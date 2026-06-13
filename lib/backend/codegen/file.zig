@@ -7,11 +7,10 @@
 const std = @import("std");
 const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
-const gen_kernel_text = @import("kernel_text.zig");
+const kt = @import("kernel_text.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
-const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const gen_family = @import("family.zig");
@@ -21,7 +20,6 @@ const Analysis = @import("ir").Analysis;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
 const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -31,26 +29,7 @@ const none_u32 = codegen.none_u32;
 const contract_abi = 5;
 const VTy = codegen.VTy;
 const hist_len = codegen.hist_len;
-const OpKind = codegen.OpKind;
-const opHasState = codegen.opHasState;
-const header_txt = gen_kernel_text.header_txt;
-const math_txt = gen_kernel_text.math_txt;
-const domain_quiet_txt = gen_kernel_text.domain_quiet_txt;
-const domain_report_txt = gen_kernel_text.domain_report_txt;
-const ops_txt = gen_kernel_text.ops_txt;
-const timer_txt = gen_kernel_text.timer_txt;
-const str_txt = gen_kernel_text.str_txt;
-const rng_txt = gen_kernel_text.rng_txt;
-const table_txt = gen_kernel_text.table_txt;
-const file_txt = gen_kernel_text.file_txt;
-const limit_txt = gen_kernel_text.limit_txt;
-const filt_txt = gen_kernel_text.filt_txt;
-const hist_txt = gen_kernel_text.hist_txt;
-const hist_quad_txt = gen_kernel_text.hist_quad_txt;
-const arr_txt = gen_kernel_text.arr_txt;
-const helpers_head_txt = gen_kernel_text.helpers_head_txt;
-const prelude_head_txt = gen_kernel_text.prelude_head_txt;
-const display_txt = gen_kernel_text.display_txt;
+const OpKind = @import("ir").op.OpKind;
 
 // =======================================================================
 // File assembly
@@ -103,34 +82,34 @@ pub fn emitFile(self: *Gen) Error!void {
         .arrs = self.lowered.mem_arrays.items.len != 0,
     };
     try buildPrelude(self, f);
-    try self.out.appendSlice(self.gpa, header_txt);
-    try self.out.appendSlice(self.gpa, math_txt);
-    try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
-    try self.out.appendSlice(self.gpa, ops_txt);
-    try self.out.appendSlice(self.gpa, gen_kernel_text.family_txt);
-    try self.out.appendSlice(self.gpa, gen_kernel_text.family_dev_txt);
-    if (f.timer) try self.out.appendSlice(self.gpa, timer_txt);
-    if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
-    if (f.hist_quad) try self.out.appendSlice(self.gpa, hist_quad_txt);
-    if (f.arrs) try self.out.appendSlice(self.gpa, arr_txt);
+    try self.out.appendSlice(self.gpa, kt.header_txt);
+    try self.out.appendSlice(self.gpa, kt.math_txt);
+    try self.out.appendSlice(self.gpa, if (self.display == .emit) kt.domain_report_txt else kt.domain_quiet_txt);
+    try self.out.appendSlice(self.gpa, kt.ops_txt);
+    try self.out.appendSlice(self.gpa, kt.family_txt);
+    try self.out.appendSlice(self.gpa, kt.family_dev_txt);
+    if (f.timer) try self.out.appendSlice(self.gpa, kt.timer_txt);
+    if (f.hist) try self.out.appendSlice(self.gpa, kt.hist_txt);
+    if (f.hist_quad) try self.out.appendSlice(self.gpa, kt.hist_quad_txt);
+    if (f.arrs) try self.out.appendSlice(self.gpa, kt.arr_txt);
     // The embedded kernel files arrive already `pub`, which is right for
     // `h.zig` and wrong here: `contract.rejectStrayPubDecls` allows only
     // contract-recognized public names. So they are depublished; every other
     // helper block is written private and made public by `publish`.
-    if (f.filt) try depublish(self.gpa, &self.out, filt_txt);
-    if (f.ac) try self.out.appendSlice(self.gpa, gen_kernel_text.ac_txt);
-    if (f.ac) try self.out.appendSlice(self.gpa, gen_kernel_text.ac_fam_txt);
+    if (f.filt) try depublish(self.gpa, &self.out, kt.filt_txt);
+    if (f.ac) try self.out.appendSlice(self.gpa, kt.ac_txt);
+    if (f.ac) try self.out.appendSlice(self.gpa, kt.ac_fam_txt);
     // §9.4.3's padding helper serves §9.5.3 too (`$sformat` is the same
     // formatter), so a device that never prints still needs it to format.
-    if (f.strs) try self.out.appendSlice(self.gpa, display_txt);
-    if (f.strs) try depublish(self.gpa, &self.out, str_txt);
-    if (f.files) try depublish(self.gpa, &self.out, file_txt);
+    if (f.strs) try self.out.appendSlice(self.gpa, kt.display_txt);
+    if (f.strs) try depublish(self.gpa, &self.out, kt.str_txt);
+    if (f.files) try depublish(self.gpa, &self.out, kt.file_txt);
     // §9.5.1.2 the same table, public for a host's second context to share
     // (`contract.FileIo`, optional: a host that runs one context ignores it).
     if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .err = zFError, .new_analysis = zFNewAnalysis };\n\n");
-    if (f.tbl) try depublish(self.gpa, &self.out, table_txt);
-    if (f.rng) try depublish(self.gpa, &self.out, rng_txt);
-    if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
+    if (f.tbl) try depublish(self.gpa, &self.out, kt.table_txt);
+    if (f.rng) try depublish(self.gpa, &self.out, kt.rng_txt);
+    if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, kt.limit_txt);
     if (self.lowered.uses.contains(.plusargs)) try self.out.appendSlice(self.gpa, plusarg_txt);
     try self.out.appendSlice(self.gpa, "\n");
     // `emitSwitchRow` splits exactly these branches; `prepare` planned them
@@ -181,22 +160,22 @@ pub fn emitFile(self: *Gen) Error!void {
 /// same `Features` `emitFile` uses, so none names a missing decl.
 fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
-    try p.appendSlice(self.arena, prelude_head_txt);
-    const alias = gen_kernel_text.appendAliases;
-    try alias(&p, self.arena, math_txt);
-    try alias(&p, self.arena, ops_txt);
-    try alias(&p, self.arena, gen_kernel_text.family_txt);
-    if (f.timer) try alias(&p, self.arena, timer_txt);
-    if (f.hist) try alias(&p, self.arena, hist_txt);
-    if (f.hist_quad) try alias(&p, self.arena, hist_quad_txt);
-    if (f.arrs) try alias(&p, self.arena, arr_txt);
-    if (f.filt) try alias(&p, self.arena, filt_txt);
-    if (f.ac) try alias(&p, self.arena, gen_kernel_text.ac_txt);
-    if (self.display == .emit or f.strs) try alias(&p, self.arena, display_txt);
-    if (f.strs) try alias(&p, self.arena, str_txt);
-    if (f.files) try alias(&p, self.arena, file_txt);
-    if (f.tbl) try alias(&p, self.arena, table_txt);
-    if (f.rng) try alias(&p, self.arena, rng_txt);
+    try p.appendSlice(self.arena, kt.prelude_head_txt);
+    const alias = kt.appendAliases;
+    try alias(&p, self.arena, kt.math_txt);
+    try alias(&p, self.arena, kt.ops_txt);
+    try alias(&p, self.arena, kt.family_txt);
+    if (f.timer) try alias(&p, self.arena, kt.timer_txt);
+    if (f.hist) try alias(&p, self.arena, kt.hist_txt);
+    if (f.hist_quad) try alias(&p, self.arena, kt.hist_quad_txt);
+    if (f.arrs) try alias(&p, self.arena, kt.arr_txt);
+    if (f.filt) try alias(&p, self.arena, kt.filt_txt);
+    if (f.ac) try alias(&p, self.arena, kt.ac_txt);
+    if (self.display == .emit or f.strs) try alias(&p, self.arena, kt.display_txt);
+    if (f.strs) try alias(&p, self.arena, kt.str_txt);
+    if (f.files) try alias(&p, self.arena, kt.file_txt);
+    if (f.tbl) try alias(&p, self.arena, kt.table_txt);
+    if (f.rng) try alias(&p, self.arena, kt.rng_txt);
     // The shared core is a unit file beside the units that call it, and
     // device.zig's alias for it is private. Spelled `core`, not the structural
     // key, so the core's own file (same prologue) does not redeclare its name;
@@ -207,23 +186,23 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     self.prelude = p.items;
 
     var hz: std.ArrayList(u8) = .empty;
-    try hz.appendSlice(self.arena, helpers_head_txt);
-    try publish(self.arena, &hz, math_txt);
-    try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
-    try publish(self.arena, &hz, ops_txt);
+    try hz.appendSlice(self.arena, kt.helpers_head_txt);
+    try publish(self.arena, &hz, kt.math_txt);
+    try publish(self.arena, &hz, if (self.display == .emit) kt.domain_report_txt else kt.domain_quiet_txt);
+    try publish(self.arena, &hz, kt.ops_txt);
     try hz.appendSlice(self.arena, "const zdr = contract.derivReads(@import(\"device.zig\"));\n");
-    try publish(self.arena, &hz, gen_kernel_text.family_txt);
-    if (f.timer) try publish(self.arena, &hz, timer_txt);
-    if (f.hist) try publish(self.arena, &hz, hist_txt);
-    if (f.hist_quad) try publish(self.arena, &hz, hist_quad_txt);
-    if (f.arrs) try publish(self.arena, &hz, arr_txt);
-    if (f.filt) try publish(self.arena, &hz, filt_txt);
-    if (f.ac) try publish(self.arena, &hz, gen_kernel_text.ac_txt);
-    if (self.display == .emit or f.strs) try publish(self.arena, &hz, display_txt);
-    if (f.strs) try publish(self.arena, &hz, str_txt);
-    if (f.files) try publish(self.arena, &hz, file_txt);
-    if (f.tbl) try publish(self.arena, &hz, table_txt);
-    if (f.rng) try publish(self.arena, &hz, rng_txt);
+    try publish(self.arena, &hz, kt.family_txt);
+    if (f.timer) try publish(self.arena, &hz, kt.timer_txt);
+    if (f.hist) try publish(self.arena, &hz, kt.hist_txt);
+    if (f.hist_quad) try publish(self.arena, &hz, kt.hist_quad_txt);
+    if (f.arrs) try publish(self.arena, &hz, kt.arr_txt);
+    if (f.filt) try publish(self.arena, &hz, kt.filt_txt);
+    if (f.ac) try publish(self.arena, &hz, kt.ac_txt);
+    if (self.display == .emit or f.strs) try publish(self.arena, &hz, kt.display_txt);
+    if (f.strs) try publish(self.arena, &hz, kt.str_txt);
+    if (f.files) try publish(self.arena, &hz, kt.file_txt);
+    if (f.tbl) try publish(self.arena, &hz, kt.table_txt);
+    if (f.rng) try publish(self.arena, &hz, kt.rng_txt);
     self.helpers = hz.items;
 }
 
@@ -273,7 +252,7 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
     for (self.names.units) |u| {
-        if (u.role == .analog_op and opHasState(u.op)) return true;
+        if (u.role == .analog_op and u.op != .none) return true;
     }
     return false;
 }

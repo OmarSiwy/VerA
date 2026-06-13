@@ -195,11 +195,7 @@ pub fn coverage(init: std.process.Init) !u8 {
     }
 
     if (uncited_paths.items.len != 0) {
-        std.mem.sort([]const u8, uncited_paths.items, {}, struct {
-            fn lt(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.lessThan(u8, a, b);
-            }
-        }.lt);
+        std.mem.sort([]const u8, uncited_paths.items, {}, harness.strLess);
         try w.writeAll("\nFIXTURES CITING NO 1364-2005 CLAUSE — they run, and count for nothing here:\n");
         for (uncited_paths.items) |p| try w.print("  ieee1364/{s}\n", .{p});
     }

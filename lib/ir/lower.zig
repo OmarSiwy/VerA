@@ -872,8 +872,6 @@ pub fn strToInt(s: []const u8, bits: u8) i64 {
 /// defined once, in the shared constant kernel, because codegen spells them
 /// as device text and a fold must agree with the device.
 pub const wrap32 = constfold.wrap32;
-/// IEEE 1364-2005 Table 5-6 integer power at 32 bits (see `wrap32`).
-pub const ipow32 = constfold.ipow32;
 
 /// Returns `tv` converted to a number when it is a string with compile-time
 /// bytes (§2.7 at an operand); everything else is returned untouched, and the
@@ -1626,8 +1624,6 @@ const lower_discipline = @import("lower/discipline.zig");
 
 // §1.3.1 nodes: nets, ports, ground and the solver-unknown order, lower/node.zig
 const lower_node = @import("lower/node.zig");
-/// Returns the name codegen prints for a `nodes` row, or "gnd" for `ground`.
-pub const nodeName = lower_node.nodeName;
 
 // §3.4 parameters and §3.2 variables and scopes, lower/param.zig
 const lower_param = @import("lower/param.zig");
@@ -1656,15 +1652,11 @@ const lower_analog_op = @import("lower/analog_op.zig");
 
 // Clause 9 system functions and tasks in analog context, and their arguments, lower/sysfunc.zig
 const lower_sysfunc = @import("lower/sysfunc.zig");
-/// Returns the compile-time value of `$simparam(name)`, or null (§9.15 Table 9-27).
-pub const simparamValue = lower_sysfunc.simparamValue;
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
 /// Returns the `Model` field that answers a §9.15 simulation parameter the
 /// card supplies (`tnom`), or null.
 pub const simparamHostField = lower_sysfunc.simparamHostField;
-/// Returns a system function's result type (`callee.zig`'s `ty` column).
-pub const sysFuncTy = lower_sysfunc.sysFuncTy;
 
 // §9.21 `$table_model`, lower/table_model.zig
 const lower_table_model = @import("lower/table_model.zig");

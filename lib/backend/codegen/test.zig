@@ -35,7 +35,7 @@ pub const Harness = struct {
     lowered: Lowered,
     bag: diag.Bag,
 
-    fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
+    pub fn run(gpa: std.mem.Allocator, src: []const u8, out: *Harness) !void {
         return runOver(gpa, src, &.{}, out);
     }
 
@@ -66,7 +66,7 @@ pub const Harness = struct {
     }
 
     /// `gen` with §9.4 display tasks emitted: the printing artifact.
-    fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
+    pub fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
         const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
@@ -1612,7 +1612,7 @@ test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
 }
 
 test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the executable" {
-    // `Analysis.callTy` types the descriptor-returning §9.5 calls `.int`, so
+    // `callee.ty` types the descriptor-returning §9.5 calls `.int`, so
     // in a device their slot is `i64` and `emitFileCallDropped` must write an
     // integer zero, not `S.con(0.0)`; otherwise the host's build fails on
     // generated Zig. `fd` feeds the residual on purpose: an unread descriptor

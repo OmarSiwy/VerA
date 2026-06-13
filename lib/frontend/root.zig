@@ -26,14 +26,5 @@ pub const wreal = @import("wreal.zig");
 pub const libmap = @import("libmap.zig");
 
 test {
-    _ = Integer;
-    _ = token;
-    _ = Preprocessor;
-    _ = Lexer;
-    _ = Ast;
-    _ = Parser;
-    _ = constfold;
-    _ = spice_cards;
-    _ = wreal;
-    _ = libmap;
+    @import("std").testing.refAllDecls(@This());
 }

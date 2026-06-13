@@ -5,7 +5,6 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
 // Shared with the emitter: `Display` is the §9.4 mode, and the `op*`/`call*`
 // helpers classify a call the same way for the plan and for the text. They
 // live in `args.zig` so this file imports no emitter.
@@ -157,7 +156,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
                 .unary => |d| self.fileDep(d.operand),
                 .binary => |d| self.fileDep(d.lhs) or self.fileDep(d.rhs),
                 .ternary => |d| self.fileDep(d.cond) or self.fileDep(d.then_val) or self.fileDep(d.else_val),
-                .call => |d| cg.isFileCall(d.callee) or for (d.args) |a| {
+                .call => |d| Mir.callee.isFileCall(d.callee) or for (d.args) |a| {
                     if (self.fileDep(a)) break true;
                 } else false,
                 .phi => |d| blk: {

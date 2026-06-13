@@ -64,7 +64,7 @@ fn hexDigit(v: u8) u8 {
 
 /// Appends `name` to `b`, escaping every byte that would break injectivity or
 /// Zig's identifier grammar.
-fn sanitizeInto(b: *Buf, name: []const u8) error{NoSpaceLeft}!void {
+fn sanitizeInto(w: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
     for (name, 0..) |c, i| {
         const bare = switch (c) {
             'a'...'z', 'A'...'Y' => true,
@@ -76,11 +76,9 @@ fn sanitizeInto(b: *Buf, name: []const u8) error{NoSpaceLeft}!void {
             else => false, // 'Z' included: it is the escape marker
         };
         if (bare) {
-            try b.byte(c);
+            try w.writeByte(c);
         } else {
-            try b.byte('Z');
-            try b.byte(hexDigit(c >> 4));
-            try b.byte(hexDigit(c));
+            try w.writeAll(&.{ 'Z', hexDigit(c >> 4), hexDigit(c) });
         }
     }
 }
@@ -90,15 +88,16 @@ fn sanitizeInto(b: *Buf, name: []const u8) error{NoSpaceLeft}!void {
 /// pass through this before it enters an emitted declaration name. Needs up to
 /// `3 * name.len + 1` bytes; fails with `error.NoSpaceLeft` otherwise.
 pub fn sanitize(buf: []u8, name: []const u8) error{NoSpaceLeft}![]const u8 {
-    var b: Buf = .{ .buf = buf };
-    try sanitizeInto(&b, name);
+    var w: std.Io.Writer = .fixed(buf);
+    sanitizeInto(&w, name) catch return error.NoSpaceLeft;
     // Annex B does not reserve Zig keywords or primitives (`pub`, `u32`), so
     // a model may use them as names. A trailing `Z` marks them rather than
     // `@"..."`, because consumers interpolate names bare (`model.{s}`); it
     // stays injective, since `sanitizeInto` emits `Z` only as `Z<hi><lo>`.
-    const leaf = b.buf[0..b.len];
-    if (std.zig.Token.keywords.has(leaf) or std.zig.primitives.isPrimitive(leaf)) try b.byte('Z');
-    return b.buf[0..b.len];
+    const leaf = w.buffered();
+    if (std.zig.Token.keywords.has(leaf) or std.zig.primitives.isPrimitive(leaf))
+        w.writeByte('Z') catch return error.NoSpaceLeft;
+    return w.buffered();
 }
 
 test "sanitize escapes Zig keywords and primitives" {
@@ -116,24 +115,6 @@ test "sanitize escapes Zig keywords and primitives" {
     try std.testing.expect(!std.mem.eql(u8, "pubZ", pubZ_src));
 }
 
-/// Bounded appender over a caller buffer, so `unitName` never allocates.
-const Buf = struct {
-    buf: []u8,
-    len: usize = 0,
-
-    fn byte(b: *Buf, c: u8) error{NoSpaceLeft}!void {
-        if (b.len == b.buf.len) return error.NoSpaceLeft;
-        b.buf[b.len] = c;
-        b.len += 1;
-    }
-
-    fn str(b: *Buf, s: []const u8) error{NoSpaceLeft}!void {
-        if (b.len + s.len > b.buf.len) return error.NoSpaceLeft;
-        @memcpy(b.buf[b.len..][0..s.len], s);
-        b.len += s.len;
-    }
-};
-
 /// Writes `<module>__<role>__<target>[__<disambig>]` into `buf` and returns it.
 /// No part is a position, and the suffix appears only for `disambig > 0`, so
 /// a collision group's first member keeps its name when another is added.
@@ -143,18 +124,29 @@ pub fn unitName(
     module: []const u8,
     unit: Unit,
 ) error{NoSpaceLeft}![]const u8 {
-    var b: Buf = .{ .buf = buf };
-    try sanitizeInto(&b, module);
-    try b.str("__");
-    try b.str(@tagName(unit.role)); // closed set, already a legal leaf
-    try b.str("__");
-    try b.str(unit.target); // pre-sanitized, see Unit.target
-    if (unit.disambig != 0) {
-        try b.str("__");
-        const printed = try std.fmt.bufPrint(b.buf[b.len..], "{d}", .{unit.disambig});
-        b.len += printed.len;
+    var w: std.Io.Writer = .fixed(buf);
+    sanitizeInto(&w, module) catch return error.NoSpaceLeft;
+    // `role` is a closed set, already a legal leaf; `target` is pre-sanitized
+    // (see Unit.target).
+    w.print("__{t}__{s}", .{ unit.role, unit.target }) catch return error.NoSpaceLeft;
+    if (unit.disambig != 0) w.print("__{d}", .{unit.disambig}) catch return error.NoSpaceLeft;
+    return w.buffered();
+}
+
+/// Writes §5.6 contribution `c`'s unit target, `V_<hi>_<lo>` or `I_<hi>_<lo>`.
+fn contribTarget(w: *std.Io.Writer, lowered: *const Lowered, c: anytype) std.Io.Writer.Error!void {
+    // §4.4: the two access roles are closed even when a user nature renames
+    // the access identifier (§3.6.1.4), so V/I is the canonical spelling.
+    try w.writeAll(switch (c.access) {
+        .potential => "V",
+        .flow => "I",
+    });
+    for ([2]u16{ c.hi, c.lo }) |n| {
+        try w.writeByte('_');
+        // §1.3.1.1 ground is not a `nodes` row. "0" cannot collide: a real
+        // net's leading digit is escaped.
+        if (n == Lower.ground) try w.writeByte('0') else try sanitizeInto(w, lowered.nodeName(n));
     }
-    return b.buf[0..b.len];
 }
 
 /// Returns the module's units in the canonical order, which
@@ -164,7 +156,7 @@ pub fn unitName(
 ///      (§5.6.7 indirect statements are never deduped, so several to one
 ///      branch form a collision group);
 ///   2. every §4.5 operator, §5.10 event and §9.17 kernel-control `call`, in
-///      `Mir.blockIter` then `Mir.blockInsts` order, role `.analog_op`. The
+///      block creation order then `Mir.blockInsts` order, role `.analog_op`. The
 ///      §9.17 `$bound_step`/`$discontinuity` calls come last, in that order.
 ///
 /// The order is a pure function of the source; `disambig` counts 0, 1, 2 in
@@ -177,26 +169,15 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const L
 
     // (1) §5.6 contributions: node names, never `nodes` rows.
     for (lowered.contributions.items) |c| {
-        var b: Buf = .{ .buf = &scratch };
-        // §4.4: the two access roles are closed even when a user nature renames
-        // the access identifier (§3.6.1.4), so V/I is the canonical spelling.
-        try b.str(switch (c.access) {
-            .potential => "V",
-            .flow => "I",
-        });
-        for ([2]u16{ c.hi, c.lo }) |n| {
-            try b.byte('_');
-            // §1.3.1.1 ground is not a `nodes` row. "0" cannot collide: a real
-            // net's leading digit is escaped.
-            if (n == Lower.ground) try b.byte('0') else try sanitizeInto(&b, lowered.nodeName(n));
-        }
-        try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, b.buf[0..b.len]) });
+        var w: std.Io.Writer = .fixed(&scratch);
+        contribTarget(&w, lowered, c) catch return error.NoSpaceLeft;
+        try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, w.buffered()) });
     }
 
     // (2) §4.5 stateful operators. `Instance` state fields are keyed on these
     // names, so adding an unrelated operator must not rename existing state.
-    var blocks = mir.blockIter();
-    while (blocks.next()) |block| {
+    for (0..mir.blockCount()) |bi| {
+        const block: Mir.Block = @enumFromInt(bi);
         var insts = mir.blockInsts(block);
         while (insts.next()) |inst| {
             if (mir.instOp(inst) != .call) continue;
@@ -251,40 +232,21 @@ fn assignDisambig(units: []Unit) void {
 // take disambig 0..N-1 and inserting one renames the later ones. Qualifying the
 // target with the enclosing contribution needs lower.zig to record that link.
 
-const Ast = @import("frontend").Ast;
-const diag = @import("diag");
+const Fixture = @import("codegen/plan/fixture.zig").Fixture;
+const nets = [_][]const u8{ "drain", "gate", "source" };
 
-const Fixture = struct {
-    arena: std.heap.ArenaAllocator,
-    mir: Mir = .{ .name = "mymod" },
-    file: Ast.SourceFile = .empty,
-    /// Naming is tested on a hand-built `Lowered` with no source behind it.
-    lowered: Lowered = undefined,
-
-    fn init(f: *Fixture) !void {
-        f.lowered = .{ .file = &f.file };
-        const a = f.arena.allocator();
-        for ([_][]const u8{ "drain", "gate", "source" }) |n|
-            try f.lowered.nodes.append(a, .{ .name = n, .kind = .net, .disc = "", .dir = .unspecified });
+fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
+    const a = f.alloc();
+    const units = try enumerateUnits(a, &f.mir, &f.lowered);
+    for (units) |u| {
+        var buf: [max_name_len]u8 = undefined;
+        try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
     }
-
-    fn deinit(f: *Fixture) void {
-        f.arena.deinit();
-    }
-
-    fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
-        const a = f.arena.allocator();
-        const units = try enumerateUnits(a, &f.mir, &f.lowered);
-        for (units) |u| {
-            var buf: [max_name_len]u8 = undefined;
-            try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
-        }
-    }
-};
+}
 
 test "inserting a contribution for a different target renames nothing" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
@@ -293,7 +255,7 @@ test "inserting a contribution for a different target renames nothing" {
     try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
 
     var before: std.ArrayList([]const u8) = .empty;
-    try f.names(&before);
+    try names(&f, &before);
     try std.testing.expectEqualStrings("mymod__analog__I_drain_source", before.items[0]);
     try std.testing.expectEqualStrings("mymod__analog__V_gate_0", before.items[1]);
 
@@ -301,7 +263,7 @@ test "inserting a contribution for a different target renames nothing" {
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = 2 });
 
     var after: std.ArrayList([]const u8) = .empty;
-    try f.names(&after);
+    try names(&f, &after);
     try std.testing.expectEqual(@as(usize, 3), after.items.len);
     for (before.items, after.items[0..before.items.len]) |b, x| {
         try std.testing.expectEqualStrings(b, x);
@@ -311,11 +273,10 @@ test "inserting a contribution for a different target renames nothing" {
 
 test "same-target collisions take group-local ordinals, first stays bare" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
-    _ = try f.mir.addBlock(a);
     const slew = try f.mir.internString(a, "slew");
     const transition = try f.mir.internString(a, "transition");
     const ln = try f.mir.internString(a, "ln"); // not an analog operator: no unit
@@ -325,7 +286,7 @@ test "same-target collisions take group-local ordinals, first stays bare" {
     _ = try f.mir.emitCall(a, .entry, slew, &.{});
 
     var got: std.ArrayList([]const u8) = .empty;
-    try f.names(&got);
+    try names(&f, &got);
     try std.testing.expectEqual(@as(usize, 3), got.items.len);
     try std.testing.expectEqualStrings("mymod__analog_op__slew", got.items[0]);
     try std.testing.expectEqualStrings("mymod__analog_op__transition", got.items[1]);
@@ -369,12 +330,11 @@ test "names never overflow silently" {
 
 test "§9.17 kernel-control units drop the `$` and stay after the operator units" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
-    try f.init();
+    try f.init(&nets);
     defer f.deinit();
     const a = f.arena.allocator();
 
     try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
-    _ = try f.mir.addBlock(a);
     const slew = try f.mir.internString(a, "slew");
     const bs = try f.mir.internString(a, "$bound_step");
     const disc = try f.mir.internString(a, "$discontinuity");
@@ -384,7 +344,7 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
     _ = try f.mir.emitCall(a, .entry, disc, &.{});
 
     var got: std.ArrayList([]const u8) = .empty;
-    try f.names(&got);
+    try names(&f, &got);
     try std.testing.expectEqual(@as(usize, 4), got.items.len);
     // Contributions first: proof indexes `unit_modes` by this order.
     try std.testing.expectEqualStrings("mymod__analog__I_drain_source", got.items[0]);

@@ -129,11 +129,6 @@ fn constBits(i: i64) Bits {
     return .{ .width = 32, .val = const_word[0..1], .unk = const_word[1..2], .signed = true };
 }
 
-/// Does `o` carry a value §12.16 can read?
-pub fn hasValue(o: *const Obj) bool {
-    return o.slot != null or o.value != null;
-}
-
 // ---------------------------------------------------------------------------
 // The formats
 // ---------------------------------------------------------------------------

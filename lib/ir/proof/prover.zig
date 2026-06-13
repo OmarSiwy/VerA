@@ -650,7 +650,7 @@ pub const Prover = struct {
                 const x = self.ivOf(b.lhs);
                 const y = self.ivOf(b.rhs);
                 const f = self.isFinite(b.lhs) and self.isFinite(b.rhs);
-                return self.binaryTransfer(op, x, y, f);
+                return binaryTransfer(op, x, y, f);
             },
             .ternary => |t| { // §4.2.12 `?:` — the union of the two arms
                 const a = self.ivOf(t.then_val);
@@ -801,8 +801,8 @@ pub const Prover = struct {
         };
     }
 
-    fn binaryTransfer(self: *Prover, op: Mir.Opcode, x: proof_lattice.Interval, y: proof_lattice.Interval, f: bool) Abstract {
-        const assume = self.opts.arith_overflow == .assume_absent;
+    fn binaryTransfer(op: Mir.Opcode, x: proof_lattice.Interval, y: proof_lattice.Interval, f: bool) Abstract {
+        // Rule 3 on `FloatMode`: `+ - * /` on finite operands stay finite.
         switch (op) {
             .fadd => {
                 const iv: proof_lattice.Interval = .{
@@ -811,7 +811,7 @@ pub const Prover = struct {
                     .lo_open = x.lo_open or y.lo_open,
                     .hi_open = x.hi_open or y.hi_open,
                 };
-                return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
+                return .{ .iv = iv, .finite = f };
             },
             .fsub => {
                 const iv: proof_lattice.Interval = .{
@@ -820,16 +820,16 @@ pub const Prover = struct {
                     .lo_open = x.lo_open or y.hi_open,
                     .hi_open = x.hi_open or y.lo_open,
                 };
-                return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
+                return .{ .iv = iv, .finite = f };
             },
             .fmul => {
                 const iv = combine(x, y, mulOp);
-                return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
+                return .{ .iv = iv, .finite = f };
             },
             .fdiv => {
                 // A divisor that can be zero yields ±inf (§4.2.4 permits it;
-                // only `%` errors). That is not an overflow, so the
-                // `assume_absent` escape (rule 3) must not apply, or an
+                // only `%` errors). That is not an overflow, so rule 3
+                // must not apply, or an
                 // inf-producing value would be marked finite under `.optimized`.
                 if (!y.excludesZero()) return .{ .iv = .top, .finite = false };
                 // A §3.4.2 puncture (`exclude 0` on a sign-spanning range)
@@ -840,7 +840,7 @@ pub const Prover = struct {
                 // still stands for finiteness (±inf only via overflow, rule 3);
                 // only the interval claim is void.
                 const iv = if (y.gt(0) or y.lt(0)) combine(x, y, divOp) else proof_lattice.Interval.top;
-                return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
+                return .{ .iv = iv, .finite = f };
             },
             // §4.2.4 modulus: |result| < |divisor|, sign of the dividend.
             .fmod => {
@@ -857,7 +857,7 @@ pub const Prover = struct {
             },
             .hypot => {
                 const iv: proof_lattice.Interval = .{ .lo = 0, .hi = addHi(absIv(x).hi, absIv(y).hi) };
-                return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
+                return .{ .iv = iv, .finite = f };
             },
             .atan2 => return .{ .iv = .{ .lo = -math.pi, .hi = math.pi }, .finite = f },
             .fmin => return .{ .iv = .{
@@ -1310,7 +1310,7 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
     // §9.5 the descriptor family is finite: every §9.5 call is integer-valued
-    // (`analysis.callTy`), and in a residual unit, the only kind `proof` rates,
+    // (`callee.ty`), and in a residual unit, the only kind `proof` rates,
     // the emitter renders it as the literal 0 §9.5.1 reserves; the descriptor
     // operation happens only in the display unit (`codegen.Gen.emitting_display`).
     // No interval: §9.5.1's fd has bit 31 set, so there is nothing useful to bound.

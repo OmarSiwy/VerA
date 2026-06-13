@@ -26,11 +26,6 @@ const Kind = Lower.Kind;
 const NoiseKind = Lower.NoiseKind;
 const NoiseSrc = Lower.NoiseSrc;
 const Accum = Lower.Accum;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
-const call = Lower.call;
-const toReal = Lower.toReal;
 
 /// Lowers one `<+`: resolves the branch, splits the rhs into its resistive and
 /// reactive halves (§5.6.1.2) and accumulates both into the target (§5.6.1.3).

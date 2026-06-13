@@ -161,7 +161,6 @@ site that needs a decision. Never add a string compare or a silent default.
 `zig build test`) parses lib/ and src/ and fails on any `else =>` over a
 boundary enum (Ast/Mir/Callee/token/...) unless the line carries
 `// else: <why this is right for every present and future variant>`.
-`tests/exhaustive.list`, the old ratchet, is EMPTY: keep it empty.
 
 **Refactor phases keep goldens byte-identical.**
 

@@ -1,9 +1,9 @@
 //! Build orchestration: device.zig in, a generation-versioned lib<name>.so plus
 //! its layout hash out (§8.3 device-side ABI). VerA produces the artifact; the
 //! host owns dlopen, dlclose and state reset, and a fresh path per generation
-//! gives it a fresh inode. Builds run `zig build-lib --listen=-` (the compiler
-//! server protocol; the 0.16 build runner has no `--listen`), either resident
-//! and `-fincremental` or cold (`compileRelease`). No build.zig is generated.
+//! gives it a fresh inode. Each build is one cold `zig build-lib --listen=-`
+//! child (the compiler server protocol; the 0.16 build runner has no
+//! `--listen`), reaped before `compileRelease` returns. No build.zig is generated.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -30,7 +30,7 @@ pub const Backend = enum {
 
 /// One support module on the compiler command line. `name` is the `@import`
 /// string; `root` is its root source file, relative to the process cwd or
-/// absolute. Strings are borrowed and must outlive the `ResidentChild`.
+/// absolute. Strings are borrowed and must outlive the build.
 pub const Module = struct {
     name: []const u8,
     root: []const u8,
@@ -53,7 +53,7 @@ pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
 }
 
 /// Everything the layout hash pins, plus where to put things. Strings are
-/// borrowed and must outlive any `ResidentChild` built from them.
+/// borrowed and must outlive the build.
 pub const Options = struct {
     /// VerA-owned directory: generated device.zig + shim.zig, the compiler
     /// cache, and the versioned artifacts. Created if absent.
@@ -174,7 +174,7 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
     if (try writeIfChanged(io, gpa, dir, "shim.zig", shim)) writes += 1;
 
     if (device.names.len == 0) {
-        // `Output.single`: no split.
+        // No `names`: the un-split form, one `device.zig` and no `u/`.
         if (try writeIfChanged(io, gpa, dir, "device.zig", device.text)) writes += 1;
         return writes;
     }
@@ -298,192 +298,11 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
     return a.items;
 }
 
-/// A long-lived `zig build-lib --listen=-` child. Spawn once per
-/// optimize/backend pair and reuse it across edits: its incremental state
-/// lives only in the child's memory, so killing it loses that state.
-pub const ResidentChild = struct {
-    io: Io,
-    opts: Options,
-    /// Owns argv and every string in it.
-    arena: std.heap.ArenaAllocator,
-    argv: []const []const u8,
-    child: std.process.Child,
-    /// Backing store for `stdout`; owned by `arena`.
-    stdout_buf: []u8,
-    stdout: Io.File.Reader,
-    layout_hash: u64,
-
-    /// Steady-state stdout buffer; larger message bodies go through `readAlloc`.
-    const buf_len = 64 * 1024;
-
-    /// Spawns the child. The first build is cold; later `rebuild`s reuse the
-    /// warm state. `o` and every string it points at must outlive the result.
-    /// Fails with `error.CompilerGone` if `o.zig_exe` cannot be spawned.
-    pub fn spawn(gpa: Allocator, io: Io, o: Options) !ResidentChild {
-        var self: ResidentChild = .{
-            .io = io,
-            .opts = o,
-            .arena = .init(gpa),
-            .argv = &.{},
-            .child = undefined,
-            .stdout_buf = &.{},
-            .stdout = undefined,
-            .layout_hash = layoutHash(o),
-        };
-        errdefer self.arena.deinit();
-
-        const arena = self.arena.allocator();
-        self.argv = try buildArgv(arena, o);
-        self.stdout_buf = try arena.alloc(u8, buf_len);
-
-        try self.start();
-        return self;
-    }
-
-    /// Launches the compiler; also valid after the child has died.
-    fn start(self: *ResidentChild) !void {
-        self.child = std.process.spawn(self.io, .{
-            .argv = self.argv,
-            .stdin = .pipe,
-            .stdout = .pipe,
-            // Compiler panics reach the terminal, and an unread stderr pipe
-            // cannot fill and deadlock the update loop.
-            .stderr = .inherit,
-        }) catch return error.CompilerGone;
-        self.stdout = self.child.stdout.?.readerStreaming(self.io, self.stdout_buf);
-    }
-
-    fn stop(self: *ResidentChild) void {
-        if (self.child.stdin) |stdin| {
-            self.send(.exit) catch {};
-            stdin.close(self.io);
-            self.child.stdin = null;
-        }
-        _ = self.child.wait(self.io) catch {
-            self.child.kill(self.io);
-        };
-    }
-
-    /// Asks the child to exit, reaps it and frees the argv.
-    pub fn deinit(self: *ResidentChild) void {
-        self.stop();
-        self.arena.deinit();
-        self.* = undefined;
-    }
-
-    /// Writes `device` into the tree (`writeTree`), asks the child for one
-    /// update and returns the result, which the caller owns. Builds happen
-    /// only here; nothing watches the filesystem. A compile error keeps the
-    /// child alive, since its warm state stays valid.
-    pub fn rebuild(
-        self: *ResidentChild,
-        gpa: Allocator,
-        device: codegen.Output,
-        generation: u32,
-    ) !Result {
-        _ = try writeTree(self.io, gpa, self.opts, device);
-        return self.update(gpa, generation) catch |err| switch (err) {
-            // ponytail: zig 0.16.0's resident compiler can crash on a later
-            // `update` after inputs change; respawn and rebuild cold, as
-            // std.Build.Step.evalZigProcess does. Delete this arm once the
-            // compiler survives repeated updates.
-            error.CompilerGone => blk: {
-                self.stop();
-                try self.start();
-                break :blk try self.update(gpa, generation);
-            },
-            else => err,
-        };
-    }
-
-    fn send(self: *ResidentChild, tag: ClientMsg.Tag) !void {
-        const stdin = self.child.stdin orelse return error.CompilerGone;
-        var w = stdin.writer(self.io, &.{});
-        w.interface.writeStruct(ClientMsg.Header{ .tag = tag, .bytes_len = 0 }, .little) catch
-            return error.CompilerGone;
-    }
-
-    /// Runs one request/response round of the compiler server protocol. An
-    /// `error_bundle` message, possibly empty, ends the update.
-    fn update(self: *ResidentChild, gpa: Allocator, generation: u32) !Result {
-        try self.send(.update);
-
-        const r = &self.stdout.interface;
-        var digest: ?Cache.BinDigest = null;
-        var cache_hit = false;
-
-        while (true) {
-            const header = r.takeStruct(ServerMsg.Header, .little) catch return error.CompilerGone;
-            const body = r.readAlloc(gpa, header.bytes_len) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                else => return error.CompilerGone,
-            };
-            defer gpa.free(body);
-
-            switch (header.tag) {
-                .zig_version => if (!std.mem.eql(u8, builtin.zig_version_string, body))
-                    return error.ProtocolMismatch,
-                .emit_digest => {
-                    if (body.len < @sizeOf(ServerMsg.EmitDigest) + Cache.bin_digest_len)
-                        return error.ProtocolMismatch;
-                    const eh: *align(1) const ServerMsg.EmitDigest = @ptrCast(body.ptr);
-                    cache_hit = eh.flags.cache_hit;
-                    digest = body[@sizeOf(ServerMsg.EmitDigest)..][0..Cache.bin_digest_len].*;
-                },
-                .error_bundle => {
-                    var bundle = try std.zig.Server.allocErrorBundle(gpa, body);
-                    if (bundle.errorMessageCount() > 0) return .{ .failed = bundle };
-                    bundle.deinit(gpa);
-                    break;
-                },
-                // file_system_inputs, time_report, test_*: nothing here uses them.
-                else => {},
-            }
-        }
-
-        const d = digest orelse return error.NoArtifact;
-        return .{ .ok = .{
-            .so_path = try self.publish(gpa, d, generation),
-            .layout_hash = self.layout_hash,
-            .generation = generation,
-            .cache_hit = cache_hit,
-        } };
-    }
-
-    /// Copies the cache output to a generation-stamped path so the host
-    /// dlopens a fresh inode; a hardlink would share the cache entry's inode.
-    /// Caller owns the returned path.
-    fn publish(
-        self: *ResidentChild,
-        gpa: Allocator,
-        digest: Cache.BinDigest,
-        generation: u32,
-    ) ![]u8 {
-        const t = &builtin.target;
-        const lib_name = try std.fmt.allocPrint(gpa, "{s}{s}{s}", .{
-            t.libPrefix(), self.opts.name, t.dynamicLibSuffix(),
-        });
-        defer gpa.free(lib_name);
-
-        const src = try std.fs.path.join(gpa, &.{
-            self.opts.work_dir, ".zig-cache", "o", &Cache.binToHex(digest), lib_name,
-        });
-        defer gpa.free(src);
-
-        const dst = try std.fmt.allocPrint(gpa, "{s}{c}{s}{s}.{d}{s}", .{
-            self.opts.work_dir, std.fs.path.sep, t.libPrefix(),
-            self.opts.name,     generation,      t.dynamicLibSuffix(),
-        });
-        errdefer gpa.free(dst);
-
-        const cwd: Io.Dir = .cwd();
-        cwd.copyFile(src, cwd, dst, self.io, .{}) catch return error.NoArtifact;
-        return dst;
-    }
-};
-
-/// Builds once, cold, with a child that is reaped before returning. Caller
-/// owns the `Result`.
+/// Builds once, cold: spawns `zig build-lib --listen=-`, writes `device` into
+/// the tree (`writeTree`), runs one update and reaps the child. Caller owns
+/// the `Result`. Fails with `error.CompilerGone` if `o.zig_exe` cannot be
+/// spawned or dies mid-update, `error.ProtocolMismatch` on a compiler other
+/// than the one VerA was built with.
 pub fn compileRelease(
     gpa: Allocator,
     io: Io,
@@ -491,9 +310,104 @@ pub fn compileRelease(
     device: codegen.Output,
     generation: u32,
 ) !Result {
-    var child = try ResidentChild.spawn(gpa, io, o);
-    defer child.deinit();
-    return child.rebuild(gpa, device, generation);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var child = std.process.spawn(io, .{
+        .argv = try buildArgv(arena.allocator(), o),
+        .stdin = .pipe,
+        .stdout = .pipe,
+        // Compiler panics reach the terminal, and an unread stderr pipe
+        // cannot fill and deadlock the update loop.
+        .stderr = .inherit,
+    }) catch return error.CompilerGone;
+    defer {
+        if (child.stdin) |stdin| {
+            send(io, &child, .exit) catch {};
+            stdin.close(io);
+            child.stdin = null;
+        }
+        _ = child.wait(io) catch child.kill(io);
+    }
+    // Steady-state buffer; larger message bodies go through `readAlloc`.
+    var stdout = child.stdout.?.readerStreaming(io, try arena.allocator().alloc(u8, 64 * 1024));
+
+    _ = try writeTree(io, gpa, o, device);
+    try send(io, &child, .update);
+
+    // One request/response round: an `error_bundle` message, possibly empty,
+    // ends the update.
+    const r = &stdout.interface;
+    var digest: ?Cache.BinDigest = null;
+    var cache_hit = false;
+    while (true) {
+        const header = r.takeStruct(ServerMsg.Header, .little) catch return error.CompilerGone;
+        const body = r.readAlloc(gpa, header.bytes_len) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => return error.CompilerGone,
+        };
+        defer gpa.free(body);
+
+        switch (header.tag) {
+            .zig_version => if (!std.mem.eql(u8, builtin.zig_version_string, body))
+                return error.ProtocolMismatch,
+            .emit_digest => {
+                if (body.len < @sizeOf(ServerMsg.EmitDigest) + Cache.bin_digest_len)
+                    return error.ProtocolMismatch;
+                const eh: *align(1) const ServerMsg.EmitDigest = @ptrCast(body.ptr);
+                cache_hit = eh.flags.cache_hit;
+                digest = body[@sizeOf(ServerMsg.EmitDigest)..][0..Cache.bin_digest_len].*;
+            },
+            .error_bundle => {
+                var bundle = try std.zig.Server.allocErrorBundle(gpa, body);
+                if (bundle.errorMessageCount() > 0) return .{ .failed = bundle };
+                bundle.deinit(gpa);
+                break;
+            },
+            // file_system_inputs, time_report, test_*: nothing here uses them.
+            else => {},
+        }
+    }
+
+    const d = digest orelse return error.NoArtifact;
+    return .{ .ok = .{
+        .so_path = try publish(io, gpa, o, d, generation),
+        .layout_hash = layoutHash(o),
+        .generation = generation,
+        .cache_hit = cache_hit,
+    } };
+}
+
+fn send(io: Io, child: *std.process.Child, tag: ClientMsg.Tag) !void {
+    const stdin = child.stdin orelse return error.CompilerGone;
+    var w = stdin.writer(io, &.{});
+    w.interface.writeStruct(ClientMsg.Header{ .tag = tag, .bytes_len = 0 }, .little) catch
+        return error.CompilerGone;
+}
+
+/// Copies the cache output to a generation-stamped path so the host dlopens a
+/// fresh inode; a hardlink would share the cache entry's inode. Caller owns
+/// the returned path.
+fn publish(io: Io, gpa: Allocator, o: Options, digest: Cache.BinDigest, generation: u32) ![]u8 {
+    const t = &builtin.target;
+    const lib_name = try std.fmt.allocPrint(gpa, "{s}{s}{s}", .{
+        t.libPrefix(), o.name, t.dynamicLibSuffix(),
+    });
+    defer gpa.free(lib_name);
+
+    const src = try std.fs.path.join(gpa, &.{
+        o.work_dir, ".zig-cache", "o", &Cache.binToHex(digest), lib_name,
+    });
+    defer gpa.free(src);
+
+    const dst = try std.fmt.allocPrint(gpa, "{s}{c}{s}{s}.{d}{s}", .{
+        o.work_dir, std.fs.path.sep, t.libPrefix(),
+        o.name,     generation,      t.dynamicLibSuffix(),
+    });
+    errdefer gpa.free(dst);
+
+    const cwd: Io.Dir = .cwd();
+    cwd.copyFile(src, cwd, dst, io, .{}) catch return error.NoArtifact;
+    return dst;
 }
 
 test "Backend.auto is self-hosted only for Debug on x86_64" {
@@ -648,7 +562,7 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
     try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, "u/unit_b.zig", .{}));
 }
 
-test "resident child builds, versions and rebuilds a device" {
+test "compileRelease builds and versions a device" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -682,25 +596,16 @@ test "resident child builds, versions and rebuilds a device" {
         .modules = &mods,
     };
 
-    // The compiler crashes `rebuild` recovers from would each dump a
-    // gigabyte-sized core; the children inherit this limit.
-    const core = try std.posix.getrlimit(.CORE);
-    try std.posix.setrlimit(.CORE, .{ .cur = 0, .max = core.max });
-    defer std.posix.setrlimit(.CORE, core) catch {};
-
-    var child = ResidentChild.spawn(gpa, io, o) catch |err| switch (err) {
-        // No `zig` on PATH in this environment: nothing to assert.
-        error.CompilerGone => return error.SkipZigTest,
-        else => return err,
-    };
-    defer child.deinit();
-
     const dev_v1 =
         \\const contract = @import("contract");
         \\pub fn eval(x: f64) callconv(.c) f64 { return x * contract.k; }
         \\
     ;
-    var r1 = try child.rebuild(gpa, .single(dev_v1), 1);
+    var r1 = compileRelease(gpa, io, o, .{ .text = dev_v1 }, 1) catch |err| switch (err) {
+        // No `zig` on PATH in this environment: nothing to assert.
+        error.CompilerGone => return error.SkipZigTest,
+        else => return err,
+    };
     defer r1.deinit(gpa);
     switch (r1) {
         .failed => |b| {
@@ -721,7 +626,7 @@ test "resident child builds, versions and rebuilds a device" {
         \\pub fn eval(x: f64) callconv(.c) f64 { return x * contract.k + 1.0; }
         \\
     ;
-    var r2 = try child.rebuild(gpa, .single(dev_v2), 2);
+    var r2 = try compileRelease(gpa, io, o, .{ .text = dev_v2 }, 2);
     defer r2.deinit(gpa);
     switch (r2) {
         .failed => |b| {
@@ -734,18 +639,14 @@ test "resident child builds, versions and rebuilds a device" {
         },
     }
 
-    // A broken unit is reported as diagnostics, and the child survives it.
-    var r3 = try child.rebuild(gpa, .single("pub fn eval() void { @compileError(\"boom\"); }\n"), 3);
+    // A broken unit is reported as diagnostics.
+    var r3 = try compileRelease(gpa, io, o, .{ .text = "pub fn eval() void { @compileError(\"boom\"); }\n" }, 3);
     defer r3.deinit(gpa);
     try std.testing.expect(r3 == .failed);
 
-    var r4 = try child.rebuild(gpa, .single(dev_v2), 4);
-    defer r4.deinit(gpa);
-    try std.testing.expect(r4 == .ok);
-
     // The split form compiles: `device.zig` and the unit files import each
     // other, which is legal Zig.
-    var r5 = try child.rebuild(gpa, splitOutput(&.{ "unit_a", "unit_b" }), 5);
+    var r5 = try compileRelease(gpa, io, o, splitOutput(&.{ "unit_a", "unit_b" }), 5);
     defer r5.deinit(gpa);
     switch (r5) {
         .failed => |b| {

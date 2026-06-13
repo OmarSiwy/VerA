@@ -15,21 +15,12 @@ const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const dist = @import("../dist.zig");
-const assert = Lower.assert;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
 const VarSlot = Lower.VarSlot;
-const err = Lower.err;
-const errWith = Lower.errWith;
 const poison = Lower.poison;
-const emit = Lower.emit;
-const call = Lower.call;
-const toReal = Lower.toReal;
-const toInt = Lower.toInt;
-const chainCondDisplay = Lower.chainCondDisplay;
-const kernelCtlPlace = Lower.kernelCtlPlace;
 
 /// This file's private state on `Lower` (`Lower.event_state`).
 pub const State = struct {
@@ -580,7 +571,7 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
         // §9.5.4.1/§9.5.7 write a string; only §9.5.4.2 has typed items, and
         // there the destination's declared type picks the callee as in
         // `lowerScan`: the name is the type, so `sysFuncTy` and
-        // `analysis.callTy` cannot disagree.
+        // `callee.ty` cannot disagree.
         if (gets or ferr) {
             if (slot.ty != .string) {
                 try self.err(self.file.exprs.mainTok(a), .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
@@ -890,7 +881,7 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
         if (a == .none) continue;
         const slot = try lower_stmt.resolveLvalue(self, a) orelse continue;
         // The destination's declared type picks the callee, exactly as §5.10's
-        // `holdSlot` does: the name IS the type, so `analysis.callTy` and
+        // `holdSlot` does: the name IS the type, so `callee.ty` and
         // `sysFuncTy` cannot disagree about it.
         const callee: []const u8 = switch (slot.ty) {
             .integer => "$sscanf$int",

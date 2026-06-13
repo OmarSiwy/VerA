@@ -222,9 +222,6 @@ pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
     return if (def == .str_const) def.str_const else null;
 }
 
-/// §9.5 the descriptor family.
-pub const isFileCall = Mir.callee.isFileCall;
-
 /// Does this operator's kernel read the current input? The pure-history ones
 /// answer from `Instance` alone, and rendering an input they never emit would
 /// leave the unit claiming a parameter (or a cache) nothing references.
