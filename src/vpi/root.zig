@@ -62,6 +62,8 @@ pub const vpiRealVar: c_int = 47;
 pub const vpiVarSelect: c_int = 68;
 pub const vpiModuleArray: c_int = 112;
 pub const vpiRegArray: c_int = 116;
+/// IEEE 1364-2005 §26.6.20 (Annex G).
+pub const vpiAutomatic: c_int = 50;
 
 // §11.6.2/§11.6.5–§11.6.7, the analog classes. Verilog-AMS names these and
 // numbers none; VerA's numbers, shared with tests/fixtures/ch12_vpi_routines/
@@ -282,6 +284,9 @@ pub const Obj = struct {
     is_local: bool = false,
     /// `.reg` only.
     is_signed: bool = true,
+    /// `.reg` only: declared in an automatic task or function (IEEE
+    /// 1364-2005 §26.6.20's vpiAutomatic), so it has no static storage.
+    automatic: bool = false,
     /// The digital engine's storage slot for this object's value, when the
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values come from analog.zig's solution.
@@ -297,6 +302,9 @@ pub const Obj = struct {
     index: ?u32 = null,
     /// An array: its elements, in increasing index.
     members: []const u32 = &.{},
+    /// A digital array: its IEEE 1364-2005 §26.6.10 range, one `.code` object
+    /// of vtype vpiRange (a slice, so vpi_iterate can walk it).
+    range: []const u32 = &.{},
     /// The one-to-one edges of the analog classes (§11.6.2, §11.6.5–§11.6.7),
     /// as object indices. Null is "no such object", which vpi_handle answers
     /// with NULL and no error (a base nature has no parent, a one-terminal
@@ -1129,6 +1137,82 @@ fn addArray(
     return at;
 }
 
+/// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
+/// bounds decimal constants, its vpiSize the element count.
+///
+/// ponytail: one range, the first dimension's, even for a multidimensional
+/// array; one per dimension needs `digital.Span` to keep its declared order.
+fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), owner: u32, left: i64, right: i64) Error!u32 {
+    const l: u32 = @intCast(objects.items.len);
+    try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = left } });
+    try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = right } });
+    const edges = try arena.dupe(code.Edge, &.{ .{ .tag = code.vpiLeftRange, .to = l }, .{ .tag = code.vpiRightRange, .to = l + 1 } });
+    const size: c_int = @intCast(@abs(left - right) + 1);
+    const props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = size }});
+    try objects.append(gpa, .{ .kind = .code, .vtype = code.vpiRange, .owner = owner, .name = "", .full = "", .edges = edges, .props = props });
+    return l + 2;
+}
+
+/// IEEE 1364-2005 §26.6.44: each §12.4.1 loop generate directly inside an
+/// instance is a gen scope array over its iterations, each a gen scope named
+/// `name[i]` whose vpiIndex is `i`. The objects each iteration declares are
+/// not modelled; a gen scope is found by name and counted, not walked into.
+///
+/// ponytail: a loop generate nested in another generate block, and a
+/// conditional generate's scope, have no gen scope yet; both are rows of
+/// `Run.scope_info` whose parent is itself lexical.
+fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), scopes: []Building, r: *sim.digital.Run, vpi_of: []const u32) Error!void {
+    const Key = struct { scope: u32, name: Ast.StrId };
+    var groups: std.AutoArrayHashMapUnmanaged(Key, std.ArrayList(u32)) = .empty;
+    defer {
+        for (groups.values()) |*v| v.deinit(gpa);
+        groups.deinit(gpa);
+    }
+    for (r.scope_info.items, 0..) |info, e| {
+        // An instance array element has an index too, but is no lexical row.
+        if (!info.lexical or info.index == null or r.scope_info.items[info.parent].lexical) continue;
+        const g = try groups.getOrPut(gpa, .{ .scope = vpi_of[info.parent], .name = info.name });
+        if (!g.found_existing) g.value_ptr.* = .empty;
+        try g.value_ptr.append(gpa, @intCast(e));
+    }
+    for (groups.keys(), groups.values()) |k, rows| {
+        const module_full = objects.items[k.scope].full;
+        const name = try arena.dupe(u8, r.file.str(k.name));
+        const members = try arena.alloc(u32, rows.items.len);
+        for (rows.items, members) |e, *m| {
+            const i = r.scope_info.items[e].index.?;
+            const c: u32 = @intCast(objects.items.len);
+            try objects.append(gpa, .{ .kind = .constant, .owner = k.scope, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
+            const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, i });
+            m.* = @intCast(objects.items.len);
+            try objects.append(gpa, .{
+                .kind = .code,
+                .vtype = code.vpiGenScope,
+                .owner = k.scope,
+                .name = local,
+                .full = try joinPath(arena, module_full, local),
+                .edges = try arena.dupe(code.Edge, &.{.{ .tag = code.vpiIndex, .to = c }}),
+                .props = try arena.dupe(code.Prop, &.{
+                    .{ .prop = vpiArray, .value = 1 },
+                    .{ .prop = code.vpiProtected, .value = 0 },
+                    .{ .prop = code.vpiImplicitDecl, .value = @intFromBool(r.scope_info.items[e].implicit) },
+                }),
+            });
+        }
+        const at: u32 = @intCast(objects.items.len);
+        try objects.append(gpa, .{
+            .kind = .code,
+            .vtype = code.vpiGenScopeArray,
+            .owner = k.scope,
+            .name = name,
+            .full = try joinPath(arena, module_full, name),
+            .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = @intCast(members.len) }}),
+            .lists = try arena.dupe(code.List, &.{.{ .tag = code.vpiGenScope, .items = members }}),
+        });
+        try scopes[k.scope].code.gen_arrays.append(gpa, at);
+    }
+}
+
 /// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`:
 /// elaboration names each element `u[k]`, so sibling scopes that share the
 /// identifier before `[` are one array. The array object goes in the parent
@@ -1315,6 +1399,9 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
                 // one of the scope's reals — as the analog model builds it.
                 const real = !is_reg and v.ty == .real;
                 const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, r.values[at].width, at);
+                // Two statements: addRange grows `objects`, moving `items`.
+                const range = try arena.dupe(u32, &.{try addRange(gpa, arena, &objects, scope, a.left, a.right)});
+                objects.items[arr].range = range;
                 try (if (is_reg) &s.reg_arrays else if (real) &s.reals else &s.integers).append(gpa, arr);
                 continue;
             }
@@ -1339,6 +1426,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
     }
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
+    try addGenScopes(gpa, arena, &objects, scopes.items, r, vpi_of);
     // §11.6.3/§11.6.16–§11.6.24, over each instance's own definition: the
     // engine ran these same bodies, one copy per instance.
     var udps: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
@@ -1833,6 +1921,27 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     return null;
 }
 
+/// IEEE 1364-2005 §27.18: "If the indices provided do not lead to the
+/// construction of a legal Verilog index select expression, the routine shall
+/// return a null handle." One index is vpi_handle_by_index.
+///
+/// ponytail: this model's arrays have elements along their first dimension
+/// only, so a second index (or a bit-select) is refused as a VerA limit,
+/// though §27.18 makes it legal.
+pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_array: ?[*]const c_int) vpiHandle {
+    _ = enter("vpi_handle_by_multi_index") orelse return null;
+    const o = object("vpi_handle_by_multi_index", obj) orelse return null;
+    const idx = index_array orelse {
+        fail("NOINDEX", "vpi_handle_by_multi_index: index_array is NULL", .{});
+        return null;
+    };
+    if (num_index != 1) {
+        fail("NOINDEX", "vpi_handle_by_multi_index: `{s}` takes one index here, not {d} (a VerA limit)", .{ o.full, num_index });
+        return null;
+    }
+    return vpi_handle_by_index(obj, idx[0]);
+}
+
 // ---------------------------------------------------------------------------
 // §12.23 vpi_iterate / §12.35 vpi_scan
 // ---------------------------------------------------------------------------
@@ -1903,6 +2012,7 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         else => false, // else: only the three array classes hold elements
     };
     if (elements) return newIter(d, o.members);
+    if (obj_type == code.vpiRange and o.range.len != 0) return newIter(d, o.range);
     // The analog double arrows: node ->> net (§11.6.5), nature ->> nature
     // tagged vpiChild and nature ->> discipline (§11.6.2).
     const analog: ?[]const u32 = switch (o.kind) {
@@ -2058,6 +2168,10 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             .reg_array, .var_array => 1,
             .module => @intFromBool(o.parent != null),
             .reg, .integer, .real_var, .word, .var_select => 0,
+            else => propFail(prop, o),
+        },
+        vpiAutomatic => return switch (o.kind) {
+            .reg, .integer, .real_var => @intFromBool(o.automatic),
             else => propFail(prop, o),
         },
         vpiIsMemory => return switch (o.kind) {

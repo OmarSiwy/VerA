@@ -37,6 +37,8 @@
 #ifndef VERA_VPI_USER_H
 #define VERA_VPI_USER_H
 
+#include <stdarg.h> /* va_list, for vpi_vprintf and vpi_mcd_vprintf */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -227,6 +229,16 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiLeftRange           79
 #define vpiRhs                 82
 #define vpiRightRange          83
+/* IEEE 1364-2005 §26.6.10: reg array ->> range -> vpiLeftRange/vpiRightRange
+ * (decimal constants, as declared), vpiSize. */
+#define vpiRange              115
+/* IEEE 1364-2005 §26.6.44: module ->> gen scope array (vpiSize, vpiName) ->>
+ * gen scope (vpiArray, vpiImplicitDecl, -> vpiIndex), one array per loop
+ * generate directly inside an instance; the objects an iteration declares
+ * are not reached from its gen scope. */
+#define vpiGenScopeArray      133
+#define vpiGenScope           134
+#define vpiImplicitDecl        26
 #define vpiOperand             97
 #define vpiProcess             99
 #define vpiExpr               102
@@ -326,6 +338,8 @@ typedef struct t_vpi_delay {
 #define vpiSigned              65   /* bool: signedness of a reg */
 #define vpiLocalParam          70   /* bool: §3.4.5 localparam */
 #define vpiArray               28   /* bool: an array, or a module in one */
+#define vpiAutomatic           50   /* bool: a reg of an automatic task or function (IEEE 1364-2005 §26.6.20);
+                                       a value change callback on one, or a delayed put, is refused */
 #define vpiIsMemory            73   /* bool: a reg array */
 
 /* vpiDirection values — §6.5.2.2. */
@@ -795,6 +809,25 @@ extern PLI_INT32  vpi_sim_control(PLI_INT32 operation, ...);
 extern vpiHandle  vpi_register_cb(p_cb_data cb_data_p);
 extern PLI_INT32  vpi_remove_cb(vpiHandle cb_obj);
 extern void       vpi_get_cb_info(vpiHandle obj, p_cb_data cb_data_p);
+
+/* IEEE 1364-2005 Clause 27's routines under their 1364 names.
+ * vpi_control() is vpi_sim_control(). vpi_flush() and vpi_mcd_flush() have
+ * nothing to flush (every write is unbuffered); vpi_mcd_flush() fails for a
+ * user channel that is not open. vpi_handle_by_multi_index() takes one index:
+ * every array here has one dimension. vpi_put_userdata()/vpi_get_userdata()
+ * hold one pointer per system task or function call. vpi_get_data() and
+ * vpi_put_data() always fail: VerA has no save or restart (1364 Annex C.8),
+ * so no cbStartOfSave/cbStartOfRestart callback ever runs. */
+extern PLI_INT32  vpi_control(PLI_INT32 operation, ...);
+extern PLI_INT32  vpi_flush(void);
+extern PLI_INT32  vpi_mcd_flush(PLI_UINT32 mcd);
+extern PLI_INT32  vpi_vprintf(PLI_BYTE8 *format, va_list ap);
+extern PLI_INT32  vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8 *format, va_list ap);
+extern vpiHandle  vpi_handle_by_multi_index(vpiHandle obj, PLI_INT32 num_index, PLI_INT32 *index_array);
+extern PLI_INT32  vpi_put_userdata(vpiHandle obj, void *userdata);
+extern void      *vpi_get_userdata(vpiHandle obj);
+extern PLI_INT32  vpi_get_data(PLI_INT32 id, PLI_BYTE8 *dataLoc, PLI_INT32 numOfBytes);
+extern PLI_INT32  vpi_put_data(PLI_INT32 id, PLI_BYTE8 *dataLoc, PLI_INT32 numOfBytes);
 
 /* §12.33.2. The APPLICATION defines this array and terminates it with 0; VerA
  * calls each entry in order, once, after the design is elaborated and the
