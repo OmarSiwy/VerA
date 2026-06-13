@@ -623,7 +623,7 @@ pub fn main(init: std.process.Init) !u8 {
             .backend = backend,
             .modules = &modules,
             .zig_exe = zig_exe,
-        }, 1, null) catch |e| {
+        }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
             return 1;
         };
