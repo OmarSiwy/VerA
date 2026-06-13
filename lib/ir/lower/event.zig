@@ -246,6 +246,7 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
 /// Lowers a §5.12/ch9 system task in statement position. Display and file tasks
 /// are void calls codegen may drop; the unsupported set is rejected by name.
 pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    if (try lower_sysfunc.refuseReserved(self, tok, name)) return;
     const c: Mir.Callee = .fromName(name);
     const family = Mir.callee.family(c);
     const formats = Mir.callee.takesFormat(c);

@@ -59,7 +59,7 @@
 4.4.1	-	Charge strength
 4.4.2	-	Drive strength
 4.5	-	Implicit declarations
-4.6	-	Net types
+4.6	no-prohibition	Net types	"There are several distinct types of nets, as shown in Table 4-1." The list of the twelve net types; nothing is illegal (each type's rules are 4.6.1 to 4.6.6). Positive: 04_data_types/b_4_6_net_types.v (one undriven net of each type).
 4.6.1	-	Wire and tri nets
 4.6.2	-	Wired nets
 4.6.3	-	Trireg net
@@ -76,8 +76,8 @@
 4.9.1	-	Net arrays
 4.9.2	-	reg and variable arrays
 4.9.3	-	Memories
-4.9.3.1	-	Array examples
-4.9.3.1.1	-	Array declarations
+4.9.3.1	non-normative	Array examples	A heading with no body text: 4.9.3.1.1 follows it at once. The examples are 4.9.3.1.1 to 4.9.3.1.3.
+4.9.3.1.1	no-prohibition	Array declarations	The clause's array declarations (mema[0:255], arrayb[7:0][0:255], w_array[7:0][5:0], inta[1:64], chng_hist[1:1000]); none is illegal (the illegal writes are 4.9.3.1.2's, cited both ways). Positive: 04_data_types/b_4_9_3_1_1_array_declarations.v (every declaration, the missing `;` after chng_hist added).
 4.9.3.1.2	-	Assignment to array elements
 4.9.3.1.3	-	Memory differences
 4.10	-	Parameters
@@ -224,7 +224,7 @@
 11.3	no-prohibition	The stratified event queue	The five regions and their order: inactive after active, nonblocking assign updates after both, monitor events last; #0 makes the process an inactive event. An ordering, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v (two #0 resumptions before a pending NBA, $strobe after it), scheduling.v, 09_behavioral_modeling/d06_intra_assign_delay.v.
 11.4	no-prohibition	Verilog simulation reference model	The reference algorithm (inactive, then nonblocking assign update, then monitor events are activated when no active event is left). An algorithm, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v.
 11.4.1	no-prohibition	Determinism	"Statements within a begin-end block shall be executed in the order in which they appear" and "Nonblocking assignments shall be performed in the order the statements were executed". Guarantees; nothing is illegal. Positive: 11_scheduling/scheduling.v, 09_behavioral_modeling/audit_nba_same_time_updates.v (two NBAs to one variable in one time step, both performed, in order).
-11.4.2	unspecified	Nondeterminism	"active events can be taken off the queue and processed in any order" and "At any time while evaluating a behavioral statement, the simulator may suspend execution" (statements without time control "do not have to be executed as one event"); the order is "nondeterministic and not under control of the user", so no test may assert one outcome (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v asserts only membership in the permitted set; the audit_sched_*_order.v fixtures pin VerA's own order and say the LRM also accepts others.
+11.4.2	unspecified	Nondeterminism	"active events can be taken off the queue and processed in any order" and "At any time while evaluating a behavioral statement, the simulator may suspend execution" (statements without time control "do not have to be executed as one event"); the order is "nondeterministic and not under control of the user", so no test may assert one outcome (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v asserts only membership in the permitted set; the audit_sched_*_order.v fixtures pin the order VerA documents (docs/IMPLEMENTATION.md) and cite no clause.
 11.5	unspecified	Race conditions	"The simulator is correct in displaying either a 1 or a 0." The clause's example race has two permitted outcomes, so no test may assert one (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v is the example, asserting only that the value is one of the two.
 11.6	non-normative	Scheduling implication of assignments	"Assignments are translated into processes and events as detailed in 11.6.1 through 11.6.7." An introduction; the rules are §11.6.1 to §11.6.7.
 11.6.1	no-prohibition	Continuous assignment	"A continuous assignment process is also evaluated at time 0 to ensure that constant values are propagated." Event semantics; nothing is illegal (a continuous assignment to a variable is §6.1.2's ban). Positive: 11_scheduling/audit_sched_constant_ports.v, 06_assignments/d06_cont_assign_reeval.v.

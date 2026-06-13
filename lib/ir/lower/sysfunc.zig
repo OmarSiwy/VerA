@@ -26,12 +26,21 @@ const call = Lower.call;
 
 // ---- ch9 system functions ---------------------------------------------------
 
+/// E1014: a source call spells a name VerA mints for itself
+/// (`Callee.synthetic`). True when refused.
+pub fn refuseReserved(self: *Lower, tok: u32, name: []const u8) Oom!bool {
+    if (!Mir.Callee.fromName(name).synthetic()) return false;
+    try self.err(tok, .E1014, "`{s}`", .{name});
+    return true;
+}
+
 /// Lowers a Clause 9 system function in expression position. The context and
 /// validity rules are checked here; what survives becomes a `call` whose simulator
 /// semantics codegen's `emitCall` owns, or a folded value.
 pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
+    if (try refuseReserved(self, ex.mainTok(e), name)) return poison;
     if (lower_event.isDigitalOnlySysFunc(name)) { // §9.2
         try self.err(self.file.exprs.mainTok(e), .E0806, "`{s}`", .{name});
         return poison;
