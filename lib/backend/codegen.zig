@@ -89,12 +89,6 @@ pub const Output = struct {
     /// a valid stand-alone device and `contract.rejectStrayPubDecls` forbids
     /// publishing them there. Arena-owned; empty when `names` is.
     helpers: []const u8 = "",
-
-    /// Returns the un-split form: one `device.zig`, no `u/` directory. Used by
-    /// `--emit-zig`, the conformance runner and the orchestrator tests.
-    pub fn single(text: []const u8) Output {
-        return .{ .text = text };
-    }
 };
 
 /// §9.4: whether display tasks are dropped or emitted (plan/args.zig).
