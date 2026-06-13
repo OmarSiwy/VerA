@@ -23,7 +23,6 @@
 //        right after; posedges 33 and 35, w = 3 from t=35; printed at t=36
 //        -> "36 3"
 //! inherited IEEE 1364-2005 9.7.7
-//! xfail an intra-assignment repeat event control does not parse ("expected an expression: found `repeat`")
 `timescale 1ns/1ns
 module b_9_7_7_repeat_event_control;
   reg clk;

@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 10.2.3
 //! reject E1100
 //! reject automatic
-//! xfail accepted: $monitor of an automatic task variable compiles and runs (it prints x)
 module b_10_2_3_automatic_monitor_rejected;
   task automatic t;
     reg [7:0] v;

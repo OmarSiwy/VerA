@@ -12,7 +12,6 @@
 //! inherited IEEE 1364-2005 12.2.2.1
 //! reject E1100
 //! reject more parameter values than the module has parameters
-//! xfail VerA ignores an ordered parameter value beyond the module's parameters
 module my_mem;
   parameter addr_width = 16;
   localparam mem_size = 1 << addr_width;

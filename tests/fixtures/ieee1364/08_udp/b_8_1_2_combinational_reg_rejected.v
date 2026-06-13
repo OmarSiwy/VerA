@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 8.1.2
 //! reject E1100
 //! reject cannot contain a reg declaration
-//! xfail a reg declaration in a combinational UDP is accepted
 `timescale 1ns/1ns
 primitive comb_reg(q, a);
   output q;

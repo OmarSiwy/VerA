@@ -470,19 +470,26 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
 }
 
 test "codegen: the unit prologue aliases the helper API and not its internals" {
-    // `aliasesOf` reads the same text `publish` does, so every helper is
+    // `appendAliases` reads the same text `publish` does, so every helper is
     // aliased by construction. The `z` + uppercase clause is what keeps a
     // kernel file's private names out of the prologue; pin both sides.
+    const gpa = std.testing.allocator;
     const has = std.mem.indexOf;
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "const zScan = zh.zScan;\n") != null);
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "const zFOpen = zh.zFOpen;\n") != null);
+    var str: std.ArrayList(u8) = .empty;
+    defer str.deinit(gpa);
+    try gen_kernel_text.appendAliases(&str, gpa, gen_kernel_text.str_txt);
+    var file: std.ArrayList(u8) = .empty;
+    defer file.deinit(gpa);
+    try gen_kernel_text.appendAliases(&file, gpa, gen_kernel_text.file_txt);
+    try std.testing.expect(has(u8, str.items, "const zScan = zh.zScan;\n") != null);
+    try std.testing.expect(has(u8, file.items, "const zFOpen = zh.zFOpen;\n") != null);
     // str_kernels.zig's `pub const ZScan` and `const zstd`, file_kernels.zig's
     // `fn zfIo` and `const zf_max`: public in h.zig, never named by an emitted
     // body, so aliasing them would be legal, unreferenced, and pure noise.
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "ZScan") == null);
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "zstd") == null);
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "zfIo") == null);
-    try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "zf_max") == null);
+    try std.testing.expect(has(u8, str.items, "ZScan") == null);
+    try std.testing.expect(has(u8, str.items, "zstd") == null);
+    try std.testing.expect(has(u8, file.items, "zfIo") == null);
+    try std.testing.expect(has(u8, file.items, "zf_max") == null);
 }
 
 test "codegen: every split unit file passes AstGen, hoist arrays included" {

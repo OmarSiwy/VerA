@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 10.4.4
 //! reject E1100
 //! reject event trigger
-//! xfail accepted: a function containing an event trigger compiles and runs
 module b_10_4_4_function_event_trigger_rejected;
   reg x;
   event e;

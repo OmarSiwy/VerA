@@ -84,7 +84,6 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\                D.noise_gens.len, want.len, @intFromBool(D.noise_gens.len == want.len),
             \\            });
             \\            inline for (D.noise_gens, 0..) |g, i| {
-            \\                var buf: [192]u8 = undefined;
             \\                // `U`'s tag names ARE the spelling contract — the same
             \\                // names a `//! bias` line uses and the same ones a
             \\                // diagnostic prints — so a fixture writes what it reads
@@ -92,12 +91,13 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\                // `#k` is §4.6.4.6's correlation column: two rows
             \\                // printing the same `#k` share one physical generator;
             \\                // `#null` is a row that declared no identity.
-            \\                const got = std.fmt.bufPrint(&buf, "{s}({s},{s})#{?d}", .{
+            \\                // Every field is comptime, so the row is too, at any length.
+            \\                const got = comptime std.fmt.comptimePrint("{s}({s},{s})#{?d}", .{
             \\                    @tagName(g.kind),
             \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
             \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
             \\                    g.source,
-            \\                }) catch "<too long>";
+            \\                });
             \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
             \\                std.debug.print("noise[{d}] got={s} want={s} ok={d}\n", .{
             \\                    i, got, w_i, @intFromBool(std.mem.eql(u8, got, w_i)),
@@ -294,17 +294,17 @@ fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!vo
         \\        const nq = if (comptime @hasDecl(D, "q")) contract.nQ(D) else 0;
         \\        std.debug.print("qsite count got={d} want={d} ok={d}\n", .{ nq, want.len, @intFromBool(nq == want.len) });
         \\        if (comptime @hasDecl(D, "q")) {
-        \\            const lte = contract.qLte(D);
         \\            inline for (0..nq) |k| {
-        \\                var buf: [256]u8 = undefined;
-        \\                var w: std.Io.Writer = .fixed(&buf);
-        \\                inline for (comptime contract.qStamps(D)) |e| if (e.site == k) {
-        \\                    if (e.sign == 1) w.print("{s}+ ", .{@tagName(e.row)}) catch {}
-        \\                    else if (e.sign == -1) w.print("{s}- ", .{@tagName(e.row)}) catch {}
-        \\                    else w.print("{s}*{d} ", .{ @tagName(e.row), e.sign }) catch {};
+        \\                // Built at comptime from comptime stamps, so a site with
+        \\                // many rows is never cut short.
+        \\                const got = comptime blk: {
+        \\                    @setEvalBranchQuota(1_000_000);
+        \\                    var s: []const u8 = "";
+        \\                    for (contract.qStamps(D)) |e| if (e.site == k) {
+        \\                        s = s ++ if (e.sign == 1) @tagName(e.row) ++ "+ " else if (e.sign == -1) @tagName(e.row) ++ "- " else std.fmt.comptimePrint("{s}*{d} ", .{ @tagName(e.row), e.sign });
+        \\                    };
+        \\                    break :blk s ++ if (contract.qLte(D)[k]) "lte" else "nolte";
         \\                };
-        \\                w.print("{s}", .{if (lte[k]) "lte" else "nolte"}) catch {};
-        \\                const got = w.buffered();
         \\                const w_k: []const u8 = if (k < want.len) want[k] else "<none>";
         \\                std.debug.print("qsite[{d}] got={s} want={s} ok={d}\n", .{ k, got, w_k, @intFromBool(std.mem.eql(u8, got, w_k)) });
         \\            }
@@ -527,7 +527,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
     );
     // Each digital name beside its `Model` field.
-    var buf: [256]u8 = undefined;
+    var buf: [naming.max_name_len]u8 = undefined;
     try out.appendSlice(arena, "const input_ports = [_]Port{");
     for (mx.inputs) |name| {
         try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}\"", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
@@ -559,7 +559,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     // the §5.10 held `Instance` field its value is copied from. A variable
     // that is not held is left out, and the digital half refuses the read.
     try out.appendSlice(arena, "const a2d_ports = [_]Port{");
-    var mod_buf: [256]u8 = undefined;
+    var mod_buf: [naming.max_name_len]u8 = undefined;
     const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
         const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
@@ -883,13 +883,12 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
         \\                D.ac_gens.len, want.len, @intFromBool(D.ac_gens.len == want.len),
         \\            });
         \\            inline for (D.ac_gens, 0..) |g, i| {
-        \\                var buf: [192]u8 = undefined;
         \\                // `U`'s tag names ARE the spelling contract, same as the
         \\                // `//! noise` block and the same as `//! bias`.
-        \\                const got = std.fmt.bufPrint(&buf, "({s},{s})", .{
+        \\                const got = comptime std.fmt.comptimePrint("({s},{s})", .{
         \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
         \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
-        \\                }) catch "<too long>";
+        \\                });
         \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
         \\                std.debug.print("acstim[{d}] got={s} want={s} ok={d}\n", .{
         \\                    i, got, w_i, @intFromBool(std.mem.eql(u8, got, w_i)),

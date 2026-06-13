@@ -6,7 +6,6 @@
 // g = -1 stores 8'hFF; g is signed, so %0d prints -1 (unsigned would be 255).
 // g < 0 is then 1.
 //! inherited IEEE 1364-2005 12.3.3
-//! xfail a reg declared without signed does not inherit signed from its output port declaration (g prints 255)
 `timescale 1ns/1ns
 module test(g);
   output signed [7:0] g;

@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 12.2.2.2
 //! reject E1100
 //! reject assigned twice
-//! xfail VerA accepts two named assignments to one parameter
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

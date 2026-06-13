@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 10.2.1
 //! reject E1100
 //! reject automatic
-//! xfail refused, but as "undeclared instance in a hierarchical reference", which a static task's item gets too; the diagnostic does not name the automatic task
 module b_10_2_1_automatic_task_item_hierarchical_rejected;
   task automatic t;
     reg [7:0] v;

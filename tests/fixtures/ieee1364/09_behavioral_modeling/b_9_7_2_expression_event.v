@@ -11,7 +11,6 @@
 // Lines print only for step > 0: the time-0 x -> 0 initialisation races the
 // always block's first wait, and step is then x or 0.
 //! inherited IEEE 1364-2005 9.7.2
-//! xfail an event expression other than a variable or a posedge/negedge term is refused ("only variable and posedge/negedge event terms are implemented")
 `timescale 1ns/1ns
 module b_9_7_2_expression_event;
   reg a, b;

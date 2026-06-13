@@ -9,7 +9,6 @@
 // a are split one bit per instance, g[0] taking bit 0, so q = ~a bitwise.
 //   a = 4'b0011 -> q = 1100;  a = 4'b1010 -> q = 0101
 //! inherited IEEE 1364-2005 8.6
-//! xfail arrays of UDP instances are refused: "arrays of UDP instances are not implemented by digital execution"
 `timescale 1ns/1ns
 primitive inv(q, a);
   output q;
