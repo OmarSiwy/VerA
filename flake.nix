@@ -49,9 +49,6 @@
           ++ cudaPkgs
           ++ rocmPkgs
         );
-
-        # Verilog-A compiler to benchmark code quality and speed against
-        openvafPkg = import ./nix/openvaf.nix { inherit pkgs; };
       in
       {
         devShells.default = pkgs.mkShell ({
@@ -69,7 +66,6 @@
           packages =
             commonInputs
             ++ [
-              openvafPkg
               pkgs.llvmPackages_21.llvm
 
               # Visualize performance

@@ -134,7 +134,7 @@ pub fn build(b: *std.Build) void {
     b.step(
         "benchmark",
         "Run every fixture through VerA — compile, build, run, judge — and time it " ++
-            "(`-- --against-openvaf` for the head-to-head; USE -Doptimize=ReleaseFast: " ++
+            "(USE -Doptimize=ReleaseFast: " ++
             "that is the shipping number, and the default Debug is several times slower)",
     ).dependOn(&bench.step);
 

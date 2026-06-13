@@ -2,8 +2,8 @@
 //! `Compiler` -> one verdict per fixture and a report. Everything that is not
 //! about a particular compiler lives here: the fixture format, the assertion
 //! lint, the verdict algebra (`judge`), the parallel walk and `--coverage`.
-//! Plugs: `torture.zig` (VerA, runs the model) and `external.zig` (any
-//! compiler, accept/refuse only). `bench.zig` owns `main`.
+//! Plugs: `torture.zig`'s full compiler (runs the model) and its
+//! accept/refuse-only one. `bench.zig` owns `main`.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -56,7 +56,7 @@ pub const Result = union(enum) {
 
 /// One compiler, plugged in.
 pub const Compiler = struct {
-    /// Names the compiler in the report — `vera`, `openvaf-r`.
+    /// Names the compiler in the report.
     name: []const u8,
     /// Whether this compiler runs a fixture or only accepts or refuses it. When
     /// false, an unasserted fixture is not held against it and the summary says
