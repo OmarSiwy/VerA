@@ -134,8 +134,8 @@ pub fn notAModuleItem(self: *Parser) Error {
 ///     enable_gatetype   [drive_strength] [delay3] enable_gate_instance …
 ///
 /// The strength and delay belong to the statement, so every instance shares
-/// them. `delay2` is a `delay3` with no turn-off value, so `parseDelay3` serves
-/// all three arms; a third value on an n-input gate is §7.14's to refuse.
+/// them. `delay2` is a `delay3` with no turn-off value (§7.2, §7.3: "zero,
+/// one, or two delays").
 ///
 /// Outside a digital run the instance is accepted and modelled by nothing,
 /// with W0252 (see `gateNotModelled`).
@@ -164,7 +164,11 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
     if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) try parse_decl.parseDriveStrength(self, &s0, &s1);
-    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
+    const enable = switch (kind) {
+        .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => true,
+        .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => false,
+    };
+    const delay: Ast.Delay3 = if (self.peek() != .hash) .{} else if (enable) try parse_decl.parseDelay3(self) else try parse_decl.parseDelay2(self);
     while (true) {
         const tok = self.pos;
         // A.3.1 makes `name_of_gate_instance` optional; `(` after the name
@@ -172,7 +176,9 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
         // `name_of_gate_instance ::= gate_instance_identifier [ range ]` is
         // §7.1.5's instance array.
         var range: ?Ast.Dim = null;
+        var name: Ast.StrId = .none;
         if (self.identLike(self.pos)) {
+            name = try self.internTok(self.pos);
             self.pos += 1;
             range = try parse_decl.optDim(self);
         }
@@ -207,18 +213,18 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
                         const one = try self.arena.alloc(Ast.ExprId, 1);
                         one[0] = input;
                         break :input_only one;
-                    }, .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
+                    }, .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .name = name, .main_tok = tok });
             },
             // A.3.1 `( output_terminal , input_terminal , enable_terminal )`
             .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => {
                 if (terms.items.len != 3) return self.failAt(tok, .E0209, "an enable gate takes an output, a data input and an enable", .{});
-                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
+                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .name = name, .main_tok = tok });
             },
             // A.3.1 `( output_terminal , input_terminal { , input_terminal } )`.
             // IEEE 1364-2005 §7.2: "one output and one or more inputs".
             .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => {
                 if (terms.items.len < 2) return self.failAt(tok, .E0209, "an n-input gate takes an output and at least one input", .{});
-                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .main_tok = tok });
+                try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .range = range, .name = name, .main_tok = tok });
             },
         }
         if (!self.eat(.comma)) break;

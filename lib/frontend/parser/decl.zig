@@ -925,12 +925,21 @@ pub fn parseChargeStrength(self: *Parser, kind: Ast.NetKind) Error!Ast.Strength 
 
 /// A.2.2.3 `delay3 ::= # delay_value | # ( mintypmax_expression [ ,
 /// mintypmax_expression [ , mintypmax_expression ] ] )`. Cursor on the `#`.
-/// Each value is parsed as a plain expression; the `min:typ:max` form is not.
 ///
 /// One value is all three transitions (IEEE 1364-2005 §7.14). Two leave
 /// `off` unset, because the clause derives it as the smaller of the two and
 /// that is arithmetic on the evaluated values, not a syntax node.
 pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
+    return parseDelays(self, true);
+}
+
+/// A.2.2.3 `delay2`: a `delay3` with no turn-off value, so a third value is
+/// E0210.
+pub fn parseDelay2(self: *Parser) Error!Ast.Delay3 {
+    return parseDelays(self, false);
+}
+
+fn parseDelays(self: *Parser, three: bool) Error!Ast.Delay3 {
     _ = try self.expect(.hash);
     if (!self.eat(.lparen)) {
         const v = try parseDelayValue(self);
@@ -942,7 +951,7 @@ pub fn parseDelay3(self: *Parser) Error!Ast.Delay3 {
     out.off = out.rise;
     if (self.eat(.comma)) {
         out.fall = try parse_expr.parseMinTypMax(self);
-        out.off = if (self.eat(.comma)) try parse_expr.parseMinTypMax(self) else .none;
+        out.off = if (three and self.eat(.comma)) try parse_expr.parseMinTypMax(self) else .none;
     }
     // After the third value the production admits only `)`. E0210 names the
     // missing parenthesis; E0207 would send the reader to the previous
