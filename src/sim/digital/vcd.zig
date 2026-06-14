@@ -11,15 +11,14 @@ const exec = @import("exec.zig");
 const compile = @import("compile.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
-const zCReal = @import("kernels").str_kernels.zCReal;
 
 /// The §18.1 tasks: `$dumpfile`, `$dumpvars`, `$dumpoff`, `$dumpon`,
 /// `$dumpall`, `$dumplimit`, `$dumpflush`.
 pub const Op = enum { file, vars, off, on, all, limit, flush };
 
 /// What `$dumpvars` can select, fixed at elaboration: every scope, and each
-/// instance scope's variables in declaration order (ports, nets, then
-/// variables; no arrays, parameters or events).
+/// instance scope's variables in declaration order (ports, nets, variables,
+/// then named events; no arrays or parameters).
 pub const Catalog = struct {
     scopes: []const Scope,
     /// Scope s's variables: `vars[var_start[s]..var_start[s + 1]]`.
@@ -41,7 +40,7 @@ pub const Scope = struct {
 
 /// One `$var`: `head` up to its identifier code, `tail` after it. `off` is
 /// the slot's first plane word in a native executable.
-pub const Var = struct { slot: u32, off: u32 = 0, width: u32, real: bool, head: []const u8, tail: []const u8 };
+pub const Var = struct { slot: u32, off: u32 = 0, width: u32, real: bool, event: bool = false, head: []const u8, tail: []const u8 };
 
 /// `$dumpvars` names a scope (with its level count) or a variable.
 pub const Target = union(enum) { scope: u32, slot: u32 };
@@ -50,7 +49,12 @@ pub const Target = union(enum) { scope: u32, slot: u32 };
 /// written for it, both planes. Two references to one slot (a port
 /// collapsed onto its parent's net) share the code, which §18.2.3.7 b)
 /// permits.
-const Code = struct { v: u32, last: []u64 };
+const Code = struct {
+    v: u32,
+    last: []u64,
+    /// An event's code: triggered in this time step (§18.2.2).
+    fired: bool = false,
+};
 
 pub const Failure = error{ NoFilesystem, CannotCreate, CannotWrite, DumpvarsTime } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
@@ -68,6 +72,9 @@ pub fn message(e: Failure) []const u8 {
 /// The dump's state and writer.
 pub const Vcd = struct {
     name: []const u8 = "dump.vcd",
+    /// The `$dumpfile` call as written (`callText`), for §18.2.3.8's
+    /// `$version`; null when none ran.
+    call: ?[]const u8 = null,
     /// §18.1.2 the `$dumpvars` selection: scopes with their level count
     /// (0 = every level below) and single variables, by slot.
     scopes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
@@ -89,10 +96,11 @@ pub const Vcd = struct {
     last_time: ?u64 = null,
 
     /// §18.1.1 `$dumpfile`: the name, unless dumping has begun or it is
-    /// null (an x or z bit).
-    pub fn setFile(self: *Vcd, gpa: std.mem.Allocator, name: ?[]const u8) Failure!void {
+    /// null (an x or z bit); `call` is the call as written.
+    pub fn setFile(self: *Vcd, gpa: std.mem.Allocator, name: ?[]const u8, call: []const u8) Failure!void {
         if (self.started) return;
         self.name = try gpa.dupe(u8, name orelse return);
+        self.call = try gpa.dupe(u8, call);
     }
 
     /// §18.1.2 one `$dumpvars` at time `now`: `levels` applies to the scopes
@@ -105,6 +113,16 @@ pub const Vcd = struct {
         for (targets) |t| switch (t) {
             .scope => |sc| try self.scopes.put(gpa, sc, levels),
             .slot => |sl| try self.slots.put(gpa, sl, {}),
+        };
+    }
+
+    /// §18.2.2 named event `slot` was triggered: its code is written as a
+    /// marker at the end of the step. The engine asks for the tick.
+    pub fn fire(self: *Vcd, cat: *const Catalog, slot: u32) void {
+        // ponytail: a scan of the codes per trigger; a slot index when a
+        // design dumps many events.
+        for (self.codes.items) |*c| if (cat.vars[c.v].slot == slot) {
+            c.fired = true;
         };
     }
 
@@ -165,16 +183,22 @@ pub const Vcd = struct {
         const md = yd.calculateMonthDay();
         const ds = t.getDaySeconds();
         try w.writer.print("$date\n\t{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n$end\n", .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() });
-        // ponytail: §18.2.3.8 wants the unevaluated `$dumpfile` argument; this
-        // prints the name it evaluated to, which is the same text for a literal.
-        try w.writer.print("$version\n\tVerA\n\t$dumpfile(\"{s}\")\n$end\n", .{self.name});
+        // §18.2.3.8: "If a variable or an expression was used to specify the
+        // filename within $dumpfile, the unevaluated variable or expression
+        // literal shall appear in the $version string."
+        if (self.call) |c|
+            try w.writer.print("$version\n\tVerA\n\t{s}\n$end\n", .{c})
+        else
+            try w.writer.print("$version\n\tVerA\n\t$dumpfile(\"{s}\")\n$end\n", .{self.name});
         // Ticks are the precision (`Time.Scale`'s global), so the file's unit
         // is the precision: `time_number` 1, 10 or 100 of an SI unit.
         const e = cat.finest;
         const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
         const k: i32 = @divFloor(e, 3);
         try w.writer.print("$timescale {d}{s} $end\n", .{ std.math.pow(u32, 10, @intCast(e - 3 * k)), units[@intCast(k + 5)] });
-        try self.dumpScope(gpa, &w, cat, src, 0, null);
+        // Every top-level module is a root: scope 0 and each scope that is
+        // its own parent.
+        for (cat.scopes, 0..) |sc, i| if (i == 0 or sc.parent == i) try self.dumpScope(gpa, &w, cat, src, @intCast(i), null);
         try w.writer.writeAll("$enddefinitions $end\n");
         try self.put(io, w.written());
     }
@@ -230,6 +254,8 @@ pub const Vcd = struct {
         try self.time(&w.writer, now);
         try w.writer.print("{s}\n", .{keyword});
         for (self.codes.items, 0..) |c, i| {
+            // An event holds no value to checkpoint.
+            if (cat.vars[c.v].event) continue;
             src.dumpPlanes(cat.vars[c.v], c.last);
             try value(&w.writer, cat.vars[c.v], c.last, @intCast(i), as_x);
         }
@@ -244,7 +270,18 @@ pub const Vcd = struct {
         // ponytail: every dumped variable is compared each dumped step; a changed
         // list fed by `store` replaces the scan when a design dumps thousands.
         var buf: std.ArrayList(u64) = .empty;
-        for (self.codes.items, 0..) |c, i| {
+        for (self.codes.items, 0..) |*c, i| {
+            // §18.2.2: "Events are dumped in the same format as scalars ...
+            // the value ... is irrelevant", a marker of a trigger.
+            if (cat.vars[c.v].event) {
+                if (!c.fired) continue;
+                c.fired = false;
+                if (w.written().len == 0) try self.time(&w.writer, now);
+                try w.writer.writeByte('1');
+                try codeText(&w.writer, @intCast(i));
+                try w.writer.writeByte('\n');
+                continue;
+            }
             try buf.resize(a, c.last.len);
             src.dumpPlanes(cat.vars[c.v], buf.items);
             if (std.mem.eql(u64, c.last, buf.items)) continue;
@@ -255,6 +292,25 @@ pub const Vcd = struct {
         try self.put(io, w.written());
     }
 };
+
+/// The source text of the task call whose name starts `text` at `start`,
+/// through its closing parenthesis: `$dumpfile(fname)`.
+pub fn callText(text: []const u8, start: u32) []const u8 {
+    var depth: u32 = 0;
+    var i: usize = start;
+    var quoted = false;
+    while (i < text.len) : (i += 1) switch (text[i]) {
+        '"' => quoted = !quoted,
+        '\\' => i += @intFromBool(quoted),
+        '(' => depth += @intFromBool(!quoted),
+        ')' => if (!quoted) {
+            depth -= 1;
+            if (depth == 0) return text[start .. i + 1];
+        },
+        else => {},
+    };
+    return text[start..];
+}
 
 fn words(w: u32) u32 {
     return (w + 63) / 64;
@@ -278,7 +334,7 @@ fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.I
     const lit: Front.Integer.Literal = .{ .width = v.width, .signed = false, .sized = true, .planes = @constCast(p) };
     if (v.real and !as_x) {
         var buf: [64]u8 = undefined;
-        try w.print("r{s} ", .{zCReal(&buf, @bitCast(p[0]), 'g', 0, 0, 16)});
+        try w.print("r{s} ", .{g16(&buf, @bitCast(p[0]))});
     } else if (v.width == 1) {
         try w.writeByte(if (as_x) 'x' else digit(lit.bit(0)));
     } else {
@@ -298,6 +354,36 @@ fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.I
     }
     try codeText(w, code);
     try w.writeByte('\n');
+}
+
+/// §18.2.1 "A real number is dumped using a %.16g printf() format": C's
+/// style e when the exponent is below -4 or at least 16, else style f with
+/// 16 significant digits, trailing zeros and point removed either way.
+fn g16(buf: *[64]u8, r: f64) []const u8 {
+    if (std.math.isNan(r)) return "nan";
+    if (std.math.isInf(r)) return if (r < 0) "-inf" else "inf";
+    var sci_buf: [64]u8 = undefined;
+    const sci = std.fmt.bufPrint(&sci_buf, "{e:.15}", .{r}) catch unreachable;
+    const e_at = std.mem.indexOfScalar(u8, sci, 'e').?;
+    const x = std.fmt.parseInt(i32, sci[e_at + 1 ..], 10) catch unreachable;
+    if (x < -4 or x >= 16) {
+        const mant = strip(sci[0..e_at]);
+        return std.fmt.bufPrint(buf, "{s}e{c}{d:0>2}", .{ mant, @as(u8, if (x < 0) '-' else '+'), @abs(x) }) catch unreachable;
+    }
+    return strip(std.fmt.bufPrint(buf, "{d:.[1]}", .{ r, @as(usize, @intCast(15 - x)) }) catch unreachable);
+}
+
+/// `%g`'s removal of trailing fraction zeros and a trailing point.
+fn strip(s: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, s, '.') == null) return s;
+    const t = std.mem.trimEnd(u8, s, "0");
+    return if (t[t.len - 1] == '.') t[0 .. t.len - 1] else t;
+}
+
+test "§18.2.1 %.16g" {
+    var buf: [64]u8 = undefined;
+    for ([_]f64{ 1.5, -2.25e10, 0.25, 6.02e23, 1e16, 0.0, 1.0 / 3.0, 1e-5, 123456789012345678.0 }, [_][]const u8{ "1.5", "-22500000000", "0.25", "6.02e+23", "1e+16", "0", "0.3333333333333333", "1e-05", "1.234567890123457e+17" }) |r, want|
+        try std.testing.expectEqualStrings(want, g16(&buf, r));
 }
 
 fn digit(b: Front.Integer.Bit) u8 {
@@ -347,8 +433,8 @@ pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
         const last = i + 1 == parts.len;
         if (r.instances.get(.{ .scope = scope, .str = p })) |child| {
             scope = child;
-        } else if (first and p == r.scope_info.items[0].name) {
-            scope = 0;
+        } else if (if (first) rootNamed(r, p) else null) |t| {
+            scope = t;
         } else if (last) {
             const at = (if (parts.len == 1) r.lookup(scope, p) else r.names.get(.{ .scope = scope, .str = p })) orelse
                 return r.exprFail(e, "$dumpvars names a module instance or a variable");
@@ -359,6 +445,76 @@ pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
     return .{ .scope = scope };
 }
 
+/// §18.3 the extended VCD tasks.
+pub const PortsOp = enum { ports, off, on, all, limit, flush };
+
+pub const ports_tasks = std.StaticStringMap(PortsOp).initComptime(.{
+    .{ "$dumpports", .ports },
+    .{ "$dumpportsoff", .off },
+    .{ "$dumpportson", .on },
+    .{ "$dumpportsall", .all },
+    .{ "$dumpportslimit", .limit },
+    .{ "$dumpportsflush", .flush },
+});
+
+/// What §18.3.1's rules across `$dumpports` calls need: the scopes and
+/// literal file names already given, and the first call.
+pub const PortsCheck = struct {
+    tok: ?u32 = null,
+    scopes: std.ArrayList(u32) = .empty,
+    files: std.ArrayList(Ast.StrId) = .empty,
+};
+
+/// Refuses a malformed §18.3 call (Syntax 18-21 to 18-25).
+// ponytail: the checks only; the dump itself is refused once every call is
+// checked (`root.elaborate`).
+pub fn checkPorts(r: *Run, op: PortsOp, args: []const Ast.ExprId, tok: u32) Error!void {
+    const ex = &r.file.exprs;
+    const given: []const Ast.ExprId = if (args.len == 1 and args[0] == .none) &.{} else args;
+    for (given) |a| if (a == .none) return r.fail(tok, "the §18.3 dump tasks take no null arguments", .{});
+    switch (op) {
+        // `$dumpports ( scope_list , file_pathname )`: "Only modules are
+        // allowed (not variables)", "Each scope specified in the scope_list
+        // shall be unique", and "Specifying the same file_pathname multiple
+        // times is not allowed". The last argument is the file unless it
+        // names an instance.
+        .ports => {
+            r.ports_dump.tok = r.ports_dump.tok orelse tok;
+            for (given, 0..) |a, i| {
+                const last = i + 1 == given.len;
+                if (last and ex.tag(a) == .str_literal) {
+                    const f = ex.strOf(a);
+                    if (std.mem.indexOfScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
+                        return r.exprFail(a, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls");
+                    try r.ports_dump.files.append(r.arena, f);
+                    continue;
+                }
+                if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) {
+                    if (last) continue;
+                    return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance");
+                }
+                const sc = switch (try target(r, a)) {
+                    .scope => |sc| sc,
+                    .slot => if (last) continue else return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance: only modules are allowed, not variables"),
+                };
+                if (std.mem.indexOfScalar(u32, r.ports_dump.scopes.items, sc) != null)
+                    return r.exprFail(a, "§18.3.1: each $dumpports scope shall be unique");
+                try r.ports_dump.scopes.append(r.arena, sc);
+            }
+        },
+        .off, .on, .all, .flush => if (given.len > 1) return r.fail(tok, "$dumpportsoff, $dumpportson, $dumpportsall and $dumpportsflush take at most one file_pathname argument", .{}),
+        // "The filesize argument is required".
+        .limit => if (given.len == 0 or given.len > 2) return r.fail(tok, "$dumpportslimit takes a filesize, then optionally a file_pathname", .{}),
+    }
+    for (given) |a| if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) try compile.checkExpr(r, a);
+}
+
+/// The top-level module named `name`.
+fn rootNamed(r: *const Run, name: Ast.StrId) ?u32 {
+    for (r.roots) |t| if (r.scope_info.items[t].name == name) return t;
+    return null;
+}
+
 // ---- the interpreter's half ---------------------------------------------------
 
 /// `r`'s `Catalog`: `offs` gives each slot's first plane word (a native
@@ -367,26 +523,41 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
     const scopes = try a.alloc(Scope, r.scope_info.items.len);
     const var_start = try a.alloc(u32, scopes.len + 1);
     var vars: std.ArrayList(Var) = .empty;
-    for (r.scope_info.items, scopes, 0..) |info, *sc, s| {
+    // §18.2.3.4 a static task's or function's frame is a scope of its own.
+    const subs = try a.alloc(?*const Ast.Subroutine, scopes.len);
+    @memset(subs, null);
+    for (r.subs.items) |sub| if (sub.framed and !sub.decl.automatic) {
+        subs[sub.frame.scope] = sub.decl;
+    };
+    for (r.scope_info.items, scopes, subs, 0..) |info, *sc, sub, s| {
         var line: std.Io.Writer.Allocating = .init(a);
-        try line.writer.print("$scope {s} {s}", .{ if (info.lexical) "begin" else "module", r.file.str(info.name) });
+        const kind = if (sub) |t| (if (t.is_function) "function" else "task") else if (info.lexical) "begin" else "module";
+        try line.writer.print("$scope {s} {s}", .{ kind, r.file.str(info.name) });
         if (info.index) |i| try line.writer.print("[{d}]", .{i});
         try line.writer.writeAll(" $end\n");
-        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = !(info.lexical and info.index == null) };
+        sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = sub != null or !(info.lexical and info.index == null) };
         var_start[s] = @intCast(vars.items.len);
-        if (info.lexical) continue;
-        const m = for (r.file.modules) |*m| {
-            if (m.name == info.module) break m;
-        } else unreachable; // every instance scope was minted from a module
+        var decls: std.ArrayList(Ast.VarDecl) = .empty;
         var names: std.ArrayList(Ast.StrId) = .empty;
-        for (m.ports) |p| try names.append(a, p.name);
-        for (m.nets) |n| try names.append(a, n.name);
-        for (m.vars) |x| try names.append(a, x.name);
+        var events: []const Ast.StrId = &.{};
+        if (sub) |t| {
+            for (t.ports) |p| try decls.append(a, p.v);
+            try decls.appendSlice(a, t.vars);
+        } else {
+            if (info.lexical) continue;
+            const m = &r.file.modules[info.def];
+            for (m.ports) |p| try names.append(a, p.name);
+            for (m.nets) |n| try names.append(a, n.name);
+            try decls.appendSlice(a, m.vars);
+            events = m.events;
+        }
+        for (decls.items) |d| try names.append(a, d.name);
+        try names.appendSlice(a, events);
         for (names.items, 0..) |name, i| {
             if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;
-            if (r.arrays.contains(at) or r.params.contains(at) or r.events.contains(at)) continue;
-            try vars.append(a, try variable(r, a, m, name, at, if (offs.len == 0) 0 else offs[at]));
+            if (r.arrays.contains(at) or r.params.contains(at)) continue;
+            try vars.append(a, try variable(r, a, decls.items, name, at, if (offs.len == 0) 0 else offs[at]));
         }
     }
     var_start[scopes.len] = @intCast(vars.items.len);
@@ -394,26 +565,27 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
 }
 
 /// §18.2.3.7 `$var var_type size identifier_code reference $end`.
-fn variable(r: *Run, a: std.mem.Allocator, m: *const Ast.ModuleDecl, name: Ast.StrId, at: u32, off: u32) Error!Var {
-    const kind: []const u8 = if (r.net_of.get(at)) |n| switch (r.nets[n].kind) {
+fn variable(r: *Run, a: std.mem.Allocator, decls: []const Ast.VarDecl, name: Ast.StrId, at: u32, off: u32) Error!Var {
+    const kind: []const u8 = if (r.events.contains(at)) "event" else if (r.net_of.get(at)) |n| switch (r.nets[n].kind) {
         // "a net of net type uwire shall have a variable type of wire"
         .uwire => "wire",
         .wreal => "real",
         .wire, .tri, .tri0, .tri1, .triand, .trior, .trireg, .wand, .wor, .supply0, .supply1 => @tagName(r.nets[n].kind),
-    } else if (r.reals.contains(at)) "real" else for (m.vars) |x| {
+    } else if (r.reals.contains(at)) "real" else for (decls) |x| {
         if (x.name == name) break switch (x.storage) {
             .reg => "reg",
             .time => "time",
             .variable => "integer",
         };
     } else "reg";
-    const width = r.values[at].width;
+    const event = r.events.contains(at);
+    const width = if (event) 1 else r.values[at].width;
     const head = try std.fmt.allocPrint(a, "$var {s} {d} ", .{ kind, width });
     var tail: std.Io.Writer.Allocating = .init(a);
     try tail.writer.print(" {s}", .{r.file.str(name)});
     if (r.vec_ranges.get(at)) |range| try tail.writer.print(" [{d}:{d}]", .{ range.msb, range.lsb });
     try tail.writer.writeAll(" $end\n");
-    return .{ .slot = at, .off = off, .width = width, .real = r.reals.contains(at), .head = head, .tail = tail.written() };
+    return .{ .slot = at, .off = off, .width = width, .real = r.reals.contains(at), .event = event, .head = head, .tail = tail.written() };
 }
 
 /// The interpreter as `Vcd`'s `src`.
@@ -446,12 +618,14 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
     switch (op) {
         .file => if (args.len == 1 and !v.started) {
             const name = try @import("system.zig").text(a, try exec.eval(r, a, args[0], 0));
-            v.setFile(r.arena, name) catch |e| return failed(r, e);
+            v.setFile(r.arena, name, callText(r.text, r.starts[tok])) catch |e| return failed(r, e);
         },
         .vars => {
             var targets: std.ArrayList(Target) = .empty;
             var levels: u32 = 0;
-            if (args.len == 0) try targets.append(a, .{ .scope = 0 }) else {
+            if (args.len == 0) {
+                for (r.roots) |s| try targets.append(a, .{ .scope = s });
+            } else {
                 levels = std.math.lossyCast(u32, (try exec.eval(r, a, args[0], 0)).asInt() orelse 0);
                 for (args[1..]) |e| try targets.append(a, try target(r, e));
             }

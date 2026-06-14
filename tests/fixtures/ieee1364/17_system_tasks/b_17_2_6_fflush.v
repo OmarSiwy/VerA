@@ -7,7 +7,6 @@
 // wrote is in its file, so a second descriptor opened for reading sees it:
 //   fd wrote "P" (80), mcd wrote "M" (77) -> "80 77"
 //! inherited IEEE 1364-2005 17.2.6
-//! xfail $fflush is not implemented: "digital system task `$fflush` is not implemented" (E1100)
 module b_17_2_6_fflush;
   integer fd, mcd, rd, c1, c2;
   initial begin

@@ -314,6 +314,10 @@ typedef struct t_vpi_delay {
 #define vpiSize                 4   /* int: bits of a net, reg or port */
 #define vpiTopModule            7   /* bool: §11.6.1 */
 #define vpiDefName              9   /* str: §11.6.1 module definition name */
+#define vpiCell                51   /* str: IEEE 1364 §13.6 the cell bound */
+#define vpiConfig              52   /* str: IEEE 1364 §13.6 lib.cell of the config
+                                       binding the module; NULL without one */
+#define vpiLibrary             58   /* str: IEEE 1364 §13.6 the module's library */
 #define vpiScalar              17   /* bool: §11.6.4 NOTE 3, §11.6.8 */
 #define vpiVector              18   /* bool: §11.6.4 NOTE 3, §11.6.8 */
 #define vpiDirection           20   /* int: §11.6.4, one of the values below */

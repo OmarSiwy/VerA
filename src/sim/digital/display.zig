@@ -17,6 +17,8 @@ const run = @import("root.zig").run;
 const expectRun = @import("root.zig").expectRun;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+const Signal = @import("net.zig").Signal;
+const netPull = @import("net.zig").netPull;
 /// §9.4.3 Table 9-23's C conversion, the one the analog devices run.
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("system.zig");
@@ -316,10 +318,15 @@ pub const Task = union(enum) {
     pla: system.Pla,
     /// §17.2.7 `$fclose`.
     fclose,
+    /// §17.2.6 `$fflush`: every write is already in its file
+    /// (`file_kernels.zFFlush`), so it only reads its argument.
+    fflush,
     /// §17.2.2 `$fdisplay`/`$fwrite`: `show` to a descriptor.
     fshow: Show,
-    /// §17.2.3 `$swrite`/`$sformat`: `show` into the first argument, a variable.
+    /// §17.2.3 `$swrite`: `show` into the first argument, a variable.
     sshow: Show,
+    /// §17.2.3 `$sformat`: `sformat`'s text into the first argument.
+    sformat,
     /// §17.3.1 `$printtimescale`.
     printtimescale,
     /// §18.1 the value change dump tasks.
@@ -361,6 +368,7 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$q_remove", Task{ .queue = .remove } },
     .{ "$q_exam", Task{ .queue = .exam } },
     .{ "$fclose", .fclose },
+    .{ "$fflush", .fflush },
     .{ "$fdisplay", Task{ .fshow = showAs(.decimal, true) } },
     .{ "$fdisplayb", Task{ .fshow = showAs(.binary, true) } },
     .{ "$fdisplayo", Task{ .fshow = showAs(.octal, true) } },
@@ -373,7 +381,7 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$swriteb", Task{ .sshow = showAs(.binary, false) } },
     .{ "$swriteo", Task{ .sshow = showAs(.octal, false) } },
     .{ "$swriteh", Task{ .sshow = showAs(.hex, false) } },
-    .{ "$sformat", Task{ .sshow = showAs(.decimal, false) } },
+    .{ "$sformat", .sformat },
     .{ "$printtimescale", .printtimescale },
     .{ "$dumpfile", Task{ .dump = .file } },
     .{ "$dumpvars", Task{ .dump = .vars } },
@@ -399,10 +407,37 @@ pub const TimeFormat = fmt.TimeFormat;
 /// `allocator` it only validates the call. Every conversion is width-exact
 /// (IEEE 1364-2005 §17.1.1.3), x and z apart (§17.1.1.4).
 pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show) Error!void {
+    return walk(self, args, allocator, show, false);
+}
+
+/// §17.2.3 `$sformat`'s text of `args` (after its variable): "always
+/// interprets its second argument, and only its second argument as a format
+/// string", which "can be a static string ... or can be a reg variable whose
+/// content is interpreted as the format string". Specifiers and arguments
+/// that do not pair up at run time warn (W1153) and the task continues.
+pub fn sformat(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator) Error!void {
+    return walk(self, args, allocator, .{ .radix = .decimal, .newline = false }, true);
+}
+
+/// The W1153 text.
+pub const sformat_mismatch = "$sformat: the format's specifiers and the arguments after it do not pair up";
+
+fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
+    const at = self.starts[@min(self.file.exprs.mainTok(e), self.starts.len - 1)];
+    try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
+}
+
+fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
     var arg: usize = 0;
     while (arg < args.len) : (arg += 1) {
         const e = args[arg];
+        if (only_first and arg != 0) {
+            // Arguments left over once the format is used up.
+            for (args[arg..]) |rest| if (rest != .none) try compile.checkExpr(self, rest);
+            if (allocator != null) try sformatMismatch(self, e);
+            return;
+        }
         // §9.4.1: "Any null argument produces a single space character in
         // the display. (A null argument is characterized by two adjacent
         // commas (,,) in the argument list.)"
@@ -410,16 +445,22 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
             if (allocator != null) try self.out.writeByte(' ');
             continue;
         }
+        // A format held in a variable is known only when the task runs.
+        const dynamic = only_first and ex.tag(e) != .str_literal;
         // Only a string is a format. §9.4.3's last sentence before Table
         // 9-23: "Any expression argument with no corresponding format
         // specification is displayed using the default decimal format",
         // the default of this task, so $displayh's bare argument is hex.
-        if (ex.tag(e) != .str_literal) {
+        if (ex.tag(e) != .str_literal and !dynamic) {
             try compile.checkExpr(self, e);
             if (allocator) |a| try emitValue(self, try exec.eval(self, a, e, 0), show.radix, null);
             continue;
         }
-        const format = self.file.str(ex.strOf(e));
+        if (dynamic and allocator == null) {
+            for (args) |x| if (x != .none) try compile.checkExpr(self, x);
+            return;
+        }
+        const format = if (dynamic) (try system.text(allocator.?, try exec.eval(self, allocator.?, e, 0))) orelse "" else self.file.str(ex.strOf(e));
         var i: usize = 0;
         while (i < format.len) : (i += 1) {
             if (format[i] != '%') {
@@ -427,7 +468,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 continue;
             }
             i += 1;
-            if (i == format.len) return self.exprFail(e, "unterminated display format");
+            if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
             if (format[i] == '%') {
                 if (allocator != null) try self.out.writeByte('%');
                 continue;
@@ -449,7 +490,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
                     precision = precision *| 10 +| (format[i] - '0');
             }
-            if (i == format.len) return self.exprFail(e, "unterminated display format");
+            if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -466,9 +507,9 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 // time unit.
                 't', 'T' => {
                     arg += 1;
-                    if (arg == args.len) return self.exprFail(e, "missing display argument");
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
-                    if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0));
+                    if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0), width);
                     continue;
                 },
                 // §17.1.1.6 `%m` and §13.6 `%l` consume no argument: they
@@ -478,25 +519,44 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                     continue;
                 },
                 'l', 'L' => {
-                    if (allocator != null) try self.out.print("work.{s}", .{self.file.str(self.scope_info.items[self.scope].module)});
+                    const def = self.scope_info.items[self.scope].def;
+                    if (allocator != null) try self.out.print("{s}.{s}", .{ self.file.str(self.def_lib[def]), self.file.str(self.file.modules[def].name) });
+                    continue;
+                },
+                // §17.1.1.5 `%v`: "the strength of scalar nets".
+                'v', 'V' => {
+                    arg += 1;
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
+                    try compile.checkExpr(self, args[arg]);
+                    if (compile.typeOf(self, args[arg]).width != 1) return self.exprFail(args[arg], "§17.1.1.5: %v takes a scalar net reference");
+                    const net = if (ex.tag(args[arg]) == .ident) self.net_of.get(try self.slot(args[arg])) else null;
+                    // The resolution keeps a net's `signal` only when read.
+                    if (net) |n| self.nets[n].strength_read = true;
+                    if (allocator) |a| {
+                        const n = if (net) |k| self.nets[k] else null;
+                        const sig: Signal = if (n == null)
+                            .of((try exec.eval(self, a, args[arg], 0)).bit(0), .strong, .strong)
+                        else if (n.?.drivers.len == 0) netPull(n.?.kind) else n.?.signal[0];
+                        try strength(self.out, sig);
+                    }
                     continue;
                 },
                 // §17.1.1.7 `%s` (the operand as 8-bit ASCII codes) and
                 // `%c` (its low eight bits as one character).
                 's', 'S', 'c', 'C' => {
                     arg += 1;
-                    if (arg == args.len) return self.exprFail(e, "missing display argument");
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
                     if (allocator) |a| try fmt.text(self.out, try exec.eval(self, a, args[arg], 0), format[i] == 'c' or format[i] == 'C', width);
                     continue;
                 },
                 else => return self.exprFail(
                     e,
-                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t are implemented",
+                    "only the §9.4.3 Table 9-22 conversions (%b, %o, %h, %d, %e, %f, %g, §9.4.7 %r and %%) and %c %s %m %l %t %v are implemented",
                 ),
             };
             arg += 1;
-            if (arg == args.len) return self.exprFail(e, "missing display argument");
+            if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
             if (radix) |r| {
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| try emitValue(self, try exec.eval(self, a, args[arg], 0), r, width);
@@ -527,7 +587,7 @@ pub fn emitScope(self: *Run) Error!void {
     while (true) {
         chain[depth] = s;
         depth += 1;
-        if (s == 0 or depth == chain.len) break;
+        if (self.scope_info.items[s].parent == s or s == 0 or depth == chain.len) break;
         s = self.scope_info.items[s].parent;
     }
     while (depth != 0) {
@@ -556,23 +616,57 @@ pub fn emitScope(self: *Run) Error!void {
     for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
 }
 
-fn emitTime(self: *Run, v: Int.Literal) Error!void {
-    try fmt.time(self.out, v, self.time_format, self.timeOf(self.scope).unit_exp);
+/// §17.1.1.5 `%v` of the §7.10 signal `s`: a Table 17-5 mnemonic and the
+/// Table 17-4 value (0 1 X Z L H), or, where a 0 or 1 spans a range of
+/// strengths, its maximum and minimum levels as digits, and for an X whose
+/// sides differ, its 0 and 1 levels ("35X").
+fn strength(out: *std.Io.Writer, s: Signal) Error!void {
+    const names = [_][]const u8{ "Hi", "Sm", "Me", "We", "La", "Pu", "St", "Su" };
+    const lo: u8 = @abs(s.lo);
+    const hi: u8 = @abs(s.hi);
+    if (s.lo == 0 and s.hi == 0) return out.writeAll("HiZ");
+    if (s.lo >= 0 and s.hi > 0 and s.lo != 0) return if (lo == hi) out.print("{s}1", .{names[hi]}) else out.print("{d}{d}1", .{ hi, lo });
+    if (s.hi <= 0 and s.lo < 0 and s.hi != 0) return if (lo == hi) out.print("{s}0", .{names[lo]}) else out.print("{d}{d}0", .{ lo, hi });
+    if (s.lo == 0) return out.print("{s}H", .{names[hi]});
+    if (s.hi == 0) return out.print("{s}L", .{names[lo]});
+    return if (lo == hi) out.print("{s}X", .{names[lo]}) else out.print("{d}{d}X", .{ lo, hi });
 }
 
-/// IEEE 1364-2005 §17.3.1 `$printtimescale` with no argument: "the time unit
-/// and precision of the module that is the current scope", in the clause's
-/// format `Time scale of (module_name) is unit / precision`.
-pub fn printTimescale(self: *Run) Error!void {
-    // ponytail: the no-argument form only; `compile` refuses a named module.
-    const mt = self.timeOf(self.scope);
+/// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
+/// minimum field width.
+fn emitTime(self: *Run, v: Int.Literal, width: ?u32) Error!void {
+    var f = self.time_format;
+    if (width) |w| f.width = w;
+    try fmt.time(self.out, v, f, self.timeOf(self.scope).unit_exp);
+}
+
+/// IEEE 1364-2005 §17.3.1 `$printtimescale`: "the time unit and precision of
+/// the module that is the current scope", or with an argument "of the module
+/// passed to it", in the clause's format `Time scale of (name) is unit /
+/// precision`. The name is the current module's, or the argument as written.
+pub fn printTimescale(self: *Run, args: []const Ast.ExprId) Error!void {
+    const scope = if (args.len == 1) try timescaleScope(self, args[0]) else self.scope;
+    const mt = self.timeOf(scope);
     const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
-    const name = self.file.str(self.scope_info.items[self.scope].module);
-    try self.out.print("Time scale of ({s}) is ", .{name});
+    try self.out.writeAll("Time scale of (");
+    if (args.len == 0) try self.out.writeAll(self.file.str(self.file.modules[self.scope_info.items[self.scope].def].name)) else {
+        const ex = &self.file.exprs;
+        const parts: []const Ast.StrId = if (ex.tag(args[0]) == .ident) &.{ex.strOf(args[0])} else ex.nameParts(args[0]);
+        for (parts, 0..) |p, i| try self.out.print("{s}{s}", .{ if (i == 0) "" else ".", self.file.str(p) });
+    }
+    try self.out.writeAll(") is ");
     try fmt.decade(self.out, mt.unit_exp);
     try self.out.writeAll(" / ");
     try fmt.decade(self.out, prec_exp);
     try self.out.writeByte('\n');
+}
+
+/// §17.3.1 the module instance `$printtimescale`'s argument names.
+pub fn timescaleScope(self: *Run, e: Ast.ExprId) Error!u32 {
+    return switch (try @import("vcd.zig").target(self, e)) {
+        .scope => |sc| sc,
+        .slot => self.exprFail(e, "§17.3.1: $printtimescale names a module instance"),
+    };
 }
 
 fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {

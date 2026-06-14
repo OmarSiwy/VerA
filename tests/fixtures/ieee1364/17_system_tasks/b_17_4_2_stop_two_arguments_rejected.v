@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 17.4.2
 //! reject E1100
 //! reject zero or one argument
-//! xfail the digital runner refuses every $stop as not implemented, so this is refused for the wrong reason
 `timescale 1 ns / 1 ns
 module b_17_4_2_stop_two_arguments_rejected;
   initial $stop(0, 1);

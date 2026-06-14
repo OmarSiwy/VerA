@@ -21,8 +21,6 @@
 //   instance top.u starts at the design cell top.
 //   `use leaf` omits the library -> the parent cell's (top's), work: work.leaf.
 // Output, t=0 then t=1:  "top work.top", "top.u work.leaf".
-// W0253: VerA says the rules bind nothing, which here equals their binding.
-// digital-runner: warning W0253
 //! inherited IEEE 1364-2005 13.3.1 13.3.1.3 13.3.1.5 13.3.1.6
 `timescale 1ns/1ns
 config cfg;
