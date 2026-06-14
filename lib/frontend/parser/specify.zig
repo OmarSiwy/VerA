@@ -197,7 +197,7 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     const delay_tok = self.pos;
     var delays: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
-        try delays.append(self.arena, try parse_expr.parseExpr(self));
+        try delays.append(self.arena, try parse_expr.parseMinTypMax(self));
         if (!self.eat(.comma)) break;
     }
     // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
@@ -382,7 +382,7 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
         const tok = self.pos;
         const name = try self.expectIdent();
         _ = try self.expect(.assign_eq);
-        const default = try parse_expr.parseExpr(self);
+        const default = try parse_expr.parseMinTypMax(self);
         if (out) |o| try o.append(self.arena, .{
             .name = name,
             .ty = .unspecified, // §3.4.1: derived from the default, as for `parameter`
