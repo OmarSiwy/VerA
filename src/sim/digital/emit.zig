@@ -243,7 +243,9 @@ fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
 /// A right-hand side: an expression, or a value already stored at word `off`
 /// with type `ty` (a formal being copied out, §10.2.2, or a parked
 /// intra-assignment value, §9.7.7).
-pub const Rhs = union(enum) { expr: Ast.ExprId, stored: struct { off: u32, ty: Type } };
+/// `part` is bits `lo` up of the `total`-bit local `cat<label>`, one operand's
+/// share of a concatenation lvalue's value.
+pub const Rhs = union(enum) { expr: Ast.ExprId, stored: struct { off: u32, ty: Type }, part: struct { label: u32, lo: u32, total: u32 } };
 
 /// `rhs` in the type `target` gives it (`exec.evalFor`, `exec.convertSlot`).
 fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
@@ -262,6 +264,7 @@ fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
             if (v.ty.width <= 64) try self.print("M.get(s, {d})", .{v.off}) else try self.print("M.getw(s, {d}, {d})", .{ v.off, words(v.ty.width) });
             try self.print(", {d}, {d}, {})", .{ v.ty.width, target.width, v.ty.signed });
         },
+        .part => |p| try self.print("L.part(cat{d}, {d}, {d}, {d})", .{ p.label, p.lo, target.width, p.total }),
     }
 }
 
@@ -1078,6 +1081,7 @@ fn slotType(self: *Emitter, at: u32) Error!Type {
 fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     const r = self.r;
     const ex = &r.file.exprs;
+    if (ex.tag(target) == .concat) return .{ .width = compile.typeOf(r, target).width, .signed = false };
     if (ex.tag(target) != .index) return slotType(self, try self.slot(target));
     if (try self.element(target)) return slotType(self, try self.slot(r.chainBase(target).base));
     try expr.nativeSelect(self, target);
@@ -1092,6 +1096,21 @@ fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
 fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
+    // `exec.put`: the value once, then each operand its bits, the rightmost
+    // the least significant (§6 Table 6-1).
+    if (ex.tag(target) == .concat) {
+        const total = (try targetType(self, target)).width;
+        const lb = self.label();
+        try self.print("            {{\n            const cat{d} = ", .{lb});
+        try rhsFor(self, val, .{ .width = total, .signed = false });
+        try self.print(";\n", .{});
+        var lo = total;
+        for (ex.args(target)) |arg| {
+            lo -= (try targetType(self, arg)).width;
+            try assignment(self, arg, .{ .part = .{ .label = lb, .lo = lo, .total = total } }, how);
+        }
+        return self.print("            }}\n", .{});
+    }
     if (ex.tag(target) != .index) {
         const at = try self.slot(target);
         try self.print("            ", .{});

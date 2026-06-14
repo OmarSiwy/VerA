@@ -19,7 +19,6 @@
 //   rw = 0; {rw[0], rw[7:6]} = 3'b110      -> rw[0] = 1, rw[7:6] = 10
 //                                   -> 1000_0001 -> 81
 //! inherited IEEE 1364-2005 6
-//! xfail a net bit-select, a net part-select and any concatenation as an assignment's left-hand side stop the run (E1100 "only whole-variable lvalues are implemented")
 module b_6_table_6_1_select_and_concatenation_lhs;
   reg a;
   reg [7:0] r8;

@@ -890,9 +890,9 @@ const PortBind = union(enum) {
     collapse: u32,
     /// An input port fed by a parent expression that is not one whole net.
     receive: struct { expr: Ast.ExprId, scope: u32, tok: u32, slice: ?Slice = null },
-    /// An output port whose parent side is a concatenation: the operand nets,
-    /// leftmost first (§6.5.7.1 joins them highest-order first).
-    send: struct { operands: []const u32, tok: u32 },
+    /// An output port whose parent side is not one whole net: the windows it
+    /// names, leftmost first (§6.5.7.1 joins them highest-order first).
+    send: struct { windows: []const Window, tok: u32 },
 };
 
 /// Everything §6.2.2 elaboration accumulates before any expression is compiled:
@@ -1138,19 +1138,18 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
                 var lo: u32 = 0;
-                var k = c.operands.len;
+                var k = c.windows.len;
                 while (k != 0) {
                     k -= 1;
-                    const dst = &e.nets.items[c.operands[k]];
-                    const w = dst.resolved.width;
-                    if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+                    const x = c.windows[k];
+                    if (lo + x.width > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
                     try e.wires.append(arena, .{
-                        .net = c.operands[k],
+                        .net = x.net,
                         .scope = scope,
-                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w } },
+                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = x.lo, .width = x.width } },
                         .tok = c.tok,
                     });
-                    lo += w;
+                    lo += x.width;
                 }
                 if (lo != width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
             },
@@ -1204,15 +1203,13 @@ fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!vo
 fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
-        const target = try netSlot(r, a.target, a.main_tok);
-        const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        const net = try drivenNet(r, e, scope, a.target, a.main_tok, a.strength0, a.strength1, "a continuous assignment can only drive a net", "a continuous assignment's left-hand side is a net, a constant select of one or a concatenation of them");
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
     for (items.gates) |g| {
-        const target = try netSlot(r, g.out, g.main_tok);
-        const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
+        const net = try drivenNet(r, e, scope, g.out, g.main_tok, g.strength0, g.strength1, "a gate's output terminal must be a net", "a gate's output terminal is a net_lvalue");
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
         // index, and a terminal as wide as the array gives each gate one bit
@@ -1374,6 +1371,82 @@ fn switchTerminal(r: *Run, e: *Elab, t: Ast.ExprId, tok: u32) Error!struct { net
     const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
     if (pos < 0 or pos >= width) return r.fail(tok, "a pass switch terminal selects a bit outside its net", .{});
     return .{ .net = net, .bit = @intCast(pos) };
+}
+
+/// `width` bits of `net` from bit `lo`: what one operand of a net lvalue
+/// names.
+const Window = struct { net: u32, lo: u32, width: u32 };
+
+/// The net a driver of the A.8.5 `net_lvalue` `x` drives: that net when `x`
+/// names one whole net, else a nameless net as wide as `x` whose value is
+/// carried onto each of `x`'s windows at strengths `s0`/`s1`.
+fn drivenNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId, tok: u32, s0: Ast.Strength, s1: Ast.Strength, comptime not_net: []const u8, comptime not_lvalue: []const u8) Error!u32 {
+    var windows: std.ArrayList(Window) = .empty;
+    try netWindows(r, e, x, tok, not_net, not_lvalue, &windows);
+    const w = windows.items;
+    if (w.len == 1 and w[0].lo == 0 and w[0].width == e.nets.items[w[0].net].resolved.width) return w[0].net;
+    var total: u32 = 0;
+    for (w) |x_| total += x_.width;
+    const tmp = try mintNet(r, e, .wire, total, false, .none, tok);
+    var lo = total;
+    for (w) |x_| {
+        lo -= x_.width;
+        try e.wires.append(r.arena, .{
+            .net = x_.net,
+            .scope = scope,
+            .source = .{ .bridge = .{ .src = e.nets.items[tmp].slot, .src_lo = lo, .dst_lo = x_.lo, .width = x_.width } },
+            .s0 = s0,
+            .s1 = s1,
+            .tok = tok,
+        });
+    }
+    return tmp;
+}
+
+/// IEEE 1364-2005 §6 Table 6-1 / A.8.5 the net lvalue `x` as the windows it
+/// names, leftmost (most significant) first: a net or net array element, a
+/// constant bit-, part- or indexed part-select of one, or a concatenation of
+/// them.
+fn netWindows(r: *Run, e: *Elab, x: Ast.ExprId, tok: u32, comptime not_net: []const u8, comptime not_lvalue: []const u8, out: *std.ArrayList(Window)) Error!void {
+    const ex = &r.file.exprs;
+    switch (ex.tag(x)) {
+        .concat => {
+            for (ex.args(x)) |arg| try netWindows(r, e, arg, tok, not_net, not_lvalue, out);
+            return;
+        },
+        .ident, .hier_ident, .index => {},
+        else => return r.exprFail(x, not_lvalue), // else: every other form is an expression
+    }
+    const sel = ex.tag(x) == .index and try r.indexedArray(x) == null;
+    const at = try netSlot(r, if (sel) ex.lhs(x) else x, tok);
+    const net = r.net_of.get(at) orelse return r.fail(tok, not_net, .{});
+    const width = e.nets.items[net].resolved.width;
+    if (!sel) return out.append(r.arena, .{ .net = net, .lo = 0, .width = width });
+    if (width == 1 and !r.vec_ranges.contains(at)) return r.exprFail(x, "§5.2.1: a scalar has no bits to select");
+    const range = r.vec_ranges.get(at) orelse VecRange{ .msb = @as(i64, width) - 1, .lsb = 0 };
+    const rg = ex.rhs(x);
+    // The declared index of the window's least significant bit, as
+    // `exec.selection` finds it.
+    var low: i64 = undefined;
+    var count: i64 = 1;
+    switch (ex.tag(rg)) {
+        .range => {
+            const msb = try r.declaredBound(ex.lhs(rg), tok);
+            low = try r.declaredBound(ex.rhs(rg), tok);
+            if (msb != low and (msb > low) != (range.msb > range.lsb)) return r.fail(tok, "§5.2.1: a part-select runs in its vector's direction", .{});
+            count = @intCast(@abs(msb - low) + 1);
+        },
+        .indexed_range => {
+            count = try r.declaredBound(ex.rhs(rg), tok);
+            const base = try r.declaredBound(ex.lhs(rg), tok);
+            const first = if (ex.extraOf(rg) == 0) base else base - count + 1;
+            low = if (range.msb >= range.lsb) first else first + count - 1;
+        },
+        else => low = try r.declaredBound(rg, tok), // else: a bit-select's index
+    }
+    const pos = range.position(low);
+    if (count < 1 or pos < 0 or pos + count > width) return r.fail(tok, "a net lvalue selects bits outside its net", .{});
+    try out.append(r.arena, .{ .net = net, .lo = @intCast(pos), .width = @intCast(count) });
 }
 
 /// IEEE 1364-2005 §12.4 a generate construct as a digital parse leaves it:
@@ -1654,7 +1727,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
             if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
-            binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
+            binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
         try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name, .index = index });
@@ -1923,7 +1996,7 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
     if (inst.ports.len != u.ports.len) return r.fail(inst.main_tok, "§8: a UDP instance connects its output and every input, in order", .{});
     for (inst.ports) |c| if (c.name != .none or c.expr == .none)
         return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
-    const net = r.net_of.get(try r.scalarSlot(inst.ports[0].expr)) orelse return r.fail(inst.main_tok, "a UDP's output terminal must be a net", .{});
+    const net = try drivenNet(r, e, scope, inst.ports[0].expr, inst.main_tok, inst.strength0, inst.strength1, "a UDP's output terminal must be a net", "a UDP's output terminal is a net_lvalue");
     if (e.nets.items[net].resolved.width != 1) return r.fail(inst.main_tok, "only scalar UDP terminals are implemented", .{});
     const rows = (try net_mod.udpRows(r.arena, u)) orelse return r.fail(u.main_tok, "a UDP table entry needs one field per input", .{});
     const ins = try r.arena.alloc(Ast.ExprId, u.ports.len - 1);
@@ -1958,7 +2031,7 @@ fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
-fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
+fn bindPort(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
     if (conn.expr == .none) return .open;
     const ex = &r.file.exprs;
     // One whole net on the outside is a collapse, the only arm under which
@@ -1977,13 +2050,9 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         // port bound to that slot would read as the whole array.
         // ponytail: so a child's drive strength does not reach the element.
         .output => blk: {
-            const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
-            const operands = try r.arena.alloc(u32, args.len);
-            for (args, operands) |arg, *out| {
-                if (ex.tag(arg) != .ident and try r.indexedArray(arg) == null) return r.exprFail(arg, "an output port connects to a net, a net array element or a concatenation of them");
-                out.* = r.net_of.get(try netSlot(r, arg, conn.main_tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
-            }
-            break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
+            var windows: std.ArrayList(Window) = .empty;
+            try netWindows(r, e, conn.expr, conn.main_tok, "an output port can only drive a net", "an output port connects to a net, a constant select of one or a concatenation of them", &windows);
+            break :blk .{ .send = .{ .windows = windows.items, .tok = conn.main_tok } };
         },
         // A collapse already covers the useful `inout`; anything else would
         // need a bidirectional bit bridge, which no fixture asks for.
@@ -2803,7 +2872,7 @@ test "the net and array declaration boundaries are explicit" {
     // §6.1/§6.2.2: neither form of assignment accepts the other's target.
     try expectRejected("module m; wire w; initial w = 1; endmodule", "no procedural assignment to a net");
     try expectRejected("module m; reg r; initial $display(\"before\"); assign r = 1; endmodule", "can only drive a net");
-    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
+    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "a scalar has no bits to select");
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
     // §6.5.3 a wreal has at most one driver, and §3.7 closes the list of net
