@@ -85,6 +85,7 @@ pub const Code = enum(u16) {
     E0145,
     // Out of scope (IEEE 1364-2005 §28) — preprocessor.zig.
     E0146,
+    E0147,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1007,6 +1008,18 @@ fn infoOf(c: Code) Info {
             \\decrypts, so any `pragma protect is refused. Compile the cleartext
             \\source with the protect directives removed. Any other pragma name
             \\still has no effect.
+            ,
+        },
+        .E0147 => .{
+            .title = "`pragma requires a pragma name",
+            .lrm = "IEEE 1364-2005 19.10",
+            .explain =
+            \\IEEE 1364-2005 Syntax 19-9 is `pragma pragma_name [ pragma_expression
+            \\{ , pragma_expression } ], and "The pragma specification is
+            \\identified by the pragma_name, which follows the `pragma
+            \\directive." A `pragma with nothing after it on its line names no
+            \\pragma, so it is not the unrecognized pragma 19.10 lets a tool
+            \\ignore. Write the pragma's name, or delete the directive.
             ,
         },
 

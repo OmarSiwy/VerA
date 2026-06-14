@@ -360,9 +360,14 @@ test "§9.15 Table 9-27 reads `timescale back, in seconds" {
 
 test "directives that contribute no text, and rejected ones" {
     try expectPp(
-        "\n\n\n\n",
-        "`timescale 1ns/1ps\n`default_nettype wire\n`celldefine\n`pragma f harmless\n",
+        "\n\n\n",
+        "`timescale 1ns/1ps\n`celldefine\n`pragma f harmless\n",
     );
+    // IEEE 1364 §19.2/§19.9: applied here, and the word alone passed through
+    // for the parser to refuse inside a module.
+    try expectPp("`default_nettype\n`unconnected_drive\n", "`default_nettype wire\n`unconnected_drive pull1\n");
+    try expectFail("`pragma\n", .E0147);
+    try expectFail("`line 3 \"f.v\" 0 // no\n", .E0128);
     try expectPp("\n\n", "`default_discipline electrical\n`default_transition 1n\n");
     // §10.6 is the exception: passed through verbatim for the parser, which is
     // the only stage that knows where a design element starts.
