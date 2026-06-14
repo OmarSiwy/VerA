@@ -381,7 +381,7 @@ pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
 /// §4.8.2 integer-to-real: the value, read by its own signedness, "Individual
 /// bits that are x or z in the net or the variable shall be treated as zero".
 /// ponytail: the low 64 bits of a wider operand.
-fn realOfInt(v: Int.Literal) f64 {
+pub fn realOfInt(v: Int.Literal) f64 {
     const lo = v.values()[0] & ~v.unknowns()[0];
     if (!v.signed or v.width > 64) return @floatFromInt(lo);
     const shift: u6 = @intCast(64 - v.width);

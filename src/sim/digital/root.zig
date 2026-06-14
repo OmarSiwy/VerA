@@ -980,13 +980,25 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.params) |p| {
         const pos = positional;
         if (!p.is_local) positional += 1;
-        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer)) {
+        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer and p.ty != .real)) {
             if (r.mixed) continue;
-            return r.fail(p.main_tok, "only integral scalar parameters are implemented by digital execution", .{});
+            return r.fail(p.main_tok, "only integral and real scalar parameters are implemented by digital execution", .{});
         }
-        const value = (try paramValue(r, p, scope, over, pos)) orelse continue;
+        if (r.mixed and p.ty == .real) continue;
+        const pv = (try paramValue(r, p, scope, over, pos)) orelse continue;
+        const value = pv.value;
         // §12.2: a range or a type converts the value like an assignment;
-        // otherwise the parameter takes the type of its value.
+        // otherwise the parameter takes the type of its value (§4.10.1: "the
+        // type and range of the final value"), real included.
+        if (p.ty == .real or (p.ty == .unspecified and p.packed_range == null and pv.real != null)) {
+            const at: u32 = @intCast(e.values.items.len);
+            try r.bind(p.name, at, p.main_tok);
+            try e.values.append(arena, try exec.realLiteral(arena, pv.real orelse exec.realOfInt(value)));
+            try r.reals.put(arena, at, {});
+            try r.params.put(arena, at, {});
+            if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
+            continue;
+        }
         const ty: compile.Type = if (p.packed_range) |range|
             .{ .width = try r.declaredWidth(range, p.main_tok), .signed = false }
         else if (p.ty == .integer)
@@ -1609,8 +1621,8 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 /// block reads), and its declared default. Each is a constant expression in
 /// the scope that wrote it. null: in a mixed design, a value this engine does
 /// not fold (a real, or one naming the analog block's), so the parameter is
-/// the analog block's alone.
-fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?Int.Literal {
+/// the analog block's alone. `real` is set when that expression is real.
+fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?struct { value: Int.Literal, real: ?f64 = null } {
     const Src = struct { e: Ast.ExprId, scope: u32 };
     const src: Src = blk: {
         // A defparam's path is relative to the instance that declares it, so
@@ -1648,9 +1660,9 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         // an integer one takes the value rounded, as the device's does.
         const w = try filled(r.arena, 64, true, .zero);
         w.values()[0] = @bitCast(std.math.lossyCast(i64, @round(c.value)));
-        return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
+        return .{ .value = try exec.normalize(r.arena, w, .{ .width = 32, .signed = true }) };
     };
-    return value;
+    return .{ .value = value, .real = if (compile.typeOf(r, src.e).real) try exec.evalReal(r, r.arena, src.e) else null };
 }
 
 /// The first name in `e` that does not resolve in the current scope.
