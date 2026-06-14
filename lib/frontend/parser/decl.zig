@@ -252,19 +252,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
             continue;
         }
         switch (self.peek()) {
-            .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => {
-                const ty = try tfPortType(self);
-                while (true) {
-                    var v = ty;
-                    v.main_tok = self.pos;
-                    v.name = try self.expectIdent();
-                    v.dims = try parseDims(self);
-                    if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
-                    try vars.append(self.arena, v);
-                    if (!self.eat(.comma)) break;
-                }
-                _ = try self.expect(.semicolon);
-            },
+            .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => try parseBlockVars(self, &vars),
             else => break, // else: the first token that declares nothing begins the body
         }
     }
@@ -289,6 +277,22 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         .body = body_id,
         .main_tok = main_tok,
     });
+}
+
+/// One A.2.8 `block_item_declaration` of variables (`reg`, `integer`,
+/// `time`, `real`, `realtime`), cursor on the keyword, through its `;`.
+pub fn parseBlockVars(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+    const ty = try tfPortType(self);
+    while (true) {
+        var v = ty;
+        v.main_tok = self.pos;
+        v.name = try self.expectIdent();
+        v.dims = try parseDims(self);
+        if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
+        try out.append(self.arena, v);
+        if (!self.eat(.comma)) break;
+    }
+    _ = try self.expect(.semicolon);
 }
 
 fn tfFormal(self: *Parser, dir: Ast.Direction, ty: Ast.VarDecl) Error!Ast.TfPort {
