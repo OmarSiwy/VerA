@@ -846,6 +846,8 @@ pub const GateInst = struct {
     kind: GateKind,
     out: ExprId,
     ins: []const ExprId,
+    /// A.3.1 `name_of_gate_instance`, `.none` when not written.
+    name: StrId = .none,
     /// IEEE 1364-2005 §7.1.5 an array of instances, `name [ range ]`: one
     /// gate per index, vector terminals split among them (§7.1.6).
     range: ?Dim = null,

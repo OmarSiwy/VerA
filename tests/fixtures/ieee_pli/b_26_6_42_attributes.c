@@ -19,8 +19,8 @@
  * REFUSAL: vpi_get(vpiSize, attribute) - the diagram draws no size -
  * vpiUndefined with vpi_chk_error() nonzero.
  *
- * VerA refuses the design (any attribute instance stops digital execution,
- * E1100), so build.zig runs this as an xfail.
+ * VerA runs the design but has no attribute object (vpi_iterate(vpiAttribute)
+ * is refused), so build.zig runs this as an xfail.
  */
 
 //! inherited IEEE 1364-2005 26.6.42

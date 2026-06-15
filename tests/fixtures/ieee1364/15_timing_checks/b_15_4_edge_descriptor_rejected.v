@@ -13,7 +13,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 15.4
 //! reject edge descriptor
-//! xfail VerA does not check an edge-control specifier's descriptors: edge[00] is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_15_4_edge_descriptor_rejected(clk, d);
   input clk, d;

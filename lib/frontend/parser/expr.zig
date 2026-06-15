@@ -135,6 +135,21 @@ pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
 
 /// Parses an A.8.4 analog_primary: a literal, parenthesized expression,
 /// concatenation, assignment pattern, name, call or branch probe.
+/// IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
+/// | expression : expression : expression`, in a digital parse: in
+/// parentheses wherever an expression is, and bare where A.2.2.3, A.2.4 and
+/// A.7.4 write one (a `delay3` element, a specparam, a path delay). The tool
+/// chooses one member of each triple; this one takes the typical, the
+/// middle, whose compound expressions then all read their middle members.
+pub fn parseMinTypMax(self: *Parser) Error!Ast.ExprId {
+    const e = try parseExpr(self);
+    if (!self.digital or !self.eat(.colon)) return e;
+    const typ = try parseExpr(self);
+    _ = try self.expect(.colon);
+    _ = try parseExpr(self);
+    return typ;
+}
+
 pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     // §10.6: a keyword the active set does not reserve is just a name, so
@@ -150,19 +165,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
         },
         .lparen => {
             self.pos += 1;
-            const e = try parseExpr(self);
-            // IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
-            // | expression : expression : expression`, legal wherever an
-            // expression is (a digital parse). The tool chooses one member of
-            // each triple; this one takes the typical, the middle, whose
-            // compound expressions then all read their middle members.
-            if (self.digital and self.eat(.colon)) {
-                const typ = try parseExpr(self);
-                _ = try self.expect(.colon);
-                _ = try parseExpr(self);
-                _ = try self.expect(.rparen);
-                return typ;
-            }
+            const e = try parseMinTypMax(self);
             _ = try self.expect(.rparen);
             return e;
         },

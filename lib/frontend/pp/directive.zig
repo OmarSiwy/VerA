@@ -318,11 +318,16 @@ fn timeLiteral(r: *Rest) ?f64 {
 /// the `line directive are required": the number "shall be a positive
 /// integer", the level "shall be 0, 1, or 2", and nothing else may follow
 /// (E0128). The level is checked and dropped, since VerA keeps the real
-/// include stack.
-///
-/// ponytail: §19.7 also forbids a comment on the line; comments are stripped
-/// before directives are read, so that one is not diagnosed.
+/// include stack. "Comments are not allowed on the same line": comments are
+/// stripped before directives are read, so a strip mark on the line is one.
 pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
+    if (pp.expand_site == null) {
+        const text = pp.opts.bag.fileText(pp.cur_file_id);
+        const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
+        // ponytail: linear in the file's comments; a `line is rare.
+        for (pp.opts.bag.fileMarks(pp.cur_file_id)) |m| if (m.out > line_start and m.out <= off + rest.len)
+            return pp.fail(pp.spanAt(at, off + rest.len), .E0128, "a comment on the directive's line", .{});
+    }
     var r: Rest = .{ .s = rest };
     r.skipSpace();
     const start = r.i;

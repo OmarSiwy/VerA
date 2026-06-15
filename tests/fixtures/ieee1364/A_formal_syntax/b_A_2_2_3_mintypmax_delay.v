@@ -10,7 +10,6 @@
 // (after #0) no corner has elapsed, so n = 0; at t=19 every corner has, so
 // n = 1. Output: "10: 0" then "19: 1".
 //! inherited IEEE 1364-2005 A.2.2.3
-//! xfail VerA's parser refuses a min:typ:max delay expression (E0210 expected ')' at `:`)
 `timescale 1ns/1ns
 module b_A_2_2_3_mintypmax_delay;
   reg r;

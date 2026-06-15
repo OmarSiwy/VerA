@@ -229,10 +229,9 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
 /// Assigns an integral `value` to the lvalue `target` under the assignment
 /// rules, as a system task does with an output argument.
 pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal) Error!void {
-    const p = (try place(self, a, target)) orelse return;
     const tt = try targetType(self, target);
     const converted = if (tt.real) try realLiteral(a, realOfInt(value)) else try normalize(a, value, .{ .width = tt.width, .signed = value.signed });
-    try write(self, a, p, converted);
+    try put(self, a, target, converted, false, null);
 }
 
 /// `assign` of a real, which an integral target takes rounded (§4.8.2).

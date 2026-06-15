@@ -35,7 +35,6 @@
 //             printed at t = 2001
 // digital-runner: warning W0251
 //! inherited IEEE 1364-2005 14.3 14.3.1
-//! xfail a min:typ:max delay expression does not parse in a specparam or a module path delay (E0207 "found `:`")
 `timescale 1ns/1ns
 module b_14_3_1_mintypmax_path_delays_cell(clk, clr, pre, q, C, Q1, Q2, Q3, Q6);
   input clk, clr, pre, C;

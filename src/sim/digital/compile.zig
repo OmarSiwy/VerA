@@ -1410,7 +1410,7 @@ fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, 
         if (a == .none) return self.fail(tok, "§10.2.2: null task arguments are not permitted", .{});
         if (p.direction != .input) {
             switch (ex.tag(a)) {
-                .ident, .hier_ident, .index => {},
+                .ident, .hier_ident, .index, .concat => {},
                 else => return self.exprFail(a, "§10.2.2: a task output actual must be a procedural lvalue"), // else: every other form is an expression
             }
             try checkTarget(self, a);
@@ -1530,10 +1530,7 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
         },
         .assign => |s| {
             if (s.value != .none) try sensitivity(self, s.value, out); // `deassign`/`release` read nothing
-            // An element lvalue reads its subscript; `sensitivity` on the
-            // whole `.index` would also add the array's own elements.
-            var x = s.target;
-            while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
+            try targetReads(self, s.target, out);
         },
         .sys_task => |s| for (s.args) |a| {
             if (a != .none and ex.tag(a) != .str_literal) try sensitivity(self, a, out);
@@ -1544,6 +1541,18 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
         .event_control => |s| try readSlots(self, s.body, out, depth + 1),
         else => unreachable, // else: compileStmt admitted only the forms above
     }
+}
+
+/// An element lvalue reads its subscript; `sensitivity` on the whole
+/// `.index` would also add the array's own elements.
+fn targetReads(self: *Run, target: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
+    const ex = &self.file.exprs;
+    if (ex.tag(target) == .concat) {
+        for (ex.args(target)) |arg| try targetReads(self, arg, out);
+        return;
+    }
+    var x = target;
+    while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
 }
 
 fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {

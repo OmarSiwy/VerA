@@ -348,6 +348,9 @@ pub const Parser = struct {
         // the source half of this convention and does not depend on the IR.
         const text = self.tokenText(i);
         if (self.tags[i] != .escaped_identifier) return self.file.intern(self.arena, text);
+        // IEEE 1364-2005 §3.7.3: a system task or function "shall not be
+        // escaped", so `\$display` keeps its `\` and names no system task.
+        if (text[0] == '$') return self.file.intern(self.arena, (lexer.Lexer{ .src = self.src }).tokenText(self.starts[i]));
         if (std.mem.indexOfScalar(u8, text, '.') == null)
             return self.file.intern(self.arena, text);
         const buf = try self.arena.dupe(u8, text);
