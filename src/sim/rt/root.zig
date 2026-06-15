@@ -14,6 +14,7 @@ pub const logic = @import("logic.zig");
 pub const net = @import("net.zig");
 pub const vcd = @import("../digital/vcd.zig");
 const snapshot = @import("snapshot.zig");
+pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
@@ -556,7 +557,11 @@ pub const State = struct {
 
     /// In place: `out` points into `self`. The time-0 queue is `d.order`.
     pub fn init(self: *State, init_: std.process.Init, d: *const Design, time_units: i32) Error!void {
-        const gpa = std.heap.smp_allocator;
+        return self.initIn(std.heap.smp_allocator, init_.io, d, time_units);
+    }
+
+    /// `init` with its storage from `gpa`, printing through `io`.
+    pub fn initIn(self: *State, gpa: std.mem.Allocator, io: std.Io, d: *const Design, time_units: i32) Error!void {
         self.* = .{
             .gpa = gpa,
             .v = try gpa.dupe(u64, d.v),
@@ -588,10 +593,10 @@ pub const State = struct {
             .stdout = undefined,
             .sink = undefined,
             .out = undefined,
-            .io = init_.io,
+            .io = io,
             .buf = undefined,
         };
-        self.stdout = std.Io.File.stdout().writer(init_.io, &self.buf);
+        self.stdout = std.Io.File.stdout().writer(io, &self.buf);
         self.sink = &self.stdout.interface;
         self.out = self.sink;
         @memset(self.terms, .empty);
@@ -1369,7 +1374,10 @@ pub const State = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const file = display.sideFile(self.io, a, source, name) catch return self.fail("the memory file cannot be read", .{});
+        const file = display.sideFile(self.io, a, source, name) catch |e| return if (e == error.StreamTooLong)
+            self.fail(display.too_large, .{})
+        else
+            self.fail("the memory file cannot be read", .{});
         var load: display.MemLoad = .init(file, radix, width, low, high, given, first, last);
         const n = (width + 63) / 64;
         const m = try a.alloc(u64, n);

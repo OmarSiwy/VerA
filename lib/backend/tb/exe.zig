@@ -79,7 +79,7 @@ pub fn buildExe(
         try gpa.dupe(u8, p)
     else
         try std.mem.concat(gpa, u8, &.{
-            try std.fs.path.join(arena, &.{ opts.work_dir, opts.name }),
+            try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
             builtin.target.exeFileExt(),
         });
     errdefer gpa.free(bin);
@@ -109,6 +109,8 @@ pub fn buildExe(
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
     if (device_zig) |text| {
         try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
+        // A `.v` device (`sim.digital.emitDevice`) runs on `sim`'s engine.
+        if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim" });
         try argv.appendSlice(arena, &.{ "--dep", "contract", try bind(arena, io, dir, opts, "device", "device", text) });
     } else try argv.append(arena, m_root);
     try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
@@ -166,7 +168,7 @@ pub fn bind(
     binding: []const u8,
     text: []const u8,
 ) ![]const u8 {
-    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ opts.name, suffix });
+    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
     try dir.writeFile(io, .{ .sub_path = file, .data = text });
     const path = try std.fs.path.join(arena, &.{ opts.work_dir, file });
     return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, path });

@@ -1,0 +1,37 @@
+// §3.3 Table 3-3 concatenation "Str1, ..., Strn" gives a string of every
+// operand's characters, and §9.5.3 gives $sformat no truncation rule. VerA
+// composes a run-time string in a 4096-byte buffer per call site
+// (docs/IMPLEMENTATION.md), so a result longer than that cannot be produced.
+// The limit has to fail loudly: the run ends with E1011 and exit status 1
+// rather than returning a cut or empty string as if it were the answer.
+//
+// THE SHAPE is a01_08_transcendental_domain_runtime_error.va's: two swept
+// points, and the exit status is part of the oracle.
+//
+//   s is "%4000d" of 1: 3999 spaces then '1', 4000 bytes.
+//   point 0, V(p) = 0.5: t = s (4000 bytes, fits). t == s, so ok=1 prints.
+//   point 1, V(p) = 2.0: t = {s, s}, 8000 bytes > 4096. The run ends with
+//                        E1011 before point 1 prints, and the status is 1.
+//
+// A silent limit fails both ways: an empty t prints ok=0 at point 1, and a
+// truncated t does too (t == s is false for any t other than s).
+//
+//! lrm 3.3
+//! lrm 9.5.3
+//! exit 1
+//! sweep V(p) = 0.5, 2.0
+//! print none
+`include "check.vh"
+module string_concat_overrun_is_fatal(p, n);
+  inout p, n; electrical p, n;
+  string s, t;
+  analog begin
+    $sformat(s, "%4000d", 1);
+    if (V(p, n) > 1.0)
+      t = {s, s};
+    else
+      t = s;
+    `CHECKI("printed at the first point only: the second overruns and is fatal", t == s, 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

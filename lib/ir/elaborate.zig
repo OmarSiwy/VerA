@@ -36,7 +36,7 @@ pub const sep = '.';
 ///
 /// A cycle is caught by name first (E0905 keeps the module stack), so hitting
 /// the limit means a deep but finite design. The limit turns that into a
-/// diagnostic instead of a stack overflow.
+/// diagnostic (E1018) instead of a stack overflow.
 const max_depth = 64;
 
 /// The elaborated design lowering walks: one module with the hierarchy already
@@ -758,8 +758,8 @@ pub const Flatten = struct {
                 return;
             };
             if (depth >= max_depth) {
-                try self.err(inst.main_tok, .E0905, "the instance tree is more than {d} levels deep at `{s}{s}`", .{
-                    max_depth, path, self.ctx.file.str(inst.name),
+                try self.err(inst.main_tok, .E1018, "at `{s}{s}`", .{
+                    path, self.ctx.file.str(inst.name),
                 });
                 return;
             }

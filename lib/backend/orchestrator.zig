@@ -38,6 +38,20 @@ pub const Module = struct {
     deps: []const []const u8 = &.{},
 };
 
+/// A module name as a file-name stem: the name itself when it is short and
+/// plain, else its plain prefix and a hash. §2.8 identifiers run to at least
+/// 1024 characters and §2.8.1 escaped ones hold any printable byte, neither of
+/// which a file system takes as a name.
+pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
+    const plain = for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') break false;
+    } else true;
+    if (plain and name.len <= 128) return name;
+    var n: usize = 0;
+    while (n < @min(name.len, 64) and (std.ascii.isAlphanumeric(name[n]) or name[n] == '_')) n += 1;
+    return std.fmt.allocPrint(a, "{s}-{x:0>16}", .{ name[0..n], std.hash.Wyhash.hash(0, name) });
+}
+
 /// Everything the layout hash pins, plus where to put things. Strings are
 /// borrowed and must outlive any `ResidentChild` built from them.
 pub const Options = struct {

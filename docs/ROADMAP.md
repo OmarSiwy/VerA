@@ -56,7 +56,8 @@ rejection fixture is not positive coverage of the rule it refuses.
 **E. The non-mandatory classes carry what `CLAUSE-AUDIT.md` §5 requires.**
 Each implementation-defined choice has a document and a test. Each resource
 limit is stated and fails loudly with a named diagnostic; the RNG row is the
-template. No test asserts one outcome for unspecified behaviour.
+template. No test asserts one outcome for unspecified behaviour. The list is
+`docs/IMPLEMENTATION.md`; its §4 is what remains open.
 
 **F. The binary builds for every supported target.** `publish.yaml`
 cross-compiles `x86_64-linux`, `aarch64-linux`, `x86_64-macos`,
@@ -424,6 +425,10 @@ Settle each before a fixture asserts one side.
   (`conformance-ieee-expression-width-review.md:82-88`.)
 - IEEE 6.1.3: which delay rule a singleton `[0:0]` vector continuous assignment
   takes. (`conformance-vector-delay-fix.md:20-24`.)
+- IEEE 13.2.2 vs A.1.1 and Syntax 13-2: "The syntax of a lib.map file is
+  limited to library specifications, include statements, and standard Verilog
+  comment syntax", while both syntax boxes derive a config_declaration as a
+  library_description. VerA refuses a config in a map (E0244).
 - IEEE 17.2.9: `$readmem` address policy. `@8` into `[0:3]` with no task bounds
   loads nothing and says nothing; x/z/underscore in addresses is undecided.
   (`conformance-readmem-validation-edges.md:66-70`.)
@@ -441,11 +446,10 @@ Settle each before a fixture asserts one side.
   callback-only entry in `vpiTimeQueue`, `vpi_mcd_printf`'s return for a
   multi-channel write, and `vpiIntVal` on a 64-bit object (never asserted).
   (`p02_SPEC.md:341-343,382-395,426-427`.)
-- Implementation choices to write into `CLAUSE-AUDIT.md` §5.3: identifiers have
-  no length limit (AMS 2.8); `"\q"` is accepted and octal escapes above `\377`
-  wrap mod 256 (AMS 2.7); `$q_exam` returns status 2 for an unknown code, code 3
-  reports the observed peak, and means use integer division (IEEE 17.6.4).
-  (`conformance-ams-lexical-core-review.md:170-172`; `conformance-lexical.md:163`;
+- Implementation choices still to add to `docs/IMPLEMENTATION.md` §1 with a
+  fixture: `"\q"` is accepted (AMS 2.7); `$q_exam` returns status 2 for an
+  unknown code, code 3 reports the observed peak, and means use integer
+  division (IEEE 17.6.4). (`conformance-ams-lexical-core-review.md:170-172`;
   `conformance-ieee-queue-review.md:26-47`.)
 
 ### 5.7 Untested
