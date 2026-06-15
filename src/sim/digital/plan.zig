@@ -17,8 +17,7 @@ pub const Reach = @import("../rt/root.zig").Reach;
 pub const Schedule = enum { fifo, static };
 
 pub const Edge = enum { any, posedge, negedge };
-/// `sel`: the term reads one bit of the slot, bit `bit` of value word `word`.
-pub const Term = struct { slot: u32, edge: Edge, sel: ?struct { word: u32, bit: u6 } = null };
+pub const Term = struct { slot: u32, edge: Edge };
 
 pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
@@ -73,14 +72,11 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
         .event_negedge => .negedge,
         .event_function => return self.refuse("a VAMS analog event in a digital event control"),
         .event_driver_update => return self.refuse("VAMS §9.22.5 driver_update"),
-        else => .any, // else: a plain name or bit-select, the other terms checkEvent admits
+        else => .any, // else: a name, or an expression checkEvent gave a slot
     };
-    const src = r.eventBit(if (edge == .any) e else ex.lhs(e)) catch return self.refuse("an event term the engine resolves only at run time");
-    try out.append(self.arena, .{
-        .slot = src.slot,
-        .edge = edge,
-        .sel = if (src.bit == exec.whole_slot) null else .{ .word = self.off[src.slot] + src.bit / 64, .bit = @intCast(src.bit % 64) },
-    });
+    const watched = if (edge == .any) e else ex.lhs(e);
+    const at = r.termSlot(watched) catch return self.refuse("an event term the engine resolves only at run time");
+    try out.append(self.arena, .{ .slot = at, .edge = edge });
 }
 
 /// The plan of `procs`; under `static` each one's `role` is set too.
@@ -107,7 +103,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| watched[t.slot] = true;
@@ -327,7 +323,7 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| reach[t.slot].terms = true;
@@ -403,13 +399,6 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
 
 /// Does `p` suspend only at its entry, returning there after every pass?
 fn fixedWait(self: *Emitter, p: Proc) Error!bool {
-    // A term on one bit keeps its last value, which only `State.watch` holds.
-    if (self.r.code.items[p.entry] == .wait_event) {
-        self.r.scope = self.r.code_scope.items[p.entry];
-        var ts: std.ArrayList(Term) = .empty;
-        try terms(self, self.r.code.items[p.entry].wait_event, &ts);
-        for (ts.items) |t| if (t.sel != null) return false;
-    }
     for (p.pcs) |pc| {
         if (pc == p.entry) continue;
         switch (self.r.code.items[pc]) {

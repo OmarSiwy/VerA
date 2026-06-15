@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 10.4.4 10.1
 //! reject E1100
 //! reject output
-//! xfail accepted: a function with an output argument compiles and runs
 module b_10_4_4_function_output_argument_rejected;
   reg x;
   function f;

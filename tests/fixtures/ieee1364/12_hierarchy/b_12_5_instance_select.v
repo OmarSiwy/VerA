@@ -9,7 +9,6 @@
 // the implicit localparam i. The parent reads through instance selects:
 //   g[0].l.x = 0, g[1].l.x = 10, g[2].l.x = 20, arr[0].x = 5, arr[1].x = 5
 //! inherited IEEE 1364-2005 12.5 12.4.1
-//! xfail an instance select in a hierarchical name does not parse ("unexpected token: found `.`")
 `timescale 1ns/1ns
 module leaf;
   parameter ID = 0;

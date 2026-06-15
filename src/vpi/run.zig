@@ -55,8 +55,12 @@ pub fn attached() ?*digital.Run {
 ///   cbReadWriteSynch                  after the events; what it schedules
 ///                                     at t runs before t is left
 ///   cbReadOnlySynch                   the same, with writes refused
+///
+/// A design that calls a registered system task as a function
+/// (`systf.misuse`, IEEE 1364-2005 §20.3) does not run: DigitalFailed.
 pub fn simulate() digital.Error!void {
     const r = engine orelse return;
+    if (@import("systf.zig").misuse != null) return error.DigitalFailed;
     callback.startOfSimulation();
     while (!stopped(r)) {
         const ev = r.scheduler.peekTime();
@@ -202,12 +206,24 @@ pub const vpiRejectTransientStep: c_int = 730;
 /// is. vpiTransientFailConverge is not answered: the walk's solver has no
 /// iteration an application can extend.
 pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
-    root.clearError();
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
+    return control(operation, &ap);
+}
+
+/// IEEE 1364-2005 §27.3: the same routine under its 1364 name.
+pub export fn vpi_control(operation: c_int, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    defer @cVaEnd(&ap);
+    return control(operation, &ap);
+}
+
+/// C calling convention because `@cVaArg` is only legal in one.
+fn control(operation: c_int, ap: *std.builtin.VaList) callconv(.c) c_int {
+    root.clearError();
     switch (operation) {
         vpiFinish => {
-            _ = @cVaArg(&ap, c_int); // the diagnostic level, as $finish(n)
+            _ = @cVaArg(ap, c_int); // the diagnostic level, as $finish(n)
             const r = engine orelse {
                 root.fail("NORUN", "vpi_sim_control(vpiFinish): no simulation is running", .{});
                 return 0;
@@ -216,7 +232,7 @@ pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
             return 1;
         },
         vpiRejectTransientStep => {
-            _ = @cVaArg(&ap, f64); // the current timestep, as vpi_get_analog_delta
+            _ = @cVaArg(ap, f64); // the current timestep, as vpi_get_analog_delta
             if (analog.rejectStep()) return 1;
             root.fail("NOSTEP", "vpi_sim_control(vpiRejectTransientStep): no analog solution after the first is awaiting acceptance", .{});
             return 0;

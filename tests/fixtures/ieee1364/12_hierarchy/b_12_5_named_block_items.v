@@ -14,7 +14,6 @@
 //        <top>.b.mod_1.x = 0 and <top>.b.mod_2.x = 1.
 //   -> "1" then "0 1"
 //! inherited IEEE 1364-2005 12.5
-//! xfail a named block is no scope of a hierarchical name: mod_2.x is refused ("undeclared instance in a hierarchical reference")
 `timescale 1ns/1ns
 module m;
   initial begin : keep

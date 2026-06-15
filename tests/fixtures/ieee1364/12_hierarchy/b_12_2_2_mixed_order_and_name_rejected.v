@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 12.2.2 12.2.2.2
 //! reject E1100
 //! reject mixes ordered and named parameter assignments
-//! xfail VerA accepts a parameter value assignment that mixes order and name
 module vdff;
   parameter size=5, delay=1;
   initial $display("%0d %0d", size, delay);

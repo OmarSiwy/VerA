@@ -10,7 +10,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.6.4
 //! reject E0209
-//! xfail VerA accepts `initial ;`, a null statement where A.6.2 requires a statement
 module b_A_6_4_null_initial_statement_rejected;
   initial ;
   initial $display("unreachable");

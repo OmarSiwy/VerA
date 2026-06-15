@@ -127,7 +127,9 @@ pub const Nets = struct {
         @memset(t.tgt, 0);
         for (drivers, t.at) |d, at| {
             const w = nets[d.net].width;
-            fill(t.cur[at..][0 .. 2 * words(w)], w, d.init);
+            // A UDP's initial value is its output bit's (§8.5); the rest z.
+            fill(t.cur[at..][0 .. 2 * words(w)], w, if (d.source == .udp) .z else d.init);
+            if (d.source == .udp) setBit(t.cur[at..][0 .. 2 * words(w)], d.delay_bit orelse 0, int(d.init));
         }
         t.or_z = try gpa.alloc(bool, drivers.len);
         t.tgt_or_z = try gpa.alloc(bool, drivers.len);
@@ -223,8 +225,11 @@ pub fn drive(s: *State, i: u32, planes: []const u64, or_z: bool) Error!void {
     const t = &s.nets;
     const d = t.drivers[i];
     const cur = t.cur[t.at[i]..][0..planes.len];
-    // §8.5: a UDP's initial output is published at time 0 whatever its delay.
-    const first = d.source == .udp and !t.started[i];
+    // §8.5: a sequential UDP's initial output is published at time 0
+    // whatever its delay.
+    const first = d.source == .udp and t.udps[d.source.udp].sequential and !t.started[i];
+    // A combinational one's output is x until its first delayed value.
+    if (d.source == .udp and !t.started[i] and !first and d.delay.present) try resolve(s, d.net);
     t.started[i] = true;
     if (d.delay.present and !first) {
         const tgt = t.tgt[t.at[i]..][0..planes.len];
@@ -274,7 +279,7 @@ pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
         }
         break :blk t.state[k];
     };
-    return driveBit(s, i, 0, out, false);
+    return driveBit(s, i, t.drivers[i].delay_bit orelse 0, out, false);
 }
 
 /// §7.6 MOS switch driver `i` (`exec.mosValue`): its data at the data

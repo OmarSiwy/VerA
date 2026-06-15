@@ -207,6 +207,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
+    var events: std.ArrayList(Ast.StrId) = .empty;
     while (true) {
         const before_attrs = self.pos;
         const attr_mark = self.attrs.items.len;
@@ -220,9 +221,21 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
             },
-            // IEEE 1364-2005 A.2.8 a `reg` declaration, which Syntax 9-13
-            // and 9-14 admit after a discrete block's name alone.
-            .kw_reg => if (blk.name != .none and (self.digital or self.in_discrete)) try parse_decl.parseBlockVars(self, &vars) else {
+            // IEEE 1364-2005 A.2.8 `block_item_declaration`'s digital arms,
+            // which A.6.3 gives a named block only.
+            .kw_reg => if (self.digital and blk.name != .none) try parse_decl.parseRegDecl(self, &vars) else {
+                self.pos = before_attrs;
+                self.attrs.shrinkRetainingCapacity(attr_mark);
+                break;
+            },
+            .kw_event => if (self.digital and blk.name != .none) {
+                self.pos += 1;
+                while (true) {
+                    try events.append(self.arena, try self.expectIdent());
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            } else {
                 self.pos = before_attrs;
                 self.attrs.shrinkRetainingCapacity(attr_mark);
                 break;
@@ -256,6 +269,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     blk.params = params.items;
     blk.vars = vars.items;
+    blk.events = events.items;
     blk.body = body.items;
     return self.file.addStmt(self.arena, .{ .block = blk }, tok);
 }
@@ -446,6 +460,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
             .nonblocking = true,
             .timing = timing.expr,
             .timing_is_delay = timing.is_delay,
+            .timing_repeat = timing.count,
         } }, tok);
     }
     // A.6.4 `task_enable ::= hierarchical_task_identifier [ ( expression
@@ -477,6 +492,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
                 .value = value,
                 .timing = timing.expr,
                 .timing_is_delay = timing.is_delay,
+                .timing_repeat = timing.count,
             } }, tok);
         },
         .colon => { // §5.6.7 / A.6.10 indirect contribution
@@ -499,9 +515,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
 /// operator: A.6.5 `delay_control | event_control`. Analog has no such
 /// production, so outside the discrete grammar this reads nothing and the
 /// expression parser reports a `#` or `@`.
-fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
-    // ponytail: no `repeat ( n ) @(e)`. A.6.5's third alternative needs a
-    // countdown around the waiter; add it beside the `.at` arm when asked.
+fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool, count: Ast.ExprId = .none } {
     if (!self.discreteGrammar()) return .{ .expr = .none, .is_delay = false };
     switch (self.peek()) {
         .hash => {
@@ -511,6 +525,15 @@ fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bo
         .at => {
             self.pos += 1;
             return .{ .expr = try parseEvent(self), .is_delay = false };
+        },
+        // A.6.5 `repeat ( expression ) event_control`.
+        .kw_repeat => {
+            self.pos += 1;
+            _ = try self.expect(.lparen);
+            const count = try parse_expr.parseExpr(self);
+            _ = try self.expect(.rparen);
+            _ = try self.expect(.at);
+            return .{ .expr = try parseEvent(self), .is_delay = false, .count = count };
         },
         else => return .{ .expr = .none, .is_delay = false }, // else: no intra-assignment timing control
     }

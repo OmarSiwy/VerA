@@ -446,6 +446,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     , .{file_name});
     if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
     for (r.code.items) |ins| if (ins == .override_on) break try self.print("pub const vera_overrides = true;\n", .{});
+    if (r.budget != @import("root.zig").max_events_per_tick) try self.print("pub const vera_event_budget: u64 = {d};\n", .{r.budget});
     // Every function of the design, once per phase (`rt.Phase`): `main`
     // names `Code(true)` only when it runs both, and Zig compiles only what
     // is named.
@@ -1024,6 +1025,12 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .repeat_start => |x| {
             if ((try expr.natural(self, x.count)).width > 64) return self.refuse("a repeat count wider than 64 bits");
+            if (x.clamp) {
+                try self.print("            const c = ", .{});
+                const ty = try expr.selfDetermined(self, x.count);
+                try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, {}) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.signed, ty.width });
+                return self.print("            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.end, next });
+            }
             try self.print("            const n = try s.repeatCount(", .{});
             const ty = try expr.selfDetermined(self, x.count);
             try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
@@ -1032,7 +1039,9 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .wait_event => |e| {
             if (try waitFixed(self)) return;
             try self.print("            const id = try s.park({d});\n", .{next});
-            try watchTerms(self, e);
+            var ts: std.ArrayList(plan.Term) = .empty;
+            try plan.terms(self, e, &ts);
+            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
             try self.print("            return;\n", .{});
         },
         .wait_slots => |slots| {
@@ -1066,7 +1075,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         // once, a blocking one parked in its cell until the control passes.
         .sample => |x| {
             const st = r.file.stmt(x.statement).assign;
-            if (st.nonblocking) {
+            if (st.nonblocking and st.timing_is_delay) {
                 try assignment(self, st.target, .{ .expr = st.value }, .{ .nba_after = st.timing });
                 return self.print("            continue :sw {d};\n", .{next});
             }
@@ -1074,20 +1083,23 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            try M.set(s, {d}, ", .{try cellOf(self, x.cell, ty.width)});
             try expr.assigned(self, st.value, ty);
             try self.print(", {f});\n", .{full(ty.width)});
+            if (compile.parksOnly(st)) return self.print("            continue :sw {d};\n", .{next});
             if (st.timing_is_delay) {
                 try self.print("            try s.run({d}, ", .{next});
                 try delay(self, st.timing);
                 return self.print(");\n            return;\n", .{});
             }
             try self.print("            const id = try s.park({d});\n", .{next});
-            try watchTerms(self, st.timing);
+            var ts: std.ArrayList(plan.Term) = .empty;
+            try plan.terms(self, st.timing, &ts);
+            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
             try self.print("            return;\n", .{});
         },
         // The target is resolved when the process resumes (§9.7.7).
         .deposit => |x| {
             const st = r.file.stmt(x.statement).assign;
             const ty = try targetType(self, st.target);
-            try assignment(self, st.target, .{ .stored = .{ .off = try cellOf(self, x.cell, ty.width), .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+            try assignment(self, st.target, .{ .stored = .{ .off = try cellOf(self, x.cell, ty.width), .ty = .{ .width = ty.width, .signed = false } } }, if (st.nonblocking) .nba else .blocking);
             try self.print("            continue :sw {d};\n", .{next});
         },
         // §10.3: a disable inside the block it names continues after it.
@@ -1123,9 +1135,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
         // §17.5 an asynchronous array's own process starts now.
         .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
-        .override_on => |o| try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
+        .override_on => |o| if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)") else try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
         .override_eval => |o| {
+            if (o.slice != null) return self.refuse("a concatenation assigned or forced (§9.3)");
+            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
             try self.store(o.slot, .blocking);
             try expr.assigned(self, o.value, try slotType(self, o.slot));
@@ -1133,6 +1147,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
+            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             if (r.net_of.get(o.slot)) |net| {
                 if (self.net_ix[net]) |k| {
                     try self.print("            if (try s.release({d}, true)) try s.resolve({d});\n            continue :sw {d};\n", .{ o.slot, k, next });
@@ -1357,12 +1372,12 @@ fn netTables(self: *Emitter) Error!void {
     for (self.rt_drivers.items) |di| {
         const d = r.drivers[di];
         r.scope = d.scope;
-        try self.print("\n        .{{ .net = {d}, .s0 = .{t}, .s1 = .{t}, .delay = {f}, .init = .{t}, .delay_bit = ", .{ self.net_ix[d.net].?, d.s0, d.s1, fmtDelay(d.delay), d.current.bit(0) });
+        try self.print("\n        .{{ .net = {d}, .s0 = .{t}, .s1 = .{t}, .delay = {f}, .init = .{t}, .delay_bit = ", .{ self.net_ix[d.net].?, d.s0, d.s1, fmtDelay(d.delay), d.current.bit(if (d.source == .udp) d.source.udp.out_bit orelse 0 else 0) });
         switch (d.source) {
             .expr => try self.print("null, .source = .expr }},", .{}),
             .gate => |g| try self.print("{d}, .source = .{{ .gate = {d} }} }},", .{ g.out_bit orelse 0, g.out_bit orelse 0 }),
             .udp => |u| {
-                try self.print("0, .source = .{{ .udp = {d} }} }},", .{udps.items.len});
+                try self.print("{d}, .source = .{{ .udp = {d} }} }},", .{ u.out_bit orelse 0, udps.items.len });
                 try udps.append(self.arena, u);
             },
             .mos => |m| {
@@ -1401,16 +1416,6 @@ fn fmtDelay(d: @import("net.zig").Delay) std.fmt.Alt(@import("net.zig").Delay, d
 
 fn delayText(d: @import("net.zig").Delay, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.print(".{{ .rise = {d}, .fall = {d}, .off = {d}, .present = {} }}", .{ d.rise, d.fall, d.off, d.present });
-}
-
-/// Files suspension `id`'s terms of the event expression `e` (`exec.suspendOn`).
-fn watchTerms(self: *Emitter, e: Ast.ExprId) Error!void {
-    var ts: std.ArrayList(plan.Term) = .empty;
-    try plan.terms(self, e, &ts);
-    for (ts.items) |t| if (t.sel) |x|
-        try self.print("            try s.watchBit(id, {d}, .{t}, {d}, {d});\n", .{ t.slot, t.edge, x.word, x.bit })
-    else
-        try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
 }
 
 /// `.continuous` (`exec`'s arm): driver `i`'s value. A plain driver stores
@@ -1477,7 +1482,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
             },
             .udp => |u| {
                 if (u.ins.len > 64) return self.refuse("a UDP of more than 64 inputs");
-                try bits(self, u.ins, null);
+                try bits(self, u.ins, u.lane);
                 try self.print("            try s.udp({d}, &b);\n", .{k});
             },
             .mos => |m| {
@@ -1705,7 +1710,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try flush(self, &text);
                     try self.print("            try s.real(", .{});
                     try expr.real(self, args[arg]);
-                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], @min(precision, 60), width });
+                    try self.print(", '{c}', {d}, {?d});\n", .{ format[i], precision, width });
                 },
                 else => return self.refuse("a display conversion the engine refuses"),
             }

@@ -93,8 +93,10 @@
  *   return the reference handle used to create the iterator. b) It is
  *   possible to have a NULL reference handle, in which case
  *   vpi_handle(vpiUse, iterator_handle) shall return NULL."
- * §26.6.44, p. 417 Details: "a) The size for a genscope array is the number
- *   of elements in the array."
+ * §26.6.44, p. 417: gen scope array -> size (vpiSize), -> name; gen scope
+ *   -> array member (vpiArray), -> name, -> protected, -> is implicitly
+ *   declared, and -> vpiIndex expr. Details: "a) The size for a genscope
+ *   array is the number of elements in the array."
  *
  * ------------------------------------------------------------------ DERIVATION
  *
@@ -152,7 +154,8 @@
  * §26.6.9  vpiMemory from the module yields the one-dimensional mem (whether
  *   the 2-D m2 is a memory is left open), each result of type vpiRegArray; vpiMemoryWord from mem gives its 4 words, each a vpiReg.
  *   mem is a memory: vpiIsMemory TRUE.
- * §26.6.10 mem's one range [0:3]: vpiSize 4.
+ * §26.6.10 mem's one range [0:3]: vpiSize 4, vpiLeftRange reads 0 and
+ *   vpiRightRange 3 (the declaration's order).
  * §26.6.11 ev: vpiNamedEvent "ev", full name "b26_structure.ev", not an array
  *   (vpiArray FALSE), so vpi_iterate(vpiIndex, ev) is NULL.
  * §26.6.12 P = 5, vpiLocalParam FALSE; L = P + 1 = 6, vpiLocalParam TRUE;
@@ -167,7 +170,9 @@
  * §26.6.43 vpi_iterate(vpiNet, top) is a vpiIterator whose vpiUse is top and
  *   vpiIteratorType vpiNet; the iterator of top modules has a NULL ref, so
  *   its vpiUse is NULL (Details b).
- * §26.6.44 gen is a genscope array of 2 (Details a); gen[0].gw is its net.
+ * §26.6.44 gen is a genscope array of 2 (Details a) whose gen scopes are
+ *   gen[0] and gen[1]; gen[1] is an array member, explicitly named, and its
+ *   vpiIndex reads 1; gen[0].gw is gen[0]'s net.
  *
  * REFUSALS, each NULL / vpiUndefined with vpi_chk_error() nonzero:
  *   §26.2.2  "b26_leaf.a": a definition's port, which is no one object.
@@ -185,11 +190,15 @@
  *   §26.6.6  vpi_get(vpiDirection, bus); §26.6.7 vpi_get(vpiDirection, r).
  *   §26.6.8  vpi_get_value(ia): Details i, an array has no value property.
  *   §26.6.9  vpi_iterate(vpiMemoryWord, r): r is no reg array.
+ *   §26.6.10 vpi_get(vpiDirection, range): the range diagram draws only
+ *            vpiSize.
  *   §26.6.11 vpi_get(vpiSize, ev): the named event diagram draws no size.
  *   §26.6.12 vpi_put_value(P): the parameter diagram draws only
  *            vpi_get_value(); P still reads 5 afterwards.
  *   §26.6.16 vpi_handle_multi(vpiInterModPath, top, bus): not two ports.
  *   §26.6.43 vpi_get(vpiSize, iterator): the iterator diagram draws no size.
+ *   §26.6.44 vpi_get(vpiSize, gen[1]): a gen scope draws no size (its array
+ *            does).
  */
 
 //! inherited IEEE 1364-2005 26.2.2
@@ -220,6 +229,7 @@
 //! inherited IEEE 1364-2005 26.6.9
 //! inherited-reject IEEE 1364-2005 26.6.9
 //! inherited IEEE 1364-2005 26.6.10
+//! inherited-reject IEEE 1364-2005 26.6.10
 //! inherited IEEE 1364-2005 26.6.11
 //! inherited-reject IEEE 1364-2005 26.6.11
 //! inherited IEEE 1364-2005 26.6.12
@@ -228,6 +238,7 @@
 //! inherited IEEE 1364-2005 26.6.43
 //! inherited-reject IEEE 1364-2005 26.6.43
 //! inherited IEEE 1364-2005 26.6.44
+//! inherited-reject IEEE 1364-2005 26.6.44
 
 #include "b_check.h"
 
@@ -604,8 +615,16 @@ static void nets_regs_variables(void)
   {
     vpiHandle itr = vpi_iterate(vpiRange, mem);
     vpiHandle rg = itr ? vpi_scan(itr) : NULL;
-    XFAIL(rg != NULL && vpi_get(vpiSize, rg) == 4, "26.6.10", "reg array ->> range yields no range of size 4");
-    if (rg != NULL) vpi_free_object(itr);
+    s_vpi_value v;
+    CHECK(rg != NULL && vpi_get(vpiType, rg) == vpiRange && vpi_get(vpiSize, rg) == 4, "26.6.10: mem ->> one range of size 4");
+    v.format = vpiIntVal;
+    vpi_get_value(vpi_handle(vpiLeftRange, rg), &v);
+    CHECK(v.value.integer == 0, "26.6.10: vpiLeftRange reads 0, got %d", (int)v.value.integer);
+    vpi_get_value(vpi_handle(vpiRightRange, rg), &v);
+    CHECK(v.value.integer == 3, "26.6.10: vpiRightRange reads 3, got %d", (int)v.value.integer);
+    CHECK(vpi_get(vpiDirection, rg) == vpiUndefined, "26.6.10: a range has no direction");
+    expect_refusal("vpi_get(vpiDirection, range)");
+    vpi_free_object(itr);
   }
 
   /* §26.6.11 */
@@ -648,8 +667,18 @@ static void parameters_and_generates(void)
   {
     vpiHandle itr = vpi_iterate(vpiGenScopeArray, top);
     vpiHandle ga = itr ? vpi_scan(itr) : NULL;
-    XFAIL(ga != NULL && vpi_get(vpiSize, ga) == 2, "26.6.44", "module ->> gen scope array yields no gen of size 2");
-    if (ga != NULL) vpi_free_object(itr);
+    vpiHandle g1 = vpi_handle_by_name((PLI_BYTE8 *)"b26_structure.gen[1]", NULL);
+    s_vpi_value v;
+    CHECK(ga != NULL && vpi_get(vpiSize, ga) == 2, "26.6.44: module ->> one gen scope array of size 2");
+    CHECK_STR(vpi_get_str(vpiName, ga), "gen", "26.6.44: the array's name");
+    CHECK(vpi_scan(itr) == NULL, "26.6.44: one gen scope array");
+    CHECK(g1 != NULL && vpi_get(vpiType, g1) == vpiGenScope, "26.6.44: gen[1] is a gen scope");
+    CHECK(vpi_get(vpiArray, g1) == 1 && vpi_get(vpiImplicitDecl, g1) == 0, "26.6.44: gen[1] is an explicitly named array member");
+    v.format = vpiIntVal;
+    vpi_get_value(vpi_handle(vpiIndex, g1), &v);
+    CHECK(v.value.integer == 1, "26.6.44: gen[1]'s vpiIndex reads 1, got %d", (int)v.value.integer);
+    CHECK(vpi_get(vpiSize, g1) == vpiUndefined, "26.6.44: a gen scope has no size");
+    expect_refusal("vpi_get(vpiSize, gen scope)");
   }
 }
 

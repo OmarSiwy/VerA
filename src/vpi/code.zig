@@ -45,6 +45,7 @@ pub const vpiPartSelect: c_int = 42;
 pub const vpiRegBit: c_int = 49;
 pub const vpiRelease: c_int = 50;
 pub const vpiRepeat: c_int = 51;
+pub const vpiRepeatControl: c_int = 52;
 pub const vpiSysFuncCall: c_int = 56;
 pub const vpiSysTaskCall: c_int = 57;
 pub const vpiTask: c_int = 59;
@@ -105,6 +106,13 @@ pub const vpiNegedge: c_int = 0x32;
 pub const vpiAnyEdge: c_int = 0x3F;
 pub const vpiStmt: c_int = 104;
 pub const vpiRightRange: c_int = 83;
+/// IEEE 1364-2005 §26.6.10 an array's range.
+pub const vpiRange: c_int = 115;
+/// IEEE 1364-2005 §26.6.44 (Annex G).
+pub const vpiGenScopeArray: c_int = 133;
+pub const vpiGenScope: c_int = 134;
+pub const vpiImplicitDecl: c_int = 26;
+pub const vpiProtected: c_int = 10;
 
 // Annex G properties.
 pub const vpiOpType: c_int = 39;
@@ -182,6 +190,9 @@ pub const Prop = struct { prop: c_int, value: c_int };
 pub fn typeName(t: c_int) ?[]const u8 {
     return switch (t) {
         vpiAlways => "vpiAlways",
+        vpiRange => "vpiRange",
+        vpiGenScopeArray => "vpiGenScopeArray",
+        vpiGenScope => "vpiGenScope",
         vpiAssignStmt => "vpiAssignStmt",
         vpiAssignment => "vpiAssignment",
         vpiBegin => "vpiBegin",
@@ -213,6 +224,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiRegBit => "vpiRegBit",
         vpiRelease => "vpiRelease",
         vpiRepeat => "vpiRepeat",
+        vpiRepeatControl => "vpiRepeatControl",
         vpiSysFuncCall => "vpiSysFuncCall",
         vpiSysTaskCall => "vpiSysTaskCall",
         vpiTask => "vpiTask",
@@ -245,8 +257,10 @@ pub const ScopeLists = struct {
     primitives: std.ArrayList(u32) = .empty,
     mod_paths: std.ArrayList(u32) = .empty,
     tchks: std.ArrayList(u32) = .empty,
+    gen_arrays: std.ArrayList(u32) = .empty,
 
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
+        s.gen_arrays.deinit(gpa);
         s.mod_paths.deinit(gpa);
         s.tchks.deinit(gpa);
         s.cont_assigns.deinit(gpa);
@@ -268,6 +282,7 @@ pub const ScopeLists = struct {
             .{ .tag = vpiPrimitive, .items = try arena.dupe(u32, s.primitives.items) },
             .{ .tag = vpiModPath, .items = try arena.dupe(u32, s.mod_paths.items) },
             .{ .tag = vpiTchk, .items = try arena.dupe(u32, s.tchks.items) },
+            .{ .tag = vpiGenScopeArray, .items = try arena.dupe(u32, s.gen_arrays.items) },
         });
     }
 };
@@ -378,9 +393,32 @@ pub const Builder = struct {
                     }),
                 }));
             }
+            // IEEE 1364-2005 §26.6.20: an automatic subroutine's variables,
+            // vpiAutomatic TRUE. They have no static storage, so no slot: a
+            // value lives only in an activation's frame.
+            var autos: std.ArrayList(u32) = .empty;
+            if (t.automatic) for (t.vars) |v| {
+                // ponytail: a reg array of an automatic subroutine is not
+                // modelled yet.
+                if (v.storage != .reg or v.dims.len != 0) continue;
+                const local = try b.arena.dupe(u8, b.file.str(v.name));
+                try autos.append(b.arena, try b.add(.{
+                    .kind = .reg,
+                    .owner = b.scope,
+                    .name = local,
+                    .full = try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.objects.items[at].full, local }),
+                    // 0: a range that did not fold (`packedWidth`'s vpiUndefined).
+                    .size = std.math.cast(u32, packedWidth(b.file, v)) orelse 0,
+                    .is_signed = v.is_signed,
+                    .automatic = true,
+                }));
+            };
             const body = try b.stmt(t.body);
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = body }});
-            b.objects.items[at].lists = try b.arena.dupe(List, &.{.{ .tag = vpiIODecl, .items = ios.items }});
+            b.objects.items[at].lists = if (t.automatic)
+                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items } })
+            else
+                try b.arena.dupe(List, &.{.{ .tag = vpiIODecl, .items = ios.items }});
         }
         // §11.6.17.
         for (m.assigns) |a| {
@@ -597,6 +635,7 @@ pub const Builder = struct {
                     // be NULL."
                     var dc = none;
                     var ec = none;
+                    var rc = none;
                     if (a.timing != .none) {
                         const e = try b.expr(a.timing);
                         if (a.timing_is_delay) {
@@ -604,12 +643,19 @@ pub const Builder = struct {
                         } else {
                             ec = try b.code(vpiEventControl, &.{ .{ .tag = vpiCondition, .to = e }, .{ .tag = vpiStmt, .to = none } }, &.{}, &.{});
                         }
+                        // §26.6.31 a repeat control: its count and its event
+                        // control, and no statement.
+                        if (a.timing_repeat != .none) {
+                            rc = try b.code(vpiRepeatControl, &.{ .{ .tag = vpiExpr, .to = try b.expr(a.timing_repeat) }, .{ .tag = vpiEventControl, .to = ec } }, &.{}, &.{});
+                            ec = none;
+                        }
                     }
                     break :blk b.code(vpiAssignment, &.{
                         .{ .tag = vpiLhs, .to = lhs },
                         .{ .tag = vpiRhs, .to = rhs },
                         .{ .tag = vpiDelayControl, .to = dc },
                         .{ .tag = vpiEventControl, .to = ec },
+                        .{ .tag = vpiRepeatControl, .to = rc },
                     }, &.{}, &.{.{ .prop = vpiBlocking, .value = @intFromBool(!a.nonblocking) }});
                 },
                 // §11.6.24: force and assign stmt draw vpiLhs and vpiRhs;

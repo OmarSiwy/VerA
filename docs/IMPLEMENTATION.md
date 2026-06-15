@@ -55,7 +55,7 @@ truncation rule, so a shorter answer would be a wrong one.
 | `` `include `` depth | 32 | E0125 | `lib/frontend/preprocessor.zig:76` | `ch10_directives/include_cycle_rejected.va` |
 | real literal length | 512 bytes | E0134 | `lib/frontend/lexer.zig:484` | `ch02_lexical/real_literal_over_512_bytes_rejected.va` |
 | `` `include `` file, `$table_model` and `noise_table` data file | 16 MiB | E1013 | `lib/frontend/preprocessor.zig:79`, `lib/ir/lower/table_model.zig:240` | `ch10_directives/include_file_over_16mib_rejected.va`, `ch09_system_tasks/table_model_file_over_16mib_rejected.va` |
-| source file and `--spice` netlist | 64 MiB | E1013 | `src/main.zig` `max_source_bytes` | none (needs a 64 MiB input) |
+| source file and `--spice` netlist | 64 MiB | E1013 | `src/main.zig` `max_source_bytes` | `build.zig`: `vera --lint /dev/zero`, and `/dev/zero` as the `--spice` netlist, under `zig build test` |
 | instance tree | 64 nested instances | E1018 | `lib/ir/elaborate.zig:40` | `ch06_hierarchy/instance_tree_64_levels.va`, `instance_tree_deeper_than_64_rejected.va` |
 | nets, ports, branch flows and operator states in one module; one vector range | 65535 | E1015 | `lib/ir/lower/node.zig` `max_nodes` | `ch03_data_types/vector_net_over_65535_elements_rejected.va`, `nets_over_65535_rows_rejected.va` |
 | analog-context array or assignment pattern | 2^20 elements | E1016 | `lib/ir/lower/param.zig` `max_cells` | `ch03_data_types/array_over_2_20_elements_rejected.va` |
@@ -63,6 +63,8 @@ truncation rule, so a shorter answer would be a wrong one.
 | solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig:308` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
 | conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig:137` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
 | text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/str_kernels.zig:767`, `lib/backend/cg_display.zig:41` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
+| number literal size | 2^24 bits | E1019 | `lib/frontend/integer.zig` `max_width` | `ieee1364/03_lexical_conventions/b_3_5_1_literal_size_65536.v`, `b_3_5_1_literal_size_over_2_24_rejected.v` |
+| a constant string replication | 4096 bytes | E1011 | `lib/ir/lower/expr.zig:344` | `ch03_data_types/string_replication_4096_bytes.va`, `string_replication_over_4096_bytes_rejected.va` |
 | one `$fgets` line, one `$fscanf` look-ahead | 4096 bytes | E1011 | `lib/backend/file_kernels.zig:68,137` | `ch09_system_tasks/fgets_line_over_4096_is_fatal.va`, `fscanf_window_over_4096_is_fatal.va`, `s01_13_long_record_is_not_truncated.va` |
 | open file channels | 30 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:88` | `ch09_system_tasks/222_mcd_channels_exhausted_at_bit_31.va`, `224_two_instances_hold_distinct_channels.va` |
 | distinct paths opened for writing in one run | 64 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/file_kernels.zig:108` | `ch09_system_tasks/write_mode_path_65_fails_open.va` |
@@ -70,13 +72,14 @@ truncation rule, so a shorter answer would be a wrong one.
 | random distribution count | 1..2147483647, integral | the RNG diagnostics | `lib/backend/rng_kernels.zig:78` | `ch09_system_tasks/189_rng_*_rejected.va` |
 | UDP inputs | 64 | E1017 | `lib/frontend/parser/source.zig` | `ieee1364/08_udp/b_8_1_2_udp_more_than_64_inputs_rejected.v` |
 | digital: `$readmemb`/`$readmemh` file | 4 MiB | E1100, naming the bound | `src/sim/digital/display.zig:273` | `ieee1364/17_system_tasks/b_17_2_9_readmem_file_over_4mib_rejected.v` |
+| digital: field width or precision | 4096 | E1011 | `src/sim/digital/display.zig` `max_field` | `ieee1364/17_system_tasks/b_17_1_1_2_real_precision_100.v`, `b_17_1_1_2_field_width_over_4096_rejected.v` |
 | digital: `%d` of a known value | 64 bits | E1100 | `src/sim/digital/display.zig:588` | `ieee1364/17_system_tasks/b_17_1_1_4_decimal_over_64_bits_rejected.v` |
 | digital: expression and statement depth | 256 levels | E1100 | `src/sim/digital/compile.zig:511,803` | `ieee1364/05_expressions/b_5_expression_deeper_than_256_rejected.v` |
 | digital: hierarchy depth | 64 levels | E1100 | `src/sim/digital/root.zig:954` | `ieee1364/12_hierarchy/b_12_hierarchy_deeper_than_64_rejected.v` |
 | digital: loop generate | 65536 iterations | E1100 | `src/sim/digital/root.zig:1465` | `ieee1364/12_hierarchy/b_12_generate_past_65536_iterations_rejected.v` |
 | digital: nested task and function activations | 1024, or 4 MiB of stack | E1100 | `src/sim/digital/exec.zig:1433` (`max_sync_stack`) | `ieee1364/10_tasks_functions/b_10_4_recursion_past_the_stack_bound_rejected.v` |
 | digital: array dimensions | 16 | E1100 | `src/sim/digital/root.zig:1766` (`declareArray`) | `ieee1364/04_data_types/b_4_9_net_array_17_dimensions_rejected.v` |
-| digital: events in one time step | 10,000,000 | E1100 | `src/sim/digital/root.zig:170` | none |
+| digital: events in one time step | 10,000,000, or `--event-budget=N` | E1100 | `src/sim/digital/root.zig:186` | `ieee1364/11_scheduling/b_11_zero_delay_loop_rejected.v` (at a budget of 1000: the default takes minutes to reach) |
 | testbench `//! sweep` product | 4096 points | a `//!` directive error | `lib/backend/tb.zig:259` | none (harness input, not source) |
 | VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223` | none |
 
@@ -93,21 +96,14 @@ cite no clause. The `$ferror` fixtures assert only a nonzero code.
 
 ## 4. Open defects
 
-Each row is a limit that is still hit silently, crashes, or reports the wrong
-thing. The v1.0.0 bar (ROADMAP §1 E) needs all of them closed.
+None. Every limit above fails loudly, and these are gone rather than named:
+the `absdelay` history counts steps in a u64; unit names count collisions in
+a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
+reals and the testbench's noise, AC-stimulus, charge-site and mixed-signal
+name rows are written whole; a mixed-signal crossing the secant cannot close
+is bisected to its `time_tol` (`src/sim/mixed.zig` `max_secant`).
 
-| Where | Trigger | What happens | Proposed fix |
-|---|---|---|---|
-| `lib/backend/codegen/kernel_text.zig:710,745` (`zHistAt`, `zHistPush`, `head: u32`) | an `absdelay` that runs more than 2^32 accepted steps | `head + n - 1` overflows (a panic in safe builds); saturated, every push rewrites one slot | make `head` a u64 |
-| `lib/backend/naming.zig:242` (`assignDisambig`, `n: u16`) | 65536 units with the same role and target, e.g. that many `$bound_step` calls in one module | overflow panic | widen to u32 |
-| `lib/frontend/integer.zig:655-663` | `4294967295'h0` | a 1 GiB allocation at compile time | cap a literal's size at 65536 bits, the vector length 1364 §4.3.1 requires a tool to support, with a new E code |
-| `lib/ir/lower/expr.zig:344-347` | `s = {1000000000000{"x"}};` | the constant replication is expanded with no bound: out of memory | refuse past a byte cap with a new E code, E1011's 4096 bytes if it feeds a format |
-| `src/sim/digital/display.zig:518`, `src/sim/digital/emit.zig:1562` | `$display("%.100f", 1.0)` | precision silently clamped to 60 | print the full precision (the buffer is 512 bytes, enough for 309 digits) or refuse past 60 by name |
-| `src/sim/digital/display.zig:450` | `$display("%99999999999d", x)` | width saturates at 2^32 and writes 4 GiB of spaces | refuse a width above 4096 like E1011 does for analog |
-| `src/sim/digital/display.zig:532` (`chain: [64]u32`) | `%m` inside more than 64 nested scopes | the outermost scopes are dropped from the name | size the chain from the scope depth |
-| `src/sim/digital/display.zig:551` (`found: [64]`) | `%m` under 65 nested named blocks | which blocks are dropped depends on hash order | the same |
-| `src/vpi/print.zig:446,458` | `vpi_printf("%.300f", 1e300)`, `vpi_printf("%.60e", x)` | precision clamped to 300 / 40; a render failure prints `?` | render through an allocating path, or return an error from `vpi_printf` |
-| `lib/backend/tb/runner.zig:102,916` (`[192]u8`) | a noise or AC-stimulus row whose node names pass 192 bytes | prints `<too long>` and the check reads `ok=0` | allocate the line |
-| `lib/backend/tb/runner.zig:531,563` (`[256]u8`) | a mixed-signal port or top-module name over about 85 characters | `NoSpaceLeft` is reported as `OutOfMemory` | allocate the buffer |
-| `lib/backend/tb/runner_text.zig:401,467` (`inline for (comptime contract.jacConst(D))`) | an `--emit-exe` device with more than about 1000 constant Jacobian entries or charge-site stamps | likely a Zig "evaluation exceeded 1000 backwards branches" error in the generated testbench (not reproduced) | `@setEvalBranchQuota` in these functions, as `kernel_text.zig:306` does |
-| `src/sim/mixed.zig:301` | an A2D crossing the secant search cannot bracket in 64 cuts | the crossing time is silently less precise | warn when the cuts run out |
+The testbench's comptime loops over constant Jacobian entries and charge
+stamps were measured, not changed: a 40-node resistor mesh (1600 constant
+entries) and 200 charge sites build and run, and `tools/contract.zig` sets its
+own evaluation quota where it computes those tables.

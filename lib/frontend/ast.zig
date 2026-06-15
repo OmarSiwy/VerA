@@ -504,6 +504,9 @@ pub const ParamDecl = struct {
     ty: Type, // §3.4.1 (`.unspecified` ⇒ infer from `default`)
     default: ExprId, // §3.4 default expression (constant_mintypmax_expression)
     is_local: bool = false, // §3.4.5 localparam
+    /// A.2.1.1 `parameter signed`: IEEE 1364-2005 §12.2 converts an override
+    /// to a signed value.
+    is_signed: bool = false,
     /// IEEE 1364-2005 §4.10.3 a module-body `specparam`, kept as a
     /// `localparam` (`is_local`) that no module parameter may read.
     is_spec: bool = false,
@@ -702,6 +705,13 @@ pub const Port = struct {
     /// port is named by the net it carries. Several consecutive ports share one
     /// external name when the port expression is a concatenation (§6.5.1).
     external_name: StrId = .none,
+    /// A.1.3 this port_reference continues the previous one's port_expression,
+    /// a concatenation: `{c, d}` is two `Port`s, the second one `concat_rest`.
+    concat_rest: bool = false,
+    /// IEEE 1364-2005 A.1.3 `port_reference ::= port_identifier [ [
+    /// constant_range_expression ] ]`: the bit-select (`msb == lsb`) or
+    /// part-select of the net this reference names. A digital parse only.
+    select: ?Dim = null,
     /// A.2.1.2 `[ signed ]` on the direction or the net declaration of this
     /// port. §12.3.3: "If either ... is declared as signed, then the other
     /// shall also be considered signed."
@@ -943,6 +953,11 @@ pub const ParamOverride = struct {
 pub const Defparam = struct {
     path: StrId,
     value: ExprId,
+    /// IEEE 1364-2005 §12.2.1 a digital path's instance selects that do not
+    /// fold at parse time (a genvar's, inside a loop generate block), in
+    /// order: each is spelled `[]` in `path` and folded in the scope the
+    /// defparam is elaborated in.
+    indices: []const ExprId = &.{},
     main_tok: u32 = 0,
 };
 
@@ -995,6 +1010,9 @@ pub const ModuleDecl = struct {
     /// carries no value, only a per-timepoint triggered/not flag, which lowering
     /// materializes as an ordinary integer slot in the §2.8 declaration space.
     events: []const StrId = &.{},
+    /// Each `events` entry's name token: IEEE 1364-2005 §9.7.3 "An event
+    /// name shall be declared explicitly before it is used."
+    event_toks: []const u32 = &.{},
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
@@ -1238,6 +1256,9 @@ pub const Stmt = union(enum) {
         nonblocking: bool = false,
         timing: ExprId = .none,
         timing_is_delay: bool = false,
+        /// IEEE 1364-2005 §9.7.7 `repeat ( count ) @ ...`: the event control
+        /// waits for `count` occurrences; `.none` without `repeat`.
+        timing_repeat: ExprId = .none,
         /// IEEE 1364-2005 §9.3 procedural continuous assignments, which only
         /// a digital parse makes: `assign`/`force` (with a `value`) and
         /// `deassign`/`release` (whose `value` is `.none`).
@@ -1322,11 +1343,15 @@ pub const CaseArm = struct {
 /// a module's. The digital engine elaborates them in the block's scope.
 pub const GenItems = struct {
     events: []const StrId = &.{},
+    /// As `ModuleDecl.event_toks`.
+    event_toks: []const u32 = &.{},
     discrete: []const DiscreteBlock = &.{},
     assigns: []const ContAssign = &.{},
     gates: []const GateInst = &.{},
     pulls: []const PullInst = &.{},
     switches: []const SwitchInst = &.{},
+    /// IEEE 1364-2005 §12.2.1 defparams, relative to the block instance.
+    defparams: []const Defparam = &.{},
 };
 
 /// §5.3.2 sequential block body plus its local declarations
@@ -1341,6 +1366,9 @@ pub const SeqBlock = struct {
     parallel: bool = false,
     params: []const ParamDecl = &.{},
     vars: []const VarDecl = &.{},
+    /// IEEE 1364-2005 A.2.8 a named block's `event` declarations; only a
+    /// digital parse keeps one.
+    events: []const StrId = &.{},
     body: []const StmtId = &.{},
     /// A generate block's module instances (§6.6). The digital engine decides a
     /// digital parse's scheme; elaboration gates an analog if-generate's
@@ -1401,6 +1429,15 @@ pub const UdpDecl = struct {
     /// A.5.3 `udp_initial_statement ::= initial output_port_identifier =
     /// init_val ;`; `.none` when the declaration carries none.
     init: ExprId = .none,
+    /// The identifier the initial statement assigns (§8.1.3: the output).
+    init_target: StrId = .none,
+    /// The ports declared `output`, the last one's name, and whether any
+    /// `reg` is declared: IEEE 1364-2005 §8.1.1 wants exactly one output,
+    /// first in the list; §8.1.2 a `reg` for a sequential UDP's output and
+    /// none in a combinational one. The digital engine judges them.
+    outputs: u8 = 0,
+    output: StrId = .none,
+    has_reg: bool = false,
     rows: []const UdpRow = &.{},
     main_tok: u32 = 0,
 };

@@ -14,7 +14,6 @@
 // Each concatenation is all variables or all nets: Syntax 9-3's
 // variable_lvalue and net_lvalue concatenate only their own kind.
 //! inherited IEEE 1364-2005 9.3 9.3.1 9.3.2
-//! xfail a concatenation on the left of a procedural assign or force is refused ("a procedural continuous assignment names one whole variable or net")
 `timescale 1ns/1ns
 module b_9_3_concatenation_targets;
   reg s, x, y;

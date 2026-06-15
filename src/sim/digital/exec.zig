@@ -101,13 +101,8 @@ pub const Edge = enum(u2) {
 pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
 
 /// One term of a suspension's event expression, filed under the slot it
-/// watches (`Run.terms`). Live while `gen` is its suspension's. A term on
-/// one `bit` of the slot keeps the value it `last` saw of it, since the
-/// store that wakes it reports only the least significant bit's.
-pub const Term = struct { susp: u32, gen: u32, edge: Edge, bit: u32 = whole_slot, last: Int.Bit = .x };
-
-/// `Term.bit` of a term on the whole slot.
-pub const whole_slot = std.math.maxInt(u32);
+/// watches (`Run.terms`). Live while `gen` is its suspension's.
+pub const Term = struct { susp: u32, gen: u32, edge: Edge };
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -180,7 +175,7 @@ fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
 /// index and an indexed part-select's base are evaluated; a part-select's
 /// bounds and an indexed one's width were folded by `infer`. Null is an x/z
 /// index, which names no bit.
-fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
+pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rg = ex.rhs(e);
     const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
@@ -253,32 +248,35 @@ pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) E
     try assign(self, a, target, lit);
 }
 
-/// Writes `value` (already converted for `targetType(target)`) where `target`
-/// lands: now, or as a nonblocking update `delay` later (null: this step).
-/// A concatenation is its operands, the rightmost taking the least
-/// significant bits (IEEE 1364-2005 §6 Table 6-1). An operand that names no
-/// storage (`place`) is skipped.
-pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal, nonblocking: bool, delay: ?u64) Error!void {
+/// §9.2 writes `value`, converted for `target` (`targetType`), where the
+/// lvalue lands now, or queues it as a nonblocking update after `delay`. A
+/// concatenation partitions the value among its operands, the last one
+/// taking the low bits.
+pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal, nba: bool, delay: ?u64) Error!void {
     const ex = &self.file.exprs;
     if (ex.tag(target) == .concat) {
-        const args = ex.args(target);
         var lo: u32 = 0;
-        var k = args.len;
+        const ops = ex.args(target);
+        var k = ops.len;
         while (k != 0) {
             k -= 1;
-            const w = (try targetType(self, args[k])).width;
-            const part = try filled(a, w, false, .zero);
-            for (0..w) |i| setBit(part, @intCast(i), value.bit(lo + @as(u32, @intCast(i))));
-            try put(self, a, args[k], part, nonblocking, delay);
+            const w = (try targetType(self, ops[k])).width;
+            try put(self, a, ops[k], try bitsOf(a, value, lo, w), nba, delay);
             lo += w;
         }
         return;
     }
     const p = (try place(self, a, target)) orelse return;
-    if (nonblocking)
-        _ = try enqueue(self, .{ .write = .{ .target = p.slot, .value = value, .sel = p.sel } }, delay, true)
-    else
-        try write(self, a, p, value);
+    if (nba) {
+        _ = try enqueue(self, .{ .write = .{ .target = p.slot, .value = value, .sel = p.sel } }, delay, true);
+    } else try write(self, a, p, value);
+}
+
+/// Bits [lo, lo + w) of `v`, unsigned.
+fn bitsOf(a: std.mem.Allocator, v: Int.Literal, lo: u32, w: u32) Error!Int.Literal {
+    const out = try filled(a, w, false, .zero);
+    for (0..w) |i| setBit(out, @intCast(i), v.bit(lo + @as(u32, @intCast(i))));
+    return out;
 }
 
 /// Writes `value` (already converted by `evalFor`) where `p` lands. A selection
@@ -417,6 +415,8 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
     return switch (ex.tag(e)) {
         .real_literal => ex.realValue(e),
         .ident, .hier_ident, .index => @bitCast((try leaf(self, a, e)).values()[0]),
+        // §10.4.1 a real or realtime function: its result variable's bits.
+        .call => @bitCast((try callSync(self, a, self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?, ex.args(e))).values()[0]),
         .unary => switch (ex.unOp(e)) {
             .minus => -(try evalReal(self, a, ex.lhs(e))),
             else => try evalReal(self, a, ex.lhs(e)), // else: `+`, the only other real-valued unary
@@ -496,7 +496,13 @@ pub fn truthOf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Bit {
 /// else the variable's type, real included.
 pub fn targetType(self: *Run, e: Ast.ExprId) Error!Type {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .concat or ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
+    // §9.2 a concatenation: as wide as its operands together, unsigned.
+    if (ex.tag(e) == .concat) {
+        var width: u32 = 0;
+        for (ex.args(e)) |x| width += (try targetType(self, x)).width;
+        return .{ .width = width, .signed = false };
+    }
+    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
     const at = try self.baseSlot(e);
     return self.slotType(at);
 }
@@ -514,7 +520,7 @@ fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!
     return convertValue(a, self.values[slot], self.reals.contains(slot), target);
 }
 
-fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
+pub fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
     if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
     const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
     return normalize(a, i, .{ .width = target.width, .signed = i.signed });
@@ -756,12 +762,20 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 /// write path for the active and NBA regions, so none bypasses §5.10.1
 /// resumption. A write to a slot a §9.3 override holds is dropped, unless
 /// `overriding`.
-pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
+pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
     // §9.3: while a procedural continuous assignment holds the slot, its own
     // process is the only writer: an `assign` over a variable, a `force`
     // over anything, including a net's resolution.
+    var planes = planes_in;
     if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
         if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
+        // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
+        if (o.parts.items.len != 0) {
+            const cur = self.values[target];
+            const kept: Int.Literal = .{ .width = cur.width, .signed = cur.signed, .sized = cur.sized, .planes = try self.arena.dupe(u64, planes) };
+            for (o.parts.items) |p| for (p.bits.lo..p.bits.lo + p.bits.width) |i| setBit(kept, @intCast(i), cur.bit(@intCast(i)));
+            planes = kept.planes;
+        }
     };
     const dest = self.values[target];
     const before = dest.bit(0);
@@ -807,6 +821,19 @@ pub fn release(self: *Run, slot: u32, force: bool) Error!void {
     if (force) {
         if (self.net_of.get(slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
     }
+}
+
+/// §9.3.2 `release` of a forced select of net `slot`: its bits are the
+/// drivers' again, at once. Releasing what is not held is a no-op.
+fn releaseBits(self: *Run, slot: u32, bits: compile.Bits) Error!void {
+    const layers = self.overrides.getPtr(slot) orelse return;
+    for (layers.parts.items, 0..) |p, i| if (std.meta.eql(p.bits, bits)) {
+        _ = try stopRange(self, p.range.start, p.range.end);
+        _ = layers.parts.orderedRemove(i);
+        break;
+    };
+    if (layers.force == null and layers.assign == null and layers.parts.items.len == 0) _ = self.overrides.remove(slot);
+    if (self.net_of.get(slot)) |net| try resolve(self, net);
 }
 
 /// VPI §12.30 vpiForceFlag: force `slot` to a constant, "same as the
@@ -890,13 +917,8 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
     for (list.items) |t| {
         const s = &self.susps.items[t.susp];
         if (s.gen != t.gen) continue;
-        var term = t;
-        const hit = if (t.bit == whole_slot) t.edge.matches(before, after) else hit: {
-            term.last = self.values[target].bit(t.bit);
-            break :hit t.last != term.last and t.edge.matches(t.last, term.last);
-        };
-        if (!hit) {
-            list.items[keep] = term;
+        if (!t.edge.matches(before, after)) {
+            list.items[keep] = t;
             keep += 1;
             continue;
         }
@@ -928,8 +950,8 @@ fn park(self: *Run, pc: u32) Error!u32 {
     return id;
 }
 
-/// File one term of suspension `id` under `slot`, on its `bit` or `whole_slot`.
-fn watch(self: *Run, id: u32, slot: u32, edge: Edge, bit: u32) Error!void {
+/// File one term of suspension `id` under `slot`.
+fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
     const list = termsOf(self, slot) orelse blk: {
         const g = try self.far_terms.getOrPut(self.arena, slot);
         g.value_ptr.* = .empty;
@@ -947,8 +969,7 @@ fn watch(self: *Run, id: u32, slot: u32, edge: Edge, bit: u32) Error!void {
         list.shrinkRetainingCapacity(keep);
         if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.arena, list.capacity * 2);
     }
-    const last: Int.Bit = if (bit == whole_slot) .x else self.values[slot].bit(bit);
-    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge, .bit = bit, .last = last });
+    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
 }
 
 /// The process at suspension `id` is no longer waiting: every term it filed
@@ -1310,11 +1331,12 @@ fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: 
 /// z as x (§8.1.6). A combinational table is simply consulted; a sequential
 /// one takes each input that changed since the last evaluation as one event,
 /// in terminal order, and its state follows the entries matched (§8.6).
-fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) Error!Int.Literal {
+fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp, width: u32) Error!Int.Literal {
     const net_mod = @import("net.zig");
     const bits = try scratch.alloc(Int.Bit, u.ins.len);
     for (u.ins, bits) |in, *b| {
-        const v = (try eval(self, scratch, in, 1)).bit(0);
+        const w = try eval(self, scratch, in, 1);
+        const v = w.bit(if (w.width > 1) u.lane orelse 0 else 0);
         b.* = if (v == .z) .x else v;
     }
     const out = if (!u.sequential) net_mod.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
@@ -1326,7 +1348,9 @@ fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) 
         }
         break :blk u.state;
     };
-    return filled(scratch, 1, false, out);
+    const result = try filled(scratch, width, false, .z);
+    setBit(result, u.out_bit orelse 0, out);
+    return result;
 }
 
 /// What a `Bridge` driver contributes: its window, z everywhere else.
@@ -1366,14 +1390,14 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         .event_negedge => .negedge,
         .event_function => {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
-            return watch(self, id, slot, .any, whole_slot);
+            return watch(self, id, slot, .any);
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
-        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any, whole_slot),
-        else => .any, // else: a plain name or bit-select, the other terms checkEvent admits
+        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
+        else => .any, // else: a name, or an expression checkEvent gave a slot
     };
-    const src = try self.eventBit(if (edge == .any) e else ex.lhs(e));
-    try watch(self, id, src.slot, edge, src.bit);
+    const watched = if (edge == .any) e else ex.lhs(e);
+    try watch(self, id, try self.termSlot(watched), edge);
 }
 
 /// Queues `item` in the `.monitor` region of the current time, §17.1.2 and
@@ -1607,9 +1631,8 @@ fn returnTimed(self: *Run, a: std.mem.Allocator, idx: u32) Error!u32 {
     self.ctx = act.ret_ctx;
     try makeResident(self, self.ctx);
     self.scope = self.code_scope.items[act.ret_pc - 1];
-    for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input) {
+    for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input)
         try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
-    };
     return act.ret_pc;
 }
 
@@ -1688,12 +1711,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (self.file.exprs.tag(s.target) == .concat) {
-                    try put(self, scratch, s.target, try evalFor(self, scratch, s.value, try targetType(self, s.target)), s.nonblocking, null);
-                } else if (try place(self, scratch, s.target)) |target| {
-                    const value = try evalFor(self, scratch, s.value, try targetType(self, s.target));
-                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target.slot, .value = value, .sel = target.sel } }, null, true) else try write(self, scratch, target, value);
-                }
+                try put(self, scratch, s.target, try evalFor(self, scratch, s.value, try targetType(self, s.target)), s.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -1780,7 +1798,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
                 const id = try park(self, pc + 1);
-                for (slots) |s| try watch(self, id, s, .any, whole_slot);
+                for (slots) |s| try watch(self, id, s, .any);
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
@@ -1792,7 +1810,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     continue;
                 }
                 const id = try park(self, pc);
-                for (s.slots) |at| try watch(self, id, at, .any, whole_slot);
+                for (s.slots) |at| try watch(self, id, at, .any);
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the
@@ -1812,6 +1830,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 cell.width = parked.width;
                 cell.signed = parked.signed;
                 cell.sized = parked.sized;
+                if (compile.parksOnly(a)) {
+                    pc += 1;
+                    continue;
+                }
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
@@ -1832,7 +1854,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                try put(self, scratch, a.target, self.holds.items[s.cell], false, null);
+                try put(self, scratch, a.target, self.holds.items[s.cell], a.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -1862,7 +1884,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const value = switch (d.source) {
                     .bridge => |b| try window(self, scratch, b, d.current.width),
                     .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
-                    .udp => |u| try udpValue(self, scratch, u),
+                    .udp => |u| try udpValue(self, scratch, u, d.current.width),
                     .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
                     .pull => |b| try filled(scratch, d.current.width, false, b),
                     .expr => |x| blk: {
@@ -1880,7 +1902,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
                 // later transitions wait for the instance delay.
-                const first_udp = if (d.source == .udp) !d.source.udp.started else false;
+                const first_udp = if (d.source == .udp) d.source.udp.sequential and !d.source.udp.started else false;
+                // A combinational one's output is x until its first delayed value.
+                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
@@ -1888,7 +1912,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         const delay = switch (d.source) {
                             .expr => d.delay.continuous(d.current, st.target),
                             .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
-                            .bridge, .udp, .mos, .pull => d.delay.to(st.target.bit(0)),
+                            .udp => |u| d.delay.to(st.target.bit(u.out_bit orelse 0)),
+                            .bridge, .mos, .pull => d.delay.to(st.target.bit(0)),
                         };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
@@ -1917,6 +1942,19 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .override_on => |o| {
                 const entry = try self.overrides.getOrPut(self.arena, o.slot);
                 if (!entry.found_existing) entry.value_ptr.* = .{};
+                if (o.bits) |bits| {
+                    const parts = &entry.value_ptr.parts;
+                    const range: @import("root.zig").PcRange = .{ .start = o.start, .end = o.end };
+                    for (parts.items) |*p| {
+                        if (!std.meta.eql(p.bits, bits)) continue;
+                        _ = try stopRange(self, p.range.start, p.range.end);
+                        p.range = range;
+                        break;
+                    } else try parts.append(self.arena, .{ .bits = bits, .range = range });
+                    _ = try enqueue(self, .{ .run_process = o.start }, null, false);
+                    pc += 1;
+                    continue;
+                }
                 const layer = if (o.force) &entry.value_ptr.force else &entry.value_ptr.assign;
                 if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
                 layer.* = .{ .start = o.start, .end = o.end };
@@ -1928,15 +1966,29 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const layers = self.overrides.get(o.slot) orelse Overrides{};
                 // An assign under a force keeps tracking but does not write.
                 if (o.force or layers.force == null) {
-                    const value = try evalFor(self, scratch, o.value, self.slotType(o.slot));
+                    const w = if (o.bits) |b| b.width else self.values[o.slot].width;
+                    const value = if (o.slice) |sl|
+                        try bitsOf(scratch, try evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, w)
+                    else if (o.bits != null)
+                        try evalFor(self, scratch, o.value, .{ .width = w, .signed = false })
+                    else
+                        try evalFor(self, scratch, o.value, self.slotType(o.slot));
                     self.overriding = true;
                     defer self.overriding = false;
-                    try store(self, o.slot, value.planes);
+                    if (o.bits) |b|
+                        try write(self, scratch, .{ .slot = o.slot, .sel = .{ .first = b.lo, .count = b.width } }, value)
+                    else
+                        try store(self, o.slot, value.planes);
                 }
                 pc += 1;
                 continue;
             },
             .override_off => |o| {
+                if (o.bits) |bits| {
+                    try releaseBits(self, o.slot, bits);
+                    pc += 1;
+                    continue;
+                }
                 try release(self, o.slot, o.force);
                 pc += 1;
                 continue;
@@ -2021,8 +2073,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .repeat_start => |s| {
                 const value = try eval(self, scratch, s.count, 0);
                 const count = if (value.hasUnknown()) 0 else blk: {
-                    if (value.signed and value.asInt().? < 0)
+                    if (value.signed and value.asInt().? < 0) {
+                        if (s.clamp) break :blk 0;
                         return self.exprFail(s.count, "negative repeat counts are not implemented; IEEE1364-2005 does not define this case explicitly");
+                    }
                     break :blk value.values()[0];
                 };
                 self.repeats.items[s.counter] = count;

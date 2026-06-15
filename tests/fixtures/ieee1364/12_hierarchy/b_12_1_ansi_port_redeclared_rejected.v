@@ -10,7 +10,6 @@
 //! inherited IEEE 1364-2005 12.1 12.3.4
 //! reject E0218
 //! reject port redeclared in the module body
-//! xfail VerA accepts a wire redeclaring a port of the list of port declarations
 module m(input a, output y);
   wire a;
   assign y = a;
