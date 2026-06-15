@@ -439,9 +439,13 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
     var range: ?Ast.Dim = null;
     var signed = false;
     var var_storage: ?@FieldType(Ast.VarDecl, "storage") = null;
+    // A list_of_ports entry has been read: the list is not A.1.3's
+    // list_of_port_declarations, so no port_declaration may follow.
+    var plain = false;
     while (true) {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
+            if (plain) return self.failAt(self.pos, .E0207, "found {s}: a port_declaration cannot follow a list_of_ports port (A.1.3)", .{self.found(self.pos)});
             dir = d;
             b.ansi = true;
             self.pos += 1;
@@ -491,6 +495,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         }
         if (concat) _ = try self.expect(.rbrace);
         if (close_named) _ = try self.expect(.rparen);
+        if (dir == .unspecified) plain = true;
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);

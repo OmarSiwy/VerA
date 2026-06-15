@@ -14,7 +14,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.1.3
 //! reject E0207
-//! xfail VerA accepts a port list that mixes a port with a port_declaration
 module b_A_1_3_port_mixed_forms_rejected (a, input b);
   input a;
   initial $display("unreachable");
