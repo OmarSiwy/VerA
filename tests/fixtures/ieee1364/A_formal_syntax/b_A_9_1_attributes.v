@@ -14,7 +14,6 @@
 // changes a value: a = 2, b = 1 + 2 = 3, c = a + b = 5 through the child.
 // Output: "c=5".
 //! inherited IEEE 1364-2005 A.9.1
-//! xfail VerA's digital execution stops at any attribute instance (E1100)
 (* top_mark *)
 module b_A_9_1_attributes;
   (* keep = 1, note = "w" *) wire [3:0] c;
