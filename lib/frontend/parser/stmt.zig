@@ -211,6 +211,12 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
         const before_attrs = self.pos;
         const attr_mark = self.attrs.items.len;
         try self.skipAttributes();
+        // IEEE 1364-2005 A.6.3: `begin [ : block_identifier
+        // { block_item_declaration } ]`, so an unnamed block declares nothing.
+        if (self.digital and blk.name == .none) switch (self.peek()) {
+            .kw_parameter, .kw_localparam, .kw_integer, .kw_real, .kw_realtime, .kw_time, .kw_reg, .kw_event => return self.failAt(self.pos, .E0209, "found {s}: only a named block has block_item_declarations (A.6.3)", .{self.found(self.pos)}),
+            else => {}, // else: not a declaration
+        };
         switch (self.peek()) {
             .kw_parameter, .kw_localparam => {
                 try parse_decl.parseParamDecl(self, &params);
