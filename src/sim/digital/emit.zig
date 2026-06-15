@@ -1187,7 +1187,12 @@ fn slotType(self: *Emitter, at: u32) Error!Type {
 fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     const r = self.r;
     const ex = &r.file.exprs;
-    if (ex.tag(target) == .concat) return .{ .width = compile.typeOf(r, target).width, .signed = false };
+    // `exec.targetType`: as wide as its operands together, unsigned.
+    if (ex.tag(target) == .concat) {
+        var width: u32 = 0;
+        for (ex.args(target)) |x| width += (try targetType(self, x)).width;
+        return .{ .width = width, .signed = false };
+    }
     if (ex.tag(target) != .index) return slotType(self, try self.slot(target));
     if (try self.element(target)) return slotType(self, try self.slot(r.chainBase(target).base));
     try expr.nativeSelect(self, target);
