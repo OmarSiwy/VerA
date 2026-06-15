@@ -889,6 +889,18 @@ pub const Run = struct {
         const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
         return if (c.depth == 1 + arr.rest.len) arr else null;
     }
+    /// The slot an event term's operand `e` reads, and its bit: `exec.whole_slot`
+    /// for a variable or net, whose edge is its least significant bit's
+    /// (§9.7.2), else the least significant bit of a constant bit- or
+    /// part-select of one.
+    pub fn eventBit(self: *Run, e: Ast.ExprId) Error!struct { slot: u32, bit: u32 } {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .index or try self.indexedArray(e) != null) return .{ .slot = try self.scalarSlot(e), .bit = exec.whole_slot };
+        const at = try self.scalarSlot(ex.lhs(e));
+        if (self.reals.contains(at)) return self.exprFail(e, "§4.8.1: a real has no bits to select");
+        const w = try constSelect(self, at, self.values[at].width, e, ex.mainTok(e), "an event term selects bits outside its vector");
+        return .{ .slot = at, .bit = w.lo };
+    }
 };
 
 // ---- elaboration (§6.2.2, §6.5, §6.5.7.1, IEEE 1364 §19.10) -----------------
@@ -1497,6 +1509,14 @@ fn netWindows(r: *Run, e: *Elab, x: Ast.ExprId, tok: u32, comptime not_net: []co
     const net = r.net_of.get(at) orelse return r.fail(tok, not_net, .{});
     const width = e.nets.items[net].resolved.width;
     if (!sel) return out.append(r.arena, .{ .net = net, .lo = 0, .width = width });
+    const w = try constSelect(r, at, width, x, tok, "a net lvalue selects bits outside its net");
+    try out.append(r.arena, .{ .net = net, .lo = w.lo, .width = w.width });
+}
+
+/// The bits the constant bit-, part- or indexed part-select `x` names of
+/// the `width`-bit slot `at`, from its least significant (§5.2.1).
+fn constSelect(r: *Run, at: u32, width: u32, x: Ast.ExprId, tok: u32, comptime outside: []const u8) Error!struct { lo: u32, width: u32 } {
+    const ex = &r.file.exprs;
     if (width == 1 and !r.vec_ranges.contains(at)) return r.exprFail(x, "§5.2.1: a scalar has no bits to select");
     const range = r.vec_ranges.get(at) orelse VecRange{ .msb = @as(i64, width) - 1, .lsb = 0 };
     const rg = ex.rhs(x);
@@ -1520,8 +1540,8 @@ fn netWindows(r: *Run, e: *Elab, x: Ast.ExprId, tok: u32, comptime not_net: []co
         else => low = try r.declaredBound(rg, tok), // else: a bit-select's index
     }
     const pos = range.position(low);
-    if (count < 1 or pos < 0 or pos + count > width) return r.fail(tok, "a net lvalue selects bits outside its net", .{});
-    try out.append(r.arena, .{ .net = net, .lo = @intCast(pos), .width = @intCast(count) });
+    if (count < 1 or pos < 0 or pos + count > width) return r.fail(tok, outside, .{});
+    return .{ .lo = @intCast(pos), .width = @intCast(count) };
 }
 
 /// IEEE 1364-2005 §12.4 a generate construct as a digital parse leaves it:
