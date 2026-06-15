@@ -7,7 +7,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.3
 //! reject constant
-//! xfail VerA does not check that a module path delay is constant: a delay read from a reg variable is accepted (W0251 only)
 `timescale 1ns/1ns
 module b_14_3_variable_delay_rejected(a, q);
   input a;

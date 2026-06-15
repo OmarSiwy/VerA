@@ -133,6 +133,7 @@ pub const Code = enum(u16) {
     E0242,
     E0243,
     E0244,
+    E0245,
     E0296,
     W0250,
     W0251,
@@ -1695,6 +1696,30 @@ fn infoOf(c: Code) Info {
             \\module (both are descriptions of the file, A.1.2), text left over
             \\from a comment that was closed early, a statement written outside
             \\the analog block, or a keyword in upper case.
+            ,
+        },
+        .E0245 => .{
+            .title = "a specify block breaks a clause 14 rule",
+            .lrm = "IEEE 1364-2005 14.2",
+            .explain =
+            \\IEEE 1364-2005 clause 14 constrains where a specify block stands
+            \\(14.1: "inside a module declaration") and what its module paths
+            \\may say, beyond what annex A.7 parses:
+            \\
+            \\  - 14.2.1: a source is an input or inout port, a destination an
+            \\    output or inout port with only one driver inside the module;
+            \\  - 14.2.3: a parallel edge-sensitive path ends at a scalar port
+            \\    or a bit-select; Syntax 14-4 puts its polarity after the
+            \\    destination, not before `=>`;
+            \\  - 14.2.4: `ifnone` takes a simple path; Table 14-1 lists the
+            \\    only operators a condition may use; 14.2.4.3 references a
+            \\    port the same way in every declaration of one edge-sensitive
+            \\    path; 14.2.4.4 forbids `ifnone` and an unconditional path for
+            \\    the same module path;
+            \\  - 14.2.5: a parallel path joins terminals of the same width;
+            \\  - 14.3: a path delay is a constant expression.
+            \\
+            \\The message names the rule the path breaks.
             ,
         },
         .E0242 => .{

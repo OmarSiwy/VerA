@@ -94,6 +94,9 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                     parseConfigDecl(self, &configs)
                 else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
                     parseLibraryDecl(self)
+                else if (std.mem.eql(u8, w, "specify"))
+                    // IEEE 1364-2005 §14.1: "it shall appear inside a module declaration".
+                    self.failAt(self.pos, .E0245, "a specify block outside a module (§14.1)", .{})
                 else
                     self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
                 r catch |e| {

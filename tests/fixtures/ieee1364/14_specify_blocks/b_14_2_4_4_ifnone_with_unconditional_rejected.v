@@ -14,7 +14,6 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.4.4
 //! reject ifnone
-//! xfail VerA accepts the clause's illegal Example 2 (W0251 only): an ifnone path and an unconditional path for the same module path
 `timescale 1ns/1ns
 module b_14_2_4_4_ifnone_with_unconditional_rejected(a, b, out);
   input a, b;
