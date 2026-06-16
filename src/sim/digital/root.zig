@@ -927,12 +927,12 @@ pub const Run = struct {
         if (ex.tag(c.base) != .ident) return null;
         const arr = self.arrays.get(try self.slot(c.base)) orelse return null;
         if (c.depth != 1 + arr.rest.len) return null;
-        // IEEE 1364-2005 §4.9: "complete or partial array dimensions" are
-        // never assigned or read, so a range in an array's own dimension
-        // selects several elements, not one.
+        // IEEE 1364-2005 §5.2.2: "the desired word shall first be selected by
+        // supplying an address for each dimension"; a range there would
+        // select several elements, which §4.9 never assigns or reads.
         var at = e;
         while (ex.tag(at) == .index) : (at = ex.lhs(at)) switch (ex.tag(ex.rhs(at))) {
-            .range, .indexed_range => return self.exprFail(e, "an unpacked array reference requires an element index"),
+            .range, .indexed_range => return self.exprFail(ex.rhs(at), "§5.2.2: each array dimension takes an index, not a part-select"),
             else => {}, // else: an element index
         };
         return arr;
@@ -2294,7 +2294,6 @@ fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
 fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
     const net_mod = @import("net.zig");
     const tok = inst.main_tok;
-    try checkUdp(r, u);
     if (inst.ports.len != u.ports.len) return r.fail(tok, "§8: a UDP instance connects its output and every input, in order", .{});
     for (inst.ports) |c| if (c.name != .none or c.expr == .none)
         return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
@@ -2531,6 +2530,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget };
     try binding.libraries(&r, file, opts, pp.more_starts);
+    // IEEE 1364-2005 §8.1's rules hold for every UDP declaration, whether or
+    // not an instance uses it.
+    for (file.udps) |*u| try checkUdp(&r, u);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
