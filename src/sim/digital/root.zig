@@ -1169,6 +1169,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
     for (m.ports, 0..) |p, i| {
+        if (p.name == .none) continue; // IEEE 1364-2005 A.1.3 a null port connects nothing inside
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         if (p.external_name != .none and !p.concat_rest) for (m.ports[0..i]) |q| if (q.external_name == p.external_name)
             return r.fail(p.main_tok, "§12.3.2: a port defined twice in the list of ports: `{s}`", .{r.file.str(p.external_name)});

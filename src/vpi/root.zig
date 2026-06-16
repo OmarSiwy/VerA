@@ -1377,6 +1377,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         const eng = s.engine;
         const m = s.decl;
         for (m.ports, 0..) |p, k| {
+            if (p.name == .none) continue; // IEEE 1364-2005 A.1.3 a null port names no net
             const at = r.names.get(.{ .scope = eng, .str = p.name });
             try s.ports.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));

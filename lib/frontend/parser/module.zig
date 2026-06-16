@@ -461,6 +461,15 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             // "electrical [3:0] a, b" declares two 4-bit ports).
             range = try parse_decl.optDim(self);
         }
+        // A.1.3 `port ::= [ port_expression ] | ...`: an empty port_expression
+        // is a null port, a header position nothing inside connects to (a
+        // digital parse only; the analog pipeline has no such terminal).
+        if (self.digital and dir == .unspecified and (self.peek() == .comma or self.peek() == .rparen)) {
+            try b.ports.append(self.arena, .{ .name = .none, .main_tok = self.pos });
+            plain = true;
+            if (!self.eat(.comma)) break;
+            continue;
+        }
         // A.1.3 `port ::= [ port_expression ] | . port_identifier (
         // [ port_expression ] )`. The second alternative gives the port an
         // external name distinct from the internal nets it connects to.
