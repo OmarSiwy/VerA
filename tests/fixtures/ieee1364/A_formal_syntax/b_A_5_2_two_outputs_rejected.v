@@ -7,10 +7,11 @@
 // `(output y, output z, input a)` declares a second output. Legal
 // neighbour: b_A_5_1_udp_declarations.v
 // (`(output reg q = 1'b0, input d, input en)`).
+// VerA refuses it at elaboration (E1100), naming §8.1.1's rule.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.5.2
-//! reject E0207
-//! xfail VerA accepts a UDP declaration port list with two output declarations
+//! reject E1100
+//! reject exactly one output port
 primitive b_A_5_2_two (output y, output z, input a);
   table
     0 : 1;
