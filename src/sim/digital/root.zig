@@ -1960,23 +1960,17 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
                 const first = for (child.ports, 0..) |p, k| {
                     if (p.external_name == conn.name) break k;
                 } else return r.fail(conn.main_tok, "the instantiated module has no such port", .{});
-                if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
-                var total: u32 = 0;
-                var last = first;
-                while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
-                    total += try portWidth(r, child.ports[last]);
-                var lo = total;
-                for (child.ports[first..last], first..) |p, k| {
-                    if (p.direction != .input) return r.fail(conn.main_tok, "only an input port may be a concatenation of internal ports", .{});
-                    const w = try portWidth(r, p);
-                    lo -= w;
-                    r.scope = scope;
-                    binds_out[k] = if (conn.expr == .none) .open else .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = total } } };
-                }
+                try bindConcat(r, child, first, conn, scope, index, binds_out);
                 continue;
             }
-            const at = if (conn.name == .none) i else portByName(child, conn.name).?;
-            if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
+            // An ordered connection is to the i-th port of the header, which
+            // is several `child.ports` rows when it is a concatenation.
+            const at = if (conn.name == .none) headerPort(child, i) orelse
+                return r.fail(conn.main_tok, "more port connections than the module has ports", .{}) else portByName(child, conn.name).?;
+            if (at + 1 < child.ports.len and child.ports[at + 1].concat_rest) {
+                try bindConcat(r, child, at, conn, scope, index, binds_out);
+                continue;
+            }
             r.scope = scope;
             // A continuous port is the analog solver's on both sides (§7.2.1),
             // so a mixed design's digital half connects nothing through it,
@@ -1994,6 +1988,38 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         if (inst.name != .none) if (index) |k| try selectable(r, scope, inst.name, k, child_scope) else try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
         try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
         r.scope = scope;
+    }
+}
+
+/// The `child.ports` row of the header's `i`-th port: a concatenation's
+/// later members (`concat_rest`) are not ports of their own.
+fn headerPort(child: *const Ast.ModuleDecl, i: usize) ?usize {
+    var n: usize = 0;
+    for (child.ports, 0..) |p, k| {
+        if (p.concat_rest) continue;
+        if (n == i) return k;
+        n += 1;
+    }
+    return null;
+}
+
+/// IEEE 1364-2005 §12.3.2/§12.3.6: one connection to a header port that is a
+/// concatenation of internal ports, `child.ports[first..]` up to the next
+/// port of its own: each is a slice of the connection, leftmost the most
+/// significant.
+fn bindConcat(r: *Run, child: *const Ast.ModuleDecl, first: usize, conn: Ast.PortConn, scope: u32, index: ?i64, binds_out: []PortBind) Error!void {
+    if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
+    var total: u32 = 0;
+    var last = first;
+    while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
+        total += try portWidth(r, child.ports[last]);
+    var lo = total;
+    for (child.ports[first..last], first..) |p, k| {
+        if (p.direction != .input) return r.fail(conn.main_tok, "only an input port may be a concatenation of internal ports", .{});
+        const w = try portWidth(r, p);
+        lo -= w;
+        r.scope = scope;
+        binds_out[k] = if (conn.expr == .none) .open else .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = total } } };
     }
 }
 
