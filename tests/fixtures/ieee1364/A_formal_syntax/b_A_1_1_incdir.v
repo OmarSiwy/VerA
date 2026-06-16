@@ -18,7 +18,6 @@
 // digital-runner: --libmap a11/incdir.map
 // digital-runner: files a11/cells/a.v
 //! inherited IEEE 1364-2005 A.1.1
-//! xfail VerA's library map reader refuses -incdir (E0244 "`-incdir` is not implemented")
 `timescale 1ns/1ns
 module top;
   a #(1) u1();
