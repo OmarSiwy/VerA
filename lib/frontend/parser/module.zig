@@ -589,14 +589,10 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // they do not go through `parseStmt`.
         .kw_for => try parse_generate.parseGenerate(self, b, .kw_for),
         .kw_if => try parse_generate.parseGenerate(self, b, .kw_if),
-        // Syntax 6-8 case_generate_construct. Gated on being inside a
-        // generate region or block because `case` is also A.6.7's statement
-        // keyword; at module scope with no generate above it neither
-        // production applies, and it stays E0205.
-        .kw_case => if (self.gen_depth > 0)
-            try parse_generate.parseGenerate(self, b, .kw_case)
-        else
-            return parse_inst.unsupportedItem(self),
+        // Syntax 6-8 case_generate_construct, like `for` and `if` above: a
+        // statement is no module item, so a `case` here is a generate
+        // construct inside a generate region or not (IEEE 1364-2005 A.1.4).
+        .kw_case => try parse_generate.parseGenerate(self, b, .kw_case),
         // Not an item: a generate_block is only ever the body of the two
         // above (E0221). Kept as its own arm so the diagnostic can cite
         // Syntax 6-8 rather than blaming the analog subset.
