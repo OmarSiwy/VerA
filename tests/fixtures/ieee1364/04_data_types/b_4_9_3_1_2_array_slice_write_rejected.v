@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 4.9.3.1.2
 //! reject E1100
 //! reject requires an element index
-//! xfail VerA refuses the range as "this digital expression form is not implemented", not as a write to several array elements
 module b_4_9_3_1_2_array_slice_write_rejected;
   reg arrayb[7:0][0:255];
   initial arrayb[1][12:31] = 0;
