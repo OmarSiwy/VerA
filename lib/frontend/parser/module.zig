@@ -490,7 +490,18 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             const tok = self.pos;
             const name = try self.expectIdent();
             if (var_storage) |storage| try parse_decl.varPort(self, b, storage, name, range, signed, tok);
+            // A.1.3 `port_reference ::= port_identifier [ [
+            // constant_range_expression ] ]`, a list_of_ports form (a digital
+            // parse only; the analog pipeline has no partial terminal).
+            var select: ?Ast.Dim = null;
+            if (self.digital and dir == .unspecified and self.eat(.lbracket)) {
+                const msb = try parse_expr.parseExpr(self);
+                const lsb = if (self.eat(.colon)) try parse_expr.parseExpr(self) else msb;
+                _ = try self.expect(.rbracket);
+                select = .{ .msb = msb, .lsb = lsb };
+            }
             try b.ports.append(self.arena, .{
+                .select = select,
                 .name = name,
                 .direction = dir,
                 .discipline = disc,

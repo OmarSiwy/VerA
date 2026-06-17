@@ -7,7 +7,6 @@
 // pold drives q = 8'hA5; the port is q[3:0] = 4'h5, connected to the 4-bit
 // n4 -> "n4=5".
 //! inherited IEEE 1364-2005 A.1.3
-//! xfail VerA's port list parser refuses a part-select port_reference (E0207 at `[`)
 `timescale 1ns/1ns
 module b_A_1_3_pold (q[3:0]);
   output [7:0] q;

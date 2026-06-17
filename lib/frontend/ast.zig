@@ -705,6 +705,9 @@ pub const Port = struct {
     /// port is named by the net it carries. Several consecutive ports share one
     /// external name when the port expression is a concatenation (§6.5.1).
     external_name: StrId = .none,
+    /// A.1.3 `port_reference ::= port_identifier [ [ constant_range_expression ] ]`:
+    /// the port is these bits of its net (a bit-select has `msb == lsb`).
+    select: ?Dim = null,
     /// A.1.3 this port_reference continues the previous one's port_expression,
     /// a concatenation: `{c, d}` is two `Port`s, the second one `concat_rest`.
     concat_rest: bool = false,
