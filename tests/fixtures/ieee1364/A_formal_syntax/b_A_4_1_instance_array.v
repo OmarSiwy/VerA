@@ -11,7 +11,6 @@
 // = 2'b10 gives ia[1] a[1] -> y[1] = 0 and ia[0] a[0] -> y[0] = 1.
 // Output: "y=01".
 //! inherited IEEE 1364-2005 A.4.1
-//! xfail VerA's digital execution connects only a net as wide as the port across an instance array, so a 2-bit net on 1-bit ports is refused (E1100)
 `timescale 1ns/1ns
 module b_A_4_1_inv (o, i);
   input i;

@@ -1937,13 +1937,33 @@ fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: 
 }
 
 /// §12.1.2: "If the bit length of a port expression is the same as the
-/// port's, the expression is connected to each instance". A wider one is
-/// split across the elements, which is refused rather than truncated.
-// ponytail: only a whole identifier is sized here; splitting and general
+/// port's, the expression is connected to each instance" (null: bind it
+/// whole). One as wide as the port times the element count is split: IEEE
+/// 1364-2005 §7.1.6, "each instance shall get a part-select of the port
+/// expression as specified in the range, starting with the right-hand index".
+// ponytail: only a whole identifier is sized and split here; general
 // expressions wait for a design that needs them.
-fn arrayConn(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn) Error!void {
-    if (r.file.exprs.tag(conn.expr) == .ident and e.values.items[try r.scalarSlot(conn.expr)].width == try portWidth(r, port)) return;
-    return r.fail(conn.main_tok, "§12.1.2: only a whole net or variable as wide as the port is connected across an instance array by digital execution", .{});
+fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn: Ast.PortConn, k: i64) Error!?PortBind {
+    const refused = "§12.1.2: only a whole net or variable, as wide as the port or as the port times the array size, is connected across an instance array by digital execution";
+    if (r.file.exprs.tag(conn.expr) != .ident) return r.fail(conn.main_tok, refused, .{});
+    const whole = e.values.items[try r.scalarSlot(conn.expr)].width;
+    const w = try portWidth(r, port);
+    if (whole == w) return null;
+    const range = inst.range.?;
+    const left = try r.declaredBound(range.msb, inst.main_tok);
+    const right = try r.declaredBound(range.lsb, inst.main_tok);
+    const count: u32 = @intCast(@abs(left - right) + 1);
+    if (whole != w * count) return r.fail(conn.main_tok, refused, .{});
+    const lo: u32 = @intCast(@abs(k - right) * w);
+    return switch (port.direction) {
+        .input => .{ .receive = .{ .expr = conn.expr, .scope = r.scope, .tok = conn.main_tok, .slice = .{ .lo = lo, .total = whole } } },
+        .output => blk: {
+            const s = try sink(r, e, conn.expr, conn.main_tok, .port);
+            const operands = try r.arena.dupe(Sink, &.{.{ .net = s.net, .lo = s.lo + lo, .width = w }});
+            break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
+        },
+        .inout, .unspecified => r.fail(conn.main_tok, refused, .{}),
+    };
 }
 
 fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16, index: ?i64) Error!void {
@@ -1981,7 +2001,10 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             // so a mixed design's digital half connects nothing through it,
             // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
-            if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
+            if (index) |k| if (conn.expr != .none) if (try arrayConn(r, e, inst, child.ports[at], conn, k)) |split| {
+                binds_out[at] = split;
+                continue;
+            };
             binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
