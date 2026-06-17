@@ -7,7 +7,6 @@
 // g + 5; the top reads them as blk[0].w and blk[1].w: 5 and 6.
 // Output: "w0=5 w1=6".
 //! inherited IEEE 1364-2005 A.9.3
-//! xfail VerA's parser refuses a constant index in a hierarchical name (E0207 at `.` after `blk[0]`)
 `timescale 1ns/1ns
 module b_A_9_3_indexed_hierarchical_name;
   genvar g;

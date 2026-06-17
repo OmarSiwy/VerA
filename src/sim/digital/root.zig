@@ -1221,43 +1221,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try blockScopes(r, sub.frame.scope, sub.decl.body);
     }
     for (m.discrete) |d| try blockScopes(r, scope, d.body);
-    for (m.nets) |n| {
-        // §7.2.1: a disciplined net is continuous, the analog solver's.
-        if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
-        if (!r.mixed and (n.discipline != .none or n.is_ground))
-            return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
-        const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        // A.2.4 `net_decl_assignment` names no dimension.
-        if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
-        // §4.9.1 a net array is one net per element, on consecutive slots,
-        // the layout a variable array's elements have.
-        const base: u32 = @intCast(e.values.items.len);
-        const count = try declareArray(r, base, n.dims, n.main_tok);
-        for (0..count) |k| {
-            const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
-            if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-                .msb = try r.declaredBound(range.msb, n.main_tok),
-                .lsb = try r.declaredBound(range.lsb, n.main_tok),
-            });
-            var net = &e.nets.items[at];
-            net.delay = try r.declaredDelay3(n.delay, n.main_tok);
-            // A.2.1.3 gives `trireg` its own alternatives, and in them the third
-            // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-            // a trireg in the capacitive state does not turn off, it holds, so the
-            // net's own turn-off falls back to §7.14's "smallest of the delays".
-            if (n.kind == .trireg and n.delay.off != .none) {
-                net.decay = net.delay.off;
-                net.delay.off = @min(net.delay.rise, net.delay.fall);
-            }
-            net.charge = n.charge;
-            // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-            // declaration: one more driver of that net. Its delay is the net's
-            // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
-            // not on the `=`), so the row it contributes carries none.
-            if (n.init != .none)
-                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
-        }
-    }
+    for (m.nets) |n| try declareNet(r, e, scope, n);
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
     const grouped = !r.mixed and expressionPorts(m);
@@ -1859,6 +1823,9 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
+            // §12.4: a generate block's nets are its scope's, one set per
+            // loop iteration.
+            for (b.gen.nets) |n| try declareNet(r, e, scope, n);
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
@@ -1870,6 +1837,47 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             for (b.body) |inner| if (!r.mixed or isGenerate(r.file, m, inner)) try generate(r, e, m, scope, inner, depth);
         },
         else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
+    }
+}
+
+/// One A.2.1.3 net declaration of `scope`: the net, or a §4.9.1 net
+/// array's elements, and a net_decl_assignment's driver.
+fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
+    const arena = r.arena;
+    // §7.2.1: a disciplined net is continuous, the analog solver's.
+    if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) return;
+    if (!r.mixed and (n.discipline != .none or n.is_ground))
+        return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
+    const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
+    // A.2.4 `net_decl_assignment` names no dimension.
+    if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
+    // §4.9.1 a net array is one net per element, on consecutive slots,
+    // the layout a variable array's elements have.
+    const base: u32 = @intCast(e.values.items.len);
+    const count = try declareArray(r, base, n.dims, n.main_tok);
+    for (0..count) |k| {
+        const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
+        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(range.msb, n.main_tok),
+            .lsb = try r.declaredBound(range.lsb, n.main_tok),
+        });
+        var net = &e.nets.items[at];
+        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+        // a trireg in the capacitive state does not turn off, it holds, so the
+        // net's own turn-off falls back to §7.14's "smallest of the delays".
+        if (n.kind == .trireg and n.delay.off != .none) {
+            net.decay = net.delay.off;
+            net.delay.off = @min(net.delay.rise, net.delay.fall);
+        }
+        net.charge = n.charge;
+        // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+        // declaration: one more driver of that net. Its delay is the net's
+        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
+        // not on the `=`), so the row it contributes carries none.
+        if (n.init != .none)
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
     }
 }
 
