@@ -102,13 +102,15 @@ pub const Instruction = union(enum(u5)) {
     join_arm: struct { join: u32, end: u32 },
     /// §9.3 install a procedural continuous assignment on `slot`: its
     /// out-of-line process [start, end) keeps the slot equal to its expression.
-    override_on: struct { slot: u32, force: bool, start: u32, end: u32 },
+    /// `bits`: §9.3.2's constant select of a vector net, which the override
+    /// holds alone (`override_eval` and `override_off` alike).
+    override_on: struct { slot: u32, force: bool, start: u32, end: u32, bits: ?Bits = null },
     /// That process's one step: write `value` into `slot` past the guard.
     /// An operand of a §9.3 concatenation target takes bits [lo, lo + its
     /// width) of the value evaluated `of` bits wide.
-    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool, slice: ?Slice = null },
+    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool, slice: ?Slice = null, bits: ?Bits = null },
     /// §9.3 `deassign` / `release`.
-    override_off: struct { slot: u32, force: bool },
+    override_off: struct { slot: u32, force: bool, bits: ?Bits = null },
     /// §7.6 a controlled pass switch: read the control, re-resolve both
     /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
@@ -1230,32 +1232,62 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     if (ex.tag(target) == .concat) {
         const ops = ex.args(target);
         var of: u32 = 0;
-        for (ops) |x| {
-            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) return self.exprFail(x, "a procedural continuous assignment names whole variables or nets");
-            of += self.values[try self.scalarSlot(x)].width;
-        }
+        for (ops) |x| of += overWidth(self, try overTarget(self, x));
         var lo = of;
         for (ops) |x| {
-            lo -= self.values[try self.scalarSlot(x)].width;
+            lo -= overWidth(self, try overTarget(self, x));
             try override(self, x, value, kind, .{ .lo = lo, .of = of });
         }
         return;
     }
-    // ponytail: a whole variable or net; `force` of a net select is refused.
-    if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return self.exprFail(target, "a procedural continuous assignment names one whole variable or net");
     return override(self, target, value, kind, null);
 }
 
 pub const Slice = struct { lo: u32, of: u32 };
+pub const Bits = struct { lo: u32, width: u32 };
+const OverTarget = struct { at: u32, bits: ?Bits };
 
-/// §9.3 one override of whole variable or net `target`.
+fn overWidth(self: *Run, t: OverTarget) u32 {
+    return if (t.bits) |b| b.width else self.values[t.at].width;
+}
+
+/// A §9.3 target's slot and, for §9.3.2's "constant bit-select of a vector
+/// net, a part-select of a vector net", the bits it names.
+fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
+    const ex = &self.file.exprs;
+    const refused = "§9.3: a procedural continuous assignment names one whole variable or net, a constant bit-select or part-select of a vector net, or a concatenation of them";
+    switch (ex.tag(x)) {
+        .ident, .hier_ident => return .{ .at = try self.scalarSlot(x), .bits = null },
+        .index => {
+            const base = ex.lhs(x);
+            if (ex.tag(base) != .ident and ex.tag(base) != .hier_ident or try self.indexedArray(x) != null) return self.exprFail(x, refused);
+            const at = try self.scalarSlot(base);
+            if (!self.net_of.contains(at)) return self.exprFail(x, refused);
+            try checkExpr(self, x);
+            const rg = ex.rhs(x);
+            const index = switch (ex.tag(rg)) {
+                .range => Ast.ExprId.none,
+                .indexed_range => ex.lhs(rg),
+                else => rg, // else: a bit-select's index
+            };
+            if (index != .none and !constantExpression(self, index)) return self.exprFail(x, refused);
+            const sel = (try exec.selection(self, self.arena, x)) orelse return self.exprFail(x, "§9.3.2: the select's index is x or z");
+            if (sel.first < 0 or sel.first + sel.count > self.values[at].width) return self.exprFail(x, "§9.3.2: the select is outside its net");
+            return .{ .at = at, .bits = .{ .lo = @intCast(sel.first), .width = sel.count } };
+        },
+        else => return self.exprFail(x, refused), // else: no other expression names storage
+    }
+}
+
+/// §9.3 one override of `target`: a whole variable or net, or bits of a net.
 fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
-    const at = try self.scalarSlot(target);
+    const t = try overTarget(self, target);
+    const at = t.at;
     try notAutomatic(self, target, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
     if (!force and self.net_of.contains(at)) return self.exprFail(target, "§9.3.1: assign/deassign take a variable; a net is forced");
     if (kind == .deassign or kind == .release) {
-        _ = try append(self, .{ .override_off = .{ .slot = at, .force = force } });
+        _ = try append(self, .{ .override_off = .{ .slot = at, .force = force, .bits = t.bits } });
         return;
     }
     try checkExpr(self, value);
@@ -1263,12 +1295,12 @@ fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcCon
     try sensitivity(self, value, &watched);
     const skip = try append(self, .{ .jump = 0 });
     const start = position(self);
-    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice } });
+    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice, .bits = t.bits } });
     _ = try append(self, .{ .wait_slots = watched.items });
     _ = try append(self, .{ .jump = start });
     const end = position(self);
     self.code.items[skip].jump = end;
-    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end } });
+    _ = try append(self, .{ .override_on = .{ .slot = at, .force = force, .start = start, .end = end, .bits = t.bits } });
 }
 
 /// IEEE 1364-2005 §9.8.2 a parallel block: each statement is compiled as an
