@@ -3288,7 +3288,8 @@ test "§12.4 a hierarchical path descends one instance per part" {
 
 // IEEE 1364 §12.1.2: `u[1:0]` is two instances, each named with its index,
 // and a port expression as wide as the port reaches every one of them. One
-// twice as wide would be split across them, which is refused, not truncated.
+// twice as wide is split across them, the right-hand index taking the low
+// bits (§7.1.6); any other width is refused, not truncated.
 test "§12.1.2 an instance array is one instance per element, each connected" {
     try expectRun(
         \\`timescale 1ns/1ps
@@ -3303,12 +3304,24 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
         \\initial r = 1'b1;
         \\endmodule
     , "top.u[0] 1\ntop.u[1] 1\n");
+    try expectRun(
+        \\`timescale 1ns/1ps
+        \\module leaf(a);
+        \\input a;
+        \\initial #1 $display("%m %b", a);
+        \\endmodule
+        \\module top;
+        \\reg [1:0] r;
+        \\leaf u[1:0](r);
+        \\initial r = 2'b10;
+        \\endmodule
+    , "top.u[0] 0\ntop.u[1] 1\n");
     try expectRejected(
         \\module leaf(a);
         \\input a;
         \\endmodule
         \\module top;
-        \\reg [1:0] r;
+        \\reg [2:0] r;
         \\leaf u[1:0](r);
         \\endmodule
     , "across an instance array");
