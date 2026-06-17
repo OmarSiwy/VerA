@@ -632,7 +632,7 @@ pub fn main(init: std.process.Init) !u8 {
             .backend = backend,
             .modules = &modules,
             .zig_exe = zig_exe,
-        }, 1, null) catch |e| {
+        }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
             return 1;
         };
@@ -841,7 +841,7 @@ fn emitDevice(
             .backend = f.backend,
             .modules = &modules,
             .zig_exe = f.zig_exe,
-        }, .single(dev.zig), 1) catch |e| {
+        }, .{ .text = dev.zig }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ opts.file_name, e });
             return 1;
         };

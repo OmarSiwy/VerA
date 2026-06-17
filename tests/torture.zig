@@ -480,22 +480,13 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, ex
     defer gpa.free(argv);
     argv[0] = argv0;
     @memcpy(argv[1..], plusargs);
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .cwd = .{ .path = work },
-        .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .pipe,
-    });
-    var buf: [1 << 16]u8 = undefined;
-    var reader = child.stderr.?.readerStreaming(io, &buf);
-    var aw: Io.Writer.Allocating = .init(gpa);
-    _ = reader.interface.streamRemaining(&aw.writer) catch {};
-    var text = aw.toArrayList();
+    const r = try std.process.run(gpa, io, .{ .argv = argv, .cwd = .{ .path = work } });
+    gpa.free(r.stdout);
+    var text: std.ArrayList(u8) = .fromOwnedSlice(r.stderr);
     errdefer text.deinit(gpa);
     // Exit status is part of the oracle, even when earlier assertions passed.
     // Fatal-task fixtures opt into their expected status with `//! exit`.
-    switch (try child.wait(io)) {
+    switch (r.term) {
         .exited => |c| if (c != expected_exit) {
             var line: [64]u8 = undefined;
             const s = std.fmt.bufPrint(&line, "FAIL: <testbench exit {d}, expected {d}>\n", .{ c, expected_exit }) catch unreachable;

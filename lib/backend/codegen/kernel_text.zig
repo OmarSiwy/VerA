@@ -8,10 +8,6 @@
 const std = @import("std");
 const codegen = @import("../codegen.zig");
 const naming = @import("../naming.zig");
-const assert = codegen.assert;
-const Output = codegen.Output;
-const Gen = codegen.Gen;
-const devSafe = codegen.devSafe;
 
 // ===========================================================================
 // Fixed emitted text

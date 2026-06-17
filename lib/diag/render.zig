@@ -51,9 +51,6 @@ pub const Palette = struct {
 /// What `render` draws besides each diagnostic's headline and location.
 pub const RenderOptions = struct {
     palette: Palette = .off,
-    /// Draw the source snippet with carets. Off gives one `file:line:col:`
-    /// line per diagnostic, which is what an editor's error parser wants.
-    snippets: bool = true,
     /// Print `= help: run --explain EXXXX` after the first diagnostic carrying
     /// each code.
     explain_hint: bool = true,
@@ -230,7 +227,7 @@ fn renderOne(
         });
     }
 
-    if (opts.snippets and primary != null) {
+    if (primary != null) {
         // One primary plus at most `max_children` labels.
         var pbuf: [diag_entry.max_children + 1]Placed = undefined;
         pbuf[0] = primary.?;

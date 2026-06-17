@@ -22,12 +22,5 @@ pub const orchestrator = @import("orchestrator.zig");
 pub const tb = @import("tb.zig");
 
 test {
-    _ = naming;
-    _ = codegen;
-    _ = UnitPlan;
-    _ = cg_display;
-    _ = cg_filters;
-    _ = cg_limit;
-    _ = orchestrator;
-    _ = tb;
+    @import("std").testing.refAllDecls(@This());
 }

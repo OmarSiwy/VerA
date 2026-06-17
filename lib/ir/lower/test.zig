@@ -15,10 +15,7 @@ const diag = @import("diag");
 const ground = Lower.ground;
 const Access = Lower.Access;
 const Kind = Lower.Kind;
-const init = Lower.init;
-const call = Lower.call;
 const strToInt = Lower.strToInt;
-const lowerFile = Lower.lowerFile;
 
 /// The frontend parser namespace the harness drives.
 pub const Parser = @import("frontend").Parser;
@@ -534,7 +531,7 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
         // is the SPELLING contract" test.
         try std.testing.expectEqual(pp.port, h.low.out.nodes.items(.kind)[pp.u].port_flow);
     }
-    try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.out.port_probes.items[0].u));
+    try std.testing.expectEqualStrings("flow(<a>)", @import("node.zig").nodeName(&h.low, h.low.out.port_probes.items[0].u));
 }
 
 test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.2 reads it" {
@@ -619,8 +616,8 @@ test "lower: scan destinations are guarded by the single assignment count" {
     var string_counts: usize = 0;
     var file_counts: usize = 0;
     var guarded: usize = 0;
-    var blocks = h.mir.blockIter();
-    while (blocks.next()) |b| {
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @enumFromInt(bi);
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) == .call) {
@@ -665,8 +662,8 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
     // Exactly ONE synthetic call, and its argument is a phi: the guarded
     // `$bound_step(1p)` must NOT bound the step on the arm that never ran.
     var found: ?Mir.Value = null;
-    var blocks = h.mir.blockIter();
-    while (blocks.next()) |b| {
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @enumFromInt(bi);
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) != .call) continue;

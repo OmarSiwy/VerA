@@ -15,12 +15,6 @@ const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
-const init = Lower.init;
-const tokenSpan = Lower.tokenSpan;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
-const call = Lower.call;
 
 // ---- §7.2.2 the discrete context -------------------------------------------
 

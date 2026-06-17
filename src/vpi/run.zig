@@ -276,7 +276,12 @@ pub fn asQueue(h: vpiHandle) ?*Queue {
 pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
     var times: std.ArrayList(u64) = .empty;
     defer times.deinit(a);
-    if (engine) |r| try r.scheduler.pendingTimes(a, &times);
+    if (engine) |r| {
+        var live: std.ArrayList(sim.scheduler.Live) = .empty;
+        defer live.deinit(a);
+        try r.scheduler.pendingPayloads(a, &live);
+        for (live.items) |e| try times.append(a, e.time);
+    }
     try callback.pendingTimes(&times, a);
     std.mem.sort(u64, times.items, {}, std.sort.asc(u64));
     var out: std.ArrayList(root.vpiHandle) = .empty;

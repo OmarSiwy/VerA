@@ -9,7 +9,6 @@ const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
-const external = @import("external.zig");
 const ieee1364 = @import("ieee1364.zig");
 const options = @import("suite_options");
 
@@ -20,14 +19,13 @@ const Io = std.Io;
 test {
     _ = harness;
     _ = torture;
-    _ = external;
     _ = ieee1364;
 }
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
 /// Entry point. argv[1] is the `vera` executable (`run.addArtifactArg`), which
-/// `devices` spawns and the head-to-head's spawn floor times. Then either a
+/// `devices` spawns. Then either a
 /// mode word (`devices`, `ieee1364`, `vpi`, `spice`) or benchmark arguments:
 ///
 ///   zig build benchmark                         # the suite, timed
@@ -35,7 +33,6 @@ const Args = std.process.Args.Iterator;
 ///   zig build benchmark -- --strict             # unasserted and xfail FAIL
 ///   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
 ///   zig build benchmark -- --coverage           # LRM clauses cited and uncited
-///   zig build benchmark -- --against-openvaf    # the head-to-head
 ///   zig build benchmark -- --sweep              # the generated size sweep instead
 ///   zig build benchmark -Doptimize=ReleaseFast  # the timing that ships
 ///
@@ -78,9 +75,9 @@ const Mir = @typeInfo(@FieldType(vera.CompileResult, "mir")).pointer.child;
 /// sample to the code's cost, where a mean measures the machine's load.
 const reps = 25;
 
-/// N per fixture, smaller than `reps` because `--against-openvaf` spawns a
-/// compiler N times per fixture. The min is still the estimator; the report's
-/// distribution is over fixtures, the variation that is about the compiler.
+/// N per fixture, smaller than `reps` because every fixture is timed. The min
+/// is still the estimator; the report's distribution is over fixtures, the
+/// variation that is about the compiler.
 const fixture_reps = 5;
 
 /// The sweep. Powers of eight, so a doubling and a squaring are visibly
@@ -356,13 +353,11 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     // that a filter word cannot shadow one. What is left is this step's own.
     var cfg: harness.Config = .init();
     harness.vera_exe = vera_exe; // `//! expect vcd` runs it
-    var against_openvaf = false;
     var do_sweep = false;
     var a = first;
     while (a) |arg| : (a = args.next()) {
         if (harness.takeArg(&cfg, arg)) continue;
-        if (std.mem.eql(u8, arg, "--against-openvaf")) against_openvaf = true //
-        else if (std.mem.eql(u8, arg, "--sweep")) do_sweep = true //
+        if (std.mem.eql(u8, arg, "--sweep")) do_sweep = true //
         else if (std.mem.startsWith(u8, arg, "-")) {
             var e_buf: [256]u8 = undefined;
             var e = Io.File.stderr().writer(io, &e_buf);
@@ -371,11 +366,8 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
             return 2;
         } else cfg.filter = arg;
     }
-    // `--fixture-root=tests/pending` is how a human writes it, and a relative
-    // root would break the foreign compiler: its prelude wrapper lives in the
-    // scratch tree and `\`include`s the fixture from there, where a path
-    // relative to the repository root means nothing. Resolved once, here, so
-    // both compilers walk the same absolute paths.
+    // `--fixture-root=tests/pending` is how a human writes it; resolved once,
+    // so every FAIL line names an absolute path.
     cfg.root = std.fs.path.resolve(arena, &.{cfg.root}) catch cfg.root;
 
     var out_buf: [1 << 16]u8 = undefined;
@@ -384,9 +376,6 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     defer w.flush() catch {};
 
     if (do_sweep) return sweepReport(gpa, io, arena, w);
-
-    // Asked before the walk, so a missing compiler fails before the depth pass.
-    var ov: ?external.Ctx = if (against_openvaf) (try probe(io, arena)) orelse return 2 else null;
 
     // `--coverage` is a question about the FIXTURES — which LRM clauses they
     // cite — so it compiles nothing and there is nothing to time or compare.
@@ -398,115 +387,30 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     var depth: harness.Counts = .{};
     const code = try harness.run(init, torture.compiler(&cfg), cfg, &depth);
 
-    try report(gpa, io, arena, w, vera_exe, cfg, depth, if (ov) |*c| c else null);
+    try report(gpa, io, arena, w, cfg, depth);
     return code;
 }
 
-/// Is the foreign compiler there at all?
-///
-/// Spawned once with no file, and only `FileNotFound` and the shell's
-/// command-not-found status are read as absence: `external.cc` is a whole
-/// command line, so with `timeout 30 openvaf-r …` the process that exists is `timeout`
-/// and the one that does not reports itself as exit 127, one level down.
-fn probe(io: Io, arena: Allocator) !?external.Ctx {
-    const argv = try external.splitCommand(arena, external.cc);
-    var e_buf: [1024]u8 = undefined;
-    var e = Io.File.stderr().writer(io, &e_buf);
-
-    var missing: ?[]const u8 = null;
-    if (std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .ignore,
-        .stdout = .ignore,
-        .stderr = .ignore,
-    })) |spawned| {
-        var child = spawned;
-        const term: std.process.Child.Term = child.wait(io) catch .{ .exited = 0 };
-        switch (term) {
-            .exited => |c| if (c == 127) {
-                missing = "exit 127 — the command ran but named a program that is not there";
-            },
-            else => {},
-        }
-    } else |err| {
-        missing = @errorName(err);
-    }
-
-    if (missing) |why| {
-        try e.interface.print(
-            \\benchmark: --against-openvaf cannot run `{s}`: {s}
-            \\  That command line is `cc` in tests/external.zig, and it must name a
-            \\  Verilog-A compiler on PATH. `nix develop` provides openvaf-r
-            \\  (nix/openvaf.nix), or edit it to any compiler that takes a .va path and
-            \\  exits nonzero when it refuses one.
-            \\  Nothing else is affected: without --against-openvaf this step never
-            \\  spawns a foreign compiler.
-            \\
-        , .{ external.cc, why });
-        try e.interface.flush();
-        return null;
-    }
-    return .{ .argv = argv };
-}
-
 // ---------------------------------------------------------------------------
-// The head-to-head. Both compilers get the same fixture bytes, the same
-// accept/refuse question and the same `harness.judge`; VerA's `ok=` columns
-// print in a VerA-only section. The subprocess spawn floor is measured and
-// VerA is reported both with and without it. Fixtures outside Annex C's
-// Verilog-A subset are `n/a`, not failures.
+// The timing table. VerA's accept/refuse verdict is `harness.judge`'s; its
+// `ok=` columns print in the depth pass.
 // ---------------------------------------------------------------------------
-
-/// Did the compiler do what the fixture says? `n_a` is not a verdict about the
-/// compiler at all — see `scopeOf`.
-const Agree = enum {
-    yes,
-    no,
-    /// It died instead of answering. Not a refusal, however it exited.
-    crash,
-    n_a,
-
-    fn text(self: Agree) []const u8 {
-        return switch (self) {
-            .yes => "1",
-            .no => "0",
-            .crash => "crash",
-            .n_a => "n/a",
-        };
-    }
-};
-
-const Row = struct {
-    vera_ns: u64,
-    vera_ok: Agree,
-    scope: Scope,
-    ov_ns: ?u64 = null,
-    ov_ok: Agree = .n_a,
-};
 
 fn report(
     gpa: Allocator,
     io: Io,
     arena: Allocator,
     w: *Io.Writer,
-    vera_exe: []const u8,
     cfg: harness.Config,
     depth: harness.Counts,
-    ov: ?*external.Ctx,
 ) !void {
     const fixtures = try harness.collect(arena, io, cfg.root, cfg.filter);
     if (fixtures.len == 0) return;
 
     // VerA's accept/reject prose is discarded: the depth pass already printed
     // a stronger report of the same fixtures.
-    var err_buf: [4096]u8 = undefined;
-    var stderr = Io.File.stderr().writer(io, &err_buf);
-    const ew = &stderr.interface;
-    defer ew.flush() catch {};
     var sink: [256]u8 = undefined;
     var discard: Io.Writer.Discarding = .init(&sink);
-
-    const spawn_ns = spawnFloor(io, vera_exe);
 
     try w.print(
         \\# VerA benchmark — engine built {s}, min of {d} runs per fixture, sequential.
@@ -519,34 +423,13 @@ fn report(
         "# {s}: NOT the shipping number (~8x slow). Re-run with -Doptimize=ReleaseFast.\n",
         .{mode},
     );
-    if (ov != null) try w.print(
-        \\# THE TWO NUMBERS ARE NOT THE SAME KIND OF MEASUREMENT. vera_ns is
-        \\#   IN-PROCESS: no fork, no exec, no process start-up, because that is how a
-        \\#   simulator embeds VerA. ov_ns is a SUBPROCESS and contains all of it,
-        \\#   inseparably — nothing here can subtract a foreign binary's start-up from
-        \\#   its own compile.
-        \\# START-UP: {d} ns, the min of {d} spawns of the built `vera` binary with no
-        \\#   arguments — what THIS engine costs to start as a process on this machine.
-        \\#   The speed table adds it to every vera sample as `vera+spawn`, which is
-        \\#   what VerA would cost invoked the way {s} is. It is a fact about the vera
-        \\#   binary and NOT a floor under ov_ns: a differently linked binary of a
-        \\#   different size starts at a different speed, and in a Debug build this
-        \\#   number is mostly the size of a 60 MB unoptimized executable.
-        \\# ov_out is what the compiler left in its scratch directory. `--dry-run`
-        \\#   writes nothing by design, so `-` there means "not emitted", never
-        \\#   "emitted nothing".
-        \\
-    , .{ spawn_ns, reps, external.cc });
+    try w.writeAll("fixture\tdemands\tvera_ns\tvera_out\tvera_ok\n");
 
-    try w.writeAll("fixture\tdemands\tvera_ns\tvera_out\tvera_ok");
-    if (ov != null) try w.writeAll("\tscope\tov_ns\tov_out\tov_ok");
-    try w.writeAll("\n");
-
-    const rows = try arena.alloc(Row, fixtures.len);
+    const times = try arena.alloc(u64, fixtures.len);
     var per_arena: std.heap.ArenaAllocator = .init(gpa);
     defer per_arena.deinit();
 
-    for (fixtures, rows) |f, *row| {
+    for (fixtures, times) |f, *time| {
         _ = per_arena.reset(.retain_capacity);
         const pa = per_arena.allocator();
         const source = try Io.Dir.cwd().readFileAlloc(io, f.path, pa, .limited(1 << 20));
@@ -561,7 +444,7 @@ fn report(
             vera_out = torture.compileOnce(gpa, f, source, d) catch null;
             vera_ns = @min(vera_ns, elapsed(io, t0));
         }
-        const vera_ok: Agree = if (try harness.judge(
+        const vera_ok = try harness.judge(
             gpa,
             io,
             pa,
@@ -569,25 +452,8 @@ fn report(
             f,
             false,
             &discard.writer,
-        ) == .pass) .yes else .no;
-
-        row.* = .{ .vera_ns = vera_ns, .vera_ok = vera_ok, .scope = scopeOf(source) };
-
-        if (ov) |c| if (row.scope == .va) {
-            // The wrapper is written once, before the clock: see `prepare`.
-            const job = try external.prepare(io, pa, f, source);
-            var ns: u64 = std.math.maxInt(u64);
-            for (0..fixture_reps) |_| {
-                const t0: Io.Timestamp = .now(io, .awake);
-                _ = external.compileOnce(io, pa, c.argv, f, job) catch break;
-                ns = @min(ns, elapsed(io, t0));
-            }
-            // One spawn beyond the timing loop, so the verdict comes from
-            // `harness.judge` like VerA's. `Ctx` carries back crash and size.
-            const verdict = try harness.judge(gpa, io, pa, external.compiler(c), f, false, ew);
-            if (ns != std.math.maxInt(u64)) row.ov_ns = ns;
-            row.ov_ok = if (c.crashed) .crash else if (verdict == .pass) .yes else .no;
-        };
+        ) == .pass;
+        time.* = vera_ns;
 
         try w.print("{s}\t{s}\t{d}\t", .{
             relative(f.path, cfg.root),
@@ -595,19 +461,11 @@ fn report(
             vera_ns,
         });
         try optional(w, vera_out);
-        try w.print("\t{s}", .{vera_ok.text()});
-        if (ov) |c| {
-            try w.print("\t{t}\t", .{row.scope});
-            try optional(w, row.ov_ns);
-            try w.writeAll("\t");
-            try optional(w, if (row.scope == .va) c.artifact else null);
-            try w.print("\t{s}", .{row.ov_ok.text()});
-        }
-        try w.writeAll("\n");
+        try w.print("\t{d}\n", .{@intFromBool(vera_ok)});
         try w.flush();
     }
 
-    try summary(w, arena, rows, depth, spawn_ns, ov != null);
+    try summary(w, arena, times, depth);
 }
 
 /// `-` and not `0`: "there is no number" and "the number is zero" are different
@@ -620,93 +478,14 @@ fn relative(path: []const u8, root: []const u8) []const u8 {
     return path[@min(root.len + 1, path.len)..];
 }
 
-fn summary(
-    w: *Io.Writer,
-    arena: Allocator,
-    rows: []const Row,
-    depth: harness.Counts,
-    spawn_ns: u64,
-    against: bool,
-) !void {
-    var vera_all: std.ArrayList(u64) = .empty;
-    var vera_va: std.ArrayList(u64) = .empty;
-    var ov_va: std.ArrayList(u64) = .empty;
-    var agreed: usize = 0;
-    var ov_agreed: usize = 0;
-    var ov_disagreed: usize = 0;
-    var ov_crashed: usize = 0;
-    var ov_na: usize = 0;
-    for (rows) |r| {
-        try vera_all.append(arena, r.vera_ns);
-        if (r.vera_ok == .yes) agreed += 1;
-        if (!against) continue;
-        switch (r.ov_ok) {
-            .n_a => ov_na += 1,
-            .crash => ov_crashed += 1,
-            .yes => ov_agreed += 1,
-            .no => ov_disagreed += 1,
-        }
-        if (r.scope == .va) {
-            try vera_va.append(arena, r.vera_ns);
-            if (r.ov_ns) |n| try ov_va.append(arena, n);
-        }
-    }
-
+fn summary(w: *Io.Writer, arena: Allocator, times: []const u64, depth: harness.Counts) !void {
     try w.writeAll(
         \\
-        \\# SPEED — total and distribution. Only rows with the same `scope` are
-        \\#   comparable: the `va` rows are the fixtures both compilers were given.
+        \\# SPEED — total and distribution.
         \\
     );
     try w.writeAll("scope\tcompiler\tn\ttotal_ns\tp50_ns\tp90_ns\tp99_ns\tmax_ns\n");
-    try stats(w, arena, "all", "vera", vera_all.items, 0);
-    if (against) {
-        try stats(w, arena, "va", "vera", vera_va.items, 0);
-        try stats(w, arena, "va", "vera+spawn", vera_va.items, spawn_ns);
-        try stats(w, arena, "va", external.cc, ov_va.items, 0);
-    }
-
-    if (against) {
-        try w.print(
-            \\
-            \\# AGREEMENT WITH THE FIXTURE — accept what the LRM says must compile,
-            \\#   refuse what it says must not. This is the whole of a fixture that
-            \\#   travels, and both columns are `harness.judge`: the same code, the same
-            \\#   fixtures, the same verdict algebra.
-            \\#   `crash` is counted apart from `disagreed` because a compiler that dies
-            \\#   on a `//! reject` fixture exits nonzero exactly as a refusal does, and
-            \\#   scoring that as conformance is the one way this report could call a
-            \\#   defect a pass.
-            \\
-        , .{});
-        try w.writeAll("compiler\tscored\tagreed\tdisagreed\tcrashed\tout_of_scope\n");
-        try w.print("vera\t{d}\t{d}\t{d}\t0\t0\n{s}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
-            rows.len,
-            agreed,
-            rows.len - agreed,
-            external.cc,
-            rows.len - ov_na,
-            ov_agreed,
-            ov_disagreed,
-            ov_crashed,
-            ov_na,
-        });
-        try w.print(
-            \\
-            \\# SCOPE — `ams` means the FIXTURE uses a construct Annex C keeps out of
-            \\#   Verilog-A: C.16's keyword list, C.4's `wreal`/`discrete`/
-            \\#   `` `default_discipline ``, C.5's `===`/`!==`, C.7's `casex`/`casez` and
-            \\#   digital behaviour. {d} of {d} fixtures are that, and they are `n/a` for
-            \\#   {s} — the suite's scope, not the compiler's defect.
-            \\#   THE CEILING, because it is one: the test is TEXTUAL (identifiers
-            \\#   outside comments and strings), so it can only UNDER-count `ams`, and it
-            \\#   knows nothing of the foreign compiler's OWN subset — a refusal of an
-            \\#   in-scope fixture counts as a disagreement even where the cause is a
-            \\#   limitation rather than a conformance defect. Both errors run one way:
-            \\#   `disagreed` above is an UPPER bound on non-conformance.
-            \\
-        , .{ ov_na, rows.len, external.cc });
-    }
+    try stats(w, arena, "all", "vera", times);
 
     try w.writeAll(
         \\
@@ -728,23 +507,12 @@ fn summary(
 }
 
 /// One speed row. The samples are COPIED before sorting: they are also the
-/// caller's, and a second row over the same set would otherwise sort an
-/// already-sorted array and call it a distribution.
-fn stats(
-    w: *Io.Writer,
-    arena: Allocator,
-    scope: []const u8,
-    name: []const u8,
-    samples: []const u64,
-    add: u64,
-) !void {
+/// caller's.
+fn stats(w: *Io.Writer, arena: Allocator, scope: []const u8, name: []const u8, samples: []const u64) !void {
     if (samples.len == 0) return;
     const s = try arena.dupe(u64, samples);
     var total: u64 = 0;
-    for (s) |*x| {
-        x.* += add;
-        total += x.*;
-    }
+    for (s) |x| total += x;
     std.mem.sort(u64, s, {}, std.sort.asc(u64));
     try w.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
         scope, name, s.len, total, pct(s, 50), pct(s, 90), pct(s, 99), s[s.len - 1],
@@ -753,106 +521,6 @@ fn stats(
 
 fn pct(sorted: []const u64, p: usize) u64 {
     return sorted[@min(sorted.len * p / 100, sorted.len - 1)];
-}
-
-/// What a SUBPROCESS costs on this machine before it has done any work. The
-/// binary spawned is the `vera` this build produced, because it is the one
-/// native binary here that is certainly present and certainly exits at once.
-///
-/// 0 means "could not be measured", and the report says nothing about spawn
-/// cost rather than guessing at it.
-fn spawnFloor(io: Io, exe: []const u8) u64 {
-    var min: u64 = std.math.maxInt(u64);
-    for (0..reps) |_| {
-        const t0: Io.Timestamp = .now(io, .awake);
-        var child = std.process.spawn(io, .{
-            .argv = &.{exe},
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        }) catch return 0;
-        _ = child.wait(io) catch return 0;
-        min = @min(min, elapsed(io, t0));
-    }
-    return min;
-}
-
-// ---------------------------------------------------------------------------
-// Scope — which fixtures a Verilog-A compiler can be held to at all
-// ---------------------------------------------------------------------------
-
-const Scope = enum { va, ams };
-
-/// Annex C's list and nothing invented. C.16 names the nine Verilog-AMS
-/// keywords Verilog-A does not use; C.4 removes `wreal`, the `discrete` domain
-/// and `` `default_discipline ``; C.5 removes `===` and `!==`; C.7 removes
-/// `casex`, `casez` and digital behaviour, which is what the event and
-/// procedural keywords here are.
-///
-/// Conservative: a fixture that is Verilog-AMS only by semantics scores as in
-/// scope, so a scope rule never excuses a real refusal.
-const ams_only = [_][]const u8{
-    // C.16
-    "connect",         "connectmodule", "connectrules",       "driver_update",
-    "endconnectrules", "merged",        "resolveto",          "split",
-    "wreal",
-    // C.4
-              "discrete",      "default_discipline",
-    // C.7
-    "always",
-    "initial",         "casex",         "casez",              "posedge",
-    "negedge",         "fork",          "join",               "task",
-    "endtask",
-};
-
-/// Is this fixture inside the Verilog-A subset?
-///
-/// Read outside comments and string literals: a `//!` header discussing "the
-/// connect rules of §7.6" is not a `connect` statement.
-fn scopeOf(source: []const u8) Scope {
-    var i: usize = 0;
-    while (i < source.len) {
-        switch (source[i]) {
-            '/' => {
-                if (i + 1 < source.len and source[i + 1] == '/') {
-                    i = std.mem.indexOfScalarPos(u8, source, i, '\n') orelse source.len;
-                } else if (i + 1 < source.len and source[i + 1] == '*') {
-                    i = if (std.mem.indexOfPos(u8, source, i + 2, "*/")) |e| e + 2 else source.len;
-                } else i += 1;
-            },
-            '"' => {
-                i += 1;
-                while (i < source.len and source[i] != '"') : (i += 1) {
-                    if (source[i] == '\\') i += 1;
-                }
-                i += 1;
-            },
-            // C.5: the case equality operators. `!=` and `==` are not them, so
-            // the whole three characters have to match.
-            '=', '!' => {
-                if (std.mem.startsWith(u8, source[i..], "===") or
-                    std.mem.startsWith(u8, source[i..], "!==")) return .ams;
-                i += 1;
-            },
-            else => |c| {
-                if (!isIdent(c)) {
-                    i += 1;
-                    continue;
-                }
-                // The WHOLE identifier, so `wreal_count` is not `wreal`.
-                var j = i;
-                while (j < source.len and isIdent(source[j])) j += 1;
-                const word = source[i..j];
-                for (ams_only) |k| if (std.mem.eql(u8, word, k)) return .ams;
-                i = j;
-            },
-        }
-    }
-    return .va;
-}
-
-fn isIdent(c: u8) bool {
-    return c == '_' or c == '$' or std.ascii.isAlphanumeric(c);
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,11 +714,7 @@ fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
             if (!std.mem.endsWith(u8, entry.name, ".c")) continue;
             try names.append(gpa, try arena_state.allocator().dupe(u8, entry.name));
         }
-        std.mem.sort([]const u8, names.items, {}, struct {
-            fn lt(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.lessThan(u8, a, b);
-            }
-        }.lt);
+        std.mem.sort([]const u8, names.items, {}, harness.strLess);
 
         for (names.items) |name| {
             if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
@@ -1176,11 +840,7 @@ fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
             try decks.append(gpa, try arena_state.allocator().dupe(u8, entry.path));
         }
     }
-    std.mem.sort([]const u8, decks.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, decks.items, {}, harness.strLess);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1291,42 +951,17 @@ test "a flattened .assets reference is a suffix of the committed name" {
 const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
 
 /// Run a child and take everything it said.
-///
-/// ponytail: stdout is drained to EOF before stderr, so a child that fills the
-/// stderr pipe (64 KiB) while still writing stdout would wedge. Nothing here
-/// writes more than a few hundred bytes to either; the upgrade path is a
-/// two-thread drain, as `external.zig` would also need.
 fn capture(arena: Allocator, io: Io, argv: []const []const u8) !Captured {
     return captureIn(arena, io, argv, null);
 }
 
 /// `capture` with the child's working directory at `cwd`.
 fn captureIn(arena: Allocator, io: Io, argv: []const []const u8, cwd: ?[]const u8) !Captured {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .cwd = if (cwd) |p| .{ .path = p } else .inherit,
-        .stdin = .ignore,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    });
-    // Heap, not stack: `--native` captures from pool threads, whose stacks
-    // are smaller than these two buffers.
-    const obuf = try arena.alloc(u8, 1 << 16);
-    const ebuf = try arena.alloc(u8, 1 << 16);
-    var out: Io.Writer.Allocating = .init(arena);
-    var err: Io.Writer.Allocating = .init(arena);
-    var or_ = child.stdout.?.readerStreaming(io, obuf);
-    _ = or_.interface.streamRemaining(&out.writer) catch {};
-    var er = child.stderr.?.readerStreaming(io, ebuf);
-    _ = er.interface.streamRemaining(&err.writer) catch {};
-    return .{
-        .stdout = out.written(),
-        .stderr = err.written(),
-        .exit = switch (try child.wait(io)) {
-            .exited => |c| c,
-            else => 255,
-        },
-    };
+    const r = try std.process.run(arena, io, .{ .argv = argv, .cwd = if (cwd) |p| .{ .path = p } else .inherit });
+    return .{ .stdout = r.stdout, .stderr = r.stderr, .exit = switch (r.term) {
+        .exited => |c| c,
+        else => 255,
+    } };
 }
 
 /// A transcript that differs is reported as the whole of both sides: these are
@@ -1373,11 +1008,7 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8, vcd: bool) ![]
             try list.append(gpa, try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub, stem }));
         }
     }
-    std.mem.sort([]const u8, list.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, list.items, {}, harness.strLess);
     return list.toOwnedSlice(gpa);
 }
 
@@ -2006,27 +1637,6 @@ test "generated shapes emit the expected device and MIR size" {
     for (std.enums.values(Axis)) |axis| {
         for (0..5) |i| _ = try checkShape(std.testing.allocator, axis, i);
     }
-}
-
-// The scope rule decides what a Verilog-A compiler is scored on: a false `ams`
-// excuses a real refusal, a false `va` invents one.
-test "scope reads Annex C at code level, not in the prose that cites it" {
-    try std.testing.expectEqual(Scope.va, scopeOf("I(a,b) <+ V(a,b) / r;"));
-    try std.testing.expectEqual(Scope.ams, scopeOf("connectmodule l2e(in, out);"));
-    try std.testing.expectEqual(Scope.ams, scopeOf("  wreal w;"));
-    try std.testing.expectEqual(Scope.ams, scopeOf("always @(posedge clk) q <= d;"));
-    // C.5: `!=` and `==` are Verilog-A's; the three-character forms are not.
-    try std.testing.expectEqual(Scope.va, scopeOf("if (a != b && c == d) x = 1;"));
-    try std.testing.expectEqual(Scope.ams, scopeOf("if (a === b) x = 1;"));
-    // A header paragraph naming the construct is not the construct.
-    try std.testing.expectEqual(Scope.va, scopeOf(
-        \\//! §7.6 says a connect statement inserts a connectmodule, and wreal
-        \\//! nets always resolve — none of which this fixture does.
-        \\I(a,b) <+ 1.0;
-    ));
-    try std.testing.expectEqual(Scope.va, scopeOf("$strobe(\"always initial casex\");"));
-    // A keyword is a whole identifier, never a prefix of one.
-    try std.testing.expectEqual(Scope.va, scopeOf("real wreal_count, initial_v;"));
 }
 
 test "gen emits every axis it is asked for" {

@@ -7,9 +7,6 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-/// §4.5 / §5.10.3 / §9.17 operator facts. Spelled `opdb` and not `op` because
-/// eleven locals in this file are already called `op` (a `Mir.Opcode`).
-const opdb = @import("ir").op;
 const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("codegen/plan/unit.zig");
 const cg_display = @import("cg_display.zig");
@@ -92,12 +89,6 @@ pub const Output = struct {
     /// a valid stand-alone device and `contract.rejectStrayPubDecls` forbids
     /// publishing them there. Arena-owned; empty when `names` is.
     helpers: []const u8 = "",
-
-    /// Returns the un-split form: one `device.zig`, no `u/` directory. Used by
-    /// `--emit-zig`, the conformance runner and the orchestrator tests.
-    pub fn single(text: []const u8) Output {
-        return .{ .text = text };
-    }
 };
 
 /// §9.4: whether display tasks are dropped or emitted (plan/args.zig).
@@ -118,10 +109,6 @@ pub const Options = struct {
     /// permission on its CPU instantiation too. Implies `jac_f32`;
     /// `tools/contract.zig` rejects it without the permission.
     jac_f32_host: bool = false,
-    /// Splits the solve-invariant slice into `setup` (codegen/setup.zig).
-    /// `false` computes every value in `eval`: the bit-for-bit oracle the
-    /// split is checked against.
-    setup: bool = true,
     /// Where a codegen-stage diagnostic (E0515) goes. With none, a refusal is
     /// reported through `fatal_out` alone. This is the caller's bag, alive as
     /// long as the `CompileResult`; `lower.bag` is not, because `root.finish`
@@ -167,7 +154,6 @@ pub fn generate(
         .display = opts.display,
         .float = .{ .jac = .of(opts.jac_f32, opts.jac_f32_host) },
         .diags = opts.diags,
-        .su = .{ .on = opts.setup },
         .vpi_contribs = opts.vpi_contribs,
     };
     errdefer g.out.deinit(gpa);
@@ -577,12 +563,6 @@ pub fn mathOpByName(name: []const u8) ?Mir.Opcode {
     return null;
 }
 
-/// Whether argument `i` of a call is a runtime value (plan/args.zig).
-pub const callArgIsValue = plan_args.callArgIsValue;
-
-/// Whether a callee is a §9.5 file task (plan/args.zig).
-pub const isFileCall = plan_args.isFileCall;
-
 /// Returns whether `s` is an analysis name `analysis()` recognises (LRM §4.6.1).
 pub fn isAnalysisName(s: []const u8) bool {
     const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
@@ -617,18 +597,6 @@ pub fn devSafe(op: Mir.Opcode) bool {
     // sqrt.rn.f64 and cvt.rmi/rpi.f64.f64, single instructions.
     return opcode_zig.get(op).dev_safe;
 }
-
-// The operator set and its facts live in `lib/ir/op.zig`; these forward to it.
-
-/// §4.5/§5.10.3 operator kind (ir/op.zig).
-pub const OpKind = opdb.OpKind;
-/// Whether an operator kind owns per-instance state (ir/op.zig).
-pub const opHasState = opdb.hasState;
-
-/// Whether an operator's kernel reads its current input (plan/args.zig).
-pub const opNeedsInput = plan_args.opNeedsInput;
-/// §5.10.3 the argument index of an event operator's `enable` (plan/args.zig).
-pub const enableArgIdx = plan_args.enableArgIdx;
 
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9), codegen/kernel_text.zig
 const gen_kernel_text = @import("codegen/kernel_text.zig");

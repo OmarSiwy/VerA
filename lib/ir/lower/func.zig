@@ -18,16 +18,7 @@ const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
 const VarSlot = Lower.VarSlot;
-const init = Lower.init;
-const tokenSpan = Lower.tokenSpan;
-const err = Lower.err;
-const errWith = Lower.errWith;
 const poison = Lower.poison;
-const emit = Lower.emit;
-const call = Lower.call;
-const gotoBlock = Lower.gotoBlock;
-const toReal = Lower.toReal;
-const toInt = Lower.toInt;
 const astTy = Lower.astTy;
 
 /// Reports E0510 on every function in `fns` that calls itself directly or

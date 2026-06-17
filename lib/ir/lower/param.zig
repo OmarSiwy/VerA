@@ -17,15 +17,7 @@ const Ty = Lower.Ty;
 const VarSlot = Lower.VarSlot;
 const ArrayInfo = Lower.ArrayInfo;
 const Const = Lower.Const;
-const init = Lower.init;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
-const call = Lower.call;
 const wrap32 = Lower.wrap32;
-const toReal = Lower.toReal;
-const toInt = Lower.toInt;
-const coerceTo = Lower.coerceTo;
 const astTy = Lower.astTy;
 
 /// This file's private state on `Lower` (`Lower.param_state`).

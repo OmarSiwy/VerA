@@ -14,8 +14,6 @@ const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
-const call = Lower.call;
-const toReal = Lower.toReal;
 
 /// Returns the §4.7 function a `$limit` second argument names, or null when it names
 /// none (Syntax 9-12's other two forms put a string there, or nothing).
