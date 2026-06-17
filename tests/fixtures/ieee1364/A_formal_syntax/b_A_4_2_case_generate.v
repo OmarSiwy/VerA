@@ -10,7 +10,6 @@
 // default without its colon. N = 3 picks the named block: c = 3.
 // Output: "c=3".
 //! inherited IEEE 1364-2005 A.4.2
-//! xfail VerA refuses a case generate construct (E0205 unsupported module item `case`)
 `timescale 1ns/1ns
 module b_A_4_2_case_generate;
   parameter N = 3;

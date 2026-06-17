@@ -10,10 +10,11 @@
 // `function f(input a, output b);` puts an output in a function_port_list.
 // Legal neighbour: b_A_2_6_function_declarations.v
 // (`function signed [3:0] neg(input [3:0] v);`).
+// VerA refuses it at elaboration (E1100), naming §10.4.4's rule.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.2.6
-//! reject E0207
-//! xfail VerA accepts an output port in a function_port_list
+//! reject E1100
+//! reject a function argument is an input
 module b_A_2_6_function_output_port_rejected;
   function f(input a, output b);
     f = a;

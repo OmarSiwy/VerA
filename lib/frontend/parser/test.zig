@@ -793,10 +793,11 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "generate if (1) begin : b end else begin : b end endgenerate endmodule", .code = null },
         .{ .src = head ++ "generate if (1) begin : b end else if (1) begin : b end else begin : b end endgenerate endmodule", .code = null },
         // Syntax 6-8 case_generate_construct: a label list, a `default`, and the
-        // arms sharing one name (one construct). Outside a generate it is A.6.7's
-        // statement keyword with no module-item production: E0205.
+        // arms sharing one name (one construct). A.1.4 makes it a
+        // module_or_generate_item with or without a generate region, as the
+        // loop and if constructs are.
         .{ .src = head ++ "generate case (1) 1, 2: begin : b end default: begin : b end endcase endgenerate endmodule", .code = null },
-        .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = .E0205 },
+        .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = null },
         // §6.6: a generate block brings its module instances, defparams,
         // discrete blocks and events into existence only when the scheme
         // selects or repeats it. The block keeps its instances for elaboration

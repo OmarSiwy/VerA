@@ -9,10 +9,11 @@
 // `u (4'd1, .y(4'd0), .s(s))` starts ordered and continues by name, which
 // neither alternative derives. Legal neighbour:
 // b_A_4_1_module_instantiation.v (u1 ordered, u2 named).
+// VerA refuses it at elaboration (E1100), naming §12.3.6's rule.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.4.1
-//! reject E0207
-//! xfail VerA accepts an instance whose port connections mix ordered and named
+//! reject E1100
+//! reject mixes ordered and named port connections
 module b_A_4_1_leaf (x, y, s);
   input [3:0] x, y;
   output [3:0] s;

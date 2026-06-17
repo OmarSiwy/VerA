@@ -757,6 +757,10 @@ pub const Subroutine = struct {
     ports: []const TfPort = &.{},
     /// A.2.7 `block_item_declaration`s.
     vars: []const VarDecl = &.{},
+    /// A.2.8's `parameter_declaration`, `local_parameter_declaration` and
+    /// `event_declaration` among them, declared in the subroutine's scope.
+    params: []const ParamDecl = &.{},
+    events: []const StrId = &.{},
     body: StmtId,
     main_tok: u32 = 0,
 };
@@ -1352,6 +1356,8 @@ pub const GenItems = struct {
     switches: []const SwitchInst = &.{},
     /// IEEE 1364-2005 §12.2.1 defparams, relative to the block instance.
     defparams: []const Defparam = &.{},
+    /// IEEE 1364-2005 §12.4 the block's own nets, declared in its scope.
+    nets: []const NetDecl = &.{},
 };
 
 /// §5.3.2 sequential block body plus its local declarations

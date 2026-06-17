@@ -10,7 +10,6 @@
 // by t=11 and tranif0 turns off by t=12: at t=20, t1 = 1 and u1 is z
 // (nothing else drives it). Output: "t1=1 u1=z".
 //! inherited IEEE 1364-2005 A.3.1
-//! xfail VerA refuses a delay on tranif0/tranif1 (E1100 "a pass switch takes at most two delays", given one)
 `timescale 1ns/1ns
 module b_A_3_1_pass_enable_delay;
   reg en;

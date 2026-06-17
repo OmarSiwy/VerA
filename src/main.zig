@@ -944,6 +944,10 @@ fn libraries(
     };
     opts.lib = libs[0];
     opts.more = more;
+    // ponytail: A.1.1's -incdir lists join the include path of every file,
+    // not only their library's; per-library paths need `digital.Unit` to
+    // carry its own.
+    if (map.incdirs.len != 0) opts.include_dirs = try std.mem.concat(arena, []const u8, &.{ opts.include_dirs, map.incdirs });
     opts.search = if (search.len != 0) search else try map.order(arena);
     try report(&bag, err, json, use_color);
     return true;

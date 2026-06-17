@@ -1427,8 +1427,23 @@ fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, 
 /// its process is suspended inside it.
 fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32, depth: u16) Error!void {
     if (self.in_function) return self.fail(tok, "§10.4.4: a function cannot enable a task", .{});
-    const inst = self.instanceOf(self.scope);
-    const idx = self.sub_by_name.get(.{ .scope = inst, .str = name }) orelse return self.fail(tok, "undeclared task `{s}`", .{self.file.str(name)});
+    var inst = self.instanceOf(self.scope);
+    var leaf = name;
+    // IEEE 1364-2005 A.6.9 `hierarchical_task_identifier`: the parts before
+    // the last dot name instances as a §12.5 reference's do, and the task is
+    // the last part, declared in the final one.
+    const text = self.file.str(name);
+    if (std.mem.lastIndexOfScalar(u8, text, '.')) |dot| {
+        var parts = std.mem.splitScalar(u8, text[0..dot], '.');
+        var k: usize = 0;
+        while (parts.next()) |part| : (k += 1) {
+            const str = self.file.strings.find(part) orelse return self.fail(tok, "undeclared instance `{s}` in a hierarchical task name", .{part});
+            inst = (if (k == 0) self.upward(str) else self.instances.get(.{ .scope = inst, .str = str })) orelse
+                return self.fail(tok, "undeclared instance `{s}` in a hierarchical task name", .{part});
+        }
+        leaf = self.file.strings.find(text[dot + 1 ..]) orelse return self.fail(tok, "undeclared task `{s}`", .{text});
+    }
+    const idx = self.sub_by_name.get(.{ .scope = inst, .str = leaf }) orelse return self.fail(tok, "undeclared task `{s}`", .{self.file.str(name)});
     const decl = self.subs.items[idx].decl;
     if (decl.is_function) return self.fail(tok, "§10.4: a function is called in an expression, not enabled", .{});
     try checkArgs(self, decl, args, tok);

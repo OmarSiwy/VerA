@@ -10,6 +10,5 @@
 //! inherited IEEE 1364-2005 A.1.1
 //! reject E0244
 //! reject `include` names no file_path_spec
-//! xfail the refusal lands on `library` (line 3) instead of on `include ;`: VerA reads the `;` as the file_path_spec, then asks for a `;`
 module top;
 endmodule
