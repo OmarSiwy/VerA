@@ -8,7 +8,6 @@
 // computes L + P = 5 and triggers e (nothing waits on it).
 // Output: "s=5".
 //! inherited IEEE 1364-2005 A.2.8
-//! xfail VerA refuses event, localparam and parameter declarations among a task's block items (E0209 expected an expression)
 module b_A_2_8_event_and_parameter_items;
   task run ();
     event e;

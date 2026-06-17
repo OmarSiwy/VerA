@@ -2374,6 +2374,8 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
     const ports = try r.arena.alloc(u32, t.ports.len);
     for (t.ports, ports) |p, *slot| slot.* = try mintVar(r, p.v);
     const result = if (t.is_function) try mintVar(r, t.result) else 0;
+    try declareParams(r, scope, t.params, &.{});
+    try declareEvents(r, t.events, &.{}, t.main_tok);
     for (t.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
         _ = try mintVar(r, v);

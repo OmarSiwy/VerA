@@ -757,6 +757,10 @@ pub const Subroutine = struct {
     ports: []const TfPort = &.{},
     /// A.2.7 `block_item_declaration`s.
     vars: []const VarDecl = &.{},
+    /// A.2.8's `parameter_declaration`, `local_parameter_declaration` and
+    /// `event_declaration` among them, declared in the subroutine's scope.
+    params: []const ParamDecl = &.{},
+    events: []const StrId = &.{},
     body: StmtId,
     main_tok: u32 = 0,
 };
