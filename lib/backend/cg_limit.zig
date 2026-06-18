@@ -1,7 +1,8 @@
 //! Honoured `$limit(V(a,b), "alg", args…)` sites -> the device's `limit` hook
 //! (one clamp per site, writing a corrected `x`) and the slice of the core its
 //! arguments need, `limit_reads`/`limit_writes`, and the cold-start `seed`
-//! (SPICE MODEINITJCT). LRM §4.5.15, §9.17.3.
+//! (SPICE MODEINITJCT). A §9.17.1 `$discontinuity(-1)` request is `limit`'s
+//! `converged` verdict, read off the same slice. LRM §4.5.15, §9.17.1, §9.17.3.
 //! The host clamps `x` before `eval`, so `eval` renders the string form as the
 //! identity of its probe; a second clamp would use the wrong `x_old`. The
 //! user-function form is lowered instead. Limiters live in `limit_kernels.zig`.
@@ -90,12 +91,18 @@ pub fn liveSets(g: *const Gen) Live {
 
 // -------------------------------------------------------------------- emit
 
-/// Returns true when a clamp reads a value out of the shared core at clamp
-/// time, so `limit` must run its slice of the core (`emitCore`). An argument
-/// that is a literal, a parameter or a `setup` root (latched in
-/// `Instance.su`) needs no core.
+/// Returns true when a clamp or the §9.17.1 verdict reads a value out of the
+/// shared core at clamp time, so `limit` must run its slice of the core
+/// (`emitCore`). An argument that is a literal, a parameter or a `setup` root
+/// (latched in `Instance.su`) needs no core.
 pub fn usesCore(g: *const Gen) bool {
-    return anyArg(g, needsCore);
+    return rejectsInCore(g) or anyArg(g, needsCore);
+}
+
+/// True when the model executes §9.17.1 `$discontinuity(-1)` under a
+/// condition the core computes.
+fn rejectsInCore(g: *const Gen) bool {
+    return g.lowered.uses.contains(.reject_iteration) and needsCore(g, g.lowered.reject_iteration);
 }
 
 /// True when `pred` holds for any clamp's sign or algorithm argument that is
@@ -135,10 +142,15 @@ fn coreName(g: *Gen) Error![]const u8 {
 /// thresholds and not for every current and charge of the model. Called from
 /// `emitUnits`, so its range tiles with the other unit declarations.
 pub fn emitCore(g: *Gen) Error!void {
-    if (g.limits.calls.len == 0 or !usesCore(g)) return;
+    if (!usesCore(g)) return;
     const idx = try g.arena.alloc(u32, g.an.nv);
     @memset(idx, none_u32);
     var vals: std.ArrayList(Mir.Value) = .empty;
+    if (rejectsInCore(g)) {
+        const r = g.an.rv(g.lowered.reject_iteration);
+        idx[@intFromEnum(r)] = 0;
+        try vals.append(g.arena, r);
+    }
     for (g.limits.calls) |lc| {
         for ([_]Mir.Value{lc.sign} ++ lc.argv, 0..) |v, k| {
             if (k > lc.alg.arity() or !needsCore(g, v)) continue;
@@ -149,9 +161,14 @@ pub fn emitCore(g: *Gen) Error!void {
         }
     }
     g.lim_idx = idx;
-    try gen_unit.emitSlice(g, try coreName(g), vals.items, idx,
+    try gen_unit.emitSlice(g, try coreName(g), vals.items, idx, if (g.limits.calls.len != 0)
         \\/// §4.5.15 the `$limit` arguments the core computes, and only what they
         \\/// read: `limit` evaluates them at `old` once per instance per iterate.
+        \\
+    else
+        \\/// §9.17.1 the `$discontinuity(-1)` request the core computes, and only
+        \\/// what it reads: `limit` evaluates it at `old` once per instance per
+        \\/// iterate.
         \\
     );
 }
@@ -183,7 +200,8 @@ fn paramLeaf(g: *const Gen, v: Mir.Value) bool {
 /// Emits `limit`, `limit_reads`/`limit_writes` and `seed` for a device with
 /// honoured `$limit` sites, and reports declined sites (W0853), dropped seeds
 /// (W0854) and seeds that read the solution (E0527, sets `any_fatal`).
-/// Emits nothing but diagnostics when no site is honoured.
+/// Emits nothing but diagnostics when no site is honoured and the model has
+/// no §9.17.1 `$discontinuity(-1)`.
 pub fn emit(g: *Gen) Error!void {
     if (g.diags) |bag| inline for (.{ .{ .W0853, g.limits.declined }, .{ .W0854, g.limits.seed_dropped } }) |p| for (p[1]) |d| {
         var b = bag.build(.codegen, p[0], g.lowered.tokenSpan(d.tok));
@@ -197,13 +215,14 @@ pub fn emit(g: *Gen) Error!void {
         if (g.diags) |bag| try bag.add(.codegen, .E0527, g.lowered.tokenSpan(lc.tok), "", .{});
         g.any_fatal = true;
     }
-    if (g.limits.calls.len == 0) return;
+    const rejects = g.lowered.uses.contains(.reject_iteration);
+    if (g.limits.calls.len == 0 and !rejects) return;
 
     const needs_core = usesCore(g);
     // A setup root is an `inst.su` read, so `inst` stays named even when the
     // core call is gone. `model` goes with the core, or with a parameter leaf.
-    const reads_inst = needs_core or anyArg(g, isRoot);
-    try g.w(
+    const reads_inst = needs_core or anyArg(g, isRoot) or (rejects and isRoot(g, g.lowered.reject_iteration));
+    if (g.limits.calls.len != 0) try g.w(
         \\/// §4.5.15 `$limit`: SPICE voltage limiting, applied by the host between
         \\/// the linear solve and the next `eval`.
         \\///
@@ -218,10 +237,16 @@ pub fn emit(g: *Gen) Error!void {
         \\/// other derived, exactly ngspice's MOS ladder (emitLadder).
         \\
     , .{});
-    try g.w("pub fn limit(comptime {s}: type, {s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64, {s}: contract.SimState) contract.LimitResult(n_u) {{\n", .{
+    if (rejects) try g.w(
+        \\/// §9.17.1 `$discontinuity(-1)`: `converged` is false when the model,
+        \\/// evaluated at `old`, requests that iterate be rejected.
+        \\
+    , .{});
+    try g.w("pub fn limit(comptime {s}: type, {s}: *const Model, {s}: *const Instance, cur: [n_u]f64, {s}: [n_u]f64, {s}: contract.SimState) contract.LimitResult(n_u) {{\n", .{
         if (needs_core) "S" else "_",
         if (needs_core or anyArg(g, paramLeaf)) "model" else "_",
         if (reads_inst) "inst" else "_",
+        if (needs_core or g.limits.calls.len != 0) "old" else "_",
         if (needs_core) "sim" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
@@ -233,7 +258,9 @@ pub fn emit(g: *Gen) Error!void {
         \\    const m = {s}(S, zVals(S, &old), model, {s}, sim{s});
         \\
     , .{ try coreName(g), probe_inst, g.heldArg(true) });
-    try g.w("    var x = cur;\n", .{});
+    // A reject-only device clamps nothing, and a `var` never mutated is a
+    // compile error.
+    try g.w("    {s} x = cur;\n", .{if (g.limits.calls.len != 0) "var" else "const"});
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
     var any_pnjlim = false;
@@ -255,7 +282,14 @@ pub fn emit(g: *Gen) Error!void {
         .limvds => if (!g.limits.limvdsClaimed(i)) try emitClamp(g, lc),
         .pnjlim, .fetlim, .steplim => try emitClamp(g, lc),
     };
-    try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
+    try g.w("    return .{{ .x = x, .converged = ", .{});
+    if (any_pnjlim) try g.w("ok", .{});
+    if (any_pnjlim and rejects) try g.w(" and ", .{});
+    if (rejects) {
+        try writeArg(g, g.an.rv(g.lowered.reject_iteration), g.lim_idx);
+        try g.w(" == 0", .{});
+    } else if (!any_pnjlim) try g.w("true", .{});
+    try g.w(" }};\n}}\n\n", .{});
 
     const lv = liveSets(g);
     try g.w(

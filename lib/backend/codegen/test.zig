@@ -2398,6 +2398,31 @@ test "codegen: §9.15 $simparam(\"tnom\") read from the body is the same field" 
     try std.testing.expect(std.mem.indexOf(u8, src, "S.con(model.nom_temp__)") != null);
 }
 
+test "codegen: §9.17.1 $discontinuity(-1) is `limit`'s verdict, with no state or iteration hook" {
+    // The request is a function of the iterate alone, so it keeps no
+    // accepted-step state: the device is `eval` + `limit`, which a host can
+    // run where it runs `eval`. The verdict is read at `old`, the point the
+    // host last evaluated.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module rj(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    if (abs(V(p, n)) > 0.7) $discontinuity(-1);
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    for ([_][]const u8{ "pub fn checkConvergence(", "pub fn advanceIteration(", "pub const State ", "pub fn updateState(" }) |d|
+        try std.testing.expect(std.mem.indexOf(u8, src, d) == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zVals(S, &old)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".converged = m.f0 == 0 };") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const limit_writes: u64 = 0x0;") != null);
+}
+
 test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digit" {
     // Same arrangement as the scanner below: the kernels are `@embedFile`d into
     // every device, so what is checked here is byte-for-byte what runs there.

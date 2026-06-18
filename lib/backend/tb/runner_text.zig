@@ -775,7 +775,10 @@ pub const runner_body =
     \\            }
     \\        }
     \\        for (0..n_u) |i| x[i] += dx[i];
-    \\        const can_converge = if (@hasDecl(D, "checkConvergence")) D.checkConvergence(Val, model, inst, x.*, sim_state) else true;
+    \\        // §9.17.1 `limit`'s verdict is on the iterate at `old`. This harness
+    \\        // accepts the updated x, not the linearization point, so it asks
+    \\        // at x with `cur = old`, where every clamp is the identity.
+    \\        const can_converge = if (@hasDecl(D, "limit")) D.limit(Val, model, inst, x.*, x.*, sim_state).converged else true;
     \\        if (settled and can_converge) return true;
     \\    }
     \\    // A testbench that does not converge must FAIL, loudly and by exit
