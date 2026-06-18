@@ -1,17 +1,17 @@
 # Future plans
 
-What the 2026-09-26 to 2026-09-29 session left open. The v1.0.0 definition is
-`docs/ROADMAP.md` §1; its standing open-item list is `docs/ROADMAP.md` §5 (some
-rows there were fixed during this session and need a staleness pass).
+The continuing v1.0.0 work. Its definition is `docs/ROADMAP.md` §1 and its
+standing open-item list is `docs/ROADMAP.md` §5. Passing the existing fixtures
+does not close the unmarked implementation gaps in that list.
 
 ## 1. Where v1.0.0 stands (main, 2026-09-29)
 
 | Req | State |
 |---|---|
-| A | AMS strict suite 2038/2038, 0 XFAIL. IEEE 1364 suite: 18 fixture XFAILs after the fixfe merge, retired by `wave18/bvpi` (§2). VPI `vpi_runs`: about 88 pinned xfail lines, partly closed on the `wave23/vpi-*` branches (§2, §3). |
-| B | Closed: 365 two-way + 443 classified of 808 (`zig build test-1364 -- --coverage`). |
-| C | Closed: 488 two-way + 124 classified of 612 (`zig build benchmark -- --coverage`). |
-| D | 9/9 phases. |
+| A | AMS strict and digital fixture gates pass at `4e90fcdd`; the original digital XFAIL name list is retired. VPI `vpi_runs` still carries known gaps, partly implemented on the queued `wave23/vpi-*` branches. Unmarked AMS defects in ROADMAP §5 remain open. |
+| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `4e90fcdd`. This is a static inventory; VPI runtime obligations remain. |
+| C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
+| D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
 | E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
 | F | All five targets cross-compile; the VPI runtime does not build on Windows (Zig 0.16 `@cVaStart`). |
 | G | Written at release time. |
@@ -21,17 +21,18 @@ tag, push (AGENTS.md §3). ABI 5 is unchanged since v0.9.0 apart from additive
 optional decls, and `.v` devices, new VPI routines and new diagnostics make it
 a minor over v0.9.0 in any case.
 
-## 2. Branches not yet on main (merge queue, in this order)
+## 2. Branch integration queue (in this order)
 
-All eight branches are pushed to origin; their worktrees were removed. "Gated" means
-the AGENTS.md §9 gates passed on the branch itself.
+The original branches are pushed to origin. Their original worktrees were
+removed; review and integration work uses separate worktrees. "Gated" means
+the AGENTS.md §9 gates passed at the commit named in that row.
 
 | Order | Branch | Head | What it does | State |
 |---|---|---|---|---|
-| 1 | `wave18/bvpi` | 33a64b20 | Closes measure B on the fixture side: 20 1364 markers (18 Annex A, 2 ch 4); generate-block nets scoped per iteration; null and select ports; instance-array split (§7.1.6); hierarchical task enable; `-incdir`; task/function parameters and events. | Gated on 4bb378b0. Overlaps `wave18/fixfe` (now on main) in `lib/frontend/parser/{module,stmt,decl,specify,generate}.zig` and `ast.zig`; then retire the 5 Annex A markers fixfe's fixes pass (`b_A_2_2_3`, `b_A_3_3`, `b_A_7_4`, `b_A_7_5_3`, `b_A_9_1`). Expect the 1364 suite at 0 fixture XFAIL after. About 1–2 h. |
+| 1 | `wave18/bvpi` | 33a64b20 | Generate-block nets scoped per iteration; null and select ports; instance-array split (§7.1.6); hierarchical task enable; `-incdir`; task/function parameters and events. | Merged by `f8501782`, integrated and fully gated through `4e90fcdd`. Review fixes preserve automatic subroutine constants, validate combined null-port forms and array-width products, parse PATHPULSE mintypmax limits, and copy recursive task outputs into the restored caller. |
 | 2 | `wave22/iter` | 18ea1499 | ARPice: `$discontinuity(-1)` becomes `limit`'s `converged` verdict (device stays GPU-eligible); `$simparam("reltol"/"abstol"/"vntol")` as optional host-written Model fields. | Gated on c964f644. Goldens change for the 9 fixtures using `$discontinuity(-1)`. Tell ARPice the hash: it writes `reltol__`, `abstol__`, `vntol__` in `builder.zig` `deriveModel` next to `nom_temp__`, guarded by `@hasField`; nothing else changes for them. |
 | 3 | `wave22/vdev2` | 91138be4 | `.v` devices: locate only A2D crossings some process wakes on; default A2D ttol `min(trise, tfall)/50`; up to 256 pins. | Not gated (stopped mid-gate). |
-| 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; `--contract` defaults to the installed `share/vera/contract.zig`. Last commit is WIP: the README `--emit-so` example fix and untracked `.log` files in `ch09_system_tasks` (drop those). | Not gated. Tell the TinyTapeout session the hash. |
+| 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. Last commit includes useful README/CLI changes and generated `.log`/`.dat` files in `ch09_system_tasks` (exclude the generated files). | Not integrated. Add reviewed fix `989ea88f`: denied W0750 must stop before building or running the testbench. Tell the TinyTapeout session the integrated hash. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Not gated as a whole. |
 | 6 | `wave23/vpi-objs` | 24545fbf | Small VPI object-model rows (timescale, types, iterators, ports, net/reg bits and arrays, parameters, name search), 28 Annex G names. Last commit is WIP (a generate-net attempt that `wave18/bvpi` supersedes: drop it). | Not gated. |
 | 7 | `wave23/vpi-behav` | 62875a50 | Behavioural VPI model: forever, disable, indexed part select, concatenation operands, const type, decompile, vpiUse, delay list ops, net decl assigns. Last commit is WIP (uncommitted edits in `src/vpi` and `b_26_6_behaviour.c` when stopped). | Not gated. |
@@ -39,6 +40,26 @@ the AGENTS.md §9 gates passed on the branch itself.
 
 The four VPI branches all edit `src/vpi` and `build.zig`'s `vpi_runs`; merge one
 at a time and re-run `zig build test` (which runs `vpi_runs`) after each.
+
+The first merge passed `zig build`, `test`, `test-devices`,
+`test-vpi-fixtures`, `test-1364` in the interpreter and native FIFO/static/four
+modes, and `--fuzz 1000`. Direct suite captures show no new FAIL/XFAIL names.
+`tools/conformance.sh` measured the integrated tree; it leaves the static
+citation inventories unchanged. The mintypmax delay fixture now samples after
+the update time, avoiding an IEEE §11.4.2 active-region race.
+
+Additional reviewed work waiting for its queue position:
+
+- `9631ad93` on `v1/vpi-lazy-arguments`, based on the VPI engine branch:
+  §26.6.19(e) evaluates a retained function argument when `vpi_get_value`
+  requests it, in its lexical scope. Focused VPI, simulator and build checks
+  pass. Preserve its expression-scope metadata when merging the behaviour
+  branch's overlapping expression wrapper.
+- Generated-net VPI metadata remains necessary after `wave18/bvpi`: its
+  engine scoping does not by itself publish `gen[0].gw` or its `vpiScope`.
+- AMS `cross`/`absdelta` argument validation is being repaired separately.
+  The mixed runner also ignores several `absdelta` controls; ROADMAP §5.3
+  records that independent runtime defect.
 
 Each merge: `git merge --no-ff`, then the AGENTS.md §9 gates (`zig build`,
 `test`, `test-devices`, `test-vpi-fixtures`, `test-1364` in the interpreter
@@ -75,7 +96,10 @@ Decide whether to merge or drop each.
 - **`test-1364 -- --native=two-state`** reports XPASS for xfails whose defect
   is 4-state only. Decide: a per-fixture `native-state: 4` marker, or treat them
   as not applicable.
-- **Flake:** `ieee_pli/p03_05_convergence_test_rejection` failed 1 of 4 runs.
+- **Reported flake:** `ch12_vpi_routines/p03_05_convergence_test_rejection`
+  failed in the prior session. At `4e90fcdd`, 32 successive host runs exited
+  successfully with the exact expected transcript; the old failure did not
+  reproduce. Keep investigating if it recurs.
 - **Deliberate simplifications** marked `ponytail:` in the code (harvest with
   `grep -rn 'ponytail:' lib src tools tests`), among them: `-incdir` directories
   apply to every library's files; VPI ranges beyond an array's first dimension;

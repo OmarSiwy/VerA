@@ -7,8 +7,8 @@ each release (`AGENTS.md` §0 rule 1).
 
 An earlier version of this file carried a 26-rung release ladder, per-release
 detail and three appendices of reconciled numbers. Most of those rungs landed on
-`main` out of order and without a release being cut; only `v0.0.1` is tagged.
-§3 starts again at v0.9.0, the current tree. The old version, and the audit
+`main` out of order and without a release being cut. `v0.9.0` is now tagged;
+`FUTURE_PLANS.md` tracks the remaining integration queue after it. The old version, and the audit
 notes this file's open items came from, are at git revision `8b1514d4` (local
 tag `audit-docs-2026-09`). Read one with `git show 8b1514d4:<path>`.
 
@@ -92,15 +92,16 @@ Run these. Do not copy their output into a document.
 `grep -rl '^//! xfail' tests/fixtures` lists every gap VerA owns and a fixture
 pins. §5 lists the ones no fixture pins yet.
 
-Read from those commands on 2026-09-27:
+Measured by `tools/conformance.sh` on 2026-09-29 at `4e90fcdd`, superseding
+the 2026-09-27 inventory previously recorded here:
 
-- **A** has no FAIL. What is left is the XFAIL list.
-- **B is the long pole.** Most numbered IEEE 1364-2005 clauses are uncited or
-  cited in one direction only.
-- **C** is close. §4.5.3, §5.6.1.2 and §6.3.4 have no rejection citation, and
-  §7.4.4.2 (detail discipline resolution) has none at all.
-- **F** holds for the binary; the VPI runtime on Windows waits on Zig's C
-  varargs there.
+- **A** passes the AMS strict and digital fixture gates. VPI's known gaps
+  remain pinned in `build.zig`, and §5 still contains unmarked defects.
+- **B and C** have no unclassified citation gaps. Their static inventories
+  do not establish runtime conformance for every rule in a cited clause.
+- **F** was reported passing for the binary in the preceding session
+  (`FUTURE_PLANS.md`, 2026-09-29); final release validation must build it
+  again. The VPI runtime on Windows waits on Zig's C varargs there.
 
 **How the long pole gets done.** Each B or C clause needs the clause read, an
 expected value derived by hand, and usually the missing half of a pair. The
@@ -267,6 +268,13 @@ These need a call, not another agent pass.
 
 ### 5.2 Accepted source the standard forbids
 
+Reconciled on 2026-09-29: the contribution `ddt` tolerance lookup is fixed
+(`2bd8ee3e`, E0314 observed for an unknown nature); library-qualified
+`liblist` is refused (`461573d2`); function restrictions and automatic-task
+NBA/monitor restrictions are enforced (`7bef88f7`, `6d1bf86d`). Their fixture
+cases pass in the integrated digital suite. The remaining rows below retain
+the unfixed half where an older row combined distinct paths or rules.
+
 | Clause | Item | Source |
 |---|---|---|
 | AMS 2.6.2 | A scale factor in a digital delay (`#5u`) is accepted and runs as zero delay. | `conformance-lexical.md:158`; found 2026-09-27 |
@@ -274,17 +282,16 @@ These need a call, not another agent pass.
 | AMS 5.10.3.1 | `cross` with `expr_tol` but no `time_tol` is accepted. The `a10_11` header implies the rule is covered. | `conformance-analog-behavior.md:184-193`; found 2026-09-27 |
 | AMS 5.10.3.4 | `absdelta` with a negative delta or tolerance, or a non-integer enable, is accepted. `cross` refuses the same (E0516, E0517). | `ch05_analog_behavior/COVERAGE.md:82` |
 | AMS 6.4 | A paramset over a module that holds a `defparam` is accepted. | `h01_SPEC.md:133-135` |
-| AMS A.8.3, 5.5.3 | A `ddt` tolerance name in a contribution is never resolved: `ddt(V(p,n), Zorkmid)` compiles. The assignment form gives E0314. | `annex_a_syntax/COVERAGE.md:249-252` |
 | AMS E.3.3 | No warning when a module shadows a SPICE model or subcircuit ("shall issue a warning"); `lib/ir/elaborate/names.zig` calls it optional. | `h04_SPEC.md:120-122` |
 | IEEE A.1.3, A.4.1 | An empty `#()` is accepted in a module parameter header and in an instantiation; `#(localparam P=7)` is accepted in a header. | `conformance-ieee-grammar-review.md:69-76,84-87`; found 2026-09-27 |
-| IEEE 13.3.1.4 | A library-qualified cell selector with `liblist` is accepted. | `conformance-ieee-config-review.md:37,76-80` |
-| IEEE 10.3 | `disable <function>` is accepted. | `conformance-ieee-disable-review.md:26`; found 2026-09-27 |
-| IEEE 10.4.4 | A function with no input, with an `output`/`inout` argument, or with an event trigger is accepted. | `conformance-ieee-task-functions-review.md:52-53`; found 2026-09-27 |
-| IEEE 10.2.3 | Automatic-task variables are accepted as nonblocking targets and as `$monitor` operands. | `conformance-ieee-task-functions-review.md:43` |
-| IEEE 12.2.2, 12.3.6 | Ordered and named parameter overrides mixed (`#(5, .q(7))`) are accepted on both paths. `--run` also accepts mixed port connections and a port connected twice. | `conformance-ieee-hierarchy-review.md:42,124`; found 2026-09-27 |
-| IEEE 8.1.1, 8.1.4 | A UDP whose output is not the first port, or whose table maps one input combination to two outputs, is accepted. | `d08_SPEC.md:199-204` |
+| IEEE 12.2.2 | Mixed ordered and named parameter overrides (`#(5, .q(7))`) still need verification on the analog path. The digital override/port restrictions are fixed by `b35ab357`. | `conformance-ieee-hierarchy-review.md:42,124`; found 2026-09-27 |
+| IEEE 8.1.4 | A UDP table mapping one input combination to two outputs remains to verify. The output-first declaration rule is enforced by `9854a214`. | `d08_SPEC.md:199-204` |
 
 ### 5.3 Valid source refused or computed wrong
+
+The named-block `reg` parser restriction is fixed by `4347d32c`, and native
+static-schedule fork hangs by `9ac6848b`/`808eb30e`. Their interpreter and
+native regression cases pass at `4e90fcdd`.
 
 | Clause | Item | Source |
 |---|---|---|
@@ -299,21 +306,23 @@ These need a call, not another agent pass.
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |
 | AMS 5.6.8.2, 6.7.1 | Two instances between the same two nodes share one branch: `I(r1.branch(p,n))` reads the parallel sum. | `h04_SPEC.md:284-292`; found 2026-09-27 |
 | AMS 5.10, 3.3 | A string written inside an event body is not held. `lib/ir/lower/param.zig` says nothing can observe it; `$strobe` does. | `a03_SPEC.md:186-189` |
+| AMS 5.10.3.4 | The mixed runner reads only `absdelta`'s delta: it ignores `time_tol`, `expr_tol`, enable and the direction-change trigger, and delivers initialization unconditionally. Argument validation alone will not close this runtime gap. | `src/sim/mixed.zig` monitor initialization and `.absdelta` dispatch; read 2026-09-29 |
 | AMS 6.6.3 | Same-named instances in two generate blocks collide (E0362). | `ch06_hierarchy/COVERAGE.md:191-193` |
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |
 | AMS 9.15 | `$simparam$str("cwd")` and `("analysis_name")` return `""`. | `a10_SPEC.md:71-73,210-215` |
 | AMS E.1.2 | `.MODEL X SW` is skipped and the instance line gets E0904. | `h04_SPEC.md:125-128` |
 | IEEE 4.3.1, 5.5.3 | An analog assignment to `reg [3:0]` is not truncated: `~4'b0101` reads -6, not 10. | `annex_a_syntax/COVERAGE.md:416-427`; found 2026-09-27 |
-| IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is dropped silently by `--run` and refused (E0907) by the analog path. | `conformance-ieee-scope-review.md:47-76` |
+| IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is refused (E0907) by the analog path. The digital upward/indexed resolution is fixed by `b700311a`. | `conformance-ieee-scope-review.md:47-76` |
 | IEEE 17.5.4 | A PLA personality bit `x` is treated as "ignore"; the standard says "worst case". | `conformance-ieee-pla-review.md:58` |
 | IEEE 9.7.5 | `@*` over a statement that reads nothing is refused with an E1100 that cites §9.7.5, which has no such rule. | `conformance-ieee-scheduling-review.md:95-98` |
-| IEEE A.2.8, 9.8 | A `reg` declared in a named block is refused (E0209). | `d04_SPEC.md:208-210` |
 | IEEE A.6.5 | A hierarchical event trigger (`-> u.ev;`) does not parse. | `d04_SPEC.md:211-213` |
 | IEEE 17.2.9 | `$readmem` refuses a variable file name and variable start/finish addresses (E1100). | `conformance-readmem-validation-edges.md:66-70` |
-| IEEE 11.4.1 | Native executables under `--schedule=static` (the default): a `fork` arm that waits on an edge the statement before it causes misses the edge and the join hangs; `--run` and `fifo` complete. §11.4.1 permits the order, but a hang is not acceptable. | reported by the native perf work, not reproduced here |
 
 ### 5.4 Diagnostics and harness
+
+W0651's closed-infinity range check is fixed by `4b87e373`; its warning and
+no-warning fixtures pass in the strict suite at `4e90fcdd`.
 
 | Clause | Item | Source |
 |---|---|---|
@@ -323,7 +332,6 @@ These need a call, not another agent pass.
 | AMS 5.9.3 | `break` in an analog `for` is refused as "outside a loop" (E0404). | `ch05_analog_behavior/COVERAGE.md:85` |
 | AMS A.6.4 | `force`, `fork`, `wait`, `#5` and analog `forever` all get the generic E0209. | `annex_a_syntax/COVERAGE.md:278-282` |
 | AMS 4.5.12 | A non-zero τ or t0 on `zi_*` gets the generic "codegen refused". | `ch04_expressions/COVERAGE.md:93` |
-| AMS 3.4.2 | W0651 may misfire: on `nonzero = 1.0 exclude 0` (`ch03_data_types/05_parameter_ranges.va`) with no closed infinite bound, and on `[0:hi]` (`h01_11:41`). Check against §3.4.2 before pinning. | `h01_11_dependent_range_and_array_override.va:39-41` |
 | harness | A second `//! analysis` line silently replaces the first. | `ch09_system_tasks/COVERAGE.md:56,67` |
 | IEEE 18.1.5 | `vcdTokens` drops `$version` and `$comment`, so the `$dumplimit` comment and version text are never checked; a semantic VCD comparison would have to be added to `harness.vcdTokens`. | `conformance-vcd-review.md:39-42,155-159` |
 | fixtures | Branch `audit-wip/ch5` (`59da3dcd`) holds ch09 fixtures that were never merged, including ones for the `$arandom`, `$clog2` and geometry rows above. | found 2026-09-27 |
