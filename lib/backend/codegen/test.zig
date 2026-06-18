@@ -2398,6 +2398,29 @@ test "codegen: §9.15 $simparam(\"tnom\") read from the body is the same field" 
     try std.testing.expect(std.mem.indexOf(u8, src, "S.con(model.nom_temp__)") != null);
 }
 
+test "codegen: §9.15 $simparam reltol/abstol/vntol are host fields, one per name read" {
+    // The `tnom` shape for SPICE's Newton tolerances: a Model field the host
+    // writes, initialized to SPICE's default. A name the model never reads
+    // costs its Model nothing, so `abstol` here has no field.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module tol(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real rt = $simparam("reltol");
+        \\  analog I(p, n) <+ V(p, n) * (rt + $simparam("vntol", 0.5));
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.count(u8, src, "reltol__: f64 = 0.001,") == 1);
+    try std.testing.expect(std.mem.count(u8, src, "vntol__: f64 = 0.000001,") == 1);
+    try std.testing.expect(std.mem.indexOf(u8, src, "abstol__") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (!model.rt__given) model.rt = model.reltol__;") != null);
+    // A known name ignores its fallback (§9.15).
+    try std.testing.expect(std.mem.indexOf(u8, src, "S.con(model.vntol__)") != null);
+}
+
 test "codegen: §9.17.1 $discontinuity(-1) is `limit`'s verdict, with no state or iteration hook" {
     // The request is a function of the iterate alone, so it keeps no
     // accepted-step state: the device is `eval` + `limit`, which a host can

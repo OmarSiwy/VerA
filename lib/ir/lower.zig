@@ -1657,6 +1657,7 @@ pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
 /// Returns the `Model` field that answers a §9.15 simulation parameter the
 /// card supplies (`tnom`), or null.
 pub const simparamHostField = lower_sysfunc.simparamHostField;
+pub const host_simparams = lower_sysfunc.host_simparams;
 
 // §9.21 `$table_model`, lower/table_model.zig
 const lower_table_model = @import("lower/table_model.zig");
