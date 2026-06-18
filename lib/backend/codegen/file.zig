@@ -246,11 +246,10 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 }
 
 /// Returns whether the model needs the §4.5.2 accepted-step machinery: a
-/// stateful operator, a §5.10 held variable, a `$limit` slot or a §9.17.1
-/// `$discontinuity(-1)` iteration rejection. Each keeps state in `Instance`
-/// that only `updateState` may advance.
+/// stateful operator, a §5.10 held variable or a `$limit` slot. Each keeps
+/// state in `Instance` that only `updateState` may advance.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op != .none) return true;
     }
@@ -435,13 +434,16 @@ fn emitModel(self: *Gen) Error!void {
         });
         try self.w("    {s}__given: bool = false,\n", .{self.names.a_names[i]});
     }
-    // §9.15 the host-published nominal temperature. Model, not Instance:
-    // `.options tnom` is one number per run. The initializer is Table 9-27's
+    // §9.15 the host-published simulation parameters. Model, not Instance:
+    // each `.options` entry is one number per run. The initializer is the
     // default, for a host that never writes it.
-    if (self.lowered.uses.contains(.host_simparam)) try self.w(
-        "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
-        .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lowered.simparamValue("tnom").?) },
-    );
+    var host_simparam = false;
+    for (Lower.host_simparams) |h| if (self.lowered.uses.contains(h.use)) {
+        host_simparam = true;
+        try self.w("    {s}: f64 = {s}, // §9.15 $simparam(\"{s}\"){s} — host-written\n", .{
+            h.field, try fmtF64(self, self.lowered.simparamValue(h.name).?), h.name, if (h.use == .host_tnom) ", degC" else "",
+        });
+    };
     // §5.6.5 the card-only retention flag of each collapsible switch branch,
     // which a guarded `jac_const` entry names (`contract.JacWhen`). Not a
     // parameter: `derive` overwrites it. The initializer is the flag at the
@@ -452,7 +454,7 @@ fn emitModel(self: *Gen) Error!void {
         const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
         try self.w("    {s}: f64 = {s}, // §5.6.5 retention flag — `derive` writes it\n", .{ try gen_dispatch.guardField(self, @intCast(k)), d });
     }
-    if (self.lowered.params.items.len == 0 and !self.lowered.uses.contains(.host_simparam)) {
+    if (self.lowered.params.items.len == 0 and !host_simparam) {
         try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
     }
     try self.w("}};\n\n", .{});

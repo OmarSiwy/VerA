@@ -566,6 +566,18 @@ const sim_state_fields = [_]SimStateField{
     .{ .name = "plusargs", .T = []const [:0]const u8 },
 };
 
+/// Host-written `Model` fields, all `f64`: §9.15 `$simparam` names whose value
+/// is one number per run (SPICE `.options`). Presence is optional, and each is
+/// initialized to its SPICE default, so a host that writes none gets that. The
+/// host writes them before `derive`, and calls `setup` again after writing a
+/// name `setup_simparams` lists.
+const host_model_fields = [_][]const u8{
+    "nom_temp__", // $simparam("tnom"), degC; 27
+    "reltol__", // $simparam("reltol"); 1e-3
+    "abstol__", // $simparam("abstol"), amperes; 1e-12
+    "vntol__", // $simparam("vntol"), volts; 1e-6
+};
+
 /// §4.6.4 one noise generator: position k of `noise_gens` is a generator of
 /// `kind` on the (row, col) branch, and position k of `noisePsd`'s result is
 /// its PSD. A `.table` generator's PSD is `noise_tables[table.?]` (see
@@ -799,9 +811,10 @@ fn acDynError(comptime D: type) ?[]const u8 {
     return null;
 }
 
-/// What `limit` returns: the limited unknowns, and `converged`, false when a
-/// clamp was large enough that the host must run another Newton iteration
-/// (pnjlim's clamp is; a small fetlim/limvds one is not).
+/// What `limit` returns: the limited unknowns, and `converged`, false when the
+/// host must run another Newton iteration: a clamp was large enough (pnjlim's
+/// clamp is; a small fetlim/limvds one is not), or the model evaluated at
+/// `old` executed §9.17.1 `$discontinuity(-1)`.
 pub fn LimitResult(comptime n: usize) type {
     return struct {
         x: [n]f64,
@@ -2276,7 +2289,8 @@ fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
     return false;
 }
 
-/// Checks the host-written `Instance` fields (`sim_state_fields`).
+/// Checks the host-written `Instance` and `Model` fields (`sim_state_fields`,
+/// `host_model_fields`).
 fn validateSimState(comptime D: type) void {
     const name = @typeName(D);
     for (sim_state_fields) |f| {
@@ -2284,6 +2298,10 @@ fn validateSimState(comptime D: type) void {
         if (@FieldType(D.Instance, f.name) != f.T)
             @compileError(name ++ ".Instance." ++ f.name ++ ": host-written field must be " ++
                 @typeName(f.T));
+    }
+    for (host_model_fields) |f| {
+        if (@hasField(D.Model, f) and @FieldType(D.Model, f) != f64)
+            @compileError(name ++ ".Model." ++ f ++ ": host-written field must be f64");
     }
 
     // `SimState` carries these, so an Instance field of the same name is one

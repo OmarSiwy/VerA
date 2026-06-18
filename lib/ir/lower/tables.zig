@@ -63,10 +63,13 @@ pub const Kernel = enum {
     /// §9.15 the model queries the runtime Newton iteration number.
     newton_iter,
     /// §9.15 the model reads a `$simparam` whose value is the HOST's
-    /// (`simparamHostField`), so codegen owes its Model the reserved field. Set
+    /// (`host_simparams`), so codegen owes its Model that reserved field. Set
     /// at the call, because a §3.4 parameter default such as
     /// `parameter real tnom = $simparam("tnom")` is lowered outside the block stream.
-    host_simparam,
+    host_tnom,
+    host_reltol,
+    host_abstol,
+    host_vntol,
     /// §9.17.1 `$discontinuity(-1)`: `reject_iteration` is a live root and the
     /// device carries the rejection flag.
     reject_iteration,
