@@ -30,7 +30,7 @@ the AGENTS.md §9 gates passed at the commit named in that row.
 | Order | Branch | Head | What it does | State |
 |---|---|---|---|---|
 | 1 | `wave18/bvpi` | 33a64b20 | Generate-block nets scoped per iteration; null and select ports; instance-array split (§7.1.6); hierarchical task enable; `-incdir`; task/function parameters and events. | Merged by `f8501782`, integrated and fully gated through `4e90fcdd`. Review fixes preserve automatic subroutine constants, validate combined null-port forms and array-width products, parse PATHPULSE mintypmax limits, and copy recursive task outputs into the restored caller. |
-| 2 | `wave22/iter` | 18ea1499 | ARPice: `$discontinuity(-1)` becomes `limit`'s `converged` verdict (device stays GPU-eligible); `$simparam("reltol"/"abstol"/"vntol")` as optional host-written Model fields. | Gated on c964f644. Goldens change for the 9 fixtures using `$discontinuity(-1)`. Tell ARPice the hash: it writes `reltol__`, `abstol__`, `vntol__` in `builder.zig` `deriveModel` next to `nom_temp__`, guarded by `@hasField`; nothing else changes for them. |
+| 2 | `wave22/iter` | 18ea1499 | ARPice: `$discontinuity(-1)` becomes `limit`'s `converged` verdict (device stays GPU-eligible); `$simparam("reltol"/"abstol"/"vntol")` as optional host-written Model fields. | Merged and fully gated at `78c53446`; strict and digital FAIL/XFAIL name lists are unchanged. Consumer integration point: write `reltol__`, `abstol__`, `vntol__` in `builder.zig` `deriveModel` next to `nom_temp__`, guarded by `@hasField`. |
 | 3 | `wave22/vdev2` | 91138be4 | `.v` devices: locate only A2D crossings some process wakes on; default A2D ttol `min(trise, tfall)/50`; up to 256 pins. | Not gated (stopped mid-gate). |
 | 4 | `wave24/tt` | 2dd16b69 | TinyTapeout report: `cross()` fires on a `//! time` grid with no `//! analysis` line; W0750 for events the fixed grid fires late; omitted `--contract` uses the compiler's embedded contract and engine sources. Last commit includes useful README/CLI changes and generated `.log`/`.dat` files in `ch09_system_tasks` (exclude the generated files). | Not integrated. Add reviewed fix `989ea88f`: denied W0750 must stop before building or running the testbench. Tell the TinyTapeout session the integrated hash. |
 | 5 | `wave23/vpi-engine` | 3be48ade | User systf calltf overriding built-ins (§20.3/§20.4, sizetf once), cbStmt, cbError/cbPLIError, HDL `$fopen` mcds shared with VPI. | Not gated as a whole. |
@@ -61,16 +61,26 @@ Additional reviewed work waiting for its queue position:
   The mixed runner also ignores several `absdelta` controls; ROADMAP §5.3
   records that independent runtime defect.
 
+The second merge passed the same gate matrix, including the generated
+Newton-verdict and host-tolerance fixtures, and was measured by
+`tools/conformance.sh` at `78c53446`.
+
 Each merge: `git merge --no-ff`, then the AGENTS.md §9 gates (`zig build`,
 `test`, `test-devices`, `test-vpi-fixtures`, `test-1364` in the interpreter
 and `--native`, `=static`, `=four`, `--fuzz 1000`, the strict-suite name list),
 then retire any XPASS marker after re-checking its derivation.
 
-Two older worktrees predate this session and were left untouched:
-`timerfix` (2 unmerged commits: §5.10.3.3 periodic timer fire counting, and a
-fire within 4 ulps is due) and `agent-ab4223a4613f06e12` (uncommitted
-held-array edits in `lib/backend/codegen/{plan/setup,render,setup,unit}.zig`).
-Decide whether to merge or drop each.
+Two older user worktrees remain untouched after read-only review:
+
+- `timerfix`: adapt `65e39ac8`'s base/count periodic scheduling with a runtime
+  drift/changed-period regression. Do not merge `9a9023db` unchanged: its
+  widened due window can make `zNextTimer(1, epsilon, 1)` report no future
+  breakpoint even though later representable fires exist. Neither saved
+  commit adds fixtures.
+- `agent-ab4223a4613f06e12`: leave its uncommitted held-array optimization
+  pending. It has no tests, still contains a `VDBG` debug print, and needs
+  adaptation to the current setup/scalar-family code. This optimization is
+  not a v1 conformance prerequisite.
 
 ## 3. Conformance work left
 
