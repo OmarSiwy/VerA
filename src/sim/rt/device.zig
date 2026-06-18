@@ -15,7 +15,7 @@
 //! holds two boundaries, the accepted one and the one this step made.
 //! Clauses: VAMS §7.3.6 (synchronization), §7.8, §8.4.3.3 (an A2D event at
 //! the nearest tick), §4.5.8 (the ramps), §5.10.3.1 (`cross`); IEEE 1364-2005
-//! §11.4 (a tick boundary).
+//! §9.7.2 (which edges wake a process), §11.4 (a tick boundary).
 const std = @import("std");
 const contract = @import("contract");
 const root = @import("root.zig");
@@ -122,9 +122,13 @@ pub fn Device(comptime spec: Spec) type {
             /// which is then the reference and never a crossing.
             a2d_v: [n_in]f64 = @splat(nan),
             a2d_t: f64 = 0,
+            /// Per input, which of its crossings would wake a process at the
+            /// accepted boundary: bit 0 a rising one, bit 1 a falling one.
+            wakes: [n_in]u2 = @splat(3),
             /// The next digital event, in seconds.
             next_ev: f64 = inf,
-            /// A crossing this step took more than `ttol` before its end.
+            /// A crossing this step took more than `ttol` before its end, in
+            /// a step where some process woke.
             late_cross: bool = false,
             /// `$finish` or `$stop` ran: the outputs hold from then on.
             stopped: bool = false,
@@ -234,6 +238,10 @@ pub fn Device(comptime spec: Spec) type {
             const lo = vth(m) - m.vhys / 2;
             var edges: [2 * n_in]Edge = undefined;
             var n: usize = 0;
+            // A crossing's time matters only if the step wakes a process: one
+            // that wakes nothing runs at its secant tick, unlocated.
+            var late = false;
+            var woke = false;
             inline for (spec.pins, 0..) |p, u| if (!p.out) {
                 const i = index[u];
                 const v0 = inst.a2d_v[i];
@@ -243,11 +251,12 @@ pub fn Device(comptime spec: Spec) type {
                     // at the engine's own tick.
                     edges[n] = .{ .tick = 0, .pin = u, .bit = threshold(m, v1) };
                     n += 1;
-                } else for ([2]f64{ hi, lo }, [2]f64{ 1, -1 }, [2]logic.Bit{ .one, .zero }) |th, dir, bit| {
+                } else for ([2]f64{ hi, lo }, [2]f64{ 1, -1 }, [2]logic.Bit{ .one, .zero }, [2]u2{ 1, 2 }) |th, dir, bit, wake| {
                     if (!time.crosses(dir, v0 - th, v1 - th)) continue;
                     // The secant between the two samples, as `cross` finds it.
                     const tc = inst.a2d_t + (t - inst.a2d_t) * (th - v0) / (v1 - v0);
-                    if (t - tc > ttol(m)) inst.late_cross = true;
+                    late = late or t - tc > ttol(m);
+                    woke = woke or inst.wakes[i] & wake != 0;
                     // ponytail: a crossing that rounds past `horizon` runs at it,
                     // a tick early, rather than holding an event past `t`.
                     edges[n] = .{ .tick = @min(@as(u64, @intFromFloat(@max(@round(ticks(tc)), 0))), horizon), .pin = u, .bit = bit };
@@ -257,6 +266,7 @@ pub fn Device(comptime spec: Spec) type {
             };
             inst.a2d_t = t;
             const due = inst.next_ev != inf and time.tickAtOrBefore(inst.next_ev, tick) <= horizon;
+            if (late and (woke or due)) inst.late_cross = true;
             if (n == 0 and !due) return;
             std.mem.sort(Edge, edges[0..n], {}, struct {
                 fn lt(_: void, l: Edge, r: Edge) bool {
@@ -333,11 +343,20 @@ pub fn Device(comptime spec: Spec) type {
             };
         }
 
-        /// The engine's next event, whether it stopped, and its boundary as
-        /// this step's work; a boundary longer than `cap` fails.
+        /// The engine's next event, whether it stopped, which input edges
+        /// wake it, and its boundary as this step's work; a boundary longer
+        /// than `cap` fails.
         fn keep(inst: *Instance, st: *State, s: *root.State) !void {
             inst.stopped = s.sched.phase == .stopped;
             inst.next_ev = if (s.sched.peekTime()) |k| seconds(k) else inf;
+            inline for (spec.pins, 0..) |p, u| if (!p.out) {
+                const e = s.wakes(p.slot);
+                // An edge term sees only the slot's least significant bit.
+                const lsb = p.bit == 0;
+                const up = e.contains(.any) or lsb and e.contains(.posedge);
+                const down = e.contains(.any) or lsb and e.contains(.negedge);
+                inst.wakes[index[u]] = @as(u2, @intFromBool(up)) | @as(u2, @intFromBool(down)) << 1;
+            };
             // A stopped engine is never run again, so its state is not kept.
             if (inst.stopped) return;
             const into = st.cur ^ 1;
