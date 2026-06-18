@@ -982,8 +982,9 @@ pub const State = struct {
         if (!two) @memcpy(self.x[lo..][0..fill.len], fill);
     }
 
-    /// The activation `enter` began has returned and copied out; a
-    /// `disable` of `sub` ends with its outermost activation.
+    /// The activation `enter` began has returned. Restore the caller before
+    /// its actuals receive captured outputs; a `disable` of `sub` ends with
+    /// its outermost activation.
     pub fn leave(self: *State, sub: u32, lo: u32, n: u32) void {
         self.depth -= 1;
         self.active[sub] -= 1;
