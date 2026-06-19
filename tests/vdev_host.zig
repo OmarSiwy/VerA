@@ -33,6 +33,22 @@
 //! set 1 tick after the edge, is the next event: 6 ns. Under uic (no
 //! operating point) a = 1 V from the start: the first sample drives a from x
 //! to 1 at tick 0 with no crossing test, so the first step is not shrunk.
+//!
+//! v_edge and v_any, a 2-bit counter on clk = PULSE(0 5 5n 1n 1n 4n 10n),
+//! which crosses 2.5 V rising at 5.5 ns and falling at 10.5 ns. v_edge waits
+//! on posedge clk only: the falling crossing wakes nothing (IEEE 1364-2005
+//! §9.7.2), so the step over it is never shrunk, and q is 1 after both.
+//! The default ttol is min(trise, tfall)/50 = 20 ps, so q[0]'s ramp arms at
+//! most 20 ps after 5.5 ns (15.6 ps on this host's quarter steps, which a
+//! 0.5 ps tolerance would have shrunk further).
+//! v_any waits on any change of clk: both crossings are located and each
+//! adds 1 to q.
+//!
+//! v_wide, 132 pins: clk on the same PULSE, a 65-bit counter q from 2^64,
+//! and y = d[64] with d[64] at 5 V and the rest of d at 0 V. After the
+//! rising crossings at 5.5 and 15.5 ns q = 2^64 + 2: q[64] and q[1] are 5 V,
+//! every other q bit 0 V. The operating point reads d[64] as 1, so y is 5 V
+//! through rout into 10 kΩ.
 const std = @import("std");
 const contract = @import("contract");
 const expect = std.testing.expect;
@@ -64,6 +80,9 @@ fn Circuit(comptime D: type) type {
         t: f64 = 0,
         /// The last accepted step.
         h: f64 = 0,
+        /// Steps rejected because a crossing ran late, and solves attempted.
+        shrunk: u32 = 0,
+        solves: u32 = 0,
 
         fn pin(comptime name: []const u8) usize {
             return @intFromEnum(@field(D.U, name));
@@ -171,9 +190,11 @@ fn Circuit(comptime D: type) type {
                 var sim = at(c.t + dt);
                 sim.dt = dt;
                 try c.solve(sim);
+                c.solves += 1;
                 _ = D.updateState(S, &c.m, &c.inst, c.x, &c.st, sim);
                 if (dt > eps and D.stateCtl(&c.m, &c.inst, &c.st, .query)) {
                     _ = D.stateCtl(&c.m, &c.inst, &c.st, .revert);
+                    c.shrunk += 1;
                     dt = @max(dt / 4, eps);
                     continue;
                 }
@@ -299,4 +320,79 @@ test "v_a2d under uic: the first sample is the reference, not a crossing" {
     try expectEqual(@as(f64, 1e-9), c.t);
     try expectEqual(@as(f64, 5), c.inst.lvl_to[0]);
     try expectEqual(@as(f64, 5), c.inst.lvl_to[1]);
+}
+
+/// PULSE(0 5 5n 1n 1n 4n 10n): 2.5 V is crossed rising at 5.5 + 10k ns and
+/// falling at 10.5 + 10k ns.
+fn pulse(t: f64) f64 {
+    if (t < 5e-9) return 0;
+    const u = @mod(t - 5e-9, 10e-9);
+    if (u < 1e-9) return 5 * u / 1e-9;
+    if (u < 5e-9) return 5;
+    if (u < 6e-9) return 5 - 5 * (u - 5e-9) / 1e-9;
+    return 0;
+}
+
+/// q of a 2-bit counter from its output levels (q[1] is output 0).
+fn count(inst: anytype) u2 {
+    return @as(u2, @intFromBool(inst.lvl_to[0] == 5)) << 1 | @intFromBool(inst.lvl_to[1] == 5);
+}
+
+/// A 2-bit counter on `pulse` through the rising crossing (to 8 ns) and the
+/// falling one (to 13 ns): q after the operating point and after each, and
+/// the steps each span shrank.
+fn clockEdges(comptime C: type, c: *C) !struct { q: [3]u2, shrunk: [2]u32 } {
+    c.src[C.pin("clk")] = pulse;
+    c.g_gnd[C.pin("q[1]")] = 1e-4;
+    c.g_gnd[C.pin("q[0]")] = 1e-4;
+    c.birth();
+    _ = try c.op();
+    const q0 = count(c.inst);
+    while (c.t < 8e-9) try c.step(1e-9, 5e-14);
+    const q1 = count(c.inst);
+    const rise = c.shrunk;
+    while (c.t < 13e-9) try c.step(1e-9, 5e-14);
+    return .{ .q = .{ q0, q1, count(c.inst) }, .shrunk = .{ rise, c.shrunk - rise } };
+}
+
+test "v_edge and v_any: a crossing no process waits for is not located" {
+    // v_edge waits on posedge clk alone: the rising crossing at 5.5 ns is
+    // located and counts, the falling one at 10.5 ns is delivered but wakes
+    // nothing, so no step shrinks for it and q stays 1.
+    const E = Circuit(@import("v_edge"));
+    var e: E = .{};
+    const re = try clockEdges(E, &e);
+    try expectEqual([3]u2{ 0, 1, 1 }, re.q);
+    try expect(re.shrunk[0] > 0);
+    try expectEqual(@as(u32, 0), re.shrunk[1]);
+    try expect(e.inst.lvl_t0[1] - 5.5e-9 > 0.5e-12 and e.inst.lvl_t0[1] - 5.5e-9 <= 20e-12);
+    // v_any waits on any change: both crossings are located and each counts.
+    // (Where it starts depends on time 0, where clk goes z -> x -> 0.)
+    const A = Circuit(@import("v_any"));
+    var a: A = .{};
+    const ra = try clockEdges(A, &a);
+    try expectEqual([3]u2{ ra.q[0], ra.q[0] +% 1, ra.q[0] +% 2 }, ra.q);
+    try expect(ra.shrunk[0] > 0 and ra.shrunk[1] > 0);
+}
+
+test "v_wide: 132 pins, and ports past one plane word" {
+    @setEvalBranchQuota(100_000);
+    const C = Circuit(@import("v_wide"));
+    var c: C = .{};
+    c.src[C.pin("clk")] = pulse;
+    inline for (0..65) |b| {
+        const i = std.fmt.comptimePrint("[{d}]", .{b});
+        c.src[C.pin("d" ++ i)] = if (b == 64) volts(5) else volts(0);
+        c.g_gnd[C.pin("q" ++ i)] = 1e-4;
+    }
+    c.g_gnd[C.pin("y")] = 1e-4;
+    c.birth();
+    _ = try c.op();
+    try std.testing.expectApproxEqAbs(5.0 * 1e4 / (1e4 + 1), c.x[C.pin("y")], 1e-9);
+    while (c.t < 18e-9) try c.step(1e-9, 5e-14);
+    inline for (0..65) |b| {
+        const want: f64 = if (b == 64 or b == 1) 5 else 0;
+        // Output k is q[64 - k] (pin order).
+        try expectEqual(want, c.inst.lvl_to[64 - b]);
+    }
 }
