@@ -27,7 +27,7 @@ const usage_text =
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
     \\  --check                 type-check the generated device with zig
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
-    \\  --emit-exe              build a runnable Verilog-A testbench (needs --contract),
+    \\  --emit-exe              build a runnable Verilog-A testbench,
     \\                          or a .v design's executable; print its path
     \\                          (--emit-zig, --check and --emit-so of a .v build its
     \\                          top module as a contract device, 4-state, E1103)
@@ -50,7 +50,8 @@ const usage_text =
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
     \\  --jac-f32-host          ...and ask the host to use it on its CPU path
-    \\  --contract PATH         root of the `contract` module
+    \\  --contract PATH         root of the `contract` module (default: this vera's
+    \\                          own, written under the work directory)
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
     \\  --zig PATH              zig executable to drive (default: zig)
@@ -362,6 +363,18 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
+    // No --contract: this binary's own tools/contract.zig, written out with the
+    // `sim` tree it embeds, so the contract always matches the compiler and the
+    // mixed-signal runner finds `sim` beside it.
+    var contract_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer contract_arena.deinit();
+    if (contract_path == null and (check or emit_so or (exe_flag != null and !(digital_source and run_exe)))) {
+        const wd = work_dir orelse ".zig-cache/vera-tb";
+        contract_path = simTree(io, contract_arena.allocator(), wd) catch |e| {
+            try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
+            return 1;
+        };
+    }
     if (!digital_source) {
         if (paths.items.len > 1) {
             try err.writeAll("error: more than one input file\n");
@@ -403,10 +416,7 @@ pub fn main(init: std.process.Init) !u8 {
         const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
             .work_dir = wd,
-            .contract = contract_path orelse simTree(io, arena.allocator(), wd) catch |e| {
-                try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
-                return 1;
-            },
+            .contract = contract_path.?,
             .name = std.fs.path.stem(in_path),
             .zig_exe = zig_exe,
             .mixed = true,
@@ -541,26 +551,12 @@ pub fn main(init: std.process.Init) !u8 {
     // --check: type-check the generated Zig here, where the .va that
     // produced it can still be named.
     if (check or emit_so) {
-        const contract = contract_path orelse {
-            try err.writeAll(
-                "error: --check and --emit-so need --contract PATH (the root of the " ++
-                    "`contract` module the generated device imports)\n",
-            );
-            return 2;
-        };
-        if (try typeCheck(gpa, io, err, zig_exe, contract, device, in_path)) |code| return code;
+        if (try typeCheck(gpa, io, err, zig_exe, contract_path.?, device, in_path)) |code| return code;
     }
 
     // --emit-exe: the same device with real display tasks, driven by a
     // generated runner over the operating points its `//!` lines declare.
     if (exe_flag != null) {
-        const contract = contract_path orelse {
-            try err.writeAll(
-                "error: --emit-exe needs --contract PATH (the root of the `contract` " ++
-                    "module the generated device imports)\n",
-            );
-            return 2;
-        };
         const wd = work_dir orelse ".zig-cache/vera-tb";
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
@@ -575,7 +571,7 @@ pub fn main(init: std.process.Init) !u8 {
         };
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,
-            .contract = contract,
+            .contract = contract_path.?,
             .name = result.mir.name,
             .out_path = out_path,
             .zig_exe = zig_exe,
@@ -795,10 +791,6 @@ fn emitDevice(
         return 1;
     };
     try report(bag, err, json, use_color);
-    if ((f.check or f.so) and f.contract == null) {
-        try err.writeAll("error: --check and --emit-so need --contract PATH (tools/contract.zig of a VerA tree)\n");
-        return 2;
-    }
     if (f.check) {
         const built = vera.tb.buildExe(gpa, io, dev.zig, device_check, .{
             .work_dir = ".zig-cache/vera-check",
