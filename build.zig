@@ -327,20 +327,33 @@ pub fn build(b: *std.Build) void {
         run.addCheck(.{ .expect_stderr_match = r.says });
         test_step.dependOn(&run.step);
     }
-    // `--run` with no `--contract` builds over the binary's own contract, and
-    // the §5.10.3.1 event fires on the time grid (W0750 names the lateness).
-    {
+    // The fixed-grid runner's W0750 obeys the same lint levels as compiler
+    // diagnostics. Allowed/warned neighbours build over the binary's own
+    // contract; --run also proves the §5.10.3.1 event actually fires.
+    const grid_events = b.step("test-grid-events", "Check fixed-grid testbench diagnostics and execution");
+    test_step.dependOn(grid_events);
+    for ([_][]const u8{ "--run", "--emit-exe" }) |mode| for ([_][]const u8{ "allow", "warn", "deny", "forbid" }) |level| {
+        const rejected = std.mem.eql(u8, level, "deny") or std.mem.eql(u8, level, "forbid");
         const run = b.addRunArtifact(exe);
-        run.addArgs(&.{ "--run", "-I" });
+        run.addArgs(&.{ mode, b.fmt("--{s}=W0750", .{level}), "--allow=W0650", "-I" });
         run.addDirectoryArg(b.path("tests/fixtures"));
         run.addArg("--work-dir");
         _ = run.addOutputDirectoryArg("tb");
         run.addFileArg(b.path("tests/fixtures/ch05_analog_behavior/event_cross_fires_on_a_time_grid.va"));
-        run.expectExitCode(0);
-        run.addCheck(.{ .expect_stderr_match = "one rising clk edge is one event got=1 want=1 ok=1" });
-        run.addCheck(.{ .expect_stderr_match = "warning[W0750]" });
-        test_step.dependOn(&run.step);
-    }
+        run.expectExitCode(if (rejected) 1 else 0);
+        if (rejected) {
+            run.expectStdOutEqual(""); // No artifact path on a refusal.
+            run.addCheck(.{ .expect_stderr_match = "error[W0750]" });
+        } else {
+            if (std.mem.eql(u8, mode, "--run"))
+                run.addCheck(.{ .expect_stderr_match = "one rising clk edge is one event got=1 want=1 ok=1" });
+            if (std.mem.eql(u8, level, "warn"))
+                run.addCheck(.{ .expect_stderr_match = "warning[W0750]" })
+            else if (std.mem.eql(u8, mode, "--emit-exe"))
+                run.expectStdErrEqual("");
+        }
+        grid_events.dependOn(&run.step);
+    };
     // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero
     // never ends, so no file that size is committed or written.
     if (b.graph.host.result.os.tag != .windows) for ([_][]const []const u8{
