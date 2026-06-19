@@ -262,9 +262,10 @@ These need a call, not another agent pass.
 15. **§9.17.3, Syntax 9-12: `$limit(typ*V(a,k), ...)`**, whose first argument is
     not an access function reference. Error, or the W0853 warning VerA gives
     today? A refusal makes it a minor. (found 2026-09-27.)
-16. **A `.v` design as a contract device.** It needs `src/sim/mixed.zig` split
-    into caller-driven steps (next event time, advance, post A2D, D2A outputs,
-    monitors). This is an extension, not conformance; ask before scheduling.
+16. **A `.v` design as a contract device: implemented.** The device runtime
+    is in `src/sim/rt/device.zig`; generated-device host tests pass at
+    `15bb97ca` (2026-09-29). Remaining consumer extensions are listed in
+    `FUTURE_PLANS.md` §4.
 
 ### 5.2 Accepted source the standard forbids
 
