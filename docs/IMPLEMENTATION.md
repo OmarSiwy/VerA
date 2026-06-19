@@ -24,6 +24,7 @@ differently also conforms.
 | AMS 4.5.7 | interpolation between stored points of `absdelay` | linear by default; `(* vera_interp = 2 *)` gives quadratic | `lib/backend/codegen/kernel_text.zig:685,769` | `ch04_expressions/absdelay_vera_interp_linear.va`, `absdelay_vera_interp_quadratic.va` |
 | AMS 4.6.1 | analysis names beyond Table 4-21 | none: any other name is false | `lib/backend/codegen/call.zig` `analysis` | `ch04_expressions/143_analysis_transient.va` |
 | AMS 4.6.3 | the small-signal analysis name | `"ac"` | `lib/ir/lower/contrib.zig:1320` | `ch04_expressions/a06_ac_stim_ac_analysis.va` |
+| AMS 5.10.3.1 | the `time_tol` of a `.v` contract device's A2D bridge (7.8 supplies no connect module) | card `ttol`, by default min(trise, tfall)/50; only a step where some process wakes is held to it | `src/sim/rt/device.zig` `ttol` | `tests/vdev_host.zig`, "v_edge and v_any" |
 | AMS 7.4.4.2 | discipline resolution mode | basic only | `lib/ir/elaborate/resolve.zig:128` | `ch07_mixed_signal/lrm_7_4_4_1.va` |
 | AMS 9.5.7, 1364 17.2.7 | `$ferror` codes | C errno values (2, 5, 9, 13, 21, 22, 24, 28); fixtures assert only nonzero | `lib/backend/file_kernels.zig:216` | `ch09_system_tasks/053_ferror.va`, `write_mode_path_65_fails_open.va` |
 | AMS 9.7.2 | what `$stop` does in a batch run | prints and exits 0 | `lib/backend/cg_display.zig:247` | `ch09_system_tasks/174_stop_terminates.va` |
