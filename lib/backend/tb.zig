@@ -283,6 +283,7 @@ const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
 pub const renderVpiLib = tb_runner.renderVpiLib;
 pub const mixedPlan = tb_runner.mixedPlan;
+pub const warnGridEvents = tb_runner.warnGridEvents;
 pub const opStates = tb_runner.opStates;
 pub const shapeOverrides = tb_runner.shapeOverrides;
 

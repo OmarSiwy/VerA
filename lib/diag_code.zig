@@ -316,6 +316,9 @@ pub const Code = enum(u16) {
     E0705,
     E0706,
     E0707,
+    /// A monitored event under the fixed-grid testbench, which inserts no
+    /// timepoint at a crossing or timer.
+    W0750,
 
     // ---------------------------------------------------------------- class 8
     // System tasks and functions — lower.zig.
@@ -4548,6 +4551,30 @@ fn infoOf(c: Code) Info {
             \\      if (en) held = V(in);
             \\
             \\`--deny=E0707` makes this the error the LRM says it is.
+            ,
+        },
+        .W0750 => .{
+            .title = "event fires on the testbench's fixed time grid, not at its own time",
+            .lrm = "5.10.3",
+            .explain =
+            \\LRM 5.10.3.1 has cross() "control the timestep to accurately
+            \\resolve the crossing", and 5.10.3.3 has timer() fire at its
+            \\scheduled time. A host simulator does that by inserting a
+            \\timepoint. The testbench `--run` and `--emit-exe` build for a
+            \\model with no discrete half steps only the `//! time` points and
+            \\inserts none, so a cross(), above() or timer() event whose time
+            \\falls between two declared points fires at the next declared
+            \\point, late by up to one grid step. It still fires once, in the
+            \\step the crossing occurs in, and the event's statement sees the
+            \\values at that point, not at the crossing.
+            \\
+            \\The device itself is unaffected: a host that places timepoints
+            \\from its breakpoints (`nextBreakpoint`, `pendingBreakpoint`)
+            \\resolves the event exactly.
+            \\
+            \\TO FIX: put a `//! time` point on (or just past) each event time
+            \\the result depends on, or refine the grid until the lateness does
+            \\not matter. `--allow=W0750` silences it.
             ,
         },
 
