@@ -368,12 +368,17 @@ pub fn main(init: std.process.Init) !u8 {
     // mixed-signal runner finds `sim` beside it.
     var contract_arena: std.heap.ArenaAllocator = .init(gpa);
     defer contract_arena.deinit();
-    if (contract_path == null and (check or emit_so or (exe_flag != null and !(digital_source and run_exe)))) {
-        const wd = work_dir orelse ".zig-cache/vera-tb";
-        contract_path = simTree(io, contract_arena.allocator(), wd) catch |e| {
-            try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
-            return 1;
-        };
+    if (check or emit_so or (exe_flag != null and !(digital_source and run_exe))) {
+        if (contract_path) |p| Io.Dir.cwd().access(io, p, .{}) catch |e| {
+            try err.print("error: --contract {s}: {t}\n", .{ p, e });
+            return 2;
+        } else {
+            const wd = work_dir orelse ".zig-cache/vera-tb";
+            contract_path = simTree(io, contract_arena.allocator(), wd) catch |e| {
+                try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
+                return 1;
+            };
+        }
     }
     if (!digital_source) {
         if (paths.items.len > 1) {
