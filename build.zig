@@ -48,6 +48,8 @@ pub fn build(b: *std.Build) void {
     const language = b.option(Language, "language", "verilog: an IEEE 1364-2005 `vera` without the analog backend; ams (default): the Verilog-AMS compiler") orelse .ams;
     const exe = cliExe(b, target, optimize, mods, "vera", language == .ams);
     b.installArtifact(exe);
+    // The ABI a host's `dyn` module and device driver compile against.
+    b.installFile("tools/contract.zig", "share/vera/contract.zig");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -323,6 +325,20 @@ pub fn build(b: *std.Build) void {
         run.addFileArg(b.path(r.file));
         run.expectExitCode(r.exit);
         run.addCheck(.{ .expect_stderr_match = r.says });
+        test_step.dependOn(&run.step);
+    }
+    // `--run` with no `--contract` builds over the binary's own contract, and
+    // the §5.10.3.1 event fires on the time grid (W0750 names the lateness).
+    {
+        const run = b.addRunArtifact(exe);
+        run.addArgs(&.{ "--run", "-I" });
+        run.addDirectoryArg(b.path("tests/fixtures"));
+        run.addArg("--work-dir");
+        _ = run.addOutputDirectoryArg("tb");
+        run.addFileArg(b.path("tests/fixtures/ch05_analog_behavior/event_cross_fires_on_a_time_grid.va"));
+        run.expectExitCode(0);
+        run.addCheck(.{ .expect_stderr_match = "one rising clk edge is one event got=1 want=1 ok=1" });
+        run.addCheck(.{ .expect_stderr_match = "warning[W0750]" });
         test_step.dependOn(&run.step);
     }
     // E1013's 64 MiB cap on the source and on a `--spice` netlist. /dev/zero

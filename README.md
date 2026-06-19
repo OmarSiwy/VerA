@@ -22,7 +22,9 @@ git clone https://github.com/OmarSiwy/VerA && cd VerA
 zig build -Doptimize=ReleaseFast
 ```
 
-Binary at `zig-out/bin/vera`.
+Binary at `zig-out/bin/vera`, and the device/host ABI your host compiles
+against at `zig-out/share/vera/contract.zig` (`--prefix DIR` installs both under
+`DIR`).
 
 ## Use
 
@@ -30,14 +32,15 @@ Binary at `zig-out/bin/vera`.
 # the common case: model in, Zig out
 vera model.va --emit-zig -o device.zig
 
-# a shared library instead
-vera model.va --emit-so --contract tools/contract.zig
+# a shared library instead: dyn.zig is your host's, and its
+# `exportDevice(comptime D: type, comptime name: []const u8)` exports the device
+vera model.va --emit-so --dyn dyn.zig --work-dir build
 
 # check it without generating anything
 vera model.va --lint
 
 # build a self-checking testbench and run it
-vera model.va --run --display=emit --contract tools/contract.zig
+vera model.va --run --display=emit
 
 # what does that error code mean
 vera --explain W0650
@@ -45,6 +48,12 @@ vera --explain W0650
 
 Exit 0 on success, 1 on a diagnosed error, 2 on bad flags. `vera --help` has the
 rest.
+
+`--check`, `--emit-so` and `--run` build against the `contract.zig` built into
+`vera`; `--contract PATH` picks another. For a model with no discrete half,
+`--run` steps only the `//! time` points the model's header declares, so a
+`cross`, `above` or `timer` event fires at the first point past its own time
+(W0750).
 
 Two flags matter to you:
 
