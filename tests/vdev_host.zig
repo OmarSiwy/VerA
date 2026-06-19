@@ -43,6 +43,12 @@
 //! 0.5 ps tolerance would have shrunk further).
 //! v_any waits on any change of clk: both crossings are located and each
 //! adds 1 to q.
+//!
+//! v_wide, 132 pins: clk on the same PULSE, a 65-bit counter q from 2^64,
+//! and y = d[64] with d[64] at 5 V and the rest of d at 0 V. After the
+//! rising crossings at 5.5 and 15.5 ns q = 2^64 + 2: q[64] and q[1] are 5 V,
+//! every other q bit 0 V. The operating point reads d[64] as 1, so y is 5 V
+//! through rout into 10 kΩ.
 const std = @import("std");
 const contract = @import("contract");
 const expect = std.testing.expect;
@@ -367,4 +373,26 @@ test "v_edge and v_any: a crossing no process waits for is not located" {
     const ra = try clockEdges(A, &a);
     try expectEqual([3]u2{ ra.q[0], ra.q[0] +% 1, ra.q[0] +% 2 }, ra.q);
     try expect(ra.shrunk[0] > 0 and ra.shrunk[1] > 0);
+}
+
+test "v_wide: 132 pins, and ports past one plane word" {
+    @setEvalBranchQuota(100_000);
+    const C = Circuit(@import("v_wide"));
+    var c: C = .{};
+    c.src[C.pin("clk")] = pulse;
+    inline for (0..65) |b| {
+        const i = std.fmt.comptimePrint("[{d}]", .{b});
+        c.src[C.pin("d" ++ i)] = if (b == 64) volts(5) else volts(0);
+        c.g_gnd[C.pin("q" ++ i)] = 1e-4;
+    }
+    c.g_gnd[C.pin("y")] = 1e-4;
+    c.birth();
+    _ = try c.op();
+    try std.testing.expectApproxEqAbs(5.0 * 1e4 / (1e4 + 1), c.x[C.pin("y")], 1e-9);
+    while (c.t < 18e-9) try c.step(1e-9, 5e-14);
+    inline for (0..65) |b| {
+        const want: f64 = if (b == 64 or b == 1) 5 else 0;
+        // Output k is q[64 - k] (pin order).
+        try expectEqual(want, c.inst.lvl_to[64 - b]);
+    }
 }
