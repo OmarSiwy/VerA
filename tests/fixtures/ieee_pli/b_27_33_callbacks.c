@@ -114,7 +114,27 @@
  *   cbValueChange on the array mem: mem[2] 0 -> 8'h7E at t=1, the only array
  *   change -> one callback, value 0x7E, index 2.
  *   cbStmt (Annex G 2) on the statement of the process whose statement is a
- *   begin block (Table 27-6's vpiBegin), and on the module.
+ *   begin block (Table 27-6's vpiBegin): that block ran at t=0 and runs no
+ *   more, and the callback is removed at once (§27.35: 1).
+ *   cbStmt on the assignment `s = 8'h42` (vpiAssignment: "The callback will
+ *   occur before the statement executes"): once, at t=7, obj that
+ *   assignment, s still 8'h01, value NULL and index 0 (§27.33.1.1).
+ *   cbStmt on the module (§27.33.1.3, "a callback on every statement that
+ *   can have a callback placed on it"), counted from here to the end. After
+ *   t=0 these statements run, a delay control counting when it is reached
+ *   (Table 27-6) and its statement when the delay ends:
+ *     t=1  n = 5; mem[2] = 8'h7E; #1        3
+ *     t=2  n = 9; #1                        2
+ *     t=3  n = 9; #1                        2
+ *     t=4  n = 2                            1
+ *     t=5  g = 2; #5                        2
+ *     t=6  a = 20                           1
+ *     t=7  s = 8'h42                        1
+ *     t=10 g = 3; #10                       2
+ *     t=20 g = 4; $display                  2
+ *     t=40 $finish(0)                       1
+ *   17 callbacks, each with a statement in obj. The continuous assignment
+ *   is no statement.
  * REFUSED: cbValueChange with a NULL obj; cbStmt on the reg s, which is no
  * statement.
  *
@@ -152,15 +172,13 @@
 
 #include "b_check.h"
 
-#ifndef cbStmt
-#define cbStmt 2       /* Annex G */
-#endif
 
 static char ud_n[] = "n", ud_mem[] = "mem";
 static vpiHandle s, n, mem, top;
 static s_cb_data reg_n, reg_mem;
 static int order = 0, at_eoc, at_sos;
-static int n_pli = 0, pli_level = 0;
+static int n_pli = 0, pli_level = 0, n_s42 = 0, n_stmt = 0;
+static vpiHandle s42;
 static int n_after = 0, n_rw7 = 0, n_ro7 = 0, n_next = 0, n_ten = 0, n_change = 0, n_mem = 0;
 static PLI_UINT32 change_t[3];
 static PLI_INT32 change_v[3];
@@ -201,6 +219,45 @@ static vpiHandle err_h[2];
 static PLI_INT32 never(p_cb_data d) { (void)d; CHECK(0, "a refused or removed callback ran at %u", (unsigned)now()); return 0; }
 static PLI_INT32 stray(p_cb_data d) { (void)d; return 0; }
 static PLI_INT32 on_pli(p_cb_data d) { (void)d; n_pli++; pli_level = vpi_chk_error(NULL); return 0; }
+
+static PLI_INT32 on_s42(p_cb_data d)
+{
+  n_s42++;
+  CHECK(d->reason == cbStmt && vpi_compare_objects(d->obj, s42), "27.33.1.1: obj is the statement");
+  CHECK(now() == 7 && int_of(s) == 0x01, "27.33.1.1: at 7, before s = 8'h42 runs");
+  CHECK(d->value == NULL && d->index == 0 && d->time != NULL && d->time->type == vpiSimTime,
+        "27.33.1.1: no value, index 0, the time as registered");
+  return 0;
+}
+
+static PLI_INT32 on_any(p_cb_data d)
+{
+  PLI_INT32 t = vpi_get(vpiType, d->obj);
+  n_stmt++;
+  if (d->reason != cbStmt || t == vpiModule || t == vpiContAssign || t == vpiNullStmt || t == vpiUndefined) {
+    CHECK(0, "27.33.1.3: callback %d holds no statement (type %d)", n_stmt, (int)t);
+  }
+  return 0;
+}
+
+/* The assignment `#7 s = 8'h42` delays: the statement of a delay control in
+ * a begin block, whose left-hand side is s. */
+static vpiHandle assignment_to_s(void)
+{
+  vpiHandle procs = vpi_iterate(vpiProcess, top), p, found = NULL;
+  while ((p = vpi_scan(procs)) != NULL) {
+    vpiHandle blk = vpi_handle(vpiStmt, p), stmts, st;
+    if (vpi_get(vpiType, blk) != vpiBegin) continue;
+    stmts = vpi_iterate(vpiStmt, blk);
+    while (stmts != NULL && (st = vpi_scan(stmts)) != NULL) {
+      vpiHandle inner;
+      if (vpi_get(vpiType, st) != vpiDelayControl) continue;
+      inner = vpi_handle(vpiStmt, st);
+      if (found == NULL && vpi_compare_objects(vpi_handle(vpiLhs, inner), s)) found = inner;
+    }
+  }
+  return found;
+}
 
 static PLI_INT32 on_change(p_cb_data d)
 {
@@ -311,13 +368,13 @@ static PLI_INT32 rw0(p_cb_data d)
   while ((h = vpi_scan(itr)) != NULL)
     if (stmt == NULL && vpi_get(vpiType, vpi_handle(vpiStmt, h)) == vpiBegin) stmt = vpi_handle(vpiStmt, h);
   CHECK(stmt != NULL, "a process whose statement is a begin block");
-  h = reg(cbStmt, stray, 0, stmt);
-  XFAIL(h != NULL, "27.33.1.1", "cbStmt on a statement is refused");
-  if (h) vpi_remove_cb(h);
-  h = reg(cbStmt, stray, 0, top);
-  XFAIL(h != NULL, "27.33.1.3", "cbStmt on a module is refused");
-  if (h) vpi_remove_cb(h);
-  fflush(stdout);
+  h = reg(cbStmt, never, 0, stmt);
+  CHECK(h != NULL, "27.33.1.1: cbStmt on a begin block");
+  CHECK(vpi_remove_cb(h) == 1, "27.35: removed");
+  s42 = assignment_to_s();
+  CHECK(s42 != NULL && vpi_get(vpiType, s42) == vpiAssignment, "the assignment s = 8'h42");
+  CHECK(reg(cbStmt, on_s42, 0, s42) != NULL, "27.33.1.1: cbStmt on s = 8'h42");
+  CHECK(reg(cbStmt, on_any, 0, top) != NULL, "27.33.1.3: cbStmt on the module");
   CHECK(reg(cbStmt, never, 0, s) == NULL, "27.33.1.1: a reg is no statement");
   expect_refusal("cbStmt on a reg");
   return 0;
@@ -390,6 +447,8 @@ static PLI_INT32 eos(p_cb_data d)
   CHECK(change_t[0] == 1 && change_v[0] == 5 && change_t[1] == 2 && change_v[1] == 9 &&
         change_t[2] == 4 && change_v[2] == 2, "27.33.1: (1,5) (2,9) (4,2)");
   CHECK(n_mem == 1, "27.33.1: one array change, got %d", n_mem);
+  CHECK(n_s42 == 1, "27.33.1.1: s = 8'h42 ran once, got %d", n_s42);
+  CHECK(n_stmt == 17, "27.33.1.3: 17 statements after t=0, got %d", n_stmt);
   p02_done("b_27_33_callbacks");
   return 0;
 }

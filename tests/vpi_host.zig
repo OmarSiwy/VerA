@@ -225,7 +225,7 @@ fn digitalHost(path: []const u8) !u8 {
     vpi.runStartupRoutines();
     var bag = vera.diag.Bag.init(arena);
     const dir = std.fs.path.dirname(path) orelse ".";
-    var run = sim.digital.elaborate(arena, source, .{ .file_name = path, .include_dirs = &.{dir}, .io = io, .systf = vpi.systf.hook }, &bag, out) catch |e| {
+    var run = sim.digital.elaborate(arena, source, .{ .file_name = path, .include_dirs = &.{dir}, .io = io, .systf = vpi.systf.hook, .stmt_sites = true }, &bag, out) catch |e| {
         try vera.diag.render(&bag, err, .{});
         try err.print("vpi_host: `{s}` did not elaborate: {t}\n", .{ path, e });
         try err.flush();

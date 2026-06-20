@@ -611,6 +611,12 @@ pub const Builder = struct {
     /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
         if (id == .none) return none;
+        const at = try b.stmtObj(id);
+        if (at != none) b.objects.items[at].stmt = id;
+        return at;
+    }
+
+    fn stmtObj(b: *Builder, id: Ast.StmtId) Error!u32 {
         const f = b.file;
         return switch (f.stmt(id)) {
             .empty => b.code(vpiNullStmt, &.{}, &.{}, &.{}),
