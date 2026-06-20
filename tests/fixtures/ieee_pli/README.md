@@ -16,13 +16,8 @@ user_data preservation, build-before-runtime phases, one sizetf invocation,
 per-source-call compiletf invocation, per-execution calltf and call/argument
 widths. Different argument values distinguish the original built-in behavior.
 
-Current disposition: **open required positive**. The current production
-`vpi_user.h` lacks registration/value declarations and the linked test host
-only walks declarations after compiling the design. No runtime invocation
-interface exists here to execute this probe correctly. Missing registration
-is not an allowed exclusion. This folder does not yet enter an executable
-conformance denominator; `docs/conformance-ieee-pli-overview-review.md` (at 8b1514d4) records
-its source boundary and the observed header-check failure.
+Current disposition: runs in `build.zig`'s `vpi_runs` under `zig build test`,
+its HDL transcript and stderr marker pinned.
 
 `audit_end_compile_objects` is a separate plugin/deck. Startup performs only
 the registration permitted by IEEE26.2.4; traversal and numeric/string type
@@ -50,9 +45,10 @@ other probes, missing production APIs block compilation/execution today.
 application. Load before elaboration; compare HDL stdout to its
 `.expected.txt`, stderr to `.expected.stderr.txt`, and require exit0.
 The first unread side-effect function argument must not execute; the second
-is evaluated when the plugin requests its value. Current production-header
-syntax compilation fails for missing registration/value/callback support;
-no execution is claimed. This is not an expected-rejection fixture.
+is evaluated when the plugin requests its value. The task's registration
+and calltf run, but `vpi_get_value` of the `bump(0)` argument does not execute
+the call (`read=0`), so it is not in `vpi_runs`. This is not an
+expected-rejection fixture.
 
 ## Routine probes and compile-only visibility
 

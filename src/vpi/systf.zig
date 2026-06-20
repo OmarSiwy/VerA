@@ -108,7 +108,8 @@ fn width(s: *Systf) u32 {
 /// The digital engine's view of the registrations (`digital.Options.systf`).
 pub const hook: digital.UserSystf = .{ .kind = kindOf, .call = callDigital };
 
-fn kindOf(name: []const u8) ?digital.UserKind {
+/// What the digital registration of `name` is, if one was made.
+pub fn kindOf(name: []const u8) ?digital.UserKind {
     const s = find(name, .digital) orelse return null;
     if (s.digital.type == vpiSysTask) return .task;
     return .{

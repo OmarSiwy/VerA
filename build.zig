@@ -447,13 +447,12 @@ const VpiRun = struct {
 };
 
 /// Not here, each for a reason outside the routine it exercises:
-///   p02_10  a $systf call in digital code: the engine has no user-systf call
 ///   p03_07/90, p02_11  an analog system TASK whose calltf writes an output
 ///           argument (§12.22.2's $resistor): the device calls user system
 ///           FUNCTIONS only (`contract.SystfHost` returns one value)
 ///   p03_09  an `ac` analysis: no small-signal solve runs in this process
-///   audit_builtin_override, audit_lazy_arguments: a user $systf call,
-///           as p02_10
+///   audit_lazy_arguments  IEEE 1364-2005 §26.6.19(e): vpi_get_value of an
+///           argument that is an HDL function call does not run the call
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
@@ -696,6 +695,17 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
         .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
         .stdout = "p02: b_26_1_systf checks=45\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_10_systf_digital.c",
+        .design = "tests/fixtures/digital/p02_systf.v",
+        .stdout = "p02: 10_systf_digital checks=92\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_builtin_override.c",
+        .design = "tests/fixtures/ieee_pli/audit_builtin_override.v",
+        .stdout = "first=8000000001 second=8000000001\n",
+        .stderr = "pli-override calls=2 size=40\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
