@@ -695,7 +695,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
         .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
-        .stdout = "xfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=42\n",
+        .stdout = "p02: b_26_1_systf checks=45\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",

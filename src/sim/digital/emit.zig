@@ -937,6 +937,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
                 },
                 .fflush => {},
+                .user => return self.refuse("a PLI application's system task, which runs only under a VPI host"),
                 .ports => return self.refuse("§18.3 extended VCD, whose port states need the driver strengths an executable does not keep"),
                 .fclose => {
                     try self.print("            s.fclose(", .{});

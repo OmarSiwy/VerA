@@ -219,9 +219,13 @@ fn digitalHost(path: []const u8) !u8 {
         try err.flush();
         return 2;
     };
+    // §12.33.2 first: IEEE 1364-2005 §26.2.4 allows only the two
+    // registration routines there, and elaboration reads the systfs they
+    // register (§20.4) and sizes them (§26.1.1).
+    vpi.runStartupRoutines();
     var bag = vera.diag.Bag.init(arena);
     const dir = std.fs.path.dirname(path) orelse ".";
-    var run = sim.digital.elaborate(arena, source, .{ .file_name = path, .include_dirs = &.{dir}, .io = io }, &bag, out) catch |e| {
+    var run = sim.digital.elaborate(arena, source, .{ .file_name = path, .include_dirs = &.{dir}, .io = io, .systf = vpi.systf.hook }, &bag, out) catch |e| {
         try vera.diag.render(&bag, err, .{});
         try err.print("vpi_host: `{s}` did not elaborate: {t}\n", .{ path, e });
         try err.flush();
@@ -230,9 +234,8 @@ fn digitalHost(path: []const u8) !u8 {
     try vpi.openDigital(std.heap.page_allocator, &run);
     defer vpi.close();
 
-    // §12.33.2, then §12.31.4's "end of simulation data structure compilation
-    // or build", then time 0.
-    vpi.runStartupRoutines();
+    // §12.31.4's "end of simulation data structure compilation or build",
+    // then time 0.
     vpi.callback.endOfCompile();
     vpi.run.simulate() catch |e| {
         if (vpi.systf.misuse) |name| {

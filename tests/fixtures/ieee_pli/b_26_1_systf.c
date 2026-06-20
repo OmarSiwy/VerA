@@ -1,10 +1,9 @@
 /* b 26.1 — user-defined system task/function registration and the three
  * application routines (sizetf, compiletf, calltf), over b_26_1_systf.v.
  *
- * A digital design that calls a NEW $name does not elaborate in VerA (E1100,
- * "digital system task ... is not implemented"), so every call here is to a
- * BUILT-IN name the application overrides, which §20.4 allows; the design
- * then elaborates whether or not the override takes.
+ * Every call here is to a BUILT-IN name the application overrides, which
+ * §20.4 allows, so the design elaborates whether or not the override takes
+ * and the run tells the override from the built-in.
  *
  * IEEE 1364-2005:
  *
@@ -127,8 +126,11 @@
  *
  * RUN, read at cbEndOfSimulation: site 1 executes twice, site 2 once, so
  * $unsigned's calltf runs 3 times; $signed, $realtime, $monitoroff once. The
- * $unsigned calltf puts 40'h8000000001, so `a` and `b` read 0x8000000001 —
- * not the built-in's 1 and 0.
+ * $unsigned calltf puts 40'h8000000001 into a value its sizetf made 40 bits
+ * wide (§20.4 "The PLI return width is defined by the PLI sizetf routine"),
+ * so the 40-bit `a` and `b` read 0x8000000001 — not the built-in's 1 and 0.
+ * The $signed calltf puts 16'h8001 into its 16 bits, so `c` reads 0x8001 —
+ * not the built-in's 4'sb1000 sign-extended, 16'hfff8.
  */
 
 //! inherited IEEE 1364-2005 20.2
@@ -230,8 +232,8 @@ static PLI_INT32 end_of_compile(p_cb_data d)
         "26.1.2: one compiletf per call site, got %d %d %d %d",
         compiles[U], compiles[S], compiles[R], compiles[M]);
   CHECK(calls[U] + calls[S] + calls[R] + calls[M] == 0, "no calltf before simulation");
-  XFAIL(sizes[U] == 1, "26.1.1", "the $unsigned sizetf is called once per call site, not at most once");
-  XFAIL(sizes[S] == 1, "27.34.1", "the sizetf of a vpiSizedSignedFunc is never called");
+  CHECK(sizes[U] == 1, "26.1.1: the $unsigned sizetf once, for two call sites, got %d", sizes[U]);
+  CHECK(sizes[S] == 1, "27.34.1: the sizetf of a vpiSizedSignedFunc, got %d", sizes[S]);
   CHECK(sizes[R] == 0, "26.1.1: no sizetf for a vpiRealFunc");
   CHECK(sizes[M] == 0, "26.1.1: no sizetf for a system task");
   CHECK(bad_ud == 0, "26.1.4: every routine is handed the registered user_data");
@@ -261,11 +263,11 @@ static PLI_INT32 end_of_compile(p_cb_data d)
 static PLI_INT32 end_of_simulation(p_cb_data d)
 {
   (void)d;
-  XFAIL(calls[U] == 3, "26.1.3", "the $unsigned calltf does not run: the built-in executes instead");
-  XFAIL(hex_of("b_26_1_systf.a") == 0x8000000001LL && hex_of("b_26_1_systf.b") == 0x8000000001LL,
-        "20.4", "a and b hold the built-in $unsigned results, not the override's");
-  XFAIL(calls[S] == 1 && calls[R] == 1 && calls[M] == 1, "20.3",
-        "no overriding system function or task is called at run time");
+  CHECK(calls[U] == 3, "26.1.3: the $unsigned calltf once per execution, got %d", calls[U]);
+  CHECK(hex_of("b_26_1_systf.a") == 0x8000000001LL && hex_of("b_26_1_systf.b") == 0x8000000001LL,
+        "20.4: a and b hold the override's 40-bit result");
+  CHECK(hex_of("b_26_1_systf.c") == 0x8001, "20.4: c holds the $signed override's 16-bit result");
+  CHECK(calls[S] == 1 && calls[R] == 1 && calls[M] == 1, "20.3: each overriding function and task runs once");
   CHECK(hex_of("b_26_1_systf.a") == 0x8000000001LL || hex_of("b_26_1_systf.a") == 1,
         "the design ran: a is the override's or the built-in's 1");
   p02_done("b_26_1_systf");

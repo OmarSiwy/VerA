@@ -743,6 +743,7 @@ pub const Builder = struct {
                 const at = try b.code(if (user) vpiTaskCall else vpiSysTaskCall, if (user) &.{.{ .tag = vpiTask, .to = b.lookup(name) }} else &.{}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
+                b.objects.items[at].src_tok = f.stmtTok(id);
                 break :blk at;
             },
             .contribute => |s| b.contrib(s.lhs, s.rhs),
@@ -862,6 +863,7 @@ pub const Builder = struct {
                 const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = b.lookup(name) }}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
+                b.objects.items[at].src_tok = ex.mainTok(id);
                 break :blk at;
             },
             // §11.6.19 accessfunc -> branches, discipline.
