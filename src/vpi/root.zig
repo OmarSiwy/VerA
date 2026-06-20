@@ -1306,6 +1306,7 @@ pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     if (design != null) close();
     design = try buildDigital(gpa, r);
     run.attach(r);
+    print.share(r);
 }
 
 fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {

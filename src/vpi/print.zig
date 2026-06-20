@@ -2,13 +2,16 @@
 //! Channels 1-3 are stdout, stderr and the log (§12.27), predefined and
 //! unclosable; `vpi_mcd_open` hands out the lowest free channel from 4. VerA
 //! has no product log file, so channel 3 discards and `vpi_printf` is stdout.
-//! Formatting is C's printf done over `@cVaArg`, since the `vpi` module is
-//! linked into binaries without libc.
+//! While a digital design runs, the HDL's §17.2 tasks share these channels
+//! (`share`, IEEE 1364-2005 §27.25). Formatting is C's printf done over
+//! `@cVaArg`, since the `vpi` module is linked into binaries without libc.
 
 const std = @import("std");
 const root = @import("root.zig");
+const digital = @import("sim").digital;
 
 const Io = std.Io;
+const FileIo = @typeInfo(@FieldType(digital.Run, "file_io")).optional.child;
 
 fn io() Io {
     return Io.Threaded.global_single_threaded.io();
@@ -23,6 +26,7 @@ fn io() Io {
 /// descriptor instead of an mcd".
 const first_user = 3; // index of channel 4
 const channel_count = 31;
+const fd_bit = 1 << 31;
 
 const Channel = struct {
     file: Io.File,
@@ -47,25 +51,27 @@ pub export fn vpi_mcd_open(file: [*c]const u8) c_uint {
         return 0;
     }
     const want = std.mem.span(file);
+    return openChannel(want) catch |e| {
+        switch (e) {
+            error.NoChannel => root.fail("NOCHANNEL", "vpi_mcd_open: all 28 user channels are open", .{}),
+            error.OutOfMemory => root.fail("NOMEM", "vpi_mcd_open: out of memory", .{}),
+            else => root.fail("NOOPEN", "vpi_mcd_open: cannot open `{s}`: {t}", .{ want, e }),
+        }
+        return 0;
+    };
+}
+
+/// The channel open onto `name`, or the lowest free one opened onto it.
+fn openChannel(name: []const u8) !c_uint {
     for (channels[first_user..], first_user..) |c, i| {
-        if (c) |ch| if (std.mem.eql(u8, ch.name, want)) return bit(i);
+        if (c) |ch| if (std.mem.eql(u8, ch.name, name)) return bit(i);
     }
     const free = for (channels[first_user..], first_user..) |c, i| {
         if (c == null) break i;
-    } else {
-        root.fail("NOCHANNEL", "vpi_mcd_open: all 28 user channels are open", .{});
-        return 0;
-    };
-    const f = Io.Dir.cwd().createFile(io(), want, .{}) catch |e| {
-        root.fail("NOOPEN", "vpi_mcd_open: cannot open `{s}`: {t}", .{ want, e });
-        return 0;
-    };
-    const name = gpa.dupeZ(u8, want) catch {
-        f.close(io());
-        root.fail("NOMEM", "vpi_mcd_open: out of memory", .{});
-        return 0;
-    };
-    channels[free] = .{ .file = f, .name = name };
+    } else return error.NoChannel;
+    const f = try Io.Dir.cwd().createFile(io(), name, .{});
+    errdefer f.close(io());
+    channels[free] = .{ .file = f, .name = try gpa.dupeZ(u8, name) };
     return bit(free);
 }
 
@@ -76,9 +82,26 @@ fn bit(i: usize) c_uint {
 /// §12.24 "On success this routine returns a zero (0); on error it returns the
 /// mcd value of the unclosed channels." The predefined three "can not be
 /// closed", and a channel that is not open cannot be closed either — both come
-/// back in the return value, and both are an error.
+/// back in the return value, and both are an error. IEEE 1364-2005 §27.22: it
+/// "can also be used to close file descriptors that were opened using the
+/// system function $fopen()".
 pub export fn vpi_mcd_close(mcd: c_uint) c_uint {
     root.clearError();
+    if (mcd & fd_bit != 0) {
+        if (fdName(mcd) == null) {
+            root.fail("NOCLOSE", "vpi_mcd_close: 0x{x} is no file descriptor $fopen opened", .{mcd});
+            return mcd;
+        }
+        _ = hdlClose(mcd);
+        return 0;
+    }
+    const unclosed = closeChannels(mcd);
+    if (unclosed != 0) root.fail("NOCLOSE", "vpi_mcd_close: channels 0x{x} are predefined or not open", .{unclosed});
+    return unclosed;
+}
+
+/// Closes every channel `mcd` names; returns the ones it could not.
+fn closeChannels(mcd: c_uint) c_uint {
     var unclosed: c_uint = 0;
     for (0..channel_count) |i| {
         if (mcd & bit(i) == 0) continue;
@@ -94,32 +117,137 @@ pub export fn vpi_mcd_close(mcd: c_uint) c_uint {
         gpa.free(ch.name);
         channels[i] = null;
     }
-    if (unclosed != 0) root.fail("NOCLOSE", "vpi_mcd_close: channels 0x{x} are predefined or not open", .{unclosed});
     return unclosed;
 }
 
 /// §12.25 "the name of a file represented by a single-channel descriptor ...
-/// On error, the routine shall return NULL."
+/// On error, the routine shall return NULL." IEEE 1364-2005 §27.24: "The
+/// channel descriptor cd could be an fd file descriptor returned from $fopen".
 pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
     root.clearError();
-    if (cd == 0 or cd & (cd - 1) != 0) {
-        root.fail("BADMCD", "vpi_mcd_name: 0x{x} is not a single-channel descriptor", .{cd});
+    const s: []const u8 = if (cd & fd_bit != 0) fdName(cd) orelse {
+        root.fail("BADMCD", "vpi_mcd_name: 0x{x} is no file descriptor $fopen opened", .{cd});
         return null;
-    }
-    const i = @ctz(cd);
-    const s: []const u8 = switch (i) {
-        0 => "stdout",
-        1 => "stderr",
-        2 => "log",
-        else => if (i < channel_count and channels[i] != null) channels[i].?.name else {
-            root.fail("BADMCD", "vpi_mcd_name: channel {d} is not open", .{i + 1});
+    } else name: {
+        if (cd == 0 or cd & (cd - 1) != 0) {
+            root.fail("BADMCD", "vpi_mcd_name: 0x{x} is not a single-channel descriptor", .{cd});
             return null;
-        },
+        }
+        const i = @ctz(cd);
+        break :name switch (i) {
+            0 => "stdout",
+            1 => "stderr",
+            2 => "log",
+            else => if (i < channel_count and channels[i] != null) channels[i].?.name else {
+                root.fail("BADMCD", "vpi_mcd_name: channel {d} is not open", .{i + 1});
+                return null;
+            },
+        };
     };
     const n = @min(s.len, name_buf.len - 1);
     @memcpy(name_buf[0..n], s[0..n]);
     name_buf[n] = 0;
     return &name_buf;
+}
+
+// ---------------------------------------------------------------------------
+// The HDL's descriptors (IEEE 1364-2005 §27.22-§27.26)
+// ---------------------------------------------------------------------------
+
+/// The table an fd opens in: the engine's own, or the one the run had.
+var fds: FileIo = digital.own_files;
+/// Each open fd's name, by its channel number (§27.24).
+var fd_names: [64]?[:0]u8 = @splat(null);
+
+fn fdName(d: i64) ?[:0]const u8 {
+    const ch: usize = @intCast(d & 0x7fff_ffff);
+    return if (ch < fd_names.len) fd_names[ch] else null;
+}
+
+/// Makes `r`'s §17.2 tasks open, write and close an mcd as one of these
+/// channels: IEEE 1364-2005 §27.25 "The mcd descriptors returned from
+/// vpi_mcd_open() and from $fopen may be shared between the HDL system tasks
+/// that use mcd descriptors and the VPI routines that use mcd descriptors."
+/// An fd stays in `r`'s table, its name kept for §27.24.
+pub fn share(r: *digital.Run) void {
+    if (r.file_io) |t| if (t.open == hdlOpen) return;
+    fds = r.file_io orelse digital.own_files;
+    r.file_io = .{ .open = hdlOpen, .close = hdlClose, .put = hdlPut, .getc = fdGetc, .ungetc = fdUngetc, .tell = fdTell, .seek = fdSeek, .eof = fdEof, .err = fdErr };
+}
+
+fn hdlOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
+    if (mcd) return openChannel(path) catch 0;
+    const d = fds.open(path, ty, false);
+    const ch: usize = @intCast(d & 0x7fff_ffff);
+    if (d != 0 and ch < fd_names.len) {
+        if (fd_names[ch]) |old| gpa.free(old);
+        fd_names[ch] = gpa.dupeZ(u8, path) catch null;
+    }
+    return d;
+}
+
+fn hdlClose(d: i64) i64 {
+    if (d & fd_bit == 0) {
+        _ = closeChannels(@truncate(@as(u64, @bitCast(d))));
+        return 0;
+    }
+    const ch: usize = @intCast(d & 0x7fff_ffff);
+    if (ch < fd_names.len) if (fd_names[ch]) |old| {
+        gpa.free(old);
+        fd_names[ch] = null;
+    };
+    return fds.close(d);
+}
+
+/// The characters written, or 0 when no channel `d` names took them. The
+/// engine writes bit 0 (its transcript) itself.
+fn hdlPut(d: i64, text: []const u8) i64 {
+    if (d & fd_bit != 0) return fds.put(d, text);
+    var took = false;
+    for (1..channel_count) |i| {
+        if (d & bit(i) == 0) continue;
+        const file = (channelFile(i) catch continue) orelse {
+            took = true;
+            continue;
+        };
+        file.writeStreamingAll(io(), text) catch continue;
+        took = true;
+    }
+    return if (took) @intCast(text.len) else 0;
+}
+
+// An mcd is write-only: the reads see it as no descriptor at all, which also
+// keeps it off the fd slot the engine's table would read its bits as.
+fn fdOnly(d: i64) i64 {
+    return if (d & fd_bit != 0) d else 0;
+}
+fn fdGetc(d: i64) i64 {
+    return fds.getc(fdOnly(d));
+}
+fn fdUngetc(c: i64, d: i64) i64 {
+    return fds.ungetc(c, fdOnly(d));
+}
+fn fdTell(d: i64) i64 {
+    return fds.tell(fdOnly(d));
+}
+fn fdSeek(d: i64, off: i64, op: i64) i64 {
+    return fds.seek(fdOnly(d), off, op);
+}
+fn fdEof(d: i64) i64 {
+    return fds.eof(fdOnly(d));
+}
+fn fdErr(d: i64) i64 {
+    return if (fds.err) |e| e(fdOnly(d)) else 0;
+}
+
+/// Channel `i`'s file; null for the log, which discards.
+fn channelFile(i: usize) error{NotOpen}!?Io.File {
+    return switch (i) {
+        0 => .stdout(),
+        1 => .stderr(),
+        2 => null, // no product log file; see the file header
+        else => if (channels[i]) |ch| ch.file else error.NotOpen,
+    };
 }
 
 /// §12.28 "shall write to both stdout and the current product log file ...
@@ -206,15 +334,10 @@ fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
     const text = out.written();
     for (0..channel_count) |i| {
         if (mcd & bit(i) == 0) continue;
-        const file: Io.File = switch (i) {
-            0 => .stdout(),
-            1 => .stderr(),
-            2 => continue, // no product log file; see the file header
-            else => if (channels[i]) |ch| ch.file else {
-                root.fail("BADMCD", "vpi_mcd_printf: channel {d} is not open", .{i + 1});
-                return EOF;
-            },
-        };
+        const file = (channelFile(i) catch {
+            root.fail("BADMCD", "vpi_mcd_printf: channel {d} is not open", .{i + 1});
+            return EOF;
+        }) orelse continue;
         file.writeStreamingAll(io(), text) catch {
             root.fail("NOWRITE", "vpi_mcd_printf: write to channel {d} failed", .{i + 1});
             return EOF;

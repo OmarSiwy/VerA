@@ -21,6 +21,8 @@ pub const exec = @import("exec.zig");
 const display = @import("display.zig");
 /// `vera --emit-exe design.v`: an elaborated `Run` as an executable's root.
 pub const emit = @import("emit.zig");
+/// The §17.2 descriptor table a `Run` with no `file_io` opens files through.
+pub const own_files = @import("system.zig").own;
 const driver = @import("driver.zig");
 const binding = @import("bind.zig");
 const Type = compile.Type;
