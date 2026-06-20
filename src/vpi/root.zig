@@ -1624,6 +1624,11 @@ pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
         err_buf[0 .. err_buf.len - 1];
     err_len = written.len;
     err_buf[err_len] = 0;
+    // A cbPLIError routine may call other routines, each clearing the status;
+    // the failing routine's caller still reads this error afterwards.
+    const saved = .{ err_level, err_code, err_buf, err_len };
+    callback.pliError();
+    err_level, err_code, err_buf, err_len = saved;
 }
 
 // ---------------------------------------------------------------------------

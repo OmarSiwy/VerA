@@ -750,7 +750,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "xfail 27.33.3: cbError and cbPLIError are not defined\nxfail 27.33.1.1: cbStmt on a statement is refused\nxfail 27.33.1.3: cbStmt on a module is refused\nxfail 27.33.2: cbAtStartOfSimTime of delay zero from a later region is not an error\nxfail 27.33.2: cbReadWriteSynch of delay zero from read-only synch is not an error\np02: b_27_33_callbacks checks=73\np02_design: t=20 reached\n",
+        .stdout = "xfail 27.33.1.1: cbStmt on a statement is refused\nxfail 27.33.1.3: cbStmt on a module is refused\np02: b_27_33_callbacks checks=74\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
@@ -771,7 +771,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 170 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=273\n",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 168 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=275\n",
     },
 };
 

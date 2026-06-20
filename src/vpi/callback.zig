@@ -73,6 +73,8 @@ pub const cbAfterDelay: c_int = 9;
 pub const cbEndOfCompile: c_int = 10;
 pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
+pub const cbError: c_int = 13;
+pub const cbPLIError: c_int = 28;
 
 // §12.31.3 the analog reasons. Verilog-AMS names them and numbers none; the
 // numbers are VerA's, shared by vpi_user.h and
@@ -131,6 +133,8 @@ var cbs: std.ArrayList(*Cb) = .empty;
 var live: std.AutoHashMapUnmanaged(usize, *Cb) = .empty;
 /// How many dispatches are on the stack; a sweep only runs at zero.
 var depth: u32 = 0;
+/// The reason of the innermost dispatch on the stack, 0 outside one.
+var active: c_int = 0;
 
 /// Returns `h` as a live callback, or null; never dereferences a foreign
 /// pointer.
@@ -180,8 +184,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
     switch (d.reason) {
         // §12.31.4: "The only fields in the s_cb_data structure which need to
         // be setup for simulation action/feature callbacks are the reason,
-        // cb_rtn, and user_data".
-        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation => {},
+        // cb_rtn, and user_data". IEEE 1364-2005 §27.33.3 adds cbError and
+        // cbPLIError to the actions "that shall occur in all VPI-compliant
+        // products".
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError => {},
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
         // must be one VerA issued.
@@ -230,6 +236,16 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 cb.due = if (d.reason == cbAtStartOfSimTime) ticks else now +| ticks;
                 if (cb.due < now) {
                     root.fail("BADTIME", "vpi_register_cb: time {d} is already in the past (now {d})", .{ cb.due, now });
+                    return null;
+                }
+                // IEEE 1364-2005 §27.33.2: "The following situations will
+                // generate an error, and no callback will be created".
+                if (cb.due == now and d.reason == cbAtStartOfSimTime and root.run.started and active != cbAtStartOfSimTime) {
+                    root.fail("BADTIME", "vpi_register_cb: time {d} has progressed past its start, outside a cbAtStartOfSimTime callback", .{now});
+                    return null;
+                }
+                if (cb.due == now and d.reason == cbReadWriteSynch and root.run.read_only) {
+                    root.fail("BADTIME", "vpi_register_cb: a cbReadWriteSynch of delay zero at read-only synch time", .{});
                     return null;
                 }
             }
@@ -392,6 +408,9 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     }
     depth += 1;
     defer depth -= 1;
+    const outer = active;
+    active = cb.reason;
+    defer active = outer;
     return cb.rtn(&data);
 }
 
@@ -425,6 +444,19 @@ pub fn startOfSimulation() void {
 /// §12.31.4 cbEndOfSimulation — "e.g., $finish system task executed".
 pub fn endOfSimulation() void {
     fireAll(cbEndOfSimulation);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbError: "Simulation run-time error occurred".
+pub fn runError() void {
+    fireAll(cbError);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbPLIError: "Simulation run-time error occurred
+/// in a PLI function call", fired as the routine records it. A routine a
+/// cbPLIError callback calls that fails fires none.
+pub fn pliError() void {
+    if (active == cbPLIError) return;
+    fireAll(cbPLIError);
 }
 
 /// The earliest tick a live time callback is due at that is strictly after
