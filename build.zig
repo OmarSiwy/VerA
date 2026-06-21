@@ -477,13 +477,12 @@ const VpiRun = struct {
 };
 
 /// Not here, each for a reason outside the routine it exercises:
-///   p02_10  a $systf call in digital code: the engine has no user-systf call
 ///   p03_07/90, p02_11  an analog system TASK whose calltf writes an output
 ///           argument (§12.22.2's $resistor): the device calls user system
 ///           FUNCTIONS only (`contract.SystfHost` returns one value)
 ///   p03_09  an `ac` analysis: no small-signal solve runs in this process
-///   audit_builtin_override, audit_lazy_arguments: a user $systf call,
-///           as p02_10
+///   audit_lazy_arguments  IEEE 1364-2005 §26.6.19(e): vpi_get_value of an
+///           argument that is an HDL function call does not run the call
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
@@ -725,7 +724,18 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
         .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
-        .stdout = "xfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=42\n",
+        .stdout = "p02: b_26_1_systf checks=45\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_10_systf_digital.c",
+        .design = "tests/fixtures/digital/p02_systf.v",
+        .stdout = "p02: 10_systf_digital checks=92\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_builtin_override.c",
+        .design = "tests/fixtures/ieee_pli/audit_builtin_override.v",
+        .stdout = "first=8000000001 second=8000000001\n",
+        .stderr = "pli-override calls=2 size=40\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
@@ -780,14 +790,13 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
         .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "xfail 27.33.3: cbError and cbPLIError are not defined\nxfail 27.33.1.1: cbStmt on a statement is refused\nxfail 27.33.1.3: cbStmt on a module is refused\nxfail 27.33.2: cbAtStartOfSimTime of delay zero from a later region is not an error\nxfail 27.33.2: cbReadWriteSynch of delay zero from read-only synch is not an error\np02: b_27_33_callbacks checks=73\np02_design: t=20 reached\n",
+        .stdout = "p02: b_27_33_callbacks checks=82\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
         .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
-        .stdout = "b27 printf 7 ok\nxfail 27.25: a file the HDL opened with $fopen does not return the HDL's mcd\nb27 mcd1\nxfail 27.24: the name of an fd from $fopen is not returned\nxfail 27.22: an mcd from the HDL's $fopen is not closed\nxfail 27.26: text for an mcd from the HDL's $fopen goes to the output channel, not the file\np02: b_27_mcd checks=32\n",
-        // The 27.26 xfail: text for the HDL's mcd lands on stderr.
-        .stderr = "hdl\n",
+        .stdout = "b27 printf 7 ok\nb27 mcd1\np02: b_27_mcd checks=34\n",
+        .stderr = "",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_delays.c",
@@ -802,7 +811,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 170 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=273\n",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 167 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=276\n",
     },
 };
 

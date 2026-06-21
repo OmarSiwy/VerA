@@ -611,6 +611,12 @@ pub const Builder = struct {
     /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
         if (id == .none) return none;
+        const at = try b.stmtObj(id);
+        if (at != none) b.objects.items[at].stmt = id;
+        return at;
+    }
+
+    fn stmtObj(b: *Builder, id: Ast.StmtId) Error!u32 {
         const f = b.file;
         return switch (f.stmt(id)) {
             .empty => b.code(vpiNullStmt, &.{}, &.{}, &.{}),
@@ -743,6 +749,7 @@ pub const Builder = struct {
                 const at = try b.code(if (user) vpiTaskCall else vpiSysTaskCall, if (user) &.{.{ .tag = vpiTask, .to = b.lookup(name) }} else &.{}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
+                b.objects.items[at].src_tok = f.stmtTok(id);
                 break :blk at;
             },
             .contribute => |s| b.contrib(s.lhs, s.rhs),
@@ -862,6 +869,7 @@ pub const Builder = struct {
                 const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = b.lookup(name) }}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
+                b.objects.items[at].src_tok = ex.mainTok(id);
                 break :blk at;
             },
             // §11.6.19 accessfunc -> branches, discipline.

@@ -9,6 +9,7 @@
 //! until a sweep at dispatch depth zero, so a callback may remove itself.
 
 const std = @import("std");
+const digital = @import("sim").digital;
 const root = @import("root.zig");
 const value = @import("value.zig");
 const analog = @import("analog.zig");
@@ -63,6 +64,7 @@ pub const vpiSuppressTime: c_int = 3;
 
 // §12.31 reasons, Annex G numbering.
 pub const cbValueChange: c_int = 1;
+pub const cbStmt: c_int = 2;
 pub const cbForce: c_int = 3;
 pub const cbRelease: c_int = 4;
 pub const cbAtStartOfSimTime: c_int = 5;
@@ -73,6 +75,8 @@ pub const cbAfterDelay: c_int = 9;
 pub const cbEndOfCompile: c_int = 10;
 pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
+pub const cbError: c_int = 13;
+pub const cbPLIError: c_int = 28;
 
 // §12.31.3 the analog reasons. Verilog-AMS names them and numbers none; the
 // numbers are VerA's, shared by vpi_user.h and
@@ -120,8 +124,13 @@ pub const Cb = struct {
     /// acbAbsTime / acbElapsedTime: the analog time, in seconds, whose
     /// accepted solution it is delivered upon — and which it forces.
     due_real: f64 = 0,
+    /// cbStmt: each (pc, statement object) it fires at, in the engine's
+    /// order; owned by `gpa`.
+    sites: []const Site = &.{},
     dead: bool = false,
 };
+
+pub const Site = struct { pc: u32, obj: u32 };
 
 const gpa = std.heap.smp_allocator;
 
@@ -131,6 +140,8 @@ var cbs: std.ArrayList(*Cb) = .empty;
 var live: std.AutoHashMapUnmanaged(usize, *Cb) = .empty;
 /// How many dispatches are on the stack; a sweep only runs at zero.
 var depth: u32 = 0;
+/// The reason of the innermost dispatch on the stack, 0 outside one.
+var active: c_int = 0;
 
 /// Returns `h` as a live callback, or null; never dereferences a foreign
 /// pointer.
@@ -142,10 +153,17 @@ pub fn asCb(h: vpiHandle) ?*Cb {
 /// Frees every callback and invalidates every handle. `root.close()` calls
 /// it: callbacks belong to the session a design was opened for.
 pub fn reset() void {
-    for (cbs.items) |cb| gpa.destroy(cb);
+    for (cbs.items) |cb| destroy(cb);
     cbs.clearAndFree(gpa);
     live.clearAndFree(gpa);
     depth = 0;
+    hooked.deinit(gpa);
+    hooked = .{};
+}
+
+fn destroy(cb: *Cb) void {
+    gpa.free(cb.sites);
+    gpa.destroy(cb);
 }
 
 fn isTimeReason(r: c_int) bool {
@@ -180,8 +198,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
     switch (d.reason) {
         // §12.31.4: "The only fields in the s_cb_data structure which need to
         // be setup for simulation action/feature callbacks are the reason,
-        // cb_rtn, and user_data".
-        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation => {},
+        // cb_rtn, and user_data". IEEE 1364-2005 §27.33.3 adds cbError and
+        // cbPLIError to the actions "that shall occur in all VPI-compliant
+        // products".
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError => {},
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
         // must be one VerA issued.
@@ -208,6 +228,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
             }
             value.watch(o);
         },
+        // IEEE 1364-2005 §27.33.1.1 a statement Table 27-6 lists, or
+        // §27.33.1.3 a module: "every statement that can have a callback
+        // placed on it".
+        cbStmt => cb.sites = stmtSites(d.obj) orelse return null,
         cbAtStartOfSimTime, cbReadWriteSynch, cbReadOnlySynch, cbAfterDelay, cbNextSimTime => {
             // IEEE 1364-2005 27.33.2, which §12.31 defers to for the header:
             // a time callback needs a time it can deliver in. cbNextSimTime is
@@ -230,6 +254,16 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 cb.due = if (d.reason == cbAtStartOfSimTime) ticks else now +| ticks;
                 if (cb.due < now) {
                     root.fail("BADTIME", "vpi_register_cb: time {d} is already in the past (now {d})", .{ cb.due, now });
+                    return null;
+                }
+                // IEEE 1364-2005 §27.33.2: "The following situations will
+                // generate an error, and no callback will be created".
+                if (cb.due == now and d.reason == cbAtStartOfSimTime and root.run.started and active != cbAtStartOfSimTime) {
+                    root.fail("BADTIME", "vpi_register_cb: time {d} has progressed past its start, outside a cbAtStartOfSimTime callback", .{now});
+                    return null;
+                }
+                if (cb.due == now and d.reason == cbReadWriteSynch and root.run.read_only) {
+                    root.fail("BADTIME", "vpi_register_cb: a cbReadWriteSynch of delay zero at read-only synch time", .{});
                     return null;
                 }
             }
@@ -260,15 +294,22 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
             return null;
         },
     }
-    const p = gpa.create(Cb) catch return oom();
+    const p = gpa.create(Cb) catch {
+        gpa.free(cb.sites);
+        return oom();
+    };
     p.* = cb;
     cbs.append(gpa, p) catch {
-        gpa.destroy(p);
+        destroy(p);
         return oom();
     };
     live.put(gpa, @intFromPtr(p), p) catch {
         _ = cbs.pop();
-        gpa.destroy(p);
+        destroy(p);
+        return oom();
+    };
+    if (cb.reason == cbStmt) rehook() catch {
+        retire(p);
         return oom();
     };
     return @ptrCast(p);
@@ -310,6 +351,8 @@ pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
     };
     _ = live.remove(@intFromPtr(cb));
     cb.dead = true;
+    // Only shrinks the set, which needs no memory.
+    if (cb.reason == cbStmt) rehook() catch unreachable;
     sweep();
     return 1;
 }
@@ -345,7 +388,7 @@ fn sweep() void {
     var i: usize = 0;
     while (i < cbs.items.len) {
         if (cbs.items[i].dead) {
-            gpa.destroy(cbs.orderedRemove(i));
+            destroy(cbs.orderedRemove(i));
         } else i += 1;
     }
 }
@@ -365,7 +408,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     var data: CbData = .{
         .reason = cb.reason,
         .cb_rtn = cb.rtn,
-        .obj = if (override) @ptrCast(@constCast(from.?)) else cb.obj,
+        .obj = if (override or cb.reason == cbStmt) @ptrCast(@constCast(from.?)) else cb.obj,
         .time = null,
         .value = null,
         .index = index,
@@ -392,6 +435,9 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     }
     depth += 1;
     defer depth -= 1;
+    const outer = active;
+    active = cb.reason;
+    defer active = outer;
     return cb.rtn(&data);
 }
 
@@ -425,6 +471,19 @@ pub fn startOfSimulation() void {
 /// §12.31.4 cbEndOfSimulation — "e.g., $finish system task executed".
 pub fn endOfSimulation() void {
     fireAll(cbEndOfSimulation);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbError: "Simulation run-time error occurred".
+pub fn runError() void {
+    fireAll(cbError);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbPLIError: "Simulation run-time error occurred
+/// in a PLI function call", fired as the routine records it. A routine a
+/// cbPLIError callback calls that fails fires none.
+pub fn pliError() void {
+    if (active == cbPLIError) return;
+    fireAll(cbPLIError);
 }
 
 /// The earliest tick a live time callback is due at that is strictly after
@@ -514,6 +573,95 @@ pub fn fireOverride(reason: c_int, o: *root.Obj) void {
         if (cb.dead or cb.reason != reason) continue;
         if (cb.obj != null and root.asObj(cb.obj) != o) continue;
         _ = call(cb, cb.index, o);
+    }
+    sweep();
+}
+
+// ---------------------------------------------------------------------------
+// IEEE 1364-2005 §27.33.1.1 statement callbacks
+// ---------------------------------------------------------------------------
+
+/// The pcs a live cbStmt fires at, which the engine checks (`StmtHook`).
+var hooked: std.DynamicBitSetUnmanaged = .{};
+
+/// `obj`'s sites: a statement's own, or every statement's of a module
+/// instance. Null, with the error recorded, for anything else.
+fn stmtSites(obj: vpiHandle) ?[]const Site {
+    const o = root.asObj(obj) orelse {
+        root.fail("BADHANDLE", "vpi_register_cb: cbStmt needs a statement or module handle in obj", .{});
+        return null;
+    };
+    const one = o.stmt != .none and o.vtype != @import("code.zig").vpiNullStmt;
+    if (!one and o.kind != .module) {
+        root.fail("NOTSTMT", "vpi_register_cb: `{s}` is neither a statement Table 27-6 lists nor a module", .{o.full});
+        return null;
+    }
+    const r = root.run.attached() orelse {
+        root.fail("NOENGINE", "vpi_register_cb: no digital run executes statements", .{});
+        return null;
+    };
+    const all = r.stmt_sites orelse {
+        root.fail("NOSITES", "vpi_register_cb: this run records no statement sites", .{});
+        return null;
+    };
+    const d = &root.design.?;
+    const scope = if (one) o.owner.? else o.scope;
+    // The statement objects this registration covers, by AST statement.
+    var covered: std.AutoHashMapUnmanaged(@import("frontend").Ast.StmtId, u32) = .empty;
+    defer covered.deinit(gpa);
+    if (one) {
+        covered.put(gpa, o.stmt, @intCast(o - d.objects.ptr)) catch return oomSites();
+    } else for (d.objects, 0..) |s, i| {
+        if (s.kind != .code or s.owner != scope or s.stmt == .none or s.vtype == @import("code.zig").vpiNullStmt) continue;
+        covered.put(gpa, s.stmt, @intCast(i)) catch return oomSites();
+    }
+    var out: std.ArrayList(Site) = .empty;
+    const eng = d.scopes[scope].engine;
+    for (all.items) |st| {
+        if (st.scope != eng) continue;
+        const at = covered.get(st.stmt) orelse continue;
+        out.append(gpa, .{ .pc = st.pc, .obj = at }) catch {
+            out.deinit(gpa);
+            return oomSites();
+        };
+    }
+    return out.toOwnedSlice(gpa) catch {
+        out.deinit(gpa);
+        return oomSites();
+    };
+}
+
+fn oomSites() ?[]const Site {
+    root.fail("NOMEM", "vpi_register_cb: out of memory", .{});
+    return null;
+}
+
+/// Rebuilds `hooked` from the live cbStmt callbacks, and installs the hook
+/// on the engine while any is live.
+fn rehook() !void {
+    const r = root.run.attached() orelse return;
+    try hooked.resize(gpa, r.code.items.len, false);
+    hooked.unsetAll();
+    for (cbs.items) |cb| {
+        if (cb.dead or cb.reason != cbStmt) continue;
+        for (cb.sites) |st| hooked.set(st.pc);
+    }
+    r.stmt_hook = if (hooked.findFirstSet() != null) .{ .at = &hooked, .fire = fireStmt } else null;
+}
+
+/// Every live cbStmt at `pc`, in registration order, each once per
+/// statement starting there, outer first: "Just before the indicated
+/// statement executes".
+fn fireStmt(_: *digital.Run, pc: u32) digital.Error!void {
+    const d = &root.design.?;
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.reason != cbStmt) continue;
+        for (cb.sites) |st| {
+            if (cb.dead) break;
+            if (st.pc == pc) _ = call(cb, 0, &d.objects[st.obj]);
+        }
     }
     sweep();
 }
@@ -694,8 +842,10 @@ test "registrations VerA cannot keep are refused with vpiError" {
     var junk: u32 = 0;
     const vc: CbData = .{ .reason = cbValueChange, .cb_rtn = onStart, .obj = @ptrCast(&junk), .time = null, .value = null, .index = 0, .user_data = null };
     try std.testing.expect(vpi_register_cb(&vc) == null);
-    // A reason with no number VerA delivers (cbStmt, 2).
-    const stmt: CbData = .{ .reason = 2, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    // A reason VerA does not deliver, and a cbStmt on no statement.
+    const unknown: CbData = .{ .reason = 9999, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(vpi_register_cb(&unknown) == null);
+    const stmt: CbData = .{ .reason = cbStmt, .cb_rtn = onStart, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
     try std.testing.expect(vpi_register_cb(&stmt) == null);
     try std.testing.expectEqual(@as(usize, 0), cbs.items.len);
 }

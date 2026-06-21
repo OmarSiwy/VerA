@@ -473,6 +473,11 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
                 .atan2 => std.math.atan2(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .hypot => std.math.hypot(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .driver_delay => try driver.evalReal(self, a, e),
+                .user => blk2: {
+                    const v = try filled(a, 64, true, .zero);
+                    try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
+                    break :blk2 @bitCast(v.values()[0]);
+                },
                 else => unreachable, // else: the integral system functions are not real-typed
             };
         },
@@ -722,6 +727,12 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
                 return normalize(a, value, ty);
             },
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_next_state, .driver_next_strength, .driver_type => |f| return normalize(a, try driver.eval(self, a, e, driver.of(f).?), ty),
+            .user => {
+                const natural = compile.typeOf(self, e);
+                const v = try filled(a, natural.width, natural.signed, .x);
+                try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
+                return normalize(a, v, ty);
+            },
             else => unreachable, // else: the real-valued functions left through the real path above
         },
         .concat => {
@@ -1695,6 +1706,12 @@ fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Erro
 /// Runs the process at `start` until it suspends, stops or finishes;
 /// `scratch_arena` is reset before each instruction.
 pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) Error!void {
+    return if (self.stmt_hook != null) run(self, scratch_arena, start, true) else run(self, scratch_arena, start, false);
+}
+
+/// `execute`, which with `hooked` calls `Run.stmt_hook` before each
+/// instruction a statement starts at.
+fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime hooked: bool) Error!void {
     var pc = start;
     var restarted = false;
     while (true) {
@@ -1704,6 +1721,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
         // §6.2.2 / §12.7: the names an instruction reads are those of the
         // scope it was compiled in: its instance's, or an inlined task's.
         self.scope = self.code_scope.items[pc];
+        // ponytail: a `wait` whose level is false resumes at its own pc, so
+        // each re-test is one more visit.
+        if (hooked) if (self.stmt_hook) |h| if (pc < h.at.bit_length and h.at.isSet(pc)) try h.fire(self, pc);
         // Each instruction completes its copies/captures before scratch is
         // reused; an untimed loop therefore retains no iteration temporaries.
         _ = scratch_arena.reset(.retain_capacity);
@@ -1774,6 +1794,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
                     .fflush => {},
+                    .user => try self.systf.?.call(self, self.instanceOf(self.scope), s.tok, null),
                     .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .sshow => |sh| try @import("system.zig").sformat(self, scratch, s.args, sh),
                     .sformat => try @import("system.zig").sformat(self, scratch, s.args, null),

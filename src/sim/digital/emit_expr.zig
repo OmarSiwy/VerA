@@ -129,6 +129,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
                 .pow => "std.math.pow",
                 .atan2 => "std.math.atan2",
                 .hypot => "std.math.hypot",
+                .user => return self.refuse(user_fn),
                 else => return self.refuse("a VAMS real system function"), // else: driver access, which stays with the interpreter
             };
             try self.print("{s}(", .{name});
@@ -142,6 +143,8 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
         else => return self.refuse("a real expression of this form"), // else: an array element or VAMS branch access
     }
 }
+
+const user_fn = "a PLI application's system function, which runs only under a VPI host";
 
 /// `exec.evalFor(e, target)` of an integral target: `e` in the context the
 /// assignment gives it, truncated to the target (§5.5.3).
@@ -437,6 +440,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
                 .fgets, .fscanf, .fread, .ferror => return self.refuse("a §17.2 read into a string or memory argument"),
+                .user => return self.refuse(user_fn),
                 else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }
         },

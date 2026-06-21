@@ -497,6 +497,8 @@ typedef struct t_cb_data {
  *
  *   §12.31.1 event   cbValueChange        a net, reg, variable or array word
  *                                          changed value
+ *   IEEE 1364-2005   cbStmt               just before a Table 27-6 statement
+ *   §27.33.1.1                             runs; on a module, each of its own
  *                    cbForce, cbRelease   accepted; they fire on a force or
  *                                          release, and VerA's digital engine
  *                                          performs neither, so they never do
@@ -507,11 +509,17 @@ typedef struct t_cb_data {
  *                    cbReadOnlySynch      likewise; puts are refused inside
  *                    cbNextSimTime        the next queue; time is ignored
  *   §12.31.4 action  cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation
+ *   IEEE 1364-2005   cbError              the digital run stopped on an error
+ *   §27.33.3 action  cbPLIError           a VPI routine recorded an error
  *
  * A time reason needs a vpiSimTime or vpiScaledRealTime time (IEEE 1364
- * 27.33.2); NULL or vpiSuppressTime is refused. Every callback is ONE-SHOT
- * except cbValueChange, cbForce and cbRelease, which stand until removed. */
+ * 27.33.2); NULL or vpiSuppressTime is refused, as is a cbAtStartOfSimTime
+ * for the current time once it has started, outside a cbAtStartOfSimTime
+ * callback, and a cbReadWriteSynch of delay zero at read-only synch. Every
+ * callback is ONE-SHOT except cbValueChange, cbStmt, cbForce, cbRelease,
+ * cbError and cbPLIError, which stand until removed. */
 #define cbValueChange           1
+#define cbStmt                  2
 #define cbForce                 3
 #define cbRelease               4
 #define cbAtStartOfSimTime      5
@@ -522,6 +530,8 @@ typedef struct t_cb_data {
 #define cbEndOfCompile         10
 #define cbStartOfSimulation    11
 #define cbEndOfSimulation      12
+#define cbError                13
+#define cbPLIError             28
 
 #define vpiCallback           107   /* §11.6.25 vpi_get(vpiType, callback) */
 #define vpiTimeQueue           64   /* §11.6.25 a pending time; vpi_iterate(vpiTimeQueue, NULL) */

@@ -75,7 +75,10 @@
  *   §27.22  close(a|b) 0, then the files read "alpha\nboth\n" (11 bytes) and
  *           "both\n" (5). close(1) cannot close channel 1: returns 1.
  *           close(a) again: a is not open, so a is unclosed: returns a.
- *           close(hm) 0, then the HDL's file reads "hdl\n".
+ *           close(hm) 0, then the HDL's file reads "hdl\n". close(hf) 0: the
+ *           routine "can also be used to close file descriptors that were
+ *           opened using the system function $fopen()", after which hf names
+ *           no file (§27.24's NULL).
  */
 
 //! inherited IEEE 1364-2005 27.22
@@ -134,8 +137,7 @@ static PLI_INT32 rw0(p_cb_data d)
         "27.25: neither is channel 1 or the fd bit");
   CHECK(vpi_mcd_open((PLI_BYTE8 *)"b_27_mcd_a.log") == a, "27.25: an open file returns its descriptor");
   c = vpi_mcd_open((PLI_BYTE8 *)"b_27_mcd_hdl.log");
-  XFAIL(c == hm, "27.25",
-        "a file the HDL opened with $fopen does not return the HDL's mcd");
+  CHECK(c == hm, "27.25: the file the HDL opened returns the HDL's mcd");
   CHECK(vpi_mcd_open(NULL) == 0, "27.25: 0 on error");
   expect_refusal("vpi_mcd_open(NULL)");
 
@@ -150,7 +152,7 @@ static PLI_INT32 rw0(p_cb_data d)
   nm = vpi_mcd_name(a);
   CHECK(nm != NULL && strcmp(nm, "b_27_mcd_a.log") == 0, "27.24: the name of a");
   nm = vpi_mcd_name(hf);
-  XFAIL(nm != NULL && strcmp(nm, "b_27_mcd_fd.log") == 0, "27.24", "the name of an fd from $fopen is not returned");
+  CHECK(nm != NULL && strcmp(nm, "b_27_mcd_fd.log") == 0, "27.24: the name of the HDL's fd");
   CHECK(vpi_mcd_name(a | b) == NULL, "27.24: a|b is no single channel");
   for (unused = 1u << 30; unused & (a | b | c | hm); unused >>= 1) {}
   CHECK(vpi_mcd_name(unused) == NULL, "27.24: a channel never opened names no file");
@@ -161,10 +163,11 @@ static PLI_INT32 rw0(p_cb_data d)
   CHECK(file_is("b_27_mcd_b.log", "both\n"), "27.26: file b");
   CHECK(vpi_mcd_close(1) == 1, "27.22: channel 1 cannot be closed");
   CHECK(vpi_mcd_close(a) == a, "27.22: a is no longer open");
-  XFAIL(vpi_mcd_close(hm) == 0, "27.22", "an mcd from the HDL's $fopen is not closed");
-  XFAIL(file_is("b_27_mcd_hdl.log", "hdl\n"), "27.26",
-        "text for an mcd from the HDL's $fopen goes to the output channel, not the file");
+  CHECK(vpi_mcd_close(hm) == 0, "27.22: the HDL's mcd closes");
+  CHECK(file_is("b_27_mcd_hdl.log", "hdl\n"), "27.26: the HDL's file");
   CHECK(file_is("b_27_mcd_fd.log", ""), "27.26: nothing is written to an fd");
+  CHECK(vpi_mcd_close(hf) == 0, "27.22: the HDL's fd closes");
+  CHECK(vpi_mcd_name(hf) == NULL, "27.24: a closed fd names no file");
 
   p02_done("b_27_mcd");
   return 0;
