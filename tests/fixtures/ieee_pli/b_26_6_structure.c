@@ -117,8 +117,9 @@
  * §26.6.2  arr is a vpiModuleArray named "arr" of vpiSize 2 (two instances),
  *   whose members are arr[0] and arr[1]; each member has vpiArray TRUE and
  *   leads back to arr; vpi_handle_by_index(arr, 1) is arr[1]; its declared
- *   range [1:0] gives vpiLeftRange 1; its connection list (s) is, as an
- *   expr, a vpiOperation of vpiOpType vpiListOp.
+ *   range [1:0] gives vpiLeftRange 1 and vpiRightRange 0; its connection
+ *   list (s) is, as an expr, a vpiOperation of vpiOpType vpiListOp whose one
+ *   operand is the net s.
  * §26.2.2  b26_leaf is instantiated as u (W 8) and w4 (W 4): u.a and w4.a
  *   are two distinct objects, each leading back to its own instance, with
  *   its own vpiSize (8 and 4) and its own W (8 and 4, §26.6.12 Details a).
@@ -136,8 +137,9 @@
  *   net -> module through vpi_handle(), module ->> net through vpi_iterate(),
  *   the circled top-module arrow through a NULL reference.
  * §26.6.5  u's ports by vpiPortIndex (Details f): a (index 0, input, 8 bits: vector) and y
- *   (index 1, output, 1 bit: scalar); u.a's high connection is bus, and it
- *   is connected by name.
+ *   (index 1, output, 1 bit: scalar); u.a's high connection is bus and
+ *   u.y's is s (Details a), both connected by name; w4 connects in order,
+ *   so w4.a's high connection is r and vpiConnByName is FALSE.
  * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits (Details a), value
  *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). na is a net ARRAY of
  *   two nets: vpiNetArray, vpiSize 2, the module's one net array, walked
@@ -167,8 +169,9 @@
  *   (vpiArray FALSE), so vpi_iterate(vpiIndex, ev) is NULL.
  * §26.6.12 P = 5, vpiLocalParam FALSE; L = P + 1 = 6, vpiLocalParam TRUE;
  *   u.W = 8, w4.W = 4 (its override). u.W has no range: vpiLeftRange NULL
- *   (Details c); P is [7:0]: vpiLeftRange reads 7. w4's #(.W(4)) is one
- *   param assign.
+ *   (Details c); P is [7:0]: vpiLeftRange reads 7, vpiRightRange 0. w4's
+ *   #(.W(4)) is one param assign, whose vpiLhs is w4.W (Details b), whose
+ *   vpiRhs reads 4 and whose vpiConnByName is TRUE; u has none.
  * §26.6.16 §27.20 says only that vpi_handle_multi "can be used" to reach an
  *   intermodule path, so no path is required between two given ports: this
  *   fixture asserts only the refusal below. §27.20, p. 439: "vpi_handle_multi()
@@ -393,13 +396,17 @@ static void module_and_arrays(void)
   CHECK(int_value(vpi_handle(vpiIndex, m1)) == 1, "26.6.1 d: arr[1]'s index reads 1");
   expect_no_error("the module array walk");
   {
-    vpiHandle lr = vpi_handle(vpiLeftRange, arr);
-    XFAIL(lr != NULL && int_value(lr) == 1, "26.6.2", "instance array -> vpiLeftRange does not read 1");
+    vpiHandle lr = vpi_handle(vpiLeftRange, arr), rr = vpi_handle(vpiRightRange, arr);
+    CHECK(lr != NULL && int_value(lr) == 1 && rr != NULL && int_value(rr) == 0, "26.6.2: arr's range [1:0]");
   }
   {
     vpiHandle e = vpi_handle(vpiExpr, arr);
-    XFAIL(e != NULL && vpi_get(vpiType, e) == vpiOperation && vpi_get(vpiOpType, e) == vpiListOp, "26.6.2",
-          "instance array -> expr is not a vpiListOp operation");
+    vpiHandle s = p02_by_name("b26_structure.s"), op;
+    vpiHandle ops = e != NULL ? vpi_iterate(vpiOperand, e) : NULL;
+    CHECK(e != NULL && vpi_get(vpiType, e) == vpiOperation && vpi_get(vpiOpType, e) == vpiListOp, "26.6.2: instance array -> expr is a vpiListOp operation");
+    op = ops != NULL ? vpi_scan(ops) : NULL;
+    CHECK(op != NULL && vpi_compare_objects(op, s) && vpi_scan(ops) == NULL, "26.6.2: its one operand is the connection s");
+    expect_no_error("the instance array's range and connections");
   }
   CHECK(vpi_get(vpiDirection, arr) == vpiUndefined, "26.6.2: an instance array has no direction");
   expect_refusal("vpi_get(vpiDirection, module array)");
@@ -517,8 +524,15 @@ static void ports_and_paths(void)
   CHECK(vpi_get(vpiVector, p[0]) == 1 && vpi_get(vpiScalar, p[0]) == 0, "26.6.5 c: a is more than 1 bit");
   CHECK(vpi_get(vpiScalar, p[1]) == 1 && vpi_get(vpiVector, p[1]) == 0, "26.6.5 c: y is 1 bit");
   expect_no_error("the port walk");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiHighConn, p[0]), bus), "26.6.5", "vpiHighConn of u.a is not bus");
-  XFAIL(vpi_get(vpiConnByName, p[0]) == 1, "26.6.5", "vpiConnByName of a named connection is not TRUE");
+  CHECK(vpi_compare_objects(vpi_handle(vpiHighConn, p[0]), bus), "26.6.5 a: vpiHighConn of u.a is bus");
+  CHECK(vpi_compare_objects(vpi_handle(vpiHighConn, p[1]), p02_by_name("b26_structure.s")), "26.6.5 a: vpiHighConn of u.y is s");
+  CHECK(vpi_get(vpiConnByName, p[0]) == 1, "26.6.5: vpiConnByName of a named connection is TRUE");
+  {
+    vpiHandle w4a = p02_by_name("b26_structure.w4.a");
+    CHECK(vpi_get(vpiConnByName, w4a) == 0 && vpi_compare_objects(vpi_handle(vpiHighConn, w4a), p02_by_name("b26_structure.r")),
+          "26.6.5: w4's ordered connection of a is r, not by name");
+  }
+  expect_no_error("the port connections");
   CHECK(vpi_get(vpiTopModule, p[0]) == vpiUndefined, "26.6.5: a port has no vpiTopModule");
   expect_refusal("vpi_get(vpiTopModule, port)");
 
@@ -664,6 +678,7 @@ static void parameters_and_generates(void)
   vpiHandle L = p02_by_name("b26_structure.L");
   vpiHandle uW = p02_by_name("b26_structure.u.W");
   vpiHandle w4 = p02_by_name("b26_structure.w4");
+  vpiHandle u = p02_by_name("b26_structure.u");
   s_vpi_value v;
 
   /* §26.6.12 */
@@ -673,9 +688,18 @@ static void parameters_and_generates(void)
   CHECK(vpi_handle(vpiLeftRange, uW) == NULL, "26.6.12 c: W has no range");
   {
     vpiHandle lr = vpi_handle(vpiLeftRange, P);
-    XFAIL(lr != NULL && int_value(lr) == 7, "26.6.12", "vpiLeftRange of P [7:0] does not read 7");
+    vpiHandle rr = vpi_handle(vpiRightRange, P);
+    CHECK(lr != NULL && int_value(lr) == 7 && rr != NULL && int_value(rr) == 0, "26.6.12: P's range [7:0]");
   }
-  XFAIL(count(vpiParamAssign, w4) == 1, "26.6.12", "w4 ->> param assign does not yield its #(.W(4))");
+  {
+    vpiHandle itr = vpi_iterate(vpiParamAssign, w4);
+    vpiHandle pa = itr != NULL ? vpi_scan(itr) : NULL;
+    CHECK(pa != NULL && vpi_get(vpiType, pa) == vpiParamAssign && vpi_scan(itr) == NULL, "26.6.12: w4 ->> one param assign");
+    CHECK(vpi_compare_objects(vpi_handle(vpiLhs, pa), p02_by_name("b26_structure.w4.W")), "26.6.12 b: its vpiLhs is w4.W");
+    CHECK(int_value(vpi_handle(vpiRhs, pa)) == 4 && vpi_get(vpiConnByName, pa) == 1, "26.6.12: .W(4), by name");
+    CHECK(vpi_iterate(vpiParamAssign, u) == NULL, "26.6.12: u overrides nothing");
+  }
+  expect_no_error("the parameter ranges and assignments");
   v.format = vpiIntVal;
   v.value.integer = 9;
   vpi_put_value(P, &v, NULL, vpiNoDelay);

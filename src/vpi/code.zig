@@ -52,6 +52,7 @@ pub const vpiTask: c_int = 59;
 pub const vpiTaskCall: c_int = 60;
 pub const vpiWait: c_int = 69;
 pub const vpiWhile: c_int = 70;
+pub const vpiParamAssign: c_int = 40;
 pub const vpiGate: c_int = 21;
 pub const vpiPrimTerm: c_int = 46;
 pub const vpiTableEntry: c_int = 58;
@@ -70,6 +71,7 @@ pub const vpiElseStmt: c_int = 73;
 pub const vpiForIncStmt: c_int = 74;
 pub const vpiForInitStmt: c_int = 75;
 pub const vpiLhs: c_int = 77;
+pub const vpiHighConn: c_int = 76;
 pub const vpiIndex: c_int = 78;
 pub const vpiLeftRange: c_int = 79;
 pub const vpiParent: c_int = 81;
@@ -120,6 +122,7 @@ pub const vpiBlocking: c_int = 41;
 pub const vpiCaseType: c_int = 42;
 pub const vpiDirection: c_int = 20;
 pub const vpiSize: c_int = 4;
+pub const vpiConnByName: c_int = 21;
 
 // vpiCaseType values.
 pub const vpiCaseExact: c_int = 1;
@@ -162,6 +165,7 @@ pub const vpiConditionOp: c_int = 32;
 pub const vpiConcatOp: c_int = 33;
 pub const vpiMultiConcatOp: c_int = 34;
 pub const vpiEventOrOp: c_int = 35;
+pub const vpiListOp: c_int = 37;
 pub const vpiPosedgeOp: c_int = 39;
 pub const vpiNegedgeOp: c_int = 40;
 pub const vpiArithLShiftOp: c_int = 41;
@@ -236,6 +240,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiUdp => "vpiUdp",
         vpiUdpDefn => "vpiUdpDefn",
         vpiWhile => "vpiWhile",
+        vpiParamAssign => "vpiParamAssign",
         vpiAnalog => "vpiAnalog",
         vpiContrib => "vpiContrib",
         vpiAccessFunc => "vpiAccessFunc",
@@ -258,9 +263,13 @@ pub const ScopeLists = struct {
     mod_paths: std.ArrayList(u32) = .empty,
     tchks: std.ArrayList(u32) = .empty,
     gen_arrays: std.ArrayList(u32) = .empty,
+    /// IEEE 1364-2005 §26.6.12: the `#(...)` assignments overriding this
+    /// instance's parameters, written in its parent (root.zig).
+    param_assigns: std.ArrayList(u32) = .empty,
 
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
         s.gen_arrays.deinit(gpa);
+        s.param_assigns.deinit(gpa);
         s.mod_paths.deinit(gpa);
         s.tchks.deinit(gpa);
         s.cont_assigns.deinit(gpa);
@@ -283,6 +292,7 @@ pub const ScopeLists = struct {
             .{ .tag = vpiModPath, .items = try arena.dupe(u32, s.mod_paths.items) },
             .{ .tag = vpiTchk, .items = try arena.dupe(u32, s.tchks.items) },
             .{ .tag = vpiGenScopeArray, .items = try arena.dupe(u32, s.gen_arrays.items) },
+            .{ .tag = vpiParamAssign, .items = try arena.dupe(u32, s.param_assigns.items) },
         });
     }
 };
@@ -331,7 +341,7 @@ pub const Builder = struct {
         return at;
     }
 
-    fn code(b: *Builder, vtype: c_int, edges: []const Edge, lists: []const List, props: []const Prop) Error!u32 {
+    pub fn code(b: *Builder, vtype: c_int, edges: []const Edge, lists: []const List, props: []const Prop) Error!u32 {
         return b.add(.{
             .kind = .code,
             .owner = b.scope,
@@ -891,7 +901,7 @@ pub const Builder = struct {
         return b.add(.{ .kind = .constant, .owner = null, .name = "", .full = "", .size = width, .value = v, .const_type = const_type });
     }
 
-    fn operation(b: *Builder, op: c_int, operands: []const Ast.ExprId) Error!u32 {
+    pub fn operation(b: *Builder, op: c_int, operands: []const Ast.ExprId) Error!u32 {
         var items: std.ArrayList(u32) = .empty;
         for (operands) |o| try items.append(b.arena, try b.expr(o));
         const at = try b.code(vpiOperation, &.{}, &.{.{ .tag = vpiOperand, .items = try b.many(items.items) }}, &.{.{ .prop = vpiOpType, .value = op }});
