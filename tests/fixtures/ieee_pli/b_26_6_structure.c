@@ -140,18 +140,24 @@
  *   is connected by name.
  * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits (Details a), value
  *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). na is a net ARRAY of
- *   two nets: vpiNetArray, vpiSize 2. bus is no array member, so
+ *   two nets: vpiNetArray, vpiSize 2, the module's one net array, walked
+ *   as na[0] and na[1]; na[1] is a 4-bit net with vpiArray TRUE (the
+ *   diagram's "array member"). bus is no array member: vpiArray FALSE, and
  *   vpi_iterate(vpiIndex, bus) is NULL (Details t).
  * §26.6.7  r: vpiReg, 4 bits, 9 ("1001" in vpiBinStrVal); not an array
  *   member, so vpi_iterate(vpiIndex, r) is NULL (Details m). mem: vpiRegArray
  *   of 4 regs (Details l); mem[1] (vpi_handle_by_index) is a vpiReg of 8 bits
  *   whose vpiParent is mem, whose vpiIndex reads 1, whose value is "11" hex,
- *   and which is an array member (vpiArray TRUE). m2 is 2 x 3: vpiSize 6.
+ *   and which is an array member (vpiArray TRUE). m2 is 2 x 3: vpiSize 6,
+ *   and m2 ->> reg walks its six regs, m2[1][2] the last.
  * §26.6.8  i: vpiIntegerVar, not an array, 32 bits (Details g), 5. ia:
  *   vpiArray TRUE, vpiSize 3 (Details g), var selects ia[0..2]; ia[2] is a
  *   vpiVarSelect of 32 bits (Details h), index 2, parent ia, value 3. x is a
- *   vpiRealVar reading 2.5 (exact in binary64). t is a `time`: vpiTimeVar.
- *   The module's variables are i, ia, x, t: four.
+ *   vpiRealVar reading 2.5 (exact in binary64). t is a `time`: vpiTimeVar,
+ *   and §4.8 "The time variables shall behave the same as a reg of at least
+ *   64 bits ... They shall be unsigned quantities": vpiSize at least 64,
+ *   vpiSigned FALSE. The module's variables (§26.6.1 module ->> variables)
+ *   are i, ia, x, t: four; r, mem and m2 are regs.
  * §26.6.9  vpiMemory from the module yields the one-dimensional mem (whether
  *   the 2-D m2 is a memory is left open), each result of type vpiRegArray; vpiMemoryWord from mem gives its 4 words, each a vpiReg.
  *   mem is a memory: vpiIsMemory TRUE.
@@ -545,8 +551,13 @@ static void nets_regs_variables(void)
   CHECK(v.value.scalar == vpi1, "26.6.6: s3 = s = bus[0] = 1");
   CHECK(vpi_iterate(vpiIndex, bus) == NULL, "26.6.6 t: no array, no indices");
   XFAIL(count(vpiBit, bus) == 8, "26.6.6", "net ->> net bit does not yield bus's 8 bits");
-  XFAIL(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6",
-        "a net array is not a vpiNetArray of vpiSize 2");
+  CHECK(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6 s: na is a vpiNetArray of 2 nets");
+  CHECK(count(vpiNetArray, top) == 1 && count(vpiNet, na) == 2 && yields(vpiNet, na, "b26_structure.na[1]"),
+        "26.6.6: module ->> net array ->> net");
+  CHECK(vpi_get(vpiArray, vpi_handle_by_index(na, 1)) == 1 && vpi_get(vpiSize, vpi_handle_by_index(na, 1)) == 4,
+        "26.6.6: na[1] is a 4-bit array member");
+  CHECK(vpi_get(vpiArray, bus) == 0, "26.6.6: bus is no array member");
+  expect_no_error("the net array walk");
   CHECK(vpi_get(vpiDirection, bus) == vpiUndefined, "26.6.6: a net has no direction");
   expect_refusal("vpi_get(vpiDirection, net)");
 
@@ -566,8 +577,10 @@ static void nets_regs_variables(void)
   vpi_get_value(w, &v);
   CHECK_STR(v.value.str, "11", "26.6.7: mem[1] = 8'h11");
   expect_no_error("the reg walk");
-  XFAIL(vpi_get(vpiArray, w) == 1, "26.6.7", "vpiArray of a reg array member is not TRUE");
-  XFAIL(vpi_get(vpiSize, m2) == 6, "26.6.7", "vpiSize of a 2x3 reg array is not its 6 regs");
+  CHECK(vpi_get(vpiArray, w) == 1, "26.6.7: vpiArray of a reg array member is TRUE");
+  CHECK(vpi_get(vpiSize, m2) == 6 && count(vpiReg, m2) == 6 && yields(vpiReg, m2, "b26_structure.m2[1][2]"),
+        "26.6.7 l: m2 holds its 2 x 3 regs");
+  expect_no_error("the array members");
   CHECK(vpi_get(vpiDirection, r) == vpiUndefined, "26.6.7: a reg has no direction");
   expect_refusal("vpi_get(vpiDirection, reg)");
 
@@ -588,8 +601,12 @@ static void nets_regs_variables(void)
   vpi_get_value(x, &v);
   CHECK(v.value.real == 2.5, "26.6.8: x = 2.5");
   expect_no_error("the variable walk");
-  XFAIL(vpi_get(vpiType, t) == vpiTimeVar, "26.6.8", "a time variable is not a vpiTimeVar");
-  XFAIL(count(vpiVariables, top) == 4, "26.6.8", "module ->> variables does not yield i, ia, x, t");
+  CHECK(vpi_get(vpiType, t) == vpiTimeVar && vpi_get(vpiSize, t) >= 64 && vpi_get(vpiSigned, t) == 0,
+        "26.6.8: t is an unsigned vpiTimeVar of at least 64 bits");
+  CHECK(count(vpiVariables, top) == 4 && yields(vpiVariables, top, "b26_structure.i") &&
+        yields(vpiVariables, top, "b26_structure.ia") && yields(vpiVariables, top, "b26_structure.x") &&
+        yields(vpiVariables, top, "b26_structure.t"), "26.6.1: module ->> variables yields i, ia, x, t");
+  expect_no_error("the time variable");
   v.format = vpiIntVal;
   vpi_get_value(ia, &v);
   expect_refusal("26.6.8 i: vpi_get_value(variable array)");
@@ -636,7 +653,7 @@ static void nets_regs_variables(void)
   CHECK_STR(vpi_get_str(vpiName, ev), "ev", "26.6.11 name");
   CHECK_STR(vpi_get_str(vpiFullName, ev), "b26_structure.ev", "26.6.11 full name");
   CHECK(vpi_iterate(vpiIndex, ev) == NULL, "26.6.11: not in an array, so NULL");
-  XFAIL(vpi_get(vpiArray, ev) == 0, "26.6.11", "vpiArray of a scalar named event is not FALSE");
+  CHECK(vpi_get(vpiArray, ev) == 0, "26.6.11: vpiArray of a scalar named event is FALSE");
   CHECK(vpi_get(vpiSize, ev) == vpiUndefined, "26.6.11: a named event has no size");
   expect_refusal("vpi_get(vpiSize, named event)");
 }

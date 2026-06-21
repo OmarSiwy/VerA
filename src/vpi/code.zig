@@ -365,8 +365,10 @@ pub const Builder = struct {
     /// events, tasks and functions, continuous assignments and processes.
     pub fn module(b: *Builder, m: *const Ast.ModuleDecl) Error!void {
         // §11.6.10's named event: scope <->> named event, named in the scope.
+        // IEEE 1364-2005 §26.6.11: a declared event is no array member (an
+        // event array is refused at parse).
         for (m.events) |e| {
-            const at = try b.add(.{ .kind = .code, .owner = b.scope, .name = "", .full = "", .vtype = vpiNamedEvent });
+            const at = try b.add(.{ .kind = .code, .owner = b.scope, .name = "", .full = "", .vtype = vpiNamedEvent, .props = &.{.{ .prop = root.vpiArray, .value = 0 }} });
             try b.setName(at, try b.arena.dupe(u8, b.file.str(e)));
             try b.lists.events.append(b.gpa, at);
         }

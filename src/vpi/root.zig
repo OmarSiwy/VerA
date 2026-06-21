@@ -62,6 +62,10 @@ pub const vpiRealVar: c_int = 47;
 pub const vpiVarSelect: c_int = 68;
 pub const vpiModuleArray: c_int = 112;
 pub const vpiRegArray: c_int = 116;
+pub const vpiTimeVar: c_int = 63;
+pub const vpiNetArray: c_int = 114;
+/// IEEE 1364-2005 §26.6.1 module ->> variables.
+pub const vpiVariables: c_int = 100;
 /// IEEE 1364-2005 §26.6.20 (Annex G).
 pub const vpiAutomatic: c_int = 50;
 
@@ -176,12 +180,16 @@ const Kind = enum(u8) {
     /// §11.6.10 `integer` and `real` variables.
     integer,
     real_var,
+    /// IEEE 1364-2005 §26.6.8 a `time` variable.
+    time_var,
     /// §11.6.10/§11.6.11 arrays. A reg array is IEEE 1364 §26.6.9's memory
     /// (vpiRegArray, vpiIsMemory); an integer or real array is a variable of
     /// its element type with vpiArray set (§26.6.7). Each holds its elements
     /// in `members`.
     reg_array,
     var_array,
+    /// IEEE 1364-2005 §26.6.6 an array of nets; its elements are `.net`s.
+    net_array,
     /// One element: a memory word (a vpiReg) or a variable select.
     word,
     var_select,
@@ -219,7 +227,9 @@ fn typeOf(o: *const Obj) c_int {
         .parameter => vpiParameter,
         .integer => vpiIntegerVar,
         .real_var => vpiRealVar,
+        .time_var => vpiTimeVar,
         .reg_array => vpiRegArray,
+        .net_array => vpiNetArray,
         .var_array => if (o.ty == .real) vpiRealVar else vpiIntegerVar,
         .var_select => vpiVarSelect,
         .module_array => vpiModuleArray,
@@ -245,6 +255,8 @@ fn typeName(t: c_int) []const u8 {
         vpiIntegerVar => "vpiIntegerVar",
         vpiRealVar => "vpiRealVar",
         vpiRegArray => "vpiRegArray",
+        vpiTimeVar => "vpiTimeVar",
+        vpiNetArray => "vpiNetArray",
         vpiVarSelect => "vpiVarSelect",
         vpiModuleArray => "vpiModuleArray",
         vpiConstant => "vpiConstant",
@@ -424,6 +436,11 @@ const Scope = struct {
     integers: []const u32 = &.{},
     reals: []const u32 = &.{},
     reg_arrays: []const u32 = &.{},
+    /// IEEE 1364-2005 §26.6.1 module ->> net array and ->> variables (every
+    /// integer, time and real variable and variable array, in declaration
+    /// order).
+    net_arrays: []const u32 = &.{},
+    variables: []const u32 = &.{},
     module_arrays: []const u32 = &.{},
     nodes: []const u32 = &.{},
     branches: []const u32 = &.{},
@@ -580,6 +597,8 @@ const Building = struct {
     integers: std.ArrayList(u32) = .empty,
     reals: std.ArrayList(u32) = .empty,
     reg_arrays: std.ArrayList(u32) = .empty,
+    net_arrays: std.ArrayList(u32) = .empty,
+    variables: std.ArrayList(u32) = .empty,
     module_arrays: std.ArrayList(u32) = .empty,
     nodes: std.ArrayList(u32) = .empty,
     branches: std.ArrayList(u32) = .empty,
@@ -594,6 +613,8 @@ const Building = struct {
         s.integers.deinit(gpa);
         s.reals.deinit(gpa);
         s.reg_arrays.deinit(gpa);
+        s.net_arrays.deinit(gpa);
+        s.variables.deinit(gpa);
         s.module_arrays.deinit(gpa);
         s.nodes.deinit(gpa);
         s.branches.deinit(gpa);
@@ -726,15 +747,17 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             const dim = literalDim(file, v.dims[0]) orelse continue;
             const is_reg = v.storage == .reg;
             if (!is_reg and v.ty != .real and v.ty != .integer) continue;
-            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
             const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, at);
+            if (!is_reg) try scopes.items[split.scope].variables.append(gpa, at);
             continue;
         }
         if (v.dims.len != 0) continue;
         if (v.storage == .variable and (v.ty == .real or v.ty == .integer)) {
             const list = if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, @intCast(objects.items.len));
+            try scopes.items[split.scope].variables.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, .{
                 .kind = if (v.ty == .real) .real_var else .integer,
                 .owner = split.scope,
@@ -1111,6 +1134,8 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .integers = try arena.dupe(u32, s.integers.items),
         .reals = try arena.dupe(u32, s.reals.items),
         .reg_arrays = try arena.dupe(u32, s.reg_arrays.items),
+        .net_arrays = try arena.dupe(u32, s.net_arrays.items),
+        .variables = try arena.dupe(u32, s.variables.items),
         .module_arrays = try arena.dupe(u32, s.module_arrays.items),
         .nodes = try arena.dupe(u32, s.nodes.items),
         .branches = try arena.dupe(u32, s.branches.items),
@@ -1126,14 +1151,18 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         // A named block, task, function or named event has a full name; a
         // statement or expression does not.
         .code => if (o.full.len != 0) try d.by_name.put(gpa, o.full, @intCast(i)),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
     };
 }
 
 /// §11.6.10/§11.6.11: an array object and, after it, each element preceded by
-/// the constant its `vpiIndex` leads to — elements in increasing index. The
-/// digital engine stores element `addr` in `base + (addr - low)`
-/// (`digital.Run.arrays`), which is the slot given each element here.
+/// the constant its `vpiIndex` leads to — elements in increasing index,
+/// row-major over the dimensions `[low:high]` then `rest`, so the element
+/// count is IEEE 1364-2005 §26.6.6/§26.6.7's vpiSize. A multidimensional
+/// element is named by all its indices (`m[1][2]`) and its vpiIndex is the
+/// innermost ("the index for the reg", §26.6.7 m). The digital engine stores
+/// element k of that order in `base + k` (`digital.Run.arrays`), which is the
+/// slot given each element here.
 fn addArray(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -1145,25 +1174,46 @@ fn addArray(
     ty: Ast.Type,
     low: i64,
     high: i64,
+    rest: []const sim.digital.Span,
     width: u32,
     base: ?u32,
 ) Error!u32 {
     const at: u32 = @intCast(objects.items.len);
-    const count: u32 = @intCast(high - low + 1);
+    var count: u32 = @intCast(high - low + 1);
+    for (rest) |sp| count *= @intCast(sp.high - sp.low + 1);
     const members = try arena.alloc(u32, count);
     try objects.append(gpa, .{ .kind = kind, .owner = owner, .name = name, .full = full, .size = count, .ty = ty, .members = members });
-    const elem: Kind = if (kind == .reg_array) .word else .var_select;
+    const elem: Kind = switch (kind) {
+        .reg_array => .word,
+        .net_array => .net,
+        else => .var_select, // else: the one other array class addArray is given
+    };
+    var suffix: std.ArrayList(u8) = .empty;
     for (0..count) |k| {
-        const addr = low + @as(i64, @intCast(k));
+        // Peel the indices off `k`, innermost (fastest) dimension first.
+        suffix.clearRetainingCapacity();
+        var q: i64 = @intCast(k);
+        var inner: i64 = 0;
+        var d = rest.len + 1;
+        while (d > 0) {
+            d -= 1;
+            const sp: sim.digital.Span = if (d == 0) .{ .low = low, .high = high } else rest[d - 1];
+            const n = sp.high - sp.low + 1;
+            const i = sp.low + @mod(q, n);
+            q = @divTrunc(q, n);
+            if (d == rest.len) inner = i;
+            var buf: [24]u8 = undefined;
+            try suffix.insertSlice(arena, 0, std.fmt.bufPrint(&buf, "[{d}]", .{i}) catch unreachable);
+        }
         const c: u32 = @intCast(objects.items.len);
-        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = addr } });
+        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
         members[k] = @intCast(objects.items.len);
-        const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, addr });
+        const local = try std.fmt.allocPrint(arena, "{s}{s}", .{ name, suffix.items });
         try objects.append(gpa, .{
             .kind = elem,
             .owner = owner,
             .name = local,
-            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ full, addr }),
+            .full = try std.fmt.allocPrint(arena, "{s}{s}", .{ full, suffix.items }),
             .size = width,
             .ty = ty,
             .slot = if (base) |b| b + @as(u32, @intCast(k)) else null,
@@ -1426,6 +1476,21 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
         for (m.nets) |n| {
             const at = r.names.get(.{ .scope = eng, .str = n.name }) orelse continue;
+            // IEEE 1364-2005 §26.6.6: a net array, over the engine's element
+            // slots, each element a net of the declared type.
+            if (r.arrays.get(at)) |a| {
+                const local = try arena.dupe(u8, file.str(n.name));
+                const arr = try addArray(gpa, arena, &objects, .net_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), .unspecified, a.low, a.high, a.rest, r.values[at].width, at);
+                for (objects.items[arr].members) |e| {
+                    objects.items[e].net_type = n.kind;
+                    objects.items[e].src_tok = n.main_tok;
+                }
+                const range = try arena.dupe(u32, &.{try addRange(gpa, arena, &objects, scope, a.left, a.right)});
+                objects.items[arr].range = range;
+                objects.items[arr].src_tok = n.main_tok;
+                try s.net_arrays.append(gpa, arr);
+                continue;
+            }
             try s.nets.append(gpa, @intCast(objects.items.len));
             var o = try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at);
             o.net_type = n.kind;
@@ -1442,18 +1507,22 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
                 // §26.6.7: a `real` array is a vpiRealVar with vpiArray set,
                 // one of the scope's reals — as the analog model builds it.
                 const real = !is_reg and v.ty == .real;
-                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, r.values[at].width, at);
+                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, a.rest, r.values[at].width, at);
                 // Two statements: addRange grows `objects`, moving `items`.
                 const range = try arena.dupe(u32, &.{try addRange(gpa, arena, &objects, scope, a.left, a.right)});
                 objects.items[arr].range = range;
+                objects.items[arr].src_tok = v.main_tok;
                 try (if (is_reg) &s.reg_arrays else if (real) &s.reals else &s.integers).append(gpa, arr);
+                if (!is_reg) try s.variables.append(gpa, arr);
                 continue;
             }
-            const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else if (v.ty == .real) .real_var else continue;
-            const list = if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers;
-            try list.append(gpa, @intCast(objects.items.len));
+            const kind: Kind = if (v.storage == .reg) .reg else if (v.storage == .time) .time_var else if (v.ty == .integer) .integer else if (v.ty == .real) .real_var else continue;
+            if (kind != .reg) try s.variables.append(gpa, @intCast(objects.items.len));
+            // A time variable is in neither per-type list: its type is its own.
+            if (kind != .time_var) try (if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers).append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
-            objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
+            // IEEE 1364-2005 §4.8: `time` is unsigned, `integer` signed.
+            objects.items[objects.items.len - 1].is_signed = kind != .time_var and (v.is_signed or kind == .integer);
             objects.items[objects.items.len - 1].src_tok = v.main_tok;
         }
         // §11.6.12 parameters. The engine folds each into a slot of its own
@@ -1499,7 +1568,7 @@ fn nameTable(gpa: std.mem.Allocator, objects: []const Obj) Error!std.StringHashM
     errdefer names.deinit(gpa);
     for (objects, 0..) |o, i| switch (o.kind) {
         .constant, .quantity, .node, .discipline, .nature => {},
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch, .code => if (o.full.len != 0) try names.put(gpa, o.full, @intCast(i)),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch, .code => if (o.full.len != 0) try names.put(gpa, o.full, @intCast(i)),
     };
     return names;
 }
@@ -1524,7 +1593,7 @@ fn addAnalogCode(
         // (§5.4.2) has none, and a statement reaches it by its node pair.
         .branch => if (o.full.len > top_name.len) try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
         .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
     };
     var names = try nameTable(gpa, objects.items);
     defer names.deinit(gpa);
@@ -1791,7 +1860,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
             // no module arrow leaves it (§11.6.2, §11.6.7).
             switch (o.kind) {
                 .discipline, .nature, .quantity => return noEdge(obj_type, o),
-                .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .node, .branch => {},
+                .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .node, .branch => {},
                 // An expression is in no scope (§11.6.19 draws no scope
                 // arrow); a statement, process or declaration is (§11.6.21
                 // stmt -> scope).
@@ -1865,7 +1934,7 @@ fn analogEdge(o: *const Obj, obj_type: c_int) ??u32 {
             vpiNode => o.node,
             else => null, // else: a port's other edges are the shared owner edge
         },
-        .module, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .code => null,
+        .module, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .code => null,
     };
 }
 
@@ -2071,8 +2140,9 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const elements: bool = switch (o.kind) {
         .reg_array => obj_type == vpiMemoryWord or obj_type == vpiReg,
         .var_array => obj_type == vpiVarSelect,
+        .net_array => obj_type == vpiNet,
         .module_array => obj_type == vpiModule,
-        else => false, // else: only the three array classes hold elements
+        else => false, // else: only the four array classes hold elements
     };
     if (elements) return newIter(d, o.members);
     if (obj_type == code.vpiRange and o.range.len != 0) return newIter(d, o.range);
@@ -2105,6 +2175,8 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         // IEEE 1364 §26.6.9: the legacy vpiMemory method returns the reg
         // arrays, as vpiRegArray objects.
         vpiMemory, vpiRegArray => s.reg_arrays,
+        vpiNetArray => s.net_arrays,
+        vpiVariables => s.variables,
         vpiModuleArray => s.module_arrays,
         // §11.6.1's `nodes` and `branches` classes (§11.6.5, §11.6.6).
         vpiNode => s.nodes,
@@ -2228,16 +2300,17 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     if (o.kind == .code and prop != vpiType and prop != vpiLineNo) return codeProp(o, prop);
     switch (prop) {
         vpiType => return typeOf(o),
-        // IEEE 1364 §26.6.1/§26.6.7: "is item an array" — an array, or a
-        // module that is a member of an instance array.
+        // IEEE 1364 §26.6.1/§26.6.6-§26.6.8: "is item an array" — an array,
+        // or a module, net or reg that is a member of one (a reg that is
+        // one is a `.word`). §26.6.8 draws no vpiArray on a var select.
         vpiArray => return switch (o.kind) {
-            .reg_array, .var_array => 1,
-            .module => @intFromBool(o.parent != null),
-            .reg, .integer, .real_var, .word, .var_select => 0,
+            .reg_array, .var_array, .net_array, .word => 1,
+            .module, .net => @intFromBool(o.parent != null),
+            .reg, .integer, .real_var, .time_var, .var_select => 0,
             else => propFail(prop, o),
         },
         vpiAutomatic => return switch (o.kind) {
-            .reg, .integer, .real_var => @intFromBool(o.automatic),
+            .reg, .integer, .real_var, .time_var => @intFromBool(o.automatic),
             else => propFail(prop, o),
         },
         vpiIsMemory => return switch (o.kind) {
@@ -2266,8 +2339,8 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             // An array's size counts ELEMENTS (§26.6.9 "array size counts
             // members"), everything else's counts bits.
             switch (o.kind) {
-                .reg_array, .var_array, .module_array => if (prop == vpiSize) return @intCast(o.size) else return propFail(prop, o),
-                .port, .net, .reg, .integer, .real_var, .word, .var_select, .constant, .node, .branch, .quantity => {},
+                .reg_array, .var_array, .net_array, .module_array => if (prop == vpiSize) return @intCast(o.size) else return propFail(prop, o),
+                .port, .net, .reg, .integer, .real_var, .time_var, .word, .var_select, .constant, .node, .branch, .quantity => {},
                 else => return propFail(prop, o),
             }
             // A width of 0 means the declared range did not fold (see
@@ -2327,7 +2400,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             };
         },
         vpiSigned => {
-            if (o.kind != .reg and o.kind != .integer) return propFail(prop, o);
+            if (o.kind != .reg and o.kind != .integer and o.kind != .time_var) return propFail(prop, o);
             return @intFromBool(o.is_signed);
         },
         vpiNetType => {
