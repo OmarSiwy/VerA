@@ -803,6 +803,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p02: b_27_33_callbacks checks=82\np02_design: t=20 reached\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/audit_stmt_registration_during_call.c",
+        .design = "tests/fixtures/ieee_pli/audit_stmt_registration_during_call.v",
+        .stdout = "stmt-registration: before=0,1,3 final=4\n",
+    },
+    .{
         .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
         .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
         .stdout = "b27 printf 7 ok\nb27 mcd1\np02: b_27_mcd checks=34\n",
