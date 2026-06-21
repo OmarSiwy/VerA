@@ -96,6 +96,9 @@ pub const vpiReg: c_int = 48;
 // Relationships.
 pub const vpiScope: c_int = 84;
 pub const vpiInternalScope: c_int = 92;
+/// IEEE 1364-2005 §26.6.43 (Annex G).
+pub const vpiUse: c_int = 101;
+pub const vpiIteratorType: c_int = 57;
 
 // Properties.
 pub const vpiUndefined: c_int = -1;
@@ -104,6 +107,12 @@ pub const vpiName: c_int = 2;
 pub const vpiFullName: c_int = 3;
 pub const vpiSize: c_int = 4;
 pub const vpiTopModule: c_int = 7;
+pub const vpiFile: c_int = 5;
+pub const vpiLineNo: c_int = 6;
+pub const vpiNetType: c_int = 22;
+pub const vpiProtected: c_int = 10;
+pub const vpiTimeUnit: c_int = 11;
+pub const vpiTimePrecision: c_int = 12;
 pub const vpiDefName: c_int = 9;
 pub const vpiCell: c_int = 51;
 pub const vpiConfig: c_int = 52;
@@ -244,8 +253,13 @@ fn typeName(t: c_int) []const u8 {
         vpiNode => "vpiNode",
         vpiBranch => "vpiBranch",
         vpiQuantity => "vpiQuantity",
-        // else: `t` is always typeOf()'s answer, and every value typeOf can
-        // return has a prong above; this arm is unreachable, not a default.
+        vpiIterator => "vpiIterator",
+        callback.vpiCallback => "vpiCallback",
+        value.vpiSchedEvent => "vpiSchedEvent",
+        systf.vpiUserSystf => "vpiUserSystf",
+        run.vpiTimeQueue => "vpiTimeQueue",
+        // else: `t` is always vpi_get(vpiType)'s answer, and every value it
+        // can return has a prong above; this arm is unreachable, not a default.
         else => "vpiUndefined",
     };
 }
@@ -372,8 +386,12 @@ pub const Obj = struct {
     flow_neg: bool = false,
     /// `.code` of the digital model: the main token of the statement it is —
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
-    /// names the engine driver §12.29's vpi_put_delays rewrites.
+    /// names the engine driver §12.29's vpi_put_delays rewrites. A declared
+    /// object of the digital model: its declaration's token. Either way the
+    /// IEEE 1364-2005 §26.3.3 location; 0 is none recorded.
     src_tok: u32 = 0,
+    /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
+    net_type: Ast.NetKind = .wire,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -393,6 +411,11 @@ const Scope = struct {
     /// The §6.7 path relative to the top, `""` at the root. The key the flat
     /// declarations are bucketed by.
     path: []const u8,
+    /// IEEE 1364-2005 §26.6.1 vpiTimeUnit and vpiTimePrecision, powers of ten
+    /// of a second (§17.3.2 Table 17-10's exponents): the §19.8 time scale of
+    /// this instance's definition. Null in the analog model, which has none.
+    time_unit: ?i8 = null,
+    time_precision: ?i8 = null,
     children: []const u32 = &.{},
     ports: []const u32 = &.{},
     nets: []const u32 = &.{},
@@ -417,6 +440,11 @@ const Iter = struct {
     /// Handles to objects that are not in `Design.objects` (§11.6.25 time
     /// queues), OWNED by the iterator; scanned instead of `items` when set.
     handles: ?[]vpiHandle = null,
+    /// IEEE 1364-2005 §26.6.43: the reference handle it was made from
+    /// (vpiUse, NULL for a NULL reference) and the type it iterates
+    /// (vpiIteratorType).
+    use: vpiHandle = null,
+    ty: c_int = 0,
 };
 
 /// The installed object model (`design`). Owns everything it reports: strings
@@ -442,6 +470,10 @@ pub const Design = struct {
     natures: []const u32 = &.{},
     /// §11.6.14's circled arrow: `vpi_iterate(vpiUdpDefn, NULL)`.
     udp_defns: []const u32 = &.{},
+    /// IEEE 1364-2005 §26.6.1 Details b: what vpiTimeUnit and
+    /// vpiTimePrecision of a NULL object answer, "the smallest time precision
+    /// of all modules". Null in the analog model.
+    finest: ?i8 = null,
     /// §11.6 `vpiFullName` → object index. Every object has one and they are
     /// unique, which is what makes §12.21 a lookup rather than a tree walk.
     by_name: std.StringHashMapUnmanaged(u32),
@@ -535,6 +567,8 @@ const Building = struct {
     library: []const u8 = "work",
     config: []const u8 = "",
     path: []const u8,
+    time_unit: ?i8 = null,
+    time_precision: ?i8 = null,
     parent: ?u32,
     /// A digital model's `digital.Run` scope id for this instance.
     engine: u32 = 0,
@@ -680,6 +714,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .size = vectorSize(lowered, flat_name),
+            .net_type = n.kind,
         });
     }
     for (flat.vars) |v| {
@@ -1066,6 +1101,8 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .library = s.library,
         .config = s.config,
         .path = s.path,
+        .time_unit = s.time_unit,
+        .time_precision = s.time_precision,
         .children = try arena.dupe(u32, s.children.items),
         .ports = try arena.dupe(u32, s.ports.items),
         .nets = try arena.dupe(u32, s.nets.items),
@@ -1350,7 +1387,10 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
         const m = &file.modules[info.def];
         const cfg = if (r.binds.get(@intCast(e))) |b| b.cfg else null;
+        const mt = r.timeOf(@intCast(e));
         try scopes.append(gpa, .{
+            .time_unit = @intCast(mt.unit_exp),
+            .time_precision = @intCast(mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)))),
             .decl = m,
             .def_name = try arena.dupe(u8, file.str(m.name)),
             .library = try arena.dupe(u8, file.str(r.def_lib[info.def])),
@@ -1382,11 +1422,15 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));
             objects.items[objects.items.len - 1].direction = p.direction;
             objects.items[objects.items.len - 1].port_index = @intCast(k);
+            objects.items[objects.items.len - 1].src_tok = p.main_tok;
         }
         for (m.nets) |n| {
             const at = r.names.get(.{ .scope = eng, .str = n.name }) orelse continue;
             try s.nets.append(gpa, @intCast(objects.items.len));
-            try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at));
+            var o = try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at);
+            o.net_type = n.kind;
+            o.src_tok = n.main_tok;
+            try objects.append(gpa, o);
         }
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
@@ -1410,6 +1454,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try list.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
             objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
+            objects.items[objects.items.len - 1].src_tok = v.main_tok;
         }
         // §11.6.12 parameters. The engine folds each into a slot of its own
         // (IEEE 1364 §12.2, `Run.params`), so NOTE 1's "final value of the
@@ -1422,6 +1467,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             var o = try digitalObj(r, arena, top_name, s.path, scope, p.name, .parameter, at);
             o.ty = p.ty;
             o.is_local = p.is_local;
+            o.src_tok = p.main_tok;
             try objects.append(gpa, o);
         }
     }
@@ -1440,6 +1486,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
+    d.finest = @intCast(r.finest);
     return d;
 }
 
@@ -1710,6 +1757,13 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return handleOf(&design.?.objects[at]);
     }
     const d = enter("vpi_handle") orelse return null;
+    // IEEE 1364-2005 §26.6.43: an iterator's one edge, NULL when it was made
+    // from a NULL reference (Details b).
+    if (asIter(ref)) |it| {
+        if (obj_type == vpiUse) return it.use;
+        fail("NOTRAVERSE", "vpi_handle: an iterator has no relationship {d}", .{obj_type});
+        return null;
+    }
     const o = object("vpi_handle", ref) orelse return null;
     // §11.6.2/§11.6.5–§11.6.7's single arrows. Each edge is answered only
     // from the classes whose diagram draws it; from any other class it is
@@ -1955,6 +2009,15 @@ pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_
 /// application that does not check errors sees the documented empty loop either
 /// way; one that does can tell a fact about the design from a limit of VerA's.
 pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
+    const h = iterate(obj_type, ref);
+    if (asIter(h)) |it| {
+        it.use = ref;
+        it.ty = obj_type;
+    }
+    return h;
+}
+
+fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_iterate") orelse return null;
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
@@ -2128,8 +2191,9 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
-    if (asIter(obj)) |_| {
+    if (asIter(obj)) |it| {
         if (prop == vpiType) return vpiIterator;
+        if (prop == vpiIteratorType) return it.ty;
         fail("NOPROP", "vpi_get: an iterator has no property {d}", .{prop});
         return vpiUndefined;
     }
@@ -2156,10 +2220,12 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         fail("NOPROP", "vpi_get: a time queue has no property {d}; vpi_get_time reads its time", .{prop});
         return vpiUndefined;
     }
-    // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
-    // which VerA answers, so a NULL object is an invalid handle like any other.
+    // §12.5's NULL-object case: IEEE 1364-2005 §26.6.1 Details b.
+    if (obj == null and (prop == vpiTimeUnit or prop == vpiTimePrecision)) {
+        if (design) |d| if (d.finest) |f| return f;
+    }
     const o = object("vpi_get", obj) orelse return vpiUndefined;
-    if (o.kind == .code and prop != vpiType) return codeProp(o, prop);
+    if (o.kind == .code and prop != vpiType and prop != vpiLineNo) return codeProp(o, prop);
     switch (prop) {
         vpiType => return typeOf(o),
         // IEEE 1364 §26.6.1/§26.6.7: "is item an array" — an array, or a
@@ -2184,6 +2250,17 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         vpiTopModule => {
             if (o.kind != .module) return propFail(prop, o);
             return @intFromBool(o.owner == null);
+        },
+        vpiTimeUnit, vpiTimePrecision => {
+            if (o.kind != .module) return propFail(prop, o);
+            const sc = design.?.scopes[o.scope];
+            return (if (prop == vpiTimeUnit) sc.time_unit else sc.time_precision) orelse propFail(prop, o);
+        },
+        // IEEE 1364-2005 §26.6.1: no module is protected, since §28's
+        // `pragma protect` is refused where it is written (E0146).
+        vpiProtected => {
+            if (o.kind != .module) return propFail(prop, o);
+            return 0;
         },
         vpiSize, vpiScalar, vpiVector => {
             // An array's size counts ELEMENTS (§26.6.9 "array size counts
@@ -2252,6 +2329,14 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         vpiSigned => {
             if (o.kind != .reg and o.kind != .integer) return propFail(prop, o);
             return @intFromBool(o.is_signed);
+        },
+        vpiNetType => {
+            if (o.kind != .net) return propFail(prop, o);
+            return netType(o.net_type) orelse propFail(prop, o);
+        },
+        vpiLineNo => {
+            const at = location(o) orelse return propFail(prop, o);
+            return at.line;
         },
         else => {
             fail("NOPROP", "vpi_get: property {d} is not answered for a {s}", .{ prop, @tagName(o.kind) });
@@ -2473,6 +2558,44 @@ pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
     }
 }
 
+/// IEEE 1364-2005 §26.6.6's vpiNetType, Annex G numbered; null for a
+/// `wreal`, which Annex G has no constant for.
+fn netType(k: Ast.NetKind) ?c_int {
+    return switch (k) {
+        .wire => 1,
+        .wand => 2,
+        .wor => 3,
+        .tri => 4,
+        .tri0 => 5,
+        .tri1 => 6,
+        .trireg => 7,
+        .triand => 8,
+        .trior => 9,
+        .supply1 => 10,
+        .supply0 => 11,
+        .uwire => 13,
+        .wreal => null,
+    };
+}
+
+/// IEEE 1364-2005 §26.3.3 vpiLineNo and vpiFile: where the declaration or
+/// statement `o.src_tok` is, in the source file as written. Only the digital
+/// model records a token.
+///
+/// ponytail: the physical line; §19.7's `line renumbering is not applied.
+fn location(o: *const Obj) ?struct { line: c_int, file: []const u8 } {
+    if (o.src_tok == 0) return null;
+    const r = run.attached() orelse return null;
+    const start = r.starts[o.src_tok];
+    const at = r.bag.locate(.{ .start = start, .end = start }, null);
+    const off = r.bag.toSourceOffset(at.file, at.offset);
+    const text = r.bag.sourceText(at.file);
+    return .{
+        .line = @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n")),
+        .file = r.bag.fileName(at.file),
+    };
+}
+
 fn propFail(prop: c_int, o: *const Obj) c_int {
     fail("NOPROP", "vpi_get: a {s} has no property {d}", .{ @tagName(o.kind), prop });
     return vpiUndefined;
@@ -2490,6 +2613,9 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 /// returns NULL, the one value an application would not go on to print.
 pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const d = enter("vpi_get_str") orelse return null;
+    // IEEE 1364-2005 §26.3.2: every object has a type, and its name, the
+    // handles that are not design objects (an iterator, a callback) included.
+    if (prop == vpiType and asObj(obj) == null and issued(obj) != null) return copyStr(typeName(vpi_get(vpiType, obj)));
     const o = object("vpi_get_str", obj) orelse return null;
     const s: []const u8 = switch (prop) {
         // §11.6.7 lists no name for a quantity: it is reached from its
@@ -2519,6 +2645,13 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
             }
             break :blk d.scopes[o.scope].def_name;
         },
+        vpiFile => blk: {
+            const at = location(o) orelse {
+                fail("NOPROP", "vpi_get_str: no source location is recorded for a {s}", .{@tagName(o.kind)});
+                return null;
+            };
+            break :blk at.file;
+        },
         // IEEE 1364-2005 §13.6: "The following VPI properties shall exist for
         // objects of type vpiModule".
         vpiLibrary, vpiCell, vpiConfig => blk: {
@@ -2538,6 +2671,10 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
             return null;
         },
     };
+    return copyStr(s);
+}
+
+fn copyStr(s: []const u8) [*c]u8 {
     const n = @min(s.len, str_buf.len - 1);
     @memcpy(str_buf[0..n], s[0..n]);
     str_buf[n] = 0;
