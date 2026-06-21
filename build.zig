@@ -481,8 +481,6 @@ const VpiRun = struct {
 ///           argument (§12.22.2's $resistor): the device calls user system
 ///           FUNCTIONS only (`contract.SystfHost` returns one value)
 ///   p03_09  an `ac` analysis: no small-signal solve runs in this process
-///   audit_lazy_arguments  IEEE 1364-2005 §26.6.19(e): vpi_get_value of an
-///           argument that is an HDL function call does not run the call
 const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
@@ -736,6 +734,18 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_builtin_override.v",
         .stdout = "first=8000000001 second=8000000001\n",
         .stderr = "pli-override calls=2 size=40\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_lazy_arguments.c",
+        .design = "tests/fixtures/ieee_pli/audit_lazy_arguments.v",
+        .stdout = "unread=0\nread=1\n",
+        .stderr = "pli-lazy-arguments calls=2 reads=1\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_19_lazy_arguments.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_19_lazy_arguments.v",
+        .stdout = "root_calls=10\n",
+        .stderr = "pli-lazy-scopes calls=3 nested=2 retained=2\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",

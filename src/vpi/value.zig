@@ -5,6 +5,8 @@
 //! calltf saw or put. Node and branch values are §12.10's, in `analog.zig`.
 //! Puts go through the engine's write path, so they wake waiting processes
 //! and fire value-change callbacks as a procedural assignment does.
+//! IEEE 1364-2005 §26.6.19(e): expression and function-call handles evaluate
+//! only when read, in their original digital scope, on every request.
 
 const std = @import("std");
 const sim = @import("sim");
@@ -106,7 +108,18 @@ const Source = union(enum) {
     str: []const u8,
 };
 
+fn activeCall(o: *const Obj) bool {
+    return o.kind == .code and o.vtype == root.code.vpiSysFuncCall and
+        systf.active != null and &root.design.?.objects[systf.active.?] == o;
+}
+
 fn source(o: *const Obj) ?Source {
+    // §26.6.19(b): the active system function's own handle reads its
+    // current return value, without recursively invoking its calltf.
+    if (activeCall(o)) if (systf.result) |lit| {
+        if (systf.find(o.name, .digital).?.digital.sysfunctype == systf.vpiRealFunc) return .{ .real = @bitCast(lit.values()[0]) };
+        return literalSource(lit);
+    };
     if (o.slot) |at| {
         const r = run.attached() orelse return null;
         const lit = r.values[at];
@@ -120,6 +133,10 @@ fn source(o: *const Obj) ?Source {
         .str => |s| .{ .str = s },
     };
     return null;
+}
+
+fn literalSource(lit: Int.Literal) Source {
+    return .{ .bits = .{ .width = lit.width, .val = lit.values(), .unk = lit.unknowns(), .signed = lit.signed } };
 }
 
 var const_word: [2]u64 = undefined;
@@ -150,7 +167,20 @@ pub var cb_store: Store = .{};
 /// Fills `v` from `o` in the format `v.format` names, into `st`'s storage.
 /// Errors are recorded (`vpi_chk_error`) and leave `v` as it was.
 pub fn read(o: *const Obj, v: *Value, st: *Store) void {
-    const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else {
+    var scratch = std.heap.ArenaAllocator.init(gpa);
+    defer scratch.deinit();
+    const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else blk: {
+        if (!o.in_analog and !activeCall(o) and o.src_expr != .none and o.expr_scope != null) if (run.attached()) |r| {
+            const instance = root.design.?.scopes[o.expr_scope.?].engine;
+            const result = r.vpiEval(scratch.allocator(), instance, o.src_expr) catch {
+                root.fail("EXPREVAL", "vpi_get_value: cannot evaluate this digital expression", .{});
+                return;
+            };
+            break :blk switch (result) {
+                .bits => |lit| literalSource(lit),
+                .real => |f| Source{ .real = f },
+            };
+        };
         root.fail("NOVALUE", "vpi_get_value: `{s}` has no value this process can read", .{o.full});
         return;
     };

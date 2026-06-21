@@ -379,6 +379,13 @@ pub const Obj = struct {
     /// `.code` statement: its AST statement, which with `owner` names the
     /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
     stmt: Ast.StmtId = .none,
+    /// A source expression retained for IEEE 1364-2005 §26.6.19(e)'s lazy
+    /// vpi_get_value. Declared objects keep their storage-based value path.
+    src_expr: Ast.ExprId = .none,
+    /// The instance supplying `src_expr`'s engine context. Expressions such
+    /// as operations have no VPI scope relationship (`owner` is null), but
+    /// still need their original instance when an application reads them.
+    expr_scope: ?u32 = null,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference

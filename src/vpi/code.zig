@@ -822,6 +822,18 @@ pub const Builder = struct {
     /// Builds or resolves the object for expression `id`; returns its index,
     /// or `none` for `.none` or a form this model does not hold.
     pub fn expr(b: *Builder, id: Ast.ExprId) Error!u32 {
+        const at = try b.exprObj(id);
+        if (at == none) return at;
+        const o = &b.objects.items[at];
+        if ((o.kind == .code or o.kind == .constant) and o.full.len == 0 and o.src_expr == .none) {
+            o.src_expr = id;
+            o.expr_scope = b.scope;
+            o.in_analog = b.analog != null;
+        }
+        return at;
+    }
+
+    fn exprObj(b: *Builder, id: Ast.ExprId) Error!u32 {
         if (id == .none) return none;
         const ex = &b.file.exprs;
         return switch (ex.tag(id)) {

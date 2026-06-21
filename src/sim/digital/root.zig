@@ -240,6 +240,11 @@ pub const Run = struct {
     /// scope in force is `self.scope`, which the executing process carries.
     names: std.AutoHashMapUnmanaged(Name, u32) = .empty,
     scope: u32 = 0,
+    /// IEEE 1364-2005 §26.6.19(e): the lexical scope of an expression a
+    /// VPI application may evaluate later, keyed by (instance, expression).
+    /// Populated only for a host with `systf`; obtaining an argument handle
+    /// does not evaluate its expression.
+    vpi_expr_scopes: std.AutoHashMapUnmanaged([2]u32, u32) = .empty,
     /// The highest scope id handed out; the root is 0.
     scopes: u32 = 0,
     /// Per scope id: the instance that minted it, its name and its module
@@ -828,6 +833,21 @@ pub const Run = struct {
     pub fn slotType(self: *const Run, at: u32) compile.Type {
         if (self.reals.contains(at)) return compile.real_type;
         return .{ .width = self.values[at].width, .signed = self.values[at].signed };
+    }
+
+    /// IEEE 1364-2005 §26.6.19(e): evaluate a retained VPI expression in
+    /// its original scope, when its value is requested. Arguments to user
+    /// systfs can denote non-values (scopes, arrays, named events), so their
+    /// value typing is deferred until this request too. Function bodies
+    /// were compiled during elaboration; `checkExpr` prepares the call and
+    /// its operands without executing them. The result's storage is `a`'s.
+    pub fn vpiEval(self: *Run, a: std.mem.Allocator, instance: u32, e: Ast.ExprId) Error!union(enum) { bits: Int.Literal, real: f64 } {
+        const saved = self.scope;
+        defer self.scope = saved;
+        self.scope = self.vpi_expr_scopes.get(.{ instance, @intFromEnum(e) }) orelse instance;
+        try compile.checkExpr(self, e);
+        if (compile.typeOf(self, e).real) return .{ .real = try exec.evalReal(self, a, e) };
+        return .{ .bits = try exec.eval(self, a, e, 0) };
     }
     /// §12.7 a name as seen from `scope`: declared there, or in an enclosing
     /// scope of the same module, never across an instance boundary.
