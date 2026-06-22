@@ -330,6 +330,9 @@ pub const Run = struct {
     trans: []Tran = &.{},
     /// Keyed by the base slot of an unpacked array (§3.9).
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
+    /// IEEE 1364-2005 §12.4/§26.6.44: the net declarations belonging to each
+    /// elaborated generate scope, retained for its VPI object relationships.
+    gen_nets: std.AutoHashMapUnmanaged(u32, []const Ast.NetDecl) = .empty,
     /// The slots that are §5.10.4 named events. They occupy a slot only so that
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
     /// there, because §5.10's events "do not hold any data". Each to its
@@ -1898,6 +1901,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             // §12.4: a generate block's nets are its scope's, one set per
             // loop iteration.
             for (b.gen.nets) |n| try declareNet(r, e, scope, n);
+            if (b.gen.nets.len != 0) try r.gen_nets.put(r.arena, scope, b.gen.nets);
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
