@@ -750,7 +750,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
-        .stdout = "xfail 26.6.1: vpiTimeUnit of a `timescale 1ns module is not -9\nxfail 26.6.1: vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12\nxfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.3.2: vpi_get_str(vpiType, iterator) is not \"vpiIterator\"\nxfail 26.3.2: vpiNetType of a wire is not vpiWire\nxfail 26.3.3: vpiLineNo of a net is not its source line\nxfail 26.3.3: vpiFile of a net is not its source file\nxfail 26.6.43: vpi_handle(vpiUse, iterator) is not its reference handle\nxfail 26.6.43: vpiIteratorType is not the iterated type\nxfail 26.6.1: vpiProtected of an unprotected module is not FALSE\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.6: a net array is not a vpiNetArray of vpiSize 2\nxfail 26.6.7: vpiArray of a reg array member is not TRUE\nxfail 26.6.7: vpiSize of a 2x3 reg array is not its 6 regs\nxfail 26.6.8: a time variable is not a vpiTimeVar\nxfail 26.6.8: module ->> variables does not yield i, ia, x, t\nxfail 26.6.11: vpiArray of a scalar named event is not FALSE\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=261\n",
+        .stdout = "xfail 26.6.44: gen[0].gw names no object\np02: b_26_6_structure checks=299\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
@@ -790,7 +790,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_objects.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail 27.19: a name searched in scope u finds top's bus\np02: b_27_objects checks=81\n",
+        .stdout = "p02: b_27_objects checks=83\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_values.c",
@@ -826,7 +826,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 167 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=276\n",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 139 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=304\n",
     },
 };
 

@@ -108,7 +108,8 @@
  *   child instances include u, w4 and c1;
  *   u is b26_leaf, not top, not an array member, so vpiIndex(u) is NULL
  *   (Details d), and vpiIndex(top) likewise. `timescale 1ns/1ps: vpiTimeUnit
- *   of the module is -9, and NULL's vpiTimePrecision -12 (Details b; §27.6's
+ *   of the module is -9 and its vpiTimePrecision -12; a NULL object's
+ *   vpiTimePrecision and vpiTimeUnit are both -12 (Details b; §27.6's
  *   "simulation time unit" for a NULL object is also -12, since §19.8 makes
  *   the smallest time_precision the simulation's precision). §26/§27 never
  *   state the integer encoding; -9 and -12 are §17.3.2 Table 17-10's
@@ -116,8 +117,9 @@
  * §26.6.2  arr is a vpiModuleArray named "arr" of vpiSize 2 (two instances),
  *   whose members are arr[0] and arr[1]; each member has vpiArray TRUE and
  *   leads back to arr; vpi_handle_by_index(arr, 1) is arr[1]; its declared
- *   range [1:0] gives vpiLeftRange 1; its connection list (s) is, as an
- *   expr, a vpiOperation of vpiOpType vpiListOp.
+ *   range [1:0] gives vpiLeftRange 1 and vpiRightRange 0; its connection
+ *   list (s) is, as an expr, a vpiOperation of vpiOpType vpiListOp whose one
+ *   operand is the net s.
  * §26.2.2  b26_leaf is instantiated as u (W 8) and w4 (W 4): u.a and w4.a
  *   are two distinct objects, each leading back to its own instance, with
  *   its own vpiSize (8 and 4) and its own W (8 and 4, §26.6.12 Details a).
@@ -135,22 +137,32 @@
  *   net -> module through vpi_handle(), module ->> net through vpi_iterate(),
  *   the circled top-module arrow through a NULL reference.
  * §26.6.5  u's ports by vpiPortIndex (Details f): a (index 0, input, 8 bits: vector) and y
- *   (index 1, output, 1 bit: scalar); u.a's high connection is bus, and it
- *   is connected by name.
- * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits (Details a), value
+ *   (index 1, output, 1 bit: scalar); u.a's high connection is bus and
+ *   u.y's is s (Details a), both connected by name; w4 connects in order,
+ *   so w4.a's high connection is r and vpiConnByName is FALSE.
+ * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits bus[7]..bus[0]
+ *   (Details a), bus[3] a vpiNetBit whose vpiParent is bus and whose
+ *   vpiIndex reads 3 (Details h) and which vpi_handle_by_index(bus, 3)
+ *   returns (the diagram's "access by index"), the scalar s none; value
  *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). na is a net ARRAY of
- *   two nets: vpiNetArray, vpiSize 2. bus is no array member, so
+ *   two nets: vpiNetArray, vpiSize 2, the module's one net array, walked
+ *   as na[0] and na[1]; na[1] is a 4-bit net with vpiArray TRUE (the
+ *   diagram's "array member"). bus is no array member: vpiArray FALSE, and
  *   vpi_iterate(vpiIndex, bus) is NULL (Details t).
  * §26.6.7  r: vpiReg, 4 bits, 9 ("1001" in vpiBinStrVal); not an array
  *   member, so vpi_iterate(vpiIndex, r) is NULL (Details m). mem: vpiRegArray
  *   of 4 regs (Details l); mem[1] (vpi_handle_by_index) is a vpiReg of 8 bits
  *   whose vpiParent is mem, whose vpiIndex reads 1, whose value is "11" hex,
- *   and which is an array member (vpiArray TRUE). m2 is 2 x 3: vpiSize 6.
+ *   and which is an array member (vpiArray TRUE). m2 is 2 x 3: vpiSize 6,
+ *   and m2 ->> reg walks its six regs, m2[1][2] the last.
  * §26.6.8  i: vpiIntegerVar, not an array, 32 bits (Details g), 5. ia:
  *   vpiArray TRUE, vpiSize 3 (Details g), var selects ia[0..2]; ia[2] is a
  *   vpiVarSelect of 32 bits (Details h), index 2, parent ia, value 3. x is a
- *   vpiRealVar reading 2.5 (exact in binary64). t is a `time`: vpiTimeVar.
- *   The module's variables are i, ia, x, t: four.
+ *   vpiRealVar reading 2.5 (exact in binary64). t is a `time`: vpiTimeVar,
+ *   and §4.8 "The time variables shall behave the same as a reg of at least
+ *   64 bits ... They shall be unsigned quantities": vpiSize at least 64,
+ *   vpiSigned FALSE. The module's variables (§26.6.1 module ->> variables)
+ *   are i, ia, x, t: four; r, mem and m2 are regs.
  * §26.6.9  vpiMemory from the module yields the one-dimensional mem (whether
  *   the 2-D m2 is a memory is left open), each result of type vpiRegArray; vpiMemoryWord from mem gives its 4 words, each a vpiReg.
  *   mem is a memory: vpiIsMemory TRUE.
@@ -160,8 +172,9 @@
  *   (vpiArray FALSE), so vpi_iterate(vpiIndex, ev) is NULL.
  * §26.6.12 P = 5, vpiLocalParam FALSE; L = P + 1 = 6, vpiLocalParam TRUE;
  *   u.W = 8, w4.W = 4 (its override). u.W has no range: vpiLeftRange NULL
- *   (Details c); P is [7:0]: vpiLeftRange reads 7. w4's #(.W(4)) is one
- *   param assign.
+ *   (Details c); P is [7:0]: vpiLeftRange reads 7, vpiRightRange 0. w4's
+ *   #(.W(4)) is one param assign, whose vpiLhs is w4.W (Details b), whose
+ *   vpiRhs reads 4 and whose vpiConnByName is TRUE; u has none.
  * §26.6.16 §27.20 says only that vpi_handle_multi "can be used" to reach an
  *   intermodule path, so no path is required between two given ports: this
  *   fixture asserts only the refusal below. §27.20, p. 439: "vpi_handle_multi()
@@ -242,65 +255,6 @@
 
 #include "b_check.h"
 
-/* Annex G numbers that src/vpi/vpi_user.h does not define. */
-#ifndef vpiFile
-#define vpiFile 5
-#endif
-#ifndef vpiLineNo
-#define vpiLineNo 6
-#endif
-#ifndef vpiProtected
-#define vpiProtected 10
-#endif
-#ifndef vpiTimeUnit
-#define vpiTimeUnit 11
-#endif
-#ifndef vpiTimePrecision
-#define vpiTimePrecision 12
-#endif
-#ifndef vpiConnByName
-#define vpiConnByName 21
-#endif
-#ifndef vpiNetType
-#define vpiNetType 22
-#endif
-#ifndef vpiWire
-#define vpiWire 1
-#endif
-#ifndef vpiParamAssign
-#define vpiParamAssign 40
-#endif
-#ifndef vpiIteratorType
-#define vpiIteratorType 57
-#endif
-#ifndef vpiTimeVar
-#define vpiTimeVar 63
-#endif
-#ifndef vpiHighConn
-#define vpiHighConn 76
-#endif
-#ifndef vpiBit
-#define vpiBit 90
-#endif
-#ifndef vpiVariables
-#define vpiVariables 100
-#endif
-#ifndef vpiUse
-#define vpiUse 101
-#endif
-#ifndef vpiNetArray
-#define vpiNetArray 114
-#endif
-#ifndef vpiRange
-#define vpiRange 115
-#endif
-#ifndef vpiListOp
-#define vpiListOp 37
-#endif
-#ifndef vpiGenScopeArray
-#define vpiGenScopeArray 133
-#endif
-
 static vpiHandle top;
 
 /* The number of objects vpi_iterate(type, ref) yields; 0 for a NULL
@@ -362,8 +316,11 @@ static void module_and_arrays(void)
   CHECK(vpi_get(vpiArray, u) == 0, "26.6.1: u is no array member");
   CHECK(vpi_handle(vpiIndex, u) == NULL, "26.6.1 d: u has no index");
   expect_no_error("the module walk");
-  XFAIL(vpi_get(vpiTimeUnit, top) == -9, "26.6.1", "vpiTimeUnit of a `timescale 1ns module is not -9");
-  XFAIL(vpi_get(vpiTimePrecision, NULL) == -12, "26.6.1", "vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12");
+  CHECK(vpi_get(vpiTimeUnit, top) == -9, "26.6.1: vpiTimeUnit of a `timescale 1ns module is -9");
+  CHECK(vpi_get(vpiTimePrecision, top) == -12, "26.6.1: vpiTimePrecision of a `timescale 1ns/1ps module is -12");
+  CHECK(vpi_get(vpiTimePrecision, NULL) == -12, "26.6.1 b: vpi_get(vpiTimePrecision, NULL) is the smallest precision, -12");
+  CHECK(vpi_get(vpiTimeUnit, NULL) == -12, "26.6.1 b: so is vpi_get(vpiTimeUnit, NULL)");
+  expect_no_error("the time scale");
   CHECK(vpi_get(vpiSize, top) == vpiUndefined, "26.6.1: a module has no vpiSize");
   expect_refusal("vpi_get(vpiSize, module)");
 
@@ -383,13 +340,17 @@ static void module_and_arrays(void)
   CHECK(int_value(vpi_handle(vpiIndex, m1)) == 1, "26.6.1 d: arr[1]'s index reads 1");
   expect_no_error("the module array walk");
   {
-    vpiHandle lr = vpi_handle(vpiLeftRange, arr);
-    XFAIL(lr != NULL && int_value(lr) == 1, "26.6.2", "instance array -> vpiLeftRange does not read 1");
+    vpiHandle lr = vpi_handle(vpiLeftRange, arr), rr = vpi_handle(vpiRightRange, arr);
+    CHECK(lr != NULL && int_value(lr) == 1 && rr != NULL && int_value(rr) == 0, "26.6.2: arr's range [1:0]");
   }
   {
     vpiHandle e = vpi_handle(vpiExpr, arr);
-    XFAIL(e != NULL && vpi_get(vpiType, e) == vpiOperation && vpi_get(vpiOpType, e) == vpiListOp, "26.6.2",
-          "instance array -> expr is not a vpiListOp operation");
+    vpiHandle s = p02_by_name("b26_structure.s"), op;
+    vpiHandle ops = e != NULL ? vpi_iterate(vpiOperand, e) : NULL;
+    CHECK(e != NULL && vpi_get(vpiType, e) == vpiOperation && vpi_get(vpiOpType, e) == vpiListOp, "26.6.2: instance array -> expr is a vpiListOp operation");
+    op = ops != NULL ? vpi_scan(ops) : NULL;
+    CHECK(op != NULL && vpi_compare_objects(op, s) && vpi_scan(ops) == NULL, "26.6.2: its one operand is the connection s");
+    expect_no_error("the instance array's range and connections");
   }
   CHECK(vpi_get(vpiDirection, arr) == vpiUndefined, "26.6.2: an instance array has no direction");
   expect_refusal("vpi_get(vpiDirection, module array)");
@@ -438,18 +399,18 @@ static void instances_and_access(void)
   itr = vpi_iterate(vpiNet, top);
   {
     const char *s = vpi_get_str(vpiType, itr);
-    XFAIL(s != NULL && strcmp(s, "vpiIterator") == 0, "26.3.2", "vpi_get_str(vpiType, iterator) is not \"vpiIterator\"");
+    CHECK(s != NULL && strcmp(s, "vpiIterator") == 0, "26.3.2: vpi_get_str(vpiType, iterator) is \"vpiIterator\"");
   }
-  XFAIL(vpi_get(vpiNetType, bus) == vpiWire, "26.3.2", "vpiNetType of a wire is not vpiWire");
+  CHECK(vpi_get(vpiNetType, bus) == vpiWire, "26.3.2: vpiNetType of a wire is vpiWire");
   CHECK(vpi_get(vpiType, NULL) == vpiUndefined, "26.3.2: NULL is no object");
   expect_refusal("vpi_get(vpiType, NULL)");
 
   /* §26.3.3 */
-  XFAIL(vpi_get(vpiLineNo, inner) == 28, "26.3.3", "vpiLineNo of a net is not its source line");
+  CHECK(vpi_get(vpiLineNo, inner) == 28, "26.3.3: vpiLineNo of a net is its source line, got %d", (int)vpi_get(vpiLineNo, inner));
   {
     const char *f = vpi_get_str(vpiFile, inner);
     size_t n = f ? strlen(f) : 0;
-    XFAIL(n >= 18 && strcmp(f + n - 18, "b_26_6_structure.v") == 0, "26.3.3", "vpiFile of a net is not its source file");
+    CHECK(n >= 18 && strcmp(f + n - 18, "b_26_6_structure.v") == 0, "26.3.3: vpiFile of a net is its source file");
   }
   CHECK(vpi_get(vpiLineNo, itr) == vpiUndefined, "26.3.3: an iterator has no location");
   expect_refusal("vpi_get(vpiLineNo, iterator)");
@@ -457,8 +418,8 @@ static void instances_and_access(void)
   /* §26.6.43 */
   CHECK(vpi_get(vpiType, itr) == vpiIterator, "26.6.43: an iterator object");
   expect_no_error("iterator type");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiUse, itr), top), "26.6.43", "vpi_handle(vpiUse, iterator) is not its reference handle");
-  XFAIL(vpi_get(vpiIteratorType, itr) == vpiNet, "26.6.43", "vpiIteratorType is not the iterated type");
+  CHECK(vpi_compare_objects(vpi_handle(vpiUse, itr), top), "26.6.43 a: vpiUse is the reference handle");
+  CHECK(vpi_get(vpiIteratorType, itr) == vpiNet, "26.6.43: vpiIteratorType is the iterated type");
   CHECK(vpi_get(vpiSize, itr) == vpiUndefined, "26.6.43: an iterator has no size");
   expect_refusal("vpi_get(vpiSize, iterator)");
   vpi_free_object(itr);
@@ -467,7 +428,7 @@ static void instances_and_access(void)
   vpi_free_object(itr);
 
   /* §26.6.1 */
-  XFAIL(vpi_get(vpiProtected, top) == 0, "26.6.1", "vpiProtected of an unprotected module is not FALSE");
+  CHECK(vpi_get(vpiProtected, top) == 0, "26.6.1: vpiProtected of an unprotected module is FALSE");
 
   /* §26.5.2 / §26.5.3 */
   CHECK(vpi_get(vpiSize, bus) == 8, "26.5.2: an int property through vpi_get()");
@@ -507,8 +468,15 @@ static void ports_and_paths(void)
   CHECK(vpi_get(vpiVector, p[0]) == 1 && vpi_get(vpiScalar, p[0]) == 0, "26.6.5 c: a is more than 1 bit");
   CHECK(vpi_get(vpiScalar, p[1]) == 1 && vpi_get(vpiVector, p[1]) == 0, "26.6.5 c: y is 1 bit");
   expect_no_error("the port walk");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiHighConn, p[0]), bus), "26.6.5", "vpiHighConn of u.a is not bus");
-  XFAIL(vpi_get(vpiConnByName, p[0]) == 1, "26.6.5", "vpiConnByName of a named connection is not TRUE");
+  CHECK(vpi_compare_objects(vpi_handle(vpiHighConn, p[0]), bus), "26.6.5 a: vpiHighConn of u.a is bus");
+  CHECK(vpi_compare_objects(vpi_handle(vpiHighConn, p[1]), p02_by_name("b26_structure.s")), "26.6.5 a: vpiHighConn of u.y is s");
+  CHECK(vpi_get(vpiConnByName, p[0]) == 1, "26.6.5: vpiConnByName of a named connection is TRUE");
+  {
+    vpiHandle w4a = p02_by_name("b26_structure.w4.a");
+    CHECK(vpi_get(vpiConnByName, w4a) == 0 && vpi_compare_objects(vpi_handle(vpiHighConn, w4a), p02_by_name("b26_structure.r")),
+          "26.6.5: w4's ordered connection of a is r, not by name");
+  }
+  expect_no_error("the port connections");
   CHECK(vpi_get(vpiTopModule, p[0]) == vpiUndefined, "26.6.5: a port has no vpiTopModule");
   expect_refusal("vpi_get(vpiTopModule, port)");
 
@@ -540,9 +508,23 @@ static void nets_regs_variables(void)
   vpi_get_value(p02_by_name("b26_structure.s3"), &v);
   CHECK(v.value.scalar == vpi1, "26.6.6: s3 = s = bus[0] = 1");
   CHECK(vpi_iterate(vpiIndex, bus) == NULL, "26.6.6 t: no array, no indices");
-  XFAIL(count(vpiBit, bus) == 8, "26.6.6", "net ->> net bit does not yield bus's 8 bits");
-  XFAIL(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6",
-        "a net array is not a vpiNetArray of vpiSize 2");
+  CHECK(count(vpiBit, bus) == 8 && yields(vpiBit, bus, "b26_structure.bus[7]") && yields(vpiBit, bus, "b26_structure.bus[0]"),
+        "26.6.6 a: net ->> net bit yields bus's 8 bits");
+  {
+    vpiHandle b3 = p02_by_name("b26_structure.bus[3]");
+    CHECK(vpi_get(vpiType, b3) == vpiNetBit && vpi_compare_objects(vpi_handle(vpiParent, b3), bus) &&
+          int_value(vpi_handle(vpiIndex, b3)) == 3, "26.6.6 h: bus[3] is a net bit of bus, index 3");
+    CHECK(vpi_compare_objects(vpi_handle_by_index(bus, 3), b3), "26.6.6: net -> access by index reaches bus[3]");
+    CHECK(vpi_iterate(vpiBit, p02_by_name("b26_structure.s")) == NULL, "26.6.6: a scalar net has no bits");
+  }
+  expect_no_error("the net bits");
+  CHECK(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6 s: na is a vpiNetArray of 2 nets");
+  CHECK(count(vpiNetArray, top) == 1 && count(vpiNet, na) == 2 && yields(vpiNet, na, "b26_structure.na[1]"),
+        "26.6.6: module ->> net array ->> net");
+  CHECK(vpi_get(vpiArray, vpi_handle_by_index(na, 1)) == 1 && vpi_get(vpiSize, vpi_handle_by_index(na, 1)) == 4,
+        "26.6.6: na[1] is a 4-bit array member");
+  CHECK(vpi_get(vpiArray, bus) == 0, "26.6.6: bus is no array member");
+  expect_no_error("the net array walk");
   CHECK(vpi_get(vpiDirection, bus) == vpiUndefined, "26.6.6: a net has no direction");
   expect_refusal("vpi_get(vpiDirection, net)");
 
@@ -562,8 +544,10 @@ static void nets_regs_variables(void)
   vpi_get_value(w, &v);
   CHECK_STR(v.value.str, "11", "26.6.7: mem[1] = 8'h11");
   expect_no_error("the reg walk");
-  XFAIL(vpi_get(vpiArray, w) == 1, "26.6.7", "vpiArray of a reg array member is not TRUE");
-  XFAIL(vpi_get(vpiSize, m2) == 6, "26.6.7", "vpiSize of a 2x3 reg array is not its 6 regs");
+  CHECK(vpi_get(vpiArray, w) == 1, "26.6.7: vpiArray of a reg array member is TRUE");
+  CHECK(vpi_get(vpiSize, m2) == 6 && count(vpiReg, m2) == 6 && yields(vpiReg, m2, "b26_structure.m2[1][2]"),
+        "26.6.7 l: m2 holds its 2 x 3 regs");
+  expect_no_error("the array members");
   CHECK(vpi_get(vpiDirection, r) == vpiUndefined, "26.6.7: a reg has no direction");
   expect_refusal("vpi_get(vpiDirection, reg)");
 
@@ -584,8 +568,12 @@ static void nets_regs_variables(void)
   vpi_get_value(x, &v);
   CHECK(v.value.real == 2.5, "26.6.8: x = 2.5");
   expect_no_error("the variable walk");
-  XFAIL(vpi_get(vpiType, t) == vpiTimeVar, "26.6.8", "a time variable is not a vpiTimeVar");
-  XFAIL(count(vpiVariables, top) == 4, "26.6.8", "module ->> variables does not yield i, ia, x, t");
+  CHECK(vpi_get(vpiType, t) == vpiTimeVar && vpi_get(vpiSize, t) >= 64 && vpi_get(vpiSigned, t) == 0,
+        "26.6.8: t is an unsigned vpiTimeVar of at least 64 bits");
+  CHECK(count(vpiVariables, top) == 4 && yields(vpiVariables, top, "b26_structure.i") &&
+        yields(vpiVariables, top, "b26_structure.ia") && yields(vpiVariables, top, "b26_structure.x") &&
+        yields(vpiVariables, top, "b26_structure.t"), "26.6.1: module ->> variables yields i, ia, x, t");
+  expect_no_error("the time variable");
   v.format = vpiIntVal;
   vpi_get_value(ia, &v);
   expect_refusal("26.6.8 i: vpi_get_value(variable array)");
@@ -632,7 +620,7 @@ static void nets_regs_variables(void)
   CHECK_STR(vpi_get_str(vpiName, ev), "ev", "26.6.11 name");
   CHECK_STR(vpi_get_str(vpiFullName, ev), "b26_structure.ev", "26.6.11 full name");
   CHECK(vpi_iterate(vpiIndex, ev) == NULL, "26.6.11: not in an array, so NULL");
-  XFAIL(vpi_get(vpiArray, ev) == 0, "26.6.11", "vpiArray of a scalar named event is not FALSE");
+  CHECK(vpi_get(vpiArray, ev) == 0, "26.6.11: vpiArray of a scalar named event is FALSE");
   CHECK(vpi_get(vpiSize, ev) == vpiUndefined, "26.6.11: a named event has no size");
   expect_refusal("vpi_get(vpiSize, named event)");
 }
@@ -643,6 +631,7 @@ static void parameters_and_generates(void)
   vpiHandle L = p02_by_name("b26_structure.L");
   vpiHandle uW = p02_by_name("b26_structure.u.W");
   vpiHandle w4 = p02_by_name("b26_structure.w4");
+  vpiHandle u = p02_by_name("b26_structure.u");
   s_vpi_value v;
 
   /* §26.6.12 */
@@ -652,9 +641,18 @@ static void parameters_and_generates(void)
   CHECK(vpi_handle(vpiLeftRange, uW) == NULL, "26.6.12 c: W has no range");
   {
     vpiHandle lr = vpi_handle(vpiLeftRange, P);
-    XFAIL(lr != NULL && int_value(lr) == 7, "26.6.12", "vpiLeftRange of P [7:0] does not read 7");
+    vpiHandle rr = vpi_handle(vpiRightRange, P);
+    CHECK(lr != NULL && int_value(lr) == 7 && rr != NULL && int_value(rr) == 0, "26.6.12: P's range [7:0]");
   }
-  XFAIL(count(vpiParamAssign, w4) == 1, "26.6.12", "w4 ->> param assign does not yield its #(.W(4))");
+  {
+    vpiHandle itr = vpi_iterate(vpiParamAssign, w4);
+    vpiHandle pa = itr != NULL ? vpi_scan(itr) : NULL;
+    CHECK(pa != NULL && vpi_get(vpiType, pa) == vpiParamAssign && vpi_scan(itr) == NULL, "26.6.12: w4 ->> one param assign");
+    CHECK(vpi_compare_objects(vpi_handle(vpiLhs, pa), p02_by_name("b26_structure.w4.W")), "26.6.12 b: its vpiLhs is w4.W");
+    CHECK(int_value(vpi_handle(vpiRhs, pa)) == 4 && vpi_get(vpiConnByName, pa) == 1, "26.6.12: .W(4), by name");
+    CHECK(vpi_iterate(vpiParamAssign, u) == NULL, "26.6.12: u overrides nothing");
+  }
+  expect_no_error("the parameter ranges and assignments");
   v.format = vpiIntVal;
   v.value.integer = 9;
   vpi_put_value(P, &v, NULL, vpiNoDelay);

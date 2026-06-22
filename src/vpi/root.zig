@@ -62,6 +62,10 @@ pub const vpiRealVar: c_int = 47;
 pub const vpiVarSelect: c_int = 68;
 pub const vpiModuleArray: c_int = 112;
 pub const vpiRegArray: c_int = 116;
+pub const vpiTimeVar: c_int = 63;
+pub const vpiNetArray: c_int = 114;
+/// IEEE 1364-2005 §26.6.1 module ->> variables.
+pub const vpiVariables: c_int = 100;
 /// IEEE 1364-2005 §26.6.20 (Annex G).
 pub const vpiAutomatic: c_int = 50;
 
@@ -96,6 +100,11 @@ pub const vpiReg: c_int = 48;
 // Relationships.
 pub const vpiScope: c_int = 84;
 pub const vpiInternalScope: c_int = 92;
+/// IEEE 1364-2005 §26.6.5-§26.6.7 vector ->> bit.
+pub const vpiBit: c_int = 90;
+/// IEEE 1364-2005 §26.6.43 (Annex G).
+pub const vpiUse: c_int = 101;
+pub const vpiIteratorType: c_int = 57;
 
 // Properties.
 pub const vpiUndefined: c_int = -1;
@@ -104,6 +113,12 @@ pub const vpiName: c_int = 2;
 pub const vpiFullName: c_int = 3;
 pub const vpiSize: c_int = 4;
 pub const vpiTopModule: c_int = 7;
+pub const vpiFile: c_int = 5;
+pub const vpiLineNo: c_int = 6;
+pub const vpiNetType: c_int = 22;
+pub const vpiProtected: c_int = 10;
+pub const vpiTimeUnit: c_int = 11;
+pub const vpiTimePrecision: c_int = 12;
 pub const vpiDefName: c_int = 9;
 pub const vpiCell: c_int = 51;
 pub const vpiConfig: c_int = 52;
@@ -167,12 +182,16 @@ const Kind = enum(u8) {
     /// §11.6.10 `integer` and `real` variables.
     integer,
     real_var,
+    /// IEEE 1364-2005 §26.6.8 a `time` variable.
+    time_var,
     /// §11.6.10/§11.6.11 arrays. A reg array is IEEE 1364 §26.6.9's memory
     /// (vpiRegArray, vpiIsMemory); an integer or real array is a variable of
     /// its element type with vpiArray set (§26.6.7). Each holds its elements
     /// in `members`.
     reg_array,
     var_array,
+    /// IEEE 1364-2005 §26.6.6 an array of nets; its elements are `.net`s.
+    net_array,
     /// One element: a memory word (a vpiReg) or a variable select.
     word,
     var_select,
@@ -210,7 +229,9 @@ fn typeOf(o: *const Obj) c_int {
         .parameter => vpiParameter,
         .integer => vpiIntegerVar,
         .real_var => vpiRealVar,
+        .time_var => vpiTimeVar,
         .reg_array => vpiRegArray,
+        .net_array => vpiNetArray,
         .var_array => if (o.ty == .real) vpiRealVar else vpiIntegerVar,
         .var_select => vpiVarSelect,
         .module_array => vpiModuleArray,
@@ -236,6 +257,8 @@ fn typeName(t: c_int) []const u8 {
         vpiIntegerVar => "vpiIntegerVar",
         vpiRealVar => "vpiRealVar",
         vpiRegArray => "vpiRegArray",
+        vpiTimeVar => "vpiTimeVar",
+        vpiNetArray => "vpiNetArray",
         vpiVarSelect => "vpiVarSelect",
         vpiModuleArray => "vpiModuleArray",
         vpiConstant => "vpiConstant",
@@ -244,8 +267,13 @@ fn typeName(t: c_int) []const u8 {
         vpiNode => "vpiNode",
         vpiBranch => "vpiBranch",
         vpiQuantity => "vpiQuantity",
-        // else: `t` is always typeOf()'s answer, and every value typeOf can
-        // return has a prong above; this arm is unreachable, not a default.
+        vpiIterator => "vpiIterator",
+        callback.vpiCallback => "vpiCallback",
+        value.vpiSchedEvent => "vpiSchedEvent",
+        systf.vpiUserSystf => "vpiUserSystf",
+        run.vpiTimeQueue => "vpiTimeQueue",
+        // else: `t` is always vpi_get(vpiType)'s answer, and every value it
+        // can return has a prong above; this arm is unreachable, not a default.
         else => "vpiUndefined",
     };
 }
@@ -331,7 +359,8 @@ pub const Obj = struct {
     nets: []const u32 = &.{},
     children: []const u32 = &.{},
     users: []const u32 = &.{},
-    /// `.code` only: the object type and the diagram's edges, as data.
+    /// `.code`: the object type and the diagram's edges, as data. Any other
+    /// class may carry `edges` and `props` too, answered after its own.
     vtype: c_int = 0,
     edges: []const code.Edge = &.{},
     lists: []const code.List = &.{},
@@ -374,7 +403,8 @@ pub const Obj = struct {
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
     /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
     /// task or function call, the token the engine runs its calltf by
-    /// (`systf.hook`).
+    /// (`systf.hook`); of a declaration, its IEEE §26.3.3 source location.
+    /// Zero means no source token was recorded.
     src_tok: u32 = 0,
     /// `.code` statement: its AST statement, which with `owner` names the
     /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
@@ -386,6 +416,8 @@ pub const Obj = struct {
     /// as operations have no VPI scope relationship (`owner` is null), but
     /// still need their original instance when an application reads them.
     expr_scope: ?u32 = null,
+    /// `.net` only: its A.2.2.1 net type, IEEE 1364-2005 §26.6.6 vpiNetType.
+    net_type: Ast.NetKind = .wire,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -405,6 +437,11 @@ const Scope = struct {
     /// The §6.7 path relative to the top, `""` at the root. The key the flat
     /// declarations are bucketed by.
     path: []const u8,
+    /// IEEE 1364-2005 §26.6.1 vpiTimeUnit and vpiTimePrecision, powers of ten
+    /// of a second (§17.3.2 Table 17-10's exponents): the §19.8 time scale of
+    /// this instance's definition. Null in the analog model, which has none.
+    time_unit: ?i8 = null,
+    time_precision: ?i8 = null,
     children: []const u32 = &.{},
     ports: []const u32 = &.{},
     nets: []const u32 = &.{},
@@ -413,6 +450,11 @@ const Scope = struct {
     integers: []const u32 = &.{},
     reals: []const u32 = &.{},
     reg_arrays: []const u32 = &.{},
+    /// IEEE 1364-2005 §26.6.1 module ->> net array and ->> variables (every
+    /// integer, time and real variable and variable array, in declaration
+    /// order).
+    net_arrays: []const u32 = &.{},
+    variables: []const u32 = &.{},
     module_arrays: []const u32 = &.{},
     nodes: []const u32 = &.{},
     branches: []const u32 = &.{},
@@ -431,6 +473,11 @@ const Iter = struct {
     /// Handles to objects that are not in `Design.objects` (§11.6.25 time
     /// queues), OWNED by the iterator; scanned instead of `items` when set.
     handles: ?[]vpiHandle = null,
+    /// IEEE 1364-2005 §26.6.43: the reference handle it was made from
+    /// (vpiUse, NULL for a NULL reference) and the type it iterates
+    /// (vpiIteratorType).
+    use: vpiHandle = null,
+    ty: c_int = 0,
 };
 
 /// The installed object model (`design`). Owns everything it reports: strings
@@ -456,6 +503,15 @@ pub const Design = struct {
     natures: []const u32 = &.{},
     /// §11.6.14's circled arrow: `vpi_iterate(vpiUdpDefn, NULL)`.
     udp_defns: []const u32 = &.{},
+    /// How `vpi_handle_by_name` searches from a scope. Verilog-AMS §12.21
+    /// uses "the scope search rules defined by the Verilog-AMS HDL", §6.7's
+    /// upward walk; IEEE 1364-2005 §27.19 "search within that scope only".
+    /// The model over a 1364 digital run takes the second.
+    search_up: bool = true,
+    /// IEEE 1364-2005 §26.6.1 Details b: what vpiTimeUnit and
+    /// vpiTimePrecision of a NULL object answer, "the smallest time precision
+    /// of all modules". Null in the analog model.
+    finest: ?i8 = null,
     /// §11.6 `vpiFullName` → object index. Every object has one and they are
     /// unique, which is what makes §12.21 a lookup rather than a tree walk.
     by_name: std.StringHashMapUnmanaged(u32),
@@ -549,6 +605,8 @@ const Building = struct {
     library: []const u8 = "work",
     config: []const u8 = "",
     path: []const u8,
+    time_unit: ?i8 = null,
+    time_precision: ?i8 = null,
     parent: ?u32,
     /// A digital model's `digital.Run` scope id for this instance.
     engine: u32 = 0,
@@ -560,6 +618,8 @@ const Building = struct {
     integers: std.ArrayList(u32) = .empty,
     reals: std.ArrayList(u32) = .empty,
     reg_arrays: std.ArrayList(u32) = .empty,
+    net_arrays: std.ArrayList(u32) = .empty,
+    variables: std.ArrayList(u32) = .empty,
     module_arrays: std.ArrayList(u32) = .empty,
     nodes: std.ArrayList(u32) = .empty,
     branches: std.ArrayList(u32) = .empty,
@@ -574,6 +634,8 @@ const Building = struct {
         s.integers.deinit(gpa);
         s.reals.deinit(gpa);
         s.reg_arrays.deinit(gpa);
+        s.net_arrays.deinit(gpa);
+        s.variables.deinit(gpa);
         s.module_arrays.deinit(gpa);
         s.nodes.deinit(gpa);
         s.branches.deinit(gpa);
@@ -694,6 +756,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .size = vectorSize(lowered, flat_name),
+            .net_type = n.kind,
         });
     }
     for (flat.vars) |v| {
@@ -705,15 +768,17 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             const dim = literalDim(file, v.dims[0]) orelse continue;
             const is_reg = v.storage == .reg;
             if (!is_reg and v.ty != .real and v.ty != .integer) continue;
-            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
             const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, at);
+            if (!is_reg) try scopes.items[split.scope].variables.append(gpa, at);
             continue;
         }
         if (v.dims.len != 0) continue;
         if (v.storage == .variable and (v.ty == .real or v.ty == .integer)) {
             const list = if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, @intCast(objects.items.len));
+            try scopes.items[split.scope].variables.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, .{
                 .kind = if (v.ty == .real) .real_var else .integer,
                 .owner = split.scope,
@@ -1080,6 +1145,8 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .library = s.library,
         .config = s.config,
         .path = s.path,
+        .time_unit = s.time_unit,
+        .time_precision = s.time_precision,
         .children = try arena.dupe(u32, s.children.items),
         .ports = try arena.dupe(u32, s.ports.items),
         .nets = try arena.dupe(u32, s.nets.items),
@@ -1088,6 +1155,8 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .integers = try arena.dupe(u32, s.integers.items),
         .reals = try arena.dupe(u32, s.reals.items),
         .reg_arrays = try arena.dupe(u32, s.reg_arrays.items),
+        .net_arrays = try arena.dupe(u32, s.net_arrays.items),
+        .variables = try arena.dupe(u32, s.variables.items),
         .module_arrays = try arena.dupe(u32, s.module_arrays.items),
         .nodes = try arena.dupe(u32, s.nodes.items),
         .branches = try arena.dupe(u32, s.branches.items),
@@ -1104,14 +1173,18 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         // A named block, task, function or named event has a full name; a
         // statement or expression does not.
         .code => if (o.full.len != 0) try d.by_name.put(gpa, o.full, @intCast(i)),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
     };
 }
 
 /// §11.6.10/§11.6.11: an array object and, after it, each element preceded by
-/// the constant its `vpiIndex` leads to — elements in increasing index. The
-/// digital engine stores element `addr` in `base + (addr - low)`
-/// (`digital.Run.arrays`), which is the slot given each element here.
+/// the constant its `vpiIndex` leads to — elements in increasing index,
+/// row-major over the dimensions `[low:high]` then `rest`, so the element
+/// count is IEEE 1364-2005 §26.6.6/§26.6.7's vpiSize. A multidimensional
+/// element is named by all its indices (`m[1][2]`) and its vpiIndex is the
+/// innermost ("the index for the reg", §26.6.7 m). The digital engine stores
+/// element k of that order in `base + k` (`digital.Run.arrays`), which is the
+/// slot given each element here.
 fn addArray(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -1123,25 +1196,46 @@ fn addArray(
     ty: Ast.Type,
     low: i64,
     high: i64,
+    rest: []const sim.digital.Span,
     width: u32,
     base: ?u32,
 ) Error!u32 {
     const at: u32 = @intCast(objects.items.len);
-    const count: u32 = @intCast(high - low + 1);
+    var count: u32 = @intCast(high - low + 1);
+    for (rest) |sp| count *= @intCast(sp.high - sp.low + 1);
     const members = try arena.alloc(u32, count);
     try objects.append(gpa, .{ .kind = kind, .owner = owner, .name = name, .full = full, .size = count, .ty = ty, .members = members });
-    const elem: Kind = if (kind == .reg_array) .word else .var_select;
+    const elem: Kind = switch (kind) {
+        .reg_array => .word,
+        .net_array => .net,
+        else => .var_select, // else: the one other array class addArray is given
+    };
+    var suffix: std.ArrayList(u8) = .empty;
     for (0..count) |k| {
-        const addr = low + @as(i64, @intCast(k));
+        // Peel the indices off `k`, innermost (fastest) dimension first.
+        suffix.clearRetainingCapacity();
+        var q: i64 = @intCast(k);
+        var inner: i64 = 0;
+        var d = rest.len + 1;
+        while (d > 0) {
+            d -= 1;
+            const sp: sim.digital.Span = if (d == 0) .{ .low = low, .high = high } else rest[d - 1];
+            const n = sp.high - sp.low + 1;
+            const i = sp.low + @mod(q, n);
+            q = @divTrunc(q, n);
+            if (d == rest.len) inner = i;
+            var buf: [24]u8 = undefined;
+            try suffix.insertSlice(arena, 0, std.fmt.bufPrint(&buf, "[{d}]", .{i}) catch unreachable);
+        }
         const c: u32 = @intCast(objects.items.len);
-        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = addr } });
+        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
         members[k] = @intCast(objects.items.len);
-        const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, addr });
+        const local = try std.fmt.allocPrint(arena, "{s}{s}", .{ name, suffix.items });
         try objects.append(gpa, .{
             .kind = elem,
             .owner = owner,
             .name = local,
-            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ full, addr }),
+            .full = try std.fmt.allocPrint(arena, "{s}{s}", .{ full, suffix.items }),
             .size = width,
             .ty = ty,
             .slot = if (base) |b| b + @as(u32, @intCast(k)) else null,
@@ -1150,6 +1244,40 @@ fn addArray(
         });
     }
     return at;
+}
+
+/// IEEE 1364-2005 §26.6.6 Details a / §26.6.7: the bits of the vector net or
+/// reg last appended, `vtype` vpiNetBit or vpiRegBit, from its declared msb
+/// to its lsb, each named `v[i]`, with vpiParent the vector and vpiIndex
+/// `i`. The vector reaches them by vpiBit; a scalar's set is empty.
+fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), r: *const sim.digital.Run, vtype: c_int) Error!void {
+    const v: u32 = @intCast(objects.items.len - 1);
+    const vec = objects.items[v];
+    const slot = vec.slot orelse return;
+    if (vec.size < 2) {
+        objects.items[v].lists = &.{.{ .tag = vpiBit, .items = &.{} }};
+        return;
+    }
+    const range = r.vecRange(slot);
+    const bits = try arena.alloc(u32, vec.size);
+    const step: i64 = if (range.msb >= range.lsb) -1 else 1;
+    for (bits, 0..) |*bit, k| {
+        const i = range.msb + step * @as(i64, @intCast(k));
+        const c: u32 = @intCast(objects.items.len);
+        try objects.append(gpa, .{ .kind = .constant, .owner = vec.owner, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
+        bit.* = @intCast(objects.items.len);
+        try objects.append(gpa, .{
+            .kind = .code,
+            .vtype = vtype,
+            .owner = vec.owner,
+            .name = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.name, i }),
+            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.full, i }),
+            .src_tok = vec.src_tok,
+            .edges = try arena.dupe(code.Edge, &.{ .{ .tag = vpiParent, .to = v }, .{ .tag = vpiIndex, .to = c } }),
+            .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
+        });
+    }
+    objects.items[v].lists = try arena.dupe(code.List, &.{.{ .tag = vpiBit, .items = bits }});
 }
 
 /// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
@@ -1366,7 +1494,10 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
         const m = &file.modules[info.def];
         const cfg = if (r.binds.get(@intCast(e))) |b| b.cfg else null;
+        const mt = r.timeOf(@intCast(e));
         try scopes.append(gpa, .{
+            .time_unit = @intCast(mt.unit_exp),
+            .time_precision = @intCast(mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)))),
             .decl = m,
             .def_name = try arena.dupe(u8, file.str(m.name)),
             .library = try arena.dupe(u8, file.str(r.def_lib[info.def])),
@@ -1399,11 +1530,31 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));
             objects.items[objects.items.len - 1].direction = p.direction;
             objects.items[objects.items.len - 1].port_index = @intCast(k);
+            objects.items[objects.items.len - 1].src_tok = p.main_tok;
         }
         for (m.nets) |n| {
             const at = r.names.get(.{ .scope = eng, .str = n.name }) orelse continue;
+            // IEEE 1364-2005 §26.6.6: a net array, over the engine's element
+            // slots, each element a net of the declared type.
+            if (r.arrays.get(at)) |a| {
+                const local = try arena.dupe(u8, file.str(n.name));
+                const arr = try addArray(gpa, arena, &objects, .net_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), .unspecified, a.low, a.high, a.rest, r.values[at].width, at);
+                for (objects.items[arr].members) |e| {
+                    objects.items[e].net_type = n.kind;
+                    objects.items[e].src_tok = n.main_tok;
+                }
+                const range = try arena.dupe(u32, &.{try addRange(gpa, arena, &objects, scope, a.left, a.right)});
+                objects.items[arr].range = range;
+                objects.items[arr].src_tok = n.main_tok;
+                try s.net_arrays.append(gpa, arr);
+                continue;
+            }
             try s.nets.append(gpa, @intCast(objects.items.len));
-            try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at));
+            var o = try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at);
+            o.net_type = n.kind;
+            o.src_tok = n.main_tok;
+            try objects.append(gpa, o);
+            try addBits(gpa, arena, &objects, r, code.vpiNetBit);
         }
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
@@ -1415,18 +1566,24 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
                 // §26.6.7: a `real` array is a vpiRealVar with vpiArray set,
                 // one of the scope's reals — as the analog model builds it.
                 const real = !is_reg and v.ty == .real;
-                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, r.values[at].width, at);
+                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, a.rest, r.values[at].width, at);
                 // Two statements: addRange grows `objects`, moving `items`.
                 const range = try arena.dupe(u32, &.{try addRange(gpa, arena, &objects, scope, a.left, a.right)});
                 objects.items[arr].range = range;
+                objects.items[arr].src_tok = v.main_tok;
                 try (if (is_reg) &s.reg_arrays else if (real) &s.reals else &s.integers).append(gpa, arr);
+                if (!is_reg) try s.variables.append(gpa, arr);
                 continue;
             }
-            const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else if (v.ty == .real) .real_var else continue;
-            const list = if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers;
-            try list.append(gpa, @intCast(objects.items.len));
+            const kind: Kind = if (v.storage == .reg) .reg else if (v.storage == .time) .time_var else if (v.ty == .integer) .integer else if (v.ty == .real) .real_var else continue;
+            if (kind != .reg) try s.variables.append(gpa, @intCast(objects.items.len));
+            // A time variable is in neither per-type list: its type is its own.
+            if (kind != .time_var) try (if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers).append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
-            objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
+            // IEEE 1364-2005 §4.8: `time` is unsigned, `integer` signed.
+            objects.items[objects.items.len - 1].is_signed = kind != .time_var and (v.is_signed or kind == .integer);
+            objects.items[objects.items.len - 1].src_tok = v.main_tok;
+            if (kind == .reg) try addBits(gpa, arena, &objects, r, code.vpiRegBit);
         }
         // §11.6.12 parameters. The engine folds each into a slot of its own
         // (IEEE 1364 §12.2, `Run.params`), so NOTE 1's "final value of the
@@ -1439,6 +1596,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             var o = try digitalObj(r, arena, top_name, s.path, scope, p.name, .parameter, at);
             o.ty = p.ty;
             o.is_local = p.is_local;
+            o.src_tok = p.main_tok;
             try objects.append(gpa, o);
         }
     }
@@ -1454,10 +1612,89 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     for (scopes.items, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps };
         try b.module(s.decl);
+        try addConnections(&b, scopes.items, r);
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
+    d.finest = @intCast(r.finest);
+    d.search_up = false;
     return d;
+}
+
+/// IEEE 1364-2005 §26.6.2/§26.6.5/§26.6.12, built in scope `b.scope`, whose
+/// expressions the connections are: each parameter's declared range
+/// (vpiLeftRange/vpiRightRange, NULL without one, Details c), and for each
+/// child instance its ports' vpiHighConn and vpiConnByName and one param
+/// assign per `#(...)` entry; an instance array's range and its connection
+/// list as one vpiListOp operation.
+///
+/// ponytail: only instances written directly in the module body; one inside
+/// a generate block has none of these (its `Ast.Instance` is the block's).
+fn addConnections(b: *code.Builder, scopes: []Building, r: *const sim.digital.Run) Error!void {
+    const s = &scopes[b.scope];
+    const m = s.decl;
+    const file = b.file;
+    for (s.params.items) |at| {
+        const p = for (m.params) |p| {
+            if (std.mem.eql(u8, file.str(p.name), b.objects.items[at].name)) break p;
+        } else continue;
+        const range = p.packed_range orelse Ast.Dim{ .msb = .none, .lsb = .none };
+        const l = try b.expr(range.msb);
+        const rr = try b.expr(range.lsb);
+        b.objects.items[at].edges = try b.arena.dupe(code.Edge, &.{ .{ .tag = code.vpiLeftRange, .to = l }, .{ .tag = code.vpiRightRange, .to = rr } });
+    }
+    for (m.instances) |*inst| {
+        if (inst.range) |range| for (s.module_arrays.items) |at| {
+            if (!std.mem.eql(u8, b.objects.items[at].name, file.str(inst.name))) continue;
+            var conns: std.ArrayList(Ast.ExprId) = .empty;
+            for (inst.ports) |c| try conns.append(b.arena, c.expr);
+            const l = try b.expr(range.msb);
+            const rr = try b.expr(range.lsb);
+            const list = try b.operation(code.vpiListOp, conns.items);
+            b.objects.items[at].edges = try b.arena.dupe(code.Edge, &.{
+                .{ .tag = code.vpiLeftRange, .to = l },
+                .{ .tag = code.vpiRightRange, .to = rr },
+                .{ .tag = code.vpiExpr, .to = list },
+            });
+        };
+        for (s.children.items) |c| {
+            if (r.scope_info.items[scopes[c].engine].name != inst.name) continue;
+            const child = scopes[c].decl;
+            const named = inst.ports.len != 0 and inst.ports[0].name != .none;
+            for (scopes[c].ports.items) |pt| b.objects.items[pt].props = try b.arena.dupe(code.Prop, &.{.{ .prop = code.vpiConnByName, .value = @intFromBool(named) }});
+            for (inst.ports, 0..) |conn, k| {
+                // §12.3.6: by name, the port whose external name it is; in
+                // order, the k-th port (a concatenation's pieces are one).
+                var ordinal: usize = 0;
+                const j = for (child.ports, 0..) |p, j| {
+                    if (named) {
+                        if ((if (p.external_name != .none) p.external_name else p.name) == conn.name) break j;
+                    } else if (!p.concat_rest) {
+                        if (ordinal == k) break j;
+                        ordinal += 1;
+                    }
+                } else continue;
+                const high = try b.expr(conn.expr);
+                b.objects.items[scopes[c].ports.items[j]].edges = try b.arena.dupe(code.Edge, &.{.{ .tag = code.vpiHighConn, .to = high }});
+            }
+            for (inst.params, 0..) |o, k| {
+                // §12.2.2.1: in order, the k-th parameter that is not local.
+                var ordinal: usize = 0;
+                const name = for (child.params) |p| {
+                    if (p.is_local) continue;
+                    if (if (o.name != .none) p.name == o.name else ordinal == k) break p.name;
+                    ordinal += 1;
+                } else continue;
+                const lhs = for (scopes[c].params.items) |at| {
+                    if (std.mem.eql(u8, b.objects.items[at].name, file.str(name))) break at;
+                } else code.none;
+                const rhs = try b.expr(o.value);
+                const at = try b.code(code.vpiParamAssign, &.{ .{ .tag = code.vpiLhs, .to = lhs }, .{ .tag = code.vpiRhs, .to = rhs } }, &.{}, &.{.{ .prop = code.vpiConnByName, .value = @intFromBool(o.name != .none) }});
+                b.objects.items[at].owner = c;
+                try scopes[c].code.param_assigns.append(b.gpa, at);
+            }
+        }
+    }
 }
 
 /// §6.7 full name -> object, for resolving the identifiers of the
@@ -1469,7 +1706,7 @@ fn nameTable(gpa: std.mem.Allocator, objects: []const Obj) Error!std.StringHashM
     errdefer names.deinit(gpa);
     for (objects, 0..) |o, i| switch (o.kind) {
         .constant, .quantity, .node, .discipline, .nature => {},
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch, .code => if (o.full.len != 0) try names.put(gpa, o.full, @intCast(i)),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .branch, .code => if (o.full.len != 0) try names.put(gpa, o.full, @intCast(i)),
     };
     return names;
 }
@@ -1494,7 +1731,7 @@ fn addAnalogCode(
         // (§5.4.2) has none, and a statement reaches it by its node pair.
         .branch => if (o.full.len > top_name.len) try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
         .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
     };
     var names = try nameTable(gpa, objects.items);
     defer names.deinit(gpa);
@@ -1732,14 +1969,23 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return handleOf(&design.?.objects[at]);
     }
     const d = enter("vpi_handle") orelse return null;
+    // IEEE 1364-2005 §26.6.43: an iterator's one edge, NULL when it was made
+    // from a NULL reference (Details b).
+    if (asIter(ref)) |it| {
+        if (obj_type == vpiUse) return it.use;
+        fail("NOTRAVERSE", "vpi_handle: an iterator has no relationship {d}", .{obj_type});
+        return null;
+    }
     const o = object("vpi_handle", ref) orelse return null;
     // §11.6.2/§11.6.5–§11.6.7's single arrows. Each edge is answered only
     // from the classes whose diagram draws it; from any other class it is
     // NOTRAVERSE, like every relationship a diagram does not draw.
     // §11.6.3/§11.6.16–§11.6.24: a behavioural object's single arrows are
-    // its own `edges` rows (code.zig). A tag it does not carry falls through
-    // to the containing-scope edge, and past that is NOTRAVERSE.
-    if (o.kind == .code) for (o.edges) |e| if (e.tag == obj_type) {
+    // its own `edges` rows (code.zig), as are the few a declared object
+    // carries (a port's vpiHighConn, a range's bounds). A tag it does not
+    // carry falls through to the containing-scope edge, and past that is
+    // NOTRAVERSE.
+    for (o.edges) |e| if (e.tag == obj_type) {
         if (e.to == no_obj) return null;
         return handleOf(&d.objects[e.to]);
     };
@@ -1759,7 +2005,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
             // no module arrow leaves it (§11.6.2, §11.6.7).
             switch (o.kind) {
                 .discipline, .nature, .quantity => return noEdge(obj_type, o),
-                .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .node, .branch => {},
+                .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .node, .branch => {},
                 // An expression is in no scope (§11.6.19 draws no scope
                 // arrow); a statement, process or declaration is (§11.6.21
                 // stmt -> scope).
@@ -1833,7 +2079,7 @@ fn analogEdge(o: *const Obj, obj_type: c_int) ??u32 {
             vpiNode => o.node,
             else => null, // else: a port's other edges are the shared owner edge
         },
-        .module, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .code => null,
+        .module, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .code => null,
     };
 }
 
@@ -1855,7 +2101,8 @@ fn noEdge(obj_type: c_int, o: *const Obj) vpiHandle {
 /// looked for in ITS parent, and so on to the top. That loop is the whole of
 /// the `scope != NULL` arm. With a NULL scope the name is absolute and matched
 /// against `vpiFullName` — the property §12.21 says the routine "can be applied
-/// to all objects with".
+/// to all objects with". A digital run searches `scope` alone instead
+/// (`Design.search_up`).
 pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
     const d = enter("vpi_handle_by_name") orelse return null;
     if (name == null) {
@@ -1869,10 +2116,14 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
         // non-module object is the one it is declared in, and the scope of a
         // module is itself.
         var at: ?u32 = if (from.kind == .module) from.scope else from.owner;
-        while (at) |sc| : (at = d.scopes[sc].parent) {
+        while (at) |sc| : (at = if (d.search_up) d.scopes[sc].parent else null) {
             var buf: [name_buf_len]u8 = undefined;
             const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
             if (d.by_name.get(full)) |i| return handleOf(&d.objects[i]);
+        }
+        if (!d.search_up) {
+            fail("NONAME", "vpi_handle_by_name: `{s}` names no object in that scope", .{want});
+            return null;
         }
         // The search ends at the top, where a hierarchical name is an absolute
         // one: `vpi_handle_by_name("top.u.k", any_scope)` is §12.21's
@@ -1905,14 +2156,13 @@ pub const name_buf_len = 4096;
 /// can access an expression using `vpiIndex`."
 ///
 /// The indexed objects are the §11.6.11 array elements — memory words and
-/// variable selects — and the members of a §6.2.2 instance array: "for a memory
-/// word, obj is the associated memory". `index` is the element's own declared
-/// index, the value its vpiIndex constant holds.
+/// variable selects — the members of a §6.2.2 instance array ("for a memory
+/// word, obj is the associated memory"), and the bits of a digital vector
+/// net or reg (IEEE 1364-2005 §26.6.6/§26.6.7). `index` is the element's own
+/// declared index, the value its vpiIndex constant holds.
 ///
-/// ponytail: BIT-LEVEL objects (net bit, reg bit, port bit) are not modelled,
-/// so indexing a vector is still §12.2's error indication. Each would need
-/// §11.6.5's `vpiIndex` expr and its own properties; `Lowered.vectors` already
-/// holds the folded `[msb:lsb]` they would need.
+/// ponytail: the analog model and port bits have no bit objects, so indexing
+/// one of those vectors is still §12.2's error indication.
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     const d = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
@@ -1935,6 +2185,13 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });
         return null;
     }
+    if (o.kind != .code) for (o.lists) |l| if (l.tag == vpiBit and l.items.len != 0) {
+        for (l.items) |bit| for (d.objects[bit].edges) |e| {
+            if (e.tag == vpiIndex and d.objects[e.to].value.?.int == index) return handleOf(&d.objects[bit]);
+        };
+        fail("NOINDEX", "vpi_handle_by_index: `{s}` has no bit {d}", .{ o.full, index });
+        return null;
+    };
     fail(
         "NOINDEX",
         "vpi_handle_by_index: a {s} has no indexed object at {d} — bit-level objects are not modelled",
@@ -1977,6 +2234,15 @@ pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_
 /// application that does not check errors sees the documented empty loop either
 /// way; one that does can tell a fact about the design from a limit of VerA's.
 pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
+    const h = iterate(obj_type, ref);
+    if (asIter(h)) |it| {
+        it.use = ref;
+        it.ty = obj_type;
+    }
+    return h;
+}
+
+fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_iterate") orelse return null;
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
@@ -2016,11 +2282,12 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
-    // A behavioural object's double arrows are its `lists` rows. An empty
-    // row is an empty set (NULL, no error — §11.6.23 NOTE 2's default case
-    // item among them); a tag it has no row for is no relationship.
+    // A behavioural object's double arrows are its `lists` rows, as are a
+    // vector's bits. An empty row is an empty set (NULL, no error —
+    // §11.6.23 NOTE 2's default case item among them); a tag a behavioural
+    // object has no row for is no relationship.
+    for (o.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
     if (o.kind == .code) {
-        for (o.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no relationship {d}", .{ typeName(o.vtype), obj_type });
         return null;
     }
@@ -2030,8 +2297,9 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const elements: bool = switch (o.kind) {
         .reg_array => obj_type == vpiMemoryWord or obj_type == vpiReg,
         .var_array => obj_type == vpiVarSelect,
+        .net_array => obj_type == vpiNet,
         .module_array => obj_type == vpiModule,
-        else => false, // else: only the three array classes hold elements
+        else => false, // else: only the four array classes hold elements
     };
     if (elements) return newIter(d, o.members);
     if (obj_type == code.vpiRange and o.range.len != 0) return newIter(d, o.range);
@@ -2064,6 +2332,8 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         // IEEE 1364 §26.6.9: the legacy vpiMemory method returns the reg
         // arrays, as vpiRegArray objects.
         vpiMemory, vpiRegArray => s.reg_arrays,
+        vpiNetArray => s.net_arrays,
+        vpiVariables => s.variables,
         vpiModuleArray => s.module_arrays,
         // §11.6.1's `nodes` and `branches` classes (§11.6.5, §11.6.6).
         vpiNode => s.nodes,
@@ -2150,8 +2420,9 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
-    if (asIter(obj)) |_| {
+    if (asIter(obj)) |it| {
         if (prop == vpiType) return vpiIterator;
+        if (prop == vpiIteratorType) return it.ty;
         fail("NOPROP", "vpi_get: an iterator has no property {d}", .{prop});
         return vpiUndefined;
     }
@@ -2178,22 +2449,25 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         fail("NOPROP", "vpi_get: a time queue has no property {d}; vpi_get_time reads its time", .{prop});
         return vpiUndefined;
     }
-    // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
-    // which VerA answers, so a NULL object is an invalid handle like any other.
+    // §12.5's NULL-object case: IEEE 1364-2005 §26.6.1 Details b.
+    if (obj == null and (prop == vpiTimeUnit or prop == vpiTimePrecision)) {
+        if (design) |d| if (d.finest) |f| return f;
+    }
     const o = object("vpi_get", obj) orelse return vpiUndefined;
-    if (o.kind == .code and prop != vpiType) return codeProp(o, prop);
+    if (o.kind == .code and prop != vpiType and prop != vpiLineNo) return codeProp(o, prop);
     switch (prop) {
         vpiType => return typeOf(o),
-        // IEEE 1364 §26.6.1/§26.6.7: "is item an array" — an array, or a
-        // module that is a member of an instance array.
+        // IEEE 1364 §26.6.1/§26.6.6-§26.6.8: "is item an array" — an array,
+        // or a module, net or reg that is a member of one (a reg that is
+        // one is a `.word`). §26.6.8 draws no vpiArray on a var select.
         vpiArray => return switch (o.kind) {
-            .reg_array, .var_array => 1,
-            .module => @intFromBool(o.parent != null),
-            .reg, .integer, .real_var, .word, .var_select => 0,
+            .reg_array, .var_array, .net_array, .word => 1,
+            .module, .net => @intFromBool(o.parent != null),
+            .reg, .integer, .real_var, .time_var, .var_select => 0,
             else => propFail(prop, o),
         },
         vpiAutomatic => return switch (o.kind) {
-            .reg, .integer, .real_var => @intFromBool(o.automatic),
+            .reg, .integer, .real_var, .time_var => @intFromBool(o.automatic),
             else => propFail(prop, o),
         },
         vpiIsMemory => return switch (o.kind) {
@@ -2207,12 +2481,23 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             if (o.kind != .module) return propFail(prop, o);
             return @intFromBool(o.owner == null);
         },
+        vpiTimeUnit, vpiTimePrecision => {
+            if (o.kind != .module) return propFail(prop, o);
+            const sc = design.?.scopes[o.scope];
+            return (if (prop == vpiTimeUnit) sc.time_unit else sc.time_precision) orelse propFail(prop, o);
+        },
+        // IEEE 1364-2005 §26.6.1: no module is protected, since §28's
+        // `pragma protect` is refused where it is written (E0146).
+        vpiProtected => {
+            if (o.kind != .module) return propFail(prop, o);
+            return 0;
+        },
         vpiSize, vpiScalar, vpiVector => {
             // An array's size counts ELEMENTS (§26.6.9 "array size counts
             // members"), everything else's counts bits.
             switch (o.kind) {
-                .reg_array, .var_array, .module_array => if (prop == vpiSize) return @intCast(o.size) else return propFail(prop, o),
-                .port, .net, .reg, .integer, .real_var, .word, .var_select, .constant, .node, .branch, .quantity => {},
+                .reg_array, .var_array, .net_array, .module_array => if (prop == vpiSize) return @intCast(o.size) else return propFail(prop, o),
+                .port, .net, .reg, .integer, .real_var, .time_var, .word, .var_select, .constant, .node, .branch, .quantity => {},
                 else => return propFail(prop, o),
             }
             // A width of 0 means the declared range did not fold (see
@@ -2272,10 +2557,19 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             };
         },
         vpiSigned => {
-            if (o.kind != .reg and o.kind != .integer) return propFail(prop, o);
+            if (o.kind != .reg and o.kind != .integer and o.kind != .time_var) return propFail(prop, o);
             return @intFromBool(o.is_signed);
         },
+        vpiNetType => {
+            if (o.kind != .net) return propFail(prop, o);
+            return netType(o.net_type) orelse propFail(prop, o);
+        },
+        vpiLineNo => {
+            const at = location(o) orelse return propFail(prop, o);
+            return at.line;
+        },
         else => {
+            for (o.props) |p| if (p.prop == prop) return p.value;
             fail("NOPROP", "vpi_get: property {d} is not answered for a {s}", .{ prop, @tagName(o.kind) });
             return vpiUndefined;
         },
@@ -2501,6 +2795,44 @@ pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
     }
 }
 
+/// IEEE 1364-2005 §26.6.6's vpiNetType, Annex G numbered; null for a
+/// `wreal`, which Annex G has no constant for.
+fn netType(k: Ast.NetKind) ?c_int {
+    return switch (k) {
+        .wire => 1,
+        .wand => 2,
+        .wor => 3,
+        .tri => 4,
+        .tri0 => 5,
+        .tri1 => 6,
+        .trireg => 7,
+        .triand => 8,
+        .trior => 9,
+        .supply1 => 10,
+        .supply0 => 11,
+        .uwire => 13,
+        .wreal => null,
+    };
+}
+
+/// IEEE 1364-2005 §26.3.3 vpiLineNo and vpiFile: where the declaration or
+/// statement `o.src_tok` is, in the source file as written. Only the digital
+/// model records a token.
+///
+/// ponytail: the physical line; §19.7's `line renumbering is not applied.
+fn location(o: *const Obj) ?struct { line: c_int, file: []const u8 } {
+    if (o.src_tok == 0) return null;
+    const r = run.attached() orelse return null;
+    const start = r.starts[o.src_tok];
+    const at = r.bag.locate(.{ .start = start, .end = start }, null);
+    const off = r.bag.toSourceOffset(at.file, at.offset);
+    const text = r.bag.sourceText(at.file);
+    return .{
+        .line = @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n")),
+        .file = r.bag.fileName(at.file),
+    };
+}
+
 fn propFail(prop: c_int, o: *const Obj) c_int {
     fail("NOPROP", "vpi_get: a {s} has no property {d}", .{ @tagName(o.kind), prop });
     return vpiUndefined;
@@ -2518,6 +2850,9 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 /// returns NULL, the one value an application would not go on to print.
 pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const d = enter("vpi_get_str") orelse return null;
+    // IEEE 1364-2005 §26.3.2: every object has a type, and its name, the
+    // handles that are not design objects (an iterator, a callback) included.
+    if (prop == vpiType and asObj(obj) == null and issued(obj) != null) return copyStr(typeName(vpi_get(vpiType, obj)));
     const o = object("vpi_get_str", obj) orelse return null;
     const s: []const u8 = switch (prop) {
         // §11.6.7 lists no name for a quantity: it is reached from its
@@ -2547,6 +2882,13 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
             }
             break :blk d.scopes[o.scope].def_name;
         },
+        vpiFile => blk: {
+            const at = location(o) orelse {
+                fail("NOPROP", "vpi_get_str: no source location is recorded for a {s}", .{@tagName(o.kind)});
+                return null;
+            };
+            break :blk at.file;
+        },
         // IEEE 1364-2005 §13.6: "The following VPI properties shall exist for
         // objects of type vpiModule".
         vpiLibrary, vpiCell, vpiConfig => blk: {
@@ -2566,6 +2908,10 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
             return null;
         },
     };
+    return copyStr(s);
+}
+
+fn copyStr(s: []const u8) [*c]u8 {
     const n = @min(s.len, str_buf.len - 1);
     @memcpy(str_buf[0..n], s[0..n]);
     str_buf[n] = 0;
