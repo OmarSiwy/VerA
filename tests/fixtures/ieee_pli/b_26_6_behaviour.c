@@ -546,10 +546,11 @@ static void statements(void)
   x = vpi_handle(vpiStmt, proc_forever);
   CHECK(vpi_get(vpiType, x) == vpiDelayControl, "26.6.34: initial #20 ...");
   fv = vpi_handle(vpiStmt, x);
-  XFAIL(vpi_get(vpiType, fv) == vpiForever, "26.6.34", "forever is not a vpiForever");
+  CHECK(vpi_get(vpiType, fv) == vpiForever, "26.6.34: a forever");
   CHECK(vpi_get(vpiType, vpi_handle(vpiStmt, fv)) == vpiDelayControl, "26.6.34: forever -> stmt, #1 clk = ~clk");
-  XFAIL(vpi_handle(vpiCondition, fv) == NULL && vpi_chk_error(NULL) != 0, "26.6.34",
-        "vpi_handle(vpiCondition, forever) is not refused");
+  expect_no_error("the forever");
+  CHECK(vpi_handle(vpiCondition, fv) == NULL, "26.6.34: forever draws no condition");
+  expect_refusal("vpi_handle(vpiCondition, forever)");
 
   /* §26.6.35 */
   CHECK(vpi_get(vpiType, st[3]) == vpiIfElse && vpi_get(vpiOpType, vpi_handle(vpiCondition, st[3])) == vpiEqOp &&
