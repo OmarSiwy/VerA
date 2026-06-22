@@ -490,6 +490,11 @@ pub const Design = struct {
     natures: []const u32 = &.{},
     /// §11.6.14's circled arrow: `vpi_iterate(vpiUdpDefn, NULL)`.
     udp_defns: []const u32 = &.{},
+    /// How `vpi_handle_by_name` searches from a scope. Verilog-AMS §12.21
+    /// uses "the scope search rules defined by the Verilog-AMS HDL", §6.7's
+    /// upward walk; IEEE 1364-2005 §27.19 "search within that scope only".
+    /// The model over a 1364 digital run takes the second.
+    search_up: bool = true,
     /// IEEE 1364-2005 §26.6.1 Details b: what vpiTimeUnit and
     /// vpiTimePrecision of a NULL object answer, "the smallest time precision
     /// of all modules". Null in the analog model.
@@ -1596,6 +1601,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
     d.finest = @intCast(r.finest);
+    d.search_up = false;
     return d;
 }
 
@@ -2074,7 +2080,8 @@ fn noEdge(obj_type: c_int, o: *const Obj) vpiHandle {
 /// looked for in ITS parent, and so on to the top. That loop is the whole of
 /// the `scope != NULL` arm. With a NULL scope the name is absolute and matched
 /// against `vpiFullName` — the property §12.21 says the routine "can be applied
-/// to all objects with".
+/// to all objects with". A digital run searches `scope` alone instead
+/// (`Design.search_up`).
 pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
     const d = enter("vpi_handle_by_name") orelse return null;
     if (name == null) {
@@ -2088,10 +2095,14 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
         // non-module object is the one it is declared in, and the scope of a
         // module is itself.
         var at: ?u32 = if (from.kind == .module) from.scope else from.owner;
-        while (at) |sc| : (at = d.scopes[sc].parent) {
+        while (at) |sc| : (at = if (d.search_up) d.scopes[sc].parent else null) {
             var buf: [name_buf_len]u8 = undefined;
             const full = std.fmt.bufPrint(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
             if (d.by_name.get(full)) |i| return handleOf(&d.objects[i]);
+        }
+        if (!d.search_up) {
+            fail("NONAME", "vpi_handle_by_name: `{s}` names no object in that scope", .{want});
+            return null;
         }
         // The search ends at the top, where a hierarchical name is an absolute
         // one: `vpi_handle_by_name("top.u.k", any_scope)` is §12.21's

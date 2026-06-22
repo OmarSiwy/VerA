@@ -740,7 +740,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_objects.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail 27.19: a name searched in scope u finds top's bus\np02: b_27_objects checks=81\n",
+        .stdout = "p02: b_27_objects checks=83\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_values.c",
