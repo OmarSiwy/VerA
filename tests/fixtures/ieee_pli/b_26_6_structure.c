@@ -255,65 +255,6 @@
 
 #include "b_check.h"
 
-/* Annex G numbers that src/vpi/vpi_user.h does not define. */
-#ifndef vpiFile
-#define vpiFile 5
-#endif
-#ifndef vpiLineNo
-#define vpiLineNo 6
-#endif
-#ifndef vpiProtected
-#define vpiProtected 10
-#endif
-#ifndef vpiTimeUnit
-#define vpiTimeUnit 11
-#endif
-#ifndef vpiTimePrecision
-#define vpiTimePrecision 12
-#endif
-#ifndef vpiConnByName
-#define vpiConnByName 21
-#endif
-#ifndef vpiNetType
-#define vpiNetType 22
-#endif
-#ifndef vpiWire
-#define vpiWire 1
-#endif
-#ifndef vpiParamAssign
-#define vpiParamAssign 40
-#endif
-#ifndef vpiIteratorType
-#define vpiIteratorType 57
-#endif
-#ifndef vpiTimeVar
-#define vpiTimeVar 63
-#endif
-#ifndef vpiHighConn
-#define vpiHighConn 76
-#endif
-#ifndef vpiBit
-#define vpiBit 90
-#endif
-#ifndef vpiVariables
-#define vpiVariables 100
-#endif
-#ifndef vpiUse
-#define vpiUse 101
-#endif
-#ifndef vpiNetArray
-#define vpiNetArray 114
-#endif
-#ifndef vpiRange
-#define vpiRange 115
-#endif
-#ifndef vpiListOp
-#define vpiListOp 37
-#endif
-#ifndef vpiGenScopeArray
-#define vpiGenScopeArray 133
-#endif
-
 static vpiHandle top;
 
 /* The number of objects vpi_iterate(type, ref) yields; 0 for a NULL
