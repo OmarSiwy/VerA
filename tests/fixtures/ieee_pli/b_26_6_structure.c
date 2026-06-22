@@ -140,7 +140,10 @@
  *   (index 1, output, 1 bit: scalar); u.a's high connection is bus and
  *   u.y's is s (Details a), both connected by name; w4 connects in order,
  *   so w4.a's high connection is r and vpiConnByName is FALSE.
- * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits (Details a), value
+ * §26.6.6  bus: vpiNet, 8 bits (Details s), 8 net bits bus[7]..bus[0]
+ *   (Details a), bus[3] a vpiNetBit whose vpiParent is bus and whose
+ *   vpiIndex reads 3 (Details h) and which vpi_handle_by_index(bus, 3)
+ *   returns (the diagram's "access by index"), the scalar s none; value
  *   8'h09 (9 in vpiIntVal); s and s3: 1 (vpi1). na is a net ARRAY of
  *   two nets: vpiNetArray, vpiSize 2, the module's one net array, walked
  *   as na[0] and na[1]; na[1] is a 4-bit net with vpiArray TRUE (the
@@ -564,7 +567,16 @@ static void nets_regs_variables(void)
   vpi_get_value(p02_by_name("b26_structure.s3"), &v);
   CHECK(v.value.scalar == vpi1, "26.6.6: s3 = s = bus[0] = 1");
   CHECK(vpi_iterate(vpiIndex, bus) == NULL, "26.6.6 t: no array, no indices");
-  XFAIL(count(vpiBit, bus) == 8, "26.6.6", "net ->> net bit does not yield bus's 8 bits");
+  CHECK(count(vpiBit, bus) == 8 && yields(vpiBit, bus, "b26_structure.bus[7]") && yields(vpiBit, bus, "b26_structure.bus[0]"),
+        "26.6.6 a: net ->> net bit yields bus's 8 bits");
+  {
+    vpiHandle b3 = p02_by_name("b26_structure.bus[3]");
+    CHECK(vpi_get(vpiType, b3) == vpiNetBit && vpi_compare_objects(vpi_handle(vpiParent, b3), bus) &&
+          int_value(vpi_handle(vpiIndex, b3)) == 3, "26.6.6 h: bus[3] is a net bit of bus, index 3");
+    CHECK(vpi_compare_objects(vpi_handle_by_index(bus, 3), b3), "26.6.6: net -> access by index reaches bus[3]");
+    CHECK(vpi_iterate(vpiBit, p02_by_name("b26_structure.s")) == NULL, "26.6.6: a scalar net has no bits");
+  }
+  expect_no_error("the net bits");
   CHECK(vpi_get(vpiType, na) == vpiNetArray && vpi_get(vpiSize, na) == 2, "26.6.6 s: na is a vpiNetArray of 2 nets");
   CHECK(count(vpiNetArray, top) == 1 && count(vpiNet, na) == 2 && yields(vpiNet, na, "b26_structure.na[1]"),
         "26.6.6: module ->> net array ->> net");

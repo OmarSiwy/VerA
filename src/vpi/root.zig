@@ -100,6 +100,8 @@ pub const vpiReg: c_int = 48;
 // Relationships.
 pub const vpiScope: c_int = 84;
 pub const vpiInternalScope: c_int = 92;
+/// IEEE 1364-2005 §26.6.5-§26.6.7 vector ->> bit.
+pub const vpiBit: c_int = 90;
 /// IEEE 1364-2005 §26.6.43 (Annex G).
 pub const vpiUse: c_int = 101;
 pub const vpiIteratorType: c_int = 57;
@@ -1225,6 +1227,40 @@ fn addArray(
     return at;
 }
 
+/// IEEE 1364-2005 §26.6.6 Details a / §26.6.7: the bits of the vector net or
+/// reg last appended, `vtype` vpiNetBit or vpiRegBit, from its declared msb
+/// to its lsb, each named `v[i]`, with vpiParent the vector and vpiIndex
+/// `i`. The vector reaches them by vpiBit; a scalar's set is empty.
+fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), r: *const sim.digital.Run, vtype: c_int) Error!void {
+    const v: u32 = @intCast(objects.items.len - 1);
+    const vec = objects.items[v];
+    const slot = vec.slot orelse return;
+    if (vec.size < 2) {
+        objects.items[v].lists = &.{.{ .tag = vpiBit, .items = &.{} }};
+        return;
+    }
+    const range = r.vecRange(slot);
+    const bits = try arena.alloc(u32, vec.size);
+    const step: i64 = if (range.msb >= range.lsb) -1 else 1;
+    for (bits, 0..) |*bit, k| {
+        const i = range.msb + step * @as(i64, @intCast(k));
+        const c: u32 = @intCast(objects.items.len);
+        try objects.append(gpa, .{ .kind = .constant, .owner = vec.owner, .name = "", .full = "", .size = 32, .value = .{ .int = i } });
+        bit.* = @intCast(objects.items.len);
+        try objects.append(gpa, .{
+            .kind = .code,
+            .vtype = vtype,
+            .owner = vec.owner,
+            .name = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.name, i }),
+            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ vec.full, i }),
+            .src_tok = vec.src_tok,
+            .edges = try arena.dupe(code.Edge, &.{ .{ .tag = vpiParent, .to = v }, .{ .tag = vpiIndex, .to = c } }),
+            .props = try arena.dupe(code.Prop, &.{.{ .prop = vpiSize, .value = 1 }}),
+        });
+    }
+    objects.items[v].lists = try arena.dupe(code.List, &.{.{ .tag = vpiBit, .items = bits }});
+}
+
 /// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
 /// bounds decimal constants, its vpiSize the element count.
 ///
@@ -1497,6 +1533,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             o.net_type = n.kind;
             o.src_tok = n.main_tok;
             try objects.append(gpa, o);
+            try addBits(gpa, arena, &objects, r, code.vpiNetBit);
         }
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
@@ -1525,6 +1562,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             // IEEE 1364-2005 §4.8: `time` is unsigned, `integer` signed.
             objects.items[objects.items.len - 1].is_signed = kind != .time_var and (v.is_signed or kind == .integer);
             objects.items[objects.items.len - 1].src_tok = v.main_tok;
+            if (kind == .reg) try addBits(gpa, arena, &objects, r, code.vpiRegBit);
         }
         // §11.6.12 parameters. The engine folds each into a slot of its own
         // (IEEE 1364 §12.2, `Run.params`), so NOTE 1's "final value of the
@@ -2086,14 +2124,13 @@ pub const name_buf_len = 4096;
 /// can access an expression using `vpiIndex`."
 ///
 /// The indexed objects are the §11.6.11 array elements — memory words and
-/// variable selects — and the members of a §6.2.2 instance array: "for a memory
-/// word, obj is the associated memory". `index` is the element's own declared
-/// index, the value its vpiIndex constant holds.
+/// variable selects — the members of a §6.2.2 instance array ("for a memory
+/// word, obj is the associated memory"), and the bits of a digital vector
+/// net or reg (IEEE 1364-2005 §26.6.6/§26.6.7). `index` is the element's own
+/// declared index, the value its vpiIndex constant holds.
 ///
-/// ponytail: BIT-LEVEL objects (net bit, reg bit, port bit) are not modelled,
-/// so indexing a vector is still §12.2's error indication. Each would need
-/// §11.6.5's `vpiIndex` expr and its own properties; `Lowered.vectors` already
-/// holds the folded `[msb:lsb]` they would need.
+/// ponytail: the analog model and port bits have no bit objects, so indexing
+/// one of those vectors is still §12.2's error indication.
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     const d = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
@@ -2116,6 +2153,13 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });
         return null;
     }
+    if (o.kind != .code) for (o.lists) |l| if (l.tag == vpiBit and l.items.len != 0) {
+        for (l.items) |bit| for (d.objects[bit].edges) |e| {
+            if (e.tag == vpiIndex and d.objects[e.to].value.?.int == index) return handleOf(&d.objects[bit]);
+        };
+        fail("NOINDEX", "vpi_handle_by_index: `{s}` has no bit {d}", .{ o.full, index });
+        return null;
+    };
     fail(
         "NOINDEX",
         "vpi_handle_by_index: a {s} has no indexed object at {d} — bit-level objects are not modelled",
@@ -2206,11 +2250,12 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
-    // A behavioural object's double arrows are its `lists` rows. An empty
-    // row is an empty set (NULL, no error — §11.6.23 NOTE 2's default case
-    // item among them); a tag it has no row for is no relationship.
+    // A behavioural object's double arrows are its `lists` rows, as are a
+    // vector's bits. An empty row is an empty set (NULL, no error —
+    // §11.6.23 NOTE 2's default case item among them); a tag a behavioural
+    // object has no row for is no relationship.
+    for (o.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
     if (o.kind == .code) {
-        for (o.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
         fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no relationship {d}", .{ typeName(o.vtype), obj_type });
         return null;
     }
