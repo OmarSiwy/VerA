@@ -77,7 +77,10 @@
  * identified by its type, an assignment by its lhs (a, b, d, q), and filed
  * under the design header's number. Its vpiScope is the module. The fork fk
  * is a named fork holding two assignments; the scope that contains it is
- * main.
+ * main, so (§12.5, p. 191: "each module instance, generate block instance,
+ * task, function, or named begin-end or fork-join block defines a new
+ * hierarchical level, or scope") its full name is "b26_behaviour.main.fk",
+ * and main's statements, fk among them, have vpiScope main.
  *
  *   §26.2.5  statement 2's rhs `a + b`: a vpiOperation, vpiOpType vpiAddOp,
  *            operands a and b, each a reg (a leaf). Statement 18's
@@ -122,7 +125,7 @@
  *   §26.6.38 statement 20 `disable main`: vpiExpr is the named begin main.
  *   §26.6.27 statement 14 `-> go`: event stmt -> named event go.
  *   §26.6.3  the module's internal scopes are bump, twice and main; main's is
- *            fk.
+ *            fk (full name "b26_behaviour.main.fk", above).
  *   §26.6.4  bump's io decl `input [3:0] by`: "by", vpiInput, 4 bits,
  *            vpiVector TRUE, vpiScalar FALSE.
  *   §26.6.18 bump is a vpiTask, twice a vpiFunction of vpiSize 8; the
@@ -478,12 +481,13 @@ static void statements(void)
   CHECK_STR(vpi_get_str(vpiName, mainb), "main", "26.6.3 name");
   CHECK_STR(vpi_get_str(vpiFullName, mainb), "b26_behaviour.main", "26.6.3 full name");
   CHECK(vpi_compare_objects(vpi_handle(vpiScope, mainb), top), "26.6.3: main's scope is the module");
-  CHECK_STR(vpi_get_str(vpiFullName, st[18]), "b26_behaviour.fk", "26.6.3: the named fork is a scope");
+  CHECK_STR(vpi_get_str(vpiFullName, st[18]), "b26_behaviour.main.fk", "26.6.3: the named fork is a scope");
+  CHECK(has_scope(top, "b26_behaviour.bump") && has_scope(top, "b26_behaviour.twice") &&
+        has_scope(top, "b26_behaviour.main"), "26.6.3: module ->> vpiInternalScope is bump, twice, main");
+  CHECK(has_scope(mainb, "b26_behaviour.main.fk"), "26.6.3: main ->> vpiInternalScope is fk");
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, st[18]), mainb), "26.6.3: fk's vpiScope is main");
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, st[0]), mainb), "26.6.3: main's statements are in main");
   expect_no_error("the scope walk");
-  XFAIL(has_scope(top, "b26_behaviour.bump") && has_scope(top, "b26_behaviour.twice") &&
-        has_scope(top, "b26_behaviour.main"), "26.6.3", "module ->> vpiInternalScope omits bump, twice, main");
-  XFAIL(has_scope(mainb, "b26_behaviour.fk"), "26.6.3", "main ->> vpiInternalScope omits fk");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiScope, st[18]), mainb), "26.6.3", "fk's vpiScope is not main");
   CHECK(vpi_get(vpiSize, mainb) == vpiUndefined, "26.6.3: a scope has no size");
   expect_refusal("vpi_get(vpiSize, named begin)");
 

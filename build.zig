@@ -658,7 +658,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p04_07_behaviour_objects.c",
         .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
-        .stdout = "p02: p04_07_behaviour_objects checks=240\np04_behaviour: d=12\n",
+        .stdout = "p02: p04_07_behaviour_objects checks=241\np04_behaviour: d=12\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p04_08_analog_behaviour.c",
@@ -705,7 +705,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
-        .stdout = "xfail 26.6.3: module ->> vpiInternalScope omits bump, twice, main\nxfail 26.6.3: main ->> vpiInternalScope omits fk\nxfail 26.6.3: fk's vpiScope is not main\nxfail 26.6.34: forever is not a vpiForever\nxfail 26.6.34: vpi_handle(vpiCondition, forever) is not refused\nxfail 26.6.38: disable -> vpiExpr is not main\nxfail 26.6.26: {2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]\nxfail 26.6.26: a[i +: 2] is no vpiIndexedPartSelect\nxfail 26.6.26: vpiConstType of 4'd9 is not vpiDecConst\nxfail 26.6.26: vpiDecompile of a + b is not \"a + b\"\nxfail 26.6.25: vpi_iterate(vpiUse, a) yields no use of a\nxfail 26.3.4: vpiDelay of #(2,3) is not a vpiListOp operation\nxfail 26.6.24: the net declaration assignment of nd is no cont assign\nxfail 26.6.24: vpiNetDeclAssign of an assign statement is not FALSE\nxfail 26.6.24: vpi_get_value(cont assign) is refused\nxfail 26.6.4: vpiVector/vpiScalar of an io decl\nxfail 26.6.18: vpiSize of function [7:0] twice is not 8\nxfail 26.6.18: vpiFuncType of function [7:0] is not vpiSizedFunc\nxfail 26.6.18: the function holds no 8-bit reg named twice\nxfail 26.6.19: vpiFuncType of the call twice(d)\nxfail 26.6.19: vpiDecompile of the $display call is refused\nxfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=275\nd=12 c=1 q=9 p2=0101\n",
+        .stdout = "xfail 26.6.34: forever is not a vpiForever\nxfail 26.6.34: vpi_handle(vpiCondition, forever) is not refused\nxfail 26.6.38: disable -> vpiExpr is not main\nxfail 26.6.26: {2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]\nxfail 26.6.26: a[i +: 2] is no vpiIndexedPartSelect\nxfail 26.6.26: vpiConstType of 4'd9 is not vpiDecConst\nxfail 26.6.26: vpiDecompile of a + b is not \"a + b\"\nxfail 26.6.25: vpi_iterate(vpiUse, a) yields no use of a\nxfail 26.3.4: vpiDelay of #(2,3) is not a vpiListOp operation\nxfail 26.6.24: the net declaration assignment of nd is no cont assign\nxfail 26.6.24: vpiNetDeclAssign of an assign statement is not FALSE\nxfail 26.6.24: vpi_get_value(cont assign) is refused\nxfail 26.6.4: vpiVector/vpiScalar of an io decl\nxfail 26.6.18: vpiSize of function [7:0] twice is not 8\nxfail 26.6.18: vpiFuncType of function [7:0] is not vpiSizedFunc\nxfail 26.6.18: the function holds no 8-bit reg named twice\nxfail 26.6.19: vpiFuncType of the call twice(d)\nxfail 26.6.19: vpiDecompile of the $display call is refused\nxfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=276\nd=12 c=1 q=9 p2=0101\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",

@@ -394,6 +394,9 @@ const Scope = struct {
     /// declarations are bucketed by.
     path: []const u8,
     children: []const u32 = &.{},
+    /// IEEE 1364-2005 §26.6.3 module ->> vpiInternalScope: the instances,
+    /// then the gen scopes, tasks, functions and named blocks written here.
+    internal: []const u32 = &.{},
     ports: []const u32 = &.{},
     nets: []const u32 = &.{},
     regs: []const u32 = &.{},
@@ -1067,6 +1070,13 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .config = s.config,
         .path = s.path,
         .children = try arena.dupe(u32, s.children.items),
+        .internal = blk: {
+            var all: std.ArrayList(u32) = .empty;
+            try all.appendSlice(arena, s.children.items);
+            for (s.code.gen_arrays.items) |g| try all.appendSlice(arena, objects[g].lists[0].items);
+            try all.appendSlice(arena, s.code.internal.items);
+            break :blk all.items;
+        },
         .ports = try arena.dupe(u32, s.ports.items),
         .nets = try arena.dupe(u32, s.nets.items),
         .regs = try arena.dupe(u32, s.regs.items),
@@ -2028,11 +2038,8 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const s = &d.scopes[o.scope];
     for (s.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
     const items: []const u32 = switch (obj_type) {
-        // §11.6.1 gives module a one-to-many to `scope` tagged vpiInternalScope
-        // AND a separate one to `module`. In a design whose only named scopes
-        // are instances these are the same set, and answering both tags with it
-        // is what lets an application written either way walk.
-        vpiModule, vpiInternalScope => s.children,
+        vpiModule => s.children,
+        vpiInternalScope => s.internal,
         vpiPort => s.ports,
         vpiNet => s.nets,
         vpiReg => s.regs,

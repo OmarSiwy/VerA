@@ -18,7 +18,9 @@
  *     vpiInitial, vpiInitial, vpiAlways, vpiInitial.
  *   process -> stmt: main's is the named begin `main` (vpiNamedBegin, with
  *     11.6.3's vpiName "main" and vpiFullName "p04_behaviour.main"), and
- *     named begin ->> stmt yields its 19 statements in order.
+ *     named begin ->> stmt yields its 19 statements in order. main is in
+ *     the module; its statements are in main (stmt -> scope, 11.6.3's scope
+ *     class holding the named begin).
  *   11.6.18: "simple expr" is the class of nets, regs, variables, parameters,
  *     memories and their words — an identifier in an expression IS that
  *     object, so statement 0's vpiLhs compares equal to the reg `a` found by
@@ -248,9 +250,12 @@ static void main_block(vpiHandle blk)
         "11.6.3: the named begin's names");
   n = scan_all(vpi_iterate(vpiStmt, blk), s, 24);
   CHECK(n == 19, "main holds 19 statements, got %d", n);
-  /* 11.6.21 stmt -> scope. Not for 18: a disable's vpiScope is the scope it
-   * disables (11.6.24), checked below. */
-  for (k = 0; k < 18; k++) CHECK(vpi_compare_objects(vpi_handle(vpiScope, s[k]), top), "stmt %d -> scope is the module", k);
+  /* 11.6.21 stmt -> scope: 11.6.3's scope class holds the named begin, so a
+   * statement of main is in main (IEEE 1364-2005 §12.5: a named begin-end
+   * block "defines a new hierarchical level, or scope"). Not for 18: a
+   * disable's vpiScope is the scope it disables (11.6.24), checked below. */
+  for (k = 0; k < 18; k++) CHECK(vpi_compare_objects(vpi_handle(vpiScope, s[k]), blk), "stmt %d -> scope is main", k);
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, blk), top), "main -> scope is the module");
 
   /* 0 */
   CHECK(vpi_get(vpiType, s[0]) == vpiAssignment && vpi_get(vpiBlocking, s[0]) == 1, "0: a blocking assignment");

@@ -258,8 +258,13 @@ pub const ScopeLists = struct {
     mod_paths: std.ArrayList(u32) = .empty,
     tchks: std.ArrayList(u32) = .empty,
     gen_arrays: std.ArrayList(u32) = .empty,
+    /// IEEE 1364-2005 §26.6.3 the task, function and named block scopes
+    /// written directly in the module; root.zig joins its instances and gen
+    /// scopes to them for `vpiInternalScope`.
+    internal: std.ArrayList(u32) = .empty,
 
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
+        s.internal.deinit(gpa);
         s.gen_arrays.deinit(gpa);
         s.mod_paths.deinit(gpa);
         s.tchks.deinit(gpa);
@@ -305,6 +310,11 @@ pub const Builder = struct {
     scope: u32,
     path: []const u8,
     lists: *ScopeLists,
+    /// IEEE 1364-2005 §26.6.3 the innermost task, function or named block
+    /// being built (a statement's vpiScope), `none` at module level, and the
+    /// list its own internal scopes go to. `path` includes it (§12.5).
+    inner: u32 = none,
+    internal: ?*std.ArrayList(u32) = null,
     /// The analog model's discipline-by-name table and the branch objects,
     /// for §11.6.19's accessfunc and §11.6.20's contribution; empty for a
     /// digital scope.
@@ -351,6 +361,27 @@ pub const Builder = struct {
         b.objects.items[at].name = local;
         b.objects.items[at].full = f;
         try b.names.put(b.gpa, f, at);
+    }
+
+    const Saved = struct { inner: u32, path: []const u8, internal: ?*std.ArrayList(u32) };
+
+    /// Enters object `at`, already named `local` in the current scope, as a
+    /// scope of its own (IEEE 1364-2005 §12.5: "Each ... task, function, named
+    /// begin-end or fork-join block defines a new hierarchical level"), with
+    /// `into` collecting its internal scopes. `leave` restores the outer one.
+    fn enter(b: *Builder, at: u32, local: []const u8, into: *std.ArrayList(u32)) Error!Saved {
+        try (b.internal orelse &b.lists.internal).append(b.gpa, at);
+        const saved: Saved = .{ .inner = b.inner, .path = b.path, .internal = b.internal };
+        b.inner = at;
+        b.path = if (b.path.len == 0) local else try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.path, local });
+        b.internal = into;
+        return saved;
+    }
+
+    fn leave(b: *Builder, s: Saved) void {
+        b.inner = s.inner;
+        b.path = s.path;
+        b.internal = s.internal;
     }
 
     fn many(b: *Builder, items: []const u32) Error![]const u32 {
@@ -413,12 +444,17 @@ pub const Builder = struct {
                     .automatic = true,
                 }));
             };
+            var inner: std.ArrayList(u32) = .empty;
+            defer inner.deinit(b.gpa);
+            const saved = try b.enter(at, b.objects.items[at].name, &inner);
             const body = try b.stmt(t.body);
+            b.leave(saved);
+            const scopes: List = .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) };
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = body }});
             b.objects.items[at].lists = if (t.automatic)
-                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items } })
+                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items }, scopes })
             else
-                try b.arena.dupe(List, &.{.{ .tag = vpiIODecl, .items = ios.items }});
+                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, scopes });
         }
         // §11.6.17.
         for (m.assigns) |a| {
@@ -610,6 +646,19 @@ pub const Builder = struct {
     /// Builds the object for statement `id` and its children; returns its
     /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
+        const at = try b.stmtObj(id);
+        // IEEE 1364-2005 §26.6.3 stmt -> vpiScope: the innermost task,
+        // function or named block around it. At module level the edge is the
+        // owner one every object shares. Appended, so a disable's own
+        // vpiScope (AMS §11.6.24, the scope it disables) is found first.
+        if (at != none and b.inner != none) {
+            const o = &b.objects.items[at];
+            o.edges = try std.mem.concat(b.arena, Edge, &.{ o.edges, &.{.{ .tag = vpiScope, .to = b.inner }} });
+        }
+        return at;
+    }
+
+    fn stmtObj(b: *Builder, id: Ast.StmtId) Error!u32 {
         if (id == .none) return none;
         const f = b.file;
         return switch (f.stmt(id)) {
@@ -620,10 +669,22 @@ pub const Builder = struct {
                 const named = blk.name != .none;
                 const vt: c_int = if (blk.parallel) (if (named) vpiNamedFork else vpiFork) else if (named) vpiNamedBegin else vpiBegin;
                 const at = try b.code(vt, &.{}, &.{}, &.{});
-                if (named) try b.setName(at, try b.arena.dupe(u8, f.str(blk.name)));
+                var inner: std.ArrayList(u32) = .empty;
+                defer inner.deinit(b.gpa);
+                var saved: ?Saved = null;
+                if (named) {
+                    const local = try b.arena.dupe(u8, f.str(blk.name));
+                    try b.setName(at, local);
+                    saved = try b.enter(at, local, &inner);
+                }
                 var items: std.ArrayList(u32) = .empty;
                 for (blk.body) |s| try items.append(b.arena, try b.stmt(s));
-                b.objects.items[at].lists = try b.arena.dupe(List, &.{.{ .tag = vpiStmt, .items = try b.many(items.items) }});
+                if (saved) |sv| b.leave(sv);
+                const stmts: List = .{ .tag = vpiStmt, .items = try b.many(items.items) };
+                b.objects.items[at].lists = if (named)
+                    try b.arena.dupe(List, &.{ stmts, .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) } })
+                else
+                    try b.arena.dupe(List, &.{stmts});
                 break :blk at;
             },
             .assign => |a| switch (a.continuous) {
