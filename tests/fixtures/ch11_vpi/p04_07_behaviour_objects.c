@@ -57,11 +57,12 @@
  *   always: event control, condition a vpiPosedgeOp operation over clk,
  *     statement a NONblocking assignment (vpiBlocking FALSE) whose rhs is
  *     {2{a[1:0]}} — vpiMultiConcatOp, and by 11.6.19's NOTE its first
- *     operand is the multiplier 2; the second is what is replicated, the
- *     inner concatenation {a[1:0]} (vpiConcatOp, one operand — the braces
- *     are a concatenation of their own, A.8.1 multiple_concatenation ::=
- *     { constant_expression concatenation }), whose operand is the part
- *     select a[1:0]: vpiParent a, vpiLeftRange 1, vpiRightRange 0.
+ *     operand is the multiplier 2. The NOTE stops there; IEEE 1364-2005
+ *     §26.6.26 a), whose Annex G numbering the VPI uses, goes on: "The
+ *     remaining operands shall be the expressions within the concatenation"
+ *     (A.8.1 multiple_concatenation ::= { constant_expression concatenation
+ *     }), so the second and last operand is the part select a[1:0]:
+ *     vpiParent a, vpiLeftRange 1, vpiRightRange 0.
  *   11.6.3: module ->> task and ->> function, one each; bump ->> io decl is
  *     `input [3:0] by` (vpiInput, size 4), twice's is `input [7:0] v`
  *     (size 8); each -> stmt is its body.
@@ -371,9 +372,8 @@ static void always_block(vpiHandle ev)
   operation(rhs, vpiMultiConcatOp, 2, "{2{a[1:0]}}");
   scan_all(vpi_iterate(vpiOperand, rhs), ops, 4);
   CHECK(int_value(ops[0]) == 2, "11.6.19 NOTE: the first operand is the multiplier");
-  operation(ops[1], vpiConcatOp, 1, "then the replicated concatenation {a[1:0]}");
-  scan_all(vpi_iterate(vpiOperand, ops[1]), ops, 4);
-  CHECK(vpi_get(vpiType, ops[0]) == vpiPartSelect, "whose one operand is the part select");
+  ops[0] = ops[1];
+  CHECK(vpi_get(vpiType, ops[0]) == vpiPartSelect, "then the expression within the concatenation, the part select");
   CHECK(same(vpi_handle(vpiParent, ops[0]), "p04_behaviour.a"), "of a");
   CHECK(int_value(vpi_handle(vpiLeftRange, ops[0])) == 1 && int_value(vpi_handle(vpiRightRange, ops[0])) == 0, "[1:0]");
   CHECK(vpi_get(vpiConstType, rhs) == vpiUndefined, "11.6.19: an operation has no vpiConstType");

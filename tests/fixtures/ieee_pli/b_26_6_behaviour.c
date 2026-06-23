@@ -313,7 +313,7 @@ static void expressions(void)
   vpiHandle a = p02_by_name("b26_behaviour.a");
   vpiHandle b = p02_by_name("b26_behaviour.b");
   vpiHandle sum = vpi_handle(vpiRhs, vpi_handle(vpiStmt, st[2]));
-  vpiHandle fk0, fk1, rep, x1, x2, inner, ps, y;
+  vpiHandle fk0, fk1, rep, x1, x2, inner, ps;
   int ops = 0, leaves = 0;
 
   /* §26.2.5 */
@@ -341,11 +341,9 @@ static void expressions(void)
   CHECK(vpi_get(vpiType, x1) == vpiConstant &&
         (vpi_get(vpiConstType, x1) == vpiDecConst || vpi_get(vpiConstType, x1) == vpiIntConst) && int_value(x1) == 2,
         "26.6.26 a: the first operand is the multiplier 2");
-  XFAIL(count(vpiOperand, rep) == 2 && vpi_get(vpiType, inner) == vpiPartSelect, "26.6.26",
-        "{2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]");
+  CHECK(count(vpiOperand, rep) == 2 && vpi_get(vpiType, inner) == vpiPartSelect,
+        "26.6.26 a: {2{a[1:0]}}'s second and last operand is a[1:0]");
   ps = inner;
-  if (vpi_get(vpiType, inner) == vpiOperation && vpi_get(vpiOpType, inner) == vpiConcatOp)
-    first_two(vpiOperand, inner, &ps, &y);
   CHECK(vpi_get(vpiType, ps) == vpiPartSelect && vpi_compare_objects(vpi_handle(vpiParent, ps), a), "26.6.26: a[1:0]");
   CHECK(int_value(vpi_handle(vpiLeftRange, ps)) == 1 && int_value(vpi_handle(vpiRightRange, ps)) == 0,
         "26.6.26: its ranges 1 and 0");
