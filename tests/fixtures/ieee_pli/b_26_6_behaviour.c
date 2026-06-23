@@ -92,7 +92,10 @@
  *            concatenation }): the part select a[1:0], vpiParent a,
  *            vpiLeftRange 1, vpiRightRange 0. A full traversal of a + b meets
  *            one operation and two leaves. The fork's two statements are told
- *            apart by their lhs (p2 is the concatenation's).
+ *            apart by their lhs (p2 is the concatenation's). The other's rhs
+ *            `a[i +: 2]` is an indexed part select of vpiIndexedPartSelectType
+ *            vpiPosIndexed: vpiParent a, vpiBaseExpr the reg i, vpiWidthExpr
+ *            the constant 2.
  *   §26.3.4  w1's `assign #4` has one delay: vpiDelay is a constant reading
  *            4. w's `assign #(2,3)` has two: an operation of vpiListOp.
  *   §26.6.24 three continuous assignments: w's, w1's and nd's net
@@ -350,7 +353,12 @@ static void expressions(void)
   expect_no_error("the expression walk");
   {
     vpiHandle r0 = vpi_handle(vpiRhs, fk0);
-    XFAIL(r0 != NULL && vpi_get(vpiType, r0) == vpiIndexedPartSelect, "26.6.26", "a[i +: 2] is no vpiIndexedPartSelect");
+    CHECK(r0 != NULL && vpi_get(vpiType, r0) == vpiIndexedPartSelect &&
+          vpi_get(vpiIndexedPartSelectType, r0) == vpiPosIndexed, "26.6.26: a[i +: 2] is an indexed part select, +:");
+    CHECK(vpi_compare_objects(vpi_handle(vpiParent, r0), a) &&
+          vpi_compare_objects(vpi_handle(vpiBaseExpr, r0), p02_by_name("b26_behaviour.i")) &&
+          int_value(vpi_handle(vpiWidthExpr, r0)) == 2, "26.6.26: of a, base i, width 2");
+    expect_no_error("the indexed part select");
   }
   {
     vpiHandle k = vpi_handle(vpiRhs, st[0]);

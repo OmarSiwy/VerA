@@ -42,6 +42,8 @@ pub const vpiNetBit: c_int = 37;
 pub const vpiNullStmt: c_int = 38;
 pub const vpiOperation: c_int = 39;
 pub const vpiPartSelect: c_int = 42;
+/// IEEE 1364-2005 §26.6.26 (Annex G).
+pub const vpiIndexedPartSelect: c_int = 130;
 pub const vpiRegBit: c_int = 49;
 pub const vpiRelease: c_int = 50;
 pub const vpiRepeat: c_int = 51;
@@ -79,6 +81,8 @@ pub const vpiArgument: c_int = 89;
 pub const vpiOperand: c_int = 97;
 pub const vpiProcess: c_int = 99;
 pub const vpiExpr: c_int = 102;
+pub const vpiBaseExpr: c_int = 131;
+pub const vpiWidthExpr: c_int = 132;
 // §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
 // checks and their terms, the relations between them, and their properties.
 pub const vpiModPath: c_int = 31;
@@ -120,6 +124,9 @@ pub const vpiBlocking: c_int = 41;
 pub const vpiCaseType: c_int = 42;
 pub const vpiDirection: c_int = 20;
 pub const vpiSize: c_int = 4;
+pub const vpiIndexedPartSelectType: c_int = 72;
+pub const vpiPosIndexed: c_int = 1;
+pub const vpiNegIndexed: c_int = 2;
 
 // vpiCaseType values.
 pub const vpiCaseExact: c_int = 1;
@@ -221,6 +228,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiNullStmt => "vpiNullStmt",
         vpiOperation => "vpiOperation",
         vpiPartSelect => "vpiPartSelect",
+        vpiIndexedPartSelect => "vpiIndexedPartSelect",
         vpiRegBit => "vpiRegBit",
         vpiRelease => "vpiRelease",
         vpiRepeat => "vpiRepeat",
@@ -974,16 +982,24 @@ pub const Builder = struct {
         return at;
     }
 
-    /// `base[i]` and `base[msb:lsb]`: an array element is the memory word or
-    /// variable select the model already holds (§11.6.18); a bit of a vector
-    /// is a net bit or reg bit with vpiParent and vpiIndex; a range is
-    /// §11.6.19's part select.
+    /// `base[i]`, `base[msb:lsb]` and `base[i +: w]`: an array element is the
+    /// memory word or variable select the model already holds (§11.6.18); a
+    /// bit of a vector is a net bit or reg bit with vpiParent and vpiIndex; a
+    /// range is §11.6.19's part select, and an IEEE 1364-2005 §5.2.1
+    /// indexed part-select is §26.6.26's, with its base and width.
     fn select(b: *Builder, id: Ast.ExprId) Error!u32 {
         const ex = &b.file.exprs;
         const ix = ex.rhs(id);
-        // Not modelled: an IEEE 1364-2005 §5.2.1 indexed part-select.
-        if (ex.tag(ix) == .indexed_range) return none;
         const base = try b.expr(ex.lhs(id));
+        if (ex.tag(ix) == .indexed_range) {
+            const at = try b.code(vpiIndexedPartSelect, &.{
+                .{ .tag = vpiParent, .to = base },
+                .{ .tag = vpiBaseExpr, .to = try b.expr(ex.lhs(ix)) },
+                .{ .tag = vpiWidthExpr, .to = try b.expr(ex.rhs(ix)) },
+            }, &.{}, &.{.{ .prop = vpiIndexedPartSelectType, .value = if (ex.extraOf(ix) == 0) vpiPosIndexed else vpiNegIndexed }});
+            b.objects.items[at].owner = null;
+            return at;
+        }
         if (base != none) {
             const bo = b.objects.items[base];
             if (bo.members.len != 0 and ex.tag(ix) == .int_literal) {

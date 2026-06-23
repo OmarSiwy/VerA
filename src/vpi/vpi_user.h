@@ -184,6 +184,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiNullStmt            38
 #define vpiOperation           39
 #define vpiPartSelect          42
+#define vpiIndexedPartSelect  130   /* IEEE 1364-2005 §26.6.26 base[i +: w], base[i -: w] */
 #define vpiRegBit              49
 #define vpiRelease             50
 #define vpiRepeat              51
@@ -242,6 +243,11 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiOperand             97
 #define vpiProcess             99
 #define vpiExpr               102
+#define vpiBaseExpr           131   /* one-to-one: indexed part select -> its base expression */
+#define vpiWidthExpr          132   /* one-to-one: indexed part select -> its width expression */
+#define vpiIndexedPartSelectType 72 /* int: vpiPosIndexed (+:) or vpiNegIndexed (-:) */
+#define vpiPosIndexed           1
+#define vpiNegIndexed           2
 #define vpiStmt               104
 
 #define vpiOpType              39   /* int: §11.6.19, one of the values below */
