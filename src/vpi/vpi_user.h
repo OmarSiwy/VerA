@@ -243,6 +243,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiOperand             97
 #define vpiProcess             99
 #define vpiExpr               102
+#define vpiUse                101   /* one-to-many: simple expr ->> what reads or writes it (IEEE 1364-2005 §26.6.25) */
 #define vpiBaseExpr           131   /* one-to-one: indexed part select -> its base expression */
 #define vpiWidthExpr          132   /* one-to-one: indexed part select -> its width expression */
 #define vpiIndexedPartSelectType 72 /* int: vpiPosIndexed (+:) or vpiNegIndexed (-:) */

@@ -2015,6 +2015,7 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
+    if (obj_type == code.vpiUse) return uses(d, o);
     // A behavioural object's double arrows are its `lists` rows. An empty
     // row is an empty set (NULL, no error — §11.6.23 NOTE 2's default case
     // item among them); a tag it has no row for is no relationship.
@@ -2071,6 +2072,69 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     };
     if (items.len == 0) return null;
     return newIter(d, items);
+}
+
+/// IEEE 1364-2005 §26.6.25 simple expr ->> vpiUse: the objects (statements,
+/// expressions, continuous assignments, terminals) that read or write `o`,
+/// in object order. Details a): "For vectors, the vpiUse relationship shall
+/// access any use of the vector or part-selects or bit-selects thereof", so
+/// an object holding a select of `o` uses it too.
+///
+/// ponytail: a scan of every object per call, and a bit select's own uses
+/// only (Details b adds the parent vector's and a containing part select's).
+fn uses(d: *Design, o: *const Obj) vpiHandle {
+    switch (o.kind) {
+        .net, .reg, .integer, .real_var, .parameter, .word, .var_select => {},
+        .code => if (o.vtype != code.vpiNetBit and o.vtype != code.vpiRegBit) return useFail(o),
+        .module, .port, .reg_array, .var_array, .module_array, .constant, .discipline, .nature, .node, .branch, .quantity => return useFail(o),
+    }
+    const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+    var out: std.ArrayList(vpiHandle) = .empty;
+    for (d.objects) |*u| {
+        if (u.kind != .code) continue;
+        const hit = for (u.edges) |e| {
+            // A select's vpiParent is the vector it selects from, not a use.
+            if (e.tag != vpiParent and e.tag != vpiScope and e.tag != vpiModule and reaches(d, e.to, target)) break true;
+        } else for (u.lists) |l| {
+            if (for (l.items) |i| {
+                if (reaches(d, i, target)) break true;
+            } else false) break true;
+        } else false;
+        if (hit) out.append(d.gpa, handleOf(u)) catch {
+            out.deinit(d.gpa);
+            fail("NOMEM", "vpi_iterate: out of memory", .{});
+            return null;
+        };
+    }
+    if (out.items.len == 0) {
+        out.deinit(d.gpa);
+        return null;
+    }
+    const handles = out.toOwnedSlice(d.gpa) catch {
+        out.deinit(d.gpa);
+        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        return null;
+    };
+    return newHandleIter(d, handles);
+}
+
+/// Is object `at` the object `target`, or a part or bit select of it?
+fn reaches(d: *const Design, at: u32, target: u32) bool {
+    if (at == target) return true;
+    if (at == no_obj) return false;
+    const x = &d.objects[at];
+    if (x.kind != .code) return false;
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiIndexedPartSelect, code.vpiNetBit, code.vpiRegBit => {},
+        else => return false, // else: only a select names a part of another object
+    }
+    for (x.edges) |e| if (e.tag == vpiParent) return e.to == target;
+    return false;
+}
+
+fn useFail(o: *const Obj) vpiHandle {
+    fail("NOTRAVERSE", "vpi_iterate: a {s} is no simple expression, so it has no vpiUse", .{typeName(typeOf(o))});
+    return null;
 }
 
 /// An iterator over `handles`, which it takes ownership of.

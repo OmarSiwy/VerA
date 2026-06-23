@@ -149,8 +149,10 @@
  *            No application is running a calltf, so
  *            vpi_handle(vpiSysTfCall, NULL) is NULL.
  *   §26.6.25 statement 0's lhs IS the reg a; statement 9's rhs mem[1] IS
- *            vpi_handle_by_index(mem, 1). a is used (vpiUse) by w's rhs,
- *            among others.
+ *            vpi_handle_by_index(mem, 1). a is used (vpiUse) by statement 0,
+ *            which writes it, and by the rhs `a & b` of w's continuous
+ *            assignment (or `a[0]` of w1's: a bit select of a is a use of a,
+ *            Details a), among others.
  *   §26.6.39 a cbValueChange on a is a vpiCallback; vpi_get_cb_info gives
  *            back its reason and object; vpi_iterate(vpiCallback, a) yields
  *            it, and vpi_iterate(vpiCallback, NULL) the cbEndOfSimulation
@@ -395,7 +397,19 @@ static void expressions(void)
                             vpi_handle_by_index(p02_by_name("b26_behaviour.mem"), 1)),
         "26.6.25: mem[1] is the memory word");
   expect_no_error("the simple expressions");
-  XFAIL(count(vpiUse, a) >= 1, "26.6.25", "vpi_iterate(vpiUse, a) yields no use of a");
+  {
+    vpiHandle ca_w, ca_w1, itr = vpi_iterate(vpiUse, a), u;
+    int found_st0 = 0, found_rhs = 0;
+    first_two(vpiContAssign, top, &ca_w, &ca_w1);
+    CHECK(itr != NULL, "26.6.25: a has uses");
+    while ((u = vpi_scan(itr)) != NULL) {
+      if (vpi_compare_objects(u, st[0])) found_st0 = 1;
+      if (vpi_compare_objects(u, vpi_handle(vpiRhs, ca_w)) || vpi_compare_objects(u, vpi_handle(vpiRhs, ca_w1)))
+        found_rhs = 1;
+    }
+    CHECK(found_st0 && found_rhs, "26.6.25: a's uses include statement 0 and a continuous assignment's rhs");
+    expect_no_error("the uses of a");
+  }
   CHECK(vpi_iterate(vpiUse, vpi_handle(vpiRhs, st[0])) == NULL, "26.6.25: a constant is no simple expr");
   expect_refusal("vpi_iterate(vpiUse, constant)");
 }
