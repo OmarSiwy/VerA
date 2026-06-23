@@ -798,8 +798,13 @@ pub const Builder = struct {
             },
             // §11.6.21 event stmt '->' -> named event.
             .event_trigger => |s| b.code(vpiEventStmt, &.{.{ .tag = vpiNamedEvent, .to = b.lookup(f.str(s.name)) }}, &.{}, &.{}),
-            // §11.6.24 disable -> vpiScope: the named block, task or function.
-            .disable => |s| b.code(vpiDisable, &.{.{ .tag = vpiScope, .to = b.lookup(f.str(s.name)) }}, &.{}, &.{}),
+            // disable -> the named block, task or function it disables: AMS
+            // §11.6.24 tags the arrow vpiScope, IEEE 1364-2005 §26.6.38
+            // vpiExpr, and both are answered.
+            .disable => |s| blk: {
+                const target = b.lookup(f.str(s.name));
+                break :blk b.code(vpiDisable, &.{ .{ .tag = vpiScope, .to = target }, .{ .tag = vpiExpr, .to = target } }, &.{}, &.{});
+            },
             .sys_task => |s| blk: {
                 const name = f.str(s.name);
                 var args: std.ArrayList(u32) = .empty;
