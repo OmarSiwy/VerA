@@ -175,6 +175,7 @@ pub const vpiConditionOp: c_int = 32;
 pub const vpiConcatOp: c_int = 33;
 pub const vpiMultiConcatOp: c_int = 34;
 pub const vpiEventOrOp: c_int = 35;
+pub const vpiListOp: c_int = 37;
 pub const vpiPosedgeOp: c_int = 39;
 pub const vpiNegedgeOp: c_int = 40;
 pub const vpiArithLShiftOp: c_int = 41;
@@ -474,7 +475,7 @@ pub const Builder = struct {
         for (m.assigns) |a| {
             const lhs = try b.expr(a.target);
             const rhs = try b.expr(a.value);
-            const delay = if (a.delay.any()) try b.expr(a.delay.rise) else none;
+            const delay = try b.delayExpr(a.delay);
             const at = try b.code(vpiContAssign, &.{
                 .{ .tag = vpiLhs, .to = lhs },
                 .{ .tag = vpiRhs, .to = rhs },
@@ -490,7 +491,7 @@ pub const Builder = struct {
             try terms.append(b.arena, g.out);
             try terms.appendSlice(b.arena, g.ins);
             const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items);
-            const delay = if (g.delay.any()) try b.expr(g.delay.rise) else none;
+            const delay = try b.delayExpr(g.delay);
             b.objects.items[at].delays = try b.delays(g.delay);
             b.objects.items[at].src_tok = g.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiDelay, .to = delay }});
@@ -502,7 +503,7 @@ pub const Builder = struct {
             const d = b.objects.items[defn];
             const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items);
             try b.setName(at, try b.arena.dupe(u8, b.file.str(inst.name)));
-            const delay = if (inst.delay.any()) try b.expr(inst.delay.rise) else none;
+            const delay = try b.delayExpr(inst.delay);
             b.objects.items[at].delays = try b.delays(inst.delay);
             b.objects.items[at].src_tok = inst.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{
@@ -643,6 +644,17 @@ pub const Builder = struct {
         var out: std.ArrayList(f64) = .empty;
         for (es) |e| try out.append(b.arena, literal(b.file, e) orelse return &.{});
         return out.items;
+    }
+
+    /// IEEE 1364-2005 §26.3.4 vpiDelay: "an expression that evaluates to a
+    /// constant if there is only one delay specified or an operation if
+    /// there are more than one delay specified. If multiple delays are
+    /// specified, then the operation's vpiOpType shall be vpiListOp."
+    fn delayExpr(b: *Builder, d: Ast.Delay3) Error!u32 {
+        if (!d.any()) return none;
+        // `parseDelay3` spreads a single delay over all three transitions.
+        if (d.fall == d.rise) return b.expr(d.rise);
+        return b.operation(vpiListOp, if (d.off == .none) &.{ d.rise, d.fall } else &.{ d.rise, d.fall, d.off });
     }
 
     fn delays(b: *Builder, d: Ast.Delay3) Error![]const f64 {

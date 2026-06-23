@@ -11,7 +11,9 @@
  *     primitive <->> prim term: y, a, b; the output first (vpiTermIndex 0,
  *     vpiDirection vpiOutput), then the inputs (1 and 2, vpiInput); each
  *     prim term -> expr is the net or reg it connects, and leads back to the
- *     gate. vpiDelay is the constant 2.
+ *     gate. vpiDelay: IEEE 1364-2005 §26.3.4 "an operation if there are more
+ *     than one delay specified ... the operation's vpiOpType shall be
+ *     vpiListOp", so #(2,3) is a vpiListOp whose operands read 2 and 3.
  *   12.11 over it: "For primitive objects, the no_of_delays value shall be 2
  *     or 3." Two give rise 2 and fall 3; three add the turn-off, which a
  *     two-delay primitive derives as the smaller of the two (IEEE 1364
@@ -98,9 +100,20 @@ static PLI_INT32 walk(p_cb_data cb_data)
   term(terms[0], 0, vpiOutput, "p04_prims.y", g_and);
   term(terms[1], 1, vpiInput, "p04_prims.a", g_and);
   term(terms[2], 2, vpiInput, "p04_prims.b", g_and);
-  v.format = vpiIntVal;
-  vpi_get_value(vpi_handle(vpiDelay, g_and), &v);
-  CHECK(v.value.integer == 2, "vpiDelay is the constant 2");
+  {
+    vpiHandle dly = vpi_handle(vpiDelay, g_and), itr, x;
+    PLI_INT32 want = 2;
+    CHECK(vpi_get(vpiType, dly) == vpiOperation && vpi_get(vpiOpType, dly) == vpiListOp,
+          "IEEE 1364-2005 §26.3.4: vpiDelay of #(2,3) is a vpiListOp operation");
+    itr = vpi_iterate(vpiOperand, dly);
+    while ((x = vpi_scan(itr)) != NULL) {
+      v.format = vpiIntVal;
+      vpi_get_value(x, &v);
+      CHECK(v.value.integer == want, "delay operand %d", (int)want);
+      want++;
+    }
+    CHECK(want == 4, "two delays, 2 and 3");
+  }
   expect_no_error("the and gate");
 
   memset(&dl, 0, sizeof dl);
