@@ -356,9 +356,13 @@ typedef struct t_vpi_delay {
 #define vpiNoDirection          5
 
 /* vpiConstType values — §11.6.12, over §3.4.1's parameter types; an index
- * constant is vpiDecConst. */
+ * constant is vpiDecConst, and an integer literal's is the base it was written
+ * in (IEEE 1364-2005 §26.6.26). */
 #define vpiDecConst             1
 #define vpiRealConst            2
+#define vpiBinaryConst          3
+#define vpiOctConst             4
+#define vpiHexConst             5
 #define vpiStringConst          6
 #define vpiIntConst             7
 

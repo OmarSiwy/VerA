@@ -128,6 +128,11 @@ pub const vpiIndexedPartSelectType: c_int = 72;
 pub const vpiPosIndexed: c_int = 1;
 pub const vpiNegIndexed: c_int = 2;
 
+// vpiConstType values of a based literal (Annex G).
+pub const vpiBinaryConst: c_int = 3;
+pub const vpiOctConst: c_int = 4;
+pub const vpiHexConst: c_int = 5;
+
 // vpiCaseType values.
 pub const vpiCaseExact: c_int = 1;
 pub const vpiCaseX: c_int = 2;
@@ -899,10 +904,18 @@ pub const Builder = struct {
         const ex = &b.file.exprs;
         return switch (ex.tag(id)) {
             .ident => b.lookup(b.file.str(ex.strOf(id))),
-            // An unsized integer is written in decimal (A.8.7 unsigned_number);
-            // a sized one's base is not recorded by the parser, so its
-            // vpiConstType is not answered.
-            .int_literal => b.constant(.{ .int = ex.intValue(id) }, if (ex.intLiteral(id).width == 0) 32 else @intCast(ex.intLiteral(id).width), if (ex.intLiteral(id).width == 0) root.vpiDecConst else 0),
+            // IEEE 1364-2005 §26.6.26 vpiConstType: the base the literal was
+            // written in (an unsized one without a base format is decimal,
+            // A.8.7 unsigned_number).
+            .int_literal => blk: {
+                const lit = ex.intLiteral(id);
+                break :blk b.constant(.{ .int = lit.value }, if (lit.width == 0) 32 else lit.width, switch (lit.radix) {
+                    2 => vpiBinaryConst,
+                    8 => vpiOctConst,
+                    16 => vpiHexConst,
+                    else => root.vpiDecConst,
+                });
+            },
             .real_literal => b.constant(.{ .real = ex.realValue(id) }, 64, root.vpiRealConst),
             .str_literal => b.constant(.{ .str = try b.arena.dupe(u8, b.file.str(ex.strOf(id))) }, 0, root.vpiStringConst),
             .logic_literal => blk: {

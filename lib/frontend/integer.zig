@@ -636,6 +636,21 @@ pub const max_width: u32 = 1 << 24;
 /// Parses one §2.6.1 number token (size, `'`, optional `s`, base, digits;
 /// white space allowed around the base) into a `Literal` allocated from
 /// `arena`. A sized value wider than its size is truncated from the left.
+/// §2.6.1 the radix `text`'s base format names: 2, 8, 10 or 16, and 10 for
+/// a literal without one. `text` is one `parse` accepted.
+pub fn radixOf(text: []const u8) u8 {
+    const q = std.mem.indexOfScalar(u8, text, '\'') orelse return 10;
+    var i = q + 1;
+    if (i < text.len and (text[i] == 's' or text[i] == 'S')) i += 1;
+    if (i >= text.len) return 10;
+    return switch (std.ascii.toLower(text[i])) {
+        'b' => 2,
+        'o' => 8,
+        'h' => 16,
+        else => 10,
+    };
+}
+
 pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Allocator.Error)!Literal {
     var digits = text;
     var radix: u8 = 10;
@@ -745,6 +760,14 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         literal.width = @max(64, actual);
     }
     return literal;
+}
+
+test "§2.6.1 radixOf reads the base format, and 10 without one" {
+    try std.testing.expectEqual(@as(u8, 10), radixOf("9"));
+    try std.testing.expectEqual(@as(u8, 10), radixOf("4'd9"));
+    try std.testing.expectEqual(@as(u8, 2), radixOf("4'sB1x0z"));
+    try std.testing.expectEqual(@as(u8, 8), radixOf("'o17"));
+    try std.testing.expectEqual(@as(u8, 16), radixOf("8 'hFF"));
 }
 
 test "four-state based literals preserve width, sign, extension and truncation" {

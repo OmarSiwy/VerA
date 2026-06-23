@@ -362,7 +362,7 @@ static void expressions(void)
   }
   {
     vpiHandle k = vpi_handle(vpiRhs, st[0]);
-    XFAIL(vpi_get(vpiConstType, k) == vpiDecConst, "26.6.26", "vpiConstType of 4'd9 is not vpiDecConst");
+    CHECK(vpi_get(vpiConstType, k) == vpiDecConst, "26.6.26: vpiConstType of 4'd9 is vpiDecConst");
   }
   {
     const char *s = vpi_get_str(vpiDecompile, sum);
