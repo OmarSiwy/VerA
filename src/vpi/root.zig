@@ -115,6 +115,7 @@ pub const vpiPortIndex: c_int = 29;
 pub const vpiConstType: c_int = 40;
 pub const vpiSigned: c_int = 65;
 pub const vpiLocalParam: c_int = 70;
+pub const vpiDecompile: c_int = 54;
 
 // §6.5.2.2 directions.
 pub const vpiInput: c_int = 1;
@@ -370,6 +371,11 @@ pub const Obj = struct {
     /// source row's canonical pair — its flow is the row's, negated
     /// (§1.3.1.2: the reference direction is the declaration's).
     flow_neg: bool = false,
+    /// The source an expression (`.code` or `.constant`) or a task call was
+    /// built from, which `vpiDecompile` spells (IEEE 1364-2005 §26.6.26 b),
+    /// §26.6.19 g)); `.none` for an object with no source of its own.
+    src_expr: Ast.ExprId = .none,
+    src_stmt: Ast.StmtId = .none,
     /// `.code` of the digital model: the main token of the statement it is —
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
     /// names the engine driver §12.29's vpi_put_delays rewrites.
@@ -445,6 +451,10 @@ pub const Design = struct {
     natures: []const u32 = &.{},
     /// §11.6.14's circled arrow: `vpi_iterate(vpiUdpDefn, NULL)`.
     udp_defns: []const u32 = &.{},
+    /// The parsed source `src_expr`/`src_stmt` index, for a digital design
+    /// (the run it is read from outlives the model). Null for the analog
+    /// model, whose compilation may be freed once `open` returns.
+    file: ?*const Ast.SourceFile = null,
     /// §11.6 `vpiFullName` → object index. Every object has one and they are
     /// unique, which is what makes §12.21 a lookup rather than a tree walk.
     by_name: std.StringHashMapUnmanaged(u32),
@@ -1450,6 +1460,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
+    d.file = file;
     return d;
 }
 
@@ -2525,6 +2536,25 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
                 return null;
             }
             break :blk d.scopes[o.scope].def_name;
+        },
+        // IEEE 1364-2005 §26.6.26 b) / §26.6.19 g), spelled from the
+        // source straight into the buffer.
+        vpiDecompile => {
+            if (o.src_expr == .none and o.src_stmt == .none) {
+                fail("NOPROP", "vpi_get_str: a {s} has no vpiDecompile", .{typeName(typeOf(o))});
+                return null;
+            }
+            const f = d.file orelse {
+                fail("NOSOURCE", "vpi_get_str: the analog model keeps no source to decompile", .{});
+                return null;
+            };
+            var w: std.Io.Writer = .fixed(str_buf[0 .. str_buf.len - 1]);
+            (if (o.src_expr != .none) code.decompile(&w, f, o.src_expr) else code.decompileCall(&w, f, o.src_stmt)) catch {
+                fail("TOOLONG", "vpi_get_str: the decompiled text passes {d} bytes", .{str_buf.len - 1});
+                return null;
+            };
+            str_buf[w.end] = 0;
+            return @ptrCast(&str_buf);
         },
         // IEEE 1364-2005 §13.6: "The following VPI properties shall exist for
         // objects of type vpiModule".
