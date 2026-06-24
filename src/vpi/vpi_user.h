@@ -150,6 +150,11 @@ typedef PLI_UINT32 *vpiHandle;
  *   vpiParent, vpiLeftRange, vpiRightRange; net/reg bit -> vpiParent,
  *   vpiIndex; contrib -> vpiBranch, vpiRhs (+ vpiLhs, indirect);
  *   accessfunc -> vpiBranch, vpiDiscipline.
+ *   IEEE 1364-2005 §26.6.3/4/18: task/function ->> vpiReg, vpiIntegerVar,
+ *   vpiRealVar includes formals, locals and the implicit result;
+ *   io decl -> vpiExpr reaches its formal variable. Their vpiScope is the
+ *   subroutine, and static declarations expose their current stored value.
+ *   Subroutine arrays and time variables are not modelled yet.
  *
  * An identifier in an expression IS the object it names (§11.6.18): the
  * vpiLhs of `a = ...` is the reg a. Every relationship a diagram does not

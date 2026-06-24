@@ -768,6 +768,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: Annex G's vpiPolarity (34) is refused\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: Annex G's vpiTchkType (38) is refused\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_18_subroutines.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_18_subroutines.v",
+        .stdout = "b26_subroutines: metadata and runtime ok\n",
+    },
+    .{
         .c = "tests/fixtures/ieee_pli/b_26_6_20_frames.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_20_frames.v",
         .stdout = "p02: b_26_6_20_frames checks=14\n",
