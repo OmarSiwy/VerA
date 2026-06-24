@@ -10,7 +10,7 @@
  * 1 ns, a.set_format at 2 ns, b.set_format at 4 ns, then the top's default
  * reset at 5 ns. The children instantiate the same definition, so their
  * calls share a source token but have distinct handles and modules. At
- * startup and read-only time 0, all call objects exist yet the active
+ * end of compilation and read-only time 0, all call objects exist yet the active
  * handle is NULL with no error. At read-only times 1, 2, 4, 5 and 6 the
  * expected handles are respectively top, a, b, reset, reset. Executing
  * the zero-argument call still makes that actual call active; it does not
@@ -123,11 +123,12 @@ static PLI_INT32 finished(p_cb_data cb)
   return 0;
 }
 
-static void register_app(void)
+static PLI_INT32 compiled(p_cb_data ignored)
 {
   vpiHandle process, body, a, b, task_a, task_b;
   s_cb_data cb;
   unsigned i;
+  (void)ignored;
   top = p02_by_name("b26_timeformat");
   a = p02_by_name("b26_timeformat.a");
   b = p02_by_name("b26_timeformat.b");
@@ -139,7 +140,7 @@ static void register_app(void)
   reset_call = vpi_handle(vpiStmt, item(vpiStmt, body, 1));
   child_a = vpi_handle(vpiStmt, task_a);
   child_b = vpi_handle(vpiStmt, task_b);
-  CHECK(vpi_handle(vpiActiveTimeFormat, NULL) == NULL, "no call has executed during startup");
+  CHECK(vpi_handle(vpiActiveTimeFormat, NULL) == NULL, "no call has executed during compilation");
   expect_no_error("active format before execution");
   call(first, top, 1, -9, 2, " ns");
   call(child_a, a, 1, -12, 1, " ps");
@@ -159,6 +160,17 @@ static void register_app(void)
   cb.reason = cbEndOfSimulation;
   cb.cb_rtn = finished;
   CHECK(vpi_register_cb(&cb) != NULL, "register end callback");
+  return 0;
+}
+
+static void register_app(void)
+{
+  /* §26.2.4: startup registers; the design walk waits for compilation. */
+  s_cb_data cb;
+  memset(&cb, 0, sizeof cb);
+  cb.reason = cbEndOfCompile;
+  cb.cb_rtn = compiled;
+  CHECK(vpi_register_cb(&cb) != NULL, "register compile callback");
 }
 
 void (*vlog_startup_routines[])(void) = { register_app, NULL };
