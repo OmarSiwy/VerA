@@ -77,7 +77,10 @@
  * identified by its type, an assignment by its lhs (a, b, d, q), and filed
  * under the design header's number. Its vpiScope is the module. The fork fk
  * is a named fork holding two assignments; the scope that contains it is
- * main.
+ * main, so (§12.5, p. 191: "each module instance, generate block instance,
+ * task, function, or named begin-end or fork-join block defines a new
+ * hierarchical level, or scope") its full name is "b26_behaviour.main.fk",
+ * and main's statements, fk among them, have vpiScope main.
  *
  *   §26.2.5  statement 2's rhs `a + b`: a vpiOperation, vpiOpType vpiAddOp,
  *            operands a and b, each a reg (a leaf). Statement 18's
@@ -89,12 +92,22 @@
  *            concatenation }): the part select a[1:0], vpiParent a,
  *            vpiLeftRange 1, vpiRightRange 0. A full traversal of a + b meets
  *            one operation and two leaves. The fork's two statements are told
- *            apart by their lhs (p2 is the concatenation's).
+ *            apart by their lhs (p2 is the concatenation's). The other's rhs
+ *            `a[i +: 2]` is an indexed part select of vpiIndexedPartSelectType
+ *            vpiPosIndexed: vpiParent a, vpiBaseExpr the reg i, vpiWidthExpr
+ *            the constant 2.
+ *            §26.6.26 b) decompiles `a + b` as "a + b" (operator and operands
+ *            one space apart, no parentheses: none are needed for
+ *            precedence), the concatenation as "{2{a[1:0]}}", the indexed
+ *            part select as "a[i +: 2]" and statement 0's rhs as "4'd9".
  *   §26.3.4  w1's `assign #4` has one delay: vpiDelay is a constant reading
  *            4. w's `assign #(2,3)` has two: an operation of vpiListOp.
  *   §26.6.24 three continuous assignments: w's, w1's and nd's net
- *            declaration assignment (vpiNetDeclAssign TRUE). w's lhs is the
- *            net w and its rhs a vpiBitAndOp.
+ *            declaration assignment (vpiNetDeclAssign TRUE; FALSE for the
+ *            other two). w's lhs is the net w and its rhs a vpiBitAndOp. A
+ *            cont assign has a value: nd's drives 4'd3 with no delay, so at
+ *            time 0's read-write synch it reads "0011"; w's reads whatever
+ *            its delayed driver holds, and reading it is no error.
  *   §26.6.28 statement 0: vpiLhs is the reg a, vpiBlocking TRUE, rhs 4'd9 a
  *            constant, vpiConstType vpiDecConst. The always's statement is an
  *            event control whose statement is the nonblocking p <= a:
@@ -122,7 +135,7 @@
  *   §26.6.38 statement 20 `disable main`: vpiExpr is the named begin main.
  *   §26.6.27 statement 14 `-> go`: event stmt -> named event go.
  *   §26.6.3  the module's internal scopes are bump, twice and main; main's is
- *            fk.
+ *            fk (full name "b26_behaviour.main.fk", above).
  *   §26.6.4  bump's io decl `input [3:0] by`: "by", vpiInput, 4 bits,
  *            vpiVector TRUE, vpiScalar FALSE.
  *   §26.6.18 bump is a vpiTask, twice a vpiFunction of vpiSize 8; the
@@ -132,12 +145,17 @@
  *            constant 1); statement 16's rhs: func call -> function twice,
  *            one argument, the reg d; statement 19: sys task call "$display",
  *            vpiUserDefn FALSE, five arguments (the format and d, c, q, p2),
- *            and (§26.6.19 g) a vpiDecompile string, a "$display(" call.
+ *            and (§26.6.19 g) a vpiDecompile string: the call as written,
+ *            `$display("d=%0d c=%0d q=%0d p2=%b", d, c, q, p2)`, the
+ *            arguments decompiled as expressions and separated as the source
+ *            separates them.
  *            No application is running a calltf, so
  *            vpi_handle(vpiSysTfCall, NULL) is NULL.
  *   §26.6.25 statement 0's lhs IS the reg a; statement 9's rhs mem[1] IS
- *            vpi_handle_by_index(mem, 1). a is used (vpiUse) by w's rhs,
- *            among others.
+ *            vpi_handle_by_index(mem, 1). a is used (vpiUse) by statement 0,
+ *            which writes it, and by the rhs `a & b` of w's continuous
+ *            assignment (or `a[0]` of w1's: a bit select of a is a use of a,
+ *            Details a), among others.
  *   §26.6.39 a cbValueChange on a is a vpiCallback; vpi_get_cb_info gives
  *            back its reason and object; vpi_iterate(vpiCallback, a) yields
  *            it, and vpi_iterate(vpiCallback, NULL) the cbEndOfSimulation
@@ -310,7 +328,7 @@ static void expressions(void)
   vpiHandle a = p02_by_name("b26_behaviour.a");
   vpiHandle b = p02_by_name("b26_behaviour.b");
   vpiHandle sum = vpi_handle(vpiRhs, vpi_handle(vpiStmt, st[2]));
-  vpiHandle fk0, fk1, rep, x1, x2, inner, ps, y;
+  vpiHandle fk0, fk1, rep, x1, x2, inner, ps;
   int ops = 0, leaves = 0;
 
   /* §26.2.5 */
@@ -338,26 +356,36 @@ static void expressions(void)
   CHECK(vpi_get(vpiType, x1) == vpiConstant &&
         (vpi_get(vpiConstType, x1) == vpiDecConst || vpi_get(vpiConstType, x1) == vpiIntConst) && int_value(x1) == 2,
         "26.6.26 a: the first operand is the multiplier 2");
-  XFAIL(count(vpiOperand, rep) == 2 && vpi_get(vpiType, inner) == vpiPartSelect, "26.6.26",
-        "{2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]");
+  CHECK(count(vpiOperand, rep) == 2 && vpi_get(vpiType, inner) == vpiPartSelect,
+        "26.6.26 a: {2{a[1:0]}}'s second and last operand is a[1:0]");
   ps = inner;
-  if (vpi_get(vpiType, inner) == vpiOperation && vpi_get(vpiOpType, inner) == vpiConcatOp)
-    first_two(vpiOperand, inner, &ps, &y);
   CHECK(vpi_get(vpiType, ps) == vpiPartSelect && vpi_compare_objects(vpi_handle(vpiParent, ps), a), "26.6.26: a[1:0]");
   CHECK(int_value(vpi_handle(vpiLeftRange, ps)) == 1 && int_value(vpi_handle(vpiRightRange, ps)) == 0,
         "26.6.26: its ranges 1 and 0");
   expect_no_error("the expression walk");
   {
     vpiHandle r0 = vpi_handle(vpiRhs, fk0);
-    XFAIL(r0 != NULL && vpi_get(vpiType, r0) == vpiIndexedPartSelect, "26.6.26", "a[i +: 2] is no vpiIndexedPartSelect");
+    CHECK(r0 != NULL && vpi_get(vpiType, r0) == vpiIndexedPartSelect &&
+          vpi_get(vpiIndexedPartSelectType, r0) == vpiPosIndexed, "26.6.26: a[i +: 2] is an indexed part select, +:");
+    CHECK(vpi_compare_objects(vpi_handle(vpiParent, r0), a) &&
+          vpi_compare_objects(vpi_handle(vpiBaseExpr, r0), p02_by_name("b26_behaviour.i")) &&
+          int_value(vpi_handle(vpiWidthExpr, r0)) == 2, "26.6.26: of a, base i, width 2");
+    expect_no_error("the indexed part select");
   }
   {
     vpiHandle k = vpi_handle(vpiRhs, st[0]);
-    XFAIL(vpi_get(vpiConstType, k) == vpiDecConst, "26.6.26", "vpiConstType of 4'd9 is not vpiDecConst");
+    CHECK(vpi_get(vpiConstType, k) == vpiDecConst, "26.6.26: vpiConstType of 4'd9 is vpiDecConst");
   }
   {
     const char *s = vpi_get_str(vpiDecompile, sum);
-    XFAIL(s != NULL && strcmp(s, "a + b") == 0, "26.6.26", "vpiDecompile of a + b is not \"a + b\"");
+    CHECK(s != NULL && strcmp(s, "a + b") == 0, "26.6.26 b: vpiDecompile of a + b is \"a + b\"");
+    s = vpi_get_str(vpiDecompile, rep);
+    CHECK(s != NULL && strcmp(s, "{2{a[1:0]}}") == 0, "26.6.26 b: vpiDecompile of {2{a[1:0]}}");
+    s = vpi_get_str(vpiDecompile, vpi_handle(vpiRhs, fk0));
+    CHECK(s != NULL && strcmp(s, "a[i +: 2]") == 0, "26.6.26 b: vpiDecompile of a[i +: 2]");
+    s = vpi_get_str(vpiDecompile, vpi_handle(vpiRhs, st[0]));
+    CHECK(s != NULL && strcmp(s, "4'd9") == 0, "26.6.26 b: vpiDecompile of 4'd9");
+    expect_no_error("the decompiled expressions");
   }
   CHECK(vpi_get(vpiConstType, sum) == vpiUndefined, "26.6.26: an operation has no vpiConstType");
   expect_refusal("vpi_get(vpiConstType, operation)");
@@ -372,7 +400,19 @@ static void expressions(void)
                             vpi_handle_by_index(p02_by_name("b26_behaviour.mem"), 1)),
         "26.6.25: mem[1] is the memory word");
   expect_no_error("the simple expressions");
-  XFAIL(count(vpiUse, a) >= 1, "26.6.25", "vpi_iterate(vpiUse, a) yields no use of a");
+  {
+    vpiHandle ca_w, ca_w1, itr = vpi_iterate(vpiUse, a), u;
+    int found_st0 = 0, found_rhs = 0;
+    first_two(vpiContAssign, top, &ca_w, &ca_w1);
+    CHECK(itr != NULL, "26.6.25: a has uses");
+    while ((u = vpi_scan(itr)) != NULL) {
+      if (vpi_compare_objects(u, st[0])) found_st0 = 1;
+      if (vpi_compare_objects(u, vpi_handle(vpiRhs, ca_w)) || vpi_compare_objects(u, vpi_handle(vpiRhs, ca_w1)))
+        found_rhs = 1;
+    }
+    CHECK(found_st0 && found_rhs, "26.6.25: a's uses include statement 0 and a continuous assignment's rhs");
+    expect_no_error("the uses of a");
+  }
   CHECK(vpi_iterate(vpiUse, vpi_handle(vpiRhs, st[0])) == NULL, "26.6.25: a constant is no simple expr");
   expect_refusal("vpi_iterate(vpiUse, constant)");
 }
@@ -396,17 +436,28 @@ static void cont_assigns(void)
   CHECK(d != NULL && vpi_get(vpiType, d) == vpiConstant && int_value(d) == 4, "26.3.4: one delay is a constant, 4");
   expect_no_error("the continuous assignments");
   d = vpi_handle(vpiDelay, ca_w);
-  XFAIL(d != NULL && vpi_get(vpiType, d) == vpiOperation && vpi_get(vpiOpType, d) == vpiListOp, "26.3.4",
-        "vpiDelay of #(2,3) is not a vpiListOp operation");
+  CHECK(d != NULL && vpi_get(vpiType, d) == vpiOperation && vpi_get(vpiOpType, d) == vpiListOp && count(vpiOperand, d) == 2,
+        "26.3.4: two delays are a vpiListOp operation over two operands");
+  expect_no_error("the list of delays");
   CHECK(vpi_handle(vpiDelay, a) == NULL, "26.3.4: a reg has no delay");
   expect_refusal("vpi_handle(vpiDelay, reg)");
-  XFAIL(count(vpiContAssign, top) == 3, "26.6.24", "the net declaration assignment of nd is no cont assign");
-  XFAIL(vpi_get(vpiNetDeclAssign, ca_w) == 0, "26.6.24", "vpiNetDeclAssign of an assign statement is not FALSE");
   {
+    vpiHandle itr = vpi_iterate(vpiContAssign, top), ca, ca_nd = NULL;
     s_vpi_value v;
+    int n = 0;
+    while ((ca = vpi_scan(itr)) != NULL) {
+      n++;
+      if (vpi_compare_objects(vpi_handle(vpiLhs, ca), p02_by_name("b26_behaviour.nd"))) ca_nd = ca;
+    }
+    CHECK(n == 3 && ca_nd != NULL, "26.6.24: three continuous assignments, nd's net declaration assignment among them");
+    CHECK(vpi_get(vpiNetDeclAssign, ca_nd) == 1 && vpi_get(vpiNetDeclAssign, ca_w) == 0 &&
+          vpi_get(vpiNetDeclAssign, ca_w1) == 0, "26.6.24: vpiNetDeclAssign is TRUE for nd's alone");
+    v.format = vpiBinStrVal;
+    vpi_get_value(ca_nd, &v);
+    CHECK(strcmp(v.value.str, "0011") == 0, "26.6.24: nd's assignment drives 4'd3, got %s", v.value.str);
     v.format = vpiBinStrVal;
     vpi_get_value(ca_w, &v);
-    XFAIL(vpi_chk_error(NULL) == 0, "26.6.24", "vpi_get_value(cont assign) is refused");
+    expect_no_error("the continuous assignments' values");
   }
   CHECK(vpi_handle(vpiCondition, ca_w) == NULL, "26.6.24: a cont assign has no condition");
   expect_refusal("vpi_handle(vpiCondition, cont assign)");
@@ -478,12 +529,13 @@ static void statements(void)
   CHECK_STR(vpi_get_str(vpiName, mainb), "main", "26.6.3 name");
   CHECK_STR(vpi_get_str(vpiFullName, mainb), "b26_behaviour.main", "26.6.3 full name");
   CHECK(vpi_compare_objects(vpi_handle(vpiScope, mainb), top), "26.6.3: main's scope is the module");
-  CHECK_STR(vpi_get_str(vpiFullName, st[18]), "b26_behaviour.fk", "26.6.3: the named fork is a scope");
+  CHECK_STR(vpi_get_str(vpiFullName, st[18]), "b26_behaviour.main.fk", "26.6.3: the named fork is a scope");
+  CHECK(has_scope(top, "b26_behaviour.bump") && has_scope(top, "b26_behaviour.twice") &&
+        has_scope(top, "b26_behaviour.main"), "26.6.3: module ->> vpiInternalScope is bump, twice, main");
+  CHECK(has_scope(mainb, "b26_behaviour.main.fk"), "26.6.3: main ->> vpiInternalScope is fk");
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, st[18]), mainb), "26.6.3: fk's vpiScope is main");
+  CHECK(vpi_compare_objects(vpi_handle(vpiScope, st[0]), mainb), "26.6.3: main's statements are in main");
   expect_no_error("the scope walk");
-  XFAIL(has_scope(top, "b26_behaviour.bump") && has_scope(top, "b26_behaviour.twice") &&
-        has_scope(top, "b26_behaviour.main"), "26.6.3", "module ->> vpiInternalScope omits bump, twice, main");
-  XFAIL(has_scope(mainb, "b26_behaviour.fk"), "26.6.3", "main ->> vpiInternalScope omits fk");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiScope, st[18]), mainb), "26.6.3", "fk's vpiScope is not main");
   CHECK(vpi_get(vpiSize, mainb) == vpiUndefined, "26.6.3: a scope has no size");
   expect_refusal("vpi_get(vpiSize, named begin)");
 
@@ -542,10 +594,11 @@ static void statements(void)
   x = vpi_handle(vpiStmt, proc_forever);
   CHECK(vpi_get(vpiType, x) == vpiDelayControl, "26.6.34: initial #20 ...");
   fv = vpi_handle(vpiStmt, x);
-  XFAIL(vpi_get(vpiType, fv) == vpiForever, "26.6.34", "forever is not a vpiForever");
+  CHECK(vpi_get(vpiType, fv) == vpiForever, "26.6.34: a forever");
   CHECK(vpi_get(vpiType, vpi_handle(vpiStmt, fv)) == vpiDelayControl, "26.6.34: forever -> stmt, #1 clk = ~clk");
-  XFAIL(vpi_handle(vpiCondition, fv) == NULL && vpi_chk_error(NULL) != 0, "26.6.34",
-        "vpi_handle(vpiCondition, forever) is not refused");
+  expect_no_error("the forever");
+  CHECK(vpi_handle(vpiCondition, fv) == NULL, "26.6.34: forever draws no condition");
+  expect_refusal("vpi_handle(vpiCondition, forever)");
 
   /* §26.6.35 */
   CHECK(vpi_get(vpiType, st[3]) == vpiIfElse && vpi_get(vpiOpType, vpi_handle(vpiCondition, st[3])) == vpiEqOp &&
@@ -585,7 +638,8 @@ static void statements(void)
 
   /* §26.6.38 */
   CHECK(vpi_get(vpiType, st[20]) == vpiDisable, "26.6.38: disable main");
-  XFAIL(vpi_compare_objects(vpi_handle(vpiExpr, st[20]), mainb), "26.6.38", "disable -> vpiExpr is not main");
+  CHECK(vpi_compare_objects(vpi_handle(vpiExpr, st[20]), mainb), "26.6.38: disable -> vpiExpr is main");
+  expect_no_error("the disable");
   CHECK(vpi_handle(vpiCondition, st[20]) == NULL, "26.6.38: disable has no condition");
   expect_refusal("vpi_handle(vpiCondition, disable)");
 }
@@ -638,7 +692,8 @@ static void tasks_and_calls(void)
   XFAIL(vpi_get(vpiFuncType, fc) == vpiSizedFunc, "26.6.19", "vpiFuncType of the call twice(d)");
   {
     const char *s = vpi_get_str(vpiDecompile, st[19]);
-    XFAIL(s != NULL && strncmp(s, "$display(", 9) == 0, "26.6.19", "vpiDecompile of the $display call is refused");
+    CHECK(s != NULL && strcmp(s, "$display(\"d=%0d c=%0d q=%0d p2=%b\", d, c, q, p2)") == 0,
+          "26.6.19 g: vpiDecompile of the $display call");
   }
   CHECK(vpi_iterate(vpiOperand, st[15]) == NULL, "26.6.19: a call draws arguments, not operands");
   expect_refusal("vpi_iterate(vpiOperand, task call)");

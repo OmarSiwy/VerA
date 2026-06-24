@@ -130,6 +130,7 @@ pub const vpiPortIndex: c_int = 29;
 pub const vpiConstType: c_int = 40;
 pub const vpiSigned: c_int = 65;
 pub const vpiLocalParam: c_int = 70;
+pub const vpiDecompile: c_int = 54;
 
 // §6.5.2.2 directions.
 pub const vpiInput: c_int = 1;
@@ -399,6 +400,12 @@ pub const Obj = struct {
     /// source row's canonical pair — its flow is the row's, negated
     /// (§1.3.1.2: the reference direction is the declaration's).
     flow_neg: bool = false,
+    /// The source an expression (`.code` or `.constant`) or a task call was
+    /// built from, which `vpiDecompile` spells (IEEE 1364-2005 §26.6.26 b),
+    /// §26.6.19 g)). Expressions also supply §26.6.19(e)'s lazy value reads;
+    /// declared objects retain their storage-based path. `.none` means no source.
+    src_expr: Ast.ExprId = .none,
+    src_stmt: Ast.StmtId = .none,
     /// `.code` of the digital model: the main token of the statement it is —
     /// a gate, a UDP instance, a continuous assignment — which with `owner`
     /// names the engine driver §12.29's vpi_put_delays rewrites; of a system
@@ -409,9 +416,6 @@ pub const Obj = struct {
     /// `.code` statement: its AST statement, which with `owner` names the
     /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
     stmt: Ast.StmtId = .none,
-    /// A source expression retained for IEEE 1364-2005 §26.6.19(e)'s lazy
-    /// vpi_get_value. Declared objects keep their storage-based value path.
-    src_expr: Ast.ExprId = .none,
     /// The instance supplying `src_expr`'s engine context. Expressions such
     /// as operations have no VPI scope relationship (`owner` is null), but
     /// still need their original instance when an application reads them.
@@ -443,6 +447,9 @@ const Scope = struct {
     time_unit: ?i8 = null,
     time_precision: ?i8 = null,
     children: []const u32 = &.{},
+    /// IEEE 1364-2005 §26.6.3 module ->> vpiInternalScope: the instances,
+    /// then the gen scopes, tasks, functions and named blocks written here.
+    internal: []const u32 = &.{},
     ports: []const u32 = &.{},
     nets: []const u32 = &.{},
     regs: []const u32 = &.{},
@@ -512,6 +519,10 @@ pub const Design = struct {
     /// vpiTimePrecision of a NULL object answer, "the smallest time precision
     /// of all modules". Null in the analog model.
     finest: ?i8 = null,
+    /// The parsed source `src_expr`/`src_stmt` index, for a digital design
+    /// (the run it is read from outlives the model). Null for the analog
+    /// model, whose compilation may be freed once `open` returns.
+    file: ?*const Ast.SourceFile = null,
     /// §11.6 `vpiFullName` → object index. Every object has one and they are
     /// unique, which is what makes §12.21 a lookup rather than a tree walk.
     by_name: std.StringHashMapUnmanaged(u32),
@@ -1148,6 +1159,13 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .time_unit = s.time_unit,
         .time_precision = s.time_precision,
         .children = try arena.dupe(u32, s.children.items),
+        .internal = blk: {
+            var all: std.ArrayList(u32) = .empty;
+            try all.appendSlice(arena, s.children.items);
+            for (s.code.gen_arrays.items) |g| try all.appendSlice(arena, objects[g].lists[0].items);
+            try all.appendSlice(arena, s.code.internal.items);
+            break :blk all.items;
+        },
         .ports = try arena.dupe(u32, s.ports.items),
         .nets = try arena.dupe(u32, s.nets.items),
         .regs = try arena.dupe(u32, s.regs.items),
@@ -1649,6 +1667,7 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     d.udp_defns = udp_defns;
     d.finest = @intCast(r.finest);
     d.search_up = false;
+    d.file = file;
     return d;
 }
 
@@ -2314,6 +2333,7 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
+    if (obj_type == code.vpiUse) return uses(d, o);
     // A behavioural object's double arrows are its `lists` rows, as are a
     // vector's bits. An empty row is an empty set (NULL, no error —
     // §11.6.23 NOTE 2's default case item among them); a tag a behavioural
@@ -2350,11 +2370,8 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const s = &d.scopes[o.scope];
     for (s.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
     const items: []const u32 = switch (obj_type) {
-        // §11.6.1 gives module a one-to-many to `scope` tagged vpiInternalScope
-        // AND a separate one to `module`. In a design whose only named scopes
-        // are instances these are the same set, and answering both tags with it
-        // is what lets an application written either way walk.
-        vpiModule, vpiInternalScope => s.children,
+        vpiModule => s.children,
+        vpiInternalScope => s.internal,
         vpiPort => s.ports,
         vpiNet => s.nets,
         vpiReg => s.regs,
@@ -2377,6 +2394,69 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     };
     if (items.len == 0) return null;
     return newIter(d, items);
+}
+
+/// IEEE 1364-2005 §26.6.25 simple expr ->> vpiUse: the objects (statements,
+/// expressions, continuous assignments, terminals) that read or write `o`,
+/// in object order. Details a): "For vectors, the vpiUse relationship shall
+/// access any use of the vector or part-selects or bit-selects thereof", so
+/// an object holding a select of `o` uses it too.
+///
+/// ponytail: a scan of every object per call, and a bit select's own uses
+/// only (Details b adds the parent vector's and a containing part select's).
+fn uses(d: *Design, o: *const Obj) vpiHandle {
+    switch (o.kind) {
+        .net, .reg, .integer, .real_var, .time_var, .parameter, .word, .var_select => {},
+        .code => if (o.vtype != code.vpiNetBit and o.vtype != code.vpiRegBit) return useFail(o),
+        .module, .port, .reg_array, .var_array, .net_array, .module_array, .constant, .discipline, .nature, .node, .branch, .quantity => return useFail(o),
+    }
+    const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+    var out: std.ArrayList(vpiHandle) = .empty;
+    for (d.objects) |*u| {
+        if (u.kind != .code) continue;
+        const hit = for (u.edges) |e| {
+            // A select's vpiParent is the vector it selects from, not a use.
+            if (e.tag != vpiParent and e.tag != vpiScope and e.tag != vpiModule and reaches(d, e.to, target)) break true;
+        } else for (u.lists) |l| {
+            if (for (l.items) |i| {
+                if (reaches(d, i, target)) break true;
+            } else false) break true;
+        } else false;
+        if (hit) out.append(d.gpa, handleOf(u)) catch {
+            out.deinit(d.gpa);
+            fail("NOMEM", "vpi_iterate: out of memory", .{});
+            return null;
+        };
+    }
+    if (out.items.len == 0) {
+        out.deinit(d.gpa);
+        return null;
+    }
+    const handles = out.toOwnedSlice(d.gpa) catch {
+        out.deinit(d.gpa);
+        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        return null;
+    };
+    return newHandleIter(d, handles);
+}
+
+/// Is object `at` the object `target`, or a part or bit select of it?
+fn reaches(d: *const Design, at: u32, target: u32) bool {
+    if (at == target) return true;
+    if (at == no_obj) return false;
+    const x = &d.objects[at];
+    if (x.kind != .code) return false;
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiIndexedPartSelect, code.vpiNetBit, code.vpiRegBit => {},
+        else => return false, // else: only a select names a part of another object
+    }
+    for (x.edges) |e| if (e.tag == vpiParent) return e.to == target;
+    return false;
+}
+
+fn useFail(o: *const Obj) vpiHandle {
+    fail("NOTRAVERSE", "vpi_iterate: a {s} is no simple expression, so it has no vpiUse", .{typeName(typeOf(o))});
+    return null;
 }
 
 /// An iterator over `handles`, which it takes ownership of.
@@ -2920,6 +3000,25 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
                 return null;
             };
             break :blk at.file;
+        },
+        // IEEE 1364-2005 §26.6.26 b) / §26.6.19 g), spelled from the
+        // source straight into the buffer.
+        vpiDecompile => {
+            if (o.src_expr == .none and o.src_stmt == .none) {
+                fail("NOPROP", "vpi_get_str: a {s} has no vpiDecompile", .{typeName(typeOf(o))});
+                return null;
+            }
+            const f = d.file orelse {
+                fail("NOSOURCE", "vpi_get_str: the analog model keeps no source to decompile", .{});
+                return null;
+            };
+            var w: std.Io.Writer = .fixed(str_buf[0 .. str_buf.len - 1]);
+            (if (o.src_expr != .none) code.decompile(&w, f, o.src_expr) else code.decompileCall(&w, f, o.src_stmt)) catch {
+                fail("TOOLONG", "vpi_get_str: the decompiled text passes {d} bytes", .{str_buf.len - 1});
+                return null;
+            };
+            str_buf[w.end] = 0;
+            return @ptrCast(&str_buf);
         },
         // IEEE 1364-2005 §13.6: "The following VPI properties shall exist for
         // objects of type vpiModule".

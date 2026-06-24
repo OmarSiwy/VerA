@@ -42,6 +42,8 @@ pub const vpiNetBit: c_int = 37;
 pub const vpiNullStmt: c_int = 38;
 pub const vpiOperation: c_int = 39;
 pub const vpiPartSelect: c_int = 42;
+/// IEEE 1364-2005 §26.6.26 (Annex G).
+pub const vpiIndexedPartSelect: c_int = 130;
 pub const vpiRegBit: c_int = 49;
 pub const vpiRelease: c_int = 50;
 pub const vpiRepeat: c_int = 51;
@@ -81,6 +83,9 @@ pub const vpiArgument: c_int = 89;
 pub const vpiOperand: c_int = 97;
 pub const vpiProcess: c_int = 99;
 pub const vpiExpr: c_int = 102;
+pub const vpiUse: c_int = 101;
+pub const vpiBaseExpr: c_int = 131;
+pub const vpiWidthExpr: c_int = 132;
 // §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
 // checks and their terms, the relations between them, and their properties.
 pub const vpiModPath: c_int = 31;
@@ -120,9 +125,18 @@ pub const vpiProtected: c_int = 10;
 pub const vpiOpType: c_int = 39;
 pub const vpiBlocking: c_int = 41;
 pub const vpiCaseType: c_int = 42;
+pub const vpiNetDeclAssign: c_int = 43;
 pub const vpiDirection: c_int = 20;
 pub const vpiSize: c_int = 4;
 pub const vpiConnByName: c_int = 21;
+pub const vpiIndexedPartSelectType: c_int = 72;
+pub const vpiPosIndexed: c_int = 1;
+pub const vpiNegIndexed: c_int = 2;
+
+// vpiConstType values of a based literal (Annex G).
+pub const vpiBinaryConst: c_int = 3;
+pub const vpiOctConst: c_int = 4;
+pub const vpiHexConst: c_int = 5;
 
 // vpiCaseType values.
 pub const vpiCaseExact: c_int = 1;
@@ -225,6 +239,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiNullStmt => "vpiNullStmt",
         vpiOperation => "vpiOperation",
         vpiPartSelect => "vpiPartSelect",
+        vpiIndexedPartSelect => "vpiIndexedPartSelect",
         vpiRegBit => "vpiRegBit",
         vpiRelease => "vpiRelease",
         vpiRepeat => "vpiRepeat",
@@ -266,8 +281,13 @@ pub const ScopeLists = struct {
     /// IEEE 1364-2005 §26.6.12: the `#(...)` assignments overriding this
     /// instance's parameters, written in its parent (root.zig).
     param_assigns: std.ArrayList(u32) = .empty,
+    /// IEEE 1364-2005 §26.6.3 the task, function and named block scopes
+    /// written directly in the module; root.zig joins its instances and gen
+    /// scopes to them for `vpiInternalScope`.
+    internal: std.ArrayList(u32) = .empty,
 
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
+        s.internal.deinit(gpa);
         s.gen_arrays.deinit(gpa);
         s.param_assigns.deinit(gpa);
         s.mod_paths.deinit(gpa);
@@ -315,6 +335,11 @@ pub const Builder = struct {
     scope: u32,
     path: []const u8,
     lists: *ScopeLists,
+    /// IEEE 1364-2005 §26.6.3 the innermost task, function or named block
+    /// being built (a statement's vpiScope), `none` at module level, and the
+    /// list its own internal scopes go to. `path` includes it (§12.5).
+    inner: u32 = none,
+    internal: ?*std.ArrayList(u32) = null,
     /// The analog model's discipline-by-name table and the branch objects,
     /// for §11.6.19's accessfunc and §11.6.20's contribution; empty for a
     /// digital scope.
@@ -361,6 +386,27 @@ pub const Builder = struct {
         b.objects.items[at].name = local;
         b.objects.items[at].full = f;
         try b.names.put(b.gpa, f, at);
+    }
+
+    const Saved = struct { inner: u32, path: []const u8, internal: ?*std.ArrayList(u32) };
+
+    /// Enters object `at`, already named `local` in the current scope, as a
+    /// scope of its own (IEEE 1364-2005 §12.5: "Each ... task, function, named
+    /// begin-end or fork-join block defines a new hierarchical level"), with
+    /// `into` collecting its internal scopes. `leave` restores the outer one.
+    fn enter(b: *Builder, at: u32, local: []const u8, into: *std.ArrayList(u32)) Error!Saved {
+        try (b.internal orelse &b.lists.internal).append(b.gpa, at);
+        const saved: Saved = .{ .inner = b.inner, .path = b.path, .internal = b.internal };
+        b.inner = at;
+        b.path = if (b.path.len == 0) local else try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.path, local });
+        b.internal = into;
+        return saved;
+    }
+
+    fn leave(b: *Builder, s: Saved) void {
+        b.inner = s.inner;
+        b.path = s.path;
+        b.internal = s.internal;
     }
 
     fn many(b: *Builder, items: []const u32) Error![]const u32 {
@@ -425,25 +471,45 @@ pub const Builder = struct {
                     .automatic = true,
                 }));
             };
+            var inner: std.ArrayList(u32) = .empty;
+            defer inner.deinit(b.gpa);
+            const saved = try b.enter(at, b.objects.items[at].name, &inner);
             const body = try b.stmt(t.body);
+            b.leave(saved);
+            const scopes: List = .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) };
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = body }});
             b.objects.items[at].lists = if (t.automatic)
-                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items } })
+                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, .{ .tag = root.vpiReg, .items = autos.items }, scopes })
             else
-                try b.arena.dupe(List, &.{.{ .tag = vpiIODecl, .items = ios.items }});
+                try b.arena.dupe(List, &.{ .{ .tag = vpiIODecl, .items = ios.items }, scopes });
         }
         // §11.6.17.
         for (m.assigns) |a| {
             const lhs = try b.expr(a.target);
             const rhs = try b.expr(a.value);
-            const delay = if (a.delay.any()) try b.expr(a.delay.rise) else none;
+            const delay = try b.delayExpr(a.delay);
             const at = try b.code(vpiContAssign, &.{
                 .{ .tag = vpiLhs, .to = lhs },
                 .{ .tag = vpiRhs, .to = rhs },
                 .{ .tag = vpiDelay, .to = delay },
-            }, &.{}, &.{});
+            }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 0 }});
             b.objects.items[at].delays = try b.delays(a.delay);
             b.objects.items[at].src_tok = a.main_tok;
+            try b.lists.cont_assigns.append(b.gpa, at);
+        }
+        // IEEE 1364-2005 §26.6.24: a net declaration assignment (A.2.4) is a
+        // continuous assignment too, "-> net decl assign bool:
+        // vpiNetDeclAssign". §6.1.3: "When there is a continuous assignment
+        // in a declaration, the delay is part of the continuous assignment".
+        for (m.nets) |n| {
+            if (n.init == .none) continue;
+            const at = try b.code(vpiContAssign, &.{
+                .{ .tag = vpiLhs, .to = b.lookup(b.file.str(n.name)) },
+                .{ .tag = vpiRhs, .to = try b.expr(n.init) },
+                .{ .tag = vpiDelay, .to = try b.delayExpr(n.delay) },
+            }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 1 }});
+            b.objects.items[at].delays = try b.delays(n.delay);
+            b.objects.items[at].src_tok = n.main_tok;
             try b.lists.cont_assigns.append(b.gpa, at);
         }
         // §11.6.13 gates, in source order, then UDP instances.
@@ -452,7 +518,7 @@ pub const Builder = struct {
             try terms.append(b.arena, g.out);
             try terms.appendSlice(b.arena, g.ins);
             const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items);
-            const delay = if (g.delay.any()) try b.expr(g.delay.rise) else none;
+            const delay = try b.delayExpr(g.delay);
             b.objects.items[at].delays = try b.delays(g.delay);
             b.objects.items[at].src_tok = g.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiDelay, .to = delay }});
@@ -464,7 +530,7 @@ pub const Builder = struct {
             const d = b.objects.items[defn];
             const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items);
             try b.setName(at, try b.arena.dupe(u8, b.file.str(inst.name)));
-            const delay = if (inst.delay.any()) try b.expr(inst.delay.rise) else none;
+            const delay = try b.delayExpr(inst.delay);
             b.objects.items[at].delays = try b.delays(inst.delay);
             b.objects.items[at].src_tok = inst.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{
@@ -607,6 +673,17 @@ pub const Builder = struct {
         return out.items;
     }
 
+    /// IEEE 1364-2005 §26.3.4 vpiDelay: "an expression that evaluates to a
+    /// constant if there is only one delay specified or an operation if
+    /// there are more than one delay specified. If multiple delays are
+    /// specified, then the operation's vpiOpType shall be vpiListOp."
+    fn delayExpr(b: *Builder, d: Ast.Delay3) Error!u32 {
+        if (!d.any()) return none;
+        // `parseDelay3` spreads a single delay over all three transitions.
+        if (d.fall == d.rise) return b.expr(d.rise);
+        return b.operation(vpiListOp, if (d.off == .none) &.{ d.rise, d.fall } else &.{ d.rise, d.fall, d.off });
+    }
+
     fn delays(b: *Builder, d: Ast.Delay3) Error![]const f64 {
         if (!d.any()) return &.{};
         var out: std.ArrayList(f64) = .empty;
@@ -622,13 +699,21 @@ pub const Builder = struct {
     /// Builds the object for statement `id` and its children; returns its
     /// index, or `none` for `.none` or a statement with no §11.6.21 object.
     pub fn stmt(b: *Builder, id: Ast.StmtId) Error!u32 {
-        if (id == .none) return none;
         const at = try b.stmtObj(id);
         if (at != none) b.objects.items[at].stmt = id;
+        // IEEE 1364-2005 §26.6.3 stmt -> vpiScope: the innermost task,
+        // function or named block around it. At module level the edge is the
+        // owner one every object shares. Appended, so a disable's own
+        // vpiScope (AMS §11.6.24, the scope it disables) is found first.
+        if (at != none and b.inner != none) {
+            const o = &b.objects.items[at];
+            o.edges = try std.mem.concat(b.arena, Edge, &.{ o.edges, &.{.{ .tag = vpiScope, .to = b.inner }} });
+        }
         return at;
     }
 
     fn stmtObj(b: *Builder, id: Ast.StmtId) Error!u32 {
+        if (id == .none) return none;
         const f = b.file;
         return switch (f.stmt(id)) {
             .empty => b.code(vpiNullStmt, &.{}, &.{}, &.{}),
@@ -638,10 +723,22 @@ pub const Builder = struct {
                 const named = blk.name != .none;
                 const vt: c_int = if (blk.parallel) (if (named) vpiNamedFork else vpiFork) else if (named) vpiNamedBegin else vpiBegin;
                 const at = try b.code(vt, &.{}, &.{}, &.{});
-                if (named) try b.setName(at, try b.arena.dupe(u8, f.str(blk.name)));
+                var inner: std.ArrayList(u32) = .empty;
+                defer inner.deinit(b.gpa);
+                var saved: ?Saved = null;
+                if (named) {
+                    const local = try b.arena.dupe(u8, f.str(blk.name));
+                    try b.setName(at, local);
+                    saved = try b.enter(at, local, &inner);
+                }
                 var items: std.ArrayList(u32) = .empty;
                 for (blk.body) |s| try items.append(b.arena, try b.stmt(s));
-                b.objects.items[at].lists = try b.arena.dupe(List, &.{.{ .tag = vpiStmt, .items = try b.many(items.items) }});
+                if (saved) |sv| b.leave(sv);
+                const stmts: List = .{ .tag = vpiStmt, .items = try b.many(items.items) };
+                b.objects.items[at].lists = if (named)
+                    try b.arena.dupe(List, &.{ stmts, .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) } })
+                else
+                    try b.arena.dupe(List, &.{stmts});
                 break :blk at;
             },
             .assign => |a| switch (a.continuous) {
@@ -721,10 +818,16 @@ pub const Builder = struct {
                 .{ .tag = vpiForIncStmt, .to = try b.stmt(s.step) },
                 .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
             }, &.{}, &.{}),
-            .while_stmt => |s| b.code(vpiWhile, &.{
-                .{ .tag = vpiCondition, .to = try b.expr(s.cond) },
-                .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
-            }, &.{}, &.{}),
+            // The parser records `forever s` as `while (1) s` with the `1`
+            // on the `forever` keyword itself; IEEE 1364-2005 §26.6.34 draws
+            // forever -> stmt alone.
+            .while_stmt => |s| if (f.exprs.tag(s.cond) == .int_literal and f.exprs.mainTok(s.cond) == f.stmtTok(id))
+                b.code(vpiForever, &.{.{ .tag = vpiStmt, .to = try b.stmt(s.body) }}, &.{}, &.{})
+            else
+                b.code(vpiWhile, &.{
+                    .{ .tag = vpiCondition, .to = try b.expr(s.cond) },
+                    .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
+                }, &.{}, &.{}),
             .repeat_stmt => |s| b.code(vpiRepeat, &.{
                 .{ .tag = vpiCondition, .to = try b.expr(s.count) },
                 .{ .tag = vpiStmt, .to = try b.stmt(s.body) },
@@ -749,8 +852,13 @@ pub const Builder = struct {
             },
             // §11.6.21 event stmt '->' -> named event.
             .event_trigger => |s| b.code(vpiEventStmt, &.{.{ .tag = vpiNamedEvent, .to = b.lookup(f.str(s.name)) }}, &.{}, &.{}),
-            // §11.6.24 disable -> vpiScope: the named block, task or function.
-            .disable => |s| b.code(vpiDisable, &.{.{ .tag = vpiScope, .to = b.lookup(f.str(s.name)) }}, &.{}, &.{}),
+            // disable -> the named block, task or function it disables: AMS
+            // §11.6.24 tags the arrow vpiScope, IEEE 1364-2005 §26.6.38
+            // vpiExpr, and both are answered.
+            .disable => |s| blk: {
+                const target = b.lookup(f.str(s.name));
+                break :blk b.code(vpiDisable, &.{ .{ .tag = vpiScope, .to = target }, .{ .tag = vpiExpr, .to = target } }, &.{}, &.{});
+            },
             .sys_task => |s| blk: {
                 const name = f.str(s.name);
                 var args: std.ArrayList(u32) = .empty;
@@ -762,6 +870,7 @@ pub const Builder = struct {
                 b.objects.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.items[at].in_analog = b.analog != null;
                 b.objects.items[at].src_tok = f.stmtTok(id);
+                b.objects.items[at].src_stmt = id;
                 break :blk at;
             },
             .contribute => |s| b.contrib(s.lhs, s.rhs),
@@ -832,7 +941,9 @@ pub const Builder = struct {
     }
 
     /// Builds or resolves the object for expression `id`; returns its index,
-    /// or `none` for `.none` or a form this model does not hold.
+    /// or `none` for `.none` or a form this model does not hold. An object
+    /// built here remembers `id`, which §26.6.26 b)'s vpiDecompile spells;
+    /// one resolved by name is the declared object, and keeps none.
     pub fn expr(b: *Builder, id: Ast.ExprId) Error!u32 {
         const at = try b.exprObj(id);
         if (at == none) return at;
@@ -850,10 +961,18 @@ pub const Builder = struct {
         const ex = &b.file.exprs;
         return switch (ex.tag(id)) {
             .ident => b.lookup(b.file.str(ex.strOf(id))),
-            // An unsized integer is written in decimal (A.8.7 unsigned_number);
-            // a sized one's base is not recorded by the parser, so its
-            // vpiConstType is not answered.
-            .int_literal => b.constant(.{ .int = ex.intValue(id) }, if (ex.intLiteral(id).width == 0) 32 else @intCast(ex.intLiteral(id).width), if (ex.intLiteral(id).width == 0) root.vpiDecConst else 0),
+            // IEEE 1364-2005 §26.6.26 vpiConstType: the base the literal was
+            // written in (an unsized one without a base format is decimal,
+            // A.8.7 unsigned_number).
+            .int_literal => blk: {
+                const lit = ex.intLiteral(id);
+                break :blk b.constant(.{ .int = lit.value }, if (lit.width == 0) 32 else lit.width, switch (lit.radix) {
+                    2 => vpiBinaryConst,
+                    8 => vpiOctConst,
+                    16 => vpiHexConst,
+                    else => root.vpiDecConst,
+                });
+            },
             .real_literal => b.constant(.{ .real = ex.realValue(id) }, 64, root.vpiRealConst),
             .str_literal => b.constant(.{ .str = try b.arena.dupe(u8, b.file.str(ex.strOf(id))) }, 0, root.vpiStringConst),
             .logic_literal => blk: {
@@ -873,9 +992,14 @@ pub const Builder = struct {
             .ternary => b.operation(vpiConditionOp, &.{ ex.lhs(id), ex.rhs(id), ex.ternaryElse(id) }),
             .concat => b.operation(vpiConcatOp, ex.args(id)),
             // §11.6.19 NOTE: "For an operator whose type is vpiMultiConcat,
-            // the first operand shall be the multiplier expression."
+            // the first operand shall be the multiplier expression." IEEE
+            // 1364-2005 §26.6.26 a): "The remaining operands shall be the
+            // expressions within the concatenation". A digital parse keeps
+            // the braces of that concatenation as a `.concat` of its own,
+            // the one element of `rhs`.
             .multi_concat => blk: {
-                const inner = ex.rhs(id);
+                var inner = ex.rhs(id);
+                if (ex.tag(inner) == .concat and ex.args(inner).len == 1 and ex.tag(ex.args(inner)[0]) == .concat) inner = ex.args(inner)[0];
                 var ops: std.ArrayList(Ast.ExprId) = .empty;
                 try ops.append(b.arena, ex.lhs(id));
                 if (ex.tag(inner) == .concat) try ops.appendSlice(b.arena, ex.args(inner)) else try ops.append(b.arena, inner);
@@ -929,16 +1053,24 @@ pub const Builder = struct {
         return at;
     }
 
-    /// `base[i]` and `base[msb:lsb]`: an array element is the memory word or
-    /// variable select the model already holds (§11.6.18); a bit of a vector
-    /// is a net bit or reg bit with vpiParent and vpiIndex; a range is
-    /// §11.6.19's part select.
+    /// `base[i]`, `base[msb:lsb]` and `base[i +: w]`: an array element is the
+    /// memory word or variable select the model already holds (§11.6.18); a
+    /// bit of a vector is a net bit or reg bit with vpiParent and vpiIndex; a
+    /// range is §11.6.19's part select, and an IEEE 1364-2005 §5.2.1
+    /// indexed part-select is §26.6.26's, with its base and width.
     fn select(b: *Builder, id: Ast.ExprId) Error!u32 {
         const ex = &b.file.exprs;
         const ix = ex.rhs(id);
-        // Not modelled: an IEEE 1364-2005 §5.2.1 indexed part-select.
-        if (ex.tag(ix) == .indexed_range) return none;
         const base = try b.expr(ex.lhs(id));
+        if (ex.tag(ix) == .indexed_range) {
+            const at = try b.code(vpiIndexedPartSelect, &.{
+                .{ .tag = vpiParent, .to = base },
+                .{ .tag = vpiBaseExpr, .to = try b.expr(ex.lhs(ix)) },
+                .{ .tag = vpiWidthExpr, .to = try b.expr(ex.rhs(ix)) },
+            }, &.{}, &.{.{ .prop = vpiIndexedPartSelectType, .value = if (ex.extraOf(ix) == 0) vpiPosIndexed else vpiNegIndexed }});
+            b.objects.items[at].owner = null;
+            return at;
+        }
         if (base != none) {
             const bo = b.objects.items[base];
             if (bo.members.len != 0 and ex.tag(ix) == .int_literal) {
@@ -1091,6 +1223,274 @@ fn literal(file: *const Ast.SourceFile, e: Ast.ExprId) ?f64 {
         .int_literal => @floatFromInt(file.exprs.intValue(e)),
         .real_literal => file.exprs.realValue(e),
         else => null, // else: only a literal folds without the elaborator
+    };
+}
+
+// ---------------------------------------------------------------------------
+// IEEE 1364-2005 §26.6.26 b) / §26.6.19 g) vpiDecompile
+// ---------------------------------------------------------------------------
+
+const Writer = std.Io.Writer;
+
+/// §26.6.26 b): "a string with a functionally equivalent expression to the
+/// original expression within the HDL. Parentheses shall be added only to
+/// preserve precedence. Each operand and operator shall be separated by a
+/// single space character." A literal is spelled in its own base, and an
+/// x/z or wide one in binary.
+pub fn decompile(w: *Writer, f: *const Ast.SourceFile, id: Ast.ExprId) Writer.Error!void {
+    if (id == .none) return;
+    const ex = &f.exprs;
+    switch (ex.tag(id)) {
+        .ident => try w.writeAll(f.str(ex.strOf(id))),
+        .hier_ident => for (ex.nameParts(id), 0..) |p, k| {
+            if (k != 0) try w.writeByte('.');
+            try w.writeAll(f.str(p));
+        },
+        .int_literal => {
+            const lit = ex.intLiteral(id);
+            if (lit.width == 0 and lit.radix == 10) return w.print("{d}", .{lit.value});
+            const bits: u64 = if (lit.width == 0 or lit.width >= 64) @bitCast(lit.value) else @as(u64, @bitCast(lit.value)) & ((@as(u64, 1) << @intCast(lit.width)) - 1);
+            if (lit.width != 0) try w.print("{d}", .{lit.width});
+            try w.writeAll(if (lit.signed) "'s" else "'");
+            switch (lit.radix) {
+                2 => try w.print("b{b}", .{bits}),
+                8 => try w.print("o{o}", .{bits}),
+                16 => try w.print("h{x}", .{bits}),
+                else => try w.print("d{d}", .{bits}),
+            }
+        },
+        .logic_literal => {
+            const lit = ex.logicValue(id);
+            try w.print("{d}{s}b", .{ lit.width, if (lit.signed) "'s" else "'" });
+            var k = lit.width;
+            while (k > 0) {
+                k -= 1;
+                const v = (lit.values()[k / 64] >> @intCast(k % 64)) & 1;
+                const u = (lit.unknowns()[k / 64] >> @intCast(k % 64)) & 1;
+                try w.writeByte("01zx"[v | (u << 1)]);
+            }
+        },
+        .real_literal => {
+            var buf: [400]u8 = undefined;
+            const t = std.fmt.bufPrint(&buf, "{d}", .{ex.realValue(id)}) catch unreachable;
+            try w.writeAll(t);
+            // A real stays a real: `2.0`, not the integer `2`.
+            if (std.mem.indexOfAny(u8, t, ".eEni") == null) try w.writeAll(".0");
+        },
+        .str_literal => {
+            try w.writeByte('"');
+            for (f.str(ex.strOf(id))) |c| switch (c) {
+                '\\' => try w.writeAll("\\\\"),
+                '"' => try w.writeAll("\\\""),
+                '\n' => try w.writeAll("\\n"),
+                '\t' => try w.writeAll("\\t"),
+                0x20...0x21, 0x23...0x5b, 0x5d...0x7e => try w.writeByte(c),
+                else => try w.print("\\{o:0>3}", .{c}),
+            };
+            try w.writeByte('"');
+        },
+        .pos_inf => try w.writeAll("inf"),
+        .neg_inf => try w.writeAll("-inf"),
+        .unary => {
+            try w.writeAll(unarySpelling(ex.unOp(id)));
+            try w.writeByte(' ');
+            try operand(w, f, ex.lhs(id), unary_prec, false);
+        },
+        .binary => {
+            const p = binaryPrec(ex.binOp(id));
+            try operand(w, f, ex.lhs(id), p, false);
+            try w.print(" {s} ", .{binarySpelling(ex.binOp(id))});
+            try operand(w, f, ex.rhs(id), p, true);
+        },
+        .ternary => {
+            try operand(w, f, ex.lhs(id), 0, true);
+            try w.writeAll(" ? ");
+            try decompile(w, f, ex.rhs(id));
+            try w.writeAll(" : ");
+            try decompile(w, f, ex.ternaryElse(id));
+        },
+        .call, .builtin_call, .filter_call, .noise_call, .event_function => {
+            try w.writeAll(f.str(ex.strOf(id)));
+            try list(w, f, "(", ex.args(id), ")");
+        },
+        // A.8.2 system_function_call: the parentheses come with arguments.
+        .sys_call => {
+            try w.writeAll(f.str(ex.strOf(id)));
+            if (ex.args(id).len != 0) try list(w, f, "(", ex.args(id), ")");
+        },
+        .branch_access => {
+            try w.print("{s}(", .{f.str(ex.strOf(id))});
+            try decompile(w, f, ex.lhs(id));
+            if (ex.rhs(id) != .none) try w.writeAll(", ");
+            try decompile(w, f, ex.rhs(id));
+            try w.writeByte(')');
+        },
+        .port_access => {
+            try w.print("{s}(<", .{f.str(ex.strOf(id))});
+            try decompile(w, f, ex.lhs(id));
+            try w.writeAll(">)");
+        },
+        .concat => try list(w, f, "{", ex.args(id), "}"),
+        .multi_concat => {
+            var inner = ex.rhs(id);
+            if (ex.tag(inner) == .concat and ex.args(inner).len == 1 and ex.tag(ex.args(inner)[0]) == .concat) inner = ex.args(inner)[0];
+            try w.writeByte('{');
+            try decompile(w, f, ex.lhs(id));
+            try decompile(w, f, inner);
+            try w.writeByte('}');
+        },
+        .assign_pattern => try list(w, f, "'{", ex.args(id), "}"),
+        .pattern_repl => {
+            try w.writeAll("'{");
+            try decompile(w, f, ex.lhs(id));
+            try list(w, f, "{", ex.args(ex.rhs(id)), "}");
+            try w.writeByte('}');
+        },
+        .index => {
+            try operand(w, f, ex.lhs(id), unary_prec + 1, false);
+            try w.writeByte('[');
+            try decompile(w, f, ex.rhs(id));
+            try w.writeByte(']');
+        },
+        .range => {
+            try decompile(w, f, ex.lhs(id));
+            try w.writeByte(':');
+            try decompile(w, f, ex.rhs(id));
+        },
+        .indexed_range => {
+            try decompile(w, f, ex.lhs(id));
+            try w.writeAll(if (ex.extraOf(id) == 0) " +: " else " -: ");
+            try decompile(w, f, ex.rhs(id));
+        },
+        .event_or => {
+            try decompile(w, f, ex.lhs(id));
+            try w.writeAll(" or ");
+            try decompile(w, f, ex.rhs(id));
+        },
+        .event_posedge => {
+            try w.writeAll("posedge ");
+            try decompile(w, f, ex.lhs(id));
+        },
+        .event_negedge => {
+            try w.writeAll("negedge ");
+            try decompile(w, f, ex.lhs(id));
+        },
+        .event_driver_update => {
+            try w.writeAll("driver_update ");
+            try decompile(w, f, ex.lhs(id));
+        },
+        .event_initial_step, .event_final_step => {
+            try w.writeAll(if (ex.tag(id) == .event_initial_step) "initial_step" else "final_step");
+            const names = ex.nameParts(id);
+            if (names.len != 0) {
+                try w.writeByte('(');
+                for (names, 0..) |n, k| try w.print("{s}\"{s}\"", .{ if (k == 0) "" else ", ", f.str(n) });
+                try w.writeByte(')');
+            }
+        },
+    }
+}
+
+/// §26.6.19 g): a system or user task call, "a functionally equivalent
+/// system task/function call to what was in the original HDL".
+pub fn decompileCall(w: *Writer, f: *const Ast.SourceFile, id: Ast.StmtId) Writer.Error!void {
+    const s = f.stmt(id).sys_task;
+    try w.writeAll(f.str(s.name));
+    if (s.args.len != 0) try list(w, f, "(", s.args, ")");
+}
+
+fn list(w: *Writer, f: *const Ast.SourceFile, open: []const u8, items: []const Ast.ExprId, close: []const u8) Writer.Error!void {
+    try w.writeAll(open);
+    for (items, 0..) |e, k| {
+        if (k != 0) try w.writeAll(", ");
+        try decompile(w, f, e);
+    }
+    try w.writeAll(close);
+}
+
+/// IEEE 1364-2005 §5.1.2 Table 5-4, highest first; every binary operator
+/// associates left to right, the conditional right to left.
+const unary_prec: u8 = 12;
+
+fn binaryPrec(op: Ast.BinaryOp) u8 {
+    return switch (op) {
+        .pow => 11,
+        .mul, .div, .mod => 10,
+        .add, .sub => 9,
+        .shl, .shr, .ashl, .ashr => 8,
+        .lt, .le, .gt, .ge => 7,
+        .eq, .neq, .case_eq, .case_neq => 6,
+        .bit_and => 5,
+        .bit_xor, .bit_xnor => 4,
+        .bit_or => 3,
+        .logical_and => 2,
+        .logical_or => 1,
+    };
+}
+
+/// The precedence `id` binds at as an operand: its operator's, or above
+/// every operator for a primary.
+fn precOf(ex: *const Ast.ExprStore, id: Ast.ExprId) u8 {
+    return switch (ex.tag(id)) {
+        .unary => unary_prec,
+        .binary => binaryPrec(ex.binOp(id)),
+        .ternary => 0,
+        // A primary: a literal, a name, a call, a select, a concatenation.
+        .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf, .ident, .hier_ident, .call, .builtin_call, .sys_call, .filter_call, .noise_call, .branch_access, .port_access, .concat, .multi_concat, .assign_pattern, .pattern_repl, .index, .range, .indexed_range, .event_or, .event_posedge, .event_negedge, .event_initial_step, .event_final_step, .event_function, .event_driver_update => unary_prec + 1,
+    };
+}
+
+/// An operand of an operator of precedence `parent`, parenthesized when it
+/// binds looser, or as loose on the right of a left-associative operator.
+fn operand(w: *Writer, f: *const Ast.SourceFile, id: Ast.ExprId, parent: u8, right: bool) Writer.Error!void {
+    const p = precOf(&f.exprs, id);
+    const wrap = p < parent or (right and p == parent);
+    if (wrap) try w.writeByte('(');
+    try decompile(w, f, id);
+    if (wrap) try w.writeByte(')');
+}
+
+fn unarySpelling(op: Ast.UnaryOp) []const u8 {
+    return switch (op) {
+        .plus => "+",
+        .minus => "-",
+        .logical_not => "!",
+        .bit_not => "~",
+        .reduce_and => "&",
+        .reduce_nand => "~&",
+        .reduce_or => "|",
+        .reduce_nor => "~|",
+        .reduce_xor => "^",
+        .reduce_xnor => "~^",
+    };
+}
+
+fn binarySpelling(op: Ast.BinaryOp) []const u8 {
+    return switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+        .mod => "%",
+        .pow => "**",
+        .eq => "==",
+        .neq => "!=",
+        .case_eq => "===",
+        .case_neq => "!==",
+        .lt => "<",
+        .le => "<=",
+        .gt => ">",
+        .ge => ">=",
+        .logical_and => "&&",
+        .logical_or => "||",
+        .bit_and => "&",
+        .bit_or => "|",
+        .bit_xor => "^",
+        .bit_xnor => "~^",
+        .shl => "<<",
+        .shr => ">>",
+        .ashl => "<<<",
+        .ashr => ">>>",
     };
 }
 
@@ -1424,4 +1824,23 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
     for (out, 0..) |*v, k| v.* = d.da[k * mtm * pulse + (if (mtm == 3) @as(usize, 1) else 0)].real;
     const idx = (@intFromPtr(o) - @intFromPtr(design.objects.ptr)) / @sizeOf(root.Obj);
     design.objects[idx].delays = out;
+}
+
+test "§26.6.26 b) vpiDecompile adds parentheses only where precedence needs them" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module t;
+        \\  reg [7:0] x, a, b, c, d;
+        \\  initial x = (a + b) * c - (d - a) - b ? {2{a[1:0], 1'b1}} : ~(a & 4'hF) + -2.5;
+        \\endmodule
+    );
+    defer h.deinit();
+    const procs = root.vpi_iterate(vpiProcess, root.vpi_handle_by_name("t", null));
+    const init = root.vpi_scan(procs);
+    _ = root.vpi_free_object(procs);
+    const rhs = root.vpi_handle(vpiRhs, root.vpi_handle(vpiStmt, init));
+    try std.testing.expectEqualStrings(
+        "(a + b) * c - (d - a) - b ? {2{a[1:0], 1'b1}} : ~ (a & 4'hf) + - 2.5",
+        std.mem.span(root.vpi_get_str(root.vpiDecompile, rhs)),
+    );
 }
