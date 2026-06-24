@@ -755,7 +755,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
         .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
-        .stdout = "xfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=298\nd=12 c=1 q=9 p2=0101\n",
+        .stdout = "p02: b_26_6_behaviour checks=298\nd=12 c=1 q=9 p2=0101\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
@@ -766,6 +766,11 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
         .design = "tests/fixtures/ch11_vpi/p06_specify.v",
         .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: Annex G's vpiPolarity (34) is refused\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: Annex G's vpiTchkType (38) is refused\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_41_timeformat.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_41_timeformat.v",
+        .stdout = "b26_timeformat: active call follows execution ok\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_39_callbacks.c",
