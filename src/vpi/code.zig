@@ -123,6 +123,7 @@ pub const vpiProtected: c_int = 10;
 pub const vpiOpType: c_int = 39;
 pub const vpiBlocking: c_int = 41;
 pub const vpiCaseType: c_int = 42;
+pub const vpiNetDeclAssign: c_int = 43;
 pub const vpiDirection: c_int = 20;
 pub const vpiSize: c_int = 4;
 pub const vpiIndexedPartSelectType: c_int = 72;
@@ -480,9 +481,24 @@ pub const Builder = struct {
                 .{ .tag = vpiLhs, .to = lhs },
                 .{ .tag = vpiRhs, .to = rhs },
                 .{ .tag = vpiDelay, .to = delay },
-            }, &.{}, &.{});
+            }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 0 }});
             b.objects.items[at].delays = try b.delays(a.delay);
             b.objects.items[at].src_tok = a.main_tok;
+            try b.lists.cont_assigns.append(b.gpa, at);
+        }
+        // IEEE 1364-2005 §26.6.24: a net declaration assignment (A.2.4) is a
+        // continuous assignment too, "-> net decl assign bool:
+        // vpiNetDeclAssign". §6.1.3: "When there is a continuous assignment
+        // in a declaration, the delay is part of the continuous assignment".
+        for (m.nets) |n| {
+            if (n.init == .none) continue;
+            const at = try b.code(vpiContAssign, &.{
+                .{ .tag = vpiLhs, .to = b.lookup(b.file.str(n.name)) },
+                .{ .tag = vpiRhs, .to = try b.expr(n.init) },
+                .{ .tag = vpiDelay, .to = try b.delayExpr(n.delay) },
+            }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 1 }});
+            b.objects.items[at].delays = try b.delays(n.delay);
+            b.objects.items[at].src_tok = n.main_tok;
             try b.lists.cont_assigns.append(b.gpa, at);
         }
         // §11.6.13 gates, in source order, then UDP instances.
