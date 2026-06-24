@@ -1,7 +1,8 @@
 //! The simulation-callback registry: §12.31 vpi_register_cb, §12.34
 //! vpi_remove_cb, §12.6 vpi_get_cb_info, and dispatch. Hosts fire the §12.31.4
 //! action reasons (`endOfCompile` and siblings); `run.zig` fires the time and
-//! value-change reasons and `analog.zig` the §12.31.3 analog ones.
+//! value-change reasons and `analog.zig` the §12.31.3 analog ones. The live
+//! registry also supplies IEEE 1364-2005 §26.6.39 callback traversal.
 //!
 //! A handle is a heap `Cb` pointer, valid while it is a key of `live`: C
 //! pointers are never read until membership proves them ours. Removal deletes
@@ -116,6 +117,10 @@ pub const Cb = struct {
     time: Time,
     /// The registered `value->format`, or vpiSuppressVal.
     value_format: c_int,
+    /// §26.6.39's object association. `obj` alone is not one: time reasons
+    /// use it for timescale context, and action reasons ignore it entirely.
+    /// Null means global, except for time reasons associated with a queue.
+    reference: vpiHandle = null,
     /// Time reasons: the absolute tick this callback is due at.
     due: u64 = 0,
     /// cbNextSimTime: the tick it was registered at — it fires at the first
@@ -173,6 +178,28 @@ fn isTimeReason(r: c_int) bool {
     };
 }
 
+/// IEEE 1364-2005 §26.6.39: callbacks on an object, a time queue, or NULL
+/// for callbacks unrelated to either. Snapshot only live registrations;
+/// the caller owns the returned slice, whose handles retain their ordinary
+/// callback lifetime (§27.35). No iteration order is promised by the LRM.
+pub fn all(a: std.mem.Allocator, ref: vpiHandle) ![]vpiHandle {
+    const queue = root.run.asQueue(ref);
+    const next = if (queue != null) try root.run.nextTime(root.run.now(), a) else null;
+    var out: std.ArrayList(vpiHandle) = .empty;
+    errdefer out.deinit(a);
+    for (cbs.items) |cb| {
+        if (cb.dead) continue;
+        const matches = if (isTimeReason(cb.reason)) blk: {
+            const q = queue orelse break :blk false;
+            if (cb.reason == cbNextSimTime)
+                break :blk next != null and q.time == next.? and q.time > cb.since;
+            break :blk q.time == cb.due;
+        } else queue == null and cb.reference == ref;
+        if (matches) try out.append(a, @ptrCast(cb));
+    }
+    return out.toOwnedSlice(a);
+}
+
 /// §12.31. Returns the callback handle, or NULL plus vpiError for a request
 /// that cannot be kept.
 pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
@@ -205,9 +232,12 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
         // must be one VerA issued.
-        cbForce, cbRelease => if (d.obj != null and root.asObj(d.obj) == null) {
-            root.fail("BADHANDLE", "vpi_register_cb: obj is not a handle to an object", .{});
-            return null;
+        cbForce, cbRelease => {
+            if (d.obj != null and root.asObj(d.obj) == null) {
+                root.fail("BADHANDLE", "vpi_register_cb: obj is not a handle to an object", .{});
+                return null;
+            }
+            cb.reference = d.obj;
         },
         // §12.31.1 "After value change on an expression or terminal". The
         // object must be one whose value can change in this process: a
@@ -226,6 +256,7 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
                 return null;
             }
+            cb.reference = d.obj;
             value.watch(o);
         },
         // IEEE 1364-2005 §27.33.1.1 a statement Table 27-6 lists, or

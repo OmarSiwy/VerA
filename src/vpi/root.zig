@@ -2295,6 +2295,23 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
 
 fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_iterate") orelse return null;
+    // IEEE 1364-2005 §26.6.39: object and time-queue associations, or a
+    // NULL reference for global callbacks. Time queues are not Design rows.
+    if (obj_type == callback.vpiCallback) {
+        if (ref != null and asObj(ref) == null and run.asQueue(ref) == null) {
+            _ = object("vpi_iterate", ref);
+            return null;
+        }
+        const handles = callback.all(d.gpa, ref) catch {
+            fail("NOMEM", "vpi_iterate: out of memory", .{});
+            return null;
+        };
+        if (handles.len == 0) {
+            d.gpa.free(handles);
+            return null;
+        }
+        return newHandleIter(d, handles);
+    }
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
     if (ref == null) {

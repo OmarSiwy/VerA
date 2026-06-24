@@ -284,6 +284,21 @@ pub fn asQueue(h: vpiHandle) ?*Queue {
     return queue_live.get(@intFromPtr(p));
 }
 
+/// The first pending time strictly after `after`. A cbNextSimTime has no
+/// due time of its own (§27.33.2); §26.6.39 associates it with this queue.
+pub fn nextTime(after: u64, a: std.mem.Allocator) !?u64 {
+    var best = callback.nextDue(after, false);
+    if (engine) |r| {
+        var pending: std.ArrayList(sim.scheduler.Live) = .empty;
+        defer pending.deinit(a);
+        try r.scheduler.pendingPayloads(a, &pending);
+        for (pending.items) |e| {
+            if (e.time > after and (best == null or e.time < best.?)) best = e.time;
+        }
+    }
+    return best;
+}
+
 /// §11.6.25 NOTE 3: the pending time queues, in strictly increasing time. A
 /// time queue exists wherever the simulation must stop: an event, or a time
 /// callback — the data model gives a callback a one-to-one `vpiParent`
