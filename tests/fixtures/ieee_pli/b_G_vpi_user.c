@@ -1207,12 +1207,12 @@ static void constants(void)
   missing++;
 #endif
 #ifdef vpiPolarity
-  XFAIL(vpiPolarity == 34, "G", "vpiPolarity is not Annex G's 34");
+  CHECK(vpiPolarity == 34, "G: vpiPolarity is 34");
 #else
   missing++;
 #endif
 #ifdef vpiDataPolarity
-  XFAIL(vpiDataPolarity == 35, "G", "vpiDataPolarity is not Annex G's 35");
+  CHECK(vpiDataPolarity == 35, "G: vpiDataPolarity is 35");
 #else
   missing++;
 #endif
@@ -1287,7 +1287,7 @@ static void constants(void)
   missing++;
 #endif
 #ifdef vpiTchkType
-  XFAIL(vpiTchkType == 38, "G", "vpiTchkType is not Annex G's 38");
+  CHECK(vpiTchkType == 38, "G: vpiTchkType is 38");
 #else
   missing++;
 #endif

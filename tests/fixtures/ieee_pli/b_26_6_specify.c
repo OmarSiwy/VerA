@@ -29,8 +29,8 @@
  *   path 1  (a => y) = (2, 3): vpiPathParallel; one in term, direction
  *           input, no edge (vpiNoEdge), whose expr is the net a; one out
  *           term, y; no condition (NULL); no polarity written, so (§14.2.7.1:
- *           "By default, module paths shall have unknown polarity") Annex G's
- *           vpiPolarity (34) reads vpiUnknown; no ifnone: vpiModPathHasIfNone
+ *           "By default, module paths shall have unknown polarity")
+ *           vpiPolarity reads vpiUnknown; no ifnone: vpiModPathHasIfNone
  *           FALSE; vpiDelay is an expression (§26.6.15 draws the arrow;
  *           §26.3.4's constant-or-vpiListOp rule is checked in
  *           b_26_6_behaviour.c). Its module is u. No clause fixes the order
@@ -39,17 +39,14 @@
  *   path 2  if (b) (b *> y) = 4: vpiPathFull, with a condition.
  *   path 3  (posedge clk => (q : d)) = (1, ..., 6): in term clk with edge
  *           vpiPosedge; its vpiModDataPathIn term is d.
- *   $setup(d, posedge clk, 5, notif): Annex G's vpiTchkType (38) reads
- *           vpiSetup. Details a: the reference event posedge clk is the ref
- *           term (a vpiTchkTerm of edge vpiPosedge whose expr is the net
- *           clk), the data event d the data term; the notifier is the reg
+ *   $setup(d, posedge clk, 5, notif): vpiTchkType reads vpiSetup.
+ *           Details a: the reference event posedge clk is the ref term
+ *           (a vpiTchkTerm of edge vpiPosedge whose expr is the net clk),
+ *           the data event d the data term; the notifier is the reg
  *           notif. Details b: vpiExpr yields its four arguments, exactly two
  *           of them (the data and reference events) vpiTchkTerm. $setup is
  *           told apart from $width by its data term.
  *   $width(posedge clk, 10): no data event, so vpiTchkDataTerm is NULL.
- *
- * vpi_user.h numbers vpiPolarity 38 and vpiTchkType 40 where Annex G has 34
- * and 38; the checks below use Annex G's numbers.
  *
  * REFUSALS (vpiUndefined with vpi_chk_error() nonzero): vpi_get(vpiSize, mod path) and
  * vpi_get(vpiSize, tchk) - neither diagram draws a size.
@@ -62,9 +59,7 @@
 
 #include "b_check.h"
 
-/* Annex G's numbers, where src/vpi/vpi_user.h lacks the name or differs. */
-#define G_vpiPolarity 34
-#define G_vpiTchkType 38
+/* Annex G's numbers, where src/vpi/vpi_user.h lacks the name. */
 #ifndef vpiModPathHasIfNone
 #define vpiModPathHasIfNone 71
 #endif
@@ -115,7 +110,7 @@ static PLI_INT32 walk(p_cb_data cb_data)
   CHECK(vpi_get(vpiEdge, only(vpiModPathIn, path[2])) == vpiPosedge, "26.6.15: path 3's posedge clk");
   expect_no_error("the path walk");
   XFAIL(vpi_get(vpiType, vpi_handle(vpiExpr, in)) == vpiNet, "26.6.15", "path term -> expr is the port, not the net a");
-  XFAIL(vpi_get(G_vpiPolarity, path[0]) == vpiUnknown, "26.6.15", "Annex G's vpiPolarity (34) is refused");
+  CHECK(vpi_get(vpiPolarity, path[0]) == vpiUnknown, "26.6.15: no polarity written is vpiUnknown");
   XFAIL(vpi_get(vpiModPathHasIfNone, path[0]) == 0, "26.6.15", "vpiModPathHasIfNone is refused");
   e = vpi_handle(vpiDelay, path[0]);
   XFAIL(e != NULL, "26.6.15", "mod path -> vpiDelay is NULL");
@@ -148,7 +143,7 @@ static PLI_INT32 walk(p_cb_data cb_data)
         "26.6.17: the notifier");
   CHECK(vpi_handle(vpiTchkDataTerm, tchk[1]) == NULL, "26.6.17 a: $width has no data event");
   expect_no_error("the timing check walk");
-  XFAIL(vpi_get(G_vpiTchkType, tchk[0]) == vpiSetup, "26.6.17", "Annex G's vpiTchkType (38) is refused");
+  CHECK(vpi_get(vpiTchkType, tchk[0]) == vpiSetup, "26.6.17: $setup's vpiTchkType");
   XFAIL(vpi_get(vpiType, vpi_handle(vpiExpr, rt)) == vpiNet, "26.6.17", "tchk term -> expr is the port, not the net clk");
   {
     int args = 0, terms = 0;
