@@ -402,10 +402,21 @@ pub export fn vpi_get_value(obj: vpiHandle, value_p: ?*Value) void {
         v.value.real = dv.value;
         return;
     }
-    const o = root.asObj(obj) orelse {
+    var o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_value: that handle is not an object with a value", .{});
         return;
     };
+    // IEEE 1364-2005 §26.6.13: a prim term's value is its terminal's.
+    if (o.kind == .code and o.vtype == root.code.vpiPrimTerm) {
+        const e = for (o.edges) |e| {
+            if (e.tag == root.code.vpiExpr) break e.to;
+        } else root.no_obj;
+        if (e == root.no_obj) {
+            root.fail("NOVALUE", "vpi_get_value: that terminal's expression is not one this model holds", .{});
+            return;
+        }
+        o = &root.design.?.objects[e];
+    }
     read(o, v, &get_store);
 }
 
