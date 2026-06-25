@@ -44,6 +44,9 @@ pub const vpiX: c_int = 3;
 pub const vpiH: c_int = 4;
 pub const vpiL: c_int = 5;
 
+/// IEEE 1364-2005 Annex G's strength of a reg or variable.
+pub const vpiStrongDrive: c_int = 0x40;
+
 // §12.30 flags.
 pub const vpiNoDelay: c_int = 1;
 pub const vpiInertialDelay: c_int = 2;
@@ -149,6 +152,12 @@ pub var cb_store: Store = .{};
 /// Fills `v` from `o` in the format `v.format` names, into `st`'s storage.
 /// Errors are recorded (`vpi_chk_error`) and leave `v` as it was.
 pub fn read(o: *const Obj, v: *Value, st: *Store) void {
+    // A named event occurs; it holds no value (its slot is a rendezvous).
+    if (o.kind == .code and o.vtype == root.code.vpiNamedEvent) {
+        root.fail("NOVALUE", "vpi_get_value: `{s}` is a named event, which has no value", .{o.full});
+        return;
+    }
+    if (v.format == vpiStrengthVal) return strength(o, v);
     const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else {
         root.fail("NOVALUE", "vpi_get_value: `{s}` has no value this process can read", .{o.full});
         return;
@@ -162,6 +171,38 @@ pub fn read(o: *const Obj, v: *Value, st: *Store) void {
     };
     formatInto(src, v, st) catch {
         root.fail("NOMEM", "vpi_get_value: out of memory", .{});
+    };
+}
+
+/// IEEE 1364-2005 §27.14 vpiStrengthVal: into the application's array, one
+/// entry per bit, LSB first. "If the object is a reg or variable, the
+/// strength will always be returned as strong."
+///
+/// ponytail: a net's strength is refused; the engine keeps a net's per-bit
+/// strength (`Net.signal`) only on the paths that fold several drivers.
+fn strength(o: *const Obj, v: *Value) void {
+    const out = v.value.strength orelse {
+        root.fail("BADVALUE", "vpi_get_value: vpiStrengthVal with a NULL strength array", .{});
+        return;
+    };
+    const r = run.attached();
+    const at = o.slot orelse 0;
+    if (o.slot == null or r == null or r.?.net_of.contains(at) or r.?.reals.contains(at)) {
+        root.fail("BADFORMAT", "vpi_get_value: vpiStrengthVal is answered for a reg or integer variable only", .{});
+        return;
+    }
+    const lit = r.?.values[at];
+    const b: Bits = .{ .width = lit.width, .val = lit.values(), .unk = lit.unknowns(), .signed = lit.signed };
+    const bits: [*]callback.StrengthVal = @ptrCast(out);
+    for (0..b.width) |i| bits[i] = .{ .logic = scalar(b.bit(@intCast(i))), .s0 = vpiStrongDrive, .s1 = vpiStrongDrive };
+}
+
+fn scalar(b: Int.Bit) c_int {
+    return switch (b) {
+        .zero => vpi0,
+        .one => vpi1,
+        .z => vpiZ,
+        .x => vpiX,
     };
 }
 
@@ -189,12 +230,7 @@ fn formatInto(src: Source, v: *Value, st: *Store) !void {
             v.value.str = st.str.items.ptr;
         },
         vpiScalarVal => switch (src) {
-            .bits => |b| v.value.scalar = switch (b.bit(0)) {
-                .zero => vpi0,
-                .one => vpi1,
-                .z => vpiZ,
-                .x => vpiX,
-            },
+            .bits => |b| v.value.scalar = scalar(b.bit(0)),
             else => return badFormat(v.format, "non-bit"),
         },
         vpiIntVal => v.value.integer = switch (src) {
@@ -553,6 +589,17 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
         return null;
     };
+    // IEEE 1364-2005 §27.32: "Calling vpi_put_value() on an object of type
+    // vpiNamedEvent shall cause the named event to toggle", and value_p may
+    // be NULL.
+    if (o.kind == .code and o.vtype == root.code.vpiNamedEvent) {
+        if (mode != vpiNoDelay) {
+            root.fail("NOPUT", "vpi_put_value: `{s}` is a named event, toggled now (vpiNoDelay) and not scheduled", .{o.full});
+            return null;
+        }
+        exec.trigger(run.attached().?, at) catch return engineFail();
+        return null;
+    }
     // vpiReleaseFlag: "The value_p shall contain the current value of the
     // object" — written back, after the release (IEEE 1364 §9.3.2 puts a
     // net back under its drivers at once).
@@ -562,19 +609,30 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         callback.fireOverride(callback.cbRelease, o);
         return null;
     }
-    // A net's value is the resolution of its drivers (§7.9); storing into it
-    // would last until the next driver update. A put to a net needs a driver
-    // of its own, which the engine does not give an application. A force
-    // overrides the drivers, so it is the one put a net takes (§9.3.2).
-    if (mode != vpiForceFlag and (o.kind == .net or (o.kind == .port and (run.attached().?).net_of.contains(at)))) {
-        root.fail("NETPUT", "vpi_put_value: `{s}` is a net, whose value its drivers decide", .{o.full});
+    // A net's value is the resolution of its drivers (§7.9). IEEE 1364-2005
+    // §27.32: a put "overrides the resolved value of the net. This value
+    // shall remain in effect until one of the drivers of the net changes
+    // value", which a vpiNoDelay store is: the next resolution overwrites it.
+    // A delayed put would need a driver of its own, which the engine does
+    // not give an application.
+    //
+    // ponytail: a driver re-evaluated to the value it already had resolves
+    // the net again too, ending the put early.
+    const r = run.attached().?;
+    if ((mode == vpiInertialDelay or mode == vpiTransportDelay or mode == vpiPureTransportDelay) and r.net_of.contains(at)) {
+        root.fail("NETPUT", "vpi_put_value: `{s}` is a net, which takes a put with vpiNoDelay or vpiForceFlag only", .{o.full});
         return null;
     }
     const v = value_p orelse {
         root.fail("BADVALUE", "vpi_put_value: value_p is NULL", .{});
         return null;
     };
-    const r = run.attached().?;
+    // IEEE 1364-2005 §27.32: "It shall be illegal to specify the format of
+    // the value as vpiStringVal when putting a value to a real variable".
+    if (v.format == vpiStringVal and r.reals.contains(at)) {
+        root.fail("BADFORMAT", "vpi_put_value: vpiStringVal onto the real `{s}` is illegal", .{o.full});
+        return null;
+    }
     const dest = r.values[at];
     put_buf.resize(gpa, dest.planes.len) catch return oom();
     toPlanes(v, dest.width, put_buf.items) catch |e| {
@@ -905,9 +963,15 @@ test "§12.30: vpiForceFlag overrides a net's driver, vpiReleaseFlag hands it ba
     overrides_n = 0;
     var v: Value = std.mem.zeroes(Value);
     v.format = vpiIntVal;
-    // A plain put to a net is still refused: its drivers decide it.
+    // A vpiNoDelay put overrides the resolved value until a driver changes
+    // (IEEE 1364-2005 §27.32); a delayed one is refused.
     v.value.integer = 7;
     try std.testing.expect(vpi_put_value(w, &v, null, vpiNoDelay) == null);
+    try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
+    vpi_get_value(w, &v);
+    try std.testing.expectEqual(@as(c_int, 7), v.value.integer);
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 5, .real = 0 };
+    try std.testing.expect(vpi_put_value(w, &v, &t, vpiInertialDelay) == null);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
     v.value.integer = 0xF0;
     try std.testing.expect(vpi_put_value(w, &v, null, vpiForceFlag) == null);
