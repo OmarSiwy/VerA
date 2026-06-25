@@ -109,13 +109,13 @@ static PLI_INT32 walk(p_cb_data cb_data)
   CHECK(vpi_handle(vpiCondition, path[1]) != NULL, "26.6.15: path 2's if (b)");
   CHECK(vpi_get(vpiEdge, only(vpiModPathIn, path[2])) == vpiPosedge, "26.6.15: path 3's posedge clk");
   expect_no_error("the path walk");
-  XFAIL(vpi_get(vpiType, vpi_handle(vpiExpr, in)) == vpiNet, "26.6.15", "path term -> expr is the port, not the net a");
+  CHECK(vpi_get(vpiType, vpi_handle(vpiExpr, in)) == vpiNet, "26.6.15: path term -> expr is the net a");
   CHECK(vpi_get(vpiPolarity, path[0]) == vpiUnknown, "26.6.15: no polarity written is vpiUnknown");
-  XFAIL(vpi_get(vpiModPathHasIfNone, path[0]) == 0, "26.6.15", "vpiModPathHasIfNone is refused");
+  CHECK(vpi_get(vpiModPathHasIfNone, path[0]) == 0, "26.6.15: path 1 has no ifnone");
   e = vpi_handle(vpiDelay, path[0]);
-  XFAIL(e != NULL, "26.6.15", "mod path -> vpiDelay is NULL");
-  XFAIL(vpi_handle(vpiModDataPathIn, path[2]) != NULL || vpi_iterate(vpiModDataPathIn, path[2]) != NULL, "26.6.15",
-        "path 3's vpiModDataPathIn is NULL");
+  CHECK(e != NULL, "26.6.15: mod path -> vpiDelay");
+  CHECK(vpi_handle(vpiModDataPathIn, path[2]) != NULL || vpi_iterate(vpiModDataPathIn, path[2]) != NULL,
+        "26.6.15: path 3's vpiModDataPathIn");
   CHECK(vpi_get(vpiSize, path[0]) == vpiUndefined, "26.6.15: a mod path has no size");
   expect_refusal("vpi_get(vpiSize, mod path)");
 
@@ -144,7 +144,7 @@ static PLI_INT32 walk(p_cb_data cb_data)
   CHECK(vpi_handle(vpiTchkDataTerm, tchk[1]) == NULL, "26.6.17 a: $width has no data event");
   expect_no_error("the timing check walk");
   CHECK(vpi_get(vpiTchkType, tchk[0]) == vpiSetup, "26.6.17: $setup's vpiTchkType");
-  XFAIL(vpi_get(vpiType, vpi_handle(vpiExpr, rt)) == vpiNet, "26.6.17", "tchk term -> expr is the port, not the net clk");
+  CHECK(vpi_get(vpiType, vpi_handle(vpiExpr, rt)) == vpiNet, "26.6.17: tchk term -> expr is the net clk");
   {
     int args = 0, terms = 0;
     itr = vpi_iterate(vpiExpr, tchk[0]);
@@ -153,7 +153,7 @@ static PLI_INT32 walk(p_cb_data cb_data)
         if (vpi_get(vpiType, h) == vpiTchkTerm) terms++;
         args++;
       }
-    XFAIL(args == 4 && terms == 2, "26.6.17", "tchk ->> vpiExpr does not yield four arguments, two of them tchk terms");
+    CHECK(args == 4 && terms == 2, "26.6.17 b: tchk ->> vpiExpr yields four arguments, two of them tchk terms");
   }
   CHECK(vpi_get(vpiSize, tchk[0]) == vpiUndefined, "26.6.17: a timing check has no size");
   expect_refusal("vpi_get(vpiSize, tchk)");

@@ -286,6 +286,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiConcatOp            33
 #define vpiMultiConcatOp       34
 #define vpiEventOrOp           35
+#define vpiListOp              37
 #define vpiPosedgeOp           39
 #define vpiNegedgeOp           40
 #define vpiArithLShiftOp       41
@@ -766,6 +767,8 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
 #define vpiTchkRefTerm         88
 #define vpiModPathIn           95
 #define vpiModPathOut          96
+#define vpiModDataPathIn       94
+#define vpiModPathHasIfNone    71
 #define vpiEdge                36
 #define vpiNoEdge              0x00
 #define vpiPosedge             0x0D

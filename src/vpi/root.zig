@@ -287,6 +287,9 @@ pub const Obj = struct {
     /// `.reg` only: declared in an automatic task or function (IEEE
     /// 1364-2005 §26.6.20's vpiAutomatic), so it has no static storage.
     automatic: bool = false,
+    /// `.net` only: IEEE 1364-2005 §26.6.6's vpiImplicitDecl, a net no
+    /// declaration wrote (§4.5, §12.3.3).
+    implicit: bool = false,
     /// The digital engine's storage slot for this object's value, when the
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values come from analog.zig's solution.
@@ -1089,7 +1092,10 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         // A named block, task, function or named event has a full name; a
         // statement or expression does not.
         .code => if (o.full.len != 0) try d.by_name.put(gpa, o.full, @intCast(i)),
-        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
+        // An implicit net shares its name with the port that made it; the
+        // name keeps denoting what the source declared.
+        .net => if (!o.implicit or !d.by_name.contains(o.full)) try d.by_name.put(gpa, o.full, @intCast(i)),
+        .module, .port, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
     };
 }
 
@@ -1388,6 +1394,21 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try s.nets.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at));
         }
+        // The implicit nets: a port declared with no net type (IEEE 1364-2005
+        // §12.3.3), then §4.5's undeclared terminals and assignment targets,
+        // in the order the engine declared them.
+        for (m.ports) |p| try implicitNet(gpa, arena, r, &objects, s, scope, top_name, p.name);
+        const ex = &file.exprs;
+        var terms: std.ArrayList(Ast.ExprId) = .empty;
+        for (m.instances) |inst| for (inst.ports) |c| try terms.append(arena, c.expr);
+        for (m.gates) |g| {
+            try terms.append(arena, g.out);
+            try terms.appendSlice(arena, g.ins);
+        }
+        for (m.switches) |sw| try terms.appendSlice(arena, sw.terms);
+        for (m.pulls) |p| try terms.append(arena, p.out);
+        for (m.assigns) |a| try terms.append(arena, a.target);
+        for (terms.items) |x| if (x != .none and ex.tag(x) == .ident) try implicitNet(gpa, arena, r, &objects, s, scope, top_name, ex.strOf(x));
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = eng, .str = v.name }) orelse continue;
             // §3.9 arrays: §11.6.11's classes, over the engine's own element
@@ -1485,6 +1506,27 @@ fn addAnalogCode(
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
         try b.analogBlocks(flat.analog);
     }
+}
+
+/// `name`, when it denotes a net of the engine that no net object of `s`
+/// holds yet: that net, added to `s`'s nets.
+fn implicitNet(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    r: *const sim.digital.Run,
+    objects: *std.ArrayList(Obj),
+    s: *Building,
+    scope: u32,
+    top_name: []const u8,
+    name: Ast.StrId,
+) Error!void {
+    const at = r.names.get(.{ .scope = s.engine, .str = name }) orelse return;
+    if (!r.net_of.contains(at)) return;
+    for (s.nets.items) |n| if (objects.items[n].slot == at) return;
+    try s.nets.append(gpa, @intCast(objects.items.len));
+    var o = try digitalObj(r, arena, top_name, s.path, scope, name, .net, at);
+    o.implicit = true;
+    try objects.append(gpa, o);
 }
 
 /// One declared name of `scope`, bound to the slot `at` that stores it.
@@ -2168,6 +2210,10 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             .reg_array, .var_array => 1,
             .module => @intFromBool(o.parent != null),
             .reg, .integer, .real_var, .word, .var_select => 0,
+            else => propFail(prop, o),
+        },
+        code.vpiImplicitDecl => return switch (o.kind) {
+            .net => @intFromBool(o.implicit),
             else => propFail(prop, o),
         },
         vpiAutomatic => return switch (o.kind) {
