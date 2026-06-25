@@ -760,12 +760,12 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
         .design = "tests/fixtures/ch11_vpi/p04_prims.v",
-        .stdout = "xfail 26.6.13: vpi_get_value(prim term) is refused\nxfail 26.6.13: vpiArray of a gate outside an array is not FALSE\nxfail 26.6.14: no table entry decompiles (vpiStringVal) as 1 1 : ? : 1\nxfail 26.6.14: udp defn -> initial is NULL\nxfail 26.6.22: vpi_iterate(vpiDriver, y) omits the and's output\nxfail 26.6.22: vpi_iterate(vpiLoad, y) omits the not's input\nxfail 26.6.23: vpi_iterate(vpiLoad, reg a) omits the and's input\np02: b_26_6_primitives checks=65\n",
+        .stdout = "p02: b_26_6_primitives checks=65\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
         .design = "tests/fixtures/ch11_vpi/p06_specify.v",
-        .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: Annex G's vpiPolarity (34) is refused\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: Annex G's vpiTchkType (38) is refused\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
+        .stdout = "p02: b_26_6_specify checks=58\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_6_41_timeformat.c",
@@ -810,7 +810,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_values.c",
         .design = "tests/fixtures/ieee_pli/b_27_values.v",
-        .stdout = "xfail 27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000\nxfail 27.14: vpiStrengthVal of a reg is not logic 1 at strong strength\nxfail 27.32: a put onto a named event is refused\nxfail 27.32: a vpiNoDelay put onto a net is refused\nxfail 27.32: vpiStringVal onto a real variable is not refused\nxfail 27.32: the net does not hold the put value until its driver changes\nxfail 27.32: the named event put did not toggle it\np02: b_27_values checks=140\n",
+        .stdout = "xfail 27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000\np02: b_27_values checks=140\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
@@ -841,7 +841,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 126 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=317\n",
+        .stdout = "xfail G: 88 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=355\n",
     },
 };
 
