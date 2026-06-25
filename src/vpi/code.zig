@@ -60,6 +60,11 @@ pub const vpiUdpDefn: c_int = 66;
 pub const vpiPrimitive: c_int = 103;
 pub const vpiPrimType: c_int = 33;
 pub const vpiTermIndex: c_int = 30;
+pub const vpiSwitch: c_int = 55;
+pub const vpiPullupPrim: c_int = 25;
+pub const vpiPulldownPrim: c_int = 26;
+pub const vpiStrength0: c_int = 31;
+pub const vpiStrength1: c_int = 32;
 pub const vpiSeqPrim: c_int = 27;
 pub const vpiCombPrim: c_int = 28;
 
@@ -82,6 +87,8 @@ pub const vpiExpr: c_int = 102;
 /// IEEE 1364-2005 §26.6.22/§26.6.23.
 pub const vpiDriver: c_int = 91;
 pub const vpiLoad: c_int = 93;
+pub const vpiLocalDriver: c_int = 122;
+pub const vpiLocalLoad: c_int = 123;
 // §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
 // checks and their terms, the relations between them, and their properties.
 pub const vpiModPath: c_int = 31;
@@ -237,6 +244,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiTaskCall => "vpiTaskCall",
         vpiWait => "vpiWait",
         vpiGate => "vpiGate",
+        vpiSwitch => "vpiSwitch",
         vpiPrimTerm => "vpiPrimTerm",
         vpiTableEntry => "vpiTableEntry",
         vpiUdp => "vpiUdp",
@@ -440,23 +448,53 @@ pub const Builder = struct {
             b.objects.items[at].src_tok = a.main_tok;
             try b.lists.cont_assigns.append(b.gpa, at);
         }
-        // §11.6.13 gates, in source order, then UDP instances.
+        // §11.6.13 gates, in source order, then pull sources, switches and
+        // UDP instances.
         for (m.gates) |g| {
             var terms: std.ArrayList(Ast.ExprId) = .empty;
             try terms.append(b.arena, g.out);
             try terms.appendSlice(b.arena, g.ins);
-            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items, g.range != null);
+            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items, &.{}, &.{
+                .{ .prop = root.vpiArray, .value = @intFromBool(g.range != null) },
+                .{ .prop = vpiStrength0, .value = drive(g.strength0) },
+                .{ .prop = vpiStrength1, .value = drive(g.strength1) },
+            });
+            if (g.name != .none) try b.setName(at, try b.arena.dupe(u8, b.file.str(g.name)));
             const delay = if (g.delay.any()) try b.expr(g.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(g.delay);
             b.objects.items[at].src_tok = g.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiDelay, .to = delay }});
+        }
+        // IEEE 1364-2005 §7.8: a pull source drives its one terminal, at its
+        // strength on its own side (the other "shall be ignored").
+        for (m.pulls) |p| {
+            const side: c_int = if (p.one) vpiStrength1 else vpiStrength0;
+            _ = try b.primitive(vpiGate, if (p.one) vpiPullupPrim else vpiPulldownPrim, if (p.one) "pullup" else "pulldown", &.{p.out}, &.{}, &.{
+                .{ .prop = root.vpiArray, .value = 0 },
+                .{ .prop = side, .value = drive(p.strength) },
+            });
+        }
+        // §7.1/§7.6's switches: a MOS or CMOS switch's output, then its input
+        // and controls; a pass switch's two inouts, then its enable.
+        for (m.switches) |sw| {
+            const pass = switch (sw.kind) {
+                .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => true,
+                .cmos, .rcmos, .nmos, .pmos, .rnmos, .rpmos => false,
+            };
+            var dirs: std.ArrayList(c_int) = .empty;
+            for (sw.terms, 0..) |_, k| try dirs.append(b.arena, if (k == 0) (if (pass) root.vpiInout else root.vpiOutput) else if (pass and k == 1) root.vpiInout else root.vpiInput);
+            _ = try b.primitive(vpiSwitch, switchType(sw.kind), @tagName(sw.kind), sw.terms, dirs.items, &.{.{ .prop = root.vpiArray, .value = 0 }});
         }
         if (b.udps) |udps| for (m.instances) |inst| {
             const defn = udps.get(inst.module) orelse continue;
             var terms: std.ArrayList(Ast.ExprId) = .empty;
             for (inst.ports) |c| try terms.append(b.arena, c.expr);
             const d = b.objects.items[defn];
-            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items, inst.range != null);
+            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items, &.{}, &.{
+                .{ .prop = root.vpiArray, .value = @intFromBool(inst.range != null) },
+                .{ .prop = vpiStrength0, .value = drive(inst.strength0) },
+                .{ .prop = vpiStrength1, .value = drive(inst.strength1) },
+            });
             try b.setName(at, try b.arena.dupe(u8, b.file.str(inst.name)));
             const delay = if (inst.delay.any()) try b.expr(inst.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(inst.delay);
@@ -488,19 +526,30 @@ pub const Builder = struct {
         }
     }
 
-    /// A §11.6.13 primitive with its terminals: output first, then the
-    /// inputs, vpiTermIndex in that order (A.3.3's terminal lists). `array`:
-    /// declared with a range (IEEE 1364-2005 §7.1.5), its vpiArray.
+    /// A §11.6.13 primitive with its terminals, vpiTermIndex in A.3.3's
+    /// order: each terminal's direction from `dirs`, or when empty, output
+    /// first and then the inputs. `props` are the class's own (vpiArray,
+    /// the strengths).
     ///
-    /// ponytail: an array of instances is this one object, not one per
-    /// index with a vpiIndex; splitting it needs §7.1.6's terminal split.
-    fn primitive(b: *Builder, vtype: c_int, prim_type: c_int, def_name: []const u8, terms: []const Ast.ExprId, array: bool) Error!u32 {
-        const at = try b.code(vtype, &.{}, &.{}, &.{
+    /// ponytail: an array of instances (IEEE 1364-2005 §7.1.5) is this one
+    /// object with vpiArray set, not one per index with a vpiIndex; splitting
+    /// it needs §7.1.6's terminal split.
+    fn primitive(b: *Builder, vtype: c_int, prim_type: c_int, def_name: []const u8, terms: []const Ast.ExprId, dirs: []const c_int, props: []const Prop) Error!u32 {
+        const dir = struct {
+            fn at(ds: []const c_int, k: usize) c_int {
+                return if (ds.len != 0) ds[k] else if (k == 0) root.vpiOutput else root.vpiInput;
+            }
+        }.at;
+        var inputs: c_int = 0;
+        for (terms, 0..) |_, k| inputs += @intFromBool(dir(dirs, k) == root.vpiInput);
+        var all: std.ArrayList(Prop) = .empty;
+        try all.appendSlice(b.arena, &.{
             .{ .prop = vpiPrimType, .value = prim_type },
             // NOTE 1: "vpiSize shall return the number of inputs."
-            .{ .prop = vpiSize, .value = @intCast(terms.len - 1) },
-            .{ .prop = root.vpiArray, .value = @intFromBool(array) },
+            .{ .prop = vpiSize, .value = inputs },
         });
+        try all.appendSlice(b.arena, props);
+        const at = try b.code(vtype, &.{}, &.{}, all.items);
         b.objects.items[at].def_name = def_name;
         var items: std.ArrayList(u32) = .empty;
         for (terms, 0..) |t, k| {
@@ -509,7 +558,7 @@ pub const Builder = struct {
                 .{ .tag = vpiExpr, .to = e },
                 .{ .tag = vpiPrimitive, .to = at },
             }, &.{}, &.{
-                .{ .prop = vpiDirection, .value = if (k == 0) root.vpiOutput else root.vpiInput },
+                .{ .prop = vpiDirection, .value = dir(dirs, k) },
                 .{ .prop = vpiTermIndex, .value = @intCast(k) },
             }));
         }
@@ -982,6 +1031,30 @@ fn gateType(k: Ast.GateKind) c_int {
         .g_notif0 => 11,
         .g_notif1 => 12,
     };
+}
+
+/// Annex G's vpiPrimType for a §7.1 switch.
+fn switchType(k: Ast.SwitchKind) c_int {
+    return switch (k) {
+        .nmos => 13,
+        .pmos => 14,
+        .cmos => 15,
+        .rnmos => 16,
+        .rpmos => 17,
+        .rcmos => 18,
+        .rtran => 19,
+        .rtranif0 => 20,
+        .rtranif1 => 21,
+        .tran => 22,
+        .tranif0 => 23,
+        .tranif1 => 24,
+    };
+}
+
+/// Annex G's strength code of a §7.9 strength level: one bit per level,
+/// vpiHiZ 0x01 up to vpiSupplyDrive 0x80.
+fn drive(s: Ast.Strength) c_int {
+    return @as(c_int, 1) << @intCast(@intFromEnum(s));
 }
 
 /// A gate's vpiDefName: its keyword (A.3.4).
