@@ -205,6 +205,10 @@ inline fn tested(self: *const UnitPlan, cond: Mir.Value) bool {
 /// the common declaration itself, where it is computed, and false for a value
 /// defined inside a loop this unit re-runs.
 pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
+    // Builtin literals need no core dependency (`analyze` skips their slots).
+    // A held first-call flag can publish `.one`, but another unit still
+    // renders that literal directly instead of referencing an absent `c`.
+    if (@intFromEnum(v) < Mir.Value.first_dynamic) return false;
     if (self.in_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
     if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@intFromEnum(v)]) return false;
     // §5.9 A unit that re-materializes a loop must not read that loop's values
