@@ -168,11 +168,10 @@ mem_arrays: std.ArrayList(Lower.MemArray) = .empty,
 limit_slots: std.ArrayList(Lower.LimitSlot) = .empty,
 /// First-call sample counts, one entry per array-source call site.
 table_samples: std.ArrayList(u32) = .empty,
-/// §9.13.1 the number of seedless call sites (`$random` with no argument, or a
-/// constant/parameter seed, whose "internal seed ... is not visible from the source").
-/// One `Instance` latch slot each, advanced on the accepted step. Per site because
-/// the internal seed "gets updated every time the call to $arandom is made".
-rng_auto_sites: u32 = 0,
+/// §9.13.1 implementation-chosen starting seeds for omitted-seed call sites.
+/// Each `Instance` latch advances on the accepted step. Explicit constant and
+/// parameter seeds instead use held SSA storage, updated by the executed call.
+rng_auto_seeds: std.ArrayList(i64) = .empty,
 
 // ---- live roots: values no contribution reads, kept alive by codegen ----
 /// §9.4 display tasks, in source order. Nothing reads a display call's result, so

@@ -110,6 +110,42 @@ test "§4.5.5 idtmod" {
 test "§9.13.1 $arandom internal seed" {
     try expectRow(.o_rn);
 }
+test "§9.13.1 parameter seed survives rejected draws" {
+    try expectRow(.o_rp);
+}
+test "omitted seed numbering is unchanged by explicit seed storage" {
+    // Implementation choice, not a fixed LRM stream: all non-variable seed
+    // sites count toward 1+7919*k. This omitted site follows one omitted and
+    // two explicit sites, so k=3 and its initial seed is 23758. The unchanged
+    // IEEE uniform wrapper then yields -506541885 and 430367027. Counting
+    // only omitted sites would give k=1 and change an existing trajectory.
+    const got = run(0);
+    try std.testing.expectEqual(@as(f64, -506541885), got.r[0][@intFromEnum(D.U.o_ra)]);
+    try std.testing.expectEqual(@as(f64, 430367027), got.r[1][@intFromEnum(D.U.o_ra)]);
+}
+test "§9.13.1 rejected first call restores the constant seed" {
+    // AMS §9.13.1 assigns 7 to the hidden seed. The independent IEEE
+    // §17.9.3 derivation in arandom_constant_seed_stream.va gives these first
+    // two draws. Repeated evals consume nothing; a reverted update restores
+    // both the seed and the first-call flag, while a committed one advances.
+    const model: D.Model = .{};
+    var inst: D.Instance = .{};
+    var state = D.initState(&model, &inst);
+    const x = bias(-1);
+    const sim = simAt(0, 0, true);
+    for (0..2) |_| {
+        const r: [n_u]S = D.eval(S, &x, &model, &inst, sim);
+        try std.testing.expectEqual(@as(f64, -2146999808), r[@intFromEnum(D.U.o_rc)].v);
+    }
+    _ = D.updateState(S, &model, &inst, x, &state, sim);
+    _ = D.stateCtl(&model, &inst, &state, .revert);
+    const retried: [n_u]S = D.eval(S, &x, &model, &inst, sim);
+    try std.testing.expectEqual(@as(f64, -2146999808), retried[@intFromEnum(D.U.o_rc)].v);
+    _ = D.updateState(S, &model, &inst, x, &state, sim);
+    _ = D.stateCtl(&model, &inst, &state, .commit);
+    const next: [n_u]S = D.eval(S, &x, &model, &inst, simAt(1e-9, 0, false));
+    try std.testing.expectEqual(@as(f64, 1181502348), next[@intFromEnum(D.U.o_rc)].v);
+}
 test "§4.5 a revert leaves no field of Instance or State behind" {
     const want = run(0);
     const got = run(2);

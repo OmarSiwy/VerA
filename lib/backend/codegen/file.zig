@@ -133,7 +133,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
     // advance, the only place a stream may move: a per-iteration draw makes
     // the residual non-deterministic and Newton never converges.
-    if (f.stateful or self.lowered.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
+    if (f.stateful or self.lowered.rng_auto_seeds.items.len != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
     try cg_limit.emit(self);
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
@@ -733,17 +733,17 @@ pub fn emitInstance(self: *Gen) Error!void {
     // §9.13.2's "shall always return the same value given the same seed" can
     // be checked. Distinct per site: the internal seed "gets updated every
     // time the call ... is made", so two call sites are two streams.
-    if (self.lowered.rng_auto_sites != 0) {
+    if (self.lowered.rng_auto_seeds.items.len != 0) {
         try self.w(
             "    /// §9.13.1 the internal seed of each seedless `$random`/`$arandom`\n" ++
                 "    /// call site. Advanced by `updateState` on the ACCEPTED step and only\n" ++
                 "    /// READ by `eval`: a draw that moved between Newton iterations would\n" ++
                 "    /// make the residual non-deterministic and the solve would not converge.\n" ++
                 "    rng_auto: [{d}]i64 = .{{",
-            .{self.lowered.rng_auto_sites},
+            .{self.lowered.rng_auto_seeds.items.len},
         );
-        for (0..self.lowered.rng_auto_sites) |k| try self.w("{s}{d}", .{
-            if (k == 0) "" else ", ", 1 + 7919 * @as(u32, @intCast(k)),
+        for (self.lowered.rng_auto_seeds.items, 0..) |seed, k| try self.w("{s}{d}", .{
+            if (k == 0) "" else ", ", seed,
         });
         try self.w("}},\n", .{});
         try self.hist.append(self.arena, "rng_auto");

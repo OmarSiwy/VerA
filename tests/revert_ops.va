@@ -1,9 +1,10 @@
 // The device tests/revert_host.zig runs twice, once with a rejected step and
 // once without: one §4.5/§5.10/§9.13 construct that keeps history in the
 // device per output row, each read off its own node, all fed by V(a).
-module revert_ops(a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn);
-    inout a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn;
-    electrical a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn;
+module revert_ops(a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra);
+    inout a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra;
+    electrical a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra;
+    parameter integer random_seed = 7;
 
     real t_cross, t_above;
     integer ticks;
@@ -24,5 +25,10 @@ module revert_ops(a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im,
         I(o_tm) <+ ticks;
         I(o_im) <+ idtmod(1e9 * V(a), 0, 10);
         I(o_rn) <+ $arandom % 1000;
+        // §9.13.1: the rejected negative-voltage attempt is this site's
+        // FIRST call, so rollback must restore its first-call flag too.
+        if (V(a) < 0) I(o_rc) <+ $arandom(7);
+        I(o_rp) <+ $arandom(random_seed);
+        I(o_ra) <+ $arandom;
     end
 endmodule
