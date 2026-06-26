@@ -68,11 +68,12 @@ pub const Callee = enum(u8) {
     @"$angle",
     @"$hflip",
     @"$vflip",
-    // §9.11 conversions, §9.12.1 $clog2.
+    // §9.11 conversions, §9.14 $clog2.
     @"$rtoi",
     @"$itor",
     @"$realtobits",
     @"$bitstoreal",
+    /// Source arity one; MIR also carries the operand's self-determined width.
     @"$clog2",
     // IEEE 1364 §17.11 math, the `$` spellings of Table 4-14/4-15.
     @"$sqrt",

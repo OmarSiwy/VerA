@@ -123,13 +123,14 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 return try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round({s}))", .{f});
             }
             if (row.op == .select or row.op == .phi) return hostConditionalExpr(self, inst, depth, .int);
-            // §9.12.1 `$clog2` is a constant system function, so a §6.3.4
+            // §9.14 `$clog2` is a constant system function, so a §6.3.4
             // dependent default may call it over an overridable parameter.
             if (row.op == .call) {
                 const d = self.mir.instData(inst).call;
-                if (d.callee != .@"$clog2" or d.args.len != 1) return null;
+                if (d.callee != .@"$clog2") return null;
                 const a = try i64Const(self, d.args[0], depth + 1) orelse return null;
-                return try std.fmt.allocPrint(self.arena, "zClog2({s})", .{a});
+                const width = try i64Const(self, d.args[1], depth + 1) orelse return null;
+                return try std.fmt.allocPrint(self.arena, "zClog2({s}, {s})", .{ a, width });
             }
             if (row.op == .feq or row.op == .fne or row.op == .flt or row.op == .fle or row.op == .fgt or row.op == .fge) {
                 const a = try f64Const(self, av, depth + 1, false) orelse return null;
@@ -1029,7 +1030,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §4.5.15 the host owns the limiting algorithm (contract `limit`), so
         // the device returns the access function unchanged.
         .@"$limit" => return gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real),
-        .@"$clog2" => return gen_render.intCall1(self, "zClog2", if (args.len > 0) args[0] else .zero),
+        .@"$clog2" => {
+            try self.b("zClog2(", .{});
+            try gen_render.renderVal(self, args[0], .int);
+            try self.b(", ", .{});
+            try gen_render.renderVal(self, args[1], .int);
+            return self.b(")", .{});
+        },
         // §9.11 `$rtoi` truncates (Table 9-7). Saturating, since the clause is
         // silent on overflow and `@intFromFloat` is UB under ReleaseFast.
         .@"$rtoi" => {

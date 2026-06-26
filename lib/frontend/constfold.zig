@@ -360,6 +360,7 @@ pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
     const ex = &file.exprs;
     switch (ex.tag(e)) {
         .int_literal => return .{ .int = ex.intValue(e) },
+        .logic_literal => return .{ .int = ex.logicValue(e).asExactInt() orelse return null },
         .real_literal => return .{ .real = ex.realValue(e) },
         .str_literal => return .{ .str = file.str(ex.strOf(e)) },
         .pos_inf => return .{ .real = std.math.inf(f64) },
@@ -448,6 +449,17 @@ pub fn unsignedCompare(file: *const Ast.SourceFile, l: Ast.ExprId, r: Ast.ExprId
 /// wider value where a sign, a complement, a bitwise operator or `?:` passes a
 /// wide operand through. Null when unknown.
 pub fn operandWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?u32 {
+    return expressionWidth(file, e, env, false);
+}
+
+/// IEEE 1364-2005 §5.4.1 / §17.11.1: `$clog2`'s self-determined operand
+/// keeps the size of a sized unary or arithmetic expression; no assignment
+/// context widens it to the analog integer carrier's 32 bits.
+pub fn clog2Width(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?u32 {
+    return expressionWidth(file, e, env, true);
+}
+
+fn expressionWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, comptime self_determined: bool) ?u32 {
     const ex = &file.exprs;
     return switch (ex.tag(e)) {
         // §2.6.1: an unsized number is "at least 32" bits; one no 32 bits
@@ -457,22 +469,34 @@ pub fn operandWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?u
         .ident => env.width(e),
         // `unary`'s `wrapFrom`: a sign or complement keeps a wide literal's width.
         .unary => switch (ex.unOp(e)) {
-            .plus, .minus, .bit_not => atLeast32(operandWidth(file, ex.lhs(e), env) orelse return null),
-            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => 32,
+            .plus, .minus, .bit_not => widthFloor(expressionWidth(file, ex.lhs(e), env, self_determined) orelse return null, self_determined),
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => if (self_determined) 1 else 32,
         },
         .binary => switch (ex.binOp(e)) {
-            .bit_and, .bit_or, .bit_xor, .bit_xnor => atLeast32(@max(operandWidth(file, ex.lhs(e), env) orelse return null, operandWidth(file, ex.rhs(e), env) orelse return null)),
-            .add, .sub, .mul, .div, .mod, .pow, .shl, .shr, .ashl, .ashr, .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => 32,
+            .bit_and, .bit_or, .bit_xor, .bit_xnor => widthFloor(@max(expressionWidth(file, ex.lhs(e), env, self_determined) orelse return null, expressionWidth(file, ex.rhs(e), env, self_determined) orelse return null), self_determined),
+            .add, .sub, .mul, .div, .mod => if (self_determined) @max(expressionWidth(file, ex.lhs(e), env, true) orelse return null, expressionWidth(file, ex.rhs(e), env, true) orelse return null) else 32,
+            .pow, .shl, .shr, .ashl, .ashr => if (self_determined) expressionWidth(file, ex.lhs(e), env, true) else 32,
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => if (self_determined) 1 else 32,
         },
-        .ternary => atLeast32(@max(operandWidth(file, ex.rhs(e), env) orelse return null, operandWidth(file, ex.ternaryElse(e), env) orelse return null)),
+        .ternary => widthFloor(@max(expressionWidth(file, ex.rhs(e), env, self_determined) orelse return null, expressionWidth(file, ex.ternaryElse(e), env, self_determined) orelse return null), self_determined),
         // §9.11 `$realtobits` returns the double's 64-bit pattern.
         .sys_call => if (std.mem.eql(u8, file.str(ex.strOf(e)), "$realtobits")) 64 else 32,
         else => 32, // else: every other integer-valued form is §3.2's 32-bit integer
     };
 }
 
-fn atLeast32(w: u32) u32 {
-    return @max(w, 32);
+fn widthFloor(w: u32, comptime self_determined: bool) u32 {
+    return if (self_determined) w else @max(w, 32);
+}
+
+/// §17.11.1's unsigned interpretation at the source operand's width.
+/// Wider signed literals that fit the i64 carrier repeat their sign bit;
+/// a negative one is therefore above 2**(width-1) and rounds up to width.
+pub fn clog2(value: i64, width: u32) i64 {
+    if (width > 64 and value < 0) return width;
+    const mask: u64 = if (width >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(width)) - 1;
+    const bits = @as(u64, @bitCast(value)) & mask;
+    return if (bits <= 1) 0 else 64 - @as(i64, @clz(bits - 1));
 }
 
 /// The `env` that knows nothing: `fold(file, e, literal_env)` folds literals

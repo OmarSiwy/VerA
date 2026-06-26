@@ -1,0 +1,50 @@
+// AMS §3.4.1 derives an inferred parameter from its final HDL override;
+// §9.14 imports IEEE 1364-2005 §17.11.1's unsigned interpretation.
+// The child starts with a four-bit default but its HDL override has 64 bits:
+// 2**63+1 has ceiling log 64, through both direct use and a dependent default.
+// A signed four-bit parameter and its inferred alias both contain 15 -> 4.
+// An explicit [3:0] range fixes four bits despite an eight-bit initializer:
+// ff is truncated to f, so both direct and dependent $clog2 are 4.
+// The child's parameter-bound range has the same result after flattening,
+// as does its packed reg whose four one bits read as analog integer 15.
+//
+// HOST ABI CHOICE (not a clause claim): numeric host bindings carry no source
+// width. They retain the final elaborated declaration's operand width, as
+// documented in IMPLEMENTATION.md. knob's 4-bit default fixes that width;
+// the numeric override 255 is viewed as low bits 1111 -> 4, in both uses.
+//! lrm 3.4.1
+//! lrm 9.14
+//! param knob = 255
+//! checks 10
+`include "check.vh"
+module clog2_width_child;
+  parameter integer BITS = 4;
+  parameter code = 4'h1;
+  parameter [BITS-1:0] packed_child = 8'hff;
+  localparam integer derived = $clog2(code);
+  reg [BITS-1:0] bits;
+  analog begin
+    `CHECKI("HDL override supplies its 64-bit width", $clog2(code), 64);
+    `CHECKI("dependent default uses overridden HDL width", derived, 64);
+    `CHECKI("child packed range follows its renamed parameter", $clog2(packed_child), 4);
+    bits = -1;
+    `CHECKI("child reg width follows its renamed parameter", $clog2(bits), 4);
+  end
+endmodule
+module clog2_inferred_parameter_width;
+  parameter knob = 4'd1;
+  parameter signed_tiny = 4'shf;
+  localparam copy = signed_tiny;
+  parameter [3:0] packed_tiny = 8'hff;
+  localparam integer packed_derived = $clog2(packed_tiny);
+  localparam integer derived = $clog2(knob);
+  clog2_width_child #(.code(64'h8000000000000001)) child();
+  analog begin
+    `CHECKI("numeric host override retains source width", $clog2(knob), 4);
+    `CHECKI("dependent host default retains source width", derived, 4);
+    `CHECKI("inferred signed parameter", $clog2(signed_tiny), 4);
+    `CHECKI("inferred parameter alias", $clog2(copy), 4);
+    `CHECKI("explicit packed range takes precedence", $clog2(packed_tiny), 4);
+    `CHECKI("dependent default keeps explicit packed range", packed_derived, 4);
+  end
+endmodule
