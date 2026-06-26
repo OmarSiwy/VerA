@@ -2,7 +2,8 @@
 //! and its folded operands) in, a `Const` out, or null when the expression is
 //! not constant. Pure: no allocation and no symbol table; identifiers and
 //! `>>>`'s signedness come from the caller's `env`. Implements §3.2's 32-bit
-//! integer wrap, §4.2.1.3, §4.2.4, §4.2.11, §4.2.12, §4.3 and Table 3-3.
+//! integer wrap, §4.2.1.3, §4.2.4, §4.2.11, §4.2.12, §4.3 and Table 3-3;
+//! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
 
 const std = @import("std");
 const Ast = @import("ast.zig");
@@ -356,49 +357,77 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
 ///   width(e) ?u32      a name's bit length (§4.2.9 comparisons)
 /// `literal_env` answers none of them: a fold over literals only.
 pub fn fold(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
+    return foldContext(file, e, env, false, null);
+}
+
+/// IEEE §§5.4–5.5: a system-function operand is self-determined, but its
+/// type and size propagate into its context-dependent subexpressions.
+pub fn foldSized(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?Const {
+    return foldContext(file, e, env, true, null);
+}
+
+fn foldContext(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, comptime sized: bool, parent: ?IntContext) ?Const {
     if (e == .none) return null;
     const ex = &file.exprs;
-    switch (ex.tag(e)) {
-        .int_literal => return .{ .int = ex.intValue(e) },
-        .logic_literal => return .{ .int = ex.logicValue(e).asExactInt() orelse return null },
-        .real_literal => return .{ .real = ex.realValue(e) },
-        .str_literal => return .{ .str = file.str(ex.strOf(e)) },
-        .pos_inf => return .{ .real = std.math.inf(f64) },
-        .neg_inf => return .{ .real = -std.math.inf(f64) },
-        .unary => {
-            const a = fold(file, ex.lhs(e), env) orelse return null;
+    const plan: ?IntPlan = if (sized) intPlan(file, e, env, parent) else null;
+    if (plan) |p| if (!p.supported) return null;
+    const contexts = if (plan) |p| p.operands else [_]?IntContext{ null, null, null };
+    var value: Const = switch (ex.tag(e)) {
+        .int_literal => .{ .int = ex.intValue(e) },
+        .logic_literal => .{ .int = ex.logicValue(e).asExactInt() orelse return null },
+        .real_literal => .{ .real = ex.realValue(e) },
+        .str_literal => .{ .str = file.str(ex.strOf(e)) },
+        .pos_inf => .{ .real = std.math.inf(f64) },
+        .neg_inf => .{ .real = -std.math.inf(f64) },
+        .unary => blk: {
+            const a = foldContext(file, ex.lhs(e), env, sized, contexts[0]) orelse return null;
             const op = ex.unOp(e);
-            return switch (op) {
+            break :blk (switch (op) {
                 .plus, .minus, .logical_not, .bit_not => unary(op, a),
                 .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => reduction(ex, op, ex.lhs(e), a),
-            };
+            }) orelse return null;
         },
-        .binary => {
-            var a = fold(file, ex.lhs(e), env) orelse return null;
-            var b = fold(file, ex.rhs(e), env) orelse return null;
+        .binary => blk: {
+            var a = foldContext(file, ex.lhs(e), env, sized, contexts[0]) orelse return null;
             const op = ex.binOp(e);
+            if (sized and ((op == .logical_and and !a.isTrue()) or (op == .logical_or and a.isTrue())))
+                break :blk .{ .int = @intFromBool(a.isTrue()) };
+            var b = foldContext(file, ex.rhs(e), env, sized, contexts[1]) orelse return null;
             const compare = op == .eq or op == .neq or op == .case_eq or op == .case_neq or op == .lt or op == .le or op == .gt or op == .ge;
-            if (compare and a == .int and b == .int) if (unsignedCompare(file, ex.lhs(e), ex.rhs(e), env)) |u| {
+            if (sized and a == .int and b == .int) {
+                if (op == .shr) if (contexts[0]) |c| {
+                    a.int = (IntContext{ .width = c.width, .signed = false }).normalize(a.int);
+                };
+                if (compare) if (contexts[0]) |c| if (!c.signed and c.width == 64) {
+                    a.int ^= std.math.minInt(i64);
+                    b.int ^= std.math.minInt(i64);
+                };
+            } else if (compare and a == .int and b == .int) if (unsignedCompare(file, ex.lhs(e), ex.rhs(e), env)) |u| {
                 a.int = u.extend(.lhs, a.int);
                 b.int = u.extend(.rhs, b.int);
             };
-            return binary(op, a, b, if (op == .ashr) env.signed(ex.lhs(e)) else null);
+            const shift_signed = if (op != .ashr) null else if (sized and contexts[0] != null) contexts[0].?.signed else env.signed(ex.lhs(e));
+            break :blk binary(op, a, b, shift_signed) orelse return null;
         },
-        .ternary => {
-            const c = fold(file, ex.lhs(e), env) orelse return null;
-            return fold(file, if (c.isTrue()) ex.rhs(e) else ex.ternaryElse(e), env);
+        .ternary => blk: {
+            const c = foldContext(file, ex.lhs(e), env, sized, contexts[0]) orelse return null;
+            break :blk foldContext(file, if (c.isTrue()) ex.rhs(e) else ex.ternaryElse(e), env, sized, contexts[if (c.isTrue()) 1 else 2]) orelse return null;
         },
         // §4.3 Table 4-14/4-15 math in a constant expression.
-        .builtin_call => {
+        .builtin_call => blk: {
             const f = MathFn.fromName(file.str(ex.strOf(e))) orelse return null;
             const args = ex.args(e);
             if (args.len != f.arity()) return null;
             var vals: [2]Const = undefined;
             for (args, 0..) |a, i| vals[i] = fold(file, a, env) orelse return null;
-            return math(f, vals[0..args.len]);
+            break :blk math(f, vals[0..args.len]) orelse return null;
         },
-        else => return env.leaf(e), // else: every other tag names something only the caller can resolve
-    }
+        else => env.leaf(e) orelse return null, // else: every other tag names something only the caller can resolve
+    };
+    if (value == .int) if (plan) |p| {
+        value.int = p.resize(value.int);
+    };
+    return value;
 }
 
 /// §4.2.9 on the i64 carrier: "When one or both operands are unsigned, the
@@ -487,6 +516,119 @@ fn expressionWidth(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, com
 
 fn widthFloor(w: u32, comptime self_determined: bool) u32 {
     return if (self_determined) w else @max(w, 32);
+}
+
+/// IEEE §5.5.1 signedness before the unsigned `$clog2` boundary. Names are
+/// the environment's; a function call keeps its own argument contexts.
+pub fn clog2Signed(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype) ?bool {
+    const ex = &file.exprs;
+    return switch (ex.tag(e)) {
+        .int_literal => ex.intLiteral(e).signed,
+        .logic_literal => ex.logicValue(e).signed,
+        .ident => env.signed(e),
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus, .bit_not => clog2Signed(file, ex.lhs(e), env),
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => false,
+        },
+        .binary => switch (ex.binOp(e)) {
+            .shl, .shr, .ashl, .ashr, .pow => clog2Signed(file, ex.lhs(e), env),
+            .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => clog2OperandsSigned(file, ex.lhs(e), ex.rhs(e), env),
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => false,
+        },
+        .ternary => clog2OperandsSigned(file, ex.rhs(e), ex.ternaryElse(e), env),
+        .sys_call => !std.mem.eql(u8, file.str(ex.strOf(e)), "$realtobits"),
+        .call, .index => true, // analog function/array integral results are §3.2 integers
+        else => null, // else: not an integral expression in the analog context
+    };
+}
+
+fn clog2OperandsSigned(file: *const Ast.SourceFile, a: Ast.ExprId, b: Ast.ExprId, env: anytype) ?bool {
+    const sa = clog2Signed(file, a, env) orelse return null;
+    const sb = clog2Signed(file, b, env) orelse return null;
+    return sa and sb;
+}
+
+/// One IEEE §5.5.2 type/size context, over the existing i64 carrier.
+pub const IntContext = struct {
+    width: u32,
+    signed: bool,
+
+    pub fn normalize(c: IntContext, value: i64) i64 {
+        if (c.width >= 64) return value;
+        const mask = (@as(u64, 1) << @intCast(c.width)) - 1;
+        var bits = @as(u64, @bitCast(value)) & mask;
+        if (c.signed and bits & (@as(u64, 1) << @intCast(c.width - 1)) != 0) bits |= ~mask;
+        return @bitCast(bits);
+    }
+};
+
+/// Shared by folding and lowering: where context propagates, where it stops,
+/// and how the result enters its parent. No changes to ordinary analog ops.
+pub const IntPlan = struct {
+    result: IntContext,
+    from_width: u32,
+    operands: [3]?IntContext = .{ null, null, null },
+    supported: bool = true,
+
+    pub fn resize(p: IntPlan, value: i64) i64 {
+        const source: IntContext = .{ .width = p.from_width, .signed = p.result.signed };
+        return p.result.normalize(source.normalize(value));
+    }
+};
+
+/// IEEE Table 5-22 and §5.5.2: logical operands, a shift/power's RHS, and a
+/// conditional's condition are self-determined. Comparisons share a context
+/// between their operands, independent of their one-bit result.
+pub fn intPlan(file: *const Ast.SourceFile, e: Ast.ExprId, env: anytype, parent: ?IntContext) ?IntPlan {
+    const ex = &file.exprs;
+    const own: IntContext = .{ .width = clog2Width(file, e, env) orelse return null, .signed = clog2Signed(file, e, env) orelse return null };
+    const result: IntContext = if (parent) |p| .{ .width = @max(p.width, own.width), .signed = p.signed } else own;
+    var plan: IntPlan = .{ .result = result, .from_width = own.width };
+    switch (ex.tag(e)) {
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus, .bit_not => {
+                plan.from_width = result.width;
+                plan.operands[0] = result;
+                plan.supported = result.width <= (if (ex.unOp(e) == .minus) @as(u32, 32) else 64);
+            },
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => {},
+        },
+        .binary => switch (ex.binOp(e)) {
+            .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => {
+                plan.from_width = result.width;
+                plan.operands[0] = result;
+                plan.operands[1] = result;
+                const bitwise = switch (ex.binOp(e)) {
+                    .bit_and, .bit_or, .bit_xor, .bit_xnor => true,
+                    else => false, // else: the enclosing prong's five arithmetic operations wrap at 32
+                };
+                plan.supported = result.width <= (if (bitwise) @as(u32, 64) else 32);
+            },
+            .pow, .shl, .shr, .ashl, .ashr => {
+                plan.from_width = result.width;
+                plan.operands[0] = result;
+                plan.supported = result.width <= 32;
+            },
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
+                const comparison: IntContext = .{
+                    .width = @max(clog2Width(file, ex.lhs(e), env) orelse return null, clog2Width(file, ex.rhs(e), env) orelse return null),
+                    .signed = clog2OperandsSigned(file, ex.lhs(e), ex.rhs(e), env) orelse return null,
+                };
+                plan.operands[0] = comparison;
+                plan.operands[1] = comparison;
+                plan.supported = comparison.width <= 64;
+            },
+            .logical_and, .logical_or => {},
+        },
+        .ternary => {
+            plan.from_width = result.width;
+            plan.operands[1] = result;
+            plan.operands[2] = result;
+            plan.supported = result.width <= 64;
+        },
+        else => {}, // else: a primary keeps its own width until converted to its parent
+    }
+    return plan;
 }
 
 /// §17.11.1's unsigned interpretation at the source operand's width.

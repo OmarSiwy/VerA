@@ -11,8 +11,7 @@
 // amount override from 8 to -1, so its answer changes from 3 to 32.
 // An explicit $rtoi(8.9) produces 8 -> 3; the invalid real-operand neighbours
 // are reject_clog2_real.va and reject_clog2_real_default.va. The separate
-// unresolved nested narrow-arithmetic case is tracked in ROADMAP, not assumed
-// correct by these single-operation boundary checks.
+// nested intermediate contexts are exercised in clog2_nested_contexts.va.
 //! lrm 3.2
 //! lrm 6.3.4
 //! lrm 9.14

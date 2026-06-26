@@ -42,6 +42,7 @@ pub const ParamInfo = struct {
     /// Final HDL declaration width, retained for self-determined operands.
     /// Numeric model bindings change the value, not this source metadata.
     source_width: ?u32 = null,
+    source_signed: ?bool = null,
     default: Mir.Value,
     /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`; proof.zig uses them as
     /// bound evidence.
