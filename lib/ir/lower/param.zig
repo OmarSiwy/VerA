@@ -822,18 +822,15 @@ pub const VarScope = enum { module, local };
 pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!void {
     const name = self.file.str(decl.name);
     const ty = astTy(decl.ty);
-    const read_mask: ?u32 = if (decl.storage == .reg) blk: {
+    const reg_width: ?u32 = if (decl.storage == .reg) blk: {
         const width = if (decl.packed_range) |range| packedShapeWidth(self, range) orelse {
             try self.err(decl.main_tok, .E0352, "the packed range of `{s}` is not a constant integer range", .{name});
             return;
         } else 1;
-        if (width > 31) {
-            try self.err(decl.main_tok, .E0222, "`{s}` has {d} bits", .{ name, width });
-            return;
-        }
-        // §7.3.1 Table 7-1 clears every bit above the source grouping and
-        // always clears bit 31. Keep this mask in declaration scope.
-        break :blk (@as(u32, 1) << @intCast(width)) - 1;
+        // The limit applies to an analog access, not a declaration. A mixed
+        // module can keep wider registers entirely in its digital processes.
+        // Retain the folded width so analogRead checks the actual access.
+        break :blk width;
     } else null;
     // §5.3.2: "All named block variables are static — that is, an unique
     // location exists for all variables and leaving or entering the block do
@@ -857,7 +854,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
         if (isMemArray(self, decl.name, ty)) {
             const place = try declareMemArray(self, name, dims, ty, !hold);
-            self.arrays.getPtr(name).?.mem.?.read_mask = read_mask;
+            self.arrays.getPtr(name).?.mem.?.reg_width = reg_width;
             const elems = try flattenPattern(self, decl.init, dims);
             if (hold) {
                 // §5.10 the initializer is the `Instance` field's default and
@@ -895,7 +892,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
             // element takes a slot, since the index may be a runtime `case`.
             const en = try elemName(self, name, idx);
             const slot = try declareVar(self, en, ty);
-            self.vars.getPtr(en).?.read_mask = read_mask;
+            self.vars.getPtr(en).?.reg_width = reg_width;
             // §3.2 an element the pattern does not reach keeps the zero start.
             const init_val: Mir.Value = if (elem != .none)
                 try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem))
@@ -910,7 +907,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     }
 
     const slot = try declareVar(self, name, ty);
-    self.vars.getPtr(name).?.read_mask = read_mask;
+    self.vars.getPtr(name).?.reg_width = reg_width;
     const init_val: Mir.Value = if (decl.init == .none)
         zeroOf(ty)
     else
@@ -1032,13 +1029,19 @@ pub fn storeElem(self: *Lower, place: Ssa.Place, index: Mir.Value, v: Mir.Value)
 pub fn loadElem(self: *Lower, mem: ArrayInfo.Mem, ty: Ty, index: Mir.Value) Oom!Mir.Value {
     const cur = try self.builder.readVariable(mem.place, self.cur);
     const value = try self.emit(if (ty == .integer) .iload else .fload, &.{ cur, index });
-    return analogRead(self, value, mem.read_mask);
+    return analogRead(self, value, mem.reg_width);
 }
 
 /// §7.3.1: the analog value of a discrete bit grouping is a nonnegative
 /// 32-bit integer. The source width controls zero extension, not arithmetic.
-pub fn analogRead(self: *Lower, value: Mir.Value, mask: ?u32) Oom!Mir.Value {
-    return if (mask) |bits| self.emit(.bitand, &.{ value, try self.mir.addIntConst(self.arena, bits) }) else value;
+pub fn analogRead(self: *Lower, value: Mir.Value, width: ?u32) Oom!Mir.Value {
+    const w = width orelse return value;
+    if (w > 31) {
+        try self.err(self.mir.cur_tok, .E0222, "this analog access reads {d} bits", .{w});
+        return .undef;
+    }
+    const mask = (@as(u32, 1) << @intCast(w)) - 1;
+    return self.emit(.bitand, &.{ value, try self.mir.addIntConst(self.arena, mask) });
 }
 
 /// The flat element index of an in-range subscript tuple: row-major, each

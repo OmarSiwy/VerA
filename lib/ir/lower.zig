@@ -659,8 +659,9 @@ pub const Display = struct {
 pub const VarSlot = struct {
     place: Ssa.Place,
     ty: Ty,
-    /// §7.3.1: a packed reg read becomes a zero-extended analog integer.
-    read_mask: ?u32 = null,
+    /// §7.3.1: retained declaration width, checked and zero-extended when
+    /// analog code reads it. A register used only by digital code may be wider.
+    reg_width: ?u32 = null,
 };
 /// Absent-index sentinel for the `u32` index fields here.
 pub const none_u32 = std.math.maxInt(u32);
@@ -676,7 +677,7 @@ pub const ArrayInfo = struct {
     /// element under `elemName`. See `lower_param.declareVarDecl`.
     mem: ?Mem = null,
     /// A memory-backed array's SSA place and `out.mem_arrays` row.
-    pub const Mem = struct { place: Ssa.Place, id: u32, read_mask: ?u32 = null };
+    pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };

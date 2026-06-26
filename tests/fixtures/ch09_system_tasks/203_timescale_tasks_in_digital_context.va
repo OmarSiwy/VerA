@@ -22,6 +22,9 @@
 //
 // Both verdicts are set to 0 at time zero so the analog block's time-zero read
 // is defined (§7.3.2).
+// The 64-bit formatting register stays entirely in digital code. §7.3.1's
+// 31-bit limit applies to analog accesses, so its declaration is legal; only
+// the two integer verdicts cross into the analog block.
 //
 //! lrm 9.6
 //! analysis tran
