@@ -758,6 +758,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p02: b_26_6_behaviour checks=298\nd=12 c=1 q=9 p2=0101\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_prim_review.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_prim_review.v",
+        .stdout = "b26_prim_review: active drivers, UDP symbols and strengths ok\n",
+    },
+    .{
         .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
         .design = "tests/fixtures/ch11_vpi/p04_prims.v",
         .stdout = "p02: b_26_6_primitives checks=65\n",

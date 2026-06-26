@@ -908,10 +908,14 @@ pub const Builder = struct {
                 },
                 // §11.6.24: force and assign stmt draw vpiLhs and vpiRhs;
                 // deassign and release draw vpiLhs alone.
-                .assign, .force => b.code(if (a.continuous == .force) vpiForce else vpiAssignStmt, &.{
-                    .{ .tag = vpiLhs, .to = try b.expr(a.target) },
-                    .{ .tag = vpiRhs, .to = try b.expr(a.value) },
-                }, &.{}, &.{}),
+                .assign, .force => blk: {
+                    const at = try b.code(if (a.continuous == .force) vpiForce else vpiAssignStmt, &.{
+                        .{ .tag = vpiLhs, .to = try b.expr(a.target) },
+                        .{ .tag = vpiRhs, .to = try b.expr(a.value) },
+                    }, &.{}, &.{});
+                    b.objects.items[at].override_expr = a.value;
+                    break :blk at;
+                },
                 .deassign, .release => b.code(if (a.continuous == .release) vpiRelease else vpiDeassign, &.{
                     .{ .tag = vpiLhs, .to = try b.expr(a.target) },
                 }, &.{}, &.{}),
