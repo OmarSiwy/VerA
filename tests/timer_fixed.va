@@ -1,0 +1,13 @@
+// §5.10.3.3 periodic events. tests/timer_host.zig drives the emitted device
+// through its public breakpoint, eval, updateState and stateCtl hooks.
+module timer_fixed(out);
+  inout out;
+  electrical out;
+  parameter real start = 2u;
+  parameter real period = 1m;
+  integer fires;
+  analog begin
+    @(timer(start, period)) fires = fires + 1;
+    I(out) <+ fires;
+  end
+endmodule

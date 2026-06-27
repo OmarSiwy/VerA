@@ -558,8 +558,10 @@ pub const timer_txt =
     \\    // `updateState` clamps `__next` UP from its 0.0 initialiser, so a start
     \\    // before the origin fires at the origin — already a timepoint.
     \\    const s = @max(start, 0.0);
+    \\    if (!std.math.isFinite(s) or !std.math.isFinite(t)) return null;
     \\    if (s > t) return s;
     \\    if (!(period > 0.0)) return null; // one-shot, and its single fire is behind us
+    \\    if (!std.math.isFinite(period)) return null;
     \\    // Fire k is s + k*period. Take the first k past `t`, then repair the
     \\    // two one-ulp outcomes of the division: landing high SKIPS a fire,
     \\    // landing low returns `t` itself and the transient walk stops advancing.
@@ -569,10 +571,18 @@ pub const timer_txt =
     \\    const next = s + n * period;
     \\    // Strictly `> t`, never `>=`: a host that re-asks from the breakpoint it
     \\    // was just handed (analysis/src/tran/matex.zig walks exactly that way)
-    \\    // spins forever on an equal answer. When `period` is so small beside `t`
-    \\    // that no later time is representable, "no breakpoint" is the honest —
-    \\    // and terminating — answer.
-    \\    return if (next > t and std.math.isFinite(next)) next else null;
+    \\    // spins forever on an equal answer. A tiny period may disappear in
+    \\    // the addition, or overflow the COUNT, without exhausting finite time.
+    \\    // Then consecutive f64 times already span an event: the first f64
+    \\    // after t is at/just beyond it (§5.10.3.3). Do not apply this repair
+    \\    // when a finite count gives an infinite EVENT (a genuinely spent
+    \\    // finite-time schedule with a large period).
+    \\    if (std.math.isFinite(next) and next > t) return next;
+    \\    if (next <= t or !std.math.isFinite(n)) {
+    \\        const future = std.math.nextAfter(f64, t, z_inf);
+    \\        if (std.math.isFinite(future)) return future;
+    \\    }
+    \\    return null;
     \\}
     \\
 ;

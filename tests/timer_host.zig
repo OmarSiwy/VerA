@@ -1,0 +1,135 @@
+//! Emitted timer devices -> a host's accepted/rejected timepoints, VAMS
+//! §5.10.3.3. The fixed device compares the static and live breakpoint hooks:
+//! both describe the same schedule, so they must agree bit for bit even after
+//! thousands of events. This is an ABI consistency assertion, not a claim that
+//! the LRM requires exact decimal timepoints (it permits at or just beyond).
+//!
+//! The dynamic device changes its period at a scheduled event: 0, 2, 4 ns
+//! followed by 8 and 12 ns when the period becomes 4 ns at 4 ns. Its rejection
+//! test makes the same change on a discarded trial: retrying with 2 ns must
+//! restore the old grid, including all hidden scheduling state.
+
+const std = @import("std");
+const contract = @import("contract");
+const D = @import("device");
+const n_u = @typeInfo(D.U).@"enum".fields.len;
+const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const fixed = @hasDecl(D, "nextBreakpoint");
+
+const Run = struct {
+    model: D.Model,
+    inst: D.Instance = .{},
+    state: D.State = .{},
+    time: f64 = 0,
+    initialized: bool = false,
+
+    fn init(model: D.Model) Run {
+        var r: Run = .{ .model = model };
+        if (@hasDecl(D, "setup")) D.setup(S.Of(0), &r.model, &r.inst);
+        r.state = D.initState(&r.model, &r.inst);
+        return r;
+    }
+
+    fn attempt(r: *Run, t: f64, control: f64) f64 {
+        var x: [n_u]f64 = @splat(0.0);
+        if (comptime @hasField(D.U, "ctl")) x[@intFromEnum(D.U.ctl)] = control;
+        const sim: contract.SimState = .{
+            .t = t,
+            .dt = t - r.time,
+            .kind = if (r.initialized) .tran else .dc,
+            .initial_step = !r.initialized,
+            .analog_initial = !r.initialized,
+        };
+        const residual = D.eval(S, &x, &r.model, &r.inst, sim);
+        _ = D.updateState(S, &r.model, &r.inst, x, &r.state, sim);
+        return residual[@intFromEnum(D.U.out)].v;
+    }
+
+    fn accept(r: *Run, t: f64, control: f64) f64 {
+        const count = r.attempt(t, control);
+        _ = D.stateCtl(&r.model, &r.inst, &r.state, .commit);
+        r.time = t;
+        r.initialized = true;
+        return count;
+    }
+};
+
+test "§5.10.3.3 live and static periodic schedules do not accumulate drift" {
+    if (comptime !fixed) return error.SkipZigTest;
+    var r = Run.init(.{ .start = 2e-6, .period = 1e-3 });
+    try std.testing.expectEqual(0.0, r.accept(0, 0));
+    // The historical failure appeared around 19 ms. This host follows the
+    // public schedule through 4 s and observes every event through eval.
+    for (0..4096) |i| {
+        const want = D.nextBreakpoint(&r.model, r.time).?;
+        const got = D.pendingBreakpoint(&r.inst, r.time).?;
+        try std.testing.expectEqual(want, got);
+        try std.testing.expectEqual(@as(f64, @floatFromInt(i + 1)), r.accept(got, 0));
+    }
+}
+
+test "§5.10.3.3 small periods retain a representable future breakpoint" {
+    if (comptime !fixed) return error.SkipZigTest;
+    const epsilon = std.math.floatEps(f64);
+    for ([_]f64{ epsilon, epsilon / 16, 1e-320 }) |period| {
+        var r = Run.init(.{ .start = 1, .period = period });
+        try std.testing.expectEqual(0.0, r.accept(0, 0));
+        try std.testing.expectEqual(1.0, r.accept(1, 0));
+        for (0..16) |i| {
+            const want = std.math.nextAfter(f64, r.time, std.math.inf(f64));
+            // There is at least one real event between consecutive f64 times.
+            // The next representable time is at/just beyond that event; none
+            // may be returned at or before the host's current time.
+            const future = D.nextBreakpoint(&r.model, r.time);
+            try std.testing.expect(future != null);
+            try std.testing.expectEqual(want, future.?);
+            try std.testing.expectEqual(future, D.pendingBreakpoint(&r.inst, r.time));
+            try std.testing.expectEqual(@as(f64, @floatFromInt(i + 2)), r.accept(future.?, 0));
+        }
+    }
+}
+
+test "§5.10.3.3 an exhausted finite-time schedule has no future breakpoint" {
+    if (comptime !fixed) return error.SkipZigTest;
+    const max = std.math.floatMax(f64);
+    for ([_]D.Model{
+        .{ .start = 1, .period = 0 },
+        .{ .start = 1, .period = -1 },
+        .{ .start = 0.75 * max, .period = max },
+    }) |model| {
+        try std.testing.expectEqual(@as(?f64, null), D.nextBreakpoint(&model, model.start));
+    }
+    const tiny: D.Model = .{ .start = 1, .period = 1e-320 };
+    try std.testing.expectEqual(@as(?f64, null), D.nextBreakpoint(&tiny, max));
+}
+
+test "§5.10.3.3 changed period rebases at the scheduled fire" {
+    if (comptime fixed) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(1.0, r.accept(0, 0));
+    try std.testing.expectEqual(2.0, r.accept(p, 0));
+    try std.testing.expectEqual(3.0, r.accept(2 * p, 1));
+    const next = D.pendingBreakpoint(&r.inst, r.time).?;
+    try std.testing.expectEqual(4 * p, next);
+    try std.testing.expectEqual(3.0, r.accept(3 * p, 1));
+    try std.testing.expectEqual(4.0, r.accept(next, 1));
+    try std.testing.expectEqual(6 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+}
+
+test "§5.10.3.3 a rejected period change restores the schedule" {
+    if (comptime fixed) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    _ = r.accept(0, 0);
+    _ = r.accept(p, 0);
+    const accepted_inst = r.inst;
+    const accepted_state = r.state;
+    try std.testing.expectEqual(3.0, r.attempt(2 * p, 1));
+    try std.testing.expectEqual(4 * p, D.pendingBreakpoint(&r.inst, 2 * p).?);
+    _ = D.stateCtl(&r.model, &r.inst, &r.state, .revert);
+    try std.testing.expectEqualDeep(accepted_inst, r.inst);
+    try std.testing.expectEqualDeep(accepted_state, r.state);
+    try std.testing.expectEqual(3.0, r.accept(2 * p, 0));
+    try std.testing.expectEqual(3 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+}
