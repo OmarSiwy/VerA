@@ -83,8 +83,9 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 continue;
             }
             if (mon.kind == .absdelta) {
-                // §5.10.3.4 absdelta(expr, delta, time_tol, expr_tol, enable).
-                m.* = .{ .kind = .{ .absdelta = .{ .delta = @max((try dig.monitorArg(j, 1)) orelse 0, 0) } } };
+                // Its arguments can change at runtime. In particular, no
+                // probe is meaningful until the initial analog solve exists.
+                m.* = .{ .kind = .{ .absdelta = .{} } };
                 continue;
             }
             const above = mon.kind == .above;
@@ -139,14 +140,15 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         if (s.acc == null or s.acc.? != target) try s.accept(target);
         // §5.10.3.4 absdelta "generates events ... During initialization".
         if (sync and i == 0) {
-            var any = false;
             for (s.mons, 0..) |*m, j| if (m.kind == .absdelta) {
                 const ad = &m.kind.absdelta;
+                ad.initialized = true;
                 ad.last = try s.monValue(j);
-                try dig.deliverA2d(j, horizon);
-                any = true;
+                ad.extreme = ad.last;
+                ad.last_time = target;
             };
-            if (any) try s.runDigital(horizon);
+            _ = try s.refreshAbsdelta(target);
+            try s.runDigital(horizon);
         }
     }
     try a.finish();
@@ -157,6 +159,8 @@ const max_secant = 64;
 
 /// §5.10.3.1 leaves an absent `time_tol` to the tool.
 const default_time_tol = 1e-12;
+/// §5.10.3.4 lets the tool choose an absent/zero expression tolerance.
+const default_expr_tol = 1e-12;
 
 /// One monitored analog event (`digital.Run.monitors`): what its kind needs,
 /// and its value on the last final solution (`v0`, unused by a timer).
@@ -169,8 +173,17 @@ const Mon = struct {
         crossing: struct { dir: f64, tol: f64, enable: u8 },
         /// §5.10.3.3: the next firing time and the period.
         timer: struct { next: f64, period: f64 },
-        /// §5.10.3.4: the change that makes an event, and the value at the last one.
-        absdelta: struct { delta: f64, last: f64 = 0 },
+        /// §5.10.3.4: event history is distinct from observed extrema, so
+        /// reversals smaller than expr_tol accumulate without losing a peak.
+        absdelta: struct {
+            initialized: bool = false,
+            enabled: bool = false,
+            last: f64 = 0,
+            last_time: f64 = 0,
+            direction: f64 = 0,
+            extreme: f64 = 0,
+            observed_event: bool = false,
+        },
     },
 
     /// The firing after this one, or false when there is none.
@@ -205,6 +218,9 @@ fn State(comptime A: type) type {
         mons: []Mon = &.{},
         /// A monitor is being evaluated: probes read the tentative solution.
         mon_eval: bool = false,
+        /// An absdelta enable transition at a consumed digital event reads
+        /// the interpolated analog value at that event, not the future endpoint.
+        mon_time: ?f64 = null,
 
         fn timeOf(s: *const Self, k: Tick, target: f64, horizon: Tick) f64 {
             const tk = @as(f64, @floatFromInt(k)) * s.opts.tick;
@@ -256,9 +272,148 @@ fn State(comptime A: type) type {
         }
 
         fn monArg(s: *Self, j: usize, k: usize) !?f64 {
+            return s.monArgAt(j, k, null);
+        }
+
+        fn monArgAt(s: *Self, j: usize, k: usize, t: ?f64) !?f64 {
             s.mon_eval = true;
             defer s.mon_eval = false;
+            s.mon_time = t;
+            defer s.mon_time = null;
             return s.dig.monitorArg(j, k);
+        }
+
+        const AbsdeltaArgs = struct { delta: f64, time_tol: f64, expr_tol: f64, enabled: bool };
+
+        fn absdeltaArgs(s: *Self, j: usize, t: ?f64) !AbsdeltaArgs {
+            const delta = (try s.monArgAt(j, 1, t)).?;
+            const ttol = (try s.monArgAt(j, 2, t)) orelse 0;
+            const etol = (try s.monArgAt(j, 3, t)) orelse 0;
+            const enable = (try s.monArgAt(j, 4, t)) orelse 1;
+            const tok = s.dig.file.exprs.mainTok(s.dig.monitors.items[j].expr);
+            if (!(delta >= 0 and ttol >= 0 and etol >= 0))
+                return s.dig.failWith(.E0517, tok, "`absdelta()` delta and tolerances shall be non-negative", .{});
+            if (!std.math.isFinite(enable) or enable != @round(enable))
+                return s.dig.failWith(.E0517, tok, "`absdelta()` enable shall evaluate to an integer", .{});
+            return .{
+                .delta = delta,
+                .time_tol = @max(if (ttol > 0) ttol else default_time_tol, s.opts.tick),
+                .expr_tol = if (etol > 0) etol else default_expr_tol,
+                .enabled = enable != 0,
+            };
+        }
+
+        /// Initialization and 0 -> nonzero enable are events even when expr
+        /// has not moved. Disabled observations never advance the event baseline.
+        fn refreshAbsdelta(s: *Self, t: f64) !bool {
+            var posted = false;
+            for (s.mons, 0..) |*m, j| if (m.kind == .absdelta) {
+                const ad = &m.kind.absdelta;
+                if (!ad.initialized) continue;
+                const args = try s.absdeltaArgs(j, t);
+                if (args.enabled == ad.enabled) continue;
+                ad.enabled = args.enabled;
+                ad.observed_event = false;
+                if (!args.enabled) continue;
+                ad.last = (try s.monArgAt(j, 0, t)).?;
+                ad.last_time = t;
+                ad.direction = 0;
+                ad.extreme = ad.last;
+                try s.dig.deliverA2d(j, @intFromFloat(@round(t / s.opts.tick)));
+                posted = true;
+            };
+            return posted;
+        }
+
+        /// Record only observed changes here. A numeric control changing while
+        /// expr is constant must not itself create an event (§5.10.3.4).
+        fn observeAbsdelta(s: *Self, j: usize) !void {
+            const m = &s.mons[j];
+            const ad = &m.kind.absdelta;
+            ad.observed_event = false;
+            const args = try s.absdeltaArgs(j, null);
+            if (!ad.enabled or !args.enabled) return;
+            const v = try s.monValue(j);
+            if (args.delta == 0) {
+                ad.observed_event = v != m.v0;
+                ad.direction = 0;
+                ad.extreme = v;
+                return;
+            }
+            // A smaller expr_tol can make an old, ignored excursion large
+            // enough. It still needs a NEW change of expr to cause an event.
+            if (v == m.v0) return;
+            const change = v - ad.extreme;
+            if (change == 0) return;
+            const dir = std.math.sign(change);
+            if (ad.direction == 0 or dir == ad.direction) {
+                ad.direction = dir;
+                ad.extreme = v;
+            } else if (@abs(change) >= args.expr_tol) {
+                ad.observed_event = true;
+                ad.direction = dir;
+                ad.extreme = v;
+            }
+        }
+
+        const AbsdeltaEvent = struct { monitor: usize, t: f64, value: f64, observed: bool = false };
+
+        fn nextAbsdelta(s: *Self, j: usize, base: f64, cursor: f64) !?AbsdeltaEvent {
+            const m = &s.mons[j];
+            const ad = &m.kind.absdelta;
+            if (!ad.enabled) return null;
+            const args = try s.absdeltaArgs(j, null);
+            if (!args.enabled) return null;
+            const end = s.acc.?;
+            const v1 = try s.monValue(j);
+            const observed: ?AbsdeltaEvent = if (ad.observed_event)
+                .{ .monitor = j, .t = end, .value = v1, .observed = true }
+            else
+                null;
+            if (args.delta == 0 or cursor >= end or v1 == m.v0 or @abs(v1 - ad.last) <= args.delta)
+                return observed;
+            const level = ad.last + std.math.sign(v1 - ad.last) * args.delta;
+            const frac = std.math.clamp((level - m.v0) / (v1 - m.v0), 0, 1);
+            // time_tol filters minimum event spacing. Pick the exact delta
+            // crossing when eligible, otherwise the first eligible time. No
+            // solver breakpoint is requested for either interpolated time.
+            const t = @max(@max(base + frac * (end - base), ad.last_time + args.time_tol), cursor);
+            if (t > end) return observed;
+            const value = m.v0 + (v1 - m.v0) * ((t - base) / (end - base));
+            return .{ .monitor = j, .t = t, .value = value, .observed = t == end and ad.observed_event };
+        }
+
+        /// Consume one candidate at a time, interleaved with existing digital
+        /// work. A monitor body can disable itself or change its controls;
+        /// pre-queuing the rest of the ramp would execute stale events.
+        fn drainAbsdelta(s: *Self, base: f64, horizon: Tick) !void {
+            var cursor = base;
+            while (true) {
+                var next: ?AbsdeltaEvent = null;
+                for (s.mons, 0..) |m, j| if (m.kind == .absdelta) {
+                    if (try s.nextAbsdelta(j, base, cursor)) |candidate| {
+                        if (next == null or candidate.t < next.?.t) next = candidate;
+                    }
+                };
+                const event_tick: ?Tick = if (next) |e| @intFromFloat(@round(e.t / s.opts.tick)) else null;
+                if (s.dig.scheduler.peekTime()) |queued| {
+                    if (queued <= horizon and (event_tick == null or queued < event_tick.?)) {
+                        try s.runDigital(queued);
+                        cursor = @max(cursor, @as(f64, @floatFromInt(queued)) * s.opts.tick);
+                        continue;
+                    }
+                }
+                const e = next orelse break;
+                const ad = &s.mons[e.monitor].kind.absdelta;
+                ad.last = e.value;
+                ad.last_time = e.t;
+                if (e.observed) ad.observed_event = false;
+                try s.dig.deliverA2d(e.monitor, event_tick.?);
+                if (event_tick.? <= horizon) try s.runDigital(event_tick.?);
+                cursor = @max(cursor, e.t);
+            }
+            _ = try s.refreshAbsdelta(s.acc.?);
+            try s.runDigital(horizon);
         }
 
         /// §5.10.3.1: "If enable argument is specified and it is zero, then
@@ -308,37 +463,23 @@ fn State(comptime A: type) type {
                     try s.dig.deliverA2d(j, tick);
                     while (m.kind.timer.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
                 },
-                .absdelta => |*ad| {
-                    // §5.10.3.4 / §8.4.6: absdelta does not force a timestep; each
-                    // change of "more than delta, relative to the previous
-                    // absdelta() event" is interpolated between the step's ends.
-                    // ponytail: a D2A it causes is re-solved at the step's end, not
-                    // rolled back to the event (§8.4.6 case a); expr_tol, time_tol,
-                    // enable and the direction-change trigger are not read.
-                    const v1 = try s.monValue(j);
-                    if (ad.delta == 0) {
-                        // "an event is generated every timestep the expression
-                        // value changes".
-                        if (v1 != m.v0) try s.dig.deliverA2d(j, tick);
-                        ad.last = v1;
-                    } else while (@abs(v1 - ad.last) > ad.delta) {
-                        const level = ad.last + std.math.sign(v1 - ad.last) * ad.delta;
-                        const f = if (v1 != m.v0) std.math.clamp((level - m.v0) / (v1 - m.v0), 0, 1) else 1;
-                        const te = base + f * (s.acc.? - base);
-                        try s.dig.deliverA2d(j, @intFromFloat(@round(te / s.opts.tick)));
-                        ad.last = level;
-                    }
-                },
+                .absdelta => try s.observeAbsdelta(j),
                 .crossing => |c| if (try s.active(c.enable, j) and crosses(c.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick),
             };
-            try s.runDigital(tickAtOrBefore(s.acc.?, s.opts.tick));
+            try s.drainAbsdelta(base, tickAtOrBefore(s.acc.?, s.opts.tick));
         }
 
         /// The digital ticks at or before `horizon`, re-solving at the current
         /// analog time for every D2A they cause.
+        // ponytail: a D2A caused by interpolated A2D still re-solves the
+        // endpoint; §8.4.6 needs rollback to the event and rejection of later
+        // interpolated events from the old solution.
         fn runDigital(s: *Self, horizon: Tick) !void {
             while (true) switch (try s.dig.runUntil(horizon)) {
-                .idle => break,
+                .idle => {
+                    if (try s.refreshAbsdelta(@as(f64, @floatFromInt(s.dig.scheduler.now)) * s.opts.tick)) continue;
+                    break;
+                },
                 .explicit_d2a => try s.explicitD2a(),
                 .analog => try s.accept(s.acc.?),
             };
@@ -348,7 +489,7 @@ fn State(comptime A: type) type {
             const s: *Self = @ptrCast(@alignCast(ctx));
             // §7.3.6.3 "the analog value calculated for the time corresponding
             // to a real promotion of the digital time".
-            const t: ?f64 = if (s.mon_eval or s.acc == null) null else @as(f64, @floatFromInt(s.dig.scheduler.now)) * s.opts.tick;
+            const t: ?f64 = if (s.mon_eval) s.mon_time else if (s.acc == null) null else @as(f64, @floatFromInt(s.dig.scheduler.now)) * s.opts.tick;
             return s.a.probe(t, n1, n2) catch |e| s.dig.fail(0, "the analog solution has no V({s}{s}{s}): {t}", .{ n1, if (n2 != null) ", " else "", n2 orelse "", e });
         }
     };
@@ -571,6 +712,71 @@ test "§5.10.3.1 a crossing the secant only creeps toward is still cut to within
         if (p.t > at and p.t <= at + 1e-15) return;
     }
     return error.TestExpectedCut;
+}
+
+test "§5.10.3.4 absdelta interpolates digital events without forcing analog points" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer n;
+        \\  initial n = 0;
+        \\  always @(absdelta(V(p), 0.25, 1p, 1u)) n = n + 1;
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } } }, &bag, &out.writer);
+    // The fake's 0.1 V/ns ramp has delta crossings at 2.5, 5 and 7.5 ns;
+    // at 10 ns the remaining change equals delta, rather than exceeding it.
+    // No watchAnalog: none of these A2D events causes a D2A. The only analog
+    // solves must therefore be the two times the host supplied.
+    var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .slope = 1e8 };
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9 }, .tick = 1e-12 });
+    try testing.expectEqual(@as(?i64, 4), dig.values[f.slot].asInt());
+    try testing.expectEqual(@as(usize, 2), f.solves.items.len);
+    try testing.expectEqual(@as(usize, 2), f.points.items.len);
+    try testing.expectEqual(@as(f64, 0), f.points.items[0].t);
+    try testing.expectEqual(@as(f64, 10e-9), f.points.items[1].t);
+}
+
+test "§5.10.3.4 invalid absdelta controls assigned at runtime report E0517" {
+    for ([_]struct { name: []const u8, value: []const u8 }{
+        .{ .name = "delta", .value = "-1.0" },
+        .{ .name = "ttol", .value = "-1p" },
+        .{ .name = "etol", .value = "-1.0" },
+        .{ .name = "en", .value = "0.5" },
+    }) |c| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var bag = diag.Bag.init(arena);
+        var out = std.Io.Writer.Allocating.init(arena);
+        const source = try std.fmt.allocPrint(arena,
+            \\discipline electrical potential Voltage; flow Current; enddiscipline
+            \\module m(p);
+            \\  inout p; electrical p;
+            \\  integer n;
+            \\  real delta, ttol, etol, en;
+            \\  initial begin
+            \\    n = 0; delta = 0.25; ttol = 1p; etol = 1u; en = 1.0;
+            \\    #2 {s} = {s};
+            \\  end
+            \\  always @(absdelta(V(p), delta, ttol, etol, en)) n = n + 1;
+            \\endmodule
+        , .{ c.name, c.value });
+        var dig = try digital.elaborate(arena, source, .{
+            .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } },
+        }, &bag, &out.writer);
+        try testing.expect(!bag.failed());
+        var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .slope = 1e8 };
+        try testing.expectError(error.DigitalFailed, run(Fake, &f, &dig, .{ .times = &.{ 0, 4e-9 }, .tick = 1e-12 }));
+        try testing.expectEqual(@as(usize, 1), bag.count());
+        try testing.expectEqual(diag.Code.E0517, bag.at(0).code);
+        try testing.expectEqual(@as(?i64, 1), dig.values[f.slot].asInt());
+    }
 }
 
 test "§7.8.4 an inserted bridge's digital half runs, and the analog reads it by its §6.7 path" {
