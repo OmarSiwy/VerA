@@ -65,6 +65,28 @@ pub const Harness = struct {
     }
 };
 
+test "§6.3.4 monitored-event parameters retain their dependencies, not unrelated reals" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter real base = 0.1, unused = 7.0;
+        \\  parameter delta = 2.0 * base;
+        \\  localparam real tol = base / 100.0;
+        \\  integer n;
+        \\  initial n = 0;
+        \\  always @(absdelta(V(p), delta, 1p, tol)) n = n + 1;
+        \\  analog I(p) <+ 0.0;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 3), h.low.out.discrete_params.count());
+    for ([_][]const u8{ "delta", "base", "tol" }) |name|
+        try std.testing.expect(h.low.out.discrete_params.contains(name));
+    try std.testing.expect(!h.low.out.discrete_params.contains("unused"));
+}
+
 test "lower: system math aliases preserve operand-sensitive result types" {
     const cases = [_]struct { expr: []const u8, op: Mir.Opcode, div: Mir.Opcode }{
         .{ .expr = "abs(a)", .op = .iabs, .div = .idiv },

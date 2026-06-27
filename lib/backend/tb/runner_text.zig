@@ -1013,7 +1013,10 @@ pub const mixed_body =
     \\    var bag = diag.Bag.init(arena);
     \\    bag.setSingleFile(title, mixed_source) catch {};
     \\    var dout = std.Io.Writer.Allocating.init(arena);
-    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
+    \\    var real_params: [mixed_real_ports.len]sim.digital.Param = undefined;
+    \\    inline for (mixed_real_ports, &real_params) |p, *value|
+    \\        value.* = .{ .name = p.name, .value = @field(model, p.field) };
+    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params, .real_params = &real_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
     \\    // VAMS §9.5.1.2 one descriptor table for both contexts: the device's,
     \\    // when it has one, so a descriptor either opens names one file.
     \\    if (comptime contract.fileIo(D)) |f| dig.file_io = f;

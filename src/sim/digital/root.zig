@@ -112,7 +112,7 @@ pub const Unit = struct { name: []const u8, text: []const u8, lib: []const u8 };
 /// The digital half of a design an analog compile already accepted (VAMS
 /// §7.2.2's discrete context of an analog module). Elaboration then skips
 /// what belongs to the continuous side instead of refusing it: `analog`
-/// blocks, disciplined (continuous) nets and ports, parameters, analog
+/// blocks, disciplined (continuous) nets and ports, analog-only parameters, analog
 /// functions, and every variable the digital engine cannot hold. A digital
 /// process that names one of those still fails, as an undeclared name.
 pub const Mixed = struct {
@@ -131,9 +131,14 @@ pub const Mixed = struct {
     /// VAMS §6.3 the root's parameters as the host's card set them (the
     /// values the device's `Model` holds), so both halves read one value.
     params: []const Param = &.{},
+    /// §6.3.4 effective real parameters the discrete source reads, copied
+    /// from the derived Model at the start of this analysis. Their defaults
+    /// may use analog constant functions outside this executor's subset.
+    /// Names use the flattened instance path, like `u.delta`.
+    real_params: []const Param = &.{},
 };
 
-/// One root parameter value from the host's card (`Mixed.params`).
+/// One numeric parameter value from the host (`Mixed.params` / `real_params`).
 pub const Param = struct { name: []const u8, value: f64 };
 
 /// One port VAMS §7.8.4 re-pointed at an inserted connect module, as the
@@ -508,6 +513,8 @@ pub const Run = struct {
     bound_defparams: std.ArrayList(struct { decl: u32, path: []const u8, at: u32, rest: []const u8, tok: u32 }) = .empty,
     /// `Mixed.params`: the root's parameter values on the host's card.
     card: []const Param = &.{},
+    /// `Mixed.real_params`: only the real parameters the discrete side needs.
+    real_card: []const Param = &.{},
     /// §12.2 parameter slots: constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -1230,9 +1237,9 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
     // IEEE 1364-2005 §12.2 module parameters, in declaration order so a
-    // default may name an earlier one. A mixed module's real, string and array
-    // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
-    // no parameter of those kinds, and a digital read of one is undeclared.
+    // default may name an earlier one. The mixed host supplies selected real
+    // parameters from its derived Model. Other real, string and array
+    // parameters stay on the analog side.
     for (m.defparams) |d| try bindDefparam(r, scope, d, m.instances);
     // §10: the instance's tasks and functions, named before its parameters
     // so a §10.4.5 constant function call in one can find its function.
@@ -1413,15 +1420,22 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
 fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []const Ast.ParamOverride) Error!void {
     const arena = r.arena;
     const g = r.growing.?;
+    const path = if (r.real_card.len != 0) try scopePath(r, scope) else "";
     var positional: usize = 0;
     for (params) |p| {
         const pos = positional;
         if (!p.is_local) positional += 1;
-        if (p.dims.len != 0 or p.ty == .string or (r.mixed and p.ty == .real)) {
+        const real_value = for (r.real_card) |c| {
+            if (std.mem.startsWith(u8, c.name, path) and std.mem.eql(u8, c.name[path.len..], r.file.str(p.name))) break c.value;
+        } else null;
+        if (p.dims.len != 0 or p.ty == .string or (r.mixed and p.ty == .real and real_value == null)) {
             if (r.mixed) continue;
             return r.fail(p.main_tok, "only scalar integral and real parameters are implemented by digital execution", .{});
         }
-        const pv = (try paramValue(r, p, scope, over, pos)) orelse continue;
+        // The host has applied §6.3 overrides and dependent defaults already;
+        // re-evaluating one here could reject a legal analog constant function
+        // or silently restore a default instead of this analysis's card.
+        const pv: ParamValue = if (real_value) |v| .{ .v = try exec.realLiteral(arena, v), .real = true } else (try paramValue(r, p, scope, over, pos)) orelse continue;
         // §12.2: a range or a type (`signed` is one) converts the value like
         // an assignment; otherwise the parameter takes the type of its value.
         const ty: compile.Type = if (p.packed_range) |range|
@@ -2031,7 +2045,7 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
 /// the scope that wrote it. null: in a mixed design, a value this engine does
 /// not fold (a real, or one naming the analog block's), so the parameter is
 /// the analog block's alone. `real`: `v` holds a real's 64 bits.
-fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?struct { v: Int.Literal, real: bool = false } {
+fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?ParamValue {
     const Src = struct { e: Ast.ExprId, scope: u32 };
     const src: Src = blk: {
         // A defparam's path is relative to the scope `bindDefparam` bound
@@ -2089,6 +2103,8 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
     if (compile.typeOf(r, src.e).real) return .{ .v = try exec.realLiteral(r.arena, try exec.evalReal(r, r.arena, src.e)), .real = true };
     return .{ .v = value };
 }
+
+const ParamValue = struct { v: Int.Literal, real: bool = false };
 
 /// The first name in `e` that does not resolve in the current scope.
 fn unresolved(r: *Run, e: Ast.ExprId) ?Ast.ExprId {
@@ -2936,7 +2952,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null };
     try binding.libraries(&r, file, opts, pp.more_starts);
     // IEEE 1364-2005 §8.1's rules hold for every UDP declaration, whether or
     // not an instance uses it.
@@ -3606,7 +3622,7 @@ test "§12.2 a parameter takes a defparam over a named or positional override ov
     , "top.u1 1 10 11\ntop.u2 7 2 9\ntop.u3 6 2 8\n");
 }
 
-test "VAMS §6.3 a mixed root reads the card's value and an instance its override; a real stays analog" {
+test "VAMS §6.3 a mixed root reads the card's value and an instance its override; an unused real stays analog" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var bag = diag.Bag.init(arena.allocator());
@@ -3625,6 +3641,40 @@ test "VAMS §6.3 a mixed root reads the card's value and an instance its overrid
     try std.testing.expectEqual(@as(?i64, 4), r.values[r.slotOf("seen").?].asInt());
     try std.testing.expectEqual(@as(?i64, 3), r.values[r.slotOf("u.got").?].asInt());
     try std.testing.expectEqual(@as(?u32, null), r.slotOf("g"));
+}
+
+test "VAMS §6.3.4 selected real parameters arrive from the derived host model" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(p); inout p; electrical p;
+        \\  parameter real base = 2.0, unused = 7.0;
+        \\  parameter real selected = ln(base);
+        \\  parameter inferred = 2.0 * base;
+        \\  localparam real local = 2.0 * selected;
+        \\  initial #1 $display("%g %g %g", selected, inferred, local);
+        \\  analog I(p) <+ 0.0;
+        \\endmodule
+    , .{ .mixed = .{
+        .top = "m",
+        .timescale = .{ .unit = 1e-9, .precision = 1e-9 },
+        .real_params = &.{
+            .{ .name = "selected", .value = 0.25 },
+            .{ .name = "inferred", .value = 4.0 },
+            .{ .name = "local", .value = 0.5 },
+        },
+    } }, &bag, &output.writer);
+    // The host overrode selected and derived local. ln() is intentionally
+    // outside digital constant evaluation: the supplied value is authoritative.
+    _ = try r.runUntil(1);
+    try std.testing.expectEqualStrings("0.25 4 0.5\n", output.written());
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("base"));
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("unused"));
+    for ([_][]const u8{ "selected", "inferred", "local" }) |name|
+        try std.testing.expect(r.reals.contains(r.slotOf(name).?));
 }
 
 // §12.4.2: only the selected arm's instance exists, and §12.1.1 keeps the

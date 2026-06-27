@@ -250,6 +250,17 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
             if (e == .none) return;
             const fx = &w.l.file.exprs;
+            if (fx.tag(e) == .ident) for (w.module.params) |p| {
+                if (p.name != fx.strOf(e)) continue;
+                const name = w.l.file.str(p.name);
+                if (!w.l.out.discrete_params.contains(name)) {
+                    try w.l.out.discrete_params.put(w.l.arena, name, fx.mainTok(e));
+                    // §6.3.4 a later parameter can depend on this one, even
+                    // when its name never appears directly in a process.
+                    try w.expr(p.default, .read);
+                }
+                break;
+            };
             if (fx.tag(e) == .ident) for (w.module.vars) |v| {
                 const name = w.l.file.str(v.name);
                 if (v.name != fx.strOf(e) or w.digital.contains(name)) continue;
