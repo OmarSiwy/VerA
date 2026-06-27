@@ -792,6 +792,27 @@ test "lower: §5.10.4 a named event resolves; anything else at `@`/`->` is E0705
     try std.testing.expectEqualStrings("`tock`", h2.msg(0));
 }
 
+test "lower: §5.10.3.4 absdelta bounds do not freeze card defaults" {
+    // A host can replace every default below with valid values. Unlike a
+    // literal negative bound, these analog_expression operands cannot be
+    // refused from their declarations alone. This is the compile-time half;
+    // event_bounds_mixed_legal.va runs legal runtime operands through the
+    // emitted mixed-signal host.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ad(p);
+        \\  inout p; electrical p;
+        \\  parameter real delta = -1.0, ttol = -1.0, etol = -1.0, en = 0.5;
+        \\  real sampled;
+        \\  always @(absdelta(V(p), delta, ttol, etol, en)) sampled = V(p);
+        \\  analog I(p) <+ 0.0;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expect(!h.bag.failed());
+}
+
 test "lower: an unknown name carries a `did you mean` help" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,

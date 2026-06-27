@@ -3950,11 +3950,10 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0517 => .{
-            .title = "cross()/above()/timer() argument is the wrong type or out of range",
-            .lrm = "5.10.3.1",
+            .title = "monitored event argument is the wrong type or out of range",
+            .lrm = "5.10.3",
             .explain =
-            \\LRM 5.10.3.1 types cross()'s optional arguments in three
-            \\sentences:
+            \\LRM 5.10.3.1 constrains cross()'s optional arguments:
             \\
             \\  "The dir and enable arguments, if specified, shall evaluate to
             \\   integers." 0 or absent is both edges, +1 rising, -1 falling.
@@ -3965,9 +3964,15 @@ fn infoOf(c: Code) Info {
             \\   shall also be defined." A tolerance selects how precisely a
             \\   crossing is resolved, and which crossings count is the
             \\   direction's job — a tolerance without one narrows nothing.
+            \\  "If expr_tol is specified, time_tol shall also be specified."
+            \\   Supplying only expr_tol leaves the required time bound absent.
             \\
             \\LRM 5.10.3.2 gives above() the same tolerances and no direction,
             \\and 5.10.3.3 gives timer() the same time_tol sentence verbatim.
+            \\LRM 5.10.3.4 requires absdelta()'s delta and both tolerances to
+            \\be non-negative, and its enable to evaluate to an integer.
+            \\Its numeric checks leave model-card and runtime values to
+            \\evaluation; a real-valued 1.0 is integral, but 0.5 is not.
             \\
             \\Eliding a slot is not itself an error: Syntax 5-16 types them
             \\analog_expression_or_null and 5.10.3.1's own `sh` example writes
