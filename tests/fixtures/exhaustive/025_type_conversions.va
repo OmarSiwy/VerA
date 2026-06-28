@@ -1,6 +1,6 @@
 // §4.2.1 implicit conversions. Real→integer ROUNDS (§4.2.1.1), ties away from
-// zero; integer→real is exact. A backend that truncated instead would pass a
-// test written only on positive halves, so both signs are here.
+// zero; integer→real is exact. Both signs distinguish rounding from truncation
+// and pin the direction of a half-integer tie.
 //
 //! print none
 `include "check.vh"
@@ -24,16 +24,10 @@ module ex025_type_conversions(p, n);
     `CHECKX("mixed arithmetic promotes", 1 + 0.5, 1.5);
     `CHECKX("integer division stays integer", 7 / 2 + 0.0, 3.0);
     `CHECKX("one real operand makes it real division", 7 / 2.0, 3.5);
-    // A contrast with the §9.11 explicit conversions belongs here — $rtoi
-    // TRUNCATES where the implicit conversion above rounds — but VerA
-    // implements neither $rtoi nor $itor, so there is nothing to contrast yet.
-    // Neither is illegal: §9.11 extends "$bitstoreal and $realtobits, $rtoi and
-    // $itor" into the analog context and Table 9-8 reads `$rtoi Yes Yes`,
-    // `$itor Yes Yes`. (This comment used to say the opposite and to point at
-    // ch09_system_tasks/061/062, which asserted the same false rule on
-    // 2.4-contaminated text; those fixtures have been deleted. The gap is in
-    // the compiler and is pinned by the M04 row
-    // (tests/fixtures/ch07_mixed_signal/m04_SPEC.md at 8b1514d4).)
+    // §9.11's explicit $rtoi truncates, while $itor converts to real. Both
+    // are implemented and tested in ch09_system_tasks/15_conversion_functions.va
+    // and audit_conversion_truncation_signed.va. This file covers implicit
+    // conversions and mixed arithmetic.
     I(p, n) <+ 0.0;
   end
 endmodule

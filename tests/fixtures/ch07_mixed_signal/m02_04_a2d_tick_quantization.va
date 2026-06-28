@@ -74,8 +74,8 @@ module m02_a2d_tick_quantization(vi, vo);
   inout vi, vo; electrical vi, vo;
   integer tick_lo, tick_hi;
   real    ana_lo;
-  // §3.2: "Integer variables whose values are assigned in a digital context
-  // default to the unknown value x" — only ANALOG-context assignment defaults to
+  // §3.2 gives integer variables assigned in digital code an initial x;
+  // only ANALOG-context assignment defaults to
   // zero. Both of these are written from an `always`, so without this block they
   // are x until the first crossing and the pre-crossing arm of each CHECKI below
   // would compare x against 0. `ana_lo` is analog-context and needs no such

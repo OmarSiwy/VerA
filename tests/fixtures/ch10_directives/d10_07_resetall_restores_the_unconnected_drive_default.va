@@ -1,49 +1,18 @@
-// §10.1 Table 10-1 lists `resetall alongside `unconnected_drive and defers both
-// to IEEE Std 1364, where `resetall returns every directive to its default
-// value. ch10_directives pins that for two of the four directives that carry
-// state — 36 for §10.2's default discipline and 56 for §19.2's default nettype
-// — and for neither of the two IEEE 1364 region directives. This is the third:
-// `resetall is the OTHER way out of an `unconnected_drive region, the one that
-// does not name the directive it undoes.
+// AMS §10.1 imports IEEE 1364 compiler directives. IEEE §19.6 resets
+// directive state, and §19.9 explicitly includes the effect of
+// `nounconnected_drive. IEEE §19.3 says the text macro facility is not
+// affected: user macros survive `resetall. The separate
+// audit_macro_resetall_preserves_user.va checks that behavior.
 //
-// WHY THE FILE HAS TWO CHILDREN AND NOT ONE. The previous version of this
-// fixture was ch10_directives/58 with `nounconnected_drive swapped for
-// `resetall, asserting V(u.a) = 0.5 and I = 0 — which is exactly what a tool
-// that has never heard of `unconnected_drive prints, so it could not fail for
-// its own subject's reason. "The region is closed" is only ever observable as
-// an ABSENCE, so the file has to contain the presence as well: a first child
-// that IS pulled, in the same compilation, whose 1.0 and +5e-4 no such tool can
-// produce. Then the second child's 0.5 means "the region closed" rather than
-// "the directive was never implemented".
+// A first child and its wrapper appear inside an `unconnected_drive pull1
+// region; the second pair appear after `resetall. Keeping each definition
+// beside its instantiation makes this fixture test the reset boundary.
+// The driven first child distinguishes support for the directive from a
+// compiler that ignores both directives and leaves both children floating.
 //
-// EACH CHILD IS PAIRED WITH ITS OWN INSTANTIATION inside a wrapper module, and
-// each wrapper lies wholly on one side of the `resetall. That is deliberate:
-// whether §19.10 attaches at the module definition or at the instantiation that
-// leaves the terminal blank is not settled by anything in docs/ (IEEE Std 1364
-// §19.10 itself is not offline here; §6.2.2, the nearest on-disk sentence,
-// points at the connection). tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 records that question as withdrawn. With
-// definition and instantiation on the same side, both readings give the same
-// two numbers and this file tests only `resetall.
-//
-// TWO CONSEQUENCES OF USING `resetall, both deliberate and both visible below:
-//
-//   - it removes every user text macro, so `check.vh` is included AFTER the
-//     reset. NOT a citation: a user text macro is §10.4's `define, but §10.4
-//     says nothing about `resetall and neither does any other clause in docs/ —
-//     §10.1 Table 10-1 marks `resetall "[IEEE Std 1364 Verilog]" and that text
-//     is not offline here. So this one is MEASURED, not cited: move the
-//     `include above the `resetall and the file dies at
-//     "error[E0115]: undefined macro: `CHECKX" on the first `CHECKX below
-//     (run against zig-out/bin/vera at HEAD; counterfactual in tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4).
-//     Included
-//     before the reset, `CHECKX would not exist by the time the
-//     top module needs it, and the fixture would fail for a reason that has
-//     nothing to do with §19.10. The first child and its wrapper are above the
-//     reset and use no macro, so nothing is lost. ch10_directives/56 makes the
-//     same arrangement for the same reason and its header says so;
-//   - it withdraws any default discipline (§10.2's "In addition to `resetall"),
-//     so every module declares `electrical` explicitly rather than relying on a
-//     default. Nothing here is testing §10.2.
+// `resetall also withdraws default disciplines (AMS §10.2), so every
+// module here declares its electrical discipline explicitly. The position
+// of the later check.vh include does not test or depend on macro erasure.
 //
 // THE ORACLE, derived here and not copied.
 //

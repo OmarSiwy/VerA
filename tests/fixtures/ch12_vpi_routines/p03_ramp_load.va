@@ -33,19 +33,10 @@
 // arithmetic the clause fixes — a source that ramped at 1024 V/s, or a load
 // whose override never arrived, is orders of magnitude out.
 //
-// VerA DOES NOT SOLVE THIS DECK TODAY, and the `//! xfail` records why. When a
-// module instance contributes a POTENTIAL to a node pair and another instance
-// contributes a FLOW to the same pair, VerA keeps only the last one elaborated
-// and silently drops the other: `src`'s branch equation V(out,gnd) − 1000·t = 0
-// never reaches the residual — the flow unknown is declared and never written —
-// so the deck solves to x = 0 at every instant and both checks read 0.
-// Reversing the two instantiations reverses which one survives, which is what
-// makes it a merge and not a missing feature. §5.4.2.2 is the sentence it
-// contradicts: "A branch, either named or unnamed, is a source branch if either
-// the potential or the flow of that branch is assigned a value by a
-// contribution statement ... anywhere in the MODULE." A branch belongs to a
-// module instance, so `src` and `load` own two different branches between out
-// and gnd and neither can turn the other into a switch branch.
+// The potential source and resistive flow contribution belong to different
+// instances. Both equations must survive elaboration even though their
+// terminals share a node pair (§5.4.2.2). The solved assertions below catch
+// dropping either contribution; this is a passing regression.
 //
 //! lrm 3.6
 //! lrm 5.4.2.2
