@@ -2084,27 +2084,27 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0307 => .{
-            .title = "multi-dimensional arrays are not supported",
-            .lrm = "3.2.2",
+            .title = "array has no declared dimensions",
+            .lrm = "3.2",
             .explain =
-            \\VerA scalarizes one-dimensional arrays at compile time. A
-            \\second dimension would need an index-flattening pass that the
-            \\engine does not run.
+            \\An array needs at least one declared range. VerA supports
+            \\multiple dimensions; this diagnostic reports missing dimensions
+            \\where array storage was required.
             ,
         },
         .E0308 => .{
             .title = "array bound is not a constant expression",
-            .lrm = "3.2.2",
+            .lrm = "3.2",
             .explain =
-            \\LRM 3.2.2: both array indices "shall be constant expressions".
-            \\Arrays are scalarized at compile time, so the bounds must be
-            \\known then — they may depend on parameters, since parameters are
-            \\resolved before elaboration, but not on variables or probes.
+            \\LRM 3.2 requires both bounds of an array declaration to be
+            \\constant expressions. They may depend on parameters, but not
+            \\on variables or probes. This rule concerns the declared range,
+            \\not an index used to read or write an element at runtime.
             ,
         },
         .E0309 => .{
             .title = "identifier is not an array",
-            .lrm = "3.2.2",
+            .lrm = "3.2",
             .explain =
             \\This name was indexed with `[...]` but was declared as a scalar.
             \\Check for a shadowing declaration in an inner block.
@@ -2112,21 +2112,22 @@ fn infoOf(c: Code) Info {
         },
         .E0310 => .{
             .title = "array index is out of bounds",
-            .lrm = "3.2.2",
+            .lrm = "3.2",
             .explain =
-            \\The index lies outside the declared range. Because arrays are
-            \\scalarized at compile time, every index is known at compile time
-            \\too — so an out-of-range access is a compile error, never a
-            \\runtime one.
+            \\This constant index lies outside the declared range. VerA
+            \\diagnoses an out-of-range index when it can resolve that index
+            \\at compile time. Array accesses may also use runtime indices;
+            \\this diagnostic does not require every index to be constant.
             ,
         },
         .E0311 => .{
             .title = "array index is not a constant expression",
-            .lrm = "3.2.2",
+            .lrm = "3.2",
             .explain =
-            \\Arrays are scalarized, so each access must resolve to one element
-            \\at compile time. An index that depends on a variable or a probe
-            \\cannot.
+            \\This use of an array element as a target requires a constant
+            \\index in VerA. Other array reads and assignments support runtime
+            \\indices. This restriction is separate from LRM 3.2's requirement
+            \\that the bounds in an array declaration be constant.
             \\
             \\A genvar index works: genvar loops are unrolled (LRM 6.6.1), so
             \\the index is constant in each unrolled copy.
@@ -2307,10 +2308,12 @@ fn infoOf(c: Code) Info {
         },
         .E0330 => .{
             .title = "unsupported index expression",
-            .lrm = "3.2.2",
+            .lrm = "3.2",
             .explain =
-            \\Indexing is supported on scalarized arrays with a constant index.
-            \\See E0309, E0310 and E0311 for the specific cases.
+            \\The base of an array index must resolve to a declared array
+            \\name, with one subscript per dimension. Runtime indices are
+            \\supported for variable arrays. See E0309, E0310 and E0311 for
+            \\the specific name, bounds and target restrictions.
             ,
         },
         .E0331 => .{
@@ -4792,10 +4795,9 @@ fn infoOf(c: Code) Info {
             \\Every Chapter 9 table has a "supported in analog context" column,
             \\and this name's cell says No. The prose subclauses are worded as
             \\PERMISSIONS — §9.5 "extends many of the file operation tasks so
-            \\that they can be used in the analog context", §9.11 "extends the
-            \\conversion functions ... so that $bitstoreal and $realtobits can
-            \\be used in the analog context" — so the tables under §9.2 are
-            \\where the prohibition actually lives.
+            \\that they can be used in the analog context", and §9.11 permits
+            \\$bitstoreal, $realtobits, $rtoi and $itor there. The tables under
+            \\§9.2 specify which other names remain digital-only.
             \\
             \\The families, and why each stops at the digital context:
             \\
