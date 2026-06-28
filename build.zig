@@ -380,6 +380,8 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_controls.va" },
     .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },

@@ -283,6 +283,18 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // the clause-4 operators.
     for (from.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .timer) continue;
+        if (self.lowered.timer_controls.get(from.names.opInstOf(@intCast(i)).?)) |latest| {
+            for (latest) |arg| {
+                const v = self.an.rv(arg);
+                if (v == .f_zero or self.an.foldConst(v, false) != null) continue;
+                try jobs.append(self.arena, .{
+                    .kind = .timer_period,
+                    .target = v,
+                    .mode = .strict,
+                    .comment = "§5.10.3.3 end-of-evaluation timer control",
+                });
+            }
+        }
         const args = from.names.opArgs(self.mir, i);
         if (args.len < 2) continue;
         if (self.an.foldConst(args[1], false) != null) continue; // renders inline

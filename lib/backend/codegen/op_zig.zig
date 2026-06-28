@@ -166,10 +166,8 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .slots = &.{
             .{ .suffix = "next", .default = "0.0", .note = "§5.10.3" },
             .{ .suffix = "start", .default = "std.math.nan(f64)" },
-            // Count fires from a base instead of adding the period repeatedly:
-            // the live schedule must agree with the static breakpoint hook.
-            // A period changed at a firing rebases there.
-            .{ .suffix = "base", .default = "std.math.nan(f64)" },
+            // A changed period replaces the absolute grid, just as a changed
+            // start does. NaN makes the first evaluation schedule both.
             .{ .suffix = "per", .default = "std.math.nan(f64)" },
         },
     },

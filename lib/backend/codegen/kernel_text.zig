@@ -541,51 +541,11 @@ pub const ops_txt =
     \\
 ;
 
-/// The §5.10.5 `nextBreakpoint` kernel. Emitted only when `usesOp(.timer)`.
-pub const timer_txt =
-    \\// ---- §5.10.5 timer breakpoints ----
-    \\
-    \\/// One +inf for every `.timer` arm of `updateState`: `std.math.inf` is
-    \\/// comptime work per call site, and dozens of timers (a PWL source)
-    \\/// exhaust the 1000-branch comptime quota.
-    \\const z_inf: f64 = std.math.inf(f64);
-    \\
-    \\/// The next time a `timer(start, period)` fires, STRICTLY after `t`.
-    \\/// The only source in Verilog-A that means "put a timepoint here" — see
-    \\/// `emitNextBreakpoint`. Must agree exactly with the `.timer` arm of
-    \\/// `updateState`, which is the code that actually raises `__hit`.
-    \\fn zNextTimer(start: f64, period: f64, t: f64) ?f64 {
-    \\    // `updateState` clamps `__next` UP from its 0.0 initialiser, so a start
-    \\    // before the origin fires at the origin — already a timepoint.
-    \\    const s = @max(start, 0.0);
-    \\    if (!std.math.isFinite(s) or !std.math.isFinite(t)) return null;
-    \\    if (s > t) return s;
-    \\    if (!(period > 0.0)) return null; // one-shot, and its single fire is behind us
-    \\    if (!std.math.isFinite(period)) return null;
-    \\    // Fire k is s + k*period. Take the first k past `t`, then repair the
-    \\    // two one-ulp outcomes of the division: landing high SKIPS a fire,
-    \\    // landing low returns `t` itself and the transient walk stops advancing.
-    \\    var n = @floor((t - s) / period) + 1.0;
-    \\    if (n > 1.0 and s + (n - 1.0) * period > t) n -= 1.0;
-    \\    if (s + n * period <= t) n += 1.0;
-    \\    const next = s + n * period;
-    \\    // Strictly `> t`, never `>=`: a host that re-asks from the breakpoint it
-    \\    // was just handed (analysis/src/tran/matex.zig walks exactly that way)
-    \\    // spins forever on an equal answer. A tiny period may disappear in
-    \\    // the addition, or overflow the COUNT, without exhausting finite time.
-    \\    // Then consecutive f64 times already span an event: the first f64
-    \\    // after t is at/just beyond it (§5.10.3.3). Do not apply this repair
-    \\    // when a finite count gives an infinite EVENT (a genuinely spent
-    \\    // finite-time schedule with a large period).
-    \\    if (std.math.isFinite(next) and next > t) return next;
-    \\    if (next <= t or !std.math.isFinite(n)) {
-    \\        const future = std.math.nextAfter(f64, t, z_inf);
-    \\        if (std.math.isFinite(future)) return future;
-    \\    }
-    \\    return null;
-    \\}
-    \\
-;
+/// §5.10.3.3 timer scheduling, shared with the mixed coordinator.
+pub const timer_txt = "// ---- §5.10.3.3 timer schedule ----\n\n" ++
+    timer_src[std.mem.indexOf(u8, timer_src, "\n\n").? + 2 ..];
+// A file-level //! header cannot be spliced into the middle of device.zig.
+const timer_src = @embedFile("../timer_kernels.zig");
 
 /// §9.5.3/§9.5.4.2 the string formatter's scratch and the scanner, embedded
 /// verbatim from `str_kernels.zig` so codegen's tests exercise the device's

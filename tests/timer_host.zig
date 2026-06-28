@@ -15,6 +15,10 @@ const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".fields.len;
 const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
 const fixed = @hasDecl(D, "nextBreakpoint");
+const controlled = @hasField(D.U, "period_ctl");
+const body_controlled = @hasField(D.U, "body");
+
+const Controls = struct { value: f64 = 0, start: f64 = 0, period: f64 = 1, enable: f64 = 1 };
 
 const Run = struct {
     model: D.Model,
@@ -31,8 +35,17 @@ const Run = struct {
     }
 
     fn attempt(r: *Run, t: f64, control: f64) f64 {
+        return r.attemptWith(t, .{ .value = control });
+    }
+
+    fn attemptWith(r: *Run, t: f64, control: Controls) f64 {
         var x: [n_u]f64 = @splat(0.0);
-        if (comptime @hasField(D.U, "ctl")) x[@intFromEnum(D.U.ctl)] = control;
+        if (comptime @hasField(D.U, "ctl")) x[@intFromEnum(D.U.ctl)] = control.value;
+        if (comptime controlled) {
+            x[@intFromEnum(D.U.start_ctl)] = control.start;
+            x[@intFromEnum(D.U.period_ctl)] = control.period;
+            x[@intFromEnum(D.U.enable_ctl)] = control.enable;
+        }
         const sim: contract.SimState = .{
             .t = t,
             .dt = t - r.time,
@@ -41,12 +54,17 @@ const Run = struct {
             .analog_initial = !r.initialized,
         };
         const residual = D.eval(S, &x, &r.model, &r.inst, sim);
+        if (comptime body_controlled) std.debug.assert(residual[@intFromEnum(D.U.body)].v == residual[@intFromEnum(D.U.out)].v);
         _ = D.updateState(S, &r.model, &r.inst, x, &r.state, sim);
         return residual[@intFromEnum(D.U.out)].v;
     }
 
     fn accept(r: *Run, t: f64, control: f64) f64 {
-        const count = r.attempt(t, control);
+        return r.acceptWith(t, .{ .value = control });
+    }
+
+    fn acceptWith(r: *Run, t: f64, control: Controls) f64 {
+        const count = r.attemptWith(t, control);
         _ = D.stateCtl(&r.model, &r.inst, &r.state, .commit);
         r.time = t;
         r.initialized = true;
@@ -89,6 +107,19 @@ test "§5.10.3.3 small periods retain a representable future breakpoint" {
     }
 }
 
+test "§5.10.3.3 a periodic origin before zero keeps its absolute phase" {
+    if (comptime !fixed) return error.SkipZigTest;
+    var r = Run.init(.{ .start = -1, .period = 2 });
+    // Only the -1 second event is past: subsequent multiples are 1 and 3,
+    // rather than the 0,2,4 grid produced by clamping the origin to zero.
+    try std.testing.expectEqual(0.0, r.accept(0, 0));
+    for ([_]f64{ 1, 3 }, 0..) |want, k| {
+        try std.testing.expectEqual(want, D.nextBreakpoint(&r.model, r.time).?);
+        try std.testing.expectEqual(want, D.pendingBreakpoint(&r.inst, r.time).?);
+        try std.testing.expectEqual(@as(f64, @floatFromInt(k + 1)), r.accept(want, 0));
+    }
+}
+
 test "§5.10.3.3 an exhausted finite-time schedule has no future breakpoint" {
     if (comptime !fixed) return error.SkipZigTest;
     const max = std.math.floatMax(f64);
@@ -103,8 +134,8 @@ test "§5.10.3.3 an exhausted finite-time schedule has no future breakpoint" {
     try std.testing.expectEqual(@as(?f64, null), D.nextBreakpoint(&tiny, max));
 }
 
-test "§5.10.3.3 changed period rebases at the scheduled fire" {
-    if (comptime fixed) return error.SkipZigTest;
+test "§5.10.3.3 changed period at a common grid point" {
+    if (comptime fixed or controlled or body_controlled) return error.SkipZigTest;
     var r = Run.init(.{});
     const p = r.model.period;
     try std.testing.expectEqual(1.0, r.accept(0, 0));
@@ -118,7 +149,7 @@ test "§5.10.3.3 changed period rebases at the scheduled fire" {
 }
 
 test "§5.10.3.3 a rejected period change restores the schedule" {
-    if (comptime fixed) return error.SkipZigTest;
+    if (comptime fixed or controlled or body_controlled) return error.SkipZigTest;
     var r = Run.init(.{});
     const p = r.model.period;
     _ = r.accept(0, 0);
@@ -131,5 +162,64 @@ test "§5.10.3.3 a rejected period change restores the schedule" {
     try std.testing.expectEqualDeep(accepted_inst, r.inst);
     try std.testing.expectEqualDeep(accepted_state, r.state);
     try std.testing.expectEqual(3.0, r.accept(2 * p, 0));
+    try std.testing.expectEqual(3 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+}
+
+test "§5.10.3.3 between-fire changes replace the absolute grid before delivery" {
+    if (comptime !controlled) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(1.0, r.acceptWith(0, .{}));
+    try std.testing.expectEqual(2.0, r.acceptWith(p, .{}));
+    // At 4 ns the latest period becomes 3 ns BEFORE the event test. Four is
+    // not on 0 + k*3, so the obsolete event is canceled; the next is 6 ns.
+    try std.testing.expectEqual(2.0, r.acceptWith(2 * p, .{ .period = 1.5 }));
+    try std.testing.expectEqual(3 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+    try std.testing.expectEqual(3.0, r.acceptWith(3 * p, .{ .period = 1.5 }));
+    // At 7 ns extend to a 5 ns period: latest grid 0,5,10,..., next 10.
+    try std.testing.expectEqual(3.0, r.acceptWith(3.5 * p, .{ .period = 2.5 }));
+    try std.testing.expectEqual(5 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+    // At 8 ns shorten to 2 ns: now IS on the new grid, so it fires now.
+    try std.testing.expectEqual(4.0, r.acceptWith(4 * p, .{}));
+    try std.testing.expectEqual(5 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+}
+
+test "§5.10.3.3 disable and re-enable preserve the running absolute grid" {
+    if (comptime !controlled) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(0.0, r.acceptWith(0, .{ .start = 0.5 }));
+    try std.testing.expectEqual(1.0, r.acceptWith(0.5 * p, .{ .start = 0.5 }));
+    try std.testing.expectEqual(1.0, r.acceptWith(1.5 * p, .{ .start = 0.5, .enable = 0 }));
+    try std.testing.expectEqual(1.0, r.acceptWith(2 * p, .{ .start = 0.5 }));
+    const next = D.pendingBreakpoint(&r.inst, r.time).?;
+    try std.testing.expectEqual(0.5 * p + 2 * p, next);
+    try std.testing.expectEqual(2.0, r.acceptWith(next, .{ .start = 0.5 }));
+}
+
+test "§5.10.3.3 solved non-positive periods are one-shots and can be rearmed" {
+    if (comptime !controlled) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(0.0, r.acceptWith(0, .{ .start = -1, .period = -1 }));
+    try std.testing.expectEqual(@as(?f64, null), D.pendingBreakpoint(&r.inst, 0));
+    try std.testing.expectEqual(0.0, r.acceptWith(p, .{ .start = 2, .period = 0 }));
+    try std.testing.expectEqual(2 * p, D.pendingBreakpoint(&r.inst, p).?);
+    try std.testing.expectEqual(1.0, r.acceptWith(2 * p, .{ .start = 2, .period = 0 }));
+    try std.testing.expectEqual(@as(?f64, null), D.pendingBreakpoint(&r.inst, 2 * p));
+    // A changed start can be NOW; a spent past start cannot.
+    try std.testing.expectEqual(2.0, r.acceptWith(3 * p, .{ .start = 3, .period = 0 }));
+    try std.testing.expectEqual(2.0, r.acceptWith(4 * p, .{ .start = 2, .period = -1 }));
+}
+
+test "§5.10.3.3 an event-body change schedules from its final value exactly once" {
+    if (comptime !body_controlled) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(1.0, r.accept(0, 0));
+    try std.testing.expectEqual(2.0, r.accept(p, 0));
+    const next = D.pendingBreakpoint(&r.inst, r.time).?;
+    try std.testing.expectEqual(1.5 * p, next);
+    try std.testing.expectEqual(3.0, r.accept(next, 0));
     try std.testing.expectEqual(3 * p, D.pendingBreakpoint(&r.inst, r.time).?);
 }

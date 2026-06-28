@@ -1497,6 +1497,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         }
     }
 
+    try lower_event.finishTimers(self);
+
     // §5.6.1.3 the contribution accumulators' final values, and beside each the
     // final value of its retention flag — the "is a value retained [this
     // cycle]?" question the clause's three-way rule turns on.

@@ -34,7 +34,13 @@ const astTy = Lower.astTy;
 /// Lowers an expression, returning its value and its LRM type; every
 /// operator's opcode family depends on the type (LRM §4, §4.2.1.1–§4.2.1.3).
 pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    return lowerExprRaw(self, e, null, false);
+    if (self.event_state.timer_replay) |replay| if (replay.get(e)) |value| return value;
+    const value = try lowerExprRaw(self, e, null, false);
+    if (e != .none) if (self.event_state.timer_capture) |capture| try capture.put(self.arena, e, .{
+        .value = value,
+        .variable = if (self.file.exprs.tag(e) == .ident) self.vars.get(self.file.str(self.file.exprs.strOf(e))) else null,
+    });
+    return value;
 }
 
 /// IEEE §§5.4–5.5 inside a self-determined `$clog2` argument. Function

@@ -71,6 +71,10 @@ pub fn emitCore(self: *Gen) Error!void {
             const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
             if (k != none_u32) keep[k] = true;
         }
+        if (self.lowered.timer_controls.get(inst)) |latest| for (latest) |a| {
+            const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
+            if (k != none_u32) keep[k] = true;
+        };
     }
     self.state_core = try gen_unit.sliceCore(self, "state", keep,
         \\/// §4.5.2 what `updateState` reads off the core, and only what that
@@ -255,9 +259,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         const n = self.names.unit_names[i];
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
-        const args = self.mir.instData(inst).call.args;
+        const original_args = self.mir.instData(inst).call.args;
+        const latest = self.lowered.timer_controls.get(inst);
+        const args: []const @import("ir").Mir.Value = if (latest) |*v| v else original_args;
         const lo = gen_unit.opInputIdx(self, @intCast(i));
-        if (lo == none_u32) {
+        if (latest != null) {
+            try self.w("    {{\n        const in = {s};\n", .{try gen_call.ctrlStep(self, args, 0, "0.0")});
+        } else if (lo == none_u32) {
             try self.w("    {{\n        const in: f64 = 0.0;\n", .{});
         } else {
             try self.w("    {{\n        const in = m.f{d}{s};\n", .{ lo, val });
@@ -334,28 +342,14 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // event, not the record, so a re-enabled operator never compares
             // against a stale sample.
             .cross, .above => try self.w("        inst.{s}__prev = in;\n", .{n}),
-            // §5.10.3.3 the schedule is absolute ("at start_time, and every
-            // period after that"), so it advances whether or not enable let
-            // the event through. "the next event will be scheduled based on
-            // the latest value": a changed start_time replaces the schedule,
-            // earlier or later, and re-arms a spent one-shot. A changed
-            // period takes effect at the next fire, rebasing the count there.
-            // Use base + k*period, never next + period: accumulated rounding
-            // makes the live schedule drift from the static breakpoint hook.
+            // §5.10.3.3 the latest start and period define the absolute grid,
+            // including changes BETWEEN fires. Count rather than accumulate,
+            // advancing even while enable suppresses delivery.
             .timer => try self.w(
                 \\        const period = {1s};
-                \\        if (inst.{0s}__start != in) {{
-                \\            inst.{0s}__start = in;
-                \\            inst.{0s}__base = in;
-                \\            inst.{0s}__per = period;
-                \\            inst.{0s}__next = zNextTimer(in, period, sim.t) orelse z_inf;
-                \\        }} else if (sim.t >= inst.{0s}__next) {{
-                \\            if (period != inst.{0s}__per) {{
-                \\                inst.{0s}__base = inst.{0s}__next;
-                \\                inst.{0s}__per = period;
-                \\            }}
-                \\            inst.{0s}__next = zNextTimer(inst.{0s}__base, period, sim.t) orelse z_inf;
-                \\        }}
+                \\        inst.{0s}__start = in;
+                \\        inst.{0s}__per = period;
+                \\        inst.{0s}__next = zNextTimer(in, period, sim.t) orelse z_inf;
                 \\
             , .{ n, try gen_call.timerPeriod(self, args) }),
             // §9.17.2 "no larger than the smallest $bound_step() argument
@@ -708,8 +702,9 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
     , .{if (self.uses_model) "model" else "_"});
     for (timers.items) |tm| {
-        if (tm[2]) |g| try self.w("    if (({s}) != 0.0)\n    ", .{g});
+        if (tm[2]) |g| try self.w("    if (({s}) != 0.0) {{\n    ", .{g});
         try self.w("    if (zNextTimer({s}, {s}, t)) |b| best = @min(best, b);\n", .{ tm[0].?, tm[1].? });
+        if (tm[2] != null) try self.w("    }}\n", .{});
     }
     try self.w(
         \\    return if (best == std.math.inf(f64)) null else best;

@@ -16,6 +16,7 @@ const time = @import("time.zig");
 const tickAtOrBefore = time.tickAtOrBefore;
 const crosses = time.crosses;
 const ulps = time.ulps;
+const timer = @import("kernels").timer_kernels;
 
 pub const Options = struct {
     /// The declared analog timepoints, in seconds, ascending. `times[0]` is the
@@ -74,12 +75,9 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         s.mons = try dig.arena.alloc(Mon, dig.monitors.items.len);
         for (s.mons, dig.monitors.items, 0..) |*m, mon, j| {
             if (mon.kind == .timer) {
-                // §5.10.3.3 timer(start_time, period, ...): "at start_time,
-                // and every period after that"; a period <= 0 fires once.
-                // ponytail: a firing at or before the DC point is not delivered.
-                const start = (try dig.monitorArg(j, 0)).?;
-                m.* = .{ .kind = .{ .timer = .{ .next = start, .period = (try dig.monitorArg(j, 1)) orelse 0 } } };
-                while (m.kind.timer.next <= opts.times[0]) if (!m.advanceTimer()) break;
+                // Controls may read a probe. Initialize after the first solve,
+                // when those arguments have an analog value (§5.10.3.3).
+                m.* = .{ .kind = .{ .timer = .{} } };
                 continue;
             }
             if (mon.kind == .absdelta) {
@@ -148,6 +146,7 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 ad.last_time = target;
             };
             _ = try s.refreshAbsdelta(target);
+            _ = try s.refreshTimers(target);
             try s.runDigital(horizon);
         }
     }
@@ -171,8 +170,15 @@ const Mon = struct {
         /// tolerance, and the argument index of `enable`, whose zero makes the
         /// event inactive.
         crossing: struct { dir: f64, tol: f64, enable: u8 },
-        /// §5.10.3.3: the next firing time and the period.
-        timer: struct { next: f64, period: f64 },
+        /// §5.10.3.3 the latest absolute grid and its pending event. A digital
+        /// body can change controls at this point after the event was already
+        /// delivered; consumed prevents that change from delivering it twice.
+        timer: struct {
+            start: f64 = std.math.nan(f64),
+            period: f64 = std.math.nan(f64),
+            next: f64 = std.math.inf(f64),
+            consumed: f64 = std.math.nan(f64),
+        },
         /// §5.10.3.4: event history is distinct from observed extrema, so
         /// reversals smaller than expr_tol accumulate without losing a peak.
         absdelta: struct {
@@ -185,17 +191,6 @@ const Mon = struct {
             observed_event: bool = false,
         },
     },
-
-    /// The firing after this one, or false when there is none.
-    fn advanceTimer(m: *Mon) bool {
-        const tm = &m.kind.timer;
-        if (tm.period <= 0) {
-            tm.next = std.math.inf(f64);
-            return false;
-        }
-        tm.next += tm.period;
-        return true;
-    }
 };
 
 fn State(comptime A: type) type {
@@ -281,6 +276,40 @@ fn State(comptime A: type) type {
             s.mon_time = t;
             defer s.mon_time = null;
             return s.dig.monitorArg(j, k);
+        }
+
+        /// Refresh after each analog solve and digital control change. With
+        /// unchanged controls a point just beyond the deadline still delivers
+        /// the pending event. A changed start/period first replaces that
+        /// deadline from its latest absolute grid, which may cancel an old
+        /// event or place a new one at this very time (§5.10.3.3).
+        fn refreshTimers(s: *Self, t: f64) !bool {
+            var posted = false;
+            for (s.mons, 0..) |*m, j| if (m.kind == .timer) {
+                const tm = &m.kind.timer;
+                const start = (try s.monArgAt(j, 0, t)).?;
+                const period = (try s.monArgAt(j, 1, t)) orelse 0;
+                const ttol = (try s.monArgAt(j, 2, t)) orelse 0;
+                const enable = (try s.monArgAt(j, 3, t)) orelse 1;
+                const tok = s.dig.file.exprs.mainTok(s.dig.monitors.items[j].expr);
+                if (!(ttol >= 0))
+                    return s.dig.failWith(.E0517, tok, "`timer()` time_tol shall be non-negative", .{});
+                if (!std.math.isFinite(enable) or enable != @round(enable))
+                    return s.dig.failWith(.E0517, tok, "`timer()` enable shall evaluate to an integer", .{});
+                // We choose the deadline itself, satisfying every positive
+                // tolerance and the absent/zero at-or-just-beyond default.
+                tm.next = timer.zTimerPending(start, period, t, tm.start, tm.period, tm.next);
+                tm.start = start;
+                tm.period = period;
+                if (t < tm.next) continue;
+                tm.next = timer.zNextTimer(start, period, t) orelse std.math.inf(f64);
+                if (tm.consumed == t) continue;
+                tm.consumed = t;
+                if (enable == 0) continue;
+                try s.dig.deliverA2d(j, @intFromFloat(@round(t / s.opts.tick)));
+                posted = true;
+            };
+            return posted;
         }
 
         const AbsdeltaArgs = struct { delta: f64, time_tol: f64, expr_tol: f64, enabled: bool };
@@ -457,15 +486,11 @@ fn State(comptime A: type) type {
             }
             const tick: Tick = @intFromFloat(@round(s.acc.? / s.opts.tick));
             for (s.mons, 0..) |*m, j| switch (m.kind) {
-                .timer => |tm| {
-                    // Stepped to exactly, so the point IS the firing.
-                    if (s.acc.? + s.opts.tick * 1e-6 < tm.next) continue;
-                    try s.dig.deliverA2d(j, tick);
-                    while (m.kind.timer.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
-                },
+                .timer => {}, // Refreshed together below, using current controls.
                 .absdelta => try s.observeAbsdelta(j),
                 .crossing => |c| if (try s.active(c.enable, j) and crosses(c.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick),
             };
+            _ = try s.refreshTimers(s.acc.?);
             try s.drainAbsdelta(base, tickAtOrBefore(s.acc.?, s.opts.tick));
         }
 
@@ -477,7 +502,13 @@ fn State(comptime A: type) type {
         fn runDigital(s: *Self, horizon: Tick) !void {
             while (true) switch (try s.dig.runUntil(horizon)) {
                 .idle => {
-                    if (try s.refreshAbsdelta(@as(f64, @floatFromInt(s.dig.scheduler.now)) * s.opts.tick)) continue;
+                    const t = @as(f64, @floatFromInt(s.dig.scheduler.now)) * s.opts.tick;
+                    const absdelta_posted = try s.refreshAbsdelta(t);
+                    // A timer controls analog timepoints. Its probes read the
+                    // current solution, even when the last digital tick was
+                    // earlier (or rounded just before this analog time).
+                    const timer_posted = try s.refreshTimers(s.acc.?);
+                    if (absdelta_posted or timer_posted) continue;
                     break;
                 },
                 .explicit_d2a => try s.explicitD2a(),
@@ -508,6 +539,7 @@ const Fake = struct {
     snap: i64 = -1,
     slope: f64 = 0,
     power: f64 = 1,
+    timer_grid: ?struct { start: f64, period: f64 } = null,
     t: f64 = 0,
     solves: std.ArrayList(Point) = .empty,
     points: std.ArrayList(Point) = .empty,
@@ -532,6 +564,10 @@ const Fake = struct {
     }
     pub fn finish(f: *Fake) !void {
         try f.points.append(f.gpa, f.solves.items[f.solves.items.len - 1]);
+    }
+    pub fn breakpoint(f: *Fake, t: f64) ?f64 {
+        const grid = f.timer_grid orelse return null;
+        return timer.zNextTimer(grid.start, grid.period, t);
     }
 };
 
@@ -827,4 +863,63 @@ test "§5.10.4 / §7.3.6.1 an analog timer's `-> ev` reaches `always @(ev)` at e
     dig.watchAnalog(f.slot);
     try run(Fake, &f, &dig, .{ .times = &.{ 0, 10e-9, 20e-9 }, .tick = 1e-9 });
     try expectPoints(f, &.{ .{ 0, 0 }, .{ 5e-9, 1 }, .{ 10e-9, 1 }, .{ 15e-9, 2 }, .{ 20e-9, 2 } });
+}
+
+test "§5.10.3.3 a monitored timer agrees with the host grid without duplicate analog points" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(p);
+        \\  inout p; electrical p; event ev; integer hits;
+        \\  initial hits = 0;
+        \\  always @(ev) hits = hits + 1;
+        \\  analog @(timer(2u, 1m)) -> ev;
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-3, .precision = 1e-9 } } }, &bag, &out.writer);
+    var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena, .timer_grid = .{ .start = 2e-6, .period = 1e-3 } };
+    dig.watchAnalog(f.slot);
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 4.096 }, .tick = 1e-9 });
+    // The two host-supplied endpoints plus k=0..4095. A counted monitor
+    // agrees with the host's closed-form schedule bit for bit; accumulation
+    // used to create two neighboring analog points for one physical event.
+    try testing.expectEqual(@as(?i64, 4096), dig.values[f.slot].asInt());
+    try testing.expectEqual(@as(usize, 4098), f.points.items.len);
+    for (f.points.items[1..4097], 0..) |p, k|
+        try testing.expectEqual(2e-6 + @as(f64, @floatFromInt(k)) * 1e-3, p.t);
+}
+
+test "§5.10.3.3 runtime-invalid timer controls report E0517" {
+    for ([_]struct { name: []const u8, value: []const u8 }{
+        .{ .name = "ttol", .value = "-1p" },
+        .{ .name = "en", .value = "0.5" },
+    }) |c| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var bag = diag.Bag.init(arena);
+        var out = std.Io.Writer.Allocating.init(arena);
+        const source = try std.fmt.allocPrint(arena,
+            \\discipline electrical potential Voltage; flow Current; enddiscipline
+            \\module m(p);
+            \\  inout p; electrical p; event ev; integer hits;
+            \\  real ttol, en;
+            \\  initial begin hits = 0; ttol = 1p; en = 1; #2 {s} = {s}; end
+            \\  always @(ev) hits = hits + 1;
+            \\  analog @(timer(1n, 2n, ttol, en)) -> ev;
+            \\endmodule
+        , .{ c.name, c.value });
+        var dig = try digital.elaborate(arena, source, .{
+            .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-12 } },
+        }, &bag, &out.writer);
+        try testing.expect(!bag.failed());
+        var f: Fake = .{ .slot = dig.slotOf("hits").?, .gpa = arena };
+        try testing.expectError(error.DigitalFailed, run(Fake, &f, &dig, .{ .times = &.{ 0, 4e-9 }, .tick = 1e-12 }));
+        try testing.expectEqual(@as(usize, 1), bag.count());
+        try testing.expectEqual(diag.Code.E0517, bag.at(0).code);
+        try testing.expectEqual(@as(?i64, 1), dig.values[f.slot].asInt());
+    }
 }
