@@ -26,6 +26,8 @@ const Run = struct {
     state: D.State = .{},
     time: f64 = 0,
     initialized: bool = false,
+    calls: f64 = 0,
+    mark: f64 = 0,
 
     fn init(model: D.Model) Run {
         var r: Run = .{ .model = model };
@@ -54,6 +56,10 @@ const Run = struct {
             .analog_initial = !r.initialized,
         };
         const residual = D.eval(S, &x, &r.model, &r.inst, sim);
+        if (comptime @hasField(D.U, "calls")) {
+            r.calls = residual[@intFromEnum(D.U.calls)].v;
+            r.mark = residual[@intFromEnum(D.U.mark)].v;
+        }
         if (comptime body_controlled) std.debug.assert(residual[@intFromEnum(D.U.body)].v == residual[@intFromEnum(D.U.out)].v);
         _ = D.updateState(S, &r.model, &r.inst, x, &r.state, sim);
         return residual[@intFromEnum(D.U.out)].v;
@@ -217,9 +223,49 @@ test "§5.10.3.3 an event-body change schedules from its final value exactly onc
     var r = Run.init(.{});
     const p = r.model.period;
     try std.testing.expectEqual(1.0, r.accept(0, 0));
+    // Every form (scalar, array, function and precomputed effect) must roll
+    // back its changed dependencies together with the timer's pending event.
+    try std.testing.expectEqual(2.0, r.attempt(p, 0));
+    _ = D.stateCtl(&r.model, &r.inst, &r.state, .revert);
+    try std.testing.expectEqual(p, D.pendingBreakpoint(&r.inst, r.time).?);
     try std.testing.expectEqual(2.0, r.accept(p, 0));
     const next = D.pendingBreakpoint(&r.inst, r.time).?;
     try std.testing.expectEqual(1.5 * p, next);
     try std.testing.expectEqual(3.0, r.accept(next, 0));
     try std.testing.expectEqual(3 * p, D.pendingBreakpoint(&r.inst, r.time).?);
+}
+
+test "§5.10.3.3 final function dependencies retain host parameter overrides" {
+    if (comptime !@hasField(D.Model, "gain")) return error.SkipZigTest;
+    var r = Run.init(.{ .period = 4e-9, .gain = 2 });
+    // period*gain begins at 8 ns. The second body's rate=1.5 makes the
+    // latest absolute grid 0,12,24 ns, retaining the delivered 8 ns event.
+    try std.testing.expectEqual(1.0, r.accept(0, 0));
+    try std.testing.expectEqual(8e-9, D.pendingBreakpoint(&r.inst, 0).?);
+    try std.testing.expectEqual(2.0, r.accept(8e-9, 0));
+    const next = D.pendingBreakpoint(&r.inst, r.time).?;
+    try std.testing.expectApproxEqAbs(12e-9, next, 1e-23);
+    try std.testing.expectEqual(3.0, r.accept(next, 0));
+    try std.testing.expectApproxEqAbs(24e-9, D.pendingBreakpoint(&r.inst, r.time).?, 1e-23);
+}
+
+test "§4.7.2.3/.4 final timer controls do not repeat output or inout effects, including retries" {
+    if (comptime !@hasField(D.U, "calls")) return error.SkipZigTest;
+    var r = Run.init(.{});
+    const p = r.model.period;
+    try std.testing.expectEqual(1.0, r.accept(0, 0));
+    try std.testing.expectEqual(1.0, r.calls);
+    try std.testing.expectEqual(101.0, r.mark);
+    try std.testing.expectEqual(2.0, r.attempt(p, 0));
+    try std.testing.expectEqual(2.0, r.calls);
+    try std.testing.expectEqual(102.0, r.mark);
+    _ = D.stateCtl(&r.model, &r.inst, &r.state, .revert);
+    try std.testing.expectEqual(2.0, r.accept(p, 0));
+    try std.testing.expectEqual(2.0, r.calls);
+    try std.testing.expectEqual(102.0, r.mark);
+    const next = D.pendingBreakpoint(&r.inst, r.time).?;
+    try std.testing.expectEqual(1.5 * p, next);
+    try std.testing.expectEqual(3.0, r.accept(next, 0));
+    try std.testing.expectEqual(3.0, r.calls);
+    try std.testing.expectEqual(103.0, r.mark);
 }

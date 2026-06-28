@@ -92,6 +92,26 @@ truncation rule, so a shorter answer would be a wrong one.
 | testbench `//! sweep` product | 4096 points | a `//!` directive error | `lib/backend/tb.zig:259` | none (harness input, not source) |
 | VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig:414`, `src/vpi/root.zig:2223` | none |
 
+### Timer controls with effects
+
+AMS §5.10.3.3 requires the next event to use the final `start_time` and
+`period`. VerA recomputes arithmetic, array reads and analog functions proved
+free of effects. A function with output/inout arguments, random/file activity,
+or an unproved nested call keeps its original result. If one of that call's
+inputs changes afterwards, E0528 reports the unsupported combination instead
+of silently retaining an old schedule or repeating effects. This is a limit
+on legal AMS, not a prohibition in the LRM.
+
+Compute such a call into a variable before `timer()`, then use or update that
+variable as the control. An unchanged effectful leaf remains supported even
+when another operand changes; a constant return also needs no recomputation
+when an input changes. `lib/ir/lower/event.zig` owns this check;
+`ch05_analog_behavior/timer_changed_effectful_*_rejected.va` pins the refusals,
+`timer_effectful_file_leaf.va` checks one file write per accepted point, and
+`tests/timer_host.zig` with `tests/timer_body_precomputed_controls.va` checks
+final deadlines and output/inout effects through an emitted device, including
+a rejected trial followed by a retry.
+
 ## 3. Unspecified behaviour
 
 `CLAUSE-AUDIT.md` §5.5: no test asserts one outcome where the LRM permits

@@ -287,6 +287,7 @@ pub const Code = enum(u16) {
     E0525,
     E0526,
     E0527,
+    E0528,
     E0572,
     E0573,
     E0574,
@@ -4180,6 +4181,24 @@ fn infoOf(c: Code) Info {
             \\
             \\    vgs = type * $limit(V(g, si), "fetlimds", type * vonp, type, type * vtox);  // ok
             \\    vds = $limit(V(di, si), "limvds", 1, V(d, s));                              // no
+            ,
+        },
+        .E0528 => .{
+            .title = "changed timer control would repeat a side-effecting call",
+            .lrm = "5.10.3.3",
+            .explain =
+            \\A timer's next event uses the latest start_time and period after
+            \\the analog block finishes. VerA recomputes arithmetic, array reads
+            \\and effect-free analog functions over their final dependencies.
+            \\An input of a side-effecting call changed after the original call,
+            \\so retaining its old return gives a stale schedule, while repeating
+            \\it would repeat output/inout writes, random draws or file activity.
+            \\That combination is an implementation limit, not illegal AMS.
+            \\
+            \\Compute the effectful call once into a variable before timer(),
+            \\then use or update that variable as the timer control. An unchanged
+            \\effectful call remains legal and is evaluated only at its original
+            \\source position, including when other timer operands change.
             ,
         },
         .E0572 => .{
