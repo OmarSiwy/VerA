@@ -375,6 +375,7 @@ pub fn build(b: *std.Build) void {
 /// A host driver and the `.va` its `device` import is emitted from: device
 /// hooks called in an order the fixture directives cannot express.
 const host_tests = [_]struct { host: []const u8, va: []const u8 }{
+    .{ .host = "tests/fixtures/ch03_data_types/nodeset_metadata_host.zig", .va = "tests/fixtures/ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
