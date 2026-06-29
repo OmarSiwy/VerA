@@ -92,8 +92,8 @@ Run these. Do not copy their output into a document.
 `grep -rl '^//! xfail' tests/fixtures` lists every gap VerA owns and a fixture
 pins. §5 lists the ones no fixture pins yet.
 
-Measured by `tools/conformance.sh` on 2026-09-29 at `8bfbc528`, superseding
-the 2026-09-27 inventory previously recorded here:
+Measured by `tools/conformance.sh` on 2026-09-29 at `6dca90a7`, superseding
+the earlier `8bfbc528` checkpoint:
 
 - **A** passes the AMS strict and digital fixture gates. VPI's known gaps
   remain pinned in `build.zig`, and §5 still contains unmarked defects.
@@ -276,16 +276,16 @@ NBA/monitor restrictions are enforced (`7bef88f7`, `6d1bf86d`). Their fixture
 cases pass in the integrated digital suite. The remaining rows below retain
 the unfixed half where an older row combined distinct paths or rules.
 
+Also closed at `6dca90a7`: `cross`/`absdelta` argument validation (`86843c23`)
+and parameter-list grammar in both languages (`eff0e2ac`). Named rejection
+fixtures have behavioral legal neighbors; empty named values still work.
+
 | Clause | Item | Source |
 |---|---|---|
 | AMS 2.6.2 | A scale factor in a digital delay (`#5u`) is accepted and runs as zero delay. | `conformance-lexical.md:158`; found 2026-09-27 |
 | AMS 3.4.7 | An `aliasparam` name used in an equation is accepted. | `conformance-parameters.md:36`; found 2026-09-27 |
-| AMS 5.10.3.1 | `cross` with `expr_tol` but no `time_tol` is accepted. The `a10_11` header implies the rule is covered. | `conformance-analog-behavior.md:184-193`; found 2026-09-27 |
-| AMS 5.10.3.4 | `absdelta` with a negative delta or tolerance, or a non-integer enable, is accepted. `cross` refuses the same (E0516, E0517). | `ch05_analog_behavior/COVERAGE.md:82` |
 | AMS 6.4 | A paramset over a module that holds a `defparam` is accepted. | `h01_SPEC.md:133-135` |
 | AMS E.3.3 | No warning when a module shadows a SPICE model or subcircuit ("shall issue a warning"); `lib/ir/elaborate/names.zig` calls it optional. | `h04_SPEC.md:120-122` |
-| IEEE A.1.3, A.4.1 | An empty `#()` is accepted in a module parameter header and in an instantiation; `#(localparam P=7)` is accepted in a header. | `conformance-ieee-grammar-review.md:69-76,84-87`; found 2026-09-27 |
-| IEEE 12.2.2 | Mixed ordered and named parameter overrides (`#(5, .q(7))`) still need verification on the analog path. The digital override/port restrictions are fixed by `b35ab357`. | `conformance-ieee-hierarchy-review.md:42,124`; found 2026-09-27 |
 | IEEE 8.1.4 | A UDP table mapping one input combination to two outputs remains to verify. The output-first declaration rule is enforced by `9854a214`. | `d08_SPEC.md:199-204` |
 
 ### 5.3 Valid source refused or computed wrong
@@ -294,11 +294,14 @@ The named-block `reg` parser restriction is fixed by `4347d32c`, and native
 static-schedule fork hangs by `9ac6848b`/`808eb30e`. Their interpreter and
 native regression cases pass at `4e90fcdd`.
 
+The `6dca90a7` gate also closes the analog `$clog2`, constant-seeded random
+stream, geometry-override, packed-reg analog-read and mixed `absdelta` rows.
+It includes absolute timer schedules, final control changes and emitted-host
+rollback checks; `IMPLEMENTATION.md` documents the E0528 effectful-control
+limit. The wide-register part-select case below remains open.
+
 | Clause | Item | Source |
 |---|---|---|
-| AMS 9.14, IEEE 17.11.1 | Analog `$clog2` of a negative integer returns 0. The argument is unsigned, so `$clog2(-1)` on a 32-bit integer is 32. | `conformance-ch9-review.md:486-492`; found 2026-09-27 |
-| AMS 9.13.1 | `$arandom(7)` gives a different sequence from `$random` seeded with 7; the review derives -2146999808, then 1181502348. | `conformance-ch9-review.md:419-425,452-454` |
-| AMS 9.18 | `#(.$xposition(2))` and the other geometry overrides are refused (E0907). The LRM's own example uses this form. | `conformance-ch9-review.md:344-350` |
 | AMS 4.2.4 | Integer `%` with a probe-dependent divisor is refused (E0601). | `conformance-expressions.md:77-79` |
 | AMS 7.3.1 | E0222 checks the declared bus width, so a legal 31-bit part-select of a wider `reg` is refused. | `conformance-mixed-signal.md:206-210` |
 | AMS 3.6.3.2 | A hierarchical nodeset (`electrical top.foo.w = 2.75;`) is ignored without a diagnostic. | `a08_nodeset_SPEC.md:264-269`; found 2026-09-27 |
@@ -307,13 +310,11 @@ native regression cases pass at `4e90fcdd`.
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |
 | AMS 5.6.8.2, 6.7.1 | Two instances between the same two nodes share one branch: `I(r1.branch(p,n))` reads the parallel sum. | `h04_SPEC.md:284-292`; found 2026-09-27 |
 | AMS 5.10, 3.3 | A string written inside an event body is not held. `lib/ir/lower/param.zig` says nothing can observe it; `$strobe` does. | `a03_SPEC.md:186-189` |
-| AMS 5.10.3.4 | The mixed runner reads only `absdelta`'s delta: it ignores `time_tol`, `expr_tol`, enable and the direction-change trigger, and delivers initialization unconditionally. Argument validation alone will not close this runtime gap. | `src/sim/mixed.zig` monitor initialization and `.absdelta` dispatch; read 2026-09-29 |
 | AMS 6.6.3 | Same-named instances in two generate blocks collide (E0362). | `ch06_hierarchy/COVERAGE.md:191-193` |
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |
 | AMS 9.15 | `$simparam$str("cwd")` and `("analysis_name")` return `""`. | `a10_SPEC.md:71-73,210-215` |
 | AMS E.1.2 | `.MODEL X SW` is skipped and the instance line gets E0904. | `h04_SPEC.md:125-128` |
-| IEEE 4.3.1, 5.5.3 | An analog assignment to `reg [3:0]` is not truncated: `~4'b0101` reads -6, not 10. | `annex_a_syntax/COVERAGE.md:416-427`; found 2026-09-27 |
 | IEEE 12.2.1, 12.8.2 | A `defparam` path that starts at a module name is refused (E0907) by the analog path. The digital upward/indexed resolution is fixed by `b700311a`. | `conformance-ieee-scope-review.md:47-76` |
 | IEEE 17.5.4 | A PLA personality bit `x` is treated as "ignore"; the standard says "worst case". | `conformance-ieee-pla-review.md:58` |
 | IEEE 9.7.5 | `@*` over a statement that reads nothing is refused with an E1100 that cites §9.7.5, which has no such rule. | `conformance-ieee-scheduling-review.md:95-98` |
@@ -323,19 +324,19 @@ native regression cases pass at `4e90fcdd`.
 ### 5.4 Diagnostics and harness
 
 W0651's closed-infinity range check is fixed by `4b87e373`; its warning and
-no-warning fixtures pass in the strict suite at `4e90fcdd`.
+no-warning fixtures pass in the strict suite at `4e90fcdd`. Array diagnostics
+and analog-conversion explanations were corrected by `8bf8b5ff` and are gated
+at `6dca90a7`.
 
 | Clause | Item | Source |
 |---|---|---|
-| AMS 3.2 | E0311 cites "LRM 3.2.2", which does not exist, and its explain text says every array access must resolve at compile time. | `a01_SPEC.md:61-62` |
-| AMS 9.11 | E0806's explain text, and `134_signed_analog_rejected.va:1-4`, quote the pre-2023 §9.11. | `a01_SPEC.md:405-414` |
 | AMS 6.3.3 | Overriding an ordinary parameter twice reports the aliasparam message (E0908). | `conformance-empty-parameter-fix.md:134-135` |
 | AMS 5.9.3 | `break` in an analog `for` is refused as "outside a loop" (E0404). | `ch05_analog_behavior/COVERAGE.md:85` |
 | AMS A.6.4 | `force`, `fork`, `wait`, `#5` and analog `forever` all get the generic E0209. | `annex_a_syntax/COVERAGE.md:278-282` |
 | AMS 4.5.12 | A non-zero τ or t0 on `zi_*` gets the generic "codegen refused". | `ch04_expressions/COVERAGE.md:93` |
 | harness | A second `//! analysis` line silently replaces the first. | `ch09_system_tasks/COVERAGE.md:56,67` |
 | IEEE 18.1.5 | `vcdTokens` drops `$version` and `$comment`, so the `$dumplimit` comment and version text are never checked; a semantic VCD comparison would have to be added to `harness.vcdTokens`. | `conformance-vcd-review.md:39-42,155-159` |
-| fixtures | Branch `audit-wip/ch5` (`59da3dcd`) holds ch09 fixtures that were never merged, including ones for the `$arandom`, `$clog2` and geometry rows above. | found 2026-09-27 |
+| fixtures | Other contents of the unmerged `audit-wip/ch5` (`59da3dcd`) still need triage. New independent fixtures for `$arandom`, `$clog2` and geometry are gated at `6dca90a7`. | found 2026-09-27; reconciled 2026-09-29 |
 
 ### 5.5 Fixture headers to correct
 
@@ -377,8 +378,9 @@ Test data, not compiler work. Each header claims something false or stale.
   `event_cross_any.va` runs DC only, `analog_initial.va` cannot tell once per
   analysis from once per evaluation, and `nature_attribute_unsupported.va`
   still tags `lrm 11.6.2`. (`conformance-analog-behavior.md:147-215`.)
-- `lrm_7_2_4.va:8` says p and q are "on the same signal"; a resistor joins two
-  nodes. (`conformance-mixed-signal.md:178-191`.)
+- `92fa96d5` corrected `lrm_7_2_4.va` to join continuous segments through
+  one bound port. Its published minimum tolerance and local nature attributes
+  run at the `6dca90a7` gate, alongside vector and intermediate-resolution cases.
 - `abstol_override_branches.va:20-29` says `p.potential.abstol` does not parse;
   it does. (`conformance-standard-definitions.md:23`.)
 - Corrected on 2026-09-29: the implemented `$rtoi`/`$itor` descriptions in
@@ -471,7 +473,6 @@ No fixture pins these. Each is measure B or C work.
 - AMS 4.3.1: the derivative of `abs` at 0 is -1. (`conformance-minmax-derivative-fix.md:89`.)
 - AMS 4.5.14: the other dynamic-argument slots and analysis restarts. (`ch04_expressions/COVERAGE.md:99`.)
 - AMS 4.6.4.6: anti-correlation. `//! noise` has no `coeff=` field. (`a06_SPEC.md:253-255`.)
-- AMS 7.2.4: smallest abstol over a node. (`conformance-mixed-signal.md:178-191`.)
 - AMS 7.3.3, 7.3.6.3: a continuous variable read from a discrete context,
   interpolated, or exact after an analog event. (`m01_SPEC.md:199-203`.)
 - AMS 7.3.5: a same-value reassignment of an analog-event variable still fires. (`conformance-mixed-signal.md:252-253`.)
