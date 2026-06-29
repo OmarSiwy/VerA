@@ -2,7 +2,7 @@
 //!
 //! Source in, `Ast` and diagnostics out, asserted per Annex A production.
 //!
-//! LRM clauses cited: §1, §2.6.1, §2.7, §3.2.1, §3.3, §3.4.2, §4.2.2, §4.2.13, §4.2.14, §4.5.11, §6.6, §6.6.2.
+//! LRM clauses cited: §1, §2.6.1, §2.6.2, §2.7, §3.2.1, §3.3, §3.4.2, §4.2.2, §4.2.13, §4.2.14, §4.5.11, §6.6, §6.6.2.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -50,6 +50,91 @@ pub fn parseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
         else => return e,
     };
     return .{ .file = file, .bag = bag };
+}
+
+test "§2.6.2 scaled literals are refused in every digital delay production before folding" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const Case = struct {
+        fn parse(a: std.mem.Allocator, src: []const u8, digital: bool) !TestResult {
+            var list = try lexer.Lexer.tokenize(a, src);
+            const bag = try newBag(a, src);
+            var p = Parser.init(a, src, list.items(.tag), list.items(.start), bag);
+            p.digital = digital;
+            const file = p.parseSourceFile() catch |e| switch (e) {
+                error.ParseError => p.file,
+                else => return e,
+            };
+            try std.testing.expect(!p.in_digital_delay);
+            return .{ .file = file, .bag = bag };
+        }
+
+        fn rejected(a: std.mem.Allocator, src: []const u8, digital: bool) !void {
+            const r = try parse(a, src, digital);
+            var errors: usize = 0;
+            for (0..r.count()) |i| if (diag.severityOf(r.code(i)) == .err) {
+                try std.testing.expectEqual(diag.Code.E0247, r.code(i));
+                errors += 1;
+            };
+            try std.testing.expectEqual(@as(usize, 1), errors);
+        }
+    };
+    const invalid = [_][]const u8{
+        "module m; initial #5u; endmodule",
+        "module m; reg q; initial q = #(1 + 2u) 1; endmodule",
+        "module m; reg q; initial q <= #1m 1; endmodule",
+        "module m; initial #(0 ? 3u : 1); endmodule",
+        "module m; wire #(1u, 2, 3) q; endmodule",
+        "module m; wire q; assign #(1, 2u) q = 1; endmodule",
+        "module m; wire q; buf #(1, 2u) g(q, 1); endmodule",
+        "module m; wire q; nmos #(1, 2u, 3) g(q, 1, 1); endmodule",
+        "primitive p(q,a); output q; input a; table 0:0; 1:1; endtable endprimitive module m; wire q; p #2u g(q,1); endmodule",
+        "module m(input a, output y); buf g(y,a); specify (a => y) = 1u; endspecify endmodule",
+        // The body and following declaration are outside the delay context.
+        "module m; initial #5u $display(1m); parameter real g = 2m; endmodule",
+    };
+    for ([_]bool{ false, true }) |digital| {
+        for (invalid) |src| try Case.rejected(arena, src, digital);
+        for ("TGMKkmunpfa") |suffix| {
+            const src = try std.fmt.allocPrint(arena, "module m; initial #1.25{c}; endmodule", .{suffix});
+            try Case.rejected(arena, src, digital);
+        }
+        const legal = try Case.parse(arena,
+            \\module m;
+            \\parameter real delay_units = 0.25;
+            \\wire #0.5 w; reg q;
+            \\assign #2.5e-1 w = q;
+            \\buf #(0.5, 2.5e-1) g(w,q);
+            \\child #(.g(1m)) u();
+            \\function real f; input real t; f=t; endfunction
+            \\initial begin
+            \\  #delay_units q = #0.5 1;
+            \\  q <= #2.5e-1 0;
+            \\  #(f (* metadata = 1u *) (2.5e-1)) $display(1m);
+            \\end
+            \\endmodule
+        , digital);
+        // The analog-only parse warns for the primitive's missing executor;
+        // neither parse may refuse any legal delay or ordinary scaled value.
+        try std.testing.expectEqual(@as(usize, if (digital) 0 else 1), legal.count());
+        if (!digital) try std.testing.expectEqual(diag.Code.W0252, legal.code(0));
+
+        // Resolving child to a UDP is elaboration's job. Retain lexical
+        // evidence from a discarded operand, but not from call metadata.
+        const ambiguous = try Case.parse(
+            arena,
+            "module m; child #(0 ? 1u : 0.25, f (* metadata=1u *) (0.5)) u(); endmodule",
+            digital,
+        );
+        try std.testing.expectEqual(@as(usize, 0), ambiguous.count());
+        const overrides = ambiguous.file.modules[0].instances[0].params;
+        try std.testing.expect(overrides[0].scaled_literal_tok != null);
+        try std.testing.expect(overrides[1].scaled_literal_tok == null);
+    }
+    // Typical-value selection must not hide a scaled min/max operand.
+    try Case.rejected(arena, "module m; wire #(1u:2:3) q; endmodule", true);
+    try Case.rejected(arena, "module m; wire #(1:2:3u) q; endmodule", true);
 }
 
 test "escaped identifier expressions share declaration normalization" {

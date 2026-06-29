@@ -944,6 +944,10 @@ pub const ParamOverride = struct {
     name: StrId = .none,
     value: ExprId = .none,
     main_tok: u32 = 0,
+    /// A positional `#(...)` becomes a digital delay if elaboration resolves
+    /// the instance to a UDP. Preserve the first §2.6.2 scaled literal before
+    /// expression folding hides it; module parameter overrides allow it.
+    scaled_literal_tok: ?u32 = null,
 };
 
 /// One `defparam` assignment. LRM §6.3.1 (A.1.4 parameter_override, A.2.4

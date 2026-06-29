@@ -618,6 +618,8 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
     }
 
     const text = self.tokenText(tok);
+    if (self.in_digital_delay and self.attr_depth == 0 and lexer.scaleExp(text[text.len - 1]) != null)
+        try self.report(tok, .E0247, "`{s}` in a digital delay; use decimal or scientific notation in the module's time units", .{text});
     // §2.6.2 decoding (`_` removal, the Table 2-1 scale factor) has one home,
     // `lexer.parseReal`. It applies the scale to the text and rounds once;
     // `mantissa * scale` would round twice and can be off by 1 ulp.

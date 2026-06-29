@@ -2,7 +2,7 @@
 //! analog block, function or discrete process in, `Ast.StmtId`s out.
 //! Digital-only statements (IEEE 1364-2005 Clause 9) parse only in the
 //! discrete grammar.
-//! LRM clauses cited: §4.7.1, §4.7.2.2, §5.6, §5.7, §5.8, §5.8.3, §5.9, §5.9.1,
+//! LRM clauses cited: §2.6.2, §4.7.1, §4.7.2.2, §5.6, §5.7, §5.8, §5.8.3, §5.9, §5.9.1,
 //! §5.9.2, §5.10, §5.10.4, §5.11.
 
 const std = @import("std");
@@ -347,6 +347,9 @@ fn parseEventControl(self: *Parser) Error!Ast.StmtId {
 /// Parses an A.6.5 `delay_control` after the `#`: `( mintypmax_expression )`
 /// or a `delay_value`.
 fn parseDelay(self: *Parser) Error!Ast.ExprId {
+    const saved_delay = self.in_digital_delay;
+    self.in_digital_delay = true;
+    defer self.in_digital_delay = saved_delay;
     if (!self.eat(.lparen)) return parse_expr.parsePrimary(self);
     const value = try parse_expr.parseExpr(self);
     _ = try self.expect(.rparen);

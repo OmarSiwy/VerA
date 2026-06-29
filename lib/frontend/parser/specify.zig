@@ -3,7 +3,7 @@
 //! In: tokens from `specify` to `endspecify`, and module-level `specparam`.
 //! Out: `ModuleDecl.paths` and `.timing_checks`, and specparams as local parameters.
 //!
-//! LRM clauses cited: §1.1, §2.8, §3.4.1, §3.4.5, §8, §11.6.15, §14.2.6.
+//! LRM clauses cited: §1.1, §2.6.2, §2.8, §3.4.1, §3.4.5, §8, §11.6.15, §14.2.6.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -201,6 +201,9 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     // not by `parseExpr`, because `( tplh , tphl )` is a list of two.
     const bracketed = self.eat(.lparen);
     const delay_tok = self.pos;
+    const saved_delay = self.in_digital_delay;
+    self.in_digital_delay = true;
+    defer self.in_digital_delay = saved_delay;
     var delays: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
         try delays.append(self.arena, try parse_expr.parseMinTypMax(self));
