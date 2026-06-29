@@ -5440,16 +5440,17 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0908 => .{
-            .title = "a parameter and its aliasparam are both overridden",
-            .lrm = "3.4.7",
+            .title = "a parameter is overridden more than once",
+            .lrm = "6.3.3 / 3.4.7",
             .explain =
-            \\3.4.7: "It shall be an error to specify a value for both the
-            \\original parameter and its alias in the same module instantiation
-            \\or paramset."
+            \\6.3.3 forbids another assignment to a parameter name after it has
+            \\been assigned a value. Repeating an ordinary named parameter
+            \\assignment is an error even when no aliasparam is involved.
             \\
-            \\An aliasparam is a second NAME for one storage location, not a
-            \\second parameter, so two overrides are two values for one thing and
-            \\the LRM does not pick a winner. Delete one.
+            \\3.4.7 also forbids overriding one parameter through both its
+            \\original name and an alias, or through multiple aliases, whether
+            \\by name or by defparam. Equal assigned values do not make those
+            \\overrides legal. Keep only one override for the parameter.
             ,
         },
         .E0909 => .{
