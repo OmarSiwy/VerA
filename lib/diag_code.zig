@@ -134,6 +134,7 @@ pub const Code = enum(u16) {
     E0243,
     E0244,
     E0245,
+    E0246,
     E0296,
     W0250,
     W0251,
@@ -1717,6 +1718,23 @@ fn infoOf(c: Code) Info {
             \\module (both are descriptions of the file, A.1.2), text left over
             \\from a comment that was closed early, a statement written outside
             \\the analog block, or a keyword in upper case.
+            ,
+        },
+        .E0246 => .{
+            .title = "invalid module parameter list",
+            .lrm = "A.1.3 / A.4.1",
+            .explain =
+            \\A.1.3 requires at least one parameter declaration in a module's
+            \\#(...) header. The declaration starts with `parameter`;
+            \\`localparam` belongs in the module body. Omit the whole #(...)
+            \\header when the module declares no header parameters.
+            \\
+            \\A.4.1 likewise requires at least one ordered expression or
+            \\named assignment in an instance's #(...). All assignments in
+            \\that list use the same form (IEEE 1364-2005 12.2.2). Omit the
+            \\whole list to use defaults, or use a named empty value, .P(),
+            \\to retain that parameter's default. An empty port list () is
+            \\independent of these parameter-list requirements and is legal.
             ,
         },
         .E0245 => .{

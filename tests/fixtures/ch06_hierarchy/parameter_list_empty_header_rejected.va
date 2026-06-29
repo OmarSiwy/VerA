@@ -1,0 +1,8 @@
+// AMS A.1.3's header requires its first parameter_declaration. #() has none.
+// parameter_list_forms.va supplies a legal header and executes its parameters.
+//! lrm A.1.3
+//! reject E0246
+module parameter_list_empty_header #() (p);
+  inout p; electrical p;
+  analog I(p) <+ V(p);
+endmodule
