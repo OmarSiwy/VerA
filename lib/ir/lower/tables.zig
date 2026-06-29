@@ -40,6 +40,9 @@ pub const Node = struct {
     /// Discipline name (`""` when undeclared, §3.9). A name and not an index,
     /// because a node may name a discipline `disciplines` has no row for.
     disc: []const u8,
+    /// §7.2.4 minimum potential tolerance over the signal's continuous net
+    /// segments. This is node metadata, not a net's §5.5.3 nature attribute.
+    potential_abstol: ?f64 = null,
     /// §6.5.2.2 port direction (`.unspecified` for an internal net or an undeclared
     /// direction). An `input` or `output` port is a §1.3.4 signal-flow port; which
     /// of the two decides §1.3.4.1's contribution-target rule (E0425).

@@ -89,6 +89,13 @@ pub const Design = struct {
     /// port bound to a net: the bound flat net and the child's declared range
     /// (null for a scalar port), for lowering to fold and compare.
     port_widths: []const PortWidth = &.{},
+    /// §7.2.4's continuous segments of one signal retain their local
+    /// disciplines even when flattening gives the signal one net declaration.
+    /// Lowering folds their potential tolerances into the shared node's minimum.
+    signal_disciplines: []const SignalDiscipline = &.{},
+    /// §5.5.3 attribute reads on bound ports keep the source segment's
+    /// discipline even after the expression names the shared flattened net.
+    attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
     /// §6.4.3 "If a paramset variable without a description has the same name
     /// as a module output variable, the module output variable shall not be
     /// available for instances using the paramset." The flat names of those
@@ -104,6 +111,9 @@ pub const PortWidth = struct {
     range: ?Ast.Dim,
     main_tok: u32,
 };
+
+/// One hierarchical net segment attached to the flattened signal `net`.
+pub const SignalDiscipline = struct { net: []const u8, discipline: []const u8 };
 
 /// One `Design.port_concats` row: a vector port bound to a concatenation of
 /// parent nets (LRM §6.5.7.1).
@@ -414,6 +424,10 @@ pub const Flatten = struct {
     unconnected_inputs: std.ArrayList(NameSite) = .empty,
     port_concats: std.ArrayList(PortConcat) = .empty,
     port_widths: std.ArrayList(PortWidth) = .empty,
+    signal_disciplines: std.ArrayList(SignalDiscipline) = .empty,
+    attribute_disciplines: std.AutoHashMapUnmanaged(Ast.ExprId, Ast.StrId) = .empty,
+    /// Attribute reads of undeclared ports wait for bottom-up resolution.
+    pending_attributes: std.ArrayList(struct { expr: Ast.ExprId, net: Ast.StrId, path: []const u8 }) = .empty,
 
     /// §6.3.1 every `defparam` seen so far, keyed by the absolute flat name of
     /// the parameter it overrides: the declaring module's path joined with the
@@ -454,12 +468,16 @@ pub const Flatten = struct {
         discs: std.ArrayList(Ast.StrId) = .empty,
         /// Each arrival's instance path, parallel to `discs`.
         paths: std.ArrayList([]const u8) = .empty,
+        /// Answers for undeclared segments, keyed by their arrival index.
+        resolved: std.AutoHashMapUnmanaged(usize, ?Ast.StrId) = .empty,
         tok: u32,
     };
 
     /// Per-instance clone state: the rename map and the §9.18/§9.19 answers
     /// that differ from one instance of a module to the next.
     pub const Unit = struct {
+        /// This instance's namespace prefix, ending in `sep` below the top.
+        path: []const u8 = "",
         /// Local name → flat name for this unit's declarations and ports.
         rename: Rename = .empty,
         /// §9.19 `$port_connected`: the child's local port name → was it given
@@ -468,10 +486,11 @@ pub const Flatten = struct {
         connected: std.AutoHashMapUnmanaged(Ast.StrId, bool) = .empty,
         /// §9.19 `$param_given`: local parameter name → was it overridden.
         given: std.AutoHashMapUnmanaged(Ast.StrId, bool) = .empty,
-        /// §4.4 the discipline a BOUND port was declared with in this unit,
+        /// §4.4/§5.5.3 the discipline a BOUND port was declared with in this unit,
         /// local port name → discipline. The port is the parent's net after
         /// the join, whose discipline may be another one; `localAccess` checks
-        /// this unit's access names against this, not against that.
+        /// this unit's access names against this, not against that. Attribute
+        /// reads likewise retain this discipline when their net is renamed.
         port_disc: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
         /// Annex E: the unit is a shipped Table E.1 primitive, whose `V`/`I`
         /// is a nature-neutral spelling of the port pair's potential and flow,
@@ -633,6 +652,8 @@ pub const Flatten = struct {
             .inserts = self.inserts.items,
             .port_concats = self.port_concats.items,
             .port_widths = self.port_widths.items,
+            .signal_disciplines = self.signal_disciplines.items,
+            .attribute_disciplines = self.attribute_disciplines,
             .ps_hidden = self.ps_hidden.items,
         };
     }
@@ -814,6 +835,7 @@ pub const Flatten = struct {
     ) Error!void {
         const parent = self.unit; // restored below; the rename map is a stack
         var unit: Unit = .{
+            .path = path,
             .primitive = elab_names.isPrimitive(self, child),
             .gate = if (gate == .none) parent.gate else try self.conj(parent.gate, gate, false),
         };
@@ -844,6 +866,8 @@ pub const Flatten = struct {
                         continue;
                     }
                     try unit.rename.put(self.ctx.arena, p.name, try elab_names.join(self, path, p.name));
+                    const local = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline;
+                    if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
                     try concats.append(self.ctx.arena, .{ .port = p, .elems = elems, .tok = c.main_tok });
                 }
                 continue;
@@ -932,12 +956,16 @@ pub const Flatten = struct {
         for (subs.items) |sub| try elab_names.bind(self, &unit, path, sub.name);
 
         self.unit = unit;
-        for (concats.items) |cc| try self.port_concats.append(self.ctx.arena, .{
-            .name = self.ctx.file.str(unit.rename.get(cc.port.name).?),
-            .range = (try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range)).?,
-            .elems = cc.elems,
-            .main_tok = cc.tok,
-        });
+        for (concats.items) |cc| {
+            const name = unit.rename.get(cc.port.name).?;
+            try self.port_concats.append(self.ctx.arena, .{
+                .name = self.ctx.file.str(name),
+                .range = (try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range)).?,
+                .elems = cc.elems,
+                .main_tok = cc.tok,
+            });
+            try elab_resolve.noteSignalDiscipline(self, name, (try elab_resolve.oocDiscipline(self, path, cc.port.name)) orelse cc.port.discipline);
+        }
         for (widths.items) |pw| try self.port_widths.append(self.ctx.arena, .{
             .net = self.ctx.file.str(pw.net),
             .range = try elab_clone.cloneDim(self, pw.port.range orelse pw.port.type_range),

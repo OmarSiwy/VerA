@@ -3,7 +3,7 @@
 //! In: net and port declarations. Out: `nodes` (the U-enum index codegen depends on),
 //! implicit nets, and the port/branch tables.
 //!
-//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2.
+//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §7.2.4.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -199,6 +199,32 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
     const idx = try appendNode(self, name, discipline, .net);
     gop.value_ptr.* = idx;
     return idx;
+}
+
+/// §7.2.4: the node's potential tolerance is the smallest among the
+/// continuous segments sharing it. Preserve the net's resolved discipline:
+/// §5.5.3 still reads that net's local nature attributes, not this minimum.
+pub fn collectSignalAbstols(self: *Lower, segments: []const @import("../elaborate.zig").SignalDiscipline) Oom!void {
+    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    for (segments) |s| {
+        const info = self.out.disciplines.get(s.discipline) orelse continue;
+        if (info.is_discrete or !info.has_potential) continue;
+        if (self.out.vectors.get(s.net)) |r| {
+            for (0..r.size()) |k| {
+                const key = try lower_param.elemKey(self, &key_buf, s.net, &.{r.at(@intCast(k))});
+                collectNodeAbstol(self, key, info.potential_abstol);
+            }
+        } else collectNodeAbstol(self, s.net, info.potential_abstol);
+    }
+}
+
+fn collectNodeAbstol(self: *Lower, name: []const u8, abstol: f64) void {
+    const idx = self.node_voltages.get(name) orelse return;
+    if (idx == ground) return;
+    const local = self.out.disciplines.get(self.out.nodes.items(.disc)[idx]) orelse return;
+    if (local.is_discrete or !local.has_potential) return;
+    const slot = &self.out.nodes.items(.potential_abstol)[idx];
+    slot.* = @min(slot.* orelse local.potential_abstol, abstol);
 }
 
 /// Folds one §3.6.3.2 net_decl_assignment into a nodeset value for `node`.

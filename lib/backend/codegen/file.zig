@@ -382,6 +382,7 @@ fn emitNodesets(self: *Gen) Error!void {
 /// discipline at its high node (`Lower.NodeKind`'s payload). A net with no
 /// discipline (a §3.5 implicit net without `default_discipline`) falls back to
 /// annex D's `VOLTAGE_ABSTOL` 1e-6 / `CURRENT_ABSTOL` 1e-12.
+/// A shared potential node uses §7.2.4's minimum across its signal segments.
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = plan_topo.isFlowUnknown(self.input(), i);
     var idx: u16 = @intCast(i);
@@ -392,6 +393,7 @@ pub fn abstolOf(self: *const Gen, i: u32) f64 {
     };
     if (idx == Lower.ground or idx >= self.lowered.nodes.len)
         return if (flow) 1e-12 else 1e-6;
+    if (!flow) if (self.lowered.nodes.items(.potential_abstol)[idx]) |abstol| return abstol;
     const info = self.lowered.disciplines.get(self.lowered.nodes.items(.disc)[idx]) orelse
         return if (flow) 1e-12 else 1e-6;
     return if (flow) info.flow_abstol else info.potential_abstol;
