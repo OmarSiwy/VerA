@@ -7,6 +7,7 @@
 //! §9.13.1/§9.13.2 hidden seed storage uses the same retained SSA mechanism.
 
 const std = @import("std");
+const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
@@ -77,7 +78,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // point or the simulation state, which has no value a model card could
     // carry (`parameter real bad = $abstime;` would read 0.0). Reported and
     // then lowered anyway, like E0347.
-    if (simStateInDefault(self, decl.default)) |what| {
+    if (@import("frontend").constfold.firstStateRead(self.file, decl.default, if (self.out.module) |m| m.vars else &.{})) |what| {
         try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
     if (oomrInDefault(self, decl.default)) |h|
@@ -158,37 +159,6 @@ fn packedShapeWidth(self: *Lower, range: Ast.Dim) ?u32 {
     return lower_constfold.packedWidth(self, range);
 }
 
-/// §3.4/A.2.4: the spelling of the first simulation-state or module-variable
-/// reference in a parameter default, or null when none exists. Access functions, analog
-/// operators, small-signal sources and event functions are state reads by
-/// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
-/// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
-/// before the solve and are left to the ordinary paths. Every other tag is
-/// searched through its `children`, first in source order.
-fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
-    if (e == .none) return null;
-    const ex = &self.file.exprs;
-    const tag = ex.tag(e);
-    switch (tag) {
-        // §4.4 access functions, §4.5 analog operators, §4.6 small-signal
-        // sources, §5.10 event functions: operating-point reads by construction.
-        .branch_access, .port_access, .filter_call, .noise_call, .event_function => return self.file.str(ex.strOf(e)),
-        .sys_call => {
-            const n = self.file.str(ex.strOf(e));
-            if (simStateName(n)) return n;
-        },
-        // §3.4 "constant numbers and previously defined parameters": a module
-        // variable is neither, and holds nothing until the analog block runs.
-        .ident => if (self.out.module) |m| for (m.vars) |v| {
-            if (v.name == ex.strOf(e)) return self.file.str(v.name);
-        },
-        else => {}, // else: a state read only through its children
-    }
-    var buf: [3]Ast.ExprId = undefined;
-    for (ex.children(e, &buf)) |c| if (simStateInDefault(self, c)) |w| return w;
-    return null;
-}
-
 /// §6.7.1 "parameter declaration statements shall not make out-of-module
 /// references": the first hierarchical name in `e`, or null. A §5.5.3 nature
 /// attribute reference (`net.potential.attr`) is a constant, not a reference.
@@ -203,23 +173,6 @@ fn oomrInDefault(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (oomrInDefault(self, c)) |h| return h;
     return null;
-}
-
-/// The `$` (and `analysis`) names whose value belongs to a solve: time, the
-/// ambient temperature pair, the RNG family, and the analysis type. §9.13's
-/// distributions are matched by their two prefixes.
-///
-/// `$simparam` is deliberately NOT here: §9.15's table is the HOST's, constant
-/// for a whole run, and a default reading it is the documented W1050 contract
-/// — the field ships as 0 and the host writes it (codegen's "§3.4 a default
-/// with no compile-time value is W1050" test pins exactly that shape).
-fn simStateName(n: []const u8) bool {
-    const names = [_][]const u8{
-        "$abstime", "$realtime", "$temperature", "$vt",
-        "$random",  "$arandom",  "analysis",
-    };
-    for (names) |s| if (std.mem.eql(u8, n, s)) return true;
-    return std.mem.startsWith(u8, n, "$dist_") or std.mem.startsWith(u8, n, "$rdist_");
 }
 
 /// §3.4.2: "The parameter value shall be within the range from the smallest
@@ -327,23 +280,23 @@ fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, fo
     });
 }
 
-/// Declares §3.4.7's `aliasparam m = $mfactor;` form, which the clause prints
-/// but Syntax 3-2 (identifier on the right) does not cover. Returns false when
-/// `target` is not `$mfactor`.
+/// §3.4.7/§9.18 permits aliases of all six system parameters. The first
+/// alias supplies a model-card slot with Table 9-29's top-level default;
+/// additional aliases share that slot. A child alias is resolved earlier,
+/// by elaboration, so it never replaces the top-level system value here.
 ///
-/// The alias gets the storage: §9.18's `$mfactor` has no model-card location
-/// (it is an `Instance` field the host writes, §6.3.6), so the alias becomes an
-/// ordinary real parameter defaulting to Table 9-29's top-level 1.0, and
-/// `$mfactor` reads it (`lowerSysCall`).
-///
-/// ponytail: a host that writes `Instance.mfactor` and also overrides the alias
-/// sets one quantity twice; the equations read the alias while the stamp is
-/// scaled by the field. The upgrade is for codegen to fold the card knob into
-/// `Instance.mfactor` at `derive` time.
+/// As before, a host overriding the `$mfactor` alias must also keep the
+/// `Instance.mfactor` scaling field consistent with that model-card value.
 pub fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
-    if (!std.mem.eql(u8, target, "$mfactor")) return false;
-    self.mfactor_param = @intCast(self.out.params.items.len);
-    try addParam(self, alias, .real, try self.mir.addFloatConst(self.arena, 1.0), .{ .real = 1.0 }, &.{}, false, Mir.no_tok);
+    const kind = hier_param.Kind.fromName(target) orelse return false;
+    if (self.hier_params.get(kind)) |idx| {
+        try self.param_index.put(self.arena, alias, idx);
+        try self.out.aliases.append(self.arena, .{ .name = alias, .param = idx });
+        return true;
+    }
+    self.hier_params.set(kind, @intCast(self.out.params.items.len));
+    const value = kind.initial();
+    try addParam(self, alias, .real, try self.mir.addFloatConst(self.arena, value), .{ .real = value }, &.{}, false, Mir.no_tok);
     return true;
 }
 

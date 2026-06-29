@@ -1,0 +1,11 @@
+// §9.18/Table 9-29 restricts $hflip to +1 or -1: zero is invalid.
+// geometry_hierarchical_overrides.va and geometry_parameter_sweep.va cover
+// both legal signs and their multiplication.
+//! lrm 9.18
+//! reject E0890
+module geometry_hflip_bad;
+  geometry_hflip_child #(.$hflip(0)) child();
+endmodule
+module geometry_hflip_child;
+  analog $display("flip=%g", $hflip);
+endmodule

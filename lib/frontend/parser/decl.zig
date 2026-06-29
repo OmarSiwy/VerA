@@ -884,9 +884,18 @@ pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayLi
             // identifier of a path carries no index.
             _ = try self.expect(.dot);
         } else if (!self.eat(.dot)) break;
-        const part = try self.expectIdent();
+        // §6.3.6 permits `defparam instance.$xposition = ...` and the
+        // other hierarchical system parameters. A system name is the final
+        // segment; elaboration checks that it names an overridable value.
+        const system = self.peek() == .system_identifier;
+        const part = if (system) blk: {
+            const id = try self.internTok(self.pos);
+            self.pos += 1;
+            break :blk id;
+        } else try self.expectIdent();
         try joined.append(self.arena, '.');
         try joined.appendSlice(self.arena, self.file.str(part));
+        if (system) break;
     }
     return self.file.intern(self.arena, joined.items);
 }

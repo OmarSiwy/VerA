@@ -5,6 +5,7 @@
 //! LRM clauses this file's code cites: §3.4.7, §4.3.1, §9.2, §9.5, §9.5.4.2, §9.5.7, §9.15, §9.17.3, §9.18, §9.20, §9.22, §9.23.
 
 const std = @import("std");
+const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
@@ -108,10 +109,9 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // division. Use typed arithmetic opcodes, after the context checks above.
     if (std.mem.eql(u8, name, "$abs") or std.mem.eql(u8, name, "$min") or
         std.mem.eql(u8, name, "$max")) return lower_expr.lowerBuiltin(self, e);
-    // §3.4.7/§9.18: this module wrote `aliasparam m = $mfactor;`, so the two
-    // names denote one location, the parameter the alias declared
-    // (`aliasSystemParam`). Both spellings read it (§3.4.7 rule 2).
-    if (self.mfactor_param) |pi| if (std.mem.eql(u8, name, "$mfactor"))
+    // §3.4.7/§9.18 aliases and the original system spelling denote the
+    // same top-level value. Instance-local reads were resolved in elaboration.
+    if (hier_param.Kind.fromName(name)) |kind| if (self.hier_params.get(kind)) |pi|
         return .{ .v = self.param_values.items[pi], .ty = .real };
     // §9.13 Table 9-10. Before everything below, because the seed is an inout
     // argument and the write-back is not something a `call` result can express.

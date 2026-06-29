@@ -1,0 +1,15 @@
+// §9.18/Table 9-29 restricts $vflip to +1 or -1, including paramset
+// assignments (§6.3.6). The legal geometry_paramset.va assigns -1 and
+// resolves (-1)*(-1) to +1; this isolated value 2 is not a flip.
+//! lrm 6.3.6
+//! lrm 9.18
+//! reject E0890
+module geometry_vflip_bad;
+  geometry_vflip_ps child();
+endmodule
+paramset geometry_vflip_ps geometry_vflip_child;
+  .$vflip = 2;
+endparamset
+module geometry_vflip_child;
+  analog $display("flip=%g", $vflip);
+endmodule

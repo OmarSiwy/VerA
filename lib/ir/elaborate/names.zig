@@ -306,7 +306,7 @@ pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net:
 ///
 /// A flattened child's $mfactor copies exist only in its own equations, so
 /// the scaling is source arithmetic. The top's $mfactor stays with the host
-/// (Table 9-29's 1.0; `unit.mfactor` is `.none` there and nothing fires).
+/// (Table 9-29's 1.0; `unit.hier.get(.mfactor)` is `.none` there and nothing fires).
 ///
 /// ponytail: a named branch (`I(br)`) is not in `disc_of`, so it is left
 /// unscaled; the upgrade is a branch → net map here. Rules 3 and 4 (noise
@@ -320,7 +320,7 @@ pub fn mfactorScale(
     op: Ast.BinaryOp,
     tok: u32,
 ) Error!?Ast.ExprId {
-    if (self.unit.mfactor == .none) return null;
+    if (self.unit.hier.get(.mfactor) == .none) return null;
     const name = netRefName(self, net) orelse return null;
     const disc = self.disc_of.get(name) orelse return null;
     const flow = discipline.accessOf(self.ctx.file, disc, .flow) orelse return null;
@@ -329,7 +329,7 @@ pub fn mfactorScale(
         .tag = .binary,
         .main_tok = tok,
         .lhs = value,
-        .rhs = self.unit.mfactor,
+        .rhs = self.unit.hier.get(.mfactor),
         .extra = @intFromEnum(op),
     });
 }

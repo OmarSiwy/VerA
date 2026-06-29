@@ -4,6 +4,7 @@
 //! `>>>`'s signedness come from the caller's `env`. Implements §3.2's 32-bit
 //! integer wrap, §4.2.1.3, §4.2.4, §4.2.11, §4.2.12, §4.3 and Table 3-3;
 //! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
+//! §3.4/A.2.4 and §6.3 share the syntactic check for reads of simulation state.
 
 const std = @import("std");
 const Ast = @import("ast.zig");
@@ -117,6 +118,54 @@ pub fn ipow32(b: i64, n: i64) ?i64 {
         x *%= x;
     }
     return r;
+}
+
+/// §3.4/A.2.4: the spelling of the first simulation-state or module-variable
+/// reference in a parameter default, or null when none exists. Access functions, analog
+/// operators, small-signal sources and event functions are state reads by
+/// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
+/// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
+/// before the solve and are left to the ordinary paths. Every other tag is
+/// searched through its `children`, first in source order.
+pub fn firstStateRead(file: *const Ast.SourceFile, e: Ast.ExprId, vars: []const Ast.VarDecl) ?[]const u8 {
+    if (e == .none) return null;
+    const ex = &file.exprs;
+    const tag = ex.tag(e);
+    switch (tag) {
+        // §4.4 access functions, §4.5 analog operators, §4.6 small-signal
+        // sources, §5.10 event functions: operating-point reads by construction.
+        .branch_access, .port_access, .filter_call, .noise_call, .event_function => return file.str(ex.strOf(e)),
+        .sys_call => {
+            const n = file.str(ex.strOf(e));
+            if (simStateName(n)) return n;
+        },
+        // §3.4 "constant numbers and previously defined parameters": a module
+        // variable is neither, and holds nothing until the analog block runs.
+        .ident => for (vars) |v| {
+            if (v.name == ex.strOf(e)) return file.str(v.name);
+        },
+        else => {}, // else: a state read only through its children
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (firstStateRead(file, c, vars)) |w| return w;
+    return null;
+}
+
+/// The `$` (and `analysis`) names whose value belongs to a solve: time, the
+/// ambient temperature pair, the RNG family, and the analysis type. §9.13's
+/// distributions are matched by their two prefixes.
+///
+/// `$simparam` is deliberately NOT here: §9.15's table is the HOST's, constant
+/// for a whole run, and a default reading it is the documented W1050 contract
+/// — the field ships as 0 and the host writes it (codegen's "§3.4 a default
+/// with no compile-time value is W1050" test pins exactly that shape).
+fn simStateName(n: []const u8) bool {
+    const names = [_][]const u8{
+        "$abstime", "$realtime", "$temperature", "$vt",
+        "$random",  "$arandom",  "analysis",
+    };
+    for (names) |s| if (std.mem.eql(u8, n, s)) return true;
+    return std.mem.startsWith(u8, n, "$dist_") or std.mem.startsWith(u8, n, "$rdist_");
 }
 
 test "ipow32 is IEEE 1364-2005 Table 5-6 at 32 bits" {

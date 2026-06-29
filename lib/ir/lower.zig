@@ -358,10 +358,9 @@ scope_log: std.ArrayList(ScopeEntry) = .empty,
 consts: std.StringHashMapUnmanaged(Const) = .empty,
 /// name → index into `params` (aliasparam §3.4.7 maps two names to one index).
 param_index: std.StringHashMapUnmanaged(u32) = .empty,
-/// §3.4.7's one printed example whose right-hand side is NOT a parameter:
-/// `aliasparam m = $mfactor;`. The index of the parameter the alias declared, or
-/// null when this module never aliased it (see `aliasSystemParam`).
-mfactor_param: ?u32 = null,
+/// §3.4.7/§9.18 top-level aliases share one model-card slot per system
+/// parameter. Child aliases have already become instance-local values.
+hier_params: @import("hier_param.zig").Aliases = .initFill(null),
 /// Scalarized array bounds (§3.2.2 variables, §3.4.4 parameters).
 arrays: std.StringHashMapUnmanaged(ArrayInfo) = .empty,
 /// §4.6.4 the noise sources a variable holds, by name, for §4.6.4.6's
@@ -1096,6 +1095,23 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // with `width` a module parameter, and `foldDim` cannot answer that from
     // an empty `consts`. A parameter declaration cannot name a net (§3.4
     // defaults are constant expressions), so the order is otherwise free.
+    // §6.3.6 implicitly declares the geometry controls. Register their
+    // top-level aliases before the explicit parameters so they exist
+    // before a flattened child's dependent defaults read them. Keep the
+    // existing `$mfactor` host/scaling ABI in its separate alias path below.
+    for (module.aliasparams) |a| {
+        const kind = @import("hier_param.zig").Kind.fromName(self.file.str(a.target)) orelse continue;
+        if (kind == .mfactor) continue;
+        const alias = self.file.str(a.alias);
+        const collides = self.param_index.contains(alias) or for (module.params) |p| {
+            if (p.name == a.alias) break true;
+        } else false;
+        if (collides) {
+            try self.err(module.main_tok, .E0331, "`{s}`", .{alias});
+            continue;
+        }
+        _ = try lower_param.aliasSystemParam(self, alias, self.file.str(a.target));
+    }
     for (module.params) |*p| try lower_param.lowerParamDecl(self, p);
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
@@ -1315,6 +1331,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.aliasparams) |a| {
         const target = self.file.str(a.target);
         const alias = self.file.str(a.alias);
+        if (@import("hier_param.zig").Kind.fromName(target)) |kind|
+            if (kind != .mfactor) continue; // already declared above
         // §3.4.7 "The alias_identifier shall not occur anywhere else in the
         // module; in particular, it shall not conflict with a different
         // parameter_identifier". Unchecked, the `put` below would rebind the

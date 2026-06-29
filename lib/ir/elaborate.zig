@@ -6,6 +6,7 @@
 //! Annex F.2 discipline resolution.
 
 const std = @import("std");
+const hier_param = @import("hier_param.zig");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
@@ -496,11 +497,10 @@ pub const Flatten = struct {
         /// is a nature-neutral spelling of the port pair's potential and flow,
         /// not those two access functions. See `primitiveAccess`.
         primitive: bool = false,
-        /// §9.18 the value `$mfactor` has in this unit, as an EXPRESSION in the
-        /// flat namespace. `.none` at the top, where codegen answers Table
-        /// 9-29's 1.0; below it the running product of §9.18's "times the
-        /// parent's value", so no constant folding is needed.
-        mfactor: Ast.ExprId = .none,
+        /// §9.18 the six resolved values in the flat namespace. `.none`
+        /// denotes Table 9-29's top-level identity; descendants inherit the
+        /// parent's expression unless they specify a new value to combine.
+        hier: hier_param.Values = .initFill(.none),
         /// §6.6 the conjunction of if-generate schemes that brings this unit
         /// into existence, in the flat namespace; `.none` when nothing does.
         /// Every analog block of the unit is lowered under it.
@@ -577,6 +577,18 @@ pub const Flatten = struct {
         // in the device for no change.
         try self.params.appendSlice(self.ctx.arena, top.params);
         try self.aliasparams.appendSlice(self.ctx.arena, top.aliasparams);
+        // A host can set a top-level geometry alias through the model card.
+        // Retain that parameter read in every descendant's composition. The
+        // mfactor host field has its own automatic scaling convention.
+        for (top.aliasparams) |al| {
+            const kind = hier_param.Kind.fromName(self.ctx.file.str(al.target)) orelse continue;
+            if (kind == .mfactor or self.unit.hier.get(kind) != .none) continue;
+            self.unit.hier.set(kind, try self.ctx.file.exprs.add(self.ctx.arena, .{
+                .tag = .ident,
+                .main_tok = top.main_tok,
+                .str = al.alias,
+            }));
+        }
         try self.vars.appendSlice(self.ctx.arena, top.vars);
         for (top.ports) |p| try elab_resolve.noteDiscipline(self, p.name, p.discipline);
         try elab_resolve.addNets(self, top.nets);
@@ -1194,7 +1206,7 @@ pub const Flatten = struct {
 
     /// Binds an instance's `#(...)` to `child`'s parameters into `over` (§6.3),
     /// applies matching defparams last (§6.3.1), and sets `unit`'s §9.18
-    /// `$mfactor` product and §9.19 `$param_given` answers. Reports E0907 and
+    /// hierarchical values and §9.19 `$param_given` answers. Reports E0907 and
     /// E0908 on bad overrides.
     pub fn collectOverrides(
         self: *Flatten,
@@ -1205,11 +1217,8 @@ pub const Flatten = struct {
         unit: *Unit,
         path: []const u8,
     ) Error!void {
-        // §9.18/Table 9-29: `$mfactor_resolved = $mfactor_specified *
-        // $mfactor_hier`, carried as an expression: the top's `$mfactor` is
-        // host-supplied, and a specified factor may be any constant
-        // expression over the parent's parameters.
-        var mfactor = parent.mfactor;
+        var specified: hier_param.Values = .initFill(.none);
+        var spellings: std.EnumArray(hier_param.Kind, Ast.StrId) = .initFill(.none);
 
         const named = inst.params.len != 0 and inst.params[0].name != .none;
         // §3.4.5: local parameters "cannot directly be modified with the
@@ -1243,14 +1252,6 @@ pub const Flatten = struct {
                 ord += 1;
                 continue;
             }
-            if (self.ctx.file.strings.eql(o.name, "$mfactor")) {
-                // §6.3.3 an empty named association supplies no value. For
-                // §9.18 that leaves the inherited product unchanged (times 1).
-                if (o.value == .none) continue;
-                if (try elab_paramset.checkMfactor(self, o.main_tok, o.value)) continue;
-                mfactor = try elab_paramset.mulMfactor(self, mfactor, value, o.main_tok);
-                continue;
-            }
             // §3.4.7 an aliasparam is a second NAME for one parameter, so an
             // override through it lands on the target.
             var target = o.name;
@@ -1258,6 +1259,17 @@ pub const Flatten = struct {
                 target = al.target;
                 break;
             };
+            if (hier_param.Kind.fromName(self.ctx.file.str(target))) |kind| {
+                // §6.3.3 an empty association supplies no new value.
+                if (o.value == .none) continue;
+                if (specified.get(kind) != .none) {
+                    try self.err(o.main_tok, .E0908, "`{s}` is given more than one value", .{kind.name()});
+                    continue;
+                }
+                specified.set(kind, value);
+                spellings.set(kind, o.name);
+                continue;
+            }
             if (!try elab_paramset.checkOverridable(self, child, target, o.name, o.main_tok)) continue;
             // §6.3.3 / IEEE 12.2.2.2: .name() documents the parameter but
             // leaves its default, dependencies and $param_given unchanged.
@@ -1272,10 +1284,19 @@ pub const Flatten = struct {
             try over.put(self.ctx.arena, target, value);
         }
 
-        // §9.18: an instance with no `.$mfactor` still PROPAGATES the parent's
-        // ("times 1.0, if no override was specified"), which is why `mfactor`
-        // starts at the parent's value rather than at `.none`.
-        unit.mfactor = mfactor;
+        // Resolve §6.3.1 precedence BEFORE composition: a defparam replaces
+        // the specified value, never the inherited contribution. §3.4.7
+        // forbids assigning through different aliases, even across mechanisms.
+        for (hier_param.Kind.all) |kind| {
+            const direct = try self.ctx.file.intern(self.ctx.arena, kind.name());
+            try self.collectSystemDefparam(path, kind, direct, &specified, &spellings);
+            for (child.aliasparams) |al| if (al.target == direct)
+                try self.collectSystemDefparam(path, kind, al.alias, &specified, &spellings);
+            const value = specified.get(kind);
+            unit.hier.set(kind, parent.hier.get(kind));
+            if (value == .none or try elab_paramset.checkSystemParam(self, kind, self.ctx.file.exprs.mainTok(value), value)) continue;
+            unit.hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, parent.hier.get(kind), value, self.ctx.file.exprs.mainTok(value)));
+        }
 
         // §6.3.1 last: "If a defparam assignment conflicts with a module
         // instance parameter, the parameter in the module shall take the value
@@ -1290,6 +1311,19 @@ pub const Flatten = struct {
         }
 
         try elab_paramset.markGiven(self, child, over, unit);
+    }
+
+    fn collectSystemDefparam(self: *Flatten, path: []const u8, kind: hier_param.Kind, name: Ast.StrId, specified: *hier_param.Values, spellings: *std.EnumArray(hier_param.Kind, Ast.StrId)) Error!void {
+        const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(name) });
+        const dp = self.defparams.getPtr(key) orelse return;
+        dp.used = true;
+        const previous = spellings.get(kind);
+        if (previous != .none and previous != name) {
+            try self.err(dp.tok, .E0908, "`{s}` and its alias are both given a value", .{kind.name()});
+            return;
+        }
+        specified.set(kind, dp.value);
+        spellings.set(kind, name);
     }
 
     const elab_paramset = @import("elaborate/paramset.zig");
