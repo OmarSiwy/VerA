@@ -9,13 +9,13 @@
 // (a,b) taking a.potential.abstol and the named branch cap taking
 // n1.potential.abstol.
 //
-// The abstol argument to ddt() (§4.5.4) is a tolerance hint for the solver's
+// The abstol argument to ddt() (§4.5.3) is a tolerance hint for the solver's
 // time step; it does not change the value ddt() returns. §4.5.3 "In DC
 // analysis, ddt() returns zero (0)", so the contributed flows are exactly zero
 // whatever c and abstol are, and an implementation that let the extra argument
 // leak into the result would report a nonzero number against a deliberately
-// nonzero branch potential. abstol's own value comes from disciplines.vams and
-// not from the LRM, so it is not asserted.
+// nonzero branch potential. The selected abstol comes from the nature
+// declaration; this fixture checks access and the DC result, not its value.
 //
 // The bias pair is 0.75/0.25 and not the 0.7/0.2 that reads more naturally,
 // because 0.7 - 0.2 in IEEE-754 double is 0.49999999999999994 — one ulp below
@@ -24,13 +24,12 @@
 // controlled_sources.va, which hits the same rounding from the other side and
 // pays for it with a relative tolerance).
 //
-// This is also the only Verilog-A spelling that reads what §11.6.2 models as
-// nature's one-to-many relationship to param assign, so ch11's s11-6-2 row
-// points here.
+// This language test does not exercise VPI relationships. Its former
+// §11.6.2 citation belongs to ch11_vpi/p04_06_analog_objects.c, which
+// traverses nature and discipline handles in the in-process VPI host.
 //
 //! lrm A.8.9
 //! lrm 5.5.3
-//! lrm 11.6.2
 //! bias V(a) = 0.75, V(b) = 0.25, V(n1) = 0.5, V(n2) = 0.125
 `include "check.vh"
 module ch5_nature_attribute(a, b, n1, n2);

@@ -52,18 +52,11 @@
 //   `r` is bound before the check because check.vh expands its GOT twice and a
 //   call that is required to raise a runtime error is not a pure expression.
 //
-// WHY IT FAILS TODAY. VerA lowers `asin` straight to the host `@asin`/libm call
-// with no domain guard, so an out-of-range argument produces a quiet NaN that
-// propagates into the residual. Observed today, on a single-point version of
-// this file at a 2.0 bias:
-//
-//   asin out of domain got=-nan want=0 ok=0
-//
-// and the run exits 0. THE SOFT PART OF THIS FIXTURE is the exit CODE: §4.3.2
-// says "report an error" and does not say the run terminates, so 1 is taken
-// from §9.7.3's $fatal convention, which VerA already uses. If the project
-// decides a domain violation is a continuable §9.7 `$error` instead, delete the
-// `//! exit 1` line and keep the two assertions — the NaN is wrong either way.
+// This runs the generated executable's domain-reporting path. VerA reports
+// the invalid asin input and exits 1; the device-only artifact does not print
+// diagnostics (codegen/kernel_text.zig, domain_report_txt/domain_quiet_txt).
+// The exit code tests VerA's reporting policy: §4.3.2 requires an error, but
+// does not itself require termination or prescribe this process status.
 //
 //! lrm 4.3.2
 //! lrm 4.2.1

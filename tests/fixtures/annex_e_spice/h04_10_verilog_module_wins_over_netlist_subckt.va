@@ -38,12 +38,8 @@
 //   netlist RDIV wins    (violation):  1.0 * 3000/(1000+3000) = 0.75  V
 //   neither body contributes:                                  0.0    V
 //
-// Three distinct numbers, one assertion — but 0.5 is ALSO the answer a tool
-// gives if it never reads the netlist at all, so that assertion on its own is
-// satisfied by a tool with no Annex E netlist reader whatsoever. Measured: with
-// `//! spice` unreachable from the CLI today, `vera --emit-exe` on this file
-// prints `got=0.5 want=0.5 ok=1`. An assertion true of a tool that has none of
-// the feature is not a claim about the feature.
+// The midpoint alone also passes if a tool ignores the netlist altogether.
+// The unshadowed subcircuit below checks that the netlist was read.
 //
 // SO THE CONTROL IS IN THIS FILE, not in fixture 06. `.SUBCKT RNET` has a name
 // nothing in this file shadows, so E.3.3's rule does not apply to it and the
@@ -69,14 +65,9 @@
 // resistor row with no tc1/tc2 has factor (1 + tc1*T + tc2*T^2) = 1 exactly, so
 // `4K` = 4000 ohm gives I = 1.0/4000 = 2.5e-4 A. 1e-14 relative is ~45 ulp.
 //
-// WHAT VerA DOES TODAY. `Flatten.findModule` (`lib/ir/elaborate.zig`) walks
-// `userModules()` first, then the shipped primitives, then the netlist range, so
-// the ordering half of E.3.3 is implemented and the 0.5 check reads green. The
-// control does not: `lib/frontend/spice_cards.zig` gives `.SUBCKT` an empty
-// body, so `rNet` is an open circuit and `I(x2.a, x2.b)` is 0. The file is red
-// today for a stated reason, which is what it was missing. The mandated WARNING
-// is still NOT asserted here — `//! reject` is for diagnostics that stop a
-// compile, and this one must not.
+// These checks cover name selection and the unshadowed netlist control.
+// E.3.3 also requires a shadowing warning; this fixture does not yet assert
+// it. That diagnostic obligation remains in docs/ROADMAP.md §5.2.
 //
 //! lrm E.3.3
 //! lrm E.2

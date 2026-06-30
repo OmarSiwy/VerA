@@ -42,19 +42,18 @@
 // THE CHECKEQ BAND. Both branches sit at ~7.7e-4 A under the absolute reading
 // and ~1.0e-3 A under the nominal-rise reading. 1e-14 A absolute is ~1e-11
 // relative on either, which admits any order of evaluation of the three-term
-// polynomial and whether the tool divides once or twice, and still fails every
-// wrong binding in kind: drop the card's TC1 and one side reads 1.0e-3 while
-// the other reads 7.69e-4, a gap of 2.3e-4 — eleven orders of magnitude above
-// the band. Drop the card's R and one side reads 1.0 A.
+// polynomial and whether the tool divides once or twice, and still detects a
+// dropped TC1 under the absolute-temperature reading. With zero temperature
+// rise the current alone cannot distinguish a dropped TC1, so the explicit
+// parameter-value check below supplies that evidence independently.
 //
 // THE THREE `CHECKX` LINES DO CARRY DIGITS, because those are the card's own
 // literals round-tripped, not a consequence of any equation: 1000, 1e-3, 0.
 //
 // WHAT THIS CATCHES THAT FIXTURE 01 DOES NOT. A tool could bind only the
 // parameter whose name matches the primitive's first, or only the one SPICE
-// spells positionally, and still pass 01. Here tc1 alone moves the answer by
-// 30%, and the longhand control is what makes that movement attributable to
-// tc1 rather than to the temperature convention.
+// spells positionally, and still pass 01. Here the direct TC1 check verifies
+// the binding even when the temperature convention gives T=0.
 //
 //! lrm E.3
 //! lrm E.2.2.1
@@ -70,14 +69,9 @@ module h04_model_card_tc1(a, b, c);
   // written out, under the same 1.0 V. Not a second claim — the reference the
   // CHECKEQ below is against.
   //
-  // ON ITS OWN NODE PAIR, DELIBERATELY. Measured: two primitive instances
-  // between the SAME two nodes both report the aggregate branch flow, so
-  // `I(r1.p,r1.n)` and `I(ref.p,ref.n)` would be the identical expression and
-  // the CHECKEQ would be vacuous — it passes even with the two given different
-  // `r`. Verified by running the pair at .r(1k) against .r(2k): both sides read
-  // 1.269e-3, the parallel sum, ok=1. Split across (a,b) and (c,b) with both
-  // `a` and `c` biased to 1.0 V, the same experiment reads 7.692e-4 against
-  // 1.0e-3, ok=0. The control is only a control on its own pair.
+  // Independent node pairs keep these unnamed branch-flow probes distinct.
+  // Probing two instances by their common endpoints would read the aggregate
+  // flow twice and would not compare their individual bindings.
   resistor #(.r(1k), .tc1(1.0e-3), .tc2(0.0)) ref(c, b);
   analog begin
     `CHECKX("the card's R reaches Table E.1's r", r1.r, 1000.0);

@@ -1,37 +1,17 @@
-// §5.10.3.3 timer(), the sentence that makes the schedule DYNAMIC:
+// §5.10.3.3 requires the next timer event to use the latest start_time
+// and period values from the analog-block evaluation. The default event
+// time may be at or just beyond the requested time; this fixed-grid harness
+// includes every requested instant and observes events on those points.
 //
-//   "If the start_time or period expressions change value during the evaluation
-//    of the analog block, the next event will be scheduled based on the latest
-//    value of the start_time and period."
+// DERIVATION: start_time=0, and per=2 ns at the 0 and 2 ns points.
+// Events there produce counts 1 and 2. At 4 ns V(ctl)=1, so per becomes
+// 4 ns; the event at 4 ns gives count 3 and the next is at 8 ns.
+// The 6 ns point keeps count 3; 8 ns gives count 4. Thus 1,2,3,3,4.
+// A period frozen at 2 ns would also fire at 6 ns and fail that check.
 //
-// and the preceding paragraph that permits such an argument at all: "The
-// start_time and period arguments are analog_expressions." §4.5.14's Table 4-20
-// — the constant-vs-dynamic table — lists the analog OPERATORS of clause 4 and
-// does not cover the clause 5 events, and this sentence is the clause 5 rule:
-// the period is re-read, and the NEXT event follows the value it had when the
-// previous one was scheduled.
-//
-// THE DERIVATION. `per` is 2 ns while V(ctl) is low and 4 ns once it goes high;
-// `V(ctl)` is driven by the `wave` line and steps high at t = 4n. start_time is
-// 0, so the schedule is computed forward, each fire scheduling the next from
-// the period in force AT THAT FIRE:
-//
-//   t = 0     start_time -> FIRE          count 1   next = 0 + 2n  = 2n
-//   t = 2n    scheduled  -> FIRE          count 2   next = 2n + 2n = 4n
-//   t = 4n    scheduled  -> FIRE          count 3   per is now 4n, so
-//                                                   next = 4n + 4n = 8n
-//   t = 6n    not scheduled               count 3
-//   t = 8n    scheduled  -> FIRE          count 4
-//
-// Expected counts: 1, 2, 3, 3, 4. The two rows that carry the claim are 6n and
-// 8n: a tool that froze the period at its first value fires at 6n and reads 4
-// there and 5 at 8n, and a tool that applies the new period retroactively (a
-// pure `k*period` grid from start_time) puts the next fire at 8n but has
-// already missed 2n, reading 2 and 3. Both differ from 3/4 on this grid.
-//
-// `per` is a plain real variable assigned from a probe, which is the shape the
-// clause's "change value during the evaluation of the analog block" describes;
-// a parameter cannot change during an analysis and so cannot exercise the rule.
+// This example does not distinguish absolute-grid scheduling from adding
+// a period to the last event: their deadlines coincide on this waveform.
+// timer_runtime_drift.va and tests/timer_host.zig cover the wider schedule.
 //
 //! lrm 5.10.3.3
 //! analysis tran
