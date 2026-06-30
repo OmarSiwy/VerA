@@ -35,12 +35,12 @@
 // widening this file. A `parameter_type` where `signed` stands would be the
 // first arm again.
 //
-// EVERY WANT IS THE DECLARED DEFAULT, read back through an ordinary expression;
-// the values are the digits written in the declarations, which is what
-// §6.3.1 makes a parameter that was not overridden. `mode == "NPN"` is 1 by
-// §4.2.6's equality applied to the string operand of Table 3-3, and the alias
-// `amplification` names the SAME storage as `gain` (§3.4.7), so 3 is the only
-// answer that does not prove the alias is a copy.
+// Values other than gain are the declared defaults. The host binds its
+// alias amplification=5, so equations read the ORIGINAL gain as 5 and
+// gain*scale is 5*4=20. §3.4.7 forbids the former alias equation read; that
+// withdrawn acceptance claim moves to
+// ch03_data_types/aliasparam_equation_rejected.va. The string comparison
+// mode == "NPN" is 1 by Table 3-3 and §4.2.6.
 //
 // `A.2.1` (Declaration types) is cited as well: it is the heading over the
 // subclause this file exercises and states no production of its own, so this
@@ -50,6 +50,7 @@
 //! lrm A.2.1.1
 //! lrm 3.4.6
 //! lrm 3.4.7
+//! param amplification = 5
 //! print none
 `include "check.vh"
 module annex_a_parameters(p, n);
@@ -67,7 +68,7 @@ module annex_a_parameters(p, n);
     aliasparam amplification = gain;
 
     analog begin
-        `CHECKI("parameter integer", gain, 3);
+        `CHECKI("parameter integer after alias override", gain, 5);
         `CHECKX("parameter real", factor, 2.5);
         `CHECKX("parameter realtime", tstep, 1.25);
         `CHECKI("parameter time", delay, 5);
@@ -75,7 +76,7 @@ module annex_a_parameters(p, n);
         `CHECKI("parameter [signed]", signed_value, 5);
         `CHECKI("localparam integer", scale, 4);
         `CHECKX("localparam real", offset, 1.5);
-        `CHECKI("aliasparam names the same parameter", amplification, 3);
+        `CHECKI("alias override participates in integer arithmetic", gain * scale, 20);
         I(p, n) <+ V(p, n);
     end
 endmodule

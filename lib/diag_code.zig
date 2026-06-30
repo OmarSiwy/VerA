@@ -216,6 +216,7 @@ pub const Code = enum(u16) {
     E0370,
     E0371,
     E0372,
+    E0373,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2371,6 +2372,18 @@ fn infoOf(c: Code) Info {
             \\`a` field becomes dead — writing it changes nothing.
             \\
             \\Rename the alias, or delete the parameter it collides with.
+            ,
+        },
+        .E0373 => .{
+            .title = "aliasparam name used in an expression",
+            .lrm = "3.4.7",
+            .explain =
+            \\An alias supplies an alternate name for parameter overrides.
+            \\The equations must reference the original parameter name, not
+            \\the alias. This also applies to constant expressions, unused
+            \\branches and hierarchical references. Bind through the alias
+            \\in an instance, paramset, defparam or host model card, and read
+            \\the original name in expressions.
             ,
         },
         .E0332 => .{

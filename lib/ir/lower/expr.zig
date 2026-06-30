@@ -431,38 +431,7 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
 ///
 /// Allocates the result in `self.arena` on every call.
 pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
-    var parts = self.file.exprs.nameParts(e);
-    // §6.2.1 the `$root` prefix: "used to unambiguously refer to a top-level
-    // instance or to an instance path starting from the root of the instantiation
-    // tree", against a plain path, where "the ambiguity is resolved by giving
-    // priority to the local scope". Elaboration's flat namespace IS rooted — a
-    // name with no path prefix is a name of the top, so `$root.` is dropped.
-    // The segment after it names a top-level instance (§6.7's
-    // `$root.mymodule.u1`), and a flattened design's one top-level instance is
-    // the device itself, so the top module's name drops with it.
-    //
-    // Not done in `Elaborate`'s clone: the top module's body is never cloned,
-    // so the rule would only reach children. Here it applies to every unit.
-    if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) parts = parts[1..];
-    // The top module's own name, with or without `$root`: IEEE 1364 §12.6's
-    // upward name referencing, which §6.7.1's last paragraph adopts, lets a
-    // path open with the name of a module above the reference; §5.5.5's
-    // example reads `V(top.a1.b)` from inside `b1`. The flattened namespace is
-    // rooted at the top, so its name drops. A local of the same name wins
-    // (§6.2.1 "priority to the local scope"): cloning has already renamed
-    // part 0 of a child's local path, and the top's own instances are
-    // checked here.
-    if (parts.len > 1) if (self.out.module) |m| if (parts[0] == m.name and for (m.instances) |inst| {
-        if (inst.name == parts[0]) break false;
-    } else true) {
-        parts = parts[1..];
-    };
-    var out: std.ArrayList(u8) = .empty;
-    for (parts, 0..) |p, i| {
-        if (i != 0) try out.append(self.arena, Elaborate.sep);
-        try out.appendSlice(self.arena, self.file.str(p));
-    }
-    const path = try out.toOwnedSlice(self.arena);
+    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, e);
     // The one place the join is NOT the answer: a child port bound to a parent
     // net is the same signal as that net, so `u.a` denotes `p` and there is no
     // `u.a` to find. `Design.names` holds those aliases and nothing else.

@@ -46,6 +46,11 @@ pub inline fn cloneParams(
         if (out.dims.len != 0) try checkArraySize(self, out, over.contains(p.name));
     }
     for (aliases) |al| {
+        if (@import("alias.zig").original(self.ctx.file, params, aliases, al)) |target|
+            try self.expression_aliases.append(self.ctx.arena, .{
+                .alias = elab_names.flat(self, al.alias),
+                .target = elab_names.flat(self, target),
+            });
         if (hier_param.Kind.fromName(self.ctx.file.str(al.target))) |kind| {
             // An inlined alias denotes THIS instance's resolved value. It
             // must not declare another top-level model-card system alias.

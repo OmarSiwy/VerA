@@ -9,9 +9,9 @@
 //                              is `CHECKX` and not a tolerance.
 //   `aliasparam amplification = gain;`
 //                              §3.4.7 — an alternate name for the SAME
-//                              parameter. Overriding `gain` to 3.5 must be
-//                              visible through the alias; a second, separate
-//                              storage would still read the 2.0 default.
+//                              parameter for OVERRIDES. Binding amplification
+//                              to 3.5 must change the original gain from 2.0.
+//                              Equations cannot read the alias (§3.4.7).
 //   `parameter real bipolar = -0.5 from (-inf:0];`
 //                              A.2.5 `value_range_expression ::= constant_expression
 //                              | -inf | inf` and §3.4.2. The LOWER half of that
@@ -25,6 +25,9 @@
 // The header used to cite "LRM 3.7" for branches (§3.7 is Real net declarations)
 // and "LRM 3.4.5" for aliasparam (§3.4.5 is Local parameters).
 //
+// The former alias-read acceptance claim moves to
+// ch03_data_types/aliasparam_equation_rejected.va.
+//
 //! lrm A.2
 //! lrm A.2.5
 //! lrm 3.12
@@ -32,7 +35,7 @@
 //! lrm 3.4.2
 //! bias V(p) = 0.8
 //! bias V(n) = 0.3
-//! param gain = 3.5
+//! param amplification = 3.5
 //! print none
 `include "check.vh"
 module annex_a_declarations(p, n);
@@ -49,7 +52,7 @@ module annex_a_declarations(p, n);
 
     analog begin
         `CHECKX("named branch probes the declared node pair", V(path), 0.5);
-        `CHECKX("aliasparam reads the overridden parameter", amplification, 3.5);
+        `CHECKX("an alias override reaches the original parameter", gain, 3.5);
         `CHECKX("a parameter bounded below by -inf keeps its negative default", bipolar, -0.5);
         I(path) <+ gain * V(path) + offset + bipolar;
     end
