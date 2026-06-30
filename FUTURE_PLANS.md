@@ -8,8 +8,8 @@ does not close the unmarked implementation gaps in that list.
 
 | Req | State |
 |---|---|
-| A | AMS strict and digital fixture gates pass at `6dca90a7`; the original digital XFAIL name list is retired. The original branch queue is integrated. VPI `vpi_runs` still carries event-array and attribute gaps, and unmarked AMS defects in ROADMAP §5 remain open. |
-| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `6dca90a7`. This is a static inventory; VPI runtime obligations remain. |
+| A | AMS strict and digital fixture gates pass at `b033ac35`; the original digital XFAIL name list is retired. The original branch queue and VPI event arrays are integrated. VPI attributes and unmarked AMS defects in ROADMAP §5 remain open. |
+| B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `b033ac35`. This is a static inventory; VPI runtime obligations remain. |
 | C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
 | D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
 | E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
@@ -79,10 +79,22 @@ at `c76b158f`.
   aliases, defparams and paramsets. Host-dependent domain checks retain the
   documented implementation boundary.
 
-Next integration work: the E0247 scaled-digital-delay fix is reviewed as
-`f959eea4`; alias equation restrictions, paramset/defparam hierarchy and VPI
-event arrays are being checked in isolated worktrees. They remain open until
-their combined gates pass.
+The next combined checkpoint is fully gated at `b033ac35` (2026-09-29).
+`tools/conformance.sh` measured it; both raw FAIL/XFAIL name lists are
+unchanged from `6dca90a7`. It includes:
+
+- E0247 for scaled literals in digital delays (`f959eea4`), E0373 for
+  aliasparam equation reads (`256eafcc`), and E0926 for a defparam in the
+  selected paramset hierarchy (`7bed3930`). Legal neighbors execute.
+- Named event arrays, including indexed triggers and automatic activation
+  isolation, plus their VPI objects and runtime assertions (`c2930d63`).
+  Native indexed-event emission remains on the fallback list below.
+- The ordinary duplicate-override E0908 explanation (`e11553ca`) and the
+  fixture claim/citation corrections in `b033ac35` (ROADMAP §5.5).
+
+Next integration work: VPI attributes, probe-dependent analog integer
+remainder, outer defparams in paramset overload selection, and SPICE name
+precedence/warnings are being checked in isolated worktrees.
 
 The second merge passed the same gate matrix, including the generated
 Newton-verdict and host-tolerance fixtures, and was measured by
@@ -147,18 +159,26 @@ Two older user worktrees remain untouched after read-only review:
     subroutine arrays and time variables still need complete object metadata;
   - Annex G constant names: the executable `b_G_vpi_user` fixture still
     reports undefined names, each waiting on the object it names;
-  - whole-design rows: `b_26_6_11_event_array` (`event e[0:1]`),
-    `b_26_6_42_attributes` (stops at vpiAttribute);
+  - `b_26_6_11_event_array` executes and passes at `c2930d63`; the remaining
+    whole-design marker is `b_26_6_42_attributes` (stops at vpiAttribute);
   - nested/conditional generate metadata and generated net arrays; ordinary
     generated scalar/vector nets and their enclosing scopes are gated at
     `c0e9b469`.
 - **`@(posedge v[0])`** wakes one active-region pass later than `@(posedge v)`
   (§11.4.2 allows it, but a glitch inside one pass is missed). An exact per-bit
   event term for constant selects is 2–3 h.
-- **Native fallbacks** (named, correct, but run in the embedded interpreter):
-  force/release of net selects, concatenation targets of `assign`/`force`,
-  pass-switch inout joins in select/concatenation ports, extended VCD. Native
-  versions need per-bit force layers and strength tracking in `src/sim/rt`.
+- **Compile and run Verilog:** `test-1364 -- --native`, `--native=static`
+  and `--native=four` build executables, run them and check their transcripts.
+  `zig build test` also executes generated `.v` contract devices in host
+  tests. Keep these as runtime gates and inspect each `FALLBACK` entry:
+  an embedded interpreter result does not establish native code generation.
+  The `b033ac35` native run still falls back for indexed part-selects and
+  selects of array elements, real arrays/expressions, recursive timed tasks,
+  indexed named events, string/memory file-read destinations, variable
+  `$sformat` formats, strength display, force/release of net selects,
+  concatenation targets of `assign`/`force`, pass switches and extended VCD.
+  Closing these native gaps is the next compilation priority. Per-bit force
+  layers and strength tracking belong in `src/sim/rt`.
 - **`test-1364 -- --native=two-state`** reports XPASS for xfails whose defect
   is 4-state only. Decide: a per-fixture `native-state: 4` marker, or treat them
   as not applicable.
