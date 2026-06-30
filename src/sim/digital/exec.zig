@@ -102,7 +102,15 @@ pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
 
 /// One term of a suspension's event expression, filed under the slot it
 /// watches (`Run.terms`). Live while `gen` is its suspension's.
-pub const Term = struct { susp: u32, gen: u32, edge: Edge };
+pub const Term = struct {
+    susp: u32,
+    gen: u32,
+    edge: Edge,
+    /// §9.7.3: an event array index selects which occurrence wakes this
+    /// waiter. Changing the index itself does not cause an occurrence.
+    event_select: Ast.ExprId = .none,
+    scope: u32 = 0,
+};
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -125,7 +133,7 @@ fn integerCeilingLog2(value: Int.Literal) u64 {
 /// §3.9 the element an `.index` names right now, or the whole value a
 /// scalar reference names. `null` is an out-of-bounds or X/Z index: it
 /// names no storage, so a read of one is X and a write to one is discarded.
-fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
+pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     const ex = &self.file.exprs;
     if (ex.tag(e) != .index) return try self.slot(e);
     const c = self.chainBase(e);
@@ -931,6 +939,8 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
         _ = try enqueue(self, .{ .run_process = pc }, null, false);
     };
     const list = termsOf(self, target) orelse return;
+    const event = self.events.get(target);
+    const event_ctx = if (event) |e| eventContext(self, e.scope, self.ctx) else 0;
     // Compacts as it goes: a matched term leaves with its suspension, and a
     // stale one (its suspension resumed through another slot, or was
     // disabled) is dropped.
@@ -938,7 +948,9 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
     for (list.items) |t| {
         const s = &self.susps.items[t.susp];
         if (s.gen != t.gen) continue;
-        if (!t.edge.matches(before, after)) {
+        if ((if (event) |e| event_ctx != eventContext(self, e.scope, s.ctx) else false) or
+            !t.edge.matches(before, after) or !try selectedEvent(self, t, target))
+        {
             list.items[keep] = t;
             keep += 1;
             continue;
@@ -949,6 +961,50 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
         _ = try enqueue(self, resumption(pc, ctx), null, false);
     }
     list.shrinkRetainingCapacity(keep);
+}
+
+/// §10.2.1 allocates all declared items for each automatic invocation,
+/// including events: a shared compiled slot is not a shared event identity.
+/// Find the live activation enclosing this declaration (also for events in
+/// its named blocks). Static events need no activation key; an inlined
+/// automatic frame already has distinct slots.
+fn eventContext(self: *const Run, declared: u32, from: u32) u32 {
+    var ctx = from;
+    while (ctx != 0) {
+        const act = self.acts.items[ctx];
+        const sub = self.subs.items[act.sub];
+        if (sub.decl.automatic) {
+            const frame_scope = sub.body.?.frame.scope;
+            var scope = declared;
+            while (true) {
+                if (scope == frame_scope) return ctx;
+                const info = self.scope_info.items[scope];
+                if (!info.lexical) break;
+                scope = info.parent;
+            }
+        }
+        ctx = act.ret_ctx;
+    }
+    return 0;
+}
+
+/// §§9.7.2–9.7.3: the event expression selects an occurrence; changing
+/// its index alone is not an occurrence. Test the current select only when
+/// an element occurs, in the suspended reader's automatic activation.
+fn selectedEvent(self: *Run, t: Term, target: u32) Error!bool {
+    if (t.event_select == .none) return true;
+    var scratch = std.heap.ArenaAllocator.init(self.arena);
+    defer scratch.deinit();
+    const scope = self.scope;
+    const ctx = self.ctx;
+    defer self.scope = scope;
+    defer self.ctx = ctx;
+    self.scope = t.scope;
+    self.ctx = self.susps.items[t.susp].ctx;
+    try makeResident(self, self.ctx);
+    const selected = try address(self, scratch.allocator(), t.event_select);
+    try makeResident(self, ctx);
+    return selected != null and selected.? == target;
 }
 
 fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
@@ -1418,6 +1474,20 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
+    if (ex.tag(watched) == .index) {
+        const base = try self.slot(self.chainBase(watched).base);
+        if (self.events.contains(base)) {
+            const arr = self.arrays.get(base).?;
+            for (0..arr.count) |k| {
+                const slot = base + @as(u32, @intCast(k));
+                try watch(self, id, slot, .any);
+                const term = &termsOf(self, slot).?.items[termsOf(self, slot).?.items.len - 1];
+                term.event_select = watched;
+                term.scope = self.scope;
+            }
+            return;
+        }
+    }
     try watch(self, id, try self.termSlot(watched), edge);
 }
 
@@ -1907,8 +1977,12 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             // §5.10 an event has "no time duration": the resumed processes
             // are scheduled in the active region of this same timestep, and
             // execution of the triggering process continues meanwhile.
-            .trigger => |at| {
-                try trigger(self, at);
+            .trigger => |event| {
+                const at = switch (event) {
+                    .slot => |slot| slot,
+                    .indexed => |e| try address(self, scratch, e),
+                };
+                if (at) |slot| try trigger(self, slot);
                 pc += 1;
                 continue;
             },

@@ -38,6 +38,7 @@ pub const vpiInitial: c_int = 24;
 pub const vpiIODecl: c_int = 28;
 pub const vpiNamedBegin: c_int = 33;
 pub const vpiNamedEvent: c_int = 34;
+pub const vpiNamedEventArray: c_int = 129;
 pub const vpiNamedFork: c_int = 35;
 pub const vpiNetBit: c_int = 37;
 pub const vpiNullStmt: c_int = 38;
@@ -254,6 +255,7 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiIODecl => "vpiIODecl",
         vpiNamedBegin => "vpiNamedBegin",
         vpiNamedEvent => "vpiNamedEvent",
+        vpiNamedEventArray => "vpiNamedEventArray",
         vpiNamedFork => "vpiNamedFork",
         vpiNetBit => "vpiNetBit",
         vpiNullStmt => "vpiNullStmt",
@@ -295,6 +297,7 @@ pub const ScopeLists = struct {
     tasks: std.ArrayList(u32) = .empty,
     functions: std.ArrayList(u32) = .empty,
     events: std.ArrayList(u32) = .empty,
+    event_arrays: std.ArrayList(u32) = .empty,
     primitives: std.ArrayList(u32) = .empty,
     mod_paths: std.ArrayList(u32) = .empty,
     tchks: std.ArrayList(u32) = .empty,
@@ -318,6 +321,7 @@ pub const ScopeLists = struct {
         s.tasks.deinit(gpa);
         s.functions.deinit(gpa);
         s.events.deinit(gpa);
+        s.event_arrays.deinit(gpa);
         s.primitives.deinit(gpa);
     }
 
@@ -329,6 +333,7 @@ pub const ScopeLists = struct {
             .{ .tag = vpiTask, .items = try arena.dupe(u32, s.tasks.items) },
             .{ .tag = vpiFunction, .items = try arena.dupe(u32, s.functions.items) },
             .{ .tag = vpiNamedEvent, .items = try arena.dupe(u32, s.events.items) },
+            .{ .tag = vpiNamedEventArray, .items = try arena.dupe(u32, s.event_arrays.items) },
             .{ .tag = vpiPrimitive, .items = try arena.dupe(u32, s.primitives.items) },
             .{ .tag = vpiModPath, .items = try arena.dupe(u32, s.mod_paths.items) },
             .{ .tag = vpiTchk, .items = try arena.dupe(u32, s.tchks.items) },
@@ -369,8 +374,9 @@ pub const Builder = struct {
     udps: ?*const std.AutoHashMapUnmanaged(Ast.StrId, u32) = null,
     /// A digital model's engine run and the instance scope in it, where a
     /// static subroutine's variables have their slots.
-    run: ?*const sim.digital.Run = null,
+    run: ?*sim.digital.Run = null,
     engine: u32 = 0,
+    automatic: bool = false,
 
     pub const Analog = struct {
         /// Flat branch name -> branch object.
@@ -413,7 +419,7 @@ pub const Builder = struct {
         try b.names.put(b.gpa, f, at);
     }
 
-    const Saved = struct { inner: u32, path: []const u8, internal: ?*std.ArrayList(u32) };
+    const Saved = struct { inner: u32, path: []const u8, internal: ?*std.ArrayList(u32), engine: u32, automatic: bool };
 
     /// Enters object `at`, already named `local` in the current scope, as a
     /// scope of its own (IEEE 1364-2005 §12.5: "Each ... task, function, named
@@ -421,7 +427,7 @@ pub const Builder = struct {
     /// `into` collecting its internal scopes. `leave` restores the outer one.
     fn enter(b: *Builder, at: u32, local: []const u8, into: *std.ArrayList(u32)) Error!Saved {
         try (b.internal orelse &b.lists.internal).append(b.gpa, at);
-        const saved: Saved = .{ .inner = b.inner, .path = b.path, .internal = b.internal };
+        const saved: Saved = .{ .inner = b.inner, .path = b.path, .internal = b.internal, .engine = b.engine, .automatic = b.automatic };
         b.inner = at;
         b.path = if (b.path.len == 0) local else try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.path, local });
         b.internal = into;
@@ -432,6 +438,8 @@ pub const Builder = struct {
         b.inner = s.inner;
         b.path = s.path;
         b.internal = s.internal;
+        b.engine = s.engine;
+        b.automatic = s.automatic;
     }
 
     fn many(b: *Builder, items: []const u32) Error![]const u32 {
@@ -487,17 +495,69 @@ pub const Builder = struct {
 
     // ---------------------------------------------------------------- module
 
+    const Events = struct { scalars: []const u32, arrays: []const u32 };
+
+    /// IEEE 1364-2005 §26.6.11: declarations and persistent element
+    /// identities. Storage order is the engine's increasing row-major order;
+    /// vpiRange retains source direction, vpiIndex runs innermost first.
+    fn eventDecls(b: *Builder, declarations: []const Ast.EventDecl) Error!Events {
+        var scalars: std.ArrayList(u32) = .empty;
+        var arrays: std.ArrayList(u32) = .empty;
+        for (declarations) |e| {
+            const slot = if (b.run) |r| r.names.get(.{ .scope = b.engine, .str = e.name }) else null;
+            const scope: []const Edge = if (b.inner == none) &.{} else &.{.{ .tag = vpiScope, .to = b.inner }};
+            const auto_prop: Prop = .{ .prop = root.vpiAutomatic, .value = @intFromBool(b.automatic) };
+            const at = try b.code(if (e.dims.len == 0) vpiNamedEvent else vpiNamedEventArray, scope, &.{.{ .tag = vpiIndex, .items = &.{} }}, if (e.dims.len == 0) &.{ .{ .prop = root.vpiArray, .value = 0 }, auto_prop } else &.{auto_prop});
+            try b.setName(at, try b.arena.dupe(u8, b.file.str(e.name)));
+            b.objects.items[at].src_tok = e.main_tok;
+            b.objects.items[at].automatic = b.automatic;
+            if (e.dims.len == 0) {
+                b.objects.items[at].slot = if (b.automatic) null else slot;
+                try scalars.append(b.arena, at);
+                continue;
+            }
+            try arrays.append(b.arena, at);
+            const base = slot orelse continue;
+            const arr = b.run.?.arrays.get(base).?;
+            const ranges = try b.arena.alloc(u32, e.dims.len);
+            ranges[0] = try root.addRange(b.gpa, b.arena, b.objects, b.scope, arr.left, arr.right);
+            for (arr.rest, ranges[1..]) |sp, *range| range.* = try root.addRange(b.gpa, b.arena, b.objects, b.scope, if (sp.descending) sp.high else sp.low, if (sp.descending) sp.low else sp.high);
+            const members = try b.arena.alloc(u32, arr.count);
+            for (members, 0..) |*member, k| {
+                const indices = try b.arena.alloc(u32, e.dims.len);
+                var suffix: std.ArrayList(u8) = .empty;
+                var q: i64 = @intCast(k);
+                for (indices, 0..) |*index, j| {
+                    const d = indices.len - 1 - j;
+                    const sp: sim.digital.Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
+                    const count = sp.high - sp.low + 1;
+                    const i = sp.low + @mod(q, count);
+                    q = @divTrunc(q, count);
+                    index.* = try b.constant(.{ .int = i }, 32, root.vpiDecConst);
+                    var buf: [24]u8 = undefined;
+                    try suffix.insertSlice(b.arena, 0, std.fmt.bufPrint(&buf, "[{d}]", .{i}) catch unreachable);
+                }
+                const local = try std.fmt.allocPrint(b.arena, "{s}{s}", .{ b.file.str(e.name), suffix.items });
+                member.* = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = at }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, auto_prop });
+                if (scope.len != 0) b.objects.items[member.*].edges = try b.arena.dupe(Edge, &.{ b.objects.items[member.*].edges[0], b.objects.items[member.*].edges[1], scope[0] });
+                try b.setName(member.*, local);
+                b.objects.items[member.*].index = indices[0];
+                b.objects.items[member.*].automatic = b.automatic;
+                b.objects.items[member.*].slot = if (b.automatic) null else base + @as(u32, @intCast(k));
+            }
+            b.objects.items[at].members = members;
+            b.objects.items[at].range = ranges;
+            b.objects.items[at].lists = try b.arena.dupe(List, &.{ .{ .tag = vpiNamedEvent, .items = members }, .{ .tag = vpiRange, .items = ranges } });
+        }
+        return .{ .scalars = scalars.items, .arrays = arrays.items };
+    }
+
     /// The behavioural contents of one digital module instance: its named
     /// events, tasks and functions, continuous assignments and processes.
     pub fn module(b: *Builder, m: *const Ast.ModuleDecl) Error!void {
-        // §11.6.10's named event: scope <->> named event, named in the scope.
-        // IEEE 1364-2005 §26.6.11: a declared event is no array member (an
-        // event array is refused at parse).
-        for (m.events) |e| {
-            const at = try b.add(.{ .kind = .code, .owner = b.scope, .name = "", .full = "", .vtype = vpiNamedEvent, .props = &.{.{ .prop = root.vpiArray, .value = 0 }} });
-            try b.setName(at, try b.arena.dupe(u8, b.file.str(e)));
-            try b.lists.events.append(b.gpa, at);
-        }
+        const events = try b.eventDecls(m.events);
+        try b.lists.events.appendSlice(b.gpa, events.scalars);
+        try b.lists.event_arrays.appendSlice(b.gpa, events.arrays);
         // §11.6.3 task and function, before any statement that calls one.
         for (m.tasks) |*t| {
             const at = try b.add(.{ .kind = .code, .owner = b.scope, .name = "", .full = "", .vtype = if (t.is_function) vpiFunction else vpiTask });
@@ -517,7 +577,10 @@ pub const Builder = struct {
             var inner: std.ArrayList(u32) = .empty;
             defer inner.deinit(b.gpa);
             const saved = try b.enter(at, b.objects.items[at].name, &inner);
+            b.automatic = t.automatic;
             const frame = b.subFrame(t);
+            if (frame) |fr| b.engine = fr.scope;
+            const local_events = try b.eventDecls(t.events);
             var vars: SubVars = .{};
             if (t.is_function) _ = try b.subVar(&vars, t.result, if (frame) |fr| fr.result else null, t.automatic);
             var ios: std.ArrayList(u32) = .empty;
@@ -548,6 +611,8 @@ pub const Builder = struct {
                 .{ .tag = root.vpiReg, .items = vars.regs.items },
                 .{ .tag = root.vpiIntegerVar, .items = vars.ints.items },
                 .{ .tag = root.vpiRealVar, .items = vars.reals.items },
+                .{ .tag = vpiNamedEvent, .items = local_events.scalars },
+                .{ .tag = vpiNamedEventArray, .items = local_events.arrays },
                 .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) },
             });
         }
@@ -863,13 +928,15 @@ pub const Builder = struct {
                     const local = try b.arena.dupe(u8, f.str(blk.name));
                     try b.setName(at, local);
                     saved = try b.enter(at, local, &inner);
+                    if (b.run) |r| b.engine = r.block_scopes.get(.{ .scope = b.engine, .stmt = id }) orelse b.engine;
                 }
+                const events = try b.eventDecls(blk.events);
                 var items: std.ArrayList(u32) = .empty;
                 for (blk.body) |s| try items.append(b.arena, try b.stmt(s));
                 if (saved) |sv| b.leave(sv);
                 const stmts: List = .{ .tag = vpiStmt, .items = try b.many(items.items) };
                 b.objects.items[at].lists = if (named)
-                    try b.arena.dupe(List, &.{ stmts, .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) } })
+                    try b.arena.dupe(List, &.{ stmts, .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) }, .{ .tag = vpiNamedEvent, .items = events.scalars }, .{ .tag = vpiNamedEventArray, .items = events.arrays } })
                 else
                     try b.arena.dupe(List, &.{stmts});
                 break :blk at;
@@ -988,7 +1055,7 @@ pub const Builder = struct {
                 }, &.{}, &.{}),
             },
             // §11.6.21 event stmt '->' -> named event.
-            .event_trigger => |s| b.code(vpiEventStmt, &.{.{ .tag = vpiNamedEvent, .to = b.lookup(f.str(s.name)) }}, &.{}, &.{}),
+            .event_trigger => |s| b.code(vpiEventStmt, &.{.{ .tag = vpiNamedEvent, .to = try b.expr(s.target) }}, &.{}, &.{}),
             // disable -> the named block, task or function it disables: AMS
             // §11.6.24 tags the arrow vpiScope, IEEE 1364-2005 §26.6.38
             // vpiExpr, and both are answered.
@@ -1117,6 +1184,14 @@ pub const Builder = struct {
         const ex = &b.file.exprs;
         return switch (ex.tag(id)) {
             .ident => b.lookup(b.file.str(ex.strOf(id))),
+            .hier_ident => blk: {
+                var name: std.ArrayList(u8) = .empty;
+                for (ex.nameParts(id), 0..) |p, k| {
+                    if (k != 0) try name.append(b.arena, '.');
+                    try name.appendSlice(b.arena, b.file.str(p));
+                }
+                break :blk b.names.get(name.items) orelse b.lookup(name.items);
+            },
             // IEEE 1364-2005 §26.6.26 vpiConstType: the base the literal was
             // written in (an unsized one without a base format is decimal,
             // A.8.7 unsigned_number).
@@ -1198,9 +1273,9 @@ pub const Builder = struct {
                 b.objects.items[at].name = try b.arena.dupe(u8, b.file.str(ex.strOf(id)));
                 break :blk at;
             },
-            // Not modelled: a hierarchical reference, the analog operators
-            // and filters, event functions, patterns, infinities. No object.
-            .hier_ident, .builtin_call, .filter_call, .noise_call, .port_access, .assign_pattern, .pattern_repl, .range, .indexed_range, .pos_inf, .neg_inf, .event_initial_step, .event_final_step, .event_driver_update, .event_function => none,
+            // Not modelled: the analog operators and filters, event
+            // functions, patterns, infinities. No object.
+            .builtin_call, .filter_call, .noise_call, .port_access, .assign_pattern, .pattern_repl, .range, .indexed_range, .pos_inf, .neg_inf, .event_initial_step, .event_final_step, .event_driver_update, .event_function => none,
         };
     }
 
@@ -1223,6 +1298,36 @@ pub const Builder = struct {
     /// indexed part-select is §26.6.26's, with its base and width.
     fn select(b: *Builder, id: Ast.ExprId) Error!u32 {
         const ex = &b.file.exprs;
+        var event_base = id;
+        var rank: usize = 0;
+        while (ex.tag(event_base) == .index) : (event_base = ex.lhs(event_base)) rank += 1;
+        if (ex.tag(event_base) == .ident or ex.tag(event_base) == .hier_ident) {
+            const array = try b.expr(event_base);
+            if (array != none and b.objects.items[array].vtype == vpiNamedEventArray) {
+                const indices = try b.arena.alloc(u32, rank);
+                const values = try b.arena.alloc(?i64, rank);
+                var x = id;
+                for (indices, values) |*index, *v| {
+                    index.* = try b.expr(ex.rhs(x));
+                    v.* = try b.eventIndexValue(ex.rhs(x));
+                    x = ex.lhs(x);
+                }
+                for (b.objects.items[array].members) |member| {
+                    for (b.objects.items[member].lists) |l| {
+                        if (l.tag != vpiIndex or l.items.len != rank) continue;
+                        const matches = for (l.items, values) |want, have| {
+                            if (have == null or have.? != b.objects.items[want].value.?.int) break false;
+                        } else true;
+                        if (matches) return member;
+                    }
+                }
+                const automatic = b.automatic or b.objects.items[array].automatic;
+                const at = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = array }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, .{ .prop = root.vpiAutomatic, .value = @intFromBool(automatic) } });
+                b.objects.items[at].automatic = automatic;
+                b.objects.items[at].event_ref = .{ .expr = id, .scope = b.engine };
+                return at;
+            }
+        }
         const ix = ex.rhs(id);
         const base = try b.expr(ex.lhs(id));
         if (ex.tag(ix) == .indexed_range) {
@@ -1260,6 +1365,14 @@ pub const Builder = struct {
         }, &.{}, &.{});
         b.objects.items[at].owner = null;
         return at;
+    }
+
+    /// Constant source selects denote the declared element, including
+    /// negative bounds and parameter expressions. Use the engine's integer
+    /// rules; a variable or application function is never evaluated here.
+    fn eventIndexValue(b: *Builder, e: Ast.ExprId) Error!?i64 {
+        const r = b.run orelse return null;
+        return r.vpiConstantIndex(b.arena, b.engine, e) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.NotElaborated;
     }
 };
 

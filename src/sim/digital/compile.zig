@@ -68,7 +68,7 @@ pub const Instruction = union(enum(u5)) {
     /// A.6.5 `-> named_event`. §5.10 events "do not hold any data", so this
     /// stores nothing: it resumes whoever waits on the slot now, and a
     /// trigger nobody waits for is gone.
-    trigger: u32,
+    trigger: union(enum) { slot: u32, indexed: Ast.ExprId },
     /// §9.9.2 an `always` body returning to its own start.
     restart: struct { target: u32, tok: u32 },
     /// A.6.5 `disable` of a named block, whose activity is its pc range
@@ -430,7 +430,7 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
         // would be accepted as a replication count.
         .sys_call => if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
             if (!f.constant()) return false;
-        },
+        } else return false,
         else => return false, // else: not a form this executor folds
     }
     var buf: [3]Ast.ExprId = undefined;
@@ -610,6 +610,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
             }
             const base = try self.slot(x);
+            if (self.events.contains(base)) return self.exprFail(e, "§9.7.3: a named event holds no data; it can only be triggered and waited on");
             if (self.reals.contains(base)) break :blk real_type;
             const v = self.values[base];
             break :blk .{ .width = v.width, .signed = v.signed };
@@ -1063,15 +1064,15 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 self.code.items[at].jump = position(self);
             }
         },
-        // A.6.5 `event_trigger`. The slot is resolved here, not at run
-        // time, so a trigger cannot fail in the middle of a dispatch.
+        // A.6.5 `event_trigger`: resolve the declaration here; array
+        // indices choose one of its element slots when the trigger runs.
         .event_trigger => |s| {
             if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain an event trigger", .{});
-            const at = self.lookup(self.scope, s.name) orelse
+            const base = self.chainBase(s.target).base;
+            if (self.file.exprs.tag(base) == .ident and self.lookup(self.scope, self.file.exprs.strOf(base)) == null)
                 return self.fail(tok, "undeclared named event", .{});
-            const decl = self.events.get(at) orelse return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
-            if (tok < decl) return self.fail(tok, "§9.7.3: a named event is declared before it is used", .{});
-            _ = try append(self, .{ .trigger = at });
+            const at = (try eventReference(self, s.target)) orelse return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+            _ = try append(self, .{ .trigger = if (self.file.exprs.tag(s.target) == .index) .{ .indexed = s.target } else .{ .slot = at } });
         },
         .event_control => |s| {
             if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
@@ -1603,7 +1604,8 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
         },
         // These read nothing. A nested `@` or `#` inside `@*` suspends on
         // its own terms; §9.7.5 takes the list from the reads either way.
-        .empty, .event_trigger, .disable => {},
+        .empty, .disable => {},
+        .event_trigger => |s| try targetReads(self, s.target, out),
         .event_control => |s| try readSlots(self, s.body, out, depth + 1),
         else => unreachable, // else: compileStmt admitted only the forms above
     }
@@ -1639,6 +1641,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         return;
     }
     if (try self.indexedArray(e) != null) {
+        if (self.events.contains(try self.slot(self.chainBase(e).base))) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
         var x = e;
         while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
             try checkExpr(self, ex.rhs(x));
@@ -1686,10 +1689,11 @@ fn checkDelay(self: *Run, e: Ast.ExprId) Error!void {
     if (typeOf(self, e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
 }
 
-/// Event terms resolve to watched slots at compile time, so a resumption
-/// never has to fail in the middle of a dispatch.
+/// Event terms resolve to watched slots at compile time; an indexed named
+/// event also validates each index for selection at an occurrence.
 fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
     const ex = &self.file.exprs;
+    if (try eventReference(self, e) != null) return;
     switch (ex.tag(e)) {
         .event_or => {
             try checkEvent(self, ex.lhs(e));
@@ -1699,12 +1703,13 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         // (posedge, negedge) applied to real variables".
         .event_posedge, .event_negedge => {
             const x = ex.lhs(e);
+            if (try eventReference(self, x) != null) return self.exprFail(e, "§9.7.3: a named event has no value for a posedge or negedge");
             if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) try exprTerm(self, x);
             if (self.reals.contains(try self.termSlot(x)))
                 return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable");
         },
         .hier_ident => _ = try self.scalarSlot(e),
-        .ident => if (self.events.get(try self.scalarSlot(e))) |decl| if (ex.mainTok(e) < decl)
+        .ident => if (self.events.get(try self.scalarSlot(e))) |decl| if (ex.mainTok(e) < decl.tok)
             return self.exprFail(e, "§9.7.3: a named event is declared before it is used"),
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
@@ -1713,6 +1718,28 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         .event_driver_update => try driver.checkUpdate(self, e),
         else => try exprTerm(self, e), // else: every other term is an expression (A.6.5 `event_expression ::= expression`)
     }
+}
+
+/// §9.7.3: a scalar event or exactly one selected array element. Only the
+/// indices are value expressions; neither the array nor an event holds data.
+fn eventReference(self: *Run, e: Ast.ExprId) Error!?u32 {
+    const ex = &self.file.exprs;
+    const c = self.chainBase(e);
+    if (ex.tag(c.base) != .ident and ex.tag(c.base) != .hier_ident) return null;
+    const at = try self.slot(c.base);
+    const decl = self.events.get(at) orelse return null;
+    if (ex.tag(c.base) == .ident and ex.mainTok(e) < decl.tok) return self.exprFail(e, "§9.7.3: a named event is declared before it is used");
+    const dimensions: usize = if (self.arrays.get(at)) |arr| arr.rest.len + 1 else 0;
+    if (c.depth != dimensions) return self.exprFail(e, "§9.7.3: a named event array requires one index per dimension");
+    var x = e;
+    while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
+        const i = ex.rhs(x);
+        if (ex.tag(i) == .range or ex.tag(i) == .indexed_range) return self.exprFail(i, "§9.7.3: an event array takes an index, not a part-select");
+        try checkExpr(self, i);
+        if (typeOf(self, i).real) return self.exprFail(i, "§9.7.3: an event array index must be integral");
+        if (typeOf(self, i).width > 64) return self.exprFail(i, "array indices wider than 64 bits are not implemented");
+    }
+    return at;
 }
 
 /// IEEE 1364-2005 §9.7.2: "An implicit event shall be detected on any change

@@ -139,14 +139,13 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
         },
         .at => return parseEventControl(self), // §5.10 / A.6.5
         // A.6.5 `event_trigger ::= -> hierarchical_event_identifier
-        // { [ expression ] } ;` (§5.10.4). The bracketed expressions index
-        // an event array, which A.2.1.3's `list_of_event_identifiers` cannot
-        // declare in this subset, so only the scalar form is parsed.
+        // { [ expression ] } ;` (§5.10.4). The executor checks that the
+        // expression names one event rather than a value or whole array.
         .arrow => {
             self.pos += 1;
-            const name = try self.expectIdent();
+            const target = try parse_expr.parseExpr(self);
             _ = try self.expect(.semicolon);
-            return self.file.addStmt(self.arena, .{ .event_trigger = .{ .name = name } }, tok);
+            return self.file.addStmt(self.arena, .{ .event_trigger = .{ .target = target } }, tok);
         },
         .kw_disable => { // §5.11
             self.pos += 1;
@@ -207,7 +206,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
-    var events: std.ArrayList(Ast.StrId) = .empty;
+    var events: std.ArrayList(Ast.EventDecl) = .empty;
     while (true) {
         const before_attrs = self.pos;
         const attr_mark = self.attrs.items.len;
@@ -237,7 +236,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
             .kw_event => if (self.digital and blk.name != .none) {
                 self.pos += 1;
                 while (true) {
-                    try events.append(self.arena, try self.expectIdent());
+                    try events.append(self.arena, try parse_decl.parseEventDecl(self));
                     if (!self.eat(.comma)) break;
                 }
                 _ = try self.expect(.semicolon);

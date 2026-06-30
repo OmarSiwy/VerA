@@ -314,8 +314,8 @@ pub const Obj = struct {
     is_local: bool = false,
     /// `.reg` only.
     is_signed: bool = true,
-    /// `.reg` only: declared in an automatic task or function (IEEE
-    /// 1364-2005 §26.6.20's vpiAutomatic), so it has no static storage.
+    /// Declared in an automatic task or function (IEEE 1364-2005
+    /// §26.6.20), or an event reference requiring such an activation.
     automatic: bool = false,
     /// `.net` only: IEEE 1364-2005 §26.6.6's vpiImplicitDecl, a net no
     /// declaration wrote (§4.5, §12.3.3).
@@ -324,6 +324,10 @@ pub const Obj = struct {
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values come from analog.zig's solution.
     slot: ?u32 = null,
+    /// §26.6.11: a source reference to an event with nonconstant indices.
+    /// Its identity is selected when used, in the declaring lexical scope.
+    /// Automatic references require frame handles and are refused by put.
+    event_ref: ?struct { expr: Ast.ExprId, scope: u32 } = null,
     /// `.parameter` of the analog model: the constant lowering folded for it
     /// (`Lowered.consts`), copied; §11.6.12 NOTE 1's "the value of the
     /// parameter".
@@ -1321,9 +1325,8 @@ fn addBits(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.Array
 /// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
 /// bounds decimal constants, its vpiSize the element count.
 ///
-/// ponytail: one range, the first dimension's, even for a multidimensional
-/// array; one per dimension needs `digital.Span` to keep its declared order.
-fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), owner: u32, left: i64, right: i64) Error!u32 {
+/// The caller adds one row for each dimension it models.
+pub fn addRange(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), owner: u32, left: i64, right: i64) Error!u32 {
     const l: u32 = @intCast(objects.items.len);
     try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = left } });
     try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = right } });
@@ -1688,9 +1691,6 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps, .run = r, .engine = s.engine };
         try b.module(s.decl);
         try addConnections(&b, scopes.items, r);
-        // A named event's slot is the engine's rendezvous for it, which a
-        // put toggles (IEEE 1364-2005 §27.32).
-        for (s.decl.events, s.code.events.items) |e, at| objects.items[at].slot = r.names.get(.{ .scope = s.engine, .str = e });
     }
     try freeze(&d, objects.items, scopes.items);
     d.udp_defns = udp_defns;
@@ -2270,7 +2270,7 @@ pub const name_buf_len = 4096;
 /// a parent object. ... This function can be used to access all objects which
 /// can access an expression using `vpiIndex`."
 ///
-/// The indexed objects are the §11.6.11 array elements — memory words and
+/// The indexed objects are §26.6.11 named events and §11.6.11 array elements — memory words and
 /// variable selects — the members of a §6.2.2 instance array ("for a memory
 /// word, obj is the associated memory"), and the bits of a digital vector
 /// net or reg (IEEE 1364-2005 §26.6.6/§26.6.7). `index` is the element's own
@@ -2293,6 +2293,10 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         return null;
     }
     if (o.members.len != 0) {
+        if (o.kind == .code and o.vtype == code.vpiNamedEventArray and o.range.len != 1) {
+            fail("NOINDEX", "vpi_handle_by_index: `{s}` requires {d} event-array indices", .{ o.full, o.range.len });
+            return null;
+        }
         for (o.members) |m| {
             const c = d.objects[m].index orelse continue;
             if (d.objects[c].value.?.int == index) return handleOf(&d.objects[m]);
@@ -2319,16 +2323,29 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
 /// construction of a legal Verilog index select expression, the routine shall
 /// return a null handle." One index is vpi_handle_by_index.
 ///
-/// ponytail: this model's arrays have elements along their first dimension
-/// only, so a second index (or a bit-select) is refused as a VerA limit,
-/// though §27.18 makes it legal.
+/// Named event arrays accept one index per dimension. Other array classes
+/// still route only a single index through vpi_handle_by_index; their
+/// multidimensional selection remains a VerA limit.
 pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_array: ?[*]const c_int) vpiHandle {
-    _ = enter("vpi_handle_by_multi_index") orelse return null;
+    const d = enter("vpi_handle_by_multi_index") orelse return null;
     const o = object("vpi_handle_by_multi_index", obj) orelse return null;
     const idx = index_array orelse {
         fail("NOINDEX", "vpi_handle_by_multi_index: index_array is NULL", .{});
         return null;
     };
+    if (o.kind == .code and o.vtype == code.vpiNamedEventArray) {
+        if (num_index > 0 and num_index == o.range.len) for (o.members) |m| {
+            for (d.objects[m].lists) |l| {
+                if (l.tag != vpiIndex) continue;
+                const matches = for (l.items, 0..) |ix, k| {
+                    if (d.objects[ix].value.?.int != idx[l.items.len - 1 - k]) break false;
+                } else true;
+                if (matches) return handleOf(&d.objects[m]);
+            }
+        };
+        fail("NOINDEX", "vpi_handle_by_multi_index: no event in `{s}` has the supplied indices", .{o.full});
+        return null;
+    }
     if (num_index != 1) {
         fail("NOINDEX", "vpi_handle_by_multi_index: `{s}` takes one index here, not {d} (a VerA limit)", .{ o.full, num_index });
         return null;

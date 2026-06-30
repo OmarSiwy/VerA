@@ -327,7 +327,6 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .defparams = .consumed, // §6.3.1 applied to the parameter each names
     .genvars = .merged,
     .events = .merged,
-    .event_toks = .consumed, // the digital engine's, read from the parsed module
     .functions = .merged,
     .analog = .merged,
     // §7.2.2 the discrete context. Merged: lowering reads what the analog
@@ -380,7 +379,7 @@ pub const Flatten = struct {
     nets: std.ArrayList(Ast.NetDecl) = .empty,
     branches: std.ArrayList(Ast.BranchDecl) = .empty,
     genvars: std.ArrayList(Ast.StrId) = .empty,
-    events: std.ArrayList(Ast.StrId) = .empty,
+    events: std.ArrayList(Ast.EventDecl) = .empty,
     functions: std.ArrayList(Ast.FuncDecl) = .empty,
     analog: std.ArrayList(Ast.AnalogBlock) = .empty,
     discrete: std.ArrayList(Ast.DiscreteBlock) = .empty,
@@ -974,7 +973,7 @@ pub const Flatten = struct {
         for (child.vars) |v| try elab_names.bind(self, &unit, path, v.name);
         for (child.branches) |b| try elab_names.bind(self, &unit, path, b.name);
         for (child.genvars) |g| try elab_names.bind(self, &unit, path, g);
-        for (child.events) |e| try elab_names.bind(self, &unit, path, e);
+        for (child.events) |e| try elab_names.bind(self, &unit, path, e.name);
         for (child.functions) |fd| try elab_names.bind(self, &unit, path, fd.name);
         for (child.instances) |sub| try elab_names.bind(self, &unit, path, sub.name);
         var subs: std.ArrayList(Ast.Instance) = .empty;
@@ -1037,7 +1036,7 @@ pub const Flatten = struct {
             try self.branches.append(self.ctx.arena, out);
         }
         for (child.genvars) |g| try self.genvars.append(self.ctx.arena, elab_names.flat(self, g));
-        for (child.events) |e| try self.events.append(self.ctx.arena, elab_names.flat(self, e));
+        for (child.events) |e| try self.events.append(self.ctx.arena, try elab_clone.cloneEvent(self, e));
         for (child.functions) |fd| try self.functions.append(self.ctx.arena, try elab_clone.cloneFunc(self, fd));
         for (child.attrs) |at| try self.attrs.append(self.ctx.arena, .{
             .name = at.name,

@@ -224,7 +224,6 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         const items = try self.arena.create(Ast.GenItems);
         items.* = .{
             .events = gb.events.items,
-            .event_toks = gb.event_toks.items,
             .discrete = gb.discrete.items,
             .assigns = gb.assigns.items,
             .gates = gb.gates.items,
@@ -237,7 +236,6 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     } else {
         for (gb.discrete.items) |*d| d.generated = true;
         try b.events.appendSlice(self.arena, gb.events.items);
-        try b.event_toks.appendSlice(self.arena, gb.event_toks.items);
         try b.discrete.appendSlice(self.arena, gb.discrete.items);
         try b.assigns.appendSlice(self.arena, gb.assigns.items);
         try b.gates.appendSlice(self.arena, gb.gates.items);
@@ -286,8 +284,8 @@ pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!vo
 fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
     for (b.gen_blocks.items) |g| if (g.name == name) return true;
     for (b.instances.items) |i| if (i.name == name) return true;
-    return inDeclSpaces(b, name) or
-        std.mem.indexOfScalar(Ast.StrId, b.events.items, name) != null;
+    for (b.events.items) |e| if (e.name == name) return true;
+    return inDeclSpaces(b, name);
 }
 
 /// Whether `name` is in one of the module's ordinary declaration spaces. Ports

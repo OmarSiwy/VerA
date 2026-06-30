@@ -75,6 +75,8 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
         else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
+    if (ex.tag(watched) == .index and r.events.contains(r.slot(r.chainBase(watched).base) catch return self.refuse("an indexed event term the engine resolves only at run time")))
+        return self.refuse("an indexed named event control");
     const at = r.termSlot(watched) catch return self.refuse("an event term the engine resolves only at run time");
     try out.append(self.arena, .{ .slot = at, .edge = edge });
 }

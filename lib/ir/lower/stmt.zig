@@ -91,7 +91,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
             try self.err(tok, .E0701, "", .{})
         else
             try lower_event.lowerEventControl(self, s.event, s.body),
-        .event_trigger => |s| try lowerEventTrigger(self, tok, self.file.str(s.name)), // §5.10.4
+        .event_trigger => |s| try lowerEventTrigger(self, tok, s.target), // §5.10.4
         .disable => |s| try lowerDisable(self, tok, self.file.str(s.name)),
         .sys_task => |s| try lower_event.lowerSysTask(self, tok, self.file.str(s.name), s.args),
         .jump => |j| try lowerJump(self, tok, j.kind, j.value),
@@ -104,7 +104,9 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// A.6.4 lists `event_trigger` under `analog_event_statement` and not under
 /// `analog_statement`, so a trigger outside an event control is refused, as
 /// `disable` (E0401) is.
-fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
+fn lowerEventTrigger(self: *Lower, tok: u32, target: Ast.ExprId) Oom!void {
+    if (self.file.exprs.tag(target) != .ident) return self.err(tok, .E0235, "§5.10.4: an indexed or hierarchical named event trigger in an analog block", .{});
+    const name = self.file.str(self.file.exprs.strOf(target));
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0434);
         b.help("only `@(<event>) -> ev;` is legal", .{});

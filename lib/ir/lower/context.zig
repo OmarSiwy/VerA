@@ -601,14 +601,14 @@ const EventRefs = struct {
     /// top-level statement of its block (`digital.Run.analogTriggers`).
     skip_carried: bool = false,
     fn isEvent(w: *const EventRefs, s: Ast.StrId) bool {
-        for (w.module.events) |ev| if (ev == s) return true;
+        for (w.module.events) |ev| if (ev.name == s) return true;
         return false;
     }
     pub fn stmt(w: *EventRefs, s: Ast.StmtId) Oom!void {
         if (s == .none) return;
         const f = w.l.file;
         switch (f.stmt(s)) {
-            .event_trigger => |t| if (w.isEvent(t.name)) try w.names.put(w.l.arena, f.str(t.name), f.stmtTok(s)),
+            .event_trigger => |t| if (f.exprs.tag(t.target) == .ident and w.isEvent(f.exprs.strOf(t.target))) try w.names.put(w.l.arena, f.str(f.exprs.strOf(t.target)), f.stmtTok(s)),
             .event_control => |c| if (w.skip_carried and c.event != .none and f.exprs.tag(c.event) == .event_function and
                 !std.mem.eql(u8, f.str(f.exprs.strOf(c.event)), "absdelta"))
             {

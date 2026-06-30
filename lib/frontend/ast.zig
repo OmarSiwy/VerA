@@ -760,8 +760,16 @@ pub const Subroutine = struct {
     /// A.2.8's `parameter_declaration`, `local_parameter_declaration` and
     /// `event_declaration` among them, declared in the subroutine's scope.
     params: []const ParamDecl = &.{},
-    events: []const StrId = &.{},
+    events: []const EventDecl = &.{},
     body: StmtId,
+    main_tok: u32 = 0,
+};
+
+/// IEEE 1364-2005 §9.7.3 / AMS §5.10.4: one scalar event or unpacked
+/// array of events. Each element has an identity, but holds no data.
+pub const EventDecl = struct {
+    name: StrId,
+    dims: []const Dim = &.{},
     main_tok: u32 = 0,
 };
 
@@ -1014,13 +1022,9 @@ pub const ModuleDecl = struct {
     /// applies them to the flattened parameters.
     defparams: []const Defparam = &.{},
     genvars: []const StrId = &.{}, // §3.5 (unrolling evidence, §6.6.1)
-    /// §5.10.4 named events (A.2.1.3 event_declaration). Names only: an event
-    /// carries no value, only a per-timepoint triggered/not flag, which lowering
-    /// materializes as an ordinary integer slot in the §2.8 declaration space.
-    events: []const StrId = &.{},
-    /// Each `events` entry's name token: IEEE 1364-2005 §9.7.3 "An event
-    /// name shall be declared explicitly before it is used."
-    event_toks: []const u32 = &.{},
+    /// §5.10.4 named events (A.2.1.3 event_declaration). Scalar events and
+    /// array elements each have an identity, but carry no value.
+    events: []const EventDecl = &.{},
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
@@ -1314,10 +1318,9 @@ pub const Stmt = union(enum) {
     /// terms are every net and variable `body` reads. A.6.5 offers it to
     /// `event_control` only, so an analog block rejects it.
     event_control: struct { event: ExprId, body: StmtId, kind: Timing = .event },
-    /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
-    /// `hierarchical_event_identifier`, so only its last (and, in a flat
-    /// elaboration, only) component is kept.
-    event_trigger: struct { name: StrId },
+    /// §5.10.4 `-> event;` (A.6.5 `event_trigger`): a hierarchical event
+    /// identifier followed by one expression index per array dimension.
+    event_trigger: struct { target: ExprId },
     /// §5.11 `disable <block>;` (A.6.5 disable_statement).
     disable: struct { name: StrId },
     /// §5.12 / ch9 analog system task: `$strobe`, `$finish`, `$error`,
@@ -1350,9 +1353,7 @@ pub const CaseArm = struct {
 /// with it: its named events, processes and drivers, as `ModuleDecl` holds
 /// a module's. The digital engine elaborates them in the block's scope.
 pub const GenItems = struct {
-    events: []const StrId = &.{},
-    /// As `ModuleDecl.event_toks`.
-    event_toks: []const u32 = &.{},
+    events: []const EventDecl = &.{},
     discrete: []const DiscreteBlock = &.{},
     assigns: []const ContAssign = &.{},
     gates: []const GateInst = &.{},
@@ -1378,7 +1379,7 @@ pub const SeqBlock = struct {
     vars: []const VarDecl = &.{},
     /// IEEE 1364-2005 A.2.8 a named block's `event` declarations; only a
     /// digital parse keeps one.
-    events: []const StrId = &.{},
+    events: []const EventDecl = &.{},
     body: []const StmtId = &.{},
     /// A generate block's module instances (§6.6). The digital engine decides a
     /// digital parse's scheme; elaboration gates an analog if-generate's
@@ -1657,7 +1658,8 @@ pub const SourceFile = struct {
     /// duck-typed; this is the statement counterpart of `ExprStore.children`.
     pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
         switch (self.stmt(id)) {
-            .empty, .event_trigger, .disable => {},
+            .empty, .disable => {},
+            .event_trigger => |s| try self.eventIndexEdges(s.target, v),
             .block => |b| for (b.body) |s| try v.stmt(s),
             .assign => |a| {
                 try v.expr(a.target, .write);
@@ -1749,6 +1751,14 @@ pub const SourceFile = struct {
             pub fn stmt(_: @This(), _: StmtId) std.mem.Allocator.Error!void {}
         };
         try self.stmtEdges(id, Writes{ .file = self, .funcs = funcs, .gpa = gpa, .out = out });
+    }
+
+    /// The event target is an identity, not a value read or written. Its
+    /// index expressions are reads, visited leftmost first like the source.
+    fn eventIndexEdges(self: *const SourceFile, target: ExprId, v: anytype) @TypeOf(v.expr(target, .read)) {
+        if (self.exprs.tag(target) != .index) return;
+        try self.eventIndexEdges(self.exprs.lhs(target), v);
+        try v.expr(self.exprs.rhs(target), .read);
     }
 
     /// The expression half of `stmtWrites`.
