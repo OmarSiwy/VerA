@@ -2,7 +2,7 @@
 //!
 //! Run on std.testing.allocator through an arena, so a leaked byte fails the test.
 //!
-//! LRM clauses this file's code cites: §2.7, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §5.6.1.3, §5.6.7, §5.6.7.2, §5.8, §5.8.1.
+//! LRM clauses this file's code cites: §2.7, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §5.6.1.3, §5.6.7, §5.6.7.2, §5.8, §5.8.1, §6.3.1, §6.4, §6.6.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -85,6 +85,59 @@ test "§6.3.4 monitored-event parameters retain their dependencies, not unrelate
     for ([_][]const u8{ "delta", "base", "tol" }) |name|
         try std.testing.expect(h.low.out.discrete_params.contains(name));
     try std.testing.expect(!h.low.out.discrete_params.contains("unused"));
+}
+
+test "§6.3.1 paramset defparams follow final parameter values and freeze the selected generate shape" {
+    const source =
+        \\module top(p);
+        \\  inout p; electrical p;
+        \\  parameter integer enabled = 1;
+        \\  card #(.select(enabled)) u(p);
+        \\endmodule
+        \\paramset card wrapper;
+        \\  parameter integer select = 1;
+        \\  .enabled = select;
+        \\endparamset
+        \\module wrapper(p);
+        \\  inout p; electrical p;
+        \\  parameter integer enabled = 1;
+        \\  if (enabled) begin bad child(p); end
+        \\  analog I(p) <+ 0.0;
+        \\endmodule
+        \\module bad(p);
+        \\  inout p; electrical p;
+        \\  leaf child(p); defparam child.gain = 5.0;
+        \\endmodule
+        \\module leaf(p);
+        \\  inout p; electrical p;
+        \\  parameter real gain = 1.0;
+        \\  analog I(p) <+ gain * V(p);
+        \\endmodule
+    ;
+    for ([_]?f64{ null, 0, 1 }) |override| {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, source, &h);
+        defer h.deinit();
+        var overrides: [1]Lower.ParamOverride = undefined;
+        if (override) |value| {
+            overrides[0] = .{ .name = "enabled", .value = value };
+            h.low.param_overrides = &overrides;
+        }
+        if (override != null and override.? == 0) {
+            const out = try h.low.lowerFile();
+            const index = h.low.param_index.get("u.enabled").?;
+            try std.testing.expect(out.params.items[index].shape);
+            try std.testing.expectEqual(@as(u32, 0), h.bag.err_count);
+        } else {
+            try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
+            var found = false;
+            for (0..h.bag.records.items.len) |i| if (h.code(i) == .E0926) {
+                try std.testing.expect(std.mem.indexOf(u8, h.msg(i), "`u`") != null);
+                found = true;
+            };
+            try std.testing.expect(found);
+        }
+    }
 }
 
 test "lower: system math aliases preserve operand-sensitive result types" {

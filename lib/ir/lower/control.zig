@@ -1,8 +1,9 @@
-//! §5.8 conditionals and §5.9 loops.
+//! §5.8 conditionals, §5.9 loops, and §6.6 hierarchy selection.
 //!
-//! In: if/case/for/while/repeat AST. Out: MIR control flow (blocks, branches, phis).
+//! In: if/case/for/while/repeat AST and gated hierarchy restrictions.
+//! Out: MIR control flow (blocks, branches, phis) and selection diagnostics.
 //!
-//! LRM clauses this file's code cites: §3.5, §4.2.7, §5.6.7, §5.8, §5.8.1, §5.8.3, §5.9, §5.9.1, §5.9.2, §6.6, §6.6.1, §6.6.2.
+//! LRM clauses this file's code cites: §3.5, §4.2.7, §5.6.7, §5.8, §5.8.1, §5.8.3, §5.9, §5.9.1, §5.9.2, §6.3.1, §6.4, §6.6, §6.6.1, §6.6.2, §6.9.4.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -36,6 +37,23 @@ pub fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
     var b = self.errWith(tok, .E0428);
     b.help("a generate scheme may read parameters and genvars, not variables", .{});
     try b.emit();
+}
+
+/// §6.3.1/§6.4 forbid a defparam in or below a paramset instance. §6.9.4
+/// gives parameters their final values before §6.6.2 selects generate arms;
+/// flattening retained both arms, so judge their gates only after lowerParamDecl.
+/// As with every generate scheme, the card must preserve the selected shape.
+pub fn checkParamsetDefparams(self: *Lower) Oom!void {
+    for (self.paramset_defparams) |dp| {
+        if (dp.gate != .none) {
+            const active = lower_constfold.shapeEval(self, dp.gate) orelse {
+                try checkGenScheme(self, self.file.exprs.mainTok(dp.gate), dp.gate);
+                continue;
+            };
+            if (!active.isTrue()) continue;
+        }
+        try self.err(dp.main_tok, .E0926, "a defparam in the hierarchy of paramset instance `{s}`", .{dp.instance});
+    }
 }
 
 /// Lowers a §5.8 conditional. A constant-foldable condition lowers only the taken
