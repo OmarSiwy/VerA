@@ -19,6 +19,51 @@ const generate = codegen.generate;
 // Tests
 // ---------------------------------------------------------------------------
 
+test "codegen: an unused integer remainder keeps its artifact-specific zero check" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  integer d, unused;
+        \\  analog begin
+        \\    d = V(p,n);
+        \\    unused = 11 % d;
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const device = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, device, "zm_b == 0) { @trap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, device, "error[E0601]") == null);
+    const executable = try h.genDisplay(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, executable, "error[E0601]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, executable, "std.process.exit(1)") != null);
+}
+
+test "codegen: a discarded remainder inside a display argument stays in the display phase" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog function integer f;
+        \\    input d; integer d, unused;
+        \\    begin unused = 11 % d; f = 7; end
+        \\  endfunction
+        \\  analog begin
+        \\    $strobe("%d", f($rtoi(V(p,n))));
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expectEqual(Mir.Value.f_zero, h.lowered.table_effect);
+    const device = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, device, "fn zm_f") == null);
+    const executable = try h.genDisplay(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, executable, "error[E0601]") != null);
+}
+
 // Test-only imports.
 pub const Ast = @import("frontend").Ast;
 pub const Preprocessor = @import("frontend").Preprocessor;

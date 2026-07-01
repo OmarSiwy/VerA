@@ -136,7 +136,8 @@ pub fn build(
 /// Builds the structural half alone: alias snapshot, CFG, dominator tree,
 /// natural loops, per-block pools. `vty`, `deps`, `arr_of` and `folds` stay
 /// empty. For the prover, which runs before codegen's own `build` and needs
-/// no value types; building them twice per compile measured slower.
+/// no value types; building them twice per compile measured slower. It adds
+/// only `buildLiteralFolds` to identify provably untaken runtime-error paths.
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -868,21 +869,32 @@ pub fn foldConst(self: *const Analysis, v: Mir.Value, resolve_params: bool) ?Fol
 
 fn buildFolds(self: *Analysis) Error!void {
     for (&self.folds, [_]bool{ false, true }) |*col, resolve_params| {
-        col.* = try self.arena.alloc(?Const, self.nv);
-        @memset(col.*, null);
-        // An answer only ever goes from null to a constant, so this
-        // terminates; operands precede their users except through an alias
-        // or a parameter default defined later, which cost another pass.
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (col.*, 0..) |*c, v| {
-                if (c.* != null) continue;
-                c.* = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), col.*, resolve_params) orelse continue;
-                changed = true;
-            }
+        col.* = try self.buildFoldColumn(resolve_params);
+    }
+}
+
+/// Literal-only folds after `buildStructure`: runtime branch truth may not
+/// inspect a parameter's overridable default (§4.2.3/§6.3.4). The prover
+/// needs this column but none of the derivative/type tables in `build`.
+pub fn buildLiteralFolds(self: *Analysis) Error!void {
+    self.folds[0] = try self.buildFoldColumn(false);
+}
+
+fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error![]?Const {
+    const col = try self.arena.alloc(?Const, self.nv);
+    @memset(col, null);
+    // An answer only ever goes from null to a constant, so this terminates;
+    // operands precede users except through aliases or forward defaults.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (col, 0..) |*c, v| {
+            if (c.* != null) continue;
+            c.* = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), col, resolve_params) orelse continue;
+            changed = true;
         }
     }
+    return col;
 }
 
 /// `v`'s fold given the current answers for its operands. The operators are

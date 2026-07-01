@@ -1,6 +1,6 @@
 //! Value and instruction rendering: one MIR value or instruction in, its Zig
 //! expression text out, with the §4.2.1.1/§4.2.1.2 integer/real conversions
-//! explicit. LRM clauses cited: §2.7, §3.2, §3.2.1, §3.2.2, §4.2.1, §4.2.11,
+//! explicit. LRM clauses cited: §2.7, §3.2, §3.2.1, §3.2.2, §4.2.1, §4.2.4, §4.2.11,
 //! §4.3.1, §4.3.2, §4.5, §9.4, §9.13, §9.21.
 
 const std = @import("std");
@@ -34,6 +34,20 @@ pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
 /// Integer `/` with a zero divisor defined as 0 (see `renderOp`'s `.idiv`).
 const idiv_fn = "(struct { fn zd_f(zd_a: i64, zd_b: i64) i64 { " ++
     "return if (zd_b == 0) 0 else @divTrunc(zd_a, zd_b); } }.zd_f)";
+
+/// §4.2.4 permits a varying divisor but requires an error when it is zero.
+/// Executables report E0601; solver devices trap without importing host I/O
+/// onto GPU targets. -1 divides every integer exactly, including minInt(i64),
+/// whose hardware signed remainder would otherwise overflow its quotient.
+/// Both ordinary expressions and model-card derivation use this spelling.
+pub fn imodFn(self: *const Gen) []const u8 {
+    const head = "(struct { fn zm_f(zm_a: i64, zm_b: i64) i64 { if (zm_b == 0) { ";
+    const tail = " } return if (zm_b == -1) 0 else @rem(zm_a, zm_b); } }.zm_f)";
+    return if (self.display == .emit)
+        head ++ "std.debug.print(\"error[E0601]: LRM 4.2.4: integer modulus divisor is zero\\n\", .{}); std.process.exit(1);" ++ tail
+    else
+        head ++ "@trap();" ++ tail;
+}
 
 /// Returns `renderVal`'s text as an arena string instead of appending it to
 /// `out`. Renders into `out` and rewinds, so `uses_x`/`uses_model`
@@ -589,7 +603,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             try intCall2(self, if (bare) "@divTrunc" else idiv_fn, a, b2);
             try self.b(")))", .{});
         },
-        .imod => try intCall2(self, "@rem", a, b2),
+        .imod => try intCall2(self, imodFn(self), a, b2),
         .ineg => {
             try self.b("@as(i64, @as(i32, @truncate(-%(", .{});
             try renderVal(self, a, .int);

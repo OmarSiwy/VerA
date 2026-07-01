@@ -472,12 +472,14 @@ test "E0609: a straddling base or a possibly-integer exponent stays accepted" {
 }
 
 test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
+    // A parameter's zero default can be overridden. A localparam makes this
+    // an actual zero-divisor error, preserving the source-span obligation.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(p, n);
         \\  inout p, n;
         \\  electrical p, n;
-        \\  parameter integer d = 0;
+        \\  localparam integer d = 0;
         \\  analog I(p, n) <+ V(p, n) * (10 % d);
         \\endmodule
     , &h);
@@ -633,9 +635,9 @@ test "proof: `/` by a possibly-zero divisor is ACCEPTED and forced .strict (LRM 
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
 }
 
-test "proof: integer `%` by a possibly-zero divisor remains an error (LRM 4.2.4)" {
-    // No IEEE escape for integers: Zig's @rem by zero is illegal behavior,
-    // and the device has no guarded form of it.
+test "proof: integer `%` by a possibly-zero divisor is checked at runtime (LRM 4.2.4)" {
+    // An unknown divisor is legal; the emitted checked remainder reports
+    // the actual zero rather than requiring a static proof of nonzero.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(p, n);
@@ -650,9 +652,24 @@ test "proof: integer `%` by a possibly-zero divisor remains an error (LRM 4.2.4)
     const v = try h.prove(std.testing.allocator, .{});
     defer v.deinit(std.testing.allocator);
 
-    try std.testing.expect(!v.ok());
-    try std.testing.expect(h.has(.E0601));
-    try std.testing.expect(std.mem.indexOf(u8, h.find(.E0601).?.message, "divisor") != null);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0601));
+}
+
+test "proof: a constant conditional suppresses runtime errors in its untaken arm" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p,n) <+ (1 ? 7 : 11 % 0) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0601));
 }
 
 test "proof: the §4.2.12 select guard covers `x > 0 ? ln(x) : 0`" {

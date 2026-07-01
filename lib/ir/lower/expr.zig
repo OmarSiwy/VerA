@@ -2,7 +2,7 @@
 //!
 //! In: expression AST. Out: typed MIR values (`TypedValue`).
 //!
-//! LRM clauses this file's code cites: §3.3, §4.2.3, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
+//! LRM clauses this file's code cites: §3.3, §4.2.3, §4.2.4, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
 //! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
 
 const std = @import("std");
@@ -673,7 +673,30 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: boo
             };
             const lv = if (real) try self.toReal(a) else a.v;
             const rv = if (real) try self.toReal(b) else b.v;
-            return .{ .v = try self.emit(opc, &.{ lv, rv }), .ty = ty };
+            const result = try self.emit(opc, &.{ lv, rv });
+            if (opc == .imod and self.runtime_error_phase != .none) {
+                const divisor = self.mir.valueDef(self.mir.resolveAlias(rv));
+                // A literal nonzero divisor cannot fail. All other evaluated
+                // remainders stay on the guarded effect chain (§4.2.3), even
+                // if their assigned value is dead. The chain's numeric sum is
+                // not observable; its dependencies and CFG edges are.
+                if (divisor != .int_const or divisor.int_const == 0) {
+                    const value = try self.toReal(.{ .v = result, .ty = .integer });
+                    if (self.runtime_error_phase == .display) {
+                        try self.chainCondDisplay(value);
+                        return .{ .v = result, .ty = ty };
+                    }
+                    if (self.table_effect_place == null) {
+                        const place = self.builder.newPlace();
+                        try self.builder.writeVariable(place, .entry, .f_zero);
+                        self.table_effect_place = place;
+                    }
+                    const place = self.table_effect_place.?;
+                    const previous = try self.builder.readVariable(place, self.cur);
+                    try self.builder.writeVariable(place, self.cur, try self.emit(.fadd, &.{ previous, value }));
+                }
+            }
+            return .{ .v = result, .ty = ty };
         },
         // §4.2.1.3: "If either operand is real, the other operand is converted
         // to real" — so two integers stay integer, and `7/(2**k)` divides by

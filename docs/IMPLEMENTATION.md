@@ -19,6 +19,7 @@ differently also conforms.
 | AMS 2.7 | an error for an octal escape above `\377` is optional | accepted, low 8 bits kept, no diagnostic | `lib/frontend/lexer.zig:532-539` | `ch02_lexical/octal_escape_above_377_keeps_low_byte.va` |
 | AMS 2.8 | the identifier length limit, at least 1024 | no limit; a long or escaped module name gets a hashed file stem for its build files | `src/main.zig` `fileStem` | `ch02_lexical/28_identifier_1024_chars.va`, `ch02_lexical/identifier_1024_char_module_name.va` |
 | AMS 2.9 | vendor attributes | `vera_lte`, `vera_interp`, `vera_nodiff` (AGENTS.md §6); every other attribute is parsed and ignored | `lib/ir/lower/stmt.zig:57-76` | `ch05_analog_behavior/charge_sites_lte_attribute.va`, `ch04_expressions/absdelay_vera_interp_quadratic.va`, `ch04_expressions/ddx_vera_nodiff_assignment.va`, and their `reject_*` neighbours |
+| AMS 4.2.4 | how a required integer-modulus zero-divisor error is reported | a provably evaluated zero is E0601 at compile time; a runtime zero reports E0601 and exits 1 in the executable, and traps in a solver device without host I/O, including GPU targets | `lib/ir/proof/prover.zig`, `lib/backend/codegen/render.zig` `imodFn` | `ch04_expressions/111_modulus_by_zero_rejected.va`, `modulo_integer_dynamic_zero.va`, `modulo_integer_unused_zero.va`; legal neighbours `modulo_integer_dynamic.va`, `modulo_integer_short_circuit.va`, `modulo_integer_parameter.va` |
 | AMS 4.5.4, 4.5.5 | `idt(x)` and `idtmod(x)` start at "c ... as determined by the simulator" | c = 0 | `lib/ir/lower/analog_op.zig:198-209` | `exhaustive/062_idt_integral.va`, `ch04_expressions/idtmod_one_argument_starts_at_zero.va` |
 | AMS 4.5.5 | where `idtmod` integrates | inside the device, wrapping each accepted step | `lib/backend/codegen/kernel_text.zig:434` | `ch04_expressions/17_idtmod.va`, `ch04_expressions/a04_08_idtmod_offset_window_negative_integrand.va` |
 | AMS 4.5.7 | interpolation between stored points of `absdelay` | linear by default; `(* vera_interp = 2 *)` gives quadratic | `lib/backend/codegen/kernel_text.zig:685,769` | `ch04_expressions/absdelay_vera_interp_linear.va`, `absdelay_vera_interp_quadratic.va` |
@@ -59,6 +60,14 @@ host-dependent values, and `geometry_*_rejected.va` isolates literal domain
 errors. The top-level `$mfactor` alias retains its existing ABI: a host using
 it must also keep `Instance.mfactor`, which controls automatic scaling,
 consistent with the alias's model-card value.
+
+For AMS §4.2.4 integer `%`, zero-divisor checks remain observable even when
+the remainder is discarded. Checks in a display-task argument run in that
+task's accepted-point phase; `modulo_integer_display_zero.va` exercises an
+inlined function that discards the value there. Solver devices that drop
+display tasks omit those checks too. Modulus with real operands retains its
+existing NaN behavior at a dynamic zero divisor; that reporting gap is not
+closed by the integer path.
 
 ## 2. Resource limits
 

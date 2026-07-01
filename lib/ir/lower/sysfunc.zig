@@ -450,6 +450,15 @@ pub fn lowerFormatArg(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// Lowers argument `e` of system task `name`: as a format string when the task takes
 /// one, otherwise through `lowerSysArg`.
 pub fn lowerTaskArg(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
+    // Display/file-output operands run in the accepted-point task phase, not
+    // the per-iteration residual. An unused remainder in an inlined function
+    // argument still checks, but only on the display phase's effect root.
+    const phase = self.runtime_error_phase;
+    defer self.runtime_error_phase = phase;
+    switch (Mir.callee.family(.fromName(name))) {
+        .display, .simctl, .file_out => self.runtime_error_phase = .display,
+        .none, .file_func, .file_read => {},
+    }
     if (Mir.callee.takesFormat(.fromName(name))) return lowerFormatArg(self, e);
     return lowerSysArg(self, e, takesNetRef(name));
 }

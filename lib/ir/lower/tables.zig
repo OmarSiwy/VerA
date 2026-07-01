@@ -188,7 +188,7 @@ displays: std.ArrayList(Lower.Display) = .empty,
 /// when the model prints nothing. codegen turns it into ONE unit function whose
 /// body is the prints, in source order.
 display_root: Mir.Value = .f_zero,
-/// Source-order chain over table captures and distribution checks; a core
+/// Source-order chain over table captures and required runtime checks; a core
 /// live-out.
 table_effect: Mir.Value = .f_zero,
 /// §9.17.1 rejection belongs to the Newton iteration, not timestep history:
