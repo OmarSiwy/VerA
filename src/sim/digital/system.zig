@@ -355,6 +355,15 @@ pub fn fileOp(t: contract.FileIo, f: FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
 fn fgets(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast.ExprId) Error!i64 {
     const d = (try descriptor(self, a, args[1])) orelse return 0;
     const room = (try exec.targetType(self, args[0])).width / 8;
+    const line = try readLine(a, t, d, room);
+    if (line.len != 0) try exec.assign(self, a, args[0], try stringValue(a, line));
+    return @intCast(line.len);
+}
+
+/// §17.2.4.2's byte read, shared by the interpreter and emitted executable.
+/// Include the newline, respect the destination's complete-byte capacity,
+/// and return no bytes on EOF/error so the caller leaves its target alone.
+pub fn readLine(a: std.mem.Allocator, t: contract.FileIo, d: i64, room: u32) std.mem.Allocator.Error![]const u8 {
     var line: std.ArrayList(u8) = .empty;
     while (line.items.len < room) {
         const c = t.getc(d);
@@ -362,8 +371,7 @@ fn fgets(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast
         try line.append(a, @intCast(c));
         if (c == '\n') break;
     }
-    if (line.items.len != 0) try exec.assign(self, a, args[0], try stringValue(a, line.items));
-    return @intCast(line.items.len);
+    return line.items;
 }
 
 /// §17.2.4.3 `$fscanf(fd, format, args...)`: `$sscanf` over the file from its

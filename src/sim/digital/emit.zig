@@ -1222,7 +1222,7 @@ fn slotType(self: *Emitter, at: u32) Error!Type {
 }
 
 /// `exec.targetType`: the type a value assigned to `target` takes.
-fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
+pub fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     const r = self.r;
     const ex = &r.file.exprs;
     // `exec.targetType`: as wide as its operands together, unsigned.

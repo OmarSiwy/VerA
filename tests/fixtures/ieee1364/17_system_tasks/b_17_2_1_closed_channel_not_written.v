@@ -10,6 +10,7 @@
 //   $ferror after the refused write -> nonzero -> "1"
 //   the file: 65 (A), then EOF -> "65 -1"
 //! inherited IEEE 1364-2005 17.2.1
+// native-required
 // digital-runner: warning W1154
 module b_17_2_1_closed_channel_not_written;
   integer fd, errno, c;
