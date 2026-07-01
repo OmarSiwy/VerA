@@ -928,6 +928,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
         // --- statements ---
         try testing.expectEqualSlices(u32, long.stmt_toks.items, seeded.stmt_toks.items);
         try expectDeepEqual(@TypeOf(long.stmts.items), long.stmts.items, seeded.stmts.items);
+        try expectDeepEqual(@TypeOf(long.attributes.items), long.attributes.items, seeded.attributes.items);
 
         // --- all four declaration arrays, to their leaves ---
         try expectDeepEqual(@TypeOf(long.modules), long.modules, seeded.modules);
@@ -1059,4 +1060,32 @@ test "IEEE 1364 §19.3.1: an escaped-identifier actual keeps its terminator" {
     try expectPreserved("`define ID(A) (A)\n`ID(\\a.b )\n", &.{"(\\a.b )"}, &.{});
     // A string's escape sequence is not an escaped identifier.
     try expectPreserved("`define ID(A) (A)\n`ID(\"x\\n\")\n", &.{"(\"x\\n\")"}, &.{});
+}
+
+test "§2.9 attribute owners survive a seeded parse and later attribute lists" {
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    const prefix = "(* module_attr = 3 *) module first; (* item_attr *) integer x; endmodule\n";
+    const source = prefix ++ "(* module_attr = 4 *) module second; analog (* stmt_attr *) begin end endmodule\n";
+    var pt = try Lexer.Lexer.tokenize(arena, prefix);
+    var pb: diag.Bag = .init(arena);
+    var pp = Parser.Parser.init(arena, prefix, pt.items(.tag), pt.items(.start), &pb);
+    const seed: Parser.Parser.Seed = .{
+        .file = try pp.parseSourceFile(),
+        .access_names = &.{},
+        .pos = pp.pos,
+        .gen_construct = pp.gen_construct,
+    };
+    var tokens = try Lexer.Lexer.tokenize(arena, source);
+    var sb: diag.Bag = .init(arena);
+    var sp = try Parser.Parser.initSeeded(arena, source, tokens.items(.tag), tokens.items(.start), &sb, &seed);
+    const resumed = try sp.parseSourceFile();
+    var lb: diag.Bag = .init(arena);
+    var lp = Parser.Parser.init(arena, source, tokens.items(.tag), tokens.items(.start), &lb);
+    const whole = try lp.parseSourceFile();
+    try testing.expect(!pp.failed and !sp.failed and !lp.failed);
+    try testing.expect(whole.attributes.items.len > seed.file.attributes.items.len);
+    try expectDeepEqual(@TypeOf(whole.attributes.items), whole.attributes.items, resumed.attributes.items);
+    try expectDeepEqual(@TypeOf(whole.modules), whole.modules, resumed.modules);
 }

@@ -458,9 +458,11 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
     // A list_of_ports entry has been read: the list is not A.1.3's
     // list_of_port_declarations, so no port_declaration may follow.
     var plain = false;
+    var attr_tok: ?u32 = null;
     while (true) {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
+            attr_tok = self.pos;
             if (plain) return self.failAt(self.pos, .E0207, "found {s}: a port_declaration cannot follow a list_of_ports port (A.1.3)", .{self.found(self.pos)});
             dir = d;
             b.ansi = true;
@@ -505,6 +507,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
+            if (attr_tok) |decl| try self.copyAttributes(decl, tok);
             if (var_storage) |storage| try parse_decl.varPort(self, b, storage, name, range, signed, tok);
             // A.1.3 `port_reference ::= port_identifier [ [
             // constant_range_expression ] ]`, the list-of-ports form only.
@@ -603,6 +606,19 @@ fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
 /// Parses one A.1.4 module_item into `b`. A token that begins no item is
 /// E0240.
 pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
+    const tok = self.pos;
+    const tag = self.peek();
+    const before = b.*;
+    try parseModuleItemBody(self, b);
+    if (tag == .kw_generate) return; // the region's items own their own prefixes
+    // §2.9 Example 5: a declaration's prefix belongs to every item in its
+    // list, including comma-separated instances and continuous assignments.
+    inline for (.{ "ports", "params", "vars", "nets", "instances", "defparams", "events", "functions", "analog", "discrete", "assigns", "gates", "pulls", "tasks", "switches", "paths", "timing_checks" }) |field| {
+        for (@field(b.*, field).items[@field(before, field).items.len..]) |item| try self.copyAttributes(tok, item.main_tok);
+    }
+}
+
+fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
     try self.refuseAms();
     switch (self.peek()) {
         // §10.6: "can only be specified outside of a design element".

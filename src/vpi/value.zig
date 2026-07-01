@@ -117,6 +117,7 @@ fn activeCall(o: *const Obj) bool {
 }
 
 fn source(o: *const Obj) ?Source {
+    if (o.constant_bits) |lit| return literalSource(lit);
     // §26.6.19(b): the active system function's own handle reads its
     // current return value, without recursively invoking its calltf.
     if (activeCall(o)) if (systf.result) |lit| {
@@ -659,6 +660,10 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     }
     if (o.kind == .parameter) {
         root.fail("NOPUT", "vpi_put_value: `{s}` is a parameter, which vpi_put_value does not apply to", .{o.full});
+        return null;
+    }
+    if (o.kind == .code and o.vtype == root.code.vpiAttribute) {
+        root.fail("NOPUT", "vpi_put_value: an attribute is a constant, which vpi_put_value does not apply to", .{});
         return null;
     }
     // IEEE 1364-2005 §20.3: the value the digital call whose calltf is

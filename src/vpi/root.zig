@@ -332,6 +332,10 @@ pub const Obj = struct {
     /// (`Lowered.consts`), copied; §11.6.12 NOTE 1's "the value of the
     /// parameter".
     value: ?Lower.Const = null,
+    /// IEEE §26.6.42: a folded attribute preserves its declared bit width
+    /// and all x/z bits, which a signed i64 constant cannot represent.
+    constant_bits: ?@import("frontend").Integer.Literal = null,
+    attributes: []const u32 = &.{},
     /// An element (word, var select, array member module): the array object
     /// it belongs to — §11.6.11's `vpiParent`, §6.2.2's `vpiModuleArray`.
     parent: ?u32 = null,
@@ -421,6 +425,9 @@ pub const Obj = struct {
     /// (`systf.hook`); of a declaration, its IEEE §26.3.3 source location.
     /// Zero means no source token was recorded.
     src_tok: u32 = 0,
+    /// A declaration inside a generated digital scope evaluates its source
+    /// attribute expressions there, including the iteration's localparam.
+    src_engine: ?u32 = null,
     /// `.code` statement: its AST statement, which with `owner` names the
     /// engine's `StmtSite`s for IEEE 1364-2005 §27.33.1.1's cbStmt.
     stmt: Ast.StmtId = .none,
@@ -759,6 +766,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
                 .size = vectorSize(lowered, node),
                 .direction = p.direction,
                 .port_index = @intCast(k),
+                .src_tok = p.main_tok,
             });
         }
     }
@@ -780,6 +788,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             .full = try joinPath(arena, top_name, flat_name),
             .size = vectorSize(lowered, flat_name),
             .net_type = n.kind,
+            .src_tok = n.main_tok,
         });
     }
     for (flat.vars) |v| {
@@ -792,6 +801,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             const is_reg = v.storage == .reg;
             if (!is_reg and v.ty != .real and v.ty != .integer) continue;
             const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            objects.items[at].src_tok = v.main_tok;
             const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, at);
             if (!is_reg) try scopes.items[split.scope].variables.append(gpa, at);
@@ -809,6 +819,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
                 .full = try joinPath(arena, top_name, flat_name),
                 .size = if (v.ty == .real) 64 else 32,
                 .ty = v.ty,
+                .src_tok = v.main_tok,
             });
             continue;
         }
@@ -821,6 +832,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             .full = try joinPath(arena, top_name, flat_name),
             .size = packedWidth(file, v),
             .is_signed = v.is_signed,
+            .src_tok = v.main_tok,
         });
     }
     for (flat.params) |p| {
@@ -833,6 +845,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .ty = p.ty,
+            .src_tok = p.main_tok,
             // §3.4.5, as the SOURCE wrote it. Elaboration turns a flattened
             // child's `parameter` into a `localparam` carrying its override, so
             // the flat row's `is_local` describes the flatten and not the
@@ -1399,6 +1412,7 @@ fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.
                     .slot = slot,
                     .net_type = n.kind,
                     .src_tok = n.main_tok,
+                    .src_engine = e,
                     .edges = try arena.dupe(code.Edge, &.{.{ .tag = vpiScope, .to = m.* }}),
                 });
                 try addBits(gpa, arena, objects, r, code.vpiNetBit);
@@ -1689,6 +1703,12 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     defer names.deinit(gpa);
     for (scopes.items, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps, .run = r, .engine = s.engine };
+        const declarations = objects.items.len;
+        for (0..declarations) |at| {
+            const o = objects.items[at];
+            if (o.owner == @as(u32, @intCast(i)) and o.kind != .code and o.kind != .module and o.src_tok != 0)
+                try b.attributes(@intCast(at), .{ .kind = .declaration, .tok = o.src_tok }, false);
+        }
         try b.module(s.decl);
         try addConnections(&b, scopes.items, r);
     }
@@ -1738,6 +1758,7 @@ fn addConnections(b: *code.Builder, scopes: []Building, r: *const sim.digital.Ru
         };
         for (s.children.items) |c| {
             if (r.scope_info.items[scopes[c].engine].name != inst.name) continue;
+            try b.attributes(c, .{ .kind = .declaration, .tok = inst.main_tok }, false);
             const child = scopes[c].decl;
             const named = inst.ports.len != 0 and inst.ports[0].name != .none;
             for (scopes[c].ports.items) |pt| b.objects.items[pt].props = try b.arena.dupe(code.Prop, &.{.{ .prop = code.vpiConnByName, .value = @intFromBool(named) }});
@@ -1755,6 +1776,7 @@ fn addConnections(b: *code.Builder, scopes: []Building, r: *const sim.digital.Ru
                 } else continue;
                 const high = try b.expr(conn.expr);
                 b.objects.items[scopes[c].ports.items[j]].edges = try b.arena.dupe(code.Edge, &.{.{ .tag = code.vpiHighConn, .to = high }});
+                try b.attributes(scopes[c].ports.items[j], .{ .kind = .declaration, .tok = conn.main_tok }, false);
             }
             for (inst.params, 0..) |o, k| {
                 // §12.2.2.1: in order, the k-th parameter that is not local.
@@ -1802,7 +1824,7 @@ fn addAnalogCode(
     top_name: []const u8,
 ) Error!void {
     const flat = lowered.module.?;
-    var an: code.Builder.Analog = .{};
+    var an: code.Builder.Analog = .{ .lowered = lowered };
     defer an.branches.deinit(gpa);
     defer an.flow_access.deinit(gpa);
     for (objects.items, 0..) |o, i| switch (o.kind) {
@@ -1816,6 +1838,23 @@ fn addAnalogCode(
     defer names.deinit(gpa);
     for (scopes, 0..) |*s, i| {
         var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
+        try b.attributes(@intCast(i), .{ .kind = .declaration, .tok = s.decl.main_tok }, true);
+        const declarations = objects.items.len;
+        for (0..declarations) |at| {
+            const o = objects.items[at];
+            if (o.owner == @as(u32, @intCast(i)) and o.kind != .code and o.kind != .module and o.src_tok != 0)
+                try b.attributes(@intCast(at), .{ .kind = .declaration, .tok = o.src_tok }, false);
+        }
+        for (s.decl.instances) |inst| for (s.children.items) |child| {
+            if (!std.mem.eql(u8, objects.items[child].name, b.file.str(inst.name))) continue;
+            try b.attributes(child, .{ .kind = .declaration, .tok = inst.main_tok }, false);
+            for (inst.ports, 0..) |conn, k| {
+                const pt = if (conn.name == .none) (if (k < scopes[child].ports.items.len) scopes[child].ports.items[k] else continue) else for (scopes[child].ports.items) |p| {
+                    if (std.mem.eql(u8, objects.items[p].name, b.file.str(conn.name))) break p;
+                } else continue;
+                try b.attributes(pt, .{ .kind = .declaration, .tok = conn.main_tok }, false);
+            }
+        };
         try b.analogBlocks(flat.analog);
     }
 }
@@ -2431,6 +2470,8 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
+    if (obj_type == code.vpiAttribute and @import("attributes.zig").supports(o))
+        return if (o.attributes.len == 0) null else newIter(d, o.attributes);
     if (obj_type == code.vpiUse) return uses(d, o);
     // A behavioural object's double arrows are its `lists` rows, as are a
     // vector's bits. An empty row is an empty set (NULL, no error —

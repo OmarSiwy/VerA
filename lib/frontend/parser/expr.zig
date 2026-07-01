@@ -39,7 +39,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             const tok = self.pos;
             try self.enter();
             self.pos += 1;
-            try self.skipAttributes();
+            try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
             const then_e = try parseExpr(self);
             _ = try self.expect(.colon);
             const else_e = try parseExprPrec(self, prec_ternary);
@@ -60,7 +60,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         const tok = self.pos;
         try self.enter();
         self.pos += 1;
-        try self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
+        try self.ownedAttributes(.{ .kind = .expression, .tok = tok }); // A.8.3 binary suffix
         // §4.2.2: "All operators associate left to right with the exception
         // of the conditional operator". No `**` carve-out, so `2**3**2` is 64.
         const rhs = try parseExprPrec(self, prec + 1);
@@ -97,7 +97,7 @@ pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
         else => return parsePostfix(self), // else: not a unary operator, so a postfix/primary operand
     };
     self.pos += 1;
-    try self.skipAttributes(); // A.8.3 `unary_operator { attribute_instance }`
+    try self.ownedAttributes(.{ .kind = .expression, .tok = tok }); // A.8.3 unary suffix
     const operand = try parseUnary(self);
     return self.file.exprs.add(self.arena, .{
         .tag = .unary,
@@ -240,12 +240,14 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             if (self.peek() == .attr_open) {
                 const before_attrs = self.pos;
                 const attr_mark = self.attrs.items.len;
-                try self.skipAttributes();
+                const binding_mark = self.file.attributes.items.len;
+                try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
                 if (self.peek() != .lparen) {
                     self.pos = before_attrs;
                     // The specs come with the cursor: this instance belongs
                     // to whatever follows and will be collected there.
                     self.attrs.shrinkRetainingCapacity(attr_mark);
+                    self.file.attributes.shrinkRetainingCapacity(binding_mark);
                 }
             }
             // A dotted name: a §6.8 hierarchical name, or a §5.5.3 Syntax 5-4
@@ -368,7 +370,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     // calls so `ddt (* vera_lte = 0 *) (q)` can name one charge site, and
     // `absdelay (* vera_interp = 2 *) (x, td)` one delay.
     const mark = self.attrs.items.len;
-    if (self.peek() == .attr_open) try self.skipAttributes();
+    if (self.peek() == .attr_open) try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
     const lte = self.lteSince(mark);
     const args = try parseCallArgs(self);
     const id = try addCall(self, call_tag, tok, name, args);

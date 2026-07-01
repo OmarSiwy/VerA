@@ -405,6 +405,16 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 }
 
 pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
+    return isConstantExpression(self, e, false);
+}
+
+/// Attributes are materialized for VPI after elaboration, when their
+/// §10.4.5 constant function calls still retain their elaborated frames.
+pub fn attributeConstantExpression(self: *Run, e: Ast.ExprId) bool {
+    return isConstantExpression(self, e, true);
+}
+
+fn isConstantExpression(self: *Run, e: Ast.ExprId, attribute: bool) bool {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal => return true,
@@ -421,7 +431,7 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
         // arguments to the function are constant expressions", "evaluated at
         // elaboration time", so only while elaboration folds.
         .call => {
-            if (self.growing == null) return false;
+            if (self.growing == null and !attribute) return false;
             const idx = self.sub_by_name.get(.{ .scope = self.instanceOf(self.scope), .str = ex.strOf(e) }) orelse return false;
             if (!self.subs.items[idx].framed or !(constantFunction(self, idx) catch false)) return false;
         },
@@ -434,7 +444,7 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
         else => return false, // else: not a form this executor folds
     }
     var buf: [3]Ast.ExprId = undefined;
-    for (ex.children(e, &buf)) |c| if (!constantExpression(self, c)) return false;
+    for (ex.children(e, &buf)) |c| if (!isConstantExpression(self, c, attribute)) return false;
     return true;
 }
 
