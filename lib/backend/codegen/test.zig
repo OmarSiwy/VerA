@@ -2353,7 +2353,7 @@ test "codegen: §3.4 a shape parameter is compiled in and a card that moves it i
     defer h.deinit();
     const text = try h.gen(std.testing.allocator);
     // The bound read `N`, so `N` is checked; `g` shapes nothing and is not.
-    try std.testing.expect(std.mem.indexOf(u8, text, "    if (model.N != 3) return \"N\";\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "    if (@as(i32, @truncate(model.N)) != 3) return \"N\";\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "model.g !=") == null);
 
     // `--param N=5`: the field initializer AND the check are the compiled value.
@@ -2362,7 +2362,7 @@ test "codegen: §3.4 a shape parameter is compiled in and a card that moves it i
     defer o.deinit();
     const over = try o.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, over, "N: i64 = 5,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, over, "    if (model.N != 5) return \"N\";\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, over, "    if (@as(i32, @truncate(model.N)) != 5) return \"N\";\n") != null);
 }
 
 test "codegen: §6.6 a parameter in a generate scheme fixes structure, so it is a shape parameter" {
@@ -2381,7 +2381,7 @@ test "codegen: §6.6 a parameter in a generate scheme fixes structure, so it is 
     , &h);
     defer h.deinit();
     const text = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, text, "    if (model.sel != 1) return \"sel\";\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "    if (@as(i32, @truncate(model.sel)) != 1) return \"sel\";\n") != null);
 }
 
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {

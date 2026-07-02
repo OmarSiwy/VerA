@@ -65,7 +65,7 @@ pub const ParamInfo = struct {
 /// §3.4 "parameters can be modified at compilation time": the value a
 /// `--param name=value` gives the top module's parameter `name`, in place of
 /// its declaration value. A card is written in reals; `lowerParamDecl` converts.
-pub const ParamOverride = struct { name: []const u8, value: f64 };
+pub const ParamOverride = Elaborate.ParamOverride;
 
 /// A §3.12 named branch: a node pair carrying a flow and a potential.
 pub const BranchInfo = struct {
@@ -520,6 +520,8 @@ gen_iter: ?i64 = null,
 ps_hidden: []const []const u8 = &.{},
 /// §6.3.1/§6.4 forbidden defparams, awaiting final generate-scheme values.
 paramset_defparams: []const Elaborate.ParamsetDefparam = &.{},
+/// §6.4.2 parameters whose values selected an overloaded paramset.
+selection_params: []const Ast.StrId = &.{},
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected before the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -1045,11 +1047,13 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .src = self.src,
         .tok_starts = self.tok_starts,
         .bag = self.bag,
+        .param_overrides = self.param_overrides,
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     self.ps_hidden = design.ps_hidden; // §6.4.3
     self.paramset_defparams = design.paramset_defparams;
+    self.selection_params = design.selection_params;
     self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
@@ -1119,6 +1123,9 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         _ = try lower_param.aliasSystemParam(self, alias, self.file.str(a.target));
     }
     for (module.params) |*p| try lower_param.lowerParamDecl(self, p);
+    for (self.selection_params) |name| if (self.param_index.get(self.file.str(name))) |i| {
+        self.out.params.items[i].shape = true;
+    };
     try lower_control.checkParamsetDefparams(self);
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.

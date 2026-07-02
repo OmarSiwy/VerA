@@ -265,6 +265,7 @@ pub fn build(b: *std.Build) void {
     if (language != .ams) return;
     const contract = byName(mods, "contract");
     const test_timers = b.step("test-timers", "Run emitted-device timer scheduling tests");
+    const test_paramsets = b.step("test-paramsets", "Run emitted-device paramset binding and host shape tests");
     for (host_tests) |h| {
         const gen = b.addRunArtifact(exe);
         gen.addArgs(&.{ "--emit-zig", "-I" });
@@ -290,6 +291,7 @@ pub fn build(b: *std.Build) void {
         const run_host = testRun(b, std.fs.path.stem(h.host), host, runner);
         test_step.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
+        if (std.mem.eql(u8, h.host, "tests/paramset_host.zig")) test_paramsets.dependOn(run_host);
     }
 
     // `.v` contract devices (`rt.Device`) under a mock analog host, each
@@ -375,6 +377,7 @@ pub fn build(b: *std.Build) void {
 /// A host driver and the `.va` its `device` import is emitted from: device
 /// hooks called in an order the fixture directives cannot express.
 const host_tests = [_]struct { host: []const u8, va: []const u8 }{
+    .{ .host = "tests/paramset_host.zig", .va = "tests/fixtures/ch06_hierarchy/paramset_outer_defparam_shape.va" },
     .{ .host = "tests/fixtures/ch03_data_types/nodeset_metadata_host.zig", .va = "tests/fixtures/ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },

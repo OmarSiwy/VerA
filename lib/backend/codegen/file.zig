@@ -546,11 +546,19 @@ fn emitShapeCheck(self: *Gen) Error!void {
     for (self.lowered.params.items, 0..) |p, i| {
         if (!p.shape) continue;
         const ty = Analysis.tyOfParam(p.ty);
-        if (ty == .str) continue; // a string shapes nothing
+        if (ty == .str) {
+            try self.w("    if (!std.mem.eql(u8, model.{s}, {s})) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) });
+            continue;
+        }
         // `derive` rewrites a localparam from its default; one that reads no
         // parameter is that constant every time and cannot disagree.
         if (p.is_local and self.an.foldConst(p.default, false) != null) continue;
-        try self.w("    if (model.{s} != {s}) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) });
+        // §3.4.1 gives an explicit integer its low 32 bits even when the host
+        // writes a wider carrier. Compare the value used by selection.
+        if (ty == .int and p.integer32)
+            try self.w("    if (@as(i32, @truncate(model.{s})) != {s}) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) })
+        else
+            try self.w("    if (model.{s} != {s}) return \"{f}\";\n", .{ self.names.p_names[i], try paramDefault(self, p, ty), std.zig.fmtString(p.name) });
     }
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("    return null;\n}}\n\n", .{});

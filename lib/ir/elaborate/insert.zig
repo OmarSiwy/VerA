@@ -80,7 +80,8 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
     for (module.instances, 0..) |inst, ii| {
-        const child = try moduleOf(self, &inst) orelse continue;
+        const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, file.str(inst.name), elaborate.sep });
+        const child = try moduleOf(self, &inst, child_path) orelse continue;
         if (child.is_connect) continue;
         for (child.ports, 0..) |p, pi| {
             const ci = connIndex(&inst, p, pi) orelse continue;
@@ -184,15 +185,10 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
 /// Quiet: selection proper (`elab_paramset.selectParamset`) runs again when the
 /// instance is inlined and reports anything wrong there, once. A set that does
 /// not narrow to one paramset here inserts nothing.
-fn moduleOf(self: *Flatten, inst: *const Ast.Instance) Error!?*const Ast.ModuleDecl {
+fn moduleOf(self: *Flatten, inst: *const Ast.Instance, path: []const u8) Error!?*const Ast.ModuleDecl {
     if (elab_names.findModule(self, inst.module)) |m| return m;
     var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
-    for (self.ctx.file.paramsets) |*ps| {
-        if (ps.name == inst.module and elab_paramset.paramsetAdmits(self, inst, ps)) try live.append(self.ctx.arena, ps);
-    }
-    for ([_]elab_paramset.TieRule{ .un_overridden, .ranged_locals, .unconnected_ports }) |rule| {
-        if (live.items.len > 1) try elab_paramset.tieBreak(self, inst, &live, rule);
-    }
+    _ = try elab_paramset.matchingParamsets(self, inst, path, &live);
     if (live.items.len != 1) return null;
     // The chain, walked without `paramsetChain`'s diagnostics; a chain that
     // never reaches a module is E0904 at inlining.

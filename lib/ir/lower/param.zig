@@ -94,7 +94,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // the declared type, or — §3.4.1's inference — the declared default's.
     const over: ?Const = if (decl.is_local or decl.ty == .string) null else for (self.param_overrides) |o| {
         if (std.mem.eql(u8, o.name, name))
-            break parameterConst(if (decl.ty == .unspecified and declared != null and declared.? == .int) .integer else decl.ty, .{ .real = o.value });
+            break @import("frontend").constfold.parameterCardValue(decl.ty, declared, o.value);
     } else null;
     const folded = over orelse declared;
     // §4.2.1.1 converts by "rounding the real number to the nearest integer",
@@ -342,22 +342,7 @@ pub fn addParam(
 /// Apply an explicit parameter type before a later default infers its own type.
 /// Out-of-i64 real conversion retains the existing saturation policy; deciding
 /// that implementation-defined domain is separate from preserving integral bits.
-fn parameterConst(ty: Ast.Type, value: Const) Const {
-    return switch (ty) {
-        .real => if (value == .str) value else .{ .real = value.asReal() },
-        .integer => switch (value) {
-            .int => |n| .{ .int = wrap32(n) },
-            .real => |n| blk: {
-                const rounded = @round(n);
-                if (rounded >= -9223372036854775808.0 and rounded < 9223372036854775808.0)
-                    break :blk .{ .int = wrap32(@intFromFloat(rounded)) };
-                break :blk value;
-            },
-            .str => value,
-        },
-        .string, .unspecified => value,
-    };
-}
+const parameterConst = @import("frontend").constfold.parameterValue;
 
 /// The MIR must contain the same declared-type conversion as `folded` metadata.
 /// Later defaults and operator controls follow this MIR, not the Model field.

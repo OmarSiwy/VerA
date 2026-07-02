@@ -409,6 +409,13 @@ pub fn constIntFlat(self: *Flatten, e: Ast.ExprId) ?i64 {
     return if (c == .int) c.int else null;
 }
 
+/// §6.4.2 folds an override in its source namespace. When `reads` is supplied,
+/// it records which flattened parameter values an overload choice used, for
+/// the same host shape check that protects §6.6 generate selection.
+pub fn constValue(self: *Flatten, e: Ast.ExprId, local: bool, reads: ?[]bool) ?constfold.Const {
+    return constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = local, .reads = reads });
+}
+
 /// `constfold.fold`'s identifiers, answered from the parameters flattened so
 /// far. The bound is written in the instantiating module's local names, while
 /// every value in `self.params` is already flat, so only the first lookup
@@ -417,6 +424,7 @@ const ParamEnv = struct {
     self: *Flatten,
     local: bool,
     depth: u8 = 0,
+    reads: ?[]bool = null,
 
     /// Resolves an identifier to a flattened scalar parameter's folded value.
     pub fn leaf(env: ParamEnv, e: Ast.ExprId) ?constfold.Const {
@@ -426,10 +434,21 @@ const ParamEnv = struct {
         // lowering's diagnostic, this only has to terminate.
         if (ex.tag(e) != .ident or env.depth > 32) return null;
         const name = if (env.local) flat(self, ex.strOf(e)) else ex.strOf(e);
-        for (self.params.items) |p| if (p.name == name and p.dims.len == 0) {
-            const v = constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1 }) orelse return null;
-            // §3.4.1: a declared `integer` type converts the value.
-            return if (p.ty == .integer and v == .real) .{ .int = v.asIntExact() orelse return null } else v;
+        for (self.params.items, 0..) |p, i| if (p.name == name and p.dims.len == 0) {
+            if (env.reads) |reads| reads[i] = true;
+            if (!p.is_local and p.ty != .string) for (self.ctx.param_overrides) |o| {
+                if (!std.mem.eql(u8, o.name, self.ctx.file.str(name))) continue;
+                // The replaced default supplies an inferred TYPE only. Its
+                // former value dependencies cannot change this card binding
+                // and must not freeze unrelated host fields as shape inputs.
+                const declared = if (p.ty == .unspecified)
+                    constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1 })
+                else
+                    null;
+                return constfold.parameterCardValue(p.ty, declared, o.value);
+            };
+            const declared = constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1, .reads = env.reads }) orelse return null;
+            return constfold.parameterValue(p.ty, declared);
         };
         return null;
     }

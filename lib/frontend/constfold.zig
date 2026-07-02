@@ -83,6 +83,32 @@ pub fn wrap32(x: i64) i64 {
     return @as(i32, @truncate(x));
 }
 
+/// §3.4.1 applies the declared parameter type before another expression reads
+/// its value. Shared by elaboration's paramset selection and lowering, so the
+/// selected member sees the same real/integer conversion as the emitted model.
+/// Invalid real-to-integer inputs remain real for the caller's diagnostic.
+pub fn parameterValue(ty: Ast.Type, value: Const) Const {
+    return switch (ty) {
+        .real => if (value == .str) value else .{ .real = value.asReal() },
+        .integer => switch (value) {
+            .int => |n| .{ .int = wrap32(n) },
+            .real => if (value.asIntExact()) |n| .{ .int = wrap32(n) } else value,
+            .str => value,
+        },
+        .string, .unspecified => value,
+    };
+}
+
+/// Numeric host cards carry no new HDL type or width. Preserve an inferred
+/// integral carrier without imposing the explicit `integer` declaration's
+/// 32-bit wrap; operand width still comes from the elaborated declaration.
+pub fn parameterCardValue(ty: Ast.Type, declared: ?Const, value: f64) Const {
+    const c: Const = .{ .real = value };
+    if (ty == .unspecified and declared != null and declared.? == .int)
+        return if (c.asIntExact()) |n| .{ .int = n } else c;
+    return parameterValue(ty, c);
+}
+
 /// §3.2's wrap for unary `-` and `abs`, whose result `r` comes from operand
 /// `a`: -(-2^31) is -2^31. An operand wider than 32 bits is a §2.6.1 literal
 /// ("at least 32" bits), and its negation keeps that width, as the literal
