@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 §5.2.1, pp. 56-57: "The msb_base_expr and lsb_base_expr
 // shall be integer expressions, and the width_expr shall be a positive
 // constant integer expression. The lsb_base_expr and msb_base_expr can vary at

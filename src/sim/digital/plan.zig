@@ -537,17 +537,21 @@ fn readBits(self: *Emitter, e: Ast.ExprId, out: *Bits) Error!void {
             var x = e;
             while (ex.tag(x) == .index) : (x = ex.lhs(x)) try readBits(self, ex.rhs(x), out);
         } else {
+            if (ex.tag(ex.lhs(e)) == .index) {
+                // The selected word can vary at run time. Its array slots
+                // keep whole-slot sensitivity, and both addressing stages
+                // contribute their own input reads (§5.2.2).
+                try readBits(self, ex.lhs(e), out);
+                return readBits(self, ex.rhs(e), out);
+            }
             const at = r.slot(ex.lhs(e)) catch return self.refuse("a name the engine resolves only at run time");
             const rg = ex.rhs(e);
             const width = r.values[at].width;
-            const range = expr.vecRange(r, at, width);
-            const sel: ?exec.Sel = if (ex.tag(rg) == .range) blk: {
-                const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
-                break :blk .{ .first = range.position(b.lsb), .count = @intCast(@abs(b.msb - b.lsb) + 1) };
-            } else if (compile.constantExpression(r, rg)) blk: {
-                const v = exec.eval(r, self.arena, rg, 0) catch return self.refuse("a constant the engine does not fold");
-                // An x/z index names no bit.
-                break :blk if (v.asInt()) |i| .{ .first = range.position(i), .count = 1 } else .{ .first = 0, .count = 0 };
+            const base = if (ex.tag(rg) == .indexed_range) ex.lhs(rg) else rg;
+            const sel: ?exec.Sel = if (ex.tag(rg) == .range or compile.constantExpression(r, base)) blk: {
+                // Share the interpreter's direction/width calculation,
+                // including constant indexed ranges. Null names no bit.
+                break :blk (exec.selection(r, self.arena, e) catch return self.refuse("a constant select the engine does not fold")) orelse .{ .first = 0, .count = 0 };
             } else null;
             const g = try out.getOrPut(self.arena, at);
             const s = sel orelse {

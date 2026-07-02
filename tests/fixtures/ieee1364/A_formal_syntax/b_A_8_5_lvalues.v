@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 A.8.5, p. 506:
 //   net_lvalue ::= hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
 //     | { net_lvalue { , net_lvalue } }

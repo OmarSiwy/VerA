@@ -1,3 +1,4 @@
+// native-required
 // IEEE 1364-2005 §5.2.2, p. 58: "To express bit-selects or part-selects of
 // array elements, the desired word shall first be selected by supplying an
 // address for each dimension. Once selected, bit-selects and part-selects

@@ -145,9 +145,16 @@ pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     var k = c.depth;
     while (k != 0) : (x = ex.lhs(x)) {
         k -= 1;
-        indices[k] = (try eval(self, a, ex.rhs(x), 0)).asInt() orelse return null;
+        indices[k] = indexInt(try eval(self, a, ex.rhs(x), 0)) orelse return null;
     }
     return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
+}
+
+/// Address conversion preserves unsigned magnitude: the engine's signed
+/// index range cannot contain an unsigned value above maxInt(i64).
+pub fn indexInt(value: Int.Literal) ?i64 {
+    if (value.width == 64 and !value.signed and value.values()[0] > std.math.maxInt(i64)) return null;
+    return value.asInt();
 }
 
 /// §4.9 row-major: the element `indices` (one per dimension, outermost
@@ -187,27 +194,29 @@ pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rg = ex.rhs(e);
     const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
-    // The declared index of the selected value's least significant bit.
-    var low: i64 = undefined;
+    // Storage position of the selected value's least significant bit.
+    var first: i64 = undefined;
     var count: u32 = 1;
     switch (ex.tag(rg)) {
         .range => {
             const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
-            low = b.lsb;
+            first = range.position(b.lsb);
             count = @intCast(@abs(b.msb - b.lsb) + 1);
         },
         // §5.2.1: `+:` selects `count` bits "starting at the base and
-        // ascending the bit range", `-:` descending, so the least
-        // significant end is the lower index of an ascending range.
+        // ascending the bit range", `-:` descending; which selected end
+        // is least significant follows the vector declaration's direction.
         .indexed_range => {
             count = @intCast(self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?.msb + 1); // infer folded it
-            const base = (try eval(self, a, ex.lhs(rg), 0)).asInt() orelse return null;
-            const first = if (ex.extraOf(rg) == 0) base else base - count + 1;
-            low = if (range.msb >= range.lsb) first else first + count - 1;
+            const base = indexInt(try eval(self, a, ex.lhs(rg), 0)) orelse return null;
+            const p = range.position(base);
+            first = if ((range.msb >= range.lsb) == (ex.extraOf(rg) == 0)) p else p -| (count - 1);
         },
-        else => low = (try eval(self, a, rg, 0)).asInt() orelse return null, // else: a bit-select's index
+        else => first = range.position(indexInt(try eval(self, a, rg, 0)) orelse return null), // else: a bit-select's index
     }
-    return .{ .first = range.position(low), .count = count };
+    const width = self.values[try self.baseSlot(ex.lhs(e))].width;
+    if (first >= width or first <= -@as(i64, count)) return null;
+    return .{ .first = first, .count = count };
 }
 
 /// §5.2.1: the selected bits, x wherever the index is x/z or outside the
