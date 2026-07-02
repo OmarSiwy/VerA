@@ -1211,6 +1211,20 @@ pub const State = struct {
         return system.readLine(self.scratch.allocator(), system.own, fd, w / 8);
     }
 
+    /// §17.2.4.4: one big-endian binary word, copied out of the shared
+    /// reader's scratch storage so assigning it may safely call other tasks.
+    pub fn fileWord(self: *State, d: ?i64, comptime w: u32) Error!struct { value: ?logic.T(w), n: i64 } {
+        if (self.quiet) return .{ .value = null, .n = 0 };
+        const fd = (d orelse return .{ .value = null, .n = 0 }) & 0xffff_ffff;
+        _ = self.scratch.reset(.retain_capacity);
+        const word = system.readWord(self.scratch.allocator(), system.own, fd, w) catch return error.OutOfMemory;
+        const v = word.value orelse return .{ .value = null, .n = word.n };
+        if (w <= 64) return .{ .value = .{ .v = v.values()[0], .x = 0 }, .n = word.n };
+        var word_value: logic.T(w) = .{ .v = undefined, .x = @splat(0) };
+        @memcpy(&word_value.v, v.values());
+        return .{ .value = word_value, .n = word.n };
+    }
+
     /// §17.2.7 `$ferror`: the descriptor's error and the corresponding text.
     /// Descriptor zero also reports a failed open, as on the interpreter path.
     pub fn fileError(self: *const State, d: ?i64) struct { code: i64, text: []const u8 } {

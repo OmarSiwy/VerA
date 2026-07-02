@@ -21,6 +21,7 @@
 //     what is left -> 9a bc de f0, 4 bytes -> "4 9a bc de f0"
 //   $fread(r16, fd) at end of file: no character read -> "0"
 //! inherited IEEE 1364-2005 17.2.4.4
+// native-required
 module b_17_2_4_4_fread;
   integer fd, code;
   reg [15:0] r16;

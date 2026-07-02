@@ -432,13 +432,13 @@ fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast
     var at = if (args.len > 2 and args[2] != .none) (try int(self, a, args[2])) orelse return 0 else arr.low;
     var left = if (args.len > 3) (try int(self, a, args[3])) orelse return 0 else std.math.maxInt(i64);
     var read: i64 = 0;
-    while (at >= arr.low and at <= arr.high and left > 0) : ({
-        at += 1;
-        left -= 1;
-    }) {
+    while (at >= arr.low and at <= arr.high and left > 0) {
         const w = try readWord(a, t, d, self.values[base].width);
         read += w.n;
         try exec.store(self, base + @as(u32, @intCast(at - arr.low)), (w.value orelse break).planes);
+        if (at == arr.high) break;
+        at += 1;
+        left -= 1;
     }
     return read;
 }
@@ -446,7 +446,7 @@ fn fread(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const Ast
 /// One `$fread` word: ceil(width/8) characters, big-endian, into `width`
 /// bits; the value is null when the file ends first. `n` is the characters
 /// read.
-fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Error!struct { value: ?Int.Literal, n: i64 } {
+pub fn readWord(a: std.mem.Allocator, t: contract.FileIo, d: i64, width: u32) Error!struct { value: ?Int.Literal, n: i64 } {
     const bytes = (width + 7) / 8;
     const v = try filled(a, width, false, .zero);
     for (0..bytes) |k| {

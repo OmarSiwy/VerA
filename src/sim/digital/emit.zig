@@ -1681,6 +1681,45 @@ pub fn assignChars(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = w, .signed = false } } }, .blocking);
 }
 
+/// §17.2.4.4 `$fread`: a packed target takes one binary word; an entire
+/// memory takes words from the requested (or lowest) address upward. Stores
+/// use the ordinary assignment path so observers wake for changed values.
+pub fn fread(self: *Emitter, args: []const Ast.ExprId) Error!void {
+    const r = self.r;
+    const ex = &r.file.exprs;
+    const lb = self.label();
+    const base = if (ex.tag(args[0]) == .ident) try self.slot(args[0]) else null;
+    const arr = if (base) |at| r.arrays.get(at) else null;
+    try self.print("fr{d}: {{\n            const fd{d} = ", .{ lb, lb });
+    try int64(self, args[1]);
+    try self.print(";\n", .{});
+    if (arr) |memory| {
+        const at = base.?;
+        const width = try self.slotWidth(at);
+        try self.print("            const first{d}: i64 = ", .{lb});
+        if (args.len > 2 and args[2] != .none) {
+            try int64(self, args[2]);
+            try self.print(" orelse break :fr{d} L.k(0, 0)", .{lb});
+        } else try self.print("{d}", .{memory.low});
+        try self.print(";\n            const count{d}: i64 = ", .{lb});
+        if (args.len > 3) {
+            try int64(self, args[3]);
+            try self.print(" orelse break :fr{d} L.k(0, 0)", .{lb});
+        } else try self.print("{d}", .{memory.count});
+        try self.print(";\n            if (first{d} < {d} or first{d} > {d} or count{d} <= 0) break :fr{d} L.k(0, 0);\n", .{ lb, memory.low, lb, memory.high, lb, lb });
+        try self.print("            const n{d}: u32 = @intCast(@min(count{d}, {d} - first{d} + 1));\n            var read{d}: i64 = 0;\n            for (0..n{d}) |k{d}| {{\n", .{ lb, lb, memory.high, lb, lb, lb, lb });
+        try self.print("            const a{d}: u32 = {d} + @as(u32, @intCast(first{d} - {d})) + @as(u32, @intCast(k{d}));\n", .{ lb, at, lb, memory.low, lb });
+        try self.print("            const word{d} = try s.fileWord(fd{d}, {d});\n            read{d} += word{d}.n;\n            const v{d} = word{d}.value orelse break;\n            ", .{ lb, lb, width, lb, lb, lb, lb });
+        try self.storeElement(at, lb, .blocking);
+        try self.print("v{d}, {f});\n            }}\n            break :fr{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(read{d})))), 0);\n            }}", .{ lb, full(width), lb, lb });
+    } else {
+        const ty = try targetType(self, args[0]);
+        try self.print("            const word{d} = try s.fileWord(fd{d}, {d});\n            if (word{d}.value) |v{d}| {{\n", .{ lb, lb, ty.width, lb, lb });
+        try assignment(self, args[0], .{ .evaluated = .{ .label = lb, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+        try self.print("            }}\n            break :fr{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(word{d}.n)))), 0);\n            }}", .{ lb, lb });
+    }
+}
+
 /// `exec.eval(e, 0).asInt()` as a Zig `?i64`.
 pub fn int64(self: *Emitter, e: Ast.ExprId) Error!void {
     try self.print("L.asInt(", .{});
