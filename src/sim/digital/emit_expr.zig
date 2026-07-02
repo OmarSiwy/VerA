@@ -414,14 +414,22 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("            break :fe{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(f{d}.code)))), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
                 },
                 // §17.2.4.3: each output argument as the scan reaches it.
-                .sscanf => {
-                    try self.xMeaning("`$sscanf`, which answers EOF for an x or z in its input or format", ex.mainTok(e));
+                .sscanf, .fscanf => |f| {
+                    try self.xMeaning("`$sscanf`/`$fscanf`, which answer EOF for an x or z in the input or format", ex.mainTok(e));
                     const lb = self.label();
-                    try self.print("L.rs(sc{d}: {{\n            var c{d} = try s.scan(", .{ lb, lb });
-                    const in = try selfDetermined(self, args[0]);
-                    try self.print(", {d}, ", .{in.width});
+                    if (f == .fscanf) {
+                        self.keepFour("§17.2 file I/O, which a 4-state rerun would repeat", ex.mainTok(e));
+                        try self.print("L.rs(sc{d}: {{\n            const file{d} = try s.scanFile(", .{ lb, lb });
+                        try emit.int64(self, args[0]);
+                        try self.print(", ", .{});
+                    } else {
+                        try self.print("L.rs(sc{d}: {{\n            var c{d} = try s.scan(", .{ lb, lb });
+                        const in = try selfDetermined(self, args[0]);
+                        try self.print(", {d}, ", .{in.width});
+                    }
                     const fm = try selfDetermined(self, args[1]);
                     try self.print(", {d}, {d});\n", .{ fm.width, args.len - 2 });
+                    if (f == .fscanf) try self.print("            var c{d} = file{d}.scan;\n", .{ lb, lb });
                     try self.print("            while (c{d}.next()) |x{d}| switch (x{d}.arg) {{\n", .{ lb, lb, lb });
                     for (args[2..], 0..) |arg, k| {
                         try self.print("            {d} => switch (x{d}.value) {{\n            .bits => |v{d}| {{\n", .{ k, lb, lb });
@@ -433,6 +441,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                         try self.print("            }},\n            }},\n", .{});
                     }
                     try self.print("            else => unreachable,\n            }};\n", .{});
+                    if (f == .fscanf) try self.print("            s.finishFileScan(file{d}, c{d});\n", .{ lb, lb });
                     try self.print("            break :sc{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(c{d}.result)))), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
                 },
                 // §17.9, which writes its seed argument back.
@@ -458,7 +467,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     const t = try selfDetermined(self, args[0]);
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
-                .fscanf, .fread => return self.refuse("a §17.2 read into a string or memory argument"),
+                .fread => return self.refuse("a §17.2 read into a string or memory argument"),
                 .user => return self.refuse(user_fn),
                 else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }

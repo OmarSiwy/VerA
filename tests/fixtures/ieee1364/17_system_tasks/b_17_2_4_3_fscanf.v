@@ -11,6 +11,7 @@
 //   $fgetc(fd): the q left unread -> 113
 //   $fscanf(fd, "%d", a): the input ends before any conversion -> EOF, -1
 //! inherited IEEE 1364-2005 17.2.4.3
+// native-required
 module b_17_2_4_3_fscanf;
   integer fd, code, a, b;
   initial begin
