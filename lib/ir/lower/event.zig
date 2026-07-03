@@ -1636,6 +1636,24 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
         return true;
     }
 
+    // VerA's `$vera_reject_step(t_retry)`: ask the host to reject the step
+    // it is accepting and retry it ending at `t_retry`. The request is read
+    // off the accepted solution by `updateState`, so the accumulation is a
+    // running minimum, as `$bound_step`'s is: the earliest retry wins.
+    if (std.mem.eql(u8, name, "$vera_reject_step")) {
+        // An `analog initial` block runs once per analysis and an analog
+        // function per call: neither is a step the host accepts.
+        if (self.restrict) |ctx| {
+            try self.err(tok, .E0533, "in {s}", .{ctx});
+            return true;
+        }
+        const p = try self.kernelCtlPlace(&self.reject_step_place);
+        const cur = try self.builder.readVariable(p, self.cur);
+        const v = try self.toReal(try lower_expr.lowerExpr(self, args[0]));
+        try self.builder.writeVariable(p, self.cur, try self.emit(.fmin, &.{ cur, v }));
+        return true;
+    }
+
     // §9.17.1 `$discontinuity [ ( constant_expression ) ] ;` — the argument is
     // the DEGREE, "a discontinuity in the i'th derivative", so a smaller degree
     // is the more severe announcement and the running minimum is what the host
@@ -1765,6 +1783,7 @@ pub fn isAnalogOnlySysFunc(name: []const u8) bool {
         "$fatal", "$warning", "$error", "$info", // Table 9-4
         "$simprobe", // §9.15
         "$discontinuity", "$limit", "$bound_step", // §9.17
+        "$vera_reject_step", // VerA's step rejection
         "$param_given", "$port_connected", // §9.19
         "$analog_node_alias", "$analog_port_alias", // §9.20
     };

@@ -296,6 +296,15 @@ function, event, system task or string assignment is E0530; a value read
 from before it that an iteration can move (a probe in a variable, a branch
 on one) is E0531; inside a loop, analog function or `analog initial` it is
 E0532. Held (§5.10) reads see the accepted state.
+
+**`$vera_reject_step(t_retry)`.** A VerA system task in an analog block:
+on a transient step's accepted solution, `updateState` returns
+`.request_reject_at = t_retry` when `t_retry < $abstime` (the earliest of
+several calls wins; a static solve ignores it). Such a device emits no
+`acceptQ`. The analog testbench undoes the step, solves and accepts
+`t_retry`, then solves the rejected time again (`runner_text.retry`); the
+mixed and VPI runners refuse a request. In `analog initial` or an analog
+function it is E0533.
 Every other attribute is parsed and ignored, and every attribute value is a
 §2.9 constant_expression (E0357).
 

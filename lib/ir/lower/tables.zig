@@ -198,6 +198,10 @@ table_effect: Mir.Value = .f_zero,
 /// the final value of the rejection flag, meaningful when
 /// `uses.contains(.reject_iteration)`.
 reject_iteration: Mir.Value = .zero,
+/// VerA's `$vera_reject_step`: the earliest retry time any call asked for
+/// (+inf when none ran), or `.undef` when the module never calls it.
+/// `updateState` turns it into `contract.UpdateResult.request_reject_at`.
+reject_step: Mir.Value = .undef,
 
 // ---- which kernels the device needs ----
 /// The device-side facilities the model needs (see `Kernel`).

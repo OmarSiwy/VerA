@@ -97,6 +97,8 @@ pub const Job = struct {
         /// VerA's `vera_timepoint` (§2.9): whether a cached statement ran, and
         /// each variable it assigned, which `eval` stores into the cache.
         timepoint,
+        /// VerA's `$vera_reject_step`: the retry time `updateState` returns.
+        reject_step,
         /// §9.4: the one job that is NOT folded into the core, because its
         /// body has side effects the residual must not trigger. See
         /// `plan_core.plan`.
@@ -334,6 +336,12 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .comment = "vera_timepoint cached value",
         });
     }
+    if (self.lowered.reject_step != .undef) try jobs.append(self.arena, .{
+        .kind = .reject_step,
+        .target = self.an.rv(self.lowered.reject_step),
+        .mode = .strict,
+        .comment = "$vera_reject_step retry time",
+    });
     // §9.4 the display tasks, as one unit. Queued last, so no existing job
     // (and so no declaration name) moves when a model gains or loses a
     // `$strobe`. `.strict` unconditionally: a print is not on the residual

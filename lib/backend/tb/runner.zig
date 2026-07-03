@@ -215,7 +215,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             if (n == 0) try emitLimitCheck(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping: only `updateState` writes the
             // history `eval` reads.
-            try out.print(arena, "        stepPost(&{s}, &inst, &x, &state, solved{d});\n", .{ mdl, n });
+            // VerA's `$vera_reject_step`: a rejected step is retried (`retry`).
+            try out.print(arena, "        if (stepPost(&{s}, &inst, &x, &state, solved{d})) |r| retry(r, {d}, &x, &forced, &{s}, &inst, &state, 0);\n", .{ mdl, n, n, mdl });
             n += 1;
         }
         try out.appendSlice(arena, "    }\n");
@@ -511,7 +512,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    pub fn finish(a: *Analog) !void {
         \\        a.flush();
         \\        point(a.n.*, a.x, a.model, a.inst);
-        \\        stepPost(a.model, a.inst, a.x, a.state, a.solved);
+        \\        if (stepPost(a.model, a.inst, a.x, a.state, a.solved)) |r| retryUnsupported(r);
         \\        // §7.3.6.4: what the accepted solution left in each held variable.
         \\        inline for (a2d_ports, 0..) |p, i| {
         \\            const v = @field(a.inst, p.field);
