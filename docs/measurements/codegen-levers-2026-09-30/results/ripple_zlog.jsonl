@@ -1,0 +1,1 @@
+{"sub": "build-exe", "opt": "-OReleaseFast", "noemit": false, "wall": 32.73886713799948, "cpu": 24.354482, "gi": 61.421849612, "llvm": true, "selfhosted": false, "listen": false, "t_end": 1790824187.4826808}

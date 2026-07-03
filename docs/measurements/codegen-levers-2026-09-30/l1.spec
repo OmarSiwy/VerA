@@ -1,0 +1,9 @@
+resistor.base:trees/resistor:dyn_bench.zig resistor.strip:trees/resistor:dyn_bench.zig:-fstrip
+diode.base:trees/diode:dyn_bench.zig diode.strip:trees/diode:dyn_bench.zig:-fstrip
+mos1.base:trees/mos1:dyn_bench.zig mos1.strip:trees/mos1:dyn_bench.zig:-fstrip
+bsim4va.base:trees/bsim4va:dyn_bench.zig bsim4va.strip:trees/bsim4va:dyn_bench.zig:-fstrip
+psp103.base:trees/psp103:dyn_bench.zig psp103.strip:trees/psp103:dyn_bench.zig:-fstrip
+coupled_ltra.base:trees/coupled_ltra:dyn_bench.zig coupled_ltra.strip:trees/coupled_ltra:dyn_bench.zig:-fstrip
+txl.base:trees/txl:dyn_bench.zig txl.strip:trees/txl:dyn_bench.zig:-fstrip
+v_inv.base:trees/v_inv:dyn_bench.zig v_inv.strip:trees/v_inv:dyn_bench.zig:-fstrip
+v_count.base:trees/v_count:dyn_bench.zig v_count.strip:trees/v_count:dyn_bench.zig:-fstrip
