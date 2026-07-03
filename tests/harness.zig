@@ -1389,9 +1389,8 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
         if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
         const base = std.fs.path.basename(path);
         const slug = try arena.dupe(u8, entry.path[0 .. entry.path.len - ext.len]);
-        for (slug) |*c| if (c.* == '/' or c.* == '\\') {
-            c.* = '_';
-        };
+        std.mem.replaceScalar(u8, slug, '/', '_');
+        std.mem.replaceScalar(u8, slug, '\\', '_');
         try list.append(arena, .{
             .path = path,
             .stem = base[0 .. base.len - ext.len],

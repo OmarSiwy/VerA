@@ -17,11 +17,7 @@ const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".fields.len;
 const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
-const lanes = blk: {
-    var l: [n_u]u8 = undefined;
-    for (&l, 0..) |*e, u| e.* = u;
-    break :blk l;
-};
+const lanes: [n_u]u8 = std.simd.iota(u8, n_u);
 const C = std.math.Complex;
 
 fn bias() [n_u]f64 {

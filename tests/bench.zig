@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const vera = @import("vera");
+const stdpp = @import("stdpp");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
 const ieee1364 = @import("ieee1364.zig");
@@ -511,8 +512,8 @@ fn summary(w: *Io.Writer, arena: Allocator, times: []const u64, depth: harness.C
 fn stats(w: *Io.Writer, arena: Allocator, scope: []const u8, name: []const u8, samples: []const u64) !void {
     if (samples.len == 0) return;
     const s = try arena.dupe(u64, samples);
-    var total: u64 = 0;
-    for (s) |x| total += x;
+    var all = stdpp.of(s);
+    const total = all.sumWrapping(u64);
     std.mem.sort(u64, s, {}, std.sort.asc(u64));
     try w.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
         scope, name, s.len, total, pct(s, 50), pct(s, 90), pct(s, 99), s[s.len - 1],
@@ -795,9 +796,8 @@ fn resolveModel(arena: Allocator, io: Io, dir_path: []const u8, ref: []const u8)
     if (Io.Dir.cwd().access(io, literal, .{})) |_| return literal else |_| {}
 
     const flat = try arena.dupe(u8, ref);
-    for (flat) |*c| if (c.* == '/' or c.* == '\\') {
-        c.* = '_';
-    };
+    std.mem.replaceScalar(u8, flat, '/', '_');
+    std.mem.replaceScalar(u8, flat, '\\', '_');
 
     var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch return null;
     defer dir.close(io);
@@ -927,9 +927,7 @@ test "a flattened .assets reference is a suffix of the committed name" {
     const ref = "a10_host.assets/a10_vsine.va";
     var flat: [64]u8 = undefined;
     @memcpy(flat[0..ref.len], ref);
-    for (flat[0..ref.len]) |*c| if (c.* == '/') {
-        c.* = '_';
-    };
+    std.mem.replaceScalar(u8, flat[0..ref.len], '/', '_');
     try std.testing.expectEqualStrings("a10_host.assets_a10_vsine.va", flat[0..ref.len]);
 
     // Flattening also prefixes the directories above, which is why the match is

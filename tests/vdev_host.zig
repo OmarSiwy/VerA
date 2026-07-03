@@ -58,11 +58,7 @@ const Link = struct { a: usize, b: usize, g: f64 };
 
 fn Circuit(comptime D: type) type {
     const n = @typeInfo(D.U).@"enum".fields.len;
-    const lanes = blk: {
-        var l: [n]u8 = undefined;
-        for (&l, 0..) |*x, i| x.* = i;
-        break :blk l;
-    };
+    const lanes: [n]u8 = std.simd.iota(u8, n);
     const S = contract.RefFamily(f64, &lanes, .{ .dense = true });
     return struct {
         const Self = @This();
@@ -125,12 +121,9 @@ fn Circuit(comptime D: type) type {
                     f[u] = 0;
                 };
                 const d = gauss(&j, &f);
-                var big: f64 = 0;
-                for (&c.x, d) |*x, dx| {
-                    x.* += dx;
-                    big = @max(big, @abs(dx));
-                }
-                if (big <= 1e-12) return;
+                const V = @Vector(n, f64);
+                c.x = @as(V, c.x) + @as(V, d);
+                if (@reduce(.Max, @abs(@as(V, d))) <= 1e-12) return;
             }
             return error.NoConvergence;
         }
