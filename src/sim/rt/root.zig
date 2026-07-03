@@ -443,9 +443,7 @@ pub const View = struct {
         }
         inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
         if (@as(u8, @bitCast(reach)) == 0) return;
-        var any: u64 = 0;
-        for (d) |x| any |= x;
-        if (any != 0) try self.s.wakeOf(reach, slot, before, logic.low(peek(k, self.v, self.x, off)));
+        if (@reduce(.Or, @as(@Vector(n, u64), d)) != 0) try self.s.wakeOf(reach, slot, before, logic.low(peek(k, self.v, self.x, off)));
     }
 };
 

@@ -110,19 +110,16 @@ fn orAt(dst: []u64, src: []const u64, at: u32) void {
 }
 
 fn anyX(a: anytype) bool {
-    var u: u64 = 0;
-    for (wide(a).x) |x| u |= x;
-    return u != 0;
+    const x = wide(a).x;
+    return @reduce(.Or, @as(@Vector(x.len, u64), x)) != 0;
 }
 
 /// `r` of width `w`, or all x when `unk` (§5.1.5).
 fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
     const u = 0 -% @as(u64, @intFromBool(unk));
-    var o: Wide(words(w)) = undefined;
-    for (&o.v, &o.x, r) |*v, *x, rv| {
-        v.* = rv | u;
-        x.* = u;
-    }
+    const V = @Vector(words(w), u64);
+    const uv: V = @splat(u);
+    var o: Wide(words(w)) = .{ .v = @as(V, r) | uv, .x = uv };
     o.v[words(w) - 1] &= top(w);
     o.x[words(w) - 1] &= top(w);
     return narrow(w, o);
@@ -192,8 +189,8 @@ pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
 
 pub inline fn not(a: anytype, comptime w: u32) T(w) {
     if (w <= 64) return .{ .v = (~a.v | a.x) & mask(w), .x = a.x };
-    var o = a;
-    for (&o.v, a.x) |*v, x| v.* = ~v.* | x;
+    const V = @Vector(words(w), u64);
+    var o: T(w) = .{ .v = ~@as(V, a.v) | @as(V, a.x), .x = a.x };
     o.v[words(w) - 1] &= top(w);
     return o;
 }
@@ -534,13 +531,9 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
                 const x = y.x | n.x | (y.v ^ n.v);
                 break :blk .{ .v = y.v | x, .x = x };
             }
-            var o = y;
-            for (&o.v, &o.x, n.v, n.x) |*ov, *ox, nv, nx| {
-                const x = ox.* | nx | (ov.* ^ nv);
-                ov.* |= x;
-                ox.* = x;
-            }
-            break :blk o;
+            const V = @Vector(y.v.len, u64);
+            const x = @as(V, y.x) | @as(V, n.x) | (@as(V, y.v) ^ @as(V, n.v));
+            break :blk .{ .v = @as(V, y.v) | x, .x = x };
         },
     };
 }
