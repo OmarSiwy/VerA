@@ -37,8 +37,7 @@ pub const Literal = struct {
         return self.planes[self.planes.len / 2 ..];
     }
     pub fn hasUnknown(self: Literal) bool {
-        for (self.unknowns()) |word| if (word != 0) return true;
-        return false;
+        return !std.mem.allEqual(u64, self.unknowns(), 0);
     }
     /// Returns the value as an i64, sign-extended when `signed`. Null when the
     /// literal is wider than 64 bits or holds an X or Z bit.

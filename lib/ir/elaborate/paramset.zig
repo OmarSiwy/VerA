@@ -133,8 +133,7 @@ pub fn tieBreak(
             break :blk n;
         },
     };
-    var best = scores[0];
-    for (scores[1..]) |s| best = @min(best, s);
+    const best = std.mem.min(i64, scores);
     var w: usize = 0;
     for (live.items, scores) |ps, s| if (s == best) {
         live.items[w] = ps;

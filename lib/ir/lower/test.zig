@@ -171,14 +171,9 @@ test "lower: system math aliases preserve operand-sensitive result types" {
         try Harness.run(std.testing.allocator, src, &h);
         defer h.deinit();
         _ = try h.low.lowerFile();
-        var math_count: usize = 0;
-        var div_count: usize = 0;
-        for (h.mir.insts.items(.op)) |op| {
-            if (op == c.op) math_count += 1;
-            if (op == c.div) div_count += 1;
-        }
-        try std.testing.expectEqual(@as(usize, 1), math_count);
-        try std.testing.expectEqual(@as(usize, 1), div_count);
+        const ops = h.mir.insts.items(.op);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.countScalar(Mir.Opcode, ops, c.op));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.countScalar(Mir.Opcode, ops, c.div));
     }
 }
 

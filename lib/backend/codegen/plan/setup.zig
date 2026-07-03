@@ -181,7 +181,7 @@ pub fn controlDeps(in: Input, ipdom: []const u32) Error!struct { off: []u32, cd:
     const a = in.arena;
     const nb = in.an.nb;
     var lists = try a.alloc(std.ArrayList(Cd), nb);
-    for (lists) |*l| l.* = .empty;
+    @memset(lists, .empty);
     for (0..nb) |ai| {
         const A: u32 = @intCast(ai);
         if (branchCond(in, A) == null) continue;
