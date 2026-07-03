@@ -291,6 +291,10 @@ pub const Code = enum(u16) {
     E0526,
     E0527,
     E0528,
+    E0529,
+    E0530,
+    E0531,
+    E0532,
     E0572,
     E0573,
     E0574,
@@ -4251,6 +4255,74 @@ fn infoOf(c: Code) Info {
             \\then use or update that variable as the timer control. An unchanged
             \\effectful call remains legal and is evaluated only at its original
             \\source position, including when other timer operands change.
+            ,
+        },
+        .E0529 => .{
+            .title = "vera_timepoint needs a constant value",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_timepoint *)` is VerA's attribute for running a statement
+            \\once per timepoint: the first evaluation at a time runs it, and the
+            \\later Newton iterations at that time read back what it assigned.
+            \\`= 0` turns it off. The answer decides the code the device is built
+            \\with, so it must fold before the model card exists and may not name
+            \\a parameter:
+            \\
+            \\    (* vera_timepoint *) w = acc * exp(-h / tau);       // cached
+            \\    (* vera_timepoint = 0 *) w = acc * exp(-h / tau);   // not cached
+            \\
+            \\The attribute is ignored and the statement runs every evaluation.
+            ,
+        },
+        .E0530 => .{
+            .title = "not allowed in a vera_timepoint statement",
+            .lrm = "2.9",
+            .explain =
+            \\A `(* vera_timepoint *)` statement runs on the first evaluation of a
+            \\timepoint only, and every later evaluation at that time reads back
+            \\what it assigned. So it may hold only work whose result cannot move
+            \\between Newton iterations, and nothing whose effect is more than its
+            \\assignments. It may not contain a probe (4.4) or a `$limit` (9.17.3),
+            \\which read the iterate; a contribution (5.6), whose branch would lose
+            \\its Jacobian on a cached evaluation; an analog operator that keeps
+            \\state (4.5); an event control or trigger (5.10); a system task; or an
+            \\assignment to a string variable. Compute the per-timepoint values
+            \\inside it and use them outside:
+            \\
+            \\    (* vera_timepoint *) begin e = exp(-h / tau); w = acc * e; end
+            \\    I(p, n) <+ V(p, n) / r + w;
+            ,
+        },
+        .E0531 => .{
+            .title = "vera_timepoint statement reads a value that moves between iterations",
+            .lrm = "2.9",
+            .explain =
+            \\A `(* vera_timepoint *)` statement is cached per timepoint, so every
+            \\value it reads must be the same at every Newton iteration of that
+            \\time: a parameter, `$abstime`, `analysis()`, a held (5.10) variable,
+            \\or something computed from those alone. A variable assigned before
+            \\the statement from a probe, or under a branch that tests one, is the
+            \\iterate in disguise:
+            \\
+            \\    v = V(p, n);
+            \\    (* vera_timepoint *) w = v * 2.0;       // no: v is the iterate
+            \\    (* vera_timepoint *) w = tlast * 2.0;   // yes: tlast is held
+            ,
+        },
+        .E0532 => .{
+            .title = "vera_timepoint statement runs more than once per evaluation",
+            .lrm = "2.9",
+            .explain =
+            \\A `(* vera_timepoint *)` statement keeps one cached copy of what it
+            \\assigns per timepoint. Inside a loop (5.9) it runs several times per
+            \\evaluation with different inputs; inside an analog function (4.7) it
+            \\runs once per call; inside an `analog initial` block (5.2.1) it runs
+            \\once per analysis, never per timepoint. Put the attribute on the
+            \\loop, or outside the function's call:
+            \\
+            \\    (* vera_timepoint *) for (i = 0; i < 3; i = i + 1) e[i] = exp(-h * p[i]);
+            \\
+            \\The attribute is ignored and the statement runs every evaluation.
             ,
         },
         .E0572 => .{

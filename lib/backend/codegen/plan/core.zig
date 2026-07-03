@@ -202,7 +202,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
 /// The jobs `eval`, `q` and `evalQ` read out of the core (`dispatch.zig`).
 fn evalRoot(k: Job.Kind) bool {
     return switch (k) {
-        .resist, .react, .retained, .table_effect => true,
+        .resist, .react, .retained, .table_effect, .timepoint => true,
         // `updateState`/`acceptQ`, `limit`, `seed`, `advanceIteration`,
         // `noisePsd`, `acStim`, the schedule and §9.4 display read these.
         .op_input, .ctrl, .held, .limit_arg, .limit_old, .reject_iteration, .noise, .ac_stim, .timer_period, .display => false,

@@ -2,7 +2,7 @@
 //! operators, the scalar-family helpers and Clause 9 kernels. `emitFile`
 //! splices them into device.zig and `buildPrelude` into `h.zig`; the text runs
 //! in the host's Newton loop, never in the compiler.
-//! LRM: §4.3, §4.3.1, §4.3.2, §4.5, §4.5.7, §4.5.15, §5.10.3.1, §5.10.5, §9.4.3,
+//! LRM: §2.9, §4.3, §4.3.1, §4.3.2, §4.5, §4.5.7, §4.5.15, §5.10.3.1, §5.10.5, §9.4.3,
 //! §9.5, §9.13, §9.21.
 
 const std = @import("std");
@@ -537,6 +537,26 @@ pub const ops_txt =
     \\    from.* = vi;
     \\    to.* = in;
     \\    t0.* = te;
+    \\}
+    \\
+;
+
+/// VerA's `vera_timepoint` cache key. Emitted only for a device with one
+/// (`Lowered.timepoints`).
+pub const tp_txt =
+    \\// ---- VerA's `vera_timepoint` (§2.9) cache key ----
+    \\
+    \\/// What a per-timepoint cache is keyed on beside `sim.t`: the analysis
+    \\/// (§4.6.1) and the two §5.10.2 step flags, which a statement may read
+    \\/// through a variable assigned under them.
+    \\fn zTpKey(sim: contract.SimState) u8 {
+    \\    return @intFromEnum(sim.kind) | @as(u8, @intFromBool(sim.initial_step)) << 4 | @as(u8, @intFromBool(sim.final_step)) << 5;
+    \\}
+    \\
+    \\/// Is a cache filled at `t` under key `k` current for `sim`? A dropped
+    \\/// cache holds NaN, which equals nothing.
+    \\fn zTpHit(t: f64, k: u8, sim: contract.SimState) bool {
+    \\    return t == sim.t and k == zTpKey(sim);
     \\}
     \\
 ;

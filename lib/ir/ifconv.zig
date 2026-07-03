@@ -42,7 +42,8 @@ fn firstPoint(mir: *const Mir, cond: Mir.Value) bool {
     const def = mir.valueDef(mir.resolveAlias(cond));
     if (def != .inst_result or mir.instOp(def.inst_result) != .call) return false;
     const d = mir.instData(def.inst_result).call;
-    return d.callee == .analog_initial or (d.callee == .initial_step and d.args.len == 0);
+    // VerA's `vera_timepoint` (§2.9): a select would run the cached arm.
+    return d.callee == .analog_initial or d.callee == .@"$tp_hit" or (d.callee == .initial_step and d.args.len == 0);
 }
 
 fn countPreds(mir: *const Mir, preds: []u32) void {

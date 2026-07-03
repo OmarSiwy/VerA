@@ -2,7 +2,7 @@
 //!
 //! In: expression AST. Out: typed MIR values (`TypedValue`).
 //!
-//! LRM clauses this file's code cites: §3.3, §4.2.3, §4.2.4, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
+//! LRM clauses this file's code cites: §2.9, §3.3, §4.2.3, §4.2.4, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
 //! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
 
 const std = @import("std");
@@ -936,6 +936,11 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
         return poison;
     }
+    // VerA's `vera_timepoint` (§2.9): a probe is the iterate.
+    if (self.tp_cur != null) {
+        try self.err(self.file.exprs.mainTok(e), .E0530, "a probe (§4.4)", .{});
+        return poison;
+    }
     // §3.12.1: a port branch names the §5.4.3 port flow, so `I(pb)` and
     // `I(<p>)` are one quantity and read the one unknown. Ahead of `branchOf`
     // because the name is not in `branches` and would otherwise fall through to
@@ -1083,6 +1088,11 @@ fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
 fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
+        return poison;
+    }
+    // VerA's `vera_timepoint` (§2.9): a probe is the iterate.
+    if (self.tp_cur != null) {
+        try self.err(self.file.exprs.mainTok(e), .E0530, "a probe (§4.4)", .{});
         return poison;
     }
     return portFlowRead(self, e, try lower_node.nodeOf(self, self.file.exprs.lhs(e)));

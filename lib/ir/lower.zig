@@ -490,6 +490,14 @@ interp_stack: std.ArrayList(bool) = .empty,
 /// The same for `vera_nodiff`: true where assignments store no derivative
 /// (`lower_stmt.lowerAssign`).
 nodiff_stack: std.ArrayList(bool) = .empty,
+/// VerA's `vera_timepoint` (§2.9): the `out.timepoints` row of the statement
+/// being lowered, null outside one. Inside, the constructs whose value moves
+/// between Newton iterations are refused (E0530), and a nested
+/// `vera_timepoint` adds nothing: the outer statement is cached whole.
+tp_cur: ?u32 = null,
+/// Parallel to `out.timepoints`: the place that is 1 once the statement ran,
+/// read back into `TpBlock.mark` at the end of the block.
+tp_marks: std.ArrayList(Ssa.Place) = .empty,
 /// §9.4.6 the carrier for conditional prints, which cannot be `fadd`-chained
 /// directly because a call inside an `if` arm does not dominate the chain root.
 /// An SSA place seeded `.f_zero` in `.entry`, `fadd`-ed at each guarded call
@@ -580,6 +588,36 @@ pub const HeldVar = struct {
         /// of the held value is solve-invariant.
         unless_invariant,
     };
+};
+
+/// VerA's `vera_timepoint` statement (§2.9, `Lowered.timepoints`): it runs on
+/// the first evaluation of a timepoint, and every later one reads back what it
+/// assigned. Lowered as a diamond on `$tp_hit(b)`: the hit arm writes each
+/// slot's `$tp_real`/`$tp_int` read (an array's cached `anew`), the miss arm
+/// is the statement. `eval` stores the slots when the statement ran and the
+/// cache was stale; the host's `stateCtl`, `updateState`, `initState` and
+/// `setup` drop it.
+pub const TpBlock = struct {
+    /// The attribute's token, for E0531.
+    tok: u32,
+    /// The miss arm's first block and the join both arms reach: everything
+    /// between them is the statement, whose values codegen checks (E0531).
+    miss: Mir.Block,
+    join: Mir.Block,
+    /// Nonzero at the end of the block exactly when the statement was reached.
+    mark: Mir.Value = .zero,
+    slots: []const TpSlot = &.{},
+};
+
+/// One variable a `vera_timepoint` statement assigns: its `Instance` cache
+/// slot. `final` is its value at the statement's join.
+pub const TpSlot = struct {
+    /// Source spelling, for the field comment.
+    name: []const u8,
+    ty: Ty,
+    final: Mir.Value = .undef,
+    /// §3.2.2 a memory-backed array's `out.mem_arrays` row, or `none_u32`.
+    array: u32 = none_u32,
 };
 
 /// §3.2.2 one memory-backed array (`Lowered.mem_arrays`).
@@ -1553,6 +1591,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // last site on that access function returned this evaluation, or the
     // `$limit$old` seed if none ran.
     for (self.out.limit_slots.items, self.limit_places.items) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
+    // VerA's `vera_timepoint` (§2.9): whether each cached statement ran.
+    for (self.out.timepoints.items, self.tp_marks.items) |*t, p| t.mark = try self.builder.readVariable(p, self.cur);
 
     // §9.17 analog kernel control. Emitted last and in this fixed order so the
     // unit enumeration stays a pure function of the source.

@@ -1,6 +1,6 @@
 //! Jobs: the lowered module and the plans it depends on (`Names`, `$limit`
 //! sites, small-signal rows) -> every value the shared core returns, and why,
-//! resolved before a unit is written. Clauses: §4.5, §4.6.3, §4.6.4, §5.6,
+//! resolved before a unit is written. Clauses: §2.9, §4.5, §4.6.3, §4.6.4, §5.6,
 //! §5.6.1.2, §5.6.1.3, §5.6.7, §5.10, §5.10.3.3, §9.4, §9.13, §9.17, §9.21.1.
 
 const std = @import("std");
@@ -94,6 +94,9 @@ pub const Job = struct {
         timer_period,
         /// §9.21.1/§9.13 table captures and distribution checks.
         table_effect,
+        /// VerA's `vera_timepoint` (§2.9): whether a cached statement ran, and
+        /// each variable it assigned, which `eval` stores into the cache.
+        timepoint,
         /// §9.4: the one job that is NOT folded into the core, because its
         /// body has side effects the residual must not trigger. See
         /// `plan_core.plan`.
@@ -313,6 +316,24 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         .mode = .strict,
         .comment = "§9.21.1 captures and §4.2.4/§9.13 runtime checks in source order",
     });
+    // VerA's `vera_timepoint` (§2.9): each statement's mark, then the slots
+    // something reads after it. A scratch variable no later statement reads
+    // is not cached: its hit-arm read is dead and is never emitted.
+    const read = if (self.lowered.timepoints.items.len != 0) try readSet(self, jobs.items) else &.{};
+    for (self.lowered.timepoints.items) |t| {
+        if (self.an.foldConst(t.mark, false) == null) try jobs.append(self.arena, .{
+            .kind = .timepoint,
+            .target = self.an.rv(t.mark),
+            .mode = .strict,
+            .comment = "vera_timepoint statement ran",
+        });
+        for (t.slots) |sl| if (read[@intFromEnum(self.an.rv(sl.final))]) try jobs.append(self.arena, .{
+            .kind = .timepoint,
+            .target = self.an.rv(sl.final),
+            .mode = .strict,
+            .comment = "vera_timepoint cached value",
+        });
+    }
     // §9.4 the display tasks, as one unit. Queued last, so no existing job
     // (and so no declaration name) moves when a model gains or loses a
     // `$strobe`. `.strict` unconditionally: a print is not on the residual
@@ -335,6 +356,41 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     }
     out.list = jobs.items;
     return out;
+}
+
+/// Value -> some instruction reads it, or a job in `queued` returns it. Dead
+/// instructions count: the answer only has to be a superset.
+fn readSet(self: Input, queued: []const Job) ![]bool {
+    const read = try self.arena.alloc(bool, self.an.nv);
+    @memset(read, false);
+    for (queued) |j| read[@intFromEnum(self.an.rv(j.target))] = true;
+    for (0..self.mir.insts.len) |ii| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        switch (self.mir.instData(inst)) {
+            .unary => |d| read[@intFromEnum(self.an.rv(d.operand))] = true,
+            .binary => |d| for ([_]Mir.Value{ d.lhs, d.rhs }) |v| {
+                read[@intFromEnum(self.an.rv(v))] = true;
+            },
+            .ternary => |d| for ([_]Mir.Value{ d.cond, d.then_val, d.else_val }) |v| {
+                read[@intFromEnum(self.an.rv(v))] = true;
+            },
+            .phi => |d| for (0..d.count) |k| {
+                read[@intFromEnum(self.an.rv(self.mir.phiPair(inst, @intCast(k)).value))] = true;
+            },
+            .branch => |d| read[@intFromEnum(self.an.rv(d.cond))] = true,
+            .call => |d| for (d.args) |v| {
+                read[@intFromEnum(self.an.rv(v))] = true;
+            },
+            .load => |d| for ([_]Mir.Value{ d.arr, d.index }) |v| {
+                read[@intFromEnum(self.an.rv(v))] = true;
+            },
+            .store => |d| for ([_]Mir.Value{ d.arr, d.index, d.value }) |v| {
+                read[@intFromEnum(self.an.rv(v))] = true;
+            },
+            .jump, .anew => {},
+        }
+    }
+    return read;
 }
 
 /// §4.5 Table 4-20 "Analog operator arguments": which argument positions the

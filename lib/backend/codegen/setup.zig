@@ -3,7 +3,7 @@
 //! `pub const Setup`, and `pub fn setup` computing them into `Instance.su` once
 //! per model card, instance and temperature. `setup` is emitted through the
 //! same slicer and relooper as the core.
-//! LRM: §4.4, §5.10.2, §9.4, §9.15.
+//! LRM: §2.9, §4.4, §5.10.2, §9.4, §9.15.
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
@@ -217,7 +217,10 @@ pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
 
 /// Emits `pub const Setup`, ahead of `Instance`.
 pub fn emitSetupDecl(self: *Gen) Error!void {
-    if (self.su.vals.len == 0) return;
+    if (self.su.vals.len == 0) {
+        if (self.lowered.timepoints.items.len != 0) try self.w("/// No solve-invariant values: `setup` only drops the `vera_timepoint` caches.\npub const Setup = struct {{}};\n\n", .{});
+        return;
+    }
     const n_flag = self.su.vals.len - self.su.real - self.su.int;
     try self.w(
         \\/// Solve-invariant values: functions of `Model`, this instance and its
@@ -232,6 +235,27 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
     if (self.su.int != 0) try self.w("    i: [{d}]i64 = @splat(0),\n", .{self.su.int});
     if (n_flag != 0) try self.w("    b: [{d}]bool = @splat(false),\n", .{n_flag});
     try self.w("}};\n\n", .{});
+}
+
+/// VerA's `vera_timepoint` (§2.9) on a device with no solve-invariant
+/// values: a `setup` all the same, so a card or instance write, which the
+/// host follows with `setup` (`contract.validateHost`'s `calls_setup`),
+/// drops the per-timepoint caches.
+fn emitTpSetup(self: *Gen) Error!void {
+    if (self.lowered.timepoints.items.len == 0) return;
+    try self.w(
+        \\/// §9.15 the `$simparam` names `setup` reads: none.
+        \\pub const setup_simparams = [_][]const u8{{}};
+        \\
+        \\/// Call after every write to `Model`, to this instance or its
+        \\/// temperature: it drops the `vera_timepoint` caches, which read them.
+        \\pub fn setup(comptime V: type, _: *const Model, inst: *Instance) void {{
+        \\    _ = V;
+        \\    zTpDrop(inst);
+        \\}}
+        \\
+        \\
+    , .{});
 }
 
 /// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes
@@ -263,7 +287,7 @@ fn emitSimparams(self: *Gen) Error!void {
 /// initial-step arm is what setup must compute), and the walk stops at the
 /// first loop that is not invariant, since nothing after it is placeable.
 pub fn emitSetup(self: *Gen) Error!void {
-    if (self.su.vals.len == 0) return;
+    if (self.su.vals.len == 0) return emitTpSetup(self);
     const save_idx = self.plan.lo_idx;
     const save_vals = self.plan.lo_vals;
     self.plan.lo_idx = self.su.idx;
@@ -305,6 +329,9 @@ pub fn emitSetup(self: *Gen) Error!void {
     try self.w("pub fn setup(comptime V: type, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, inst: *Instance) void {{\n", .{});
+    // VerA's `vera_timepoint` (§2.9): a card or instance write drops the
+    // per-timepoint caches, which may read it.
+    if (self.lowered.timepoints.items.len != 0) try self.w("    zTpDrop(inst);\n", .{});
     try self.w("    @setFloatMode(.strict);\n    const S = V;\n", .{});
     self.float.strict = true;
     self.su.stop = false;

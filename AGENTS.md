@@ -275,7 +275,7 @@ Device-table directives assert what a device PUBLISHES to a host, as
 per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order), and
 `//! abstol <unknown> = v` (the §3.6.1.2 `u_abstol` entry).
 
-**Vendor attributes.** VerA reads three §2.9 attributes. `vera_lte` is a
+**Vendor attributes.** VerA reads four §2.9 attributes. `vera_lte` is a
 prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)
 or a suffix on a `ddt` name (`ddt (* vera_lte = 0 *) (q)`, a slot A.8.2 gives
 only analog functions and VerA extends). It leaves those charge sites out of
@@ -285,6 +285,17 @@ the same slots on `absdelay`, picks 1 = linear (default) or 2 = quadratic (E0524
 `(* vera_nodiff *)`, a statement prefix, stores every assignment inside with
 no derivative (a SPICE frozen coefficient); `= 0` turns it off inside, the
 value folds without the card (E0525), and a contribution inside is E0526.
+`(* vera_timepoint *)`, a statement prefix, runs the statement once per
+timepoint: the first evaluation at a (`$abstime`, analysis, step flags) runs
+it, `eval` stores what it assigned in `Instance` (`tp<b>_*`; the device is
+`mutable_eval`), and later iterations read that back. `initState`, `setup`,
+`updateState` and `stateCtl(.commit/.revert)` drop the cache, so a rejected
+step recomputes it. `= 0` turns it off; the value folds without the card
+(E0529). Inside, a probe, `$limit`, contribution, stateful operator, noise
+function, event, system task or string assignment is E0530; a value read
+from before it that an iteration can move (a probe in a variable, a branch
+on one) is E0531; inside a loop, analog function or `analog initial` it is
+E0532. Held (§5.10) reads see the accepted state.
 Every other attribute is parsed and ignored, and every attribute value is a
 §2.9 constant_expression (E0357).
 

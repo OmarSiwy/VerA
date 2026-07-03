@@ -3,7 +3,7 @@
 //! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s for
 //! the stateful operators `op.OpKind` names.
 //!
-//! LRM clauses this file's code cites: §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
+//! LRM clauses this file's code cites: §2.9, §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -38,6 +38,12 @@ pub fn isHistoryless(name: []const u8) bool {
 pub fn checkOperatorPlace(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!bool {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx});
+        return false;
+    }
+    // VerA's `vera_timepoint` (§2.9): an operator with history advances per
+    // accepted step and reads its input every iterate.
+    if (self.tp_cur != null and !isHistoryless(name)) {
+        try self.err(self.file.exprs.mainTok(e), .E0530, "the analog operator `{s}` (§4.5)", .{name});
         return false;
     }
     // §5.8.1 / §5.9: an analog operator's state advances once per accepted step.
@@ -504,6 +510,11 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
 pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
+    // VerA's `vera_timepoint` (§2.9): a source is a stamp, not a value.
+    if (self.tp_cur != null) {
+        try self.err(ex.mainTok(e), .E0530, "the noise function `{s}` (§4.6.4)", .{name});
+        return poison;
+    }
     // A.8.2 `ac_stim ( [ " analysis_identifier " [ , analog_expression ...`:
     // the quotation marks are in the production, so the analysis name is a
     // string literal.

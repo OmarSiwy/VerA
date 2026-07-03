@@ -173,6 +173,9 @@ mem_arrays: std.ArrayList(Lower.MemArray) = .empty,
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(Lower.LimitSlot) = .empty,
+/// VerA's `vera_timepoint` statements (§2.9), in source order: each one's
+/// per-timepoint cache in `Instance` (`Lower.TpBlock`).
+timepoints: std.ArrayList(Lower.TpBlock) = .empty,
 /// First-call sample counts, one entry per array-source call site.
 table_samples: std.ArrayList(u32) = .empty,
 /// §9.13.1 implementation-chosen starting seeds for omitted-seed call sites.
