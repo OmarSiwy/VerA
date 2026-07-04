@@ -3509,7 +3509,7 @@ test "codegen: setup stores a card expression written twice once, and a 0/1 flag
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(std.math.nan(f64)),\n    b: [1]bool = @splat(false),\n};") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(" ++ gen_kernel_text.nan_lit ++ "),\n    b: [1]bool = @splat(false),\n};") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.b[0] = (") != null);
 }
 

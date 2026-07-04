@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const OpKind = @import("ir").op.OpKind;
+const kt = @import("kernel_text.zig");
 
 /// One `f64` `Instance` field an operator owns. The only non-f64 operator
 /// field (`absdelay`'s `__head: u64`) is `.from_args`, so there is no type
@@ -165,10 +166,10 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         // nothing is scheduled yet and differs from every start_time.
         .slots = &.{
             .{ .suffix = "next", .default = "0.0", .note = "§5.10.3" },
-            .{ .suffix = "start", .default = "std.math.nan(f64)" },
+            .{ .suffix = "start", .default = kt.nan_lit },
             // A changed period replaces the absolute grid, just as a changed
             // start does. NaN makes the first evaluation schedule both.
-            .{ .suffix = "per", .default = "std.math.nan(f64)" },
+            .{ .suffix = "per", .default = kt.nan_lit },
         },
     },
     .bound_step = .{
