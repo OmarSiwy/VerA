@@ -636,7 +636,7 @@ fn emitPath(self: *Run, s: u32) Error!void {
 /// Table 17-4 value (0 1 X Z L H), or, where a 0 or 1 spans a range of
 /// strengths, its maximum and minimum levels as digits, and for an X whose
 /// sides differ, its 0 and 1 levels ("35X").
-fn strength(out: *std.Io.Writer, s: Signal) Error!void {
+pub fn strength(out: *std.Io.Writer, s: Signal) std.Io.Writer.Error!void {
     const names = [_][]const u8{ "Hi", "Sm", "Me", "We", "La", "Pu", "St", "Su" };
     const lo: u8 = @abs(s.lo);
     const hi: u8 = @abs(s.hi);

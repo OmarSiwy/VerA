@@ -1903,12 +1903,38 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try expr.real(self, args[arg]);
                     try self.print(", '{c}', {d}, {?d});\n", .{ format[i], precision, width });
                 },
+                'v', 'V' => {
+                    arg += 1;
+                    try flush(self, &text);
+                    try strengthOf(self, args[arg]);
+                },
                 else => return self.refuse("a display conversion the engine refuses"),
             }
         }
     }
     if (sh.newline) try text.append(self.arena, '\n');
     try flush(self, &text);
+}
+
+/// §17.1.1.5 `%v` of `e`, which `display.walk` proved a scalar: a net's
+/// resolved signal (`display.walk` marked it `strength_read`, so it has a
+/// `net_ix` row whose fold keeps it), an undriven net's own pull, else the
+/// value at strong strength.
+fn strengthOf(self: *Emitter, e: Ast.ExprId) Error!void {
+    const r = self.r;
+    const net = if (r.file.exprs.tag(e) == .ident) r.net_of.get(try self.slot(e)) else null;
+    if (net) |k| {
+        if (r.nets[k].drivers.len == 0) {
+            var buf: std.Io.Writer.Allocating = .init(self.arena);
+            display.strength(&buf.writer, @import("net.zig").netPull(r.nets[k].kind)) catch return error.OutOfMemory;
+            return self.print("            try s.out.writeAll(\"{s}\");\n", .{buf.written()});
+        }
+        const ix = self.net_ix[k] orelse return self.refuse("a %v of a net the executable does not resolve");
+        return self.print("            try s.netStrength({d});\n", .{ix});
+    }
+    try self.print("            try s.strongStrength(", .{});
+    const t = try expr.selfDetermined(self, e);
+    try self.print(", {d});\n", .{t.width});
 }
 
 fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {
