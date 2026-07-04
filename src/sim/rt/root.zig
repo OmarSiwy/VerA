@@ -39,7 +39,7 @@ pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const 
     var out_buf: [1 << 16]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &out_buf);
     var err_buf: [1 << 12]u8 = undefined;
-    var stderr = std.Io.File.stderr().writer(io, &err_buf);
+    var stderr = std.Io.File.stderr().writerStreaming(io, &err_buf);
     defer stderr.interface.flush() catch {};
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena_state.deinit();
@@ -185,7 +185,7 @@ fn report(init_: std.process.Init, comptime f: []const u8, values: anytype) void
 /// One line on stderr.
 fn stderrLine(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
     var buf: [128]u8 = undefined;
-    var e = std.Io.File.stderr().writer(init_.io, &buf);
+    var e = std.Io.File.stderr().writerStreaming(init_.io, &buf);
     e.interface.print(f, values) catch {};
     e.interface.flush() catch {};
 }
@@ -760,7 +760,7 @@ pub const State = struct {
         if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
-        var e = std.Io.File.stderr().writer(self.io, &buf);
+        var e = std.Io.File.stderr().writerStreaming(self.io, &buf);
         e.interface.print("error[E1100]: " ++ message ++ "\n", args) catch {};
         e.interface.flush() catch {};
     }
@@ -1439,7 +1439,7 @@ pub const State = struct {
         if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
-        var e = std.Io.File.stderr().writer(self.io, &buf);
+        var e = std.Io.File.stderr().writerStreaming(self.io, &buf);
         e.interface.print("warning[" ++ code ++ "]: " ++ message ++ "\n", args) catch {};
         e.interface.flush() catch {};
     }
