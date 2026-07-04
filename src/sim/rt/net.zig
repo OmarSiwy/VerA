@@ -3,7 +3,7 @@
 //! store wakes them, plus the delayed transitions in flight. The tables are
 //! `digital/net.zig`'s; the one fold here, the all-strong one, is `Signal`'s.
 //! Clauses: IEEE 1364-2005 §7.9 Tables 7-4 to 7-7, §7.10, §3.7, §3.8, §6.1.3,
-//! §7.14 `delay3`, §7.8.5 gates, §7.6 MOS switches, §8 UDPs, §19.10.
+//! §7.14 `delay3`, §7.8.5 gates, §7.6 MOS and pass switches, §8 UDPs, §19.10.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -74,6 +74,24 @@ pub const Bridge = struct { src_off: u32, src_lo: u32, dst_lo: u32, width: u32 }
 /// `dnet.Udp`'s table: `ins` inputs, its state at time 0.
 pub const Udp = struct { rows: []const dnet.UdpRow, sequential: bool, ins: u32, state: Bit };
 
+/// `dnet.Tran` without its control (a `switch_ctrl` process reads that):
+/// `a` and `b` are `Nets.nets` rows, and `state` is the conduction at time 0.
+pub const Tran = struct {
+    a: u32,
+    b: u32,
+    a_bit: u32 = 0,
+    b_bit: u32 = 0,
+    on: Bit = .one,
+    state: dnet.Tran.State = .on,
+    resistive: bool = false,
+    delay: dnet.Delay = .{},
+};
+
+/// `State.next` payload `tran_base + i`: pass switch i's delayed change of
+/// conduction lands (`decay_base` with this bit set in its index).
+const tran_bit: u32 = 1 << 27;
+pub const tran_base: u32 = decay_base + tran_bit;
+
 /// What the resolution keeps between events, one row per net or driver.
 pub const Nets = struct {
     nets: []const Net,
@@ -108,13 +126,36 @@ pub const Nets = struct {
     ones: []u64,
     /// A driver value under construction.
     scratch: []u64,
+    /// §7.6 the pass switches, their conduction, the one in flight, and
+    /// per net the switches with it as a terminal.
+    trans: []const Tran = &.{},
+    tstate: []dnet.Tran.State = &.{},
+    ttarget: []dnet.Tran.State = &.{},
+    tpending: []?Handle = &.{},
+    on_net: []const []const u32 = &.{},
 
     /// The state at time 0, allocated from `gpa` for the whole run.
-    pub fn init(gpa: std.mem.Allocator, nets: []const Net, drivers: []const Driver, udps: []const Udp) Error!Nets {
+    pub fn init(gpa: std.mem.Allocator, nets: []const Net, drivers: []const Driver, udps: []const Udp, trans: []const Tran) Error!Nets {
         var t: Nets = undefined;
         t.nets = nets;
         t.drivers = drivers;
         t.udps = udps;
+        t.trans = trans;
+        t.tstate = try gpa.alloc(dnet.Tran.State, trans.len);
+        t.ttarget = try gpa.alloc(dnet.Tran.State, trans.len);
+        for (trans, t.tstate, t.ttarget) |tr, *st, *tg| {
+            st.* = tr.state;
+            tg.* = tr.state;
+        }
+        t.tpending = try gpa.alloc(?Handle, trans.len);
+        @memset(t.tpending, null);
+        const on_net = try gpa.alloc([]const u32, nets.len);
+        for (on_net, 0..) |*l, k| {
+            var list: std.ArrayList(u32) = .empty;
+            for (trans, 0..) |tr, i| if (tr.a == k or tr.b == k) try list.append(gpa, @intCast(i));
+            l.* = list.items;
+        }
+        t.on_net = on_net;
         var widest: u32 = 1;
         t.at = try gpa.alloc(u32, drivers.len);
         var n: u32 = 0;
@@ -329,6 +370,7 @@ pub fn pull(s: *State, i: u32) Error!void {
 /// or after the net's `delay3`.
 pub fn resolve(s: *State, k: u32) Error!void {
     const t = &s.nets;
+    if (t.on_net.len != 0 and t.on_net[k].len != 0) return resolveJoined(s, k);
     const n = t.nets[k];
     const nw = words(n.width);
     const res = t.res[t.nat[k]..][0 .. 2 * nw];
@@ -435,6 +477,177 @@ fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
     return floating == n.width;
 }
 
+/// One bit of one net, as a pass switch terminal sees it.
+const Node = struct { net: u32, bit: u32 };
+
+/// `exec.resolveJoined`: §7.6 "switch processing shall consider all the
+/// devices in a bidirectional switch-connected net before it can determine
+/// the appropriate value for any node". Each bit of net `start` and the net
+/// bits joined to it through switches that may conduct resolve as one, from
+/// every driver of every one of them, reduced by the switches crossed (§7.11,
+/// §7.12) and widened to include high impedance across one of unknown
+/// conduction (§7.10.2); with no driver asserting anything, the group's
+/// triregs share their charge (§4.6.3.1). Every net touched is published.
+/// ponytail: the interpreter's limits, kept: no charge decay, wired logic or
+/// net delay inside a joined group, and the group is found afresh each time.
+fn resolveJoined(s: *State, start: u32) Error!void {
+    const t = &s.nets;
+    var arena: std.heap.ArenaAllocator = .init(s.gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var touched: std.ArrayList(u32) = .empty;
+    for (0..t.nets[start].width) |i| {
+        const group = try reach(t, a, .{ .net = start, .bit = @intCast(i) });
+        for (group) |y| {
+            const paths = try switchPaths(t, a, y, group);
+            var acc: Signal = .{};
+            for (group, paths) |z, p| {
+                var own = dnet.netPull(t.nets[z.net].kind);
+                for (t.nets[z.net].drivers) |di| own = own.combine(contribution(t, di, z.bit));
+                acc = acc.combine(crossed(own, z, y, p));
+            }
+            if (acc.none()) for (group, paths) |z, p| {
+                const n = t.nets[z.net];
+                if (n.kind == .trireg) acc = acc.combine(crossed(.of(shown(s, n, z.bit), n.charge, n.charge), z, y, p));
+            };
+            const n = t.nets[y.net];
+            const res = t.res[t.nat[y.net]..][0 .. 2 * words(n.width)];
+            // A net first reached here keeps what it shows on the bits no
+            // switch joins (`exec`'s `resolved`, which it published).
+            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) {
+                try touched.append(a, y.net);
+                const nw = words(n.width);
+                @memcpy(res[0..nw], s.v[n.off..][0..nw]);
+                if (logic.two) @memset(res[nw..], 0) else @memcpy(res[nw..], s.x[n.off..][0..nw]);
+            }
+            if (y.bit == 0) t.sig0[y.net] = acc;
+            setBit(res, y.bit, acc.collapse());
+        }
+    }
+    for (touched.items) |k| {
+        const n = t.nets[k];
+        const nw = words(n.width);
+        const res = t.res[t.nat[k]..][0 .. 2 * nw];
+        try s.store(n.slot, n.off, res[0..nw], res[nw..], t.ones[0..nw]);
+    }
+}
+
+/// Bit `at` of what net `n` shows.
+fn shown(s: *const State, n: Net, at: u32) Int.Bit {
+    const o = n.off + at / 64;
+    const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
+    const x: u2 = if (logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
+    return @enumFromInt(v | x << 1);
+}
+
+/// What driver `di` asserts on bit `at` of its net (`exec.contribution`).
+fn contribution(t: *const Nets, di: u32, at: u32) Signal {
+    const nw = words(t.nets[t.drivers[di].net].width);
+    const b = bitAt(t.cur[t.at[di]..][0 .. 2 * nw], at);
+    return if (t.or_z[di] and b != .z) .orZ(b, t.s0[di], t.s1[di]) else .of(b, t.s0[di], t.s1[di]);
+}
+
+/// `exec.arrive`: what `own`, asserted at `z`, asserts at `y` over `p`.
+fn crossed(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
+    const sig = dnet.reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
+    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
+}
+
+/// The terminal of switch `tr` across from `u`, or null when `u` is neither.
+fn across(tr: Tran, u: Node) ?Node {
+    if (tr.a == u.net and tr.a_bit == u.bit) return .{ .net = tr.b, .bit = tr.b_bit };
+    if (tr.b == u.net and tr.b_bit == u.bit) return .{ .net = tr.a, .bit = tr.a_bit };
+    return null;
+}
+
+/// The net bits joined to `from` through pass switches that may conduct.
+fn reach(t: *const Nets, a: std.mem.Allocator, from: Node) Error![]const Node {
+    var seen: std.ArrayList(Node) = .empty;
+    try seen.append(a, from);
+    var i: usize = 0;
+    while (i < seen.items.len) : (i += 1) {
+        const u = seen.items[i];
+        for (t.on_net[u.net]) |ti| {
+            if (t.tstate[ti] == .off) continue;
+            const v = across(t.trans[ti], u) orelse continue;
+            for (seen.items) |w| {
+                if (std.meta.eql(w, v)) break;
+            } else try seen.append(a, v);
+        }
+    }
+    return seen.items;
+}
+
+/// From a group member to `y`: the fewest resistive switches on a path that
+/// may conduct, and whether some path surely does.
+const SwitchPath = struct { res: u32, sure: bool };
+
+fn switchPaths(t: *const Nets, a: std.mem.Allocator, y: Node, group: []const Node) Error![]const SwitchPath {
+    const p = try a.alloc(SwitchPath, group.len);
+    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
+    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
+        q.* = .{ .res = 0, .sure = true };
+    };
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (group, 0..) |u, iu| {
+            if (p[iu].res == std.math.maxInt(u32)) continue;
+            for (t.on_net[u.net]) |ti| {
+                const st = t.tstate[ti];
+                if (st == .off) continue;
+                const v = across(t.trans[ti], u) orelse continue;
+                const iv = for (group, 0..) |w, k| {
+                    if (std.meta.eql(w, v)) break k;
+                } else continue;
+                const res = p[iu].res + @intFromBool(t.trans[ti].resistive);
+                if (res < p[iv].res) {
+                    p[iv].res = res;
+                    changed = true;
+                }
+                if (p[iu].sure and st == .on and !p[iv].sure) {
+                    p[iv].sure = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    return p;
+}
+
+/// `exec` `.switch_ctrl`: pass switch `i`'s control reads `c`, so it
+/// conducts, does not, or may (x or z); both sides re-resolve now, or after
+/// the switch's delay (`switchAfter`).
+pub fn switchCtrl(s: *State, i: u32, c: Bit) Error!void {
+    const t = &s.nets;
+    const tr = t.trans[i];
+    const cb = int(c);
+    const next: dnet.Tran.State = if (cb == int(tr.on)) .on else if (cb == .zero or cb == .one) .off else .unknown;
+    if (tr.delay.present) return switchAfter(s, i, next);
+    t.tstate[i] = next;
+    try resolve(s, tr.a);
+    try resolve(s, tr.b);
+}
+
+/// `exec.switchAfter`: a controlled switch with a delay turns on after the
+/// first, off after the second, and to unknown conduction after the
+/// smaller; a control that returns before its change lands cancels it.
+fn switchAfter(s: *State, i: u32, next: dnet.Tran.State) Error!void {
+    const t = &s.nets;
+    const settled = if (t.tpending[i] != null) t.ttarget[i] else t.tstate[i];
+    if (settled == next) return;
+    if (t.tpending[i]) |h| _ = s.sched.cancel(h) catch |e| return s.schedFail(e);
+    t.tpending[i] = null;
+    if (next == t.tstate[i]) return;
+    t.ttarget[i] = next;
+    const to: Int.Bit = switch (next) {
+        .on => .one,
+        .off => .zero,
+        .unknown => .x,
+    };
+    t.tpending[i] = s.sched.scheduleAfter(t.trans[i].delay.to(to), .inactive, tran_base + i) catch |e| return s.timeFail(e);
+}
+
 /// `exec.chargeState`: the §3.8 decay countdown restarts on each entry
 /// into the capacitive state and stops on leaving it.
 fn chargeState(s: *State, k: u32, floating: bool) Error!void {
@@ -489,7 +702,13 @@ pub fn arrive(s: *State, payload: u32) Error!void {
             return s.store(n.slot, n.off, tgt[0..nw], tgt[nw..][0..nw], t.ones[0..nw]);
         },
         // §3.8: a charge held for the decay time is worth nothing, x.
-        decay_base => {
+        decay_base => if (k >= tran_bit) {
+            const i = k - tran_bit;
+            t.tpending[i] = null;
+            t.tstate[i] = t.ttarget[i];
+            try resolve(s, t.trans[i].a);
+            return resolve(s, t.trans[i].b);
+        } else {
             const n = t.nets[k];
             const nw = words(n.width);
             t.decay_ev[k] = null;

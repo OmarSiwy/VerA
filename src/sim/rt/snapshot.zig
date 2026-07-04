@@ -16,7 +16,7 @@ const Dispatch = root.Dispatch;
 /// The fixed-size fields that change while a design runs, as names of
 /// `State` fields (one value or a slice each), then of `State.nets`.
 const fixed = .{ "v", "armed", "waiting", "seq", "repeats", "joins", "monitored", "mon_site", "mon_on", "mon_pending", "random_seed", "layers", "time_format", "budget_time", "budget_used", "two", "two_at", "steps", "look_at" };
-const nets = .{ "cur", "tgt", "or_z", "tgt_or_z", "s0", "s1", "flight", "started", "res", "ntgt", "nflight", "capacitive", "decay_ev", "sig0", "prev", "state" };
+const nets = .{ "cur", "tgt", "or_z", "tgt_or_z", "s0", "s1", "flight", "started", "res", "ntgt", "nflight", "capacitive", "decay_ev", "sig0", "prev", "state", "tstate", "ttarget", "tpending" };
 
 fn bytes(p: anytype) []u8 {
     return @constCast(if (@typeInfo(@TypeOf(p.*)) == .pointer) std.mem.sliceAsBytes(p.*) else std.mem.asBytes(p));
@@ -101,6 +101,9 @@ pub fn bound(comptime d: *const root.Design) usize {
         .sig0 = d.nets.len,
         .prev = ins,
         .state = d.udps.len,
+        .tstate = d.trans.len,
+        .ttarget = d.trans.len,
+        .tpending = d.trans.len,
     };
     const Sched = @FieldType(State, "sched");
     var n: usize = 8;

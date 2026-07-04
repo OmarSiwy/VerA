@@ -19,6 +19,7 @@
 //   tran: 1               rtran: 1   (each joins its net to a)
 // Output, in that order: "10 1100 1100 011010 10 1111 11".
 //! inherited IEEE 1364-2005 A.3.4
+// native-required
 `timescale 1ns/1ns
 module b_A_3_4_gate_and_switch_types;
   reg a, b, en, dis;

@@ -28,6 +28,7 @@
 //      reads 1 at 22 and is z again at 23.
 //! inherited IEEE 1364-2005 7.6 (bit-select terminals, pass switch delays)
 //! inherited IEEE 1364-2005 7.11 7.12 (strength across tran and rtran)
+// native-required
 `timescale 1ns/1ns
 module audit_switch_bits_strength_delay;
   reg d, en;

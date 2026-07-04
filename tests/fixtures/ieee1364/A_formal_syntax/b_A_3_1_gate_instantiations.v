@@ -36,6 +36,7 @@
 //   pulldown (strong0) (pd), pullup (strong1) (pu)                 -> 0, 1
 // Output: "1 1 1 0 1 1 1 10 1 0 0 1".
 //! inherited IEEE 1364-2005 A.3.1
+// native-required
 `timescale 1ns/1ns
 module b_A_3_1_gate_instantiations;
   reg a, b, en, nc, pc;

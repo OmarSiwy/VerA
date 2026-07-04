@@ -20,6 +20,7 @@
 //        me2 (medium 1), same size, "both ... change value to x"
 //                                                           -> 0 0 x x
 //! inherited IEEE 1364-2005 4.6.3 4.6.3.1
+// native-required
 module b_4_6_3_1_capacitive_network_figure_4_2;
   reg a, b, c, d;
   trireg (large) trireg_la;
