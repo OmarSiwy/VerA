@@ -17,7 +17,14 @@ pub const Reach = @import("../rt/root.zig").Reach;
 pub const Schedule = enum { fifo, static };
 
 pub const Edge = enum { any, posedge, negedge };
-pub const Term = struct { slot: u32, edge: Edge };
+pub const Term = struct {
+    slot: u32,
+    edge: Edge,
+    /// §9.7.3: an indexed event watches every element, but selects which
+    /// occurrence resumes it at run time. Its index is not a value event.
+    count: u32 = 1,
+    event_select: Ast.ExprId = .none,
+};
 
 pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
@@ -75,8 +82,15 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
         else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    if (ex.tag(watched) == .index and r.events.contains(r.slot(r.chainBase(watched).base) catch return self.refuse("an indexed event term the engine resolves only at run time")))
-        return self.refuse("an indexed named event control");
+    if (ex.tag(watched) == .index) {
+        const base = r.slot(r.chainBase(watched).base) catch return self.refuse("an indexed event term the engine resolves only at run time");
+        if (r.events.contains(base)) return out.append(self.arena, .{
+            .slot = base,
+            .edge = .any,
+            .count = r.arrays.get(base).?.count,
+            .event_select = watched,
+        });
+    }
     const at = r.termSlot(watched) catch return self.refuse("an event term the engine resolves only at run time");
     try out.append(self.arena, .{ .slot = at, .edge = edge });
 }
@@ -95,7 +109,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             .wait_event => |e| {
                 ts.clearRetainingCapacity();
                 try terms(self, e, &ts);
-                for (ts.items) |t| watched[t.slot] = true;
+                for (ts.items) |t| @memset(watched[t.slot..][0..t.count], true);
             },
             .wait_slots => |slots| for (slots) |s| {
                 watched[s] = true;
@@ -108,7 +122,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
                 if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
-                for (ts.items) |t| watched[t.slot] = true;
+                for (ts.items) |t| @memset(watched[t.slot..][0..t.count], true);
             },
             // A held slot is never `set`: the store must meet `rt`'s guard.
             .override_eval => |x| watched[x.slot] = true,
@@ -315,7 +329,9 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
             .wait_event => |e| {
                 ts.clearRetainingCapacity();
                 try terms(self, e, &ts);
-                for (ts.items) |t| reach[t.slot].terms = true;
+                for (ts.items) |t| for (reach[t.slot..][0..t.count]) |*item| {
+                    item.terms = true;
+                };
             },
             .wait_slots => |slots| for (slots) |s| {
                 reach[s].terms = true;
@@ -328,7 +344,9 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
                 if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
-                for (ts.items) |t| reach[t.slot].terms = true;
+                for (ts.items) |t| for (reach[t.slot..][0..t.count]) |*item| {
+                    item.terms = true;
+                };
             },
             else => {}, // else: only these four file an event control
         }
@@ -401,6 +419,14 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
 
 /// Does `p` suspend only at its entry, returning there after every pass?
 fn fixedWait(self: *Emitter, p: Proc) Error!bool {
+    // An indexed named event re-evaluates its index at each occurrence;
+    // its suspension therefore needs a selector, not a fixed watcher.
+    if (self.r.code.items[p.entry] == .wait_event) {
+        self.r.scope = self.r.code_scope.items[p.entry];
+        var ts: std.ArrayList(Term) = .empty;
+        try terms(self, self.r.code.items[p.entry].wait_event, &ts);
+        for (ts.items) |t| if (t.event_select != .none) return false;
+    }
     for (p.pcs) |pc| {
         if (pc == p.entry) continue;
         switch (self.r.code.items[pc]) {
@@ -740,7 +766,11 @@ fn readsAt(self: *Emitter, pc: u32, out: *std.ArrayList(u32)) Error!bool {
         .deposit => |x| return stmtReads(self, x.statement, out),
         .call => |x| for (x.args) |e| if (!try exprReads(self, e, out)) return false,
         .override_eval => |x| return exprReads(self, x.value, out),
-        .continuous, .wait_slots, .trigger, .restart, .jump, .stop, .disable_block, .disable_task, .fork, .join_arm, .pla_start, .override_on, .override_off, .repeat_next, .switch_ctrl, .call_timed, .task_return => {},
+        .trigger => |event| switch (event) {
+            .slot => {},
+            .indexed => |e| return exprReads(self, e, out),
+        },
+        .continuous, .wait_slots, .restart, .jump, .stop, .disable_block, .disable_task, .fork, .join_arm, .pla_start, .override_on, .override_off, .repeat_next, .switch_ctrl, .call_timed, .task_return => {},
     }
     return true;
 }

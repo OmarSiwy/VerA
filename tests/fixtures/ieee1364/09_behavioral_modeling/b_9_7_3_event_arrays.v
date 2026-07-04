@@ -10,6 +10,7 @@
 // Invalid neighbors: b_9_7_3_event_array_*_rejected.v.
 //! inherited IEEE 1364-2005 9.7.3
 //! lrm 5.10.4
+// native-required
 `timescale 1ns/1ns
 module event_array_child;
   parameter LO = 5, HI = 6;

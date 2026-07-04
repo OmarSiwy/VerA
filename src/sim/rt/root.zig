@@ -243,7 +243,11 @@ pub const Reach = packed struct(u8) {
 /// `exec.Susp` without the task activation, which no native process has.
 /// `seq` is its `State.stamp`.
 const Susp = struct { pc: u32, gen: u32, alive: bool, seq: u64 = 0 };
-const Term = struct { susp: u32, gen: u32, edge: Edge };
+/// §9.7.3: the event element selected now, or null for an invalid index.
+/// The emitted function reads the declaring scope's slots in the active
+/// logic phase. Its address is immutable across a saved tick boundary.
+pub const EventSelect = fn (*State) Error!?u32;
+const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSelect = null };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
 /// holds then. `v`, `x` and `m` are `n` words each: the row's own `one`
@@ -1072,7 +1076,15 @@ pub const State = struct {
         for (list.items) |t| {
             const s = &self.susps.items[t.susp];
             if (s.gen != t.gen) continue;
-            if (!t.edge.matches(before, after)) {
+            // Only named-event lists carry selectors. IEEE §10.4.4(f)
+            // forbids a function from triggering an event, so a selector
+            // cannot recursively compact this same list. Its blocking
+            // writes may wake ordinary value lists below.
+            const selected = if (t.select) |select| (try select(self)) == slot else true;
+            // A selector can call an HDL function whose writes resume this
+            // suspension through another term of its event-or expression.
+            if (s.gen != t.gen) continue;
+            if (!t.edge.matches(before, after) or !selected) {
                 list.items[keep] = t;
                 keep += 1;
                 continue;
@@ -1135,6 +1147,17 @@ pub const State = struct {
 
     /// `exec.watch`: file one term of suspension `id` under `slot`.
     pub fn watch(self: *State, id: u32, slot: u32, edge: Edge) Error!void {
+        return self.watchTerm(id, slot, edge, null);
+    }
+
+    /// §9.7.3: only an occurrence of the selected element wakes this
+    /// suspension. Index changes alone neither wake it nor freeze a choice.
+    /// Inlined automatic invocations already have separate event slots.
+    pub fn watchSelected(self: *State, id: u32, first: u32, elements: u32, select: *const EventSelect) Error!void {
+        for (first..first + elements) |slot| try self.watchTerm(id, @intCast(slot), .any, select);
+    }
+
+    fn watchTerm(self: *State, id: u32, slot: u32, edge: Edge, select: ?*const EventSelect) Error!void {
         const list = &self.terms[slot];
         if (list.items.len == list.capacity and list.capacity != 0) {
             var keep: usize = 0;
@@ -1145,7 +1168,7 @@ pub const State = struct {
             list.shrinkRetainingCapacity(keep);
             if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.gpa, list.capacity * 2);
         }
-        try list.append(self.gpa, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+        try list.append(self.gpa, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge, .select = select });
     }
 
     fn retire(self: *State, id: u32) void {

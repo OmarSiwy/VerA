@@ -188,6 +188,9 @@ pub const Emitter = struct {
     /// `fn proc<entry>` after the processes.
     subs_todo: std.ArrayList(u32) = .empty,
     sub_done: []bool = &.{},
+    /// Indexed named-event controls: an emitted selector reads its lexical
+    /// scope when an array element occurs, not when the process suspends.
+    event_selects: std.ArrayList(struct { e: Ast.ExprId, scope: u32 }) = .empty,
     /// Emitting a subroutine body: every step first checks whether a
     /// `disable` is unwinding it (§10.3).
     in_sub: bool = false,
@@ -508,6 +511,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         try process(self, pr.pcs);
         for (pr.pcs) |pc| entry_of[pc] = pr.pcs[0];
     }
+    // Selector expressions can call HDL functions. Emit them before the
+    // subroutine worklist so those functions are emitted as well.
+    try eventSelectors(self);
     // The subroutines the processes call, and those they call in turn. A
     // body is reached only through a call, which runs it to completion.
     self.role = .general;
@@ -573,6 +579,13 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print("}};\n}}\n\n", .{});
     if (!advances(r)) self.keepFour("nothing delays, so the run never leaves time 0", null);
     const two_phase = self.auto and self.four == null;
+    // A suspension may survive the 4 -> 2 state transition. Its selector
+    // must use the phase of the occurrence, not the phase that armed it.
+    for (self.event_selects.items, 0..) |_, i| {
+        try self.print("fn selectedEvent{d}(s: *S) rt.Error!?u32 {{\n", .{i});
+        if (two_phase) try self.print("    if (s.two) return Code(true).eventSelect{d}(s);\n", .{i});
+        try self.print("    return Code(false).eventSelect{d}(s);\n}}\n\n", .{i});
+    }
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
     // intra-assignment cells follow the slots; each is written before it
     // is read.
@@ -1081,7 +1094,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            const id = try s.park({d});\n", .{next});
             var ts: std.ArrayList(plan.Term) = .empty;
             try plan.terms(self, e, &ts);
-            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
+            try eventWatches(self, ts.items);
             try self.print("            return;\n", .{});
         },
         .wait_slots => |slots| {
@@ -1105,7 +1118,13 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .trigger => |event| switch (event) {
             .slot => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
-            .indexed => return self.refuse("an indexed named event trigger"),
+            .indexed => |e| {
+                try self.print("            if (", .{});
+                try expr.address(self, e, self.label());
+                try self.print(") |at| {{\n", .{});
+                if (dumps(r)) try self.print("                s.fire(at);\n", .{});
+                try self.print("                try s.wake(at, .x, .x);\n            }}\n            continue :sw {d};\n", .{next});
+            },
         },
         .restart => |x| try self.print(
             \\            if (restarted) return s.fail("this always process completed an iteration without suspending; it needs a delay or event control", .{{}});
@@ -1135,7 +1154,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            const id = try s.park({d});\n", .{next});
             var ts: std.ArrayList(plan.Term) = .empty;
             try plan.terms(self, st.timing, &ts);
-            for (ts.items) |t| try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
+            try eventWatches(self, ts.items);
             try self.print("            return;\n", .{});
         },
         // The target is resolved when the process resumes (§9.7.7).
@@ -1206,6 +1225,33 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            continue :sw {d};\n", .{next});
         },
         .call_timed, .task_return, .switch_ctrl => unreachable, // `reach` refused each of these by name
+    }
+}
+
+/// File a wait's terms. Ordinary terms keep the direct slot path; an event
+/// array carries an emitted selector and the full range of element slots.
+fn eventWatches(self: *Emitter, ts: []const plan.Term) Error!void {
+    for (ts) |t| {
+        if (t.event_select == .none) {
+            try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
+            continue;
+        }
+        const index = self.event_selects.items.len;
+        try self.event_selects.append(self.arena, .{ .e = t.event_select, .scope = self.r.scope });
+        try self.print("            try s.watchSelected(id, {d}, {d}, selectedEvent{d});\n", .{ t.slot, t.count, index });
+    }
+}
+
+/// The selector body lives inside Code so its ordinary expressions use M.
+/// The immutable wrapper outside Code chooses the occurrence's logic phase.
+fn eventSelectors(self: *Emitter) Error!void {
+    const scope = self.r.scope;
+    defer self.r.scope = scope;
+    for (self.event_selects.items, 0..) |select, i| {
+        self.r.scope = select.scope;
+        try self.print("fn eventSelect{d}(s: *S) rt.Error!?u32 {{\n    _ = &s;\n    return ", .{i});
+        try expr.address(self, select.e, self.label());
+        try self.print(";\n}}\n\n", .{});
     }
 }
 

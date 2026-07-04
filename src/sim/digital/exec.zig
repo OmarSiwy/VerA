@@ -957,9 +957,12 @@ pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void
     for (list.items) |t| {
         const s = &self.susps.items[t.susp];
         if (s.gen != t.gen) continue;
-        if ((if (event) |e| event_ctx != eventContext(self, e.scope, s.ctx) else false) or
-            !t.edge.matches(before, after) or !try selectedEvent(self, t, target))
-        {
+        const selected = (if (event) |e| event_ctx == eventContext(self, e.scope, s.ctx) else true) and
+            t.edge.matches(before, after) and try selectedEvent(self, t, target);
+        // An index function's blocking write can satisfy another term of
+        // this event-or suspension while selectedEvent evaluates it.
+        if (s.gen != t.gen) continue;
+        if (!selected) {
             list.items[keep] = t;
             keep += 1;
             continue;
