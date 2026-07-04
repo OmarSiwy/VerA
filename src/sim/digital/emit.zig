@@ -1032,9 +1032,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try assignChars(self, t.args[0], "s.captured()");
                 },
                 .sformat => {
-                    if (r.file.exprs.tag(t.args[1]) != .str_literal) return self.refuse("a $sformat format held in a variable");
                     try self.print("            s.capture();\n", .{});
-                    try showFormat(self, t.args[1..], .{ .radix = .decimal, .newline = false }, true);
+                    if (r.file.exprs.tag(t.args[1]) == .str_literal)
+                        try showFormat(self, t.args[1..], .{ .radix = .decimal, .newline = false }, true)
+                    else
+                        try dynamicFormat(self, t.args[1..]);
                     try assignChars(self, t.args[0], "s.captured()");
                 },
                 // §18.1: the arguments are read now; the targets were
@@ -1935,6 +1937,48 @@ fn strengthOf(self: *Emitter, e: Ast.ExprId) Error!void {
     try self.print("            try s.strongStrength(", .{});
     const t = try expr.selfDetermined(self, e);
     try self.print(", {d});\n", .{t.width});
+}
+
+/// §17.2.3 `$sformat` of a format held in a variable (`display.sformat`'s
+/// dynamic walk): the format is read when the task runs, and each argument
+/// is evaluated by whichever conversion it meets there.
+fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
+    const r = self.r;
+    for (args[1..]) |a| {
+        if (a == .none) return self.refuse("a null argument after a $sformat format held in a variable");
+        // Its strength is kept only where a literal %v marks it read.
+        if (r.file.exprs.tag(a) == .ident and r.net_of.get(try self.slot(a)) != null and compile.typeOf(r, a).width == 1)
+            return self.refuse("a scalar net after a $sformat format held in a variable, which a %v there would need the strength of");
+    }
+    if (compile.typeOf(r, args[0]).real) return self.refuse("a $sformat format held in a real");
+    const scope = std.zig.fmtString(try staticText(self, display.emitScope, .{}));
+    const def = r.scope_info.items[r.scope].def;
+    const lib = std.zig.fmtString(try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));
+    const lb = self.label();
+    try self.print("            {{\n            var fb{d}: [{d}]u8 = undefined;\n            var f{d} = S.formatOf(&fb{d}, ", .{ lb, (compile.typeOf(r, args[0]).width + 7) / 8, lb, lb });
+    const ft = try expr.selfDetermined(self, args[0]);
+    try self.print(", {d});\n            b{d}: {{\n", .{ ft.width, lb });
+    for (args[1..], 1..) |a, k| {
+        try self.print("            const c{d}_{d} = (try s.nextSpec(&f{d}, \"{f}\", \"{f}\")) orelse break :b{d};\n", .{ lb, k, lb, scope, lib, lb });
+        try self.print("            switch (c{d}_{d}.conv) {{\n                'b', 'B', 'o', 'O', 'h', 'H', 'd', 'D' => try s.value(", .{ lb, k });
+        var t = try expr.selfDetermined(self, a);
+        try self.print(", {d}, {}, switch (c{d}_{d}.conv) {{\n                    'b', 'B' => .binary,\n                    'o', 'O' => .octal,\n                    'h', 'H' => .hex,\n                    else => .decimal,\n                }}, c{d}_{d}.width),\n", .{ t.width, t.signed, lb, k, lb, k });
+        try self.print("                't', 'T' => try s.time(", .{});
+        t = try expr.selfDetermined(self, a);
+        try self.print(", {d}, {}, {d}, c{d}_{d}.width),\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, lb, k });
+        try self.print("                's', 'S', 'c', 'C' => try s.text(", .{});
+        t = try expr.selfDetermined(self, a);
+        try self.print(", {d}, c{d}_{d}.conv == 'c' or c{d}_{d}.conv == 'C', c{d}_{d}.width),\n", .{ t.width, lb, k, lb, k, lb, k });
+        if (compile.typeOf(r, a).width == 1) {
+            try self.print("                'v', 'V' => try s.strongStrength(", .{});
+            t = try expr.selfDetermined(self, a);
+            try self.print(", {d}),\n", .{t.width});
+        } else try self.print("                'v', 'V' => return s.fail(\"§17.1.1.5: %v takes a scalar net reference\", .{{}}),\n", .{});
+        try self.print("                else => try s.real(", .{});
+        try expr.real(self, a);
+        try self.print(", c{d}_{d}.conv, c{d}_{d}.precision, c{d}_{d}.width),\n            }}\n", .{ lb, k, lb, k, lb, k });
+    }
+    try self.print("            try s.endFormat(&f{d}, \"{f}\", \"{f}\");\n            }}\n            }}\n", .{ lb, scope, lib });
 }
 
 fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {

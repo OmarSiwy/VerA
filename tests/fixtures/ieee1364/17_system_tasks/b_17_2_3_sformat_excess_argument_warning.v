@@ -11,6 +11,7 @@
 // must warn and continue, so the $display after it prints "continued". What
 // s holds afterwards is not fixed by the clause, so it is not printed.
 //! inherited IEEE 1364-2005 17.2.3
+// native-required
 // digital-runner: warning $sformat
 module b_17_2_3_sformat_excess_argument_warning;
   reg [8*8:1] s;
