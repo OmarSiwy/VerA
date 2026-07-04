@@ -9,6 +9,7 @@
 //   realtime_f(4) + 0.5 = 1.5                   -> "1.500000"
 //   k = real_f(3): 1.5 to integer rounds away from zero (§4.8.2) -> "2"
 //! inherited IEEE 1364-2005 10.4.1 10.4.2
+// native-required
 module b_10_4_1_real_function_return;
   real r;
   integer k;

@@ -37,7 +37,7 @@ pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
     try list(w, s.free_late.items);
     try count(w, s.late.items.len);
     for (s.late.items) |l| {
-        try w.writeAll(std.mem.asBytes(&[3]u32{ l.slot, l.off, l.n }));
+        try w.writeAll(std.mem.asBytes(&[4]u32{ l.slot, l.off, l.n, @intFromBool(l.real) }));
         try list(w, l.words);
     }
     // The live terms, slot by slot in filed order: a stale one never wakes.
@@ -147,11 +147,11 @@ fn load(s: *State, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.
     for (s.late.items) |l| gpa.free(l.words);
     try s.late.resize(gpa, try take(r));
     for (s.late.items) |*l| {
-        var h: [3]u32 = undefined;
+        var h: [4]u32 = undefined;
         try r.readSliceAll(std.mem.asBytes(&h));
         const words = try gpa.alloc(u64, try take(r));
         try r.readSliceAll(std.mem.sliceAsBytes(words));
-        l.* = .{ .slot = h[0], .off = h[1], .n = h[2], .words = words };
+        l.* = .{ .slot = h[0], .off = h[1], .n = h[2], .real = h[3] != 0, .words = words };
     }
     for (s.terms) |*l| l.clearRetainingCapacity();
     for (0..try take(r)) |_| {

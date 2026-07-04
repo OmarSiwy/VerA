@@ -24,6 +24,7 @@
 //   t = 7;  x = 0.5;  xa[1] = 1.25;  rt = 2.5.
 // Output: "rs=-5 ra1=9 i=5 j=10 t=7 x=0.50 xa1=1.25 rt=2.50".
 //! inherited IEEE 1364-2005 A.2.8
+// native-required
 module b_A_2_8_block_item_declarations;
   task run ();
     reg signed [3:0] rs;

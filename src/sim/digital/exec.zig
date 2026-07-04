@@ -431,7 +431,14 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
     if (!compile.typeOf(self, e).real) return realOfInt(try eval(self, a, e, 0));
     return switch (ex.tag(e)) {
         .real_literal => ex.realValue(e),
-        .ident, .hier_ident, .index => @bitCast((try leaf(self, a, e)).values()[0]),
+        .ident, .hier_ident => @bitCast((try leaf(self, a, e)).values()[0]),
+        .index => blk: {
+            const v = try leaf(self, a, e);
+            // §5.2.2 supplies x for an invalid array reference. At this
+            // real boundary §4.8.2 clears its unknown bits; an actual NaN
+            // in a valid real element has no unknown plane and survives.
+            break :blk @bitCast(v.values()[0] & ~v.unknowns()[0]);
+        },
         // §10.4.1 a real or realtime function: its result variable's bits.
         .call => @bitCast((try callSync(self, a, self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?, ex.args(e))).values()[0]),
         .unary => switch (ex.unOp(e)) {
@@ -453,12 +460,12 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
         .ternary => switch (try truthOf(self, a, ex.lhs(e))) {
             .one => try evalReal(self, a, ex.rhs(e)),
             .zero => try evalReal(self, a, ex.ternaryElse(e)),
-            // §5.1.13 combines an ambiguous condition bitwise, which a real
-            // has no bits for; equal arms are still that value.
+            // §5.1.13: both arms are evaluated, but a real result under
+            // an ambiguous condition is zero, even when the arms agree.
             .x, .z => blk: {
-                const y = try evalReal(self, a, ex.rhs(e));
-                const n = try evalReal(self, a, ex.ternaryElse(e));
-                break :blk if (y == n) y else 0;
+                _ = try evalReal(self, a, ex.rhs(e));
+                _ = try evalReal(self, a, ex.ternaryElse(e));
+                break :blk 0;
             },
         },
         .sys_call => blk: {
@@ -1645,7 +1652,8 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     if (fresh) for (f.first..f.first + f.count) |s| {
         const v = self.values[s];
         try self.saved_planes.appendSlice(self.arena, v.planes);
-        @memcpy(v.planes, (try filled(a, v.width, v.signed, .x)).planes);
+        const fill: Int.Bit = if (self.reals.contains(@intCast(s))) .zero else .x;
+        @memcpy(v.planes, (try filled(a, v.width, v.signed, fill)).planes);
     };
     for (inputs, f.ports) |in, slot| if (in) |v| @memcpy(self.values[slot].planes, v.planes);
     const caller_scope = self.scope;

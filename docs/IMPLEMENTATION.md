@@ -53,6 +53,15 @@ differently also conforms.
 | none (host ABI) | numeric parameter bindings carry a value without HDL type/width metadata | `$clog2` retains the final elaborated declaration's operand width and signedness for host bindings; HDL instance overrides supply their own before code generation; declared `integer` remains signed 32 bits | `lib/ir/lower/constfold.zig` `clog2Width`, `clog2Signed` | `ch09_system_tasks/clog2_inferred_parameter_width.va`, `clog2_nested_contexts.va` |
 | none (host ABI) | how a host supplies top-level geometric system parameters | a declared §3.4.7 alias supplies a real model-card slot, shared by additional aliases of the same system parameter; defaults are Table 9-29's identities and descendants retain the host dependency | `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam` | `ch09_system_tasks/geometry_top_alias_host.va` |
 
+For a digital real/realtime array read with an out-of-range or x/z index,
+IEEE §5.2.2 specifies an x reference but gives no real unknown encoding.
+VerA applies §4.8.2's x/z-to-zero conversion at the real evaluation boundary,
+so the read yields +0.0. It does not reinterpret the integer unknown plane
+as an IEEE 754 NaN. Valid elements retain their real bit patterns, including
+NaNs explicitly supplied by `$bitstoreal`. `ieee1364/04_data_types/native_real_arrays.v`
+checks invalid indices beside valid elements in both the interpreter and
+native executable.
+
 For AMS §9.18, E0890 diagnoses specified values that fold over literals
 outside Table 9-29's domains. As with the existing `$mfactor` path, expressions
 depending on model-card parameters are composed at runtime; the host must

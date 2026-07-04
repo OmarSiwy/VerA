@@ -575,13 +575,13 @@ pub inline fn word0(a: anytype) u64 {
     return wide(a).v[0];
 }
 
-/// §5.1.13 a real `?:` under an x or z condition: equal arms are that
-/// value, anything else 0 (`exec.evalReal`).
+/// §5.1.13 a real `?:` under an x or z condition is always zero, after
+/// both arms have been evaluated (`exec.evalReal`).
 pub inline fn realCond(c: Bit, y: f64, n: f64) f64 {
     return switch (c) {
         .one => y,
         .zero => n,
-        .x, .z => if (y == n) y else 0,
+        .x, .z => 0,
     };
 }
 

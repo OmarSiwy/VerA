@@ -10,6 +10,7 @@
 //   rta[3] = 1.25     -> 1.25     (realtime element, declared [2:3])
 // Output: "a -5 7 2.50 1.25".
 //! inherited IEEE 1364-2005 4.9.2
+// native-required
 module b_4_9_2_variable_arrays;
   reg [3:0] ra [0:1];
   integer ia [1:2];

@@ -3,7 +3,8 @@
 //! `evalContext`'s arm for arm, so operand sizing and signedness match it, and
 //! `evalContext` itself folds every constant. IEEE 1364-2005 §5.5.1 Table
 //! 5-22, §5.5.2, §5.1 operators, §5.2.1 selects, §3.9 array elements, §5.1.14
-//! concatenation, §17.2 file input, §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
+//! concatenation, §4.8 real values, §10.4 function results, §17.2 file input,
+//! §17.7.1 `$time`, §17.11 `$clog2`, §4.2.1.4 casts.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
@@ -59,6 +60,21 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
             try self.get(try self.slot(e));
             try self.print(")", .{});
         },
+        .index => {
+            if (!try self.element(e)) return self.refuse("a real select that is not an array element");
+            const lb = self.label();
+            const base = try self.slot(r.chainBase(e).base);
+            try self.print("(if (", .{});
+            try address(self, e, lb);
+            // §5.2.2's invalid reference is x; the real boundary follows
+            // §4.8.2's x-to-zero conversion, not a host NaN bit pattern.
+            try self.print(") |a{d}| L.real(M.get(s, {d} + a{d} - {d})) else @as(f64, 0))", .{ lb, self.off[base], lb, base });
+        },
+        .call => {
+            try self.print("L.real(", .{});
+            try functionValue(self, e);
+            try self.print(")", .{});
+        },
         .unary => switch (ex.unOp(e)) {
             .minus => {
                 try self.print("-(", .{});
@@ -81,7 +97,22 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
             try real(self, ex.rhs(e));
             try self.print(")", .{});
         },
-        .ternary => {
+        .ternary => if (calls(self, ex.rhs(e)) or calls(self, ex.ternaryElse(e))) {
+            // §5.1.13 evaluates only the chosen arm for a known condition,
+            // both for x/z, whose real result is always zero.
+            const lb = self.label();
+            try self.print("t{d}: {{ const c{d} = ", .{ lb, lb });
+            try truth(self, ex.lhs(e));
+            try self.print("; break :t{d} if (c{d} == .one) ", .{ lb, lb });
+            try real(self, ex.rhs(e));
+            try self.print(" else if (c{d} == .zero) ", .{lb});
+            try real(self, ex.ternaryElse(e));
+            try self.print(" else L.realCond(c{d}, ", .{lb});
+            try real(self, ex.rhs(e));
+            try self.print(", ", .{});
+            try real(self, ex.ternaryElse(e));
+            try self.print("); }}", .{});
+        } else {
             try self.print("L.realCond(", .{});
             try truth(self, ex.lhs(e));
             try self.print(", ", .{});
@@ -140,7 +171,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
             }
             try self.print(")", .{});
         },
-        else => return self.refuse("a real expression of this form"), // else: an array element or VAMS branch access
+        else => return self.refuse("a real expression of this form"), // else: VAMS branch access and analog-only forms stay with the interpreter
     }
 }
 
@@ -503,15 +534,24 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         },
         // §10.4 a function call: one synchronous activation (`exec.callSync`).
         .call => {
-            const idx = r.sub_base.get(r.instanceOf(r.scope)).? + r.call_subs.get(e).?;
-            const f = r.subs.items[idx].frame;
-            const lb = self.label();
-            try self.print("L.rs(c{d}: {{\n", .{lb});
-            try emit.call(self, idx, ex.args(e), lb);
-            try self.print("            break :c{d} r{d};\n            }}, {d}, {d}, {})", .{ lb, lb, r.values[f.result].width, w, sg });
+            const n = try natural(self, e);
+            try self.print("L.rs(", .{});
+            try functionValue(self, e);
+            try self.print(", {d}, {d}, {})", .{ n.width, w, sg });
         },
         else => return self.refuse("this expression form"), // else: every other form infer admits is a constant (folded above) or real (`real`)
     }
+}
+
+/// §10.4: the result captured before restoring the caller's automatic
+/// frame, in the result variable's representation (real bits or integer).
+fn functionValue(self: *Emitter, e: Ast.ExprId) Error!void {
+    const r = self.r;
+    const idx = r.sub_base.get(r.instanceOf(r.scope)).? + r.call_subs.get(e).?;
+    const lb = self.label();
+    try self.print("c{d}: {{\n", .{lb});
+    try emit.call(self, idx, r.file.exprs.args(e), lb);
+    try self.print("            break :c{d} r{d};\n            }}", .{ lb, lb });
 }
 
 /// Does `e` call a function, or a system function with an effect?

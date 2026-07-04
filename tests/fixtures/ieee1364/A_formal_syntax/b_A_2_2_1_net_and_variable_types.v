@@ -17,6 +17,7 @@
 // In $display order s0 s1 wa ta wo to z0 z1 tr uw w, then the variables:
 // "0 1 0 0 1 1 0 1 1 0 1 v=3 m1=7 ra=0.25 rm1=1.50 oi=5 ot=6".
 //! inherited IEEE 1364-2005 A.2.2.1
+// native-required
 `timescale 1ns/1ns
 module b_A_2_2_1_ovt (oi, ot);
   output integer oi;

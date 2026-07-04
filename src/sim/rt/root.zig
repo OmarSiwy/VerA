@@ -252,10 +252,10 @@ const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSele
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
 /// holds then. `v`, `x` and `m` are `n` words each: the row's own `one`
 /// for a single word, else at `words[at..]`. A `quiet` slot has nothing to
-/// wake.
-const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool, one: [3]u64 = undefined };
+/// wake. A real row compares numeric values when it arrives (§4.8).
+const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool, real: bool, one: [3]u64 = undefined };
 /// An `Nba` in flight past this timestep, owning its `v`, `x`, `m` words.
-const Late = struct { slot: u32, off: u32, n: u32, words: []u64 };
+const Late = struct { slot: u32, off: u32, n: u32, real: bool, words: []u64 };
 /// The scheduler payload of the one NBA-region event that applies every
 /// row in `rows`, in order: the interpreter's one event per row, which the
 /// scheduler promotes together, with nothing between them.
@@ -623,7 +623,10 @@ pub const State = struct {
             if (event.payload >= late_base) {
                 const k = event.payload - late_base;
                 const row = self.late.items[k];
-                try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
+                if (row.real)
+                    try self.putReal(row.slot, row.off, .{ .v = row.words[0], .x = 0 }, row.words[2])
+                else
+                    try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
                 self.gpa.free(row.words);
                 self.late.items[k].words = &.{};
                 try self.free_late.append(self.gpa, k);
@@ -655,7 +658,9 @@ pub const State = struct {
             for (self.rows.items, 0..) |*row, i| {
                 if (i != 0) try self.count(event.time);
                 const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
-                if (row.quiet) {
+                if (row.real) {
+                    try self.putReal(row.slot, row.off, .{ .v = w[0], .x = 0 }, w[2]);
+                } else if (row.quiet) {
                     if (self.held(row.slot)) continue;
                     if (row.n != 1) {
                         self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
@@ -838,6 +843,7 @@ pub const State = struct {
         if (logic.real(self.get(off)) == logic.real(a)) return;
         const before = logic.low(self.get(off));
         self.v[off] = a.v;
+        if (!two) self.x[off] = 0;
         if (self.sensed(slot)) self.diff[off] = std.math.maxInt(u64);
         try self.wake(slot, before, logic.low(a));
     }
@@ -878,18 +884,25 @@ pub const State = struct {
     /// §9.2.2: schedule the bits `m` of `slot` (words from `off`) to become
     /// `a` in the NBA region.
     pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        // ponytail: a real's update is compared by its bits, not its value as
-        // `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
+        return self.nbaValue(false, reach, slot, off, a, m);
+    }
+
+    /// §9.2.2 NBA of a §4.8 real, retaining numeric change detection.
+    pub fn nbaReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
+        return self.nbaValue(true, .all, slot, off, a, m);
+    }
+
+    fn nbaValue(self: *State, comptime is_real: bool, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         const quiet = reach == Reach{};
         if (@TypeOf(a) == W) {
             // Grown out of line, appended in line: with two phases' call
             // sites LLVM otherwise outlines the whole `append`.
             if (self.rows.items.len == self.rows.capacity) try self.rows.ensureUnusedCapacity(self.gpa, 1);
-            self.rows.appendAssumeCapacity(.{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .one = .{ a.v, a.x, m } });
+            self.rows.appendAssumeCapacity(.{ .slot = slot, .off = off, .n = 1, .at = 0, .quiet = quiet, .real = is_real, .one = .{ a.v, a.x, m } });
         } else {
             const at: u32 = @intCast(self.words.items.len);
             try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
-            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = a.v.len, .at = at, .quiet = quiet });
+            try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = a.v.len, .at = at, .quiet = quiet, .real = is_real });
         }
         if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
@@ -897,7 +910,16 @@ pub const State = struct {
     /// §9.2.2 `<= #d`: `nba` of the update `after` ticks later. At 0 it
     /// joins this step's rows, the order its own event would take.
     pub fn nbaAfter(self: *State, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        if (after == 0) return self.nba(reach, slot, off, a, m);
+        return self.nbaAfterValue(false, reach, after, slot, off, a, m);
+    }
+
+    /// `nbaAfter` retaining the target's real type until the update lands.
+    pub fn nbaRealAfter(self: *State, after: u64, slot: u32, off: u32, a: W, m: u64) Error!void {
+        return self.nbaAfterValue(true, .all, after, slot, off, a, m);
+    }
+
+    fn nbaAfterValue(self: *State, comptime is_real: bool, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        if (after == 0) return self.nbaValue(is_real, reach, slot, off, a, m);
         const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
         const words = try self.gpa.alloc(u64, 3 * n);
         if (@TypeOf(a) == W) @memcpy(words, &[3]u64{ a.v, a.x, m }) else @memcpy(words, &(a.v ++ a.x ++ m));
@@ -905,7 +927,7 @@ pub const State = struct {
             try self.late.append(self.gpa, undefined);
             break :blk @as(u32, @intCast(self.late.items.len - 1));
         };
-        self.late.items[k] = .{ .slot = slot, .off = off, .n = n, .words = words };
+        self.late.items[k] = .{ .slot = slot, .off = off, .n = n, .real = is_real, .words = words };
         _ = self.sched.scheduleAfter(after, .nba, late_base + k) catch |e|
             return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e});
     }

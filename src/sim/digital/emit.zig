@@ -263,7 +263,10 @@ pub const Emitter = struct {
     /// `M.nbaAfter`), or `M.put`, or `M.set` when nothing can wait on the slot.
     pub fn store(self: *Emitter, at: u32, how: How) Error!void {
         // §4.8 a real changes when its value does, not its bits.
-        if (how == .blocking and self.r.reals.contains(at)) return self.print("try s.putReal({d}, {d}, ", .{ at, self.off[at] });
+        if (self.r.reals.contains(at)) {
+            try realStoreCall(self, how);
+            return self.print("{d}, {d}, ", .{ at, self.off[at] });
+        }
         if (how == .blocking and !self.watched[at]) return self.print("try M.set(s, {d}, ", .{self.off[at]});
         try storeCall(self, how, self.reach[at]);
         try self.print("{d}, {d}, ", .{ at, self.off[at] });
@@ -273,7 +276,10 @@ pub const Emitter = struct {
     /// slot `base`.
     pub fn storeElement(self: *Emitter, base: u32, lb: u32, how: How) Error!void {
         const off = .{ self.off[base], lb, base, words(self.r.values[base].width) };
-        if (self.r.reals.contains(base)) return self.refuse("an array of reals");
+        if (self.r.reals.contains(base)) {
+            try realStoreCall(self, how);
+            return self.print("a{d}, {d} + (a{d} - {d}) * {d}, ", .{lb} ++ off);
+        }
         const count = self.r.arrays.get(base).?.count;
         const watched = std.mem.indexOfScalar(bool, self.watched[base..][0..count], true) != null;
         if (how == .blocking and !watched) return self.print("try M.set(s, {d} + (a{d} - {d}) * {d}, ", off);
@@ -306,6 +312,20 @@ pub const Emitter = struct {
 /// How an assignment stores (§9.2): now, or as a nonblocking update of
 /// this step or `delay` later.
 pub const How = union(enum) { blocking, nba, nba_after: Ast.ExprId };
+
+/// §4.8 real deposits compare numeric values at arrival, including NBA
+/// updates. Keep their type in the queue until then (§9.2.2).
+fn realStoreCall(self: *Emitter, how: How) Error!void {
+    switch (how) {
+        .blocking => try self.print("try s.putReal(", .{}),
+        .nba => try self.print("try s.nbaReal(", .{}),
+        .nba_after => |d| {
+            try self.print("try s.nbaRealAfter(", .{});
+            try delay(self, d);
+            try self.print(", ", .{});
+        },
+    }
+}
 
 fn storeCall(self: *Emitter, how: How, wakes: plan.Reach) Error!void {
     switch (how) {
@@ -527,11 +547,11 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (pcs) |pc| entry_of[pc] = pcs[0];
         if (!sub.decl.automatic) continue;
         self.keepFour("an automatic task or function, whose storage is x at every call (§10.2.3)", null);
-        // §10.2.3: an automatic activation's storage starts x.
+        // §§10.2.3, 4.8: integral automatic storage starts x, real zero.
         try self.print("const fill{d} = [_]u64{{", .{idx});
-        for (r.values[sub.frame.first..][0..sub.frame.count]) |v| for (0..words(v.width)) |j| {
+        for (r.values[sub.frame.first..][0..sub.frame.count], sub.frame.first..) |v, at| for (0..words(v.width)) |j| {
             const top = if (j + 1 == words(v.width)) expr.maskOf(v.width - 64 * @as(u32, @intCast(j))) else std.math.maxInt(u64);
-            try self.print(" 0x{x},", .{if (self.two_state) 0 else top});
+            try self.print(" 0x{x},", .{if (self.two_state or r.reals.contains(@intCast(at))) 0 else top});
         };
         try self.print(" }};\n\n", .{});
     }

@@ -23,6 +23,7 @@
 // The arrays are then written and read: rm[1] = 8'sd9, ia[0] = 3,
 // ta[1] = 7, ra[0] = 4.5 -> 9 3 7 4.500000
 //! inherited IEEE 1364-2005 6.2.2
+// native-required
 module b_6_2_2_declaration_forms;
   reg signed [7:0] rs = -8'sd3, ru, rm [0:1];
   integer i1 = -7, i2, ia [0:1];
