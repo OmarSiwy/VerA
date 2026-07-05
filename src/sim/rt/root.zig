@@ -13,6 +13,7 @@ pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
 pub const net = @import("net.zig");
 pub const vcd = @import("../digital/vcd.zig");
+pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
@@ -91,6 +92,8 @@ pub const Design = struct {
     subs: u32 = 0,
     /// What a `$dumpvars` (§18) can select; null when the design has none.
     vcd: ?*const vcd.Catalog = null,
+    /// §18.3 the `$dumpports` calls, each one file (`evcd.File`).
+    ports_dump: []const evcd.File = &.{},
     /// §7.9 the nets resolved from their drivers, those drivers, and the
     /// §8 UDPs among them.
     nets: []const net.Net = &.{},
@@ -155,11 +158,16 @@ pub fn main(init_: std.process.Init, d: *const Design, units: i32, comptime four
 /// tick runs twice (`snapshot.twice`) and one `vera-snapshot:` line on
 /// stderr says how many ticks and the largest boundary in bytes.
 fn run(init_: std.process.Init, s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
-    if (!asked(init_, "--vera-snapshot")) return loop(s, four, two_, std.math.maxInt(u64));
-    var stats: snapshot.Stats = .{};
-    const failed = snapshot.twice(s, four, two_, &stats);
-    stderrLine(init_, "vera-snapshot: {d} ticks, boundary at most {d} bytes\n", .{ stats.ticks, stats.bytes });
-    return failed;
+    const failed = if (!asked(init_, "--vera-snapshot")) loop(s, four, two_, std.math.maxInt(u64)) else blk: {
+        var stats: snapshot.Stats = .{};
+        const failed = snapshot.twice(s, four, two_, &stats);
+        stderrLine(init_, "vera-snapshot: {d} ticks, boundary at most {d} bytes\n", .{ stats.ticks, stats.bytes });
+        break :blk failed;
+    };
+    // §18.3.6.1: the extended dump's last step, then `$vcdclose`.
+    if (failed != null) return failed;
+    evcd.close(s, s.sched.now) catch |e| return e;
+    return null;
 }
 
 /// Dispatches every event of `s` at a tick up to `limit` in its phase;
@@ -532,6 +540,11 @@ pub const State = struct {
     /// catalog) whether a change is dumped.
     dump: vcd.Vcd = .{},
     catalog: ?*const vcd.Catalog,
+    /// §18.3 the extended dump: the files, what each has written, and the
+    /// time its `$dumpports` calls ran at. Outside a snapshot, as `dump` is.
+    port_files: []const evcd.File = &.{},
+    port_live: []evcd.Live = &.{},
+    ports_at: ?u64 = null,
     dumped: []bool,
     /// §7.9 resolution state (`net.zig`).
     nets: net.Nets,
@@ -594,6 +607,8 @@ pub const State = struct {
             .cap = .init(gpa),
             .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
             .catalog = d.vcd,
+            .port_files = d.ports_dump,
+            .port_live = try gpa.alloc(evcd.Live, d.ports_dump.len),
             .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
             .nets = try .init(gpa, d.nets, d.drivers, d.udps, d.trans),
             .scratch = .init(gpa),
@@ -618,6 +633,7 @@ pub const State = struct {
         @memset(self.monitored, false);
         @memset(self.layers, .{});
         @memset(self.dumped, false);
+        @memset(self.port_live, .{});
         for (d.order) |pc| try self.run(pc, null);
     }
 
@@ -688,6 +704,8 @@ pub const State = struct {
     /// event per nonblocking row.
     inline fn count(self: *State, at: u64) Error!void {
         if (at != self.budget_time) {
+            // §18.4: the extended dump's changes at the end of the step.
+            if (self.port_live.len != 0) try evcd.tick(self, self.budget_time);
             self.budget_time = at;
             self.budget_used = 0;
             if (self.live.len != 0 and !self.two) self.boundary(at);
@@ -861,6 +879,8 @@ pub const State = struct {
 
     pub const drive = net.drive;
     pub const switchCtrl = net.switchCtrl;
+    pub const portsSelect = evcd.select;
+    pub const portsControl = evcd.control;
     pub const gate = net.gate;
     pub const udp = net.udp;
     pub const mos = net.mos;

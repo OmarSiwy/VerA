@@ -541,7 +541,7 @@ fn shown(s: *const State, n: Net, at: u32) Int.Bit {
 }
 
 /// What driver `di` asserts on bit `at` of its net (`exec.contribution`).
-fn contribution(t: *const Nets, di: u32, at: u32) Signal {
+pub fn contribution(t: *const Nets, di: u32, at: u32) Signal {
     const nw = words(t.nets[t.drivers[di].net].width);
     const b = bitAt(t.cur[t.at[di]..][0 .. 2 * nw], at);
     return if (t.or_z[di] and b != .z) .orZ(b, t.s0[di], t.s1[di]) else .of(b, t.s0[di], t.s1[di]);
