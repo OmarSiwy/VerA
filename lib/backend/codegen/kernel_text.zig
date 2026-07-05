@@ -632,14 +632,16 @@ pub const ac_txt =
     \\    return .{ .v = vin.v.acMul(vin.val(), .init(@cos(p), -@sin(p))) };
     \\}
     \\/// §4.5.11 the cascade at s = jω, one section at a time as `zLaplace`'s
-    \\/// DC branch scales, so ω = 0 is that branch's H(0) to the bit.
-    \\fn zAcLaplace(comptime K: type, comptime NS: usize, comptime D: usize, uin: K, sec: [NS][2][D + 1]f64) K {
+    \\/// DC branch scales, so ω = 0 is that branch's H(0) to the bit. `h0` is
+    \\/// `zLaplaceH0(sec)`, passed in because this text also serves devices
+    \\/// with no filter kernels.
+    \\fn zAcLaplace(comptime K: type, comptime NS: usize, comptime D: usize, uin: K, sec: [NS][2][D + 1]f64, h0: [NS][2]f64) K {
     \\    const A = @TypeOf(uin.v);
     \\    const s: std.math.Complex(A.F) = .init(A.splat(0.0), uin.v.omega());
     \\    var y = uin.v;
     \\    var v = uin.val();
-    \\    for (sec) |sc| {
-    \\        v *= sc[0][0] / sc[1][0];
+    \\    for (sec, h0) |sc, h| {
+    \\        v *= h[0] / h[1];
     \\        y = y.acMul(v, zCDiv(A.F, zPolyC(A.F, D, sc[0], s), zPolyC(A.F, D, sc[1], s)));
     \\    }
     \\    return .{ .v = y };
