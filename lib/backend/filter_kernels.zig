@@ -9,17 +9,34 @@
 // section's own past inputs and outputs, so a static analysis can seed it with
 // the steady state and the first transient step starts consistent.
 //
-// Nothing here allocates, branches on data, or depends on the enclosing
-// device — `NS` (sections) and `D` (degree) are structural constants from the
-// flattened call, while every COEFFICIENT is a runtime read of Model.
+// Nothing here allocates or depends on the enclosing device — `NS` (sections)
+// and `D` (degree) are structural constants from the flattened call, while
+// every COEFFICIENT is a runtime read of Model. The one data dependence is a
+// LOOP BOUND, not a per-sample branch: `zDeg` reads each section's effective
+// degree off its coefficients, and `zBilin` transforms at that degree, so a
+// coefficient vector padded with zeros (`parameter real d[0:15]`, three
+// nonzero) runs as the low-order section it is rather than as a degree-15
+// one whose `(1+z⁻¹)ᴰ⁻ᵈ` factors put cancelling poles on z = −1.
+
+/// A section's effective degree: the highest power with a nonzero
+/// coefficient on EITHER side, so numerator and denominator are cleared by
+/// the same `(1+z⁻¹)ᵈ` and stay a matched pair. 0 for a bare gain.
+pub fn zDeg(comptime D: usize, sec: [2][D + 1]f64) usize {
+    var d: usize = 0;
+    for (1..D + 1) |j| d = if (sec[0][j] != 0.0 or sec[1][j] != 0.0) j else d;
+    return d;
+}
 
 /// Trapezoidal (bilinear) transform of `P(s) = Σ pᵢsⁱ` into `Σ qⱼz⁻ʲ`:
-/// substitute `s = k(1−z⁻¹)/(1+z⁻¹)` and clear the denominator by `(1+z⁻¹)ᴰ`,
+/// substitute `s = k(1−z⁻¹)/(1+z⁻¹)` and clear the denominator by `(1+z⁻¹)ᵈ`,
 /// so a section's numerator and denominator stay a matched pair. `k = 2/dt`.
-pub fn zBilin(comptime D: usize, p: [D + 1]f64, k: f64) [D + 1]f64 {
+/// `d <= D` is the section's `zDeg`: `p[d+1..]` must be zero, and `q[d+1..]`
+/// comes back zero. At `d == D` the operations are the full-degree ones, in
+/// the same order.
+pub fn zBilin(comptime D: usize, p: [D + 1]f64, k: f64, d: usize) [D + 1]f64 {
     var q: [D + 1]f64 = @splat(0.0);
     var ki: f64 = 1.0; // kⁱ
-    for (0..D + 1) |i| {
+    for (0..d + 1) |i| {
         var t: [D + 1]f64 = @splat(0.0);
         t[0] = p[i] * ki;
         var deg: usize = 0;
@@ -28,7 +45,7 @@ pub fn zBilin(comptime D: usize, p: [D + 1]f64, k: f64) [D + 1]f64 {
             while (j > 0) : (j -= 1) t[j] -= t[j - 1];
             deg += 1;
         }
-        for (0..D - i) |_| { // × (1 + z⁻¹)
+        for (0..d - i) |_| { // × (1 + z⁻¹)
             var j = deg + 1;
             while (j > 0) : (j -= 1) t[j] += t[j - 1];
             deg += 1;
@@ -87,7 +104,8 @@ pub fn zLaplace(
             continue;
         }
         const k = 2.0 / dt;
-        y = zSec(S, D, y, zBilin(D, sec[i][0], k), zBilin(D, sec[i][1], k), uh[i * D ..][0..D], yh[i * D ..][0..D]);
+        const d = zDeg(D, sec[i]);
+        y = zSec(S, D, y, zBilin(D, sec[i][0], k, d), zBilin(D, sec[i][1], k, d), uh[i * D ..][0..D], yh[i * D ..][0..D]);
     }
     return y;
 }
@@ -107,10 +125,11 @@ pub fn zLaplaceStep(
         const us = uh[i * D ..][0..D];
         const ys = yh[i * D ..][0..D];
         const k = 2.0 / dt;
+        const d = zDeg(D, sec[i]);
         const y = if (!(dt > 0.0))
             u * sec[i][0][0] / sec[i][1][0]
         else
-            zSecR(D, u, zBilin(D, sec[i][0], k), zBilin(D, sec[i][1], k), us, ys);
+            zSecR(D, u, zBilin(D, sec[i][0], k, d), zBilin(D, sec[i][1], k, d), us, ys);
         zPush(us, ys, u, y);
         u = y;
     }
@@ -248,8 +267,21 @@ test "zBilin: D = 1, the degree the other rows skip" {
     //   P·(1+z⁻¹) = 2(1+z⁻¹) + 3k(1−z⁻¹) = (2+3k) + (2−3k)z⁻¹.
     // Dyadic, so exact. codegen.zig covers D = 0, 2 and 3; a first-order
     // section is the commonest filter there is and was the gap between them.
-    const q = zBilin(1, .{ 2.0, 3.0 }, 10.0);
+    const q = zBilin(1, .{ 2.0, 3.0 }, 10.0, 1);
     try stdx.testing.expectEqual([2]f64{ 32.0, -28.0 }, q);
+}
+
+test "zDeg/zBilin: a zero-padded section transforms at its own degree" {
+    const stdx = @import("std");
+    // The same 2 + 3s padded to D = 3. Its effective degree is 1, and the
+    // transform at d = 1 is the row above, bit for bit, with zeros after.
+    // Untrimmed, `(1+z⁻¹)²` would multiply both sides: poles on z = −1.
+    const sec: [2][4]f64 = .{ .{ 2.0, 3.0, 0.0, 0.0 }, .{ 1.0, 0.0, 0.0, 0.0 } };
+    try stdx.testing.expectEqual(@as(usize, 1), zDeg(3, sec));
+    try stdx.testing.expectEqual([4]f64{ 32.0, -28.0, 0.0, 0.0 }, zBilin(3, sec[0], 10.0, 1));
+    // Either side sets the degree: a denominator-only s² is degree 2.
+    try stdx.testing.expectEqual(@as(usize, 2), zDeg(2, .{ .{ 1.0, 0.0, 0.0 }, .{ 1.0, 0.0, 5.0 } }));
+    try stdx.testing.expectEqual(@as(usize, 0), zDeg(2, .{ .{ 4.0, 0.0, 0.0 }, .{ 2.0, 0.0, 0.0 } }));
 }
 
 test "zPush: newest first, and an empty history is a no-op" {

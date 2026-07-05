@@ -25,7 +25,10 @@ pub const Poly = []const []const u8;
 /// Root forms stay factored: one section per real root, one real quadratic per
 /// conjugate pair. Expanding ∏(1 − s/ρₖ) into one coefficient vector is
 /// ill-conditioned (Wilkinson), so it is never done. Coefficient forms arrive
-/// as a polynomial and stay one direct-form section at full degree.
+/// as a polynomial and stay one direct-form section. `deg` sizes the state
+/// only: every section runs at the degree its runtime coefficients have
+/// (`filter_kernels.zDeg`), so a zero-padded vector or a first-order section
+/// beside a quadratic one is not discretised at the cascade's degree.
 pub const FilterPlan = struct {
     num: []const Poly = &.{},
     den: []const Poly = &.{},
