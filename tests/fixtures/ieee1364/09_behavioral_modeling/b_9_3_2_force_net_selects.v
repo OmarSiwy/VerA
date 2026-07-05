@@ -12,6 +12,7 @@
 //                                              bits 1..0 stay forced -> 0011
 //   release w[1:0]                          -> 0000
 //! inherited IEEE 1364-2005 9.3.2
+// native-required
 `timescale 1ns/1ns
 module b_9_3_2_force_net_selects;
   wire [3:0] w;

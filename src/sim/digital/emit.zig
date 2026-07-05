@@ -1223,11 +1223,18 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
         // §17.5 an asynchronous array's own process starts now.
         .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
-        .override_on => |o| if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)") else try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
+        .override_on => |o| if (o.bits) |b|
+            try self.print("            try s.overrideBits({d}, {d}, {d}, {d}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, (try partOf(self, o.slot, b)).?, b.lo, b.width, o.start, o.end, next })
+        else
+            try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
         .override_eval => |o| {
-            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
+            if (o.bits) |b| {
+                try self.print("try s.putBits({d}, {d}, {d}, {d}, {d}, ", .{ o.slot, self.off[o.slot], b.lo, b.width, try self.slotWidth(o.slot) });
+                try expr.assigned(self, o.value, .{ .width = b.width, .signed = false });
+                return self.print(");\n            }}\n            continue :sw {d};\n", .{next});
+            }
             try self.store(o.slot, .blocking);
             // An operand of a §9.3 concatenation target takes its window of
             // the value, evaluated as wide as the whole target.
@@ -1240,7 +1247,14 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
-            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
+            if (o.bits) |b| {
+                // Releasing a select never forced is a no-op (`exec.releaseBits`).
+                if (try partOf(self, o.slot, b)) |k| {
+                    const net = r.net_of.get(o.slot) orelse return self.refuse("a force of a select of a variable");
+                    try self.print("            try s.releaseBits({d}, {d});\n            try s.resolve({d});\n", .{ o.slot, k, self.net_ix[net].? });
+                }
+                return self.print("            continue :sw {d};\n", .{next});
+            }
             if (r.net_of.get(o.slot)) |net| {
                 if (self.net_ix[net]) |k| {
                     try self.print("            if (try s.release({d}, true)) try s.resolve({d});\n            continue :sw {d};\n", .{ o.slot, k, next });
@@ -1484,7 +1498,7 @@ pub fn plainDriver(r: *const Run, i: u32) bool {
         },
         .bridge, .udp, .mos, .pull => false,
     };
-    return plain and source and n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and
+    return plain and source and n.drivers.len == 1 and !n.strength_read and n.trans.len == 0 and !selectForced(r, n.slot) and
         d.s0 == .strong and d.s1 == .strong and !d.delay.present and !n.delay.present;
 }
 
@@ -1498,7 +1512,7 @@ fn resolvedNets(self: *Emitter) Error!void {
     @memset(self.drv_ix, null);
     for (r.nets, 0..) |n, k| {
         // §7.6 a switch terminal resolves with the nets it is joined to.
-        const resolved = n.strength_read or n.trans.len != 0 or for (n.drivers) |di| {
+        const resolved = n.strength_read or n.trans.len != 0 or selectForced(r, n.slot) or for (n.drivers) |di| {
             if (!plainDriver(r, di)) break true;
         } else false;
         if (!resolved) continue;
@@ -1510,6 +1524,30 @@ fn resolvedNets(self: *Emitter) Error!void {
             try self.rt_drivers.append(self.arena, di);
         }
     }
+}
+
+/// Which of `slot`'s forced selects (§9.3.2) `sel` is: its place among the
+/// distinct ones the code forces, in code order (`rt.Layers.parts`); null
+/// when none forces it.
+fn partOf(self: *Emitter, slot: u32, sel: compile.Bits) Error!?u32 {
+    var seen: std.ArrayList(compile.Bits) = .empty;
+    for (self.r.code.items) |ins| if (ins == .override_on) if (ins.override_on.bits) |b| if (ins.override_on.slot == slot) {
+        for (seen.items) |q| {
+            if (std.meta.eql(q, b)) break;
+        } else try seen.append(self.arena, b);
+    };
+    for (seen.items, 0..) |q, k| if (std.meta.eql(q, sel)) {
+        if (k >= @import("../rt/root.zig").max_parts) return self.refuse("more forced selects of one net than the executable keeps");
+        return @intCast(k);
+    };
+    return null;
+}
+
+/// Does some `force` hold a select of `slot` (§9.3.2)? Its net then
+/// resolves in `rt.net`, whose `store` keeps the forced bits.
+fn selectForced(r: *const Run, slot: u32) bool {
+    for (r.code.items) |ins| if (ins == .override_on) if (ins.override_on.bits != null and ins.override_on.slot == slot) return true;
+    return false;
 }
 
 /// `rt.Design.nets`/`drivers`/`udps`: `Run.nets` and `Run.drivers` of the
