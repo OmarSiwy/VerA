@@ -315,13 +315,6 @@ pub const family_txt =
     \\fn zTo(comptime S: type, comptime m: u64, a: anytype) zOf(S, m) {
     \\    return a.to(m & zdr);
     \\}
-    \\/// A body's hoisted real slots, one mask each.
-    \\fn zSlots(comptime S: type, comptime ms: []const u64) type {
-    \\    @setEvalBranchQuota(1_000_000);
-    \\    var ts: [ms.len]type = undefined;
-    \\    for (ms, &ts) |m, *t| t.* = zOf(S, m);
-    \\    return @Tuple(&ts);
-    \\}
     \\fn zV(a: anytype) f64 {
     \\    return a.val();
     \\}

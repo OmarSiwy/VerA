@@ -387,13 +387,20 @@ pub const Gen = struct {
     place: std.ArrayList(gen_unit.Place) = .empty,
     /// Index of a slot inside its type's hoist array, or `none_u32` for a slot
     /// that keeps its own name. See `emitUnitBody`: the surviving hoists are
-    /// one `var h: [n]S` (plus `hi`/`hs`) rather than one `var tN` apiece.
+    /// one array per real mask (`hoist_grp`) plus `hi`/`hs`, rather than one
+    /// `var tN` apiece.
     /// All-`none_u32` while `probing`, so the dry run names every slot `tN`;
     /// `probeBody` only compares offsets within its own text.
     hoist_idx: std.ArrayList(u32) = .empty,
-    /// The mask of each real hoist-array element, by its index in `h`
-    /// (`emitUnitBody`).
+    /// The mask of each real hoist element, by its `hoist_idx` (`emitUnitBody`).
     hoist_mask: std.ArrayList(u64) = .empty,
+    /// Where each real hoist element (by `hoist_idx`) lives: array `h<grp>`
+    /// at `[pos]`. Array `h<g>` holds every element of mask `hoist_gmask[g]`
+    /// (distinct, in first-use order) and is `hoist_glen[g]` long.
+    hoist_grp: std.ArrayList(u32) = .empty,
+    hoist_pos: std.ArrayList(u32) = .empty,
+    hoist_gmask: std.ArrayList(u64) = .empty,
+    hoist_glen: std.ArrayList(u32) = .empty,
     /// The mask of each `Lowered.mem_arrays` row's storage (`family.arrMask`).
     arr_mask: []u64 = &.{},
     /// The raw mask of every real declared, for `family.emitLaneMasks`.
