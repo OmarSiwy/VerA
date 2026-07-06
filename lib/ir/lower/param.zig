@@ -41,6 +41,10 @@ pub const State = struct {
     /// §3.2.2 array names some subscript indexes at run time (`markMemArrays`):
     /// `declareVarDecl` gives such an array one memory-backed storage.
     mem_names: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
+    /// `held_names` keys an `analog initial` body or an `@(...)` body writes
+    /// AND some read sees before the same evaluation writes them: a value
+    /// carried to another evaluation, which `vera_scratch` may not drop (E0536).
+    carried: std.StringHashMapUnmanaged(void) = .empty,
 };
 
 /// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
@@ -786,7 +790,15 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     // evaluation anyway), so a persistent slot for one would be storage
     // nothing can observe.
     const why = self.param_state.held_names.get(held_key);
-    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null;
+    // VerA's `vera_scratch` (§2.9): no slot, so every evaluation starts from
+    // the initializer below. Only a value an `analog initial` or `@(...)` body
+    // leaves for a later evaluation's read needs one anyway (E0536).
+    var scratch = try scratchOn(self, decl.main_tok);
+    if (scratch and why != null and self.param_state.carried.contains(held_key)) {
+        try self.err(decl.main_tok, .E0536, "`{s}`", .{name});
+        scratch = false;
+    }
+    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null and !scratch;
 
     if (decl.dims.len != 0) {
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
@@ -1070,6 +1082,47 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // codegen's solve-invariance can say.
         gop.value_ptr.* = if (x.reach.contains(k.*) or x.initial.contains(k.*)) .retained else .unless_invariant;
     };
+    it = x.reads.keyIterator();
+    while (it.next()) |k| if (x.initial.contains(k.*) or self.param_state.held_names.get(k.*) == .event)
+        try self.param_state.carried.put(self.arena, k.*, {});
+}
+
+/// VerA's `vera_scratch` (§2.9) on the variable declared at token `tok`: the
+/// last spec wins; §2.9's default 1 when it has no value, otherwise a
+/// constant that folds without the model card, since it decides whether the
+/// device keeps a slot (E0534, and the variable is held where observable).
+fn scratchOn(self: *Lower, tok: u32) Oom!bool {
+    var spec: ?Ast.NatureAttr = null;
+    for (self.file.attributes.items) |b| if (b.owner.kind == .declaration and b.owner.tok == tok) for (b.specs) |s| {
+        if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) spec = s;
+    };
+    const a = spec orelse return false;
+    if (a.value == .none) return true;
+    const c = lower_constfold.foldExpr(self, a.value, false) orelse {
+        try self.err(a.main_tok, .E0534, "", .{});
+        return false;
+    };
+    return c.isTrue();
+}
+
+/// §2.9 E0535: every `vera_scratch` in `module` decorates a variable
+/// declaration (§3.2), the only item with a value an evaluation assigns.
+pub fn checkScratchOwners(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    for (module.attrs) |a| {
+        if (!std.mem.eql(u8, self.file.str(a.name), "vera_scratch")) continue;
+        const on_var = outer: for (self.file.attributes.items) |b| {
+            if (b.owner.kind != .declaration) continue;
+            for (b.specs) |s| if (s.main_tok == a.main_tok and isVarTok(self, module, b.owner.tok)) break :outer true;
+        } else false;
+        if (!on_var) try self.err(a.main_tok, .E0535, "", .{});
+    }
+}
+
+fn isVarTok(self: *const Lower, module: *const Ast.ModuleDecl, tok: u32) bool {
+    for (module.vars) |v| if (v.main_tok == tok) return true;
+    for (module.functions) |f| for (f.vars) |v| if (v.main_tok == tok) return true;
+    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| if (v.main_tok == tok) return true;
+    return false;
 }
 
 /// §3.2: "Real variables are initialized to zero (0) at the start of a

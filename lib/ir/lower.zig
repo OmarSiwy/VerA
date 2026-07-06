@@ -1533,6 +1533,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // question about the scopes, and before the analog block, so an attribute is
     // reported at its own token rather than after a body that may not compile.
     try lower_param.checkAttributes(self, module.attrs);
+    try lower_param.checkScratchOwners(self, module);
 
     // §7.2.2 the DISCRETE context. Before the analog blocks because the rules
     // below relate the two, and it is the discrete side that names the variables
