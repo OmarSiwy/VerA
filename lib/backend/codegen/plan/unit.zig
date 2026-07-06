@@ -42,6 +42,11 @@ display_unit: bool = false,
 /// read: `fd = $fopen(..)` under `@(initial_step)` then `$ftell(fd)` must see
 /// the descriptor the open just returned. Empty under `.drop`.
 file_dep: []bool = &.{},
+/// Per memory-backed array: its storage carries derivative lanes
+/// (`Gen.arr_s`). The core returns an array's PLAIN values
+/// (`renderArrayOut`), so the display unit, where a §4.5.14 `ddx` may read
+/// an element's lane, recomputes such an array instead of reading the cache.
+arr_lanes: []const bool = &.{},
 /// The shared core's dedup index, from `plan/core.zig`, stable for the whole
 /// compilation. A value with an entry is read out of the core rather than
 /// recomputed, unless this unit re-runs the loop that defines it.
@@ -211,6 +216,10 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     if (@intFromEnum(v) < Mir.Value.first_dynamic) return false;
     if (self.in_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
     if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@intFromEnum(v)]) return false;
+    if (self.display_unit and self.arr_lanes.len != 0) {
+        const id = self.an.arr_of[@intFromEnum(v)];
+        if (id != none_u32 and self.arr_lanes[id]) return false;
+    }
     // §5.9 A unit that re-materializes a loop must not read that loop's values
     // out of the cache (see `analyze`).
     const blk = self.an.def_block[@intFromEnum(v)];
