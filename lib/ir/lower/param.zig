@@ -11,6 +11,7 @@ const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
+const lower_context = @import("context.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -1092,11 +1093,7 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// constant that folds without the model card, since it decides whether the
 /// device keeps a slot (E0534, and the variable is held where observable).
 fn scratchOn(self: *Lower, tok: u32) Oom!bool {
-    var spec: ?Ast.NatureAttr = null;
-    for (self.file.attributes.items) |b| if (b.owner.kind == .declaration and b.owner.tok == tok) for (b.specs) |s| {
-        if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) spec = s;
-    };
-    const a = spec orelse return false;
+    const a = scratchSpec(self, tok) orelse return false;
     if (a.value == .none) return true;
     const c = lower_constfold.foldExpr(self, a.value, false) orelse {
         try self.err(a.main_tok, .E0534, "", .{});
@@ -1116,11 +1113,60 @@ pub fn checkScratchOwners(self: *Lower, module: *const Ast.ModuleDecl) Oom!void 
         } else false;
         if (!on_var) try self.err(a.main_tok, .E0535, "", .{});
     }
+    // E0537: VAMS §7.2.2 gives a variable a discrete process (an `initial`
+    // or `always` block, or a task, A.2.7) assigns to the discrete context,
+    // where IEEE 1364-2005 §4.2.2 says it "shall retain [its] value until the
+    // next assignment". The digital kernel owns that storage, so the analog
+    // evaluation this attribute is about never resets it.
+    var writes: std.ArrayList(Ast.ExprId) = .empty;
+    for (module.discrete) |blk| try lower_context.collectWrites(self, blk.body, &writes);
+    for (module.tasks) |t| try lower_context.collectWrites(self, t.body, &writes);
+    if (writes.items.len == 0) return;
+    var digital: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    for (writes.items) |w| try digital.put(self.arena, self.file.exprs.strOf(w), {});
+    for (module.vars) |v| try refuseDigitalScratch(self, &digital, v);
+    for (module.tasks) |t| for (t.vars) |v| try refuseDigitalScratch(self, &digital, v);
+    // A named block's locals inside a discrete process are the process's.
+    const Blocks = struct {
+        l: *Lower,
+        digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void),
+        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            if (s == .none) return;
+            if (w.l.file.stmt(s) == .block) for (w.l.file.stmt(s).block.vars) |v| try refuseDigitalScratch(w.l, w.digital, v);
+            try w.l.file.stmtEdges(s, w);
+        }
+    };
+    const walk: Blocks = .{ .l = self, .digital = &digital };
+    for (module.discrete) |blk| try walk.stmt(blk.body);
+    for (module.tasks) |t| try walk.stmt(t.body);
+}
+
+/// `vera_scratch` on `v`, when on, and a discrete process writes `v` (E0537).
+/// A value that does not fold is E0534's, reported at the declaration.
+fn refuseDigitalScratch(self: *Lower, digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void), v: Ast.VarDecl) Oom!void {
+    if (!digital.contains(v.name)) return;
+    const a = scratchSpec(self, v.main_tok) orelse return;
+    if (a.value != .none) {
+        const c = lower_constfold.foldExpr(self, a.value, false) orelse return;
+        if (!c.isTrue()) return;
+    }
+    try self.err(a.main_tok, .E0537, "`{s}`", .{self.file.str(v.name)});
+}
+
+/// The last `vera_scratch` spec on the declaration at token `tok` (§2.9).
+fn scratchSpec(self: *const Lower, tok: u32) ?Ast.NatureAttr {
+    var spec: ?Ast.NatureAttr = null;
+    for (self.file.attributes.items) |b| if (b.owner.kind == .declaration and b.owner.tok == tok) for (b.specs) |s| {
+        if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) spec = s;
+    };
+    return spec;
 }
 
 fn isVarTok(self: *const Lower, module: *const Ast.ModuleDecl, tok: u32) bool {
     for (module.vars) |v| if (v.main_tok == tok) return true;
     for (module.functions) |f| for (f.vars) |v| if (v.main_tok == tok) return true;
+    for (module.tasks) |t| for (t.vars) |v| if (v.main_tok == tok) return true;
     for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| if (v.main_tok == tok) return true;
     return false;
 }

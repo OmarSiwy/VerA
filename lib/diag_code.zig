@@ -299,6 +299,7 @@ pub const Code = enum(u16) {
     E0534,
     E0535,
     E0536,
+    E0537,
     E0572,
     E0573,
     E0574,
@@ -4391,6 +4392,22 @@ fn infoOf(c: Code) Info {
             \\    y = k;   // no: k would read 0 on every later evaluation
             \\
             \\Drop the attribute, or assign the variable outside the event.
+            ,
+        },
+        .E0537 => .{
+            .title = "vera_scratch variable is written by a digital process",
+            .lrm = "7.2.2",
+            .explain =
+            \\`(* vera_scratch *)` makes a variable start every ANALOG evaluation
+            \\afresh. A variable an `initial` or `always` block or a task assigns
+            \\belongs to the discrete context (7.2.2), where IEEE 1364-2005 4.2.2
+            \\says variables "shall retain value until the next assignment". The
+            \\digital kernel keeps that value, and no analog evaluation resets it,
+            \\so the attribute would do nothing:
+            \\
+            \\    (* vera_scratch *) real t;
+            \\    always @(posedge clk) t = 1.0;   // no: t is digital-owned
+            \\    analog t = V(p, n);               // yes, when only analog writes t
             ,
         },
         .E0572 => .{
