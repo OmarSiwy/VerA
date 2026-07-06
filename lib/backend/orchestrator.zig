@@ -69,7 +69,20 @@ pub const Options = struct {
     /// Order is hashed into `layout_hash` and fixes argv order.
     modules: []const Module,
     zig_exe: []const u8 = "zig",
+    /// Keep DWARF in a ReleaseFast/ReleaseSmall build. Off by default: debug
+    /// information is about half of a large device's LLVM time, and the
+    /// machine code is the same with or without it. Debug and ReleaseSafe
+    /// always keep it (their safety panics print stack traces). Not hashed:
+    /// it changes no type layout.
+    debug_info: bool = false,
 };
+
+/// Whether a native build passes `-fstrip`: optimized without safety checks,
+/// unless the caller asked for debug information. `tb.buildExe` follows the
+/// same rule.
+pub fn strip(optimize: std.builtin.OptimizeMode, debug_info: bool) bool {
+    return !debug_info and (optimize == .ReleaseFast or optimize == .ReleaseSmall);
+}
 
 /// A built shared library.
 pub const Artifact = struct {
@@ -273,6 +286,7 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
         .self_hosted => try a.appendSlice(arena, &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
         .llvm => try a.append(arena, "-fllvm"),
     }
+    if (strip(o.optimize, o.debug_info)) try a.append(arena, "-fstrip");
 
     // root = shim.zig: imports `device` plus every support module.
     for (o.modules) |m| try a.appendSlice(arena, &.{ "--dep", m.name });
@@ -415,6 +429,32 @@ test "Backend.auto is self-hosted only for Debug on x86_64" {
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.ReleaseFast, .x86_64));
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.Debug, .aarch64));
     try std.testing.expectEqual(Backend.llvm, Backend.auto(.Debug, .nvptx64));
+}
+
+test "an optimized build strips unless debug information is asked for" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const Case = struct { optimize: std.builtin.OptimizeMode, debug_info: bool, strip: bool };
+    for ([_]Case{
+        .{ .optimize = .ReleaseFast, .debug_info = false, .strip = true },
+        .{ .optimize = .ReleaseSmall, .debug_info = false, .strip = true },
+        .{ .optimize = .ReleaseFast, .debug_info = true, .strip = false },
+        .{ .optimize = .ReleaseSafe, .debug_info = false, .strip = false },
+        .{ .optimize = .Debug, .debug_info = false, .strip = false },
+    }) |c| {
+        const argv = try buildArgv(arena.allocator(), .{
+            .work_dir = "w",
+            .name = "dev",
+            .optimize = c.optimize,
+            .backend = .llvm,
+            .modules = &.{},
+            .debug_info = c.debug_info,
+        });
+        const has = for (argv) |a| {
+            if (std.mem.eql(u8, a, "-fstrip")) break true;
+        } else false;
+        try std.testing.expectEqual(c.strip, has);
+    }
 }
 
 test "layoutHash pins optimize, backend and the module graph" {

@@ -57,6 +57,9 @@ const usage_text =
     \\  --zig PATH              zig executable to drive (default: zig)
     \\  --optimize=MODE         Debug|ReleaseSafe|ReleaseFast|ReleaseSmall (default: exe Debug, so ReleaseFast)
     \\  --zig-backend=auto|llvm|native   auto: native for Debug on x86_64, else llvm
+    \\  --debug-info            keep DWARF in a ReleaseFast/ReleaseSmall --emit-so or
+    \\                          --emit-exe artifact (default: stripped; same machine
+    \\                          code, about half the LLVM time of a large device)
     \\  -I DIR                  add an `include search directory
     \\  --param NAME=VALUE      compile with the top module's parameter NAME set
     \\                          to VALUE (LRM 3.4). A parameter that sizes an
@@ -134,6 +137,7 @@ pub fn main(init: std.process.Init) !u8 {
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
     var zig_exe: []const u8 = "zig";
+    var debug_info = false;
     var optimize: ?std.builtin.OptimizeMode = null;
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
@@ -199,6 +203,8 @@ pub fn main(init: std.process.Init) !u8 {
             dyn_path = args.next() orelse return missing(err, "--dyn", "a path");
         } else if (std.mem.eql(u8, arg, "--work-dir")) {
             work_dir = args.next() orelse return missing(err, "--work-dir", "a directory");
+        } else if (std.mem.eql(u8, arg, "--debug-info")) {
+            debug_info = true;
         } else if (std.mem.eql(u8, arg, "--zig")) {
             zig_exe = args.next() orelse return missing(err, "--zig", "a path");
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
@@ -417,6 +423,7 @@ pub fn main(init: std.process.Init) !u8 {
             .zig_exe = zig_exe,
             .optimize = opt,
             .backend = backend,
+            .debug_info = debug_info,
         }, out, err, json, use_color);
         const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
@@ -427,6 +434,7 @@ pub fn main(init: std.process.Init) !u8 {
             .mixed = true,
             .optimize = opt,
             .backend = backend,
+            .debug_info = debug_info,
         }, schedule, logic, out, err, json, use_color);
         digital.run(arena.allocator(), source, opts, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
@@ -586,6 +594,7 @@ pub fn main(init: std.process.Init) !u8 {
             .mixed = dm.mixed != null,
             .optimize = opt,
             .backend = backend,
+            .debug_info = debug_info,
         }) catch |e| {
             try err.print("error: {s}: building the testbench failed: {t}\n", .{ in_path, e });
             return 1;
@@ -637,6 +646,7 @@ pub fn main(init: std.process.Init) !u8 {
             .backend = backend,
             .modules = &modules,
             .zig_exe = zig_exe,
+            .debug_info = debug_info,
         }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ in_path, e });
             return 1;
@@ -764,6 +774,7 @@ const DeviceFlags = struct {
     zig_exe: []const u8,
     optimize: std.builtin.OptimizeMode,
     backend: vera.orchestrator.Backend,
+    debug_info: bool,
 };
 
 /// `vera --emit-zig|--check|--emit-so design.v`: the top module as a contract
@@ -842,6 +853,7 @@ fn emitDevice(
             .backend = f.backend,
             .modules = &modules,
             .zig_exe = f.zig_exe,
+            .debug_info = f.debug_info,
         }, .{ .text = dev.zig }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ opts.file_name, e });
             return 1;
