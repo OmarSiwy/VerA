@@ -12,6 +12,19 @@ const std = @import("std");
 /// differs. Bumped by every change a linked host could observe.
 pub const abi_version: u32 = 5;
 
+/// The pieces `vera --emit-so` builds a large device in (`orchestrator.Part`):
+/// one compiler process and object each, in parallel, linked into one
+/// library. A `dyn` host may declare
+/// `pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: DevicePart) void`
+/// beside `exportDevice`; the split build then calls it once per part, each
+/// in its own object, so it must export every symbol from exactly one part
+/// (a call into another part goes through `@extern`). `.setup`: `setup`,
+/// `derive`, `initState`, `stateCtl`, `pendingBreakpoint`; `.state`:
+/// `updateState`; `.eval`: `eval`, `evalQ`, `q`. A host without it gets
+/// `exportDevice` in the `.setup` object, and the others export nothing.
+/// Additive: no `abi_version` change.
+pub const DevicePart = enum { setup, state, eval };
+
 /// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
 /// libm. Used by the scalar paths of generated code (the §4.5.15 limiters) and
 /// by `RefFamily`. On the host each function is the Zig builtin or `std.math`
