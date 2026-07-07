@@ -1714,7 +1714,10 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         .event_posedge, .event_negedge => {
             const x = ex.lhs(e);
             if (try eventReference(self, x) != null) return self.exprFail(e, "§9.7.3: a named event has no value for a posedge or negedge");
-            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) try exprTerm(self, x);
+            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) {
+                if (try selectTerm(self, x) != null) return;
+                try exprTerm(self, x);
+            }
             if (self.reals.contains(try self.termSlot(x)))
                 return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable");
         },
@@ -1726,7 +1729,7 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         .event_function => try self.registerMonitor(e),
         // VAMS §9.22.5 `driver_update signal`.
         .event_driver_update => try driver.checkUpdate(self, e),
-        else => try exprTerm(self, e), // else: every other term is an expression (A.6.5 `event_expression ::= expression`)
+        else => if (try selectTerm(self, e) == null) try exprTerm(self, e), // else: every other term is an expression (A.6.5 `event_expression ::= expression`)
     }
 }
 
@@ -1750,6 +1753,34 @@ fn eventReference(self: *Run, e: Ast.ExprId) Error!?u32 {
         if (typeOf(self, i).width > 64) return self.exprFail(i, "array indices wider than 64 bits are not implemented");
     }
     return at;
+}
+
+/// An event term that is a constant select of a vector: its bits
+/// `[first, first + count)` of `slot`, at most 64 and all in range.
+pub const SelectTerm = struct { slot: u32, first: u32, count: u32 };
+
+/// §9.7.2 a constant bit- or part-select of a whole vector (not an array
+/// element, a real or an event) as a term watching those bits of the vector
+/// itself, so every update of the vector is tested at once, as a whole-name
+/// term is (§11.6.3). Null for any other term, which gets a hidden slot
+/// (`exprTerm`).
+pub fn selectTerm(self: *Run, e: Ast.ExprId) Error!?SelectTerm {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .index) return null;
+    const v = ex.lhs(e);
+    if (ex.tag(v) != .ident and ex.tag(v) != .hier_ident) return null;
+    const at = try self.slot(v);
+    if (self.arrays.contains(at) or self.events.contains(at) or self.reals.contains(at)) return null;
+    const rg = ex.rhs(e);
+    switch (ex.tag(rg)) {
+        .range => {},
+        .indexed_range => if (!constantExpression(self, ex.lhs(rg))) return null,
+        else => if (!constantExpression(self, rg)) return null, // else: a bit-select's index
+    }
+    try checkExpr(self, e);
+    const sel = (try exec.selection(self, self.arena, e)) orelse return null;
+    if (sel.first < 0 or sel.count > 64 or sel.first + sel.count > self.values[at].width) return null;
+    return .{ .slot = at, .first = @intCast(sel.first), .count = sel.count };
 }
 
 /// IEEE 1364-2005 §9.7.2: "An implicit event shall be detected on any change

@@ -1392,6 +1392,10 @@ fn callTimed(self: *Emitter, pc: u32, idx: u32, args: []const Ast.ExprId) Error!
 /// array carries an emitted selector and the full range of element slots.
 fn eventWatches(self: *Emitter, ts: []const plan.Term) Error!void {
     for (ts) |t| {
+        if (t.width != 0) {
+            try self.print("            try s.watchBits(id, {d}, {d}, {d}, {d}, .{t});\n", .{ t.slot, self.off[t.slot], t.lo, t.width, t.edge });
+            continue;
+        }
         if (t.event_select == .none) {
             try self.print("            try s.watch(id, {d}, .{t});\n", .{ t.slot, t.edge });
             continue;
