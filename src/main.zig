@@ -424,6 +424,7 @@ pub fn main(init: std.process.Init) !u8 {
             .optimize = opt,
             .backend = backend,
             .debug_info = debug_info,
+            .engine_cache = try engineCache(arena.allocator(), init.environ_map, work_dir),
         }, out, err, json, use_color);
         const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
@@ -780,7 +781,25 @@ const DeviceFlags = struct {
     optimize: std.builtin.OptimizeMode,
     backend: vera.orchestrator.Backend,
     debug_info: bool,
+    /// Where `--emit-so` keeps the prebuilt engine (`engineCache`).
+    engine_cache: []const u8,
 };
+
+/// The compiler cache the prebuilt digital engine lives in, shared by every
+/// work directory: `vera-engine` in Zig's global cache directory
+/// (`ZIG_GLOBAL_CACHE_DIR`, else `XDG_CACHE_HOME/zig`, else
+/// `HOME/.cache/zig`), else the work directory's own cache.
+fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, work_dir: ?[]const u8) ![]const u8 {
+    const global = if (env.get("ZIG_GLOBAL_CACHE_DIR")) |d|
+        d
+    else if (env.get("XDG_CACHE_HOME")) |d|
+        try std.fs.path.join(arena, &.{ d, "zig" })
+    else if (env.get("HOME")) |d|
+        try std.fs.path.join(arena, &.{ d, ".cache", "zig" })
+    else
+        return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
+    return std.fs.path.join(arena, &.{ global, "vera-engine" });
+}
 
 /// `vera --emit-zig|--check|--emit-so design.v`: the top module as a contract
 /// device (`digital.emitDevice`). `--check` builds it beside a root that
@@ -851,7 +870,7 @@ fn emitDevice(
             .{ .name = "frontend", .root = try at.path(arena, tree, "lib/frontend/root.zig"), .deps = &.{"diag"} },
             .{ .name = "kernels", .root = try at.path(arena, tree, "lib/backend/kernels.zig") },
         };
-        var r = vera.orchestrator.compileRelease(gpa, io, .{
+        var o: vera.orchestrator.Options = .{
             .work_dir = wd,
             .name = dev.name,
             .optimize = f.optimize,
@@ -859,7 +878,27 @@ fn emitDevice(
             .modules = &modules,
             .zig_exe = f.zig_exe,
             .debug_info = f.debug_info,
-        }, .{ .text = dev.zig }, 1) catch |e| {
+        };
+        // The engine is built once per sources, compiler, target and flags;
+        // only the design is built here (`rt/engine.zig`). The self-hosted
+        // backend builds the whole engine as fast as it checks the cache
+        // (measured 2026-10-01: v_inv 5.9 Gi either way), so only LLVM builds
+        // link it prebuilt.
+        if (f.backend == .llvm) {
+            const eng = vera.orchestrator.buildEngine(arena, io, o, f.engine_cache) catch |e| {
+                try err.print("error: {s}: building the digital engine failed: {t}\n", .{ opts.file_name, e });
+                return 1;
+            };
+            switch (eng) {
+                .ok => |p| o.engine = p,
+                .failed => |b| {
+                    try err.print("error: {s}: the digital engine did not compile — this is an engine bug:\n", .{opts.file_name});
+                    try b.renderToWriter(.{}, err);
+                    return 1;
+                },
+            }
+        }
+        var r = vera.orchestrator.compileRelease(gpa, io, o, .{ .text = dev.zig }, 1) catch |e| {
             try err.print("error: {s}: building the device failed: {t}\n", .{ opts.file_name, e });
             return 1;
         };

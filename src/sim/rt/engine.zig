@@ -1,0 +1,138 @@
+//! The seam between a contract device (`device.zig`) and the prebuilt
+//! engine: the design-independent half of `rt` (the event loop with its
+//! scheduler, nets and nonblocking rows, and the tick-boundary snapshot)
+//! compiled once into an object (`exportAll`, under a root `vera` writes) and
+//! linked under every device built with the same sources, compiler, target
+//! and flags. A device's root declares `vera_prebuilt_engine` to reach it
+//! through `@extern` here instead of compiling it.
+//!
+//! Both sides compile the same `State`, so its layout is shared by
+//! construction; every symbol name carries `tag`, a hash of that layout and
+//! of the root options, so an object built under any other one fails to link
+//! instead of running.
+//!
+//! Zig numbers error values per compilation, so no error may cross the
+//! seam except as `code`, and no vtable whose functions return errors may
+//! be called from the side that did not build it. Hence only `quiet` engines
+//! cross (`cLoop` refuses any other): a quiet run opens, reads and writes no
+//! file and prints nothing, so the engine never calls the device's `std.Io`
+//! nor inspects an error of its `Writer`. The device's allocator crosses: its
+//! vtable returns no errors. Each process body is reached through `wrap`.
+const std = @import("std");
+const root = @import("root.zig");
+const snapshot = @import("snapshot.zig");
+const State = root.State;
+const Error = root.Error;
+
+/// A device's dispatch as the engine calls it: `code` of its error.
+pub const DispatchC = *const fn (*State, u32) callconv(.c) u16;
+
+/// 0 for none, else the error.
+pub fn code(e: ?Error) u16 {
+    const x = e orelse return 0;
+    return switch (x) {
+        error.Failed => 1,
+        error.Rerun => 2,
+        error.OutOfMemory => 3,
+        error.WriteFailed => 4,
+    };
+}
+
+/// `code`'s inverse.
+pub fn decode(c: u16) ?Error {
+    return switch (c) {
+        0 => null,
+        1 => error.Failed,
+        2 => error.Rerun,
+        3 => error.OutOfMemory,
+        else => error.WriteFailed,
+    };
+}
+
+/// `f(s, pc)` for the engine's own `loop`.
+pub inline fn call(f: DispatchC, s: *State, pc: u32) Error!void {
+    if (decode(f(s, pc))) |e| return e;
+}
+
+/// `State`'s layout (sizes, alignments and offsets, three levels down; no
+/// type names, which number anonymous types per compilation) and the root
+/// options the engine's code reads, as 16 hex digits.
+pub const tag = blk: {
+    @setEvalBranchQuota(1 << 20);
+    var h: std.hash.Wyhash = .init(0x7e9_e1e);
+    layout(&h, State, 3);
+    layout(&h, root.Design, 2);
+    h.update(&.{ @intFromBool(root.logic.two), @intFromBool(root.overrides), @intFromBool(root.activations) });
+    h.update(std.mem.asBytes(&root.budget));
+    break :blk std.fmt.comptimePrint("{x:0>16}", .{h.final()});
+};
+
+fn layout(h: *std.hash.Wyhash, comptime T: type, comptime depth: u32) void {
+    h.update(std.mem.asBytes(&[2]u64{ @alignOf(T), @sizeOf(T) }));
+    if (depth == 0 or @typeInfo(T) != .@"struct") return;
+    inline for (@typeInfo(T).@"struct".fields) |f| {
+        h.update(f.name);
+        h.update(std.mem.asBytes(&@as(u64, @offsetOf(T, f.name))));
+        layout(h, f.type, depth - 1);
+    }
+}
+
+fn sym(comptime name: []const u8) []const u8 {
+    return "vera_rt_" ++ tag ++ "_" ++ name;
+}
+
+// ---- the engine's side ----
+
+fn cLoop(s: *State, four: DispatchC, limit: u64) callconv(.c) u16 {
+    if (!s.quiet) return code(error.Failed);
+    return code(root.loop(s, four, null, limit));
+}
+
+fn cSaveTo(s: *const State, buf: [*]u8, len: usize, n: *usize) callconv(.c) u16 {
+    n.* = snapshot.saveTo(s, buf[0..len]) catch |e| return code(e);
+    return 0;
+}
+
+fn cRestore(s: *State, b: [*]const u8, len: usize) callconv(.c) u16 {
+    if (!s.quiet) return code(error.Failed);
+    snapshot.restore(s, b[0..len]) catch |e| return code(e);
+    return 0;
+}
+
+/// Exports the entry points, hidden: they bind inside the one library.
+pub fn exportAll() void {
+    @export(&cLoop, .{ .name = sym("loop"), .visibility = .hidden });
+    @export(&cSaveTo, .{ .name = sym("saveTo"), .visibility = .hidden });
+    @export(&cRestore, .{ .name = sym("restore"), .visibility = .hidden });
+}
+
+// ---- the device's side ----
+
+fn ext(comptime f: anytype, comptime name: []const u8) *const @TypeOf(f) {
+    return @extern(*const @TypeOf(f), .{ .name = sym(name), .visibility = .hidden });
+}
+
+/// `f`, a `root.Dispatch`, as the engine calls it.
+fn wrap(comptime f: root.Dispatch) DispatchC {
+    return struct {
+        fn c(s: *State, pc: u32) callconv(.c) u16 {
+            f(s, pc) catch |e| return code(e);
+            return 0;
+        }
+    }.c;
+}
+
+pub fn loop(s: *State, comptime four: root.Dispatch, comptime two: ?root.Dispatch, limit: u64) ?Error {
+    comptime std.debug.assert(two == null);
+    return decode(ext(cLoop, "loop")(s, wrap(four), limit));
+}
+
+pub fn saveTo(s: *const State, buf: []u8) std.Io.Writer.Error!usize {
+    var n: usize = undefined;
+    if (ext(cSaveTo, "saveTo")(s, buf.ptr, buf.len, &n) != 0) return error.WriteFailed;
+    return n;
+}
+
+pub fn restore(s: *State, b: []const u8) Error!void {
+    if (decode(ext(cRestore, "restore")(s, b.ptr, b.len))) |e| return e;
+}

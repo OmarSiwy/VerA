@@ -307,20 +307,49 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "contract", .module = contract }},
     });
+    // Three of them also built by `vera --emit-so` against the prebuilt
+    // engine, which `tests/vdev_so_host.zig` compares with the whole one.
+    const vdev_dyn = b.createModule(.{
+        .root_source_file = b.path("tests/vdev_dyn.zig"),
+        .imports = &.{.{ .name = "contract", .module = contract }},
+    });
+    const so_opts = b.addOptions();
+    const vdev_so_host = b.createModule(.{
+        .root_source_file = b.path("tests/vdev_so_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        // `dlopen`: the device keeps thread-local allocator state.
+        .link_libc = true,
+        .imports = &.{ .{ .name = "vdev_dyn", .module = vdev_dyn }, .{ .name = "vdev_so_options", .module = so_opts.createModule() } },
+    });
     for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide" }) |name| {
         const gen = b.addRunArtifact(exe);
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
         gen.addArg("-o");
         const device = gen.addOutputFileArg(b.fmt("{s}.zig", .{name}));
-        vdev_host.addImport(name, b.createModule(.{
+        const dev_mod = b.createModule(.{
             .root_source_file = device,
             .target = target,
             .optimize = optimize,
             .imports = &.{ .{ .name = "contract", .module = contract }, .{ .name = "sim", .module = byName(mods, "sim") } },
-        }));
+        });
+        vdev_host.addImport(name, dev_mod);
+        if (std.mem.eql(u8, name, "v_count") or std.mem.eql(u8, name, "v_a2d") or std.mem.eql(u8, name, "v_buf")) {
+            vdev_so_host.addImport(name, dev_mod);
+            const so = b.addRunArtifact(exe);
+            so.addArgs(&.{ "--emit-so", "--contract" });
+            so.addFileArg(b.path("tools/contract.zig"));
+            so.addArg("--dyn");
+            so.addFileArg(b.path("tests/vdev_dyn.zig"));
+            so.addArg("--work-dir");
+            const wd = so.addOutputDirectoryArg(name);
+            so.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
+            so_opts.addOptionPath(name, wd.path(b, b.fmt("lib{s}.1.so", .{name})));
+        }
     }
     test_step.dependOn(testRun(b, "vdev_host", vdev_host, runner));
+    test_step.dependOn(testRun(b, "vdev_so_host", vdev_so_host, runner));
     for ([_]struct { args: []const []const u8, file: []const u8, exit: u8, says: []const u8 }{
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
