@@ -278,7 +278,9 @@ pub fn Device(comptime spec: Spec) type {
             const due = inst.next_ev != inf and time.tickAtOrBefore(inst.next_ev, tick) <= horizon;
             if (late and (woke or due)) inst.late_cross = true;
             if (n == 0 and !due) return;
-            std.mem.sort(Edge, edges[0..n], {}, struct {
+            // Stable, as `std.mem.sort`, without its 28 KB block sort: at
+            // most two edges per input.
+            std.sort.insertion(Edge, edges[0..n], {}, struct {
                 fn lt(_: void, l: Edge, r: Edge) bool {
                     return l.tick < r.tick;
                 }
