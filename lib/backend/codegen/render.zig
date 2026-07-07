@@ -360,6 +360,16 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 if (plain) return self.b("a{d} = inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
                 return self.b("for (&a{d}, inst.tp{d}_s{d}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, tp.block, tp.slot, self.arr_mask[d.array] });
             }
+            if (m.uninit) {
+                // `(* vera_scratch = "uninit" *)` (§2.9): `a<id>` stays the
+                // `undefined` it was declared, and the author writes every
+                // element before reading it. Under runtime safety a broken
+                // promise reads NaN (`S.con` carries zero lanes; `scale` by
+                // NaN makes each one NaN) or minInt instead of stale bytes.
+                if (m.ty == .integer) return self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.minInt(i64));\n", .{d.array});
+                if (plain) return self.b("if (std.debug.runtime_safety) @memset(&a{d}, std.math.nan(f64));\n", .{d.array});
+                return self.b("if (std.debug.runtime_safety) @memset(&a{d}, zTo(S, 0x{x}, S.con(std.math.nan(f64))).scale(std.math.nan(f64)));\n", .{ d.array, self.arr_mask[d.array] });
+            }
             if (m.held == none_u32) {
                 if (!plain) return self.b("@memset(&a{d}, zTo(S, 0x{x}, S.con(0.0)));\n", .{ d.array, self.arr_mask[d.array] });
                 return self.b("@memset(&a{d}, {s});\n", .{ d.array, if (m.ty == .integer) "0" else "0.0" });

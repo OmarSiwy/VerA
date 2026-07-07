@@ -300,6 +300,8 @@ pub const Code = enum(u16) {
     E0535,
     E0536,
     E0537,
+    E0538,
+    E0539,
     E0572,
     E0573,
     E0574,
@@ -4408,6 +4410,35 @@ fn infoOf(c: Code) Info {
             \\    (* vera_scratch *) real t;
             \\    always @(posedge clk) t = 1.0;   // no: t is digital-owned
             \\    analog t = V(p, n);               // yes, when only analog writes t
+            ,
+        },
+        .E0538 => .{
+            .title = "vera_scratch string value is not \"uninit\"",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_scratch *)` takes a number (nonzero on, `0` off) or the one
+            \\string `"uninit"`, which drops even the per-evaluation zero start: the
+            \\author promises every element is written before it is read in the
+            \\same evaluation. Any other string is a misspelling, not a mode:
+            \\
+            \\    (* vera_scratch = "uninit" *) real st[0:63];   // yes
+            \\    (* vera_scratch = "zero" *) real st[0:63];     // no
+            \\
+            \\The attribute is ignored and the variable is held where observable.
+            ,
+        },
+        .E0539 => .{
+            .title = "vera_scratch = \"uninit\" variable has an initializer",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_scratch = "uninit" *)` says the variable starts every
+            \\evaluation with no value at all; a declaration initializer says it
+            \\starts at that value. The two contradict each other:
+            \\
+            \\    (* vera_scratch = "uninit" *) real st[0:3] = '{1, 2, 3, 4};  // no
+            \\    (* vera_scratch *) real st[0:3] = '{1, 2, 3, 4};             // yes
+            \\
+            \\Drop the initializer, or use plain `vera_scratch`.
             ,
         },
         .E0572 => .{

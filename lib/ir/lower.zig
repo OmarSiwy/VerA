@@ -633,6 +633,10 @@ pub const MemArray = struct {
     /// The `out.held_vars` row it is, or `none_u32`: a §5.10 held array starts
     /// every evaluation from its `Instance` field instead of zero.
     held: u32 = none_u32,
+    /// `(* vera_scratch = "uninit" *)` (§2.9): its `anew` stores nothing (NaN
+    /// under runtime safety), since the author writes each element before
+    /// reading it in the evaluation.
+    uninit: bool = false,
 };
 
 /// §9.17.3 one `$limit(access, user_function, …)` state slot, keyed by the
