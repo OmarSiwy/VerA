@@ -8,6 +8,7 @@
 // frames of recursive timed activations and their constant values.
 // Rejection neighbour: b_10_subroutine_parameter_assignment_rejected.v.
 //! inherited IEEE 1364-2005 4.10 10.2.3 A.2.8
+// native-required
 `timescale 1ns/1ns
 module b_10_timed_subroutine_parameters;
   integer result;

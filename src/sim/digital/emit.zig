@@ -191,6 +191,10 @@ pub const Emitter = struct {
     /// `fn proc<entry>` after the processes.
     subs_todo: std.ArrayList(u32) = .empty,
     sub_done: []bool = &.{},
+    /// The tasks whose out-of-line body a `.call_timed` reached (§10.2.3),
+    /// each a process of its own whose activations `rt.State.ctx` tells
+    /// apart.
+    timed: std.ArrayList(u32) = .empty,
     /// Indexed named-event controls: an emitted selector reads its lexical
     /// scope when an array element occurs, not when the process suspends.
     event_selects: std.ArrayList(struct { e: Ast.ExprId, scope: u32 }) = .empty,
@@ -459,6 +463,18 @@ pub fn call(self: *Emitter, idx: u32, args: []const Ast.ExprId, lb: u32) Error!v
     }
 }
 
+/// `const <name><idx>`: automatic frame `f`'s fresh value, plane word by
+/// word. §§10.2.3, 4.8: integral automatic storage starts x, real zero.
+fn fillTable(self: *Emitter, name: []const u8, idx: u32, f: root.Frame) Error!void {
+    const r = self.r;
+    try self.print("const {s}{d} = [_]u64{{", .{ name, idx });
+    for (r.values[f.first..][0..f.count], f.first..) |v, at| for (0..words(v.width)) |j| {
+        const top = if (j + 1 == words(v.width)) expr.maskOf(v.width - 64 * @as(u32, @intCast(j))) else std.math.maxInt(u64);
+        try self.print(" 0x{x},", .{if (self.two_state or r.reals.contains(@intCast(at))) 0 else top});
+    };
+    try self.print(" }};\n\n", .{});
+}
+
 pub fn words(w: u32) u32 {
     return (w + 63) / 64;
 }
@@ -519,6 +535,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     // Every function of the design, once per phase (`rt.Phase`): `main`
     // names `Code(true)` only when it runs both, and Zig compiles only what
     // is named.
+    const decls_at = self.out.written().len;
     try self.print("\nfn Code(comptime two: bool) type {{\nreturn struct {{\nconst M = rt.Phase(two);\n\n", .{});
     const seen = try self.arena.alloc(bool, r.code.items.len);
     @memset(seen, false);
@@ -527,6 +544,13 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         if (seen[entry]) continue;
         try procs.append(self.arena, .{ .entry = entry, .pcs = try reach(self, entry, seen) });
     }
+    var next_timed: usize = 0;
+    while (next_timed < self.timed.items.len) : (next_timed += 1) {
+        const entry = r.subs.items[self.timed.items[next_timed]].body.?.entry;
+        if (!seen[entry]) try procs.append(self.arena, .{ .entry = entry, .pcs = try reach(self, entry, seen) });
+    }
+    const activations = self.timed.items.len != 0;
+    if (activations) try insert(self, decls_at, "pub const vera_activations = true;\n");
     const p = try plan.build(self, procs.items, schedule);
     self.watched = p.watched;
     self.reach = p.reach;
@@ -554,15 +578,17 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (pcs) |pc| entry_of[pc] = pcs[0];
         if (!sub.decl.automatic) continue;
         self.keepFour("an automatic task or function, whose storage is x at every call (§10.2.3)", null);
-        // §§10.2.3, 4.8: integral automatic storage starts x, real zero.
-        try self.print("const fill{d} = [_]u64{{", .{idx});
-        for (r.values[sub.frame.first..][0..sub.frame.count], sub.frame.first..) |v, at| for (0..words(v.width)) |j| {
-            const top = if (j + 1 == words(v.width)) expr.maskOf(v.width - 64 * @as(u32, @intCast(j))) else std.math.maxInt(u64);
-            try self.print(" 0x{x},", .{if (self.two_state or r.reals.contains(@intCast(at))) 0 else top});
-        };
-        try self.print(" }};\n\n", .{});
+        try fillTable(self, "fill", idx, sub.frame);
     }
     self.in_sub = false;
+    // §10.2.3 an automatic timed body's fresh frame, as `fill<idx>` is a
+    // synchronous one's.
+    for (self.timed.items) |idx| {
+        const sub = r.subs.items[idx];
+        if (!sub.decl.automatic) continue;
+        self.keepFour("an automatic task or function, whose storage is x at every call (§10.2.3)", null);
+        try fillTable(self, "tfill", idx, sub.body.?.frame);
+    }
     try emitShows(self);
 
     try self.print("fn none(_: *S, _: u32) rt.Error!void {{\n    unreachable;\n}}\n\n", .{});
@@ -580,9 +606,14 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print(" }};\n\n", .{});
     try self.print(
         \\pub fn dispatch(s: *S, pc: u32) rt.Error!void {{
-        \\    if (pc < rt.show_base) {s};
+        \\    if (pc < rt.show_base) {s}
         \\
-    , .{if (entry_of.len == 0) "unreachable" else "return procs[pc](s, pc)"});
+    , .{if (entry_of.len == 0) "unreachable;" else if (activations)
+        // §10.2.3 a timed call or return continues in another function at
+        // once: one after another here, not nested on the stack.
+        "{\n        try procs[pc](s, pc);\n        while (s.jump) |j| {\n            s.jump = null;\n            try procs[j](s, j);\n        }\n        return;\n    }"
+    else
+        "return procs[pc](s, pc);"});
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word,
@@ -627,6 +658,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
+    if (activations) try actEvents(self);
     if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try netTables(self);
     try portTables(self);
@@ -661,6 +693,27 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// `rt.Design.act_events`: per slot, 1 + the automatic timed task whose
+/// out-of-line body declares that named event, in its own scope or a
+/// block nested there (§10.2.1, `exec.eventContext`), else 0.
+fn actEvents(self: *Emitter) Error!void {
+    const r = self.r;
+    const owner = try self.arena.alloc(u32, r.values.len);
+    @memset(owner, 0);
+    var it = r.events.iterator();
+    while (it.next()) |ev| for (self.timed.items) |idx| {
+        const sub = r.subs.items[idx];
+        if (!sub.decl.automatic) continue;
+        var scope = ev.value_ptr.scope;
+        while (scope != sub.body.?.frame.scope) {
+            const info = r.scope_info.items[scope];
+            if (!info.lexical) break;
+            scope = info.parent;
+        } else owner[ev.key_ptr.*] = idx + 1;
+    };
+    try table(self, "act_events", owner);
 }
 
 /// Can simulation time pass 0: does a procedural, intra-assignment, net
@@ -846,7 +899,15 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
                 try work.append(self.arena, next);
                 for (r.subs.items[idx].ranges.items) |rg| if (pc >= rg.start and pc < rg.end) try work.append(self.arena, rg.end);
             },
-            .call_timed, .task_return => return self.refuse("a §10.2.3 timed task that reaches itself"),
+            // §10.2.3 the body is a process of its own (`timed`); its
+            // `.task_return` jumps back to the call site, which then
+            // continues past it.
+            .call_timed => |c| {
+                if (self.device) return self.refuse("a §10.2.3 timed task that reaches itself");
+                if (std.mem.indexOfScalar(u32, self.timed.items, c.sub) == null) try self.timed.append(self.arena, c.sub);
+                try work.append(self.arena, next);
+            },
+            .task_return => {},
             .pla_start => |loop| try work.appendSlice(self.arena, &.{ next, loop }),
             .fork => |f| try work.appendSlice(self.arena, if (f.arms.len == 0) &.{f.end} else f.arms),
             .join_arm => |j| try work.append(self.arena, j.end),
@@ -1279,8 +1340,52 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try bits(self, &.{r.trans[sc.tran].ctrl}, 0);
             try self.print("            try s.switchCtrl({d}, b[0]);\n            s.armed[{d}] = true;\n            return;\n", .{ sc.tran, pc });
         },
-        .call_timed, .task_return => unreachable, // `reach` refused each of these by name
+        .call_timed => |c| try callTimed(self, pc, c.sub, c.args),
+        // §10.2.2 the outputs are put aside (`retCell`) while this
+        // activation's storage is still resident; the call site copies them.
+        .task_return => |idx| {
+            const sub = r.subs.items[idx];
+            for (sub.decl.ports, sub.body.?.frame.ports) |p, at| if (p.direction != .input) {
+                try self.print("            try M.set(s, {d}, ", .{try retCell(self, at)});
+                try self.get(at);
+                try self.print(", {f});\n", .{full(try self.slotWidth(at))});
+            };
+            try self.print("            s.jump = try s.returnTimed();\n            return;\n", .{});
+        },
     }
+}
+
+/// The cell a timed task's output formal `at` waits in between its
+/// activation's return and its call site's copy-out.
+fn retCell(self: *Emitter, at: u32) Error!u32 {
+    return cellOf(self, (1 << 31) + at, try self.slotWidth(at));
+}
+
+/// `exec.callTimed` and, when `s.returned`, the end of `exec.returnTimed`:
+/// the inputs read in the caller, a new activation (`rt.State.callTimed`)
+/// with the formals set, and a jump to the body; on return, the outputs
+/// copied to the actuals in the caller's restored activation (§10.2.2,
+/// §10.2.3).
+fn callTimed(self: *Emitter, pc: u32, idx: u32, args: []const Ast.ExprId) Error!void {
+    const r = self.r;
+    const sub = r.subs.items[idx];
+    const f = sub.body.?.frame;
+    try self.print("            if (s.returned) {{\n                s.returned = false;\n", .{});
+    for (sub.decl.ports, args, f.ports) |p, arg, at| if (p.direction != .input)
+        try assignment(self, arg, .{ .stored = .{ .off = try retCell(self, at), .ty = try slotType(self, at) } }, .blocking);
+    try self.print("                continue :sw {d};\n            }}\n", .{pc + 1});
+    const lb = self.label();
+    for (sub.decl.ports, args, f.ports, 0..) |p, arg, at, i| if (p.direction != .output) {
+        try self.print("            const i{d}_{d} = ", .{ lb, i });
+        try expr.assigned(self, arg, try slotType(self, at));
+        try self.print(";\n", .{});
+    };
+    const lo = self.slotOff(f.first);
+    try self.print("            try s.callTimed({d}, {d}, {d}, ", .{ idx, pc, lo });
+    if (sub.decl.automatic) try self.print("&tfill{d});\n", .{idx}) else try self.print("&.{{}});\n", .{});
+    for (sub.decl.ports, f.ports, 0..) |p, at, i| if (p.direction != .output)
+        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(try self.slotWidth(at)) });
+    try self.print("            s.jump = {d};\n            return;\n", .{sub.body.?.entry});
 }
 
 /// File a wait's terms. Ordinary terms keep the direct slot path; an event

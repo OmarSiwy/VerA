@@ -174,14 +174,12 @@ Two older user worktrees remain untouched after read-only review:
   an embedded interpreter result does not establish native code generation.
   Mark native regression fixtures `// native-required` so a fallback fails
   the native gate; the forced two-state report retains its separate policy.
-  On `feat/native-fallbacks` (2026-10-01) all three native modes fall back
-  for three fixtures only, each a §10.2.3 timed task that reaches itself
-  (`b_9_7_3_event_array_automatic`, `audit_task_recursive_timed_automatic`,
-  `b_10_timed_subroutine_parameters`). Closing them needs activation
-  contexts in `src/sim/rt`: a suspension inside an out-of-line body must
-  resume with its activation resident (`exec.callTimed`/`makeResident`), so
-  scheduler payloads and parked suspensions carry a context, and an
-  automatic event's waiters match their own activation (`eventContext`).
+  On `feat/native-activation` (2026-10-01) no case of `test-1364` falls
+  back in `--native`, `=static` or `=four` (607 native). §10.2.3 timed
+  tasks that reach themselves run natively: each out-of-line body is a
+  process, `rt.State` carries activation contexts (`ctx`, resume rows,
+  per-suspension contexts, `act_events`), and the three former fallbacks
+  are `// native-required`. Contract devices still refuse them.
 - **`test-1364 -- --native=two-state`** reports XPASS for xfails whose defect
   is 4-state only. Decide: a per-fixture `native-state: 4` marker, or treat them
   as not applicable.

@@ -106,6 +106,10 @@ pub const Design = struct {
     /// write (`digital/plan.zig` `stepLocal`), an x in which does not keep
     /// the design 4-state.
     dead: []const [2]u32 = &.{},
+    /// §10.2.1 per slot (empty without `vera_activations`): 1 + the task
+    /// whose out-of-line automatic activations each own this named event,
+    /// else 0 (`exec.eventContext`).
+    act_events: []const u32 = &.{},
 };
 
 /// The dispatch of one phase: `Code(k).dispatch` of the emitted root.
@@ -250,9 +254,17 @@ pub const Reach = packed struct(u8) {
     pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
 };
 
-/// `exec.Susp` without the task activation, which no native process has.
-/// `seq` is its `State.stamp`.
-const Susp = struct { pc: u32, gen: u32, alive: bool, seq: u64 = 0 };
+/// `exec.Susp`: where the process resumes, in which §10.2.3 activation
+/// (`State.ctx`, 0 for none). `seq` is its `State.stamp`.
+const Susp = struct { pc: u32, gen: u32, ctx: u32 = 0, alive: bool, seq: u64 = 0 };
+/// `exec.Act`: one activation of a timed task that reaches itself, entered
+/// by `State.callTimed`. Its caller resumes at `ret_pc` in `ret_ctx`; an
+/// automatic task's frame is the `n` plane words from `lo`, kept in
+/// `storage` (both planes) while another activation of it is resident.
+const Act = struct { sub: u32, ret_pc: u32, ret_ctx: u32, lo: u32, n: u32, storage: []u64 = &.{} };
+/// A process continuation queued inside an activation (`exec.Pending`'s
+/// `resume`); its scheduler payload is `resume_base` + its row.
+const Resume = struct { pc: u32, ctx: u32, live: bool };
 /// §9.7.3: the event element selected now, or null for an invalid index.
 /// The emitted function reads the declaring scope's slots in the active
 /// logic phase. Its address is immutable across a saved tick boundary.
@@ -281,6 +293,8 @@ const vcd_payload: u32 = nba_payload | 3;
 pub const show_base: u32 = 1 << 30;
 /// `late_base + k`: delayed nonblocking update `late[k]` (§9.2.2 `<= #d`).
 const late_base: u32 = 3 << 30;
+/// `resume_base + k`: process continuation `resumes[k]`, in an activation.
+const resume_base: u32 = 5 << 29;
 
 /// `root.Overrides`: the process ranges of a slot's `assign` and `force`,
 /// and of the forces of constant selects of a net (§9.3.2), each holding
@@ -295,6 +309,11 @@ pub const max_parts = 4;
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
 /// declares `vera_overrides`.
 const overrides = @hasDecl(@import("root"), "vera_overrides");
+
+/// A §10.2.3 timed task reaches itself (`emit`'s `.call_timed`): the
+/// executable's root declares `vera_activations`, and its processes carry
+/// an activation (`State.ctx`).
+pub const activations = @hasDecl(@import("root"), "vera_activations");
 
 /// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
 const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
@@ -522,6 +541,21 @@ pub const State = struct {
     unwind: ?u32 = null,
     depth: u32 = 0,
     saved: std.ArrayList(u64) = .empty,
+    /// §10.2.3 (`activations`): the activation the running process is in
+    /// (0 for none); every one in progress (row 0 unused) and the rows free;
+    /// per task, the activation its automatic frame holds; the queued
+    /// continuations inside one; per slot, `Design.act_events`. `jump` is
+    /// the pc `dispatch` runs next, without queueing (a call or a return),
+    /// `returned` says the call site at that pc is being returned to.
+    ctx: u32 = 0,
+    acts: std.ArrayList(Act) = .empty,
+    free_acts: std.ArrayList(u32) = .empty,
+    resident: []u32 = &.{},
+    resumes: std.ArrayList(Resume) = .empty,
+    free_resumes: std.ArrayList(u32) = .empty,
+    act_events: []const u32 = &.{},
+    jump: ?u32 = null,
+    returned: bool = false,
     /// §17.1.3: the standing monitor's site and the slots it watches.
     monitored: []bool,
     mon_site: ?u32 = null,
@@ -602,6 +636,8 @@ pub const State = struct {
             .repeats = try gpa.alloc(u64, d.repeats),
             .joins = try gpa.alloc(u32, d.joins),
             .active = try gpa.alloc(u32, d.subs),
+            .resident = try gpa.alloc(u32, if (activations) d.subs else 0),
+            .act_events = d.act_events,
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
@@ -630,11 +666,12 @@ pub const State = struct {
         @memset(self.repeats, 0);
         @memset(self.joins, 0);
         @memset(self.active, 0);
+        @memset(self.resident, 0);
         @memset(self.monitored, false);
         @memset(self.layers, .{});
         @memset(self.dumped, false);
         @memset(self.port_live, .{});
-        for (d.order) |pc| try self.run(pc, null);
+        for (d.order) |pc| try self.runPlain(pc, null);
     }
 
     /// The next process to dispatch, at the pc it resumes at, or
@@ -656,6 +693,15 @@ pub const State = struct {
                 try self.free_late.append(self.gpa, k);
                 continue;
             }
+            if (activations and event.payload >= resume_base) {
+                const k = event.payload - resume_base;
+                const row = self.resumes.items[k];
+                self.resumes.items[k].live = false;
+                try self.free_resumes.append(self.gpa, k);
+                self.ctx = row.ctx;
+                try self.makeResident(row.ctx);
+                return row.pc;
+            }
             if (event.payload == vcd_payload) {
                 try self.dumpTick();
                 continue;
@@ -672,13 +718,17 @@ pub const State = struct {
                 }
                 self.changed.clearRetainingCapacity();
                 self.settle = .running;
+                if (activations) self.ctx = 0;
                 return settle_pc;
             }
             if (event.payload >= net.drive_base and event.payload < nba_payload) {
                 try net.arrive(self, event.payload);
                 continue;
             }
-            if (event.payload != nba_payload) return event.payload;
+            if (event.payload != nba_payload) {
+                if (activations) self.ctx = 0;
+                return event.payload;
+            }
             for (self.rows.items, 0..) |*row, i| {
                 if (i != 0) try self.count(event.time);
                 const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
@@ -967,7 +1017,7 @@ pub const State = struct {
     /// every suspension and queued resumption inside it is dropped, and if
     /// there was one, its process continues at `end` (`exec.disableRange`).
     pub fn disable(self: *State, lo: u32, hi: u32, end: u32) Error!void {
-        if (try self.stop(lo, hi)) try self.run(end, null);
+        if (try self.stop(lo, hi)) try self.runPlain(end, null);
     }
 
     /// `exec.stopRange`: end every process suspended or queued in pcs
@@ -979,6 +1029,13 @@ pub const State = struct {
             hit = true;
         };
         if (self.sched.cancelRange(lo, hi) catch |e| return self.schedFail(e)) hit = true;
+        if (activations) for (self.resumes.items, 0..) |*row, k| if (row.live and row.pc >= lo and row.pc < hi) {
+            const at = resume_base + @as(u32, @intCast(k));
+            _ = self.sched.cancelRange(at, at + 1) catch |e| return self.schedFail(e);
+            row.live = false;
+            try self.free_resumes.append(self.gpa, @intCast(k));
+            hit = true;
+        };
         return hit;
     }
 
@@ -998,7 +1055,7 @@ pub const State = struct {
         const layer = if (force) &l.force else &l.assign;
         if (layer.*) |old| _ = try self.stop(old.start, old.end);
         layer.* = .{ .start = start, .end = end };
-        try self.run(start, null);
+        try self.runPlain(start, null);
     }
 
     /// The bits of word `j` of `slot` that a forced select holds against
@@ -1024,7 +1081,7 @@ pub const State = struct {
         const p = &self.layers[slot].parts[k];
         if (p.range) |old| _ = try self.stop(old.start, old.end);
         p.* = .{ .lo = lo, .width = width, .range = .{ .start = start, .end = end } };
-        try self.run(start, null);
+        try self.runPlain(start, null);
     }
 
     /// `exec.releaseBits`: part `k` of `slot` is its drivers' again; the
@@ -1070,7 +1127,7 @@ pub const State = struct {
         if (layer.*) |old| _ = try self.stop(old.start, old.end);
         layer.* = null;
         if (!force) return false;
-        if (l.assign) |a| try self.run(a.start, null);
+        if (l.assign) |a| try self.runPlain(a.start, null);
         return true;
     }
 
@@ -1104,6 +1161,93 @@ pub const State = struct {
         if (self.unwind == sub and self.active[sub] == 0) self.unwind = null;
     }
 
+    /// `exec.callTimed`: §10.2.2 task `sub` begins a new activation, whose
+    /// caller resumes at its call site `ret_pc`. An automatic task (§10.2.3)
+    /// sets the resident activation's frame aside and starts its own as
+    /// `fill`, `fill.len` words from `lo`; the emitted call then copies the
+    /// inputs in and jumps to the body.
+    pub fn callTimed(self: *State, sub: u32, ret_pc: u32, lo: u32, fill: []const u64) Error!void {
+        if (self.acts.items.len == 0) try self.acts.append(self.gpa, .{ .sub = 0, .ret_pc = 0, .ret_ctx = 0, .lo = 0, .n = 0 }); // 0 is "no activation"
+        const act: Act = .{ .sub = sub, .ret_pc = ret_pc, .ret_ctx = self.ctx, .lo = lo, .n = @intCast(fill.len) };
+        const id: u32 = if (self.free_acts.pop()) |k| blk: {
+            const storage = self.acts.items[k].storage;
+            self.acts.items[k] = act;
+            self.acts.items[k].storage = storage;
+            break :blk k;
+        } else blk: {
+            try self.acts.append(self.gpa, act);
+            break :blk @intCast(self.acts.items.len - 1);
+        };
+        if (fill.len != 0) {
+            try self.evict(sub);
+            @memcpy(self.v[lo..][0..fill.len], fill);
+            if (!two) @memcpy(self.x[lo..][0..fill.len], fill);
+            self.resident[sub] = id;
+        }
+        self.ctx = id;
+    }
+
+    /// `exec.returnTimed`: the running activation has ended (the emitted
+    /// body has put its outputs aside); its caller's activation becomes
+    /// resident, and the call site it returns to is the result.
+    pub fn returnTimed(self: *State) Error!u32 {
+        const done = self.ctx;
+        const act = self.acts.items[done];
+        if (self.resident[act.sub] == done) self.resident[act.sub] = 0; // dead: nothing to save
+        try self.free_acts.append(self.gpa, done);
+        self.ctx = act.ret_ctx;
+        try self.makeResident(self.ctx);
+        self.returned = true;
+        return act.ret_pc;
+    }
+
+    /// Save the resident activation of automatic task `sub`, freeing its frame.
+    fn evict(self: *State, sub: u32) Error!void {
+        const id = self.resident[sub];
+        if (id == 0) return;
+        const act = &self.acts.items[id];
+        if (act.storage.len != 2 * act.n) {
+            self.gpa.free(act.storage);
+            act.storage = &.{};
+            act.storage = try self.gpa.alloc(u64, 2 * act.n);
+        }
+        @memcpy(act.storage[0..act.n], self.v[act.lo..][0..act.n]);
+        @memcpy(act.storage[act.n..], self.x[act.lo..][0..act.n]);
+        self.resident[sub] = 0;
+    }
+
+    /// `exec.makeResident`: activation `ctx`'s storage in its task's frame.
+    fn makeResident(self: *State, ctx: u32) Error!void {
+        if (ctx == 0) return;
+        const act = self.acts.items[ctx];
+        if (act.n == 0 or self.resident[act.sub] == ctx) return;
+        try self.evict(act.sub);
+        @memcpy(self.v[act.lo..][0..act.n], act.storage[0..act.n]);
+        @memcpy(self.x[act.lo..][0..act.n], act.storage[act.n..]);
+        self.resident[act.sub] = ctx;
+    }
+
+    /// `exec.eventContext`: the live activation of automatic task `sub`
+    /// that activation `from` runs inside, or 0.
+    fn eventContext(self: *const State, sub: u32, from: u32) u32 {
+        var ctx = from;
+        while (ctx != 0) : (ctx = self.acts.items[ctx].ret_ctx) if (self.acts.items[ctx].sub == sub) return ctx;
+        return 0;
+    }
+
+    /// `exec.selectedEvent`: §9.7.3 the element `select` names, read in the
+    /// waiter's activation `ctx`; the running one is resident again after.
+    fn selectIn(self: *State, select: *const EventSelect, ctx: u32) Error!?u32 {
+        if (!activations or ctx == self.ctx) return select(self);
+        const running = self.ctx;
+        self.ctx = ctx;
+        try self.makeResident(ctx);
+        const at = select(self);
+        self.ctx = running;
+        try self.makeResident(running);
+        return at;
+    }
+
     /// §17.1.2 `$strobe` site `site`: its line at the end of this timestep.
     pub fn strobe(self: *State, site: u32) Error!void {
         _ = self.sched.schedule(.monitor, show_base + site) catch |e| return self.schedFail(e);
@@ -1131,8 +1275,29 @@ pub const State = struct {
         _ = self.sched.schedule(.monitor, monitor_payload) catch |e| return self.schedFail(e);
     }
 
-    /// Queues the process at `pc`: now (active), or `after` ticks later (inactive).
+    /// Queues the running process's continuation at `pc`, in its activation
+    /// (`ctx`): now (active), or `after` ticks later (inactive).
     pub fn run(self: *State, pc: u32, after: ?u64) Error!void {
+        return self.runIn(pc, if (activations) self.ctx else 0, after);
+    }
+
+    /// `run` in activation `ctx` (`exec.resumption`).
+    fn runIn(self: *State, pc: u32, ctx: u32, after: ?u64) Error!void {
+        if (!activations or ctx == 0) return self.runPlain(pc, after);
+        const k = self.free_resumes.pop() orelse blk: {
+            try self.resumes.append(self.gpa, undefined);
+            break :blk @as(u32, @intCast(self.resumes.items.len - 1));
+        };
+        self.resumes.items[k] = .{ .pc = pc, .ctx = ctx, .live = true };
+        _ = (if (after) |t|
+            self.sched.scheduleAfter(t, .inactive, resume_base + k) catch |e| return self.timeFail(e)
+        else
+            self.sched.schedule(.active, resume_base + k) catch |e| return self.schedFail(e));
+    }
+
+    /// Queues the process at `pc` outside any activation: now (active), or
+    /// `after` ticks later (inactive).
+    fn runPlain(self: *State, pc: u32, after: ?u64) Error!void {
         _ = (if (after) |t|
             self.sched.scheduleAfter(t, .inactive, pc) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e})
         else
@@ -1164,7 +1329,7 @@ pub const State = struct {
         if (reach.dump and self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
         if (reach.fan and slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
-            try self.run(pc, null);
+            try self.runPlain(pc, null);
         };
         if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
         if (reach.terms) return self.wakeTerms(reach, slot, before, after);
@@ -1177,6 +1342,10 @@ pub const State = struct {
     /// before they store what it waits for next.
     fn wakeTerms(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
         const list = &self.terms[slot];
+        // §10.2.1: an automatic task's event is one per activation, so only
+        // a waiter in the activation that triggers it wakes.
+        const owner: u32 = if (activations and self.act_events.len != 0) self.act_events[slot] else 0;
+        const event_ctx = if (owner != 0) self.eventContext(owner - 1, self.ctx) else 0;
         var keep: usize = 0;
         for (list.items) |t| {
             const s = &self.susps.items[t.susp];
@@ -1185,7 +1354,8 @@ pub const State = struct {
             // forbids a function from triggering an event, so a selector
             // cannot recursively compact this same list. Its blocking
             // writes may wake ordinary value lists below.
-            const selected = if (t.select) |select| (try select(self)) == slot else true;
+            const selected = (owner == 0 or event_ctx == self.eventContext(owner - 1, s.ctx)) and
+                if (t.select) |select| (try self.selectIn(select, s.ctx)) == slot else true;
             // A selector can call an HDL function whose writes resume this
             // suspension through another term of its event-or expression.
             if (s.gen != t.gen) continue;
@@ -1196,8 +1366,9 @@ pub const State = struct {
             }
             if (reach.watch) try self.wakeWatchers(slot, before, after, s.seq);
             const pc = s.pc;
+            const ctx = s.ctx;
             self.retire(t.susp);
-            try self.run(pc, null);
+            try self.runIn(pc, ctx, null);
         }
         list.shrinkRetainingCapacity(keep);
         if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
@@ -1211,7 +1382,7 @@ pub const State = struct {
             const since = self.waiting[w.proc];
             if (since == 0 or since >= bound or !w.edge.matches(before, after)) continue;
             self.waiting[w.proc] = 0;
-            try self.run(w.pc, null);
+            try self.runPlain(w.pc, null);
         }
     }
 
@@ -1245,6 +1416,7 @@ pub const State = struct {
         };
         const s = &self.susps.items[id];
         s.pc = pc;
+        if (activations) s.ctx = self.ctx;
         s.alive = true;
         s.seq = self.stamp();
         return id;
