@@ -103,11 +103,27 @@ pub const Config = struct {
     /// `--fixture-backend=llvm|native`; null is `Backend.auto(fixture_opt, <host>)`.
     fixture_backend: ?vera.orchestrator.Backend = null,
 
-    /// Returns the defaults, with `jobs` set to the CPU count.
+    /// Returns the defaults, with `jobs` from `defaultJobs`.
     pub fn init() Config {
-        return .{ .jobs = std.Thread.getCpuCount() catch 1 };
+        return .{ .jobs = defaultJobs() };
     }
 };
+
+/// Concurrent fixture builds by default: the CPU count, capped at one per
+/// `job_ram` of physical memory. Each job is a Zig compile (measured
+/// 2026-10-01: the strict suite peaked at 16.2 GB with 32 jobs, ~0.5 GB each,
+/// larger devices more), and a CPU-sized fan-out on a 32-thread, 31 GB host
+/// beside other builds exhausted RAM and froze the machine (zram swap lives
+/// in RAM, so nothing was OOM-killed). `-j` still overrides.
+pub fn defaultJobs() usize {
+    const cpus = std.Thread.getCpuCount() catch 1;
+    const ram = std.process.totalSystemMemory() catch return cpus;
+    return @max(1, @min(cpus, ram / job_ram));
+}
+
+/// RAM budgeted per concurrent fixture build: 4x the measured mean, for the
+/// large devices and the other processes on the host.
+const job_ram: u64 = 2 << 30;
 
 /// Consumes one argument if it is the suite's; false leaves it to the caller,
 /// which decides whether it is a filter. Exits 2 on a malformed value.

@@ -1169,7 +1169,7 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, flags: []const []const
     @memset(slots, .{});
     var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .flags = flags, .snapshot = snapshot, .cases = picked.items, .slots = slots };
     var group: Io.Group = .init;
-    const jobs = std.Thread.getCpuCount() catch 1;
+    const jobs = harness.defaultJobs();
     var hands: usize = 0;
     while (hands < jobs) : (hands += 1) group.concurrent(io, NativeJob.work, .{&job}) catch break;
     if (hands == 0) job.work();
