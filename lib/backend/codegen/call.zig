@@ -30,6 +30,7 @@ const isAnalysisName = codegen.isAnalysisName;
 const devSafe = codegen.devSafe;
 const opcode_zig = codegen.opcode_zig;
 const OpKind = @import("ir").op.OpKind;
+const diag = @import("diag");
 
 /// Returns `inst` as a ternary: the optimizer's select, or a pure two-way CFG
 /// merge rebuilt from its phi. Null for loop-carried or multiway phis and
@@ -729,6 +730,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const name = d.name;
     const args = d.args;
     const k = Mir.callee.opKind(c);
+    const saved_tok = self.call_tok;
+    self.call_tok = self.mir.instTok(inst);
+    defer self.call_tok = saved_tok;
     // idt's hold and the §4.5.11/§4.5.12 filters stay lane-exact: they
     // branch only on `dt` or a control argument and are S-linear over shared
     // state. Every other operator steers on or collapses a `.val()` of its
@@ -1175,7 +1179,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // MIR call no clause defines.
         .systf => {
             if (name.len != 0 and name[0] == '$') return emitUnregistered(self, inst, name, args);
-            return abort(self, "VerA: unhandled call `{s}`", .{name});
+            return abort(self, .E1020, "VerA: unhandled call `{s}`", .{name});
         },
     }
 }
@@ -1208,11 +1212,15 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
     return emitSystfCall(self, name, args);
 }
 
-/// Marks the build fatal with the first such message and writes a
-/// placeholder `S.con(0.0)` so emission can continue.
-pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+/// Reports `code` at the call being rendered (`Gen.call_tok`), marks the
+/// build fatal with the first such message and writes a placeholder
+/// `S.con(0.0)` so emission can continue. The diagnostic is what the user
+/// sees; `fatal` only poisons the unit's generated body.
+pub fn abort(self: *Gen, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
+    const msg = try std.fmt.allocPrint(self.arena, fmt, args);
+    if (self.diags) |bag| try bag.add(.codegen, code, self.lowered.tokenSpan(self.call_tok), "{s}", .{msg});
     self.any_fatal = true;
-    if (self.fatal == null) self.fatal = try std.fmt.allocPrint(self.arena, fmt, args);
+    if (self.fatal == null) self.fatal = msg;
     try self.b("S.con(0.0)", .{});
 }
 
@@ -1356,7 +1364,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // Jacobian `b0/a0` is exact.
         .laplace => {
             const p = cg_filters.planOf(self, unit);
-            if (p.err) |m| return abort(self, "{s}", .{m});
+            if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // `__sec` always takes `model`, so keep the parameter named.
             self.uses_model = true;
             try opOpen(self, fm);
@@ -1373,7 +1381,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // `updateState` advances.
         .zi => {
             const p = cg_filters.planOf(self, unit);
-            if (p.err) |m| return abort(self, "{s}", .{m});
+            if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // As for `.laplace`.
             self.uses_model = true;
             try opOpen(self, fm);

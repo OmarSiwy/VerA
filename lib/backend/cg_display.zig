@@ -396,7 +396,7 @@ fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usiz
             try g.renderVal(if (args.len > 3) args[3] else Mir.Value.zero, .int);
             return g.b(")", .{});
         },
-        else => return g.abort("VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `callee.isFileCall` here, and every one of those has a prong above
+        else => return g.abort(.E1020, "VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `callee.isFileCall` here, and every one of those has a prong above
     }
 }
 /// The first two operands every synthetic reader carries: count, then fd.

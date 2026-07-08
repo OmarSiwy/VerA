@@ -302,6 +302,7 @@ pub const Code = enum(u16) {
     E0537,
     E0538,
     E0539,
+    E0540,
     E0572,
     E0573,
     E0574,
@@ -395,6 +396,7 @@ pub const Code = enum(u16) {
     E1017,
     E1018,
     E1019,
+    E1020,
     E1100,
     E1101,
     E1102,
@@ -4441,6 +4443,27 @@ fn infoOf(c: Code) Info {
             \\Drop the initializer, or use plain `vera_scratch`.
             ,
         },
+        .E0540 => .{
+            .title = "filter root or coefficient vector violates a Laplace or Z-transform filter rule",
+            .lrm = "4.5.11",
+            .explain =
+            \\LRM 4.5.11 (laplace_*) and 4.5.12 (zi_*) constrain the vectors a
+            \\filter is built from, and the message names the sentence broken:
+            \\
+            \\  - a root vector is (real, imaginary) PAIRS, so its length is even;
+            \\  - "If a root is complex, its conjugate shall also be present";
+            \\  - the denominator is not empty and not identically zero;
+            \\  - a zi_* period T is mandatory and positive, its transition time
+            \\    nonnegative.
+            \\
+            \\VerA also refuses here the forms it does not implement, and the
+            \\message says so: a zi_* filter with a nonzero transition time or
+            \\start time (only the abrupt tau = 0, t0 = 0 form runs).
+            \\
+            \\    laplace_zp(V(in), '{-1, 1}, '{-1, 0})          // no: -1+1j alone
+            \\    laplace_zp(V(in), '{-1, 1, -1, -1}, '{-1, 0})  // yes: a pair
+            ,
+        },
         .E0572 => .{
             .title = "filter coefficient argument is not an array",
             .lrm = "4.5.1",
@@ -6475,6 +6498,19 @@ fn infoOf(c: Code) Info {
             \\
             \\A literal that size has nothing to be assigned to: split it, or
             \\build the value with a replication.
+            ,
+        },
+        .E1020 => .{
+            .title = "the code generator met a call it cannot render",
+            .lrm = "",
+            .explain =
+            \\A compiler defect, not a language rule. Every call that reaches
+            \\code generation was checked by lowering, so a call codegen has no
+            \\rendering for, or one whose arguments lowering left malformed, is
+            \\an internal inconsistency. The device is refused rather than built
+            \\with a placeholder 0 in that place.
+            \\
+            \\Report it with the source that produced it.
             ,
         },
         .W1050 => .{

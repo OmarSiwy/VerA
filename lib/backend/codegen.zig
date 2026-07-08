@@ -263,6 +263,9 @@ pub const Gen = struct {
     // rather than threading a token through `argF64`'s fifteen call sites.
     // Ceiling: it is only ever read on the E0515 path, which refuses the unit.
     ctrl_tok: u32 = Mir.no_tok,
+    /// Token of the innermost call `emitCall` is rendering: the span
+    /// `gen_call.abort` reports its refusal at.
+    call_tok: u32 = Mir.no_tok,
 
     /// The float mode and lane state of the body being written (`codegen/float/`).
     float: float_mode.Float = .{},
