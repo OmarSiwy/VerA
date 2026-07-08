@@ -195,8 +195,10 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     if (self.core.held_only.len != 0) try self.w(", comptime held: bool", .{});
     try self.w(") struct {{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
-        // §3.2.2 a held array's end-of-block version: its plain values.
+        // §3.2.2 a held array's end-of-block version: its plain values,
+        // unless the slice already stored them in place.
         if (self.an.arrOf(v)) |id| {
+            if (gen_render.inPlace(self, id)) continue;
             const m = self.lowered.mem_arrays.items[id];
             try self.w("    f{d}: [{d}]{s},\n", .{ k, m.len, if (m.ty == .integer) "i64" else "f64" });
         } else if (self.an.vty[@intFromEnum(v)] == .real) {
@@ -294,7 +296,8 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     // A unit only reads a `vera_timepoint` cache; `eval` writes it. So unless
     // §9.21.1 tables make the core itself write, a `*const` serves every
     // caller, `limit` and `collapse` included.
-    try self.w("inst: {s}, ", .{if (self.lowered.timepoints.items.len != 0 and self.lowered.table_samples.items.len == 0) "*const Instance" else "InstancePtr"});
+    // An in-place held array (`plan.Core.in_place`) is stored through it.
+    try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.timepoints.items.len != 0 and self.lowered.table_samples.items.len == 0) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
     return .{ .x = x, .model = model, .inst = inst, .sim = sim };
@@ -576,6 +579,11 @@ fn declareArrays(self: *Gen) Error!void {
         if (!s) continue;
         const len = self.lowered.mem_arrays.items[id].len;
         const ty = try gen_render.arrElemTy(self, @intCast(id));
+        if (gen_render.inPlace(self, @intCast(id))) {
+            try self.ind(1);
+            try self.b("var p{d}: *[{d}]{s} = undefined;\n", .{ id, len, ty });
+            continue;
+        }
         if (gen_render.cow(self, @intCast(id))) {
             try self.ind(1);
             try self.b("var p{d}: *const [{d}]{s} = undefined;\n", .{ id, len, ty });

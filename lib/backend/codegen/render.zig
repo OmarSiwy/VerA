@@ -295,6 +295,12 @@ pub fn cow(self: *const Gen, id: u32) bool {
     return self.lowered.mem_arrays.items[id].held != none_u32 and arrPlain(self, id);
 }
 
+/// Returns whether the slice being emitted stores held array `id` straight
+/// into its `Instance` field (`plan.Core.in_place`, `state.zig`).
+pub fn inPlace(self: *const Gen, id: u32) bool {
+    return self.core.in_place.len != 0 and self.core.in_place[id];
+}
+
 /// Returns the element type array `id` is stored as.
 pub fn arrElemTy(self: *Gen, id: u32) Error![]const u8 {
     if (self.lowered.mem_arrays.items[id].ty == .integer) return "i64";
@@ -406,7 +412,9 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 .inst_result => |di| self.mir.instOp(di) == .store,
                 else => false, // else: an array version is an instruction result
             };
-            if (cow(self, id) and !after_store)
+            if (inPlace(self, id))
+                try self.b("zArrSt({s}, p{d}, ", .{ ty, id })
+            else if (cow(self, id) and !after_store)
                 try self.b("zArrSt({s}, zArrW({s}, {d}, &a{d}, &p{d}), ", .{ ty, ty, m.len, id, id })
             else
                 try self.b("zArrSt({s}, &a{d}, ", .{ ty, id });

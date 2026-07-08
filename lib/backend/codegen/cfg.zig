@@ -32,6 +32,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     }
     try self.b("return .{{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
+        if (self.an.arrOf(v)) |id| if (gen_render.inPlace(self, id)) continue;
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
         const wrap = self.an.arrOf(v) == null and self.an.vty[@intFromEnum(v)] == .real;

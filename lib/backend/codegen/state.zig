@@ -14,6 +14,8 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
+const gen_render = @import("render.zig");
+const Mir = @import("ir").Mir;
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
 const assert = codegen.assert;
@@ -84,11 +86,49 @@ pub fn emitCore(self: *Gen) Error!void {
             if (k != none_u32) keep[k] = true;
         };
     }
+    self.core.in_place = try inPlaceArrays(self);
+    defer self.core.in_place = &.{};
     self.state_core = try gen_unit.sliceCore(self, "state", keep,
         \\/// §4.5.2 what `updateState` reads off the core, and only what that
         \\/// reads: the accepted point's operator inputs, latches and held values.
         \\
     );
+}
+
+/// §5.10 the copy-on-write held arrays (`render.cow`) the `updateState` slice
+/// may write in place. `updateState` stores every held value back
+/// unconditionally, so storing into the `Instance` field as the block runs
+/// leaves the same end state as copying it into a local on the first store,
+/// returning it and storing it back, without those three whole-array copies
+/// (txl's 5 x 2048 history: updateState 19.4k -> 0.2k cycles, bit-exact,
+/// docs/measurements/device-runtime-2026-10-01.md). Loads already read through
+/// `p<id>`, and a load never reads a version past a later store
+/// (`plan/unit.zig`), so every load sees the same value either way. Not when
+/// the slice runs on a §9.21.1 `table_probe` copy of the instance
+/// (`setup.probeInstance`), nor for an array a `vera_timepoint` cache may
+/// re-point at its `tp` slot. Empty when no array qualifies.
+fn inPlaceArrays(self: *Gen) Error![]const bool {
+    if (self.lowered.table_samples.items.len != 0) return &.{};
+    const n = self.lowered.mem_arrays.items.len;
+    const flags = try self.arena.alloc(bool, n);
+    for (flags, 0..) |*f, id| f.* = gen_render.cow(self, @intCast(id));
+    for (0..self.mir.insts.len) |ii| {
+        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        if (self.mir.instOp(inst) != .anew) continue;
+        const d = self.mir.instData(inst).anew;
+        if (d.tp != null) flags[d.array] = false;
+    }
+    if (std.mem.indexOfScalar(bool, flags, true) == null) return &.{};
+    return flags;
+}
+
+/// Returns whether `text` reads a field of the core result `m` (`m.f<k>`).
+fn readsM(text: []const u8) bool {
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, "m.f")) |i| : (at = i + 1) {
+        if (i == 0 or !(std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_')) return true;
+    }
+    return false;
 }
 
 /// Emits `<core>__iter`, the core's slice computing only the §9.17.3
@@ -164,10 +204,13 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     const body = self.out.items.len;
     // One slice evaluation serves every operator's input.
     const full = self.core;
+    var at_m: ?usize = null;
     if (uses_core) {
         self.core = self.state_core;
+        at_m = self.out.items.len + "    ".len;
         try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
     }
+    const after_m = self.out.items.len;
     try emitAcceptBody(self, acc);
     // VerA's `$vera_reject_step`: in a transient, a retry time before this
     // point rejects it. A static solve has no step to shorten.
@@ -178,6 +221,10 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\    }}
         \\
     , .{k});
+    // A slice whose only work is in-place held arrays (`plan.Core.in_place`)
+    // leaves `m` unread: the call stays, for its stores.
+    if (at_m) |at| if (!readsM(self.out.items[after_m..]))
+        self.out.replaceRangeAssumeCapacity(at, "const m = ".len, "_ = ");
     self.core = full;
     gen_unit.patchUnless(self, at_s, body, "S");
     gen_unit.patchUnless(self, at_model, body, "model");
@@ -449,7 +496,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // value is a literal zero.
             try self.w("    inst.{s} = 0;\n", .{n});
         } else if (h.array != none_u32) {
-            // §3.2.2 a held array's core field is already its plain values.
+            // §3.2.2 a held array's core field is already its plain values;
+            // an in-place one is already in `inst`.
+            if (gen_render.inPlace(self, h.array)) continue;
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
         } else {
             // The core field is typed by `vty`, not the declared type, and

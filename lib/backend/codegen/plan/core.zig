@@ -51,6 +51,11 @@ pub const Core = struct {
     /// Per Value: something `eval`/`q` returns reads it (`heldOnly`'s
     /// marking). Empty when the device stores into no held array.
     eval_need: []bool = &.{},
+    /// §5.10 per `Lowered.mem_arrays` row: this slice writes the held array
+    /// in place in its `Instance` field instead of copy-on-write
+    /// (`state.zig` `inPlaceArrays`). Set on the `updateState` slice only,
+    /// whose caller stores every held value back unconditionally. Empty: none.
+    in_place: []const bool = &.{},
 };
 
 // ---------------------------------------------------- the shared core ----

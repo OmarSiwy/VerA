@@ -393,6 +393,12 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     // The read-back carries V's derivative, but into nothing eval returns,
     // so the storage stays plain.
     try std.testing.expect(std.mem.indexOf(u8, src, "var a0: [4]f64 = undefined;") != null);
+    // `updateState`'s slice stores in place (`state.inPlaceArrays`): a
+    // mutable pointer at the field, no copy-in, no array field to return and
+    // no write-back.
+    try std.testing.expect(std.mem.indexOf(u8, src, "var p0: *[4]f64 = undefined;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (held) zArrSt(f64, p0, ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst.hh__held__hist = m.f") == null);
 }
 
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
