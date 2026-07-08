@@ -1288,12 +1288,23 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
             return if (c.v != 0.0) a.to(r) else b.to(r);
         }
 
+        /// The unknowns `lane` carries, one bit each: computed once per family.
+        const carried: u64 = blk: {
+            var c: u64 = 0;
+            for (lane, 0..) |l, u| if (u < 64 and l != no_lane) {
+                c |= @as(u64, 1) << @intCast(u);
+            };
+            break :blk c;
+        };
+
+        /// O(1) at compile time on purpose. Zig 0.16 re-evaluates this call
+        /// at every call site whose return type names it (`Join`, `zOf`, so
+        /// every family operation in a device), not once per mask: the
+        /// 64-step check loop it replaced was 39% of psp103's `eval`
+        /// object build (23.4 -> 14.3 Gi).
         pub fn Of(comptime m: u64) type {
-            @setEvalBranchQuota(100_000);
-            for (0..64) |u| {
-                if ((m >> u) & 1 != 0 and (u >= lane.len or lane[u] == no_lane))
-                    @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} names unknown {d}, which `lane` does not carry", .{ m, u }));
-            }
+            if (m & ~carried != 0)
+                @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} names unknown {d}, which `lane` does not carry", .{ m, @ctz(m & ~carried) }));
             return struct {
                 v: f64,
                 d: Lanes align(@alignOf(L)),
