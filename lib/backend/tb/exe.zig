@@ -32,6 +32,12 @@ pub const BuildOptions = struct {
     shared_lib: bool = false,
     /// Keep DWARF in a ReleaseFast/ReleaseSmall build (`orchestrator.strip`).
     debug_info: bool = false,
+    /// Overrides `orchestrator.strip` when set. The fixture suite strips its
+    /// Debug testbenches: DWARF is 7-26% of a testbench build's compiler
+    /// work and the suite reads only the transcript. A safety panic
+    /// still prints its message, without the stack trace; rebuild by hand
+    /// with `vera --emit-exe` to get one.
+    strip: ?bool = null,
 };
 
 /// Outcome of `buildExe`. Either payload is owned by the `gpa` passed to
@@ -105,7 +111,7 @@ pub fn buildExe(
     });
     // No debug info where there are no safety checks to trace: emitting it
     // is most of an unsafe build's LLVM time.
-    if (orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
     if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });

@@ -389,6 +389,7 @@ fn runAndCheck(
         .zig_exe = options.zig_exe,
         .optimize = cfg.fixture_opt,
         .backend = cfg.fixture_backend,
+        .strip = true,
     }) catch |err| {
         try w.print("FAIL {s}: building the testbench: {t}\n", .{ f.path, err });
         return .unmet;
