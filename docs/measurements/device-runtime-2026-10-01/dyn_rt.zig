@@ -220,6 +220,16 @@ fn Api(comptime D: type, comptime name: []const u8) type {
             const sim = tranSim(k, 4);
             var res: u32 = 0;
             var rej: f64 = 0;
+            if (h != null and k % 7 == 3) {
+                // Hash only: a rejected step first. Accept a perturbed point,
+                // revert it (stateCtl(.revert)), then accept the real one, so
+                // the hash also covers the revert path.
+                var xr = x;
+                for (&xr) |*v| v.* += 0.003;
+                @call(.never_inline, device_update, .{ &xr, &g_model, &g_inst, &g_state, &sim, &res, &rej });
+                var rr: u32 = 0;
+                @call(.never_inline, device_control, .{ &g_model, &g_inst, &g_state, 2, &rr });
+            }
             @call(.never_inline, device_update, .{ &x, &g_model, &g_inst, &g_state, &sim, &res, &rej });
             if (h) |hp| hp.* = mix(hp.*, rej + @as(f64, @floatFromInt(res)));
             // The accepted point: a host latches it (stateCtl(.commit)).

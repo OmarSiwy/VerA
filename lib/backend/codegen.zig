@@ -365,6 +365,10 @@ pub const Gen = struct {
     /// Then the storage is `S`; otherwise plain `f64`, and a store keeps only
     /// the value, since no load could see what it dropped. See `prepare`.
     arr_s: []bool = &.{},
+    /// §5.10 per `Lowered.mem_arrays` row: the held array `updateState`
+    /// stores in place and whose `<field>__dirty` range `stateCtl` copies
+    /// (`state.inPlaceArrays`). Set by `emitInstance`; empty when none.
+    held_in_place: []const bool = &.{},
     /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
     /// `ddx_reads`, and a subset of `deriv_reads` by construction.
     ddx_reads: u64 = 0,

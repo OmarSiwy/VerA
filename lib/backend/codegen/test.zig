@@ -401,6 +401,41 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.hh__held__hist = m.f") == null);
 }
 
+test "codegen: §5.10 stateCtl copies only the written range of a long in-place held array" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module dr(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  real hist[0:99], few[0:3]; integer k, nh;
+        \\  analog begin
+        \\    @(initial_step) begin
+        \\      nh = 0;
+        \\      for (k = 0; k < 100; k = k + 1) hist[k] = 0.0;
+        \\      for (k = 0; k < 4; k = k + 1) few[k] = 0.0;
+        \\    end
+        \\    I(p, n) <+ V(p, n) * hist[0] + few[1];
+        \\    if (nh < 100) begin
+        \\      hist[nh] = V(p, n);
+        \\      few[nh % 4] = V(p, n);
+        \\      nh = nh + 1;
+        \\    end
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // The 100-element history carries a range; the 4-element one is copied
+    // whole (`file.dirty_min_len`).
+    try std.testing.expect(std.mem.indexOf(u8, src, "dr__held__hist__dirty: [2]i64 = .{ 0, 99 },") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "dr__held__few__dirty") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zArrStD(f64, p") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zArrSync(f64, &state.dr__held__hist, &inst.dr__held__hist, &inst.dr__held__hist__dirty);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "zArrSync(f64, &inst.dr__held__hist, &state.dr__held__hist, &inst.dr__held__hist__dirty);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "state.dr__held__few = inst.dr__held__few;") != null);
+    // A fresh `State` matches `inst` nowhere in particular: the whole range.
+    try std.testing.expect(std.mem.indexOf(u8, src, "    inst.dr__held__hist__dirty = .{ 0, 99 };\n    return .{};") != null);
+}
+
 test "codegen: §3.2 a memory-backed array starts each evaluation through zFill, not @memset" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,

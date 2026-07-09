@@ -86,7 +86,7 @@ pub fn emitCore(self: *Gen) Error!void {
             if (k != none_u32) keep[k] = true;
         };
     }
-    self.core.in_place = try inPlaceArrays(self);
+    self.core.in_place = self.held_in_place;
     defer self.core.in_place = &.{};
     self.state_core = try gen_unit.sliceCore(self, "state", keep,
         \\/// §4.5.2 what `updateState` reads off the core, and only what that
@@ -107,7 +107,7 @@ pub fn emitCore(self: *Gen) Error!void {
 /// the slice runs on a §9.21.1 `table_probe` copy of the instance
 /// (`setup.probeInstance`), nor for an array a `vera_timepoint` cache may
 /// re-point at its `tp` slot. Empty when no array qualifies.
-fn inPlaceArrays(self: *Gen) Error![]const bool {
+pub fn inPlaceArrays(self: *Gen) Error![]const bool {
     if (self.lowered.table_samples.items.len != 0) return &.{};
     const n = self.lowered.mem_arrays.items.len;
     const flags = try self.arena.alloc(bool, n);
@@ -170,25 +170,19 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         .{self.lowered.limit_slots.items.len},
     );
     try gen_file.emitStateTwins(self, acc.reads_t_prev);
-    // VerA's `vera_timepoint` (§2.9): a fresh state is a fresh cache.
-    if (self.lowered.timepoints.items.len != 0) try self.w(
-        \\}};
-        \\
-        \\pub fn initState(_: *const Model, inst: *Instance) State {{
-        \\    zTpDrop(inst);
-        \\    return .{{}};
-        \\}}
-        \\
-        \\pub fn updateState(comptime
-    , .{}) else try self.w(
-        \\}};
-        \\
-        \\pub fn initState(_: *const Model, _: *Instance) State {{
-        \\    return .{{}};
-        \\}}
-        \\
-        \\pub fn updateState(comptime
-    , .{});
+    // VerA's `vera_timepoint` (§2.9): a fresh state is a fresh cache. A
+    // dirty-tracked held array (`file.dirtyTracked`): the fresh `State`
+    // differs from `inst` anywhere, so its range is the whole array.
+    var dirty = false;
+    for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_file.dirtyTracked(self, h.array));
+    const tp = self.lowered.timepoints.items.len != 0;
+    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty) "inst" else "_"});
+    if (tp) try self.w("    zTpDrop(inst);\n", .{});
+    for (self.lowered.held_vars.items, self.names.held_names) |h, n| {
+        if (h.array == none_u32 or !gen_file.dirtyTracked(self, h.array)) continue;
+        try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
+    }
+    try self.w("    return .{{}};\n}}\n\npub fn updateState(comptime", .{});
     // Each goes unread when the only accepted-step work is §9.13.1's
     // internal-seed advance, a function of the seed alone.
     const at_s = self.out.items.len + 1;
@@ -500,6 +494,8 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // an in-place one is already in `inst`.
             if (gen_render.inPlace(self, h.array)) continue;
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
+            if (gen_file.dirtyTracked(self, h.array))
+                try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
         } else {
             // The core field is typed by `vty`, not the declared type, and
             // the two can disagree (a join left at `.real`). The declared

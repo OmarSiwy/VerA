@@ -723,6 +723,7 @@ const plusarg_txt =
 /// §4.5 operator, keyed by the stable unit name so adding an unrelated
 /// operator never renumbers existing state.
 pub fn emitInstance(self: *Gen) Error!void {
+    self.held_in_place = try gen_state.inPlaceArrays(self);
     try self.w(
         \\/// Per-instance state. The host owns every field above the operator
         \\/// block: `temperature` in kelvin (§9.10) and `mfactor` (§6.3.6). Time,
@@ -871,6 +872,10 @@ pub fn emitInstance(self: *Gen) Error!void {
         try self.hist.append(self.arena, self.names.held_names[i]);
         if (h.array != none_u32) {
             try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
+            if (dirtyTracked(self, h.array)) try self.w(
+                "    {s}__dirty: [2]i64 = .{{ 0, {d} }}, // §5.10 elements written since the last stateCtl\n",
+                .{ self.names.held_names[i], self.lowered.mem_arrays.items[h.array].len - 1 },
+            );
             continue;
         }
         const init = self.an.foldConst(self.an.rv(h.init), true);
@@ -992,6 +997,39 @@ fn fsmStateCtl(self: *const Gen) bool {
     return false;
 }
 
+/// Returns whether held array `id` keeps a `__dirty` index range: it is
+/// stored in place (`Gen.held_in_place`) and long enough that `stateCtl`
+/// copying only the elements written since the last commit or revert beats
+/// copying it whole. Below `dirty_min_len` the per-store range update costs
+/// more than the copy it saves (coupled_ltra: updateState +30% with every
+/// held array tracked, docs/measurements/device-runtime-2026-10-01.md).
+pub fn dirtyTracked(self: *const Gen, id: u32) bool {
+    return self.held_in_place.len != 0 and self.held_in_place[id] and
+        self.lowered.mem_arrays.items[id].len >= dirty_min_len;
+}
+
+/// Shortest held array `dirtyTracked` keeps a range for (elements).
+const dirty_min_len = 64;
+
+/// Returns the `Lowered.held_vars` row's array id when it is dirty-tracked.
+fn dirtyArray(self: *const Gen, h: Lower.HeldVar) ?u32 {
+    if (h.array == none_u32 or !dirtyTracked(self, h.array)) return null;
+    return h.array;
+}
+
+/// Returns the module's `Lowered.held_vars` row named `name`, if any.
+fn heldNamed(self: *const Gen, name: []const u8) ?Lower.HeldVar {
+    for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
+        if (std.mem.eql(u8, n, name)) return h;
+    }
+    return null;
+}
+
+/// Returns the element type of held array row `h`'s `Instance` field.
+fn elemTy(self: *const Gen, h: Lower.HeldVar) []const u8 {
+    return if (self.lowered.mem_arrays.items[h.array].ty == .integer) "i64" else "f64";
+}
+
 /// Returns whether the module has any path latch. Every gate on the latch
 /// machinery tests this, not `acc_lo`: the reactive lowering plants prev+acc
 /// pairs, but a source-level `$prev` site arrives alone and still needs its
@@ -1057,7 +1095,13 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     );
     for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
     for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
-    for (self.hist.items) |h| try self.w("        state.{s} = inst.{s};\n", .{ h, h });
+    for (self.hist.items) |h| {
+        if (heldNamed(self, h)) |hv| if (dirtyArray(self, hv) != null) {
+            try self.w("        zArrSync({1s}, &state.{0s}, &inst.{0s}, &inst.{0s}__dirty);\n", .{ h, elemTy(self, hv) });
+            continue;
+        };
+        try self.w("        state.{s} = inst.{s};\n", .{ h, h });
+    }
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
             "        state.{0s}__t__acc = inst.{0s}__t[@intCast(inst.{0s}__head % {1d})];\n        state.{0s}__v__acc = inst.{0s}__v[@intCast(inst.{0s}__head % {1d})];\n",
@@ -1070,7 +1114,13 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},
     );
-    for (self.hist.items) |h| try self.w("        inst.{s} = state.{s};\n", .{ h, h });
+    for (self.hist.items) |h| {
+        if (heldNamed(self, h)) |hv| if (dirtyArray(self, hv) != null) {
+            try self.w("        zArrSync({1s}, &inst.{0s}, &state.{0s}, &inst.{0s}__dirty);\n", .{ h, elemTy(self, hv) });
+            continue;
+        };
+        try self.w("        inst.{s} = state.{s};\n", .{ h, h });
+    }
     // After `__head` is back: the slot the rejected push overwrote.
     for (self.names.units, 0..) |u, i| {
         if (u.role == .analog_op and u.op == .absdelay) try self.w(
