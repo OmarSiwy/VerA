@@ -229,9 +229,9 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
         // The Newton-iterate counter costs an `Instance` field plus an
         // `updateState`/`stateCtl` pair, so it is emitted only for a model that
-        // reads one of the two names that need it (`simparamIsRuntime`).
+        // reads `iteration`.
         if (args.len >= 1) if (constStrArg(self, args[0])) |s| {
-            if (simparamIsRuntime(s)) self.out.uses.insert(.newton_iter);
+            if (std.mem.eql(u8, s, "iteration")) self.out.uses.insert(.newton_iter);
             for (host_simparams) |h| if (std.mem.eql(u8, h.name, s)) self.out.uses.insert(h.use);
         };
     }
@@ -515,10 +515,12 @@ pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const
 }
 
 /// Reports whether `name` is a §9.15 simulation parameter the device answers at run
-/// time: the Newton iteration counter, which the host advances once per evaluated
-/// iteration (`advanceIteration`).
+/// time from `SimState`: the Newton iteration counter, which the host advances once
+/// per evaluated iteration (`advanceIteration`), and `dt`, not in Table 9-27, the
+/// host's step since the last accepted point (0 in a static solve), returned as
+/// the host's f64 so a model can reproduce the host's own `t - dt` bit for bit.
 pub fn simparamIsRuntime(name: []const u8) bool {
-    return std.mem.eql(u8, name, "iteration");
+    return std.mem.eql(u8, name, "iteration") or std.mem.eql(u8, name, "dt");
 }
 
 /// The §9.15 simulation parameters whose value is the host's, in `Model` field

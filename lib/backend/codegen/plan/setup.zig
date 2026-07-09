@@ -212,7 +212,7 @@ fn callInvariant(in: Input, d: anytype) bool {
     return switch (d.callee) {
         .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected" => true,
         // §9.15 Table 9-27: every literal name but `iteration`, which moves
-        // with each Newton step. `tnom` is a Model field the host writes with
+        // with each Newton step, and `dt`, with each timepoint. `tnom` is a Model field the host writes with
         // the card; a published homotopy knob (gmin, gdev, sourceScaleFactor)
         // is invariant within a solve, and the host re-runs `setup` after
         // writing one (`setup_simparams` lists which).
@@ -521,6 +521,8 @@ fn callTimepoint(in: Input, d: anytype) bool {
     if (callInvariant(in, d)) return true;
     return switch (d.callee) {
         .@"$abstime", .@"$realtime", .analysis, .analog_initial, .initial_step, .final_step => true,
+        // §9.15 `dt` moves with the timepoint, never within one; `iteration` does.
+        .@"$simparam" => std.mem.eql(u8, plan_args.strArg(in, d.args, 0) orelse return false, "dt"),
         .@"$held_real", .@"$held_int", .@"$tp_hit", .@"$tp_int", .@"$tp_real" => true,
         .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat" => true,
         else => false, // else: an ALLOWLIST — every other callee may read the iterate or state an iteration moves
@@ -745,6 +747,7 @@ test "a value of parameters and $temperature is solve-invariant; one reading a p
     const k = try f.mir.emit(a, .entry, .fmul, &.{ is, et }); // is * exp(T)
     const i = try f.mir.emit(a, .entry, .fmul, &.{ k, try f.probe(0) }); // … * V(a)
     const it = try f.call("$simparam", &.{try f.mir.addStrConst(a, "iteration")});
+    const dt = try f.call("$simparam", &.{try f.mir.addStrConst(a, "dt")});
     const an = try f.analysis();
     const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
 
@@ -753,6 +756,8 @@ test "a value of parameters and $temperature is solve-invariant; one reading a p
     try std.testing.expect(!s.val[@intFromEnum(i)]);
     // §9.15 `iteration` moves with every Newton step.
     try std.testing.expect(!s.val[@intFromEnum(it)]);
+    // `dt` moves with every timepoint, so `setup` must not hoist it.
+    try std.testing.expect(!s.val[@intFromEnum(dt)]);
     try std.testing.expect(s.blk[0]);
     try std.testing.expect(candidate(in, s.val, k));
     try std.testing.expect(!candidate(in, s.val, i));

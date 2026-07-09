@@ -585,7 +585,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$tp_int",
         .@"$tp_real",
         => true,
-        // §9.15 `$simparam("iteration")`: sim.iteration.
+        // §9.15 `$simparam("iteration")`, `$simparam("dt")`: the SimState.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
         // Constants, Model reads, and Instance fields fixed with the card and
         // the instance (`temperature`, `mfactor`), and every task,
@@ -980,6 +980,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
                 self.uses_sim = true;
+                if (std.mem.eql(u8, nm, "dt")) return self.b("S.con(sim.dt)", .{});
                 return self.b("S.con(@floatFromInt(sim.iteration))", .{});
             }
             // Host-published first: `simparamValue` answers `tnom` only as

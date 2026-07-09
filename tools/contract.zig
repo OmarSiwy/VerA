@@ -536,6 +536,7 @@ pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
 ///   t: §9.10 `$abstime`, the time the solve is targeting.
 ///   dt: the step since the last accepted point. 0 marks the static solve
 ///     (DC, IC, a transient's first point) an operator's DC form keys on.
+///     VerA's `$simparam("dt")` (§9.15) returns it unchanged.
 ///   kind: §4.6.1 `analysis()`.
 ///   initial_step, final_step: the §5.10.2 global events.
 ///   analog_initial: this evaluation is the first of a §5.2.1 sub-task (each
