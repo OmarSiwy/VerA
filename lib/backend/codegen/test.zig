@@ -579,10 +579,11 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
     defer h.deinit();
     const o = try h.genOut(std.testing.allocator);
 
-    // The merged core, `updateState`'s slice of it and the §4.5.11 `__sec`
-    // coefficient reader derived from the laplace operator: every shape
+    // The merged core and `updateState`'s slice of it: every shape
     // `emitUnits` can still produce for a model with no §9.4 display unit.
-    try std.testing.expectEqual(@as(usize, 3), o.names.len);
+    // The §4.5.11 `__sec` coefficient reader is not a unit file: it stays in
+    // the prologue (below), where every unit file reaches it through `dev`.
+    try std.testing.expectEqual(@as(usize, 2), o.names.len);
     for (o.names, o.unit_lo, o.unit_hi, 0..) |name, lo, hi, i| {
         // Tiling: `Output`'s invariant, and what lets the writer rebuild
         // device.zig as prologue ++ imports ++ tail with nothing dropped.
@@ -602,6 +603,7 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
     try std.testing.expect(std.mem.indexOf(u8, o.text[o.unit_hi[o.unit_hi.len - 1]..], "pub fn eval(") != null);
     // The prologue before the first unit carries the types a unit file aliases.
     try std.testing.expect(std.mem.indexOf(u8, o.text[0..o.unit_lo[0]], "pub const Model = struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o.text[0..o.unit_lo[0]], "__sec(") != null);
 }
 
 test "codegen: the unit prologue aliases the helper API and not its internals" {
@@ -664,6 +666,48 @@ test "codegen: every split unit file passes AstGen, hoist arrays included" {
         if (zir.hasCompileErrors()) std.debug.print("{s}\n", .{file});
         try std.testing.expect(!zir.hasCompileErrors());
     }
+}
+
+test "codegen: a laplace device's split unit files reach its __sec reader" {
+    // ESPice's `.hdl` loader builds split: the core called `<unit>__sec`, a
+    // unit file of its own, with no declaration in the core's file
+    // ("use of undeclared identifier", GeneratedDeviceDoesNotCompile). The
+    // reader now sits in device.zig's prologue, public, and every unit file
+    // aliases it from `dev`; AstGen resolves every identifier, so it fails
+    // on a unit file that names one it does not declare.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module vl2(p, n, cp, cn);
+        \\  inout p, n, cp, cn;
+        \\  electrical p, n, cp, cn;
+        \\  parameter real num[0:2] = '{1.0, 0.0, 0.0};
+        \\  parameter real den[0:2] = '{1.0, 1e-9, 0.0};
+        \\  analog V(p, n) <+ laplace_nd(V(cp, cn), num, den);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const o = try h.genOut(std.testing.allocator);
+    const gpa = std.testing.allocator;
+    try std.testing.expect(o.names.len != 0);
+    const sec = "vl2__analog_op__laplace_nd__sec";
+    // In device.zig's prologue, public, and no unit file of its own.
+    try std.testing.expect(std.mem.indexOf(u8, o.text[0..o.unit_lo[0]], "pub fn " ++ sec ++ "(") != null);
+    for (o.names) |nm| try std.testing.expect(!std.mem.endsWith(u8, nm, "__sec"));
+    try std.testing.expect(std.mem.indexOf(u8, o.prelude, "const " ++ sec ++ " = dev." ++ sec ++ ";\n") != null);
+    var named = false;
+    for (o.unit_lo, o.unit_fn, o.unit_hi) |lo, fn_at, hi| {
+        named = named or std.mem.indexOf(u8, o.text[lo..hi], sec ++ "(model)") != null;
+        const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
+        defer gpa.free(file);
+        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        defer tree.deinit(gpa);
+        var zir = try std.zig.AstGen.generate(gpa, tree);
+        defer zir.deinit(gpa);
+        if (zir.hasCompileErrors()) std.debug.print("{s}\n", .{file});
+        try std.testing.expect(!zir.hasCompileErrors());
+    }
+    // The core reads the reader, so the split form exercised the alias.
+    try std.testing.expect(named);
 }
 
 test "codegen: identical MIR yields a byte-identical file (determinism)" {
