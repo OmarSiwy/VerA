@@ -5,7 +5,7 @@
 //! `lib/` a dependency of `src/`, never the reverse.
 
 const std = @import("std");
-const BigArena = @import("big_arena.zig");
+pub const BigArena = @import("big_arena.zig");
 const Allocator = std.mem.Allocator;
 
 const token = @import("frontend").token;
