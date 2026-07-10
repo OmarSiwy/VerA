@@ -795,8 +795,8 @@ pub fn init(
     };
 }
 
-/// Unmaps the SSA matrix, the one allocation an arena cannot reclaim.
-/// Every other table lives in `arena`.
+/// Frees the SSA builder's `(place, block)` map, the one table an arena
+/// cannot reclaim. Every other table lives in `arena`.
 pub fn deinit(self: *Lower) void {
     self.builder.deinit();
 }
@@ -809,8 +809,8 @@ pub const Options = struct {
     displays_dropped: bool = false,
 };
 
-/// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's OS
-/// mappings are gone on return, so everything returned lives in `arena`.
+/// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's map
+/// is gone on return, so everything returned lives in `arena`.
 /// Returns `error.DiagnosticsReported` when any error went to `bag`.
 pub fn lower(
     arena: std.mem.Allocator,
@@ -828,7 +828,7 @@ pub fn lower(
     self.displays_dropped = opts.displays_dropped;
     defer {
         self.deinit();
-        assert(self.builder.defs.len == 0);
+        assert(self.builder.dir.len == 0);
     }
     return self.lowerFile();
 }
