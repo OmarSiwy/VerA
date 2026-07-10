@@ -40,7 +40,7 @@ pub fn zDeg(comptime D: usize, sec: [2][D + 1]f64) usize {
 /// comes back zero. At `d == D` the operations are the full-degree ones, in
 /// the same order.
 pub fn zBilin(comptime D: usize, p: [D + 1]f64, k: f64, d: usize) [D + 1]f64 {
-    var q: [D + 1]f64 = @splat(0.0);
+    var qz: [D + 1]f64 = @splat(0.0);
     var ki: f64 = 1.0; // kⁱ
     for (0..d + 1) |i| {
         var t: [D + 1]f64 = @splat(0.0);
@@ -56,10 +56,10 @@ pub fn zBilin(comptime D: usize, p: [D + 1]f64, k: f64, d: usize) [D + 1]f64 {
             while (j > 0) : (j -= 1) t[j] += t[j - 1];
             deg += 1;
         }
-        for (0..D + 1) |j| q[j] += t[j];
+        for (0..D + 1) |j| qz[j] += t[j];
         ki *= k;
     }
-    return q;
+    return qz;
 }
 
 /// One direct-form-I section on already-DISCRETE coefficients, in the solver's
@@ -163,14 +163,14 @@ fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f6
     const c = 0.5 * dt;
     // Back substitution: Δ_i = P_i + Q_i Δ_{m-1}, P_{m-1} = 0, Q_{m-1} = 1.
     var p: [D]f64 = undefined;
-    var q: [D]f64 = undefined;
+    var qz: [D]f64 = undefined;
     p[m - 1] = 0.0;
-    q[m - 1] = 1.0;
+    qz[m - 1] = 1.0;
     var i = m - 1;
     while (i > 0) {
         i -= 1;
         p[i] = 2.0 * c * x[i + 1] + c * p[i + 1];
-        q[i] = c * q[i + 1];
+        qz[i] = c * qz[i + 1];
     }
     var fm = ua;
     var sp: f64 = 0.0;
@@ -179,7 +179,7 @@ fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f6
         const al = sec[1][f.off + j] / am;
         fm -= al * x[j];
         sp += al * p[j];
-        sq += al * q[j];
+        sq += al * qz[j];
     }
     const den = 1.0 + c * sq;
     const dl = (c * (2.0 * fm + (ub - ua)) - c * sp) / den;
@@ -187,10 +187,10 @@ fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f6
     var g: f64 = 0.0;
     for (0..m) |j| {
         const ga = sec[0][f.off + j] / am - bm * (sec[1][f.off + j] / am);
-        const xj = x[j] + (p[j] + q[j] * dl);
+        const xj = x[j] + (p[j] + qz[j] * dl);
         if (xn) |o| o[j] = xj;
         y += ga * xj;
-        g += ga * q[j];
+        g += ga * qz[j];
     }
     return .{ y, bm + g * c / den };
 }
@@ -414,8 +414,8 @@ test "zBilin: D = 1, the degree the other rows skip" {
     //   P·(1+z⁻¹) = 2(1+z⁻¹) + 3k(1−z⁻¹) = (2+3k) + (2−3k)z⁻¹.
     // Dyadic, so exact. codegen.zig covers D = 0, 2 and 3; a first-order
     // section is the commonest filter there is and was the gap between them.
-    const q = zBilin(1, .{ 2.0, 3.0 }, 10.0, 1);
-    try stdx.testing.expectEqual([2]f64{ 32.0, -28.0 }, q);
+    const qz = zBilin(1, .{ 2.0, 3.0 }, 10.0, 1);
+    try stdx.testing.expectEqual([2]f64{ 32.0, -28.0 }, qz);
 }
 
 test "zDeg/zBilin: a zero-padded section transforms at its own degree" {
