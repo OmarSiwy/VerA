@@ -297,6 +297,11 @@ const tb_runner_text = @import("tb/runner_text.zig");
 const tb_exe = @import("tb/exe.zig");
 pub const buildExe = tb_exe.buildExe;
 pub const BuildOptions = tb_exe.BuildOptions;
+pub const BuildResult = tb_exe.BuildResult;
+pub const stageExe = tb_exe.stage;
+pub const Staged = tb_exe.Staged;
+pub const buildBatch = tb_exe.buildBatch;
+pub const batch_argv0 = tb_exe.batch_argv0;
 
 const tb_test = @import("tb/test.zig");
 

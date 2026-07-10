@@ -79,6 +79,10 @@ pub const Compiler = struct {
         d: vera.tb.Directives,
         w: *Io.Writer,
     ) anyerror!Result,
+    /// Runs once over the whole fixture list before any `check`, on `jobs`
+    /// workers: work `check` can share across fixtures (VerA builds its
+    /// testbenches in batches here). Null: nothing to share.
+    prepare: ?*const fn (ctx: *anyopaque, gpa: std.mem.Allocator, io: Io, fixtures: []const Fixture, jobs: usize) anyerror!void = null,
 };
 
 /// Every suite knob, parsed once by `tests/bench.zig` and shared by all the
@@ -102,6 +106,10 @@ pub const Config = struct {
     fixture_opt: std.builtin.OptimizeMode = .Debug,
     /// `--fixture-backend=llvm|native`; null is `Backend.auto(fixture_opt, <host>)`.
     fixture_backend: ?vera.orchestrator.Backend = null,
+    /// `--no-batch` builds every fixture testbench alone (`Compiler.prepare`
+    /// is skipped): the escape hatch, and the baseline a batched run is
+    /// compared against.
+    batch: bool = true,
 
     /// Returns the defaults, with `jobs` from `defaultJobs`.
     pub fn init() Config {
@@ -129,6 +137,7 @@ const job_ram: u64 = 2 << 30;
 /// which decides whether it is a filter. Exits 2 on a malformed value.
 pub fn takeArg(cfg: *Config, a: []const u8) bool {
     if (std.mem.eql(u8, a, "--strict")) cfg.strict = true //
+    else if (std.mem.eql(u8, a, "--no-batch")) cfg.batch = false //
     else if (std.mem.eql(u8, a, "--coverage")) cfg.coverage = true //
     else if (std.mem.startsWith(u8, a, "--fixture-root=")) cfg.root = a["--fixture-root=".len..] //
     else if (std.mem.startsWith(u8, a, "--fixture-opt=")) {
@@ -275,6 +284,8 @@ pub fn run(
         try w.flush();
         return if (ok) 0 else 1;
     }
+
+    if (compiler.prepare) |prepare| if (cfg.batch) try prepare(compiler.ctx, gpa, io, fixtures, @max(cfg.jobs, 1));
 
     const strict = cfg.strict;
     var counts: Counts = .{};

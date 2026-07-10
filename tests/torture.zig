@@ -17,17 +17,136 @@ const Fixture = harness.Fixture;
 const Result = harness.Result;
 
 /// VerA at full depth: compile, build a testbench, run it, read the `ok=`
-/// columns. `cfg` is borrowed for its `fixture_opt`/`fixture_backend` and must
-/// outlive the returned plug.
-pub fn compiler(cfg: *harness.Config) harness.Compiler {
+/// columns. `ctx` must outlive the returned plug.
+pub fn compiler(ctx: *Ctx) harness.Compiler {
     return .{
         .name = "vera",
         .runs = true,
         .owns_xfail = true,
-        .ctx = cfg,
+        .ctx = ctx,
         .check = check,
+        .prepare = prepare,
     };
 }
+
+/// `compiler`'s state: the suite's knobs, and the testbenches `prepare` built
+/// in batches.
+pub const Ctx = struct {
+    /// Borrowed for `fixture_opt`/`fixture_backend`.
+    cfg: *const harness.Config,
+    /// Fixture path -> the batch binary that stands in for its testbench.
+    /// Written by `prepare` alone, before any `check` reads it.
+    batched: std.StringHashMapUnmanaged(Batched) = .empty,
+    /// The batch binaries' paths, owned by the `gpa` given to `prepare`.
+    bins: std.ArrayList([]const u8) = .empty,
+
+    /// Frees what `prepare` allocated; `gpa` must be the one it was given.
+    pub fn deinit(ctx: *Ctx, gpa: std.mem.Allocator) void {
+        for (ctx.bins.items) |b| gpa.free(b);
+        ctx.bins.deinit(gpa);
+        ctx.batched.deinit(gpa);
+    }
+};
+
+/// One fixture's member slot in a batch binary.
+const Batched = struct { bin: []const u8, index: usize };
+
+/// Fixtures per batch, in walk order. A batch build pays the compiler's fixed
+/// cost once instead of `batch_size` times; larger batches serialise more of
+/// the run behind one build and hold more in one compiler's memory.
+const batch_size = 8;
+
+/// The compile -> batch-build half of the run: every fixture is compiled and
+/// staged as `check` would, and each run of `batch_size` consecutive fixtures
+/// whose testbench is a plain analog runner is built as one binary (the mixed
+/// runner links `sim` and stays one build per fixture). `check` then compiles
+/// again (milliseconds), finds the batch binary, and runs it in place of its
+/// own build. A batch that does not build marks nothing: its fixtures build
+/// one by one in `check`, so a failure names its own fixture.
+fn prepare(ctx_ptr: *anyopaque, gpa: std.mem.Allocator, io: Io, fixtures: []const Fixture, jobs: usize) anyerror!void {
+    // ponytail: argv[0] dispatch goes through a symlink; Windows builds one by one.
+    if (@import("builtin").os.tag == .windows) return;
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    const chunks = try gpa.alloc(Chunk, (fixtures.len + batch_size - 1) / batch_size);
+    defer gpa.free(chunks);
+    @memset(chunks, .{});
+    var pool: Pool = .{ .gpa = gpa, .io = io, .ctx = ctx, .fixtures = fixtures, .chunks = chunks };
+    var group: Io.Group = .init;
+    var hands: usize = 0;
+    while (hands < jobs) : (hands += 1) group.concurrent(io, Pool.work, .{&pool}) catch break;
+    if (hands == 0) pool.work();
+    try group.await(io);
+
+    for (chunks, 0..) |c, k| {
+        const bin = c.bin orelse continue;
+        try ctx.bins.append(gpa, bin);
+        const lo = k * batch_size;
+        for (c.member[0..c.n], 0..) |fi, i| try ctx.batched.put(gpa, fixtures[lo + fi].path, .{ .bin = bin, .index = i });
+    }
+}
+
+/// One batch's outcome: which of its fixtures (offsets in the chunk) are
+/// members, in member order, and the binary when it built.
+const Chunk = struct {
+    member: [batch_size]usize = undefined,
+    n: usize = 0,
+    bin: ?[]const u8 = null,
+};
+
+/// `prepare`'s work queue: one chunk of fixtures per take.
+const Pool = struct {
+    gpa: std.mem.Allocator,
+    io: Io,
+    ctx: *const Ctx,
+    fixtures: []const Fixture,
+    chunks: []Chunk,
+    next: std.atomic.Value(usize) = .init(0),
+
+    fn work(pool: *Pool) void {
+        while (true) {
+            const k = pool.next.fetchAdd(1, .monotonic);
+            if (k >= pool.chunks.len) return;
+            pool.chunk(k) catch {}; // a batch that fails marks nothing; `check` builds alone
+        }
+    }
+
+    fn chunk(pool: *Pool, k: usize) !void {
+        var arena_state: std.heap.ArenaAllocator = .init(pool.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const lo = k * batch_size;
+        const fs = pool.fixtures[lo..@min(lo + batch_size, pool.fixtures.len)];
+        var staged: [batch_size]vera.tb.Staged = undefined;
+        const c = &pool.chunks[k];
+        for (fs, 0..) |f, fi| {
+            const source = Io.Dir.cwd().readFileAlloc(pool.io, f.path, arena, .limited(1 << 20)) catch continue;
+            if (harness.vcdExpectation(source) != null) continue;
+            const d = vera.tb.parse(arena, source) catch continue;
+            if (d.reject.len != 0) continue;
+            var sink: ?vera.tb.Staged = null;
+            var discard: Io.Writer.Discarding = .init(&.{});
+            _ = runAndCheck(pool.gpa, pool.io, arena, pool.ctx, f, source, d, &discard.writer, &sink) catch continue;
+            staged[c.n] = sink orelse continue;
+            c.member[c.n] = fi;
+            c.n += 1;
+        }
+        if (c.n < 2) return; // one member gains nothing over its own build
+        const cfg = pool.ctx.cfg;
+        const built = try vera.tb.buildBatch(pool.gpa, pool.io, staged[0..c.n], .{
+            .work_dir = try std.fmt.allocPrint(arena, "{s}/torture-batch/{d}", .{ options.work_root, k }),
+            .contract = options.contract,
+            .name = "batch",
+            .zig_exe = options.zig_exe,
+            .optimize = cfg.fixture_opt,
+            .backend = cfg.fixture_backend,
+            .strip = true,
+        });
+        switch (built) {
+            .ok => |bin| c.bin = bin,
+            .failed => |text| pool.gpa.free(text),
+        }
+    }
+};
 
 /// VerA held to what a foreign compiler is held to (accept or refuse only), so
 /// the head-to-head's agreement column asks both sides the same question.
@@ -89,9 +208,9 @@ fn check(
     d: vera.tb.Directives,
     w: *Io.Writer,
 ) anyerror!Result {
-    const cfg: *const harness.Config = @ptrCast(@alignCast(ctx));
+    const c: *const Ctx = @ptrCast(@alignCast(ctx));
     if (d.reject.len != 0) return verifyRejected(gpa, f, source, d, w);
-    return runAndCheck(gpa, io, arena, cfg, f, source, d, w);
+    return runAndCheck(gpa, io, arena, c, f, source, d, w, null);
 }
 
 /// Why a fixture failed to produce a device, in the vocabulary the `//! reject`
@@ -304,12 +423,16 @@ fn runAndCheck(
     gpa: std.mem.Allocator,
     io: Io,
     arena: std.mem.Allocator,
-    cfg: *const harness.Config,
+    ctx: *const Ctx,
     f: Fixture,
     source: []const u8,
     d: vera.tb.Directives,
     w: *Io.Writer,
+    /// `prepare`'s mode: stage a plain testbench's files here instead of
+    /// building and running it (left null for a mixed one).
+    stage_into: ?*?vera.tb.Staged,
 ) !Result {
+    const cfg = ctx.cfg;
     // Stages 1-6 with §9.4 display ON. W0650 is about speed, and every fixture
     // that probes a node trips it; allowing it here keeps the transcript about
     // the model rather than about float modes — unless a `//! warn` names it.
@@ -381,7 +504,7 @@ fn runAndCheck(
         std.fs.path.basename(f.root),
         f.slug,
     });
-    const built = vera.tb.buildExe(gpa, io, device, runner, .{
+    const build_opts: vera.tb.BuildOptions = .{
         .work_dir = work,
         .contract = options.contract,
         .name = result.mir.name,
@@ -390,7 +513,12 @@ fn runAndCheck(
         .optimize = cfg.fixture_opt,
         .backend = cfg.fixture_backend,
         .strip = true,
-    }) catch |err| {
+    };
+    if (stage_into) |s| {
+        if (dm.mixed == null) s.* = try vera.tb.stageExe(arena, io, device, runner, build_opts);
+        return .met;
+    }
+    const built = (if (ctx.batched.get(f.path)) |b| linkBatched(gpa, io, arena, work, b) else vera.tb.buildExe(gpa, io, device, runner, build_opts)) catch |err| {
         try w.print("FAIL {s}: building the testbench: {t}\n", .{ f.path, err });
         return .unmet;
     };
@@ -469,6 +597,20 @@ fn countVerdicts(text: []const u8) Tally {
     return t;
 }
 
+/// Stands `<work>/vera-batch-<i>`, a symlink to the batch binary, in for the
+/// fixture's own testbench (`vera.tb.batch_argv0`). Gpa-owned path.
+fn linkBatched(gpa: std.mem.Allocator, io: Io, arena: std.mem.Allocator, work: []const u8, b: Batched) !vera.tb.BuildResult {
+    var dir = try Io.Dir.cwd().openDir(io, work, .{});
+    defer dir.close(io);
+    const name = try std.fmt.allocPrint(arena, vera.tb.batch_argv0 ++ "{d}", .{b.index});
+    dir.deleteFile(io, name) catch |e| switch (e) {
+        error.FileNotFound => {},
+        else => return e,
+    };
+    try dir.symLink(io, b.bin, name, .{});
+    return .{ .ok = try std.fs.path.join(gpa, &.{ work, name }) };
+}
+
 /// Runs the testbench and returns its stderr, where both `$strobe` output and
 /// the residual dump go, in program order. Caller frees with `gpa`.
 ///
@@ -497,6 +639,58 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, ex
         else => try text.appendSlice(gpa, "FAIL: <testbench did not exit normally>\n"),
     }
     return text.toOwnedSlice(gpa);
+}
+
+test "a batch runs each member by argv[0]; one member that does not compile fails the batch" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const work = options.work_root ++ "/batch-selftest";
+    // Prints its device's tag and the plusargs it was handed.
+    const runner =
+        \\const std = @import("std");
+        \\const device = @import("device");
+        \\pub fn main(init: std.process.Init.Minimal) void {
+        \\    const argv = init.args.toSlice(std.heap.page_allocator) catch return;
+        \\    std.debug.print("{s}", .{device.tag});
+        \\    for (argv[1..]) |a| std.debug.print(" {s}", .{a});
+        \\    std.debug.print("\n", .{});
+        \\}
+        \\
+    ;
+    const tags = [_][]const u8{ "a", "b", "broken" };
+    var staged: [tags.len]vera.tb.Staged = undefined;
+    var dirs: [tags.len][]const u8 = undefined;
+    for (&staged, &dirs, tags) |*s, *dir, tag| {
+        dir.* = try std.fs.path.join(arena, &.{ work, tag });
+        const device = if (std.mem.eql(u8, tag, "broken")) "pub const tag = 1 +;\n" else try std.fmt.allocPrint(arena, "pub const tag = \"{s}\";\n", .{tag});
+        s.* = try vera.tb.stageExe(arena, io, device, runner, .{ .work_dir = dir.*, .contract = options.contract, .name = tag, .zig_exe = options.zig_exe });
+    }
+    const opts: vera.tb.BuildOptions = .{ .work_dir = work ++ "/batch", .contract = options.contract, .name = "batch", .zig_exe = options.zig_exe, .strip = true };
+
+    const built = try vera.tb.buildBatch(gpa, io, staged[0..2], opts);
+    defer built.deinit(gpa);
+    const bin = switch (built) {
+        .ok => |p| p,
+        .failed => |text| {
+            std.debug.print("{s}\n", .{text});
+            return error.TestUnexpectedResult;
+        },
+    };
+    for (0..2) |i| {
+        const link = try linkBatched(gpa, io, arena, dirs[i], .{ .bin = bin, .index = i });
+        defer link.deinit(gpa);
+        const got = try capture(gpa, io, link.ok, dirs[i], 0, &.{ "+x=1", "+y" });
+        defer gpa.free(got);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s} +x=1 +y\n", .{tags[i]}), got);
+    }
+
+    const bad = try vera.tb.buildBatch(gpa, io, &staged, opts);
+    defer bad.deinit(gpa);
+    try std.testing.expect(bad == .failed);
 }
 
 test "capture forwards runtime argv without expansion and preserves order" {
@@ -551,15 +745,15 @@ test "declared check count rejects missing and duplicated observations" {
         .root = suite.fixture_root,
         .slug = "harness_check_count_selftest",
     };
-    const missing = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_checks = 2 }, &report.writer);
+    const missing = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_checks = 2 }, &report.writer, null);
     try std.testing.expect(missing == .unmet);
     try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 1 assertion(s), expected exactly 2") != null);
-    const complete = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_checks = 1 }, &report.writer);
+    const complete = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_checks = 1 }, &report.writer, null);
     try std.testing.expect(complete == .met);
-    const duplicated = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{
+    const duplicated = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{
         .expected_checks = 1,
         .times = &.{ 0.0, 1e-9 },
-    }, &report.writer);
+    }, &report.writer, null);
     try std.testing.expect(duplicated == .unmet);
     try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 2 assertion(s), expected exactly 1") != null);
 }
@@ -587,10 +781,10 @@ test "a fatal exit after a passing assertion must be explicitly expected" {
         .root = suite.fixture_root,
         .slug = "harness_exit_status_selftest",
     };
-    const unexpected = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{}, &report.writer);
+    const unexpected = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{}, &report.writer, null);
     try std.testing.expect(unexpected == .unmet);
     try std.testing.expect(std.mem.indexOf(u8, report.written(), "exit 1, expected 0") != null);
-    const expected = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_exit = 1 }, &report.writer);
+    const expected = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_exit = 1 }, &report.writer, null);
     try std.testing.expect(expected == .met);
 }
 
