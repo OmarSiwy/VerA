@@ -43,10 +43,11 @@ const pending: u32 = std.math.maxInt(u32);
 const chunk_bits = 6;
 const chunk_len = 1 << chunk_bits;
 
-/// The directory and the cells live outside the caller's allocator: lowering
-/// passes its compilation arena, which could not give either back when it
-/// grows, so every regrowth would stay resident until the end of the compile.
-/// They are scratch for the lowering phase alone and freed by `deinit`.
+/// The builder's own tables (the map, the predecessor and phi-user pools,
+/// the per-block state) live outside the caller's allocator: lowering passes
+/// its compilation arena, which keeps every outgrown buffer and gives nothing
+/// back before the compile ends, and these are scratch for the lowering phase
+/// alone. `deinit` frees them. `gpa` is for the MIR the builder writes into.
 const map_gpa = std.heap.page_allocator;
 
 /// Braun-style SSA builder over one `Mir`. Blocks are created by the caller
@@ -113,8 +114,8 @@ pub const SsaBuilder = struct {
     const IncompletePhi = struct { place: Place, value: Mir.Value, next: u32 };
     const UserNode = struct { phi: Mir.Value, next: u32 };
 
-    /// Returns an empty builder writing into `mir`. `gpa` backs the scratch
-    /// tables; call `deinit` to free them.
+    /// Returns an empty builder writing into `mir`, whose rows (phis) `gpa`
+    /// allocates. Call `deinit` to free the builder's own tables.
     pub fn init(gpa: std.mem.Allocator, mir: *Mir) SsaBuilder {
         return .{ .gpa = gpa, .mir = mir };
     }
@@ -123,13 +124,13 @@ pub const SsaBuilder = struct {
     pub fn deinit(self: *SsaBuilder) void {
         map_gpa.free(self.dir);
         self.cells.deinit(map_gpa);
-        self.block_state.deinit(self.gpa);
-        self.pred_pool.deinit(self.gpa);
-        self.incomplete_pool.deinit(self.gpa);
-        self.user_pool.deinit(self.gpa);
-        self.user_head.deinit(self.gpa);
-        self.scratch.deinit(self.gpa);
-        self.phi_work.deinit(self.gpa);
+        self.block_state.deinit(map_gpa);
+        self.pred_pool.deinit(map_gpa);
+        self.incomplete_pool.deinit(map_gpa);
+        self.user_pool.deinit(map_gpa);
+        self.user_head.deinit(map_gpa);
+        self.scratch.deinit(map_gpa);
+        self.phi_work.deinit(map_gpa);
         self.* = .{ .gpa = self.gpa, .mir = self.mir };
     }
 
@@ -150,7 +151,7 @@ pub const SsaBuilder = struct {
         _ = try self.ensureState(pred);
 
         const node: u32 = @intCast(self.pred_pool.items.len);
-        try self.pred_pool.append(self.gpa, .{ .block = pred, .next = list_end });
+        try self.pred_pool.append(map_gpa, .{ .block = pred, .next = list_end });
         const tail = self.block_state.items(.preds_tail)[b];
         if (tail == list_end) {
             self.block_state.items(.preds_head)[b] = node;
@@ -269,7 +270,7 @@ pub const SsaBuilder = struct {
             // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
             val = try self.mir.emitPhi(self.gpa, block, &.{});
             const node: u32 = @intCast(self.incomplete_pool.items.len);
-            try self.incomplete_pool.append(self.gpa, .{
+            try self.incomplete_pool.append(map_gpa, .{
                 .place = place,
                 .value = val,
                 .next = self.block_state.items(.phis_head)[b],
@@ -328,7 +329,7 @@ pub const SsaBuilder = struct {
             const pred = self.pred_pool.items[node]; // copy: recursion may realloc
             node = pred.next;
             const v = try self.readVariable(place, pred.block);
-            try self.scratch.append(self.gpa, .{ .block = pred.block, .value = v });
+            try self.scratch.append(map_gpa, .{ .block = pred.block, .value = v });
         }
     }
 
@@ -402,7 +403,7 @@ pub const SsaBuilder = struct {
                 while (node != list_end) {
                     const u = self.user_pool.items[node];
                     node = u.next;
-                    try self.phi_work.append(self.gpa, u.phi);
+                    try self.phi_work.append(map_gpa, u.phi);
                 }
                 // ponytail: append-then-reverse, because `user_pool` is singly
                 // linked and cannot be walked backwards. Ceiling is one extra
@@ -424,7 +425,7 @@ pub const SsaBuilder = struct {
     fn ensureState(self: *SsaBuilder, block: Mir.Block) Error!u32 {
         const i = @intFromEnum(block);
         assert(i < self.mir.blockCount());
-        while (self.block_state.len <= i) try self.block_state.append(self.gpa, .{});
+        while (self.block_state.len <= i) try self.block_state.append(map_gpa, .{});
         return i;
     }
 
@@ -434,9 +435,9 @@ pub const SsaBuilder = struct {
         const i = @intFromEnum(value);
         if (i < Mir.Value.first_dynamic) return;
         const slot = i - Mir.Value.first_dynamic;
-        while (self.user_head.items.len <= slot) try self.user_head.append(self.gpa, list_end);
+        while (self.user_head.items.len <= slot) try self.user_head.append(map_gpa, list_end);
         const node: u32 = @intCast(self.user_pool.items.len);
-        try self.user_pool.append(self.gpa, .{ .phi = user, .next = self.user_head.items[slot] });
+        try self.user_pool.append(map_gpa, .{ .phi = user, .next = self.user_head.items[slot] });
         self.user_head.items[slot] = node;
     }
 
