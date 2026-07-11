@@ -40,6 +40,9 @@ pub const FilterPlan = struct {
     uses_model: bool = false,
     /// §4.5.12 sampling period T. Null for a laplace filter.
     period: ?[]const u8 = null,
+    /// `const zr<k> = zRootSecs(...)` lines `__sec` runs before its return:
+    /// one per root vector whose parts the card sets (`cardRoots`).
+    lets: []const []const u8 = &.{},
     /// The LRM refusal planning produced; the plan is unusable when set.
     err: ?[]const u8 = null,
     /// The unit refusal `f64Expr` raised while planning (E0515: a coefficient
@@ -84,14 +87,16 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
 
     var num: std.ArrayList(Poly) = .empty;
     var den: std.ArrayList(Poly) = .empty;
-    if (try filterSide(g, &num, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
-    if (try filterSide(g, &den, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
+    var lets: std.ArrayList([]const u8) = .empty;
+    if (try filterSide(g, &num, &lets, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
+    if (try filterSide(g, &den, &lets, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
 
     var p: FilterPlan = .{
         .num = num.items,
         .den = den.items,
         .ns = @max(num.items.len, den.items.len),
         .uses_model = g.uses_model,
+        .lets = lets.items,
     };
     for (0..p.ns) |i| {
         p.deg = @max(p.deg, @max(p.poly(true, i).len, p.poly(false, i).len) - 1);
@@ -193,6 +198,7 @@ pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
 pub fn filterSide(
     g: *Gen,
     out: *std.ArrayList(Poly),
+    lets: *std.ArrayList([]const u8),
     elems: []const Mir.Value,
     roots: bool,
     z: bool,
@@ -223,6 +229,56 @@ pub fn filterSide(
     // the imaginary part."
     if (elems.len % 2 != 0)
         return "LRM 4.5.11/4.5.12: a root vector is a list of (real, imaginary) PAIRS, so its length must be even";
+    // An imaginary part the card sets decides the pairing only at run time.
+    // A real part it sets pairs here by its text (`model.a` with `model.a`)
+    // and falls back to the run-time pairing when that text cannot.
+    var card_im = false;
+    var card = false;
+    for (elems, 0..) |e, i| {
+        const c = g.an.foldConst(e, false) == null;
+        card = card or c;
+        card_im = card_im or (c and i % 2 == 1);
+    }
+    if (card_im) return runtimeRoots(g, out, lets, elems, z);
+    const mark = out.items.len;
+    const msg = (try constRoots(g, out, elems, z)) orelse return null;
+    if (!card) return msg;
+    out.shrinkRetainingCapacity(mark);
+    return runtimeRoots(g, out, lets, elems, z);
+}
+
+/// The root vector `elems` as `zRootSecs` sections, paired at run time from
+/// the values the card sets: `(M + 1) / 2` sections of degree ≤ 2, read from
+/// `zr<k>`, which `__sec` computes first (`FilterPlan.lets`).
+fn runtimeRoots(
+    g: *Gen,
+    out: *std.ArrayList(Poly),
+    lets: *std.ArrayList([]const u8),
+    elems: []const Mir.Value,
+    z: bool,
+) Error!?[]const u8 {
+    const m = elems.len / 2;
+    const k = lets.items.len;
+    var t: std.ArrayList(u8) = .empty;
+    try t.print(g.arena, "const zr{d} = zRootSecs({d}, {s}, .{{ ", .{ k, m, if (z) "true" else "false" });
+    for (elems, 0..) |e, i| {
+        if (i != 0) try t.appendSlice(g.arena, ", ");
+        try t.appendSlice(g.arena, try g.f64Expr(e));
+    }
+    try t.appendSlice(g.arena, " });");
+    try lets.append(g.arena, t.items);
+    for (0..(m + 1) / 2) |s| {
+        const poly = try g.arena.alloc([]const u8, 3);
+        for (poly, 0..) |*c, j| c.* = try std.fmt.allocPrint(g.arena, "zr{d}[{d}][{d}]", .{ k, s, j });
+        try out.append(g.arena, poly);
+    }
+    return null;
+}
+
+/// The root vector `elems` as sections whose structure is fixed here: one per
+/// real root, one real quadratic per conjugate pair. Returns an LRM
+/// diagnostic, or null on success.
+fn constRoots(g: *Gen, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: bool) Error!?[]const u8 {
     const m = elems.len / 2;
     const used = try g.arena.alloc(bool, m);
     @memset(used, false);
@@ -314,9 +370,11 @@ pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!
         .{ if (z) "12" else "11", n, var_name, var_name },
     );
     const at_fn = g.out.items.len;
-    try g.w("pub fn {s}__sec({s}: *const Model) [{d}][2][{d}]f64 {{\n    return .{{\n", .{
+    try g.w("pub fn {s}__sec({s}: *const Model) [{d}][2][{d}]f64 {{\n", .{
         n, if (p.uses_model) "model" else "_", p.ns, p.deg + 1,
     });
+    for (p.lets) |l| try g.w("    {s}\n", .{l});
+    try g.w("    return .{{\n", .{});
     for (0..p.ns) |i| {
         try g.w("        .{{ ", .{});
         for ([_]bool{ true, false }, 0..) |numerator, s| {
