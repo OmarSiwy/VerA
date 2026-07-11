@@ -31,6 +31,8 @@ const Row = exec.Row;
 const Delay = @import("net.zig").Delay;
 const Bridge = @import("net.zig").Bridge;
 const Net = @import("net.zig").Net;
+const NetCold = @import("net.zig").NetCold;
+const no_cold = @import("net.zig").no_cold;
 const Gate = @import("net.zig").Gate;
 const Udp = @import("net.zig").Udp;
 const Slice = @import("net.zig").Slice;
@@ -333,6 +335,8 @@ pub const Run = struct {
     /// instance's variables with the next one's nets.
     net_of: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     nets: []Net = &.{},
+    /// The cold rows `Net.cold` indexes.
+    net_cold: std.ArrayList(NetCold) = .empty,
     drivers: []Driver = &.{},
     /// §7.6 every pass switch.
     trans: []Tran = &.{},
@@ -401,10 +405,11 @@ pub const Run = struct {
     /// once its process resumes or is disabled.
     susps: std.ArrayList(exec.Susp) = .empty,
     free_susps: std.ArrayList(u32) = .empty,
-    /// §5.10.1 per slot, the terms of the event controls waiting on it; a
-    /// slot no variable owns (`driver.key`, `registerMonitor`) is in
-    /// `far_terms`.
-    terms: []std.ArrayList(exec.Term) = &.{},
+    /// §5.10.1 per slot, the terms of the event controls waiting on it, made
+    /// on the slot's first wait (most slots are never waited on, and a list
+    /// header is three words); a slot no variable owns (`driver.key`,
+    /// `registerMonitor`) is in `far_terms`.
+    terms: []?*std.ArrayList(exec.Term) = &.{},
     far_terms: std.AutoHashMapUnmanaged(u32, std.ArrayList(exec.Term)) = .empty,
     /// §6.1 / §7.6 the static fan-out (`exec.buildFanout`): per slot
     /// `fan[fan_start[slot]..fan_start[slot + 1]]` are the pcs of the
@@ -742,15 +747,16 @@ pub const Run = struct {
                     try exec.resolve(r, d.net);
                 },
                 .net_update => |at| {
-                    const n = &r.nets[at];
-                    n.transition.in_flight = null;
-                    try exec.store(r, n.slot, n.transition.target.planes);
+                    const n = r.nets[at];
+                    const c = try r.netColdMut(at); // a delayed net has its row
+                    c.transition.in_flight = null;
+                    try exec.store(r, n.slot, c.transition.target.planes);
                 },
                 // §3.8: the charge has been held for the decay time, and what a
                 // trireg holds once it is worth nothing is x.
                 .decay => |at| {
                     const n = &r.nets[at];
-                    n.decay_event = null;
+                    (try r.netColdMut(at)).decay_event = null; // a decaying trireg has its row
                     for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
                     try exec.store(r, n.slot, n.resolved.planes);
                 },
@@ -808,6 +814,21 @@ pub const Run = struct {
         }
         const str = self.file.strings.find(part) orelse return null;
         return self.names.get(.{ .scope = scope, .str = str });
+    }
+
+    /// Net `n`'s cold row, or `NetCold.none` when it has none.
+    pub fn netCold(self: *const Run, n: Net) *const NetCold {
+        return if (n.cold == no_cold) &NetCold.none else &self.net_cold.items[n.cold];
+    }
+
+    /// Net `net`'s cold row, made on first use.
+    pub fn netColdMut(self: *Run, net: u32) Error!*NetCold {
+        const n = &self.nets[net];
+        if (n.cold == no_cold) {
+            n.cold = @intCast(self.net_cold.items.len);
+            try self.net_cold.append(self.arena, .{});
+        }
+        return &self.net_cold.items[n.cold];
     }
 
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
@@ -1105,6 +1126,8 @@ const Sink = struct { net: u32, lo: u32, width: u32 };
 pub const Elab = struct {
     values: std.ArrayList(Int.Literal) = .empty,
     nets: std.ArrayList(Net) = .empty,
+    /// The cold rows `Net.cold` indexes; `Run.net_cold` once elaborated.
+    net_cold: std.ArrayList(NetCold) = .empty,
     wires: std.ArrayList(Wire) = .empty,
     /// One row per elaborated instance: the definition and its name scope.
     insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
@@ -1994,14 +2017,18 @@ fn declareNet(r: *Run, e: *Elab, scope: u32, n: Ast.NetDecl) Error!void {
             .lsb = try r.declaredBound(range.lsb, n.main_tok),
         });
         var net = &e.nets.items[at];
-        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+        var cold: NetCold = .{ .delay = try r.declaredDelay3(n.delay, n.main_tok) };
         // A.2.1.3 gives `trireg` its own alternatives, and in them the third
         // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
         // a trireg in the capacitive state does not turn off, it holds, so the
         // net's own turn-off falls back to §7.14's "smallest of the delays".
         if (n.kind == .trireg and n.delay.off != .none) {
-            net.decay = net.delay.off;
-            net.delay.off = @min(net.delay.rise, net.delay.fall);
+            cold.decay = cold.delay.off;
+            cold.delay.off = @min(cold.delay.rise, cold.delay.fall);
+        }
+        if (cold.delay.present or cold.decay != null) {
+            net.cold = @intCast(e.net_cold.items.len);
+            try e.net_cold.append(arena, cold);
         }
         net.charge = n.charge;
         // A.2.4 `net_decl_assignment` is a continuous assignment written on the
@@ -3103,6 +3130,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
+    r.net_cold = e.net_cold;
     // Pass two: drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
@@ -3112,8 +3140,6 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // every instruction from here on belongs to a process.
     if (e.wires.items.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
     r.drivers = try arena.alloc(Driver, e.wires.items.len);
-    const grouped = try arena.alloc(std.ArrayList(u32), e.nets.items.len);
-    @memset(grouped, .empty);
     for (e.wires.items, 0..) |a, i| {
         r.scope = a.scope;
         var watched: std.ArrayList(u32) = .empty;
@@ -3158,18 +3184,13 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         // A UDP's output bit starts at its state: §8.5's initial value for a
         // sequential one, x for a combinational one until its first value.
         if (a.source == .udp) setBit(r.drivers[i].current, a.source.udp.out_bit orelse 0, a.source.udp.state);
-        try grouped[a.net].append(arena, @intCast(i));
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
     }
     // §7.6: each net knows the pass switches on it, and a controlled one is
     // a process that re-resolves both sides whenever its control changes.
     r.trans = try arena.alloc(Tran, e.trans.items.len);
-    const on_net = try arena.alloc(std.ArrayList(u32), e.nets.items.len);
-    @memset(on_net, .empty);
     for (e.trans.items, r.trans, 0..) |t, *dst, i| {
         dst.* = t.tran;
-        try on_net[t.tran.a].append(arena, @intCast(i));
-        try on_net[t.tran.b].append(arena, @intCast(i));
         if (t.tran.ctrl == .none) continue;
         r.scope = t.scope;
         try compile.checkExpr(&r, t.tran.ctrl);
@@ -3181,12 +3202,33 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.scope = d.scope;
         if (r.net_of.get(try r.slot(d.source.mos.data))) |net| r.nets[net].strength_read = true;
     };
-    for (r.nets, on_net) |*n, t| n.trans = t.items;
-    for (r.nets, grouped) |*n, g| {
-        // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
-        // resolution question there, it is an error.
-        if (n.kind == .uwire and g.items.len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
-        n.drivers = g.items;
+    // Each net's pass switches and drivers, in declaration order, as runs of
+    // one flat array each (a counting sort), not a list per net: a large net
+    // array is one net per element and almost none of them has either.
+    {
+        const at = try netRuns(arena, r.nets.len, e.trans.items.len * 2, e.trans.items, struct {
+            fn each(t: anytype, k: usize) u32 {
+                return if (k == 0) t.tran.a else t.tran.b;
+            }
+        }.each, 2);
+        defer arena.free(at.start);
+        for (0..r.nets.len) |net| if (at.start[net] != at.start[net + 1]) {
+            (try r.netColdMut(@intCast(net))).trans = at.items[at.start[net]..at.start[net + 1]];
+        };
+    }
+    {
+        const at = try netRuns(arena, r.nets.len, e.wires.items.len, e.wires.items, struct {
+            fn each(w: anytype, _: usize) u32 {
+                return w.net;
+            }
+        }.each, 1);
+        defer arena.free(at.start);
+        for (r.nets, 0..) |*n, net| {
+            n.drivers = at.items[at.start[net]..at.start[net + 1]];
+            // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
+            // resolution question there, it is an error.
+            if (n.kind == .uwire and n.drivers.len > 1) return r.fail(n.tok, "a uwire net accepts a single driver", .{});
+        }
     }
     // §10 subroutine bodies, each on its own pc range before any process, so
     // a synchronous call never runs into a process's code.
@@ -3261,6 +3303,35 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try exec.buildFanout(&r);
     try driver.arm(&r);
     return r;
+}
+
+/// The rows of `rows` grouped by net, as one counting sort: `items` holds
+/// each row index once per net `netOf(row, k)` names (`k` < `per_row`), and
+/// net `n`'s run is `items[start[n]..start[n + 1]]`, in row order. The
+/// caller frees `start` when it has cut the runs; `items` is what they borrow.
+fn netRuns(
+    arena: std.mem.Allocator,
+    n_nets: usize,
+    n_items: usize,
+    rows: anytype,
+    comptime netOf: anytype,
+    comptime per_row: usize,
+) Error!struct { start: []u32, items: []u32 } {
+    const start = try arena.alloc(u32, n_nets + 1);
+    @memset(start, 0);
+    for (rows) |row| inline for (0..per_row) |k| {
+        start[netOf(row, k) + 1] += 1;
+    };
+    for (1..n_nets + 1) |i| start[i] += start[i - 1];
+    const items = try arena.alloc(u32, n_items);
+    const fill = try arena.dupe(u32, start[0..n_nets]);
+    defer arena.free(fill);
+    for (rows, 0..) |row, i| inline for (0..per_row) |k| {
+        const net = netOf(row, k);
+        items[fill[net]] = @intCast(i);
+        fill[net] += 1;
+    };
+    return .{ .start = start, .items = items };
 }
 
 /// Compiles each of `blocks` in `r.scope` and queues it at time 0.
