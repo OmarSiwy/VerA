@@ -117,7 +117,49 @@ acdyn: []u64 = &.{},
 arr_of: []u32 = &.{},
 /// `foldConst`'s answer per Value: `[0]` sees a parameter as the host sets
 /// it, `[1]` looks through it to its declared default.
-folds: [2][]?Const = .{ &.{}, &.{} },
+folds: [2]FoldColumn = .{ .{}, .{} },
+
+/// One `folds` column as two parallel arrays. A `?Const` is 24 bytes, all for
+/// the string arm's slice, and nearly every fold is a number: `kind` says
+/// which arm a Value folded to, `bits` holds an integer's or a real's bits,
+/// or a string's index in `strs`. 9 bytes a Value instead of 24, in the
+/// table with one row per Value that codegen keeps for the whole emit.
+pub const FoldColumn = struct {
+    kind: []Kind = &.{},
+    bits: []u64 = &.{},
+    strs: std.ArrayList([]const u8) = .empty,
+
+    const Kind = enum(u8) { none, int, real, str };
+
+    fn get(c: *const FoldColumn, v: Mir.Value) ?Const {
+        const i = @intFromEnum(v);
+        const b = c.bits[i];
+        return switch (c.kind[i]) {
+            .none => null,
+            .int => .{ .int = @bitCast(b) },
+            .real => .{ .real = @bitCast(b) },
+            .str => .{ .str = c.strs.items[@intCast(b)] },
+        };
+    }
+
+    fn set(c: *FoldColumn, arena: std.mem.Allocator, i: usize, x: Const) Error!void {
+        switch (x) {
+            .int => |n| {
+                c.kind[i] = .int;
+                c.bits[i] = @bitCast(n);
+            },
+            .real => |r| {
+                c.kind[i] = .real;
+                c.bits[i] = @bitCast(r);
+            },
+            .str => |t| {
+                c.kind[i] = .str;
+                c.bits[i] = c.strs.items.len;
+                try c.strs.append(arena, t);
+            },
+        }
+    }
+};
 
 /// Builds every table above. Tables are allocated in `arena` and borrow
 /// `mir`/`lowered`, which must outlive the result and not change after.
@@ -863,7 +905,7 @@ pub const Folded = struct { f: f64 };
 /// `resolve_params` looks through a parameter to its declared default, which
 /// only a Model default may do. O(1): a load from `folds`. Requires `build`.
 pub fn foldConst(self: *const Analysis, v: Mir.Value, resolve_params: bool) ?Folded {
-    const c = self.folds[@intFromBool(resolve_params)][@intFromEnum(v)] orelse return null;
+    const c = self.folds[@intFromBool(resolve_params)].get(v) orelse return null;
     return .{ .f = c.asReal() };
 }
 
@@ -880,17 +922,22 @@ pub fn buildLiteralFolds(self: *Analysis) Error!void {
     self.folds[0] = try self.buildFoldColumn(false);
 }
 
-fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error![]?Const {
-    const col = try self.arena.alloc(?Const, self.nv);
-    @memset(col, null);
+fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error!FoldColumn {
+    var col: FoldColumn = .{
+        .kind = try self.arena.alloc(FoldColumn.Kind, self.nv),
+        .bits = try self.arena.alloc(u64, self.nv),
+    };
+    @memset(col.kind, .none);
+    @memset(col.bits, 0);
     // An answer only ever goes from null to a constant, so this terminates;
     // operands precede users except through aliases or forward defaults.
     var changed = true;
     while (changed) {
         changed = false;
-        for (col, 0..) |*c, v| {
-            if (c.* != null) continue;
-            c.* = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), col, resolve_params) orelse continue;
+        for (0..self.nv) |v| {
+            if (col.kind[v] != .none) continue;
+            const c = self.foldStep(@enumFromInt(@as(u32, @intCast(v))), &col, resolve_params) orelse continue;
+            try col.set(self.arena, v, c);
             changed = true;
         }
     }
@@ -900,10 +947,10 @@ fn buildFoldColumn(self: *Analysis, resolve_params: bool) Error![]?Const {
 /// `v`'s fold given the current answers for its operands. The operators are
 /// the one constant kernel's (`opcode.fold`); this only decides which values
 /// are leaves.
-fn foldStep(self: *const Analysis, v: Mir.Value, col: []const ?Const, resolve_params: bool) ?Const {
+fn foldStep(self: *const Analysis, v: Mir.Value, col: *const FoldColumn, resolve_params: bool) ?Const {
     const at = struct {
-        fn f(c: []const ?Const, x: Mir.Value) ?Const {
-            return c[@intFromEnum(x)];
+        fn f(c: *const FoldColumn, x: Mir.Value) ?Const {
+            return c.get(x);
         }
     }.f;
     switch (self.mir.valueDef(self.rv(v))) {
