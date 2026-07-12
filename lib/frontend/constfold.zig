@@ -8,6 +8,8 @@
 
 const std = @import("std");
 const Ast = @import("ast.zig");
+/// The devices' exp/log/pow: a fold gives the bits the device computes.
+const gm = @import("contract").gm;
 
 /// A folded constant (§4.2 constant_expression). Genvars (§3.5) and parameter
 /// defaults live here so `for (i=0;i<N;i=i+1)` can unroll (§6.6.1).
@@ -285,7 +287,7 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
         else
             Const{ .real = @rem(x, y) },
         // `ipow32`; its 'bx corner (0 ** negative) declines to fold.
-        .pow => if (int) (if (ipow32(a.asInt(), b.asInt())) |r| Const{ .int = r } else null) else Const{ .real = std.math.pow(f64, x, y) },
+        .pow => if (int) (if (ipow32(a.asInt(), b.asInt())) |r| Const{ .int = r } else null) else Const{ .real = gm.pow(x, y) },
         .eq => .{ .int = @intFromBool(if (int) a.int == b.int else x == y) },
         .neq => .{ .int = @intFromBool(if (int) a.int != b.int else x != y) },
         .lt => .{ .int = @intFromBool(if (int) a.int < b.int else x < y) },
@@ -396,13 +398,13 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
         .abs => if (int) Const{ .int = wrapFrom(args[0].int, if (args[0].int < 0) 0 -% args[0].int else args[0].int) } else Const{ .real = @abs(x) },
         .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = @min(x, y) },
         .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = @max(x, y) },
-        .pow => .{ .real = std.math.pow(f64, x, y) },
+        .pow => .{ .real = gm.pow(x, y) },
         .hypot => .{ .real = std.math.hypot(x, y) },
         .atan2 => .{ .real = std.math.atan2(x, y) },
         .sqrt => .{ .real = @sqrt(x) },
-        .exp => .{ .real = @exp(x) },
+        .exp => .{ .real = gm.exp(x) },
         .expm1 => .{ .real = std.math.expm1(x) },
-        .ln => .{ .real = @log(x) },
+        .ln => .{ .real = gm.log(x) },
         .ln1p => .{ .real = std.math.log1p(x) },
         .log => .{ .real = @log10(x) },
         .floor => .{ .real = @floor(x) },

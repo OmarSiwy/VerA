@@ -21,9 +21,12 @@ const module_specs = [_]ModuleSpec{
 
     // lib/ — the compiler. `vera` is its facade and what an embedder takes.
     .{ .name = "diag", .path = "lib/diag.zig" },
-    .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{"diag"} },
-    .{ .name = "kernels", .path = "lib/backend/kernels.zig" },
-    .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "diag", "frontend", "kernels" } },
+    // `contract`: the compile-time folds and the prover's bounds use the
+    // devices' exp/log/pow (`contract.gm`), so a folded constant is the bits
+    // the device would compute (§9.14: `$exp` and `exp` are one function).
+    .{ .name = "frontend", .path = "lib/frontend/root.zig", .imports = &.{ "diag", "contract" } },
+    .{ .name = "kernels", .path = "lib/backend/kernels.zig", .imports = &.{"contract"} },
+    .{ .name = "ir", .path = "lib/ir/root.zig", .imports = &.{ "diag", "frontend", "kernels", "contract" } },
     .{ .name = "backend", .path = "lib/backend/root.zig", .imports = &.{ "diag", "frontend", "ir", "kernels" } },
     .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
 

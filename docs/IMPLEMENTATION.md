@@ -22,6 +22,7 @@ differently also conforms.
 | AMS 2.9 | `(* vera_timepoint *)`: what a per-timepoint cache is keyed on, and what drops it | one cache per statement in `Instance`, keyed on `$abstime`, `analysis()` and the two §5.10.2 step flags; filled by `eval`/`evalQ` when the statement ran on a stale cache; dropped by `initState`, `setup` (emitted for the purpose when the device has no solve-invariant values), `updateState` and `stateCtl` commit and revert. A statement may assign scalars, scalarized arrays and memory-backed arrays (held or not); only what a later statement reads is cached. Refused: E0529 (value), E0530 (construct inside), E0531 (reads a value an iteration moves), E0532 (in a loop, analog function or `analog initial`). A device with one declares `mutable_eval` and drops `batch_ok` | `lib/ir/lower/stmt.zig` `lowerTimepoint`, `lib/backend/codegen/plan/setup.zig` `timepointVarying`, `lib/backend/codegen/file.zig` `emitTpHelpers` | `ch05_analog_behavior/vera_timepoint_cache.va`, `reject_vera_timepoint_parameter.va`, `reject_vera_timepoint_probe.va`, `reject_vera_timepoint_contribution.va`, `reject_vera_timepoint_operator.va`, `reject_vera_timepoint_event.va`, `reject_vera_timepoint_reads_iterate.va`, `reject_vera_timepoint_in_loop.va` |
 | AMS 2.9 | `(* vera_scratch *)` on a variable declaration: what it starts each evaluation at, and where it is refused | never held (no `held_vars` row, no `Instance` field, no copy in `eval`/`stateCtl`): every evaluation, and every entry to a named block for that block's locals, starts it at its declaration's initializer, the §3.2 zero when there is none. A string variable is never held anyway, so on one it changes nothing. Refused: E0534 (value does not fold without the card), E0535 (on a parameter, net, genvar or statement), E0536 (an `analog initial` or `@(...)` body assigns it and a read may see that value before the same evaluation assigns it again: §5.2.1/§5.10 values exist to be read on other evaluations), E0537 (an `initial` or `always` block or a task assigns it: §7.2.2 makes it digital-owned, and the digital kernel, not an analog evaluation, keeps its value). `= "uninit"`: a memory-backed (runtime-indexed) array starts each evaluation with NO store; the author promises every element is written before it is read in that evaluation, and **a read-before-write is the author's bug**: under runtime safety (Debug, ReleaseSafe) the array is filled with NaN in the value and every derivative lane (`minInt(i64)` for an integer array), so it reads NaN; in ReleaseFast/ReleaseSmall nothing is stored and the value is unspecified but stable, never illegal behaviour: after the `undefined` declaration an empty `asm volatile ("" : : [p] "r" (&a) : .{ .memory = true })` (no instructions; accepted by nvptx64 and amdgcn too) may have written the array, so LLVM must treat its contents as defined. It costs the array's SROA: 201 Ir/eval against 116 without it and 233 for the zero start (4-op tape, `st[0:63]`, 8 lanes). A scalar or scalarized array keeps the zero start. Any other string: E0538; an initializer with `"uninit"`: E0539 | `lib/ir/lower/param.zig` `scratchOn`, `scratchMode`, `checkScratchOwners`, `refuseDigitalScratch`, `markHeldVars` (`State.carried`); `lib/backend/codegen/render.zig` `emitArrayStmt` | `ch03_data_types/vera_scratch_starts_each_evaluation.va`, `vera_scratch_uninit_tape.va`, `vera_scratch_uninit_reads_nan_when_safe.va`, `reject_vera_scratch_unknown_string.va`, `reject_vera_scratch_uninit_initializer.va`, `reject_vera_scratch_parameter_value.va`, `reject_vera_scratch_on_parameter.va`, `reject_vera_scratch_on_net.va`, `reject_vera_scratch_on_genvar.va`, `reject_vera_scratch_event_value.va`, `reject_vera_scratch_analog_initial.va`, `ch07_mixed_signal/reject_vera_scratch_digital_variable.va` |
 | AMS 2.8.3 | `$vera_reject_step(t_retry)`, a VerA system task | in a transient, the accepted step whose solution called it with `t_retry < $abstime` is rejected through `contract.UpdateResult.request_reject_at`; several calls in one evaluation: the earliest wins; ignored in a static solve; no `acceptQ` is emitted, since it cannot carry the request; the analog testbench retries at `t_retry` with the forced unknowns held at the rejected time's values, and the mixed and VPI runners refuse a request; in `analog initial` or an analog function, E0533 | `lib/ir/lower/event.zig` `lowerKernelCtl`, `lib/backend/codegen/state.zig` `emitStateMachine`, `lib/backend/tb/runner_text.zig` `retry` | `ch05_analog_behavior/vera_reject_step_retry.va`, `reject_vera_reject_step_analog_initial.va` |
+| AMS 4.3.1 (Table 4-14) | the accuracy of `exp`, `ln`, `pow` (the table gives each a C equivalent and a domain, no accuracy; 4.3.2's Table 4-15 functions are unchanged) | faithful: max error ≤ 0.52 ulp (exp, ln) and ≤ 0.55 ulp (pow) against the exactly rounded result over every finite input, IEEE 754 special values, identical bits on every target; the only implementation (the previous compiler_rt/`std.math.pow` path and the GPU musl ports are gone). See "Host math" below | `tools/contract.zig` `gm` (`armExp`, `armLog`, `armPow`, `hexp`, `hlog`, `powV`) | `tools/contract.zig` tests "exp/log/pow stay within the documented bound of an f128 oracle", "... fold at comptime to the bits they run to", "armExp/armPow: the contract's special cases ..." |
 | AMS 4.2.4 | how a required integer-modulus zero-divisor error is reported | a provably evaluated zero is E0601 at compile time; a runtime zero reports E0601 and exits 1 in the executable, and traps in a solver device without host I/O, including GPU targets | `lib/ir/proof/prover.zig`, `lib/backend/codegen/render.zig` `imodFn` | `ch04_expressions/111_modulus_by_zero_rejected.va`, `modulo_integer_dynamic_zero.va`, `modulo_integer_unused_zero.va`; legal neighbours `modulo_integer_dynamic.va`, `modulo_integer_short_circuit.va`, `modulo_integer_parameter.va` |
 | AMS 4.5.4, 4.5.5 | `idt(x)` and `idtmod(x)` start at "c ... as determined by the simulator" | c = 0 | `lib/ir/lower/analog_op.zig:198-209` | `exhaustive/062_idt_integral.va`, `ch04_expressions/idtmod_one_argument_starts_at_zero.va` |
 | AMS 4.5.5 | where `idtmod` integrates | inside the device, wrapping each accepted step | `lib/backend/codegen/kernel_text.zig:434` | `ch04_expressions/17_idtmod.va`, `ch04_expressions/a04_08_idtmod_offset_window_negative_integrand.va` |
@@ -59,6 +60,72 @@ differently also conforms.
 | none (CLI) | how `--emit-so` builds a `.v` device | an LLVM build links the digital engine's design-independent half (`src/sim/rt/engine.zig`: the event loop and the tick-boundary snapshot) as one object built once per engine sources, compiler, target, CPU and flags, in `vera-engine` under Zig's global cache directory (`ZIG_GLOBAL_CACHE_DIR`, `XDG_CACHE_HOME/zig`, `HOME/.cache/zig`; else the work directory's cache). The key is the compiler's own cache manifest; the object's symbols carry a hash of `State`'s layout and the root options, so a mismatched object fails to link. v_count 17.0 → 4.9 Gi, v_inv 22.2 → 5.1 Gi once the object exists (the first build also builds it, ≈16 Gi); the native backend compiles the whole engine (no gain measured) | `lib/backend/orchestrator.zig` `buildEngine`, `src/main.zig` `engineCache` | `lib/backend/orchestrator.zig` test "buildEngine reuses its object only while every key component is unchanged", `tests/vdev_so_host.zig` |
 | none (host ABI) | numeric parameter bindings carry a value without HDL type/width metadata | `$clog2` retains the final elaborated declaration's operand width and signedness for host bindings; HDL instance overrides supply their own before code generation; declared `integer` remains signed 32 bits | `lib/ir/lower/constfold.zig` `clog2Width`, `clog2Signed` | `ch09_system_tasks/clog2_inferred_parameter_width.va`, `clog2_nested_contexts.va` |
 | none (host ABI) | how a host supplies top-level geometric system parameters | a declared §3.4.7 alias supplies a real model-card slot, shared by additional aliases of the same system parameter; defaults are Table 9-29's identities and descendants retain the host dependency | `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam` | `ch09_system_tasks/geometry_top_alias_host.va` |
+
+### Host math: exp, ln, pow
+
+A device's `exp`, `ln`/`log`-based and `pow` values come from the host's
+scalar family (`contract.RefFamily`, the testbench's, a host's own), and
+its scalar paths (`$limit`, `limexp`'s clamp) from `contract.gm`. VerA's
+own families and `contract.gm` use, on every target (host, NVPTX, AMDGCN):
+
+* `exp`: ARM optimized-routines' design (musl `pow.c` `exp_inline`,
+  `exp_data.c`): 2^(k/128) table, degree-5 polynomial, exact scaling; plus
+  1 + (x + x²/2) below |x| = 2^-28 and direct +0/+inf past the rounding
+  thresholds. 
+* `ln`: ARM's `log.c` (as Zig's compiler_rt carries it; identical results
+  to the previous routine).
+* `pow`: ARM's `pow.c`, double-double log then exp; replaces
+  `std.math.pow`, whose error grew with |y| (20 ulp measured).
+
+**Correct** here means, and each is checked:
+
+1. Max error ≤ 0.52 ulp (exp, ln) and ≤ 0.55 ulp (pow) of the exactly
+   rounded result, over every finite input (faithful rounding; LRM Tables
+   4-14 sets no accuracy, so this is VerA's choice). Measured below
+   against an f128 oracle; `zig build test` checks a fixed sample.
+2. IEEE 754 / C99 Annex F special values: exp(±0) = 1, exp(+inf) = +inf,
+   exp(−inf) = +0, +inf above ln(DBL_MAX), gradual underflow and +0 below
+   −1075 ln 2; ln(±0) = −inf, ln(x < 0) = NaN, ln(+inf) = +inf, ln(1) = +0;
+   pow's F.10.4.4 rows (pow(x, ±0) = 1, pow(1, y) = 1, odd/even integer
+   exponents of negative and signed-zero bases, NaN for a negative base and
+   non-integer exponent); NaN propagates.
+3. Derivatives use the value returned: d exp = exp(x)·dx with the same
+   exp(x), d ln = dx/x, d pow = c·p/x with the same p (`RefFamily`).
+4. One implementation everywhere: no fma (a fused and an unfused build
+   round differently; `@mulAdd` is a libcall on baseline x86-64), so host,
+   NVPTX and AMDGCN give the same bits. NVPTX `sm_80` PTX of the three
+   routines has no `fma`; AMDGCN `gfx90a` has `v_fma` only inside f64
+   division's IEEE expansion (`docs/measurements/device-runtime-2026-10-01/gpu_probe.sh`). The comptime fold of the routines (target
+   independent) equals their run on the host (`zig build test`). Cost of
+   no-fma, measured: ln +2.4 and pow +4.3 ticks per call.
+5. The `@Vector(n, f64)` form (`hexp`, `hlog`; the testbench's batch
+   family) is the scalar's arithmetic lane for lane; a vector with a
+   special lane takes the scalar call for every lane.
+
+These are the only implementation: the previous host path (`@exp`/`@log`,
+i.e. compiler_rt or a linked libc, and `std.math.pow`) and the GPU's musl
+ports (`softExp`/`softLog`) were removed, so no flag reproduces the
+pre-2026-10 bits. The table below is the record of what changed.
+
+Measured 2026-10-01, i9-14900HX (AVX2, no AVX-512), f128 oracle,
+200 000 samples per row; ticks are TSC ticks per call (scalar, throughput)
+or per element of `@Vector(4, f64)`
+(`docs/measurements/device-runtime-2026-10-01/mathtable.zig`):
+
+| function, inputs | before (compiler_rt, std): max / mean ulp / ticks | glibc 2.42 (measurement only) | VerA now | VerA `@Vector(4)` ticks/elem |
+|---|---|---|---|---|
+| exp, x in [−745, 709] | 0.8811 / 0.2638 / 29.2 | 0.5034 / 0.2502 / 22.8 | 0.5054 / 0.2502 / 20.3 | 22.2 |
+| exp, x in [−80, 45] (the compact models) | 0.8480 / 0.2638 / 24.8 | 0.5044 / 0.2499 / 9.1 | 0.5064 / 0.2499 / 9.1 | 4.1 |
+| exp, \|x\| < 2^−28 (decay factors) | 0.5329 / 0.2194 / 5.1 | 0.5000 / 0.2194 / 13.1 | 0.5000 / 0.2194 / 8.9 | 7.4 |
+| ln, x random bits in (0, inf) | 0.5000 / 0.2500 / 9.5 | 0.5000 / 0.2500 / 9.2 | 0.5000 / 0.2500 / 9.5 | 5.2 |
+| ln, subnormal x | 0.5000 / 0.2506 / 116.6 | 0.5000 / 0.2506 / 115.7 | 0.5000 / 0.2506 / 120.2 | — |
+| ln, x in [0.9, 1.1] | 0.5175 / 0.2493 / 15.5 | 0.5175 / 0.2493 / 16.5 | 0.5175 / 0.2493 / 15.9 | 17.5 |
+| pow, x in [1e−3, 1e12], y in [−3, 18] | 20.34 / 1.7565 / 147.6 | 0.5054 / 0.2498 / 23.1 | 0.5058 / 0.2498 / 29.3 | — |
+| pow, psp103's own (x, y) pairs | 8.734 / 0.6904 / 55.1 | 0.4985 / 0.2143 / 22.2 | 0.5057 / 0.2144 / 27.5 | — |
+
+A vector row over a range with special lanes (|x| > 512 for exp, the band
+around 1 for ln) falls back to scalar calls, so it costs more than the
+scalar row.
 
 For a digital real/realtime array read with an out-of-range or x/z index,
 IEEE §5.2.2 specifies an x reference but gives no real unknown encoding.
