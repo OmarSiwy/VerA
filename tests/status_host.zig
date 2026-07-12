@@ -143,3 +143,17 @@ test "status: analog initial and vera_timepoint sites report too" {
     try std.testing.expectEqual(@as(u32, 0), inst.vera_status__);
     try std.testing.expectEqual(@as(?contract.StatusSite, null), contract.statusSite(D, &inst));
 }
+
+test "the *const Instance entries compile and run beside a status site" {
+    // `mutable_eval` makes `InstancePtr` `*Instance`; `noisePsd` and `acStim`
+    // stay `*const Instance` by contract, so the core they call must take a
+    // const instance (hisim2_va/hisimhv_va at 1c554bc2 did not compile).
+    const m: D.Model = .{};
+    var inst: D.Instance = .{};
+    _ = start(&m, &inst);
+    const ci: *const D.Instance = &inst;
+    const psd = D.noisePsd(S0, x(0.5), &m, ci, sim(false));
+    try std.testing.expectEqual(@as(f64, 4e-21), psd[0].white);
+    const ac = D.acStim(S0, x(0.5), &m, ci, sim(false));
+    try std.testing.expectEqual(@as(usize, 1), ac.len);
+}
