@@ -38,7 +38,12 @@ pub const validating: bool = blk: {
 /// `derive`, `initState`, `stateCtl`, `pendingBreakpoint`; `.state`:
 /// `updateState`; `.eval`: `eval`, `evalQ`, `q`. A host without it gets
 /// `exportDevice` in the `.setup` object, and the others export nothing.
-/// Additive: no `abi_version` change.
+/// A large `setup` comes as chunks (`D.setup_chunks`, `n` of them, which
+/// `setup` calls in order); a host that also declares
+/// `pub fn SetupValue(comptime D: type) type`, the `V` it passes `D.setup`,
+/// gets each chunk compiled in an object of its own, in parallel. Calling
+/// `setup` with another `V` then fails to link. Without it the chunks stay
+/// in the object that calls `setup`. Additive: no `abi_version` change.
 pub const DevicePart = enum { setup, state, eval };
 
 /// §9.7.3 one `$fatal`/`$error` call of a device (`D.status_sites`, in source
@@ -2851,6 +2856,13 @@ pub fn validate(comptime D: type) void {
         if (sp != .array or sp.array.child != []const u8)
             @compileError(name ++ ".setup_simparams must be [k][]const u8");
     }
+    if (@hasDecl(D, "setup_chunks")) {
+        if (!@hasDecl(D, "setup")) @compileError(name ++ ".setup_chunks needs `setup`");
+        if (@TypeOf(D.setup_chunks.n) != usize or D.setup_chunks.n == 0)
+            @compileError(name ++ ".setup_chunks.n must be a positive usize");
+        if (@TypeOf(D.setup_chunks.exportChunk) != fn (comptime type, comptime usize) void)
+            @compileError(name ++ ".setup_chunks.exportChunk: expected fn (comptime V: type, comptime k: usize) void");
+    }
     // §5.6.1.2/§4.5.2 `q` and `updateState` fused into one evaluation.
     if (@hasDecl(D, "acceptQ")) {
         if (!@hasDecl(D, "q") or !@hasDecl(D, "updateState"))
@@ -3122,6 +3134,7 @@ const AllowedPubDecl = enum {
     Setup,
     setup,
     setup_simparams,
+    setup_chunks,
     jac_f32,
     jac_f32_host,
     // Nothing steers on a `.val()` of an x-dependent value, draws a per-call
@@ -3553,6 +3566,13 @@ const MockAll = struct {
     pub fn setup(comptime V: type, m: *const Model, inst: *Instance) void {
         inst.su.r[0] = V.con(@floatCast(m.g)).val();
     }
+    pub const setup_chunks = struct {
+        pub const n: usize = 1;
+        pub fn exportChunk(comptime V: type, comptime k: usize) void {
+            _ = V;
+            _ = k;
+        }
+    };
 
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
     // §3.6.1.2 electrical potential's abstol, both unknowns being voltages.

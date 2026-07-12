@@ -15,6 +15,7 @@ const gen_cfg = @import("cfg.zig");
 const gen_file = @import("file.zig");
 const plan_setup = @import("plan/setup.zig");
 const plan_args = @import("plan/args.zig");
+const setup_chunk = @import("setup_chunk.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -52,6 +53,9 @@ pub const Setup = struct {
     /// (`mergePays`): each exit leaves the `zs_done` block and the roots are
     /// stored once after it (`emitRoot`).
     merge: bool = false,
+    /// How many chunks `setup` was emitted as (`setup_chunk.zig`); 0 when it is
+    /// one function. `codegen.Output.setup_chunks`.
+    chunks: u32 = 0,
 };
 
 /// Returns the instance expression an auxiliary core sweep passes: `inst`,
@@ -316,6 +320,8 @@ pub fn emitSetup(self: *Gen) Error!void {
     self.uses_model = false;
     self.uses_inst = true;
     self.fatal = null;
+    self.su.chunks = 0;
+    const at_doc = self.out.items.len;
     try self.w(
         \\/// Fill `inst.su`: once after `derive`, and again after every write to
         \\/// `Model`, to this instance or its temperature, or to a `$simparam`
@@ -362,6 +368,12 @@ pub fn emitSetup(self: *Gen) Error!void {
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
     std.debug.assert(!self.uses_x);
     std.debug.assert(self.fatal == null);
+    if (self.out.items.len - at_doc < setup_chunk.chunk_bytes) return;
+    // A large `setup` becomes chunks a split build compiles in parallel.
+    const c = try setup_chunk.chunk(self.arena, self.out.items[at_doc..], setup_chunk.chunk_bytes) orelse return;
+    self.out.shrinkRetainingCapacity(at_doc);
+    try self.out.appendSlice(self.gpa, c.text);
+    self.su.chunks = c.n;
 }
 
 /// Returns whether emitted text uses the identifier `S`.
