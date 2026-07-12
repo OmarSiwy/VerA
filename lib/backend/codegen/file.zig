@@ -900,10 +900,11 @@ pub fn emitInstance(self: *Gen) Error!void {
     }
     try emitTpFields(self);
     // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
-    // the held block above. `su_ok` exists only where it is asserted.
+    // the held block above. `su_ok` exists only where it is asserted: Debug,
+    // in a program that asked for the contract's checks (`contract.validating`).
     if (self.su.vals.len != 0) try self.w(
         \\    su: Setup = .{{}},
-        \\    su_ok: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {{}},
+        \\    su_ok: if (std.debug.runtime_safety and contract.validating) bool else void = if (std.debug.runtime_safety and contract.validating) false else {{}},
         \\
     , .{}) else if (self.lowered.timepoints.items.len != 0) try self.w("    su: Setup = .{{}},\n", .{});
     try self.w("}};\n\n", .{});

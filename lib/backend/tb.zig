@@ -158,6 +158,10 @@ pub const Directives = struct {
     /// (`opStates`). Never forced, even without `//! solve`: each row is its
     /// operator's own equation, and a tied one would pin the operator at 0.
     op_states: []const u16 = &.{},
+    /// Not a directive: the runner's root declares `vera_validate_contract`,
+    /// so `contract`'s conformance checks run on the device and this host
+    /// (`vera --validate-contract`; the fixture suite always sets it).
+    validate_contract: bool = false,
 };
 
 /// What a mixed-signal testbench needs from the compile besides the device:

@@ -154,6 +154,21 @@ display tasks omit those checks too. Modulus with real operands retains its
 existing NaN behavior at a dynamic zero divisor; that reporting gap is not
 closed by the integer path.
 
+The device/host contract's conformance checks are opt-in (no clause; a VerA
+choice). `tools/contract.zig`'s `validate`, `validateHost`'s host obligations,
+`checkFamily` and a Debug device's `su_ok` assert (`setup` ran before `eval`)
+run only in a program whose root module declares
+`pub const vera_validate_contract = true` (`contract.validating`). VerA turns
+them on in `zig build test` (`tools/zrunner.zig`), in every fixture-suite
+testbench, in `vera --emit-exe`/`--run` with `--validate-contract`, and always
+in `vera --check`. `validateHost`'s ABI check (`contract_abi == abi_version`)
+always runs: it is what refuses a stale device. A host that wants the
+obligation checks must opt in: the decl in its program's root module, or, for
+`vera --emit-so`/`orchestrator.compileRelease`, in its `dyn` module, which the
+generated shim (the build's root) forwards. Off, a device build spends
+0.4-1.8% fewer instructions (2026-10-01: mos1 2.454 -> 2.417 Gi, bsim4va
+eval 8.100 -> 7.958, psp103 eval 14.183 -> 14.125).
+
 ## 2. Resource limits
 
 Each limit is stated here and fails with a named diagnostic. A run-time

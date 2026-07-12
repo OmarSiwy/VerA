@@ -1,6 +1,7 @@
 //! The device/host ABI: the comptime interface every generated or hand-written
 //! device satisfies. `validate(D)` checks it where the device is defined and
-//! `validateHost(H, D)` where a host links it. Physics is generic over a
+//! `validateHost(H, D)` where a host links it, when the program asks for it
+//! (`validating`). Physics is generic over a
 //! host-supplied scalar family (`family_fns`); `RefFamily` is the reference
 //! one and `gm` the f64 transcendentals it and GPU kernels share. A member with
 //! no consumer yet names the LRM clause that requires it.
@@ -11,6 +12,21 @@ const std = @import("std");
 /// `pub const contract_abi`, and `validateHost` refuses a device whose value
 /// differs. Bumped by every change a linked host could observe.
 pub const abi_version: u32 = 5;
+
+/// Whether this program asked for the contract's conformance checks: its root
+/// module declares `pub const vera_validate_contract = true`. Off by default:
+/// VerA's devices follow the contract by construction, and the checks exist
+/// for developing VerA. `zig build test` turns them on (`tools/zrunner.zig`),
+/// the fixture suite in every testbench, `vera --validate-contract` in one,
+/// and `vera --check` always. Gates `validate`, `validateHost`'s obligations,
+/// `checkFamily` and a Debug device's `su_ok` assert; `validateHost`'s ABI
+/// check runs regardless. Measured (2026-10-01, one cold build, -j1): the
+/// checks are 0.4-1.8% of a device build's instructions (mos1 2.454 -> 2.417
+/// Gi, bsim4va eval 8.100 -> 7.958, psp103 eval 14.183 -> 14.125).
+pub const validating: bool = blk: {
+    const root = @import("root");
+    break :blk @hasDecl(root, "vera_validate_contract") and root.vera_validate_contract;
+};
 
 /// The pieces `vera --emit-so` builds a large device in (`orchestrator.Part`):
 /// one compiler process and object each, in parallel, linked into one
@@ -2004,6 +2020,7 @@ pub const family_primitives = [_][]const u8{
 /// Checks family `S` at comptime: its `family_fns` decls, and the
 /// `family_primitives` of `Of(0)` and `Of(1)`.
 pub fn checkFamily(comptime S: type) void {
+    if (!validating) return;
     if (@hasDecl(S, "collapse_applied") and @TypeOf(S.collapse_applied) != bool)
         @compileError(@typeName(S) ++ ": family collapse_applied must be bool");
     inline for (family_fns) |f| {
@@ -2625,6 +2642,7 @@ pub fn InstancePtr(comptime D: type) type {
 /// requires `jac_f32`), `batch_ok` (a family whose `V` holds several operating
 /// points evaluates each exactly), `mutable_eval` (see `InstancePtr`).
 pub fn validate(comptime D: type) void {
+    if (!validating) return;
     @setEvalBranchQuota(1_000_000);
     const name = @typeName(D);
 
@@ -2916,7 +2934,8 @@ pub fn validate(comptime D: type) void {
 
 /// Checks host `H` against what device `D` needs from it; a host calls it once
 /// per device it links, beside `validate(D)`. A missing obligation is a compile
-/// error. `H` declares each obligation it meets as a `true` bool:
+/// error, checked only when `validating`; the ABI check always runs. `H`
+/// declares each obligation it meets as a `true` bool:
 ///   `D.contract_abi` must equal `abi_version` (no declaration; regenerate D);
 ///   `calls_setup` when D has `setup`: the host calls it after every card,
 ///     instance, temperature or `setup_simparams` write, before `eval`;
@@ -2938,6 +2957,7 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
         @compileError(@typeName(D) ++ " was generated for a different device ABI than this contract's " ++
             std.fmt.comptimePrint("abi_version = {d}", .{abi_version}) ++
             "; regenerate it with the VerA this contract came from.");
+    if (!validating) return;
     // A host that skips `setup` evaluates at `inst.su`'s NaN initializers.
     if (@hasDecl(D, "setup")) {
         if (!@hasDecl(H, "calls_setup") or !H.calls_setup)
@@ -3284,7 +3304,8 @@ fn isValueType(comptime T: type) bool {
         .@"enum" => |e| isValueType(e.tag_type),
         .array => |a| isValueType(a.child),
         // `Instance.su` (a `Setup`): a plain struct of value fields is as
-        // copyable as its fields. `void` is `su_ok` outside Debug.
+        // copyable as its fields. `void` is `su_ok` outside Debug, or when
+        // the program did not ask for the checks (`validating`).
         .@"struct" => |s| for (s.fields) |f| {
             if (!isValueType(f.type)) break false;
         } else true,

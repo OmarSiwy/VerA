@@ -3590,7 +3590,7 @@ test "codegen: the setup split — invariant values are computed by setup and re
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.r[0] = (") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".scale(inst.su.r[0])") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "std.debug.assert(inst.su_ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (std.debug.runtime_safety and contract.validating) std.debug.assert(inst.su_ok);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{};") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "precompute") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "hp_ok") == null);

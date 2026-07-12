@@ -25,7 +25,8 @@ const usage_text =
     \\  --emit-zig              generate the device; to stdout unless -o is given
     \\  -o PATH                 write the generated device.zig here
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
-    \\  --check                 type-check the generated device with zig
+    \\  --check                 type-check the generated device with zig, running
+    \\                          the contract's conformance checks
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
     \\  --emit-exe              build a runnable Verilog-A testbench,
     \\                          or a .v design's executable; print its path
@@ -50,6 +51,13 @@ const usage_text =
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
     \\  --jac-f32-host          ...and ask the host to use it on its CPU path
+    \\  --validate-contract     run the contract's conformance checks (validate,
+    \\                          validateHost, checkFamily, Debug su_ok) in the
+    \\                          --emit-exe/--run testbench; off by default. A host
+    \\                          gets them only by opting in: `pub const
+    \\                          vera_validate_contract = true` in its root module
+    \\                          (--emit-so: in the --dyn module). The ABI check is
+    \\                          always on
     \\  --contract PATH         root of the `contract` module (default: this vera's
     \\                          own, written under the work directory)
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
@@ -121,6 +129,7 @@ pub fn main(init: std.process.Init) !u8 {
     var out_path: ?[]const u8 = null;
     var expect_module: ?[]const u8 = null;
     var check = false;
+    var validate_contract = false;
     var emit_so = false;
     var run_exe = false;
     var display: vera.codegen.Display = .drop;
@@ -185,6 +194,8 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "--display=drop")) {
             display = .drop;
             display_drop_flag = true;
+        } else if (std.mem.eql(u8, arg, "--validate-contract")) {
+            validate_contract = true;
         } else if (std.mem.eql(u8, arg, "--jac-f32")) {
             jac_f32 = true;
         } else if (std.mem.eql(u8, arg, "--jac-f32-host")) {
@@ -316,6 +327,11 @@ pub fn main(init: std.process.Init) !u8 {
         );
         return 2;
     };
+    if (validate_contract and exe_flag == null) {
+        try err.writeAll("error: `--validate-contract` turns the checks on in an --emit-exe or --run " ++
+            "testbench; --check always runs them\n");
+        return 2;
+    }
     if (lint_flag) if (codegen_flag) |f| {
         try err.print(
             "error: `--lint` and `{s}` conflict: --lint stops after the frontend " ++
@@ -578,6 +594,7 @@ pub fn main(init: std.process.Init) !u8 {
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
+        dm.validate_contract = validate_contract;
         try vera.tb.warnGridEvents(&bag, result.lowered, result.mir);
         // Runner diagnostics obey --deny/--forbid before an artifact is
         // built or its simulation starts, just like compiler diagnostics.
@@ -928,6 +945,7 @@ fn emitDevice(
 /// `--check`'s root beside a `.v` device: the contract's checks, and every
 /// hook called once so each body is compiled.
 const device_check =
+    \\pub const vera_validate_contract = true;
     \\const contract = @import("contract");
     \\const D = @import("device");
     \\const n_u = @typeInfo(D.U).@"enum".fields.len;
@@ -1050,6 +1068,15 @@ fn killAfter(io: Io, child: *std.process.Child, seconds: i64) bool {
     return true;
 }
 
+/// `typeCheck`'s root: the contract's checks on, over the device.
+const check_root =
+    \\pub const vera_validate_contract = true;
+    \\comptime {
+    \\    @import("contract").validate(@import("device"));
+    \\}
+    \\
+;
+
 /// Runs `zig build-obj -fno-emit-bin` over the generated device with the
 /// `contract` module. Returns null when it type-checks, else the exit code.
 ///
@@ -1075,17 +1102,26 @@ fn typeCheck(
     defer gpa.free(dev_name);
     try tmp.writeFile(io, .{ .sub_path = dev_name, .data = device_zig });
 
+    // The device is not the root: the root turns the contract's checks on
+    // (`contract.validating`), which `--check` is for.
+    const root_name = try std.fmt.allocPrint(gpa, "{s}.check.zig", .{stem});
+    defer gpa.free(root_name);
+    try tmp.writeFile(io, .{ .sub_path = root_name, .data = check_root });
     const contract_arg = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{contract});
     defer gpa.free(contract_arg);
-    const root_arg = try std.fmt.allocPrint(gpa, "-Mroot=.zig-cache/vera-check/{s}", .{dev_name});
+    const root_arg = try std.fmt.allocPrint(gpa, "-Mroot=.zig-cache/vera-check/{s}", .{root_name});
     defer gpa.free(root_arg);
+    const device_arg = try std.fmt.allocPrint(gpa, "-Mdevice=.zig-cache/vera-check/{s}", .{dev_name});
+    defer gpa.free(device_arg);
 
     // `--dep` applies to the NEXT `-M`, and the FIRST `-M` is the root module —
     // the ordering rule `buildArgv` in lib/backend/orchestrator.zig follows.
     const argv = [_][]const u8{
-        zig_exe,      "build-obj",   "-fno-emit-bin",
-        "--dep",      "contract",    root_arg,
-        contract_arg, "--cache-dir", ".zig-cache",
+        zig_exe,       "build-obj",  "-fno-emit-bin",
+        "--dep",       "device",     "--dep",
+        "contract",    root_arg,     "--dep",
+        "contract",    device_arg,   contract_arg,
+        "--cache-dir", ".zig-cache",
     };
 
     var child = try std.process.spawn(io, .{

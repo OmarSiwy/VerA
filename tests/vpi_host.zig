@@ -162,7 +162,8 @@ fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path
     const device = try res.generateDevice();
     if (res.device_has_compile_error) return error.CodegenRefused;
     const stem = std.fs.path.stem(path);
-    const d = try vera.tb.parse(arena, source);
+    var d = try vera.tb.parse(arena, source);
+    d.validate_contract = true;
     const runner = try vera.tb.renderVpiLib(arena, stem, d);
     const work = try std.fs.path.join(arena, &.{ host_options.work_root, app_stem });
     const out = try std.fmt.allocPrint(arena, "{s}/lib{s}.so", .{ work, stem });

@@ -256,6 +256,15 @@ P=$(./zig-out/bin/vera --emit-exe --contract tools/contract.zig \
 `--emit-exe` prints the path on **stdout** and diagnostics on **stderr**.
 Capture them separately or you get an empty path.
 
+**The contract's conformance checks are opt-in.** `contract.validate`,
+`validateHost`'s obligations, `checkFamily` and the Debug `su_ok` assert run
+only where the root module declares `pub const vera_validate_contract = true`
+(`contract.validating`). `zig build test` (`tools/zrunner.zig`), the fixture
+suite and `vera --check` always turn them on; a hand-built testbench needs
+`--validate-contract`. The ABI check always runs. **A host gets no obligation
+checks unless it opts in:** declare the decl in the program's root module, or,
+for an `--emit-so` build, in the `dyn` module (the generated shim forwards it).
+
 The header quotes the LRM sentence, derives the expected value **by hand**, then
 carries the machine-readable tags:
 

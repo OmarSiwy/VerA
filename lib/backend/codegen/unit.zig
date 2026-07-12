@@ -224,7 +224,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     // into a NaN residual; the integers have no NaN, so Debug asserts it.
     if (self.su.vals.len != 0) {
         self.uses_inst = true;
-        try self.w("    if (std.debug.runtime_safety) std.debug.assert(inst.su_ok);\n", .{});
+        try self.w("    if (std.debug.runtime_safety and contract.validating) std.debug.assert(inst.su_ok);\n", .{});
     }
     self.fatal = pre;
     try emitUnitBody(self, .undef);

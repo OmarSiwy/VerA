@@ -57,10 +57,9 @@ pub const runner_body =
     \\    return argv[@min(1, argv.len)..];
     \\}
     \\
-    \\/// What `contract.validateHost` checks this host by. The testbench is not
-    \\/// exempt from it: an exemption for the tool's own host is how a seam stops
-    \\/// being tested, and this is the host that runs against every device the
-    \\/// torture suite compiles.
+    \\/// What `contract.validateHost` checks this host by, when the checks are on
+    \\/// (`vera_validate_contract`). The fixture suite always turns them on: this
+    \\/// is the host that runs against every device the torture suite compiles.
     \\pub const iteration_hooks = true;
     \\pub const mutable_eval = true;
     \\/// 4.6.4.3 an array-parameter noise table: this host reads the card's own

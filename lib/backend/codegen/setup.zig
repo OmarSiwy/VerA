@@ -407,7 +407,7 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
         }
     }
     try self.ind(depth);
-    try self.b("if (std.debug.runtime_safety) inst.su_ok = true;\n", .{});
+    try self.b("if (std.debug.runtime_safety and contract.validating) inst.su_ok = true;\n", .{});
     try self.ind(depth);
     try self.b("{s}return;\n", .{stop});
 }

@@ -25,7 +25,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
 
-    try head(&out, arena, title);
+    try head(&out, arena, title, d);
 
     // --- main -------------------------------------------------------------
     try out.appendSlice(arena,
@@ -389,8 +389,9 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
 }
 
 /// The page every runner opens with: the fixed head, `title`, the fixed body.
-fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8) Error!void {
+fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
     try out.appendSlice(arena, tb_runner_text.runner_head);
+    try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
     try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
 }
@@ -429,7 +430,7 @@ fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!vo
 /// error in the emitted runner.
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try head(&out, arena, title);
+    try head(&out, arena, title, d);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
     if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0 or d.acdyn.len != 0)
         try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
@@ -683,7 +684,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
 /// `//! bias`/`//! wave` line pins it.
 pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try head(&out, arena, title);
+    try head(&out, arena, title, d);
     try timeArrays(&out, arena, d);
     try out.appendSlice(arena, tb_runner_text.vpi_lib_body);
 
