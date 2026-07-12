@@ -41,6 +41,74 @@ pub const validating: bool = blk: {
 /// Additive: no `abi_version` change.
 pub const DevicePart = enum { setup, state, eval };
 
+/// §9.7.3 one `$fatal`/`$error` call of a device (`D.status_sites`, in source
+/// order). A device cannot print or stop its host, so the first one an
+/// evaluation reaches latches `Instance.vera_status__` = `statusCode(site)`,
+/// with up to four numeric arguments in `Instance.vera_status_args__`. While
+/// it is latched (until `initState` or `setup`), `eval`, `q` and `evalQ`
+/// return all-zero rows and charges (value and every derivative lane) and
+/// `updateState` changes nothing, so a host polls the field after a solve
+/// and renders it with `formatStatus`. Optional: a device without it has no
+/// such site. Additive: no `abi_version` change.
+pub const StatusSite = struct {
+    severity: enum { fatal, @"error" },
+    /// The call's format string, "" when it has none.
+    fmt: []const u8,
+    /// Where the call is, for the message.
+    file: []const u8,
+    line: u32,
+};
+
+/// The `vera_status__` value site index `site` (0-based) of severity `sev`
+/// latches: the severity in the top byte (1 fatal, 2 error), `site + 1` below.
+pub fn statusCode(sev: @FieldType(StatusSite, "severity"), site: usize) u32 {
+    return (@as(u32, if (sev == .fatal) 1 else 2) << 24) | @as(u32, @intCast(site + 1));
+}
+
+/// The site `D`'s latched status names, or null when `inst` reports none.
+pub fn statusSite(comptime D: type, inst: *const D.Instance) ?StatusSite {
+    if (!@hasDecl(D, "status_sites") or inst.vera_status__ == 0) return null;
+    const k = (inst.vera_status__ & 0xff_ffff) -% 1;
+    return if (k < D.status_sites.len) D.status_sites[k] else null;
+}
+
+/// Writes `D`'s latched status as `<file>:<line>: fatal|error: <message>`,
+/// the message being the site's format with each `%d %i %g %e %f %h %x %o
+/// %b %c %t %r` taking the next numeric argument and `%s` writing `?` (a
+/// string has no numeric slot); `%%` is `%`. Writes nothing when `inst`
+/// reports no status.
+pub fn formatStatus(comptime D: type, inst: *const D.Instance, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    const s = statusSite(D, inst) orelse return;
+    try w.print("{s}:{d}: {s}: ", .{ s.file, s.line, @tagName(s.severity) });
+    var next: usize = 0;
+    var i: usize = 0;
+    while (i < s.fmt.len) : (i += 1) {
+        const c = s.fmt[i];
+        if (c != '%' or i + 1 == s.fmt.len) {
+            try w.writeByte(c);
+            continue;
+        }
+        // Width, precision and the `0` flag are skipped: the value prints
+        // at its own width.
+        i += 1;
+        while (i < s.fmt.len and (std.ascii.isDigit(s.fmt[i]) or s.fmt[i] == '.')) i += 1;
+        if (i == s.fmt.len) break;
+        const conv = std.ascii.toLower(s.fmt[i]);
+        if (conv == '%') {
+            try w.writeByte('%');
+            continue;
+        }
+        const v: f64 = if (next < inst.vera_status_args__.len) inst.vera_status_args__[next] else 0.0;
+        next += 1;
+        switch (conv) {
+            's' => try w.writeByte('?'),
+            'd', 'i', 'h', 'x', 'o', 'b', 'c', 't' => if (!std.math.isFinite(v)) try w.print("{d}", .{v}) else try w.print("{d}", .{@as(i64, @intFromFloat(@round(std.math.clamp(v, -9.2e18, 9.2e18))))}),
+            'e' => try w.print("{e}", .{v}),
+            else => try w.print("{d}", .{v}),
+        }
+    }
+}
+
 /// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
 /// libm. Used by the scalar paths of generated code (the §4.5.15 limiters) and
 /// by `RefFamily`. On the host each function is the Zig builtin or `std.math`
@@ -2690,6 +2758,12 @@ pub fn validate(comptime D: type) void {
     }
     if (@hasDecl(D, "file_io") and @TypeOf(D.file_io) != FileIo)
         @compileError(@typeName(D) ++ ".file_io must be a contract.FileIo");
+    if (@hasDecl(D, "status_sites")) {
+        if (@typeInfo(@TypeOf(D.status_sites)) != .array or @typeInfo(@TypeOf(D.status_sites)).array.child != StatusSite)
+            @compileError(name ++ ".status_sites must be an array of contract.StatusSite");
+        if (@FieldType(D.Instance, "vera_status__") != u32 or @FieldType(D.Instance, "vera_status_args__") != [4]f64)
+            @compileError(name ++ ".status_sites needs Instance.vera_status__: u32 and vera_status_args__: [4]f64");
+    }
 
     // A permission, not a shape: the lane width is the host's to choose.
     if (@hasDecl(D, "jac_f32") and @TypeOf(D.jac_f32) != bool)
@@ -3081,6 +3155,7 @@ const AllowedPubDecl = enum {
     ac_dyn_slots,
     acDyn,
     systf_calls,
+    status_sites,
     mc_param,
     derive,
     checkShape,
@@ -3433,6 +3508,19 @@ const MockTline = struct {
     }
 };
 
+test "formatStatus renders the latched site with its numeric arguments" {
+    var inst: MockAll.Instance = .{};
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try formatStatus(MockAll, &inst, &w);
+    try std.testing.expectEqualStrings("", w.buffered());
+    inst.vera_status__ = statusCode(.@"error", 0);
+    inst.vera_status_args__ = .{ 2.5, 7, 0, 0 };
+    try formatStatus(MockAll, &inst, &w);
+    try std.testing.expectEqualStrings("m.va:3: error: g = 2.5% of ?", w.buffered());
+    try std.testing.expectEqual(@as(u32, 0x0200_0001), inst.vera_status__);
+}
+
 /// Declares every contract member, so `AllowedPubDecl` cannot drift from
 /// `validate`: a member missing from the allowlist is a stray-pub-decl error
 /// here.
@@ -3456,8 +3544,11 @@ const MockAll = struct {
         bound_step: f64 = std.math.inf(f64),
         systf: ?*const SystfHost = null,
         su: Setup = .{},
+        vera_status__: u32 = 0,
+        vera_status_args__: [4]f64 = @splat(0.0),
     };
     pub const Setup = struct { r: [1]f64 = @splat(std.math.nan(f64)) };
+    pub const status_sites = [_]StatusSite{.{ .severity = .@"error", .fmt = "g = %g%% of %s", .file = "m.va", .line = 3 }};
     pub const setup_simparams = [_][]const u8{"tnom"};
     pub fn setup(comptime V: type, m: *const Model, inst: *Instance) void {
         inst.su.r[0] = V.con(@floatCast(m.g)).val();

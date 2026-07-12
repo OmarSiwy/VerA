@@ -5452,9 +5452,12 @@ fn infoOf(c: Code) Info {
             \\
             \\A print there is not a debugging aid, it is a per-iteration
             \\syscall on a hot loop that also happens not to compile for
-            \\SPIR-V or PTX. So the display family (LRM 9.4.1) and the
-            \\severity family (9.7.3) lower to void, exactly as they always
-            \\have — this warning only says so out loud, once per call site.
+            \\SPIR-V or PTX. So the display family (LRM 9.4.1) and
+            \\$warning/$info lower to void — this warning only says so out
+            \\loud, once per call site. $fatal and $error are not dropped: the
+            \\first one an evaluation reaches latches the device's status
+            \\(`contract.StatusSite`, `Instance.vera_status__`), which stops
+            \\its rows until the host clears it.
             \\
             \\The model is CONFORMANT; nothing is wrong with it. If the text
             \\is what you wanted, build the other artifact:

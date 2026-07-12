@@ -176,8 +176,9 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     var dirty = false;
     for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_file.dirtyTracked(self, h.array));
     const tp = self.lowered.timepoints.items.len != 0;
-    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty) "inst" else "_"});
+    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_file.hasStatus(self)) "inst" else "_"});
     if (tp) try self.w("    zTpDrop(inst);\n", .{});
+    if (gen_file.hasStatus(self)) try self.w(gen_file.status_drop, .{});
     for (self.lowered.held_vars.items, self.names.held_names) |h, n| {
         if (h.array == none_u32 or !gen_file.dirtyTracked(self, h.array)) continue;
         try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
@@ -196,6 +197,8 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     const at_sim = self.out.items.len;
     try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
     const body = self.out.items.len;
+    // §9.7.3 a latched status: the device stopped, so its state stays put.
+    if (gen_file.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
     // One slice evaluation serves every operator's input.
     const full = self.core;
     var at_m: ?usize = null;
@@ -256,6 +259,9 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     // It returns the charges, so it has no way to carry a
     // `$vera_reject_step` request: such a host calls `q` and `updateState`.
     if (self.lowered.reject_step != .undef) return;
+    // §9.7.3 a latched status leaves the state alone, which `updateState`
+    // checks first; a status device calls `q` and `updateState`.
+    if (gen_file.hasStatus(self)) return;
     self.uses_x = false;
     self.uses_model = false;
     self.uses_inst = true; // the §9.17 resets below always write it

@@ -12,6 +12,7 @@ const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const gen_cfg = @import("cfg.zig");
+const gen_file = @import("file.zig");
 const plan_setup = @import("plan/setup.zig");
 const plan_args = @import("plan/args.zig");
 const Mir = @import("ir").Mir;
@@ -253,10 +254,10 @@ fn emitTpSetup(self: *Gen) Error!void {
         \\pub fn setup(comptime V: type, _: *const Model, inst: *Instance) void {{
         \\    _ = V;
         \\    zTpDrop(inst);
-        \\}}
+        \\{s}}}
         \\
         \\
-    , .{});
+    , .{if (gen_file.hasStatus(self)) gen_file.status_drop else ""});
 }
 
 /// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes
@@ -333,6 +334,7 @@ pub fn emitSetup(self: *Gen) Error!void {
     // VerA's `vera_timepoint` (§2.9): a card or instance write drops the
     // per-timepoint caches, which may read it.
     if (self.lowered.timepoints.items.len != 0) try self.w("    zTpDrop(inst);\n", .{});
+    if (gen_file.hasStatus(self)) try self.w(gen_file.status_drop, .{});
     try self.w("    @setFloatMode(.strict);\n    const S = V;\n", .{});
     self.float.strict = true;
     self.su.stop = false;

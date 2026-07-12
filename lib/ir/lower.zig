@@ -468,6 +468,10 @@ bound_step_place: ?Ssa.Place = null,
 reject_step_place: ?Ssa.Place = null,
 /// §9.17.1 `$discontinuity`, the same way as `bound_step_place`.
 disc_place: ?Ssa.Place = null,
+/// §9.7.3 the status channel (`Lowered.status`): the code place, seeded 0
+/// ("nothing reported"), then its argument places, written by the FIRST
+/// `$fatal`/`$error` an evaluation reaches. Null: the model has no site.
+status_places: ?[1 + Lowered.status_arg_max]Ssa.Place = null,
 /// §9.17.1 `$discontinuity(-1)`'s flag, seeded 0 and set 1 at each call site;
 /// its final read is `out.reject_iteration`, and `out.uses.reject_iteration`
 /// says it exists.
@@ -1643,6 +1647,10 @@ fn readSiteFinals(self: *Lower, from: usize) Oom!void {
 fn finishKernelCtl(self: *Lower) Oom!void {
     if (self.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
     if (self.reject_step_place) |p| self.out.reject_step = try self.builder.readVariable(p, self.cur);
+    if (self.status_places) |ps| {
+        self.out.status = try self.builder.readVariable(ps[0], self.cur);
+        for (&self.out.status_args, ps[1..]) |*a, p| a.* = try self.builder.readVariable(p, self.cur);
+    }
     if (self.bound_step_place) |p| {
         const v = try self.builder.readVariable(p, self.cur);
         _ = try self.call("$bound_step", &.{v});
