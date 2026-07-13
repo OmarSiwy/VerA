@@ -213,6 +213,14 @@ Host migration from ABI 5:
   `vera_timepoint` caches, a latched §9.7.3 status). Call it for every instance
   of the row after each `setup`, and after an instance write.
 - `setup_chunks.exportChunk` chunks now take `(*Model, *anyopaque)`.
+- **New, only in a device that calls §9.19 `$port_connected` on one of its own
+  ports: `Model.port_connected__: u64`**, all ones by default (every port
+  connected, which is what ABI 5 answered), bit p = port p in the module's port
+  declaration order. `$port_connected(p)` reads bit p. The host writes it with
+  the card, BEFORE `derive`: `derive` and `checkShape` read it if a parameter
+  expression calls `$port_connected`, and `setup` and every eval entry read it
+  wherever the model does. An instance whose card connects a different set of
+  ports (a 4-terminal card on HiSIM_HV's 6-port module) gets its own Model row.
 - `contract.validateHost`'s `calls_setup` covers both entries.
 - `$mfactor` (still `Instance.mfactor`) is no longer a solve-invariant input:
   instances of one row may differ in it, so a value that reads it is computed

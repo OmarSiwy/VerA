@@ -1019,9 +1019,18 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             }
             return self.b("@as(i64, 0)", .{});
         },
-        // Every port of an elaborated device instance is connected; an
-        // unconnected one is the host's business (§6.5.6).
-        .@"$port_connected" => return self.b("@as(i64, 1)", .{}),
+        // §9.19 a top-level device's own port: lowering resolved it to its
+        // ordinal k, and the host says which ports its card connects in
+        // `Model.port_connected__` (all ones unless it writes it). Any other
+        // form (an element expression) is connected, as before.
+        .@"$port_connected" => {
+            const port = if (args.len == 1) self.an.foldConst(args[0], false) else null;
+            if (port) |ord| {
+                self.uses_model = true;
+                return self.b("@as(i64, @intFromBool((model.port_connected__ >> {d}) & 1 != 0))", .{std.math.lossyCast(u6, ord.f)});
+            }
+            return self.b("@as(i64, 1)", .{});
+        },
         // §9.20 node aliases are resolved and folded by `Lower.bindAlias`, so
         // codegen never sees one; one that arrives is an unregistered `$name`.
         .@"$analog_node_alias", .@"$analog_port_alias" => return emitUnregistered(self, inst, name, args),
