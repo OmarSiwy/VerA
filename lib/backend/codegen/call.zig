@@ -587,8 +587,8 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         => true,
         // §9.15 `$simparam("iteration")`, `$simparam("dt")`: the SimState.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
-        // Constants, Model reads, and Instance fields fixed with the card and
-        // the instance (`temperature`, `mfactor`), and every task,
+        // Constants, Model reads (the card, `temperature__`), the Instance's
+        // `mfactor`, fixed with the instance, and every task,
         // conversion and kernel of its operands alone.
         .limexp,
         .ddx,
@@ -918,14 +918,14 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             emitFileCallDropped(self, c, args, @intFromEnum(inst)),
         // §9.10 environment.
         .@"$temperature" => {
-            self.uses_inst = true;
-            return self.b("S.con(inst.temperature)", .{});
+            self.uses_model = true;
+            return self.b("S.con(model.temperature__)", .{});
         },
         .@"$vt" => {
             // §9.10 $vt = kT/q, k/q = 8.617333262e-5 V/K.
             if (args.len == 0) {
-                self.uses_inst = true;
-                return self.b("S.con(inst.temperature * 8.617333262145179e-5)", .{});
+                self.uses_model = true;
+                return self.b("S.con(model.temperature__ * 8.617333262145179e-5)", .{});
             }
             try self.b("(", .{});
             try gen_render.renderVal(self, args[0], .real);

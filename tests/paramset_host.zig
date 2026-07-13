@@ -10,12 +10,13 @@ const D = @import("device");
 const n_u = @typeInfo(D.U).@"enum".fields.len;
 const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
 
-fn current(model: *const D.Model) f64 {
+fn current(card: *const D.Model) f64 {
+    var model = card.*;
     var inst: D.Instance = .{};
     var x: [n_u]f64 = @splat(0.0);
     x[@intFromEnum(D.U.p)] = 0.5;
-    if (@hasDecl(D, "setup")) D.setup(S.Of(0), model, &inst);
-    const result = D.eval(S, &x, model, &inst, .{});
+    if (@hasDecl(D, "setup")) D.setup(S.Of(0), &model);
+    const result = D.eval(S, &x, &model, &inst, .{});
     return result[@intFromEnum(D.U.p)].v;
 }
 

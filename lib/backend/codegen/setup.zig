@@ -1,8 +1,10 @@
 //! `plan/setup.zig`'s solve-invariant values + the core's plan -> the setup
 //! roots (the invariant values the per-eval core and §9.4 display unit read),
-//! `pub const Setup`, and `pub fn setup` computing them into `Instance.su` once
-//! per model card, instance and temperature. `setup` is emitted through the
-//! same slicer and relooper as the core.
+//! `pub const Setup`, and `pub fn setup` computing them into `Model.su` once
+//! per model card and temperature (`Model.temperature__`), so the instances
+//! of one Model row share them. `setup` is emitted through the same slicer
+//! and relooper as the core. `pub fn setupInstance` drops what an instance
+//! caches from the card (`vera_timepoint`, a §9.7.3 status).
 //! LRM: §2.9, §4.4, §5.10.2, §9.4, §9.15.
 
 const std = @import("std");
@@ -209,31 +211,28 @@ fn placeOf(self: *const Gen, v: Mir.Value) u32 {
 pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     const i = @intFromEnum(v);
     const k = self.su.idx[i];
-    self.uses_inst = true;
+    self.uses_model = true;
     if (rootGroup(self, v) == 2) {
-        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(@intFromBool(inst.su.b[{d}])))", .{k});
-        return std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(inst.su.b[{d}]))", .{k});
+        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(@intFromBool(model.su.b[{d}])))", .{k});
+        return std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(model.su.b[{d}]))", .{k});
     }
     if (self.an.vty[i] == .int) {
-        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(inst.su.i[{d}]))", .{k});
-        return std.fmt.allocPrint(self.arena, "inst.su.i[{d}]", .{k});
+        if (as_f64) return std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.su.i[{d}]))", .{k});
+        return std.fmt.allocPrint(self.arena, "model.su.i[{d}]", .{k});
     }
-    return std.fmt.allocPrint(self.arena, "inst.su.r[{d}]", .{k});
+    return std.fmt.allocPrint(self.arena, "model.su.r[{d}]", .{k});
 }
 
-/// Emits `pub const Setup`, ahead of `Instance`.
+/// Emits `pub const Setup`, the type of `Model.su`.
 pub fn emitSetupDecl(self: *Gen) Error!void {
-    if (self.su.vals.len == 0) {
-        if (self.lowered.timepoints.items.len != 0) try self.w("/// No solve-invariant values: `setup` only drops the `vera_timepoint` caches.\npub const Setup = struct {{}};\n\n", .{});
-        return;
-    }
+    if (self.su.vals.len == 0) return;
     const n_flag = self.su.vals.len - self.su.real - self.su.int;
     try self.w(
-        \\/// Solve-invariant values: functions of `Model`, this instance and its
-        \\/// temperature only, which `eval` would otherwise recompute at every
-        \\/// Newton iterate. `setup` fills them; until it runs the reals are
-        \\/// NaN, so a forgotten call is a NaN residual and not a plausible
-        \\/// wrong one. `@sizeOf(Setup)` is the per-instance cost.
+        \\/// Solve-invariant values: functions of `Model` (its card and
+        \\/// `temperature__`) only, which `eval` would otherwise recompute at
+        \\/// every Newton iterate. `setup` fills them; until it runs the reals
+        \\/// are NaN, so a forgotten call is a NaN residual and not a plausible
+        \\/// wrong one. `@sizeOf(Setup)` is a per-Model-row cost.
         \\pub const Setup = struct {{
         \\
     , .{});
@@ -243,25 +242,22 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// VerA's `vera_timepoint` (§2.9) on a device with no solve-invariant
-/// values: a `setup` all the same, so a card or instance write, which the
-/// host follows with `setup` (`contract.validateHost`'s `calls_setup`),
-/// drops the per-timepoint caches.
-fn emitTpSetup(self: *Gen) Error!void {
-    if (self.lowered.timepoints.items.len == 0) return;
+/// Emits `pub fn setupInstance` when an instance caches what a card, a
+/// temperature or a `$simparam` write invalidates: VerA's `vera_timepoint`
+/// (§2.9) caches and a latched §9.7.3 status. The host calls it per instance
+/// after `setup` (`contract.validateHost`'s `calls_setup`).
+fn emitSetupInstance(self: *Gen) Error!void {
+    const tp = self.lowered.timepoints.items.len != 0;
+    if (!tp and !gen_file.hasStatus(self)) return;
     try self.w(
-        \\/// §9.15 the `$simparam` names `setup` reads: none.
-        \\pub const setup_simparams = [_][]const u8{{}};
-        \\
-        \\/// Call after every write to `Model`, to this instance or its
-        \\/// temperature: it drops the `vera_timepoint` caches, which read them.
-        \\pub fn setup(comptime V: type, _: *const Model, inst: *Instance) void {{
-        \\    _ = V;
-        \\    zTpDrop(inst);
-        \\{s}}}
+        \\/// Call for every instance after `setup`, or after any write to
+        \\/// `Model` or this instance: it drops what the instance cached from
+        \\/// them (`vera_timepoint` caches, a latched status).
+        \\pub fn setupInstance(_: *const Model, inst: *Instance) void {{
+        \\{s}{s}}}
         \\
         \\
-    , .{if (gen_file.hasStatus(self)) gen_file.status_drop else ""});
+    , .{ if (tp) "    zTpDrop(inst);\n" else "", if (gen_file.hasStatus(self)) gen_file.status_drop else "" });
 }
 
 /// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes
@@ -293,7 +289,8 @@ fn emitSimparams(self: *Gen) Error!void {
 /// initial-step arm is what setup must compute), and the walk stops at the
 /// first loop that is not invariant, since nothing after it is placeable.
 pub fn emitSetup(self: *Gen) Error!void {
-    if (self.su.vals.len == 0) return emitTpSetup(self);
+    try emitSetupInstance(self);
+    if (self.su.vals.len == 0) return;
     const save_idx = self.plan.lo_idx;
     const save_vals = self.plan.lo_vals;
     self.plan.lo_idx = self.su.idx;
@@ -317,15 +314,16 @@ pub fn emitSetup(self: *Gen) Error!void {
     try emitSimparams(self);
 
     self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = true;
+    self.uses_model = true;
+    self.uses_inst = false;
     self.fatal = null;
     self.su.chunks = 0;
     const at_doc = self.out.items.len;
     try self.w(
-        \\/// Fill `inst.su`: once after `derive`, and again after every write to
-        \\/// `Model`, to this instance or its temperature, or to a `$simparam`
-        \\/// in `setup_simparams` — before `eval` or any other entry point runs.
+        \\/// Fill `model.su`: once after `derive`, and again after every write to
+        \\/// `Model` (its card or `temperature__`) or to a `$simparam` in
+        \\/// `setup_simparams` — before `eval` or any other entry point runs.
+        \\/// Once per Model row: the instances that share the row share it.
         \\/// `V` is the host's VALUE scalar, with exactly the value semantics of
         \\/// the `S` it evaluates with (its Dual's value half), so every latched
         \\/// value is the bits `eval` would have computed. A §5.10.2
@@ -334,13 +332,7 @@ pub fn emitSetup(self: *Gen) Error!void {
         \\/// before any other.
         \\
     , .{});
-    try self.w("pub fn setup(comptime V: type, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model, inst: *Instance) void {{\n", .{});
-    // VerA's `vera_timepoint` (§2.9): a card or instance write drops the
-    // per-timepoint caches, which may read it.
-    if (self.lowered.timepoints.items.len != 0) try self.w("    zTpDrop(inst);\n", .{});
-    if (gen_file.hasStatus(self)) try self.w(gen_file.status_drop, .{});
+    try self.w("pub fn setup(comptime V: type, model: *Model) void {{\n", .{});
     try self.w("    @setFloatMode(.strict);\n    const S = V;\n", .{});
     self.float.strict = true;
     self.su.stop = false;
@@ -363,9 +355,15 @@ pub fn emitSetup(self: *Gen) Error!void {
     // Declared only when a per-eval branch or loop used it: it is always
     // true, and a runtime value so the arm it guards still compiles.
     if (self.su.stop) try self.out.insertSlice(self.gpa, at_stop, "    var zs_stop = true;\n    _ = &zs_stop;\n");
-    // Every root either folds or reads the card, so `model` is the rule; a
-    // setup over `$temperature` alone is the exception.
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
+    // The stores write `model.su`, so `model` is always named. No root reads
+    // an instance (`plan/setup.zig` `callInvariant`: a `$held_*` read is
+    // per-eval), but a per-eval value the relooper places before a `zs_stop`
+    // branch may, for the arm that flag never runs: it reads a default
+    // Instance, so the text compiles and nothing stored depends on it.
+    if (self.uses_inst) {
+        std.debug.assert(self.su.stop);
+        try self.out.insertSlice(self.gpa, at_stop, "    const inst: *const Instance = &.{};\n");
+    }
     std.debug.assert(!self.uses_x);
     std.debug.assert(self.fatal == null);
     if (self.out.items.len - at_doc < setup_chunk.chunk_bytes) return;
@@ -407,21 +405,21 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
         const k = self.su.idx[@intFromEnum(v)];
         try self.ind(depth);
         if (rootGroup(self, v) == 2) {
-            try self.b("inst.su.b[{d}] = (", .{k});
+            try self.b("model.su.b[{d}] = (", .{k});
             try gen_render.renderVal(self, v, .int);
             try self.b(") != 0;\n", .{});
         } else if (self.an.vty[@intFromEnum(v)] == .int) {
-            try self.b("inst.su.i[{d}] = ", .{k});
+            try self.b("model.su.i[{d}] = ", .{k});
             try gen_render.renderVal(self, v, .int);
             try self.b(";\n", .{});
         } else {
-            try self.b("inst.su.r[{d}] = (", .{k});
+            try self.b("model.su.r[{d}] = (", .{k});
             try gen_render.renderVal(self, v, .real);
             try self.b(").val();\n", .{});
         }
     }
     try self.ind(depth);
-    try self.b("if (std.debug.runtime_safety and contract.validating) inst.su_ok = true;\n", .{});
+    try self.b("if (std.debug.runtime_safety and contract.validating) model.su_ok = true;\n", .{});
     try self.ind(depth);
     try self.b("{s}return;\n", .{stop});
 }

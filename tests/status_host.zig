@@ -39,11 +39,12 @@ fn evalAt(m: *const D.Model, inst: *D.Instance, v: f64, initial: bool) contract.
     return D.eval(S, &xv, m, inst, sim(initial));
 }
 
-/// `initState`, then `setup` (the card and instance are fresh): both clear
-/// a latched status.
-fn start(m: *const D.Model, inst: *D.Instance) D.State {
+/// `initState`, then `setup` and `setupInstance` (the card and instance are
+/// fresh): `initState` and `setupInstance` both clear a latched status.
+fn start(m: *D.Model, inst: *D.Instance) D.State {
     const st = D.initState(m, inst);
-    D.setup(S0.Of(0), m, inst);
+    if (@hasDecl(D, "setup")) D.setup(S0.Of(0), m);
+    D.setupInstance(m, inst);
     return st;
 }
 
@@ -148,7 +149,7 @@ test "the *const Instance entries compile and run beside a status site" {
     // `mutable_eval` makes `InstancePtr` `*Instance`; `noisePsd` and `acStim`
     // stay `*const Instance` by contract, so the core they call must take a
     // const instance (hisim2_va/hisimhv_va at 1c554bc2 did not compile).
-    const m: D.Model = .{};
+    var m: D.Model = .{};
     var inst: D.Instance = .{};
     _ = start(&m, &inst);
     const ci: *const D.Instance = &inst;

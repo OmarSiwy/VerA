@@ -1162,17 +1162,17 @@ test "a split build links one object per part into a library that runs" {
     defer arena.deinit();
     const chunked = (try codegen.setup_chunk.chunk(arena.allocator(),
         \\/// doc
-        \\pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {
+        \\pub fn setup(comptime V: type, model: *Model) void {
         \\    @setFloatMode(.strict);
         \\    _ = V;
         \\    const t1: f64 = model.a * contract.k;
         \\    const t2: f64 = t1 + 1.0;
         \\    B1: {
         \\        if (t2 > 0.0) {
-        \\            inst.r = t2 * 2.0;
+        \\            model.r = t2 * 2.0;
         \\            break :B1;
         \\        } else {
-        \\            inst.r = 0.0;
+        \\            model.r = 0.0;
         \\            break :B1;
         \\        }
         \\    }
@@ -1185,8 +1185,7 @@ test "a split build links one object per part into a library that runs" {
     const su_dev = try std.mem.concat(arena.allocator(), u8, &.{
         \\const std = @import("std");
         \\const contract = @import("contract");
-        \\pub const Model = extern struct { a: f64 = 3.0 };
-        \\pub const Instance = extern struct { r: f64 = 0.0 };
+        \\pub const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
         \\
         ,
         chunked.text,
@@ -1203,8 +1202,8 @@ test "a split build links one object per part into a library that runs" {
         \\pub fn exportDevicePart(comptime D: type, comptime name: []const u8, comptime part: @TypeOf(.setup)) void {
         \\    _ = name;
         \\    if (part == .setup) @export(&struct {
-        \\        fn f(m: *const D.Model, i: *D.Instance) callconv(.c) void {
-        \\            D.setup(f64, m, i);
+        \\        fn f(m: *D.Model) callconv(.c) void {
+        \\            D.setup(f64, m);
         \\        }
         \\    }.f, .{ .name = "arp_setup" });
         \\}
@@ -1232,12 +1231,11 @@ test "a split build links one object per part into a library that runs" {
         try tmp.dir.access(io, "shim_setup1.zig", .{});
         var lib = try std.DynLib.open(so);
         defer lib.close();
-        const Model = extern struct { a: f64 = 3.0 };
-        const Instance = extern struct { r: f64 = 0.0 };
-        const setup = lib.lookup(*const fn (*const Model, *Instance) callconv(.c) void, "arp_setup") orelse return error.MissingSymbol;
-        var inst: Instance = .{};
-        setup(&Model{}, &inst);
-        try std.testing.expectEqual(@as(f64, 14.0), inst.r);
+        const Model = extern struct { a: f64 = 3.0, r: f64 = 0.0 };
+        const setup = lib.lookup(*const fn (*Model) callconv(.c) void, "arp_setup") orelse return error.MissingSymbol;
+        var model: Model = .{};
+        setup(&model);
+        try std.testing.expectEqual(@as(f64, 14.0), model.r);
     }
 
     // The default splits only a large LLVM build.

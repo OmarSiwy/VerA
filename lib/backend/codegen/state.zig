@@ -575,23 +575,26 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\    // TOPOLOGY, so a host must call it while building the matrix —
         \\    // before the batch exists and therefore before the batch runs
         \\    // `setup`. But it answers by evaluating `core` at x = 0, and
-        \\    // `core` reads `Instance.su`: without this the retention flags
+        \\    // `core` reads `Model.su`: without this the retention flags
         \\    // are read off unset fields and a device collapses (or fails to)
-        \\    // on garbage. `setup` is a pure function of (model, instance), so
+        \\    // on garbage. `setup` is a pure function of the model, so
         \\    // computing it here is the answer the batch will compute later,
-        \\    // and the copy keeps the caller's Instance untouched.
-        \\{s}    const m = core(S, xr, model, {s}, .{{}}{s});
+        \\    // and the copies keep the caller's Model and Instance untouched.
+        \\{s}    const m = core(S, xr, {s}, {s}, .{{}}{s});
         \\    var parent: [n_u]u8 = undefined;
         \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
         \\
     , .{
-        if (self.su.vals.len != 0)
-            "    var pin = inst.*;\n    setup(S, model, &pin);\n"
+        if (self.su.vals.len != 0 and self.lowered.table_samples.items.len != 0)
+            "    var mpin = model.*;\n    setup(S, &mpin);\n    var pin = inst.*;\n"
+        else if (self.su.vals.len != 0)
+            "    var mpin = model.*;\n    setup(S, &mpin);\n"
         else if (self.lowered.table_samples.items.len != 0)
             "    var pin = inst.*;\n"
         else
             "",
-        if (self.su.vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
+        if (self.su.vals.len != 0) "&mpin" else "model",
+        if (self.lowered.table_samples.items.len != 0) "&pin" else "inst",
         self.heldArg(true),
     });
     for (pairs, 0..) |p, pi| {

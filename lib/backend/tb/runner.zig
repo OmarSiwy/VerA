@@ -34,6 +34,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
+    // §9.10 the temperature is the Model row's, written with the card.
+    try out.print(arena, "    model.temperature__ = {f};\n", .{fmtF64(d.temp)});
     // §6.3.4: the card is complete only now. Unconditional, so a §3.4.5
     // localparam is derived even with no `//! param` line.
     try out.appendSlice(arena,
@@ -43,7 +45,6 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    var inst: D.Instance = .{};
         \\
     );
-    try out.print(arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     // §2.8.3/§12.32: this testbench is a host, so it binds `no_vpi_app` for
     // the device's unresolved `$name`s and passes `validateHost` like any other.
@@ -54,7 +55,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    // write, before the first evaluation — the ordering a host keeps.
         \\    // With `Dual` itself as the value scalar, so every latched value is
         \\    // the bits `eval` would have computed.
-        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model, &inst);
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model);
+        \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
         \\
     );
     try out.appendSlice(arena,
@@ -160,7 +162,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
             // §6.3.4: setup also derives from the swept card.
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm, &inst);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setupInstance\")) D.setupInstance(&pm, &inst);\n");
         }
         // `forced` marks the unknowns the host drives rather than Newton. By
         // default every unknown is tied to the reference; `//! solve` unties
@@ -481,7 +484,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        } else setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
         \\        inline for (snap_ports, 0..) |p, i| setField(a.model, p.field, a.snaps[i]);
         \\        inline for (event_ports, 0..) |p, k| setField(a.model, p.field, @intFromBool(fired >> k & 1 != 0));
-        \\        if (comptime @hasDecl(D, "setup")) D.setup(Dual, a.model, a.inst);
+        \\        if (comptime @hasDecl(D, "setup")) D.setup(Dual, a.model);
+        \\        if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(a.model, a.inst);
         \\    }
         \\
         \\    /// §5.10.3.3 the device's next timer instant after `t`, if it has one.
@@ -613,18 +617,19 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
+    try out.print(arena, "    model.temperature__ = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
         \\    shapeCheck(&model);
         \\    var inst: D.Instance = .{};
         \\
     );
-    try out.print(arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
-        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model, &inst);
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model);
+        \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\    var n: usize = 0;
         \\
@@ -695,18 +700,19 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "g_model", p.name, p.value);
+    try out.print(arena, "    g_model.temperature__ = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &g_model);
         \\    shapeCheck(&g_model);
         \\    g_inst = .{};
         \\
     );
-    try out.print(arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try out.appendSlice(arena,
         \\    sim_state = .{ .kind = @enumFromInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
-        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model, &g_inst);
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model);
+        \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&g_model, &g_inst);
         \\    g_x = @splat(0.0);
         \\    g_forced = @splat(null);
         \\    if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {

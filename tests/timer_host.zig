@@ -31,7 +31,8 @@ const Run = struct {
 
     fn init(model: D.Model) Run {
         var r: Run = .{ .model = model };
-        if (@hasDecl(D, "setup")) D.setup(S.Of(0), &r.model, &r.inst);
+        if (@hasDecl(D, "setup")) D.setup(S.Of(0), &r.model);
+        if (@hasDecl(D, "setupInstance")) D.setupInstance(&r.model, &r.inst);
         r.state = D.initState(&r.model, &r.inst);
         return r;
     }

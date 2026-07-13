@@ -53,7 +53,7 @@ arr_lanes: []const bool = &.{},
 lo_idx: []const u32 = &.{},
 /// The core's live-out values, in `lo_idx` order.
 lo_vals: []const Mir.Value = &.{},
-/// The setup roots (codegen/setup.zig `planSetup`): value -> its `Instance.su`
+/// The setup roots (codegen/setup.zig `planSetup`): value -> its `Model.su`
 /// index, or `none_u32`. A root is a leaf here like a core-cached value:
 /// computed outside every body, read as a field, valid in all units
 /// including the core.

@@ -303,7 +303,7 @@ value folds without the card (E0525), and a contribution inside is E0526.
 `(* vera_timepoint *)`, a statement prefix, runs the statement once per
 timepoint: the first evaluation at a (`$abstime`, analysis, step flags) runs
 it, `eval` stores what it assigned in `Instance` (`tp<b>_*`; the device is
-`mutable_eval`), and later iterations read that back. `initState`, `setup`,
+`mutable_eval`), and later iterations read that back. `initState`, `setupInstance`,
 `updateState` and `stateCtl(.commit/.revert)` drop the cache, so a rejected
 step recomputes it. `= 0` turns it off; the value folds without the card
 (E0529). Inside, a probe, `$limit`, contribution, stateful operator, noise
