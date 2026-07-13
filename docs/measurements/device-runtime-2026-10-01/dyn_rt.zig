@@ -64,9 +64,10 @@ fn Api(comptime D: type, comptime name: []const u8) type {
         }
 
         fn device_setup(model: *D.Model, inst: *D.Instance, temperature: f64) callconv(cc) void {
-            if (@hasField(D.Instance, "temperature")) inst.temperature = temperature;
+            if (@hasField(D.Model, "temperature__")) model.temperature__ = temperature;
             if (@hasDecl(D, "derive")) D.derive(V, model);
-            if (@hasDecl(D, "setup")) D.setup(V, model, inst);
+            if (@hasDecl(D, "setup")) D.setup(V, model);
+            if (@hasDecl(D, "setupInstance")) D.setupInstance(model, inst);
         }
 
         fn device_init(model: *const D.Model, inst: *D.Instance, state: *State) callconv(cc) void {
