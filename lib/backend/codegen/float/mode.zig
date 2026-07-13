@@ -19,6 +19,10 @@ pub const Float = struct {
     /// several operating points is then exact per point. Display units never
     /// set it; they are not part of the residual.
     pinned: bool = false,
+    /// Set once a unit decides on an x-dependent value through the lead
+    /// protocol (`lanes.leadLanes`). An unpinned device with it set is
+    /// `batch_ok` only for a family that runs the protocol (`batch_lead`).
+    lead: bool = false,
     /// Which single-precision-Jacobian decls the device emits
     /// (`Options.jac_f32`/`jac_f32_host`).
     jac: Jac = .off,

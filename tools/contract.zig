@@ -2098,6 +2098,205 @@ pub const family_primitives = [_][]const u8{
     "atan",  "lt",    "le",   "eq",  "val", "ddxAt", "to",
 };
 
+// ---- the lead protocol (`batch_lead`) ----
+//
+// A device that declares `batch_lead` decides on per-point values: it
+// compares reals, rounds them to integers, strips their lanes, or runs a
+// kernel that steers on them. A batch family (`V` a vector of W points) that
+// evaluates such a device implements the protocol, and every result it
+// returns is then exactly, bit for bit, what a scalar family computes for
+// that point alone, divergent batches included (they only cost more runs):
+//
+//   on the family S:  `Inner` (the family the runs use: the same `V`/`Of`/
+//                     `con`/`probe`/`sel`/`lift`, with the hooks below and
+//                     without `Inner`), `leadBegin()`, `leadNext() bool`,
+//                     `leadMerge(out: *R, new: R)` (`leadMergeInto`);
+//   on S.Inner:       `decide(op, a, b) bool`, `decideI(a) i64`,
+//                     `strip(a) Of(0)`, `Lane` (a scalar family with the same
+//                     lanes), `lane_count`, `laneOf(a, comptime w)`,
+//                     `fromLanes(comptime m, [lane_count]Lane.Of(m)) Of(m)`.
+//
+// `decide` compares per point and answers the leader's result; a point whose
+// own result differs is marked diverged. The device's entry points run the
+// batch, then while `leadNext()` names a new leader (the first point not yet
+// finished) run it again and `leadMerge` the points that finished in that
+// run: those that never diverged from its leader, so every decision they met
+// was their own. `LeadState` is the bookkeeping. A vector family without the
+// protocol is refused at compile time (`zLeads`).
+
+/// Whether a `batch_lead` device's entry point runs the protocol for
+/// family `S`: yes for a family with `Inner`, no for a run inside it (`S`
+/// has `decide`) or a one-point family. A vector family without the
+/// protocol cannot evaluate the device exactly, so it is refused here.
+pub fn leads(comptime S: type) bool {
+    if (@hasDecl(S, "Inner")) return true;
+    if (@hasDecl(S, "decide")) return false;
+    if (@typeInfo(S.V) == .vector) @compileError("this device decides per operating point (`batch_lead`): a batch family needs the lead protocol (contract.zig `batch_lead`)");
+    return false;
+}
+
+/// The lead protocol's per-call bookkeeping for W points (W <= 32). With
+/// `sig`, it also hashes each point's own decision outcomes as `region`
+/// does: a point kept from a run took its own path through it, so
+/// `regions()` after the call equals `region` at every point, without an
+/// extra evaluation (it costs the batched call 2-15% more instructions).
+pub fn LeadState(comptime W: usize, comptime sig: bool) type {
+    return struct {
+        const Bits = std.meta.Int(.unsigned, W);
+        const all: Bits = std.math.maxInt(Bits);
+        const H = @Vector(W, u64);
+        leader: std.math.Log2Int(Bits) = 0,
+        done: Bits = 0,
+        div: Bits = 0,
+        h: if (sig) H else void = if (sig) @splat(sig_seed) else {},
+        out: if (sig) H else void = if (sig) @splat(sig_seed) else {},
+        /// Runs the protocol for the batch about to be evaluated.
+        pub fn begin(s: *@This()) void {
+            s.* = .{};
+        }
+        /// The leader's outcome of one decision whose per-point outcomes
+        /// are `c`; marks the points that disagree.
+        pub fn mark(s: *@This(), c: @Vector(W, bool)) bool {
+            if (sig) s.h = sigMix(s.h, @intFromBool(c));
+            const bits: Bits = @bitCast(c);
+            // Every point agrees: nothing to record (the common case).
+            if (bits == 0) return false;
+            if (bits == all) return true;
+            const l = (bits >> s.leader) & 1 != 0;
+            s.div |= bits ^ (if (l) all else 0);
+            return l;
+        }
+        /// The leader's value of one real→integer decision whose per-point
+        /// values are `r`; marks the points whose value differs.
+        pub fn markI(s: *@This(), r: @Vector(W, i64)) i64 {
+            if (sig) s.h = sigMix(s.h, @as(H, @bitCast(r)));
+            const ra: [W]i64 = r;
+            const l = ra[s.leader];
+            s.div |= ~@as(Bits, @bitCast(r == @as(@Vector(W, i64), @splat(l))));
+            return l;
+        }
+        /// The points the run just finished settled: not done before, not
+        /// diverged in it.
+        pub fn keep(s: *const @This()) @Vector(W, bool) {
+            return @bitCast(~s.done & ~s.div);
+        }
+        /// Marks the last run's points done; false when every point is,
+        /// else names the next leader and clears the divergence.
+        pub fn next(s: *@This()) bool {
+            if (sig) {
+                s.out = @select(u64, s.keep(), s.h, s.out);
+                s.h = @splat(sig_seed);
+            }
+            s.done |= ~s.done & ~s.div;
+            if (s.done == all) return false;
+            s.leader = @intCast(@ctz(~s.done));
+            s.div = 0;
+            return true;
+        }
+        /// Each point's `region` signature, once `next()` returned false.
+        pub fn regions(s: *const @This()) [W]u16 {
+            comptime std.debug.assert(sig);
+            var r: [W]u16 = undefined;
+            inline for (0..W) |w| r[w] = sigFold(s.out[w]);
+            return r;
+        }
+    };
+}
+
+const sig_seed: u64 = 0xcbf29ce484222325;
+/// FNV-1a step of the region hash, on one point (`u64`) or W (`@Vector`).
+fn sigMix(h: anytype, v: anytype) @TypeOf(h) {
+    const T = @TypeOf(h);
+    const vv: T = if (@typeInfo(T) == .vector) @intCast(v) else v;
+    return (h ^ vv) *% @as(T, if (@typeInfo(T) == .vector) @splat(0x100000001b3) else 0x100000001b3);
+}
+fn sigFold(h: u64) u16 {
+    return @truncate(h ^ (h >> 16) ^ (h >> 32) ^ (h >> 48));
+}
+
+/// A `batch_lead` device's region signature at the operating point `x`: a
+/// 16-bit hash of the outcome of every decision its `eval` makes there (the
+/// comparisons, roundings and strips the lead protocol watches), in order.
+/// Two points with the same decision sequence have the same signature, so a
+/// batch of points with equal signatures runs once (no divergence), up to
+/// hash collisions, which cost only a re-run. Correctness never depends on
+/// it: a batched call is exact per point either way. Cost: one value-only
+/// `eval`, of which the optimizer keeps only what the decisions read (setup
+/// values are read from `inst`, not recomputed). That cone can be most of
+/// the model: measured 0.25-0.74 of a scalar `evalQ`
+/// (docs/measurements/batched-lead-2026-10-02.md). So a host buckets on the
+/// signatures a batched call already produced (`LeadState.regions`, equal
+/// to this value at every point) and calls `region` only for a point that
+/// has none yet. A device without `batch_lead` never diverges: its
+/// signature is the comptime constant 0, and a host skips the call.
+pub fn region(comptime D: type, x: *const [nU(D)]f64, model: *const D.Model, inst: InstancePtr(D), sim: SimState) u16 {
+    const Sig = Signature(nU(D));
+    if (comptime !@hasDecl(D, "batch_lead")) return 0; // never divergent
+    Sig.h = sig_seed;
+    _ = D.eval(Sig, x, model, inst, sim);
+    return sigFold(Sig.h);
+}
+
+/// The value family `region` evaluates with: `RefFamily`'s lane-free values,
+/// and the lead protocol's decision hooks recording outcomes into `h`.
+fn Signature(comptime n: usize) type {
+    const F = RefFamily(f64, &(.{no_lane} ** n), .{ .dense = true });
+    return struct {
+        pub const V = F.V;
+        pub const Of = F.Of;
+        pub const con = F.con;
+        pub const probe = F.probe;
+        pub const sel = F.sel;
+        pub const collapse_applied = F.collapse_applied;
+        threadlocal var h: u64 = 0;
+        fn mix(v: u64) void {
+            h = sigMix(h, v);
+        }
+        pub fn decide(comptime op: std.math.CompareOperator, a: anytype, b: anytype) bool {
+            const r = std.math.compare(a.val(), op, b.val());
+            mix(@intFromBool(r));
+            return r;
+        }
+        pub fn decideI(a: anytype) i64 {
+            const r = std.math.lossyCast(i64, @round(a.val()));
+            mix(@bitCast(r));
+            return r;
+        }
+        pub fn strip(a: anytype) Of(0) {
+            return F.con(a.val());
+        }
+    };
+}
+
+test "LeadState: the leader decides, disagreeing points re-run, every point finishes once" {
+    var s: LeadState(4, true) = .{};
+    s.begin();
+    // Run 1, leader 0: points 1 and 3 disagree on the first decision.
+    try std.testing.expect(s.mark(.{ true, false, true, false }));
+    try std.testing.expect(!s.mark(.{ false, false, false, false })); // all agree
+    try std.testing.expectEqual(@Vector(4, bool){ true, false, true, false }, s.keep());
+    try std.testing.expect(s.next());
+    try std.testing.expectEqual(@as(u2, 1), s.leader);
+    // Run 2, leader 1: point 3 agrees this time.
+    try std.testing.expect(!s.mark(.{ true, false, true, false }));
+    try std.testing.expectEqual(@Vector(4, bool){ false, true, false, true }, s.keep());
+    try std.testing.expect(!s.next());
+}
+
+/// `leadMerge`'s walk: copies from `new` into `out` the points `keep` names,
+/// through arrays and structs (tuples included) down to values that declare
+/// `leadKeep(self: *T, new: T, keep)`.
+pub fn leadMergeInto(out: anytype, new: @TypeOf(out.*), keep: anytype) void {
+    const T = @TypeOf(out.*);
+    switch (@typeInfo(T)) {
+        .array => for (out, new) |*o, n| leadMergeInto(o, n, keep),
+        .@"struct" => |s| if (@hasDecl(T, "leadKeep")) {
+            out.leadKeep(new, keep);
+        } else inline for (s.fields) |f| leadMergeInto(&@field(out, f.name), @field(new, f.name), keep),
+        else => @compileError("leadMergeInto: no per-point merge for " ++ @typeName(T)),
+    }
+}
+
 /// Checks family `S` at comptime: its `family_fns` decls, and the
 /// `family_primitives` of `Of(0)` and `Of(1)`.
 pub fn checkFamily(comptime S: type) void {
@@ -2725,7 +2924,8 @@ pub fn InstancePtr(comptime D: type) type {
 /// path. Optional permissions: `jac_f32` (the host may carry lanes in f32;
 /// absent, it must assume f64), `jac_f32_host` (take it on the CPU path too;
 /// requires `jac_f32`), `batch_ok` (a family whose `V` holds several operating
-/// points evaluates each exactly), `mutable_eval` (see `InstancePtr`).
+/// points evaluates each exactly), `batch_lead` (it does so only through the
+/// lead protocol; see `LeadState`), `mutable_eval` (see `InstancePtr`).
 pub fn validate(comptime D: type) void {
     if (!validating) return;
     @setEvalBranchQuota(1_000_000);
@@ -3155,6 +3355,7 @@ const AllowedPubDecl = enum {
     setup_chunks,
     jac_f32,
     jac_f32_host,
+    batch_lead,
     // Nothing steers on a `.val()` of an x-dependent value, draws a per-call
     // scalar, or collapses an x-dependent chain to its value.
     batch_ok,
@@ -3565,6 +3766,7 @@ const MockAll = struct {
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
     pub const jac_f32_host = true;
+    pub const batch_lead = false;
     pub const batch_ok = true;
     pub const mutable_eval = false;
 

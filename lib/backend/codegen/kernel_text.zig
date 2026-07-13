@@ -50,6 +50,47 @@ pub const math_txt =
     \\fn zMin(comptime S: type, a: S, b: S) S { return a.lt(b).sel(a, b); }
     \\fn zMax(comptime S: type, a: S, b: S) S { return b.lt(a).sel(a, b); }
     \\
+    \\// ---- per-operating-point decisions (`batch_lead`, contract.zig) ----
+    \\// A real compared, rounded to an integer or stripped of its lanes is one
+    \\// decision per call. A scalar family has one operating point and these
+    \\// are the plain value forms. A batch family (`V` a vector of points)
+    \\// implements the lead protocol: the leader point decides, every other
+    \\// point that would have decided otherwise is marked diverged, and the
+    \\// entry points re-run until every point has run on its own path.
+    \\fn zCmp(comptime S: type, comptime op: std.math.CompareOperator, a: anytype, b: anytype) bool {
+    \\    if (comptime @hasDecl(S, "decide")) return S.decide(op, a, b);
+    \\    return std.math.compare(a.val(), op, b.val());
+    \\}
+    \\fn zRoundI(comptime S: type, a: anytype) i64 {
+    \\    if (comptime @hasDecl(S, "decideI")) return S.decideI(a);
+    \\    return std.math.lossyCast(i64, @round(a.val()));
+    \\}
+    \\fn zStrip(comptime S: type, a: anytype) @TypeOf(S.con(0.0)) {
+    \\    if (comptime @hasDecl(S, "strip")) return S.strip(a);
+    \\    return S.con(a.val());
+    \\}
+    \\/// `a * k`, `a + k`, `a - k` for a derivative-free `k` that differs per
+    \\/// point: `scale`/`addC` of its value in a one-point family, which is
+    \\/// what the device always emitted; in a batch, the same arithmetic per
+    \\/// point (`sub` of `-k` keeps a -0 lane that `add` of a zero lane would not).
+    \\fn zMulP(comptime S: type, a: anytype, k: anytype) @TypeOf(a) {
+    \\    if (comptime @typeInfo(S.V) == .vector) return a.mul(k);
+    \\    return a.scale(k.val());
+    \\}
+    \\fn zAddP(comptime S: type, a: anytype, k: anytype) @TypeOf(a) {
+    \\    if (comptime @typeInfo(S.V) == .vector) return a.sub(k.neg());
+    \\    return a.addC(k.val());
+    \\}
+    \\fn zSubP(comptime S: type, a: anytype, k: anytype) @TypeOf(a) {
+    \\    if (comptime @typeInfo(S.V) == .vector) return a.sub(k);
+    \\    return a.addC(-(k.val()));
+    \\}
+    \\/// Whether `S` runs the lead protocol; a vector family that cannot is
+    \\/// refused, since its points would follow point 0's branches.
+    \\fn zLeads(comptime S: type) bool {
+    \\    return contract.leads(S);
+    \\}
+    \\
     \\/// Device-routed f64 transcendentals for the SCALAR paths (the
     \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
     \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
@@ -363,6 +404,16 @@ pub const family_txt =
     \\        pub fn minC(a: T, c: f64) T { return con(c).lt(a).sel(con(c), a); }
     \\        pub fn maxC(a: T, c: f64) T { return a.lt(con(c)).sel(con(c), a); }
     \\    };
+    \\}
+    \\/// `zPow` at mask `m`; a batch family (`batch_lead`) runs it once per
+    \\/// point on its scalar `Lane` family, since it steers on both values.
+    \\fn zPowL(comptime S: type, comptime m: u64, a: zOf(S, m), b: zOf(S, m), comptime ve: bool) zOf(S, m) {
+    \\    if (comptime @hasDecl(S, "Lane")) {
+    \\        var ls: [S.lane_count]zOf(S.Lane, m) = undefined;
+    \\        inline for (0..S.lane_count) |w| ls[w] = zPowL(S.Lane, m, S.laneOf(a, w), S.laneOf(b, w), ve);
+    \\        return S.fromLanes(m & zdr, ls);
+    \\    }
+    \\    return zLu(S, m, zPow(zL(S, m), zLw(S, m, a), zLw(S, m, b), ve));
     \\}
     \\fn zLw(comptime S: type, comptime m: u64, a: anytype) zL(S, m) {
     \\    return .{ .v = zTo(S, m, a) };

@@ -3409,7 +3409,8 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
     // promise. So any helper in the emitted math/ops templates whose body
     // reads `.val(` must be listed here: either its emission site calls
     // `pinLanes`, or it steers only on lane-uniform state (dt, ic, inst
-    // history, never x).
+    // history, never x), or it is a lead-protocol decision whose emission
+    // site calls `leadLanes` (a batch family's `decide` hooks replace it).
     const pinned = [_][]const u8{
         "zPow",   "zHypot",  "zFmod", "zFloor",   "zCeil",
         "zAtan2", "zLimexp", "zWrap", "zLimitUf",
@@ -3419,6 +3420,7 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
         "zTransition", "zAbsdelay", "zLog10",  "zTan",   "zAsin",
         "zAcos",       "zAsinh",    "zAcosh",  "zAtanh", "zPadInt",
     };
+    const lead = [_][]const u8{ "zCmp", "zRoundI", "zStrip", "zMulP", "zAddP", "zSubP" };
     const text = gen_kernel_text.math_txt ++ gen_kernel_text.ops_txt;
     var it = std.mem.splitSequence(u8, text, "\nfn ");
     _ = it.first(); // preamble before the first helper
@@ -3431,6 +3433,8 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
             if (std.mem.eql(u8, fn_name, p)) break;
         } else for (uniform) |u| {
             if (std.mem.eql(u8, fn_name, u)) break;
+        } else for (lead) |l| {
+            if (std.mem.eql(u8, fn_name, l)) break;
         } else {
             std.debug.print("helper `{s}` reads .val() but is on neither ledger\n", .{fn_name});
             return error.TestUnexpectedResult;
