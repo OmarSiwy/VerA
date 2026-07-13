@@ -15,3 +15,4 @@ ref/
 # and then reads them back; they are outputs, not inputs.
 /s01_13_built.dat
 /s01_13_wide.dat
+__pycache__/
