@@ -587,7 +587,7 @@ pub const Flatten = struct {
             .tag = .unary,
             .main_tok = tok,
             .lhs = c,
-            .extra = @intFromEnum(Ast.UnaryOp.logical_not),
+            .extra = @backingInt(Ast.UnaryOp.logical_not),
         });
         if (a == .none) return t;
         return ex.add(self.ctx.arena, .{
@@ -595,7 +595,7 @@ pub const Flatten = struct {
             .main_tok = tok,
             .lhs = a,
             .rhs = t,
-            .extra = @intFromEnum(Ast.BinaryOp.logical_and),
+            .extra = @backingInt(Ast.BinaryOp.logical_and),
         });
     }
 
@@ -686,10 +686,11 @@ pub const Flatten = struct {
         );
 
         const out = try self.ctx.arena.create(Ast.ModuleDecl);
-        inline for (@typeInfo(Ast.ModuleDecl).@"struct".fields) |fld| @field(out, fld.name) = switch (@field(fate, fld.name)) {
-            .top => @field(top, fld.name),
-            .merged => @field(self, fld.name).items,
-            .consumed => comptime fld.defaultValue().?,
+        const md = @typeInfo(Ast.ModuleDecl).@"struct";
+        inline for (md.field_names, md.field_types, md.field_attrs) |name, F, attrs| @field(out, name) = switch (@field(fate, name)) {
+            .top => @field(top, name),
+            .merged => @field(self, name).items,
+            .consumed => comptime attrs.defaultValue(F).?,
         };
 
         if (self.had_error) return error.DiagnosticsReported;
@@ -766,7 +767,7 @@ pub const Flatten = struct {
                 // does not exist. Neither may override a child parameter.
                 continue;
             }
-            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(dp.path) });
+            const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(dp.path) });
             try self.defparams.put(self.ctx.arena, key, .{
                 .value = try elab_clone.cloneExpr(self, dp.value),
                 .tok = dp.main_tok,
@@ -781,7 +782,7 @@ pub const Flatten = struct {
         // so this is a duplicate-key test, not a compatibility test.
         for (module.nets) |n| {
             if (!elab_resolve.isOoc(self.ctx.file.str(n.name))) continue;
-            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(n.name) });
+            const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
             if (self.ooc.get(key)) |first| {
                 try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
                     key, self.ctx.file.str(first.discipline),
@@ -811,7 +812,7 @@ pub const Flatten = struct {
                 const n = elab_names.netRefName(self, conn.expr) orelse continue;
                 var q = p;
                 q.discipline = elab_names.portDisciplineAttr(self, module, inst, conn) orelse continue;
-                const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, self.ctx.file.str(inst.name), sep });
+                const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, self.ctx.file.str(inst.name), sep });
                 try elab_resolve.resolveDiscipline(self, child_path, q, self.unit.rename.get(n) orelse n, conn.main_tok);
             }
         }
@@ -883,10 +884,10 @@ pub const Flatten = struct {
             var k: i128 = lo;
             while (k <= hi) : (k += 1) {
                 const leaf = if (is_array)
-                    try std.fmt.allocPrint(self.ctx.arena, "{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
+                    try self.ctx.arena.print("{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
                 else
                     self.ctx.file.str(inst.name);
-                const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, leaf, sep });
+                const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, leaf, sep });
                 var ps: ?*const Ast.ParamsetDecl = null;
                 const child = elab_names.findModule(self, inst.module) orelse blk: {
                     ps = try elab_paramset.selectParamset(self, &inst, child_path) orelse continue;
@@ -939,7 +940,7 @@ pub const Flatten = struct {
             var k: i128 = @min(msb.?, lsb.?);
             while (k <= @max(msb.?, lsb.?)) : (k += 1) {
                 var scalar = inst;
-                scalar.name = try self.ctx.file.intern(self.ctx.arena, try std.fmt.allocPrint(self.ctx.arena, "{s}[{d}]", .{ self.ctx.file.str(inst.name), k }));
+                scalar.name = try self.ctx.file.intern(self.ctx.arena, try self.ctx.arena.print("{s}[{d}]", .{ self.ctx.file.str(inst.name), k }));
                 scalar.range = null;
                 try out.append(self.ctx.arena, scalar);
             }
@@ -1016,7 +1017,7 @@ pub const Flatten = struct {
                 // These are the only rows `Design.names` holds.
                 try self.names.put(
                     self.ctx.arena,
-                    try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
+                    try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(p.name) }),
                     self.ctx.file.str(bound),
                 );
                 // E.3.2: a primitive's attribute was bound by `walkInstances`,
@@ -1072,7 +1073,7 @@ pub const Flatten = struct {
         // the same name from this instance's reporting. Only the selected
         // paramset's own declarations; a chain's earlier links are not read.
         if (ps) |p| for (p.vars) |v| if (!v.desc) for (child.vars) |mv| if (mv.name == v.name)
-            try self.ps_hidden.append(self.ctx.arena, try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(v.name) }));
+            try self.ps_hidden.append(self.ctx.arena, try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(v.name) }));
 
         // ---- names: every local declaration gets its flat spelling ----------
         for (child.params) |p| try elab_names.bind(self, &unit, path, p.name);
@@ -1432,7 +1433,7 @@ pub const Flatten = struct {
     }
 
     fn collectSystemDefparam(self: *Flatten, path: []const u8, kind: hier_param.Kind, name: Ast.StrId, specified: *hier_param.Values, spellings: *std.EnumArray(hier_param.Kind, Ast.StrId)) Error!void {
-        const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(name) });
+        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(name) });
         const dp = self.defparams.getPtr(key) orelse return;
         dp.used = true;
         const previous = spellings.get(kind);
@@ -1728,7 +1729,7 @@ test "§3.4.7 defparam aliases share binding and reject conflicting spellings ac
             \\parameter real g=1.0; aliasparam ag=g; aliasparam bg=g;
             \\analog I(p)<+g*V(p); endmodule
         ;
-        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+        try parse(&f, try f.arena.allocator().print(
             \\module top(p); inout p; electrical p;
             \\card #(.{s}(2.0)) u(p); defparam {s}; endmodule
             \\{s}
@@ -1752,7 +1753,7 @@ test "empty named associations retain defaults and do not mark param_given" {
     for ([_][]const u8{ "g", "ag" }) |name| {
         var f: Fixture = .{ .arena = .init(std.testing.allocator) };
         defer f.deinit();
-        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+        try parse(&f, try f.arena.allocator().print(
             \\module top(p); inout p; electrical p; kid #( .{s}() ) u(p); endmodule
             \\module kid(p); inout p; electrical p;
             \\parameter real g=3.0; aliasparam ag=g;
@@ -1776,7 +1777,7 @@ test "empty named associations still validate parameter and localparam names" {
     for ([_][]const u8{ "absent", "locked" }) |name| {
         var f: Fixture = .{ .arena = .init(std.testing.allocator) };
         defer f.deinit();
-        try parse(&f, try std.fmt.allocPrint(f.arena.allocator(),
+        try parse(&f, try f.arena.allocator().print(
             \\module top(p); inout p; electrical p; kid #( .{s}() ) u(p); endmodule
             \\module kid(p); inout p; electrical p;
             \\localparam real locked=3.0; analog I(p)<+V(p);
@@ -1888,7 +1889,7 @@ test "§6.4.2 the paramset whose range admits the override is selected, and a ga
     ;
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer f.deinit();
-    try parse(&f, try std.fmt.allocPrint(f.arena.allocator(), src, .{"0.5"}));
+    try parse(&f, try f.arena.allocator().print(src, .{"0.5"}));
     const design = try elaborate(f.ctx());
     // The SECOND paramset is the admitting one, so a first-match with no range
     // test answers 10.0 here.
@@ -1900,7 +1901,7 @@ test "§6.4.2 the paramset whose range admits the override is selected, and a ga
     // A value in the gap between the bins belongs to neither.
     var g: Fixture = .{ .arena = .init(std.testing.allocator) };
     defer g.deinit();
-    try parse(&g, try std.fmt.allocPrint(g.arena.allocator(), src, .{"0.1"}));
+    try parse(&g, try g.arena.allocator().print(src, .{"0.1"}));
     try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
     try std.testing.expectEqual(diag.Code.E0911, g.bag.at(0).code);
 }
@@ -1956,7 +1957,7 @@ test "Annex F.2.1 step 4.b: resolveto resolves the multi-candidate net, no rule 
     ;
     const S = struct {
         fn build(f: *Fixture, rules: []const u8, extra: []const u8) !void {
-            try parse(f, try std.fmt.allocPrint(f.arena.allocator(), src, .{ rules, extra }));
+            try parse(f, try f.arena.allocator().print(src, .{ rules, extra }));
         }
     };
 

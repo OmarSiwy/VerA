@@ -134,7 +134,7 @@ fn seedUsesCore(g: *const Gen) bool {
 
 /// Returns `<core>__limit`, the declaration `emitCore` writes.
 fn coreName(g: *Gen) Error![]const u8 {
-    return std.fmt.allocPrint(g.arena, "{s}__limit", .{g.core.name});
+    return g.arena.print("{s}__limit", .{g.core.name});
 }
 
 /// Emits `<core>__limit`: the core's slice computing only the clamp arguments
@@ -148,15 +148,15 @@ pub fn emitCore(g: *Gen) Error!void {
     var vals: std.ArrayList(Mir.Value) = .empty;
     if (rejectsInCore(g)) {
         const r = g.an.rv(g.lowered.reject_iteration);
-        idx[@intFromEnum(r)] = 0;
+        idx[@backingInt(r)] = 0;
         try vals.append(g.arena, r);
     }
     for (g.limits.calls) |lc| {
         for ([_]Mir.Value{lc.sign} ++ lc.argv, 0..) |v, k| {
             if (k > lc.alg.arity() or !needsCore(g, v)) continue;
             const r = g.an.rv(v);
-            if (idx[@intFromEnum(r)] != none_u32) continue;
-            idx[@intFromEnum(r)] = @intCast(vals.items.len);
+            if (idx[@backingInt(r)] != none_u32) continue;
+            idx[@backingInt(r)] = @intCast(vals.items.len);
             try vals.append(g.arena, r);
         }
     }
@@ -189,7 +189,7 @@ fn isLeaf(g: *const Gen, v0: Mir.Value) bool {
 }
 
 fn isRoot(g: *const Gen, v0: Mir.Value) bool {
-    return g.su.idx.len != 0 and g.su.idx[@intFromEnum(g.an.rv(v0))] != none_u32;
+    return g.su.idx.len != 0 and g.su.idx[@backingInt(g.an.rv(v0))] != none_u32;
 }
 
 /// A parameter leaf: a clamp argument that reads `Model` directly.
@@ -346,7 +346,7 @@ fn oneSign(g: *Gen, seen: *std.ArrayList(u32), v: Mir.Value) Error!void {
 }
 
 fn signKey(g: *const Gen, v: Mir.Value) u32 {
-    return @intFromEnum(g.an.rv(v));
+    return @backingInt(g.an.rv(v));
 }
 
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
@@ -527,7 +527,7 @@ fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
 /// `field[v]` of `m`, the core (`seed`) or `limit`'s slice of it (`emitCore`).
 fn writeArg(g: *Gen, v: Mir.Value, field: []const u32) Error!void {
     if (v == .f_zero) return g.w("0.0", .{});
-    const i = @intFromEnum(g.an.rv(v));
+    const i = @backingInt(g.an.rv(v));
     // Solve-invariant: `setup` latched it (codegen/setup.zig), so neither
     // `limit` nor `seed` evaluates the core for it.
     if (isRoot(g, v)) return g.w("{s}", .{try Gen.rootRef(g, v, false)});
@@ -578,7 +578,7 @@ fn emitSeed(g: *Gen) Error!void {
         \\    const m = core(S, xr, model, {s}, sim{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
-    try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
+    try g.w("    var s: [n_u]?f64 = @splat(null);\n", .{});
     for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         // The junction sits across `V(hi, lo)`, and only the internal side is
@@ -646,7 +646,7 @@ fn emitSeedTree(g: *Gen) Error!void {
         \\    const m = core(S, xr, model, {s}, sim{s});
         \\
     , .{ probe_inst, g.heldArg(true) });
-    try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
+    try g.w("    var s: [n_u]?f64 = @splat(null);\n", .{});
     for (g.limits.seed_steps) |st| {
         const nn = g.names.u_names[st.node];
         if (st.site == none_u32) {

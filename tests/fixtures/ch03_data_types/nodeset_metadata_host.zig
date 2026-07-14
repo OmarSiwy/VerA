@@ -10,7 +10,7 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 const lanes = blk: {
     var out: [n_u]u8 = undefined;
     for (&out, 0..) |*lane, i| lane.* = i;
@@ -18,10 +18,10 @@ const lanes = blk: {
 };
 const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
 // The device ABI encodes '[' and ']' as Z5b and Z5d in enum fields.
-const a = @intFromEnum(D.U.nZ5b0Z5d);
-const b = @intFromEnum(D.U.nZ5b1Z5d);
-const c = @intFromEnum(D.U.nZ5b2Z5d);
-const g = @intFromEnum(D.U.g);
+const a = @backingInt(D.U.nZ5b0Z5d);
+const b = @backingInt(D.U.nZ5b1Z5d);
+const c = @backingInt(D.U.nZ5b2Z5d);
+const g = @backingInt(D.U.g);
 
 test "§3.6.3.2 null nodeset preserves the host fallback; explicit zero replaces it" {
     try std.testing.expectEqual(@as(?f64, 2.75), D.u_nodeset[a]);

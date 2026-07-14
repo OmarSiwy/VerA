@@ -269,7 +269,7 @@ fn runtimeRoots(
     try lets.append(g.arena, t.items);
     for (0..(m + 1) / 2) |s| {
         const poly = try g.arena.alloc([]const u8, 3);
-        for (poly, 0..) |*c, j| c.* = try std.fmt.allocPrint(g.arena, "zr{d}[{d}][{d}]", .{ k, s, j });
+        for (poly, 0..) |*c, j| c.* = try g.arena.print("zr{d}[{d}][{d}]", .{ k, s, j });
         try out.append(g.arena, poly);
     }
     return null;
@@ -303,14 +303,14 @@ fn constRoots(g: *Gen, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: b
                 try out.append(g.arena, &.{ "0.0", "1.0" });
             } else if (z) {
                 // §4.5.12 (1 − z⁻¹ρ)
-                const negative = try std.fmt.allocPrint(g.arena, "-({s})", .{re});
+                const negative = try g.arena.print("-({s})", .{re});
                 try out.append(g.arena, try g.arena.dupe([]const u8, &.{ "1.0", negative }));
             } else {
                 // §4.5.11 (1 − s/ρ). A card that sets ρ to 0 at run time
                 // divides by zero, like a zero resistance; LRM 4.2.4 makes
                 // only `%` by zero an error.
                 try out.append(g.arena, try g.arena.dupe([]const u8, &.{
-                    "1.0", try std.fmt.allocPrint(g.arena, "-1.0 / ({s})", .{re}),
+                    "1.0", try g.arena.print("-1.0 / ({s})", .{re}),
                 }));
             }
             continue;
@@ -328,15 +328,15 @@ fn constRoots(g: *Gen, out: *std.ArrayList(Poly), elems: []const Mir.Value, z: b
         // safe for any real part. a == 0 is an undamped pole pair on the
         // imaginary axis; that is the transfer function the model asked for.
         const bb = try g.fmtF64(im.f * im.f);
-        const mag = try std.fmt.allocPrint(g.arena, "(({0s}) * ({0s}) + {1s})", .{ re, bb });
+        const mag = try g.arena.print("(({0s}) * ({0s}) + {1s})", .{ re, bb });
         try out.append(g.arena, if (z) try g.arena.dupe([]const u8, &.{
             "1.0",
-            try std.fmt.allocPrint(g.arena, "-2.0 * ({s})", .{re}),
+            try g.arena.print("-2.0 * ({s})", .{re}),
             mag,
         }) else try g.arena.dupe([]const u8, &.{
             "1.0",
-            try std.fmt.allocPrint(g.arena, "-2.0 * ({s}) / {s}", .{ re, mag }),
-            try std.fmt.allocPrint(g.arena, "1.0 / {s}", .{mag}),
+            try g.arena.print("-2.0 * ({s}) / {s}", .{ re, mag }),
+            try g.arena.print("1.0 / {s}", .{mag}),
         }));
     }
     return null;

@@ -97,7 +97,7 @@ const Scan = struct {
             return;
         }
         switch (@typeInfo(T)) {
-            .@"struct" => inline for (@typeInfo(T).@"struct".fields) |field| try self.walk(@field(value, field.name)),
+            .@"struct" => inline for (@typeInfo(T).@"struct".field_names) |name| try self.walk(@field(value, name)),
             .@"union" => switch (value) {
                 inline else => |payload| try self.walk(payload), // else: every union variant's expression slots are visited
             },

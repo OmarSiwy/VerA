@@ -25,7 +25,7 @@ pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
         countPreds(mir, preds);
         var b: u32 = 0;
         while (b < nb) : (b += 1) {
-            if (try tryConvert(gpa, mir, @enumFromInt(b), preds)) {
+            if (try tryConvert(gpa, mir, @fromBackingInt(@intCast(b)), preds)) {
                 converted += 1;
                 changed = true;
             }
@@ -49,14 +49,14 @@ fn firstPoint(mir: *const Mir, cond: Mir.Value) bool {
 fn countPreds(mir: *const Mir, preds: []u32) void {
     @memset(preds, 0);
     for (0..preds.len) |b| {
-        var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(b))));
+        var it = mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(b)))));
         while (it.next()) |inst| {
             switch (mir.instData(inst)) {
                 .branch => |d| {
-                    preds[@intFromEnum(d.then_block)] += 1;
-                    preds[@intFromEnum(d.else_block)] += 1;
+                    preds[@backingInt(d.then_block)] += 1;
+                    preds[@backingInt(d.else_block)] += 1;
                 },
-                .jump => |d| preds[@intFromEnum(d.target)] += 1,
+                .jump => |d| preds[@backingInt(d.target)] += 1,
                 .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => {},
             }
         }
@@ -68,7 +68,7 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
 /// disqualifier. Does not mutate: both sides validate before either moves.
 fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32) ?Mir.Block {
     if (arm == x) return null; // back edge to the branching block itself
-    if (preds[@intFromEnum(arm)] != 1) return null;
+    if (preds[@backingInt(arm)] != 1) return null;
     var join: ?Mir.Block = null;
     var it = mir.blockInsts(arm);
     while (it.next()) |inst| {
@@ -229,13 +229,13 @@ fn rewritePhi(mir: *Mir, phi: Mir.Inst, then_key: Mir.Block, else_key: Mir.Block
     for (0..d.count) |k| {
         const p = mir.phiPair(phi, @intCast(k));
         if (p.block == then_key or p.block == else_key) continue;
-        mir.extra.items[d.start + count * 2] = @intFromEnum(p.block);
-        mir.extra.items[d.start + count * 2 + 1] = @intFromEnum(p.value);
+        mir.extra.items[d.start + count * 2] = @backingInt(p.block);
+        mir.extra.items[d.start + count * 2 + 1] = @backingInt(p.value);
         count += 1;
     }
-    mir.extra.items[d.start + count * 2] = @intFromEnum(x);
-    mir.extra.items[d.start + count * 2 + 1] = @intFromEnum(sel);
-    mir.insts.items(.c)[@intFromEnum(phi)] = count + 1;
+    mir.extra.items[d.start + count * 2] = @backingInt(x);
+    mir.extra.items[d.start + count * 2 + 1] = @backingInt(sel);
+    mir.insts.items(.c)[@backingInt(phi)] = count + 1;
     // Even dead phis must hold the new pairs: proof evaluates their operands.
     if (count == 0) mir.setAlias(mir.instResult(phi), sel);
 }

@@ -279,7 +279,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     for (module.discrete) |blk| try dreads.stmt(blk.body);
     // §8.5 each explicit D2A term is a host-set flag.
     for (reads.sites.items, 0..) |site, k| {
-        const param = try std.fmt.allocPrint(self.arena, "__d2a{d}", .{k});
+        const param = try self.arena.print("__d2a{d}", .{k});
         try self.out.discrete_events.put(self.arena, site.term, .{ .name = site.name, .edge = site.edge, .param = param });
         try lower_param.addParam(self, param, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(site.term));
     }
@@ -304,7 +304,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
             // §8.5.3.6: the guarded read's region-1b snapshot.
             try self.out.discrete_snaps.put(self.arena, name, t.tok);
-            const snap = try std.fmt.allocPrint(self.arena, "{s}__1b", .{name});
+            const snap = try self.arena.print("{s}__1b", .{name});
             try lower_param.addParam(self, snap, ty, zero, folded, &.{}, false, t.tok);
         }
         if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
@@ -315,7 +315,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             // A name also read any other way keeps the x/z error at every
             // solve (the runner's `mixedInput`), and compares two-state.
             try self.out.discrete_xz.put(self.arena, name, {});
-            const xz = try std.fmt.allocPrint(self.arena, "{s}__xz", .{name});
+            const xz = try self.arena.print("{s}__xz", .{name});
             try lower_param.addParam(self, xz, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, t.tok);
         }
     }
@@ -334,7 +334,7 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         marks: []bool,
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;
-            w.marks[@intFromEnum(e)] = true;
+            w.marks[@backingInt(e)] = true;
             var buf: [3]Ast.ExprId = undefined;
             for (w.file.exprs.children(e, &buf)) |c| try w.expr(c, .read);
         }
@@ -351,7 +351,7 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         file: *const Ast.SourceFile,
         marks: []bool,
         fn lit(w: @This(), e: Ast.ExprId) void {
-            if (e != .none and w.file.exprs.tag(e) == .logic_literal) w.marks[@intFromEnum(e)] = true;
+            if (e != .none and w.file.exprs.tag(e) == .logic_literal) w.marks[@backingInt(e)] = true;
         }
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;

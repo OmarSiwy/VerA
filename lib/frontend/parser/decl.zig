@@ -901,7 +901,7 @@ pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayLi
             _ = try self.expect(.rbracket);
             if (constIndex(self, idx)) |k| {
                 var buf: [24]u8 = undefined;
-                try joined.appendSlice(self.arena, std.fmt.bufPrint(&buf, "[{d}]", .{k}) catch unreachable);
+                try joined.appendSlice(self.arena, std.mem.print(&buf, "[{d}]", .{k}) catch unreachable);
             } else if (unfolded) |list| {
                 try list.append(self.arena, idx);
                 try joined.appendSlice(self.arena, "[]");
@@ -953,7 +953,7 @@ pub fn parseInstanceSelect(self: *Parser, name: Ast.StrId) Error!Ast.StrId {
     const idx = try parse_expr.parseExpr(self);
     _ = try self.expect(.rbracket);
     const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
-    return self.file.intern(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ self.file.str(name), k }));
+    return self.file.intern(self.arena, try self.arena.print("{s}[{d}]", .{ self.file.str(name), k }));
 }
 
 /// Folds A.9.3's `[ constant_expression ]` over literals only, with §4.2's

@@ -48,7 +48,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
                 .main_tok = tok,
                 .lhs = lhs,
                 .rhs = then_e,
-                .extra = @intFromEnum(else_e),
+                .extra = @backingInt(else_e),
             });
             continue;
         }
@@ -69,7 +69,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             .main_tok = tok,
             .lhs = lhs,
             .rhs = rhs,
-            .extra = @intFromEnum(op),
+            .extra = @backingInt(op),
         });
     }
 }
@@ -103,7 +103,7 @@ pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
         .tag = .unary,
         .main_tok = tok,
         .lhs = operand,
-        .extra = @intFromEnum(op),
+        .extra = @backingInt(op),
     });
 }
 

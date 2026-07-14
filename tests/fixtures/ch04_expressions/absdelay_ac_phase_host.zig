@@ -18,7 +18,7 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
 const lanes = blk: {
     var l: [n_u]u8 = undefined;
@@ -26,9 +26,9 @@ const lanes = blk: {
     break :blk l;
 };
 
-const in = @intFromEnum(D.U.in);
-const a = @intFromEnum(D.U.a);
-const d = @intFromEnum(D.U.d);
+const in = @backingInt(D.U.in);
+const a = @backingInt(D.U.a);
+const d = @backingInt(D.U.d);
 
 fn slot(r: usize, c: usize) usize {
     for (D.ac_dyn_slots, 0..) |s, k| if (s == r * n_u + c) return k;

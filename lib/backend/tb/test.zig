@@ -383,7 +383,7 @@ test "plusargs rejects malformed operands rather than dropping them" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     for ([_][]const u8{ "", "+", "HELLO", "+ok missingplus", "+s=\"hello\"", "+s='hello'", "+s=\\value", "+s=\x00", "+s=\x7f", "+s=\x80", "+a\r+b" }) |bad| {
-        const source = try std.fmt.allocPrint(arena, "//! plusargs {s}\n", .{bad});
+        const source = try arena.print("//! plusargs {s}\n", .{bad});
         try testing.expectError(error.BadSyntax, tb_directive.parse(arena, source));
     }
 }
@@ -406,7 +406,7 @@ test "expected runtime check count is positive, unique and not a rejection" {
     try testing.expectEqual(null, (try tb_directive.parse(arena, "")).expected_checks);
     try testing.expectEqual(@as(?usize, 215), (try tb_directive.parse(arena, "//! checks 215\n")).expected_checks);
     for ([_][]const u8{ "", "0", "-1", "+1", "1.0", "1_0", "two" }) |bad| {
-        const source = try std.fmt.allocPrint(arena, "//! checks {s}\n", .{bad});
+        const source = try arena.print("//! checks {s}\n", .{bad});
         try testing.expectError(error.BadNumber, tb_directive.parse(arena, source));
     }
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! checks 1\n//! checks 2\n"));
@@ -521,8 +521,8 @@ test "renderRunner emits parseable Zig" {
         \\//! bias V(n) = 0
     );
     const src = try tb_runner.renderRunner(arena, "001_demo", d);
-    const z = try arena.dupeZ(u8, src);
-    var ast = try std.zig.Ast.parse(testing.allocator, z, .zig);
+    const z = try arena.dupeSentinel(u8, src, 0);
+    var ast = try std.zig.Ast.parse(testing.allocator, z, .{ .mode = .zig });
     defer ast.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), ast.errors.len);
     // The sweep really did become two straight-line blocks.

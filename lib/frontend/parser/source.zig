@@ -146,7 +146,7 @@ pub fn keywordsDirective(self: *Parser) Error!void {
     const spec = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
     const known = token.KeywordSet.fromSpecifier(spec);
     // A 1364 language has no Verilog-AMS specifier to name.
-    const set = if (known != null and @intFromEnum(known.?) <= @intFromEnum(self.language)) known.? else return self.failAt(
+    const set = if (known != null and @backingInt(known.?) <= @backingInt(self.language)) known.? else return self.failAt(
         str,
         .E0135,
         "`{s}`",

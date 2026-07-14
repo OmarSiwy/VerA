@@ -18,22 +18,22 @@ const repo_root = @import("repo_options").repo_root;
 /// `token.Tag` (lexer to parser) is last: its `plus`/`int_literal` overlap
 /// UnaryOp and ExprTag, which keep those switches.
 const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
-    .{ .name = "Ast.ExprTag", .fields = std.meta.fieldNames(Ast.ExprTag) },
-    .{ .name = "Ast.Stmt", .fields = std.meta.fieldNames(Ast.Stmt) },
-    .{ .name = "Ast.BinaryOp", .fields = std.meta.fieldNames(Ast.BinaryOp) },
-    .{ .name = "Ast.UnaryOp", .fields = std.meta.fieldNames(Ast.UnaryOp) },
-    .{ .name = "Ast.NetKind", .fields = std.meta.fieldNames(Ast.NetKind) },
-    .{ .name = "Ast.GateKind", .fields = std.meta.fieldNames(Ast.GateKind) },
-    .{ .name = "Ast.Direction", .fields = std.meta.fieldNames(Ast.Direction) },
-    .{ .name = "Ast.Type", .fields = std.meta.fieldNames(Ast.Type) },
-    .{ .name = "Mir.Opcode", .fields = std.meta.fieldNames(Mir.Opcode) },
-    .{ .name = "Mir.OpClass", .fields = std.meta.fieldNames(Mir.OpClass) },
-    .{ .name = "Mir.DefKind", .fields = std.meta.fieldNames(Mir.DefKind) },
-    .{ .name = "op.OpKind", .fields = std.meta.fieldNames(op.OpKind) },
+    .{ .name = "Ast.ExprTag", .fields = @typeInfo(Ast.ExprTag).@"enum".field_names },
+    .{ .name = "Ast.Stmt", .fields = @typeInfo(Ast.Stmt).@"union".field_names },
+    .{ .name = "Ast.BinaryOp", .fields = @typeInfo(Ast.BinaryOp).@"enum".field_names },
+    .{ .name = "Ast.UnaryOp", .fields = @typeInfo(Ast.UnaryOp).@"enum".field_names },
+    .{ .name = "Ast.NetKind", .fields = @typeInfo(Ast.NetKind).@"enum".field_names },
+    .{ .name = "Ast.GateKind", .fields = @typeInfo(Ast.GateKind).@"enum".field_names },
+    .{ .name = "Ast.Direction", .fields = @typeInfo(Ast.Direction).@"enum".field_names },
+    .{ .name = "Ast.Type", .fields = @typeInfo(Ast.Type).@"enum".field_names },
+    .{ .name = "Mir.Opcode", .fields = @typeInfo(Mir.Opcode).@"enum".field_names },
+    .{ .name = "Mir.OpClass", .fields = @typeInfo(Mir.OpClass).@"enum".field_names },
+    .{ .name = "Mir.DefKind", .fields = @typeInfo(Mir.DefKind).@"enum".field_names },
+    .{ .name = "op.OpKind", .fields = @typeInfo(op.OpKind).@"enum".field_names },
     // After OpKind: its `ddt`/`cross` overlap OpKind, which keeps those switches.
-    .{ .name = "Mir.Callee", .fields = std.meta.fieldNames(Mir.Callee) },
-    .{ .name = "Preprocessor.Directive", .fields = std.meta.fieldNames(@import("frontend").Preprocessor.Directive) },
-    .{ .name = "token.Tag", .fields = std.meta.fieldNames(@import("frontend").token.Tag) },
+    .{ .name = "Mir.Callee", .fields = @typeInfo(Mir.Callee).@"enum".field_names },
+    .{ .name = "Preprocessor.Directive", .fields = @typeInfo(@import("frontend").Preprocessor.Directive).@"enum".field_names },
+    .{ .name = "token.Tag", .fields = @typeInfo(@import("frontend").token.Tag).@"enum".field_names },
 };
 
 fn has(fields: []const []const u8, s: []const u8) bool {
@@ -44,7 +44,7 @@ fn has(fields: []const []const u8, s: []const u8) bool {
 /// Prints every unannotated `else` on a boundary enum in one file, outside
 /// `test` blocks, and returns how many.
 fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8) !usize {
-    var tree = try ZigAst.parse(arena, src, .zig);
+    var tree = try ZigAst.parse(arena, src, .{ .mode = .zig });
     if (tree.errors.len != 0) {
         std.debug.print("{s}: does not parse\n", .{path});
         return error.ParseFailed;
@@ -54,7 +54,7 @@ fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8) !usize {
     var spans: std.ArrayList(Span) = .empty;
     var n_found: usize = 0;
     for (0..tree.nodes.len) |i| {
-        const n: ZigAst.Node.Index = @enumFromInt(i);
+        const n: ZigAst.Node.Index = @fromBackingInt(@intCast(i));
         switch (tree.nodeTag(n)) {
             .fn_decl => {
                 var buf: [1]ZigAst.Node.Index = undefined;
@@ -66,7 +66,7 @@ fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8) !usize {
         }
     }
     for (0..tree.nodes.len) |i| {
-        const sw = tree.fullSwitch(@enumFromInt(i)) orelse continue;
+        const sw = tree.fullSwitch(@fromBackingInt(@intCast(i))) orelse continue;
         var else_tok: ?ZigAst.TokenIndex = null;
         var labels: std.ArrayList([]const u8) = .empty;
         for (sw.ast.cases) |c| {

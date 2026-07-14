@@ -17,10 +17,10 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 
 /// The reference family with no lanes: nothing here asks for a Jacobian.
-const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 /// (t, V(a)) at each accepted point, and the attempt rejected after the second.
 const points = [_][2]f64{ .{ 0, 0 }, .{ 1e-9, 1 }, .{ 2e-9, 1 }, .{ 3e-9, 0 }, .{ 4e-9, 1 } };
@@ -67,14 +67,14 @@ fn simAt(t: f64, t_prev: f64, dc: bool) contract.SimState {
 
 fn bias(a: f64) [n_u]f64 {
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.a)] = a;
+    x[@backingInt(D.U.a)] = a;
     return x;
 }
 
 fn expectRow(row: D.U) !void {
     const want = run(0);
     const got = run(2);
-    for (want.r, got.r) |w, g| try std.testing.expectEqual(w[@intFromEnum(row)], g[@intFromEnum(row)]);
+    for (want.r, got.r) |w, g| try std.testing.expectEqual(w[@backingInt(row)], g[@backingInt(row)]);
 }
 
 test "§4.5.8 transition" {
@@ -120,8 +120,8 @@ test "omitted seed numbering is unchanged by explicit seed storage" {
     // IEEE uniform wrapper then yields -506541885 and 430367027. Counting
     // only omitted sites would give k=1 and change an existing trajectory.
     const got = run(0);
-    try std.testing.expectEqual(@as(f64, -506541885), got.r[0][@intFromEnum(D.U.o_ra)]);
-    try std.testing.expectEqual(@as(f64, 430367027), got.r[1][@intFromEnum(D.U.o_ra)]);
+    try std.testing.expectEqual(@as(f64, -506541885), got.r[0][@backingInt(D.U.o_ra)]);
+    try std.testing.expectEqual(@as(f64, 430367027), got.r[1][@backingInt(D.U.o_ra)]);
 }
 test "§9.13.1 rejected first call restores the constant seed" {
     // AMS §9.13.1 assigns 7 to the hidden seed. The independent IEEE
@@ -135,16 +135,16 @@ test "§9.13.1 rejected first call restores the constant seed" {
     const sim = simAt(0, 0, true);
     for (0..2) |_| {
         const r: [n_u]S = D.eval(S, &x, &model, &inst, sim);
-        try std.testing.expectEqual(@as(f64, -2146999808), r[@intFromEnum(D.U.o_rc)].v);
+        try std.testing.expectEqual(@as(f64, -2146999808), r[@backingInt(D.U.o_rc)].v);
     }
     _ = D.updateState(S, &model, &inst, x, &state, sim);
     _ = D.stateCtl(&model, &inst, &state, .revert);
     const retried: [n_u]S = D.eval(S, &x, &model, &inst, sim);
-    try std.testing.expectEqual(@as(f64, -2146999808), retried[@intFromEnum(D.U.o_rc)].v);
+    try std.testing.expectEqual(@as(f64, -2146999808), retried[@backingInt(D.U.o_rc)].v);
     _ = D.updateState(S, &model, &inst, x, &state, sim);
     _ = D.stateCtl(&model, &inst, &state, .commit);
     const next: [n_u]S = D.eval(S, &x, &model, &inst, simAt(1e-9, 0, false));
-    try std.testing.expectEqual(@as(f64, 1181502348), next[@intFromEnum(D.U.o_rc)].v);
+    try std.testing.expectEqual(@as(f64, 1181502348), next[@backingInt(D.U.o_rc)].v);
 }
 test "§4.5 a revert leaves no field of Instance or State behind" {
     const want = run(0);

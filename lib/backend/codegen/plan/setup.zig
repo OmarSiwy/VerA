@@ -67,11 +67,11 @@ pub fn branchCond(in: Input, bi: u32) ?Mir.Value {
 }
 
 fn thenOf(in: Input, bi: u32) u32 {
-    return @intFromEnum(in.mir.instData(in.an.term[bi]).branch.then_block);
+    return @backingInt(in.mir.instData(in.an.term[bi]).branch.then_block);
 }
 
 fn elseOf(in: Input, bi: u32) u32 {
-    return @intFromEnum(in.mir.instData(in.an.term[bi]).branch.else_block);
+    return @backingInt(in.mir.instData(in.an.term[bi]).branch.else_block);
 }
 
 /// Immediate post-dominators, with a virtual exit `nb` that every return
@@ -240,7 +240,7 @@ const Scan = struct {
         return switch (s.in.mir.valueDef(v)) {
             .undef, .float_const, .int_const, .str_const, .param_ref => true,
             .block_param => false,
-            .inst_result => s.val[@intFromEnum(v)],
+            .inst_result => s.val[@backingInt(v)],
         };
     }
 
@@ -292,8 +292,8 @@ const Scan = struct {
             .unit_closed, .unit_open, .ge_one, .nonzero_divisor => return false,
         }
         return switch (Mir.opClass(row.op)) {
-            .unary => s.anchored(@enumFromInt(row.a)),
-            .binary => s.anchored(@enumFromInt(row.a)) and s.anchored(@enumFromInt(row.b)),
+            .unary => s.anchored(@fromBackingInt(@intCast(row.a))),
+            .binary => s.anchored(@fromBackingInt(@intCast(row.a))) and s.anchored(@fromBackingInt(@intCast(row.b))),
             .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => false,
         };
     }
@@ -304,8 +304,8 @@ const Scan = struct {
     fn anchored(s: *const Scan, v0: Mir.Value) bool {
         const v = s.in.an.rv(v0);
         if (s.in.mir.valueDef(v) != .inst_result) return s.sv(v);
-        const b = s.in.an.def_block[@intFromEnum(v)];
-        return s.val[@intFromEnum(v)] and b != none_u32 and s.in.an.loop_of[b] == none_u32;
+        const b = s.in.an.def_block[@backingInt(v)];
+        return s.val[@backingInt(v)] and b != none_u32 and s.in.an.loop_of[b] == none_u32;
     }
 
     /// The nearest placeable dominator of `b`, or `none_u32`.
@@ -324,7 +324,7 @@ const Scan = struct {
         const def = in.mir.valueDef(v);
         if (def != .inst_result) return s.sv(v);
         const inst = def.inst_result;
-        const blk = in.an.def_block[@intFromEnum(v)];
+        const blk = in.an.def_block[@backingInt(v)];
         if (blk == none_u32) return false;
         if (!s.plc[blk]) return s.speculable(inst, blk);
         const row = in.mir.instRow(inst);
@@ -340,7 +340,7 @@ const Scan = struct {
                 var k: u32 = 0;
                 while (k < d.count) : (k += 1) {
                     const p = in.mir.phiPair(inst, k);
-                    const src: u32 = @intFromEnum(p.block);
+                    const src: u32 = @backingInt(p.block);
                     if (s.plc[src] and s.sv(p.value) and !s.initElseEdge(src, blk)) continue;
                     if (s.initElseEdge(src, blk) and s.heldEquiv(v, p.value)) continue;
                     return false;
@@ -354,9 +354,9 @@ const Scan = struct {
                 return s.sv(d.cond) and s.sv(d.then_val) and s.sv(d.else_val);
             },
             else => return switch (Mir.opClass(row.op)) { // else: every other opcode is pure; its class names the operands
-                .unary => s.sv(@enumFromInt(row.a)),
-                .binary => s.sv(@enumFromInt(row.a)) and s.sv(@enumFromInt(row.b)),
-                .ternary => s.sv(@enumFromInt(row.a)) and s.sv(@enumFromInt(row.b)) and s.sv(@enumFromInt(row.c)),
+                .unary => s.sv(@fromBackingInt(@intCast(row.a))),
+                .binary => s.sv(@fromBackingInt(@intCast(row.a))) and s.sv(@fromBackingInt(@intCast(row.b))),
+                .ternary => s.sv(@fromBackingInt(@intCast(row.a))) and s.sv(@fromBackingInt(@intCast(row.b))) and s.sv(@fromBackingInt(@intCast(row.c))),
                 .phi, .branch, .jump, .call => false,
                 // §3.2.2 array storage is per evaluation: a setup root is one
                 // `Setup` scalar, and an array version is not one.
@@ -401,7 +401,7 @@ pub fn plan(in: Input) Error!Sinv {
     @memset(r.moved_off, 0);
     var n: u32 = 0;
     for (Mir.Value.first_dynamic..in.an.nv) |i| {
-        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const b = in.an.def_block[i];
         if (!r.val[i] or b == none_u32 or r.blk[b] or in.an.rv(v) != v) continue;
         r.home[i] = s.homeOf(b);
@@ -412,7 +412,7 @@ pub fn plan(in: Input) Error!Sinv {
     r.moved = try a.alloc(Mir.Value, n);
     const fill = try a.dupe(u32, r.moved_off[0..in.an.nb]);
     for (r.home, 0..) |h, i| if (h != none_u32) {
-        r.moved[fill[h]] = @enumFromInt(@as(u32, @intCast(i)));
+        r.moved[fill[h]] = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         fill[h] += 1;
     };
     return r;
@@ -482,7 +482,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         }
         for (Mir.Value.first_dynamic..nv) |i| {
             if (!s.val[i]) continue;
-            const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             if (in.an.rv(v) != v) {
                 // An alias carries its target's answer.
                 if (!s.sv(v)) {
@@ -505,7 +505,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
 /// the renderer folds), one value per evaluation (outside every loop), and of
 /// a type `Setup` has a field for.
 pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     if (i < Mir.Value.first_dynamic or !sinv[i]) return false;
     if (in.mir.valueDef(v) != .inst_result) return false;
     if (in.an.vty[i] == .str) return false;
@@ -550,8 +550,8 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     const inside = try a.alloc(bool, nb);
     @memset(inside, false);
     var stack: std.ArrayList(u32) = .empty;
-    const miss: u32 = @intFromEnum(t.miss);
-    const join: u32 = @intFromEnum(t.join);
+    const miss: u32 = @backingInt(t.miss);
+    const join: u32 = @backingInt(t.join);
     inside[miss] = true;
     try stack.append(a, miss);
     while (stack.pop()) |b| for (in.an.succs[b]) |x| {
@@ -567,7 +567,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
         changed = false;
         for (Mir.Value.first_dynamic..nv) |i| {
             if (vary[i]) continue;
-            const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const r = in.an.rv(v);
             const now = if (r != v) varies(in, vary, r) else tpRule(in, vary, inside, cds, v);
             if (!now) continue;
@@ -582,7 +582,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     // An alias is the value it names, wherever that is: a pass-through phi
     // the SSA builder placed inside and then folded away reads nothing here.
     for (Mir.Value.first_dynamic..nv) |i| {
-        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const b = in.an.def_block[i];
         if (vary[i] and in.an.rv(v) == v and b != none_u32 and inside[b]) return v;
     }
@@ -594,7 +594,7 @@ fn varies(in: Input, vary: []const bool, v0: Mir.Value) bool {
     return switch (in.mir.valueDef(v)) {
         .undef, .float_const, .int_const, .str_const, .param_ref => false,
         .block_param => true,
-        .inst_result => vary[@intFromEnum(v)],
+        .inst_result => vary[@backingInt(v)],
     };
 }
 
@@ -615,13 +615,13 @@ fn tpRule(in: Input, vary: []const bool, inside: []const bool, cds: anytype, v: 
         .load => |d| varies(in, vary, d.arr) or varies(in, vary, d.index),
         .store => |d| varies(in, vary, d.arr) or varies(in, vary, d.index) or varies(in, vary, d.value),
         .phi => |d| blk: {
-            const blk_v = in.an.def_block[@intFromEnum(v)];
+            const blk_v = in.an.def_block[@backingInt(v)];
             const out = blk_v == none_u32 or !inside[blk_v];
             for (0..d.count) |k| {
                 const pp = in.mir.phiPair(inst, @intCast(k));
                 if (varies(in, vary, pp.value)) break :blk true;
                 if (!out) continue;
-                const pb: u32 = @intFromEnum(pp.block);
+                const pb: u32 = @backingInt(pp.block);
                 if (branchCond(in, pb)) |c| if (varies(in, vary, c)) break :blk true;
                 for (cds.cd[cds.off[pb]..cds.off[pb + 1]]) |cd| {
                     if (varies(in, vary, branchCond(in, cd.a).?)) break :blk true;
@@ -659,7 +659,7 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
     const s = try solve(in, false);
     var merges: std.ArrayList(Mir.Inst) = .empty;
     for (0..an.nb) |bi| {
-        var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        var it = mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(bi)))));
         while (it.next()) |inst| switch (mir.instOp(inst)) {
             .phi, .select => try merges.append(arena, inst),
             else => {}, // else: only a phi or a select merges a held value with a write
@@ -675,15 +675,15 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
         }
         const seed = an.rv(h.seed);
         const inst = mir.valueDef(seed).inst_result;
-        const b = an.def_block[@intFromEnum(seed)];
+        const b = an.def_block[@backingInt(seed)];
         const next = mir.insts.items(.next);
         var prev: Mir.Inst = .none;
         var cur = mir.blocks.items(.first)[b];
-        while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
-        const after = next[@intFromEnum(inst)];
-        if (prev == .none) mir.blocks.items(.first)[b] = after else next[@intFromEnum(prev)] = after;
+        while (cur != inst) : (cur = next[@backingInt(cur)]) prev = cur;
+        const after = next[@backingInt(inst)];
+        if (prev == .none) mir.blocks.items(.first)[b] = after else next[@backingInt(prev)] = after;
         if (mir.blocks.items(.last)[b] == inst) mir.blocks.items(.last)[b] = prev;
-        next[@intFromEnum(inst)] = .none;
+        next[@backingInt(inst)] = .none;
         mir.setAlias(seed, h.init);
     }
     held.shrinkRetainingCapacity(kept);
@@ -695,7 +695,7 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
             continue;
         }
         const inst = mir.valueDef(an.rv(h.seed)).inst_result;
-        mir.extra.items[mir.insts.items(.b)[@intFromEnum(inst)] + 1] = @intFromEnum(try mir.addIntConst(arena, @intCast(i)));
+        mir.extra.items[mir.insts.items(.b)[@backingInt(inst)] + 1] = @backingInt(try mir.addIntConst(arena, @intCast(i)));
     }
 }
 
@@ -704,31 +704,31 @@ fn observed(in: Input, s: Sinv, merges: []const Mir.Inst, web: []bool, seed: Mir
     const mir = in.mir;
     const an = in.an;
     @memset(web, false);
-    web[@intFromEnum(an.rv(seed))] = true;
+    web[@backingInt(an.rv(seed))] = true;
     var changed = true;
     while (changed) {
         changed = false;
         for (merges) |m| {
             const r = an.rv(mir.instResult(m));
-            if (web[@intFromEnum(r)]) continue;
-            const blk = an.def_block[@intFromEnum(r)];
+            if (web[@backingInt(r)]) continue;
+            const blk = an.def_block[@backingInt(r)];
             var feeds = false;
             var fixed = blk != none_u32 and s.blk[blk];
             switch (mir.instData(m)) {
                 .phi => |d| for (0..d.count) |k| {
                     const p = mir.phiPair(m, @intCast(k));
-                    feeds = feeds or web[@intFromEnum(an.rv(p.value))];
-                    fixed = fixed and s.blk[@intFromEnum(p.block)];
+                    feeds = feeds or web[@backingInt(an.rv(p.value))];
+                    fixed = fixed and s.blk[@backingInt(p.block)];
                 },
                 .ternary => |d| {
-                    feeds = web[@intFromEnum(an.rv(d.then_val))] or web[@intFromEnum(an.rv(d.else_val))];
-                    fixed = fixed and s.val[@intFromEnum(an.rv(d.cond))];
+                    feeds = web[@backingInt(an.rv(d.then_val))] or web[@backingInt(an.rv(d.else_val))];
+                    fixed = fixed and s.val[@backingInt(an.rv(d.cond))];
                 },
                 else => unreachable, // else: `merges` holds phis and selects only
             }
             if (!feeds) continue;
             if (!fixed) return true;
-            web[@intFromEnum(r)] = true;
+            web[@backingInt(r)] = true;
             changed = true;
         }
     }
@@ -754,12 +754,12 @@ test "a value of parameters and $temperature is solve-invariant; one reading a p
     const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
 
     const s = try plan(in);
-    try std.testing.expect(s.val[@intFromEnum(t)] and s.val[@intFromEnum(et)] and s.val[@intFromEnum(k)]);
-    try std.testing.expect(!s.val[@intFromEnum(i)]);
+    try std.testing.expect(s.val[@backingInt(t)] and s.val[@backingInt(et)] and s.val[@backingInt(k)]);
+    try std.testing.expect(!s.val[@backingInt(i)]);
     // §9.15 `iteration` moves with every Newton step.
-    try std.testing.expect(!s.val[@intFromEnum(it)]);
+    try std.testing.expect(!s.val[@backingInt(it)]);
     // `dt` moves with every timepoint, so `setup` must not hoist it.
-    try std.testing.expect(!s.val[@intFromEnum(dt)]);
+    try std.testing.expect(!s.val[@backingInt(dt)]);
     try std.testing.expect(s.blk[0]);
     try std.testing.expect(candidate(in, s.val, k));
     try std.testing.expect(!candidate(in, s.val, i));
@@ -788,11 +788,11 @@ test "a pure op of parameters under a bias-dependent branch is invariant and com
     const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
 
     const s = try plan(in);
-    try std.testing.expect(!s.blk[@intFromEnum(else_b)]);
-    try std.testing.expect(s.val[@intFromEnum(p)]);
-    try std.testing.expectEqual(@as(u32, 0), s.home[@intFromEnum(p)]);
+    try std.testing.expect(!s.blk[@backingInt(else_b)]);
+    try std.testing.expect(s.val[@backingInt(p)]);
+    try std.testing.expectEqual(@as(u32, 0), s.home[@backingInt(p)]);
     try std.testing.expectEqualSlices(Mir.Value, &.{p}, s.movedTo(0));
     try std.testing.expect(candidate(in, s.val, p));
     // An integer divide by zero traps, so it stays under its guard.
-    try std.testing.expect(!s.val[@intFromEnum(d)]);
+    try std.testing.expect(!s.val[@backingInt(d)]);
 }

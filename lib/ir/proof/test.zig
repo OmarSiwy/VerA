@@ -234,7 +234,7 @@ test "§3.4.2: an `exclude` proves nonzero only where its bracket is square" {
         .{ .range = "exclude [-5:0)", .mode = .strict },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -745,7 +745,7 @@ test "proof: `1.0/$vt(V)` and `1.0/limexp(V)` are .strict with W0650 (§9.15, §
     // `.optimized` (ninf) over either division is UB.
     for ([_][]const u8{ "$vt", "limexp" }) |f| {
         var h: Harness = undefined;
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -818,7 +818,7 @@ test "W0653: only for an unproven INTEGER `/`, and a range or a guard silences i
         "parameter real r = 3.0; analog I(p,n) <+ V(p,n) % r + V(p,n) / r;",
     }) |body| {
         var h: Harness = undefined;
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -876,7 +876,7 @@ test "W0653: --allow silences it and changes nothing else" {
 test "proof: a provably-zero divisor is still E0601, for `/` and real `%` alike" {
     for ([_][]const u8{ "(10 / k) * V(p,n)", "V(p,n) % r" }) |e| {
         var h: Harness = undefined;
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;

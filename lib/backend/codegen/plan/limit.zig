@@ -159,7 +159,7 @@ const max_args = 2;
 /// The `Alg` spellings, comma-separated, for the unknown-name warning.
 const alg_names = blk: {
     var s: []const u8 = "";
-    for (std.meta.fieldNames(Alg), 0..) |n, i| s = s ++ (if (i == 0) "" else ", ") ++ n;
+    for (@typeInfo(Alg).@"enum".field_names, 0..) |n, i| s = s ++ (if (i == 0) "" else ", ") ++ n;
     break :blk s;
 };
 
@@ -257,7 +257,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
             }
             const n = alg.arity();
             if (d.args.len < 2 + n or d.args.len > 4 + n) {
-                try at.decline(if (d.args.len < 2 + n) "too few arguments for the algorithm named" else "too many arguments for the algorithm named", try std.fmt.allocPrint(g.arena, "`{t}` takes {d} argument(s) after its name, then an optional sign, then an optional seed", .{ alg, n }));
+                try at.decline(if (d.args.len < 2 + n) "too few arguments for the algorithm named" else "too many arguments for the algorithm named", try g.arena.print("`{t}` takes {d} argument(s) after its name, then an optional sign, then an optional seed", .{ alg, n }));
                 continue;
             }
             var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok };
@@ -268,7 +268,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 // land in the core as an `i64` field, and reading `.v` off it
                 // would not compile, so it is refused here where the reason
                 // can be stated.
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
+                if (v != .f_zero and g.an.vty[@backingInt(v)] != .real) bad = true;
                 lc.argv[k] = v;
             }
             // One argument past the algorithm's arity is the frame sign.
@@ -277,13 +277,13 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
             // the standard polarity spelling (bjt.va).
             if (d.args.len > 2 + n) {
                 const v = g.an.rv(d.args[2 + n]);
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] == .str) bad = true;
+                if (v != .f_zero and g.an.vty[@backingInt(v)] == .str) bad = true;
                 lc.sign = v;
             }
             // And one past the sign is the seed, arithmetic like `argv`.
             if (d.args.len > 3 + n) {
                 const v = g.an.rv(d.args[3 + n]);
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
+                if (v != .f_zero and g.an.vty[@backingInt(v)] != .real) bad = true;
                 lc.seed = v;
             }
             if (bad) {
@@ -313,7 +313,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
             keep[i] = why == null;
             if (why) |w| try declined.append(g.arena, .{
                 .tok = lc.tok,
-                .msg = try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg, w[0] }),
+                .msg = try g.arena.print("$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg, w[0] }),
                 .help = w[1],
             });
         }
@@ -360,7 +360,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
         if (derived) {
             if (explicit) try dropped.append(g.arena, .{
                 .tok = lc.tok,
-                .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is derived through vds, so it is not seeded on its own", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+                .msg = try g.arena.print("V({s},{s}) is derived through vds, so it is not seeded on its own", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
                 .help = "seed the leg on the channel's source side instead",
             });
             continue;
@@ -381,7 +381,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
         }
         try dropped.append(g.arena, .{
             .tok = lc.tok,
-            .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is already seeded by an earlier site", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+            .msg = try g.arena.print("V({s},{s}) is already seeded by an earlier site", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
         });
     }
 
@@ -410,7 +410,7 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
         if (a == b) {
             try dropped.append(g.arena, .{
                 .tok = lc.tok,
-                .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) closes a loop of seeded branches", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+                .msg = try g.arena.print("V({s},{s}) closes a loop of seeded branches", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
                 .help = "the other branches of the loop already fix it; drop this seed or one of theirs",
             });
             continue;
@@ -496,7 +496,7 @@ const Site = struct {
     fn decline(s: Site, why: []const u8, help: ?[]const u8) Error!void {
         try s.list.append(s.g.arena, .{
             .tok = s.tok,
-            .msg = try std.fmt.allocPrint(s.g.arena, "{s}: {s}", .{ spell(s.g, s.u_names, s.args), why }),
+            .msg = try s.g.arena.print("{s}: {s}", .{ spell(s.g, s.u_names, s.args), why }),
             .help = help,
         });
     }
@@ -506,8 +506,8 @@ const Site = struct {
 fn spell(g: Input, u_names: []const []const u8, args: []const Mir.Value) []const u8 {
     const alg = strArg(g, args, 1) orelse "?";
     const pair = probePair(g, args) orelse
-        return std.fmt.allocPrint(g.arena, "$limit(…, \"{s}\")", .{alg}) catch "$limit(…)";
-    return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ uName(u_names, pair[0]), uName(u_names, pair[1]), alg }) catch "$limit(…)";
+        return g.arena.print("$limit(…, \"{s}\")", .{alg}) catch "$limit(…)";
+    return g.arena.print("$limit(V({s},{s}), \"{s}\")", .{ uName(u_names, pair[0]), uName(u_names, pair[1]), alg }) catch "$limit(…)";
 }
 
 /// Returns the name of unknown `u`, or "0" for §1.3.1.1 ground.

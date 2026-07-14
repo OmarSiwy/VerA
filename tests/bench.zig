@@ -25,7 +25,7 @@ test {
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
-/// Entry point. argv[1] is the `vera` executable (`run.addArtifactArg`), which
+/// Entry point. argv[1] is the `vera` executable (`run.addArtifactArg2`), which
 /// `devices` spawns. Then either a
 /// mode word (`devices`, `ieee1364`, `vpi`, `spice`) or benchmark arguments:
 ///
@@ -182,7 +182,7 @@ fn checkShape(gpa: Allocator, axis: Axis, i: usize) !Footprint {
     defer result.deinit();
     const device = try result.generateDevice();
 
-    const want = expected[@intFromEnum(axis)][i];
+    const want = expected[@backingInt(axis)][i];
     try std.testing.expectEqual(want.defs, result.mir.defs.len);
     try std.testing.expectEqual(want.insts, result.mir.insts.len);
     try std.testing.expectEqual(want.device, device.len);
@@ -292,7 +292,7 @@ fn rewrite(io: Io, gpa: Allocator, device: anytype, work_dir: []const u8) !usize
     return vera.orchestrator.writeTree(io, gpa, .{
         .work_dir = work_dir,
         .name = "bench",
-        .optimize = .Debug,
+        .optimize = .debug,
         .backend = .self_hosted,
         .modules = &.{},
     }, device);
@@ -369,7 +369,7 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     }
     // `--fixture-root=tests/pending` is how a human writes it; resolved once,
     // so every FAIL line names an absolute path.
-    cfg.root = std.fs.path.resolve(arena, &.{cfg.root}) catch cfg.root;
+    cfg.root = std.fs.path.resolveAlloc(arena, &.{cfg.root}) catch cfg.root;
 
     var out_buf: [1 << 16]u8 = undefined;
     var stdout = Io.File.stdout().writer(io, &out_buf);
@@ -422,7 +422,7 @@ fn report(
         \\# numbers — that is `zig build-exe`, whose wall clock is not VerA's.
         \\
     , .{ mode, fixture_reps });
-    if (@import("builtin").mode != .ReleaseFast) try w.print(
+    if (@import("builtin").mode != .fast) try w.print(
         "# {s}: NOT the shipping number (~8x slow). Re-run with -Doptimize=ReleaseFast.\n",
         .{mode},
     );
@@ -540,7 +540,7 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
     try w.flush();
 
     try w.writeAll("\nmode\tcase\tn\tphase\tmin_ns\tbytes\n");
-    if (@import("builtin").mode != .ReleaseFast) try w.print(
+    if (@import("builtin").mode != .fast) try w.print(
         "# {s}: NOT the shipping number (~8x slow). Re-run with -Doptimize=ReleaseFast.\n",
         .{mode},
     );
@@ -858,7 +858,7 @@ fn spiceDecks(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         // 1. The oracle. A deck with no `.expected.json` states no result, so
         //    no simulator could grade it and it is not a fixture yet.
         const stem = path[0 .. path.len - ".sp".len];
-        const oracle = try std.fmt.allocPrint(pa, "{s}.expected.json", .{stem});
+        const oracle = try pa.print("{s}.expected.json", .{stem});
         if (Io.Dir.cwd().access(io, oracle, .{})) |_| {} else |_| {
             try w.print("FAIL {s}: no .expected.json beside it\n", .{name});
             bad = true;
@@ -998,14 +998,14 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8, vcd: bool) ![]
             if (entry.kind != .file) continue;
             if (!std.mem.eql(u8, std.fs.path.extension(entry.path), ".v")) continue;
             const stem = entry.path[0 .. entry.path.len - ".v".len];
-            const golden = try std.fmt.allocPrint(gpa, "{s}.expected.txt", .{stem});
+            const golden = try gpa.print("{s}.expected.txt", .{stem});
             defer gpa.free(golden);
             const has_golden = if (dir.access(io, golden, .{})) |_| true else |_| false;
             const source = try dir.readFileAlloc(io, entry.path, gpa, .limited(1 << 20));
             defer gpa.free(source);
             const dumps = vcd and !has_golden and harness.vcdExpectation(source) != null;
             if (!dumps and !harness.digitalCaseSelected(has_golden, source)) continue;
-            try list.append(gpa, try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub, stem }));
+            try list.append(gpa, try gpa.print("{s}/{s}", .{ sub, stem }));
         }
     }
     std.mem.sort([]const u8, list.items, {}, harness.strLess);
@@ -1016,7 +1016,7 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8, vcd: bool) ![]
 /// (`harness.judge`): an unmet xfail case is XFAIL and does not fail the run;
 /// a met one is an XPASS FAIL, so a marker cannot outlive its limitation.
 fn digitalVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !enum { pass, fail, xfail } {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const src = try arena.print("{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return if (try digitalCase(arena, io, vera_exe, case, w)) .pass else .fail;
     if (xfail.len == 0) {
@@ -1034,11 +1034,11 @@ fn digitalVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const 
 }
 
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const src = try arena.print("{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     const argv = try std.mem.concat(arena, []const u8, &.{ &.{ vera_exe, "--run", src }, try harness.digitalArgs(arena, source, std.fs.path.dirname(src).?) });
     if (harness.digitalNegative(source)) {
-        const golden = try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case });
+        const golden = try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case });
         if (Io.Dir.cwd().access(io, golden, .{})) |_| {
             try w.print("FAIL {s}: digital reject also has a positive transcript\n", .{case});
             return false;
@@ -1052,7 +1052,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
     }
     const want = try Io.Dir.cwd().readFileAlloc(
         io,
-        try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }),
+        try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case }),
         arena,
         .limited(1 << 20),
     );
@@ -1137,7 +1137,7 @@ const RunState = enum { four, two, rerun };
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
 fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []const u8, snapshot: bool, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const src = try arena.print("{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return nativeCase(arena, io, vera_exe, flags, snapshot, case, w);
     if (xfail.len == 0) {
@@ -1220,9 +1220,9 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, flags: []const []const
 /// --emit-exe` (the shared elaboration) or from the executable at run time;
 /// either way its stderr is judged, the build's and the run's together.
 fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []const u8, snapshot: bool, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const src = try arena.print("{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
-    const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
+    const work = try arena.print("native/{s}", .{case});
     try Io.Dir.cwd().createDirPath(io, work);
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--work-dir", work });
@@ -1282,7 +1282,7 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
         return .{ .pass = false, .fallback = fallback, .state = state };
     }
     if (harness.vcdExpectation(source)) |v| return .{ .pass = try vcdDiff(arena, io, w, case, work, v, two_state), .fallback = fallback, .state = state };
-    const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
+    const want = try Io.Dir.cwd().readFileAlloc(io, try arena.print("{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
     if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
     return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
 }
@@ -1318,7 +1318,7 @@ fn vcdDiff(arena: Allocator, io: Io, w: *Io.Writer, case: []const u8, work: []co
         try w.print("FAIL {s}: the executable wrote no `{s}`\n", .{ case, v.produced });
         return false;
     };
-    const dir = std.fs.path.dirname(try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case })).?;
+    const dir = std.fs.path.dirname(try arena.print("{s}/{s}.v", .{ options.fixture_root, case })).?;
     const want_text = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ dir, v.golden }), arena, .limited(1 << 24));
     const got = try harness.vcdTokens(arena, got_text);
     const want = try harness.vcdTokens(arena, want_text);
@@ -1410,7 +1410,7 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
         const n = @min(fuzz_per_file, count - done);
         const late = file % 2 == 1;
         const src = try fuzzSource(a, rand, n, late);
-        const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
+        const path = try a.print("{s}/fuzz{d}.v", .{ work, file });
         try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
         const want = try capture(a, io, &.{ exe, "--run", path });
         const built = try capture(a, io, &.{ exe, "--emit-exe", "--work-dir", work, path });

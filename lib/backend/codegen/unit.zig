@@ -85,7 +85,7 @@ pub fn emitUnits(self: *Gen) Error!void {
 pub fn emitCommon(self: *Gen) Error!void {
     if (self.core.lo_vals.len == 0) return;
     const n = self.jobs.list.len;
-    try emitCoreDecl(self, self.core.name, try std.fmt.allocPrint(self.arena, core_doc, .{ n, n }));
+    try emitCoreDecl(self, self.core.name, try self.arena.print(core_doc, .{ n, n }));
 }
 
 const core_doc =
@@ -143,11 +143,11 @@ pub fn sliceCore(self: *Gen, suffix: []const u8, keep: []const bool, doc: []cons
     for (full.lo_vals, keep, 0..) |v, kept, k| {
         if (!kept) continue;
         remap[k] = @intCast(vals.items.len);
-        idx[@intFromEnum(v)] = remap[k];
+        idx[@backingInt(v)] = remap[k];
         try vals.append(self.arena, v);
     }
     var sc = full;
-    sc.name = try std.fmt.allocPrint(self.arena, "{s}__{s}", .{ full.name, suffix });
+    sc.name = try self.arena.print("{s}__{s}", .{ full.name, suffix });
     sc.lo_idx = idx;
     sc.lo_vals = vals.items;
     sc.prev_lo = try remapAll(self, full.prev_lo, remap);
@@ -208,10 +208,10 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
             if (gen_render.inPlace(self, id)) continue;
             const m = self.lowered.mem_arrays.items[id];
             try self.w("    f{d}: [{d}]{s},\n", .{ k, m.len, if (m.ty == .integer) "i64" else "f64" });
-        } else if (self.an.vty[@intFromEnum(v)] == .real) {
+        } else if (self.an.vty[@backingInt(v)] == .real) {
             try family.note(self, family.mask(self, v));
             try self.w("    f{d}: {s},\n", .{ k, try family.ofText(self, family.mask(self, v)) });
-        } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
+        } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@backingInt(v)]) });
     }
     try self.w("}} {{\n", .{});
     // §4.3: the strictest mode of every consumer (`proof.FloatMode.strictest`
@@ -253,7 +253,7 @@ pub fn unitOfInst(self: *const Gen, inst: Mir.Inst) u32 {
 pub fn opInputIdx(self: *const Gen, i: u32) u32 {
     const args = self.names.opArgs(self.mir, i);
     if (args.len == 0) return none_u32;
-    return self.core.lo_idx[@intFromEnum(self.an.rv(args[0]))];
+    return self.core.lo_idx[@backingInt(self.an.rv(args[0]))];
 }
 
 /// Emits one source-unit function (LRM §5.6, §4.7, §5.3). The signature is
@@ -337,7 +337,7 @@ fn closeSig(self: *Gen, s: Slots, body_start: usize) Error!void {
 /// Overwrites a reserved parameter-name slot with `_`, space-padded to the
 /// name's width so the bytes after it do not move.
 pub fn patchParam(self: *Gen, at: usize, comptime width: usize) void {
-    self.out.items[at..][0..width].* = ("_" ++ " " ** (width - 1)).*;
+    self.out.items[at..][0..width].* = ("_" ++ @as([width - 1]u8, @splat(' '))).*;
 }
 
 /// Calls `patchParam` on the slot at `at` unless the body text from `from`
@@ -358,7 +358,7 @@ pub fn patchUnless(self: *Gen, at: usize, from: usize, comptime ident: []const u
 /// Returns whether Zig source `text` names `ident` as an identifier token,
 /// outside any string literal or comment.
 fn namesIdent(self: *Gen, text: []const u8, ident: []const u8) Error!bool {
-    const src = try self.arena.dupeZ(u8, text);
+    const src = try self.arena.dupeSentinel(u8, text, 0);
     var t: std.zig.Tokenizer = .init(src);
     while (true) {
         const tok = t.next();
@@ -427,7 +427,7 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
     self.hoist_mask.clearRetainingCapacity();
     try self.hoist_mask.appendNTimes(self.arena, 0, n);
     for (self.plan.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (self.an.vty[v] != .real or self.plan.slot[v] == none_u32) continue;
         const k = self.hoist_idx.items[self.plan.slot[v]];
         if (k == none_u32) continue;
@@ -460,10 +460,10 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
 pub fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
     if (slotArr(self, i)) |arr| {
         const k = slotNum(self, i);
-        if (self.an.vty[i] == .real) return std.fmt.allocPrint(self.arena, "h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
-        return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, k });
+        if (self.an.vty[i] == .real) return self.arena.print("h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
+        return self.arena.print("{s}[{d}]", .{ arr, k });
     }
-    return std.fmt.allocPrint(self.arena, "t{d}", .{slotNum(self, i)});
+    return self.arena.print("t{d}", .{slotNum(self, i)});
 }
 
 /// Returns the zero a slot of type `t` starts at when it must be defined on
@@ -522,7 +522,7 @@ pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
     const p = &self.place.items[slot];
     if (p.defs == 0) {
         p.def_off = @intCast(self.out.items.len);
-        p.scope = self.sc_open.getLast();
+        p.scope = self.sc_open.last().?;
     }
     p.defs += 1;
     if (p.defs > 1 or !movable) p.pinned = true;
@@ -657,29 +657,29 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // One array per type instead of one `var` per slot. Two passes: assign
     // every survivor its index, so the lengths are known, then emit the
     // declarations.
-    var n_hoist = [_]u32{0} ** 3;
+    var n_hoist: [3]u32 = @splat(0);
     // A returned slot cannot be seeded `undefined` (see above), and an array
     // is declared once for all its elements, so those get an explicit store
     // after the declaration.
     var seeded: std.ArrayList(Mir.Value) = .empty;
     defer seeded.deinit(self.arena);
     for (self.plan.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (self.plan.slot[v] == none_u32) continue;
         const p = self.place.items[self.plan.slot[v]];
         if (p.at_def) continue;
         // Never assigned and never read: `mark` kept the value alive but the
         // emitted tree reaches neither end. Declaring it would be an unused local.
         if (p.defs == 0 and p.uses == 0) continue;
-        const ty = @intFromEnum(self.an.vty[v]);
+        const ty = @backingInt(self.an.vty[v]);
         self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
         const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
     }
-    try hoistMasks(self, n_hoist[@intFromEnum(VTy.real)]);
+    try hoistMasks(self, n_hoist[@backingInt(VTy.real)]);
     for ([_]VTy{ .real, .int, .str }) |ty| {
-        const n = n_hoist[@intFromEnum(ty)];
+        const n = n_hoist[@backingInt(ty)];
         if (n == 0) continue;
         try self.ind(1);
         if (ty == .real) {
@@ -692,7 +692,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.b("var {s}: [{d}]{s} = undefined;\n", .{ hoistArray(ty), n, zigTy(ty) });
     }
     for (seeded.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         try self.ind(1);
         try writeSlotRef(self, v);
         try self.b(" = ", .{});

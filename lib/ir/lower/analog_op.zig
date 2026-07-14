@@ -604,14 +604,14 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §4.6.4.1 `white_noise(pwr[, name])` has one real argument, so its `.f_one`
     // exponent seed is never read as a spectrum; `flicker_noise` always
     // overwrites it (E0522 above refuses the call that would not).
-    try self.noise_psd.put(self.arena, @intFromEnum(e), psd);
+    try self.noise_psd.put(self.arena, @backingInt(e), psd);
     if (tab) |r| try self.noise_tab.put(
         self.arena,
-        @intFromEnum(e),
+        @backingInt(e),
         try self.arena.dupe(Mir.Value, vals.items[r[0]..r[1]]),
     );
     const result = try self.call(name, vals.items);
-    try self.noise_val.put(self.arena, @intFromEnum(e), result);
+    try self.noise_val.put(self.arena, @backingInt(e), result);
     return .{ .v = result, .ty = .real };
 }
 
@@ -658,12 +658,12 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
 /// cost is the generator-bearing paths and not every path of the DAG. An
 /// unsealed phi (no operands yet) is kept in, since what it will carry is
 /// unknown. Indexed by `@intFromEnum(value)`; O(values) per fixpoint pass.
-fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.DynamicBitSetUnmanaged {
+fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.bit_set.Dynamic {
     const mir = self.mir;
     const fd = Mir.Value.first_dynamic;
     const n = fd + mir.defs.len;
-    var reach = try std.DynamicBitSetUnmanaged.initEmpty(self.arena, n);
-    reach.set(@intFromEnum(gen));
+    var reach = try std.bit_set.Dynamic.initEmpty(self.arena, n);
+    reach.set(@backingInt(gen));
     const kinds = mir.defs.items(.kind);
     const payloads = mir.defs.items(.payload);
     // Operands precede their users except along a phi's back edge or an
@@ -673,7 +673,7 @@ fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.DynamicBitSetUnmanaged {
         changed = false;
         for (fd..n) |i| {
             if (kinds[i - fd] != .inst_result or reach.isSet(i)) continue;
-            const inst: Mir.Inst = @enumFromInt(@as(u32, @truncate(payloads[i - fd])));
+            const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @truncate(payloads[i - fd]))));
             if (operandReaches(mir, inst, &reach)) {
                 reach.set(i);
                 changed = true;
@@ -683,11 +683,11 @@ fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.DynamicBitSetUnmanaged {
     return reach;
 }
 
-fn reached(mir: *const Mir, reach: *const std.DynamicBitSetUnmanaged, v: Mir.Value) bool {
-    return reach.isSet(@intFromEnum(mir.resolveAlias(v)));
+fn reached(mir: *const Mir, reach: *const std.bit_set.Dynamic, v: Mir.Value) bool {
+    return reach.isSet(@backingInt(mir.resolveAlias(v)));
 }
 
-fn operandReaches(mir: *const Mir, inst: Mir.Inst, reach: *const std.DynamicBitSetUnmanaged) bool {
+fn operandReaches(mir: *const Mir, inst: Mir.Inst, reach: *const std.bit_set.Dynamic) bool {
     return switch (mir.instData(inst)) {
         .unary => |u| reached(mir, reach, u.operand),
         .binary => |b| reached(mir, reach, b.lhs) or reached(mir, reach, b.rhs),
@@ -713,11 +713,11 @@ fn operandReaches(mir: *const Mir, inst: Mir.Inst, reach: *const std.DynamicBitS
 /// generator fed back into itself, which no single factor describes.
 const PhiPath = struct { inst: Mir.Inst, up: ?*const PhiPath };
 
-fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.DynamicBitSetUnmanaged, depth: u16, path: ?*const PhiPath) Oom!Coeff {
+fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.bit_set.Dynamic, depth: u16, path: ?*const PhiPath) Oom!Coeff {
     if (depth == 64) return .nonlinear;
     const value = self.mir.resolveAlias(v);
     if (value == gen) return .{ .value = .f_one };
-    if (!reach.isSet(@intFromEnum(value))) return .absent;
+    if (!reach.isSet(@backingInt(value))) return .absent;
     const inst = switch (self.mir.valueDef(value)) {
         .inst_result => |i| i,
         // A constant, a parameter or a probe cannot contain the generator.

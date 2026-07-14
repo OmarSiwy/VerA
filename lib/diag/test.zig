@@ -20,11 +20,11 @@ test "edit distance and suggestion" {
     // The `u8` rows, at the widest input `cap` admits: 64 characters against 64
     // different ones is distance 64, the saturating case, and the whole proof a
     // byte holds every cell. One character more and the guard fires first.
-    const wide_a = "a" ** 64;
-    const wide_b = "b" ** 64;
+    const wide_a = &@as([64]u8, @splat('a'));
+    const wide_b = &@as([64]u8, @splat('b'));
     try std.testing.expectEqual(@as(usize, 64), diag_bag.editDistance(wide_a, wide_b, 64));
     try std.testing.expectEqual(@as(usize, 0), diag_bag.editDistance(wide_a, wide_a, 64));
-    try std.testing.expect(diag_bag.editDistance("a" ** 65, wide_b, 64) > 64);
+    try std.testing.expect(diag_bag.editDistance(&@as([65]u8, @splat('a')), wide_b, 64) > 64);
 
     const cands = [_][]const u8{ "vds", "vgs", "temp" };
     try std.testing.expectEqualStrings("vds", diag_bag.didYouMean("vdss", &cands).?);
@@ -70,7 +70,7 @@ test "bag: dedupe keys on the file of a preprocessor span" {
     // Offset 0 in two different headers is two places.
     for ([_]u16{ 1, 2, 2 }) |f| {
         var b = bag.build(.preprocess, .E0101, .at(0));
-        b.inFile(@enumFromInt(f));
+        b.inFile(@fromBackingInt(@intCast(f)));
         try b.emit();
     }
     try std.testing.expectEqual(@as(usize, 2), bag.count());
@@ -453,7 +453,7 @@ test "detach on a clean bag allocates nothing" {
 test "source map resolves includes and macro expansions" {
     const segs = [_]diag_location.Segment{
         .{ .out_start = 0, .in_start = 0, .file = .root, .kind = .verbatim },
-        .{ .out_start = 5, .in_start = 0, .file = @enumFromInt(1), .kind = .verbatim },
+        .{ .out_start = 5, .in_start = 0, .file = @fromBackingInt(@intCast(1)), .kind = .verbatim },
         .{ .out_start = 10, .in_start = 5, .file = .root, .kind = .verbatim },
         .{ .out_start = 14, .in_start = 0, .file = .root, .kind = .macro, .parent = 2, .macro = "FOO" },
     };
@@ -464,7 +464,7 @@ test "source map resolves includes and macro expansions" {
     try std.testing.expectEqual(@as(u32, 2), a.offset);
 
     const b = map.resolve(6);
-    try std.testing.expectEqual(@as(diag_location.FileId, @enumFromInt(1)), b.file);
+    try std.testing.expectEqual(@as(diag_location.FileId, @fromBackingInt(@intCast(1))), b.file);
     try std.testing.expectEqual(@as(u32, 1), b.offset);
 
     // Inside an expansion: report the invocation site, not a phantom offset.

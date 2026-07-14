@@ -527,7 +527,7 @@ pub const UnsignedCompare = struct {
     /// Returns operand `side`'s value as the i64 the signed compare orders as
     /// §4.2.9's unsigned comparison.
     pub fn extend(u: UnsignedCompare, side: Side, v: i64) i64 {
-        const z = if (u.mask[@intFromEnum(side)]) |m| v & m else v;
+        const z = if (u.mask[@backingInt(side)]) |m| v & m else v;
         return if (u.flip) z ^ std.math.minInt(i64) else z;
     }
 };

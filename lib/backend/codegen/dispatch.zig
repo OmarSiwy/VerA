@@ -67,7 +67,7 @@ fn emitVpiContribs(self: *Gen) Error!void {
     const cs = self.lowered.contributions.items;
     try self.w("/// Clause 12 (`Options.vpi_contribs`): the §5.6 contribution rows.\n", .{});
     try self.w("pub const vpi_contrib_access = [_]u8{{", .{});
-    for (cs) |c| try self.w(" {d},", .{@intFromEnum(c.access)});
+    for (cs) |c| try self.w(" {d},", .{@backingInt(c.access)});
     try self.w(" }};\npub const vpi_contrib_hi = [_]i32{{", .{});
     for (cs) |c| try self.w(" {d},", .{nodeCol(c.hi)});
     try self.w(" }};\npub const vpi_contrib_lo = [_]i32{{", .{});
@@ -122,7 +122,7 @@ fn qPattern(self: *Gen) void {
 /// The core field holding slot `j`'s charge.
 fn siteField(self: *const Gen, j: usize) u32 {
     const k = self.qs.sites[j];
-    return self.core.lo_idx[@intFromEnum(self.an.rv(self.lowered.charge_sites.items[k].final))];
+    return self.core.lo_idx[@backingInt(self.an.rv(self.lowered.charge_sites.items[k].final))];
 }
 
 /// Writes a `contract.Sites(Self, S)` literal: every site's charge, in slot order.
@@ -497,7 +497,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         if (val == .f_zero)
             try self.b("const c = S.con(0.0);\n", .{})
         else
-            try self.b("const c = m.f{d};\n", .{self.core.lo_idx[@intFromEnum(val)]});
+            try self.b("const c = m.f{d};\n", .{self.core.lo_idx[@backingInt(val)]});
         if (c.kind == .indirect) {
             // §5.6.7 nullor: `out` is driven by a source whose current is
             // the unknown `ib`, and the row is the constraint alone,
@@ -614,8 +614,8 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             // §5.4.2.1 "The branch potential of a flow probe is zero (0)",
             // the ammeter of Figure 5-1. Its current enters KCL at both ends,
             // which makes it a short rather than an observation.
-            try stamp(self, 1, f.hi, "add", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
-            try stamp(self, 1, f.lo, "sub", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.hi, "add", try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.lo, "sub", try self.arena.print("x[@intFromEnum(U.{s})]", .{self.names.u_names[f.u]}), uBit(f.u), f.u);
             try self.ind(1);
             patRow(self, @intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
             linBranch(self, f.u, f.hi, f.lo);
@@ -749,7 +749,7 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try self.ind(2);
         try self.b("if (", .{});
         try coreRef(self, flag);
-        if (self.an.vty[@intFromEnum(self.an.rv(flag))] == .int)
+        if (self.an.vty[@backingInt(self.an.rv(flag))] == .int)
             try self.b(" != 0) {{\n", .{})
         else
             try self.b(".val() != 0.0) {{\n", .{});
@@ -833,7 +833,7 @@ fn guardTerm(self: *Gen, row: u32, col: u32, g: f64, k: u32) Error!void {
 /// Returns `<flow unknown>__retained`: the `Model` field `derive` publishes
 /// pair `k`'s retention flag in, and the name a guarded `jac_const` entry cites.
 pub fn guardField(self: *const Gen, k: u32) Error![]const u8 {
-    return std.fmt.allocPrint(self.arena, "{s}__retained", .{self.names.u_names[self.topo.cpairs[k].flow_u]});
+    return self.arena.print("{s}__retained", .{self.names.u_names[self.topo.cpairs[k].flow_u]});
 }
 
 /// The value the branch row would have PINNED I_b to, for the arm where
@@ -901,7 +901,7 @@ fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
 /// `plan_core.plan` never plans (`.f_zero` has no `m.f<k>`).
 fn coreRef(self: *Gen, v: Mir.Value) Error!void {
     if (v == .f_zero) return self.b("S.con(0.0)", .{});
-    try self.b("m.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
+    try self.b("m.f{d}", .{self.core.lo_idx[@backingInt(v)]});
 }
 
 /// Emits one term into row `node`: `opx` (`add`/`sub`) of `val`, recording
@@ -1307,7 +1307,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
             break;
         }
         v.* = .{
-            if (nr.coeff == .f_one) mag.? else try std.fmt.allocPrint(self.arena, "({s}) * ({s})", .{ mag.?, coeff.? }),
+            if (nr.coeff == .f_one) mag.? else try self.arena.print("({s}) * ({s})", .{ mag.?, coeff.? }),
             phase.?,
         };
     }
@@ -1361,10 +1361,10 @@ pub fn emitAcTable(self: *Gen) Error!void {
 /// defect that `refuseAc` reports instead of exporting a wrong number.
 fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
     if (try gen_call.f64Const(self, v, 0, false)) |s| return s;
-    const k = self.core.lo_idx[@intFromEnum(v)];
+    const k = self.core.lo_idx[@backingInt(v)];
     if (k == none_u32) return null;
     uses_core.* = true;
-    return try std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
+    return try self.arena.print("m.f{d}.val()", .{k});
 }
 
 /// Emits `ac_gens` as a `@compileError` value for a §4.6.3 stimulus VerA
@@ -1393,7 +1393,7 @@ fn contractNoiseKind(k: Lower.NoiseKind) []const u8 {
 /// (structurally zero, or a constant `plan_core.plan` never carries).
 pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
     if (v == .f_zero) return null;
-    const k = self.core.lo_idx[@intFromEnum(v)];
+    const k = self.core.lo_idx[@backingInt(v)];
     return if (k == none_u32) null else k;
 }
 
@@ -1402,10 +1402,10 @@ pub fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
 /// take (see `buildJobs`).
 fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
     if (v == .f_zero) return "0";
-    if (is_exp) if (plan_noise.psdConst(self.mir, v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
-    const k = self.core.lo_idx[@intFromEnum(v)];
+    if (is_exp) if (plan_noise.psdConst(self.mir, v)) |c| return try self.arena.print("{d}", .{c});
+    const k = self.core.lo_idx[@backingInt(v)];
     // A live-out the planner dropped cannot happen (`buildJobs` queued it),
     // but a zero is the one answer that cannot invent noise.
     if (k == none_u32) return "0";
-    return try std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
+    return try self.arena.print("m.f{d}.val()", .{k});
 }

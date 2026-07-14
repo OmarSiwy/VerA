@@ -160,7 +160,7 @@ pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []
 fn live(in: Input, sinv: []const bool, v0: Mir.Value) bool {
     const v = in.an.rv(v0);
     if (in.an.foldConst(v, false) != null) return false;
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     return !(i < sinv.len and sinv[i] and in.mir.valueDef(v) == .inst_result);
 }
 

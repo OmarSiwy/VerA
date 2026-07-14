@@ -396,8 +396,8 @@ pub const Builder = struct {
     };
 
     fn full(b: *Builder, local: []const u8) Error![]const u8 {
-        const rel = if (b.path.len == 0) try b.arena.dupe(u8, local) else try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.path, local });
-        return std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.top_name, rel });
+        const rel = if (b.path.len == 0) try b.arena.dupe(u8, local) else try b.arena.print("{s}.{s}", .{ b.path, local });
+        return b.arena.print("{s}.{s}", .{ b.top_name, rel });
     }
 
     fn add(b: *Builder, o: Obj) Error!u32 {
@@ -438,7 +438,7 @@ pub const Builder = struct {
         try (b.internal orelse &b.lists.internal).append(b.gpa, at);
         const saved: Saved = .{ .inner = b.inner, .path = b.path, .internal = b.internal, .engine = b.engine, .automatic = b.automatic };
         b.inner = at;
-        b.path = if (b.path.len == 0) local else try std.fmt.allocPrint(b.arena, "{s}.{s}", .{ b.path, local });
+        b.path = if (b.path.len == 0) local else try b.arena.print("{s}.{s}", .{ b.path, local });
         b.internal = into;
         return saved;
     }
@@ -546,9 +546,9 @@ pub const Builder = struct {
                     q = @divTrunc(q, count);
                     index.* = try b.constant(.{ .int = i }, 32, root.vpiDecConst);
                     var buf: [24]u8 = undefined;
-                    try suffix.insertSlice(b.arena, 0, std.fmt.bufPrint(&buf, "[{d}]", .{i}) catch unreachable);
+                    try suffix.insertSlice(b.arena, 0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
                 }
-                const local = try std.fmt.allocPrint(b.arena, "{s}{s}", .{ b.file.str(e.name), suffix.items });
+                const local = try b.arena.print("{s}{s}", .{ b.file.str(e.name), suffix.items });
                 member.* = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = at }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, auto_prop });
                 if (scope.len != 0) b.objects.items[member.*].edges = try b.arena.dupe(Edge, &.{ b.objects.items[member.*].edges[0], b.objects.items[member.*].edges[1], scope[0] });
                 try b.setName(member.*, local);
@@ -1168,9 +1168,9 @@ pub const Builder = struct {
         while (true) {
             var buf: [root.name_buf_len]u8 = undefined;
             const full_name = if (path.len == 0)
-                std.fmt.bufPrint(&buf, "{s}.{s}", .{ b.top_name, name }) catch return none
+                std.mem.print(&buf, "{s}.{s}", .{ b.top_name, name }) catch return none
             else
-                std.fmt.bufPrint(&buf, "{s}.{s}.{s}", .{ b.top_name, path, name }) catch return none;
+                std.mem.print(&buf, "{s}.{s}.{s}", .{ b.top_name, path, name }) catch return none;
             if (b.names.get(full_name)) |at| {
                 const o = b.objects.items[at];
                 const matches = switch (want) {
@@ -1439,7 +1439,7 @@ fn switchType(k: Ast.SwitchKind) c_int {
 /// Annex G's strength code of a §7.9 strength level: one bit per level,
 /// vpiHiZ 0x01 up to vpiSupplyDrive 0x80.
 fn drive(s: Ast.Strength) c_int {
-    return @as(c_int, 1) << @intCast(@intFromEnum(s));
+    return @as(c_int, 1) << @intCast(@backingInt(s));
 }
 
 /// A gate's vpiDefName: its keyword (A.3.4).
@@ -1640,7 +1640,7 @@ pub fn decompile(w: *Writer, f: *const Ast.SourceFile, id: Ast.ExprId) Writer.Er
         },
         .real_literal => {
             var buf: [400]u8 = undefined;
-            const t = std.fmt.bufPrint(&buf, "{d}", .{ex.realValue(id)}) catch unreachable;
+            const t = std.mem.print(&buf, "{d}", .{ex.realValue(id)}) catch unreachable;
             try w.writeAll(t);
             // A real stays a real: `2.0`, not the integer `2`.
             if (std.mem.indexOfAny(u8, t, ".eEni") == null) try w.writeAll(".0");

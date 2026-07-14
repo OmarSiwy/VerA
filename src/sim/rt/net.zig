@@ -227,7 +227,7 @@ fn words(w: u32) u32 {
 }
 
 fn int(b: Bit) Int.Bit {
-    return @enumFromInt(@intFromEnum(b));
+    return @fromBackingInt(@intCast(@backingInt(b)));
 }
 
 /// `planes` (values then unknowns) of a `w`-bit value, every bit `b`.
@@ -235,8 +235,8 @@ fn fill(planes: []u64, w: u32, b: Bit) void {
     const n = planes.len / 2;
     for (planes[0..n], planes[n..], 0..) |*v, *x, j| {
         const m = dnet.wordMask(w, j);
-        v.* = if (@intFromEnum(b) & 1 != 0) m else 0;
-        x.* = if (@intFromEnum(b) >> 1 != 0) m else 0;
+        v.* = if (@backingInt(b) & 1 != 0) m else 0;
+        x.* = if (@backingInt(b) >> 1 != 0) m else 0;
     }
 }
 
@@ -244,13 +244,13 @@ fn bitAt(planes: []const u64, i: u32) Int.Bit {
     const n = planes.len / 2;
     const v: u2 = @intCast(planes[i / 64] >> @intCast(i % 64) & 1);
     const x: u2 = @intCast(planes[n + i / 64] >> @intCast(i % 64) & 1);
-    return @enumFromInt(v | x << 1);
+    return @fromBackingInt(@intCast(v | x << 1));
 }
 
 fn setBit(planes: []u64, i: u32, b: Int.Bit) void {
     const n = planes.len / 2;
     const at = @as(u64, 1) << @intCast(i % 64);
-    const e = @intFromEnum(b);
+    const e = @backingInt(b);
     planes[i / 64] = (planes[i / 64] & ~at) | (if (e & 1 != 0) at else 0);
     planes[n + i / 64] = (planes[n + i / 64] & ~at) | (if (e >> 1 != 0) at else 0);
 }
@@ -331,8 +331,8 @@ pub fn mos(s: *State, i: u32, data: Bit, gate_: Bit) Error!void {
     const m = t.drivers[i].source.mos;
     const g = int(gate_);
     const sig: Signal = if (m.data_net) |k| t.sig0[k] else .of(int(data), .strong, .strong);
-    t.s0[i] = dnet.reduce(if (sig.lo < 0) @enumFromInt(@as(u8, @intCast(-sig.lo))) else .highz, m.resistive);
-    t.s1[i] = dnet.reduce(if (sig.hi > 0) @enumFromInt(@as(u8, @intCast(sig.hi))) else .highz, m.resistive);
+    t.s0[i] = dnet.reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
+    t.s1[i] = dnet.reduce(if (sig.hi > 0) @fromBackingInt(@intCast(@as(u8, @intCast(sig.hi)))) else .highz, m.resistive);
     const value = sig.collapse();
     const on: Int.Bit = if (m.n_type) .one else .zero;
     const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
@@ -351,7 +351,7 @@ pub fn bridge(s: *State, i: u32) Error!void {
         const o = b.src_off + at / 64;
         const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
         const x: u2 = if (logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
-        setBit(planes, b.dst_lo + @as(u32, @intCast(j)), @enumFromInt(v | x << 1));
+        setBit(planes, b.dst_lo + @as(u32, @intCast(j)), @fromBackingInt(@intCast(v | x << 1)));
     }
     return drive(s, i, planes, false);
 }
@@ -466,7 +466,7 @@ fn fold(t: *Nets, k: u32, res: []u64, cv: []const u64, cx: []const u64) bool {
         if (n.kind == .trireg and acc.none()) {
             const w = at / 64;
             const sh: u6 = @intCast(at % 64);
-            const cb: Int.Bit = @enumFromInt(@as(u2, @intCast(cv[w] >> sh & 1)) | @as(u2, @intCast(cx[w] >> sh & 1)) << 1);
+            const cb: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(cv[w] >> sh & 1)) | @as(u2, @intCast(cx[w] >> sh & 1)) << 1));
             acc = .of(cb, n.charge, n.charge);
             floating += 1;
         }
@@ -537,7 +537,7 @@ fn shown(s: *const State, n: Net, at: u32) Int.Bit {
     const o = n.off + at / 64;
     const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
     const x: u2 = if (logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
-    return @enumFromInt(v | x << 1);
+    return @fromBackingInt(@intCast(v | x << 1));
 }
 
 /// What driver `di` asserts on bit `at` of its net (`exec.contribution`).
@@ -732,8 +732,8 @@ test "the all-strong plane fold is Signal's fold" {
             // Driver j's value in bit 0 of its own planes.
             for (0..3) |j| {
                 const b = bits[combo >> @intCast(2 * j) & 3];
-                cur[at[j]] = @intFromEnum(b) & 1;
-                cur[at[j] + 1] = @intFromEnum(b) >> 1;
+                cur[at[j]] = @backingInt(b) & 1;
+                cur[at[j] + 1] = @backingInt(b) >> 1;
             }
             const net: Net = .{ .kind = kind, .slot = 0, .off = 0, .width = 1, .drivers = &.{ 0, 1, 2 }, .strong = true };
             const t: Nets = .{
@@ -762,8 +762,8 @@ test "the all-strong plane fold is Signal's fold" {
                 .ones = &.{},
                 .scratch = &.{},
             };
-            const cv = [_]u64{@intFromEnum(charge) & 1};
-            const cx = [_]u64{@intFromEnum(charge) >> 1};
+            const cv = [_]u64{@backingInt(charge) & 1};
+            const cx = [_]u64{@backingInt(charge) >> 1};
             var fast: [2]u64 = undefined;
             var slow: [2]u64 = .{ 0, 0 };
             var tt = t;

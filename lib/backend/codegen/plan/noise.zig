@@ -272,10 +272,10 @@ fn refuseNoise(
     comptime fmt: []const u8,
     args: anytype,
 ) Error!void {
-    const msg = try std.fmt.allocPrint(self.arena, fmt, args);
+    const msg = try self.arena.print(fmt, args);
     try out.refusals.append(self.arena, .{ .code = code, .tok = tok, .msg = msg });
     if (out.fatal == null)
-        out.fatal = try std.fmt.allocPrint(self.arena, "LRM 4.6.4: {s}", .{msg});
+        out.fatal = try self.arena.print("LRM 4.6.4: {s}", .{msg});
 }
 
 /// Returns `v` as a compile-time f64, or null when only the core can answer.

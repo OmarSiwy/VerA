@@ -56,7 +56,7 @@ pub fn flatReference(file: *const Ast.SourceFile, arena: std.mem.Allocator, modu
 /// Returns `path ++ local`, interned. The flat name is the §6.7 path, so the
 /// path table (`Design.names`) needs no row for it.
 pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId {
-    const s = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
+    const s = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(local) });
     return self.ctx.file.intern(self.ctx.arena, s);
 }
 
@@ -390,7 +390,7 @@ pub fn mfactorScale(
         .main_tok = tok,
         .lhs = value,
         .rhs = self.unit.hier.get(.mfactor),
-        .extra = @intFromEnum(op),
+        .extra = @backingInt(op),
     });
 }
 

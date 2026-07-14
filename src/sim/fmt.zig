@@ -209,8 +209,8 @@ pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
     }
     if (v.width > 64) return error.TooWide;
     const raw = v.values()[0];
-    if (v.signed) return std.fmt.bufPrint(buf, "{d}", .{v.asInt().?}) catch unreachable;
+    if (v.signed) return std.mem.print(buf, "{d}", .{v.asInt().?}) catch unreachable;
     // Not `asInt`: it bit-casts, so an unsigned 64-bit operand at or above
     // 2^63 would print negative. $time is exactly that operand.
-    return std.fmt.bufPrint(buf, "{d}", .{raw}) catch unreachable;
+    return std.mem.print(buf, "{d}", .{raw}) catch unreachable;
 }

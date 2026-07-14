@@ -166,7 +166,7 @@ fn buildAnalogLib(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: Io, path
     d.validate_contract = true;
     const runner = try vera.tb.renderVpiLib(arena, stem, d);
     const work = try std.fs.path.join(arena, &.{ host_options.work_root, app_stem });
-    const out = try std.fmt.allocPrint(arena, "{s}/lib{s}.so", .{ work, stem });
+    const out = try arena.print("{s}/lib{s}.so", .{ work, stem });
     const built = try vera.tb.buildExe(gpa, io, device, runner, .{
         .work_dir = work,
         .contract = host_options.contract,
@@ -196,8 +196,9 @@ fn stderrWriter() *Io.Writer {
 
 fn bindLib(l: *std.DynLib) !vpi.analog_run.Lib {
     var out: vpi.analog_run.Lib = undefined;
-    inline for (@typeInfo(vpi.analog_run.Lib).@"struct".fields) |f| {
-        @field(out, f.name) = l.lookup(f.type, "vera_vpi_" ++ f.name) orelse return error.MissingSymbol;
+    const s = @typeInfo(vpi.analog_run.Lib).@"struct";
+    inline for (s.field_names, s.field_types) |name, F| {
+        @field(out, name) = l.lookup(F, "vera_vpi_" ++ name) orelse return error.MissingSymbol;
     }
     return out;
 }

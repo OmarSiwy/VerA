@@ -165,7 +165,7 @@ pub fn child(r: *Run, parent: u32, inst: *const Ast.Instance) Error!struct { def
     const parent_lib = r.def_lib[r.scope_info.items[parent].def];
     // ponytail: a generate block between the parent instance and `inst` is
     // not spelled into the path, so an instance clause cannot reach inside one.
-    const path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ up.path, r.file.str(inst.name) });
+    const path = try r.arena.print("{s}.{s}", .{ up.path, r.file.str(inst.name) });
     // §13.3.1.2: "The default clause selects all instances that do not match
     // a more specific selection clause"; an instance clause names one
     // instance, a cell clause every instance of a cell.

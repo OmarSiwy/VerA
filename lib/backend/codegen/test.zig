@@ -258,7 +258,7 @@ test "codegen: `constant` is declared exactly for a Jacobian no x can move" {
         .{ .body = "if (V(p, n) > 0) I(p, n) <+ V(p, n) / r; else I(p, n) <+ 2.0 * V(p, n);", .want = null },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module k(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -309,7 +309,7 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
         const src = try h.gen(std.testing.allocator);
         try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "t_prev: f64") != null);
         try std.testing.expectEqual(c.t_prev, std.mem.indexOf(u8, src, "state.t_prev = sim.t;") != null);
-        const decl = try std.fmt.allocPrint(h.arena_state.allocator(), "pub const state_class: contract.StateClass = {s};", .{c.class});
+        const decl = try h.arena_state.allocator().print("pub const state_class: contract.StateClass = {s};", .{c.class});
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
     }
 }
@@ -588,7 +588,7 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
         // Tiling: `Output`'s invariant, and what lets the writer rebuild
         // device.zig as prologue ++ imports ++ tail with nothing dropped.
         if (i != 0) try std.testing.expectEqual(o.unit_hi[i - 1], lo);
-        const decl = try std.fmt.allocPrint(std.testing.allocator, "fn {s}(", .{name});
+        const decl = try std.testing.allocator.print("fn {s}(", .{name});
         defer std.testing.allocator.free(decl);
         // The range holds the declaration it is named for, and `unit_fn` points
         // at that declaration's keyword, where the writer splices `pub `,
@@ -659,7 +659,7 @@ test "codegen: every split unit file passes AstGen, hoist arrays included" {
         // `orchestrator.writeTree`'s unit file.
         const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
         defer gpa.free(file);
-        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file, .{ .mode = .zig });
         defer tree.deinit(gpa);
         var zir = try std.zig.AstGen.generate(gpa, tree);
         defer zir.deinit(gpa);
@@ -699,7 +699,7 @@ test "codegen: a laplace device's split unit files reach its __sec reader" {
         named = named or std.mem.indexOf(u8, o.text[lo..hi], sec ++ "(model)") != null;
         const file = try std.mem.concatWithSentinel(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] }, 0);
         defer gpa.free(file);
-        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file, .{ .mode = .zig });
         defer tree.deinit(gpa);
         var zir = try std.zig.AstGen.generate(gpa, tree);
         defer zir.deinit(gpa);
@@ -869,8 +869,7 @@ test "codegen: §5.8 control flow reconstructs into structured Zig" {
 
 test "codegen: minmax tie derivatives use source-defined mask selection" {
     for ([_][]const u8{ "min", "$min", "max", "$max" }) |name| {
-        const input = try std.fmt.allocPrint(
-            std.testing.allocator,
+        const input = try std.testing.allocator.print(
             "module m(p,q); inout p,q; electrical p,q; analog I(p) <+ {s}(V(p),V(q)); endmodule",
             .{name},
         );
@@ -1104,7 +1103,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
         const f = body[i + ".white = m.f".len ..];
         const end = std.mem.indexOfScalar(u8, f, '.').?;
-        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = zTo(S, 0x0, S.con(model.su.r[", .{f[0..end]});
+        const decl = try std.testing.allocator.print("    .f{s} = zTo(S, 0x0, S.con(model.su.r[", .{f[0..end]});
         defer std.testing.allocator.free(decl);
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
         k = i + 1;
@@ -1989,7 +1988,7 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
         },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -2049,7 +2048,7 @@ test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's b
         if (!std.mem.startsWith(u8, decl, "var t")) continue;
         const name = decl[4 .. std.mem.indexOfScalar(u8, decl, ':') orelse continue];
         var buf: [32]u8 = undefined;
-        const store = try std.fmt.bufPrint(&buf, "{s} = ", .{name});
+        const store = try std.mem.print(&buf, "{s} = ", .{name});
         std.testing.expect(std.mem.indexOf(u8, src, store) != null) catch |e| {
             std.debug.print("slot `{s}` is declared but never assigned\n", .{name});
             return e;
@@ -2729,12 +2728,12 @@ test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     try std.testing.expectEqual(@as(f64, 5.5), k.zScanR("abc 5.5", "%s %f", 1));
     // Literal text in the control string must match, and %e reads back what
     // §9.4.3's `%10.4e` wrote (09_string_formatting.va's round trip).
-    const txt = try std.fmt.bufPrint(k.zSBuf(0), "value={e:>10.4}", .{0.5});
+    const txt = try std.mem.print(k.zSBuf(0), "value={e:>10.4}", .{0.5});
     try std.testing.expectEqual(@as(f64, 0.5), k.zScanR(txt, "value=%e", 0));
     try std.testing.expectEqual(@as(i64, 0), k.zScanN(txt, "other=%e"));
     // Two call sites, two scratch rows: §9.5.3 gives each writer its own string
     // variable, so one must not overwrite the other's bytes.
-    const hex = try std.fmt.bufPrint(k.zSBuf(1), "{x}", .{@as(i64, 4096)});
+    const hex = try std.mem.print(k.zSBuf(1), "{x}", .{@as(i64, 4096)});
     try std.testing.expectEqual(@as(i64, 1000), k.zScanI(hex, "%d", 0));
     try std.testing.expectEqualStrings("value= 5.0000e-1", txt);
 }
@@ -3226,7 +3225,7 @@ test "codegen: §9.17.3 a declined $limit is W0853 naming why, an honoured one i
         .{ .body = "$limit(V(a, c), \"steplim\")", .why = "too few arguments" },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module d(p, n);
             \\  inout p, n; electrical p, n, a, c;
             \\  real v;
@@ -3262,7 +3261,7 @@ test "codegen: §3.2 a held slot only a card-varying write could need is dropped
         .{ .cond = "V(p) > 0", .held = 1 },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p);
             \\  inout p; electrical p;
             \\  parameter real g = 1.0;
@@ -3858,7 +3857,7 @@ test "codegen: no embedded kernel shadows a device-level declaration" {
             if (has_std) "" else "const std = @import(\"std\");\n", stubs.items, k,
         }, 0);
         defer gpa.free(file);
-        var tree = try std.zig.Ast.parse(gpa, file, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file, .{ .mode = .zig });
         defer tree.deinit(gpa);
         var zir = try std.zig.AstGen.generate(gpa, tree);
         defer zir.deinit(gpa);
@@ -3885,10 +3884,10 @@ test "codegen: a device with laplace_nd and ddt passes AstGen" {
     , &h);
     defer h.deinit();
     const gpa = std.testing.allocator;
-    const text = try gpa.dupeZ(u8, try h.gen(gpa));
+    const text = try gpa.dupeSentinel(u8, try h.gen(gpa), 0);
     defer gpa.free(text);
     try std.testing.expect(std.mem.indexOf(u8, text, "pub fn q(") != null);
-    var tree = try std.zig.Ast.parse(gpa, text, .zig);
+    var tree = try std.zig.Ast.parse(gpa, text, .{ .mode = .zig });
     defer tree.deinit(gpa);
     var zir = try std.zig.AstGen.generate(gpa, tree);
     defer zir.deinit(gpa);

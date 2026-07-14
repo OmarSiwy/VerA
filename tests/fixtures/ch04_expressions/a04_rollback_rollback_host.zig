@@ -58,22 +58,22 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 
 /// The reference family with no lanes: nothing here asks for a Jacobian.
-const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 /// The slew output, read from row `p` and divided back out by the 1e-3 scale
 /// the .va applies.
 fn read(model: *const D.Model, inst: *D.Instance, x: [n_u]f64, sim: contract.SimState) f64 {
     const r: [n_u]S = D.eval(S, &x, model, inst, sim);
-    return r[@intFromEnum(D.U.p)].v / 1.0e-3;
+    return r[@backingInt(D.U.p)].v / 1.0e-3;
 }
 
 /// Drive the unknowns the way the .va's ramp asks: V(p) = t/1ns volts.
 fn bias(t_ns: f64) [n_u]f64 {
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.p)] = t_ns;
+    x[@backingInt(D.U.p)] = t_ns;
     return x;
 }
 

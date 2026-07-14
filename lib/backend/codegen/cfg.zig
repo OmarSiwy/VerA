@@ -35,12 +35,12 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
         if (self.an.arrOf(v)) |id| if (gen_render.inPlace(self, id)) continue;
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
-        const wrap = self.an.arrOf(v) == null and self.an.vty[@intFromEnum(v)] == .real;
+        const wrap = self.an.arrOf(v) == null and self.an.vty[@backingInt(v)] == .real;
         if (wrap) try family.openTo(self, family.mask(self, v));
         if (self.an.arrOf(v) != null)
             try gen_render.renderArrayOut(self, v)
         else
-            try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
+            try gen_render.renderVal(self, v, self.an.vty[@backingInt(v)]);
         if (wrap) try self.b(")", .{});
         try self.b(",\n", .{});
     }
@@ -54,7 +54,7 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
     for (stmts) |inst| {
         // `setup` computes a speculable value at its home instead.
-        if (self.su.mode and self.sinv.home[@intFromEnum(self.an.i_res[@intFromEnum(inst)])] != none_u32) continue;
+        if (self.su.mode and self.sinv.home[@backingInt(self.an.i_res[@backingInt(inst)])] != none_u32) continue;
         try emitStmt(self, inst, depth, decl);
     }
     if (self.su.mode) for (self.sinv.movedTo(bi)) |v| {
@@ -63,11 +63,11 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
 }
 
 fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!void {
-    const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+    const i = @backingInt(self.an.i_res[@backingInt(inst)]);
     if (!self.plan.needed[i]) return;
     // §3.2.2 an `anew`/`store` is a statement on its storage, not a slot.
     if (self.an.arr_of[i] != none_u32) {
-        if (!self.plan.cached(@enumFromInt(i))) try gen_render.emitArrayStmt(self, inst, depth);
+        if (!self.plan.cached(@fromBackingInt(@intCast(i)))) try gen_render.emitArrayStmt(self, inst, depth);
         return;
     }
     if (self.plan.slot[i] == none_u32) return;
@@ -80,7 +80,7 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
     if (at_def) {
         if (self.an.vty[i] == .real) {
             // Zig types it from the expression; `lane_masks` counts it.
-            try family.note(self, family.mask(self, @enumFromInt(i)));
+            try family.note(self, family.mask(self, @fromBackingInt(@intCast(i))));
             try self.b("const t{d} = ", .{self.plan.slot[i]});
         } else try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
     } else {
@@ -168,7 +168,7 @@ fn isFallThrough(self: *const Gen, at: usize, depth: u32, k: u32) bool {
     const body = self.out.items[at..];
     if (body.len == 0) return true;
     var buf: [64]u8 = undefined;
-    const want = std.fmt.bufPrint(&buf, "break :B{d};\n", .{k}) catch return false;
+    const want = std.mem.print(&buf, "break :B{d};\n", .{k}) catch return false;
     if (body.len != depth * 4 + want.len) return false;
     return std.mem.allEqual(u8, body[0 .. depth * 4], ' ') and std.mem.eql(u8, body[depth * 4 ..], want);
 }
@@ -184,18 +184,18 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
         return;
     }
     switch (self.mir.instData(t)) {
-        .jump => |d| try emitEdge(self, bi, @intFromEnum(d.target), depth, target),
+        .jump => |d| try emitEdge(self, bi, @backingInt(d.target), depth, target),
         .branch => |d| {
             // `planDeadBranches`: both arms reconverge with nothing this
             // unit can observe in between, so emit the common action once.
             if (self.plan.dead_branch[bi])
-                return emitEdge(self, bi, @intFromEnum(d.then_block), depth, target);
+                return emitEdge(self, bi, @backingInt(d.then_block), depth, target);
             try self.ind(depth);
             try self.b("if (", .{});
             const was_dead = self.su.dead;
             defer self.su.dead = was_dead;
             var else_dead = was_dead;
-            if (self.su.mode and !self.sinv.val[@intFromEnum(self.an.rv(d.cond))]) {
+            if (self.su.mode and !self.sinv.val[@backingInt(self.an.rv(d.cond))]) {
                 // `setup` takes a per-eval branch `then` without testing it:
                 // neither arm holds setup work, and a §5.10.2 initial-step
                 // arm is exactly what it must compute (plan/setup.zig's
@@ -208,13 +208,13 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             } else try renderCond(self, d.cond);
             try self.b(") {{\n", .{});
             try gen_unit.scopeOpen(self);
-            try emitEdge(self, bi, @intFromEnum(d.then_block), depth + 1, target);
+            try emitEdge(self, bi, @backingInt(d.then_block), depth + 1, target);
             gen_unit.scopeClose(self, self.out.items.len);
             try self.ind(depth);
             try self.b("}} else {{\n", .{});
             try gen_unit.scopeOpen(self);
             self.su.dead = else_dead;
-            try emitEdge(self, bi, @intFromEnum(d.else_block), depth + 1, target);
+            try emitEdge(self, bi, @backingInt(d.else_block), depth + 1, target);
             gen_unit.scopeClose(self, self.out.items.len);
             try self.ind(depth);
             try self.b("}}\n", .{});
@@ -279,7 +279,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     var k: u32 = 0;
     for (phis) |inst| {
         if (!slotted(self, inst)) continue;
-        const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+        const i = @backingInt(self.an.i_res[@backingInt(inst)]);
         try self.ind(d2);
         var m: ?u64 = null;
         if (par) {
@@ -304,7 +304,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
     for (phis) |inst| {
         if (!slotted(self, inst)) continue;
         try self.ind(d2);
-        const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+        const i = @backingInt(self.an.i_res[@backingInt(inst)]);
         gen_unit.probeDef(self, self.plan.slot[i], false);
         try gen_unit.writeSlotRef(self, i);
         if (gen_unit.slotMask(self, i)) |mk|
@@ -326,7 +326,7 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
     const def = self.mir.valueDef(v);
     if (def != .inst_result) return false;
     const inst = def.inst_result;
-    if (self.mir.instOp(inst) == .phi) return self.an.def_block[@intFromEnum(v)] == to;
+    if (self.mir.instOp(inst) == .phi) return self.an.def_block[@backingInt(v)] == to;
     if (gen_render.materialized(self, v)) return false;
     return switch (self.mir.instData(inst)) {
         .unary => |d| readsPhiOf(self, d.operand, to, depth + 1),
@@ -344,6 +344,6 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
 /// Returns whether this unit materializes the pooled phi `inst` into a
 /// local slot.
 pub fn slotted(self: *const Gen, inst: Mir.Inst) bool {
-    const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+    const i = @backingInt(self.an.i_res[@backingInt(inst)]);
     return self.plan.needed[i] and self.plan.slot[i] != none_u32;
 }

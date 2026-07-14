@@ -55,8 +55,8 @@ const wide_device =
 /// Whether `contract` declares `name`, read from the module itself so there is
 /// no third list to keep in step.
 fn declares(name: []const u8) bool {
-    inline for (@typeInfo(contract).@"struct".decls) |d| {
-        if (std.mem.eql(u8, d.name, name)) return true;
+    inline for (@typeInfo(contract).@"struct".decl_names) |d| {
+        if (std.mem.eql(u8, d, name)) return true;
     }
     return false;
 }
@@ -108,8 +108,8 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
 // The split build writes `orchestrator.Part` tags into the shims as enum
 // literals the host's `exportDevicePart` takes as `contract.DevicePart`.
 test "orchestrator.Part and contract.DevicePart name the same parts" {
-    const a = std.meta.fieldNames(vera.orchestrator.Part);
-    const b = std.meta.fieldNames(contract.DevicePart);
+    const a = @typeInfo(vera.orchestrator.Part).@"enum".field_names;
+    const b = @typeInfo(contract.DevicePart).@"enum".field_names;
     try std.testing.expectEqual(a.len, b.len);
     for (a, b) |x, y| try std.testing.expectEqualStrings(x, y);
 }

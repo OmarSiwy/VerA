@@ -15,14 +15,14 @@ const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
 
-const n_u = @typeInfo(D.U).@"enum".fields.len;
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
 const Dual = contract.RefFamily(f64, &lanes, .{ .dense = true });
 const lanes: [n_u]u8 = std.simd.iota(u8, n_u);
 const C = std.math.Complex;
 
 fn bias() [n_u]f64 {
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.in)] = 0.5;
+    x[@backingInt(D.U.in)] = 0.5;
     return x;
 }
 

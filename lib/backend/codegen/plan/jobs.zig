@@ -332,7 +332,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
             .mode = .strict,
             .comment = "vera_timepoint statement ran",
         });
-        for (t.slots) |sl| if (read[@intFromEnum(self.an.rv(sl.final))]) try jobs.append(self.arena, .{
+        for (t.slots) |sl| if (read[@backingInt(self.an.rv(sl.final))]) try jobs.append(self.arena, .{
             .kind = .timepoint,
             .target = self.an.rv(sl.final),
             .mode = .strict,
@@ -389,29 +389,29 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
 fn readSet(self: Input, queued: []const Job) ![]bool {
     const read = try self.arena.alloc(bool, self.an.nv);
     @memset(read, false);
-    for (queued) |j| read[@intFromEnum(self.an.rv(j.target))] = true;
+    for (queued) |j| read[@backingInt(self.an.rv(j.target))] = true;
     for (0..self.mir.insts.len) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         switch (self.mir.instData(inst)) {
-            .unary => |d| read[@intFromEnum(self.an.rv(d.operand))] = true,
+            .unary => |d| read[@backingInt(self.an.rv(d.operand))] = true,
             .binary => |d| for ([_]Mir.Value{ d.lhs, d.rhs }) |v| {
-                read[@intFromEnum(self.an.rv(v))] = true;
+                read[@backingInt(self.an.rv(v))] = true;
             },
             .ternary => |d| for ([_]Mir.Value{ d.cond, d.then_val, d.else_val }) |v| {
-                read[@intFromEnum(self.an.rv(v))] = true;
+                read[@backingInt(self.an.rv(v))] = true;
             },
             .phi => |d| for (0..d.count) |k| {
-                read[@intFromEnum(self.an.rv(self.mir.phiPair(inst, @intCast(k)).value))] = true;
+                read[@backingInt(self.an.rv(self.mir.phiPair(inst, @intCast(k)).value))] = true;
             },
-            .branch => |d| read[@intFromEnum(self.an.rv(d.cond))] = true,
+            .branch => |d| read[@backingInt(self.an.rv(d.cond))] = true,
             .call => |d| for (d.args) |v| {
-                read[@intFromEnum(self.an.rv(v))] = true;
+                read[@backingInt(self.an.rv(v))] = true;
             },
             .load => |d| for ([_]Mir.Value{ d.arr, d.index }) |v| {
-                read[@intFromEnum(self.an.rv(v))] = true;
+                read[@backingInt(self.an.rv(v))] = true;
             },
             .store => |d| for ([_]Mir.Value{ d.arr, d.index, d.value }) |v| {
-                read[@intFromEnum(self.an.rv(v))] = true;
+                read[@backingInt(self.an.rv(v))] = true;
             },
             .jump, .anew => {},
         }

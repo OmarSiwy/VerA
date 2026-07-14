@@ -12,6 +12,14 @@ const vera = @import("vera");
 const options = @import("suite_options");
 
 const Io = std.Io;
+/// `--fixture-opt=` names. Zig 0.17 renamed `std.lang.Optimize`'s tags
+/// (`fast`, ...); the flag keeps the names it always took.
+const optimize_names = std.StaticStringMap(std.lang.Optimize).initComptime(.{
+    .{ "Debug", .debug },
+    .{ "ReleaseSafe", .safe },
+    .{ "ReleaseFast", .fast },
+    .{ "ReleaseSmall", .small },
+});
 
 /// `std.mem.sort` order for strings: bytewise.
 pub fn strLess(_: void, a: []const u8, b: []const u8) bool {
@@ -103,7 +111,7 @@ pub const Config = struct {
     /// microseconds, and safety checks make a codegen bug trap instead of
     /// printing a plausible wrong number. Zig floats are strict IEEE in every
     /// mode, so `--fixture-opt=ReleaseFast` asks only about optimization.
-    fixture_opt: std.builtin.OptimizeMode = .Debug,
+    fixture_opt: std.lang.Optimize = .debug,
     /// `--fixture-backend=llvm|native`; null is `Backend.auto(fixture_opt, <host>)`.
     fixture_backend: ?vera.orchestrator.Backend = null,
     /// `--no-batch` builds every fixture testbench alone (`Compiler.prepare`
@@ -142,7 +150,7 @@ pub fn takeArg(cfg: *Config, a: []const u8) bool {
     else if (std.mem.startsWith(u8, a, "--fixture-root=")) cfg.root = a["--fixture-root=".len..] //
     else if (std.mem.startsWith(u8, a, "--fixture-opt=")) {
         const name = a["--fixture-opt=".len..];
-        cfg.fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
+        cfg.fixture_opt = optimize_names.get(name) orelse {
             std.debug.print("suite: not an optimize mode: {s}\n", .{name});
             std.process.exit(2);
         };
@@ -1054,7 +1062,7 @@ fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const stem = rel[0 .. rel.len - ".v".len];
-    const golden = std.fmt.bufPrint(&buf, "{s}.expected.txt", .{stem}) catch return null;
+    const golden = std.mem.print(&buf, "{s}.expected.txt", .{stem}) catch return null;
     if (dir.access(io, golden, .{})) |_| return null else |_| {}
 
     const source = dir.readFileAlloc(io, rel, arena, .limited(1 << 20)) catch return null;
@@ -1375,8 +1383,7 @@ test "a directive is found after the hand-derivation, not just in a header" {
     // Directives follow the header's LRM quote and derivation, often kilobytes
     // into the file, so the whole file must be scanned.
     var prose: [4096]u8 = @splat('x');
-    const late = try std.fmt.allocPrint(
-        std.testing.allocator,
+    const late = try std.testing.allocator.print(
         "// {s}\n//! reject E0205\n",
         .{prose[0..]},
     );

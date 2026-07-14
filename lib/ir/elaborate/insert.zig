@@ -80,7 +80,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
     for (module.instances, 0..) |inst, ii| {
-        const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, file.str(inst.name), elaborate.sep });
+        const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(inst.name), elaborate.sep });
         const child = try moduleOf(self, &inst, child_path) orelse continue;
         if (child.is_connect) continue;
         for (child.ports, 0..) |p, pi| {
@@ -220,12 +220,12 @@ fn segmentName(
     const file = self.ctx.file;
     const a = self.ctx.arena;
     const leaf = if (!merged)
-        try std.fmt.allocPrint(a, "{s}__{s}__{s}", .{ file.str(h.sig), file.str(insts[h.inst].name), file.str(h.port) })
+        try a.print("{s}__{s}__{s}", .{ file.str(h.sig), file.str(insts[h.inst].name), file.str(h.port) })
     else
-        try std.fmt.allocPrint(a, "{s}__{s}__{s}", .{ file.str(owner.sig), file.str(r.module.name), file.str(owner.bottom) });
+        try a.print("{s}__{s}__{s}", .{ file.str(owner.sig), file.str(r.module.name), file.str(owner.bottom) });
     return .{
         .instance = try file.intern(a, leaf),
-        .segment = try file.intern(a, try std.fmt.allocPrint(a, "{s}{s}{c}{s}", .{ path, leaf, sep, file.str(lower_port) })),
+        .segment = try file.intern(a, try a.print("{s}{s}{c}{s}", .{ path, leaf, sep, file.str(lower_port) })),
     };
 }
 

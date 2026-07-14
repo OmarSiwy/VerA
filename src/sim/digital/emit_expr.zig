@@ -123,7 +123,7 @@ pub fn real(self: *Emitter, e: Ast.ExprId) Error!void {
         },
         .sys_call => {
             const args = ex.args(e);
-            const f = r.sys_calls[@intFromEnum(e)].?;
+            const f = r.sys_calls[@backingInt(e)].?;
             switch (f) {
                 .realtime => {
                     const scale = r.timeOf(r.scope).scale;
@@ -369,7 +369,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         },
         .sys_call => {
             const args = ex.args(e);
-            switch (r.sys_calls[@intFromEnum(e)].?) {
+            switch (r.sys_calls[@backingInt(e)].?) {
                 .make_signed, .make_unsigned => {
                     try self.print("L.rs(", .{});
                     const t = try selfDetermined(self, args[0]);
@@ -402,7 +402,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("L.rs(qf{d}: {{\n            const f{d} = s.queueFull(", .{ lb, lb });
                     try emit.int64(self, args[0]);
                     try self.print(");\n", .{});
-                    try emit.assignInt(self, args[1], try std.fmt.allocPrint(self.arena, "f{d}.status", .{lb}));
+                    try emit.assignInt(self, args[1], try self.arena.print("f{d}.status", .{lb}));
                     try self.print("            break :qf{d} L.k(@bitCast(f{d}.full), 0);\n            }}, 64, {d}, {})", .{ lb, lb, w, sg });
                 },
                 // §17.2 on the executable's descriptor table.
@@ -432,7 +432,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("L.rs(fl{d}: {{\n            const t{d} = try s.fileLine(", .{ lb, lb });
                     try emit.int64(self, args[1]);
                     try self.print(", {d});\n            if (t{d}.len != 0) {{\n", .{ target.width, lb });
-                    try emit.assignChars(self, args[0], try std.fmt.allocPrint(self.arena, "t{d}", .{lb}));
+                    try emit.assignChars(self, args[0], try self.arena.print("t{d}", .{lb}));
                     try self.print("            }}\n            break :fl{d} L.k(@as(u32, @truncate(t{d}.len)), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
                 },
                 .ferror => {
@@ -441,7 +441,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("L.rs(fe{d}: {{\n            const f{d} = s.fileError(", .{ lb, lb });
                     try emit.int64(self, args[0]);
                     try self.print(");\n", .{});
-                    try emit.assignChars(self, args[1], try std.fmt.allocPrint(self.arena, "f{d}.text", .{lb}));
+                    try emit.assignChars(self, args[1], try self.arena.print("f{d}.text", .{lb}));
                     try self.print("            break :fe{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(f{d}.code)))), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
                 },
                 // §17.2.4.3: each output argument as the scan reaches it.
@@ -464,11 +464,11 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print("            while (c{d}.next()) |x{d}| switch (x{d}.arg) {{\n", .{ lb, lb, lb });
                     for (args[2..], 0..) |arg, k| {
                         try self.print("            {d} => switch (x{d}.value) {{\n            .bits => |v{d}| {{\n", .{ k, lb, lb });
-                        try emit.assignPlanes(self, arg, try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
+                        try emit.assignPlanes(self, arg, try self.arena.print("v{d}", .{lb}));
                         try self.print("            }},\n            .chars => |t{d}| {{\n", .{lb});
-                        try emit.assignChars(self, arg, try std.fmt.allocPrint(self.arena, "t{d}", .{lb}));
+                        try emit.assignChars(self, arg, try self.arena.print("t{d}", .{lb}));
                         try self.print("            }},\n            .real => |f{d}| {{\n", .{lb});
-                        try emit.assignReal(self, arg, try std.fmt.allocPrint(self.arena, "f{d}", .{lb}));
+                        try emit.assignReal(self, arg, try self.arena.print("f{d}", .{lb}));
                         try self.print("            }},\n            }},\n", .{});
                     }
                     try self.print("            else => unreachable,\n            }};\n", .{});
@@ -490,7 +490,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                         try self.print(" orelse 0))", .{});
                     }
                     try self.print(");\n            if (d{d}) |g{d}| {{\n", .{ lb, lb });
-                    try emit.assignInt(self, args[0], try std.fmt.allocPrint(self.arena, "g{d}.seed", .{lb}));
+                    try emit.assignInt(self, args[0], try self.arena.print("g{d}.seed", .{lb}));
                     try self.print("            }}\n            break :rd{d} L.k(@as(u32, @bitCast(if (d{d}) |g{d}| g{d}.value else 0)), 0);\n            }}, 32, {d}, {})", .{ lb, lb, lb, lb, w, sg });
                 },
                 .clog2 => {
@@ -567,7 +567,7 @@ fn calls(self: *Emitter, e: Ast.ExprId) bool {
 /// Does `e` call a system function with an effect (`SysFn.effects`)?
 pub fn effects(self: *Emitter, e: Ast.ExprId) bool {
     const ex = &self.r.file.exprs;
-    if (ex.tag(e) == .sys_call) if (self.r.sys_calls[@intFromEnum(e)]) |f| if (f.effects()) return true;
+    if (ex.tag(e) == .sys_call) if (self.r.sys_calls[@backingInt(e)]) |f| if (f.effects()) return true;
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (c != .none and effects(self, c)) return true;
     return false;

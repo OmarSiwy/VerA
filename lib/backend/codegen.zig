@@ -475,7 +475,7 @@ pub const Gen = struct {
         @memset(self.arr_s, false);
         if (self.arr_s.len != 0) for (self.an.i_op, 0..) |op, ii| {
             if (op != .fload) continue;
-            const arr: Mir.Value = @enumFromInt(self.mir.insts.items(.a)[ii]);
+            const arr: Mir.Value = @fromBackingInt(@intCast(self.mir.insts.items(.a)[ii]));
             if (!self.an.dFree(arr)) self.arr_s[self.an.arrOf(arr).?] = true;
         };
         // One storage holds every version of its array, so its elements are
@@ -483,8 +483,8 @@ pub const Gen = struct {
         self.arr_mask = try self.arena.alloc(u64, self.arr_s.len);
         @memset(self.arr_mask, 0);
         if (self.arr_mask.len != 0) for (0..self.an.nv) |v| {
-            const id = self.an.arrOf(@enumFromInt(v)) orelse continue;
-            self.arr_mask[id] |= self.an.unknownDeps(@enumFromInt(v));
+            const id = self.an.arrOf(@fromBackingInt(@intCast(v))) orelse continue;
+            self.arr_mask[id] |= self.an.unknownDeps(@fromBackingInt(@intCast(v)));
         };
         self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
         // After `plan_names.plan`, which fills the `branch_u` that `freeFlows`
@@ -510,7 +510,7 @@ pub const Gen = struct {
             var d = bag.build(.codegen, .E0531, self.lowered.tokenSpan(t.tok));
             // The value's own source token, when it has one.
             const def = self.mir.valueDef(v);
-            const tok = if (def == .inst_result) self.mir.insts.items(.tok)[@intFromEnum(def.inst_result)] else Mir.no_tok;
+            const tok = if (def == .inst_result) self.mir.insts.items(.tok)[@backingInt(def.inst_result)] else Mir.no_tok;
             if (tok != Mir.no_tok) d.label(self.lowered.tokenSpan(tok), "this value can change between iterations", .{});
             try d.emit();
         }
@@ -534,15 +534,15 @@ pub const Gen = struct {
         // §4.5.14 `ddx` in a display task: the display unit is a consumer
         // `eval_need` does not see, and it reads lanes.
         const display_ddx = self.display == .emit and for (self.an.i_op, 0..) |op, ii| {
-            if (op == .call and self.mir.instData(@enumFromInt(ii)).call.callee == .ddx) break true;
+            if (op == .call and self.mir.instData(@fromBackingInt(@intCast(ii))).call.callee == .ddx) break true;
         } else false;
         if (self.core.eval_need.len != 0 and !display_ddx) for (self.arr_s, 0..) |*s, id| {
             if (!s.* or self.lowered.mem_arrays.items[id].held == none_u32) continue;
             s.* = for (self.an.i_op, 0..) |op, ii| {
                 if (op != .fload) continue;
-                const arr: Mir.Value = @enumFromInt(self.mir.insts.items(.a)[ii]);
+                const arr: Mir.Value = @fromBackingInt(@intCast(self.mir.insts.items(.a)[ii]));
                 if (self.an.arrOf(arr).? != id or self.an.dFree(arr)) continue;
-                if (self.core.eval_need[@intFromEnum(self.an.rv(self.an.i_res[ii]))]) break true;
+                if (self.core.eval_need[@backingInt(self.an.rv(self.an.i_res[ii]))]) break true;
             } else false;
         };
         // After the core planner, which is what fills them. Stable for the

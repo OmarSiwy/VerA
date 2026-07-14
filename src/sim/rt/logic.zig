@@ -146,7 +146,7 @@ fn allX(comptime w: u32) W {
 /// Bit 0.
 pub inline fn low(a: anytype) Bit {
     const s = wide(a);
-    return @enumFromInt(@as(u2, @intCast(s.v[0] & 1)) | @as(u2, @intCast(s.x[0] & 1)) << 1);
+    return @fromBackingInt(@intCast(@as(u2, @intCast(s.v[0] & 1)) | @as(u2, @intCast(s.x[0] & 1)) << 1));
 }
 
 /// `Literal.resize`: truncate, or extend by `sign` (per plane, so a top x
@@ -183,7 +183,7 @@ fn rsWide(s: anytype, comptime from: u32, comptime to: u32, comptime sign: bool)
 
 /// A one-bit result in its context (`exec.scalarContext`).
 pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
-    const n: u2 = @intFromEnum(b);
+    const n: u2 = @backingInt(b);
     return rs(W{ .v = n & 1, .x = n >> 1 }, 1, w, sign);
 }
 
@@ -795,7 +795,7 @@ fn same(want: Int.Literal, got: anytype) !void {
 }
 
 fn bitOf(b: Int.Bit) Bit {
-    return @enumFromInt(@intFromEnum(b));
+    return @fromBackingInt(@intCast(@backingInt(b)));
 }
 
 fn check(comptime w: u32, comptime signed: bool, a: T(w), b: T(w)) !void {

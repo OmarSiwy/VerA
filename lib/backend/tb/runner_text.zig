@@ -18,7 +18,7 @@ pub const runner_head =
     \\const D = @import("device");
     \\const contract = @import("contract");
     \\
-    \\const n_u = @typeInfo(D.U).@"enum".fields.len;
+    \\const n_u = @typeInfo(D.U).@"enum".field_names.len;
     \\
     \\
 ;
@@ -148,7 +148,7 @@ pub const runner_body =
     \\/// `noisePsd`, `limit`, `seed`, `collapse`, `derive`, the iteration hooks):
     \\/// the reference family with no lanes, so every path runs the arithmetic
     \\/// `eval` does.
-    \\const Val = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+    \\const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
     \\
     \\/// A batch family: `V` is NL operating points, one per vector element, and
     \\/// every value is lane-free. Per element it computes what `Val` does:
@@ -278,13 +278,14 @@ pub const runner_body =
     \\    // moved apart, so a point that read another's latch or held value
     \\    // would differ from its scalar evaluation.
     \\    var insts: [NL]D.Instance = @splat(inst.*);
-    \\    for (1..NL) |k| inline for (@typeInfo(D.Instance).@"struct".fields) |fl| {
+    \\    const inst_info = @typeInfo(D.Instance).@"struct";
+    \\    for (1..NL) |k| inline for (inst_info.field_names, inst_info.field_types) |name, FT| {
     \\        const kf: f64 = @floatFromInt(k);
-    \\        if (fl.type == f64) {
-    \\            const v = @field(insts[k], fl.name);
-    \\            if (std.math.isFinite(v)) @field(insts[k], fl.name) = v * (1.0 + 0.25 * kf) + 0.125 * kf;
-    \\        } else if (fl.type == i64) {
-    \\            @field(insts[k], fl.name) +%= @intCast(k);
+    \\        if (FT == f64) {
+    \\            const v = @field(insts[k], name);
+    \\            if (std.math.isFinite(v)) @field(insts[k], name) = v * (1.0 + 0.25 * kf) + 0.125 * kf;
+    \\        } else if (FT == i64) {
+    \\            @field(insts[k], name) +%= @intCast(k);
     \\        }
     \\    };
     \\    for (0..NL) |k| batch_insts[k] = &insts[k];
@@ -302,7 +303,7 @@ pub const runner_body =
     \\    }
     \\    const rv: [n_u]Batch.B = D.eval(Batch, &xv, model, &insts[0], sim_state);
     \\    // The signatures the batched call produced are `contract.region`'s.
-    \\    const sigs = if (comptime @hasDecl(D, "batch_lead")) batch_lead.regions() else [_]u16{0} ** NL;
+    \\    const sigs = if (comptime @hasDecl(D, "batch_lead")) batch_lead.regions() else @as([NL]u16, @splat(0));
     \\    for (0..NL) |k| {
     \\        const want = contract.region(D, &xs[k], model, &insts[k], sim_state);
     \\        if (sigs[k] == want) continue;
@@ -688,9 +689,9 @@ pub const runner_body =
     \\}
     \\
     \\const u_names = blk: {
-    \\    const f = @typeInfo(D.U).@"enum".fields;
+    \\    const f = @typeInfo(D.U).@"enum".field_names;
     \\    var names: [f.len][]const u8 = undefined;
-    \\    for (f, 0..) |e, i| names[i] = e.name;
+    \\    for (f, 0..) |e, i| names[i] = e;
     \\    break :blk names;
     \\};
     \\

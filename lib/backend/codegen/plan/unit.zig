@@ -154,7 +154,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
         grew = false;
         for (Mir.Value.first_dynamic..self.an.nv) |i| {
             if (self.file_dep[i]) continue;
-            const def = self.mir.valueDef(@enumFromInt(i));
+            const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
             if (def != .inst_result) continue;
             const inst = def.inst_result;
             const hit = switch (self.mir.instData(inst)) {
@@ -183,7 +183,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
 }
 
 inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
-    return self.file_dep[@intFromEnum(self.an.rv(v))];
+    return self.file_dep[@backingInt(self.an.rv(v))];
 }
 
 /// Is this Value a setup root here? Unlike `cached` it is true inside the
@@ -191,7 +191,7 @@ inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
 /// every body may read it.
 pub inline fn isRoot(self: *const UnitPlan, v: Mir.Value) bool {
     if (!self.su_on) return false;
-    return self.su_idx[@intFromEnum(v)] != none_u32;
+    return self.su_idx[@backingInt(v)] != none_u32;
 }
 
 /// The block this unit computes `v` in.
@@ -203,7 +203,7 @@ fn homeBlock(self: *const UnitPlan, v: usize) u32 {
 /// A branch the unit being planned actually tests: every one, except while
 /// planning `setup`, which takes a per-eval branch `then` untested.
 inline fn tested(self: *const UnitPlan, cond: Mir.Value) bool {
-    return !self.setup_mode or self.sinv[@intFromEnum(cond)];
+    return !self.setup_mode or self.sinv[@backingInt(cond)];
 }
 
 /// Is this Value read out of the common declaration's cache HERE? False inside
@@ -213,16 +213,16 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     // Builtin literals need no core dependency (`analyze` skips their slots).
     // A held first-call flag can publish `.one`, but another unit still
     // renders that literal directly instead of referencing an absent `c`.
-    if (@intFromEnum(v) < Mir.Value.first_dynamic) return false;
-    if (self.in_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
-    if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@intFromEnum(v)]) return false;
+    if (@backingInt(v) < Mir.Value.first_dynamic) return false;
+    if (self.in_common or self.lo_idx[@backingInt(v)] == none_u32) return false;
+    if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@backingInt(v)]) return false;
     if (self.display_unit and self.arr_lanes.len != 0) {
-        const id = self.an.arr_of[@intFromEnum(v)];
+        const id = self.an.arr_of[@backingInt(v)];
         if (id != none_u32 and self.arr_lanes[id]) return false;
     }
     // §5.9 A unit that re-materializes a loop must not read that loop's values
     // out of the cache (see `analyze`).
-    const blk = self.an.def_block[@intFromEnum(v)];
+    const blk = self.an.def_block[@backingInt(v)];
     if (blk != none_u32) {
         const l = self.an.loop_of[blk];
         if (l != none_u32 and self.loop_recompute[l]) return false;
@@ -258,7 +258,7 @@ fn markRecomputedLoops(self: *UnitPlan) bool {
     if (self.in_common) return false;
     var grew = false;
     for (self.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (self.cached(lv) or self.isRoot(lv)) continue; // computed elsewhere
         const blk = self.an.def_block[v];
         if (blk == none_u32) continue;
@@ -313,7 +313,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
                 if (self.mir.instOp(t) != .branch) continue;
                 if (self.dead_branch[bi]) continue;
                 const cond = self.an.rv(self.mir.instData(t).branch.cond);
-                if (self.needed[@intFromEnum(cond)] or !self.tested(cond)) continue;
+                if (self.needed[@backingInt(cond)] or !self.tested(cond)) continue;
                 try self.mark(&work, cond);
                 grew = true;
             }
@@ -334,7 +334,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     var k = self.live.items.len;
     while (k > 0) {
         k -= 1;
-        const v = @intFromEnum(self.live.items[k]);
+        const v = @backingInt(self.live.items[k]);
         if (v < Mir.Value.first_dynamic) break; // sentinels sort first
         if (self.eager_use[v] != 0 or self.arm_use[v] == 0) continue;
         // Read at more than one arm position: a slot, computed once where it
@@ -350,7 +350,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // a value; inlining it into its uses would render its expression at
         // every one of them, including the `return`.
         if (self.in_common and self.lo_idx[v] != none_u32) continue;
-        const def = self.mir.valueDef(@as(Mir.Value, @enumFromInt(v)));
+        const def = self.mir.valueDef(@as(Mir.Value, @fromBackingInt(@intCast(v))));
         if (def != .inst_result) continue;
         const op = self.mir.instOp(def.inst_result);
         // A `call` is never inlined: §4.5 operators and ch9 functions are
@@ -374,7 +374,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     // order: a unit-local dense index, never a MIR value index.
     self.uses_cache = false;
     for (self.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic or self.inlined[v]) continue;
         // An Instance-field read needs no statement, slot or core call; it
         // is valid in every body including the core itself.
@@ -418,8 +418,8 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
 
 fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!void {
     const v = self.an.rv(v0);
-    if (self.needed[@intFromEnum(v)]) return;
-    self.needed[@intFromEnum(v)] = true;
+    if (self.needed[@backingInt(v)]) return;
+    self.needed[@backingInt(v)] = true;
     try self.live.append(self.arena, v);
     // A value read from the core's cache or from a setup root's Instance
     // field is a leaf here: its operands were computed there, and pulling
@@ -470,14 +470,14 @@ fn closeSlice(self: *UnitPlan, work: *std.ArrayList(Mir.Value)) Error!void {
 }
 
 fn ltValue(_: void, lhs: Mir.Value, rhs: Mir.Value) bool {
-    return @intFromEnum(lhs) < @intFromEnum(rhs);
+    return @backingInt(lhs) < @backingInt(rhs);
 }
 
 fn countUses(self: *UnitPlan, target: Mir.Value) void {
     if (self.in_common) {
-        for (self.lo_vals) |v| self.eager_use[@intFromEnum(v)] += 1;
+        for (self.lo_vals) |v| self.eager_use[@backingInt(v)] += 1;
     } else {
-        self.eager_use[@intFromEnum(self.an.rv(target))] += 1;
+        self.eager_use[@backingInt(self.an.rv(target))] += 1;
     }
     for (self.live.items) |lv| {
         // A leaf: its operands are not here.
@@ -497,7 +497,7 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
         if (self.dead_branch[bi]) continue;
         const cond = self.an.rv(self.mir.instData(t).branch.cond);
         if (!self.tested(cond)) continue;
-        self.eager_use[@intFromEnum(cond)] += 1;
+        self.eager_use[@backingInt(cond)] += 1;
     }
 }
 
@@ -506,7 +506,7 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
 fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
     const bump = struct {
         fn f(g: *UnitPlan, v: Mir.Value, arm: bool, un: bool) void {
-            const i = @intFromEnum(g.an.rv(v));
+            const i = @backingInt(g.an.rv(v));
             if (!g.needed[i]) return;
             if (un) {
                 if (arm) return; // already an arm use
@@ -563,7 +563,7 @@ fn boundInlineDepth(self: *UnitPlan) void {
     // inlines (operands are created before their results; a phi never
     // inlines), so every inlined operand's depth is already written.
     for (self.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic or !self.inlined[v]) continue;
         const ops: [3]Mir.Value = switch (self.mir.instData(self.mir.valueDef(lv).inst_result)) {
             .unary => |d| .{ d.operand, .undef, .undef },
@@ -575,7 +575,7 @@ fn boundInlineDepth(self: *UnitPlan) void {
         };
         var d: u16 = 1;
         for (ops) |o0| {
-            const o = @intFromEnum(self.an.rv(o0));
+            const o = @backingInt(self.an.rv(o0));
             if (o >= Mir.Value.first_dynamic and self.inlined[o]) d = @max(d, self.inl_depth[o] + 1);
         }
         if (d > max_inline_depth and self.eager_use[v] != 0) {
@@ -600,7 +600,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
         const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
         if (stmts.len < 2) continue;
         for (stmts[0 .. stmts.len - 1], 0..) |inst, si| {
-            const v = @intFromEnum(self.an.rv(self.an.i_res[@intFromEnum(inst)]));
+            const v = @backingInt(self.an.rv(self.an.i_res[@backingInt(inst)]));
             if (v < Mir.Value.first_dynamic) continue;
             if (!self.needed[v] or self.inlined[v]) continue;
             if (self.eager_use[v] != 1 or self.arm_use[v] != 0) continue;
@@ -608,7 +608,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
             // the sweep above), and a cached value renders as `c.fN`
             // wherever it appears, so neither is ours to fuse.
             if (self.in_common and self.lo_idx[v] != none_u32) continue;
-            if (self.cached(@enumFromInt(v))) continue;
+            if (self.cached(@fromBackingInt(@intCast(v)))) continue;
             const op = self.mir.instOp(inst);
             // `call` is an operator/function evaluated once per step (§4.5)
             // and `phi` is materialised as a `var`; neither is an expression.
@@ -622,7 +622,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
             // effects the value must not cross. This lets ifconv's spliced
             // arms sit between a comparison and the select that consumes it.
             for (stmts[si + 1 ..]) |next| {
-                if (self.eagerlyUses(next, @enumFromInt(v))) {
+                if (self.eagerlyUses(next, @fromBackingInt(@intCast(v)))) {
                     self.inlined[v] = true;
                     break;
                 }
@@ -676,7 +676,7 @@ fn foldedExponent(self: *const UnitPlan, d: anytype) bool {
 /// slice.
 pub fn isStraightLine(self: *const UnitPlan) bool {
     for (self.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic) continue;
         // A cache or Instance-field read is a field of a value the body
         // already holds, so it has no block of its own.
@@ -699,7 +699,7 @@ pub fn planDeadBranches(self: *UnitPlan) void {
     @memset(self.blk_work, false);
     @memset(self.blk_phi, false);
     for (self.live.items) |lv| {
-        const v = @intFromEnum(lv);
+        const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic) continue;
         const db = self.homeBlock(v);
         if (db == none_u32) continue;
@@ -711,7 +711,7 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         // copies nor its block are work here.
         if (self.isRoot(lv)) continue;
         const def = self.mir.valueDef(lv);
-        if (def == .inst_result and self.an.i_op[@intFromEnum(def.inst_result)] == .phi)
+        if (def == .inst_result and self.an.i_op[@backingInt(def.inst_result)] == .phi)
             self.blk_phi[db] = true;
         // A cache read has no block of its own.
         if (self.cached(lv)) continue;
@@ -727,8 +727,8 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         const t = self.an.term[bi];
         if (t == .none or self.mir.instOp(t) != .branch) continue;
         const d = self.mir.instData(t).branch;
-        const a = self.edgeAct(bi, @intFromEnum(d.then_block)) orelse continue;
-        const b2 = self.edgeAct(bi, @intFromEnum(d.else_block)) orelse continue;
+        const a = self.edgeAct(bi, @backingInt(d.then_block)) orelse continue;
+        const b2 = self.edgeAct(bi, @backingInt(d.else_block)) orelse continue;
         if (std.meta.eql(a, b2)) self.dead_branch[bi] = true;
     }
 }
@@ -773,8 +773,8 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         from = to;
         // A dead branch emits as the edge to its `then` block (`emitTerm`).
         to = switch (self.mir.instOp(t)) {
-            .jump => @intFromEnum(self.mir.instData(t).jump.target),
-            .branch => if (self.dead_branch[to]) @intFromEnum(self.mir.instData(t).branch.then_block) else return null,
+            .jump => @backingInt(self.mir.instData(t).jump.target),
+            .branch => if (self.dead_branch[to]) @backingInt(self.mir.instData(t).branch.then_block) else return null,
             else => return null, // else: a terminator is a jump or a branch; anything else ends the walk
         };
     }
@@ -801,14 +801,14 @@ test "a unit's slice stops at a value the core carries" {
     p.lo_idx = lo_idx;
     try p.analyze(t, false);
     try std.testing.expect(p.straight);
-    try std.testing.expect(p.needed[@intFromEnum(sq)] and p.needed[@intFromEnum(va)]);
+    try std.testing.expect(p.needed[@backingInt(sq)] and p.needed[@backingInt(va)]);
     try std.testing.expect(!p.uses_cache);
 
     // Now the core returns `sq`: the unit reads it as a leaf, so `V(a)` is
     // no longer part of its slice.
-    lo_idx[@intFromEnum(sq)] = 0;
+    lo_idx[@backingInt(sq)] = 0;
     p.lo_vals = &.{sq};
     try p.analyze(t, false);
     try std.testing.expect(p.cached(sq) and p.uses_cache);
-    try std.testing.expect(p.needed[@intFromEnum(sq)] and !p.needed[@intFromEnum(va)]);
+    try std.testing.expect(p.needed[@backingInt(sq)] and !p.needed[@backingInt(va)]);
 }

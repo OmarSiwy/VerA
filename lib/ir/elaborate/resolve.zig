@@ -66,7 +66,7 @@ pub fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!vo
 pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?Ast.StrId {
     // The same allocPrint join every sibling key builds (`defparams`,
     // `walkInstances`); a fixed buffer would silently drop long paths.
-    const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
+    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(local) });
     const n = self.ooc.get(key) orelse return null;
     return if (n.discipline == .none) null else n.discipline;
 }

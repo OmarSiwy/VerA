@@ -254,7 +254,7 @@ pub fn successors(comptime T: type, first: ?T, operation: anytype) it.Iterator(S
 /// Struct-of-arrays rows: each field loads as its own contiguous vector.
 fn Rows(comptime T: type) type {
     const M = std.MultiArrayList(T);
-    const fields = @typeInfo(T).@"struct".fields;
+    const s = @typeInfo(T).@"struct";
     return struct {
         pub const Item = T;
         pub const random_access = true;
@@ -283,9 +283,9 @@ fn Rows(comptime T: type) type {
         }
         pub fn block(self: *@This(), comptime N: usize, i: usize) lanes.Block(T, N) {
             var v: lanes.Lanes(T, N) = undefined;
-            inline for (fields) |f| {
-                const column = self.rows.items(@field(M.Field, f.name));
-                @field(v, f.name) = lanes.load(f.type, N, column[self.front + i ..][0..N]);
+            inline for (s.field_names, s.field_types) |name, F| {
+                const column = self.rows.items(@field(M.Field, name));
+                @field(v, name) = lanes.load(F, N, column[self.front + i ..][0..N]);
             }
             return .{ .v = v, .m = @splat(true) };
         }

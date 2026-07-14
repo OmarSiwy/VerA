@@ -7,17 +7,17 @@
 const std = @import("std");
 const contract = @import("contract");
 const D = @import("device");
-const n_u = @typeInfo(D.U).@"enum".fields.len;
-const S = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const n_u = @typeInfo(D.U).@"enum".field_names.len;
+const S = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 fn current(card: *const D.Model) f64 {
     var model = card.*;
     var inst: D.Instance = .{};
     var x: [n_u]f64 = @splat(0.0);
-    x[@intFromEnum(D.U.p)] = 0.5;
+    x[@backingInt(D.U.p)] = 0.5;
     if (@hasDecl(D, "setup")) D.setup(S.Of(0), &model);
     const result = D.eval(S, &x, &model, &inst, .{});
-    return result[@intFromEnum(D.U.p)].v;
+    return result[@backingInt(D.U.p)].v;
 }
 
 test "paramset selections remain fixed while a single-member value follows a host write" {

@@ -92,6 +92,6 @@ fn binary(file: *Ast.SourceFile, arena: std.mem.Allocator, op: Ast.BinaryOp, lhs
         .main_tok = tok,
         .lhs = lhs,
         .rhs = rhs,
-        .extra = @intFromEnum(op),
+        .extra = @backingInt(op),
     });
 }

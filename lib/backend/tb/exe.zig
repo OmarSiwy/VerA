@@ -21,7 +21,7 @@ pub const BuildOptions = struct {
     out_path: ?[]const u8 = null,
     zig_exe: []const u8 = "zig",
     /// `-O` for the testbench. Debug by default: see `buildExe`.
-    optimize: std.builtin.OptimizeMode = .Debug,
+    optimize: std.lang.Optimize = .debug,
     /// Null is `Backend.auto(optimize, <this host>)`.
     backend: ?orchestrator.Backend = null,
     /// The runner is `renderMixed`'s: it imports `sim` and `diag`, compiled
@@ -100,12 +100,12 @@ pub fn buildExe(
     try argv.appendSlice(arena, &.{
         opts.zig_exe,
         if (opts.shared_lib) "build-lib" else "build-exe",
-        try std.fmt.allocPrint(arena, "-femit-bin={s}", .{bin}),
-        try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
+        try arena.print("-femit-bin={s}", .{bin}),
+        try arena.print("-O{t}", .{opts.optimize}),
         "--cache-dir",
         ".zig-cache",
     });
-    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.cpu.arch)) {
+    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
     });
@@ -121,13 +121,13 @@ pub fn buildExe(
         if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim" });
         try argv.appendSlice(arena, &.{ "--dep", "contract", try bind(arena, io, dir, opts, "device", "device", text) });
     } else try argv.append(arena, m_root);
-    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
+    try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
     if (opts.mixed) {
         // build.zig's `module_specs` rows for these four, spelled for build-exe.
         const root = std.fs.path.dirname(std.fs.path.dirname(opts.contract) orelse ".") orelse ".";
         const src = struct {
             fn m(a: Allocator, r: []const u8, name: []const u8, rel: []const u8) ![]const u8 {
-                return std.fmt.allocPrint(a, "-M{s}={s}", .{ name, try std.fs.path.join(a, &.{ r, rel }) });
+                return a.print("-M{s}={s}", .{ name, try std.fs.path.join(a, &.{ r, rel }) });
             }
         };
         try argv.appendSlice(arena, &.{ "--dep", "contract", "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
@@ -162,12 +162,12 @@ pub fn bind(
     binding: []const u8,
     text: []const u8,
 ) ![]const u8 {
-    return std.fmt.allocPrint(arena, "-M{s}={s}", .{ binding, try writeModule(arena, io, dir, opts, suffix, text) });
+    return arena.print("-M{s}={s}", .{ binding, try writeModule(arena, io, dir, opts, suffix, text) });
 }
 
 /// `bind`'s file half: writes `<name>.<suffix>.zig` and returns its path.
 fn writeModule(arena: Allocator, io: Io, dir: Io.Dir, opts: BuildOptions, suffix: []const u8, text: []const u8) ![]const u8 {
-    const file = try std.fmt.allocPrint(arena, "{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
+    const file = try arena.print("{s}.{s}.zig", .{ try orchestrator.fileStem(arena, opts.name), suffix });
     try dir.writeFile(io, .{ .sub_path = file, .data = text });
     return std.fs.path.join(arena, &.{ opts.work_dir, file });
 }
@@ -236,25 +236,25 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
     try argv.appendSlice(arena, &.{
         opts.zig_exe,
         "build-exe",
-        try std.fmt.allocPrint(arena, "-femit-bin={s}", .{bin}),
-        try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
+        try arena.print("-femit-bin={s}", .{bin}),
+        try arena.print("-O{t}", .{opts.optimize}),
         "--cache-dir",
         ".zig-cache",
     });
-    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.cpu.arch)) {
+    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
     });
     if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
-    for (0..members.len) |i| try argv.appendSlice(arena, &.{ "--dep", try std.fmt.allocPrint(arena, "tb{d}", .{i}) });
-    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mroot={s}", .{root_path}));
+    for (0..members.len) |i| try argv.appendSlice(arena, &.{ "--dep", try arena.print("tb{d}", .{i}) });
+    try argv.append(arena, try arena.print("-Mroot={s}", .{root_path}));
     for (members, 0..) |m, i| try argv.appendSlice(arena, &.{
-        "--dep",                                                      try std.fmt.allocPrint(arena, "device=dev{d}", .{i}),
-        "--dep",                                                      "contract",
-        try std.fmt.allocPrint(arena, "-Mtb{d}={s}", .{ i, m.root }), "--dep",
-        "contract",                                                   try std.fmt.allocPrint(arena, "-Mdev{d}={s}", .{ i, m.device }),
+        "--dep",                                        try arena.print("device=dev{d}", .{i}),
+        "--dep",                                        "contract",
+        try arena.print("-Mtb{d}={s}", .{ i, m.root }), "--dep",
+        "contract",                                     try arena.print("-Mdev{d}={s}", .{ i, m.device }),
     });
-    try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
+    try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
 
     const r = try std.process.run(gpa, io, .{ .argv = argv.items });
     gpa.free(r.stdout);

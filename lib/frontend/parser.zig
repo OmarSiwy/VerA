@@ -172,7 +172,7 @@ pub const Parser = struct {
     /// construct is then parsed anyway, so the one error is the only one.
     pub fn refuseAms(self: *Parser) error{OutOfMemory}!void {
         const t = self.peek();
-        if (@intFromEnum(self.language) >= @intFromEnum(token.KeywordSet.vams_2_3) or !token.isKeyword(t)) return;
+        if (@backingInt(self.language) >= @backingInt(token.KeywordSet.vams_2_3) or !token.isKeyword(t)) return;
         const w = self.tokenText(self.pos);
         if (token.isReserved(w, self.language)) return;
         try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });

@@ -203,7 +203,7 @@ pub fn parameterBinding(self: *Flatten, inst: *const Ast.Instance, params: []con
 }
 
 fn parameterDefparam(self: *Flatten, path: []const u8, original: Ast.StrId, spelling: Ast.StrId, consume: bool, found: *?ParamBinding) Error!void {
-    const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(spelling) });
+    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(spelling) });
     const dp = self.defparams.getPtr(key) orelse return;
     if (consume) {
         dp.used = true;
@@ -366,7 +366,7 @@ fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bo
     for (ranges) |r| {
         const off = r.strings orelse continue;
         const contains = for (self.ctx.file.exprs.list(off)) |id| {
-            if (std.mem.eql(u8, s, self.ctx.file.str(@enumFromInt(id)))) break true;
+            if (std.mem.eql(u8, s, self.ctx.file.str(@fromBackingInt(@intCast(id))))) break true;
         } else false;
         switch (r.kind) {
             .from => {
@@ -447,7 +447,7 @@ pub fn paramsetOverrides(
     unit: *Unit,
     path: []const u8,
 ) Error!void {
-    const ps_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, self.ctx.file.str(ps.name), sep });
+    const ps_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, self.ctx.file.str(ps.name), sep });
 
     // §6.4's chain, near to far. `chainEnd` already walked it to find
     // `child`, so this cannot fail here.

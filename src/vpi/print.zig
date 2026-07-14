@@ -71,7 +71,7 @@ fn openChannel(name: []const u8) !c_uint {
     } else return error.NoChannel;
     const f = try Io.Dir.cwd().createFile(io(), name, .{});
     errdefer f.close(io());
-    channels[free] = .{ .file = f, .name = try gpa.dupeZ(u8, name) };
+    channels[free] = .{ .file = f, .name = try gpa.dupeSentinel(u8, name, 0) };
     return bit(free);
 }
 
@@ -181,7 +181,7 @@ fn hdlOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
     const ch: usize = @intCast(d & 0x7fff_ffff);
     if (d != 0 and ch < fd_names.len) {
         if (fd_names[ch]) |old| gpa.free(old);
-        fd_names[ch] = gpa.dupeZ(u8, path) catch null;
+        fd_names[ch] = gpa.dupeSentinel(u8, path, 0) catch null;
     }
     return d;
 }
@@ -276,13 +276,13 @@ pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c
 /// ponytail: `va_list` is taken as a pointer, which is how the SysV x86-64
 /// and AAPCS64 ABIs pass one; a target that passes it by value needs its own
 /// entry point.
-pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.lang.VaList) c_int {
     root.clearError();
     return emit(1, format, ap);
 }
 
 /// IEEE 1364-2005 §27.27: vpi_mcd_printf over a started `va_list`.
-pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.lang.VaList) c_int {
     root.clearError();
     return emit(mcd, format, ap);
 }
@@ -314,7 +314,7 @@ pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
 
 const EOF: c_int = -1;
 
-fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.lang.VaList) c_int {
     // IEEE 1364-2005 §27.26: the most significant bit marks "a file descriptor
     // instead of an mcd", and vpi_mcd_printf "shall not write to" one.
     if (mcd & 0x8000_0000 != 0) {
@@ -370,12 +370,12 @@ const Length = enum { none, hh, h, l, ll, j, z, t, L };
 ///
 /// C calling convention because `@cVaArg` is only legal in one; false when the
 /// writer failed (out of memory).
-pub fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *std.builtin.VaList) callconv(.c) bool {
+pub fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *std.lang.VaList) callconv(.c) bool {
     expand(w, std.mem.span(format), ap) catch return false;
     return true;
 }
 
-inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.builtin.VaList) Io.Writer.Error!void {
+inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.lang.VaList) Io.Writer.Error!void {
     var i: usize = 0;
     while (i < fmt.len) {
         if (fmt[i] != '%') {
@@ -511,7 +511,7 @@ inline fn expand(w: *Io.Writer, fmt: []const u8, ap: *std.builtin.VaList) Io.Wri
             'p' => {
                 const p = @cVaArg(ap, usize);
                 var buf: [2 + 16]u8 = undefined;
-                const text = std.fmt.bufPrint(&buf, "0x{x}", .{p}) catch unreachable;
+                const text = std.mem.print(&buf, "0x{x}", .{p}) catch unreachable;
                 try padded(w, s, text);
             },
             'f', 'F', 'e', 'E', 'g', 'G' => {
@@ -655,8 +655,8 @@ fn sci(buf: []u8, a: f64, p: usize, upper: bool, alt: bool) Body {
     const x = std.fmt.parseInt(i32, r[e + 1 ..], 10) catch 0;
     const mant = r[0..e];
     const dot = if (p == 0 and alt) "." else "";
-    const head = std.fmt.bufPrint(buf, "{s}{s}", .{ mant, dot }) catch return .{ .head = "?" };
-    const tail = std.fmt.bufPrint(buf[head.len..], "{c}{c}{d:0>2}", .{
+    const head = std.mem.print(buf, "{s}{s}", .{ mant, dot }) catch return .{ .head = "?" };
+    const tail = std.mem.print(buf[head.len..], "{c}{c}{d:0>2}", .{
         @as(u8, if (upper) 'E' else 'e'), @as(u8, if (x < 0) '-' else '+'), @abs(x),
     }) catch return .{ .head = "?" };
     return .{ .head = head, .zeros = p -| max_sci, .tail = tail };
@@ -714,12 +714,12 @@ test "C conversions: reals" {
 test "C conversions: a real's precision is never clamped" {
     var b: [512]u8 = undefined;
     // 0.5 exactly, 100 fraction digits: "0.5" then 99 zeros.
-    try expectFormat("0.5" ++ "0" ** 99, formatted(&b, "%.100f", @as(f64, 0.5)), &b);
+    try expectFormat("0.5" ++ @as([99]u8, @splat('0')), formatted(&b, "%.100f", @as(f64, 0.5)), &b);
     // 60 mantissa digits: "1." and 60 zeros, then the exponent.
-    try expectFormat("1." ++ "0" ** 60 ++ "e+00", formatted(&b, "%.60e", @as(f64, 1.0)), &b);
+    try expectFormat("1." ++ @as([60]u8, @splat('0')) ++ "e+00", formatted(&b, "%.60e", @as(f64, 1.0)), &b);
     // The smallest subnormal's one shortest digit (see `real`) sits at the
     // 324th place, past where the old 300-digit clamp cut it off.
-    try expectFormat("0." ++ "0" ** 323 ++ "5000000", formatted(&b, "%.330f", @as(f64, 5e-324)), &b);
+    try expectFormat("0." ++ @as([323]u8, @splat('0')) ++ "5000000", formatted(&b, "%.330f", @as(f64, 5e-324)), &b);
 }
 
 test "§12.24–§12.26: channel numbering, reopen, and the three predefined channels" {
@@ -729,7 +729,7 @@ test "§12.24–§12.26: channel numbering, reopen, and the three predefined cha
     // absolute path inside its own temporary directory.
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir = path_buf[0..try tmp.dir.realPath(io(), &path_buf)];
-    const a_path = try std.fmt.allocPrintSentinel(std.testing.allocator, "{s}/a.log", .{dir}, 0);
+    const a_path = try std.testing.allocator.printSentinel("{s}/a.log", .{dir}, 0);
     defer std.testing.allocator.free(a_path);
 
     try std.testing.expectEqual(@as(c_uint, 0x7), vpi_mcd_close(0x7));

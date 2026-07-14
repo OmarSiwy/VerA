@@ -274,7 +274,7 @@ fn controlStatic(
     const b = &self.builder;
     while (stack.pop()) |blk| {
         if ((try blocks.getOrPut(self.arena, blk)).found_existing) continue;
-        const i = @intFromEnum(blk);
+        const i = @backingInt(blk);
         // Unsealed: more predecessors may still arrive (a loop's back edge).
         if (i >= b.block_state.len or !b.block_state.items(.sealed)[i]) return false;
         const last = self.mir.blockLast(blk);

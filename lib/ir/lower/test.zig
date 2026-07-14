@@ -158,7 +158,7 @@ test "lower: system math aliases preserve operand-sensitive result types" {
         .{ .expr = "$max(a,r)", .op = .fmax, .div = .fdiv },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p);
             \\inout p; electrical p;
             \\parameter integer a = 3, b = 5;
@@ -179,8 +179,7 @@ test "lower: system math aliases preserve operand-sensitive result types" {
 
 test "lower: system math aliases reject wrong arity" {
     for ([_][]const u8{ "$abs()", "$abs(1,2)", "$min(1)", "$min(1,2,3)", "$max(1)", "$max(1,2,3)" }) |expr| {
-        const src = try std.fmt.allocPrint(
-            std.testing.allocator,
+        const src = try std.testing.allocator.print(
             "module m(p); inout p; electrical p; analog I(p) <+ {s}; endmodule",
             .{expr},
         );
@@ -273,7 +272,7 @@ test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
         .{ .attr = "full_case = 1", .code = null },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n);
             \\  inout p, n;
             \\  electrical p, n;
@@ -524,7 +523,7 @@ test "lower: §3.2.2 a runtime-indexed array is one storage, a constant-indexed 
     try std.testing.expectEqual(@as(usize, 1), h.low.out.mem_arrays.items.len);
     try std.testing.expectEqualStrings("h", h.low.out.mem_arrays.items[0].name);
     try std.testing.expectEqual(@as(u32, 8), h.low.out.mem_arrays.items[0].len);
-    var n = [_]u32{0} ** 3; // anew, load, store
+    var n: [3]u32 = @splat(0); // anew, load, store
     for (h.mir.insts.items(.op)) |op| switch (op) {
         .anew => n[0] += 1,
         .fload => n[1] += 1,
@@ -650,7 +649,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     };
     for (cases) |c| {
         var g: Harness = undefined;
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module fr(p, n);
             \\  inout p, n; electrical p, n;
             \\  real x;
@@ -687,7 +686,7 @@ test "lower: scan destinations are guarded by the single assignment count" {
     var file_counts: usize = 0;
     var guarded: usize = 0;
     for (0..h.mir.blockCount()) |bi| {
-        const b: Mir.Block = @enumFromInt(bi);
+        const b: Mir.Block = @fromBackingInt(@intCast(bi));
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) == .call) {
@@ -733,7 +732,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
     // `$bound_step(1p)` must NOT bound the step on the arm that never ran.
     var found: ?Mir.Value = null;
     for (0..h.mir.blockCount()) |bi| {
-        const b: Mir.Block = @enumFromInt(bi);
+        const b: Mir.Block = @fromBackingInt(@intCast(bi));
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) != .call) continue;
@@ -958,7 +957,7 @@ test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
         .{ .cond = "analysis(\"dc\") || gain > 0.0", .warns = false },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, n, c);
             \\  inout p, n, c;
             \\  electrical p, n, c;
@@ -1073,7 +1072,7 @@ test "lower: §3.2 a variable some path reads before writing is held, and only t
         .{ .body = "@(cross(V(p), 1)) x = 1.0; I(p) <+ x;", .held = 1, .why = .event },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p);
             \\  inout p;
             \\  electrical p;
@@ -1105,7 +1104,7 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
         .{ .cond = "analysis(\"dc\")", .warns = true },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p, c);
             \\  inout p, c;
             \\  electrical p, c;
@@ -1153,7 +1152,7 @@ test "lower: A.6.1 an assign target is judged by declaration kind, then by domai
         .{ .decl = "wire t;", .code = null },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p);
             \\  inout p; electrical p;
             \\  {s}
@@ -1208,7 +1207,7 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
         .{ .stmt = "nope = 1;", .code = .E0313 },
     };
     for (cases) |c| {
-        const src = try std.fmt.allocPrint(std.testing.allocator,
+        const src = try std.testing.allocator.print(
             \\module m(p);
             \\  inout p; electrical p;
             \\  integer q; real v; integer arr[0:3];

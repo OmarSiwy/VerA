@@ -82,7 +82,7 @@ const Bits = struct {
         const o: u6 = @truncate(i);
         const v: u2 = @intCast((b.val[w] >> o) & 1);
         const u: u2 = @intCast((b.unk[w] >> o) & 1);
-        return @enumFromInt(v | (u << 1));
+        return @fromBackingInt(@intCast(v | (u << 1)));
     }
 
     fn known(b: Bits) bool {
@@ -833,7 +833,7 @@ fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
             if (i >= w) return;
             const o: u6 = @truncate(i);
             const m = @as(u64, 1) << o;
-            const e = @intFromEnum(b);
+            const e = @backingInt(b);
             if (e & 1 != 0) vv[i / 64] |= m;
             if (e & 2 != 0) uu[i / 64] |= m;
         }

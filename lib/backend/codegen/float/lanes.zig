@@ -32,15 +32,15 @@ pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
     const row = self.mir.instRow(def.inst_result);
     if (codegen.opcode_zig.get(row.op).libm) return true;
     return switch (Mir.opClass(row.op)) {
-        .unary => eagerCostly(self, @enumFromInt(row.a), depth + 1),
-        .binary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.b), depth + 1),
-        .ternary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.b), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.c), depth + 1),
+        .unary => eagerCostly(self, @fromBackingInt(@intCast(row.a)), depth + 1),
+        .binary => eagerCostly(self, @fromBackingInt(@intCast(row.a)), depth + 1) or
+            eagerCostly(self, @fromBackingInt(@intCast(row.b)), depth + 1),
+        .ternary => eagerCostly(self, @fromBackingInt(@intCast(row.a)), depth + 1) or
+            eagerCostly(self, @fromBackingInt(@intCast(row.b)), depth + 1) or
+            eagerCostly(self, @fromBackingInt(@intCast(row.c)), depth + 1),
         // §3.2.2 a load is one bounds-checked memory read; its index is the
         // only inline operand.
-        .load => eagerCostly(self, @enumFromInt(row.b), depth + 1),
+        .load => eagerCostly(self, @fromBackingInt(@intCast(row.b)), depth + 1),
         .phi, .branch, .jump, .call, .anew, .store => false,
     };
 }
@@ -62,14 +62,14 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (proof.domainOf(row.op) != .all) return false;
     return switch (Mir.opClass(row.op)) {
         .phi => true, // function-scope var, assigned on edges before here
-        .unary => eagerSafe(self, @enumFromInt(row.a), depth + 1),
-        .binary => eagerSafe(self, @enumFromInt(row.a), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.b), depth + 1),
-        .ternary => eagerSafe(self, @enumFromInt(row.a), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.b), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.c), depth + 1),
+        .unary => eagerSafe(self, @fromBackingInt(@intCast(row.a)), depth + 1),
+        .binary => eagerSafe(self, @fromBackingInt(@intCast(row.a)), depth + 1) and
+            eagerSafe(self, @fromBackingInt(@intCast(row.b)), depth + 1),
+        .ternary => eagerSafe(self, @fromBackingInt(@intCast(row.a)), depth + 1) and
+            eagerSafe(self, @fromBackingInt(@intCast(row.b)), depth + 1) and
+            eagerSafe(self, @fromBackingInt(@intCast(row.c)), depth + 1),
         // §3.2.2 total: an index outside the array reads zero.
-        .load => eagerSafe(self, @enumFromInt(row.b), depth + 1),
+        .load => eagerSafe(self, @fromBackingInt(@intCast(row.b)), depth + 1),
         .branch, .jump, .call, .anew, .store => false,
     };
 }
@@ -94,7 +94,7 @@ pub fn pinLanes(self: *Gen, v: Mir.Value) void {
 /// rendered: a setup root is a `Model` field, which every point shares.
 pub fn perPoint(self: *const Gen, v: Mir.Value) bool {
     const r = self.an.rv(v);
-    if (@intFromEnum(r) < self.an.nv and self.plan.isRoot(r)) return false;
+    if (@backingInt(r) < self.an.nv and self.plan.isRoot(r)) return false;
     return self.an.pointDep(r);
 }
 

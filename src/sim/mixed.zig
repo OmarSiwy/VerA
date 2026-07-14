@@ -790,7 +790,7 @@ test "§5.10.3.4 invalid absdelta controls assigned at runtime report E0517" {
         const arena = arena_state.allocator();
         var bag = diag.Bag.init(arena);
         var out = std.Io.Writer.Allocating.init(arena);
-        const source = try std.fmt.allocPrint(arena,
+        const source = try arena.print(
             \\discipline electrical potential Voltage; flow Current; enddiscipline
             \\module m(p);
             \\  inout p; electrical p;
@@ -902,7 +902,7 @@ test "§5.10.3.3 runtime-invalid timer controls report E0517" {
         const arena = arena_state.allocator();
         var bag = diag.Bag.init(arena);
         var out = std.Io.Writer.Allocating.init(arena);
-        const source = try std.fmt.allocPrint(arena,
+        const source = try arena.print(
             \\discipline electrical potential Voltage; flow Current; enddiscipline
             \\module m(p);
             \\  inout p; electrical p; event ev; integer hits;

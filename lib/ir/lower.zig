@@ -1082,7 +1082,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     lower_context.markDiscreteExprs(self.file, discrete);
     for (tags, discrete, 0..) |tag, in_discrete, i| {
         if (tag != .logic_literal or in_discrete) continue;
-        const e: Ast.ExprId = @enumFromInt(i);
+        const e: Ast.ExprId = @fromBackingInt(@intCast(i));
         const literal = self.file.exprs.logicValue(e);
         if (literal.asExactInt() != null) continue; // `lower_expr` lowers it as an integer
         const span = self.tokenSpan(self.file.exprs.mainTok(e));
@@ -1191,7 +1191,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const name = self.file.str(p.name);
             const disc = self.strOrEmpty(p.discipline);
             for (0..r.size()) |k| {
-                const idx = try lower_node.internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
+                const idx = try lower_node.internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
                 self.out.nodes.items(.dir)[idx] = p.direction;
             }
             try self.out.vectors.put(self.arena, name, r);
@@ -1236,7 +1236,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                 else
                     try lower_param.flattenPattern(self, n.init, &.{lower_param.Bounds{ .lo = 0, .hi = r.size() - 1 }});
                 for (0..r.size()) |k| {
-                    const idx = try lower_node.internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
+                    const idx = try lower_node.internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
                     if (k < seeds.len and seeds[k] != .none)
                         try lower_node.recordNodeset(self, idx, seeds[k], n.main_tok, name);
                 }
@@ -1314,7 +1314,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         }
         for (pc.elems, 0..) |el, k| {
             const idx = try lower_node.internNode(self, el, "");
-            try self.node_voltages.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
+            try self.node_voltages.put(self.arena, try self.arena.print("{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
         }
         try self.out.vectors.put(self.arena, pc.name, r);
     }
@@ -1442,7 +1442,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             // `lowerBranchAccess`).
             const p = try lower_node.nodeOf(self, b.hi);
             for (0..(if (arr) |r| r.size() else 1)) |k| {
-                const key = if (arr) |r| try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, r.at(@intCast(k)) }) else base;
+                const key = if (arr) |r| try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }) else base;
                 try self.port_branches.put(self.arena, key, p);
             }
         } else if (arr) |r| {
@@ -1454,7 +1454,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const lo = if (b.lo == .none) ground else try lower_node.nodeOf(self, b.lo);
             try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo); // §3.12 → §3.11
             for (0..r.size()) |k|
-                try self.branches.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, r.at(@intCast(k)) }), .{
+                try self.branches.put(self.arena, try self.arena.print("{s}[{d}]", .{ base, r.at(@intCast(k)) }), .{
                     .hi = hi,
                     .lo = lo,
                     .id = lower_node.newBranchId(self),

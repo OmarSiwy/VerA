@@ -114,7 +114,7 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
 /// slot, `S.con(literal)`, `model.<name>`, `x[@intFromEnum(U.<node>)]`, or the
 /// instruction rendered inline. Never a `v{MIR index}` name.
 pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     // `setup` wrote the field when the card, instance or temperature changed.
     if (i < self.an.nv and self.plan.isRoot(v)) {
         const f = try gen_setup.rootRef(self, v, false);
@@ -154,7 +154,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
 /// rather than an expression. The stop condition `eagerSafe`, `maskCmp` and
 /// `foldHidesSlot` share.
 pub fn materialized(self: *const Gen, v: Mir.Value) bool {
-    const i = @intFromEnum(v);
+    const i = @backingInt(v);
     return i < self.an.nv and
         (self.plan.isRoot(v) or self.plan.cached(v) or self.plan.slot[i] != none_u32);
 }
@@ -185,13 +185,13 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // each S op it replaces would carry zero lanes `.strict` cannot fold.
     // `f64Const` succeeds only on literals, parameters and arithmetic.
     const res = self.mir.instResult(inst);
-    if (res != .undef and self.an.vty[@intFromEnum(res)] == .real and self.an.dFree(res)) {
+    if (res != .undef and self.an.vty[@backingInt(res)] == .real and self.an.dFree(res)) {
         if (try gen_call.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
     }
 
-    const a: Mir.Value = @enumFromInt(row.a);
-    const b2: Mir.Value = @enumFromInt(row.b);
-    const c: Mir.Value = @enumFromInt(row.c);
+    const a: Mir.Value = @fromBackingInt(@intCast(row.a));
+    const b2: Mir.Value = @fromBackingInt(@intCast(row.b));
+    const c: Mir.Value = @fromBackingInt(@intCast(row.c));
 
     // §4.2.12 the conditional stays lazy by default: the prover treats the
     // condition as a guard, so `x > 0 ? ln(x) : 0` is accepted, and running
@@ -202,7 +202,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // `sel`: a dead arm's NaN/inf is discarded, the branch is gone, and a
     // lane-parallel S gets a per-lane pick.
     if (op == .select) {
-        const want = self.an.vty[@intFromEnum(self.mir.instResult(inst))];
+        const want = self.an.vty[@backingInt(self.mir.instResult(inst))];
         if (want == .real and self.float.strict and
             float_lanes.eagerSafe(self, b2, 0) and float_lanes.eagerSafe(self, c, 0) and
             !float_lanes.eagerCostly(self, b2, 0) and !float_lanes.eagerCostly(self, c, 0))
@@ -262,7 +262,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
         try self.b(")", .{});
         return;
     }
-    return renderOp(self, op, a, b2, self.an.vty[@intFromEnum(self.mir.instResult(inst))]);
+    return renderOp(self, op, a, b2, self.an.vty[@backingInt(self.mir.instResult(inst))]);
 }
 
 /// Writes a lazy real `if`'s `then else otherwise)` after its condition. Both
@@ -313,7 +313,7 @@ pub fn arrElemTy(self: *Gen, id: u32) Error![]const u8 {
 fn arrRef(self: *Gen, v0: Mir.Value) Error!bool {
     const v = self.an.rv(v0);
     if (self.plan.cached(v)) {
-        try self.b("&c.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
+        try self.b("&c.f{d}", .{self.core.lo_idx[@backingInt(v)]});
         return true;
     }
     const id = self.an.arrOf(v).?;
@@ -405,7 +405,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             const id = self.an.arrOf(d.arr).?;
             const m = self.lowered.mem_arrays.items[id];
             const r = self.an.rv(self.mir.instResult(inst));
-            if (self.emitting_common and self.core.held_only.len != 0 and self.core.held_only[@intFromEnum(r)]) {
+            if (self.emitting_common and self.core.held_only.len != 0 and self.core.held_only[@backingInt(r)]) {
                 self.uses_held = true;
                 try self.b("if (held) ", .{});
             }
@@ -744,9 +744,9 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
     if (def != .inst_result) return false;
     const row = self.mir.instRow(def.inst_result);
     return switch (Mir.opClass(row.op)) {
-        .unary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1),
-        .binary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1) or
-            foldHidesSlot(self, @enumFromInt(row.b), depth + 1),
+        .unary => foldHidesSlot(self, @fromBackingInt(@intCast(row.a)), depth + 1),
+        .binary => foldHidesSlot(self, @fromBackingInt(@intCast(row.a)), depth + 1) or
+            foldHidesSlot(self, @fromBackingInt(@intCast(row.b)), depth + 1),
         .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => true,
     };
 }
@@ -963,11 +963,11 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     var m: u64 = 0;
     for (args[7..head]) |v| m |= family.mask(self, v);
     const val = "zV"; // a family has no `S.val`
-    const pt = try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{m});
+    const pt = try self.arena.print("zL(S, 0x{x})", .{m});
     if (site != 0) {
         self.uses_inst = true;
         self.float.pinned = true;
-        try self.b("tbl_{d}: {{ _ = {s}(", .{ @intFromEnum(inst), val });
+        try self.b("tbl_{d}: {{ _ = {s}(", .{ @backingInt(inst), val });
         try renderVal(self, args[6], .real);
         try self.b("); if (!inst.table_ready[{d}]) {{ inst.table_{d} = [_]f64{{", .{ site - 1, site - 1 });
     } else {
@@ -980,7 +980,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
         try self.b(")", .{});
     }
     if (site != 0) {
-        try self.b("}}; inst.table_ready[{d}] = true; }} break :tbl_{d} ", .{ site - 1, @intFromEnum(inst) });
+        try self.b("}}; inst.table_ready[{d}] = true; }} break :tbl_{d} ", .{ site - 1, @backingInt(inst) });
         try self.b("zLu(S, 0x{x}, ", .{m});
         try self.b("zTable({s}, {d}, {d}, {d}, {d}, \"{s}\", inst.table_{d}, [_]{s}{{", .{ pt, np, ncol, nd, dep, ext, site - 1, pt });
     } else try self.b("}}, [_]{s}{{", .{pt});

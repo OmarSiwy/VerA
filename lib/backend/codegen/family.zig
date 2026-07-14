@@ -25,7 +25,7 @@ pub fn openTo(self: *Gen, m: u64) Error!void {
 
 /// Returns `zOf(S, 0x<m>)` as text for a `{s}` slot, allocated in the arena.
 pub fn ofText(self: *Gen, m: u64) Error![]const u8 {
-    return std.fmt.allocPrint(self.arena, "zOf(S, 0x{x})", .{m});
+    return self.arena.print("zOf(S, 0x{x})", .{m});
 }
 
 /// Records one real the shared core declares at mask `m`, for `lane_masks`.
@@ -73,7 +73,7 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     @memset(host, false);
     var steered = false;
     for (0..self.mir.insts.len) |i| {
-        const inst: Mir.Inst = @enumFromInt(i);
+        const inst: Mir.Inst = @fromBackingInt(@intCast(i));
         if (self.mir.instOp(inst) == .branch and self.an.xDep(self.mir.instData(inst).branch.cond)) steered = true;
     }
     // The host-state cone, then the affine set: both monotone, so each
@@ -82,7 +82,7 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     while (changed) {
         changed = false;
         for (0..nv) |v| {
-            if (host[v] or !hostStep(self, @enumFromInt(v), host)) continue;
+            if (host[v] or !hostStep(self, @fromBackingInt(@intCast(v)), host)) continue;
             host[v] = true;
             changed = true;
         }
@@ -93,7 +93,7 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     while (changed) {
         changed = false;
         for (0..nv) |v| {
-            if (!aff[v] or affineStep(self, @enumFromInt(v), aff, host, steered)) continue;
+            if (!aff[v] or affineStep(self, @fromBackingInt(@intCast(v)), aff, host, steered)) continue;
             aff[v] = false;
             changed = true;
         }
@@ -114,10 +114,10 @@ const Lattice = struct {
     aff: []const bool,
     host: []const bool,
     fn affine(k: Lattice, v: Mir.Value) bool {
-        return k.aff[@intFromEnum(k.g.an.rv(v))];
+        return k.aff[@backingInt(k.g.an.rv(v))];
     }
     fn card(k: Lattice, v: Mir.Value) bool {
-        return !k.g.an.xDep(v) and !k.host[@intFromEnum(k.g.an.rv(v))];
+        return !k.g.an.xDep(v) and !k.host[@backingInt(k.g.an.rv(v))];
     }
 };
 
@@ -126,7 +126,7 @@ const Lattice = struct {
 fn hostStep(self: *const Gen, v: Mir.Value, host: []const bool) bool {
     const in = struct {
         fn f(g: *const Gen, h: []const bool, o: Mir.Value) bool {
-            return h[@intFromEnum(g.an.rv(o))];
+            return h[@backingInt(g.an.rv(o))];
         }
     }.f;
     const def = self.mir.valueDef(self.an.rv(v));

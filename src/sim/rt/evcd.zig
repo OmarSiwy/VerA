@@ -125,7 +125,7 @@ pub fn close(s: *State, at: u64) Error!void {
     try tick(s, at);
     for (s.port_live, s.port_files) |*f, file| if (f.started) {
         var buf: [64]u8 = undefined;
-        try put(s, f, file, std.fmt.bufPrint(&buf, "$vcdclose #{d} $end\n", .{at}) catch unreachable);
+        try put(s, f, file, std.mem.print(&buf, "$vcdclose #{d} $end\n", .{at}) catch unreachable);
     };
 }
 
@@ -206,14 +206,14 @@ fn state(s: *State, p: Port) Error![]u8 {
         chars[p.width + i] = '0' + st.s0;
         chars[2 * p.width + i] = '0' + st.s1;
     }
-    return std.fmt.allocPrint(s.gpa, "p{s} {s} {s}", .{ chars[0..p.width], chars[p.width .. 2 * p.width], chars[2 * p.width ..] });
+    return s.gpa.print("p{s} {s} {s}", .{ chars[0..p.width], chars[p.width .. 2 * p.width], chars[2 * p.width ..] });
 }
 
 fn shown(s: *const State, p: Port, at: u32) @import("frontend").Integer.Bit {
     const o = p.off + at / 64;
     const v: u2 = @intCast(s.v[o] >> @intCast(at % 64) & 1);
     const x: u2 = if (root.logic.two) 0 else @intCast(s.x[o] >> @intCast(at % 64) & 1);
-    return @enumFromInt(v | x << 1);
+    return @fromBackingInt(@intCast(v | x << 1));
 }
 
 /// `$dumpportsoff`'s X: Table 18-7's unknown of the port's direction.

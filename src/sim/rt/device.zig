@@ -321,7 +321,7 @@ pub fn Device(comptime spec: Spec) type {
         /// The A2D store of `bit` into pin `p`, with every wake it causes.
         fn drive(s: *root.State, comptime p: Pin, bit: logic.Bit) !void {
             const one = @as(u64, 1) << @intCast(p.bit % 64);
-            const b: u2 = @intFromEnum(bit);
+            const b: u2 = @backingInt(bit);
             // (v, x) planes: 0 = 00, 1 = 10, z = 01, x = 11.
             const v: u64 = if (b == 1 or b == 3) one else 0;
             const xb: u64 = if (b >= 2) one else 0;

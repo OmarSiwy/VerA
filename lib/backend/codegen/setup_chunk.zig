@@ -258,11 +258,11 @@ fn pieces(st: *State, body: Lines, guards: Lines) Error!bool {
             if (arms != null and try selfContained(st.a, arms.?.then) and try selfContained(st.a, arms.?.@"else")) {
                 const arms_ = arms.?;
                 st.guards += 1;
-                const g = try std.fmt.allocPrint(st.a, "zg{d}", .{st.guards});
-                const decl = try std.fmt.allocPrint(st.a, "const {s}: bool = {s};", .{ g, arms_.cond });
+                const g = try st.a.print("zg{d}", .{st.guards});
+                const decl = try st.a.print("const {s}: bool = {s};", .{ g, arms_.cond });
                 try st.pieces.append(st.a, .{ .guards = guards, .lines = try st.a.dupe([]const u8, &.{decl}) });
                 if (!try pieces(st, arms_.then, try cat(st.a, guards, g))) return false;
-                if (arms_.@"else".len != 0 and !try pieces(st, arms_.@"else", try cat(st.a, guards, try std.fmt.allocPrint(st.a, "!{s}", .{g})))) return false;
+                if (arms_.@"else".len != 0 and !try pieces(st, arms_.@"else", try cat(st.a, guards, try st.a.print("!{s}", .{g})))) return false;
                 continue;
             }
         }
@@ -304,7 +304,7 @@ fn openBlock(a: Allocator, s: Lines) Error!?Lines {
     const label = first[0 .. first.len - 3];
     for (label) |c| if (!isIdent(c)) return null;
     const inner = try dedentAll(a, s[1 .. s.len - 1]);
-    const br = try std.fmt.allocPrint(a, "break :{s};", .{label});
+    const br = try a.print("break :{s};", .{label});
     const stripped = try stripTail(a, inner, br) orelse return null;
     for (stripped) |l| if (std.mem.indexOf(u8, l, br) != null) return null;
     return stripped;
@@ -328,7 +328,7 @@ fn stripTail(a: Allocator, body: Lines, br: []const u8) Error!?Lines {
     const e = try stripTail(a, arms.@"else", br) orelse return null;
     var out: std.ArrayList([]const u8) = .empty;
     try out.appendSlice(a, body[0..last]);
-    try out.append(a, try std.fmt.allocPrint(a, "if ({s}) {{", .{arms.cond}));
+    try out.append(a, try a.print("if ({s}) {{", .{arms.cond}));
     for (t) |l| try out.append(a, try indent(a, l));
     if (arms.@"else".len != 0 or arms.has_else) {
         try out.append(a, "} else {");
@@ -409,7 +409,7 @@ fn dedentAll(a: Allocator, ls: Lines) Error!Lines {
 }
 
 fn indent(a: Allocator, l: []const u8) Error![]const u8 {
-    return if (l.len == 0) l else std.fmt.allocPrint(a, "    {s}", .{l});
+    return if (l.len == 0) l else a.print("    {s}", .{l});
 }
 
 fn isIdent(c: u8) bool {

@@ -97,7 +97,7 @@ test "§2.6.2 scaled literals are refused in every digital delay production befo
     for ([_]bool{ false, true }) |digital| {
         for (invalid) |src| try Case.rejected(arena, src, digital);
         for ("TGMKkmunpfa") |suffix| {
-            const src = try std.fmt.allocPrint(arena, "module m; initial #1.25{c}; endmodule", .{suffix});
+            const src = try arena.print("module m; initial #1.25{c}; endmodule", .{suffix});
             try Case.rejected(arena, src, digital);
         }
         const legal = try Case.parse(arena,
@@ -146,8 +146,7 @@ test "escaped identifier expressions share declaration normalization" {
         "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
     };
     for (names) |name| {
-        const src = try std.fmt.allocPrint(
-            arena,
+        const src = try arena.print(
             "module m; integer \\{s} ; initial begin \\{s} = 9; $display(\"%0d\", \\{s} ); end endmodule",
             .{ name, name, name },
         );
@@ -195,7 +194,7 @@ test "escaped hierarchy head shares instance normalization" {
     var references: usize = 0;
     for (res.file.exprs.nodes.items(.tag), 0..) |tag, i| {
         if (tag == .hier_ident) {
-            const parts = res.file.exprs.nameParts(@enumFromInt(i));
+            const parts = res.file.exprs.nameParts(@fromBackingInt(@intCast(i)));
             try std.testing.expectEqual(@as(usize, 2), parts.len);
             try std.testing.expectEqual(declared, parts[0]);
             references += 1;
@@ -592,7 +591,7 @@ test "UDP single transition descriptor per sequential row" {
     // One pair is one edge, not two. All shorthand edge symbols are
     // independently legal with a level input; level-only rows remain legal.
     for ([_][]const u8{ "(01) 0", "0 (10)", "(0?) 1", "? (??)", "r 0", "R 0", "f 0", "F 0", "p 0", "P 0", "n 0", "N 0", "* 0", "0 1", "x 0" }) |inputs| {
-        const src = try std.fmt.allocPrint(arena, "primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
+        const src = try arena.print("primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
         const res = try parseForTest(arena, src);
         try std.testing.expectEqual(@as(usize, 0), res.count());
         try std.testing.expectEqual(@as(usize, 1), res.file.udps[0].rows.len);
@@ -600,7 +599,7 @@ test "UDP single transition descriptor per sequential row" {
     // Pair/pair, pair/symbol in either order and symbol/symbol all exceed
     // the same source restriction, even when their transitions differ.
     for ([_][]const u8{ "(01) (10)", "(01) r", "f (10)", "r f", "P N", "* (??)", "(0?) *", "R F" }) |inputs| {
-        const src = try std.fmt.allocPrint(arena, "primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
+        const src = try arena.print("primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
         const res = try parseForTest(arena, src);
         try std.testing.expect(res.count() > 0);
         try std.testing.expectEqual(diag.Code.E0234, res.code(0));

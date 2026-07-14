@@ -78,7 +78,7 @@ fn memDigit(character: u8, radix: Radix) !MemDigit {
         'a'...'f' => c - 'a' + 10,
         else => return error.BadDigit,
     };
-    if (digit >= @intFromEnum(radix)) return error.BadDigit;
+    if (digit >= @backingInt(radix)) return error.BadDigit;
     return .{ .digit = digit };
 }
 
@@ -112,7 +112,7 @@ fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !I
         while (k < per and bit < width) : ({
             k += 1;
             bit += 1;
-        }) setBit(value, bit, decoded.fill orelse @enumFromInt(@as(u2, @intCast((decoded.digit >> @intCast(k)) & 1))));
+        }) setBit(value, bit, decoded.fill orelse @fromBackingInt(@intCast(@as(u2, @intCast((decoded.digit >> @intCast(k)) & 1)))));
     }
     return value;
 }
@@ -764,8 +764,8 @@ fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []cons
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "words.hex", .data = data });
-    const file_name = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/test.v", .{tmp.sub_path});
-    const source = try std.fmt.allocPrint(a, "module m; reg [7:0] mem[3:0]; initial begin " ++
+    const file_name = try a.print(".zig-cache/tmp/{s}/test.v", .{tmp.sub_path});
+    const source = try a.print("module m; reg [7:0] mem[3:0]; initial begin " ++
         "mem[0]=8'haa; mem[1]=8'hbb; mem[2]=8'hcc; mem[3]=8'hdd; " ++
         "{s}(\"words.hex\",mem{s}); " ++
         "$display(\"%h %h %h %h\",mem[0],mem[1],mem[2],mem[3]); end endmodule", .{ task, bounds });

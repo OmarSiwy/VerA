@@ -627,7 +627,7 @@ pub fn fireOverride(reason: c_int, o: *root.Obj) void {
 // ---------------------------------------------------------------------------
 
 /// The pcs a live cbStmt fires at, which the engine checks (`StmtHook`).
-var hooked: std.DynamicBitSetUnmanaged = .{};
+var hooked: std.bit_set.Dynamic = .{};
 
 /// `obj`'s sites: a statement's own, or every statement's of a module
 /// instance. Null, with the error recorded, for anything else.

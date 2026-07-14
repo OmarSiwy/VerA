@@ -38,7 +38,7 @@ const diag = @import("diag");
 fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
     if (self.mir.instOp(inst) == .select) return self.mir.instData(inst);
     if (self.mir.instOp(inst) != .phi or self.mir.instData(inst).phi.count != 2) return null;
-    const join = self.an.def_block[@intFromEnum(self.mir.instResult(inst))];
+    const join = self.an.def_block[@backingInt(self.mir.instResult(inst))];
     if (join == none_u32) return null;
     const header = self.an.idom[join];
     if (header == none_u32 or header == join) return null;
@@ -52,10 +52,10 @@ fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
         var found = false;
         for (0..2) |k| {
             const pair = self.mir.phiPair(inst, @intCast(k));
-            const matches = if (@intFromEnum(arm) == join)
-                @intFromEnum(pair.block) == header
+            const matches = if (@backingInt(arm) == join)
+                @backingInt(pair.block) == header
             else
-                self.an.dominates(@intFromEnum(arm), @intFromEnum(pair.block));
+                self.an.dominates(@backingInt(arm), @backingInt(pair.block));
             if (matches) {
                 if (found) return null;
                 arms[i] = pair.value;
@@ -79,7 +79,7 @@ fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[
     const condition = try i64Const(self, d.cond, depth + 1) orelse return null;
     const yes = (if (ty == .int) try i64Const(self, d.then_val, depth + 1) else try f64Const(self, d.then_val, depth + 1, false)) orelse return null;
     const no = (if (ty == .int) try i64Const(self, d.else_val, depth + 1) else try f64Const(self, d.else_val, depth + 1, false)) orelse return null;
-    return try std.fmt.allocPrint(self.arena, "@as({s}, if (({s}) != 0) ({s}) else ({s}))", .{ if (ty == .int) "i64" else "f64", condition, yes, no });
+    return try self.arena.print("@as({s}, if (({s}) != 0) ({s}) else ({s}))", .{ if (ty == .int) "i64" else "f64", condition, yes, no });
 }
 
 /// Returns a host-side `[]const u8` for a string operand: the literal, or the
@@ -87,11 +87,11 @@ fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[
 /// how `i64Const` tells a string comparison from arithmetic.
 fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
     switch (self.mir.valueDef(self.an.rv(v0))) {
-        .str_const => |s| return try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
+        .str_const => |s| return try self.arena.print("\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str) return null;
             self.uses_model = true;
-            return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]});
+            return try self.arena.print("model.{s}", .{self.names.p_names[p]});
         },
         .undef, .float_const, .int_const, .block_param, .inst_result => return null,
     }
@@ -104,24 +104,24 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
     if (depth > 32) return null;
     const v = self.an.rv(v0);
     switch (self.mir.valueDef(v)) {
-        .int_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{n}),
-        .float_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{std.math.lossyCast(i64, @round(n))}),
+        .int_const => |n| return try self.arena.print("@as(i64, {d})", .{n}),
+        .float_const => |n| return try self.arena.print("@as(i64, {d})", .{std.math.lossyCast(i64, @round(n))}),
         .param_ref => |p| {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) == .str) return null;
             self.uses_model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
-                .int => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]}),
-                .real => try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round(model.{s}))", .{self.names.p_names[p]}),
+                .int => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
+                .real => try self.arena.print("std.math.lossyCast(i64, @round(model.{s}))", .{self.names.p_names[p]}),
                 .str => unreachable,
             };
         },
         .inst_result => |inst| {
             const row = self.mir.instRow(inst);
-            const av: Mir.Value = @enumFromInt(row.a);
-            const bv: Mir.Value = @enumFromInt(row.b);
+            const av: Mir.Value = @fromBackingInt(@intCast(row.a));
+            const bv: Mir.Value = @fromBackingInt(@intCast(row.b));
             if (self.an.tyOf(v) == .real or row.op == .fi_cast) {
                 const f = try f64Const(self, if (row.op == .fi_cast) av else v, depth + 1, false) orelse return null;
-                return try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round({s}))", .{f});
+                return try self.arena.print("std.math.lossyCast(i64, @round({s}))", .{f});
             }
             if (row.op == .select or row.op == .phi) return hostConditionalExpr(self, inst, depth, .int);
             // §9.14 `$clog2` is a constant system function, so a §6.3.4
@@ -131,7 +131,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 if (d.callee != .@"$clog2") return null;
                 const a = try i64Const(self, d.args[0], depth + 1) orelse return null;
                 const width = try i64Const(self, d.args[1], depth + 1) orelse return null;
-                return try std.fmt.allocPrint(self.arena, "zClog2({s}, {s})", .{ a, width });
+                return try self.arena.print("zClog2({s}, {s})", .{ a, width });
             }
             if (row.op == .feq or row.op == .fne or row.op == .flt or row.op == .fle or row.op == .fgt or row.op == .fge) {
                 const a = try f64Const(self, av, depth + 1, false) orelse return null;
@@ -145,7 +145,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                     .fge => ">=",
                     else => unreachable, // else: the `if` above admits only these six real comparisons
                 };
-                return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
+                return try self.arena.print("@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
             }
             if (Mir.opClass(row.op) != .unary and Mir.opClass(row.op) != .binary) return null;
             // Table 3-3's relational row over two strings (equality, then
@@ -162,15 +162,15 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                     .ige => "!= .lt",
                     else => return null, // else: Table 3-3 relates two strings and nothing else; no other op of two has an integer value
                 };
-                return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(std.mem.order(u8, {s}, {s}) {s}))", .{ sa, sb, so });
+                return try self.arena.print("@as(i64, @intFromBool(std.mem.order(u8, {s}, {s}) {s}))", .{ sa, sb, so });
             };
             const a = try i64Const(self, av, depth + 1) orelse return null;
             if (Mir.opClass(row.op) == .unary) return switch (row.op) {
                 .opt_barrier => a,
-                .ineg => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(-%({s}))))", .{a}),
-                .iabs => try std.fmt.allocPrint(self.arena, "zIabs({s})", .{a}),
-                .bitnot => try std.fmt.allocPrint(self.arena, "~({s})", .{a}),
-                .lognot => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) == 0))", .{a}),
+                .ineg => try self.arena.print("@as(i64, @as(i32, @truncate(-%({s}))))", .{a}),
+                .iabs => try self.arena.print("zIabs({s})", .{a}),
+                .bitnot => try self.arena.print("~({s})", .{a}),
+                .lognot => try self.arena.print("@as(i64, @intFromBool(({s}) == 0))", .{a}),
                 else => null, // else: every real unary (and `fi_cast`) returned above through `f64Const`; what is left has no integer spelling
             };
             const rhs = try i64Const(self, bv, depth + 1) orelse return null;
@@ -190,20 +190,20 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 else => "", // else: read only by the prongs below that print an infix `op`
             };
             return switch (row.op) {
-                .iadd, .isub, .imul => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(({s}) {s} ({s}))))", .{ a, op, rhs }),
-                .bitand, .bitor, .bitxor => try std.fmt.allocPrint(self.arena, "(({s}) {s} ({s}))", .{ a, op, rhs }),
-                .bitxnor => try std.fmt.allocPrint(self.arena, "~(({s}) ^ ({s}))", .{ a, rhs }),
-                .ieq, .ine, .ilt, .ile, .igt, .ige => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs }),
+                .iadd, .isub, .imul => try self.arena.print("@as(i64, @as(i32, @truncate(({s}) {s} ({s}))))", .{ a, op, rhs }),
+                .bitand, .bitor, .bitxor => try self.arena.print("(({s}) {s} ({s}))", .{ a, op, rhs }),
+                .bitxnor => try self.arena.print("~(({s}) ^ ({s}))", .{ a, rhs }),
+                .ieq, .ine, .ilt, .ile, .igt, .ige => try self.arena.print("@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs }),
                 // i65 holds minInt(i64)/-1 before the wrap. A zero divisor
                 // yields 0, as `renderOp`'s `.idiv` does (W0653).
-                .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @as(i64, 0) else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
-                .imod => try std.fmt.allocPrint(self.arena, "{s}({s}, {s})", .{ gen_render.imodFn(self), a, rhs }),
-                .logand, .logor => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
-                .shl => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
-                .shr => try std.fmt.allocPrint(self.arena, "zShr({s}, {s})", .{ a, rhs }),
-                .imin, .imax => try std.fmt.allocPrint(self.arena, "@as(i64, {s}({s}, {s}))", .{ if (row.op == .imin) "@min" else "@max", a, rhs }),
+                .idiv => try self.arena.print("(if (({s}) == 0) @as(i64, 0) else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
+                .imod => try self.arena.print("{s}({s}, {s})", .{ gen_render.imodFn(self), a, rhs }),
+                .logand, .logor => try self.arena.print("@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
+                .shl => try self.arena.print("@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
+                .shr => try self.arena.print("zShr({s}, {s})", .{ a, rhs }),
+                .imin, .imax => try self.arena.print("@as(i64, {s}({s}, {s}))", .{ if (row.op == .imin) "@min" else "@max", a, rhs }),
                 // `Lower.ipow32` as device text, as in `renderOp`.
-                .ipow => try std.fmt.allocPrint(self.arena, "{s}({s}, {s})", .{ gen_render.ipow_fn, a, rhs }),
+                .ipow => try self.arena.print("{s}({s}, {s})", .{ gen_render.ipow_fn, a, rhs }),
                 // Real-valued binaries: `tyOf(v) == .real` and the float
                 // comparisons both returned above.
                 .fadd, .fsub, .fmul, .fdiv, .fmod, .flt, .fgt, .fle, .fge, .feq, .fne, .pow, .hypot, .fmin, .fmax, .atan2 => null,
@@ -275,7 +275,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // declaration would be unread. `depth > 0` because at depth 0 the
         // caller is this slot's own declaration.
         if (depth > 0 and self.an.dFree(v)) {
-            const i = @intFromEnum(v);
+            const i = @backingInt(v);
             // A setup field is already a plain f64.
             if (i < self.an.nv and self.plan.isRoot(v)) return try gen_setup.rootRef(self, v, true);
             // One that differs per point of a batch: `.val()` would pick
@@ -283,10 +283,10 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             // arithmetic on a lane-free value).
             if (float_lanes.perPoint(self, v)) return null;
             if (i < self.an.nv and self.plan.cached(v))
-                return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
+                return try self.arena.print("c.f{d}.val()", .{self.core.lo_idx[i]});
             if (i < self.an.nv and self.plan.slot[i] != none_u32) {
                 gen_unit.probeUse(self, self.plan.slot[i]);
-                return try std.fmt.allocPrint(self.arena, "{s}.val()", .{try gen_unit.slotRefStr(self, i)});
+                return try self.arena.print("{s}.val()", .{try gen_unit.slotRefStr(self, i)});
             }
         }
         // Fold a literal chain to one number unless it would swallow a slot.
@@ -298,7 +298,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // subtree at its integer width before converting its final value.
         if (self.an.tyOf(v) == .int) {
             const integer = try i64Const(self, v, depth + 1) orelse return null;
-            return try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt({s}))", .{integer});
+            return try self.arena.print("@as(f64, @floatFromInt({s}))", .{integer});
         }
         if (self.an.foldConst(v0, false)) |k| return try gen_file.fmtF64(self, k.f);
     }
@@ -306,8 +306,8 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         .param_ref => |p| {
             self.uses_model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
-                .real => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]}),
-                .int => try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.{s}))", .{self.names.p_names[p]}),
+                .real => try self.arena.print("model.{s}", .{self.names.p_names[p]}),
+                .int => try self.arena.print("@as(f64, @floatFromInt(model.{s}))", .{self.names.p_names[p]}),
                 .str => "0.0",
             };
         },
@@ -322,26 +322,26 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 if (d.callee != .@"$simparam") return null;
                 const f = Lower.simparamHostField(strArg(self, d.args, 0) orelse "") orelse return null;
                 self.uses_model = true;
-                return try std.fmt.allocPrint(self.arena, "model.{s}", .{f});
+                return try self.arena.print("model.{s}", .{f});
             }
             switch (Mir.opClass(row.op)) {
                 // Fragments from `opcode_zig`'s `host_f64` column, because
                 // `allocPrint` needs a comptime format.
                 .unary => {
-                    const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
+                    const a = try f64Const(self, @fromBackingInt(@intCast(row.a)), depth + 1, in_unit) orelse return null;
                     const fix = opcode_zig.get(row.op).host_f64 orelse return null;
-                    return try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ fix[0], a, fix[1] });
+                    return try self.arena.print("{s}{s}{s}", .{ fix[0], a, fix[1] });
                 },
                 .binary => {
                     if (row.op == .fmod) {
-                        const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
-                        const b2 = try f64Const(self, @enumFromInt(row.b), depth + 1, in_unit) orelse return null;
-                        return try std.fmt.allocPrint(self.arena, "(if (({s}) == 0.0) @panic(\"VerA: real parameter remainder divisor is zero\") else @rem({s}, {s}))", .{ b2, a, b2 });
+                        const a = try f64Const(self, @fromBackingInt(@intCast(row.a)), depth + 1, in_unit) orelse return null;
+                        const b2 = try f64Const(self, @fromBackingInt(@intCast(row.b)), depth + 1, in_unit) orelse return null;
+                        return try self.arena.print("(if (({s}) == 0.0) @panic(\"VerA: real parameter remainder divisor is zero\") else @rem({s}, {s}))", .{ b2, a, b2 });
                     }
                     const fix = opcode_zig.get(row.op).host_f64 orelse return null;
-                    const a = try f64Const(self, @enumFromInt(row.a), depth + 1, in_unit) orelse return null;
-                    const b2 = try f64Const(self, @enumFromInt(row.b), depth + 1, in_unit) orelse return null;
-                    return try std.fmt.allocPrint(self.arena, "{s}{s}{s}{s}{s}", .{
+                    const a = try f64Const(self, @fromBackingInt(@intCast(row.a)), depth + 1, in_unit) orelse return null;
+                    const b2 = try f64Const(self, @fromBackingInt(@intCast(row.b)), depth + 1, in_unit) orelse return null;
+                    return try self.arena.print("{s}{s}{s}{s}{s}", .{
                         fix[0], a, fix[1], b2, fix[2],
                     });
                 },
@@ -402,7 +402,7 @@ pub fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
     // The collapse is intended: a control argument (or §4.6.3's stimulus
     // magnitude) configures the operator and is not part of the Jacobian.
     float_lanes.pinLanes(self, self.an.rv(args[i]));
-    return std.fmt.allocPrint(self.arena, "({s}).val()", .{
+    return self.arena.print("({s}).val()", .{
         try gen_render.renderToArena(self, args[i], .real),
     });
 }
@@ -412,7 +412,7 @@ pub fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
 /// its `Instance` field; with `maxdelay`, td is clamped to it.
 pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool) Error![]const u8 {
     if (try absdelayFreezes(self, args))
-        return std.fmt.allocPrint(self.arena, "inst.{s}__td", .{n});
+        return self.arena.print("inst.{s}__td", .{n});
     const td = if (step)
         try ctrlStep(self, args, 1, "0.0")
     else
@@ -421,10 +421,10 @@ pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool
     // §4.5.7 "If td becomes greater than maxdelay, maxdelay will be used as
     // a substitute for td." Table 4-20 makes maxdelay the constant argument,
     // so it renders over Model where td renders over the core.
-    return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{
+    return self.arena.print("@min({s}, {s})", .{
         td,
         if (try absdelayMaxdSampled(self, args))
-            try std.fmt.allocPrint(self.arena, "inst.{s}__maxd", .{n})
+            try self.arena.print("inst.{s}__maxd", .{n})
         else
             try argF64(self, args, 2, "0.0"),
     });
@@ -436,7 +436,7 @@ pub fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool
 fn absdelayTdAc(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     const td = try ctrlEval(self, args, 1, "0.0");
     if (args.len < 3) return td;
-    return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{ td, try ctrlEval(self, args, 2, "0.0") });
+    return self.arena.print("@min({s}, {s})", .{ td, try ctrlEval(self, args, 2, "0.0") });
 }
 
 /// Returns whether a signal-valued `maxdelay` is latched into `Instance` at
@@ -464,9 +464,9 @@ pub fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
 pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     if (try f64Const(self, args[i], 0, false)) |s| return s;
-    const k = self.core.lo_idx[@intFromEnum(self.an.rv(args[i]))];
+    const k = self.core.lo_idx[@backingInt(self.an.rv(args[i]))];
     if (k == none_u32) return f64Expr(self, args[i]);
-    return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
+    return self.arena.print("m.f{d}.v", .{k});
 }
 
 /// Returns §5.10.3.3's period as `updateState` reads it: inline when it
@@ -475,8 +475,8 @@ pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
 pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     if (args.len < 2) return "0.0";
     if (self.an.foldConst(args[1], false) == null) {
-        const lo = self.core.lo_idx[@intFromEnum(self.an.rv(args[1]))];
-        if (lo != none_u32) return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{lo});
+        const lo = self.core.lo_idx[@backingInt(self.an.rv(args[1]))];
+        if (lo != none_u32) return self.arena.print("m.f{d}.v", .{lo});
     }
     return argF64(self, args, 1, "0.0");
 }
@@ -495,16 +495,15 @@ pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const
         // §5.10.3.1 "For any other values of dir, the cross() function does
         // not generate an event". §4.5.10's direction is the same closed
         // set, so `last_crossing` reads it the same way.
-        if (c.f == 1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in });
-        if (c.f == -1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in });
+        if (c.f == 1.0) return self.arena.print("inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in });
+        if (c.f == -1.0) return self.arena.print("inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in });
         if (c.f != 0.0) return "false";
-        return std.fmt.allocPrint(
-            self.arena,
+        return self.arena.print(
             "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
             .{ n, in },
         );
     }
-    return std.fmt.allocPrint(self.arena, "zCrossDir({s}, inst.{s}__prev, {s})", .{
+    return self.arena.print("zCrossDir({s}, inst.{s}__prev, {s})", .{
         try f64Expr(self, arg), n, in,
     });
 }
@@ -880,7 +879,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$warning",
         .@"$info",
         => return if (self.display == .emit)
-            cg_display.emitDisplayTask(self, c, args, @intFromEnum(inst))
+            cg_display.emitDisplayTask(self, c, args, @backingInt(inst))
         else
             voidTask(self),
         // §9.7.1/§9.7.2 same gate: in a printing artifact the run ends at the
@@ -917,9 +916,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$fscanf$real",
         .@"$fscanf$str",
         => return if (self.emitting_display)
-            cg_display.emitFileCall(self, c, args, @intFromEnum(inst))
+            cg_display.emitFileCall(self, c, args, @backingInt(inst))
         else
-            emitFileCallDropped(self, c, args, @intFromEnum(inst)),
+            emitFileCallDropped(self, c, args, @backingInt(inst)),
         // §9.10 environment.
         .@"$temperature" => {
             self.uses_model = true;
@@ -1104,11 +1103,11 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §9.5.3 `$swrite`/`$sformat` as the synthetic `$sformat(format,
         // args...)`: lowering made it the right-hand side of an assignment to
         // the destination. The text goes into this call site's scratch row.
-        .@"$sformat" => return cg_display.emitStringFormat(self, args, @intFromEnum(inst)),
+        .@"$sformat" => return cg_display.emitStringFormat(self, args, @backingInt(inst)),
         // §3.3 Table 3-3 a string built while the device runs, into this call
         // site's own scratch row, keyed like `$sformat`'s.
         .@"$str$cat" => {
-            try self.b("zStrCat(zSBuf({d}), &.{{", .{@intFromEnum(inst)});
+            try self.b("zStrCat(zSBuf({d}), &.{{", .{@backingInt(inst)});
             for (args, 0..) |a, i| {
                 if (i != 0) try self.b(", ", .{});
                 try gen_render.renderVal(self, a, .str);
@@ -1116,7 +1115,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b("}})", .{});
         },
         .@"$str$repeat" => {
-            try self.b("zStrRepeat(zSBuf({d}), ", .{@intFromEnum(inst)});
+            try self.b("zStrRepeat(zSBuf({d}), ", .{@backingInt(inst)});
             try gen_render.renderVal(self, args[0], .int);
             try self.b(", ", .{});
             try gen_render.renderVal(self, args[1], .str);
@@ -1232,7 +1231,7 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
 /// `S.con(0.0)` so emission can continue. The diagnostic is what the user
 /// sees; `fatal` only poisons the unit's generated body.
 pub fn abort(self: *Gen, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
-    const msg = try std.fmt.allocPrint(self.arena, fmt, args);
+    const msg = try self.arena.print(fmt, args);
     if (self.diags) |bag| try bag.add(.codegen, code, self.lowered.tokenSpan(self.call_tok), "{s}", .{msg});
     self.any_fatal = true;
     if (self.fatal == null) self.fatal = msg;
@@ -1301,7 +1300,7 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     // `zsr` holds every argument's lanes, the union of theirs.
     var m: u64 = 0;
     for (args) |a| m |= family.mask(self, a);
-    const to = try std.fmt.allocPrint(self.arena, "zTo(S, 0x{x}, ", .{m});
+    const to = try self.arena.print("zTo(S, 0x{x}, ", .{m});
     const end = ")";
     try self.b("        var zsr = {s}S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp)){s};\n", .{ to, k, end });
     for (args, 0..) |_, j|
@@ -1374,8 +1373,8 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`
     // says; `kS` is its scalar and `in` its input.
     const fm = family.mask(self, self.mir.instResult(inst));
-    const kS = try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{fm});
-    const in = if (needs_in) try std.fmt.allocPrint(self.arena, "zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
+    const kS = try self.arena.print("zL(S, 0x{x})", .{fm});
+    const in = if (needs_in) try self.arena.print("zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
     switch (k) {
         // §4.5.11 the cascade is linear in the current input, so its
         // Jacobian `b0/a0` is exact.
@@ -1385,7 +1384,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // `__sec` always takes `model`, so keep the parameter named.
             self.uses_model = true;
             try opOpen(self, fm);
-            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}__sec(model), zLaplaceH0({1d}, {2d}, {4s}__sec(model)))", .{ kS, p.ns, p.deg, in, n }));
+            try acOpen(self, kS, try self.arena.print("zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}__sec(model), zLaplaceH0({1d}, {2d}, {4s}__sec(model)))", .{ kS, p.ns, p.deg, in, n }));
             try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
                 kS, p.ns, p.deg, in, n, n, n,
             });
@@ -1402,7 +1401,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // As for `.laplace`.
             self.uses_model = true;
             try opOpen(self, fm);
-            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
+            try acOpen(self, kS, try self.arena.print("zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
                 kS, p.ns, p.deg, in, n, p.period orelse "0.0",
             }));
             try self.b(
@@ -1433,7 +1432,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         },
         .absdelay => {
             try opOpen(self, fm);
-            try acOpen(self, kS, try std.fmt.allocPrint(self.arena, "zAcDelay({s}, {s}, {s})", .{ kS, in, try absdelayTdAc(self, args) }));
+            try acOpen(self, kS, try self.arena.print("zAcDelay({s}, {s}, {s})", .{ kS, in, try absdelayTdAc(self, args) }));
             try self.b(
                 "{s}({s}, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, sim.t, sim.dt, {s})",
                 .{
@@ -1477,7 +1476,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // an event after the simulation time has advanced from zero": a
         // transient and a positive `dt`.
         .cross => try self.b("S.con(if (sim.kind == .tran and sim.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
-            try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in0})),
+            try crossTest(self, n, args, try self.arena.print("({s}).val()", .{in0})),
             try enableTest(self, .cross, args),
         }),
         // §5.10.3.3 a change BEFORE the event test replaces its pending
@@ -1542,7 +1541,7 @@ fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u
     // A run-time zero test for a parameter time. Skipped for the bare 0.0
     // fallback, which `zTransFrac` already reads as an instantaneous edge.
     if (std.mem.eql(u8, dflt, "0.0")) return e;
-    return std.fmt.allocPrint(self.arena, "(if (({s}) != 0.0) ({s}) else ({s}))", .{ e, e, dflt });
+    return self.arena.print("(if (({s}) != 0.0) ({s}) else ({s}))", .{ e, e, dflt });
 }
 
 /// Returns the §10.3 `` `default_transition `` in force at the call being

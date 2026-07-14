@@ -1819,7 +1819,7 @@ fn acDynError(comptime D: type) ?[]const u8 {
     const info = @typeInfo(@TypeOf(D.ac_dyn_slots));
     if (info != .array or info.array.child != u32) return name ++ ".ac_dyn_slots must be [k]u32";
     const f = @typeInfo(@TypeOf(D.acDyn));
-    if (f != .@"fn" or f.@"fn".params.len != 7 or f.@"fn".params[0].type != type)
+    if (f != .@"fn" or f.@"fn".param_types.len != 7 or f.@"fn".param_types[0] != type)
         return name ++ ".acDyn: expected fn (comptime F: type, *const Model, InstancePtr, *const [n_u]f64, SimState, F, *[ac_dyn_slots.len]std.math.Complex(F)) void";
     const n = nU(D);
     for (D.ac_dyn_slots, 0..) |s, i| {
@@ -1931,7 +1931,7 @@ pub const Constant = struct {
 
 /// Returns |U|, the device's number of unknowns.
 pub fn nU(comptime D: type) comptime_int {
-    return @typeInfo(D.U).@"enum".fields.len;
+    return @typeInfo(D.U).@"enum".field_names.len;
 }
 
 // ============================================================================
@@ -1968,7 +1968,7 @@ pub fn qStamps(comptime D: type) []const QStamp(D.U) {
     const n = nU(D);
     const id = comptime blk: {
         var t: [n]QStamp(D.U) = undefined;
-        for (&t, 0..) |*e, k| e.* = .{ .site = k, .row = @enumFromInt(k), .sign = 1 };
+        for (&t, 0..) |*e, k| e.* = .{ .site = k, .row = @fromBackingInt(@intCast(k)), .sign = 1 };
         break :blk t;
     };
     return &id;
@@ -1985,7 +1985,7 @@ pub fn qLte(comptime D: type) [nQ(D)]bool {
 pub fn qRowMask(comptime D: type, comptime r: usize) u64 {
     var m: u64 = 0;
     for (qStamps(D)) |e| {
-        if (@intFromEnum(e.row) == r) m |= siteMask(D, e.site);
+        if (@backingInt(e.row) == r) m |= siteMask(D, e.site);
     }
     return m;
 }
@@ -2005,7 +2005,7 @@ pub fn qRows(comptime D: type, comptime S: type, q: Sites(D, S)) QRows(D, S) {
     var out: QRows(D, S) = undefined;
     inline for (0..nU(D)) |r| out[r] = S.con(0.0).to(qRowMask(D, r));
     inline for (comptime qStamps(D)) |e| {
-        const r = @intFromEnum(e.row);
+        const r = @backingInt(e.row);
         const s = q[e.site];
         out[r] = if (e.sign == 1) out[r].add(s) else if (e.sign == -1) out[r].sub(s) else out[r].add(s.scale(e.sign));
     }
@@ -2029,8 +2029,8 @@ fn qSitesError(comptime D: type) ?[]const u8 {
         if (e.sign == 0 or !std.math.isFinite(e.sign)) return name ++ ".q_stamps: a zero or non-finite sign";
         if (k == 0) continue;
         const p = t[k - 1];
-        const pr: usize = @intFromEnum(p.row);
-        const r: usize = @intFromEnum(e.row);
+        const pr: usize = @backingInt(p.row);
+        const r: usize = @backingInt(e.row);
         if (r < pr or (r == pr and e.site <= p.site)) return name ++ ".q_stamps must be sorted by (row, site) with no duplicates";
     }
     return null;
@@ -2171,7 +2171,7 @@ pub fn instLanes(comptime S: type) bool {
 /// extra evaluation (it costs the batched call 2-15% more instructions).
 pub fn LeadState(comptime W: usize, comptime sig: bool) type {
     return struct {
-        const Bits = std.meta.Int(.unsigned, W);
+        const Bits = @Int(.unsigned, W);
         const all: Bits = std.math.maxInt(Bits);
         const H = @Vector(W, u64);
         leader: std.math.Log2Int(Bits) = 0,
@@ -2271,7 +2271,7 @@ pub fn region(comptime D: type, x: *const [nU(D)]f64, model: *const D.Model, ins
 /// The value family `region` evaluates with: `RefFamily`'s lane-free values,
 /// and the lead protocol's decision hooks recording outcomes into `h`.
 fn Signature(comptime n: usize) type {
-    const F = RefFamily(f64, &(.{no_lane} ** n), .{ .dense = true });
+    const F = RefFamily(f64, &@as([n]u8, @splat(no_lane)), .{ .dense = true });
     return struct {
         pub const V = F.V;
         pub const Of = F.Of;
@@ -2323,7 +2323,7 @@ pub fn leadMergeInto(out: anytype, new: @TypeOf(out.*), keep: anytype) void {
         .array => for (out, new) |*o, n| leadMergeInto(o, n, keep),
         .@"struct" => |s| if (@hasDecl(T, "leadKeep")) {
             out.leadKeep(new, keep);
-        } else inline for (s.fields) |f| leadMergeInto(&@field(out, f.name), @field(new, f.name), keep),
+        } else inline for (s.field_names) |name| leadMergeInto(&@field(out, name), @field(new, name), keep),
         else => @compileError("leadMergeInto: no per-point merge for " ++ @typeName(T)),
     }
 }
@@ -3093,7 +3093,7 @@ pub fn validate(comptime D: type) void {
         @compileError(name ++ ": Setup, setup and setup_simparams come together");
     if (@hasDecl(D, "setup")) {
         const info = @typeInfo(@TypeOf(D.setup));
-        if (info != .@"fn" or info.@"fn".params.len != 2 or info.@"fn".params[0].type != type)
+        if (info != .@"fn" or info.@"fn".param_types.len != 2 or info.@"fn".param_types[0] != type)
             @compileError(name ++ ".setup: expected fn (comptime S: type, *Model) void");
         if (!@hasField(D.Model, "su") or @FieldType(D.Model, "su") != D.Setup)
             @compileError(name ++ ".Model must carry `su: Setup`");
@@ -3441,17 +3441,17 @@ const AllowedPubDecl = enum {
 };
 
 fn rejectStrayPubDecls(comptime D: type) void {
-    const decls = @typeInfo(D).@"struct".decls;
+    const decls = @typeInfo(D).@"struct".decl_names;
     for (decls) |d| {
-        if (@hasField(AllowedPubDecl, d.name)) continue;
+        if (@hasField(AllowedPubDecl, d)) continue;
         // `<module>__analog_op__{laplace,zi}_*__sec`: a §4.5.11/§4.5.12
         // filter's cascade coefficients, public because a small-signal host
         // builds H(jw) from them. The name embeds the module, so it cannot be
         // listed. TODO: drop once `laplace_*` lowers to internal unknowns and
         // `zi_*` has a complex AC stamp.
         // ponytail: the exemption is suffix-only; endsWith owns the length guard.
-        if (std.mem.endsWith(u8, d.name, "__sec")) continue;
-        @compileError(@typeName(D) ++ ": stray pub decl `" ++ d.name ++
+        if (std.mem.endsWith(u8, d, "__sec")) continue;
+        @compileError(@typeName(D) ++ ": stray pub decl `" ++ d ++
             "` — only contract-recognized names may be pub");
     }
 }
@@ -3467,7 +3467,7 @@ fn validatePhysicsFn(comptime D: type, comptime fn_name: []const u8) void {
 /// Returns the message rather than raising it so the refusal is testable.
 fn genericFnError(comptime D: type, comptime fn_name: []const u8, comptime ret: []const u8) ?[]const u8 {
     const info = @typeInfo(@TypeOf(@field(D, fn_name)));
-    if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
+    if (info != .@"fn" or info.@"fn".param_types.len != 5 or info.@"fn".param_types[0] != type)
         return @typeName(D) ++ "." ++ fn_name ++
             ": expected fn (comptime S: type, *const [n_u]S.V, *const Model, InstancePtr, SimState) " ++ ret;
     return null;
@@ -3477,7 +3477,7 @@ fn genericFnError(comptime D: type, comptime fn_name: []const u8, comptime ret: 
 /// `shape` names the whole expected signature in the complaint.
 fn expectGeneric(comptime D: type, comptime fn_name: []const u8, comptime params: usize, comptime shape: []const u8) void {
     const info = @typeInfo(@TypeOf(@field(D, fn_name)));
-    if (info != .@"fn" or info.@"fn".params.len != params or info.@"fn".params[0].type != type)
+    if (info != .@"fn" or info.@"fn".param_types.len != params or info.@"fn".param_types[0] != type)
         @compileError(@typeName(D) ++ "." ++ fn_name ++ ": expected " ++ shape);
 }
 
@@ -3553,8 +3553,8 @@ fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
     const mask = derivReads(D);
     const t = jacConst(D);
     for (t, 0..) |e, k| {
-        const r: usize = @intFromEnum(e.row);
-        const c: usize = @intFromEnum(e.col);
+        const r: usize = @backingInt(e.row);
+        const c: usize = @backingInt(e.col);
         if (c < 64 and (mask >> @intCast(c)) & 1 != 0)
             return name ++ ".jac_const: column `" ++ @tagName(e.col) ++ "` is in deriv_reads, so its partials are not constant";
         if (e.g == 0 and e.c == 0)
@@ -3562,8 +3562,8 @@ fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
         if (e.when) |w| if (!@hasField(D.Model, w.flag))
             return name ++ ".jac_const: `when.flag` \"" ++ w.flag ++ "\" is not a field of Model";
         if (k == 0) continue;
-        const pr: usize = @intFromEnum(t[k - 1].row);
-        const pc: usize = @intFromEnum(t[k - 1].col);
+        const pr: usize = @backingInt(t[k - 1].row);
+        const pc: usize = @backingInt(t[k - 1].col);
         if (r < pr or (r == pr and c <= pc))
             return name ++ ".jac_const must be sorted by (row, col) with no duplicates";
     }
@@ -3586,8 +3586,9 @@ fn requireWithError(comptime D: type, comptime decl: []const u8, comptime needs:
 /// A float field of either width: VerA emits `f64` parameters, and a
 /// hand-written device may declare `f32`.
 fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
-    for (@typeInfo(T).@"struct".fields) |f| {
-        if (std.mem.eql(u8, f.name, name) and (f.type == f32 or f.type == f64)) return true;
+    const s = @typeInfo(T).@"struct";
+    for (s.field_names, s.field_types) |f_name, F| {
+        if (std.mem.eql(u8, f_name, name) and (F == f32 or F == f64)) return true;
     }
     return false;
 }
@@ -3619,11 +3620,12 @@ fn validateDefaultedStruct(comptime D: type, comptime decl: []const u8) void {
     const T = @field(D, decl);
     if (@typeInfo(T) != .@"struct")
         @compileError(@typeName(D) ++ "." ++ decl ++ " must be a struct");
-    for (@typeInfo(T).@"struct".fields) |f| {
-        if (f.default_value_ptr == null)
-            @compileError(@typeName(D) ++ "." ++ decl ++ "." ++ f.name ++ " must have a default value");
-        if (!isValueType(f.type))
-            @compileError(@typeName(D) ++ "." ++ decl ++ "." ++ f.name ++
+    const s = @typeInfo(T).@"struct";
+    for (s.field_names, s.field_types, s.field_attrs) |f_name, F, attrs| {
+        if (attrs.default_value_ptr == null)
+            @compileError(@typeName(D) ++ "." ++ decl ++ "." ++ f_name ++ " must have a default value");
+        if (!isValueType(F))
+            @compileError(@typeName(D) ++ "." ++ decl ++ "." ++ f_name ++
                 ": field type must be numeric/bool/enum, []const u8, or a fixed-size array of these");
     }
 }
@@ -3647,8 +3649,8 @@ fn isValueType(comptime T: type) bool {
         // `Model.su` (a `Setup`): a plain struct of value fields is as
         // copyable as its fields. `void` is `su_ok` outside Debug, or when
         // the program did not ask for the checks (`validating`).
-        .@"struct" => |s| for (s.fields) |f| {
-            if (!isValueType(f.type)) break false;
+        .@"struct" => |s| for (s.field_types) |F| {
+            if (!isValueType(F)) break false;
         } else true,
         .void => true,
         else => false,
@@ -3658,8 +3660,8 @@ fn isValueType(comptime T: type) bool {
 fn isDenseEnum(comptime E: type) bool {
     const info = @typeInfo(E).@"enum";
     if (info.tag_type != u8) return false;
-    for (info.fields, 0..) |f, idx| {
-        if (f.value != idx) return false;
+    for (info.field_values, 0..) |value, idx| {
+        if (value != idx) return false;
     }
     return true;
 }
@@ -4009,7 +4011,7 @@ test "validate: every contract member at once (allowlist cannot drift)" {
     comptime validate(MockAll);
     // Every allowlisted name is either declared above or is a required decl
     // MockAll already has, so an entry added to one and not the other fails.
-    comptime for (std.meta.fieldNames(AllowedPubDecl)) |k| {
+    comptime for (@typeInfo(AllowedPubDecl).@"enum".field_names) |k| {
         if (!@hasDecl(MockAll, k))
             @compileError("AllowedPubDecl has `" ++ k ++ "` but MockAll does not declare it");
     };
@@ -4090,7 +4092,7 @@ test "deriv_reads/jac_const: a linear device needs no lane, and the table is its
     // because every term the column enters is linear.
     const m: MockVsrc.Model = .{};
     const base = [3]f64{ 0.25, -0.5, 2e-3 };
-    const Values = RefFamily(f64, &(.{no_lane} ** 3), .{ .dense = true });
+    const Values = RefFamily(f64, &@as([3]u8, @splat(no_lane)), .{ .dense = true });
     const r0: [3]Values = MockVsrc.eval(Values, &base, &m, &.{}, .{});
     for (0..3) |col| {
         var xs = base;
@@ -4099,7 +4101,7 @@ test "deriv_reads/jac_const: a linear device needs no lane, and the table is its
         for (0..3) |row| {
             var want: f64 = 0;
             for (jacConst(MockVsrc)) |e| {
-                if (@intFromEnum(e.row) == row and @intFromEnum(e.col) == col) want = e.g;
+                if (@backingInt(e.row) == row and @backingInt(e.col) == col) want = e.g;
             }
             try testing.expectEqual(want, r1[row].v - r0[row].v);
         }
@@ -4122,7 +4124,7 @@ test "q sites: rows are the signed sums of the stamps, and the table's rules ref
         pub const q_lte = [n_q]bool{ true, false };
     };
     try testing.expect(comptime (qSitesError(Two) == null));
-    const Values = RefFamily(f64, &(.{no_lane} ** 3), .{ .dense = true });
+    const Values = RefFamily(f64, &@as([3]u8, @splat(no_lane)), .{ .dense = true });
     const qr = qRows(Two, Values, .{ Values.con(2.0), Values.con(0.5) });
     try testing.expectEqual(@as(f64, 2.5), qr[0].v);
     try testing.expectEqual(@as(f64, -2.0), qr[1].v);

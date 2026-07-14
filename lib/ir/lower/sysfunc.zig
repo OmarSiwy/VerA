@@ -205,7 +205,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 const inst = if (u.path.len == 0)
                     top
                 else
-                    try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ top, Elaborate.sep, u.path[0 .. u.path.len - 1] });
+                    try self.arena.print("{s}{c}{s}", .{ top, Elaborate.sep, u.path[0 .. u.path.len - 1] });
                 // "path" is "the hierarchical path to the $simparam$str
                 // function": the instance, then every scope inside it that
                 // encloses the call (§6.7 named blocks, §6.6.3 generate blocks
@@ -216,7 +216,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 const full = if (std.mem.eql(u8, nm, "instance") or self.scope_path.len == 0)
                     inst
                 else
-                    try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ inst, Elaborate.sep, self.scope_path });
+                    try self.arena.print("{s}{c}{s}", .{ inst, Elaborate.sep, self.scope_path });
                 return .{ .v = try self.mir.addStrConst(self.arena, full), .ty = .string };
             }
         };

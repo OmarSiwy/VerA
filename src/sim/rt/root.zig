@@ -1411,7 +1411,7 @@ pub const State = struct {
     /// edge term waiting on it (§9.7.2: of its least significant bit). The
     /// monitor and the dump are left out.
     pub fn wakes(self: *const State, slot: u32) std.EnumSet(Edge) {
-        var e: std.EnumSet(Edge) = .initEmpty();
+        var e: std.EnumSet(Edge) = .empty;
         if (self.sensed(slot) or (slot + 1 < self.fan_start.len and self.fan_start[slot] != self.fan_start[slot + 1])) e.insert(.any);
         // A select term's edge is of a bit other than the slot's LSB.
         for (self.terms[slot].items) |t| if (self.susps.items[t.susp].gen == t.gen) e.insert(if (t.rec == no_rec) t.edge else .any);

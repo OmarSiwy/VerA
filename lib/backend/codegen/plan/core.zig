@@ -91,8 +91,8 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
         if (job.kind == .display) continue;
         const v = in.an.rv(job.target);
         if (v == .f_zero) continue; // an operator with no input; rendered inline
-        if (self.lo_idx[@intFromEnum(v)] != none_u32) continue;
-        self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
+        if (self.lo_idx[@backingInt(v)] != none_u32) continue;
+        self.lo_idx[@backingInt(v)] = @intCast(vals.items.len);
         try vals.append(a, v);
     }
     // Path-latch operands ride the same live-out queue: `updateState`'s
@@ -107,15 +107,15 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
             if (row.op != .path_prev and row.op != .path_acc) continue;
             const fam_v = if (row.op == .path_prev) &pv else &qv;
             const fam_l = if (row.op == .path_prev) &pl else &ql;
-            const v = in.an.rv(@enumFromInt(row.a));
+            const v = in.an.rv(@fromBackingInt(@intCast(row.a)));
             // ponytail: keep first-seen order with the stdlib membership scan.
             if (std.mem.indexOfScalar(Mir.Value, fam_v.items, v) != null) continue;
-            if (self.lo_idx[@intFromEnum(v)] == none_u32) {
-                self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
+            if (self.lo_idx[@backingInt(v)] == none_u32) {
+                self.lo_idx[@backingInt(v)] = @intCast(vals.items.len);
                 try vals.append(a, v);
             }
             try fam_v.append(a, v);
-            try fam_l.append(a, self.lo_idx[@intFromEnum(v)]);
+            try fam_l.append(a, self.lo_idx[@backingInt(v)]);
         }
         self.prev_vals = pv.items;
         self.prev_lo = pl.items;
@@ -130,7 +130,7 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     self.held_idx = try a.alloc(u32, in.lowered.held_vars.items.len);
     for (in.lowered.held_vars.items, 0..) |h, i| {
         const v = in.an.rv(h.final);
-        self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
+        self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@backingInt(v)];
     }
     if (self.lo_vals.len == 0) return self;
     try heldOnly(in, jobs, &self);
@@ -167,7 +167,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     const n: u32 = @intCast(in.mir.insts.len);
     var any = false;
     for (0..n) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         if (in.mir.instOp(inst) != .store) continue;
         const id = in.an.arrOf(in.mir.instResult(inst)) orelse continue;
         if (in.lowered.mem_arrays.items[id].held != none_u32) any = true;
@@ -180,7 +180,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     @memset(m.blk, false);
     for (jobs) |job| if (evalRoot(job.kind)) try m.mark(job.target);
     for (0..n) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         if (in.mir.instOp(inst) != .call) continue;
         const d = in.mir.instData(inst).call;
         if (callee.opKind(d.callee) != .none) continue;
@@ -192,12 +192,12 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     @memset(skip, false);
     var some = false;
     for (0..n) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
         if (in.mir.instOp(inst) != .store) continue;
         const r = in.an.rv(in.mir.instResult(inst));
         const id = in.an.arrOf(r) orelse continue;
-        if (in.lowered.mem_arrays.items[id].held == none_u32 or m.need[@intFromEnum(r)]) continue;
-        skip[@intFromEnum(r)] = true;
+        if (in.lowered.mem_arrays.items[id].held == none_u32 or m.need[@backingInt(r)]) continue;
+        skip[@backingInt(r)] = true;
         some = true;
     }
     out.eval_need = m.need;
@@ -223,8 +223,8 @@ const Mark = struct {
 
     fn mark(m: *Mark, v0: Mir.Value) Error!void {
         const v = m.in.an.rv(v0);
-        if (m.need[@intFromEnum(v)]) return;
-        m.need[@intFromEnum(v)] = true;
+        if (m.need[@backingInt(v)]) return;
+        m.need[@backingInt(v)] = true;
         try m.work.append(m.in.arena, v);
     }
 
@@ -242,7 +242,7 @@ const Mark = struct {
         const def = m.in.mir.valueDef(v);
         if (def != .inst_result) return;
         const inst = def.inst_result;
-        try m.block(m.in.an.def_block[@intFromEnum(v)]);
+        try m.block(m.in.an.def_block[@backingInt(v)]);
         switch (m.in.mir.instData(inst)) {
             .unary => |d| try m.mark(d.operand),
             .binary => |d| {
@@ -269,7 +269,7 @@ const Mark = struct {
             .phi => |d| for (0..d.count) |j| {
                 const p = m.in.mir.phiPair(inst, @intCast(j));
                 try m.mark(p.value);
-                const pb: u32 = @intFromEnum(p.block);
+                const pb: u32 = @backingInt(p.block);
                 try m.block(pb);
                 if (plan_setup.branchCond(m.in, pb)) |c| try m.mark(c);
             },
@@ -298,7 +298,7 @@ test "live-outs are deduplicated in job order; display stays out; held values in
 
     const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
     try std.testing.expectEqualSlices(Mir.Value, &.{ vb, va }, c.lo_vals);
-    try std.testing.expectEqual(@as(u32, 0), c.lo_idx[@intFromEnum(vb)]);
+    try std.testing.expectEqual(@as(u32, 0), c.lo_idx[@backingInt(vb)]);
     try std.testing.expectEqualSlices(u32, &.{0}, c.held_idx);
     // One `.strict` consumer makes the shared body strict (§4.3); the display
     // job is not a consumer.

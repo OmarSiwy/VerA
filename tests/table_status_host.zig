@@ -9,7 +9,7 @@ const contract = @import("contract");
 const D = @import("device");
 
 const n_u = contract.nU(D);
-const S0 = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+const S0 = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });
 
 test "noisePsd and acStim take a *const Instance and leave it untouched" {
     var m: D.Model = .{};
@@ -19,7 +19,7 @@ test "noisePsd and acStim take a *const Instance and leave it untouched" {
     if (@hasDecl(D, "setupInstance")) D.setupInstance(&m, &inst);
     const ci: *const D.Instance = &inst;
     var xv: [n_u]f64 = @splat(0.0);
-    xv[@intFromEnum(D.U.a)] = 0.5;
+    xv[@backingInt(D.U.a)] = 0.5;
     const psd = D.noisePsd(S0, xv, &m, ci, .{});
     try std.testing.expectEqual(@as(f64, 4e-21), psd[0].white);
     const ac = D.acStim(S0, xv, &m, ci, .{});
