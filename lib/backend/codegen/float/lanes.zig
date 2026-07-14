@@ -80,7 +80,7 @@ pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
 /// varies. No effect while emitting the display unit.
 pub fn pinLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
-    if (!self.an.xDep(v)) return;
+    if (!perPoint(self, v)) return;
     // An x-dependent integer is already one decision per call: it came from
     // a real collapse (`leadLanes`) or a call that pinned where it was made.
     if (self.an.tyOf(self.an.rv(v)) == .int) return;
@@ -90,9 +90,35 @@ pub fn pinLanes(self: *Gen, v: Mir.Value) void {
 /// Records a decision on `v` that goes through the lead protocol
 /// (`zCmp`, `zRoundI`, `zStrip`): a batch family that implements it stays
 /// exact per point, so it marks the device `batch_lead` rather than pinned.
+/// Whether `v` can differ between two points of a batch (`pointDep`), as
+/// rendered: a setup root is a `Model` field, which every point shares.
+pub fn perPoint(self: *const Gen, v: Mir.Value) bool {
+    const r = self.an.rv(v);
+    if (@intFromEnum(r) < self.an.nv and self.plan.isRoot(r)) return false;
+    return self.an.pointDep(r);
+}
+
+/// Records an eval-side read of a per-instance value through `zInst` (real)
+/// or `zInstI` (integer, a decision: the lead protocol). Each point of a
+/// batch has its own `Instance`, so the device declares `batch_inst`.
+pub fn instLanes(self: *Gen, int: bool) void {
+    if (self.emitting_display) return;
+    self.float.inst = true;
+    if (int) self.float.lead = true;
+}
+
+/// Records an eval-side read of per-instance state that `zInst` does not
+/// carry per point (operator history, a held array, a limiter's previous
+/// value, plusargs, a host system function): one instance per call, so the
+/// device is not `batch_ok`.
+pub fn instPin(self: *Gen) void {
+    if (self.emitting_display) return;
+    self.float.pinned = true;
+}
+
 pub fn leadLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
-    if (!self.an.xDep(v)) return;
+    if (!perPoint(self, v)) return;
     self.float.lead = true;
 }
 

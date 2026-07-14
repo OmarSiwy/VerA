@@ -2123,6 +2123,25 @@ pub const family_primitives = [_][]const u8{
 // run: those that never diverged from its leader, so every decision they met
 // was their own. `LeadState` is the bookkeeping. A vector family without the
 // protocol is refused at compile time (`zLeads`).
+//
+// The batch key. Every point of a batched call shares the `Model` row (card,
+// temperature, setup cache, port mask) and the `SimState`; nothing else.
+// Each point has its own `Instance`: a device that reads per-instance state
+// in `eval`/`q`/`evalQ` (a §5.10 held variable, a `$prev` path latch,
+// `$mfactor`) declares `batch_inst`, and its batch family supplies
+//
+//   on the family that runs the core (S.Inner under the protocol, else S):
+//                     `instLane(comptime T: type, comptime w: usize) *const T`,
+//                     point w's `Instance` (T is `D.Instance`), with `Lane`,
+//                     `lane_count` and `fromLanes` as above;
+//
+// the `inst` argument of the batched call is then not read for those fields.
+// A real field reads per point (`zInst`); an integer one is a decision
+// (`zInstI`, the lead protocol). Per-instance state no point can carry this
+// way (operator history, a held array, `$limit`'s previous value) drops
+// `batch_ok`. A vector family without `instLane` is refused at compile time.
+// `updateState`, `setupInstance` and `initState` stay per instance: the host
+// calls them on each instance with its own bias; they have no batched form.
 
 /// Whether a `batch_lead` device's entry point runs the protocol for
 /// family `S`: yes for a family with `Inner`, no for a run inside it (`S`
@@ -2132,6 +2151,16 @@ pub fn leads(comptime S: type) bool {
     if (@hasDecl(S, "Inner")) return true;
     if (@hasDecl(S, "decide")) return false;
     if (@typeInfo(S.V) == .vector) @compileError("this device decides per operating point (`batch_lead`): a batch family needs the lead protocol (contract.zig `batch_lead`)");
+    return false;
+}
+
+/// Whether a `batch_inst` device reads its per-instance fields per point
+/// through `S.instLane` (a batch family) or from `inst` (a one-point
+/// family). A vector family without `instLane` would read point 0's
+/// instance for every point, so it is refused here.
+pub fn instLanes(comptime S: type) bool {
+    if (@hasDecl(S, "instLane")) return true;
+    if (@typeInfo(S.V) == .vector) @compileError("this device reads per-instance state (`batch_inst`): a batch family needs `instLane(T, w)`, each point's own `Instance` (contract.zig `batch_inst`)");
     return false;
 }
 
@@ -2222,7 +2251,9 @@ fn sigFold(h: u64) u16 {
 /// hash collisions, which cost only a re-run. Correctness never depends on
 /// it: a batched call is exact per point either way. Cost: one value-only
 /// `eval`, of which the optimizer keeps only what the decisions read (setup
-/// values are read from `inst`, not recomputed). That cone can be most of
+/// values are read from the `Model` row, not recomputed; `inst` is the
+/// point's own instance, whose held values and latches the decisions may
+/// read). That cone can be most of
 /// the model: measured 0.25-0.74 of a scalar `evalQ`
 /// (docs/measurements/batched-lead-2026-10-02.md). So a host buckets on the
 /// signatures a batched call already produced (`LeadState.regions`, equal
@@ -2925,7 +2956,9 @@ pub fn InstancePtr(comptime D: type) type {
 /// absent, it must assume f64), `jac_f32_host` (take it on the CPU path too;
 /// requires `jac_f32`), `batch_ok` (a family whose `V` holds several operating
 /// points evaluates each exactly), `batch_lead` (it does so only through the
-/// lead protocol; see `LeadState`), `mutable_eval` (see `InstancePtr`).
+/// lead protocol; see `LeadState`), `batch_inst` (each point needs its own
+/// `Instance`, through the family's `instLane`; see the lead protocol's
+/// batch key), `mutable_eval` (see `InstancePtr`).
 pub fn validate(comptime D: type) void {
     if (!validating) return;
     @setEvalBranchQuota(1_000_000);
@@ -3356,6 +3389,7 @@ const AllowedPubDecl = enum {
     jac_f32,
     jac_f32_host,
     batch_lead,
+    batch_inst,
     // Nothing steers on a `.val()` of an x-dependent value, draws a per-call
     // scalar, or collapses an x-dependent chain to its value.
     batch_ok,
@@ -3767,6 +3801,7 @@ const MockAll = struct {
     pub const jac_f32 = true;
     pub const jac_f32_host = true;
     pub const batch_lead = false;
+    pub const batch_inst = false;
     pub const batch_ok = true;
     pub const mutable_eval = false;
 

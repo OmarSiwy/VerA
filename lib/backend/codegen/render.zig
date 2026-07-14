@@ -362,6 +362,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             // in place, as a held one reads its own field.
             if (d.tp) |tp| {
                 self.uses_inst = true;
+                float_lanes.instPin(self);
                 if (cow(self, d.array)) return self.b("p{d} = &inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
                 if (plain) return self.b("a{d} = inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
                 return self.b("for (&a{d}, inst.tp{d}_s{d}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, tp.block, tp.slot, self.arr_mask[d.array] });
@@ -395,6 +396,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             // §5.10 a held array starts from what the last accepted
             // evaluation left in its `Instance` field.
             self.uses_inst = true;
+            float_lanes.instPin(self); // a held array is one instance's
             const f = self.names.held_names[m.held];
             if (plain) return self.b("p{d} = &inst.{s};\n", .{ d.array, f });
             return self.b("for (&a{d}, inst.{s}) |*zd, zs| zd.* = zTo(S, 0x{x}, S.con(zs));\n", .{ d.array, f, self.arr_mask[d.array] });
@@ -642,7 +644,8 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 if (fv == v) break fk;
             } else unreachable; // plan_core.plan queued every site
             self.uses_inst = true; // the latch read keeps `inst` in the signature
-            try self.b("S.con(inst.{s}__{d})", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
+            float_lanes.instLanes(self, false);
+            try self.b("zInst(S, inst, \"{s}__{d}\")", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
         },
         // §3.2 integer arithmetic at 32-bit two's complement width
         // (`Lower.wrap32`). `%` never widens; `/` overflows only for
@@ -756,7 +759,7 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
 /// Whether real `v` is derivative-free yet x-dependent: a `.val()` of it
 /// would be one point's value (see `renderOp`'s `.fadd, .fsub, .fmul`).
 fn perPoint(self: *Gen, v: Mir.Value) bool {
-    return self.an.dFree(v) and self.an.xDep(v) and self.an.tyOf(self.an.rv(v)) == .real;
+    return self.an.dFree(v) and float_lanes.perPoint(self, v) and self.an.tyOf(self.an.rv(v)) == .real;
 }
 
 fn writeConst(self: *Gen, v: Mir.Value) Error!void {

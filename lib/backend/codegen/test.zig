@@ -3382,7 +3382,7 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "S.con(inst.pb__0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "zInst(S, inst, \"pb__0\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "inst.wb__0 = ") != null); // updateState stages
     try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = inst.wb__0;") != null); // commit latches
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
@@ -3401,6 +3401,39 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s2, "pb__") == null);
     try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
+}
+
+test "codegen: a batch reads each point's own Instance, or the device is not batch_ok" {
+    // The batch key is the Model row and the SimState; each point has its own
+    // Instance. A held value or a `$prev` latch reads per point (`zInst`,
+    // `batch_inst`); operator history no point can carry (absdelay's samples)
+    // drops `batch_ok`.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module k(p, n);
+        \\  inout p, n; electrical p, n; real h;
+        \\  analog begin
+        \\    @(initial_step) h = V(p, n);
+        \\    I(p, n) <+ h * V(p, n) + 1e-3 * $prev(V(p, n));
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "zInst(S, inst, \"k__held__h\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const batch_ok = true;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const batch_inst = true;") != null);
+
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module k(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1n);
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const s2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "pub const batch_ok") == null);
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {

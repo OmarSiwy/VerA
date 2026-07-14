@@ -226,10 +226,14 @@ Measured and not built (2026-09):
   value collapses make mos1 and bsim4va 0.37-0.55× and psp103 about 1.0×.
   Since 2026-10-02 diode, mos1, bsim4va and psp103 are `batch_ok` through
   the lead protocol (`batch_lead`, exact per point, divergent batches
-  included). A host buckets on the region signatures the previous batched
-  call returned (docs/measurements/batched-lead-2026-10-02.md: 1.06-1.30
-  runs per W = 4 batch on ARPice's generated decks, about 1.4-1.6× in
-  instructions). AVX-512 W = 8 is estimated (llvm-mca,
+  included). The batch key is the `Model` row and the `SimState` only: each
+  point has its own `Instance`, read per point through the family's
+  `instLane` when the device declares `batch_inst` (held values, `$prev`
+  latches; mos1, bsim4va, psp103). A host buckets on the region signatures
+  the previous batched call returned (docs/measurements/batched-lead-2026-10-02.md:
+  1.06-1.30 runs per W = 4 batch on ARPice's generated decks; coherent
+  batches 1.5-1.8× in instructions with per-point instances, mos1 about
+  1.0-1.1× in cycles). AVX-512 W = 8 is estimated (llvm-mca,
   calibrated) at about 1.2-1.8×, NEON W = 2 at about 0.8-1.1×. The ABI keeps
   `S.V` and `batch_ok` for it.
 - Liveness-coloured hoist slots: bsim4 33% slower (they defeat SROA).
