@@ -42,7 +42,7 @@ snap() {
 }
 export -f snap
 
-find "$root/tests/fixtures" -name '*.va' -print0 \
+find "$root/tests/fixtures" \( -name '*.va' -o -name '*.v' \) -print0 \
   | sort -z \
   | xargs -0 -P "$(nproc)" -I{} bash -c 'snap "$@"' _ {} "$out" "$root" "$vera"
 
