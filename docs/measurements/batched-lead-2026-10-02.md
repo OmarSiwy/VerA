@@ -51,6 +51,62 @@ per point, and folding them was the collapse that made a batch inexact.
 Cycles moved within run-to-run noise (mos1 evalQ +0.8% and +1.6% in two
 runs).
 
+## 1b. Correction (2026-10-02, later): each point has its own Instance
+
+The first version of this study shared ONE `Instance` across the W points
+of a batch, and so did its check. That is wrong for a host: mos1 reads 18
+`$prev`/charge path latches and 6 held values in `eval`, bsim4va 10
+latches and 1 held value, psp103 9 held values, and `updateState` writes
+each instance's own. A batch of 4 ring stages under lane 0's instance got
+lane 0's latches on every lane (ESPice found it). Only diode was sound.
+
+Fix: the batch key is the `Model` row and the `SimState`; each point has
+its own `Instance`. A device that reads per-instance state as a value
+declares `batch_inst`, and its batch family supplies
+`instLane(T, w) *const T`. The device reads each such field per point
+(`zInst`; an integer field is a lead-protocol decision, `zInstI`).
+Per-instance state no point can carry that way (operator history, held
+arrays, `$limit`'s previous value) drops `batch_ok`. `updateState`,
+`stateCtl`, `setupInstance` and `initState` stay per instance.
+
+The check now gives each lane its own instance. `bench_check_hist`
+drives W instances through different transient histories, then moves
+every real and integer field apart per lane, and runs every mixed batch
+against each instance's scalar evalQ. It also checks that the batched
+call leaves the instances byte-identical. Before the fix (device trees
+from 7056347f, the same harness): mos1 576 mismatching outputs, bsim4va
+240. psp103 0: its held values are loaded at the top of the core, but on
+this card every path overwrites them before use, so no harness can show a
+pre-fix failure for psp103. After: 0 on all four. The in-tree fixture
+`ch05_analog_behavior/batch_per_instance_state.va` fails the same way
+before the fix (`lane_check FAIL: res[a] lane 1`) and passes after.
+
+There is no pack or unpack step. The batched core gathers each per-instance
+field from the W instances where it reads it. That cost is inside every
+batched number below (`results_lanes.jsonl`). Instructions per instance:
+
+| model | W | scalar | coherent, shared inst | coherent, own inst | × | gather cost |
+|---|---|---|---|---|---|---|
+| diode | 4 / 8 | 182 | 104 / 104 | 104 / 104 | 1.75 / 1.76 | 0 |
+| mos1 | 4 / 8 | 605 | 366 / 347 | 394 / 382 | 1.54 / 1.58 | +28 / +35 (+8% / +10%) |
+| bsim4va | 4 / 8 | 5812 | 3235 / 3130 | 3269 / 3165 | 1.78 / 1.84 | +34 / +35 (+1%) |
+| psp103 | 4 / 8 | 6376 | 3444 / 3484 | 3468 / 3505 | 1.84 / 1.82 | +24 / +21 (+0.7%) |
+
+In cycles, per-lane instances: mos1 coherent 1.02-1.16× (W = 4) and
+1.08-1.09× (W = 8) over two runs, down from 1.20-1.40× with a shared
+instance. bsim4va 1.50× / 1.48× and psp103 2.03-2.06× / 2.00× are
+unchanged. mos1 loses most of its gain: its 24 per-instance reads are a
+large share of a small model.
+
+A value computed from per-instance state differs per point too, so the
+codegen tracks it like an x-dependent value (`Analysis.pointDep`). Without
+that, a select over a held value folded through `.val()` and read lane
+0's. Eight mixed-signal and `$mfactor` fixtures caught this once the
+testbench gave each point its own instance: their held digital inputs
+differ per instance. Scalar evalQ is
+unchanged against main e2932392: bit-identical, same instruction counts
+(diode 181.0, mos1 589.8, bsim4va 6055.4, psp103 6619.3).
+
 ## 2. Batched evalQ per instance (instructions; `results_nosig.jsonl`)
 
 `coherent`: W copies of one point (one run). `mixed`: W consecutive points
@@ -145,6 +201,11 @@ Mismatches against scalar (values and signatures, first timepoint): 0.
 Newton iterates within one step.
 
 ## 5. What a host should do
+
+0. **Batch only points with the same `Model` row and `SimState`**, and give
+   the batch family each point's own `Instance` (`instLane`) when the
+   device declares `batch_inst`. Call `updateState`, `stateCtl`,
+   `setupInstance` and `initState` per instance.
 
 1. **Never batch in netlist order.** 1.8-3.5 runs per batch makes every
    compact model slower than scalar.

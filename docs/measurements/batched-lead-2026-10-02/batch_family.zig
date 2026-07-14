@@ -15,6 +15,10 @@ pub fn Family(comptime W: usize, comptime lane: []const u8) type {
     const C = Core(W, lane);
     return struct {
         pub const Core_ = C;
+        pub const Lane = C.Lane;
+        pub const lane_count = C.lane_count;
+        pub const fromLanes = C.fromLanes;
+        pub const instLane = C.instLane;
         pub const V = C.V;
         pub const Of = C.Of;
         pub const con = C.con;
@@ -42,6 +46,11 @@ pub fn Family(comptime W: usize, comptime lane: []const u8) type {
 fn Core(comptime W: usize, comptime lane: []const u8) type {
     return struct {
         pub var lead: contract.LeadState(W, @import("cfg").SIG) = .{};
+        /// Point w's `Instance` (contract.zig `batch_inst`), set by the host.
+        pub var insts: [W]*const anyopaque = undefined;
+        pub fn instLane(comptime T: type, comptime w: usize) *const T {
+            return @ptrCast(@alignCast(insts[w]));
+        }
         pub const Lane = contract.RefFamily(f64, lane, .{ .dense = false });
         pub const lane_count = W;
         pub fn laneOf(a: anytype, comptime w: usize) Lane.Of(@TypeOf(a).mask) {
