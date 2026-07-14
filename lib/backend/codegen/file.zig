@@ -26,9 +26,9 @@ const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 
-/// `tools/contract.zig`'s `abi_version`, which `backend` cannot import. Every
-/// testbench runs `validateHost`, which compares the two.
-const contract_abi = 6;
+/// `tools/contract.zig`'s `abi_version`, through `kernels` (which may import
+/// `contract`), so the stamp cannot drift from the contract.
+const contract_abi = @import("kernels").abi_version;
 const VTy = codegen.VTy;
 const OpKind = @import("ir").op.OpKind;
 
