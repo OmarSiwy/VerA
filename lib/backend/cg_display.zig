@@ -7,7 +7,6 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
@@ -63,6 +62,8 @@ pub const PrintArg = struct {
     /// Original integer width, before SSA and the i64 storage carrier.
     bits: u7 = 64,
 
+    /// How `renderPrintArg` spells the operand: which helper, if any, sits
+    /// between the value and the Zig format verb.
     pub const Mode = enum {
         /// Straight through the Zig verb the conversion mapped to.
         plain,
@@ -257,7 +258,7 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
     const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
     if (level >= 1) {
-        g.uses_sim = true;
+        g.uses.sim = true;
         try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{sim.t}}); ", .{
             name, std.zig.fmtString(g.mir.name),
         });

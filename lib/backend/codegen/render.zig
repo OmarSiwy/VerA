@@ -8,8 +8,10 @@ const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const gen_setup = @import("setup.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_unit = @import("unit.zig");
@@ -50,7 +52,7 @@ pub fn imodFn(self: *const Gen) []const u8 {
 }
 
 /// Returns `renderVal`'s text as an arena string instead of appending it to
-/// `out`. Renders into `out` and rewinds, so `uses_x`/`uses_model`
+/// `out`. Renders into `out` and rewinds, so `uses.x`/`uses.model`
 /// accounting matches a direct render. For §4.5 operator inputs that must
 /// appear inside a kernel call's `{s}`.
 pub fn renderToArena(self: *Gen, v: Mir.Value, want: VTy) Error![]const u8 {
@@ -133,17 +135,17 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         .int_const => |x| try self.b("@as(i64, {d})", .{x}),
         .str_const => |s| try self.b("\"{f}\"", .{std.zig.fmtString(s)}),
         .param_ref => |p| {
-            self.uses_model = true;
+            self.uses.model = true;
             switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .real => try self.b("S.con(model.{s})", .{self.names.p_names[p]}),
                 .int, .str => try self.b("model.{s}", .{self.names.p_names[p]}),
             }
         },
         .block_param => |u| {
-            self.uses_x = true;
+            self.uses.x = true;
             // Every probe read needs its lane; `deriv_reads` is this sound
             // superset.
-            self.deriv_reads |= gen_dispatch.uBit(u);
+            self.jac.deriv_reads |= gen_dispatch.uBit(u);
             try self.b("x[@intFromEnum(U.{s})]", .{self.names.u_names[u]});
         },
         .inst_result => |inst| try renderInst(self, inst),
@@ -186,7 +188,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // `f64Const` succeeds only on literals, parameters and arithmetic.
     const res = self.mir.instResult(inst);
     if (res != .undef and self.an.vty[@backingInt(res)] == .real and self.an.dFree(res)) {
-        if (try gen_call.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
+        if (try gen_host.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
     }
 
     const a: Mir.Value = @fromBackingInt(@intCast(row.a));
@@ -233,8 +235,8 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
                 // buys nothing: pick in f64 when both arms have an f64 form,
                 // else pick the `S` arm.
                 float_lanes.pinLanes(self, a);
-                const fb = try gen_call.f64Const(self, b2, 1, true);
-                const fc = if (fb != null) try gen_call.f64Const(self, c, 1, true) else null;
+                const fb = try gen_host.f64Const(self, b2, 1, true);
+                const fc = if (fb != null) try gen_host.f64Const(self, c, 1, true) else null;
                 try self.b("{s}(if ((", .{if (fc != null) "S.con" else ""});
                 try renderVal(self, a, .int);
                 try self.b(") != 0) ", .{});
@@ -361,7 +363,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             // left, from its `Instance` slot; a copy-on-write array reads it
             // in place, as a held one reads its own field.
             if (d.tp) |tp| {
-                self.uses_inst = true;
+                self.uses.inst = true;
                 float_lanes.instPin(self);
                 if (cow(self, d.array)) return self.b("p{d} = &inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
                 if (plain) return self.b("a{d} = inst.tp{d}_s{d};\n", .{ d.array, tp.block, tp.slot });
@@ -395,7 +397,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             }
             // §5.10 a held array starts from what the last accepted
             // evaluation left in its `Instance` field.
-            self.uses_inst = true;
+            self.uses.inst = true;
             float_lanes.instPin(self); // a held array is one instance's
             const f = self.names.held_names[m.held];
             if (plain) return self.b("p{d} = &inst.{s};\n", .{ d.array, f });
@@ -406,7 +408,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
             const m = self.lowered.mem_arrays.items[id];
             const r = self.an.rv(self.mir.instResult(inst));
             if (self.emitting_common and self.core.held_only.len != 0 and self.core.held_only[@backingInt(r)]) {
-                self.uses_held = true;
+                self.uses.held = true;
                 try self.b("if (held) ", .{});
             }
             const ty = try arrElemTy(self, id);
@@ -417,7 +419,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 .inst_result => |di| self.mir.instOp(di) == .store,
                 else => false, // else: an array version is an instruction result
             };
-            if (inPlace(self, id) and gen_file.dirtyTracked(self, id))
+            if (inPlace(self, id) and gen_instance.dirtyTracked(self, id))
                 try self.b("zArrStD({s}, p{d}, &inst.{s}__dirty, ", .{ ty, id, self.names.held_names[m.held] })
             else if (inPlace(self, id))
                 try self.b("zArrSt({s}, p{d}, ", .{ ty, id })
@@ -582,7 +584,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // expression, which keeps it off `zPow`'s lane-pinning path.
             // `UnitPlan.foldedExponent` mirrors this test; change both.
             const par_exp: ?[]const u8 = if (self.an.foldConst(b2, false) == null and self.an.dFree(b2))
-                try gen_call.f64Const(self, b2, 1, true)
+                try gen_host.f64Const(self, b2, 1, true)
             else
                 null;
             if (self.an.foldConst(b2, false)) |k| {
@@ -643,7 +645,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             const k = for (fam, 0..) |fv, fk| {
                 if (fv == v) break fk;
             } else unreachable; // plan_core.plan queued every site
-            self.uses_inst = true; // the latch read keeps `inst` in the signature
+            self.uses.inst = true; // the latch read keeps `inst` in the signature
             float_lanes.instLanes(self, false);
             try self.b("zInst(S, inst, \"{s}__{d}\")", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
         },
@@ -763,7 +765,7 @@ fn perPoint(self: *Gen, v: Mir.Value) bool {
 }
 
 fn writeConst(self: *Gen, v: Mir.Value) Error!void {
-    if (try gen_call.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
+    if (try gen_host.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
     // A derivative-free value can still differ per point (a `ddx`-stripped
     // probe): `.val()` collapses it to one, so a batch is not exact.
     float_lanes.pinLanes(self, v);
@@ -895,7 +897,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
         .@"$rng$auto" => {
             // §9.13.1's internal seed; `updateState` advances it on the
             // accepted step, never here.
-            self.uses_inst = true;
+            self.uses.inst = true;
             const site = intArg(self, args, 0) orelse 0;
             return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
         },
@@ -965,7 +967,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     const val = "zV"; // a family has no `S.val`
     const pt = try self.arena.print("zL(S, 0x{x})", .{m});
     if (site != 0) {
-        self.uses_inst = true;
+        self.uses.inst = true;
         self.float.pinned = true;
         try self.b("tbl_{d}: {{ _ = {s}(", .{ @backingInt(inst), val });
         try renderVal(self, args[6], .real);

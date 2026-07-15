@@ -10,15 +10,17 @@ const CollapsePair = @import("plan/topology.zig").CollapsePair;
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
 const gen_render = @import("render.zig");
 const Mir = @import("ir").Mir;
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
-const assert = codegen.assert;
+const assert = std.debug.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const plan_args = @import("plan/args.zig");
@@ -48,7 +50,7 @@ fn scanAccept(self: *Gen) Error!Accept {
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
     for (self.core.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
-    a.uses_core = a.uses_core or gen_file.pathLatches(self);
+    a.uses_core = a.uses_core or gen_instance.pathLatches(self);
     a.uses_core = a.uses_core or rejectStepIdx(self) != null;
     a.reads_t_prev = a.reads_t_prev or a.uses_dt;
     return a;
@@ -169,18 +171,18 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    try gen_file.emitStateTwins(self, acc.reads_t_prev);
+    try gen_instance.emitStateTwins(self, acc.reads_t_prev);
     // VerA's `vera_timepoint` (§2.9): a fresh state is a fresh cache. A
     // dirty-tracked held array (`file.dirtyTracked`): the fresh `State`
     // differs from `inst` anywhere, so its range is the whole array.
     var dirty = false;
-    for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_file.dirtyTracked(self, h.array));
+    for (self.lowered.held_vars.items) |h| dirty = dirty or (h.array != none_u32 and gen_instance.dirtyTracked(self, h.array));
     const tp = self.lowered.timepoints.items.len != 0;
-    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_file.hasStatus(self)) "inst" else "_"});
+    try self.w("}};\n\npub fn initState(_: *const Model, {s}: *Instance) State {{\n", .{if (tp or dirty or gen_instance.hasStatus(self)) "inst" else "_"});
     if (tp) try self.w("    zTpDrop(inst);\n", .{});
-    if (gen_file.hasStatus(self)) try self.w(gen_file.status_drop, .{});
+    if (gen_instance.hasStatus(self)) try self.w(gen_instance.status_drop, .{});
     for (self.lowered.held_vars.items, self.names.held_names) |h, n| {
-        if (h.array == none_u32 or !gen_file.dirtyTracked(self, h.array)) continue;
+        if (h.array == none_u32 or !gen_instance.dirtyTracked(self, h.array)) continue;
         try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
     }
     try self.w("    return .{{}};\n}}\n\npub fn updateState(comptime", .{});
@@ -198,7 +200,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
     const body = self.out.items.len;
     // §9.7.3 a latched status: the device stopped, so its state stays put.
-    if (gen_file.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
+    if (gen_instance.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
     // One slice evaluation serves every operator's input.
     const full = self.core;
     var at_m: ?usize = null;
@@ -235,7 +237,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\
     , .{});
     try emitStateClass(self);
-    try gen_file.emitStateCtl(self, acc.reads_t_prev);
+    try gen_instance.emitStateCtl(self, acc.reads_t_prev);
     try emitAdvanceIteration(self);
     try emitAcceptQ(self, acc);
 }
@@ -244,7 +246,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
 /// latches alone (no operator history, held variable or §9.13.1 seed),
 /// `.history` otherwise.
 fn emitStateClass(self: *Gen) Error!void {
-    const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
+    const latch_only = gen_instance.pathLatches(self) and !gen_file.hasStatefulOps(self) and
         self.lowered.rng_auto_seeds.items.len == 0;
     try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
         if (latch_only) "path_latch" else "history",
@@ -261,10 +263,10 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (self.lowered.reject_step != .undef) return;
     // §9.7.3 a latched status leaves the state alone, which `updateState`
     // checks first; a status device calls `q` and `updateState`.
-    if (gen_file.hasStatus(self)) return;
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = true; // the §9.17 resets below always write it
+    if (gen_instance.hasStatus(self)) return;
+    self.uses.x = false;
+    self.uses.model = false;
+    self.uses.inst = true; // the §9.17 resets below always write it
     self.core_wanted = false;
     self.core_hoisted = true;
     defer self.core_hoisted = false;
@@ -291,12 +293,12 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     try emitAcceptBody(self, acc);
     try self.w("    return qq;\n}}\n\n", .{});
     if (self.core_wanted or acc.uses_core) {
-        self.uses_x = true;
-        self.uses_model = true;
+        self.uses.x = true;
+        self.uses.model = true;
         try self.out.insertSlice(self.gpa, at_core, try self.arena.print("    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(true)}));
     }
-    if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
+    if (!self.uses.x) gen_unit.patchParam(self, at_x, "x".len);
+    if (!self.uses.model) gen_unit.patchParam(self, at_model, "model".len);
 }
 
 /// Writes the accepted-step body shared by `updateState` and `acceptQ`:
@@ -393,7 +395,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 try self.w(
                     "        zTransStep(in, &inst.{0s}__from, &inst.{0s}__to, &inst.{0s}__t0, " ++
                         "sim.t, dt, {1s}, {2s}, {3s});\n",
-                    .{ n, try gen_call.argF64(self, args, 1, "0.0"), t[0], t[1] },
+                    .{ n, try gen_host.argF64(self, args, 1, "0.0"), t[0], t[1] },
                 );
             },
             .slew => {
@@ -500,7 +502,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // an in-place one is already in `inst`.
             if (gen_render.inPlace(self, h.array)) continue;
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
-            if (gen_file.dirtyTracked(self, h.array))
+            if (gen_instance.dirtyTracked(self, h.array))
                 try self.w("    inst.{s}__dirty = .{{ 0, {d} }};\n", .{ n, self.lowered.mem_arrays.items[h.array].len - 1 });
         } else {
             // The core field is typed by `vty`, not the declared type, and
@@ -691,16 +693,16 @@ fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
 /// breakpoint at t + td and clamps dt_max under the shortest delay. A site
 /// whose delay is a solved quantity is skipped.
 pub fn emitDelays(self: *Gen) Error!void {
-    const saved = self.uses_model;
-    defer self.uses_model = saved;
-    self.uses_model = false;
+    const saved = self.uses.model;
+    defer self.uses.model = saved;
+    self.uses.model = false;
     var tds: std.ArrayList([]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .absdelay) continue;
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
-        const td = try gen_call.f64Const(self, args[1], 0, false) orelse continue;
+        const td = try gen_host.f64Const(self, args[1], 0, false) orelse continue;
         try tds.append(self.arena, td);
     }
     if (tds.items.len == 0) return;
@@ -710,7 +712,7 @@ pub fn emitDelays(self: *Gen) Error!void {
         \\/// shortest delay (engine minDelay -> tran echo machinery).
         \\pub fn delays({s}: *const Model) [{d}]f64 {{
         \\    return .{{
-    , .{ if (self.uses_model) "model" else "_", tds.items.len });
+    , .{ if (self.uses.model) "model" else "_", tds.items.len });
     for (tds.items, 0..) |td, k| try self.w("{s} {s}", .{ if (k == 0) "" else ",", td });
     try self.w(" }};\n}}\n\n\n", .{});
 }
@@ -750,11 +752,11 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
     , .{});
 
-    // Render first: `f64Const` sets `uses_model`, and an unused `model`
+    // Render first: `f64Const` sets `uses.model`, and an unused `model`
     // parameter does not compile.
-    const saved = self.uses_model;
-    defer self.uses_model = saved;
-    self.uses_model = false;
+    const saved = self.uses.model;
+    defer self.uses.model = saved;
+    self.uses.model = false;
 
     var timers: std.ArrayList([3]?[]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
@@ -768,15 +770,15 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
             if (ei < args.len) {
                 if (self.an.foldConst(args[ei], false)) |c| {
                     if (c.f == 0.0) continue;
-                } else if (try gen_call.f64Const(self, args[ei], 0, false)) |e| {
+                } else if (try gen_host.f64Const(self, args[ei], 0, false)) |e| {
                     guard = e;
                 }
             }
         }
         // No diagnostic: an unrenderable period already has one, and a solved
         // start_time is legal Verilog-A this hook cannot describe.
-        const start = try gen_call.f64Const(self, if (args.len > 0) args[0] else .zero, 0, false) orelse return;
-        const period = try gen_call.f64Const(self, if (args.len > 1) args[1] else .zero, 0, false) orelse return;
+        const start = try gen_host.f64Const(self, if (args.len > 0) args[0] else .zero, 0, false) orelse return;
+        const period = try gen_host.f64Const(self, if (args.len > 1) args[1] else .zero, 0, false) orelse return;
         try timers.append(self.arena, .{ start, period, guard });
     }
     if (timers.items.len == 0) return;
@@ -787,7 +789,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\pub fn nextBreakpoint({s}: *const Model, t: f64) ?f64 {{
         \\    var best = std.math.inf(f64);
         \\
-    , .{if (self.uses_model) "model" else "_"});
+    , .{if (self.uses.model) "model" else "_"});
     for (timers.items) |tm| {
         if (tm[2]) |g| try self.w("    if (({s}) != 0.0) {{\n    ", .{g});
         try self.w("    if (zNextTimer({s}, {s}, t)) |b| best = @min(best, b);\n", .{ tm[0].?, tm[1].? });
