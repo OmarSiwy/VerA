@@ -12,6 +12,7 @@ const codegen = @import("../codegen.zig");
 const kt = @import("kernel_text.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_noise = @import("noise.zig");
 const gen_state = @import("state.zig");
@@ -563,7 +564,7 @@ pub fn emitDerive(self: *Gen) Error!void {
         if (self.an.foldConst(p.default, false) != null and !p.is_local) continue;
         // Render in the parameter's numeric domain. A known initializer
         // cannot stand in for a dependency that changes after a host write.
-        const e = (if (ty == .int) try gen_call.i64Const(self, p.default, 0) else try gen_call.f64Const(self, p.default, 0, false)) orelse {
+        const e = (if (ty == .int) try gen_host.i64Const(self, p.default, 0) else try gen_host.f64Const(self, p.default, 0, false)) orelse {
             // Defaults with no compile-time value retain W1050's explicit
             // host-supplied-value contract (for example $simparam("gmin")).
             if (!p.is_local and p.folded == null and self.an.foldConst(p.default, true) == null) continue;
@@ -666,7 +667,7 @@ fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     const bag = self.diags orelse return;
     if (!bag.enabled(.W1050)) return;
     if (p.folded != null or self.an.foldConst(p.default, true) != null) return;
-    if (try gen_call.f64Const(self, p.default, 0, false) != null) return;
+    if (try gen_host.f64Const(self, p.default, 0, false) != null) return;
     var d = bag.build(.codegen, .W1050, self.lowered.tokenSpan(p.tok));
     d.msg("`{s}`", .{p.name});
     d.point("this default has no compile-time value, so the field is 0", .{});

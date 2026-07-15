@@ -10,6 +10,7 @@ const CollapsePair = @import("plan/topology.zig").CollapsePair;
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_instance = @import("instance.zig");
@@ -394,7 +395,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 try self.w(
                     "        zTransStep(in, &inst.{0s}__from, &inst.{0s}__to, &inst.{0s}__t0, " ++
                         "sim.t, dt, {1s}, {2s}, {3s});\n",
-                    .{ n, try gen_call.argF64(self, args, 1, "0.0"), t[0], t[1] },
+                    .{ n, try gen_host.argF64(self, args, 1, "0.0"), t[0], t[1] },
                 );
             },
             .slew => {
@@ -701,7 +702,7 @@ pub fn emitDelays(self: *Gen) Error!void {
         const inst = self.names.opInstOf(@intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
-        const td = try gen_call.f64Const(self, args[1], 0, false) orelse continue;
+        const td = try gen_host.f64Const(self, args[1], 0, false) orelse continue;
         try tds.append(self.arena, td);
     }
     if (tds.items.len == 0) return;
@@ -769,15 +770,15 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
             if (ei < args.len) {
                 if (self.an.foldConst(args[ei], false)) |c| {
                     if (c.f == 0.0) continue;
-                } else if (try gen_call.f64Const(self, args[ei], 0, false)) |e| {
+                } else if (try gen_host.f64Const(self, args[ei], 0, false)) |e| {
                     guard = e;
                 }
             }
         }
         // No diagnostic: an unrenderable period already has one, and a solved
         // start_time is legal Verilog-A this hook cannot describe.
-        const start = try gen_call.f64Const(self, if (args.len > 0) args[0] else .zero, 0, false) orelse return;
-        const period = try gen_call.f64Const(self, if (args.len > 1) args[1] else .zero, 0, false) orelse return;
+        const start = try gen_host.f64Const(self, if (args.len > 0) args[0] else .zero, 0, false) orelse return;
+        const period = try gen_host.f64Const(self, if (args.len > 1) args[1] else .zero, 0, false) orelse return;
         try timers.append(self.arena, .{ start, period, guard });
     }
     if (timers.items.len == 0) return;

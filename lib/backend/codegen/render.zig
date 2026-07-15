@@ -8,6 +8,7 @@ const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_instance = @import("instance.zig");
@@ -187,7 +188,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // `f64Const` succeeds only on literals, parameters and arithmetic.
     const res = self.mir.instResult(inst);
     if (res != .undef and self.an.vty[@backingInt(res)] == .real and self.an.dFree(res)) {
-        if (try gen_call.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
+        if (try gen_host.f64Const(self, res, 0, true)) |s| return self.b("S.con({s})", .{s});
     }
 
     const a: Mir.Value = @fromBackingInt(@intCast(row.a));
@@ -234,8 +235,8 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
                 // buys nothing: pick in f64 when both arms have an f64 form,
                 // else pick the `S` arm.
                 float_lanes.pinLanes(self, a);
-                const fb = try gen_call.f64Const(self, b2, 1, true);
-                const fc = if (fb != null) try gen_call.f64Const(self, c, 1, true) else null;
+                const fb = try gen_host.f64Const(self, b2, 1, true);
+                const fc = if (fb != null) try gen_host.f64Const(self, c, 1, true) else null;
                 try self.b("{s}(if ((", .{if (fc != null) "S.con" else ""});
                 try renderVal(self, a, .int);
                 try self.b(") != 0) ", .{});
@@ -583,7 +584,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // expression, which keeps it off `zPow`'s lane-pinning path.
             // `UnitPlan.foldedExponent` mirrors this test; change both.
             const par_exp: ?[]const u8 = if (self.an.foldConst(b2, false) == null and self.an.dFree(b2))
-                try gen_call.f64Const(self, b2, 1, true)
+                try gen_host.f64Const(self, b2, 1, true)
             else
                 null;
             if (self.an.foldConst(b2, false)) |k| {
@@ -764,7 +765,7 @@ fn perPoint(self: *Gen, v: Mir.Value) bool {
 }
 
 fn writeConst(self: *Gen, v: Mir.Value) Error!void {
-    if (try gen_call.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
+    if (try gen_host.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
     // A derivative-free value can still differ per point (a `ddx`-stripped
     // probe): `.val()` collapses it to one, so a batch is not exact.
     float_lanes.pinLanes(self, v);
