@@ -18,7 +18,7 @@ const gen_render = @import("render.zig");
 const Mir = @import("ir").Mir;
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
-const assert = codegen.assert;
+const assert = std.debug.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const plan_args = @import("plan/args.zig");
@@ -262,9 +262,9 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     // §9.7.3 a latched status leaves the state alone, which `updateState`
     // checks first; a status device calls `q` and `updateState`.
     if (gen_file.hasStatus(self)) return;
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = true; // the §9.17 resets below always write it
+    self.uses.x = false;
+    self.uses.model = false;
+    self.uses.inst = true; // the §9.17 resets below always write it
     self.core_wanted = false;
     self.core_hoisted = true;
     defer self.core_hoisted = false;
@@ -291,12 +291,12 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     try emitAcceptBody(self, acc);
     try self.w("    return qq;\n}}\n\n", .{});
     if (self.core_wanted or acc.uses_core) {
-        self.uses_x = true;
-        self.uses_model = true;
+        self.uses.x = true;
+        self.uses.model = true;
         try self.out.insertSlice(self.gpa, at_core, try self.arena.print("    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(true)}));
     }
-    if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
+    if (!self.uses.x) gen_unit.patchParam(self, at_x, "x".len);
+    if (!self.uses.model) gen_unit.patchParam(self, at_model, "model".len);
 }
 
 /// Writes the accepted-step body shared by `updateState` and `acceptQ`:
@@ -691,9 +691,9 @@ fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
 /// breakpoint at t + td and clamps dt_max under the shortest delay. A site
 /// whose delay is a solved quantity is skipped.
 pub fn emitDelays(self: *Gen) Error!void {
-    const saved = self.uses_model;
-    defer self.uses_model = saved;
-    self.uses_model = false;
+    const saved = self.uses.model;
+    defer self.uses.model = saved;
+    self.uses.model = false;
     var tds: std.ArrayList([]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .absdelay) continue;
@@ -710,7 +710,7 @@ pub fn emitDelays(self: *Gen) Error!void {
         \\/// shortest delay (engine minDelay -> tran echo machinery).
         \\pub fn delays({s}: *const Model) [{d}]f64 {{
         \\    return .{{
-    , .{ if (self.uses_model) "model" else "_", tds.items.len });
+    , .{ if (self.uses.model) "model" else "_", tds.items.len });
     for (tds.items, 0..) |td, k| try self.w("{s} {s}", .{ if (k == 0) "" else ",", td });
     try self.w(" }};\n}}\n\n\n", .{});
 }
@@ -750,11 +750,11 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
     , .{});
 
-    // Render first: `f64Const` sets `uses_model`, and an unused `model`
+    // Render first: `f64Const` sets `uses.model`, and an unused `model`
     // parameter does not compile.
-    const saved = self.uses_model;
-    defer self.uses_model = saved;
-    self.uses_model = false;
+    const saved = self.uses.model;
+    defer self.uses.model = saved;
+    self.uses.model = false;
 
     var timers: std.ArrayList([3]?[]const u8) = .empty;
     for (self.names.units, 0..) |u, i| {
@@ -787,7 +787,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\pub fn nextBreakpoint({s}: *const Model, t: f64) ?f64 {{
         \\    var best = std.math.inf(f64);
         \\
-    , .{if (self.uses_model) "model" else "_"});
+    , .{if (self.uses.model) "model" else "_"});
     for (timers.items) |tm| {
         if (tm[2]) |g| try self.w("    if (({s}) != 0.0) {{\n    ", .{g});
         try self.w("    if (zNextTimer({s}, {s}, t)) |b| best = @min(best, b);\n", .{ tm[0].?, tm[1].? });

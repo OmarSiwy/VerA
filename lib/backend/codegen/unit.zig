@@ -18,12 +18,63 @@ const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
-const diag = @import("diag");
-const naming = @import("../naming.zig");
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 const OpKind = @import("ir").op.OpKind;
+
+/// Which of a unit's uniform parameters its body read (`Gen.uses`). Zig
+/// rejects an unused parameter, so the signature must say `_`; `closeSig`
+/// back-patches each one left false. Every renderer that spells a parameter
+/// sets its flag; a declaration resets them all before its body.
+pub const Uses = struct {
+    x: bool = false,
+    model: bool = false,
+    inst: bool = false,
+    /// The body read the host's `contract.SimState` (§4.6.1, §5.10.2, §9.10).
+    sim: bool = false,
+    /// The core read its `held` flag (`plan_core.heldOnly`): a skippable
+    /// store was emitted. Patched to `_` otherwise, like the flags above.
+    /// Read only by `emitCoreDecl`.
+    held: bool = false,
+};
+
+/// The dry run `probeBody` makes of a body, and what it learned (`Gen.probe`).
+/// Arena lists, cleared per run.
+pub const Probe = struct {
+    /// Set for the duration of the dry run; every recorder below is a no-op
+    /// otherwise.
+    active: bool = false,
+    /// Where each slot's declaration goes, by slot. Meaningful only on the
+    /// out-of-SSA path (`straight` declares everything at its definition).
+    place: std.ArrayList(Place) = .empty,
+    /// Emitted lexical scopes, as half-open output offsets: `sc_end` their
+    /// closing offset once written, and `sc_open` the stack of indices into
+    /// `sc_end` still being written.
+    sc_end: std.ArrayList(u32) = .empty,
+    sc_open: std.ArrayList(u32) = .empty,
+};
+
+/// The out-of-SSA slots that survived `probeBody` as hoisted function-scope
+/// arrays (`Gen.hoist`): one array per real mask (`h<g>`) plus `hi`/`hs`,
+/// rather than one `var tN` apiece. Arena lists, rebuilt per body by
+/// `emitUnitBody`.
+pub const Hoist = struct {
+    /// Per slot: its index inside its type's hoist array, or `none_u32` for a
+    /// slot that keeps its own name. All-`none_u32` while probing, so the dry
+    /// run names every slot `tN`; `probeBody` only compares offsets within
+    /// its own text.
+    idx: std.ArrayList(u32) = .empty,
+    // Per real hoist element (indexed by `idx`): its mask, and where it
+    // lives, array `h<grp>` at `[pos]`.
+    mask: std.ArrayList(u64) = .empty,
+    grp: std.ArrayList(u32) = .empty,
+    pos: std.ArrayList(u32) = .empty,
+    // Per array `h<g>`: it holds every element of mask `gmask[g]` (distinct,
+    // in first-use order) and is `glen[g]` long.
+    gmask: std.ArrayList(u64) = .empty,
+    glen: std.ArrayList(u32) = .empty,
+};
 
 // =======================================================================
 // Units
@@ -172,10 +223,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     self.emitting_common = true;
     defer self.emitting_common = false;
 
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = false;
-    self.uses_sim = false;
+    self.uses = .{};
     // §3.6.2.2 a refusal visible from any unit's declaration poisons the
     // shared body. Not a widening: `eval` stamps every contribution, so any
     // unit's `@compileError` already failed the whole device.
@@ -196,8 +244,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     const at_fn = self.out.items.len;
     const slots = try openSig(self, name);
     // §5.10 whether the caller keeps the held arrays' end-of-block values
-    // (`Gen.heldArg`).
-    self.uses_held = false;
+    // (`Gen.heldArg`); `uses.held` says whether the body read it.
     const at_held = self.out.items.len + ", comptime ".len;
     if (self.core.held_only.len != 0) try self.w(", comptime held: bool", .{});
     try self.w(") struct {{\n", .{});
@@ -223,14 +270,13 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     // `Setup` defaults its reals to NaN, which a missed `setup` call turns
     // into a NaN residual; the integers have no NaN, so Debug asserts it.
     if (self.su.vals.len != 0) {
-        self.uses_model = true;
+        self.uses.model = true;
         try self.w("    if (std.debug.runtime_safety and contract.validating) std.debug.assert(model.su_ok);\n", .{});
     }
     self.fatal = pre;
     try emitUnitBody(self, .undef);
-    if (self.fatal != null) self.uses_held = false;
     try closeSig(self, slots, body_start);
-    if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
+    if (self.core.held_only.len != 0 and !self.uses.held) patchParam(self, at_held, "held".len);
     // A slice of integers and plain arrays alone never names `S`.
     if (!try namesIdent(self, self.out.items[slots.x..], "S")) patchParam(self, slots.x - "S: type, ".len, "S".len);
     try self.w("}}\n\n", .{});
@@ -265,10 +311,7 @@ pub fn opInputIdx(self: *const Gen, i: u32) u32 {
 /// splices `pub ` for the split form. `text` itself stays private because
 /// `contract.rejectStrayPubDecls` allows only contract-recognized public names.
 pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u8, comment: []const u8) Error!usize {
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = false;
-    self.uses_sim = false;
+    self.uses = .{};
     self.fatal = self.pre_fatal;
     self.plan.display_unit = self.emitting_display;
     try self.plan.analyze(target, self.emitting_common);
@@ -322,16 +365,13 @@ fn closeSig(self: *Gen, s: Slots, body_start: usize) Error!void {
     if (self.fatal) |msg| {
         self.any_fatal = true;
         self.out.shrinkRetainingCapacity(body_start);
-        self.uses_x = false;
-        self.uses_model = false;
-        self.uses_inst = false;
-        self.uses_sim = false;
+        self.uses = .{};
         try self.b("    @compileError(\"{s}\");\n", .{msg});
     }
-    if (!self.uses_x) patchParam(self, s.x, "x".len);
-    if (!self.uses_model) patchParam(self, s.model, "model".len);
-    if (!self.uses_inst) patchParam(self, s.inst, "inst".len);
-    if (!self.uses_sim) patchParam(self, s.sim, "sim".len);
+    if (!self.uses.x) patchParam(self, s.x, "x".len);
+    if (!self.uses.model) patchParam(self, s.model, "model".len);
+    if (!self.uses.inst) patchParam(self, s.inst, "inst".len);
+    if (!self.uses.sim) patchParam(self, s.sim, "sim".len);
 }
 
 /// Overwrites a reserved parameter-name slot with `_`, space-padded to the
@@ -382,7 +422,7 @@ pub fn zigTy(t: VTy) []const u8 {
     };
 }
 
-/// Returns the name of the hoist array a slot of type `t` lives in (`hoist_idx`).
+/// Returns the name of the hoist array a slot of type `t` lives in (`Hoist.idx`).
 fn hoistArray(t: VTy) []const u8 {
     return switch (t) {
         .real => "h",
@@ -395,12 +435,12 @@ fn hoistArray(t: VTy) []const u8 {
 // `tN` or a hoist-array element, so declaration and use cannot drift apart.
 fn slotArr(self: *Gen, i: usize) ?[]const u8 {
     const s = self.plan.slot[i];
-    if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return hoistArray(self.an.vty[i]);
+    if (s < self.hoist.idx.items.len and self.hoist.idx.items[s] != none_u32) return hoistArray(self.an.vty[i]);
     return null;
 }
 fn slotNum(self: *Gen, i: usize) u32 {
     const s = self.plan.slot[i];
-    if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return self.hoist_idx.items[s];
+    if (s < self.hoist.idx.items.len and self.hoist.idx.items[s] != none_u32) return self.hoist.idx.items[s];
     return s;
 }
 /// Writes the name value `i`'s slot is read and written under: its own `tN`
@@ -408,7 +448,7 @@ fn slotNum(self: *Gen, i: usize) u32 {
 pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
     if (slotArr(self, i)) |arr| {
         const k = slotNum(self, i);
-        if (self.an.vty[i] == .real) return self.b("h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
+        if (self.an.vty[i] == .real) return self.b("h{d}[{d}]", .{ self.hoist.grp.items[k], self.hoist.pos.items[k] });
         return self.b("{s}[{d}]", .{ arr, k });
     }
     return self.b("t{d}", .{slotNum(self, i)});
@@ -419,39 +459,39 @@ pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
 pub fn slotMask(self: *Gen, i: usize) ?u64 {
     if (self.an.vty[i] != .real) return null;
     if (slotArr(self, i) == null) return null;
-    return self.hoist_mask.items[slotNum(self, i)];
+    return self.hoist.mask.items[slotNum(self, i)];
 }
 
 /// Every real hoist element's mask: the union over the values that share it.
 fn hoistMasks(self: *Gen, n: u32) Error!void {
-    self.hoist_mask.clearRetainingCapacity();
-    try self.hoist_mask.appendNTimes(self.arena, 0, n);
+    self.hoist.mask.clearRetainingCapacity();
+    try self.hoist.mask.appendNTimes(self.arena, 0, n);
     for (self.plan.live.items) |lv| {
         const v = @backingInt(lv);
         if (self.an.vty[v] != .real or self.plan.slot[v] == none_u32) continue;
-        const k = self.hoist_idx.items[self.plan.slot[v]];
+        const k = self.hoist.idx.items[self.plan.slot[v]];
         if (k == none_u32) continue;
-        self.hoist_mask.items[k] |= family.mask(self, lv);
+        self.hoist.mask.items[k] |= family.mask(self, lv);
     }
-    for (self.hoist_mask.items) |m| try family.note(self, m);
+    for (self.hoist.mask.items) |m| try family.note(self, m);
     // One array per distinct mask: a `@Tuple` with one field per slot is
     // most of a large body's sema time (psp103 `setup`: 1,576 fields, 9
     // masks; `docs/measurements/codegen-levers-2026-09-30.md` lever 5), and
     // every element keeps exactly the type its tuple field had.
-    self.hoist_grp.clearRetainingCapacity();
-    self.hoist_pos.clearRetainingCapacity();
-    self.hoist_gmask.clearRetainingCapacity();
-    self.hoist_glen.clearRetainingCapacity();
-    for (self.hoist_mask.items) |m| {
+    self.hoist.grp.clearRetainingCapacity();
+    self.hoist.pos.clearRetainingCapacity();
+    self.hoist.gmask.clearRetainingCapacity();
+    self.hoist.glen.clearRetainingCapacity();
+    for (self.hoist.mask.items) |m| {
         // ponytail: linear scan; a body has 1-30 distinct masks.
-        const g = std.mem.indexOfScalar(u64, self.hoist_gmask.items, m) orelse blk: {
-            try self.hoist_gmask.append(self.arena, m);
-            try self.hoist_glen.append(self.arena, 0);
-            break :blk self.hoist_gmask.items.len - 1;
+        const g = std.mem.indexOfScalar(u64, self.hoist.gmask.items, m) orelse blk: {
+            try self.hoist.gmask.append(self.arena, m);
+            try self.hoist.glen.append(self.arena, 0);
+            break :blk self.hoist.gmask.items.len - 1;
         };
-        try self.hoist_grp.append(self.arena, @intCast(g));
-        try self.hoist_pos.append(self.arena, self.hoist_glen.items[g]);
-        self.hoist_glen.items[g] += 1;
+        try self.hoist.grp.append(self.arena, @intCast(g));
+        try self.hoist.pos.append(self.arena, self.hoist.glen.items[g]);
+        self.hoist.glen.items[g] += 1;
     }
 }
 
@@ -460,7 +500,7 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
 pub fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
     if (slotArr(self, i)) |arr| {
         const k = slotNum(self, i);
-        if (self.an.vty[i] == .real) return self.arena.print("h{d}[{d}]", .{ self.hoist_grp.items[k], self.hoist_pos.items[k] });
+        if (self.an.vty[i] == .real) return self.arena.print("h{d}[{d}]", .{ self.hoist.grp.items[k], self.hoist.pos.items[k] });
         return self.arena.print("{s}[{d}]", .{ arr, k });
     }
     return self.arena.print("t{d}", .{slotNum(self, i)});
@@ -479,7 +519,7 @@ pub fn zeroOf(t: VTy) []const u8 {
 /// Where one slot's declaration ends up, and the evidence for it.
 ///
 /// `def_off`/`max_use` are output offsets and `scope` an index into
-/// `sc_end`. The emitted scopes nest, so "every use is lexically inside the
+/// `Probe.sc_end`. The emitted scopes nest, so "every use is lexically inside the
 /// block that defines this slot" is exactly `def_off < max_use <
 /// sc_end[scope]`, with no dominator query needed.
 pub const Place = struct {
@@ -498,40 +538,40 @@ pub const Place = struct {
 };
 
 /// Records that a lexical scope opens at the current output offset. No-op
-/// unless `probing`.
+/// unless `probe.active`.
 pub fn scopeOpen(self: *Gen) Error!void {
-    if (!self.probing) return;
-    try self.sc_end.append(self.arena, 0);
-    try self.sc_open.append(self.arena, @intCast(self.sc_end.items.len - 1));
+    if (!self.probe.active) return;
+    try self.probe.sc_end.append(self.arena, 0);
+    try self.probe.sc_open.append(self.arena, @intCast(self.probe.sc_end.items.len - 1));
 }
 
 /// Records that the innermost open scope ends at `at`, which is not always
 /// `out.len`: the `emitCode` peephole rewinds over a label it drops.
-/// No-op unless `probing`.
+/// No-op unless `probe.active`.
 pub fn scopeClose(self: *Gen, at: usize) void {
-    if (!self.probing) return;
-    self.sc_end.items[self.sc_open.pop().?] = @intCast(at);
+    if (!self.probe.active) return;
+    self.probe.sc_end.items[self.probe.sc_open.pop().?] = @intCast(at);
 }
 
-/// Records the definition of `slot` at the current offset while `probing`.
+/// Records the definition of `slot` at the current offset while `probe.active`.
 /// `movable` is false for a phi copy: `emitPhiCopies` writes the slot from
 /// several edges, and even a single-edge copy lands in an arm its merge
 /// block's readers are lexically outside of.
 pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
-    if (!self.probing) return;
-    const p = &self.place.items[slot];
+    if (!self.probe.active) return;
+    const p = &self.probe.place.items[slot];
     if (p.defs == 0) {
         p.def_off = @intCast(self.out.items.len);
-        p.scope = self.sc_open.last().?;
+        p.scope = self.probe.sc_open.last().?;
     }
     p.defs += 1;
     if (p.defs > 1 or !movable) p.pinned = true;
 }
 
-/// Records a read of `slot` at the current offset while `probing`.
+/// Records a read of `slot` at the current offset while `probe.active`.
 pub fn probeUse(self: *Gen, slot: u32) void {
-    if (!self.probing) return;
-    const p = &self.place.items[slot];
+    if (!self.probe.active) return;
+    const p = &self.probe.place.items[slot];
     p.uses += 1;
     // Read before written in the text: a loop-carried value, or a slot the
     // emitter never assigns at all (which is the `undefined`/zero seed the
@@ -546,27 +586,27 @@ pub fn probeUse(self: *Gen, slot: u32) void {
 /// dropped labels and inlined arms). Safe to run twice: emission only appends
 /// to `out` and sets monotone flags, and `fatal` is set-once.
 pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
-    self.place.clearRetainingCapacity();
-    try self.place.appendNTimes(self.arena, .{}, self.plan.n_slots);
-    self.sc_end.clearRetainingCapacity();
-    self.sc_open.clearRetainingCapacity();
+    self.probe.place.clearRetainingCapacity();
+    try self.probe.place.appendNTimes(self.arena, .{}, self.plan.n_slots);
+    self.probe.sc_end.clearRetainingCapacity();
+    self.probe.sc_open.clearRetainingCapacity();
 
     const at = self.out.items.len;
     self.su.exits = 0;
     self.su.store_bytes = 0;
-    self.probing = true;
+    self.probe.active = true;
     try scopeOpen(self); // the function body itself
     try gen_setup.emitRoot(self, target);
     scopeClose(self, self.out.items.len);
-    self.probing = false;
+    self.probe.active = false;
     self.su.lines = std.mem.count(u8, self.out.items[at..], "\n");
     self.out.shrinkRetainingCapacity(at);
 
-    for (self.place.items) |*p| {
+    for (self.probe.place.items) |*p| {
         // `uses == 0` keeps its `var`: a slot that is written and never read
         // is legal Zig, but the same code as an unused `const` is not.
         p.at_def = !p.pinned and p.defs == 1 and p.uses != 0 and
-            p.max_use < self.sc_end.items[p.scope];
+            p.max_use < self.probe.sc_end.items[p.scope];
     }
 }
 
@@ -614,16 +654,16 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // First, before anything can emit a slot name: slot numbering is
     // unit-local, so the previous unit's hoist indices would rename this
     // unit's slots. Both paths below can emit before the real assignment.
-    self.hoist_idx.clearRetainingCapacity();
-    try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
+    self.hoist.idx.clearRetainingCapacity();
+    try self.hoist.idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
 
     // One call at the top of the body, so the shared core is evaluated
     // exactly once per unit.
     if (self.plan.uses_cache) {
-        self.uses_x = true;
-        self.uses_model = true;
-        self.uses_inst = true;
-        self.uses_sim = true;
+        self.uses.x = true;
+        self.uses.model = true;
+        self.uses.inst = true;
+        self.uses.sim = true;
         try self.ind(1);
         try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst, sim{s} }});\n", .{self.heldArg(true)});
     }
@@ -666,13 +706,13 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     for (self.plan.live.items) |lv| {
         const v = @backingInt(lv);
         if (self.plan.slot[v] == none_u32) continue;
-        const p = self.place.items[self.plan.slot[v]];
+        const p = self.probe.place.items[self.plan.slot[v]];
         if (p.at_def) continue;
         // Never assigned and never read: `mark` kept the value alive but the
         // emitted tree reaches neither end. Declaring it would be an unused local.
         if (p.defs == 0 and p.uses == 0) continue;
         const ty = @backingInt(self.an.vty[v]);
-        self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
+        self.hoist.idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
         const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
@@ -683,7 +723,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         if (n == 0) continue;
         try self.ind(1);
         if (ty == .real) {
-            for (self.hoist_gmask.items, self.hoist_glen.items, 0..) |m, len, g| {
+            for (self.hoist.gmask.items, self.hoist.glen.items, 0..) |m, len, g| {
                 if (g != 0) try self.ind(1);
                 try self.b("var h{d}: [{d}]zOf(S, 0x{x}) = undefined;\n", .{ g, len, m });
             }

@@ -76,9 +76,9 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         else => unreachable, // else: `planAll` plans only a `.laplace`/`.zi` unit, whose call is one of these eight
     };
 
-    const saved = g.uses_model;
-    g.uses_model = false;
-    defer g.uses_model = saved;
+    const saved = g.uses.model;
+    g.uses.model = false;
+    defer g.uses.model = saved;
 
     const nv = readVec(g, args, 1) orelse
         return .{ .err = "LRM 4.5.11/4.5.12: the numerator argument of a filter must be a vector" };
@@ -95,7 +95,7 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         .num = num.items,
         .den = den.items,
         .ns = @max(num.items.len, den.items.len),
-        .uses_model = g.uses_model,
+        .uses_model = g.uses.model,
         .lets = lets.items,
     };
     for (0..p.ns) |i| {
@@ -114,7 +114,7 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
             };
         }
         p.period = try g.f64Expr(args[dv.next]);
-        p.uses_model = g.uses_model;
+        p.uses_model = g.uses.model;
         // §4.5.12 τ and t0. The emitted sampler steps abruptly at t = 0, which
         // is exactly the clause's τ = 0 form ("the output is abruptly
         // discontinuous") with t0 = 0. Any other value is a different

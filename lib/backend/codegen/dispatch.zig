@@ -18,9 +18,57 @@ const gen_unit = @import("unit.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
-const assert = codegen.assert;
+const assert = std.debug.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
+
+/// The Jacobian evidence emission leaves behind (`Gen.jac`), read by the
+/// pattern tables and `emitDerivReads` after the dispatchers. Written by the
+/// dispatchers through `patRow` and the `lin*` recorders, except the two lane
+/// masks, which the renderer (`x[u]`) and `ddx` (`.ddxAt(u)`) also set.
+/// `[2]` columns are indexed by `@intFromBool(react)`: 0 `eval`, 1 `q`.
+/// `pat`, `dpat` and `lin` are arena slices allocated by `emitDispatchers`;
+/// empty before it.
+pub const Jac = struct {
+    /// Structural Jacobian columns per residual row: `pat[react][ru]` has bit
+    /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
+    /// it writes each row. The host reads the emitted constant to drop
+    /// structurally-zero stamps at compile time.
+    pat: [2][]u64 = .{ &.{}, &.{} },
+    /// Which residual rows each half ever writes: bit `ru` of `rows[react]` is
+    /// set when the emitted `eval` (resp. `q`) contains any `res[ru] = ...`.
+    /// Not `pat[react][ru] != 0`: a term that depends on no unknown writes the
+    /// row with a clear pattern (an independent current source), and a host
+    /// that read a clear pattern as "identically zero" would drop it.
+    /// Set beside `pat` in `patRow`, which every `res[...]` writer goes through.
+    rows: [2]u64 = .{ 0, 0 },
+    /// Which half of `pat` the current `emitStamps` writes.
+    react: bool = false,
+    /// Per residual row, either half: the columns whose partial reaches it
+    /// through a frequency-dependent operator (`Analysis.acDynDeps`), the
+    /// source of `ac_dyn_slots`. `patRow` fills it from `cur_dyn`.
+    dpat: []u64 = &.{},
+    /// `acDynDeps` of the contribution `emitStamps` is writing.
+    cur_dyn: u64 = 0,
+    /// Unknowns whose derivative lane `eval`/`q` may read: the mask behind the
+    /// emitted `deriv_reads`. Syntactic, so a superset: every `x[u]`
+    /// `renderValueRef` writes, every `.ddxAt(u)`, and every dispatcher term
+    /// with a non-constant coefficient. See `emitDerivReads`.
+    deriv_reads: u64 = 0,
+    /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
+    /// `ddx_reads`, and a subset of `deriv_reads` by construction.
+    ddx_reads: u64 = 0,
+    /// The dispatcher's constant-coefficient terms, per half:
+    /// `lin[react][row * n_u + col]` is the exact coefficient of `x[col]` in
+    /// `res[row]` as far as the stamps are linear. Only the columns OUTSIDE
+    /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
+    /// Empty above 64 unknowns, where neither decl is emitted.
+    lin: [2][]f64 = .{ &.{}, &.{} },
+    /// The constants of a collapsible switch row that hold only under its
+    /// guard (`emitSwitchRow`), eval half; `plan/jac.zig` merges them into
+    /// `jac_const` with a `.when`. Arena list.
+    guarded: std.ArrayList(plan_jac.Entry) = .empty,
+};
 
 // =======================================================================
 // Dispatchers: §5.6 residual assembly, §1.3.1.2 reference directions
@@ -28,16 +76,16 @@ const none_u32 = codegen.none_u32;
 
 /// Emits `eval`, and `q`/`evalQ`/the charge-site tables when any charge site
 /// exists, then the pattern tables, `display` and (optionally) `vpiContribs`.
-/// Allocates `pat` and `lin` on the arena.
+/// Allocates `jac.pat`, `jac.dpat` and `jac.lin` on the arena.
 pub fn emitDispatchers(self: *Gen) Error!void {
-    self.pat[0] = try self.arena.alloc(u64, self.names.n_u);
-    self.pat[1] = try self.arena.alloc(u64, self.names.n_u);
-    @memset(self.pat[0], 0);
-    @memset(self.pat[1], 0);
-    self.dpat = try self.arena.alloc(u64, self.names.n_u);
-    @memset(self.dpat, 0);
-    self.rows = .{ 0, 0 };
-    if (self.names.n_u <= 64) for (&self.lin) |*l| {
+    self.jac.pat[0] = try self.arena.alloc(u64, self.names.n_u);
+    self.jac.pat[1] = try self.arena.alloc(u64, self.names.n_u);
+    @memset(self.jac.pat[0], 0);
+    @memset(self.jac.pat[1], 0);
+    self.jac.dpat = try self.arena.alloc(u64, self.names.n_u);
+    @memset(self.jac.dpat, 0);
+    self.jac.rows = .{ 0, 0 };
+    if (self.names.n_u <= 64) for (&self.jac.lin) |*l| {
         l.* = try self.arena.alloc(f64, self.names.n_u * self.names.n_u);
         @memset(l.*, 0);
     };
@@ -113,9 +161,9 @@ fn qPattern(self: *Gen) void {
     for (self.qs.stamps) |st| {
         const k = self.qs.sites[st.slot];
         const bits = self.an.unknownDeps(self.lowered.charge_sites.items[k].final);
-        if (self.pat[1].len != 0) self.pat[1][st.row] |= bits;
-        self.dpat[st.row] |= self.an.acDynDeps(self.lowered.charge_sites.items[k].final);
-        self.rows[1] |= uBit(st.row);
+        if (self.jac.pat[1].len != 0) self.jac.pat[1][st.row] |= bits;
+        self.jac.dpat[st.row] |= self.an.acDynDeps(self.lowered.charge_sites.items[k].final);
+        self.jac.rows[1] |= uBit(st.row);
     }
 }
 
@@ -199,12 +247,12 @@ fn emitPattern(self: *Gen, any_q: bool) Error!void {
         \\/// happens to be zero, never a missing matrix entry.
         \\
     , .{});
-    try emitPatternRows(self, "jac_pattern", self.pat[0]);
-    try emitWrittenRows(self, "jac_rows", "eval", self.rows[0]);
+    try emitPatternRows(self, "jac_pattern", self.jac.pat[0]);
+    try emitWrittenRows(self, "jac_rows", "eval", self.jac.rows[0]);
     if (!any_q) return;
     try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
-    try emitPatternRows(self, "q_pattern", self.pat[1]);
-    try emitWrittenRows(self, "q_rows", "q", self.rows[1]);
+    try emitPatternRows(self, "q_pattern", self.jac.pat[1]);
+    try emitWrittenRows(self, "q_rows", "q", self.jac.rows[1]);
 }
 
 /// Emits `ac_dyn_slots` and `acDyn` (`contract.acDynSlots`) when a
@@ -213,7 +261,7 @@ fn emitPattern(self: *Gen, any_q: bool) Error!void {
 fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
     const n = self.names.n_u;
     var slots: std.ArrayList(u32) = .empty;
-    for (self.dpat, 0..) |m, r| for (0..n) |c| {
+    for (self.jac.dpat, 0..) |m, r| for (0..n) |c| {
         const hit = if (n > 64) m != 0 else (m >> @intCast(c)) & 1 != 0;
         if (hit) try slots.append(self.arena, @intCast(r * n + c));
     };
@@ -324,7 +372,7 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("var   res: contract.Rows(Self, S) = zRowsZero(S);\n", .{});
     const stamps = try emitStamps(self, false);
     self.core_hoisted = false;
-    // `uses_x` also counts a row that reads `x` only through the core, so ask
+    // `uses.x` also counts a row that reads `x` only through the core, so ask
     // the text: every direct read is `x[@intFromEnum(U.<name>)]`.
     if (std.mem.indexOf(u8, self.out.items[at_mut..], "x[@intFromEnum(") == null) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.core_wanted) gen_unit.patchParam(self, at_m, "m".len);
@@ -405,27 +453,27 @@ const status_post = "    zStatusStore(inst, m);\n" ++ status_pre;
 const zero_both = ".{ .res = zRowsZero(S), .q = zSitesZero(S) };\n";
 
 /// Emits the §5.6 stamp rows for one residual half into a `res` the caller
-/// has declared. Accumulates `uses_x`/`uses_model`/`uses_inst`, `pat`, `rows`
+/// has declared. Accumulates `uses.x`/`uses.model`/`uses.inst`, `jac.pat`, `jac.rows`
 /// and `lin`, and returns the row count so the caller can back-patch its
 /// signature. Opens a `core` call unless `core_hoisted` is set.
 pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     var stamps: u32 = 0;
     // Which half `patRow` accumulates into. `eval`/`q` and `evalQ` emit the
     // same rows, so the second pass ORs in bits the first already set.
-    self.pat_react = react;
+    self.jac.react = react;
     // `lin` is a replay, not an accumulation: `evalQ` re-emits the same
     // stamps, and adding them twice would double every coefficient. The
     // guarded stamps are eval-only (`emitSwitchRow`), so eval resets them.
-    @memset(self.lin[@intFromBool(react)], 0);
-    if (!react) self.guarded.clearRetainingCapacity();
+    @memset(self.jac.lin[@intFromBool(react)], 0);
+    if (!react) self.jac.guarded.clearRetainingCapacity();
     // One core evaluation per residual, not one per contribution: LLVM does
     // not merge them (see `plan_core.plan`'s header).
     var opened = false;
     if (self.lowered.table_effect != .f_zero) {
         opened = true;
-        self.uses_x = true;
-        self.uses_model = true;
-        self.uses_inst = true;
+        self.uses.x = true;
+        self.uses.model = true;
+        self.uses.inst = true;
         self.core_wanted = true;
         if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst, sim{s} }});\n", .{self.heldArg(false)});
         try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lowered.table_effect)).?});
@@ -433,7 +481,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
 
     for (self.lowered.contributions.items, 0..) |c, i| {
         const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
-        self.cur_dyn = contribDyn(self, i, c, react);
+        self.jac.cur_dyn = contribDyn(self, i, c, react);
         // §5.6.1.3 a `.flow` entry whose branch row is runtime-selected is
         // consumed by that row (`I_b − value`); its KCL current is the ±I_b
         // the potential entry already stamps. Stamping the value here too
@@ -471,14 +519,14 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             val != .f_zero or run_pot != null or
                 (c.access == .potential and self.an.rv(c.react_val) != .f_zero);
         if (!live) continue;
-        self.uses_x = true;
+        self.uses.x = true;
         // `model`/`inst` are read through `core` alone, so a residual whose
         // every live row is zero never opens one (an unused parameter would
         // fail the host's build). A runtime-selected row always opens it: its
         // retention flag is a core field (`buildJobs`).
         if (val != .f_zero or run_pot != null) {
-            self.uses_model = true;
-            self.uses_inst = true;
+            self.uses.model = true;
+            self.uses.inst = true;
             if (!opened) {
                 opened = true;
                 self.core_wanted = true;
@@ -592,14 +640,14 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         try self.b("}}\n", .{});
     }
 
-    self.cur_dyn = 0;
+    self.jac.cur_dyn = 0;
 
     // §5.4.2 the branch-flow unknowns no branch row defines (`FreeFlow`).
     // Both rows are purely resistive: a §5.6.6 implicit sum's reactive half
     // is already on this row as `−Σ q`, and a §5.4.2.1 probe is a short,
     // which stores no charge.
     if (!react) for (self.topo.free_flows) |f| {
-        self.uses_x = true;
+        self.uses.x = true;
         stamps += 1;
         if (f.sourced) {
             // Closes `res[u] = x[u] − Σ contributions`, whose `−Σ` half the
@@ -640,12 +688,12 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // with a `ddt` junction capacitance. Emitted after the contribution loop
     // because it reads the finished res[p].
     for (self.lowered.port_probes.items) |pp| {
-        self.uses_x = true;
+        self.uses.x = true;
         stamps += 1;
         try self.ind(1);
         // Reads the finished res[port], so this row's columns are that row's.
         patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
-        self.dpat[pp.u] |= self.dpat[pp.port];
+        self.jac.dpat[pp.u] |= self.jac.dpat[pp.port];
         try linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
             try rowSet(self, pp.u);
@@ -742,7 +790,7 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
             try guardTerm(self, u, c.hi, 1, k);
             try guardTerm(self, u, c.lo, -1, k);
         }
-    } else self.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
+    } else self.jac.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
     linDynamic(self, u);
     const d: u32 = if (split) 4 else 2;
     if (split) {
@@ -827,7 +875,7 @@ fn guardOf(self: *const Gen, i: usize) ?u32 {
 /// Ground has no row and no column.
 fn guardTerm(self: *Gen, row: u32, col: u32, g: f64, k: u32) Error!void {
     if (row == Lower.ground or col == Lower.ground) return;
-    try self.guarded.append(self.arena, .{ .row = row, .col = col, .g = g, .c = 0, .when = k });
+    try self.jac.guarded.append(self.arena, .{ .row = row, .col = col, .g = g, .c = 0, .when = k });
 }
 
 /// Returns `<flow unknown>__retained`: the `Model` field `derive` publishes
@@ -906,7 +954,7 @@ fn coreRef(self: *Gen, v: Mir.Value) Error!void {
 
 /// Emits one term into row `node`: `opx` (`add`/`sub`) of `val`, recording
 /// `bits` in the row pattern. `col` names the unknown when `val` is exactly `x[col]` (a ±1 term
-/// whose coefficient `Gen.lin` records), and is null for a core value, whose
+/// whose coefficient `Gen.jac.lin` records), and is null for a core value, whose
 /// lanes `renderValueRef` already marked. Ground has no row and writes nothing.
 pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8, bits: u64, col: ?u32) Error!void {
     if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
@@ -931,17 +979,17 @@ fn rowEnd(self: *Gen) Error!void {
     try self.b(");\n", .{});
 }
 
-/// Records that row `node` of the half being emitted (`pat_react`) gained a
+/// Records that row `node` of the half being emitted (`jac.react`) gained a
 /// term whose derivative lives in `bits`, and that the row is written at all
 /// (`rows`). Ground has no row. Every `res[...]` writer calls this.
 pub fn patRow(self: *Gen, node: u16, bits: u64) void {
     if (node == Lower.ground) return;
-    if (self.pat[@intFromBool(self.pat_react)].len == 0) return;
-    self.pat[@intFromBool(self.pat_react)][node] |= bits;
+    if (self.jac.pat[@intFromBool(self.jac.react)].len == 0) return;
+    self.jac.pat[@intFromBool(self.jac.react)][node] |= bits;
     // A superset: a stamp of `x[u]` itself (an `ib`) is marked when the
     // contribution reaches `u` through an operator too.
-    self.dpat[node] |= self.cur_dyn & bits;
-    self.rows[@intFromBool(self.pat_react)] |= uBit(node);
+    self.jac.dpat[node] |= self.jac.cur_dyn & bits;
+    self.jac.rows[@intFromBool(self.jac.react)] |= uBit(node);
 }
 
 /// Records that row `row` of the half being emitted gains `k · x[col]`. The
@@ -950,21 +998,21 @@ pub fn patRow(self: *Gen, node: u16, bits: u64) void {
 /// whose lanes are already marked.
 fn linTerm(self: *Gen, row: u32, col: u32, k: f64) void {
     if (row == Lower.ground or col == Lower.ground) return;
-    const l = self.lin[@intFromBool(self.pat_react)];
+    const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
     l[row * self.names.n_u + col] += k;
 }
 
 /// Records that row `row` is assigned a term with no recorded unknown in it.
 fn linClear(self: *Gen, row: u32) void {
-    const l = self.lin[@intFromBool(self.pat_react)];
+    const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
     @memset(l[row * self.names.n_u ..][0..self.names.n_u], 0);
     // Its guarded constants go with the assignment too.
-    if (self.pat_react) return;
+    if (self.jac.react) return;
     var k: usize = 0;
-    while (k < self.guarded.items.len) {
-        if (self.guarded.items[k].row == row) _ = self.guarded.orderedRemove(k) else k += 1;
+    while (k < self.jac.guarded.items.len) {
+        if (self.jac.guarded.items[k].row == row) _ = self.jac.guarded.orderedRemove(k) else k += 1;
     }
 }
 
@@ -979,29 +1027,29 @@ fn linBranch(self: *Gen, row: u32, hi: u16, lo: u16) void {
 /// Records §5.4.3 `res[u] = x[u] − res[port]` (eval) or `−res[port]` (q):
 /// the row is the finished port row negated, so its constants are too.
 fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) Error!void {
-    const l = self.lin[@intFromBool(self.pat_react)];
+    const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
     const n = self.names.n_u;
     for (0..n) |c| l[u * n + c] = -l[port * n + c];
     if (with_x) l[u * n + u] += 1;
     // The port row's guarded constants are copied too, under the same guard
     // (`emitSwitchRow`): they are eval-only, and each is appended once per row.
-    if (self.pat_react) return;
-    const k0 = self.guarded.items.len;
+    if (self.jac.react) return;
+    const k0 = self.jac.guarded.items.len;
     for (0..k0) |k| {
-        const e = self.guarded.items[k];
+        const e = self.jac.guarded.items[k];
         if (e.row != port) continue;
-        try self.guarded.append(self.arena, .{ .row = u, .col = e.col, .g = 0 - e.g, .c = 0 - e.c, .when = e.when });
+        try self.jac.guarded.append(self.arena, .{ .row = u, .col = e.col, .g = 0 - e.g, .c = 0 - e.c, .when = e.when });
     }
 }
 
 /// Records that row `row` is about to be written under a runtime condition:
 /// its constants may not survive, so each of their columns keeps a lane.
 fn linDynamic(self: *Gen, row: u32) void {
-    const l = self.lin[@intFromBool(self.pat_react)];
+    const l = self.jac.lin[@intFromBool(self.jac.react)];
     if (l.len == 0) return;
     for (l[row * self.names.n_u ..][0..self.names.n_u], 0..) |k, c| {
-        if (k != 0) self.deriv_reads |= uBit(@intCast(c));
+        if (k != 0) self.jac.deriv_reads |= uBit(@intCast(c));
     }
 }
 
@@ -1014,7 +1062,7 @@ fn linDynamic(self: *Gen, row: u32) void {
 /// the dispatcher's unconditional ±1 stamps, which `lin` replays exactly.
 /// Omitted above 64 unknowns, where the defaults (every lane) are correct.
 pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
-    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.deriv_reads, self.ddx_reads, limit_writes, .{ self.lin[0], self.lin[1] }, self.guarded.items) orelse return;
+    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.jac.deriv_reads, self.jac.ddx_reads, limit_writes, .{ self.jac.lin[0], self.jac.lin[1] }, self.jac.guarded.items) orelse return;
     try self.w(
         \\/// Unknowns whose derivative lane `eval`/`q` read. Every other
         \\/// column's partials are constants, listed in `jac_const`; see
@@ -1029,7 +1077,7 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
         \\/// `g` of `eval`, `c` of `q`. Sorted by (row, col); absent is 0.
         \\pub const jac_const = [_]contract.JacConst(U){{
         \\
-    , .{ jc.mask, self.ddx_reads });
+    , .{ jc.mask, self.jac.ddx_reads });
     for (jc.entries) |e| {
         try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s}", .{
             self.names.u_names[e.row], self.names.u_names[e.col], try gen_file.fmtF64(self, e.g), try gen_file.fmtF64(self, e.c),
@@ -1054,7 +1102,7 @@ fn nodeBit(node: u16) u64 {
 
 /// The columns accumulated so far on row `u` of the half being emitted.
 fn patOf(self: *const Gen, u: u32) u64 {
-    const half = self.pat[@intFromBool(self.pat_react)];
+    const half = self.jac.pat[@intFromBool(self.jac.react)];
     return if (half.len == 0) std.math.maxInt(u64) else half[u];
 }
 
@@ -1245,8 +1293,8 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     , .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model) [{d}][2]f64 {{\n", .{total});
-    const saved_model = self.uses_model;
-    self.uses_model = false;
+    const saved_model = self.uses.model;
+    self.uses.model = false;
     var body: std.ArrayList(u8) = .empty;
     var at: usize = 0;
     for (self.noise.tabs, 0..) |pts, k| {
@@ -1260,8 +1308,8 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
         }
         at += pts.len;
     }
-    const reads_model = self.uses_model;
-    self.uses_model = saved_model or reads_model;
+    const reads_model = self.uses.model;
+    self.uses.model = saved_model or reads_model;
     if (!reads_model) gen_unit.patchParam(self, at_model, "model".len);
     try self.w("    var pts: [{d}][2]f64 = .{{\n", .{total});
     try self.w("{s}", .{body.items});
@@ -1287,10 +1335,10 @@ pub fn emitAcTable(self: *Gen) Error!void {
     // Rendered before anything is written, so the `x`/`model`/`inst`
     // parameters can be patched to `_` when nothing reached them, as
     // `emitUnit` does. The flags are Gen-wide, so they are saved.
-    const saved_model = self.uses_model;
-    const saved_inst = self.uses_inst;
-    self.uses_model = false;
-    self.uses_inst = false;
+    const saved_model = self.uses.model;
+    const saved_inst = self.uses.inst;
+    self.uses.model = false;
+    self.uses.inst = false;
     const vals = try self.arena.alloc([2][]const u8, self.noise.ac_rows.len);
     var all_stated = true;
     var uses_core = false;
@@ -1311,10 +1359,10 @@ pub fn emitAcTable(self: *Gen) Error!void {
             phase.?,
         };
     }
-    const reads_model = self.uses_model or uses_core;
-    const reads_inst = self.uses_inst or uses_core;
-    self.uses_model = saved_model or reads_model;
-    self.uses_inst = saved_inst or reads_inst;
+    const reads_model = self.uses.model or uses_core;
+    const reads_inst = self.uses.inst or uses_core;
+    self.uses.model = saved_model or reads_model;
+    self.uses.inst = saved_inst or reads_inst;
     if (!all_stated) return refuseAc(self);
 
     try self.w("/// §4.6.3 AC stimulus sources declared by the model.\npub const ac_gens = [_]contract.AcGen(Self){{\n", .{});

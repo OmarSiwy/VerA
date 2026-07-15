@@ -7,7 +7,6 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
@@ -257,7 +256,7 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
     const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
     if (level >= 1) {
-        g.uses_sim = true;
+        g.uses.sim = true;
         try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{sim.t}}); ", .{
             name, std.zig.fmtString(g.mir.name),
         });
