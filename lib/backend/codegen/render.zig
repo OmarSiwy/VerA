@@ -10,6 +10,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
+const gen_instance = @import("instance.zig");
 const gen_setup = @import("setup.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_unit = @import("unit.zig");
@@ -417,7 +418,7 @@ pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
                 .inst_result => |di| self.mir.instOp(di) == .store,
                 else => false, // else: an array version is an instruction result
             };
-            if (inPlace(self, id) and gen_file.dirtyTracked(self, id))
+            if (inPlace(self, id) and gen_instance.dirtyTracked(self, id))
                 try self.b("zArrStD({s}, p{d}, &inst.{s}__dirty, ", .{ ty, id, self.names.held_names[m.held] })
             else if (inPlace(self, id))
                 try self.b("zArrSt({s}, p{d}, ", .{ ty, id })
