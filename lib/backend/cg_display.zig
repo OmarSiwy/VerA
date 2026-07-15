@@ -62,6 +62,8 @@ pub const PrintArg = struct {
     /// Original integer width, before SSA and the i64 storage carrier.
     bits: u7 = 64,
 
+    /// How `renderPrintArg` spells the operand: which helper, if any, sits
+    /// between the value and the Zig format verb.
     pub const Mode = enum {
         /// Straight through the Zig verb the conversion mapped to.
         plain,

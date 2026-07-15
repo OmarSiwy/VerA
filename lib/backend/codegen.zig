@@ -34,6 +34,9 @@ const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 
+/// Every way `generate` fails. Out of memory aside, each is a refusal of
+/// the whole device: no partial `Output` is returned. A refusal confined to
+/// one unit is not an error here but a `@compileError` body plus `fatal_out`.
 pub const Error = std.mem.Allocator.Error || error{
     /// proof.zig rejected the model. `generate` returns this before emitting
     /// a byte.

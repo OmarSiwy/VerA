@@ -57,8 +57,10 @@ const Features = struct {
 };
 
 /// Writes the whole device.zig into `self.out` and builds `self.prelude` and
-/// `self.helpers`. Requires `Gen.prepare` to have run.
+/// `self.helpers`. Requires `Gen.prepare` to have run; asserts nothing has
+/// been emitted yet.
 pub fn emitFile(self: *Gen) Error!void {
+    assert(self.out.items.len == 0 and self.files.len == 0);
     const f: Features = .{
         .stateful = hasStatefulOps(self),
         .hist = usesOp(self, .absdelay),
@@ -266,7 +268,8 @@ fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
 
 /// Records the unit declaration `name` spanning `lo` to the current end of
 /// `self.out`, with its keyword at `fn_at`. Asserts `lo` is the previous
-/// range's end: the ranges tile (`Output`'s invariant).
+/// range's end (the ranges tile, `Output`'s invariant) and `fn_at` lies in
+/// the range.
 pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Error!void {
     const his = self.files.items(.hi);
     if (his.len != 0) assert(his[his.len - 1] == lo);

@@ -86,10 +86,7 @@ pub fn pinLanes(self: *Gen, v: Mir.Value) void {
     self.float.pinned = true;
 }
 
-/// Records a decision on `v` that goes through the lead protocol
-/// (`zCmp`, `zRoundI`, `zStrip`): a batch family that implements it stays
-/// exact per point, so it marks the device `batch_lead` rather than pinned.
-/// Whether `v` can differ between two points of a batch (`pointDep`), as
+/// Returns whether `v` can differ between two points of a batch (`pointDep`), as
 /// rendered: a setup root is a `Model` field, which every point shares.
 pub fn perPoint(self: *const Gen, v: Mir.Value) bool {
     const r = self.an.rv(v);
@@ -115,6 +112,10 @@ pub fn instPin(self: *Gen) void {
     self.float.pinned = true;
 }
 
+/// Records a decision on `v` that goes through the lead protocol
+/// (`zCmp`, `zRoundI`, `zStrip`): a batch family that implements it stays
+/// exact per point, so it marks the device `batch_lead` rather than pinned.
+/// No effect for a value every point shares, or in the display unit.
 pub fn leadLanes(self: *Gen, v: Mir.Value) void {
     if (self.emitting_display) return;
     if (!perPoint(self, v)) return;
