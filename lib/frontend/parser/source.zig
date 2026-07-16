@@ -12,6 +12,9 @@ const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_module = @import("module.zig");
 const parse_inst = @import("inst.zig");
+const parse_discipline = @import("discipline.zig");
+const parse_hier = @import("hier.zig");
+const parse_net = @import("net.zig");
 const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
@@ -73,8 +76,8 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             // `connectmodule` (§7.6, Syntax 7-4) has the same header, items
             // and `endmodule`; `Ast.ModuleDecl.is_connect` records it.
             .kw_module, .kw_macromodule, .kw_connectmodule => try element(self, before, &modules, parse_module.parseModule(self)),
-            .kw_discipline => try element(self, before, &disciplines, parse_decl.parseDiscipline(self)),
-            .kw_nature => try element(self, before, &natures, parse_decl.parseNature(self)),
+            .kw_discipline => try element(self, before, &disciplines, parse_discipline.parseDiscipline(self)),
+            .kw_nature => try element(self, before, &natures, parse_discipline.parseNature(self)),
             // §6.4 / A.1.9 paramset_declaration. §6.4 makes a paramset
             // instantiable "exactly like a module"; `ir/elaborate.zig`
             // applies it.
@@ -320,7 +323,7 @@ fn parseConfigRule(self: *Parser) Error!Ast.ConfigRule {
         return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
     self.pos += 1;
     var rule: Ast.ConfigRule = .{ .select = .default, .expand = .{ .liblist = &.{} }, .main_tok = tok };
-    if (is_instance) rule.select = .{ .instance = try parse_decl.parseDottedName(self, false) } else if (!is_default) rule.select = .{ .cell = try parseLibCell(self) };
+    if (is_instance) rule.select = .{ .instance = try parse_hier.parseDottedName(self, false) } else if (!is_default) rule.select = .{ .cell = try parseLibCell(self) };
     if (self.reservedIs(self.pos, "liblist")) {
         // IEEE 1364-2005 §13.3.1.4: "It is an error if a library name is
         // included in a cell selection clause and the corresponding expansion
@@ -398,7 +401,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
         if (self.peek() == .kw_output or self.peek() == .kw_input) {
             dir = self.peek();
             self.pos += 1;
-            _ = try parse_module.optDiscipline(self);
+            _ = try parse_net.optDiscipline(self);
             if (self.eat(.kw_reg)) has_reg = true;
         }
         const port = try self.expectIdent();
@@ -426,7 +429,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
         if (self.peek() != .kw_output and self.peek() != .kw_input and self.peek() != .kw_reg) break;
         const kw = self.peek();
         self.pos += 1;
-        _ = try parse_module.optDiscipline(self);
+        _ = try parse_net.optDiscipline(self);
         if (kw == .kw_reg or self.eat(.kw_reg)) has_reg = true;
         while (true) {
             const port = try self.expectIdent();
@@ -613,10 +616,10 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
     self.pos += 1; // the udp_identifier
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
-    if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) try parse_decl.parseDriveStrength(self, &s0, &s1);
+    if (self.peek() == .lparen and parse_net.strengthWord(self, self.pos + 1) != null) try parse_net.parseDriveStrength(self, &s0, &s1);
     // A.2.2.3 `delay2` is a `delay3` that stops at two values.
     const delay_tok = self.pos;
-    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
+    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_net.parseDelay3(self) else .{};
     // `parseDelay3` copies a lone value into `off`; only a written third one differs.
     if (delay.off != .none and delay.off != delay.rise) try self.report(delay_tok, .E0239, "`{s} #(…)`: 3 values", .{self.file.str(module)});
     while (true) {

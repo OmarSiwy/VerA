@@ -12,7 +12,7 @@ const parse_stmt = @import("stmt.zig");
 const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
-const parse_decl = @import("decl.zig");
+const parse_hier = @import("hier.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
@@ -256,7 +256,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // `.hier_ident`; lowering tells them apart by resolving the parts.
             // IEEE 1364-2005 §12.5 an instance select, `g[0].l.x`: the part
             // is spelled `g[0]`, the name the digital engine registers.
-            const head = if (parse_decl.instanceSelectAhead(self)) try parse_decl.parseInstanceSelect(self, name) else name;
+            const head = if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, name) else name;
             if (self.peek() == .dot) {
                 var parts: std.ArrayList(Ast.StrId) = .empty;
                 try parts.append(self.arena, head);
@@ -279,7 +279,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                         },
                         else => try self.expectIdent(), // else: not a nature attribute keyword; `expectIdent` takes it or refuses it
                     };
-                    try parts.append(self.arena, if (parse_decl.instanceSelectAhead(self)) try parse_decl.parseInstanceSelect(self, part) else part);
+                    try parts.append(self.arena, if (parse_hier.instanceSelectAhead(self)) try parse_hier.parseInstanceSelect(self, part) else part);
                 }
                 // §6.7.1: "Analog user defined functions can be accessed
                 // hierarchically." A dotted name with an argument list becomes
