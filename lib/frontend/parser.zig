@@ -2,8 +2,16 @@
 //! by recursive descent with precedence climbing for expressions.
 //! LRM annex A (grammar), §4.2.2 (precedence), §6.8 (scopes).
 //!
-//! The grammar is split across `parser/*.zig`; each sub-file holds free functions
-//! taking `self: *Parser`. This file owns the cursor, token text and diagnostics.
+//! The grammar is split across `parser/*.zig`, one file per data domain; each
+//! holds free functions taking `self: *Parser`. This file owns the cursor,
+//! token text, attribute collection and diagnostics.
+//!
+//! Spine: `parseSourceFile` (source.zig) dispatches each A.1.2 description to
+//! the file that owns its grammar. `parseModule` (module.zig) dispatches each
+//! A.1.4 item the same way into the scope's `Body` table, which becomes the
+//! `Ast.ModuleDecl` at `endmodule`. Statements (stmt.zig) and expressions
+//! (expr.zig) are reached from the items. Every node lands in `file`, the
+//! `Ast.SourceFile` stores this parse writes and `parseSourceFile` returns.
 
 const std = @import("std");
 const token = @import("token.zig");
@@ -184,11 +192,11 @@ pub const Parser = struct {
     /// was reported; the AST is then partial and must not be lowered.
     pub const parseSourceFile = parse_source.parseSourceFile;
 
-    // Annex A.5 user-defined primitives and their instances (IEEE 1364-2005 Clause 8)
-    const parse_udp = @import("parser/udp.zig");
-
     // Annex A.1.2 module_declaration and A.1.4 module_item (LRM §6.2, Clause 3)
     const parse_module = @import("parser/module.zig");
+
+    // Annex A.1.6/A.1.7 natures and disciplines (§3.6)
+    const parse_discipline = @import("parser/discipline.zig");
 
     // Annex A.1.9 paramset (LRM §6.4)
     const parse_paramset = @import("parser/paramset.zig");
@@ -196,8 +204,20 @@ pub const Parser = struct {
     // Annex A.1.8 connectrules (LRM §7.7)
     const parse_connectrules = @import("parser/connectrules.zig");
 
-    // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1)
-    const parse_specify = @import("parser/specify.zig");
+    // Annex A.5 user-defined primitives and their instances (IEEE 1364-2005 Clause 8)
+    const parse_udp = @import("parser/udp.zig");
+
+    // Annex A.2.1.1 parameters (§3.4), A.2.1.3 variables and events, A.2.5 dimensions
+    const parse_decl = @import("parser/decl.zig");
+
+    // Annex A.2.1.2/A.2.1.3/A.2.2 port, net and branch declarations, strengths and delays
+    const parse_net = @import("parser/net.zig");
+
+    // §6.7 / A.9.3 hierarchical names in declaration positions
+    const parse_hier = @import("parser/hier.zig");
+
+    // Annex A.2.6 analog functions (§4.7.1), IEEE 1364-2005 A.2.6/A.2.7 digital functions and tasks
+    const parse_function = @import("parser/function.zig");
 
     // Annex A.4.1 module instantiation (LRM §6.2.2), A.3 gates and switches, A.6.2 initial/always
     const parse_inst = @import("parser/inst.zig");
@@ -205,20 +225,8 @@ pub const Parser = struct {
     // Annex A.4.2 generate constructs (LRM §6.6)
     const parse_generate = @import("parser/generate.zig");
 
-    // Annex A.2.1.1 parameters (§3.4), A.2.1.3 variables and events, A.2.5 dimensions
-    const parse_decl = @import("parser/decl.zig");
-
-    // Annex A.2.6 analog functions (§4.7.1), IEEE 1364-2005 A.2.6/A.2.7 digital functions and tasks
-    const parse_function = @import("parser/function.zig");
-
-    // Annex A.1.6/A.1.7 natures and disciplines (§3.6)
-    const parse_discipline = @import("parser/discipline.zig");
-
-    // Annex A.2.1.2/A.2.1.3/A.2.2 port, net and branch declarations, strengths and delays
-    const parse_net = @import("parser/net.zig");
-
-    // §6.7 / A.9.3 hierarchical names in declaration positions
-    const parse_hier = @import("parser/hier.zig");
+    // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1)
+    const parse_specify = @import("parser/specify.zig");
 
     // Annex A.6.4 analog_statement (LRM Clause 5)
     const parse_stmt = @import("parser/stmt.zig");
@@ -422,7 +430,8 @@ pub const Parser = struct {
         });
     }
 
-    /// Parse a suffix or statement prefix, retaining its actual owner.
+    /// `skipAttributes`, then binds what it read to `owner` (an operator or
+    /// call suffix, or a statement prefix) instead of the next declaration.
     pub fn ownedAttributes(self: *Parser, owner: Ast.AttributeOwner) error{OutOfMemory}!void {
         const first = self.file.attributes.items.len;
         try self.skipAttributes();
@@ -433,7 +442,10 @@ pub const Parser = struct {
         for (self.file.attributes.items[first..]) |*a| a.owner = owner;
     }
 
-    /// A declaration list gives every declared name the prefix's specs.
+    /// Gives the declaration at token `to` every attribute binding the
+    /// declaration at token `from` has: §2.9 Example 5 puts a prefix on every
+    /// name of its list. A binding already copied is not added again.
+    /// Cost: O(n²) in the file's attribute bindings.
     pub fn copyAttributes(self: *Parser, from: u32, to: u32) error{OutOfMemory}!void {
         if (from == to) return;
         const count = self.file.attributes.items.len;
@@ -447,11 +459,35 @@ pub const Parser = struct {
         }
     }
 
-    /// Lookahead may have consumed a body statement's prefix already.
+    /// Rebinds the declaration-owned attributes at token `tok` to the
+    /// statement that starts there. `skipAttributes` binds a prefix to a
+    /// declaration, and lookahead may have read a statement's prefix before
+    /// knowing it was one. Cost: O(n) in the file's attribute bindings.
     pub fn statementAttributes(self: *Parser, tok: u32) void {
         for (self.file.attributes.items) |*a| if (a.owner.kind == .declaration and a.owner.tok == tok) {
             a.owner.kind = .statement;
         };
+    }
+
+    /// Where a speculative `skipAttributes` started: the cursor and the
+    /// lengths of `attrs` and `file.attributes`. Both tables only grow while
+    /// it is held, so the lengths are enough to undo the read.
+    pub const AttrMark = struct { pos: u32, specs: usize, bindings: usize };
+
+    /// Returns the mark `rewindAttributes` undoes a speculative read back to.
+    pub fn markAttributes(self: *const Parser) AttrMark {
+        return .{ .pos = self.pos, .specs = self.attrs.items.len, .bindings = self.file.attributes.items.len };
+    }
+
+    /// Hands attribute instances read since `m` back to the token stream: the
+    /// cursor returns to `m` and their specs and bindings are dropped, so
+    /// whatever the instance prefixes collects it again. Asserts the cursor
+    /// has not moved back past `m`.
+    pub fn rewindAttributes(self: *Parser, m: AttrMark) void {
+        std.debug.assert(m.pos <= self.pos);
+        self.pos = m.pos;
+        self.attrs.shrinkRetainingCapacity(m.specs);
+        self.file.attributes.shrinkRetainingCapacity(m.bindings);
     }
 
     /// The last spec of each VerA attribute in `self.attrs[mark..]` (§2.9:
@@ -648,18 +684,18 @@ const parse_test = @import("parser/test.zig");
 
 test {
     _ = Parser.parse_source;
-    _ = Parser.parse_udp;
     _ = Parser.parse_module;
+    _ = Parser.parse_discipline;
     _ = Parser.parse_paramset;
     _ = Parser.parse_connectrules;
-    _ = Parser.parse_specify;
-    _ = Parser.parse_generate;
-    _ = Parser.parse_inst;
+    _ = Parser.parse_udp;
     _ = Parser.parse_decl;
-    _ = Parser.parse_function;
-    _ = Parser.parse_discipline;
     _ = Parser.parse_net;
     _ = Parser.parse_hier;
+    _ = Parser.parse_function;
+    _ = Parser.parse_inst;
+    _ = Parser.parse_generate;
+    _ = Parser.parse_specify;
     _ = Parser.parse_stmt;
     _ = Parser.parse_expr;
     _ = Parser.parse_concat;

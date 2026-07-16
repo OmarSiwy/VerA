@@ -4,7 +4,7 @@
 //! discipline, connectrules, paramset, library, config and primitive declarations,
 //! each parsed by the file that owns its grammar (`udp.zig` for a primitive).
 //!
-//! LRM clauses cited: §1, §1.1, §2.2, §6.2, §6.4, §7.6, §7.7, §8.5.3, §10.6.
+//! LRM clauses cited: §1, §1.1, §2.2, §6.2, §6.4, §7.6, §7.7, §10.6.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
