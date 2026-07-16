@@ -11,6 +11,7 @@ const std = @import("std");
 const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_expr = @import("expr.zig");
+const parse_literal = @import("literal.zig");
 const Ast = @import("../ast.zig");
 const token = @import("../token.zig");
 const Error = parser.Error;
@@ -106,7 +107,7 @@ fn parseRange(self: *Parser) Error!Ast.ValueRange {
         var names: std.ArrayList(Ast.StrId) = .empty;
         if (self.peek() != .rbrace) while (true) {
             const tok = try self.expect(.string_literal);
-            try names.append(self.arena, try parse_expr.internString(self, tok));
+            try names.append(self.arena, try parse_literal.internString(self, tok));
             if (!self.eat(.comma)) break;
         };
         _ = try self.expect(.rbrace);

@@ -10,6 +10,7 @@ const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
+const parse_literal = @import("literal.zig");
 const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
 const parse_specify = @import("specify.zig");
@@ -434,7 +435,7 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
             try self.report(self.pos, .E0220, "after `{s}`", .{@tagName(tag)[6..]});
         if (self.peek() != .rparen) while (true) {
             const s = try self.expect(.string_literal);
-            try names.append(self.arena, try parse_expr.internString(self, s));
+            try names.append(self.arena, try parse_literal.internString(self, s));
             if (!self.eat(.comma)) break;
         };
         _ = try self.expect(.rparen);
