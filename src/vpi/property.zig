@@ -10,6 +10,7 @@ const Ast = @import("frontend").Ast;
 const analog_run = @import("analog.zig");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
+const decompile = @import("decompile.zig");
 const root = @import("root.zig");
 const run = @import("run.zig");
 const systf = @import("systf.zig");
@@ -430,7 +431,7 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
                 return null;
             };
             var w: std.Io.Writer = .fixed(str_buf[0 .. str_buf.len - 1]);
-            (if (o.src_expr != .none) code.decompile(&w, f, o.src_expr) else code.decompileCall(&w, f, o.src_stmt)) catch {
+            (if (o.src_expr != .none) decompile.decompile(&w, f, o.src_expr) else decompile.decompileCall(&w, f, o.src_stmt)) catch {
                 fail("TOOLONG", "vpi_get_str: the decompiled text passes {d} bytes", .{str_buf.len - 1});
                 return null;
             };
