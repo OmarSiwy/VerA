@@ -10,6 +10,8 @@ const std = @import("std");
 const digital = @import("sim").digital;
 const Int = @import("frontend").Integer;
 const root = @import("root.zig");
+const property = @import("property.zig");
+const handle = @import("handle.zig");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
 
@@ -484,7 +486,7 @@ test "§12.32/§12.33: a name is unique per domain, shared across the two, and m
     try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
     try std.testing.expectEqualStrings("$both", std.mem.span(info.tfname));
     try std.testing.expect(info.user_data == @as([*c]u8, &ud));
-    try std.testing.expectEqual(vpiUserSystf, root.vpi_get(root.vpiType, d));
+    try std.testing.expectEqual(vpiUserSystf, property.vpi_get(root.vpiType, d));
     // The other domain's reader refuses.
     var ainfo: AnalogSystfData = std.mem.zeroes(AnalogSystfData);
     vpi_get_analog_systf_info(d, &ainfo);
@@ -503,7 +505,7 @@ test "§12.32/§12.33: a name is unique per domain, shared across the two, and m
 test "§11.6.16/§12.22.1: with no call active there is no call and no derivative" {
     reset();
     defer reset();
-    try std.testing.expect(root.vpi_handle(vpiSysTfCall, null) == null);
+    try std.testing.expect(handle.vpi_handle(vpiSysTfCall, null) == null);
     try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
     try std.testing.expect(vpi_handle_multi(vpiDerivative, null, null) == null);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
