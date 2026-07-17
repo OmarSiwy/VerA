@@ -10,6 +10,7 @@ const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
+const parse_literal = @import("literal.zig");
 const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
 const parse_specify = @import("specify.zig");
@@ -209,9 +210,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
     var events: std.ArrayList(Ast.EventDecl) = .empty;
     while (true) {
-        const before_attrs = self.pos;
-        const attr_mark = self.attrs.items.len;
-        const binding_mark = self.file.attributes.items.len;
+        const mark = self.markAttributes();
         try self.skipAttributes();
         // IEEE 1364-2005 A.6.3: `begin [ : block_identifier
         // { block_item_declaration } ]`, so an unnamed block declares nothing.
@@ -231,9 +230,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
             // IEEE 1364-2005 A.2.8 `block_item_declaration`'s digital arms,
             // which A.6.3 gives a named block only.
             .kw_reg => if (self.digital and blk.name != .none) try parse_decl.parseRegDecl(self, &vars) else {
-                self.pos = before_attrs;
-                self.attrs.shrinkRetainingCapacity(attr_mark);
-                self.file.attributes.shrinkRetainingCapacity(binding_mark);
+                self.rewindAttributes(mark);
                 break;
             },
             .kw_event => if (self.digital and blk.name != .none) {
@@ -247,17 +244,13 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 }
                 _ = try self.expect(.semicolon);
             } else {
-                self.pos = before_attrs;
-                self.attrs.shrinkRetainingCapacity(attr_mark);
-                self.file.attributes.shrinkRetainingCapacity(binding_mark);
+                self.rewindAttributes(mark);
                 break;
             },
             else => { // else: not a declaration: the block's statements start here
                 // The attributes just read prefix the first statement
                 // (A.6.4), so they are handed back for `parseStmt`.
-                self.pos = before_attrs;
-                self.attrs.shrinkRetainingCapacity(attr_mark);
-                self.file.attributes.shrinkRetainingCapacity(binding_mark);
+                self.rewindAttributes(mark);
                 break;
             },
         }
@@ -434,7 +427,7 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
             try self.report(self.pos, .E0220, "after `{s}`", .{@tagName(tag)[6..]});
         if (self.peek() != .rparen) while (true) {
             const s = try self.expect(.string_literal);
-            try names.append(self.arena, try parse_expr.internString(self, s));
+            try names.append(self.arena, try parse_literal.internString(self, s));
             if (!self.eat(.comma)) break;
         };
         _ = try self.expect(.rparen);

@@ -12,6 +12,7 @@ const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
 const parse_module = @import("module.zig");
 const parse_stmt = @import("stmt.zig");
+const parse_net = @import("net.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
@@ -191,12 +192,12 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
     // reserved and no terminal can be one.
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
-    if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) try parse_decl.parseDriveStrength(self, &s0, &s1);
+    if (self.peek() == .lparen and parse_net.strengthWord(self, self.pos + 1) != null) try parse_net.parseDriveStrength(self, &s0, &s1);
     const enable = switch (kind) {
         .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => true,
         .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_buf, .g_not => false,
     };
-    const delay: Ast.Delay3 = if (self.peek() != .hash) .{} else if (enable) try parse_decl.parseDelay3(self) else try parse_decl.parseDelay2(self);
+    const delay: Ast.Delay3 = if (self.peek() != .hash) .{} else if (enable) try parse_net.parseDelay3(self) else try parse_net.parseDelay2(self);
     while (true) {
         const tok = self.pos;
         // A.3.1 makes `name_of_gate_instance` optional; `(` after the name
@@ -320,16 +321,16 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
     // §7.8: "pull strength in the absence of a strength specification", and
     // only the strength on the side the source pulls toward is kept.
     var strength: Ast.Strength = .pull;
-    if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) {
+    if (self.peek() == .lparen and parse_net.strengthWord(self, self.pos + 1) != null) {
         const tok = self.pos + 1;
         if (self.peekAt(2) == .comma) {
             var s0: Ast.Strength = .strong;
             var s1: Ast.Strength = .strong;
-            try parse_decl.parseDriveStrength(self, &s0, &s1);
+            try parse_net.parseDriveStrength(self, &s0, &s1);
             strength = if (side == 1) s1 else s0;
         } else {
             self.pos += 1;
-            const w = parse_decl.strengthWord(self, self.pos).?;
+            const w = parse_net.strengthWord(self, self.pos).?;
             self.pos += 1;
             _ = try self.expect(.rparen);
             if (w.side != side) return self.failAt(
@@ -418,7 +419,7 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
     const arm = switch_arms.get(spelling).?; // the caller dispatched on exactly these
     const kind = std.meta.stringToEnum(Ast.SwitchKind, spelling).?;
     self.pos += 1;
-    const delay: Ast.Delay3 = if (arm.delay and self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
+    const delay: Ast.Delay3 = if (arm.delay and self.peek() == .hash) try parse_net.parseDelay3(self) else .{};
     while (true) {
         const inst_tok = self.pos;
         // A.3.1 makes `name_of_gate_instance ::= gate_instance_identifier
