@@ -55,8 +55,37 @@ their layout, so the parser is a writer, not the owner.
    `tokenText`, `internTok`, `reservedIs` and `found` re-scans the lexeme
    (documented in parser.zig). The parser calls it for every identifier and
    every annex B `.kw_reserved` dispatch. A token end column (or length) in
-   the lexer's output would make it O(1). Owner: the lexer/token unit. Step 3
-   to measure.
+   the lexer's output would make it O(1). Owner: the lexer/token unit.
+   Measured 2026-10-03 (debug counters, callgrind on a ReleaseFast
+   `-Dcpu=x86_64_v2` vera): psp103 makes 37,125 `tokenText` calls against
+   107,512 tokens, hisimhv_va 49,937 against 131,468. All of `Lexer.next`
+   is 19.6 M of the 923 M instructions of `--lint psp103`, so the re-scans
+   are at most a few M (well under 1 %). The cost of the fix is 4 B per
+   token (430 KB on psp103) unless the length fits a `u8`/`u16` column with
+   an escape for long tokens. Expected saving: small; do it only together
+   with a lexer change that needs the end column anyway.
+6. **`access_names` is a string-keyed hash map.** `Parser.access_names`
+   (`StringHashMapUnmanaged(void)`, 16 entries on every model) is hashed by
+   string on every `name(` in an expression. The names are interned, so a
+   `StrId` set (a 16-entry `u32` array scanned linearly) would answer it
+   without hashing. Frozen: `pp/prelude.zig:177` iterates its keys to build
+   `Seed.access_names`. Proposal: an `accessNames()` accessor the prelude
+   calls, after which the field can change shape. Expected saving: one
+   string hash per call site (1,453 call lists on psp103), negligible.
+7. **The seven mode flags.** `Parser` carries `failed`, `in_analog_fn`,
+   `digital`, `in_discrete`, `in_digital_delay`, `in_connect_module` and
+   `gen_loop_body` as separate `bool`s. One parser exists per parse, so
+   packing them saves nothing measurable; it is listed only because seam 1's
+   `atRest()` is what would let them become one save/restore value.
+8. **AST lists the parser builds with slack it cannot reclaim.** Every
+   `ModuleDecl` slice is the `Body` list's `.items`, grown by doubling in the
+   compile arena; below `BigArena.large` (64 KiB) each growth leaves the old
+   buffer behind. On psp103 the `ParamDecl` lists (64 B rows) requested
+   230 KB for about 58 KB of rows, `VarDecl` 147 KB. Exact-size slices need
+   either a reusable parser-side buffer the AST copies from (one more copy of
+   the final rows) or a non-arena allocator for the growing phase; both
+   change who owns the slices `ast.zig` hands downstream. Expected saving:
+   about 300 KB of dead arena bytes on psp103.
 4. **Stale path in a doc I do not own.** `docs/IMPLEMENTATION.md` lines 51 and
    265 cite `lib/frontend/parser/source.zig` for `max_udp_inputs` (E1017). The
    constant now lives in `lib/frontend/parser/udp.zig`.
@@ -67,16 +96,68 @@ their layout, so the parser is a writer, not the owner.
    (`switch_arms`, inst.zig). The names are unchanged, so grep still finds
    them; the `Parser.` prefix was never a literal path.
 
-## Performance observations (not changed in step 1)
+## Memory
 
-- `Parser.copyAttributes` scans every attribute binding of the file per call
-  and again per match, and `parseModuleItem` calls it for each row it added
-  to each of 17 `Body` lists; `statementAttributes` scans all bindings per
-  statement. Both are linear-to-quadratic in the file's attribute count,
-  harmless for attribute-light compact models and quadratic for an
-  attribute-heavy one. A per-owner-token index would make both O(1).
-- `parseModuleItem` copies the whole `Body` (23 list headers) per item to
-  diff list lengths afterwards.
+Data-oriented audit of everything the parser owns, 2026-10-03, base
+`0f3602b1`. Sizes are `@sizeOf` on x86_64; counts come from throwaway debug
+counters on psp103 (`--lint`), removed before commit. `std.ArrayList` is
+32 B here.
+
+| type | size before → after | count on psp103 | bytes saved | what changed or why not |
+|---|---|---|---|---|
+| `Parser` | 648 → 744 B | 1 per parse (+1 for the prelude) | −96 B | Gained `attr_at` and two scratch stacks (3 lists). One instance; its bools and `u32` depths are frozen API (`pp/prelude.zig` asserts them, `sim/digital` sets `digital`), see seams 1 and 7. |
+| `Body` copy in `parseModuleItem` | 744 B copied per item → 17 × 8 B lengths | 1,407 items | 1.05 MB of `memcpy` per parse | The item now records the 17 list lengths it diffs, not the whole `Body`. |
+| `Body` | 744 B, unchanged | 1 per module or generate block | 0 | One per scope, never in a hot loop. Its list slack is AST-owned; see seam 8. |
+| `file.attributes` scans (`copyAttributes`, `statementAttributes`) | O(bindings) per call → O(log n + rows since the cursor reached the owner) | 2,148 bindings; 5,050 + 8,235 calls | 24.3 M → 3.2 k row visits | New `attr_at: ArrayList(u32)`, the cursor at each append, kept sorted and parallel to `file.attributes` by its one writer `appendBinding`. `bindingsFrom` binary-searches it. |
+| `attr_at` row | new, 4 B | 2,148 | −8.6 KB (−16 KB with growth) | The price of the index above. |
+| call-argument lists (`parseCallArgs`) | arena `ArrayList(ExprId)` per call, copied into the pool → `scratch_exprs` | 1,453 lists | 192 KB of dead arena (capacity) | Arguments go from one parse-long stack straight into the expression pool. Only `$task(...)` statements, which keep the slice, dupe it exactly. |
+| block bodies (`parseSeqBlock`) | arena `ArrayList(StmtId)` stored with slack → `scratch_stmts` + exact dupe | 1,806 blocks | about 220 KB of slack (247 KB capacity for 26 KB of rows) | Exact-size slice from the scratch stack. |
+| case labels (`parseCase`) | arena `ArrayList(ExprId)` per arm → `scratch_exprs` + exact dupe | per arm | small on these models | Same pattern as block bodies. |
+| `AttrMark` | 24 → 12 B | stack only | 12 B per speculative read | `usize` lengths narrowed to `u32` (bounded by the token count). Pinned. |
+| `GenAuto` / `GenBlock` | 8 / 12 B, unchanged | 0 on psp103 | 0 | `u32` handles only. Pinned. |
+| `StrengthWord` | 2 B, unchanged | 13 (static table) | 0 | Pinned. |
+| `SwitchArm` | 24 B, unchanged | 12 (static table) | 0 | The 16 B `shape` slice could be a `u8` index into four strings, but it is a 12-row comptime table that is never iterated. |
+| `specify.timing_checks` value | 2 B, unchanged | 12 (static table) | 0 | Already two `u8`s. |
+| UDP entry columns (`parseUdpEntry`) | 3 × 80 B stack buffer | per UDP row, 0 on these models | 0 | Stack scratch with a stated capacity (`max_udp_inputs`), no heap. |
+| `Parser.attrs` (`NatureAttr`, 12 B) | unchanged | 2,148 specs, 100 KB requested | 0 | Per-module scratch, cleared at `endmodule` and duped into `ModuleDecl.attrs`. Handing the list over would save the ~26 KB dupe; not worth losing the reuse across modules. |
+| `access_names` | unchanged | 16 | 0 | Frozen; see seam 6. |
+| `kw_stack` | unchanged | 0 on these models | 0 | Grows only under `begin_keywords. |
+
+Parser-requested bytes (a counting allocator around `parseSourceFile`,
+debug build, the user parse only):
+
+| model | before | after | allocations before → after |
+|---|---|---|---|
+| psp103 | 6,652,489 B | 6,273,409 B (−5.7 %) | 4,937 → 3,509 |
+| bsim4va | 5,220,418 B | 4,986,310 B (−4.5 %) | 5,070 → 4,480 |
+| hisimhv_va | 10,116,583 B | 9,620,879 B (−4.9 %) | 11,023 → 9,721 |
+| 20,000-statement synthetic | 51,057,949 B | 48,498,085 B (−5.0 %) | 120,095 → 100,097 |
+
+The remaining bytes are AST stores: `exprs.nodes` (3.25 MB requested on
+psp103), `stmts` (1.2 MB), the string interner (0.58 MB) and the real pool
+(0.23 MB), all owned by `ast.zig`.
+
+Instructions (callgrind, ReleaseFast `-Dcpu=x86_64_v2`, `vera --lint`;
+`parseSourceFile` inclusive, prelude parse included):
+
+| model | total before → after | `parseSourceFile` before → after |
+|---|---|---|
+| psp103 | 1,104.6 M → 923.3 M (−16.4 %) | 222.6 M → 41.3 M |
+| bsim4va | 968.3 M → 827.3 M (−14.6 %) | 169.7 M → 28.6 M |
+| hisimhv_va | 1,788.2 M → 1,567.0 M (−12.4 %) | 273.9 M → 52.8 M |
+
+Wall time and peak RSS (ReleaseFast native, `vera --emit-zig -I $M $M/<m>.va`,
+six runs each, interleaved; time is the best run, RSS the median, because
+the same binary at two paths measured 4.3 MB and 5.3 MB on an empty module,
+so ±1 MB is mapping noise):
+
+| workload | before | after |
+|---|---|---|
+| psp103 | 0.14 s, 34.3 MB | 0.13 s, 33.6 MB |
+| bsim4va | 0.10 s, 25.2 MB | 0.09 s, 24.9 MB |
+| hisimhv_va | 0.23 s, 54.3 MB | 0.21 s, 53.9 MB |
+| 20,000-statement synthetic, `--lint` | 4.86 s, 328.5 MB | 4.90 s, 326.1 MB |
+| `--lint` over all 3228 fixtures | 1.107 s | 1.085 s |
 
 ## Bugs found
 
