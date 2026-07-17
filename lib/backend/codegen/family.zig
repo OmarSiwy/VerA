@@ -69,7 +69,10 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
 /// x and a different one at every time.
 pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     const nv = self.an.nv;
-    const host = try self.arena.alloc(bool, nv);
+    // `host` and `aff` are scratch of this pass (two nv-long columns, 250 KiB
+    // on hisimhv_va): on the gpa, freed on return.
+    const host = try self.gpa.alloc(bool, nv);
+    defer self.gpa.free(host);
     @memset(host, false);
     var steered = false;
     for (0..self.mir.insts.len) |i| {
@@ -87,7 +90,8 @@ pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
             changed = true;
         }
     }
-    const aff = try self.arena.alloc(bool, nv);
+    const aff = try self.gpa.alloc(bool, nv);
+    defer self.gpa.free(aff);
     @memset(aff, true);
     changed = true;
     while (changed) {

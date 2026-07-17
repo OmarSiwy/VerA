@@ -48,8 +48,9 @@ pub const NoiseRow = struct {
     row: u16,
     col: u16,
     kind: Lower.NoiseKind,
-    /// §4.6.4.6 dense generator id: rows sharing it are one generator.
-    source: usize,
+    /// §4.6.4.6 dense generator id: rows sharing it are one generator. At
+    /// most the row count, which a `u32` index everywhere else bounds.
+    source: u32,
     /// §4.6.4.1/.2 the PSD itself: `S(f) = pwr` for white, `pwr/f^exp` for
     /// flicker. rv-resolved, so `.f_zero` means "no generator at this bias".
     /// Both `.f_zero` on a §4.6.4.3/.4 row, whose PSD is `table` instead.
@@ -136,7 +137,7 @@ pub fn plan(self: Input) Error!Noise {
                 .row = row,
                 .col = col,
                 .kind = s.kind,
-                .source = sid,
+                .source = @intCast(sid),
                 .pwr = self.an.rv(s.pwr),
                 .exp = self.an.rv(s.exp),
                 .table = table,
