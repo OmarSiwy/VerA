@@ -279,7 +279,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     try closeSig(self, slots, body_start);
     if (self.core.held_only.len != 0 and !self.uses.held) patchParam(self, at_held, "held".len);
     // A slice of integers and plain arrays alone never names `S`.
-    if (!try namesIdent(self, self.out.items[slots.x..], "S")) patchParam(self, slots.x - "S: type, ".len, "S".len);
+    if (!try namesIdent(self, slots.x, "S")) patchParam(self, slots.x - "S: type, ".len, "S".len);
     try self.w("}}\n\n", .{});
     try gen_file.recordUnitFile(self, name, lo, at_fn);
 }
@@ -396,10 +396,14 @@ pub fn patchUnless(self: *Gen, at: usize, from: usize, comptime ident: []const u
     patchParam(self, at, ident.len);
 }
 
-/// Returns whether Zig source `text` names `ident` as an identifier token,
-/// outside any string literal or comment.
-fn namesIdent(self: *Gen, text: []const u8, ident: []const u8) Error!bool {
-    const src = try self.arena.dupeSentinel(u8, text, 0);
+/// Returns whether the Zig source written from output offset `from` names
+/// `ident` as an identifier token, outside any string literal or comment.
+/// Tokenizes `out` in place behind a sentinel it appends and pops again, so a
+/// body (hundreds of KiB for a large core) is never copied.
+fn namesIdent(self: *Gen, from: usize, ident: []const u8) Error!bool {
+    try self.out.append(self.gpa, 0);
+    defer _ = self.out.pop();
+    const src = self.out.items[from .. self.out.items.len - 1 :0];
     var t: std.zig.Tokenizer = .init(src);
     while (true) {
         const tok = t.next();
@@ -523,9 +527,10 @@ pub fn zeroOf(t: VTy) []const u8 {
 /// `Probe.sc_end`. The emitted scopes nest, so "every use is lexically inside the
 /// block that defines this slot" is exactly `def_off < max_use <
 /// sc_end[scope]`, with no dominator query needed.
+/// `defs`/`uses` saturate at 255: every reader asks only 0, 1 or more.
 pub const Place = struct {
-    defs: u32 = 0,
-    uses: u32 = 0,
+    defs: u8 = 0,
+    uses: u8 = 0,
     def_off: u32 = 0,
     max_use: u32 = 0,
     scope: u32 = 0,
@@ -536,6 +541,13 @@ pub const Place = struct {
     /// Set once, after the probe: declare at the definition instead of at
     /// function scope.
     at_def: bool = false,
+
+    // One per slot of the body being probed (psp103's `setup`: 6854;
+    // hisimhv_va: 10097), walked whole by `probeBody`: 16 bytes, three
+    // offsets and four one-byte facts.
+    comptime {
+        std.debug.assert(@sizeOf(Place) == 16);
+    }
 };
 
 /// Records that a lexical scope opens at the current output offset. No-op
@@ -565,7 +577,7 @@ pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
         p.def_off = @intCast(self.out.items.len);
         p.scope = self.probe.sc_open.last().?;
     }
-    p.defs += 1;
+    p.defs +|= 1;
     if (p.defs > 1 or !movable) p.pinned = true;
 }
 
@@ -573,7 +585,7 @@ pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
 pub fn probeUse(self: *Gen, slot: u32) void {
     if (!self.probe.active) return;
     const p = &self.probe.place.items[slot];
-    p.uses += 1;
+    p.uses +|= 1;
     // Read before written in the text: a loop-carried value, or a slot the
     // emitter never assigns at all (which is the `undefined`/zero seed the
     // hoist exists to provide).
