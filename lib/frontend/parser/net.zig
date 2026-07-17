@@ -206,6 +206,9 @@ pub fn netKind(tag: token.Tag) ?Ast.NetKind {
 /// which only A.2.1.3's `trireg` alternatives take. The charge words are
 /// listed so they can be recognised and refused elsewhere.
 pub const StrengthWord = struct { level: Ast.Strength, side: u8 };
+comptime {
+    std.debug.assert(@sizeOf(StrengthWord) == 2); // a `strength_words` value: two bytes
+}
 const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
     .{ "supply0", StrengthWord{ .level = .supply, .side = 0 } },
     .{ "strong0", StrengthWord{ .level = .strong, .side = 0 } },
