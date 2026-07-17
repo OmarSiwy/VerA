@@ -224,7 +224,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             const at = try self.slot(e);
             try self.print("L.rs(", .{});
             try self.get(at);
-            try self.print(", {d}, {d}, {})", .{ try self.slotWidth(at), w, sg });
+            try self.print(", {d}, {d}, {})", .{ self.slotWidth(at), w, sg });
         },
         .index => try index(self, e, ty),
         .unary => switch (ex.unOp(e)) {
@@ -651,7 +651,7 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     }
     const operand = ex.lhs(e);
     const at = try self.slot(r.chainBase(operand).base);
-    const sw = try self.slotWidth(at);
+    const sw = self.slotWidth(at);
     const range = vecRange(r, at, sw);
     const rg = ex.rhs(e);
     if (ex.tag(rg) == .range) {
@@ -687,7 +687,7 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
 /// The packed value a select reads, including an addressed array element.
 fn selectValue(self: *Emitter, operand: Ast.ExprId, base: u32) Error!void {
     if (self.r.file.exprs.tag(operand) != .index) return self.get(base);
-    return value(self, operand, .{ .width = try self.slotWidth(base), .signed = false });
+    return value(self, operand, .{ .width = self.slotWidth(base), .signed = false });
 }
 
 /// The optional storage shift of an indexed part-select (§5.2.1). Its
@@ -727,6 +727,7 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     try self.print(" break :b{d} @as(?u32, {d} + @as(u32, @intCast(o{d}))); }}", .{ label, base, label });
 }
 
+/// The interpreter's §3.3 `[msb:lsb]`, so both engines number bits alike.
 pub const VecRange = @import("root.zig").VecRange;
 
 /// A slot's declared `[msb:lsb]`, `[w-1:0]` when it declares none.
@@ -738,6 +739,9 @@ pub fn vecRange(r: anytype, at: u32, width: u32) VecRange {
 /// where the slot has that bit, and names no bit elsewhere (§5.2.1).
 pub const Place = struct { shift: i64, count: u32 };
 
+/// The `Place` of part-select `e` on a vector declared `range`, from the
+/// bounds `infer` folded for the executing scope's specialization. Asserts
+/// `e` was typed there.
 pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     const r = self.r;
     const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
@@ -745,6 +749,7 @@ pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     return .{ .shift = range.position(b.lsb), .count = @intCast(@abs(b.msb - b.lsb) + 1) };
 }
 
+/// The low `w` bits set; all 64 for `w` >= 64.
 pub fn maskOf(w: u32) u64 {
     return if (w >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(w)) - 1;
 }

@@ -12,11 +12,17 @@ const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
+/// What a store to a slot must wake, decided per slot here (`Plan.reach`).
 pub const Reach = @import("../rt/root.zig").Reach;
 
+/// `vera --schedule=`: same-time events in the interpreter's FIFO order
+/// (`fifo`), or combinational processes levelized into topological nodes
+/// (`static`, the default; §11.4.2 lets active events run in any order).
 pub const Schedule = enum { fifo, static };
 
+/// §9.7.2 the edge an event term waits for; `any` is a value change.
 pub const Edge = enum { any, posedge, negedge };
+/// One term of an event control, as the native runtime waits on it.
 pub const Term = struct {
     slot: u32,
     edge: Edge,
@@ -30,6 +36,8 @@ pub const Term = struct {
     width: u32 = 0,
 };
 
+/// How the runtime schedules one process under `static` (`fifo` leaves
+/// every process `general`).
 pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
     general,
@@ -42,14 +50,21 @@ pub const Role = union(enum) {
     comb: u32,
 };
 
+/// One emitted process: the pc it starts at, every pc it can reach (its
+/// switch's prongs), and its role.
 pub const Proc = struct { entry: u32, pcs: []const u32, role: Role = .general };
 
+/// A triggered process `proc` waiting at `pc` for `edge` of the slot whose
+/// `Plan.watchers` run holds this row.
 pub const Watcher = struct { proc: u32, pc: u32, edge: Edge };
 
 /// Node `node` reads the bits `mask` of plane word `word`: a change there
 /// dirties it, a change anywhere else in the slot does not.
 pub const Sense = struct { node: u32, word: u32, mask: u64 };
 
+/// `build`'s result, the tables `rt.Design` is emitted from, in the
+/// emitter's arena unless a field says otherwise. The `_start` columns are
+/// CSR offsets: slot `s`'s run is `x[x_start[s]..x_start[s + 1]]`.
 pub const Plan = struct {
     /// Per slot: an event control, driver or node may wait on it.
     watched: []const bool,
@@ -66,6 +81,8 @@ pub const Plan = struct {
     watchers: []const Watcher = &.{},
     /// The number of triggered processes.
     triggered: u32 = 0,
+    /// `Run.fan_start`/`Run.fan` themselves (not copies): per slot, the pcs
+    /// of the continuous drivers and controlled switches reading it.
     fan_start: []const u32,
     fan: []const u32,
 };

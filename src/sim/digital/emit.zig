@@ -18,6 +18,7 @@ const expr = @import("emit_expr.zig");
 const plan = @import("plan.zig");
 const vcd = @import("vcd.zig");
 const Type = compile.Type;
+/// `plan.Schedule`, here for `vera --schedule=` (src/main.zig).
 pub const Schedule = plan.Schedule;
 
 test {
@@ -36,6 +37,7 @@ pub const Embed = struct {
     search: []const []const u8 = &.{},
 };
 
+/// What `program` made: the executable's root text, native or not.
 pub const Program = struct {
     /// The executable's root module.
     text: []const u8,
@@ -54,6 +56,8 @@ pub const Logic = enum { auto, two, four };
 /// Why a design keeps x or z meaning, and the token where it does.
 pub const Reason = struct { why: []const u8, tok: ?u32 };
 
+/// `Unsupported`: a construct is not native; `Emitter.why` names it, and
+/// `program` falls back to the interpreter (`device` refuses).
 pub const Error = error{ Unsupported, OutOfMemory };
 
 /// The root module of `r`'s executable. `r` is read and its time-0 queue
@@ -105,7 +109,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         const at = r.names.get(.{ .scope = 0, .str = p.name }) orelse return self.refuse("a port with no net or variable behind it");
         if (r.reals.contains(at)) return self.refuse("a real port");
         for (m.vars) |v| if (v.name == p.name and v.storage != .reg) return self.refuse("an integer or time port");
-        const w = try self.slotWidth(at);
+        const w = self.slotWidth(at);
         const vr = expr.vecRange(r, at, w);
         const scalar = w == 1 and !r.vec_ranges.contains(at);
         var i = vr.msb;
@@ -169,6 +173,10 @@ fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.
     return out.written();
 }
 
+/// One emission's state: the `Run` it reads (never runs), the text so far
+/// in `out`, and the layout and bookkeeping tables the processes and the
+/// trailing `rt.Design` share. Everything is `arena`'s; one `Emitter` per
+/// `program`/`device` call.
 pub const Emitter = struct {
     r: *Run,
     arena: std.mem.Allocator,
@@ -225,10 +233,13 @@ pub const Emitter = struct {
     /// §18.3 each `$dumpports` call (`rt.evcd.File`), by the pc it is at.
     port_files: std.ArrayList(PortFile) = .empty,
 
+    /// Appends formatted Zig text to `out`; a writer failure is OOM.
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
         self.out.writer.print(f, args) catch return error.OutOfMemory;
     }
 
+    /// Records `why` (static text) as the reason the design is not native
+    /// and returns `error.Unsupported` for the caller to propagate.
     pub fn refuse(self: *Emitter, why: []const u8) error{Unsupported} {
         self.why = why;
         return error.Unsupported;
@@ -311,7 +322,8 @@ pub const Emitter = struct {
         return if (at < self.off.len) self.off[at] else self.slot_words;
     }
 
-    pub fn slotWidth(self: *Emitter, at: u32) Error!u32 {
+    /// Slot `at`'s width in bits (a real's is 64).
+    pub fn slotWidth(self: *const Emitter, at: u32) u32 {
         return self.r.values[at].width;
     }
 
@@ -438,7 +450,7 @@ pub fn call(self: *Emitter, idx: u32, args: []const Ast.ExprId, lb: u32) Error!v
     try self.print("            try s.enter({d}, {d}, ", .{ idx, lo });
     if (sub.decl.automatic) try self.print("&fill{d});\n", .{idx}) else try self.print("&.{{}});\n", .{});
     for (sub.decl.ports, f.ports, 0..) |p, at, i| if (p.direction != .output)
-        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(try self.slotWidth(at)) });
+        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(self.slotWidth(at)) });
     try self.print("            try proc{d}(s, {d});\n", .{ sub.entry, sub.entry });
     if (sub.decl.is_function) {
         try self.print("            const r{d} = ", .{lb});
@@ -478,6 +490,7 @@ fn fillTable(self: *Emitter, name: []const u8, idx: u32, f: root.Frame) Error!vo
     try self.print(" }};\n\n", .{});
 }
 
+/// The 64-bit plane words a `w`-bit value occupies in `rt.State`.
 pub fn words(w: u32) u32 {
     return (w + 63) / 64;
 }
@@ -737,7 +750,7 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
     const r = self.r;
     if (!pureNode(self, pc)) return self.print("    if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc });
     const slot = r.nets[r.drivers[r.code.items[pc].continuous].net].slot;
-    if (!self.watched[slot]) return self.print("    try M.set(s, {d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(try self.slotWidth(slot)) });
+    if (!self.watched[slot]) return self.print("    try M.set(s, {d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(self.slotWidth(slot)) });
     var wakes = self.reach[slot];
     wakes.comb = false;
     try self.print("    try M.putNode(s, {f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
@@ -772,7 +785,7 @@ fn nodeValue(self: *Emitter, pc: u32, n: u32) Error!void {
     r.scope = d.scope;
     r.pc = pc;
     const head = self.out.written().len;
-    try self.print("fn val{d}(s: rt.View) L.T({d}) {{\n    @setEvalBranchQuota(1 << 30);\n", .{ n, try self.slotWidth(slot) });
+    try self.print("fn val{d}(s: rt.View) L.T({d}) {{\n    @setEvalBranchQuota(1 << 30);\n", .{ n, self.slotWidth(slot) });
     const body = self.out.written().len;
     if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
     try self.print("    return ", .{});
@@ -974,7 +987,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            ", .{});
             try self.store(x.slot, .blocking);
             try expr.assigned(self, x.value, try slotType(self, x.slot));
-            try self.print(", {f});\n            continue :sw {d};\n", .{ full(try self.slotWidth(x.slot)), next });
+            try self.print(", {f});\n            continue :sw {d};\n", .{ full(self.slotWidth(x.slot)), next });
         },
         .assign => |x| {
             try assignment(self, x.target, .{ .expr = x.value }, if (x.nonblocking) .nba else .blocking);
@@ -1038,7 +1051,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     const arr = r.arrays.get(base).?;
                     const name = r.file.str(r.file.exprs.strOf(t.args[0]));
                     try self.print("            try s.readmem(\"{f}\", \"{f}\", .{t}, ", .{ std.zig.fmtString(r.file_name), std.zig.fmtString(name), radix });
-                    try self.print("{d}, {d}, {d}, {d}, {d}, {d}", .{ try self.slotWidth(base), base, self.off[base], arr.low, arr.high, t.args.len - 2 });
+                    try self.print("{d}, {d}, {d}, {d}, {d}, {d}", .{ self.slotWidth(base), base, self.off[base], arr.low, arr.high, t.args.len - 2 });
                     for (2..4) |k| {
                         try self.print(", ", .{});
                         if (k < t.args.len) try int64(self, t.args[k]) else try self.print("null", .{});
@@ -1074,7 +1087,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     self.keepFour("a §17.5 PLA, whose outputs are x where no row decides", t.tok);
                     const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
                     try self.print("            try s.pla(.{{ .logic = .@\"{t}\", .plane = {}, .async_ = false }}, {d}, {d}, {d}, ", .{
-                        p.logic, p.plane, self.off[base], r.arrays.get(base).?.count, try self.slotWidth(base),
+                        p.logic, p.plane, self.off[base], r.arrays.get(base).?.count, self.slotWidth(base),
                     });
                     const in = try expr.selfDetermined(self, t.args[1]);
                     try self.print(", {d}, {d}, {d});\n", .{ in.width, at, ty.width });
@@ -1299,7 +1312,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .override_eval => |o| {
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
             if (o.bits) |b| {
-                try self.print("try s.putBits({d}, {d}, {d}, {d}, {d}, ", .{ o.slot, self.off[o.slot], b.lo, b.width, try self.slotWidth(o.slot) });
+                try self.print("try s.putBits({d}, {d}, {d}, {d}, {d}, ", .{ o.slot, self.off[o.slot], b.lo, b.width, self.slotWidth(o.slot) });
                 try expr.assigned(self, o.value, .{ .width = b.width, .signed = false });
                 return self.print(");\n            }}\n            continue :sw {d};\n", .{next});
             }
@@ -1309,9 +1322,9 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             if (o.slice) |sl| {
                 try self.print("L.part(", .{});
                 try expr.assigned(self, o.value, .{ .width = sl.of, .signed = false });
-                try self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(o.slot), sl.of });
+                try self.print(", {d}, {d}, {d})", .{ sl.lo, self.slotWidth(o.slot), sl.of });
             } else try expr.assigned(self, o.value, try slotType(self, o.slot));
-            try self.print(", {f});\n            }}\n            continue :sw {d};\n", .{ full(try self.slotWidth(o.slot)), next });
+            try self.print(", {f});\n            }}\n            continue :sw {d};\n", .{ full(self.slotWidth(o.slot)), next });
         },
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
@@ -1351,7 +1364,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             for (sub.decl.ports, sub.body.?.frame.ports) |p, at| if (p.direction != .input) {
                 try self.print("            try M.set(s, {d}, ", .{try retCell(self, at)});
                 try self.get(at);
-                try self.print(", {f});\n", .{full(try self.slotWidth(at))});
+                try self.print(", {f});\n", .{full(self.slotWidth(at))});
             };
             try self.print("            s.jump = try s.returnTimed();\n            return;\n", .{});
         },
@@ -1361,7 +1374,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
 /// The cell a timed task's output formal `at` waits in between its
 /// activation's return and its call site's copy-out.
 fn retCell(self: *Emitter, at: u32) Error!u32 {
-    return cellOf(self, (1 << 31) + at, try self.slotWidth(at));
+    return cellOf(self, (1 << 31) + at, self.slotWidth(at));
 }
 
 /// `exec.callTimed` and, when `s.returned`, the end of `exec.returnTimed`:
@@ -1387,7 +1400,7 @@ fn callTimed(self: *Emitter, pc: u32, idx: u32, args: []const Ast.ExprId) Error!
     try self.print("            try s.callTimed({d}, {d}, {d}, ", .{ idx, pc, lo });
     if (sub.decl.automatic) try self.print("&tfill{d});\n", .{idx}) else try self.print("&.{{}});\n", .{});
     for (sub.decl.ports, f.ports, 0..) |p, at, i| if (p.direction != .output)
-        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(try self.slotWidth(at)) });
+        try self.print("            try M.set(s, {d}, i{d}_{d}, {f});\n", .{ self.off[at], lb, i, full(self.slotWidth(at)) });
     try self.print("            s.jump = {d};\n            return;\n", .{sub.body.?.entry});
 }
 
@@ -1491,7 +1504,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         try self.print("            ", .{});
         try self.store(at, how);
         try rhsFor(self, val, try slotType(self, at));
-        return self.print(", {f});\n", .{full(try self.slotWidth(at))});
+        return self.print(", {f});\n", .{full(self.slotWidth(at))});
     }
     if (try self.element(target)) {
         const base = try self.slot(r.chainBase(target).base);
@@ -1501,7 +1514,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         try self.print(") |a{d}| ", .{lb});
         try self.storeElement(base, lb, how);
         try rhsFor(self, val, try slotType(self, base));
-        return self.print(", {f});\n", .{full(try self.slotWidth(base))});
+        return self.print(", {f});\n", .{full(self.slotWidth(base))});
     }
     // §5.2.1 a select of a vector: unsigned, as wide as it selects.
     const vector = ex.lhs(target);
@@ -1521,7 +1534,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
 fn assignSelect(self: *Emitter, target: Ast.ExprId, at: u32, element_label: ?u32, val: Rhs, how: How) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
-    const sw = try self.slotWidth(at);
+    const sw = self.slotWidth(at);
     const range = expr.vecRange(r, at, sw);
     const rg = ex.rhs(target);
     if (ex.tag(rg) == .range) {
@@ -1876,7 +1889,7 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     const d = r.drivers[i];
     const n = r.nets[d.net];
     r.scope = d.scope;
-    const nw = try self.slotWidth(n.slot);
+    const nw = self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
         if (self.role == .comb and pureNode(self, pc)) {
             // Only the time-0 queue runs this process (`plan.Role.comb`):
@@ -1956,7 +1969,7 @@ fn driverValue(self: *Emitter, e: Ast.ExprId, slice: ?@import("net.zig").Slice, 
         const ctx: Type = .{ .width = @max(t.width, sl.total), .signed = t.signed };
         try self.print("L.part(", .{});
         try expr.value(self, e, ctx);
-        return self.print(", {d}, {d}, {d})", .{ sl.lo, try self.slotWidth(net_slot), ctx.width });
+        return self.print(", {d}, {d}, {d})", .{ sl.lo, self.slotWidth(net_slot), ctx.width });
     }
     try expr.assigned(self, e, try slotType(self, net_slot));
 }
@@ -2058,7 +2071,7 @@ pub fn fread(self: *Emitter, args: []const Ast.ExprId) Error!void {
     try self.print(";\n", .{});
     if (arr) |memory| {
         const at = base.?;
-        const width = try self.slotWidth(at);
+        const width = self.slotWidth(at);
         try self.print("            const first{d}: i64 = ", .{lb});
         if (args.len > 2 and args[2] != .none) {
             try int64(self, args[2]);

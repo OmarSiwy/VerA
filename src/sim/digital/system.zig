@@ -390,6 +390,9 @@ fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const As
 /// consumed prefix, so a failed conversion leaves the offending byte unread.
 pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0 };
 
+/// Starts a `$fscanf` on descriptor `descriptor_`: the rest of the file is
+/// read into `a` and the descriptor left at its end until `finishFileScan`
+/// puts it back. A null, x or unreadable descriptor scans no input (EOF).
 pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, format: ?[]const u8, outs: usize) std.mem.Allocator.Error!FileScan {
     const no_input: FileScan = .{ .scan = .init(null, format, outs) };
     const d = low32(descriptor_) orelse return no_input;
@@ -406,6 +409,9 @@ pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, for
     return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len };
 }
 
+/// Ends a `fileScan`: the descriptor is repositioned just past what `scan`
+/// consumed, and `$fscanf`'s value (`Scan.result`) returned. Must follow
+/// every `fileScan` whose descriptor was readable.
 pub fn finishFileScan(t: contract.FileIo, file: FileScan, scan: Scan) i64 {
     const d = file.descriptor orelse return scan.result;
     _ = t.seek(d, file.start + @as(i64, @intCast(scan.at)), 0);
@@ -564,6 +570,8 @@ pub const Scan = struct {
         return null;
     }
 
+    /// The next assignment, or null once the scan is over and `result` is
+    /// final. Null for good after the first null.
     pub fn next(self: *Scan) ?Assign {
         if (self.done) return null;
         const input = self.input;

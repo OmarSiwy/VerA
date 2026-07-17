@@ -21,6 +21,7 @@ const Signal = @import("net.zig").Signal;
 /// §18.3 the extended VCD tasks.
 pub const Op = enum { ports, off, on, all, limit, flush };
 
+/// The §18.3 task names, each to its `Op`.
 pub const tasks = std.StaticStringMap(Op).initComptime(.{
     .{ "$dumpports", .ports },
     .{ "$dumpportsoff", .off },
@@ -358,6 +359,8 @@ pub fn below(r: *Run, scope: u32, inst: u32) bool {
     }
 }
 
+/// One port bit as §18.4.3 dumps it: the Table 18-7 state character and
+/// its strength0 and strength1 components, each 0..7.
 pub const State = struct { c: u8, s0: u8, s1: u8 };
 
 /// A signal's strength components: the strength0 and strength1 levels it

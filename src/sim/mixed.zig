@@ -18,6 +18,7 @@ const crosses = time.crosses;
 const ulps = time.ulps;
 const timer = @import("kernels").timer_kernels;
 
+/// One analysis's timeline, as `run` reads it.
 pub const Options = struct {
     /// The declared analog timepoints, in seconds, ascending. `times[0]` is the
     /// DC point that opens the analysis (§8.4.2); the rest are transient

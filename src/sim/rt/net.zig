@@ -20,7 +20,9 @@ const Signal = dnet.Signal;
 /// `State.next` payloads: driver k's, net k's delayed transition, and net
 /// k's §3.8 charge decay. All below `nba_payload`, above every pc and show.
 pub const drive_base: u32 = root.show_base | 1 << 28;
+/// `net_base + k`: net k's delayed transition lands (`drive_base`).
 pub const net_base: u32 = root.show_base | 2 << 28;
+/// `decay_base + k`: net k's §3.8 charge decays to x (`drive_base`).
 pub const decay_base: u32 = root.show_base | 3 << 28;
 
 /// One net `exec.resolve` folds: `Run.nets[k]` with its word offset.
@@ -90,6 +92,7 @@ pub const Tran = struct {
 /// `State.next` payload `tran_base + i`: pass switch i's delayed change of
 /// conduction lands (`decay_base` with this bit set in its index).
 const tran_bit: u32 = 1 << 27;
+/// `tran_base + i`: pass switch i's delayed change of conduction lands.
 pub const tran_base: u32 = decay_base + tran_bit;
 
 /// What the resolution keeps between events, one row per net or driver.

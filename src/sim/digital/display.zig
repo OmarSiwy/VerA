@@ -153,6 +153,9 @@ pub const MemLoad = struct {
     /// `value`, `width` bits wide.
     pub const Word = struct { index: u32, value: Int.Literal };
 
+    /// §17.2.9: `BadAddress`, an `@` address that is not hex;
+    /// `AddressOutOfRange`, an address outside the call's start..finish
+    /// range; `BadWord`, a word that is not a number in the task's radix.
     pub const Failure = error{ BadAddress, AddressOutOfRange, BadWord } || std.mem.Allocator.Error;
 
     /// `given` is how many of the start and finish arguments the call has;
@@ -411,6 +414,7 @@ const pla_rows: []const TaskRow = blk: {
     break :blk &out;
 };
 
+/// §17.3.2 `$timeformat`'s state; the type is `fmt`'s so `rt` shares it.
 pub const TimeFormat = fmt.TimeFormat;
 
 // ---- formatting (§9.4.3, §17.1.1.3, §17.1.1.4, §17.3) -----------------------
