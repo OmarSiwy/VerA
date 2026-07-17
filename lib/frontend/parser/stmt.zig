@@ -256,7 +256,8 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
         }
     }
 
-    var body: std.ArrayList(Ast.StmtId) = .empty;
+    const mark = self.scratch_stmts.items.len;
+    defer self.scratch_stmts.shrinkRetainingCapacity(mark);
     while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
         const before = self.pos;
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
@@ -266,7 +267,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
             self.recoverStatement(before);
             continue;
         };
-        try body.append(self.arena, s);
+        try self.scratch_stmts.append(self.arena, s);
     }
     if (parallel) {
         if (!self.reservedIs(self.pos, "join")) return self.failAt(self.pos, .E0207, "found {s}: no `join` closes the fork", .{self.found(self.pos)});
@@ -276,7 +277,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     blk.params = params.items;
     blk.vars = vars.items;
     blk.events = events.items;
-    blk.body = body.items;
+    blk.body = try self.arena.dupe(Ast.StmtId, self.scratch_stmts.items[mark..]);
     return self.file.addStmt(self.arena, .{ .block = blk }, tok);
 }
 
@@ -295,18 +296,21 @@ pub fn parseCase(self: *Parser, kind: Ast.CaseKind, gen: ?*parse_module.Body) Er
     var arms: std.ArrayList(Ast.CaseArm) = .empty;
     while (self.peek() != .kw_endcase and self.peek() != .eof) {
         try self.skipAttributes();
-        var labels: std.ArrayList(Ast.ExprId) = .empty;
+        const mark = self.scratch_exprs.items.len;
+        defer self.scratch_exprs.shrinkRetainingCapacity(mark);
         if (self.eat(.kw_default)) {
             _ = self.eat(.colon); // A.6.7: `default [ : ]`
         } else {
             while (true) {
-                try labels.append(self.arena, try parse_expr.parseExpr(self));
+                const label = try parse_expr.parseExpr(self);
+                try self.scratch_exprs.append(self.arena, label);
                 if (!self.eat(.comma)) break;
             }
             _ = try self.expect(.colon);
         }
+        const labels = try self.arena.dupe(Ast.ExprId, self.scratch_exprs.items[mark..]);
         const body = if (gen) |b| try parse_generate.parseGenerateBlock(self, b) else try parseStmt(self);
-        try arms.append(self.arena, .{ .labels = labels.items, .body = body });
+        try arms.append(self.arena, .{ .labels = labels, .body = body });
     }
     _ = try self.expect(.kw_endcase);
     return self.file.addStmt(

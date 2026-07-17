@@ -101,6 +101,21 @@ pub const Parser = struct {
     /// Nonzero inside an attribute value, where §2.9 bans a nested attribute
     /// instance (E0357).
     attr_depth: u32 = 0,
+    /// Parallel to `file.attributes`: the cursor when each binding was
+    /// appended. The cursor only moves back in `rewindAttributes`, which
+    /// truncates both, so the column is sorted, and a binding a declaration
+    /// at token `t` owns was appended with the cursor at or past `t`. That
+    /// makes `bindingsFrom` a binary search instead of a scan of the file.
+    /// Not part of `Seed`: `initSeeded` rebuilds it from the seeded bindings.
+    attr_at: std.ArrayList(u32) = .empty,
+    /// Stacks for the lists a construct collects while nested constructs
+    /// collect theirs: a user pushes above the mark it took, copies its run
+    /// out (into the expression pool, or one exact-size arena slice) and
+    /// truncates back to the mark on every path, errors included. One growing
+    /// buffer per parse replaces an arena list per construct, whose growth
+    /// copies and slack the arena never reclaims.
+    scratch_exprs: std.ArrayList(Ast.ExprId) = .empty,
+    scratch_stmts: std.ArrayList(Ast.StmtId) = .empty,
 
     /// Asserts `tags` and `starts` have equal length and end in `.eof`.
     pub fn init(
@@ -162,6 +177,9 @@ pub const Parser = struct {
         p.pos = s.pos;
         p.gen_construct = s.gen_construct;
         try p.file.seedFrom(arena, &s.file);
+        // The prefix appended its bindings before the cursor reached `s.pos`;
+        // `s.pos` keeps the column sorted and bounds each owner from above.
+        try p.attr_at.appendNTimes(arena, s.pos, p.file.attributes.items.len);
         for (s.access_names) |n| try p.access_names.put(arena, n, {});
         return p;
     }
@@ -424,15 +442,39 @@ pub const Parser = struct {
                 else => {}, // else: any other token is inside the attribute being skipped
             };
         };
-        if (self.attrs.items.len != mark) try self.file.attributes.append(self.arena, .{
+        if (self.attrs.items.len != mark) try self.appendBinding(.{
             .owner = .{ .kind = .declaration, .tok = self.pos },
             .specs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items[mark..]),
         });
     }
 
+    /// The one writer of `file.attributes`' rows, keeping `attr_at` beside it.
+    /// Asserts a declaration owner is not past the cursor, which is what lets
+    /// `bindingsFrom` skip every row appended before the cursor reached it.
+    fn appendBinding(self: *Parser, binding: Ast.AttributeBinding) error{OutOfMemory}!void {
+        std.debug.assert(self.attr_at.items.len == self.file.attributes.items.len);
+        std.debug.assert(binding.owner.kind != .declaration or binding.owner.tok <= self.pos);
+        try self.attr_at.ensureUnusedCapacity(self.arena, 1);
+        try self.file.attributes.append(self.arena, binding);
+        self.attr_at.appendAssumeCapacity(self.pos);
+    }
+
+    /// Index of the first `file.attributes` row appended with the cursor at or
+    /// past `tok`. No earlier row is owned by a declaration at `tok`.
+    /// Cost: O(log n) in the file's bindings.
+    fn bindingsFrom(self: *const Parser, tok: u32) usize {
+        const order = struct {
+            fn f(want: u32, at: u32) std.math.Order {
+                return std.math.order(want, at);
+            }
+        }.f;
+        return std.sort.lowerBound(u32, self.attr_at.items, tok, order);
+    }
+
     /// `skipAttributes`, then binds what it read to `owner` (an operator or
     /// call suffix, or a statement prefix) instead of the next declaration.
     pub fn ownedAttributes(self: *Parser, owner: Ast.AttributeOwner) error{OutOfMemory}!void {
+        std.debug.assert(owner.kind != .declaration or owner.tok <= self.pos); // `attr_at`'s invariant
         const first = self.file.attributes.items.len;
         try self.skipAttributes();
         // §2.9/IEEE §3.8 prohibit attributes inside an attribute value;
@@ -444,27 +486,29 @@ pub const Parser = struct {
 
     /// Gives the declaration at token `to` every attribute binding the
     /// declaration at token `from` has: §2.9 Example 5 puts a prefix on every
-    /// name of its list. A binding already copied is not added again.
-    /// Cost: O(n²) in the file's attribute bindings.
+    /// name of its list. A binding already copied is not added again. Cost:
+    /// the bindings appended since the cursor reached `from` (and `to`), not
+    /// the file's.
     pub fn copyAttributes(self: *Parser, from: u32, to: u32) error{OutOfMemory}!void {
         if (from == to) return;
         const count = self.file.attributes.items.len;
-        for (0..count) |i| {
+        for (self.bindingsFrom(from)..count) |i| {
             const a = self.file.attributes.items[i];
             if (a.owner.kind != .declaration or a.owner.tok != from) continue;
-            const exists = for (self.file.attributes.items) |b| {
+            const exists = for (self.file.attributes.items[self.bindingsFrom(to)..]) |b| {
                 if (b.owner.kind == .declaration and b.owner.tok == to and b.specs.ptr == a.specs.ptr) break true;
             } else false;
-            if (!exists) try self.file.attributes.append(self.arena, .{ .owner = .{ .kind = .declaration, .tok = to }, .specs = a.specs });
+            if (!exists) try self.appendBinding(.{ .owner = .{ .kind = .declaration, .tok = to }, .specs = a.specs });
         }
     }
 
     /// Rebinds the declaration-owned attributes at token `tok` to the
     /// statement that starts there. `skipAttributes` binds a prefix to a
     /// declaration, and lookahead may have read a statement's prefix before
-    /// knowing it was one. Cost: O(n) in the file's attribute bindings.
+    /// knowing it was one. Cost: the bindings appended since the cursor
+    /// reached `tok`.
     pub fn statementAttributes(self: *Parser, tok: u32) void {
-        for (self.file.attributes.items) |*a| if (a.owner.kind == .declaration and a.owner.tok == tok) {
+        for (self.file.attributes.items[self.bindingsFrom(tok)..]) |*a| if (a.owner.kind == .declaration and a.owner.tok == tok) {
             a.owner.kind = .statement;
         };
     }
@@ -472,11 +516,15 @@ pub const Parser = struct {
     /// Where a speculative `skipAttributes` started: the cursor and the
     /// lengths of `attrs` and `file.attributes`. Both tables only grow while
     /// it is held, so the lengths are enough to undo the read.
-    pub const AttrMark = struct { pos: u32, specs: usize, bindings: usize };
+    /// Both lengths are bounded by the token count, which is a `u32`.
+    pub const AttrMark = struct { pos: u32, specs: u32, bindings: u32 };
+    comptime {
+        std.debug.assert(@sizeOf(AttrMark) == 12);
+    }
 
     /// Returns the mark `rewindAttributes` undoes a speculative read back to.
     pub fn markAttributes(self: *const Parser) AttrMark {
-        return .{ .pos = self.pos, .specs = self.attrs.items.len, .bindings = self.file.attributes.items.len };
+        return .{ .pos = self.pos, .specs = @intCast(self.attrs.items.len), .bindings = @intCast(self.file.attributes.items.len) };
     }
 
     /// Hands attribute instances read since `m` back to the token stream: the
@@ -488,6 +536,7 @@ pub const Parser = struct {
         self.pos = m.pos;
         self.attrs.shrinkRetainingCapacity(m.specs);
         self.file.attributes.shrinkRetainingCapacity(m.bindings);
+        self.attr_at.shrinkRetainingCapacity(m.bindings);
     }
 
     /// The last spec of each VerA attribute in `self.attrs[mark..]` (§2.9:
