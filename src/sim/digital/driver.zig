@@ -14,6 +14,7 @@ const Run = root.Run;
 const Error = root.Error;
 const compile = @import("compile.zig");
 const exec = @import("exec.zig");
+const elab = @import("elab.zig");
 const Driver = @import("net.zig").Driver;
 const Signal = @import("net.zig").Signal;
 const filled = @import("net.zig").filled;
@@ -66,7 +67,7 @@ pub fn key(net: u32) u32 {
 /// bound to the segment.
 /// ponytail: an ordinary `inout` port stays on the drivers' net; §7.9's
 /// Figure 7-11 bidirectional split is the upgrade.
-pub fn segregate(r: *Run, e: *root.Elab) Error!void {
+pub fn segregate(r: *Run, e: *elab.Elab) Error!void {
     for (r.inserts, r.insert_segs) |row, seg| {
         const parent = scopeAt(r, row.path) orelse continue;
         // A continuous lower port minted no segment: nothing digital to split.
@@ -78,7 +79,7 @@ pub fn segregate(r: *Run, e: *root.Elab) Error!void {
         if (!driven) continue;
         const kind = e.nets.items[d].kind;
         const width = e.nets.items[d].resolved.width;
-        const rx = try root.mintNet(r, e, kind, width, e.values.items[slot].signed, .none, e.nets.items[d].tok);
+        const rx = try elab.mintNet(r, e, kind, width, e.values.items[slot].signed, .none, e.nets.items[d].tok);
         for (e.wires.items) |*w| if (w.net == d and isConnect(r, w.scope)) {
             w.net = rx;
         };

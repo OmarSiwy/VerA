@@ -11,6 +11,7 @@ const exec = @import("exec.zig");
 const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
+const elab = @import("elab.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const SpecExpr = @import("root.zig").SpecExpr;
@@ -495,7 +496,7 @@ pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
                     "it reads a name that is neither its own nor a parameter",
                 .hier_ident => "it contains a hierarchical reference",
                 .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
-                    if (!v.r.subs.items[callee].framed) try @import("root.zig").earlyFrame(v.r, callee, ex.mainTok(x));
+                    if (!v.r.subs.items[callee].framed) try elab.earlyFrame(v.r, callee, ex.mainTok(x));
                     break :blk if (try notConstant(v.r, callee) == null) null else "it calls a function that is not a constant function";
                 } else "it calls a function that is not a constant function",
                 .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| if (sf.constant()) null else "it calls a system function no constant expression may" else "it calls a system function no constant expression may",
@@ -823,7 +824,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const inst = self.instanceOf(self.scope);
             const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
             if (!self.subs.items[idx].decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
-            if (!self.subs.items[idx].framed) try @import("root.zig").earlyFrame(self, idx, ex.mainTok(e));
+            if (!self.subs.items[idx].framed) try elab.earlyFrame(self, idx, ex.mainTok(e));
             const sub = self.subs.items[idx];
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
@@ -941,7 +942,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (self.block_scopes.get(.{ .scope = outer, .stmt = id })) |inner| {
                 self.scope = inner;
             } else if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) {
-                self.scope = try @import("root.zig").blockScope(self, outer, id);
+                self.scope = try elab.blockScope(self, outer, id);
             }
             const start = position(self);
             if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
@@ -1437,7 +1438,7 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
 fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
     if (self.subs.items[idx].body != null) return;
     const decl = self.subs.items[idx].decl;
-    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
+    const f = if (decl.automatic) try elab.frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
     const skip = try append(self, .{ .jump = 0 });
     self.subs.items[idx].body = .{ .entry = position(self), .frame = f };
     const caller = self.scope;
@@ -1545,7 +1546,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
     }
     self.subs.items[idx].inlining = true;
     defer self.subs.items[idx].inlining = false;
-    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, inst) else self.subs.items[idx].frame;
+    const f = if (decl.automatic) try elab.frame(self, decl, inst) else self.subs.items[idx].frame;
     const start = position(self);
     for (decl.ports, args, f.ports) |p, a, slot| if (p.direction != .output) {
         _ = try append(self, .{ .init_var = .{ .slot = slot, .value = a } });
