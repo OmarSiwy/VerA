@@ -10,7 +10,8 @@ const Ast = Front.Ast;
 const Int = Front.Integer;
 const diag = @import("diag");
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const waiters = @import("waiters.zig");
+const evaluate = @import("evaluate.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const run = @import("root.zig").run;
@@ -253,13 +254,13 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
         self.exprFail(args[0], too_large)
     else
         self.exprFail(args[0], "the memory file cannot be read");
-    const start = if (args.len >= 3) (try exec.eval(self, a, args[2], 0)).asInt() else null;
-    const finish = if (args.len == 4) (try exec.eval(self, a, args[3], 0)).asInt() else null;
+    const start = if (args.len >= 3) (try evaluate.eval(self, a, args[2], 0)).asInt() else null;
+    const finish = if (args.len == 4) (try evaluate.eval(self, a, args[3], 0)).asInt() else null;
     var load: MemLoad = .init(text, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
     while (load.next(a) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => |f| return self.fail(ex.mainTok(args[0]), "{s}", .{MemLoad.message(f)}),
-    }) |w| try exec.store(self, base + w.index, w.value.planes);
+    }) |w| try waiters.store(self, base + w.index, w.value.planes);
     if (load.mismatch()) |m| {
         const tok = ex.mainTok(args[0]);
         const at = self.starts[@min(tok, self.starts.len - 1)];
@@ -476,14 +477,14 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
         // the default of this task, so $displayh's bare argument is hex.
         if (ex.tag(e) != .str_literal and !dynamic) {
             try compile.checkExpr(self, e);
-            if (allocator) |a| try emitValue(self, try exec.eval(self, a, e, 0), show.radix, null);
+            if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, e, 0), show.radix, null);
             continue;
         }
         if (dynamic and allocator == null) {
             for (args) |x| if (x != .none) try compile.checkExpr(self, x);
             return;
         }
-        const format = if (dynamic) (try system.text(allocator.?, try exec.eval(self, allocator.?, e, 0))) orelse "" else self.file.str(ex.strOf(e));
+        const format = if (dynamic) (try system.text(allocator.?, try evaluate.eval(self, allocator.?, e, 0))) orelse "" else self.file.str(ex.strOf(e));
         var i: usize = 0;
         while (i < format.len) : (i += 1) {
             if (format[i] != '%') {
@@ -535,7 +536,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     arg += 1;
                     if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
-                    if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0), width);
+                    if (allocator) |a| try emitTime(self, try evaluate.eval(self, a, args[arg], 0), width);
                     continue;
                 },
                 // §17.1.1.6 `%m` and §13.6 `%l` consume no argument: they
@@ -561,7 +562,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     if (allocator) |a| {
                         const n = if (net) |k| self.nets[k] else null;
                         const sig: Signal = if (n == null)
-                            .of((try exec.eval(self, a, args[arg], 0)).bit(0), .strong, .strong)
+                            .of((try evaluate.eval(self, a, args[arg], 0)).bit(0), .strong, .strong)
                         else if (n.?.drivers.len == 0) netPull(n.?.kind) else n.?.signal[0];
                         try strength(self.out, sig);
                     }
@@ -573,7 +574,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     arg += 1;
                     if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
-                    if (allocator) |a| try fmt.text(self.out, try exec.eval(self, a, args[arg], 0), format[i] == 'c' or format[i] == 'C', width);
+                    if (allocator) |a| try fmt.text(self.out, try evaluate.eval(self, a, args[arg], 0), format[i] == 'c' or format[i] == 'C', width);
                     continue;
                 },
                 else => return self.exprFail(
@@ -585,11 +586,11 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
             if (radix) |r| {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| try emitValue(self, try exec.eval(self, a, args[arg], 0), r, width);
+                if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, args[arg], 0), r, width);
             } else {
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| {
-                    const real = try exec.evalReal(self, a, args[arg]);
+                    const real = try evaluate.evalReal(self, a, args[arg]);
                     var buf: [real_buf]u8 = undefined;
                     const text = zCReal(&buf, real, format[i], 0, 0, precision);
                     if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
@@ -698,7 +699,7 @@ fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
 
 /// Prints the standing monitor's argument list, if there is one and it is
 /// on. The caller decides whether to print (a watched slot changed in
-/// `exec.store`, or `$monitoron` ran), never by comparing text.
+/// `waiters.store`, or `$monitoron` ran), never by comparing text.
 pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     const m = self.monitor orelse return;
     if (!self.monitor_on) return;

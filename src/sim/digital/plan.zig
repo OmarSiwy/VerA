@@ -7,7 +7,7 @@
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
@@ -600,10 +600,10 @@ fn readBits(self: *Emitter, e: Ast.ExprId, out: *Bits) Error!void {
             const rg = ex.rhs(e);
             const width = r.values[at].width;
             const base = if (ex.tag(rg) == .indexed_range) ex.lhs(rg) else rg;
-            const sel: ?exec.Sel = if (ex.tag(rg) == .range or compile.constantExpression(r, base)) blk: {
+            const sel: ?evaluate.Sel = if (ex.tag(rg) == .range or compile.constantExpression(r, base)) blk: {
                 // Share the interpreter's direction/width calculation,
                 // including constant indexed ranges. Null names no bit.
-                break :blk (exec.selection(r, self.arena, e) catch return self.refuse("a constant select the engine does not fold")) orelse .{ .first = 0, .count = 0 };
+                break :blk (evaluate.selection(r, self.arena, e) catch return self.refuse("a constant select the engine does not fold")) orelse .{ .first = 0, .count = 0 };
             } else null;
             const g = try out.getOrPut(self.arena, at);
             const s = sel orelse {

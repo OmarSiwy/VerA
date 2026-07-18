@@ -18,7 +18,7 @@ pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
 const compile = @import("compile.zig");
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
-/// process does (`exec.store` now, `exec.enqueue` of a `.write` later), so a
+/// process does (`waiters.store` now, `exec.enqueue` of a `.write` later), so a
 /// §12.30 put wakes waiters and value-change watchers like any other write.
 pub const exec = @import("exec.zig");
 const display = @import("display.zig");
@@ -29,6 +29,9 @@ pub const own_files = @import("system.zig").own;
 const driver = @import("driver.zig");
 const binding = @import("bind.zig");
 const elab = @import("elab.zig");
+const evaluate = @import("evaluate.zig");
+const waiters = @import("waiters.zig");
+const resolution = @import("resolution.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
@@ -227,7 +230,7 @@ pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: Moni
 pub const MonitorKind = enum { cross, above, timer, absdelta };
 
 /// One digital event term of an analog event control (`Run.watchEvent`).
-pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
+pub const D2aSite = struct { slot: u32, edge: waiters.Edge, site: u6 };
 
 /// The events one time step may dispatch before `runUntil` calls it a
 /// zero-delay loop. Far above any design's settling activity per step.
@@ -414,15 +417,15 @@ pub const Run = struct {
     free_rows: std.ArrayList(u32) = .empty,
     /// §9.7 the processes suspended on an event control. A row is recycled
     /// once its process resumes or is disabled.
-    susps: std.ArrayList(exec.Susp) = .empty,
+    susps: std.ArrayList(waiters.Susp) = .empty,
     free_susps: std.ArrayList(u32) = .empty,
     /// §5.10.1 per slot, the terms of the event controls waiting on it, made
     /// on the slot's first wait (most slots are never waited on, and a list
     /// header is three words); a slot no variable owns (`driver.key`,
     /// `registerMonitor`) is in `far_terms`.
-    terms: []?*std.ArrayList(exec.Term) = &.{},
-    far_terms: std.AutoHashMapUnmanaged(u32, std.ArrayList(exec.Term)) = .empty,
-    /// §6.1 / §7.6 the static fan-out (`exec.buildFanout`): per slot
+    terms: []?*std.ArrayList(waiters.Term) = &.{},
+    far_terms: std.AutoHashMapUnmanaged(u32, std.ArrayList(waiters.Term)) = .empty,
+    /// §6.1 / §7.6 the static fan-out (`waiters.buildFanout`): per slot
     /// `fan[fan_start[slot]..fan_start[slot + 1]]` are the pcs of the
     /// continuous drivers and controlled switches reading it, and `armed[pc]`
     /// says that process is suspended on its operands right now.
@@ -583,19 +586,19 @@ pub const Run = struct {
     /// Table 7-1 in reverse: a real "with no conversion", an integer as itself.
     pub fn a2dWrite(r: *Run, at: u32, v: f64) Error!void {
         const cur = r.values[at];
-        const lit = if (r.reals.contains(at)) try exec.realLiteral(r.arena, v) else blk: {
+        const lit = if (r.reals.contains(at)) try evaluate.realLiteral(r.arena, v) else blk: {
             const w = try filled(r.arena, 64, true, .zero);
             w.values()[0] = @bitCast(std.math.lossyCast(i64, v));
-            break :blk try exec.normalize(r.arena, w, .{ .width = cur.width, .signed = cur.signed });
+            break :blk try evaluate.normalize(r.arena, w, .{ .width = cur.width, .signed = cur.signed });
         };
-        try exec.store(r, at, lit.planes);
+        try waiters.store(r, at, lit.planes);
     }
 
     /// VAMS §7.3.4 / §8.5: an analog event control waits on `edge` of `slot`
     /// (a variable, net or named event), as term `site` < 64. From now on the
     /// event makes `runUntil` stop with `.explicit_d2a` at region 1b of its
     /// tick, with bit `site` set in `d2a_fired`.
-    pub fn watchEvent(r: *Run, at: u32, edge: exec.Edge, site: u6) Error!void {
+    pub fn watchEvent(r: *Run, at: u32, edge: waiters.Edge, site: u6) Error!void {
         r.watch[at].insert(.d2a);
         try r.d2a_sites.append(r.arena, .{ .slot = at, .edge = edge, .site = site });
     }
@@ -678,7 +681,7 @@ pub const Run = struct {
         r.scope = mon.scope;
         var scratch = std.heap.ArenaAllocator.init(r.arena);
         defer scratch.deinit();
-        return try exec.evalReal(r, scratch.allocator(), args[k]);
+        return try evaluate.evalReal(r, scratch.allocator(), args[k]);
     }
 
     /// VAMS §7.3.6.1: monitor `m`'s event occurred; wake its waiters "at the
@@ -717,7 +720,7 @@ pub const Run = struct {
             // of the time where they occur": 1b is always followed by 3b.
             if (event.region == .explicit_d2a) {
                 r.d2a_pending = false;
-                try exec.requestAnalog(r);
+                try waiters.requestAnalog(r);
                 return .explicit_d2a;
             }
             const item = r.pending.items[event.payload].item;
@@ -731,8 +734,8 @@ pub const Run = struct {
                     try exec.makeResident(r, x.ctx);
                     try exec.execute(r, &scratch, x.pc);
                 },
-                .a2d => |at| try exec.wakeA2d(r, at),
-                .write => |w| try exec.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
+                .a2d => |at| try waiters.wakeA2d(r, at),
+                .write => |w| try evaluate.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
                 .strobe => |s| {
                     r.scope = s.scope;
                     r.pc = s.pc;
@@ -747,8 +750,8 @@ pub const Run = struct {
                     const t = &r.trans[at];
                     t.pending = null;
                     t.state = t.target;
-                    try exec.resolve(r, t.a);
-                    try exec.resolve(r, t.b);
+                    try resolution.resolve(r, t.a);
+                    try resolution.resolve(r, t.b);
                 },
                 // §6.1.3: the scheduler drops a cancelled transition, so what
                 // arrives is the one still in flight.
@@ -757,13 +760,13 @@ pub const Run = struct {
                     d.transition.in_flight = null;
                     @memcpy(d.current.planes, d.transition.target.planes);
                     d.or_z = d.transition.or_z;
-                    try exec.resolve(r, d.net);
+                    try resolution.resolve(r, d.net);
                 },
                 .net_update => |at| {
                     const n = r.nets[at];
                     const c = try r.netColdMut(at); // a delayed net has its row
                     c.transition.in_flight = null;
-                    try exec.store(r, n.slot, c.transition.target.planes);
+                    try waiters.store(r, n.slot, c.transition.target.planes);
                 },
                 // §3.8: the charge has been held for the decay time, and what a
                 // trireg holds once it is worth nothing is x.
@@ -771,7 +774,7 @@ pub const Run = struct {
                     const n = &r.nets[at];
                     (try r.netColdMut(at)).decay_event = null; // a decaying trireg has its row
                     for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
-                    try exec.store(r, n.slot, n.resolved.planes);
+                    try waiters.store(r, n.slot, n.resolved.planes);
                 },
             }
             // Freed only now: the `.write` planes above are this row's own, and
@@ -910,8 +913,8 @@ pub const Run = struct {
         defer self.scope = saved;
         self.scope = self.vpi_expr_scopes.get(.{ instance, @backingInt(e) }) orelse instance;
         try compile.checkExpr(self, e);
-        if (compile.typeOf(self, e).real) return .{ .real = try exec.evalReal(self, a, e) };
-        return .{ .bits = try exec.eval(self, a, e, 0) };
+        if (compile.typeOf(self, e).real) return .{ .real = try evaluate.evalReal(self, a, e) };
+        return .{ .bits = try evaluate.eval(self, a, e, 0) };
     }
 
     /// §26.6.11: a constant event select denotes the persistent declared
@@ -988,7 +991,7 @@ pub const Run = struct {
         if (self.growing) |g| self.values = g.items;
         try compile.checkExpr(self, e);
         if (!compile.constantExpression(self, e)) return self.fail(tok, "a constant expression is required here", .{});
-        const v = try exec.eval(self, self.arena, e, 0);
+        const v = try evaluate.eval(self, self.arena, e, 0);
         const out = try filled(self.arena, v.width, v.signed, .zero);
         @memcpy(out.planes, v.planes);
         return out;
@@ -1164,7 +1167,7 @@ pub const Overrides = struct {
 pub const PartForce = struct { bits: compile.Bits, range: PcRange };
 
 /// A half-open range of `Run.code` pcs, `[start, end)`: one process body.
-/// Empty for a VPI force, which no process maintains (`exec.forceValue`).
+/// Empty for a VPI force, which no process maintains (`waiters.forceValue`).
 pub const PcRange = struct { start: u32, end: u32 };
 
 /// One activation's storage: a scope, a slot per formal, the result slot of
@@ -1564,7 +1567,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .empty);
-    try exec.buildFanout(&r);
+    try waiters.buildFanout(&r);
     try driver.arm(&r);
     return r;
 }

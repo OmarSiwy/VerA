@@ -11,7 +11,7 @@ const Ast = Front.Ast;
 const root = @import("root.zig");
 const Run = root.Run;
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const display = @import("display.zig");
 const fmt = @import("../fmt.zig");
 const expr = @import("emit_expr.zig");
@@ -402,7 +402,7 @@ fn rhsValue(self: *Emitter, rhs: Rhs) Error!void {
     }
 }
 
-/// `rhs` in the type `target` gives it (`exec.evalFor`, `exec.convertSlot`).
+/// `rhs` in the type `target` gives it (`evaluate.evalFor`, `evaluate.convertSlot`).
 fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
     const ty = switch (rhs) {
         .expr => |e| return expr.assigned(self, e, target),
@@ -411,7 +411,7 @@ fn rhsFor(self: *Emitter, rhs: Rhs, target: Type) Error!void {
         .evaluated => |v| v.ty,
         .part => |p| return self.print("L.part(cat{d}, {d}, {d}, {d})", .{ p.label, p.lo, target.width, p.total }),
     };
-    // `exec.convertValue`, §4.8.2 between a real and an integer.
+    // `evaluate.convertValue`, §4.8.2 between a real and an integer.
     if (ty.real and target.real) return rhsValue(self, rhs);
     if (target.real) {
         try self.print("L.realBits(L.toReal(", .{});
@@ -713,7 +713,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
 
 /// `rt.Design.act_events`: per slot, 1 + the automatic timed task whose
 /// out-of-line body declares that named event, in its own scope or a
-/// block nested there (§10.2.1, `exec.eventContext`), else 0.
+/// block nested there (§10.2.1, `waiters.eventContext`), else 0.
 fn actEvents(self: *Emitter) Error!void {
     const r = self.r;
     const owner = try self.arena.alloc(u32, r.values.len);
@@ -1059,7 +1059,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print(");\n", .{});
                 },
                 // §17.6: inputs read, the shared queue engine, then each
-                // output written as `exec.assignInt` writes it, status last.
+                // output written as `evaluate.assignInt` writes it, status last.
                 .queue => |op| {
                     if (self.device) return self.refuse("a §17.6 stochastic queue, whose length a device's state cannot bound");
                     const lb = self.label();
@@ -1329,7 +1329,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
             if (o.bits) |b| {
-                // Releasing a select never forced is a no-op (`exec.releaseBits`).
+                // Releasing a select never forced is a no-op (`waiters.releaseBits`).
                 if (try partOf(self, o.slot, b)) |k| {
                     const net = r.net_of.get(o.slot) orelse return self.refuse("a force of a select of a variable");
                     try self.print("            try s.releaseBits({d}, {d});\n            try s.resolve({d});\n", .{ o.slot, k, self.net_ix[net].? });
@@ -1447,16 +1447,16 @@ fn waitFixed(self: *Emitter) Error!bool {
     return true;
 }
 
-/// `exec.targetType` of a whole slot.
+/// `evaluate.targetType` of a whole slot.
 fn slotType(self: *Emitter, at: u32) Error!Type {
     return self.r.slotType(at);
 }
 
-/// `exec.targetType`: the type a value assigned to `target` takes.
+/// `evaluate.targetType`: the type a value assigned to `target` takes.
 pub fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     const r = self.r;
     const ex = &r.file.exprs;
-    // `exec.targetType`: as wide as its operands together, unsigned.
+    // `evaluate.targetType`: as wide as its operands together, unsigned.
     if (ex.tag(target) == .concat) {
         var width: u32 = 0;
         for (ex.args(target)) |x| width += (try targetType(self, x)).width;
@@ -1467,12 +1467,12 @@ pub fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     return .{ .width = compile.typeOf(r, target).width, .signed = false };
 }
 
-/// A.6.2 `lvalue = value` or `lvalue <= value`: `exec.place`, then
-/// `exec.evalFor`, then `write` now or an NBA row (§9.2.2).
+/// A.6.2 `lvalue = value` or `lvalue <= value`: `evaluate.place`, then
+/// `evaluate.evalFor`, then `write` now or an NBA row (§9.2.2).
 fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
-    // `exec.put`: the value once, then each operand its bits, the rightmost
+    // `evaluate.put`: the value once, then each operand its bits, the rightmost
     // the least significant (§6 Table 6-1).
     if (ex.tag(target) == .concat) {
         const total = (try targetType(self, target)).width;
@@ -1587,7 +1587,7 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const t = try expr.natural(self, amount);
     if (t.real) {
         if (compile.constantExpression(r, amount)) {
-            const v = exec.evalReal(r, self.arena, amount) catch return self.refuse("a delay the engine does not fold");
+            const v = evaluate.evalReal(r, self.arena, amount) catch return self.refuse("a delay the engine does not fold");
             const ticks = scale.realDelay(v) catch |e| return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
             return self.print("{d}", .{ticks});
         }
@@ -1597,7 +1597,7 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     }
     if (t.width > 64) return self.refuse("a delay wider than 64 bits");
     if (compile.constantExpression(r, amount)) fold: {
-        const v = exec.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
+        const v = evaluate.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
         // `--two-state` computes an unknown constant from its 0-valued leaves.
         if (self.two_state and v.hasUnknown()) break :fold;
         const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch |e|
@@ -1609,7 +1609,7 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     try self.print(", {}, .{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ t.signed, scale.local_per_unit, scale.global_per_local });
 }
 
-/// Is driver `i` its net's value as is (`exec.plainCopy`, with no delay)?
+/// Is driver `i` its net's value as is (`resolution.plainCopy`, with no delay)?
 /// It stores the net itself; every other driver resolves in `rt.net`. A
 /// logic gate is one on a scalar net: it never asserts §7.10.2's H/L.
 pub fn plainDriver(r: *const Run, i: u32) bool {
@@ -1881,7 +1881,7 @@ fn delayText(d: @import("net.zig").Delay, out: *std.Io.Writer) std.Io.Writer.Err
 }
 
 /// `.continuous` (`exec`'s arm): driver `i`'s value. A plain driver stores
-/// its net (`exec.plainCopy`); any other hands its value to `rt.net`, which
+/// its net (`resolution.plainCopy`); any other hands its value to `rt.net`, which
 /// delays it (§6.1.3) or resolves the net (§7.9). Then it re-arms on its
 /// operands.
 fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
@@ -2009,7 +2009,7 @@ fn gateLogic(self: *Emitter, kind: Ast.GateKind, n: usize) Error!void {
 }
 
 /// `const b`: bit `lane` (0 without one) of each terminal in `ins`, as
-/// `exec.gateValue` reads it.
+/// `resolution.gateValue` reads it.
 fn bits(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
     for (ins, 0..) |in, j| {
         try self.print("            const in{d} = ", .{j});
@@ -2022,7 +2022,7 @@ fn bits(self: *Emitter, ins: []const Ast.ExprId, lane: ?u32) Error!void {
     try self.print(" }};\n", .{});
 }
 
-/// `exec.assignInt`: the Zig `i64` `v` assigned to `target`, through a
+/// `evaluate.assignInt`: the Zig `i64` `v` assigned to `target`, through a
 /// scratch word past the slots'.
 pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
@@ -2030,7 +2030,7 @@ pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
 }
 
-/// `exec.assign` of the Zig `[2]u64` `v`, a signed 64-bit value's value and
+/// `evaluate.assign` of the Zig `[2]u64` `v`, a signed 64-bit value's value and
 /// unknown planes, to `target`.
 pub fn assignPlanes(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
@@ -2038,7 +2038,7 @@ pub fn assignPlanes(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!voi
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
 }
 
-/// `exec.assignReal` of the Zig `f64` `v` to `target`.
+/// `evaluate.assignReal` of the Zig `f64` `v` to `target`.
 pub fn assignReal(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
     try self.print("            try M.set(s, {d}, L.k(@bitCast(@as(f64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
@@ -2096,14 +2096,14 @@ pub fn fread(self: *Emitter, args: []const Ast.ExprId) Error!void {
     }
 }
 
-/// `exec.eval(e, 0).asInt()` as a Zig `?i64`.
+/// `evaluate.eval(e, 0).asInt()` as a Zig `?i64`.
 pub fn int64(self: *Emitter, e: Ast.ExprId) Error!void {
     try self.print("L.asInt(", .{});
     const t = try expr.selfDetermined(self, e);
     try self.print(", {d}, {})", .{ t.width, t.signed });
 }
 
-/// `exec.eval(e, 0).asInt() orelse 0` as a Zig `i64`.
+/// `evaluate.eval(e, 0).asInt() orelse 0` as a Zig `i64`.
 fn int(self: *Emitter, e: Ast.ExprId) Error!void {
     try self.print("(L.asInt(", .{});
     const t = try expr.selfDetermined(self, e);

@@ -25,7 +25,7 @@ const isRoot = root.isRoot;
 const expectRun = root.expectRun;
 const expectRejected = root.expectRejected;
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const binding = @import("bind.zig");
 const Type = compile.Type;
 const net_mod = @import("net.zig");
@@ -434,7 +434,7 @@ fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []con
         // The host has applied §6.3 overrides and dependent defaults already;
         // re-evaluating one here could reject a legal analog constant function
         // or silently restore a default instead of this analysis's card.
-        const pv: ParamValue = if (real_value) |v| .{ .v = try exec.realLiteral(arena, v), .real = true } else (try paramValue(r, p, scope, over, pos)) orelse continue;
+        const pv: ParamValue = if (real_value) |v| .{ .v = try evaluate.realLiteral(arena, v), .real = true } else (try paramValue(r, p, scope, over, pos)) orelse continue;
         // §12.2: a range or a type (`signed` is one) converts the value like
         // an assignment; otherwise the parameter takes the type of its value.
         const ty: compile.Type = if (p.packed_range) |range|
@@ -445,7 +445,7 @@ fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []con
             compile.real_type
         else
             .{ .width = if (pv.real) 64 else pv.v.width, .signed = p.is_signed or pv.v.signed };
-        const converted = try exec.convertValue(arena, pv.v, pv.real, ty);
+        const converted = try evaluate.convertValue(arena, pv.v, pv.real, ty);
         const at: u32 = @intCast(g.items.len);
         try r.bind(p.name, at, p.main_tok);
         const slot_value = try filled(arena, ty.width, ty.signed, .zero);
@@ -869,7 +869,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                     if (chosen != null) break;
                     const l = try r.constant(label, tok);
                     const ty: Type = .{ .width = @max(l.width, value.width), .signed = l.signed and value.signed };
-                    if ((try exec.convert(r.arena, value, ty)).equality(.case_equal, try exec.convert(r.arena, l, ty)) == .one) chosen = arm.body;
+                    if ((try evaluate.convert(r.arena, value, ty)).equality(.case_equal, try evaluate.convert(r.arena, l, ty)) == .one) chosen = arm.body;
                 }
             }
             const arm = chosen orelse fallback;
@@ -1022,7 +1022,7 @@ fn genvarSlot(r: *Run, e: *Elab, name: Ast.StrId, tok: u32) Error!u32 {
 }
 
 fn setGenvar(r: *Run, e: *Elab, at: u32, value: Int.Literal) Error!void {
-    @memcpy(e.values.items[at].planes, (try exec.convert(r.arena, value, .{ .width = 32, .signed = true })).planes);
+    @memcpy(e.values.items[at].planes, (try evaluate.convert(r.arena, value, .{ .width = 32, .signed = true })).planes);
 }
 
 /// Every module a generate construct instantiates, in either arm.
@@ -1104,9 +1104,9 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         // an integer one takes the value rounded, as the device's does.
         const w = try filled(r.arena, 64, true, .zero);
         w.values()[0] = @bitCast(std.math.lossyCast(i64, @round(c.value)));
-        return .{ .v = try exec.normalize(r.arena, w, .{ .width = 32, .signed = true }) };
+        return .{ .v = try evaluate.normalize(r.arena, w, .{ .width = 32, .signed = true }) };
     };
-    if (compile.typeOf(r, src.e).real) return .{ .v = try exec.realLiteral(r.arena, try exec.evalReal(r, r.arena, src.e)), .real = true };
+    if (compile.typeOf(r, src.e).real) return .{ .v = try evaluate.realLiteral(r.arena, try evaluate.evalReal(r, r.arena, src.e)), .real = true };
     return .{ .v = value };
 }
 
@@ -1408,7 +1408,7 @@ fn netSlot(r: *Run, e: Ast.ExprId, tok: u32) Error!u32 {
         k -= 1;
         indices[k] = try r.declaredBound(ex.rhs(x), tok);
     }
-    const offset = exec.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
+    const offset = evaluate.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
     return try r.slot(c.base) + offset;
 }
 
@@ -1830,7 +1830,7 @@ fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32, comptime who: SinkOf) Erro
     try compile.checkExpr(r, arg);
     if (index != .none and !compile.constantExpression(r, index)) return r.exprFail(arg, refused);
     const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, "an output port can only drive a net");
-    const sel = (try exec.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
+    const sel = (try evaluate.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
     if (sel.first < 0 or sel.first + sel.count > e.nets.items[net].resolved.width) return r.exprFail(arg, "§12.3.9.2: the select is outside its net");
     return .{ .net = net, .lo = @intCast(sel.first), .width = sel.count };
 }

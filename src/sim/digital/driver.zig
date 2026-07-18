@@ -13,7 +13,8 @@ const root = @import("root.zig");
 const Run = root.Run;
 const Error = root.Error;
 const compile = @import("compile.zig");
-const exec = @import("exec.zig");
+const waiters = @import("waiters.zig");
+const evaluate = @import("evaluate.zig");
 const elab = @import("elab.zig");
 const Driver = @import("net.zig").Driver;
 const Signal = @import("net.zig").Signal;
@@ -162,7 +163,7 @@ fn watch(r: *Run, slot: u32, net: u32, reg: bool) Error!void {
     try r.drv.sources.append(r.arena, .{ .slot = slot, .net = net, .reg = reg });
 }
 
-/// `exec.store` wrote `slot`. §9.22.5: "an update is defined as the addition
+/// `waiters.store` wrote `slot`. §9.22.5: "an update is defined as the addition
 /// of a new pending value to the driver. This is true whether or not there is
 /// a change in the resolved value of the signal", so a `reg` driver updates on
 /// every assignment, changed or not. A nonblocking one already updated when it
@@ -175,14 +176,14 @@ pub fn stored(r: *Run, slot: u32, changed: bool) Error!void {
         .idle, .stopped => false,
     };
     for (r.drv.sources.items) |s| if (s.slot == slot and (if (s.reg) !maturing else changed))
-        try exec.wake(r, key(s.net), .x, .x);
+        try waiters.wake(r, key(s.net), .x, .x);
 }
 
 /// `exec.enqueue` scheduled a write of `slot`: a pending value added to a
 /// `reg` driver (§9.22.5, and what §9.23 then reads back).
 pub fn scheduled(r: *Run, slot: u32) Error!void {
     if (!r.watch[slot].contains(.driver_update)) return;
-    for (r.drv.sources.items) |s| if (s.slot == slot and s.reg) try exec.wake(r, key(s.net), .x, .x);
+    for (r.drv.sources.items) |s| if (s.slot == slot and s.reg) try waiters.wake(r, key(s.net), .x, .x);
 }
 
 // ---- the access functions (§9.22.1 to §9.22.4, §9.23.1 to §9.23.4) ----------------
@@ -242,7 +243,7 @@ pub fn eval(r: *Run, a: std.mem.Allocator, e: Ast.ExprId, f: Fn) Error!Int.Liter
         // input ports on the receivers' net (the segment itself, unsplit).
         .receiver_count => receivers(r, r.nets[r.drv.receivers.get(net) orelse net].slot),
         .state, .strength, .next_state, .next_strength, .type => blk: {
-            const i = (try exec.eval(r, a, args[1], 0)).asInt();
+            const i = (try evaluate.eval(r, a, args[1], 0)).asInt();
             const d = if (i != null and i.? >= 0) ordinary(r, net, @intCast(i.?)).driver else null;
             // §9.22.3 bounds the index to 0..N-1 and says no more; an index
             // outside it names no driver, and reads x.
@@ -272,7 +273,7 @@ pub fn eval(r: *Run, a: std.mem.Allocator, e: Ast.ExprId, f: Fn) Error!Int.Liter
 pub fn evalReal(r: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
     const args = r.file.exprs.args(e);
     const net = r.net_of.get(try r.scalarSlot(args[0])).?;
-    const i = (try exec.eval(r, a, args[1], 0)).asInt() orelse return -1.0;
+    const i = (try evaluate.eval(r, a, args[1], 0)).asInt() orelse return -1.0;
     if (i < 0) return -1.0;
     const d = ordinary(r, net, @intCast(i)).driver orelse return -1.0;
     const p = (try pending(r, a, d)) orelse return -1.0;
