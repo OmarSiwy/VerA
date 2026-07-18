@@ -1,9 +1,13 @@
-//! The digital interpreter: a scheduled `Pending` row (a pc to run, a write,
-//! a delayed drive) and the `Run` state -> stored values, woken waiters, new
-//! events and display output.
-//! Clauses: IEEE 1364-2005 §3.8, §3.9, §5.5.2, §5.10.1, §6.1/§6.1.3, §7.8.5,
-//! §7.9, §9.5.1, §9.7.1, §10.3, §17.1.2, §17.1.3, §17.11.1 `$clog2`;
-//! §8.5.3.3/§8.5.3.4 intra-assignment timing.
+//! The digital interpreter's dispatch: a scheduled `Pending` row (a pc to
+//! run, a write, a delayed drive) and the `Run` state -> the process run
+//! until it suspends, stops or finishes, the events it queues and its
+//! display output. Each instruction's work is in a sibling: `evaluate.zig`
+//! (expressions), `waiters.zig` (the write path and what it wakes) and
+//! `resolution.zig` (nets); this file owns the payload rows, the process
+//! control and the subroutine activations.
+//! Clauses: IEEE 1364-2005 §6.1/§6.1.3, §9.5.1, §9.7.1, §9.8.2, §10.2.2,
+//! §10.2.3, §10.3, §17.1.2, §17.1.3; §8.5.3.3/§8.5.3.4 intra-assignment
+//! timing.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -13,24 +17,18 @@ const display = @import("display.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
-const Type = compile.Type;
-const Inertial = @import("net.zig").Inertial;
-const no_cold = @import("net.zig").no_cold;
 const Handle = @import("../scheduler.zig").Handle;
-const Bridge = @import("net.zig").Bridge;
-const Gate = @import("net.zig").Gate;
-const gateBit = @import("net.zig").gateBit;
-const Signal = @import("net.zig").Signal;
-const netPull = @import("net.zig").netPull;
-const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 const wordMask = @import("net.zig").wordMask;
 const Show = display.Show;
 const Overrides = @import("root.zig").Overrides;
 const driver = @import("driver.zig");
+const evaluate = @import("evaluate.zig");
+const resolution = @import("resolution.zig");
+const waiters = @import("waiters.zig");
 
-// ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
+// ---- scheduler rows (§6.1.3, §17.1.2, §17.1.3) -------------------------------
 
 /// One scheduled event's payload, consumed whole by its dispatch. A `.write`
 /// value lives in its row's own planes (`Row`), never in variable storage.
@@ -39,7 +37,7 @@ pub const Pending = union(enum) {
     /// A resumption inside a §10.2.3 task activation (`Run.acts`): `pc`
     /// runs with activation `ctx`'s storage resident.
     @"resume": struct { pc: u32, ctx: u32 },
-    write: struct { target: u32, value: Int.Literal, sel: ?Sel = null },
+    write: struct { target: u32, value: Int.Literal, sel: ?evaluate.Sel = null },
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs,
     /// not when the call executed, so it reports the settled value.
     strobe: struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 },
@@ -73,1435 +71,38 @@ pub const Pending = union(enum) {
 /// ever queued at once, not as the run is long. `buf` is the row's own
 /// storage for a `.write` value, kept across reuse and grown only when a wider
 /// value arrives.
-pub const Row = struct { item: Pending, handle: Handle = undefined, buf: []u64 = &.{} };
+pub const Row = struct {
+    item: Pending,
+    handle: Handle = undefined,
+    buf: []u64 = &.{},
 
-/// §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
-/// with x and z as the intermediate value on either side of the transition.
-pub const Edge = enum(u2) {
-    any,
-    posedge,
-    negedge,
-    fn matches(self: Edge, before: Int.Bit, after: Int.Bit) bool {
-        // A plain `@(v)` term watches the whole value, which the caller has
-        // already proved changed; the other two read the LSB the table covers.
-        if (self == .any) return true;
-        if (before == after) return false;
-        return switch (self) {
-            .posedge => before == .zero or after == .one,
-            .negedge => before == .one or after == .zero,
-            .any => unreachable,
-        };
+    // Budget: one row per event queued at once (recycled). `Pending.write`
+    // is the widest payload: a slot, a value and an optional select.
+    comptime {
+        std.debug.assert(@sizeOf(Row) == 88);
     }
 };
 
-/// One process suspended on an event control (§9.7): where it resumes, and
-/// in which task activation (`ctx`, 0 for none). The terms of its `or` all
-/// name this row, and retire together when any one of them fires. `gen`
-/// counts the row's retirements, so a term filed by an earlier occupant of a
-/// recycled row is recognisably stale.
-pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
-
-/// One term of a suspension's event expression, filed under the slot it
-/// watches (`Run.terms`). Live while `gen` is its suspension's.
-pub const Term = struct {
-    susp: u32,
-    gen: u32,
-    edge: Edge,
-    /// §9.7.3: an event array index selects which occurrence wakes this
-    /// waiter. Changing the index itself does not cause an occurrence.
-    event_select: Ast.ExprId = .none,
-    scope: u32 = 0,
-    /// §9.7.2 a constant select term (`compile.selectTerm`): bits
-    /// `[lo, lo + width)` of the slot, and their value when last tested
-    /// (`v`, `x` planes); width 0 is the whole slot.
-    lo: u32 = 0,
-    width: u32 = 0,
-    v: u64 = 0,
-    x: u64 = 0,
-};
-
-/// Bits `[lo, lo + width)` of `value`, `width` at most 64, as (values,
-/// unknowns) words.
-fn termBits(value: Int.Literal, lo: u32, width: u32) [2]u64 {
-    var out: [2]u64 = undefined;
-    for ([_][]const u64{ value.values(), value.unknowns() }, &out) |plane, *o| {
-        const w = lo / 64;
-        const sh: u6 = @intCast(lo % 64);
-        var bits = plane[w] >> sh;
-        if (sh != 0 and w + 1 < plane.len) bits |= plane[w + 1] << @intCast(64 - @as(u7, sh));
-        o.* = bits & wordMask(width, 0);
-    }
-    return out;
-}
-
-/// A change of a select term's bits: whether it matches `t.edge` (of the
-/// select's least significant bit) and, either way, `t` now remembers them.
-fn selectChanged(t: *Term, value: Int.Literal) bool {
-    const now = termBits(value, t.lo, t.width);
-    if (now[0] == t.v and now[1] == t.x) return false;
-    const before: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(t.v & 1)) | @as(u2, @intCast(t.x & 1)) << 1));
-    const after: Int.Bit = @fromBackingInt(@intCast(@as(u2, @intCast(now[0] & 1)) | @as(u2, @intCast(now[1] & 1)) << 1));
-    t.v = now[0];
-    t.x = now[1];
-    return t.edge.matches(before, after);
-}
-
-// ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
-
-/// IEEE 1364-2005 §17.11.1 `$clog2`: every operand bit read as unsigned,
-/// whatever the declared signedness. The ceiling is the bit length, minus one
-/// exactly for powers of two.
-fn integerCeilingLog2(value: Int.Literal) u64 {
-    // An x or z operand gives 0, a choice: §17.11.1 does not say.
-    if (value.hasUnknown()) return 0;
-    var length: u64 = 0;
-    var power_of_two = true;
-    for (value.values(), 0..) |word, index| {
-        if (word == 0) continue;
-        if (length != 0 or word & (word - 1) != 0) power_of_two = false;
-        length = @as(u64, @intCast(index)) * 64 + 64 - @clz(word);
-    }
-    return if (length != 0 and power_of_two) length - 1 else length;
-}
-
-/// §3.9 the element an `.index` names right now, or the whole value a
-/// scalar reference names. `null` is an out-of-bounds or X/Z index: it
-/// names no storage, so a read of one is X and a write to one is discarded.
-pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) != .index) return try self.slot(e);
-    const c = self.chainBase(e);
-    const base = try self.slot(c.base);
-    const arr = self.arrays.get(base).?; // infer proved this is an array
-    // §4.9 row-major: the innermost select is the last dimension.
-    var indices: [16]i64 = undefined;
-    var x = e;
-    var k = c.depth;
-    while (k != 0) : (x = ex.lhs(x)) {
-        k -= 1;
-        indices[k] = indexInt(try eval(self, a, ex.rhs(x), 0)) orelse return null;
-    }
-    return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
-}
-
-/// Address conversion preserves unsigned magnitude: the engine's signed
-/// index range cannot contain an unsigned value above maxInt(i64).
-pub fn indexInt(value: Int.Literal) ?i64 {
-    if (value.width == 64 and !value.signed and value.values()[0] > std.math.maxInt(i64)) return null;
-    return value.asInt();
-}
-
-/// §4.9 row-major: the element `indices` (one per dimension, outermost
-/// first) names, counted from the array's first; null when one is outside
-/// its declared range.
-pub fn elementOffset(arr: @import("root.zig").Array, indices: []const i64) ?u32 {
-    var offset: u64 = 0;
-    for (indices, 0..) |at, d| {
-        const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
-        if (at < span.low or at > span.high) return null;
-        offset = offset * @as(u64, @intCast(span.high - span.low + 1)) + @as(u64, @intCast(at - span.low));
-    }
-    return @intCast(offset);
-}
-
-/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the bit
-/// positions it names: the selected value's bit i is bit `first + i` of the
-/// slot, and names no bit where the slot has none.
-pub const Sel = struct { first: i64, count: u32 };
-
-/// Where an assignment lands: a whole slot, or a selection of one (§5.2.1).
-pub const Place = struct { slot: u32, sel: ?Sel = null };
-
-/// The slot the vector a select `e` selects from lives in right now: a named
-/// vector, or the §5.2.2 array element its operand addresses. Null is an
-/// element address that names no storage.
-fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
-    const v = self.file.exprs.lhs(e);
-    return if (self.file.exprs.tag(v) == .index) try address(self, a, v) else try self.slot(v);
-}
-
-/// The selection an `.index` of a vector makes right now. A bit-select's
-/// index and an indexed part-select's base are evaluated; a part-select's
-/// bounds and an indexed one's width were folded by `infer`. Null is an x/z
-/// index, which names no bit.
-pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
-    const ex = &self.file.exprs;
-    const rg = ex.rhs(e);
-    const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
-    // Storage position of the selected value's least significant bit.
-    var first: i64 = undefined;
-    var count: u32 = 1;
-    switch (ex.tag(rg)) {
-        .range => {
-            const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
-            first = range.position(b.lsb);
-            count = @intCast(@abs(b.msb - b.lsb) + 1);
-        },
-        // §5.2.1: `+:` selects `count` bits "starting at the base and
-        // ascending the bit range", `-:` descending; which selected end
-        // is least significant follows the vector declaration's direction.
-        .indexed_range => {
-            count = @intCast(self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?.msb + 1); // infer folded it
-            const base = indexInt(try eval(self, a, ex.lhs(rg), 0)) orelse return null;
-            const p = range.position(base);
-            first = if ((range.msb >= range.lsb) == (ex.extraOf(rg) == 0)) p else p -| (count - 1);
-        },
-        else => first = range.position(indexInt(try eval(self, a, rg, 0)) orelse return null), // else: a bit-select's index
-    }
-    const width = self.values[try self.baseSlot(ex.lhs(e))].width;
-    if (first >= width or first <= -@as(i64, count)) return null;
-    return .{ .first = first, .count = count };
-}
-
-/// §5.2.1: the selected bits, x wherever the index is x/z or outside the
-/// declared range. A select is unsigned whatever its vector is.
-fn readSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
-    const width = compile.typeOf(self, e).width;
-    const out = try filled(a, width, false, .x);
-    const at = (try selectSlot(self, a, e)) orelse return out;
-    const sel = (try selection(self, a, e)) orelse return out;
-    const v = self.values[at];
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < v.width) setBit(out, @intCast(i), v.bit(@intCast(pos)));
-    }
-    return out;
-}
-
-/// Where `e` lands if written now, or null when it names no storage (an
-/// out-of-range or x/z array index, §3.9; an x/z bit index, §5.2.1).
-fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) != .index) return .{ .slot = try self.slot(e) };
-    if (try self.indexedArray(e) != null) return .{ .slot = (try address(self, a, e)) orelse return null };
-    return .{ .slot = (try selectSlot(self, a, e)) orelse return null, .sel = (try selection(self, a, e)) orelse return null };
-}
-
-/// Assigns an integral `value` to the lvalue `target` under the assignment
-/// rules, as a system task does with an output argument.
-pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal) Error!void {
-    const tt = try targetType(self, target);
-    const converted = if (tt.real) try realLiteral(a, realOfInt(value)) else try normalize(a, value, .{ .width = tt.width, .signed = value.signed });
-    try put(self, a, target, converted, false, null);
-}
-
-/// `assign` of a real, which an integral target takes rounded (§4.8.2).
-pub fn assignReal(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, r: f64) Error!void {
-    const p = (try place(self, a, target)) orelse return;
-    const tt = try targetType(self, target);
-    try write(self, a, p, try convertValue(a, try realLiteral(a, r), true, tt));
-}
-
-/// `assign` of an integer.
-pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) Error!void {
-    const lit = try filled(a, 64, true, .zero);
-    lit.values()[0] = @bitCast(v);
-    try assign(self, a, target, lit);
-}
-
-/// §9.2 writes `value`, converted for `target` (`targetType`), where the
-/// lvalue lands now, or queues it as a nonblocking update after `delay`. A
-/// concatenation partitions the value among its operands, the last one
-/// taking the low bits.
-pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal, nba: bool, delay: ?u64) Error!void {
-    const ex = &self.file.exprs;
-    if (ex.tag(target) == .concat) {
-        var lo: u32 = 0;
-        const ops = ex.args(target);
-        var k = ops.len;
-        while (k != 0) {
-            k -= 1;
-            const w = (try targetType(self, ops[k])).width;
-            try put(self, a, ops[k], try bitsOf(a, value, lo, w), nba, delay);
-            lo += w;
-        }
-        return;
-    }
-    const p = (try place(self, a, target)) orelse return;
-    if (nba) {
-        _ = try enqueue(self, .{ .write = .{ .target = p.slot, .value = value, .sel = p.sel } }, delay, true);
-    } else try write(self, a, p, value);
-}
-
-/// Bits [lo, lo + w) of `v`, unsigned.
-fn bitsOf(a: std.mem.Allocator, v: Int.Literal, lo: u32, w: u32) Error!Int.Literal {
-    const out = try filled(a, w, false, .zero);
-    for (0..w) |i| setBit(out, @intCast(i), v.bit(lo + @as(u32, @intCast(i))));
-    return out;
-}
-
-/// Writes `value` (already converted by `evalFor`) where `p` lands. A selection
-/// merges into the value the slot holds now, which for a nonblocking update is
-/// when it lands, so two NBAs to different bits both survive. Bits outside the
-/// declared range are dropped.
-pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Error!void {
-    const sel = p.sel orelse return store(self, p.slot, value.planes);
-    const cur = self.values[p.slot];
-    const merged = try filled(a, cur.width, cur.signed, .zero);
-    @memcpy(merged.planes, cur.planes);
-    for (0..sel.count) |i| {
-        const pos = sel.first + @as(i64, @intCast(i));
-        if (pos >= 0 and pos < cur.width) setBit(merged, @intCast(pos), value.bit(@intCast(i)));
-    }
-    return store(self, p.slot, merged.planes);
-}
-
-fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
-    const ex = &self.file.exprs;
-    return switch (ex.tag(e)) {
-        .ident, .hier_ident => self.values[try self.slot(e)],
-        .index => blk: {
-            const ty = compile.typeOf(self, e);
-            if (try self.indexedArray(e) == null) break :blk try readSelect(self, a, e);
-            const at = (try address(self, a, e)) orelse break :blk try filled(a, ty.width, ty.signed, .x);
-            break :blk self.values[at];
-        },
-        .logic_literal => ex.logicValue(e),
-        // §3.6 packed ASCII, the first character most significant.
-        .str_literal => blk: {
-            const text = self.file.str(ex.strOf(e));
-            const value = try filled(a, compile.stringWidth(text), false, .zero);
-            for (text, 0..) |c, i| {
-                const shift: u32 = @intCast((text.len - 1 - i) * 8);
-                value.values()[shift / 64] |= @as(u64, c) << @intCast(shift % 64);
-            }
-            break :blk value;
-        },
-        .int_literal => blk: {
-            const n = ex.intLiteral(e);
-            const planes = try a.alloc(u64, 2);
-            planes[0] = @bitCast(n.value);
-            planes[1] = 0;
-            const width = if (n.width == 0) 32 else n.width;
-            if (width < 64) planes[0] &= (@as(u64, 1) << @intCast(width)) - 1;
-            break :blk .{ .width = width, .signed = n.signed, .sized = n.width != 0, .planes = planes };
-        },
-        else => unreachable, // else: evalContext sends only these leaves
-    };
-}
-
-/// `value` in type `ty`. A value already of that type is returned as is,
-/// planes and all, so the result may be a variable's storage: a caller that
-/// keeps it past the next store copies it (as `claim` and the hold cells do).
-pub fn normalize(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
-    if (value.width == ty.width and value.signed == ty.signed) return value;
-    var result = value.resize(a, ty.width, if (ty.signed) .sign else .zero) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.ZeroSize => unreachable,
-    };
-    result.signed = ty.signed;
-    return result;
-}
-
-/// IEEE 1364-2005 §3.5.1 / Table 5-22's note: "if the size of the unsized
-/// constant is smaller than the context, and its leftmost bit is x or z, the
-/// x or z shall be extended", to the size of the expression, not to 32 bits.
-/// The parsed literal already carries the fill up to its own width, so it is
-/// its top bit that is replicated; a known top bit extends as usual.
-fn unsizedFill(a: std.mem.Allocator, v: Int.Literal, ty: Type) Error!Int.Literal {
-    const top = v.bit(v.width - 1);
-    var out = v.resize(a, ty.width, if (top == .x or top == .z or ty.signed) .sign else .zero) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.ZeroSize => unreachable,
-    };
-    out.signed = ty.signed;
-    return out;
-}
-
-/// An assignment's conversion (§5.5.3): `value` extended by its own
-/// signedness or truncated to `ty.width`, then typed `ty`.
-pub fn convert(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
-    var out = try normalize(a, value, .{ .width = ty.width, .signed = value.signed });
-    out.signed = ty.signed;
-    return out;
-}
-
-fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
-    return filled(a, 1, false, bit);
-}
-
-/// `e` evaluated at least `width` bits wide, in its own signedness: an
-/// assignment supplies width only (§5.5.3). `evalContext` propagates both.
-pub fn eval(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, width: u32) Error!Int.Literal {
-    var ty = compile.typeOf(self, e);
-    // An integral reading of a real is §4.8.2's rounded integer.
-    if (ty.real) ty = .{ .width = 64, .signed = true };
-    ty.width = @max(ty.width, width);
-    return evalContext(self, a, e, ty);
-}
-
-// ---- reals (IEEE 1364-2005 §4.8, §17.8, §17.11.2) ---------------------------
-
-/// A real as the 64-bit slot value that holds it.
-pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
-    const out = try filled(a, 64, true, .zero);
-    out.values()[0] = @bitCast(r);
-    return out;
-}
-
-/// §4.8.2 integer-to-real: the value, read by its own signedness, "Individual
-/// bits that are x or z in the net or the variable shall be treated as zero".
-/// ponytail: the low 64 bits of a wider operand.
-fn realOfInt(v: Int.Literal) f64 {
-    const lo = v.values()[0] & ~v.unknowns()[0];
-    if (!v.signed or v.width > 64) return @floatFromInt(lo);
-    const shift: u6 = @intCast(64 - v.width);
-    return @floatFromInt(@as(i64, @bitCast(lo << shift)) >> shift);
-}
-
-/// §4.8.2 real-to-integer: "rounded off to the nearest integer" (35.5 is 36,
-/// -1.5 is -2), as a 64-bit signed value; a non-finite real has no integer
-/// and is x.
-fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
-    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return filled(a, 64, true, .x);
-    const out = try filled(a, 64, true, .zero);
-    out.values()[0] = @bitCast(@as(i64, @intFromFloat(@round(r))));
-    return out;
-}
-
-/// `e`'s value as a real, converting an integral one (§4.8.2).
-pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
-    const ex = &self.file.exprs;
-    if (!compile.typeOf(self, e).real) return realOfInt(try eval(self, a, e, 0));
-    return switch (ex.tag(e)) {
-        .real_literal => ex.realValue(e),
-        .ident, .hier_ident => @bitCast((try leaf(self, a, e)).values()[0]),
-        .index => blk: {
-            const v = try leaf(self, a, e);
-            // §5.2.2 supplies x for an invalid array reference. At this
-            // real boundary §4.8.2 clears its unknown bits; an actual NaN
-            // in a valid real element has no unknown plane and survives.
-            break :blk @bitCast(v.values()[0] & ~v.unknowns()[0]);
-        },
-        // §10.4.1 a real or realtime function: its result variable's bits.
-        .call => @bitCast((try callSync(self, a, self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?, ex.args(e))).values()[0]),
-        .unary => switch (ex.unOp(e)) {
-            .minus => -(try evalReal(self, a, ex.lhs(e))),
-            else => try evalReal(self, a, ex.lhs(e)), // else: `+`, the only other real-valued unary
-        },
-        .binary => blk: {
-            const l = try evalReal(self, a, ex.lhs(e));
-            const r = try evalReal(self, a, ex.rhs(e));
-            break :blk switch (ex.binOp(e)) {
-                .add => l + r,
-                .sub => l - r,
-                .mul => l * r,
-                .div => l / r,
-                .pow => std.math.pow(f64, l, r),
-                else => unreachable, // else: infer admitted only these real-valued operators
-            };
-        },
-        .ternary => switch (try truthOf(self, a, ex.lhs(e))) {
-            .one => try evalReal(self, a, ex.rhs(e)),
-            .zero => try evalReal(self, a, ex.ternaryElse(e)),
-            // §5.1.13: both arms are evaluated, but a real result under
-            // an ambiguous condition is zero, even when the arms agree.
-            .x, .z => blk: {
-                _ = try evalReal(self, a, ex.rhs(e));
-                _ = try evalReal(self, a, ex.ternaryElse(e));
-                break :blk 0;
-            },
-        },
-        .sys_call => blk: {
-            const f = self.sys_calls[@backingInt(e)].?;
-            const args = ex.args(e);
-            break :blk switch (f) {
-                .realtime => self.timeOf(self.scope).scale.realAt(self.scheduler.now),
-                .itor => realOfInt(try eval(self, a, args[0], 0)),
-                .bitstoreal => @bitCast((try eval(self, a, args[0], 64)).values()[0]),
-                .ln => @log(try evalReal(self, a, args[0])),
-                .log10 => @log10(try evalReal(self, a, args[0])),
-                .exp => @exp(try evalReal(self, a, args[0])),
-                .sqrt => @sqrt(try evalReal(self, a, args[0])),
-                .floor => @floor(try evalReal(self, a, args[0])),
-                .ceil => @ceil(try evalReal(self, a, args[0])),
-                .sin => @sin(try evalReal(self, a, args[0])),
-                .cos => @cos(try evalReal(self, a, args[0])),
-                .tan => @tan(try evalReal(self, a, args[0])),
-                .asin => std.math.asin(try evalReal(self, a, args[0])),
-                .acos => std.math.acos(try evalReal(self, a, args[0])),
-                .atan => std.math.atan(try evalReal(self, a, args[0])),
-                .sinh => std.math.sinh(try evalReal(self, a, args[0])),
-                .cosh => std.math.cosh(try evalReal(self, a, args[0])),
-                .tanh => std.math.tanh(try evalReal(self, a, args[0])),
-                .asinh => std.math.asinh(try evalReal(self, a, args[0])),
-                .acosh => std.math.acosh(try evalReal(self, a, args[0])),
-                .atanh => std.math.atanh(try evalReal(self, a, args[0])),
-                .pow => std.math.pow(f64, try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
-                .atan2 => std.math.atan2(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
-                .hypot => std.math.hypot(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
-                .driver_delay => try driver.evalReal(self, a, e),
-                .user => blk2: {
-                    const v = try filled(a, 64, true, .zero);
-                    try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
-                    break :blk2 @bitCast(v.values()[0]);
-                },
-                else => unreachable, // else: the integral system functions are not real-typed
-            };
-        },
-        // VAMS §7.3.6.3 the analog solution at the promoted digital time.
-        .branch_access => blk: {
-            const probe = self.probe orelse return self.exprFail(e, "an analog probe needs the mixed-signal kernel");
-            const b = ex.rhs(e);
-            break :blk try probe(self.probe_ctx, self.file.str(ex.strOf(ex.lhs(e))), if (b == .none) null else self.file.str(ex.strOf(b)));
-        },
-        else => unreachable, // else: infer types no other form real
-    };
-}
-
-/// A condition's truth (§9.4): a real is true when it is not zero.
-pub fn truthOf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Bit {
-    if (compile.typeOf(self, e).real) return if ((try evalReal(self, a, e)) != 0) .one else .zero;
-    return (try eval(self, a, e, 0)).truth();
-}
-
-/// The type an assignment to `e` converts its value to: a select's own width,
-/// else the variable's type, real included.
-pub fn targetType(self: *Run, e: Ast.ExprId) Error!Type {
-    const ex = &self.file.exprs;
-    // §9.2 a concatenation: as wide as its operands together, unsigned.
-    if (ex.tag(e) == .concat) {
-        var width: u32 = 0;
-        for (ex.args(e)) |x| width += (try targetType(self, x)).width;
-        return .{ .width = width, .signed = false };
-    }
-    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
-    const at = try self.baseSlot(e);
-    return self.slotType(at);
-}
-
-/// `e` converted for an assignment to `target` (§5.5.3; §4.8.2 between real
-/// and integral).
-pub fn evalFor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, target: Type) Error!Int.Literal {
-    if (target.real) return realLiteral(a, try evalReal(self, a, e));
-    const rhs = try eval(self, a, e, target.width);
-    return normalize(a, rhs, .{ .width = target.width, .signed = rhs.signed });
-}
-
-/// A slot's value converted for an assignment to `target`.
-fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!Int.Literal {
-    return convertValue(a, self.values[slot], self.reals.contains(slot), target);
-}
-
-pub fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
-    if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
-    const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
-    return normalize(a, i, .{ .width = target.width, .signed = i.signed });
-}
-
-fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal {
-    return normalize(a, try scalar(a, bit), ty);
-}
-
-/// `e` evaluated in context `ty` (IEEE 1364-2005 §5.5.2): the context reaches
-/// the operands before they are evaluated. A one-bit result stops it; its
-/// operands get Table 5-22's self-determined or common comparison context.
-pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
-    // §4.8: a real context is a double; a real operand in an integral
-    // context is its §4.8.2 rounded integer.
-    if (ty.real) return realLiteral(a, try evalReal(self, a, e));
-    if (compile.typeOf(self, e).real) return normalize(a, try intOfReal(a, try evalReal(self, a, e)), ty);
-    switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
-        .unary => {
-            const op = ex.unOp(e);
-            switch (op) {
-                .plus, .minus, .bit_not => {
-                    const value = try evalContext(self, a, ex.lhs(e), ty);
-                    return switch (op) {
-                        .plus => value,
-                        .minus => value.negate(a),
-                        .bit_not => value.bitwiseNot(a),
-                        else => unreachable, // else: the enclosing arm is these three
-                    };
-                },
-                .logical_not => return scalarContext(a, switch (try truthOf(self, a, ex.lhs(e))) {
-                    .one => .zero,
-                    .zero => .one,
-                    .x, .z => .x,
-                }, ty),
-                .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => {
-                    const value = try eval(self, a, ex.lhs(e), 0);
-                    const bit = value.reduce(switch (op) {
-                        .reduce_and => .and_bits,
-                        .reduce_nand => .nand_bits,
-                        .reduce_or => .or_bits,
-                        .reduce_nor => .nor_bits,
-                        .reduce_xor => .xor_bits,
-                        .reduce_xnor => .xnor_bits,
-                        else => unreachable, // else: the enclosing arm is the six reductions
-                    });
-                    return scalarContext(a, bit, ty);
-                },
-            }
-        },
-        .binary => {
-            const op = ex.binOp(e);
-            switch (op) {
-                .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
-                    const operand_type = compile.common(compile.typeOf(self, ex.lhs(e)), compile.typeOf(self, ex.rhs(e)));
-                    if (operand_type.real) {
-                        const l = try evalReal(self, a, ex.lhs(e));
-                        const r = try evalReal(self, a, ex.rhs(e));
-                        const holds = switch (op) {
-                            .eq => l == r,
-                            .neq => l != r,
-                            .lt => l < r,
-                            .le => l <= r,
-                            .gt => l > r,
-                            .ge => l >= r,
-                            else => unreachable, // else: infer refuses === on a real
-                        };
-                        return scalarContext(a, if (holds) .one else .zero, ty);
-                    }
-                    const lhs = try evalContext(self, a, ex.lhs(e), operand_type);
-                    const rhs = try evalContext(self, a, ex.rhs(e), operand_type);
-                    const bit = switch (op) {
-                        .eq, .neq, .case_eq, .case_neq => lhs.equality(switch (op) {
-                            .eq => .equal,
-                            .neq => .not_equal,
-                            .case_eq => .case_equal,
-                            else => .case_not_equal, // else: `!==`, the fourth equality operator
-                        }, rhs),
-                        else => lhs.relational(switch (op) { // else: the four relational operators
-                            .lt => .less,
-                            .le => .less_equal,
-                            .gt => .greater,
-                            else => .greater_equal, // else: `>=`, the fourth relational operator
-                        }, rhs),
-                    };
-                    return scalarContext(a, bit, ty);
-                },
-                .logical_and, .logical_or => {
-                    const truth = try truthOf(self, a, ex.lhs(e));
-                    if ((op == .logical_and and truth == .zero) or (op == .logical_or and truth == .one))
-                        return scalarContext(a, truth, ty);
-                    const rhs = try truthOf(self, a, ex.rhs(e));
-                    const lhs_bit = try scalar(a, truth);
-                    return scalarContext(a, lhs_bit.logical(if (op == .logical_and) .and_bits else .or_bits, try scalar(a, rhs)), ty);
-                },
-                .shl, .shr, .ashl, .ashr, .pow => {
-                    const lhs = try evalContext(self, a, ex.lhs(e), ty);
-                    const rhs = try eval(self, a, ex.rhs(e), 0);
-                    if (op == .pow) return lhs.power(a, rhs);
-                    return lhs.shift(a, switch (op) {
-                        .shl => .left,
-                        .shr => .right,
-                        .ashl => .arithmetic_left,
-                        else => .arithmetic_right, // else: `>>>`, the fourth shift
-                    }, rhs);
-                },
-                .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => {},
-            }
-            const lhs = try evalContext(self, a, ex.lhs(e), ty);
-            const rhs = try evalContext(self, a, ex.rhs(e), ty);
-            return switch (op) {
-                .add, .sub, .mul, .div, .mod => lhs.arithmetic(a, switch (op) {
-                    .add => .add,
-                    .sub => .subtract,
-                    .mul => .multiply,
-                    .div => .divide,
-                    else => .remainder, // else: `%`, the fifth arithmetic operator
-                }, rhs),
-                .bit_and, .bit_or, .bit_xor, .bit_xnor => lhs.bitwise(a, switch (op) {
-                    .bit_and => .and_bits,
-                    .bit_or => .or_bits,
-                    .bit_xor => .xor_bits,
-                    else => .xnor_bits, // else: `~^`, the fourth bitwise operator
-                }, rhs),
-                else => unreachable, // else: every other operator returned above
-            };
-        },
-        .ternary => {
-            if (compile.typeOf(self, ex.lhs(e)).real) return switch (try truthOf(self, a, ex.lhs(e))) {
-                .one => evalContext(self, a, ex.rhs(e), ty),
-                else => evalContext(self, a, ex.ternaryElse(e), ty),
-            };
-            const condition = try eval(self, a, ex.lhs(e), 0);
-            return switch (condition.truth()) {
-                .one => evalContext(self, a, ex.rhs(e), ty),
-                .zero => evalContext(self, a, ex.ternaryElse(e), ty),
-                .x, .z => condition.conditional(a, try evalContext(self, a, ex.rhs(e), ty), try evalContext(self, a, ex.ternaryElse(e), ty)),
-            };
-        },
-        // `infer` resolved every call it typed.
-        .sys_call => switch (self.sys_calls[@backingInt(e)].?) {
-            .make_signed, .make_unsigned => |cast| {
-                var value = try eval(self, a, ex.args(e)[0], 0);
-                value.signed = cast == .make_signed;
-                return normalize(a, value, ty);
-            },
-            // §17.8: `$rtoi` truncates toward zero; `$realtobits` is the bits.
-            .rtoi => {
-                const r = try evalReal(self, a, ex.args(e)[0]);
-                const v = try filled(a, 32, true, .x);
-                if (std.math.isFinite(r) and @abs(r) < 0x1p31) {
-                    v.values()[0] = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r)))));
-                    v.unknowns()[0] = 0;
-                }
-                return normalize(a, v, ty);
-            },
-            .realtobits => {
-                const v = try filled(a, 64, false, .zero);
-                v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
-                return normalize(a, v, ty);
-            },
-            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf, .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
-                const natural = compile.typeOf(self, e);
-                const raw: u64 = switch (f) {
-                    .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => @as(u32, @bitCast(try @import("system.zig").random(self, a, f.dist().?, ex.args(e), ex.mainTok(e)))),
-                    .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
-                        .fopen => .fopen,
-                        .fgetc => .fgetc,
-                        .ungetc => .ungetc,
-                        .fgets => .fgets,
-                        .fscanf => .fscanf,
-                        .fread => .fread,
-                        .ftell => .ftell,
-                        .fseek => .fseek,
-                        .rewind => .rewind,
-                        .feof => .feof,
-                        .ferror => .ferror,
-                        else => .sscanf,
-                    }, ex.args(e), ex.mainTok(e))),
-                    .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
-                    .time, .stime => blk: {
-                        const units = self.timeOf(self.scope).scale.unitsAt(self.scheduler.now);
-                        break :blk if (f == .stime) units & 0xffff_ffff else units;
-                    },
-                    .clog2 => blk: {
-                        const n = try eval(self, a, ex.args(e)[0], 0);
-                        break :blk integerCeilingLog2(n);
-                    },
-                    .test_plusargs, .value_plusargs => 0,
-                    else => unreachable, // else: the arms around this one
-                };
-                const planes = try a.alloc(u64, 2);
-                planes[0] = if (natural.width >= 64) raw else raw & ((@as(u64, 1) << @intCast(natural.width)) - 1);
-                planes[1] = 0;
-                const value: Int.Literal = .{ .width = natural.width, .signed = natural.signed, .sized = true, .planes = planes };
-                return normalize(a, value, ty);
-            },
-            .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_next_state, .driver_next_strength, .driver_type => |f| return normalize(a, try driver.eval(self, a, e, driver.of(f).?), ty),
-            .user => {
-                const natural = compile.typeOf(self, e);
-                const v = try filled(a, natural.width, natural.signed, .x);
-                try self.systf.?.call(self, self.instanceOf(self.scope), ex.mainTok(e), v);
-                return normalize(a, v, ty);
-            },
-            else => unreachable, // else: the real-valued functions left through the real path above
-        },
-        .concat => {
-            var parts: std.ArrayList(Int.Literal) = .empty;
-            for (ex.args(e)) |arg| {
-                if (compile.typeOf(self, arg).width == 0) {
-                    // §5.1.14 evaluates the repeated operand once even for
-                    // count zero. No zero-width Literal enters value helpers.
-                    std.debug.assert(ex.tag(arg) == .multi_concat);
-                    _ = try eval(self, a, ex.rhs(arg), 0);
-                } else try parts.append(a, try eval(self, a, arg, 0));
-            }
-            const value = Int.Literal.concatenate(a, parts.items) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.ZeroSize, error.Overflow => unreachable, // preflight checked exact widths
-            };
-            return normalize(a, value, ty);
-        },
-        .call => {
-            const idx = self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?;
-            return normalize(a, try callSync(self, a, idx, ex.args(e)), ty);
-        },
-        .multi_concat => {
-            const value = try eval(self, a, ex.rhs(e), 0);
-            const repeated = value.replicate(a, self.replications.get(.{ .spec = self.specOf(self.scope), .e = e }).?) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.ZeroSize, error.Overflow => unreachable, // zero only consumed by .concat above
-            };
-            return normalize(a, repeated, ty);
-        },
-        else => unreachable, // else: infer rejects every other form before execution
-    }
-}
-
-// ---- the write path and §7.9 resolution (§5.10.1, §6.1.3, §3.8, §7.8.5) -----
-
-/// Stores `planes` into slot `target` and wakes what watches it: the one
-/// write path for the active and NBA regions, so none bypasses §5.10.1
-/// resumption. A write to a slot a §9.3 override holds is dropped, unless
-/// `overriding`.
-pub fn store(self: *Run, target: u32, planes_in: []const u64) Error!void {
-    // §9.3: while a procedural continuous assignment holds the slot, its own
-    // process is the only writer: an `assign` over a variable, a `force`
-    // over anything, including a net's resolution.
-    var planes = planes_in;
-    if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
-        if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
-        // §9.3.2 a forced select of a net keeps its bits; the rest resolve.
-        if (o.parts.items.len != 0) {
-            const cur = self.values[target];
-            const kept: Int.Literal = .{ .width = cur.width, .signed = cur.signed, .sized = cur.sized, .planes = try self.arena.dupe(u64, planes) };
-            for (o.parts.items) |p| for (p.bits.lo..p.bits.lo + p.bits.width) |i| setBit(kept, @intCast(i), cur.bit(@intCast(i)));
-            planes = kept.planes;
-        }
-    };
-    const dest = self.values[target];
-    const before = dest.bit(0);
-    // A real changes when its value does: -0.0 and +0.0 compare equal
-    // (VAMS §3.7, IEEE 754 `==`), and a NaN never equals itself.
-    const changed = if (self.reals.contains(target))
-        @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
-    else
-        !std.mem.eql(u64, dest.planes, planes);
-    // Not copied when unchanged, which also covers `planes` aliasing
-    // `dest.planes` (`a = a`), a copy @memcpy forbids.
-    if (changed) @memcpy(dest.planes, planes);
-    // A §10.4.5 constant function running during elaboration: nothing
-    // watches a slot yet.
-    if (self.growing != null or self.folding_constant) return;
-    if (!changed) return driver.stored(self, target, false);
-    // Most slots have no watcher, so one test skips them all.
-    const watchers = self.watch[target];
-    if (watchers.count() != 0) {
-        if (watchers.contains(.monitor)) try requestMonitor(self);
-        if (watchers.contains(.analog)) try requestAnalog(self);
-        if (watchers.contains(.vcd) or watchers.contains(.ports)) try requestVcd(self);
-        if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
-    }
-    try wake(self, target, before, dest.bit(0));
-    if (watchers.contains(.vpi)) if (self.vpi_change) |f| f(self, target);
-    // After `wake`, so a `driver_update` process runs after the driver it
-    // watches has re-evaluated (both join the same active-region FIFO).
-    try driver.stored(self, target, true);
-}
-
-/// §5.10.4 `-> e`: named event `at` occurs, resuming what waits on it.
-pub fn trigger(self: *Run, at: u32) Error!void {
-    if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
-    if (self.watch[at].contains(.vcd)) {
-        self.vcd.fire(&self.vcd_catalog.?, at);
-        try requestVcd(self);
-    }
-    try wake(self, at, .x, .x);
-}
-
-/// §9.3 `deassign` (`force` false) or `release` (`force` true) of `slot`.
-/// Releasing what is not held is a no-op.
-pub fn release(self: *Run, slot: u32, force: bool) Error!void {
-    const layers = self.overrides.getPtr(slot) orelse return;
-    const layer = if (force) &layers.force else &layers.assign;
-    if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
-    layer.* = null;
-    const held = layers.assign;
-    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(slot);
-    // §9.3.2: a released net is its drivers' again; a released
-    // variable keeps its value, unless an assign holds it.
-    if (force) {
-        if (self.net_of.get(slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
-    }
-}
-
-/// §9.3.2 `release` of a forced select of net `slot`: its bits are the
-/// drivers' again, at once. Releasing what is not held is a no-op.
-fn releaseBits(self: *Run, slot: u32, bits: compile.Bits) Error!void {
-    const layers = self.overrides.getPtr(slot) orelse return;
-    for (layers.parts.items, 0..) |p, i| if (std.meta.eql(p.bits, bits)) {
-        _ = try stopRange(self, p.range.start, p.range.end);
-        _ = layers.parts.orderedRemove(i);
-        break;
-    };
-    if (layers.force == null and layers.assign == null and layers.parts.items.len == 0) _ = self.overrides.remove(slot);
-    if (self.net_of.get(slot)) |net| try resolve(self, net);
-}
-
-/// VPI §12.30 vpiForceFlag: force `slot` to a constant, "same as the
-/// procedural force" (§9.3.2) but with no expression to keep re-evaluating,
-/// so the force layer holds an empty process range.
-pub fn forceValue(self: *Run, slot: u32, planes: []const u64) Error!void {
-    const entry = try self.overrides.getOrPut(self.arena, slot);
-    if (!entry.found_existing) entry.value_ptr.* = .{};
-    if (entry.value_ptr.force) |old| _ = try stopRange(self, old.start, old.end);
-    entry.value_ptr.force = .{ .start = 0, .end = 0 };
-    const was = self.overriding;
-    self.overriding = true;
-    defer self.overriding = was;
-    try store(self, slot, planes);
-}
-
-/// VAMS §8.5: "the implicit D2A event ... is created when a digital variable to
-/// which an analog block is implicitly sensitive changes value". §8.5.3.7 then
-/// processes the macro-process in region 3b, after every region-1..3 event of
-/// the tick, and once however many inputs moved.
-pub fn requestAnalog(self: *Run) Error!void {
-    if (self.analog_pending) return;
-    self.analog_pending = true;
-    _ = self.scheduler.schedule(.analog, @import("root.zig").analog_payload) catch |e|
-        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
-}
-
-/// VAMS §8.5: an event an analog event control waits on occurred. Every term
-/// it matches is marked, and ONE region-1b event reports them all once region
-/// 1 of the tick is done (§8.5.3.6).
-fn requestD2a(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
-    for (self.d2a_sites.items) |s| if (s.slot == target and s.edge.matches(before, after)) {
-        self.d2a_fired |= @as(u64, 1) << s.site;
-    };
-    if (self.d2a_fired == 0 or self.d2a_pending) return;
-    self.d2a_pending = true;
-    _ = self.scheduler.schedule(.explicit_d2a, @import("root.zig").analog_payload) catch |e|
-        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
-}
-
-/// §17.1.3: "the entire argument list is displayed at the end of the time
-/// step". One event however many watched values moved, and however often: a
-/// value that changes and changes back within the step still "changes value",
-/// so it prints, with the settled values.
-fn requestMonitor(self: *Run) Error!void {
-    if (self.monitor == null or !self.monitor_on or self.monitor_pending) return;
-    self.monitor_pending = true;
-    try enqueueMonitor(self, .monitor_tick);
-}
-
-/// §18.1.3/§18.1.4 the dump is written at the end of the time step, once.
-pub fn requestVcd(self: *Run) Error!void {
-    if (self.vcd.pending) return;
-    self.vcd.pending = true;
-    try enqueueMonitor(self, .vcd_tick);
-}
-
-/// VAMS §8.5.1: "A2D events ... are scheduled just like other event controlled
-/// statements": the waiters of a monitor slot resume in the active region.
-pub fn wakeA2d(self: *Run, slot: u32) Error!void {
-    return wake(self, slot, .x, .x);
-}
-
-/// Resume every process suspended on `target` whose edge matches. Split out
-/// of `store` because §5.10.4's `-> e` resumes without publishing anything:
-/// a named event has no value for a change to be detected in.
-///
-/// The continuous drivers and controlled switches reading `target` come
-/// first, then the event controls in the order they suspended. §11.4.2 lets
-/// the processes one event resumes run in any order.
-pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
-    if (target + 1 < self.fan_start.len) for (self.fan[self.fan_start[target]..self.fan_start[target + 1]]) |pc| if (self.armed[pc]) {
-        self.armed[pc] = false;
-        _ = try enqueue(self, .{ .run_process = pc }, null, false);
-    };
-    const list = termsOf(self, target) orelse return;
-    const event = self.events.get(target);
-    const event_ctx = if (event) |e| eventContext(self, e.scope, self.ctx) else 0;
-    // Compacts as it goes: a matched term leaves with its suspension, and a
-    // stale one (its suspension resumed through another slot, or was
-    // disabled) is dropped.
-    var keep: usize = 0;
-    for (list.items) |t0| {
-        var t = t0;
-        const s = &self.susps.items[t.susp];
-        if (s.gen != t.gen) continue;
-        const selected = (if (event) |e| event_ctx == eventContext(self, e.scope, s.ctx) else true) and
-            (if (t.width == 0) t.edge.matches(before, after) else selectChanged(&t, self.values[target])) and
-            try selectedEvent(self, t, target);
-        // An index function's blocking write can satisfy another term of
-        // this event-or suspension while selectedEvent evaluates it.
-        if (s.gen != t.gen) continue;
-        if (!selected) {
-            list.items[keep] = t;
-            keep += 1;
-            continue;
-        }
-        const pc = s.pc;
-        const ctx = s.ctx;
-        retire(self, t.susp);
-        _ = try enqueue(self, resumption(pc, ctx), null, false);
-    }
-    list.shrinkRetainingCapacity(keep);
-}
-
-/// §10.2.1 allocates all declared items for each automatic invocation,
-/// including events: a shared compiled slot is not a shared event identity.
-/// Find the live activation enclosing this declaration (also for events in
-/// its named blocks). Static events need no activation key; an inlined
-/// automatic frame already has distinct slots.
-fn eventContext(self: *const Run, declared: u32, from: u32) u32 {
-    var ctx = from;
-    while (ctx != 0) {
-        const act = self.acts.items[ctx];
-        const sub = self.subs.items[act.sub];
-        if (sub.decl.automatic) {
-            const frame_scope = sub.body.?.frame.scope;
-            var scope = declared;
-            while (true) {
-                if (scope == frame_scope) return ctx;
-                const info = self.scope_info.items[scope];
-                if (!info.lexical) break;
-                scope = info.parent;
-            }
-        }
-        ctx = act.ret_ctx;
-    }
-    return 0;
-}
-
-/// §§9.7.2–9.7.3: the event expression selects an occurrence; changing
-/// its index alone is not an occurrence. Test the current select only when
-/// an element occurs, in the suspended reader's automatic activation.
-fn selectedEvent(self: *Run, t: Term, target: u32) Error!bool {
-    if (t.event_select == .none) return true;
-    var scratch = std.heap.ArenaAllocator.init(self.arena);
-    defer scratch.deinit();
-    const scope = self.scope;
-    const ctx = self.ctx;
-    defer self.scope = scope;
-    defer self.ctx = ctx;
-    self.scope = t.scope;
-    self.ctx = self.susps.items[t.susp].ctx;
-    try makeResident(self, self.ctx);
-    const selected = try address(self, scratch.allocator(), t.event_select);
-    try makeResident(self, ctx);
-    return selected != null and selected.? == target;
-}
-
-fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
-    return if (slot < self.terms.len) self.terms[slot] else self.far_terms.getPtr(slot);
-}
-
-/// Suspend the executing process at `pc` (§9.7). Its terms are filed with
-/// `watch` under the id returned.
-fn park(self: *Run, pc: u32) Error!u32 {
-    const id = self.free_susps.pop() orelse blk: {
-        try self.susps.append(self.arena, .{ .pc = 0, .ctx = 0, .gen = 0, .alive = false });
-        // Room for every row on the free list, so `retire` cannot fail.
-        try self.free_susps.ensureTotalCapacity(self.arena, self.susps.items.len);
-        break :blk @as(u32, @intCast(self.susps.items.len - 1));
-    };
-    const s = &self.susps.items[id];
-    s.pc = pc;
-    s.ctx = self.ctx;
-    s.alive = true;
-    return id;
-}
-
-/// File one term of suspension `id` under `slot`.
-fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
-    const list = termsOf(self, slot) orelse if (slot < self.terms.len) blk: {
-        // Made on the slot's first wait, at an address that stays put.
-        const l = try self.arena.create(std.ArrayList(Term));
-        l.* = .empty;
-        self.terms[slot] = l;
-        break :blk l;
-    } else blk: {
-        const g = try self.far_terms.getOrPut(self.arena, slot);
-        g.value_ptr.* = .empty;
-        break :blk g.value_ptr;
-    };
-    // Stale terms stay until their slot is next woken, which a slot that
-    // never changes never is: sweep them before the list grows, and grow
-    // anyway past half full so a sweep is paid for by as many appends.
-    if (list.items.len == list.capacity and list.capacity != 0) {
-        var keep: usize = 0;
-        for (list.items) |t| if (self.susps.items[t.susp].gen == t.gen) {
-            list.items[keep] = t;
-            keep += 1;
-        };
-        list.shrinkRetainingCapacity(keep);
-        if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.arena, list.capacity * 2);
-    }
-    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
-}
-
-/// The process at suspension `id` is no longer waiting: every term it filed
-/// goes stale, and the row is free.
-fn retire(self: *Run, id: u32) void {
-    const s = &self.susps.items[id];
-    s.alive = false;
-    s.gen +%= 1;
-    self.free_susps.appendAssumeCapacity(id);
-}
-
-/// The static fan-out of every continuous driver and controlled switch
-/// (§6.1, §7.6): their operands are fixed at compile time, so each slot's
-/// list of them is built once, and a flag per pc stands for the whole
-/// sensitivity list the process would otherwise re-register per evaluation.
-/// Called once the slot space and the code are final.
-pub fn buildFanout(r: *Run) Error!void {
-    const n = r.values.len;
-    const start = try r.arena.alloc(u32, n + 1);
-    @memset(start, 0);
-    for (r.code.items) |ins| for (staticSlots(r, ins)) |at| {
-        start[at + 1] += 1;
-    };
-    for (1..n + 1) |i| start[i] += start[i - 1];
-    const fill = try r.arena.dupe(u32, start[0..n]);
-    const fan = try r.arena.alloc(u32, start[n]);
-    for (r.code.items, 0..) |ins, pc| for (staticSlots(r, ins)) |at| {
-        fan[fill[at]] = @intCast(pc);
-        fill[at] += 1;
-    };
-    r.arena.free(fill); // the cursor is spent; a large one goes back now
-    r.fan_start = start;
-    r.fan = fan;
-    r.armed = try r.arena.alloc(bool, r.code.items.len);
-    @memset(r.armed, false);
-    r.terms = try r.arena.alloc(?*std.ArrayList(Term), n);
-    @memset(r.terms, null);
-}
-
-fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
-    return switch (ins) {
-        .continuous => |i| r.drivers[i].sensitivity,
-        .switch_ctrl => |s| s.slots,
-        else => &.{}, // else: every other instruction suspends through `park`
-    };
-}
-
-/// §7.9: a net's value is the wired-logic resolution of all its drivers, so
-/// it is recomputed whole on every driver update and published through
-/// `store`, the path a variable write takes, so `@(posedge w)` resumes on a
-/// net.
-pub fn resolve(self: *Run, net: u32) Error!void {
-    const n = self.nets[net];
-    // A §18.4 port's state can change with its drivers' strengths alone.
-    if (self.watch[n.slot].contains(.ports)) try requestVcd(self);
-    if (self.netCold(n).trans.len != 0) return resolveJoined(self, net);
-    // VAMS §3.7: a wreal has at most one driver and is that driver's value
-    // (no four-state resolution, no strength), and 0.0 with none.
-    if (n.kind == .wreal) {
-        n.resolved.values()[0] = 0;
-        n.resolved.unknowns()[0] = 0;
-        for (n.drivers) |d| {
-            const cur = self.drivers[d].current;
-            if (!cur.hasUnknown()) n.resolved.values()[0] = cur.values()[0];
-        }
-        return store(self, n.slot, n.resolved.planes);
-    }
-    const current = self.values[n.slot];
-    // ponytail: one bit at a time; a plane-parallel fold over the 4x4 tables
-    // when a wide bus resolves often enough to matter.
-    const tables = wiredLogic(n.kind);
-    var floating: u32 = 0;
-    if (plainCopy(self, n)) {
-        // The fold below would reproduce the one driver bit for bit:
-        // `Signal.of` at strong/strong, then `collapse`, is the identity.
-        const src = self.drivers[n.drivers[0]].current;
-        @memcpy(n.resolved.planes, src.planes);
-        const last = n.resolved.values().len - 1;
-        n.resolved.values()[last] &= wordMask(n.resolved.width, last);
-        n.resolved.unknowns()[last] &= wordMask(n.resolved.width, last);
-    } else for (0..n.resolved.width) |i| {
-        const at: u32 = @intCast(i);
-        var acc: Signal = .{};
-        for (n.drivers) |d| {
-            const c = contribution(self.drivers[d], at);
-            acc = if (tables) |table| acc.combineWired(c, table) else acc.combine(c);
-        }
-        // §7.9/§7.10: a `trireg` with no driver asserting anything is in
-        // the capacitive state, and what it asserts there is the charge
-        // it last held, at its charge strength. Checked before the net
-        // type's own pull so that a driven trireg never sees it.
-        if (n.kind == .trireg and acc.none()) {
-            acc = .of(current.bit(at), n.charge, n.charge);
-            floating += 1;
-        }
-        acc = acc.combine(netPull(n.kind));
-        n.signal[at] = acc;
-        setBit(n.resolved, at, acc.collapse());
-    }
-    if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
-    // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it applies
-    // between the resolution and the publish, after every driver is folded in.
-    if (self.netCold(n).delay.present) {
-        const c = try self.netColdMut(net);
-        const st = &c.transition;
-        if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
-            st.in_flight = try enqueue(self, .{ .net_update = net }, c.delay.to(st.target.bit(0)), false);
-        return;
-    }
-    try store(self, n.slot, n.resolved.planes);
-}
-
-/// Whether `n` shows its one driver unchanged: a strong, unambiguous driver
-/// on a net type with no wired logic and no pull of its own (§7.9, §7.10),
-/// whose per-bit `signal` no MOS switch reads.
-fn plainCopy(self: *const Run, n: @import("net.zig").Net) bool {
-    const plain = switch (n.kind) {
-        .wire, .tri, .uwire => true,
-        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
-    };
-    if (!plain or n.drivers.len != 1 or n.strength_read) return false;
-    const d = self.drivers[n.drivers[0]];
-    return !d.or_z and d.s0 == .strong and d.s1 == .strong;
-}
-
-/// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
-/// devices in a bidirectional switch-connected net before it can determine
-/// the appropriate value for any node": the net bits joined through
-/// conducting pass switches resolve as one, from every driver of every one of
-/// them. A signal crossing a switch loses supply strength (§7.11) and one
-/// Table 7-8 step per resistive switch on the strongest path (§7.12). Across
-/// a switch of unknown conduction a driver may or may not arrive, so what it
-/// asserts there is widened to include high impedance (§7.10.2). With no
-/// driver asserting anything, the group's triregs are §4.6.3.1's capacitive
-/// network: each asserts the charge it holds at its charge strength, so the
-/// larger charge wins and equal ones of different values make x.
-/// ponytail: no charge decay, wired logic or net delay inside a joined
-/// group; the group is found afresh on every resolution, which is fine for
-/// the handful of switches a digital fixture wires up.
-fn resolveJoined(self: *Run, start: u32) Error!void {
-    var scratch = std.heap.ArenaAllocator.init(self.arena);
-    defer scratch.deinit();
-    const a = scratch.allocator();
-    var touched: std.ArrayList(u32) = .empty;
-    try touched.append(a, start);
-    for (0..self.nets[start].resolved.width) |i| {
-        const group = try reach(self, a, .{ .net = start, .bit = @intCast(i) });
-        for (group) |y| {
-            const paths = try switchPaths(self, a, y, group);
-            var acc: Signal = .{};
-            for (group, paths) |z, p| {
-                const n = self.nets[z.net];
-                var own = netPull(n.kind);
-                for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], z.bit));
-                acc = acc.combine(arrive(own, z, y, p));
-            }
-            if (acc.none()) for (group, paths) |z, p| {
-                const n = self.nets[z.net];
-                if (n.kind == .trireg) acc = acc.combine(arrive(.of(self.values[n.slot].bit(z.bit), n.charge, n.charge), z, y, p));
-            };
-            const n = self.nets[y.net];
-            n.signal[y.bit] = acc;
-            setBit(n.resolved, y.bit, acc.collapse());
-            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
-        }
-    }
-    for (touched.items) |t| try store(self, self.nets[t].slot, self.nets[t].resolved.planes);
-}
-
-/// What `own`, asserted at group member `z`, asserts at `y` over path `p`:
-/// reduced by the switches it crosses, and widened to include high impedance
-/// when no path surely conducts.
-fn arrive(own: Signal, z: Node, y: Node, p: SwitchPath) Signal {
-    const sig = @import("net.zig").reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
-    return if (p.sure or sig.none()) sig else .{ .lo = @min(sig.lo, 0), .hi = @max(sig.hi, 0) };
-}
-
-/// One bit of one net, as a pass switch terminal sees it.
-const Node = struct { net: u32, bit: u32 };
-
-/// The terminal of `t` across from `u`, or null when `u` is neither.
-fn across(t: @import("net.zig").Tran, u: Node) ?Node {
-    if (t.a == u.net and t.a_bit == u.bit) return .{ .net = t.b, .bit = t.b_bit };
-    if (t.b == u.net and t.b_bit == u.bit) return .{ .net = t.a, .bit = t.a_bit };
-    return null;
-}
-
-/// The net bits joined to `from` through pass switches that may conduct.
-fn reach(self: *Run, a: std.mem.Allocator, from: Node) Error![]const Node {
-    var seen: std.ArrayList(Node) = .empty;
-    try seen.append(a, from);
-    var i: usize = 0;
-    while (i < seen.items.len) : (i += 1) {
-        const u = seen.items[i];
-        for (self.netCold(self.nets[u.net]).trans) |ti| {
-            const t = self.trans[ti];
-            if (t.state == .off) continue;
-            const v = across(t, u) orelse continue;
-            for (seen.items) |w| {
-                if (std.meta.eql(w, v)) break;
-            } else try seen.append(a, v);
-        }
-    }
-    return seen.items;
-}
-
-/// From each member of `group` to `y`: the fewest resistive switches on a
-/// path that may conduct, and whether some path surely does.
-const SwitchPath = struct { res: u32, sure: bool };
-
-fn switchPaths(self: *Run, a: std.mem.Allocator, y: Node, group: []const Node) Error![]const SwitchPath {
-    const p = try a.alloc(SwitchPath, group.len);
-    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
-    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
-        q.* = .{ .res = 0, .sure = true };
-    };
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (group, 0..) |u, iu| {
-            if (p[iu].res == std.math.maxInt(u32)) continue;
-            for (self.netCold(self.nets[u.net]).trans) |ti| {
-                const t = self.trans[ti];
-                if (t.state == .off) continue;
-                const v = across(t, u) orelse continue;
-                const iv = for (group, 0..) |w, k| {
-                    if (std.meta.eql(w, v)) break k;
-                } else continue;
-                const res = p[iu].res + @intFromBool(t.resistive);
-                if (res < p[iv].res) {
-                    p[iv].res = res;
-                    changed = true;
-                }
-                if (p[iu].sure and t.state == .on and !p[iv].sure) {
-                    p[iv].sure = true;
-                    changed = true;
-                }
-            }
-        }
-    }
-    return p;
-}
-
-/// §7.6 what a MOS switch drives: its data's value, at the data's strength
-/// reduced by §7.12 (the resolved strength of a net, strong for anything
-/// else), when its gate conducts; z when it does not; §7.10.2's H or L when
-/// the gate is x or z. A z on the data is z whatever the gate ("a switch
-/// transmits the z through"), where a switch differs from a bufif.
-fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig").Mos, or_z: *bool) Error!Int.Literal {
-    const ex = &self.file.exprs;
-    const g = (try eval(self, scratch, m.gate, 1)).bit(0);
-    var sig: Signal = .of((try eval(self, scratch, m.data, 1)).bit(0), .strong, .strong);
-    if (ex.tag(m.data) == .ident) if (self.net_of.get(try self.slot(m.data))) |net| {
-        sig = self.nets[net].signal[0];
-    };
-    const reduce = @import("net.zig").reduce;
-    const d = &self.drivers[at];
-    d.s0 = reduce(if (sig.lo < 0) @fromBackingInt(@intCast(@as(u8, @intCast(-sig.lo)))) else .highz, m.resistive);
-    d.s1 = reduce(if (sig.hi > 0) @fromBackingInt(@intCast(@as(u8, @intCast(sig.hi)))) else .highz, m.resistive);
-    const value = sig.collapse();
-    const on: Int.Bit = if (m.n_type) .one else .zero;
-    const out: Int.Bit = if (value == .z or (g != on and (g == .zero or g == .one))) .z else value;
-    or_z.* = out != .z and g != on;
-    return filled(scratch, 1, false, out);
-}
-
-/// What one driver asserts on bit `at`: its value at its strengths, or §7.10.2's
-/// H/L when a gate's control is unknown.
-pub fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
-    const b = dr.current.bit(at);
-    return if (dr.or_z and b != .z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
-}
-
-/// §6.1.3's inertial rule, shared by a driver's delay and a net's: "if the
-/// value changes before the delay has elapsed, the scheduled event is
-/// cancelled". Returns whether a new transition to `to` is needed, having
-/// already cancelled whatever it displaced and recorded `to` as the target;
-/// the caller schedules it and keeps the handle in `st.in_flight`.
-///
-/// False covers the two cases that make a pulse shorter than the delay
-/// vanish rather than arrive late: the value is back to what is published,
-/// and the value is what is already on its way.
-fn schedule(self: *Run, from: Int.Literal, from_or_z: bool, to: Int.Literal, to_or_z: bool, st: *Inertial) Error!bool {
-    const settled = if (st.in_flight != null) st.target else from;
-    const settled_or_z = if (st.in_flight != null) st.or_z else from_or_z;
-    if (std.mem.eql(u64, settled.planes, to.planes) and settled_or_z == to_or_z) return false;
-    if (st.in_flight) |h| try cancel(self, h);
-    st.in_flight = null;
-    if (st.target.planes.len != to.planes.len) st.target.planes = try self.arena.alloc(u64, to.planes.len);
-    @memcpy(st.target.planes, to.planes);
-    st.target.width = to.width;
-    st.target.signed = to.signed;
-    st.or_z = to_or_z;
-    return true;
-}
-
-/// §7.6 a controlled pass switch with a delay: it turns on after the first
-/// delay, off after the second, and to unknown conduction after the smaller.
-/// A control that returns before its change lands cancels it (§7.14's
-/// inertial reading, as a gate's).
-fn switchAfter(self: *Run, at: u32, next: @import("net.zig").Tran.State) Error!void {
-    const t = &self.trans[at];
-    const settled = if (t.pending != null) t.target else t.state;
-    if (settled == next) return;
-    if (t.pending) |h| try cancel(self, h);
-    t.pending = null;
-    if (next == t.state) return;
-    t.target = next;
-    t.pending = try enqueue(self, .{ .tran_switch = at }, t.delay.to(switch (next) {
-        .on => .one,
-        .off => .zero,
-        .unknown => .x,
-    }), false);
-}
+// The VPI (src/vpi/value.zig) writes and triggers through `digital.exec`,
+// as a process does; these are the entry points it reaches.
+
+/// `evaluate.address`: the element an lvalue names right now.
+pub const address = evaluate.address;
+/// `waiters.store`: the one write path, which wakes what watches the slot.
+pub const store = waiters.store;
+/// `waiters.trigger`: §5.10.4 `-> e`.
+pub const trigger = waiters.trigger;
+/// `waiters.release`: §9.3 `deassign` or `release`.
+pub const release = waiters.release;
+/// `waiters.forceValue`: a VPI force of a constant.
+pub const forceValue = waiters.forceValue;
 
 /// Cancel one queued event and give its row back.
-fn cancel(self: *Run, h: Handle) Error!void {
+pub fn cancel(self: *Run, h: Handle) Error!void {
     const row = self.scheduler.payloadOf(h) orelse return;
     _ = self.scheduler.cancel(h) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
     try self.free_rows.append(self.arena, row);
-}
-
-/// §3.8 charge decay. The countdown restarts on each entry into the
-/// capacitive state, so this takes the state and acts on its edge.
-// ponytail: whole-net, not per-bit: a vector `trireg` with some bits driven
-// and some floating decays all of them together; a countdown per bit if a
-// design needs it.
-fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
-    const n = &self.nets[net];
-    const was = n.capacitive;
-    n.capacitive = floating;
-    // Leaving the state, or entering one that never decays, only has to
-    // cancel whatever countdown was running.
-    if (was == floating) return;
-    // A trireg without a cold row has no decay and no countdown to cancel.
-    if (n.cold == no_cold) return;
-    const c = &self.net_cold.items[n.cold];
-    if (c.decay_event) |h| try cancel(self, h);
-    c.decay_event = null;
-    if (!floating) return;
-    const after = c.decay orelse return;
-    c.decay_event = try enqueue(self, .{ .decay = net }, after, false);
-}
-
-/// What a gate driver contributes: §7.8.5's one output bit, and whether it is
-/// §7.10.2's H/L.
-fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: *bool) Error!Int.Literal {
-    // Scratch, which `execute` resets each instruction, so `gateBit` stays a
-    // pure function of the input bits, read straight off §7.8.5's tables.
-    var bits: std.ArrayList(Int.Bit) = .empty;
-    for (g.ins) |in| {
-        const v = try eval(self, scratch, in, 1);
-        try bits.append(scratch, v.bit(if (v.width > 1) g.lane.? else 0));
-    }
-    const out = try filled(scratch, width, false, .z);
-    const o = gateBit(g.kind, bits.items);
-    setBit(out, g.out_bit orelse 0, o.bit);
-    or_z.* = o.or_z;
-    return out;
-}
-
-/// What a UDP driver contributes (IEEE 1364-2005 §8). Its inputs are read with
-/// z as x (§8.1.6). A combinational table is simply consulted; a sequential
-/// one takes each input that changed since the last evaluation as one event,
-/// in terminal order, and its state follows the entries matched (§8.6).
-fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp, width: u32) Error!Int.Literal {
-    const net_mod = @import("net.zig");
-    const bits = try scratch.alloc(Int.Bit, u.ins.len);
-    for (u.ins, bits) |in, *b| {
-        const w = try eval(self, scratch, in, 1);
-        const v = w.bit(if (w.width > 1) u.lane orelse 0 else 0);
-        b.* = if (v == .z) .x else v;
-    }
-    const out = if (!u.sequential) net_mod.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
-        for (bits, 0..) |b, k| {
-            if (b == u.prev[k]) continue;
-            const from = u.prev[k];
-            u.prev[k] = b;
-            u.state = net_mod.udpEval(u.rows, true, u.prev, u.state, @intCast(k), from);
-        }
-        break :blk u.state;
-    };
-    const result = try filled(scratch, width, false, .z);
-    setBit(result, u.out_bit orelse 0, out);
-    return result;
-}
-
-/// What a `Bridge` driver contributes: its window, z everywhere else.
-fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
-    const out = try filled(scratch, width, false, .z);
-    const from = self.values[b.src];
-    for (0..b.width) |i| setBit(out, b.dst_lo + @as(u32, @intCast(i)), from.bit(b.src_lo + @as(u32, @intCast(i))));
-    return out;
 }
 
 // ---- process control and scheduling (§9.7.1, §17.1.3, 1364 §10.3) -----------
@@ -1509,10 +110,10 @@ fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!I
 /// The run-time counterpart of `checkDelay`, in the module's precision.
 fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Error!u64 {
     if (compile.typeOf(self, e).real) {
-        return self.timeOf(self.scope).scale.realDelay(try evalReal(self, scratch, e)) catch |err|
+        return self.timeOf(self.scope).scale.realDelay(try evaluate.evalReal(self, scratch, e)) catch |err|
             return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
     }
-    const value = try eval(self, scratch, e, 0);
+    const value = try evaluate.eval(self, scratch, e, 0);
     // §9.7.1 leaves an x/z delay undefined; zero is the reading that keeps
     // the process running rather than losing it.
     if (value.hasUnknown()) return 0;
@@ -1524,7 +125,7 @@ fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Erro
 
 fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
     const ex = &self.file.exprs;
-    const edge: Edge = switch (ex.tag(e)) {
+    const edge: waiters.Edge = switch (ex.tag(e)) {
         .event_or => {
             try suspendOn(self, ex.lhs(e), id);
             return suspendOn(self, ex.rhs(e), id);
@@ -1533,10 +134,10 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         .event_negedge => .negedge,
         .event_function => {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
-            return watch(self, id, slot, .any);
+            return waiters.watch(self, id, slot, .any);
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
-        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
+        .event_driver_update => return waiters.watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
         else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
@@ -1546,8 +147,8 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
             const arr = self.arrays.get(base).?;
             for (0..arr.count) |k| {
                 const slot = base + @as(u32, @intCast(k));
-                try watch(self, id, slot, .any);
-                const term = &termsOf(self, slot).?.items[termsOf(self, slot).?.items.len - 1];
+                try waiters.watch(self, id, slot, .any);
+                const term = &waiters.termsOf(self, slot).?.items[waiters.termsOf(self, slot).?.items.len - 1];
                 term.event_select = watched;
                 term.scope = self.scope;
             }
@@ -1555,20 +156,20 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         }
     }
     if (try compile.selectTerm(self, watched)) |sel| {
-        try watch(self, id, sel.slot, edge);
-        const list = termsOf(self, sel.slot).?;
+        try waiters.watch(self, id, sel.slot, edge);
+        const list = waiters.termsOf(self, sel.slot).?;
         const term = &list.items[list.items.len - 1];
-        const now = termBits(self.values[sel.slot], sel.first, sel.count);
+        const now = waiters.termBits(self.values[sel.slot], sel.first, sel.count);
         term.* = .{ .susp = term.susp, .gen = term.gen, .edge = edge, .lo = sel.first, .width = sel.count, .v = now[0], .x = now[1] };
         return;
     }
-    try watch(self, id, try self.termSlot(watched), edge);
+    try waiters.watch(self, id, try self.termSlot(watched), edge);
 }
 
 /// Queues `item` in the `.monitor` region of the current time, §17.1.2 and
 /// §17.1.3's "end of the timestep", which the scheduler orders after active,
 /// inactive and NBA.
-fn enqueueMonitor(self: *Run, item: Pending) Error!void {
+pub fn enqueueMonitor(self: *Run, item: Pending) Error!void {
     const at = try claim(self, item);
     self.pending.items[at].handle = self.scheduler.schedule(.monitor, at) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
@@ -1610,10 +211,10 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
 
 /// Drop every resumption point in [start, end): the waiters parked there and
 /// the queued `.run_process` rows. Whether anything was.
-fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
+pub fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
     var hit = false;
     for (self.susps.items, 0..) |s, id| if (s.alive and s.pc >= start and s.pc < end) {
-        retire(self, @intCast(id));
+        waiters.retire(self, @intCast(id));
         hit = true;
     };
     // Only live rows: a free row's handle is stale, and so is the handle of
@@ -1633,7 +234,7 @@ fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
 }
 
 /// Where a process continues at `pc`: in the activation `ctx`, if any.
-fn resumption(pc: u32, ctx: u32) Pending {
+pub fn resumption(pc: u32, ctx: u32) Pending {
     return if (ctx == 0) .{ .run_process = pc } else .{ .@"resume" = .{ .pc = pc, .ctx = ctx } };
 }
 
@@ -1696,7 +297,7 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
         // A copy: an actual that is the callee's own formal (`f(n)` inside
         // `f`) is that frame's storage, which the automatic reset below
         // overwrites.
-        in.* = try copyLiteral(a, try evalFor(self, a, arg, self.slotType(slot)));
+        in.* = try copyLiteral(a, try evaluate.evalFor(self, a, arg, self.slotType(slot)));
     }
     const saved_len = self.saved_planes.items.len;
     // §10.4.5: a call elaboration folds "has no effect on the initial values
@@ -1742,7 +343,7 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
         self.saved_planes.shrinkRetainingCapacity(saved_len);
     }
     for (args, inputs, f.ports) |arg, out, slot| if (out) |v|
-        try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
+        try evaluate.put(self, a, arg, try evaluate.convertValue(a, v, self.reals.contains(slot), try evaluate.targetType(self, arg)), false, null);
     if (self.unwind == idx and sub.active == 0) self.unwind = null;
     return result;
 }
@@ -1764,7 +365,7 @@ fn callTimed(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprI
     const f = sub.body.?.frame;
     const inputs = try a.alloc(?Int.Literal, args.len);
     for (sub.decl.ports, args, inputs, f.ports) |p, arg, *in, slot|
-        in.* = if (p.direction == .output) null else try copyLiteral(a, try evalFor(self, a, arg, self.slotType(slot)));
+        in.* = if (p.direction == .output) null else try copyLiteral(a, try evaluate.evalFor(self, a, arg, self.slotType(slot)));
     if (self.acts.items.len == 0) try self.acts.append(self.arena, undefined); // 0 is "no activation"
     const act: Act = .{ .sub = idx, .ret_pc = pc + 1, .ret_ctx = self.ctx, .args = args };
     const id: u32 = if (self.free_acts.pop()) |k| blk: {
@@ -1805,7 +406,7 @@ fn returnTimed(self: *Run, a: std.mem.Allocator, idx: u32) Error!u32 {
     try makeResident(self, self.ctx);
     self.scope = self.code_scope.items[act.ret_pc - 1];
     for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input)
-        try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
+        try evaluate.put(self, a, arg, try evaluate.convertValue(a, v, self.reals.contains(slot), try evaluate.targetType(self, arg)), false, null);
     return act.ret_pc;
 }
 
@@ -1853,7 +454,7 @@ fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
 /// §10.2.2 copy-out: formal `slot` assigned to the caller's lvalue `target`,
 /// under the assignment rules (§5.5.3) and in the caller's scope.
 fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
-    try put(self, a, target, try convertSlot(self, a, slot, try targetType(self, target)), false, null);
+    try evaluate.put(self, a, target, try evaluate.convertSlot(self, a, slot, try evaluate.targetType(self, target)), false, null);
 }
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
@@ -1889,14 +490,14 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
         switch (self.code.items[pc]) {
             .stop => return,
             .init_var => |s| {
-                try store(self, s.slot, (try evalFor(self, scratch, s.value, self.slotType(s.slot))).planes);
+                try waiters.store(self, s.slot, (try evaluate.evalFor(self, scratch, s.value, self.slotType(s.slot))).planes);
                 pc += 1;
                 continue;
             },
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                try put(self, scratch, s.target, try evalFor(self, scratch, s.value, try targetType(self, s.target)), s.nonblocking, null);
+                try evaluate.put(self, scratch, s.target, try evaluate.evalFor(self, scratch, s.value, try evaluate.targetType(self, s.target)), s.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -1923,7 +524,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                             try compile.sensitivity(self, arg, &self.monitor_slots);
                         for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
                         self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc };
-                        try requestMonitor(self);
+                        try waiters.requestMonitor(self);
                     },
                     // "$monitoron shall produce a display immediately after
                     // it is invoked, regardless of whether a value change has
@@ -1938,9 +539,9 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                             self.time_format = .{ .units = self.finest };
                         } else {
                             const ex = &self.file.exprs;
-                            const units = try eval(self, scratch, s.args[0], 0);
-                            const precision = try eval(self, scratch, s.args[1], 0);
-                            const width = try eval(self, scratch, s.args[3], 0);
+                            const units = try evaluate.eval(self, scratch, s.args[0], 0);
+                            const precision = try evaluate.eval(self, scratch, s.args[1], 0);
+                            const width = try evaluate.eval(self, scratch, s.args[3], 0);
                             self.time_format = .{
                                 .units = std.math.lossyCast(i32, units.asInt() orelse 0),
                                 .precision = std.math.lossyCast(u32, precision.asInt() orelse 0),
@@ -1967,7 +568,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.
-                        const verbose = s.args.len == 0 or ((try eval(self, scratch, s.args[0], 0)).asInt() orelse 1) != 0;
+                        const verbose = s.args.len == 0 or ((try evaluate.eval(self, scratch, s.args[0], 0)).asInt() orelse 1) != 0;
                         if (verbose) {
                             const start_byte = self.starts[s.tok];
                             const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);
@@ -1985,23 +586,23 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 pc = target;
                 continue;
             },
-            .wait_event => |e| return suspendOn(self, e, try park(self, pc + 1)),
+            .wait_event => |e| return suspendOn(self, e, try waiters.park(self, pc + 1)),
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
-                const id = try park(self, pc + 1);
-                for (slots) |s| try watch(self, id, s, .any);
+                const id = try waiters.park(self, pc + 1);
+                for (slots) |s| try waiters.watch(self, id, s, .any);
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
             // all; one that is not comes back to this pc, not the next, so
             // the level is re-tested rather than the edge trusted.
             .wait_level => |s| {
-                if (try truthOf(self, scratch, s.cond) == .one) {
+                if (try evaluate.truthOf(self, scratch, s.cond) == .one) {
                     pc += 1;
                     continue;
                 }
-                const id = try park(self, pc);
-                for (s.slots) |at| try watch(self, id, at, .any);
+                const id = try waiters.park(self, pc);
+                for (s.slots) |at| try waiters.watch(self, id, at, .any);
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the
@@ -2014,7 +615,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 // base slot, not `address`, which §8.5.3.3 resolves only on
                 // resumption. It outlives this dispatch, so it lives in the
                 // cell's own planes, sized once per site.
-                const parked = try evalFor(self, scratch, a.value, try targetType(self, a.target));
+                const parked = try evaluate.evalFor(self, scratch, a.value, try evaluate.targetType(self, a.target));
                 const cell = &self.holds.items[s.cell];
                 if (cell.planes.len != parked.planes.len) cell.planes = try self.arena.alloc(u64, parked.planes.len);
                 @memcpy(cell.planes, parked.planes);
@@ -2028,14 +629,14 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
-                    try put(self, scratch, a.target, self.holds.items[s.cell], true, if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null);
+                    try evaluate.put(self, scratch, a.target, self.holds.items[s.cell], true, if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null);
                     pc += 1;
                     continue;
                 }
                 if (a.timing_is_delay)
                     _ = try enqueue(self, resumption(pc + 1, self.ctx), try delayOf(self, scratch, a.timing, tok), false)
                 else
-                    try suspendOn(self, a.timing, try park(self, pc + 1));
+                    try suspendOn(self, a.timing, try waiters.park(self, pc + 1));
                 return;
             },
             // §8.5.3.3 "the values at the time the process resumes are used
@@ -2045,7 +646,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                try put(self, scratch, a.target, self.holds.items[s.cell], a.nonblocking, null);
+                try evaluate.put(self, scratch, a.target, self.holds.items[s.cell], a.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -2055,9 +656,9 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             .trigger => |event| {
                 const at = switch (event) {
                     .slot => |slot| slot,
-                    .indexed => |e| try address(self, scratch, e),
+                    .indexed => |e| try evaluate.address(self, scratch, e),
                 };
-                if (at) |slot| try trigger(self, slot);
+                if (at) |slot| try waiters.trigger(self, slot);
                 pc += 1;
                 continue;
             },
@@ -2072,19 +673,19 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 self.scope = d.scope;
                 var or_z = false;
                 const value = switch (d.source) {
-                    .bridge => |b| try window(self, scratch, b, d.current.width),
-                    .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
-                    .udp => |u| try udpValue(self, scratch, u, d.current.width),
-                    .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
+                    .bridge => |b| try resolution.window(self, scratch, b, d.current.width),
+                    .gate => |g| try resolution.gateValue(self, scratch, g, d.current.width, &or_z),
+                    .udp => |u| try resolution.udpValue(self, scratch, u, d.current.width),
+                    .mos => |mo| try resolution.mosValue(self, scratch, at, mo, &or_z),
                     .pull => |b| try filled(scratch, d.current.width, false, b),
                     .expr => |x| blk: {
                         if (x.slice) |sl| {
-                            const whole = try eval(self, scratch, x.e, sl.total);
+                            const whole = try evaluate.eval(self, scratch, x.e, sl.total);
                             const part = try filled(scratch, d.current.width, false, .z);
                             for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
                             break :blk part;
                         }
-                        break :blk try evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
+                        break :blk try evaluate.evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
                     },
                 };
                 // A.6.1's `[ delay3 ]` delays what this driver contributes,
@@ -2094,11 +695,11 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 // later transitions wait for the instance delay.
                 const first_udp = if (d.source == .udp) d.source.udp.sequential and !d.source.udp.started else false;
                 // A combinational one's output is x until its first delayed value.
-                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolve(self, d.net);
+                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolution.resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
-                    const st = &self.drivers[at].transition;
-                    if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
+                    const st = try self.driverTransition(at);
+                    if (try resolution.schedule(self, d.current, d.or_z, value, or_z, st)) {
                         const delay = switch (d.source) {
                             .expr => d.delay.continuous(d.current, st.target),
                             .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
@@ -2110,7 +711,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 } else {
                     @memcpy(d.current.planes, value.planes);
                     self.drivers[at].or_z = or_z;
-                    try resolve(self, d.net);
+                    try resolution.resolve(self, d.net);
                 }
                 self.armed[pc] = true;
                 return;
@@ -2119,12 +720,12 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             // both sides, then wait on the control's operands.
             .switch_ctrl => |s| {
                 const t = &self.trans[s.tran];
-                const c = (try eval(self, scratch, t.ctrl, 1)).bit(0);
+                const c = (try evaluate.eval(self, scratch, t.ctrl, 1)).bit(0);
                 const next: @import("net.zig").Tran.State = if (c == t.on) .on else if (c == .zero or c == .one) .off else .unknown;
-                if (t.delay.present) try switchAfter(self, s.tran, next) else {
+                if (t.delay.present) try resolution.switchAfter(self, s.tran, next) else {
                     t.state = next;
-                    try resolve(self, t.a);
-                    try resolve(self, t.b);
+                    try resolution.resolve(self, t.a);
+                    try resolution.resolve(self, t.b);
                 }
                 self.armed[pc] = true;
                 return;
@@ -2158,28 +759,28 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 if (o.force or layers.force == null) {
                     const w = if (o.bits) |b| b.width else self.values[o.slot].width;
                     const value = if (o.slice) |sl|
-                        try bitsOf(scratch, try evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, w)
+                        try evaluate.bitsOf(scratch, try evaluate.evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, w)
                     else if (o.bits != null)
-                        try evalFor(self, scratch, o.value, .{ .width = w, .signed = false })
+                        try evaluate.evalFor(self, scratch, o.value, .{ .width = w, .signed = false })
                     else
-                        try evalFor(self, scratch, o.value, self.slotType(o.slot));
+                        try evaluate.evalFor(self, scratch, o.value, self.slotType(o.slot));
                     self.overriding = true;
                     defer self.overriding = false;
                     if (o.bits) |b|
-                        try write(self, scratch, .{ .slot = o.slot, .sel = .{ .first = b.lo, .count = b.width } }, value)
+                        try evaluate.write(self, scratch, .{ .slot = o.slot, .sel = .{ .first = b.lo, .count = b.width } }, value)
                     else
-                        try store(self, o.slot, value.planes);
+                        try waiters.store(self, o.slot, value.planes);
                 }
                 pc += 1;
                 continue;
             },
             .override_off => |o| {
                 if (o.bits) |bits| {
-                    try releaseBits(self, o.slot, bits);
+                    try waiters.releaseBits(self, o.slot, bits);
                     pc += 1;
                     continue;
                 }
-                try release(self, o.slot, o.force);
+                try waiters.release(self, o.slot, o.force);
                 pc += 1;
                 continue;
             },
@@ -2257,11 +858,11 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 continue;
             },
             .branch => |s| {
-                pc = if (try truthOf(self, scratch, s.condition) == .one) pc + 1 else s.otherwise;
+                pc = if (try evaluate.truthOf(self, scratch, s.condition) == .one) pc + 1 else s.otherwise;
                 continue;
             },
             .repeat_start => |s| {
-                const value = try eval(self, scratch, s.count, 0);
+                const value = try evaluate.eval(self, scratch, s.count, 0);
                 const count = if (value.hasUnknown()) 0 else blk: {
                     if (value.signed and value.asInt().? < 0) {
                         if (s.clamp) break :blk 0;
@@ -2280,11 +881,11 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             },
             .case_select => |s| {
                 const case = self.file.stmt(s.statement).case_stmt;
-                const value = try evalContext(self, scratch, case.scrutinee, s.ty);
+                const value = try evaluate.evalContext(self, scratch, case.scrutinee, s.ty);
                 pc = s.fallback;
                 search: for (case.arms, 0..) |arm, i| {
                     for (arm.labels) |label| {
-                        const item = try evalContext(self, scratch, label, s.ty);
+                        const item = try evaluate.evalContext(self, scratch, label, s.ty);
                         if (caseMatches(case.kind, value, item)) {
                             pc = self.case_targets.items[s.targets + i];
                             break :search;
@@ -2325,71 +926,11 @@ test "§9.5.1 casez/casex per plane word agree with the per-bit wildcard rule" {
     };
 }
 
-test "continuous vector delay audit_assignment_pending_same_value" {
-    try expectRun(
-        \\// IEEE1364-2005 §6.1.3(b): cancel pending propagation only if the newly
-        \\// evaluated RHS differs from the pending value. At10 a rises, scheduling1
-        \\// at15. At12 b rises too, but(a|b) is still1: delivery remains15, not17.
-        \\//! inherited IEEE 1364-2005 6.1.3
-        \\`timescale 1ns/1ns
-        \\module audit_assignment_pending_same_value;
-        \\  reg a, b;
-        \\  wire y;
-        \\  assign #5 y = a | b;
-        \\  initial begin
-        \\    a = 0; b = 0;
-        \\    #10 a = 1;
-        \\    #2 b = 1;
-        \\    #2 $display("before=%b", y);
-        \\    #2 $display("original_deadline_passed=%b", y);
-        \\    $finish(0);
-        \\  end
-        \\endmodule
-    ,
-        \\before=0
-        \\original_deadline_passed=1
-        \\
-    );
-}
-
 // §4.8.2 rounds a real into an integer (35.5 is 36, -1.5 is -2) and $rtoi
 // truncates; an integral operand makes a real one real; a real starts at 0.0;
 // a wreal follows its driver and a -0.0 is no change from 0.0.
-test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
-    try expectRun(
-        \\module m;
-        \\real r, s; integer i, j, k; wreal w; integer hits;
-        \\assign w = s;
-        \\always @(w) hits = hits + 1;
-        \\initial begin
-        \\  hits = 0; $write("%g ", r);
-        \\  r = 35.5; i = r; r = -1.5; j = r; k = $rtoi(-1.5);
-        \\  r = 7 / 2 + 0.25; s = 1.0; #1 s = -0.0; #1 s = 0.0; #1 s = -0.0;
-        \\  #1 $display("%0d %0d %0d %g %b %0d %.3f", i, j, k, r, r > 3, hits, $sqrt(2.0));
-        \\end
-        \\endmodule
-    , "0 36 -2 -1 3.25 1 2 1.414\n");
-}
-
 // §9.3: a force outranks an assign on the same variable, and releasing it
 // hands the variable back to the assign, which is still tracking.
-test "§9.3 force over assign, release back to the assign, deassign keeps" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module m;
-        \\reg a, b, v;
-        \\initial begin
-        \\  a = 0; b = 1;
-        \\  assign v = a; #1 $write("%b", v);
-        \\  force v = b; #1 $write("%b", v);
-        \\  a = 1; b = 0; #1 $write("%b", v);
-        \\  release v; #1 $write("%b", v);
-        \\  deassign v; a = 0; v = 0; #1 $display("%b%b", v, a);
-        \\end
-        \\endmodule
-    , "010100\n");
-}
-
 test "§9.8.2 fork starts every arm at once and join waits for the last" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -2401,53 +942,6 @@ test "§9.8.2 fork starts every arm at once and join waits for the last" {
         \\end
         \\endmodule
     , "b1 c2 a3 end3\n");
-}
-
-test "§4.9 a multidimensional array is addressed row-major, one index per dimension" {
-    try expectRun(
-        \\module m;
-        \\reg [3:0] mem [-1:0][2:1][1:0];
-        \\integer i, j;
-        \\initial begin
-        \\  for (i = -1; i <= 0; i = i + 1) for (j = 1; j <= 2; j = j + 1) begin mem[i][j][0] = i + j; mem[i][j][1] = 4'hf; end
-        \\  mem[0][3][0] = 4'h9;
-        \\  $display("%0d %0d %0d %h %b", mem[-1][1][0], mem[0][2][0], mem[-1][2][0], mem[0][1][1], mem[1][1][0]);
-        \\end
-        \\endmodule
-    , "0 2 1 f xxxx\n");
-}
-
-test "§5.2.1 bit and part selects read and write against the declared range" {
-    // Two nonblocking writes to different bits both land (each merges into
-    // the value at its own landing), an x index writes nothing, and a
-    // part-select of a signed vector is unsigned.
-    try expectRun(
-        \\module m;
-        \\reg [7:0] a; reg [0:3] b; reg signed [3:0] s; reg [15:0] w;
-        \\integer i;
-        \\initial begin
-        \\  a = 0; b = 0; s = -1; i = 1'bx;
-        \\  a[1] <= 1; a[6] <= 1; a[i] = 1;
-        \\  b[0:1] = 2'b11; a[5:3] = 3'b101;
-        \\  w = s[3:0];
-        \\  #1 $display("%b %b %b %b %b", a, b, a[7:4], w, a[3]);
-        \\end
-        \\endmodule
-    , "01101010 1100 0110 0000000000001111 1\n");
-}
-
-test "§3.5.1 an unsized x/z constant fills its context, a known top digit does not" {
-    try expectRun(
-        \\module m;
-        \\reg [39:0] w;
-        \\initial begin
-        \\  w = 'hx; $display("%h", w);
-        \\  w = 'hz3; $display("%h", w);
-        \\  w = 'h3x; $display("%h", w);
-        \\  $display("%b", 'bz);
-        \\end
-        \\endmodule
-    , "xxxxxxxxxx\nzzzzzzzzz3\n000000003x\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n");
 }
 
 test "wait constant true and constant expression continue immediately" {
@@ -2502,45 +996,6 @@ test "wait dependent condition still retests and resumes at true level" {
     , "resumed count=2 t=2\n");
 }
 
-test "clog2 scans arbitrary-width unsigned bit patterns" {
-    try expectRun(
-        \\module m;
-        \\reg [64:0] wide;
-        \\reg [128:0] wider;
-        \\reg signed [128:0] signed_wide;
-        \\reg [256:0] many;
-        \\initial begin
-        \\  wide = 65'd1 << 64;
-        \\  wider = 129'd1 << 128;
-        \\  signed_wide = wider;
-        \\  many = 257'd1 << 256;
-        \\  $display("%0d %0d %0d %0d", $clog2(wide), $clog2(wider), $clog2(signed_wide), $clog2(many));
-        \\  $display("%0d %0d %0d", $clog2(wide + 65'd1), $clog2(wider + 129'd1), $clog2(many + 257'd1));
-        \\  $display("%0d %0d %0d", $clog2(wide - 65'd1), $clog2(wider - 129'd1), $clog2(many - 257'd1));
-        \\  $display("%0d %0d %0d %0d", $clog2(257'd0), $clog2(257'd1), $clog2(257'd2), $clog2(257'd3));
-        \\  $display("%0d %0d %0d", $clog2(32'shffffffff), $clog2(64'h8000000000000001), $clog2(0) - 1);
-        \\end
-        \\endmodule
-    , "64 128 128 256\n65 129 257\n64 128 256\n0 0 1 2\n32 64 -1\n");
-}
-
-test "clog2 limb scan includes every limb and preserves unknown policy" {
-    var planes: [10]u64 = @splat(0);
-    const value: Int.Literal = .{ .width = 257, .signed = false, .sized = true, .planes = &planes };
-    try std.testing.expectEqual(@as(u64, 0), integerCeilingLog2(value));
-    for (0..257) |bit| {
-        @memset(&planes, 0);
-        planes[bit / 64] = @as(u64, 1) << @intCast(bit % 64);
-        try std.testing.expectEqual(@as(u64, @intCast(bit)), integerCeilingLog2(value));
-        if (bit != 0) {
-            planes[0] |= 1;
-            try std.testing.expectEqual(@as(u64, @intCast(bit + 1)), integerCeilingLog2(value));
-        }
-    }
-    planes[5] = 1;
-    try std.testing.expectEqual(@as(u64, 0), integerCeilingLog2(value));
-}
-
 test "source processes suspend at zero delay and NBA captures RHS in lexical order" {
     try expectRun(
         \\`timescale 1ns/1ps
@@ -2559,213 +1014,6 @@ test "source processes suspend at zero delay and NBA captures RHS in lexical ord
         \\initial begin #0 $display("peer %b",a); end
         \\endmodule
     , "initial xxxx\ninactive 0010 xxxx\npeer 0010\nafter 0010 0011\n");
-}
-
-test "digital assignment context extends before operations and preserves X Z" {
-    try expectRun(
-        \\module example;
-        \\reg [7:0] a;
-        \\integer i;
-        \\initial begin
-        \\  a = ~4'b0000; $display("wide %b",a);
-        \\  a = 4'sb1000; $display("signed %b",a);
-        \\  a = 4'b1000; $display("unsigned %b",a);
-        \\  a = 4'b10xz; $display("logic %b",a);
-        \\  i = 32'shffffffff; $display("integer %b",i);
-        \\end
-        \\endmodule
-    , "wide 11111111\nsigned 11111000\nunsigned 00001000\nlogic 000010xz\ninteger 11111111111111111111111111111111\n");
-}
-
-test "an always process resumes on each posedge of a clock it does not drive" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg clk;
-        \\reg [3:0] n;
-        \\initial begin clk = 0; n = 0; end
-        \\always #5 clk = ~clk;
-        \\always @(posedge clk) begin n = n + 1; $display("tick %b", n); end
-        \\initial #28 $finish(0);
-        \\endmodule
-    , "tick 0001\ntick 0010\ntick 0011\n");
-}
-
-test "a negedge term ignores the opposite transition" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg clk;
-        \\reg [3:0] n;
-        \\initial begin clk = 0; n = 0; end
-        \\always #5 clk = ~clk;
-        \\always @(negedge clk) begin n = n + 1; $display("fall %b", n); end
-        \\initial #28 $finish(0);
-        \\endmodule
-    , "fall 0001\nfall 0010\n");
-}
-
-test "every term of one event expression retires when any of them fires" {
-    // Both waiters belong to one process: a second resumption per change would
-    // double every line below.
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a;
-        \\reg b;
-        \\reg [1:0] hits;
-        \\initial begin a = 0; b = 0; hits = 0; end
-        \\always @(a or b) begin hits = hits + 1; $display("hit %b", hits); end
-        \\initial begin #5 a = 1; #5 b = 1; #5 a = 0; #5 $finish(0); end
-        \\endmodule
-    , "hit 01\nhit 10\nhit 11\n");
-}
-
-test "a write that does not change the value resumes nothing" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a;
-        \\reg [1:0] hits;
-        \\initial begin a = 0; hits = 0; end
-        \\always @(a) begin hits = hits + 1; $display("hit %b", hits); end
-        \\initial begin #5 a = 0; #5 a = 1; #5 $finish(0); end
-        \\endmodule
-    , "hit 01\n");
-}
-
-test "a nonblocking write resumes a waiting process from the NBA region" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a;
-        \\reg [1:0] hits;
-        \\initial begin a = 0; hits = 0; end
-        \\always @(posedge a) begin hits = hits + 1; $display("nba %b", hits); end
-        \\initial begin #5 a <= 1; #5 $finish(0); end
-        \\endmodule
-    , "nba 01\n");
-}
-
-test "a continuous assignment drives its net and re-evaluates on every operand" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a, b;
-        \\wire [1:0] w;
-        \\assign w = {a, a & b};
-        \\initial begin
-        \\  a = 0; b = 0;
-        \\  #1 $display("00 %b", w);
-        \\  a = 1;
-        \\  #1 $display("10 %b", w);
-        \\  b = 1;
-        \\  #1 $display("11 %b", w);
-        \\  $finish(0);
-        \\end
-        \\endmodule
-    , "00 00\n10 10\n11 11\n");
-}
-
-test "a net resolution resumes event waiters through the same write path" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a;
-        \\wire w;
-        \\reg [1:0] hits;
-        \\assign w = a;
-        \\initial begin a = 0; hits = 0; end
-        \\always @(posedge w) begin hits = hits + 1; $display("net posedge %b", hits); end
-        \\initial begin #5 a = 1; #5 a = 0; #5 a = 1; #5 $finish(0); end
-        \\endmodule
-    , "net posedge 01\nnet posedge 10\n");
-}
-
-test "a delayed continuous assignment is inertial and swallows a short pulse" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg a;
-        \\wire y;
-        \\assign #(3, 7) y = a;
-        \\initial begin
-        \\  a = 0;
-        \\  #10 #0 $display("t10 %b", y);
-        \\  a = 1; #1 a = 0;
-        \\  #5 #0 $display("pulse_gone %b", y);
-        \\  a = 1;
-        \\  #2 #0 $display("t18 %b", y);
-        \\  #1 #0 $display("t19 %b", y);
-        \\  a = 0;
-        \\  #6 #0 $display("t25 %b", y);
-        \\  #1 #0 $display("t26 %b", y);
-        \\  $finish(0);
-        \\end
-        \\endmodule
-    ,
-        // The 1 at t=11 would have landed at 14; the 0 at t=12 cancels it and is
-        // itself the value already published, so nothing happens at all. The rise
-        // at t=16 lands at 19 and the fall at t=19 lands at 26: the two delays are
-        // chosen by the value transitioned to, not by the direction of the source.
-        \\t10 0
-        \\pulse_gone 0
-        \\t18 0
-        \\t19 1
-        \\t25 1
-        \\t26 0
-        \\
-    );
-}
-
-test "a trireg holds its charge for the decay time and then gives up" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg d;
-        \\trireg (large) #(0, 0, 20) c;
-        \\trireg forever_c;
-        \\assign c = d, forever_c = d;
-        \\initial begin
-        \\  d = 1;
-        \\  #5 d = 1'bz;
-        \\  #19 $display("t24 %b %b", c, forever_c);
-        \\  #2 $display("t26 %b %b", c, forever_c);
-        \\  d = 0; #1 d = 1'bz;
-        \\  #19 $display("restarted %b %b", c, forever_c);
-        \\  #1000 $display("late %b %b", c, forever_c);
-        \\  $finish(0);
-        \\end
-        \\endmodule
-    ,
-        // Released at t=5, so the decay is at t=25, sampled at 24 and 26 and never
-        // at it: a sample in the decay's own timestep would pin an intra-timestep
-        // order. The countdown restarts from the second release at t=28; one
-        // measured from the first release would have fired by t=46.
-        \\t24 1 1
-        \\t26 x 1
-        \\restarted 0 0
-        \\late x 0
-        \\
-    );
-}
-
-test "unpacked array elements are addressed, and an out-of-range index reads X" {
-    try expectRun(
-        \\`timescale 1ns/1ns
-        \\module example;
-        \\reg [7:0] mem [5:2];
-        \\integer i;
-        \\initial begin
-        \\  for (i = 2; i < 6; i = i + 1) mem[i] = i * 3;
-        \\  mem[1] = 8'hff;
-        \\  mem[4] <= 8'h0f;
-        \\  $display("%b %b %b", mem[2], mem[5], mem[1]);
-        \\  #1 $display("%b %b", mem[4], mem[1'bx]);
-        \\  $finish(0);
-        \\end
-        \\endmodule
-    , "00000110 00001111 xxxxxxxx\n00001111 xxxxxxxx\n");
 }
 
 test "§9.7.1 a real delay rounds to the precision instead of truncating to the unit" {

@@ -28,6 +28,7 @@ const time = @import("../time.zig");
 /// wider.
 pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u8 };
 
+/// What `digital/emit.zig`'s device root passes `Device`, all comptime.
 pub const Spec = struct {
     /// The pins' enum, `U` of the device.
     U: type,
@@ -40,6 +41,9 @@ pub const Spec = struct {
     units: i32,
 };
 
+/// The contract device (`contract.validate`'s decls) of the native design in
+/// `spec`. A compile error above 256 pins. Every instance of the device
+/// shares `spec.design`'s tables; an `Instance` holds only its bridges.
 pub fn Device(comptime spec: Spec) type {
     const n_u = spec.pins.len;
     comptime std.debug.assert(n_u <= 256);
@@ -82,6 +86,7 @@ pub fn Device(comptime spec: Spec) type {
 
     return struct {
         const Self = @This();
+        /// The contract's unknowns: one per pin, in `spec.pins` order.
         pub const U = spec.U;
 
         /// The bridge parameters, one card for every instance (§1.3 of the
@@ -153,9 +158,13 @@ pub fn Device(comptime spec: Spec) type {
             inst: Instance = .{},
         };
 
+        /// The digital engine keeps history across accepted steps.
         pub const state_class: contract.StateClass = .history;
+        /// Only an output pin's own voltage enters `eval` (`g · (V - level)`).
         pub const deriv_reads: u64 = out_mask;
         pub const ddx_reads: u64 = 0;
+        /// Output row u depends on unknown u alone; an input row on nothing
+        /// (all ones past 64 pins, the contract's dense default).
         pub const jac_pattern: [n_u]u64 = blk: {
             var p: [n_u]u64 = @splat(out_mask);
             if (n_u <= 64) for (0..n_u) |u| {

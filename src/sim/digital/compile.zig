@@ -8,9 +8,11 @@ const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
 const exec = @import("exec.zig");
+const evaluate = @import("evaluate.zig");
 const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
+const elab = @import("elab.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const SpecExpr = @import("root.zig").SpecExpr;
@@ -24,6 +26,7 @@ const tasks = display.tasks;
 /// An expression's type (§5.5.1): a width and a signedness, or IEEE 1364-2005
 /// §4.8's `real`, a double held in a slot as its 64 bits.
 pub const Type = struct { width: u32, signed: bool, real: bool = false };
+/// §4.8 `real`: 64 bits, signed, `real` set. The one real type there is.
 pub const real_type: Type = .{ .width = 64, .signed = true, .real = true };
 
 /// One bytecode row, consumed whole by one dispatch; expressions stay in the
@@ -115,6 +118,12 @@ pub const Instruction = union(enum(u5)) {
     /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
     stop,
+
+    // Budget: one row per pc, read by every dispatch of `exec.execute`. The
+    // largest payloads are two slices (`task`, `switch_ctrl`).
+    comptime {
+        std.debug.assert(@sizeOf(Instruction) == 40);
+    }
 };
 
 /// §9.14 Table 9-11's integral system functions, the two of IEEE 1364 §17.7
@@ -347,7 +356,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             break :blk .{ .width = if (n.width == 0) 32 else n.width, .signed = n.signed };
         },
         // An unsized based constant is an integer-sized operand (Table
-        // 5-22) whose x/z fill is decided in context (`exec.unsizedFill`).
+        // 5-22) whose x/z fill is decided in context (`evaluate.unsizedFill`).
         .logic_literal => blk: {
             const n = ex.logicValue(e);
             break :blk .{ .width = if (n.sized) n.width else 32, .signed = n.signed };
@@ -360,6 +369,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
     };
 }
 
+/// §3.6 a string literal's width: eight bits per character, and 8 for "".
 pub fn stringWidth(text: []const u8) u32 {
     return @intCast(@max(1, text.len) * 8);
 }
@@ -370,6 +380,9 @@ pub fn common(a: Type, b: Type) Type {
     return .{ .width = @max(a.width, b.width), .signed = a.signed and b.signed };
 }
 
+/// The natural type `checkExpr` gave `e` in the executing scope's
+/// specialization (`Run.specOf`). Asserts `e` was checked: an untyped row is
+/// unreachable.
 pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
     const i = @backingInt(e);
     return switch (self.ty_state[i]) {
@@ -379,6 +392,10 @@ pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
     };
 }
 
+/// Types `e` and every operand under it in the executing scope (§5.5.1),
+/// recording each in `Run.types`/`spec_types`, or fails with E1100 on a
+/// form digital execution does not implement. Must run before `typeOf` or
+/// any evaluation of `e`.
 pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
     _ = try inferValue(self, e, 0);
 }
@@ -404,6 +421,10 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     return ty;
 }
 
+/// IEEE 1364-2005 §5.2: is `e`, in the executing scope, a constant
+/// expression: literals, parameters and the operators over them, constant
+/// system function calls, and §10.4.5 constant function calls while
+/// elaboration still folds (`Run.growing`)? Evaluates nothing.
 pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     return isConstantExpression(self, e, false);
 }
@@ -482,7 +503,7 @@ pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
                     "it reads a name that is neither its own nor a parameter",
                 .hier_ident => "it contains a hierarchical reference",
                 .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
-                    if (!v.r.subs.items[callee].framed) try @import("root.zig").earlyFrame(v.r, callee, ex.mainTok(x));
+                    if (!v.r.subs.items[callee].framed) try elab.earlyFrame(v.r, callee, ex.mainTok(x));
                     break :blk if (try notConstant(v.r, callee) == null) null else "it calls a function that is not a constant function";
                 } else "it calls a function that is not a constant function",
                 .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| if (sf.constant()) null else "it calls a system function no constant expression may" else "it calls a system function no constant expression may",
@@ -533,7 +554,7 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
     if (!constantExpression(self, e)) return self.exprFail(e, "integral replication requires a constant expression");
     var scratch = std.heap.ArenaAllocator.init(self.arena);
     defer scratch.deinit();
-    const value = try exec.eval(self, scratch.allocator(), e, 0);
+    const value = try evaluate.eval(self, scratch.allocator(), e, 0);
     if (value.hasUnknown()) return self.exprFail(e, "replication count cannot contain X or Z");
     if (value.signed and value.bit(value.width - 1) == .one) return self.exprFail(e, "replication count cannot be negative");
     for (value.values()[1..]) |word| if (word != 0) return self.exprFail(e, "replication count exceeds the supported u32 range");
@@ -810,7 +831,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const inst = self.instanceOf(self.scope);
             const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
             if (!self.subs.items[idx].decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
-            if (!self.subs.items[idx].framed) try @import("root.zig").earlyFrame(self, idx, ex.mainTok(e));
+            if (!self.subs.items[idx].framed) try elab.earlyFrame(self, idx, ex.mainTok(e));
             const sub = self.subs.items[idx];
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
@@ -894,6 +915,8 @@ fn site(self: *Run, id: Ast.StmtId) Error!void {
     try sites.append(self.arena, .{ .scope = self.instanceOf(self.scope), .stmt = id, .pc = position(self) });
 }
 
+/// Appends one instruction in the executing scope and returns its pc.
+/// Fails at 2^32 - 1 instructions. Invalidates pointers into `Run.code`.
 pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     if (self.code.items.len == std.math.maxInt(u32)) return self.fail(0, "too many digital instructions", .{});
     const at = position(self);
@@ -902,6 +925,10 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
     return at;
 }
 
+/// Appends statement `id`'s bytecode, compiled in the executing scope, at
+/// the end of `Run.code`. `depth` is the statement nesting so far; 256 is
+/// refused rather than recursed into. Every expression is type-checked here,
+/// so nothing a process runs can fail to type at run time.
 pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     const tok = self.file.stmtTok(id);
     if (depth == 256) return self.fail(tok, "digital statements deeper than 256 AST levels are not implemented", .{});
@@ -922,7 +949,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (self.block_scopes.get(.{ .scope = outer, .stmt = id })) |inner| {
                 self.scope = inner;
             } else if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) {
-                self.scope = try @import("root.zig").blockScope(self, outer, id);
+                self.scope = try elab.blockScope(self, outer, id);
             }
             const start = position(self);
             if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
@@ -1305,7 +1332,10 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     return override(self, target, value, kind, null);
 }
 
+/// The bits of an overriding value one concatenation operand takes: from
+/// bit `lo` of a value `of` bits wide (§9.3 `assign {a, b} = v`).
 pub const Slice = struct { lo: u32, of: u32 };
+/// A constant bit range of a slot, `width` bits from bit position `lo`.
 pub const Bits = struct { lo: u32, width: u32 };
 const OverTarget = struct { at: u32, bits: ?Bits };
 
@@ -1333,7 +1363,7 @@ fn overTarget(self: *Run, x: Ast.ExprId) Error!OverTarget {
                 else => rg, // else: a bit-select's index
             };
             if (index != .none and !constantExpression(self, index)) return self.exprFail(x, refused);
-            const sel = (try exec.selection(self, self.arena, x)) orelse return self.exprFail(x, "§9.3.2: the select's index is x or z");
+            const sel = (try evaluate.selection(self, self.arena, x)) orelse return self.exprFail(x, "§9.3.2: the select's index is x or z");
             if (sel.first < 0 or sel.first + sel.count > self.values[at].width) return self.exprFail(x, "§9.3.2: the select is outside its net");
             return .{ .at = at, .bits = .{ .lo = @intCast(sel.first), .width = sel.count } };
         },
@@ -1415,7 +1445,7 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
 fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
     if (self.subs.items[idx].body != null) return;
     const decl = self.subs.items[idx].decl;
-    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
+    const f = if (decl.automatic) try elab.frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
     const skip = try append(self, .{ .jump = 0 });
     self.subs.items[idx].body = .{ .entry = position(self), .frame = f };
     const caller = self.scope;
@@ -1523,7 +1553,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
     }
     self.subs.items[idx].inlining = true;
     defer self.subs.items[idx].inlining = false;
-    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, inst) else self.subs.items[idx].frame;
+    const f = if (decl.automatic) try elab.frame(self, decl, inst) else self.subs.items[idx].frame;
     const start = position(self);
     for (decl.ports, args, f.ports) |p, a, slot| if (p.direction != .output) {
         _ = try append(self, .{ .init_var = .{ .slot = slot, .value = a } });
@@ -1646,7 +1676,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (ex.tag(e) == .concat) {
         for (ex.args(e)) |x| {
             try checkTarget(self, x);
-            if ((try exec.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
+            if ((try evaluate.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
         }
         return;
     }
@@ -1778,7 +1808,7 @@ pub fn selectTerm(self: *Run, e: Ast.ExprId) Error!?SelectTerm {
         else => if (!constantExpression(self, rg)) return null, // else: a bit-select's index
     }
     try checkExpr(self, e);
-    const sel = (try exec.selection(self, self.arena, e)) orelse return null;
+    const sel = (try evaluate.selection(self, self.arena, e)) orelse return null;
     if (sel.first < 0 or sel.count > 64 or sel.first + sel.count > self.values[at].width) return null;
     return .{ .slot = at, .first = @intCast(sel.first), .count = sel.count };
 }
