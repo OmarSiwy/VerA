@@ -744,7 +744,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
     const arg = h.mir.resolveAlias(found orelse return error.NoBoundStepCall);
     try std.testing.expectEqual(Mir.Opcode.phi, h.mir.instOp(h.mir.valueDef(arg).inst_result));
     // …and nothing was emitted for §9.17.1, which this module never calls.
-    try std.testing.expect(h.low.disc_place == null);
+    try std.testing.expect(h.low.systask_state.disc_place == null);
 }
 
 test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" {
@@ -763,8 +763,8 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
     try std.testing.expect(h.bag.isEmpty());
     try std.testing.expectEqual(Mir.Value.one, h.low.out.reject_iteration);
     // Iteration rejection must not become a timestep discontinuity.
-    try std.testing.expect(h.low.disc_place == null);
-    try std.testing.expect(h.low.bound_step_place == null);
+    try std.testing.expect(h.low.systask_state.disc_place == null);
+    try std.testing.expect(h.low.systask_state.bound_step_place == null);
 
     var h2: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -780,7 +780,7 @@ test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" 
     defer h2.deinit();
     _ = try h2.low.lowerFile();
     try std.testing.expect(h2.bag.isEmpty());
-    try std.testing.expect(h2.low.disc_place != null);
+    try std.testing.expect(h2.low.systask_state.disc_place != null);
 }
 
 test "lower: A.6.4 the analog_statement / analog_event_statement split" {

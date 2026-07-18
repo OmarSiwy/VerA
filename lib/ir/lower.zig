@@ -303,6 +303,8 @@ node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
 /// Sub-file-private state: each is read and written by that one file only.
 node_state: lower_node.State = .{},
 event_state: lower_event.State = .{},
+systask_state: lower_systask.State = .{},
+random_state: lower_random.State = .{},
 param_state: lower_param.State = .{},
 stmt_state: lower_stmt.State = .{},
 table_model_state: lower_table_model.State = .{},
@@ -459,23 +461,6 @@ cond_depth: u32 = 0,
 /// §5.6.7 and §5.8/§5.10.3.1 ask for a constant condition, which
 /// `analysis("dc")` is not.
 static_cond_depth: u32 = 0,
-/// §9.17.2 `$bound_step`: an SSA place seeded to +inf ("nothing asked for") in
-/// the entry block and `fmin`-ed at every call site, so a call under an `if`
-/// bounds the step only on the arm that ran. `finishKernelCtl` turns the final
-/// value into one synthetic `call` (a unit). Null: the model never called it.
-bound_step_place: ?Ssa.Place = null,
-/// VerA's `$vera_reject_step`, the same way: +inf is "no request".
-reject_step_place: ?Ssa.Place = null,
-/// §9.17.1 `$discontinuity`, the same way as `bound_step_place`.
-disc_place: ?Ssa.Place = null,
-/// §9.7.3 the status channel (`Lowered.status`): the code place, seeded 0
-/// ("nothing reported"), then its argument places, written by the FIRST
-/// `$fatal`/`$error` an evaluation reaches. Null: the model has no site.
-status_places: ?[1 + Lowered.status_arg_max]Ssa.Place = null,
-/// §9.17.1 `$discontinuity(-1)`'s flag, seeded 0 and set 1 at each call site;
-/// its final read is `out.reject_iteration`, and `out.uses.reject_iteration`
-/// says it exists.
-reject_iteration_place: ?Ssa.Place = null,
 /// The SSA place of each `out.held_vars` row, parallel to it: the variable's
 /// value during this evaluation, read back once into `HeldVar.final`.
 held_places: std.ArrayList(Ssa.Place) = .empty,
@@ -504,12 +489,6 @@ tp_cur: ?u32 = null,
 /// Parallel to `out.timepoints`: the place that is 1 once the statement ran,
 /// read back into `TpBlock.mark` at the end of the block.
 tp_marks: std.ArrayList(Ssa.Place) = .empty,
-/// §9.4.6 the carrier for conditional prints, which cannot be `fadd`-chained
-/// directly because a call inside an `if` arm does not dominate the chain root.
-/// An SSA place seeded `.f_zero` in `.entry`, `fadd`-ed at each guarded call
-/// site and read once at the end: the arm's phi carries the call into the live
-/// slice on the path that ran. Null: no conditional print.
-display_cond_place: ?Ssa.Place = null,
 /// §6.6.1/§5.9.3 genvars currently bound in `consts`, a stack pushed and
 /// popped by `tryUnrollFor`. Exists so `queueDisplay` can snapshot the
 /// bindings a deferred operand in an unrolled body was written under;
@@ -911,6 +890,17 @@ pub fn startUnreachable(self: *Lower) Oom!void {
     const b = try self.mir.addBlock(self.arena);
     try self.builder.sealBlock(b);
     self.cur = b;
+}
+
+/// Returns `table_effect_place`, creating it on first use seeded `.f_zero` in
+/// the entry block. Its sum is never observed; what codegen keeps alive is the
+/// dependencies and CFG edges it carries (`Lowered.table_effect`).
+pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
+    if (self.table_effect_place) |p| return p;
+    const p = self.builder.newPlace();
+    try self.builder.writeVariable(p, .entry, .f_zero);
+    self.table_effect_place = p;
+    return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -1607,14 +1597,14 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §9.17 analog kernel control. Emitted last and in this fixed order so the
     // unit enumeration stays a pure function of the source.
-    try self.finishKernelCtl();
+    try lower_systask.finishKernelCtl(self);
     // §9.4 display tasks, after the kernel-control calls: those become naming
     // units, and inserting anything ahead would renumber every Instance state
     // field. Deferred §9.4.1 operands are lowered inside, after the accumulator
     // finals above, which is what "converged" means here.
     const contribs_before = self.out.contributions.items.len;
     const sites_before = self.out.charge_sites.items.len;
-    try self.finishDisplays();
+    try lower_systask.finishDisplays(self);
     // §4.5.2 an operator in a deferred operand adds its unknown's row there.
     try self.readContribFinals(contribs_before);
     try self.readSiteFinals(sites_before);
@@ -1638,85 +1628,6 @@ fn readContribFinals(self: *Lower, from: usize) Oom!void {
 /// Reads each §5.6.1.2 charge site's charge from `from` on at the end of the block.
 fn readSiteFinals(self: *Lower, from: usize) Oom!void {
     for (self.out.charge_sites.items[from..], self.site_places.items[from..]) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
-}
-
-/// §9.17.1/§9.17.2. Turns each accumulated kernel-control place into exactly one
-/// synthetic `call`, whose single argument is the value the host must read.
-/// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
-/// evaluates the unit once per accepted step and stores it into `Instance`.
-fn finishKernelCtl(self: *Lower) Oom!void {
-    if (self.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
-    if (self.reject_step_place) |p| self.out.reject_step = try self.builder.readVariable(p, self.cur);
-    if (self.status_places) |ps| {
-        self.out.status = try self.builder.readVariable(ps[0], self.cur);
-        for (&self.out.status_args, ps[1..]) |*a, p| a.* = try self.builder.readVariable(p, self.cur);
-    }
-    if (self.bound_step_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        _ = try self.call("$bound_step", &.{v});
-    }
-    if (self.disc_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        _ = try self.call("$discontinuity", &.{v});
-    }
-}
-
-/// §9.4 Chains every unconditional display call into one value, so codegen has
-/// a single live root to slice a unit from. `fadd` is the cheapest carrier: the
-/// sum is discarded, and rendering it walks the operands in MIR order, which is
-/// source order.
-///
-/// Only `cond_depth == 0` calls join directly. They lie on the straight-line
-/// spine of the analog block, so each one dominates `self.cur` here; a call
-/// inside an `if` arm does not, and chaining it would be invalid SSA. Those
-/// reach the root through `display_cond_place` instead — one read of a place
-/// the arms wrote, an ordinary phi. §9.4.6 is satisfied by where the call
-/// sits: it stays in the arm's block and codegen emits the arm as an `if`.
-// ponytail: print order is MIR order, so a module that prints both kinds shows
-// the guarded lines first, whatever the source order. Upgrade path: give
-// `Display` a source-order index and have codegen emit by it.
-fn finishDisplays(self: *Lower) Oom!void {
-    try lower_event.lowerDeferredDisplays(self);
-    var root: Mir.Value = .f_zero;
-    var first = true;
-    for (self.out.displays.items) |d| {
-        if (d.conditional) continue;
-        // Every unconditional entry either carried its call from the
-        // statement or was a `queueDisplay` placeholder just filled above.
-        assert(d.val != .undef);
-        root = if (first) d.val else try self.emit(.fadd, &.{ root, d.val });
-        first = false;
-    }
-    if (self.display_cond_place) |p| {
-        const v = try self.builder.readVariable(p, self.cur);
-        root = if (first) v else try self.emit(.fadd, &.{ root, v });
-    }
-    self.out.display_root = root;
-}
-
-/// Carries one guarded §9.4/§9.5/§9.7 call into the display slice. The value is
-/// discarded at the root; the `fadd` gives the call a use, without which
-/// codegen's slice drops the print.
-pub fn chainCondDisplay(self: *Lower, v: Mir.Value) Oom!void {
-    const p = self.display_cond_place orelse blk: {
-        const np = self.builder.newPlace();
-        try self.builder.writeVariable(np, .entry, .f_zero);
-        self.display_cond_place = np;
-        break :blk np;
-    };
-    const prev = try self.builder.readVariable(p, self.cur);
-    try self.builder.writeVariable(p, self.cur, try self.emit(.fadd, &.{ prev, v }));
-}
-
-/// Returns the kernel-control place in `slot`, creating it on first use seeded
-/// to +inf in the entry block. +inf is both `fmin`'s identity and "the model
-/// asked for nothing", so no "was it called" flag has to survive the CFG.
-pub fn kernelCtlPlace(self: *Lower, slot: *?Ssa.Place) Oom!Ssa.Place {
-    if (slot.*) |p| return p;
-    const p = self.builder.newPlace();
-    try self.builder.writeVariable(p, .entry, .f_inf);
-    slot.* = p;
-    return p;
 }
 
 fn strOrEmpty(self: *const Lower, id: Ast.StrId) []const u8 {
@@ -1757,7 +1668,7 @@ pub const binaryMathOp = lower_expr.binaryMathOp;
 // §4.5 analog operators and filters, lower/analog_op.zig
 const lower_analog_op = @import("lower/analog_op.zig");
 
-// Clause 9 system functions and tasks in analog context, and their arguments, lower/sysfunc.zig
+// Clause 9 system functions in analog context, and their arguments, lower/sysfunc.zig
 const lower_sysfunc = @import("lower/sysfunc.zig");
 /// Reports whether a §9.15 simulation parameter is answered at run time.
 pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
@@ -1765,6 +1676,12 @@ pub const simparamIsRuntime = lower_sysfunc.simparamIsRuntime;
 /// card supplies (`tnom`), or null.
 pub const simparamHostField = lower_sysfunc.simparamHostField;
 pub const host_simparams = lower_sysfunc.host_simparams;
+
+// Clause 9 system tasks: §9.4 display, §9.5 I/O, §9.7 status, §9.17 kernel control, lower/systask.zig
+const lower_systask = @import("lower/systask.zig");
+
+// §9.13 probabilistic distributions, lower/random.zig
+const lower_random = @import("lower/random.zig");
 
 // §9.21 `$table_model`, lower/table_model.zig
 const lower_table_model = @import("lower/table_model.zig");
@@ -1796,6 +1713,8 @@ test {
     _ = lower_expr;
     _ = lower_analog_op;
     _ = lower_sysfunc;
+    _ = lower_systask;
+    _ = lower_random;
     _ = lower_table_model;
     _ = lower_limit;
     _ = lower_hier_name;

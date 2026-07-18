@@ -187,12 +187,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.out.table_samples.append(self.arena, @intCast(rows.len));
         break :blk self.out.table_samples.items.len;
     };
-    if (site != 0 and self.table_effect_place == null) {
-        const place = self.builder.newPlace();
-        try self.builder.writeVariable(place, .entry, .f_zero);
-        self.table_effect_place = place;
-    }
-    const previous = if (site == 0) .f_zero else try self.builder.readVariable(self.table_effect_place.?, self.cur);
+    const previous = if (site == 0) .f_zero else try self.builder.readVariable(try self.effectPlace(), self.cur);
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.appendSlice(self.arena, &.{
@@ -209,7 +204,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     try vals.appendSlice(self.arena, rows);
     self.out.uses.insert(.table_model);
     const result = try self.call("$table_model", vals.items);
-    if (site != 0) try self.builder.writeVariable(self.table_effect_place.?, self.cur, result);
+    if (site != 0) try self.builder.writeVariable(try self.effectPlace(), self.cur, result);
     return .{ .v = result, .ty = .real };
 }
 
