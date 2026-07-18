@@ -323,7 +323,7 @@ fn state(r: *Run, a: std.mem.Allocator, p: Port) Error![]const u8 {
         var in: Signal = .{};
         var out: Signal = .{};
         if (p.net) |net| {
-            for (r.nets[net].drivers) |d| {
+            for (r.netDrivers(net)) |d| {
                 const c = resolution.contribution(r.drivers[d], bit);
                 if (below(r, r.drivers[d].scope, p.inst)) out = out.combine(c) else in = in.combine(c);
             }

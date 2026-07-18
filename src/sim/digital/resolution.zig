@@ -32,6 +32,7 @@ const waiters = @import("waiters.zig");
 /// net.
 pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
+    const drivers = self.netDrivers(net);
     // A §18.4 port's state can change with its drivers' strengths alone.
     if (self.watch[n.slot].contains(.ports)) try waiters.requestVcd(self);
     if (self.netCold(n).trans.len != 0) return resolveJoined(self, net);
@@ -40,7 +41,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     if (n.kind == .wreal) {
         n.resolved.values()[0] = 0;
         n.resolved.unknowns()[0] = 0;
-        for (n.drivers) |d| {
+        for (drivers) |d| {
             const cur = self.drivers[d].current;
             if (!cur.hasUnknown()) n.resolved.values()[0] = cur.values()[0];
         }
@@ -51,10 +52,10 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     // when a wide bus resolves often enough to matter.
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
-    if (plainCopy(self, n)) {
+    if (plainCopy(self, net)) {
         // The fold below would reproduce the one driver bit for bit:
         // `Signal.of` at strong/strong, then `collapse`, is the identity.
-        const src = self.drivers[n.drivers[0]].current;
+        const src = self.drivers[drivers[0]].current;
         @memcpy(n.resolved.planes, src.planes);
         const last = n.resolved.values().len - 1;
         n.resolved.values()[last] &= wordMask(n.resolved.width, last);
@@ -62,7 +63,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     } else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var acc: Signal = .{};
-        for (n.drivers) |d| {
+        for (drivers) |d| {
             const c = contribution(self.drivers[d], at);
             acc = if (tables) |table| acc.combineWired(c, table) else acc.combine(c);
         }
@@ -75,7 +76,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
             floating += 1;
         }
         acc = acc.combine(netPull(n.kind));
-        n.signal[at] = acc;
+        self.signals[n.signal + at] = acc;
         setBit(n.resolved, at, acc.collapse());
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
@@ -94,13 +95,14 @@ pub fn resolve(self: *Run, net: u32) Error!void {
 /// Whether `n` shows its one driver unchanged: a strong, unambiguous driver
 /// on a net type with no wired logic and no pull of its own (§7.9, §7.10),
 /// whose per-bit `signal` no MOS switch reads.
-fn plainCopy(self: *const Run, n: @import("net.zig").Net) bool {
+fn plainCopy(self: *const Run, net: u32) bool {
+    const n = self.nets[net];
     const plain = switch (n.kind) {
         .wire, .tri, .uwire => true,
         .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
     };
-    if (!plain or n.drivers.len != 1 or n.strength_read) return false;
-    const d = self.drivers[n.drivers[0]];
+    if (!plain or self.netDrivers(net).len != 1 or n.strength_read) return false;
+    const d = self.drivers[self.netDrivers(net)[0]];
     return !d.or_z and d.s0 == .strong and d.s1 == .strong;
 }
 
@@ -132,7 +134,7 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
             for (group, paths) |z, p| {
                 const n = self.nets[z.net];
                 var own = netPull(n.kind);
-                for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], z.bit));
+                for (self.netDrivers(z.net)) |d| own = own.combine(contribution(self.drivers[d], z.bit));
                 acc = acc.combine(arrive(own, z, y, p));
             }
             if (acc.none()) for (group, paths) |z, p| {
@@ -140,7 +142,7 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
                 if (n.kind == .trireg) acc = acc.combine(arrive(.of(self.values[n.slot].bit(z.bit), n.charge, n.charge), z, y, p));
             };
             const n = self.nets[y.net];
-            n.signal[y.bit] = acc;
+            self.signals[n.signal + y.bit] = acc;
             setBit(n.resolved, y.bit, acc.collapse());
             if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
         }
@@ -232,7 +234,7 @@ pub fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net
     const g = (try evaluate.eval(self, scratch, m.gate, 1)).bit(0);
     var sig: Signal = .of((try evaluate.eval(self, scratch, m.data, 1)).bit(0), .strong, .strong);
     if (ex.tag(m.data) == .ident) if (self.net_of.get(try self.slot(m.data))) |net| {
-        sig = self.nets[net].signal[0];
+        sig = self.signals[self.nets[net].signal];
     };
     const reduce = @import("net.zig").reduce;
     const d = &self.drivers[at];

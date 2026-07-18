@@ -58,6 +58,12 @@ const Future = struct {
     fn compare(_: void, a: Future, b: Future) std.math.Order {
         return if (a.time == b.time) std.math.order(a.order, b.order) else std.math.order(a.time, b.time);
     }
+
+    // Budget: one heap entry per future event; every sift reads time and
+    // order, so the row stays three words.
+    comptime {
+        std.debug.assert(@sizeOf(Future) == 24);
+    }
 };
 
 /// The event queue of one simulation: a FIFO per current-time region plus a

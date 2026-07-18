@@ -71,7 +71,17 @@ pub const Pending = union(enum) {
 /// ever queued at once, not as the run is long. `buf` is the row's own
 /// storage for a `.write` value, kept across reuse and grown only when a wider
 /// value arrives.
-pub const Row = struct { item: Pending, handle: Handle = undefined, buf: []u64 = &.{} };
+pub const Row = struct {
+    item: Pending,
+    handle: Handle = undefined,
+    buf: []u64 = &.{},
+
+    // Budget: one row per event queued at once (recycled). `Pending.write`
+    // is the widest payload: a slot, a value and an optional select.
+    comptime {
+        std.debug.assert(@sizeOf(Row) == 88);
+    }
+};
 
 // The VPI (src/vpi/value.zig) writes and triggers through `digital.exec`,
 // as a process does; these are the entry points it reaches.
@@ -688,7 +698,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolution.resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
-                    const st = &self.drivers[at].transition;
+                    const st = try self.driverTransition(at);
                     if (try resolution.schedule(self, d.current, d.or_z, value, or_z, st)) {
                         const delay = switch (d.source) {
                             .expr => d.delay.continuous(d.current, st.target),
