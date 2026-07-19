@@ -550,7 +550,7 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
 }
 
 /// Returns the genvar a `for` init statement assigns, or null (LRM §3.5).
-pub fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
+fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
     const m = self.out.module orelse return null;
     if (init_s == .none) return null;
     const s = self.file.stmt(init_s);

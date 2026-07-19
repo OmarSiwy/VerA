@@ -569,7 +569,7 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
 
 /// Returns a system function's result type from `callee.zig`'s `ty` column, the
 /// list `callee.ty` reads too. An unlisted name, including a user `$name`, is real.
-pub fn sysFuncTy(name: []const u8) Ty {
+fn sysFuncTy(name: []const u8) Ty {
     return switch (Mir.callee.ty(Mir.Callee.fromName(name))) {
         .real => .real,
         .int => .integer,
