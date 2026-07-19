@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
-const lower_param = @import("param.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Lexer = @import("frontend").Lexer;
@@ -212,34 +212,6 @@ test "lower: §2.7 a string literal is a base-256 numeral, §3.3 justified right
     try std.testing.expectEqual(@as(i64, 65), strToInt("A", 32));
     try std.testing.expectEqual(@as(i64, 18432), strToInt("H\x00", 32));
     try std.testing.expectEqual(@as(i64, 0), strToInt("", 32));
-}
-
-test "lower: §3.2 a multidimensional array is scalarized row-major" {
-    // The ORDER is the load-bearing part: §3.3's own initializer
-    // `string paths[0:2][0:1] = '{ '{"dir1","fileA"}, … }` is rows of columns,
-    // so cell k of the flat walk must be `[k / cols][k % cols]`. Transposing it
-    // reads one cell where another was written, and every value in that example
-    // is plausible in both places — which is why the fixture checks all six.
-    const dims = [_]lower_param.Bounds{ .{ .lo = 0, .hi = 2 }, .{ .lo = 0, .hi = 1 } };
-    try std.testing.expectEqual(@as(usize, 6), lower_param.shapeCells(&dims));
-    var idx: [2]i64 = undefined;
-    const want = [_][2]i64{
-        .{ 0, 0 }, .{ 0, 1 },
-        .{ 1, 0 }, .{ 1, 1 },
-        .{ 2, 0 }, .{ 2, 1 },
-    };
-    for (want, 0..) |w, k| {
-        lower_param.shapeSubscripts(&dims, k, &idx);
-        try std.testing.expectEqualSlices(i64, &w, &idx);
-    }
-    // A non-zero `lo` offsets the subscript and not the walk (§3.2.2 counts
-    // elements): `[1:3]` puts the first cell at 1.
-    const off = [_]lower_param.Bounds{.{ .lo = 1, .hi = 3 }};
-    var one: [1]i64 = undefined;
-    lower_param.shapeSubscripts(&off, 0, &one);
-    try std.testing.expectEqual(@as(i64, 1), one[0]);
-    lower_param.shapeSubscripts(&off, 2, &one);
-    try std.testing.expectEqual(@as(i64, 3), one[0]);
 }
 
 test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
@@ -533,8 +505,8 @@ test "lower: §3.2.2 a runtime-indexed array is one storage, a constant-indexed 
     // One declaration; `h[k]` and `h[3]` read; the loop body and `h[k] =` write.
     try std.testing.expectEqualSlices(u32, &.{ 1, 2, 2 }, &n);
     // Row-major, each dimension from its left bound, so `[1:0]` counts down.
-    try std.testing.expectEqual(@as(i64, 3), lower_param.flatIndex(&.{ .{ .lo = 0, .hi = 1 }, .{ .lo = 0, .hi = 2 } }, &.{ 1, 0 }));
-    try std.testing.expectEqual(@as(i64, 1), lower_param.flatIndex(&.{.{ .lo = 0, .hi = 1, .descending = true }}, &.{0}));
+    try std.testing.expectEqual(@as(i64, 3), lower_shape.flatIndex(&.{ .{ .lo = 0, .hi = 1 }, .{ .lo = 0, .hi = 2 } }, &.{ 1, 0 }));
+    try std.testing.expectEqual(@as(i64, 1), lower_shape.flatIndex(&.{.{ .lo = 0, .hi = 1, .descending = true }}, &.{0}));
 }
 
 test "lower: §5.4.3 port access — what is rejected, and what the unknown is" {

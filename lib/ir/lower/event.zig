@@ -19,8 +19,9 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_control = @import("control.zig");
 const lower_expr = @import("expr.zig");
-const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
+const lower_shape = @import("shape.zig");
+const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
@@ -342,11 +343,11 @@ pub fn captureTimerArray(self: *Lower, name: []const u8) Oom!void {
         a.memory = try self.builder.readVariable(mem.place, self.cur);
     } else {
         var cells: std.ArrayList(@typeInfo(@TypeOf(a.cells)).pointer.child) = .empty;
-        var buf: [lower_param.max_stack_dims]i64 = undefined;
-        const idx = try lower_param.subscriptBuf(self, &buf, info.dims.len);
-        for (0..lower_param.shapeCells(info.dims)) |k| {
-            lower_param.shapeSubscripts(info.dims, k, idx);
-            const key = try lower_param.elemName(self, name, idx);
+        var buf: [lower_shape.max_stack_dims]i64 = undefined;
+        const idx = try lower_shape.subscriptBuf(self, &buf, info.dims.len);
+        for (0..lower_shape.shapeCells(info.dims)) |k| {
+            lower_shape.shapeSubscripts(info.dims, k, idx);
+            const key = try lower_shape.elemName(self, name, idx);
             if (self.vars.get(key)) |slot| try cells.append(self.arena, .{
                 .name = key,
                 .read = .{ .slot = slot, .value = try self.builder.readVariable(slot.place, self.cur) },
@@ -539,18 +540,18 @@ fn timerInputReads(self: *Lower, e: Ast.ExprId, reads: *std.ArrayList(TimerRead)
     // A fixed scalarized element does not depend on its siblings. Whole
     // arrays and runtime indices below depend on their storage version.
     if (ex.tag(e) == .index) {
-        var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+        var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
         if (try lower_stmt.indexChain(self, e, &subs)) |chain| {
             const name = self.file.str(chain.name);
             if (self.arrays.get(name)) |info| if (info.mem == null and chain.subs.len == info.dims.len) {
-                var buf: [lower_param.max_stack_dims]i64 = undefined;
-                const idx = try lower_param.subscriptBuf(self, &buf, chain.subs.len);
+                var buf: [lower_shape.max_stack_dims]i64 = undefined;
+                const idx = try lower_shape.subscriptBuf(self, &buf, chain.subs.len);
                 const fixed = for (chain.subs, idx) |sub, *value| {
                     const c = lower_constfold.foldExpr(self, sub, false) orelse break false;
                     value.* = c.asIntExact() orelse break false;
                 } else true;
                 if (fixed) {
-                    const key = try lower_param.elemName(self, name, idx);
+                    const key = try lower_shape.elemName(self, name, idx);
                     if (self.vars.get(key)) |slot| try reads.append(self.arena, .{
                         .slot = slot,
                         .value = try self.builder.readVariable(slot.place, self.cur),
@@ -653,7 +654,7 @@ fn replayTimerExpr(self: *Lower, e: Ast.ExprId, captured: *const TimerCapture, r
         const stored = try self.builder.readVariable(slot.place, self.cur);
         // §7.3.1 applies to this later read too: a packed reg's analog value
         // is zero-extended from its declaration width, not its raw SSA slot.
-        const after = try lower_param.analogRead(self, stored, slot.reg_width);
+        const after = try lower_var.analogRead(self, stored, slot.reg_width);
         changed.* = changed.* or self.mir.resolveAlias(after) != self.mir.resolveAlias(before.value.v);
         return replay.put(self.arena, e, .{ .v = after, .ty = slot.ty });
     }

@@ -12,7 +12,7 @@ const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
 const discipline_rules = @import("../discipline_rules.zig");
 const lower_expr = @import("expr.zig");
-const lower_param = @import("param.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Preprocessor = @import("frontend").Preprocessor;
@@ -58,9 +58,9 @@ pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.out.vectors.get(name) orelse
         return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
-        try applyDefaultDiscipline(self, try lower_param.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
+        try applyDefaultDiscipline(self, try lower_shape.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
 }
 
 /// §10.2: "The default discipline is applied ... to all discrete signals without a
@@ -130,8 +130,8 @@ fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: [
     const name = self.file.str(ex.strOf(base));
     // A vector is scalarised by now and its elements share one discipline
     // (§3.6.3), so the first element answers for the whole net.
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    const key = if (self.out.vectors.get(name)) |r| try lower_param.elemKey(self, &key_buf, name, &.{r.at(0)}) else name;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    const key = if (self.out.vectors.get(name)) |r| try lower_shape.elemKey(self, &key_buf, name, &.{r.at(0)}) else name;
     const idx = self.node_voltages.get(key) orelse return;
     if (idx == ground) return;
     const dname = self.out.nodes.items(.disc)[idx];
@@ -205,13 +205,13 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
 /// continuous segments sharing it. Preserve the net's resolved discipline:
 /// §5.5.3 still reads that net's local nature attributes, not this minimum.
 pub fn collectSignalAbstols(self: *Lower, segments: []const @import("../elaborate.zig").SignalDiscipline) Oom!void {
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     for (segments) |s| {
         const info = self.out.disciplines.get(s.discipline) orelse continue;
         if (info.is_discrete or !info.has_potential) continue;
         if (self.out.vectors.get(s.net)) |r| {
             for (0..r.size()) |k| {
-                const key = try lower_param.elemKey(self, &key_buf, s.net, &.{r.at(@intCast(k))});
+                const key = try lower_shape.elemKey(self, &key_buf, s.net, &.{r.at(@intCast(k))});
                 collectNodeAbstol(self, key, info.potential_abstol);
             }
         } else collectNodeAbstol(self, s.net, info.potential_abstol);
@@ -404,8 +404,8 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
 /// `internNode` for a vector element, spelled as the source does (`bus[3]`).
 /// Looks up on a stack buffer and allocates only for a new element.
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
-    var buf: [lower_param.elem_key_len]u8 = undefined;
-    const key = try lower_param.elemKey(self, &buf, base, &.{i});
+    var buf: [lower_shape.elem_key_len]u8 = undefined;
+    const key = try lower_shape.elemKey(self, &buf, base, &.{i});
     const name = self.node_voltages.getKey(key) orelse try self.arena.print("{s}[{d}]", .{ base, i });
     return internNode(self, name, "");
 }

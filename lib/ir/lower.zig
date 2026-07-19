@@ -305,7 +305,7 @@ node_state: lower_node.State = .{},
 event_state: lower_event.State = .{},
 systask_state: lower_systask.State = .{},
 random_state: lower_random.State = .{},
-param_state: lower_param.State = .{},
+var_state: lower_var.State = .{},
 stmt_state: lower_stmt.State = .{},
 table_model_state: lower_table_model.State = .{},
 hier_name_state: lower_hier_name.State = .{},
@@ -428,7 +428,7 @@ param_overrides: []const ParamOverride = &.{},
 in_analog_initial: bool = false,
 /// §9.4 the build drops the display family (`codegen.Options.display`), so a
 /// variable those tasks read is not read at all in the device. Set through
-/// `Options`; the default, false, counts those reads. Only `lower_param.Exposed`
+/// `Options`; the default, false, counts those reads. Only `lower_var.Exposed`
 /// asks: a §3.2 hold that only a print could observe is no hold.
 displays_dropped: bool = false,
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
@@ -564,7 +564,7 @@ pub const HeldVar = struct {
         /// §5.10 assigned under an `@(...)`: latch state `stateCtl` may
         /// reject a step over.
         event,
-        /// §3.2 retention (`lower_param.Exposed`) that some evaluation can
+        /// §3.2 retention (`lower_var.Exposed`) that some evaluation can
         /// observe: an `analog initial` write, or a read that reaches a later
         /// write of the same evaluation.
         retained,
@@ -704,12 +704,12 @@ const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?Array
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
-    dims: []const lower_param.Bounds,
+    dims: []const lower_shape.Bounds,
     ty: Ty,
     /// §3.2.2 set for an array some subscript indexes at run time: its one
     /// SSA place holds the current array version (`Mir.Opcode.anew`/`store`)
     /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
-    /// element under `elemName`. See `lower_param.declareVarDecl`.
+    /// element under `elemName`. See `lower_var.declareVarDecl`.
     mem: ?Mem = null,
     /// A memory-backed array's SSA place and `out.mem_arrays` row.
     pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
@@ -981,7 +981,7 @@ pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Val
         defer bytes.deinit(self.arena);
         if (!try self.strLitBytes(e, &bytes)) {
             try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
-            return lower_param.zeroOf(ty);
+            return lower_var.zeroOf(ty);
         }
         // §3.3's "right justified and either truncated on the left or zero
         // filled on the left" is measured against the declared type, and §3.2
@@ -1224,7 +1224,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                     self.file.exprs.tag(n.init) != .assign_pattern)
                     &.{}
                 else
-                    try lower_param.flattenPattern(self, n.init, &.{lower_param.Bounds{ .lo = 0, .hi = r.size() - 1 }});
+                    try lower_shape.flattenPattern(self, n.init, &.{lower_shape.Bounds{ .lo = 0, .hi = r.size() - 1 }});
                 for (0..r.size()) |k| {
                     const idx = try lower_node.internNode(self, try self.arena.print("{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
                     if (k < seeds.len and seeds[k] != .none)
@@ -1343,8 +1343,8 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // A vector port is N nets sharing one declaration and therefore one
         // discipline (§6.5.2), so the first element answers for all of them and
         // the violation is reported once, at the declaration that commits it.
-        var key_buf: [lower_param.elem_key_len]u8 = undefined;
-        const probe_name = if (self.out.vectors.get(base)) |r| try lower_param.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
+        var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+        const probe_name = if (self.out.vectors.get(base)) |r| try lower_shape.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
         const idx = self.node_voltages.get(probe_name) orelse continue;
         if (idx == ground) continue;
         const dname = self.out.nodes.items(.disc)[idx];
@@ -1474,9 +1474,9 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §3.2/§3.3 module-level variables. The §5.10 scan runs first: whether a
     // variable needs a persistent slot is decided at its declaration, not at
     // the assignment that reveals it (see `holdSlot`).
-    try lower_param.markHeldVars(self, module);
-    try lower_param.markMemArrays(self, module);
-    try lower_param.checkOneItemPerScope(self, module.params, module.vars, module.nets);
+    try lower_var.markHeldVars(self, module);
+    try lower_var.markMemArrays(self, module);
+    try lower_var.checkOneItemPerScope(self, module.params, module.vars, module.nets);
     // A.6.2 the digital `initial` block, for the same reason and at the same
     // point as the §5.10 scan above: what a variable holds at the top of every
     // evaluation is decided at its declaration. `initial x = 3;` and
@@ -1496,7 +1496,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             else
                 d.init = a.value;
         }
-        try lower_param.declareVarDecl(self, &d, .module);
+        try lower_var.declareVarDecl(self, &d, .module);
     }
     // §6.8: an `initial` block that assigns a name this module never declared.
     // Reported here because it is only knowable once every declaration is in,
@@ -1531,7 +1531,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // question about the scopes, and before the analog block, so an attribute is
     // reported at its own token rather than after a body that may not compile.
     try lower_param.checkAttributes(self, module.attrs);
-    try lower_param.checkScratchOwners(self, module);
+    try lower_var.checkScratchOwners(self, module);
 
     // §7.2.2 the DISCRETE context. Before the analog blocks because the rules
     // below relate the two, and it is the discrete side that names the variables
@@ -1643,8 +1643,14 @@ const lower_discipline = @import("lower/discipline.zig");
 // §1.3.1 nodes: nets, ports, ground and the solver-unknown order, lower/node.zig
 const lower_node = @import("lower/node.zig");
 
-// §3.4 parameters and §3.2 variables and scopes, lower/param.zig
+// §3.4 parameters and §2.9 attribute values, lower/param.zig
 const lower_param = @import("lower/param.zig");
+
+// §3.2 variables: scopes, storage and retention, lower/var.zig
+const lower_var = @import("lower/var.zig");
+
+// §3.2.2/§3.4.4 array shapes and §3.4.8 assignment patterns, lower/shape.zig
+const lower_shape = @import("lower/shape.zig");
 
 // §5 analog statements: blocks, assignments, named blocks, lower/stmt.zig
 const lower_stmt = @import("lower/stmt.zig");
@@ -1706,6 +1712,8 @@ test {
     _ = lower_discipline;
     _ = lower_node;
     _ = lower_param;
+    _ = lower_var;
+    _ = lower_shape;
     _ = lower_stmt;
     _ = lower_contrib;
     _ = lower_control;
