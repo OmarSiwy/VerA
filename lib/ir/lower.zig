@@ -29,38 +29,33 @@ pub const Oom = std.mem.Allocator.Error;
 /// `lowerFile`'s errors: OOM, "diagnostics were reported", or no module to lower.
 pub const Error = Oom || error{ DiagnosticsReported, NoModule };
 
-/// A resolved §3.4 parameter.
-pub const ParamInfo = struct {
-    name: []const u8,
-    /// Token of the declaration, so a finiteness diagnostic can point a label at
-    /// "`k` declared here" and hang a `from (0:inf)` suggestion off it.
-    tok: u32 = Mir.no_tok,
-    ty: Ast.Type,
-    /// An explicit `integer` declaration converts to signed 32 bits; an
-    /// inferred integral parameter retains its initializer's bit pattern.
-    integer32: bool = true,
-    /// Final HDL declaration width, retained for self-determined operands.
-    /// Numeric model bindings change the value, not this source metadata.
-    source_width: ?u32 = null,
-    source_signed: ?bool = null,
-    default: Mir.Value,
-    /// §3.4.2 value ranges from `Ast.ParamDecl.ranges`; proof.zig uses them as
-    /// bound evidence.
-    ranges: []const Ast.ValueRange = &.{},
-    /// §3.4.5 localparam: not part of the model card ABI.
-    is_local: bool = false,
-    /// §3.4 the value under the declared defaults, folded over the AST. The
-    /// emitted `Model` field initializer needs it, and it cannot always be
-    /// recovered from `default`: a §4.2.12 `?:` lowers to a diamond and a phi
-    /// that no MIR fold sees through. Null when the default is not a constant
-    /// expression.
-    folded: ?Const = null,
-    /// §3.2/§3.4/§6.6 a shape parameter: its value was folded into a shape (an
-    /// array or vector bound, a replication count, a genvar loop bound, a
-    /// generate scheme), which the device fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
-    /// Set by `lower_constfold.shapeEval`.
-    shape: bool = false,
-};
+// `Lowered`'s row types (lower/tables.zig), under the `Lower.X` names later
+// stages and the sub-files use.
+pub const ParamInfo = Lowered.ParamInfo;
+pub const Alias = Lowered.Alias;
+pub const unnamed_branch = Lowered.unnamed_branch;
+pub const ground = Lowered.ground;
+pub const none_u32 = Lowered.none_u32;
+pub const NodeKind = Lowered.NodeKind;
+pub const FlowKey = Lowered.FlowKey;
+pub const PortProbe = Lowered.PortProbe;
+pub const Nodeset = Lowered.Nodeset;
+pub const VecRange = Lowered.VecRange;
+pub const DisciplineInfo = Lowered.DisciplineInfo;
+pub const Access = Lowered.Access;
+pub const Kind = Lowered.Kind;
+pub const Contribution = Lowered.Contribution;
+pub const NoiseKind = Lowered.NoiseKind;
+pub const NoiseSrc = Lowered.NoiseSrc;
+pub const ChargeSite = Lowered.ChargeSite;
+pub const Ty = Lowered.Ty;
+pub const HeldVar = Lowered.HeldVar;
+pub const MemArray = Lowered.MemArray;
+pub const LimitSlot = Lowered.LimitSlot;
+pub const TpBlock = Lowered.TpBlock;
+pub const TpSlot = Lowered.TpSlot;
+pub const Display = Lowered.Display;
+pub const Const = Lowered.Const;
 
 /// §3.4 "parameters can be modified at compilation time": the value a
 /// `--param name=value` gives the top module's parameter `name`, in place of
@@ -79,193 +74,8 @@ pub const BranchInfo = struct {
     id: u32,
 };
 
-/// §5.4.1 Example 2: "There can only be one unnamed branch between any two nets
-/// or between a net and implicit ground (in addition to any number of named
-/// branches)." So every `V(a,b)`/`I(a,b)` reference shares this one identity,
-/// distinct from every named branch over the same pair.
-pub const unnamed_branch: u32 = 0;
-
-/// §1.3.1.1 the global reference node. Not a solver unknown, so it is a
-/// sentinel rather than a `nodes` row: probing it yields a literal 0.
-pub const ground: u16 = std.math.maxInt(u16);
-
-/// What quantity a `nodes` row carries, recorded where the slot is created
-/// (`appendNode`). Never re-derive it from the name: §2.8.1 strips an escaped
-/// identifier's backslash, so the net `\flow(p,n)` collides byte-for-byte with
-/// what `flowUnknown` prints. The payload is the node whose discipline supplies
-/// the unknown's §3.6.1.2 tolerance. §6.5.2 vector elements are ordinary nets
-/// (`b[1]`, `b[0]`; §3.6.3), so `\b[0]` and `b[0]` still collide.
-pub const NodeKind = union(enum) {
-    /// §3.6 a net: a declared one, a §3.6.5 implicit one, or a §3.6.3 element.
-    net,
-    /// §5.4.2 the current of a branch, carrying the branch's high node.
-    branch_flow: u16,
-    /// §5.4.3 the current through a port, carrying the port.
-    port_flow: u16,
-    /// §4.5.2 the unknown an analog operator site introduces ("new equations
-    /// and new unknowns"), carrying its tolerance: the operator's abstol or
-    /// nature argument, else the 1e-6 an undisciplined net gets. A potential.
-    op_state: f64,
-};
-
-/// §5.4.2 the identity of an unnamed branch: its ordered node pair, the key of
-/// `flow_unknowns`.
-pub const FlowKey = struct { hi: u16, lo: u16 };
-
-/// §4.4 access-function flavour. `V(a,b)` is a potential, `I(a,b)` a flow;
-/// user natures rename them (§3.6.1.4) but the two roles are closed.
-pub const Access = enum(u8) { potential, flow };
-
-/// A §5.6 contribution target and its accumulated value, split into resistive
-/// and reactive (§5.6.1.2) parts. One entry per (access, branch), never one per
-/// `<+`: §5.6.1.3 makes `<+` an accumulation, so the values are the final reads
-/// of an SSA place and conditional contributions fall out. Keyed on the branch,
-/// not the node pair, because §5.4.1 allows any number of named branches over
-/// one pair (§5.4.3's diode uses two). KCL is unaffected: every entry stamps
-/// the same two node rows.
-pub const Contribution = struct {
-    access: Access,
-    /// §5.4.1 which branch retains this value: a `BranchInfo.id`, or
-    /// `unnamed_branch` for the one implicit branch of the node pair.
-    br: u32 = unnamed_branch,
-    /// Token of the `<+` this unit came from; W0650 reports per unit, so it
-    /// needs the statement, not the instruction that broke the proof.
-    tok: u32 = Mir.no_tok,
-    hi: u16, // `nodes` row (or `ground`)
-    lo: u16, // `nodes` row (or `ground`)
-    resist_val: Mir.Value = .f_zero, // → eval()
-    react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
-    /// §5.6.1.3 "If a value is retained for the potential ... otherwise, if a
-    /// value is retained for the flow ... otherwise the branch is an open
-    /// circuit." Retention depends on the cycle's execution path, so this is
-    /// the end-of-block read of `Accum.wrote`: 1.0 for an unconditional `<+`,
-    /// 0.0 for one discarded on the straight line, and a phi when an `if`
-    /// decides, which makes codegen select the branch row at run time.
-    /// `.direct` only.
-    wrote_val: Mir.Value = .f_zero,
-    noise_srcs: []const NoiseSrc = &.{}, // §4.6.4
-    /// §5.6.7 `V(out) : V(in) == e` has the topology of a direct potential
-    /// contribution (a source in the branch, its current an unknown) with a
-    /// different constitutive row. `.direct` carries `V(hi,lo) - resist_val`;
-    /// `.indirect` carries `resist_val` alone (probe - equation), because the
-    /// branch voltage is what is being solved for (a nullor).
-    ///
-    /// A `.indirect` entry is never deduped by `contribIndex`: §5.6.1.3
-    /// accumulation is a property of `<+`, and each indirect statement is its
-    /// own equation with its own source.
-    kind: Kind = .direct,
-    /// `Ast.AnalogBlock.unit` of the block that opened this accumulator: the
-    /// module instance whose §5.4.1 branch it is. Read by `discardOpposite`
-    /// alone. An entry that later absorbs a same-kind `<+` from another
-    /// instance keeps the first id, so a third instance wired across the pair
-    /// cannot discard the aggregate.
-    unit: u32 = 0,
-    /// A `<+` from an instance other than `unit` accumulated into this entry
-    /// (two devices in parallel over one pair). The row is still right; what
-    /// is gone is any one instance's share of it, so a reader that wants the
-    /// flow of `unit`'s own §5.4.1 branch (the VPI, §11.6.7) must refuse.
-    shared: bool = false,
-};
-
-/// Whether a `Contribution` is a `<+` (`.direct`) or a §5.6.7 indirect
-/// branch assignment.
-pub const Kind = enum(u8) { direct, indirect };
-
-/// §5.4.3 one probed module port: the port's `nodes` row and the
-/// `nodes` row of the flow unknown that carries `I(<port>)`.
-pub const PortProbe = struct { port: u16, u: u16 };
-
 /// §5.4.2.1 one access function read, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
-
-/// §3.6.3.2 one net_decl_assignment: the net's `nodes` row and the folded
-/// initializer — "a nodeset value for the potential of the net by the analog
-/// solver". An initial guess, never a constraint, so it is metadata for a host
-/// and reaches nothing in the residual.
-pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
-
-/// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones, then
-/// §4.6.3's stimulus. Append only, so no existing ordinal moves. `ac_stim` is
-/// not noise and never reaches `noise_gens` (codegen routes it to `ac_gens`);
-/// it is here because it shares the A.8.2 grammar node and therefore the same
-/// collection walk (`noiseSrcsOf`, identity dedup, `var_noise`).
-pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log, ac_stim };
-
-/// §4.6.4 one noise generator a contribution carries: its PSD kind and its
-/// identity. `id` is the `Ast.ExprId` of the declaring call, because §4.6.4.6
-/// makes one call one generator: two contributions reaching the same call
-/// (through a variable) share it, perfectly correlated, while two separate
-/// calls never do. Codegen renames ids densely into `contract.NoiseGen.source`.
-/// A contribution holds a set of these, since a branch may combine several.
-/// The PSD is the arguments (`pwr`, `exp`), not the kind: `white_noise(2·q·|I|)`
-/// and `white_noise(4·k·T/R)` differ only in `pwr`; codegen exports both
-/// through `noisePsd`.
-pub const NoiseSrc = struct {
-    kind: NoiseKind,
-    id: u32,
-    /// §4.6.4.1/.2 arg 0. `.f_zero` only for a generator whose call never
-    /// lowered, which cannot happen through `lowerNoise`.
-    ///
-    /// On an `.ac_stim` row this is §4.6.3's `mag`, the first numeric argument
-    /// (the analysis name is a string and does not take a slot), defaulting to
-    /// the clause's 1.
-    pwr: Mir.Value = .f_zero,
-    /// §4.6.4.2 arg 1, the frequency exponent. Unread on a `.thermal` row, and
-    /// 1 for a one-argument `flicker_noise`.
-    ///
-    /// On an `.ac_stim` row this is §4.6.3's `phase` in radians, defaulting to
-    /// the clause's 0, which is why `lowerNoise` seeds the pair differently
-    /// for a stimulus.
-    exp: Mir.Value = .f_one,
-    /// §4.6.4.3/.4 arg 0 of a `.table`/`.table_log` row: the vector, flattened
-    /// to `f0, p0, f1, p1, …` and still unfolded. Empty on every other kind and
-    /// on a table call whose argument was not a vector. Codegen folds, sorts and
-    /// validates it with `Analysis.foldConst`.
-    table: []const Mir.Value = &.{},
-    /// The call's own token, for the diagnostics codegen raises over `table`.
-    tok: u32 = Mir.no_tok,
-    /// §4.6.4.6 the coefficient this contribution applies to the generator:
-    /// the `c1` of `V(a,b) <+ c1*n`; the branch carries `coeff²·pwr`. Per
-    /// (contribution, generator), because one shared `white_noise` reaching two
-    /// branches is one source with two coefficients, whose product is the
-    /// cross-spectrum. Signed: opposite signs are anti-correlation.
-    /// `.f_zero` means no contribution has claimed the row yet; the first use
-    /// replaces it and later ones add. A row still at zero in codegen is read
-    /// as 1 (`planNoise`).
-    coeff: Mir.Value = .f_zero,
-    /// The generator appears in a shape no single factor describes. `coeff` is
-    /// then 1 and stays there.
-    nonlinear: bool = false,
-    /// §4.6.4.1/.2/.3 the optional trailing `name` argument, verbatim; empty
-    /// when the call did not supply one. A label only: same-name combination is
-    /// a property of the host's noise summary, and §4.6.4.6 keeps separate
-    /// calls uncorrelated whatever they are called. It never merges rows or
-    /// touches `id`; it reaches `contract.NoiseGen.name`.
-    name: []const u8 = "",
-};
-
-/// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
-/// and for codegen's per-node abstol; nothing here consumes it.
-pub const DisciplineInfo = struct {
-    potential_abstol: f64 = 1e-6,
-    flow_abstol: f64 = 1e-12,
-    is_discrete: bool = false, // §3.6.2.2
-    /// §3.6.2.1 a conservative discipline binds both a potential and a flow
-    /// nature; §3.6.2.2 a signal-flow discipline binds only one. Codegen needs
-    /// the distinction: a contribution to a signal-flow net has no KCL meaning.
-    has_potential: bool = false,
-    has_flow: bool = false,
-    /// §3.6.1.4 the access identifier each bound nature declares, `""` when the
-    /// discipline binds none. §4.4 requires the name in `V(n)` to be this one,
-    /// so the check needs the discipline's spelling, not just the global set of
-    /// access names.
-    potential_access: []const u8 = "",
-    flow_access: []const u8 = "",
-};
-
-/// Value type of a lowered expression (§3.1). `Ast.Type.unspecified` is
-/// resolved before it reaches here.
-pub const Ty = enum(u8) { real, integer, string };
 
 /// A lowered expression: its Value plus the LRM type that governs which opcode
 /// family the *consumer* must use (§4.2.1.1–§4.2.1.3 implicit conversions).
@@ -532,164 +342,6 @@ events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
 /// mid-statement still lacks this statement's term. See `lowerBranchAccess`.
 contrib_target: ?lower_contrib.Target = null,
 
-/// One §5.10 event-assigned module variable and its persistent slot.
-pub const HeldVar = struct {
-    /// Source spelling, including the `[i]` of a scalarized array element
-    /// (§3.2.2). Unique within the module scope, so codegen's `Instance` field
-    /// name is injective after `naming.sanitize`.
-    name: []const u8,
-    ty: Ty,
-    /// The declared initializer. Only reachable on the first evaluation, so
-    /// codegen renders it as the `Instance` field's default and nowhere else.
-    init: Mir.Value,
-    /// The `$held_*` call seeded into the entry block. Reading the variable
-    /// anywhere, even lexically before the `@(...)`, reads this: the value the
-    /// last accepted evaluation left behind.
-    seed: Mir.Value,
-    /// The variable's value at the end of the analog block; `updateState`
-    /// stores it back on the accepted solution. Filled at the end of
-    /// `lowerModule`.
-    final: Mir.Value = .undef,
-    /// §3.2.2 a held memory-backed array: its `out.mem_arrays` index, and
-    /// `seed`/`final` are array versions. `none_u32` for a scalar.
-    array: u32 = none_u32,
-    /// The array's declared initializer, one Value per element (`init` is
-    /// the element type's zero). Empty: every element starts at zero.
-    inits: []const Mir.Value = &.{},
-    /// Why the variable is held; see `Why`.
-    why: Why = .event,
-
-    /// Why a variable needs a persistent slot.
-    pub const Why = enum {
-        /// §5.10 assigned under an `@(...)`: latch state `stateCtl` may
-        /// reject a step over.
-        event,
-        /// §3.2 retention (`lower_var.Exposed`) that some evaluation can
-        /// observe: an `analog initial` write, or a read that reaches a later
-        /// write of the same evaluation.
-        retained,
-        /// §3.2 retention that only a card-varying write could make
-        /// observable. The backend's `pruneHeld` drops it when every merge
-        /// of the held value is solve-invariant.
-        unless_invariant,
-    };
-};
-
-/// VerA's `vera_timepoint` statement (§2.9, `Lowered.timepoints`): it runs on
-/// the first evaluation of a timepoint, and every later one reads back what it
-/// assigned. Lowered as a diamond on `$tp_hit(b)`: the hit arm writes each
-/// slot's `$tp_real`/`$tp_int` read (an array's cached `anew`), the miss arm
-/// is the statement. `eval` stores the slots when the statement ran and the
-/// cache was stale; the host's `stateCtl`, `updateState`, `initState` and
-/// `setup` drop it.
-pub const TpBlock = struct {
-    /// The attribute's token, for E0531.
-    tok: u32,
-    /// The miss arm's first block and the join both arms reach: everything
-    /// between them is the statement, whose values codegen checks (E0531).
-    miss: Mir.Block,
-    join: Mir.Block,
-    /// Nonzero at the end of the block exactly when the statement was reached.
-    mark: Mir.Value = .zero,
-    slots: []const TpSlot = &.{},
-};
-
-/// One variable a `vera_timepoint` statement assigns: its `Instance` cache
-/// slot. `final` is its value at the statement's join.
-pub const TpSlot = struct {
-    /// Source spelling, for the field comment.
-    name: []const u8,
-    ty: Ty,
-    final: Mir.Value = .undef,
-    /// §3.2.2 a memory-backed array's `out.mem_arrays` row, or `none_u32`.
-    array: u32 = none_u32,
-};
-
-/// §3.2.2 one memory-backed array (`Lowered.mem_arrays`).
-pub const MemArray = struct {
-    /// Source spelling, for a comment and a diagnostic; never an identity.
-    name: []const u8,
-    /// Element count over every dimension.
-    len: u32,
-    /// `.real` or `.integer` (a string array stays scalarized).
-    ty: Ty,
-    /// The `out.held_vars` row it is, or `none_u32`: a §5.10 held array starts
-    /// every evaluation from its `Instance` field instead of zero.
-    held: u32 = none_u32,
-    /// `(* vera_scratch = "uninit" *)` (§2.9): its `anew` stores nothing (NaN
-    /// under runtime safety), since the author writes each element before
-    /// reading it in the evaluation.
-    uninit: bool = false,
-};
-
-/// §9.17.3 one `$limit(access, user_function, …)` state slot, keyed by the
-/// access function, not the call site: §9.17.3 puts the state on the argument
-/// ("internal state containing information about the argument on previous
-/// iterations"). Per-site state breaks the SPICE-converted accessor idiom,
-/// where `$limit(V(g,s), DEVlimitOldGet)` reads what a later
-/// `$limit(V(g,s), DEVlimitNewSet, …)` writes: a per-site slot would store back
-/// what it just read and never change. When every site names a distinct access
-/// function the two readings coincide.
-pub const LimitSlot = struct {
-    /// `V(g,s)` as it reads in the source, for the `Instance` field comment.
-    label: []const u8,
-    access: Access,
-    hi: u16,
-    lo: u16,
-    neg: bool,
-    br: u32,
-    /// The `$limit$old` call seeded into the entry block: the value this slot
-    /// returned on the previous Newton iterate.
-    seed: Mir.Value,
-    /// The slot's value at the end of the analog block. `updateState` stages
-    /// it; the next iterate's `updateState` promotes it into the read field.
-    final: Mir.Value = .undef,
-};
-
-/// §5.6.1.2 one charge site: one reactive term a contribution's right-hand
-/// side splits into (`lower_contrib.splitTerm`), a `ddt` with the factors of
-/// its multiplicative spine, whose charge is the term with the `ddt` stripped.
-/// Static by §4.5.15 (no analog operator in a user function, a runtime loop
-/// or a runtime conditional), so a site is one source occurrence after genvar
-/// unrolling and flattening. `Contribution.react_val` is exactly the sum of
-/// its sites' `sign * final`, which is what lets the host tape charges per
-/// site and still stamp the same rows (`contract.QStamp`).
-pub const ChargeSite = struct {
-    /// The `contributions` entry this site accumulates into.
-    contrib: u32,
-    /// ±1: the site's sign inside that entry's reactive accumulator: the
-    /// term's own sign in the sum, times the §1.3.1.2 reversed-branch flip.
-    sign: f64,
-    /// VerA's `vera_lte` attribute (`Ast.LteAttr`): does this charge join the
-    /// host's local-truncation-error check? Default true.
-    lte: bool = true,
-    /// The `ddt` token, for diagnostics and the emitted comment.
-    tok: u32 = Mir.no_tok,
-    /// The site's charge at the end of the analog block: zero on every path
-    /// that did not execute it or that §5.6.1.3 discarded.
-    final: Mir.Value = .f_zero,
-};
-
-/// §3.4.7 one `aliasparam`: the alias's spelling and the `params` index it names.
-pub const Alias = struct { name: []const u8, param: u32 };
-
-/// One §9.4/§9.7.3 print site.
-pub const Display = struct {
-    /// The synthetic `call`. Its first argument is the §2.7 format string.
-    val: Mir.Value,
-    /// The task's exact spelling (`$strobe`, `$write`, `$error`, …). Codegen
-    /// needs it for the newline rule (§9.4.1: `$write` does not append one) and
-    /// for the §9.7.3 severity prefix.
-    name: []const u8,
-    /// The call token, for W0850.
-    tok: u32,
-    /// The call sits under an `if` or a loop, so it reaches the display root
-    /// through `display_cond_place` rather than by direct `fadd` (the value
-    /// does not dominate the root). `finishDisplays` is the one reader: it
-    /// leaves these out of the unconditional chain.
-    conditional: bool,
-};
-
 /// A visible variable: its SSA place and declared type.
 pub const VarSlot = struct {
     place: Ssa.Place,
@@ -698,8 +350,6 @@ pub const VarSlot = struct {
     /// analog code reads it. A register used only by digital code may be wider.
     reg_width: ?u32 = null,
 };
-/// Absent-index sentinel for the `u32` index fields here.
-pub const none_u32 = std.math.maxInt(u32);
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
@@ -722,33 +372,6 @@ const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// structure, so "was a value retained this cycle?" survives a conditional as
 /// an ordinary SSA boolean; on a straight line it folds to a constant.
 pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
-
-/// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
-/// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
-/// `[3:5]`), so nothing here assumes msb ≥ lsb.
-pub const VecRange = struct {
-    msb: i64,
-    lsb: i64,
-
-    /// Returns the element count.
-    pub fn size(v: VecRange) u32 {
-        return @intCast(@abs(v.msb - v.lsb) + 1);
-    }
-    /// Returns whether index `i` lies within the range.
-    pub fn has(v: VecRange, i: i64) bool {
-        return i >= @min(v.msb, v.lsb) and i <= @max(v.msb, v.lsb);
-    }
-    /// Returns the k-th element in declaration order, msb first. That order is the
-    /// host's terminal order for a vector port, and it is what §3.12 pairs
-    /// "in a parallel one-to-one fashion" for a vector branch.
-    pub fn at(v: VecRange, k: u32) i64 {
-        const d: i64 = @intCast(k);
-        return if (v.msb <= v.lsb) v.msb + d else v.msb - d;
-    }
-};
-
-/// A folded constant (§4.2 constant_expression), the shared kernel's.
-pub const Const = constfold.Const;
 
 // ---------------------------------------------------------------------------
 // Lifecycle
