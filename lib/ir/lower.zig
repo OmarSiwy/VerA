@@ -1,8 +1,17 @@
 //! AST → MIR lowering: elaborates the file (§6), then lowers the device
 //! module's declarations and analog blocks into `Mir` plus the `Lowered` side
 //! tables (params, nodes, branches, contributions, held state) every later
-//! stage reads. Covers most of LRM ch3-5 and ch9 in analog context; the work is
-//! split across `lower/*.zig`, and the aliases at the bottom are the API.
+//! stage reads. Covers most of LRM ch3-5 and ch9 in analog context.
+//!
+//! The spine is `lower` → `lowerFile` → `lowerModule`, and `lowerModule` reads
+//! as the order of the pass: disciplines, parameters, ports and nets, branches,
+//! variables, the analog blocks, then the end-of-block reads and finishers.
+//! Each step lives in the `lower/*.zig` file named for the table it owns (the
+//! map at the bottom of this file); a sub-file's private state is a `State` on
+//! `Lower` that only that file touches. This file holds what every sub-file
+//! shares: the state, the diagnostics, the MIR helpers and the §4.2.1 type
+//! coercions. The aliases at the bottom are what other modules call.
+//!
 //! `nodes` order is the solver-unknown order; keep it stable.
 
 const std = @import("std");
@@ -57,6 +66,10 @@ pub const TpSlot = Lowered.TpSlot;
 pub const Display = Lowered.Display;
 pub const Const = Lowered.Const;
 
+// ---------------------------------------------------------------------------
+// Lowering's own types: never reach a later stage
+// ---------------------------------------------------------------------------
+
 /// §3.4 "parameters can be modified at compilation time": the value a
 /// `--param name=value` gives the top module's parameter `name`, in place of
 /// its declaration value. A card is written in reals; `lowerParamDecl` converts.
@@ -80,6 +93,40 @@ pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 /// A lowered expression: its Value plus the LRM type that governs which opcode
 /// family the *consumer* must use (§4.2.1.1–§4.2.1.3 implicit conversions).
 pub const TypedValue = struct { v: Mir.Value, ty: Ty };
+
+/// A poison real. Lowering continues so the run reports every error at once.
+pub const poison: TypedValue = .{ .v = .undef, .ty = .real };
+
+/// A visible variable: its SSA place and declared type.
+pub const VarSlot = struct {
+    place: Ssa.Place,
+    ty: Ty,
+    /// §7.3.1: retained declaration width, checked and zero-extended when
+    /// analog code reads it. A register used only by digital code may be wider.
+    reg_width: ?u32 = null,
+};
+const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
+/// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
+/// first. `dims.len` is the number of subscripts a reference must supply.
+pub const ArrayInfo = struct {
+    dims: []const lower_shape.Bounds,
+    ty: Ty,
+    /// §3.2.2 set for an array some subscript indexes at run time: its one
+    /// SSA place holds the current array version (`Mir.Opcode.anew`/`store`)
+    /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
+    /// element under `elemName`. See `lower_var.declareVarDecl`.
+    mem: ?Mem = null,
+    /// A memory-backed array's SSA place and `out.mem_arrays` row.
+    pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
+};
+const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
+const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
+/// A contribution's accumulator places. `wrote` is §5.6.1.3's retention flag:
+/// 0.0 in the entry block, 1.0 after every `<+` on this (access, branch), back
+/// to 0.0 when the opposite access discards it. It has the accumulator's phi
+/// structure, so "was a value retained this cycle?" survives a conditional as
+/// an ordinary SSA boolean; on a straight line it folds to a constant.
+pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
 
 // ---------------------------------------------------------------------------
 // State
@@ -342,39 +389,8 @@ events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
 /// mid-statement still lacks this statement's term. See `lowerBranchAccess`.
 contrib_target: ?lower_contrib.Target = null,
 
-/// A visible variable: its SSA place and declared type.
-pub const VarSlot = struct {
-    place: Ssa.Place,
-    ty: Ty,
-    /// §7.3.1: retained declaration width, checked and zero-extended when
-    /// analog code reads it. A register used only by digital code may be wider.
-    reg_width: ?u32 = null,
-};
-const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
-/// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
-/// first. `dims.len` is the number of subscripts a reference must supply.
-pub const ArrayInfo = struct {
-    dims: []const lower_shape.Bounds,
-    ty: Ty,
-    /// §3.2.2 set for an array some subscript indexes at run time: its one
-    /// SSA place holds the current array version (`Mir.Opcode.anew`/`store`)
-    /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
-    /// element under `elemName`. See `lower_var.declareVarDecl`.
-    mem: ?Mem = null,
-    /// A memory-backed array's SSA place and `out.mem_arrays` row.
-    pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
-};
-const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
-const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
-/// A contribution's accumulator places. `wrote` is §5.6.1.3's retention flag:
-/// 0.0 in the entry block, 1.0 after every `<+` on this (access, branch), back
-/// to 0.0 when the opposite access discards it. It has the accumulator's phi
-/// structure, so "was a value retained this cycle?" survives a conditional as
-/// an ordinary SSA boolean; on a straight line it folds to a constant.
-pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
-
 // ---------------------------------------------------------------------------
-// Lifecycle
+// The spine: lifecycle, then elaboration and the module (LRM ch6)
 // ---------------------------------------------------------------------------
 
 /// Returns a lowering pass over `file` into `mir`. Asserts that `mir` is empty
@@ -438,248 +454,6 @@ pub fn lower(
     }
     return self.lowerFile();
 }
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
-
-/// Returns the byte range of a token, the unit every diagnostic reports in.
-pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
-    return Lexer.tokenSpan(self.src, self.tok_starts, tok);
-}
-
-/// Returns where `tok` starts in the preprocessed text, the offset §10.1's
-/// positional directives are published in (what a `Region` lookup takes).
-/// Zero for a token index never lexed, which answers with each directive's
-/// default.
-pub fn tokStart(self: *const Lower, tok: u32) u32 {
-    return if (tok < self.tok_starts.len) self.tok_starts[tok] else 0;
-}
-
-/// Records an error and keeps going. Callers substitute a poison value;
-/// nothing downstream runs because `lowerFile` fails at the end.
-pub fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
-    self.had_error = true;
-    return self.bag.add(.lower, code, self.tokenSpan(tok), fmt, args);
-}
-
-/// Starts an error that wants a label, a note or a suggestion. The caller
-/// must `emit()` it.
-pub fn errWith(self: *Lower, tok: u32, code: diag.Code) diag.Builder {
-    self.had_error = true;
-    return self.bag.build(.lower, code, self.tokenSpan(tok));
-}
-
-/// A poison real. Lowering continues so the run reports every error at once.
-pub const poison: TypedValue = .{ .v = .undef, .ty = .real };
-
-// ---------------------------------------------------------------------------
-// Small MIR helpers
-// ---------------------------------------------------------------------------
-
-/// Appends `op` to the current block (`Mir.emit`).
-pub fn emit(self: *Lower, op: Mir.Opcode, ops: []const Mir.Value) Oom!Mir.Value {
-    return self.mir.emit(self.arena, self.cur, op, ops);
-}
-
-/// Appends a call to `name` in the current block (`Mir.emitCall`).
-pub fn call(self: *Lower, name: []const u8, args: []const Mir.Value) Oom!Mir.Value {
-    const callee = try self.mir.internString(self.arena, name);
-    return self.mir.emitCall(self.arena, self.cur, callee, args);
-}
-
-/// Closes `self.cur` with a jump and registers the CFG edge. `target` must not
-/// be sealed yet.
-pub fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
-    _ = try self.mir.emitJump(self.arena, self.cur, target);
-    try self.builder.addPredecessor(target, self.cur);
-}
-
-/// Closes `self.cur` with a branch, registers both edges, and seals `then_b`
-/// (and `else_b` when `seal_else`). A loop leaves its exit unsealed until its
-/// body has registered any `break` predecessors.
-pub inline fn branchTo(self: *Lower, cond: Mir.Value, then_b: Mir.Block, else_b: Mir.Block, comptime seal_else: bool) Oom!void {
-    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
-    try self.builder.addPredecessor(then_b, self.cur);
-    try self.builder.addPredecessor(else_b, self.cur);
-    try self.builder.sealBlock(then_b);
-    if (seal_else) try self.builder.sealBlock(else_b);
-}
-
-/// Starts a fresh predecessor-less block. Everything appended to it is dead
-/// (post-`break`/`return` code, §5.9/§4.7.1); sealing it immediately keeps the
-/// SSA builder from ever waiting on an edge that will not arrive.
-pub fn startUnreachable(self: *Lower) Oom!void {
-    const b = try self.mir.addBlock(self.arena);
-    try self.builder.sealBlock(b);
-    self.cur = b;
-}
-
-/// Returns `table_effect_place`, creating it on first use seeded `.f_zero` in
-/// the entry block. Its sum is never observed; what codegen keeps alive is the
-/// dependencies and CFG edges it carries (`Lowered.table_effect`).
-pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
-    if (self.table_effect_place) |p| return p;
-    const p = self.builder.newPlace();
-    try self.builder.writeVariable(p, .entry, .f_zero);
-    self.table_effect_place = p;
-    return p;
-}
-
-// ---------------------------------------------------------------------------
-// Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
-// ---------------------------------------------------------------------------
-
-/// Returns a §2.7 string literal's integer value. "A string literal used as an operand in expressions and assignments
-/// shall be treated as unsigned integer constants represented by a sequence of
-/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
-/// A base-256 numeral, most significant character first: "AB" is
-/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
-///
-/// `bits` is §3.3's width rule for the assignment case: "the literal is right
-/// justified and either truncated on the left or zero filled on the left".
-/// The result is the unsigned value (§2.7 "unsigned integer constants"), so a
-/// 32-bit "\377\377\377\377" is 4294967295, not -1; the first arithmetic on
-/// it wraps into range.
-pub fn strToInt(s: []const u8, bits: u8) i64 {
-    var acc: u64 = 0;
-    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
-    return @bitCast(acc);
-}
-
-/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
-/// defined once, in the shared constant kernel, because codegen spells them
-/// as device text and a fold must agree with the device.
-pub const wrap32 = constfold.wrap32;
-
-/// Returns `tv` converted to a number when it is a string with compile-time
-/// bytes (§2.7 at an operand); everything else is returned untouched, and the
-/// caller diagnoses a runtime string.
-pub fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
-    // ponytail: 64 bits, the width of the slot the value lands in. An operand
-    // has no declared width (§3.3's assignment case passes its own), so a
-    // literal longer than eight characters keeps its low eight.
-    if (tv.ty != .string) return tv;
-    return switch (self.mir.valueDef(tv.v)) {
-        .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
-        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => tv,
-    };
-}
-
-/// Returns `tv0` as a real (§4.2.1.2 integer→real; §2.7 string→number).
-pub fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
-    const tv = try self.strNum(tv0); // §2.7
-    return switch (tv.ty) {
-        .real => tv.v,
-        .integer => self.emit(.if_cast, &.{tv.v}),
-        .string => tv.v, // already diagnosed at the use site
-    };
-}
-
-/// Returns `tv0` as an integer (§4.2.1.1 real→integer rounds; §2.7 string→number).
-pub fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
-    const tv = try self.strNum(tv0); // §2.7
-    return switch (tv.ty) {
-        .integer => tv.v,
-        .real => self.emit(.fi_cast, &.{tv.v}),
-        .string => tv.v,
-    };
-}
-
-/// Returns `tv` converted for a §5.7 store into a slot of type `ty`.
-/// §4.2.1.1/§4.2.1.2 convert between integer and real; §3.3 draws the one line
-/// no conversion crosses, between a string literal and a string value:
-///
-///   "A string literal can be assigned to a string or an integral type. ...
-///    A string cannot be assigned to an integral type."
-///
-/// So `integer code = "A";` is legal and `code = label;` (label a `string`) is
-/// not: the test is the shape of expression `e`, not its lowered type. Every
-/// write to a declared variable goes through this.
-pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
-    // ponytail: the mirror direction, a numeric into a `string` slot (which
-    // §3.4.1 forbids too), is unchecked; the arm to add it to is `.string`.
-    if (tv.ty == .string and ty != .string) {
-        var bytes: std.ArrayList(u8) = .empty;
-        defer bytes.deinit(self.arena);
-        if (!try self.strLitBytes(e, &bytes)) {
-            try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
-            return lower_var.zeroOf(ty);
-        }
-        // §3.3's "right justified and either truncated on the left or zero
-        // filled on the left" is measured against the declared type, and §3.2
-        // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
-        if (ty == .integer) return self.mir.addIntConst(self.arena, strToInt(bytes.items, 32));
-    }
-    return switch (ty) {
-        .real => self.toReal(tv),
-        .integer => self.toInt(tv),
-        .string => tv.v,
-    };
-}
-
-/// Is `e` a §3.3 string literal, and what are its bytes? The literal itself, or
-/// a concatenation of literals — §4.2.13's replication with a literal count is
-/// unrolled by the parser, so `{5{"Hi"}}` arrives as five operands.
-///
-/// A `.multi_concat` is deliberately not one, and that exclusion is the whole
-/// rule: Table 3-3's multiplier "can be nonconstant", and a nonconstant one
-/// leaves a string with no width at elaboration, which is why §3.3's own
-/// example makes `r = {i{"Hi"}}` invalid where `b = {i{"Hi"}}` is fine.
-///
-/// The test is made on the AST because the SSA builder answers a read of a
-/// once-written `string label = "hi"` with the literal's own `str_const`, so
-/// by Value `code = label` and `code = "hi"` are indistinguishable.
-///
-/// Table 3-3's empty-string row is the one place these bytes differ from the
-/// string the same expression evaluates to: `""` "is converted to 8'b0", so
-/// `{"H", ""}` is "H" as a string and 'H' followed by one zero byte as an
-/// integral.
-fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
-    const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .str_literal => {
-            const s = self.file.str(ex.strOf(e));
-            try out.appendSlice(self.arena, if (s.len == 0) &[_]u8{0} else s);
-            return true;
-        },
-        .concat => {
-            for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
-            return true;
-        },
-        else => return false, // else: not a literal or a concatenation of literals, so no compile-time bytes
-    }
-}
-
-/// Returns `tv` as integer 0/1: §4.2.8, a condition is "true" when non-zero. Normalized to integer 0/1 so
-/// `logand`/`logor`/`branch` all see the same shape.
-pub fn toBool(self: *Lower, tv: TypedValue) Oom!Mir.Value {
-    return switch (tv.ty) {
-        .integer => self.emit(.ine, &.{ tv.v, .zero }),
-        .real => self.emit(.fne, &.{ tv.v, .f_zero }),
-        .string => .zero,
-    };
-}
-
-/// Returns the operation type of two operands: §4.2.1, one real operand makes
-/// the operation real; a string operand makes it a string.
-pub fn unify(a: Ty, b: Ty) Ty {
-    if (a == .string or b == .string) return .string;
-    return if (a == .real or b == .real) .real else .integer;
-}
-
-/// Returns the lowering type of a declared AST type (`.unspecified` is real).
-pub fn astTy(t: Ast.Type) Ty {
-    return switch (t) {
-        .real, .unspecified => .real,
-        .integer => .integer,
-        .string => .string,
-    };
-}
-
-// ---------------------------------------------------------------------------
-// Elaboration (LRM ch6)
-// ---------------------------------------------------------------------------
 
 /// Elaborates the file (§6.2.2) into one flat module, then lowers it.
 /// Returns `error.DiagnosticsReported` if any error was recorded,
@@ -941,6 +715,241 @@ fn readContribFinals(self: *Lower, from: usize) Oom!void {
 /// Reads each §5.6.1.2 charge site's charge from `from` on at the end of the block.
 fn readSiteFinals(self: *Lower, from: usize) Oom!void {
     for (self.out.charge_sites.items[from..], self.site_places.items[from..]) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Returns the byte range of a token, the unit every diagnostic reports in.
+pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
+    return Lexer.tokenSpan(self.src, self.tok_starts, tok);
+}
+
+/// Returns where `tok` starts in the preprocessed text, the offset §10.1's
+/// positional directives are published in (what a `Region` lookup takes).
+/// Zero for a token index never lexed, which answers with each directive's
+/// default.
+pub fn tokStart(self: *const Lower, tok: u32) u32 {
+    return if (tok < self.tok_starts.len) self.tok_starts[tok] else 0;
+}
+
+/// Records an error and keeps going. Callers substitute a poison value;
+/// nothing downstream runs because `lowerFile` fails at the end.
+pub fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
+    self.had_error = true;
+    return self.bag.add(.lower, code, self.tokenSpan(tok), fmt, args);
+}
+
+/// Starts an error that wants a label, a note or a suggestion. The caller
+/// must `emit()` it.
+pub fn errWith(self: *Lower, tok: u32, code: diag.Code) diag.Builder {
+    self.had_error = true;
+    return self.bag.build(.lower, code, self.tokenSpan(tok));
+}
+
+// ---------------------------------------------------------------------------
+// Small MIR helpers
+// ---------------------------------------------------------------------------
+
+/// Appends `op` to the current block (`Mir.emit`).
+pub fn emit(self: *Lower, op: Mir.Opcode, ops: []const Mir.Value) Oom!Mir.Value {
+    return self.mir.emit(self.arena, self.cur, op, ops);
+}
+
+/// Appends a call to `name` in the current block (`Mir.emitCall`).
+pub fn call(self: *Lower, name: []const u8, args: []const Mir.Value) Oom!Mir.Value {
+    const callee = try self.mir.internString(self.arena, name);
+    return self.mir.emitCall(self.arena, self.cur, callee, args);
+}
+
+/// Closes `self.cur` with a jump and registers the CFG edge. `target` must not
+/// be sealed yet.
+pub fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
+    _ = try self.mir.emitJump(self.arena, self.cur, target);
+    try self.builder.addPredecessor(target, self.cur);
+}
+
+/// Closes `self.cur` with a branch, registers both edges, and seals `then_b`
+/// (and `else_b` when `seal_else`). A loop leaves its exit unsealed until its
+/// body has registered any `break` predecessors.
+pub inline fn branchTo(self: *Lower, cond: Mir.Value, then_b: Mir.Block, else_b: Mir.Block, comptime seal_else: bool) Oom!void {
+    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
+    try self.builder.addPredecessor(then_b, self.cur);
+    try self.builder.addPredecessor(else_b, self.cur);
+    try self.builder.sealBlock(then_b);
+    if (seal_else) try self.builder.sealBlock(else_b);
+}
+
+/// Starts a fresh predecessor-less block. Everything appended to it is dead
+/// (post-`break`/`return` code, §5.9/§4.7.1); sealing it immediately keeps the
+/// SSA builder from ever waiting on an edge that will not arrive.
+pub fn startUnreachable(self: *Lower) Oom!void {
+    const b = try self.mir.addBlock(self.arena);
+    try self.builder.sealBlock(b);
+    self.cur = b;
+}
+
+/// Returns `table_effect_place`, creating it on first use seeded `.f_zero` in
+/// the entry block. Its sum is never observed; what codegen keeps alive is the
+/// dependencies and CFG edges it carries (`Lowered.table_effect`).
+pub fn effectPlace(self: *Lower) Oom!Ssa.Place {
+    if (self.table_effect_place) |p| return p;
+    const p = self.builder.newPlace();
+    try self.builder.writeVariable(p, .entry, .f_zero);
+    self.table_effect_place = p;
+    return p;
+}
+
+// ---------------------------------------------------------------------------
+// Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
+// ---------------------------------------------------------------------------
+
+/// Returns a §2.7 string literal's integer value. "A string literal used as an operand in expressions and assignments
+/// shall be treated as unsigned integer constants represented by a sequence of
+/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
+/// A base-256 numeral, most significant character first: "AB" is
+/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
+///
+/// `bits` is §3.3's width rule for the assignment case: "the literal is right
+/// justified and either truncated on the left or zero filled on the left".
+/// The result is the unsigned value (§2.7 "unsigned integer constants"), so a
+/// 32-bit "\377\377\377\377" is 4294967295, not -1; the first arithmetic on
+/// it wraps into range.
+pub fn strToInt(s: []const u8, bits: u8) i64 {
+    var acc: u64 = 0;
+    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
+    return @bitCast(acc);
+}
+
+/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
+/// defined once, in the shared constant kernel, because codegen spells them
+/// as device text and a fold must agree with the device.
+pub const wrap32 = constfold.wrap32;
+
+/// Returns `tv` converted to a number when it is a string with compile-time
+/// bytes (§2.7 at an operand); everything else is returned untouched, and the
+/// caller diagnoses a runtime string.
+pub fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
+    // ponytail: 64 bits, the width of the slot the value lands in. An operand
+    // has no declared width (§3.3's assignment case passes its own), so a
+    // literal longer than eight characters keeps its low eight.
+    if (tv.ty != .string) return tv;
+    return switch (self.mir.valueDef(tv.v)) {
+        .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
+        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => tv,
+    };
+}
+
+/// Returns `tv0` as a real (§4.2.1.2 integer→real; §2.7 string→number).
+pub fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
+    return switch (tv.ty) {
+        .real => tv.v,
+        .integer => self.emit(.if_cast, &.{tv.v}),
+        .string => tv.v, // already diagnosed at the use site
+    };
+}
+
+/// Returns `tv0` as an integer (§4.2.1.1 real→integer rounds; §2.7 string→number).
+pub fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
+    return switch (tv.ty) {
+        .integer => tv.v,
+        .real => self.emit(.fi_cast, &.{tv.v}),
+        .string => tv.v,
+    };
+}
+
+/// Returns `tv` converted for a §5.7 store into a slot of type `ty`.
+/// §4.2.1.1/§4.2.1.2 convert between integer and real; §3.3 draws the one line
+/// no conversion crosses, between a string literal and a string value:
+///
+///   "A string literal can be assigned to a string or an integral type. ...
+///    A string cannot be assigned to an integral type."
+///
+/// So `integer code = "A";` is legal and `code = label;` (label a `string`) is
+/// not: the test is the shape of expression `e`, not its lowered type. Every
+/// write to a declared variable goes through this.
+pub fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
+    // ponytail: the mirror direction, a numeric into a `string` slot (which
+    // §3.4.1 forbids too), is unchecked; the arm to add it to is `.string`.
+    if (tv.ty == .string and ty != .string) {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.arena);
+        if (!try self.strLitBytes(e, &bytes)) {
+            try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
+            return lower_var.zeroOf(ty);
+        }
+        // §3.3's "right justified and either truncated on the left or zero
+        // filled on the left" is measured against the declared type, and §3.2
+        // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
+        if (ty == .integer) return self.mir.addIntConst(self.arena, strToInt(bytes.items, 32));
+    }
+    return switch (ty) {
+        .real => self.toReal(tv),
+        .integer => self.toInt(tv),
+        .string => tv.v,
+    };
+}
+
+/// Is `e` a §3.3 string literal, and what are its bytes? The literal itself, or
+/// a concatenation of literals — §4.2.13's replication with a literal count is
+/// unrolled by the parser, so `{5{"Hi"}}` arrives as five operands.
+///
+/// A `.multi_concat` is deliberately not one, and that exclusion is the whole
+/// rule: Table 3-3's multiplier "can be nonconstant", and a nonconstant one
+/// leaves a string with no width at elaboration, which is why §3.3's own
+/// example makes `r = {i{"Hi"}}` invalid where `b = {i{"Hi"}}` is fine.
+///
+/// The test is made on the AST because the SSA builder answers a read of a
+/// once-written `string label = "hi"` with the literal's own `str_const`, so
+/// by Value `code = label` and `code = "hi"` are indistinguishable.
+///
+/// Table 3-3's empty-string row is the one place these bytes differ from the
+/// string the same expression evaluates to: `""` "is converted to 8'b0", so
+/// `{"H", ""}` is "H" as a string and 'H' followed by one zero byte as an
+/// integral.
+fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .str_literal => {
+            const s = self.file.str(ex.strOf(e));
+            try out.appendSlice(self.arena, if (s.len == 0) &[_]u8{0} else s);
+            return true;
+        },
+        .concat => {
+            for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
+            return true;
+        },
+        else => return false, // else: not a literal or a concatenation of literals, so no compile-time bytes
+    }
+}
+
+/// Returns `tv` as integer 0/1: §4.2.8, a condition is "true" when non-zero. Normalized to integer 0/1 so
+/// `logand`/`logor`/`branch` all see the same shape.
+pub fn toBool(self: *Lower, tv: TypedValue) Oom!Mir.Value {
+    return switch (tv.ty) {
+        .integer => self.emit(.ine, &.{ tv.v, .zero }),
+        .real => self.emit(.fne, &.{ tv.v, .f_zero }),
+        .string => .zero,
+    };
+}
+
+/// Returns the operation type of two operands: §4.2.1, one real operand makes
+/// the operation real; a string operand makes it a string.
+pub fn unify(a: Ty, b: Ty) Ty {
+    if (a == .string or b == .string) return .string;
+    return if (a == .real or b == .real) .real else .integer;
+}
+
+/// Returns the lowering type of a declared AST type (`.unspecified` is real).
+pub fn astTy(t: Ast.Type) Ty {
+    return switch (t) {
+        .real, .unspecified => .real,
+        .integer => .integer,
+        .string => .string,
+    };
 }
 
 // §7.2.2 the discrete context: which statements and nets are digital, lower/context.zig
