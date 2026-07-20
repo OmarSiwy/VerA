@@ -515,7 +515,8 @@ pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         for (f.vars) |v| try vars.put(self.arena, v.name, {});
         for (f.args) |a| try vars.put(self.arena, a.name, {});
     }
-    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| try vars.put(self.arena, v.name, {});
+    var blocks = self.file.seqBlocks();
+    while (blocks.next()) |b| for (b.vars) |v| try vars.put(self.arena, v.name, {});
     const ex = &self.file.exprs;
     for (0..ex.nodes.len) |i| {
         const e: Ast.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
@@ -993,7 +994,8 @@ fn isVarTok(self: *const Lower, module: *const Ast.ModuleDecl, tok: u32) bool {
     for (module.vars) |v| if (v.main_tok == tok) return true;
     for (module.functions) |f| for (f.vars) |v| if (v.main_tok == tok) return true;
     for (module.tasks) |t| for (t.vars) |v| if (v.main_tok == tok) return true;
-    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| if (v.main_tok == tok) return true;
+    var blocks = self.file.seqBlocks();
+    while (blocks.next()) |b| for (b.vars) |v| if (v.main_tok == tok) return true;
     return false;
 }
 
