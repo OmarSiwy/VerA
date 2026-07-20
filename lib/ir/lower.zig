@@ -105,7 +105,6 @@ pub const VarSlot = struct {
     /// analog code reads it. A register used only by digital code may be wider.
     reg_width: ?u32 = null,
 };
-const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 pub const ArrayInfo = struct {
@@ -179,6 +178,8 @@ var_state: lower_var.State = .{},
 stmt_state: lower_stmt.State = .{},
 table_model_state: lower_table_model.State = .{},
 hier_name_state: lower_hier_name.State = .{},
+control_state: lower_control.State = .{},
+analog_op_state: lower_analog_op.State = .{},
 /// Accumulator places, parallel to `contributions`.
 accum: std.ArrayList(Accum) = .empty,
 /// §1.3.1/§5.4.2.1 every access function read, in source order. A branch is a
@@ -225,7 +226,7 @@ access_kind: std.StringHashMapUnmanaged(Access) = .empty,
 /// Visible variables (§3.2) — locals, function args, scalarized array elements.
 vars: std.StringHashMapUnmanaged(VarSlot) = .empty,
 /// Undo log so named blocks (§5.3.2) and inlined functions (§4.7) can shadow.
-scope_log: std.ArrayList(ScopeEntry) = .empty,
+scope_log: std.ArrayList(lower_var.ScopeEntry) = .empty,
 /// §3.4 parameters and §3.5 genvars visible to constant evaluation.
 consts: std.StringHashMapUnmanaged(Const) = .empty,
 /// name → index into `params` (aliasparam §3.4.7 maps two names to one index).

@@ -17,6 +17,20 @@ const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
 
+/// This file's private state on `Lower` (`Lower.control_state`): the scratch
+/// `isStaticValue` walks with, cleared at the start of each walk and reused, so
+/// a condition costs no arena allocation once the sets have grown to the
+/// largest walk (on psp103, ~5k conditions used to leave ~3 MB of dead sets).
+pub const State = struct {
+    /// Values already on the walk.
+    seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty,
+    /// Blocks whose deciding branch was already judged.
+    blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty,
+    /// `controlStatic`'s predecessor worklist; nested walks share it above a
+    /// base mark.
+    stack: std.ArrayList(Mir.Block) = .empty,
+};
+
 /// §6.6: "All expressions in generate schemes shall be constant expressions,
 /// deterministic at elaboration time." The scheme of an if-generate is its
 /// condition and of a case-generate its selector; the loop generate's three
@@ -188,11 +202,11 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
 /// variable is dynamic even when every write to it is static, for the same
 /// reason.
 pub fn isStaticValue(self: *Lower, v: Mir.Value) Oom!bool {
-    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
-    defer seen.deinit(self.arena);
-    var blocks: std.AutoHashMapUnmanaged(Mir.Block, void) = .empty;
-    defer blocks.deinit(self.arena);
-    return staticWalk(self, v, &seen, &blocks);
+    const st = &self.control_state;
+    st.seen.clearRetainingCapacity();
+    st.blocks.clearRetainingCapacity();
+    st.stack.clearRetainingCapacity();
+    return staticWalk(self, v, &st.seen, &st.blocks);
 }
 
 /// The calls whose value is fixed for the whole simulation: A.8.2's
@@ -268,11 +282,14 @@ fn controlStatic(
     seen: *std.AutoHashMapUnmanaged(Mir.Value, void),
     blocks: *std.AutoHashMapUnmanaged(Mir.Block, void),
 ) Oom!bool {
-    var stack: std.ArrayList(Mir.Block) = .empty;
-    defer stack.deinit(self.arena);
+    // A nested walk (a phi met while judging a branch) works above `base` and
+    // leaves the stack there on success; a `false` unwinds every walk at once.
+    const stack = &self.control_state.stack;
+    const base = stack.items.len;
     try stack.append(self.arena, from);
     const b = &self.builder;
-    while (stack.pop()) |blk| {
+    while (stack.items.len > base) {
+        const blk = stack.pop().?;
         if ((try blocks.getOrPut(self.arena, blk)).found_existing) continue;
         const i = @backingInt(blk);
         // Unsealed: more predecessors may still arrive (a loop's back edge).

@@ -33,6 +33,7 @@ const VarSlot = Lower.VarSlot;
 const ArrayInfo = Lower.ArrayInfo;
 const Const = Lower.Const;
 const astTy = Lower.astTy;
+const none_u32 = Lower.none_u32;
 
 /// This file's private state on `Lower` (`Lower.var_state`).
 pub const State = struct {
@@ -57,7 +58,22 @@ pub const State = struct {
     /// AND some read sees before the same evaluation writes them: a value
     /// carried to another evaluation, which `vera_scratch` may not drop (E0536).
     carried: std.StringHashMapUnmanaged(void) = .empty,
+    /// The bindings a declaration shadowed, which `closeScope` puts back: a
+    /// side table because almost no declaration shadows anything (psp103
+    /// logs ~1.5k declarations and shadows none), so `ScopeEntry` holds a
+    /// `u32` row here instead of the binding. Append-only; rows outlive the
+    /// entries that name them.
+    shadowed_vars: std.ArrayList(VarSlot) = .empty,
+    shadowed_arrays: std.ArrayList(ArrayInfo) = .empty,
 };
+
+/// One `scope_log` row: a declared name and what it shadowed, as rows of
+/// `State.shadowed_vars`/`shadowed_arrays` (`none_u32`: nothing).
+pub const ScopeEntry = struct { name: []const u8, prev_var: u32, prev_array: u32 };
+// Budget: a name and two handles. It was 88 B with the bindings inline.
+comptime {
+    std.debug.assert(@sizeOf(ScopeEntry) == 24);
+}
 
 /// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
 /// its locals are keyed under, and the declarations that say which names those
@@ -140,6 +156,9 @@ const Exposed = struct {
     /// Keys an `analog initial` body writes.
     initial: std.StringHashMapUnmanaged(void) = .empty,
     in_initial: bool = false,
+    /// One statement's write targets, refilled per statement: `stmt` reads it
+    /// to the end before it recurses, so one buffer serves the whole walk.
+    ws: std.ArrayList(Ast.ExprId) = .empty,
 
     fn def(x: *Exposed, k: []const u8) Oom!void {
         if (x.disabled or x.defs.contains(k)) return;
@@ -225,9 +244,9 @@ const Exposed = struct {
             Mir.callee.family(.fromName(self.file.str(s.sys_task.name))) == .display;
         if (!dropped) try self.file.stmtEdges(id, Own{ .x = x });
         const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
-        var ws: std.ArrayList(Ast.ExprId) = .empty;
-        try self.file.stmtWrites(funcs, id, self.arena, &ws);
-        for (ws.items) |w| {
+        x.ws.clearRetainingCapacity();
+        try self.file.stmtWrites(funcs, id, self.arena, &x.ws);
+        for (x.ws.items) |w| {
             const t = self.file.lvalueBase(w);
             if (t == .none) continue;
             const k = try heldKey(self, self.file.str(self.file.exprs.strOf(t)));
@@ -771,13 +790,13 @@ fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir
 pub fn closeScope(self: *Lower, mark: usize) void {
     while (self.scope_log.items.len > mark) {
         const e = self.scope_log.pop().?;
-        if (e.prev) |p| {
-            self.vars.putAssumeCapacity(e.name, p);
+        if (e.prev_var != none_u32) {
+            self.vars.putAssumeCapacity(e.name, self.var_state.shadowed_vars.items[e.prev_var]);
         } else {
             _ = self.vars.remove(e.name);
         }
-        if (e.prev_array) |a| {
-            self.arrays.putAssumeCapacity(e.name, a);
+        if (e.prev_array != none_u32) {
+            self.arrays.putAssumeCapacity(e.name, self.var_state.shadowed_arrays.items[e.prev_array]);
         } else {
             _ = self.arrays.remove(e.name);
         }
@@ -785,11 +804,17 @@ pub fn closeScope(self: *Lower, mark: usize) void {
 }
 
 fn shadowName(self: *Lower, name: []const u8) Oom!void {
-    try self.scope_log.append(self.arena, .{
-        .name = name,
-        .prev = self.vars.get(name),
-        .prev_array = self.arrays.get(name),
-    });
+    const st = &self.var_state;
+    var e: ScopeEntry = .{ .name = name, .prev_var = none_u32, .prev_array = none_u32 };
+    if (self.vars.get(name)) |p| {
+        e.prev_var = @intCast(st.shadowed_vars.items.len);
+        try st.shadowed_vars.append(self.arena, p);
+    }
+    if (self.arrays.get(name)) |a| {
+        e.prev_array = @intCast(st.shadowed_arrays.items.len);
+        try st.shadowed_arrays.append(self.arena, a);
+    }
+    try self.scope_log.append(self.arena, e);
     _ = self.vars.remove(name);
     _ = self.arrays.remove(name);
 }

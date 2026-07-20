@@ -24,6 +24,13 @@ const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
 const poison = Lower.poison;
 
+/// This file's private state on `Lower` (`Lower.analog_op_state`).
+pub const State = struct {
+    /// `readsUnknown`'s visited set, cleared and reused per walk rather than
+    /// allocated per `idt` site.
+    unknown_seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty,
+};
+
 /// Reports whether `name` is one of the two A.8.2 `analog_filter_function_call`
 /// names that keep no history (`ddx`, `limexp`). §5.8.1's ban on analog operators
 /// under a runtime condition exists to protect history, which neither reads, so
@@ -220,9 +227,9 @@ fn opIdt(self: *Lower, e: Ast.ExprId, vals: []const Mir.Value) Oom!Mir.Value {
 /// Whether `v` can read an unknown of the solve: a probe, or anything the walk
 /// does not see through (a phi, an array, a committed latch).
 fn readsUnknown(self: *Lower, v: Mir.Value) Oom!bool {
-    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
-    defer seen.deinit(self.arena);
-    return unknownWalk(self, v, &seen);
+    const seen = &self.analog_op_state.unknown_seen;
+    seen.clearRetainingCapacity();
+    return unknownWalk(self, v, seen);
 }
 
 fn unknownWalk(self: *Lower, v0: Mir.Value, seen: *std.AutoHashMapUnmanaged(Mir.Value, void)) Oom!bool {
