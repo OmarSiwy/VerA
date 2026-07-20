@@ -60,8 +60,9 @@ from lower.zig into `tables.zig`; `Lower.<Name>` still resolves to each.
    reallocation, so every outgrown copy stays allocated until the arena dies.
    Measured with a counting allocator over `Lower.lower` (bytes requested):
    `MultiArrayList(InstRow)` 2.49 MB on psp103 and 12.8 MB on hisimhv_va,
-   `MultiArrayList(ValueRow)` 0.91 / 4.63 MB, the `u32` pool 0.16 / 2.06 MB.
-   Roughly half of each is dead copies: ~9 MB of hisimhv_va's ~50 MB peak RSS.
+   `MultiArrayList(ValueRow)` 0.91 / 4.63 MB, and `ArrayList(u32)` (most
+   likely MIR's payload pool) 0.16 / 2.06 MB. Under doubling growth about half
+   of each is dead copies: an estimated ~9 MB of hisimhv_va's ~50 MB peak RSS.
    Options, cheapest first: give `Mir` its own growable allocator (a GPA, so
    a reallocation frees the old block) and keep only the finished tables in
    the arena; or add `Mir.reserve(insts, values)` and let lowering pass an
@@ -123,13 +124,15 @@ bsim4va 6.06 → 3.76 MB, hisimhv_va 28.3 → 22.3 MB (most of what remains is
 MIR's growth, proposal 2).
 
 Peak RSS and time, ReleaseFast `vera --emit-zig`, base `1d3618f8` against
-`717c8a57`, run interleaved, best of 20 each, load average ~39 at the time:
+`8c53951c`, the two binaries run alternately, best of 20 each (the machine
+was shared, load average ~26; a best-of-N peak RSS still moves ~1 MB between
+sessions, so compare within a row):
 
 | model | peak RSS before → after | CPU before → after |
 |---|---|---|
-| psp103 | 33.5 → 30.2 MB (-9.8%) | 147.6 → 134.4 ms (-9%) |
-| bsim4va | 24.8 → 23.7 MB (-4.2%) | 110.0 → 105.9 ms (-4%) |
-| hisimhv_va | 53.5 → 49.9 MB (-6.8%) | 234.5 → 229.3 ms (-2%) |
+| psp103 | 32.4 → 30.9 MB (-4.9%) | 139.1 → 132.1 ms (-5.0%) |
+| bsim4va | 24.4 → 23.5 MB (-4.0%) | 99.9 → 96.6 ms (-3.3%) |
+| hisimhv_va | 53.9 → 50.3 MB (-6.7%) | 226.5 → 219.1 ms (-3.3%) |
 
 | type | size before → after | count on psp103 | bytes saved | what changed or why not |
 |---|---|---|---|---|
