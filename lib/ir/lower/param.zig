@@ -35,6 +35,10 @@ pub fn lowerParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     const rows = module.params.len + module.aliasparams.len;
     try self.out.params.ensureTotalCapacityPrecise(self.arena, self.out.params.items.len + rows);
     try self.param_values.ensureTotalCapacityPrecise(self.arena, self.param_values.items.len + rows);
+    // `consts` too: it is only ever probed by name, so its capacity reaches no
+    // output. (`param_index` is not pre-sized: `didYouMeanMap` walks it, and a
+    // walk's order follows the capacity.)
+    try self.consts.ensureTotalCapacity(self.arena, self.consts.count() + @as(u32, @intCast(rows)));
     // §3.4 parameters before the ports, because a range is a constant
     // expression over them: §6.5.2.2's own example is `input [1:width] dt`
     // with `width` a module parameter, and `foldDim` cannot answer that from
