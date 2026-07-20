@@ -1,58 +1,109 @@
-//! §3.4 parameters and §3.2 variables and scopes.
+//! §3.4 parameters: the model card's rows, and §2.9 attribute values.
 //!
-//! In: parameter/localparam/variable declarations. Out: `params` (the model-card ABI),
-//! ranges for proof.zig, and the variable slots the statement lowering assigns.
+//! In: parameter/localparam declarations, `aliasparam`s and attribute specs.
+//! Out: `Lowered.params` (the model-card ABI, one row per scalar and per
+//! §3.4.4 array element), `Lowered.aliases`, the `consts` the constant
+//! folder reads, and `param_values`/`param_index`, through which every later
+//! read of a parameter goes. A row's `ranges` reach proof.zig as bound
+//! evidence.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.2, §3.2.2, §3.3, §3.4, §3.4.1, §3.4.2, §3.4.4, §5.3.2, §5.10, §6.3.4, §6.6.1.
-//! §9.13.1/§9.13.2 hidden seed storage uses the same retained SSA mechanism.
+//! LRM clauses this file's code cites: §2.9, §2.9.2, §3.4, §3.4.1, §3.4.2, §3.4.4, §3.4.5,
+//! §3.4.7, §4.2.1.1, §4.2.13, §5.5.3, §6.3, §6.3.4, §6.6.1, §6.7.1, §9.18.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
-const lower_context = @import("context.zig");
+const lower_shape = @import("shape.zig");
+const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
-const Ssa = @import("../ssa.zig");
+const diag = @import("diag");
 const Oom = Lower.Oom;
-const Ty = Lower.Ty;
-const VarSlot = Lower.VarSlot;
-const ArrayInfo = Lower.ArrayInfo;
 const Const = Lower.Const;
-const wrap32 = Lower.wrap32;
 const astTy = Lower.astTy;
+/// §3.4 every parameter of the module, in source order, so a default may read
+/// an earlier one (§6.3.4): the §6.3.6 geometry aliases first, then each
+/// declaration, then the §6.4.2 selection parameters marked as shape. Runs
+/// before the ports, whose ranges may read a parameter.
+pub fn lowerParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // One row per scalar declaration and per system alias, sized once: grown
+    // row by row in the arena, the table left ~2.8x its final size behind in
+    // abandoned copies (210 KB for psp103's 847 rows). An array parameter's
+    // elements still grow it past this.
+    const rows = module.params.len + module.aliasparams.len;
+    try self.out.params.ensureTotalCapacityPrecise(self.arena, self.out.params.items.len + rows);
+    try self.param_values.ensureTotalCapacityPrecise(self.arena, self.param_values.items.len + rows);
+    // `consts` too: it is only ever probed by name, so its capacity reaches no
+    // output. (`param_index` is not pre-sized: `didYouMeanMap` walks it, and a
+    // walk's order follows the capacity.)
+    try self.consts.ensureTotalCapacity(self.arena, self.consts.count() + @as(u32, @intCast(rows)));
+    // §3.4 parameters before the ports, because a range is a constant
+    // expression over them: §6.5.2.2's own example is `input [1:width] dt`
+    // with `width` a module parameter, and `foldDim` cannot answer that from
+    // an empty `consts`. A parameter declaration cannot name a net (§3.4
+    // defaults are constant expressions), so the order is otherwise free.
+    // §6.3.6 implicitly declares the geometry controls. Register their
+    // top-level aliases before the explicit parameters so they exist
+    // before a flattened child's dependent defaults read them. Keep the
+    // existing `$mfactor` host/scaling ABI in its separate alias path below.
+    for (module.aliasparams) |a| {
+        const kind = hier_param.Kind.fromName(self.file.str(a.target)) orelse continue;
+        if (kind == .mfactor) continue;
+        const alias = self.file.str(a.alias);
+        const collides = self.param_index.contains(alias) or for (module.params) |p| {
+            if (p.name == a.alias) break true;
+        } else false;
+        if (collides) {
+            try self.err(module.main_tok, .E0331, "`{s}`", .{alias});
+            continue;
+        }
+        _ = try aliasSystemParam(self, alias, self.file.str(a.target));
+    }
+    for (module.params) |*p| try lowerParamDecl(self, p);
+    for (self.selection_params) |name| if (self.param_index.get(self.file.str(name))) |i| {
+        self.out.params.items[i].shape = true;
+    };
+}
 
-/// This file's private state on `Lower` (`Lower.param_state`).
-pub const State = struct {
-    /// Variables `markHeldVars` found assigned under an `@(...)`, collected BEFORE
-    /// the module's variables are declared. Empty for a module with no event
-    /// control.
-    ///
-    /// Keyed on §5.3.2's "unique location", i.e. the pair (scope, name) spelled as
-    /// a dotted path: a module variable is its bare name, a named block's local is
-    /// `<label>.<name>` (`<outer>.<inner>.<name>` when nested). A bare name would
-    /// make `lo.n`, `hi.n` and the module's own `n` one slot.
-    /// The value says why (`Lower.HeldVar.Why`).
-    held_names: std.StringHashMapUnmanaged(Lower.HeldVar.Why) = .empty,
-    /// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
-    /// nearest declaration of it — a module variable assigned from inside a block
-    /// still keys bare, because the block does not declare it.
-    held_frames: std.ArrayList(HeldFrame) = .empty,
-    /// §3.2.2 array names some subscript indexes at run time (`markMemArrays`):
-    /// `declareVarDecl` gives such an array one memory-backed storage.
-    mem_names: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
-    /// `held_names` keys an `analog initial` body or an `@(...)` body writes
-    /// AND some read sees before the same evaluation writes them: a value
-    /// carried to another evaluation, which `vera_scratch` may not drop (E0536).
-    carried: std.StringHashMapUnmanaged(void) = .empty,
-};
-
-/// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
-/// its locals are keyed under, and the declarations that say which names those
-/// are.
-const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
-
+/// §3.4.7 each `aliasparam` other than a §6.3.6 geometry alias (`lowerParams`
+/// declared those): a second name for an existing parameter, or for a system
+/// parameter (`aliasSystemParam`). E0331 when the alias collides, E0303 when
+/// the target is unknown.
+pub fn declareAliasParams(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    // §3.4 parameters were lowered above the port loop, in source order, so a
+    // later default may still reference an earlier parameter (§6.3.4).
+    // §3.4.7 aliasparam: a second name for an existing parameter.
+    for (module.aliasparams) |a| {
+        const target = self.file.str(a.target);
+        const alias = self.file.str(a.alias);
+        if (hier_param.Kind.fromName(target)) |kind|
+            if (kind != .mfactor) continue; // already declared above
+        // §3.4.7 "The alias_identifier shall not occur anywhere else in the
+        // module; in particular, it shall not conflict with a different
+        // parameter_identifier". Unchecked, the `put` below would rebind the
+        // colliding name for the rest of the module.
+        if (!self.param_index.contains(alias) and try aliasSystemParam(self, alias, target)) continue;
+        if (self.param_index.contains(alias)) {
+            var b = self.errWith(module.main_tok, .E0331);
+            b.msg("`{s}`", .{alias});
+            b.help("an `aliasparam` gives `{s}` a second NAME, it does not declare a second parameter", .{target});
+            try b.emit();
+            continue;
+        }
+        if (self.param_index.get(target)) |idx| {
+            try self.param_index.put(self.arena, alias, idx);
+            try self.out.aliases.append(self.arena, .{ .name = alias, .param = idx });
+        } else {
+            var b = self.errWith(module.main_tok, .E0303);
+            b.msg("`{s}`", .{target});
+            if (diag.didYouMeanMap(target, self.param_index)) |s|
+                b.help("did you mean `{s}`?", .{s});
+            try b.emit();
+        }
+    }
+}
 /// Registers a parameter: infers its type (§3.4.1), folds its default, and
 /// copies `decl.ranges` into `ParamInfo.ranges` for the prover (LRM §3.4, §3.4.2).
 pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
@@ -143,7 +194,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     try addParam(self, name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
     self.out.params.items[self.out.params.items.len - 1].source_width = if (decl.packed_range) |range|
-        packedShapeWidth(self, range)
+        lower_shape.packedShapeWidth(self, range)
     else if (decl.ty == .integer)
         32
     else
@@ -154,14 +205,6 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         decl.is_signed
     else
         lower_constfold.clog2Signed(self, decl.default);
-}
-
-/// Packed bounds are source shape: a numeric model card cannot resize them.
-/// Resolve and retain the width before entering any later procedural scope.
-fn packedShapeWidth(self: *Lower, range: Ast.Dim) ?u32 {
-    _ = lower_constfold.shapeEval(self, range.msb);
-    _ = lower_constfold.shapeEval(self, range.lsb);
-    return lower_constfold.packedWidth(self, range);
 }
 
 /// §6.7.1 "parameter declaration statements shall not make out-of-module
@@ -352,7 +395,7 @@ const parameterConst = @import("frontend").constfold.parameterValue;
 /// The MIR must contain the same declared-type conversion as `folded` metadata.
 /// Later defaults and operator controls follow this MIR, not the Model field.
 fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value {
-    if (e == .none) return zeroOf(astTy(ty));
+    if (e == .none) return lower_var.zeroOf(astTy(ty));
     if (lower_constfold.foldExpr(self, e, false)) |raw| {
         return switch (parameterConst(ty, raw)) {
             .int => |n| self.mir.addIntConst(self.arena, n),
@@ -373,7 +416,7 @@ fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value {
 /// §3.4.4 `parameter real c[0:2] = '{1,2,3};` → three scalar parameters named
 /// `c[0]`, `c[1]`, `c[2]`. Codegen emits one Model field each.
 fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
-    const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
+    const dims = try lower_shape.dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
     // §3.4.4, in the restriction list closed by "Failure to follow these
     // restrictions shall result in an error": "A type of a parameter array
     // shall be given in the declaration." §3.4.1 says it again from the other
@@ -398,13 +441,13 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
         b.help("write the list as an assignment pattern: `'{{ ... }}`", .{});
         try b.emit();
     }
-    const elems = try flattenPattern(self, decl.default, dims);
+    const elems = try lower_shape.flattenPattern(self, decl.default, dims);
 
-    try declareArray(self, name, .{ .dims = dims, .ty = astTy(ty) });
-    var sub: [max_stack_dims]i64 = undefined;
-    const idx = try subscriptBuf(self, &sub, dims.len);
+    try lower_var.declareArray(self, name, .{ .dims = dims, .ty = astTy(ty) });
+    var sub: [lower_shape.max_stack_dims]i64 = undefined;
+    const idx = try lower_shape.subscriptBuf(self, &sub, dims.len);
     for (elems, 0..) |elem, k| {
-        shapeSubscripts(dims, k, idx);
+        lower_shape.shapeSubscripts(dims, k, idx);
         const default = try parameterDefault(self, elem, ty);
         // §3.4.4 an omitted element is the type's zero; anything else folds
         // through the declared defaults exactly as a scalar's does.
@@ -412,7 +455,7 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
             (if (astTy(ty) == .real) Const{ .real = 0 } else Const{ .int = 0 })
         else
             lower_constfold.constEval(self, elem);
-        try addParam(self, try elemName(self, name, idx), ty, default, if (folded) |c| parameterConst(ty, c) else null, decl.ranges, decl.is_local, decl.main_tok);
+        try addParam(self, try lower_shape.elemName(self, name, idx), ty, default, if (folded) |c| parameterConst(ty, c) else null, decl.ranges, decl.is_local, decl.main_tok);
     }
 }
 
@@ -478,1074 +521,4 @@ fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u
         try out.print(arena, "\"{s}\"", .{it});
     }
     return out.toOwnedSlice(arena);
-}
-
-/// §3.4.8/§3.3's nested assignment pattern, flattened to one expression per
-/// cell of `dims` in the same row-major order `shapeSubscripts` walks. §3.3's
-/// own example is
-///
-///     string paths[0:2][0:1] = '{ '{"dir1","fileA"}, '{"dir2","fileA"}, … };
-///
-/// — an element list per dimension, so the flattening is one recursion per
-/// dimension rather than a single `args` read. A cell the pattern does not
-/// reach is `.none`, which every caller reads as §3.2's zero (or "").
-/// A `.concat` is accepted alongside `.assign_pattern` because the parser folds
-/// `{a,b}` to the same node shape and §3.4.4's diagnostic (E0349) already
-/// covers the spelling.
-pub fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]const Ast.ExprId {
-    const out = try self.arena.alloc(Ast.ExprId, shapeCells(dims));
-    try fillPattern(self, e, dims, out);
-    return out;
-}
-
-fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {
-    if (dims.len == 0) {
-        out[0] = e;
-        return;
-    }
-    const ex = &self.file.exprs;
-    const elems: []const Ast.ExprId = if (e != .none and
-        (ex.tag(e) == .assign_pattern or ex.tag(e) == .concat))
-        try patternElems(self, e)
-    else
-        &.{};
-    const stride = shapeCells(dims[1..]);
-    for (0..@intCast(dims[0].count())) |k| {
-        const child = if (k < elems.len) elems[k] else Ast.ExprId.none;
-        try fillPattern(self, child, dims[1..], out[k * stride ..][0..stride]);
-    }
-}
-
-/// The elements of a pattern (or brace list), with A.8.1's replication form
-/// unrolled when the parser could not: `'{N{a, b}}` whose count is a
-/// constant_expression rather than a literal (§4.2.14), carried as one
-/// `.pattern_repl` element. The count folds like an array bound — parameters
-/// included (§3.4) — and must be a non-negative integer (§4.2.13), else E0223
-/// and no elements, so every cell keeps its §3.2 zero default.
-pub fn patternElems(self: *Lower, e: Ast.ExprId) Oom![]const Ast.ExprId {
-    const ex = &self.file.exprs;
-    const elems = ex.args(e);
-    if (elems.len != 1 or ex.tag(elems[0]) != .pattern_repl) return elems;
-    const count = ex.lhs(elems[0]);
-    const group = ex.args(ex.rhs(elems[0]));
-    const c = lower_constfold.shapeEval(self, count);
-    const n = if (c) |v| switch (v) {
-        .int => |i| i,
-        else => null,
-    } else null;
-    if (n == null or n.? < 0) {
-        try self.err(ex.mainTok(count), .E0223, "", .{});
-        return &.{};
-    }
-    const cells = @as(i128, n.?) * group.len;
-    if (cells > max_cells) {
-        try self.err(ex.mainTok(count), .E1016, "the pattern has {d} elements", .{cells});
-        return &.{};
-    }
-    const out = try self.arena.alloc(Ast.ExprId, @as(usize, @intCast(n.?)) * group.len);
-    for (0..@intCast(n.?)) |k| @memcpy(out[k * group.len ..][0..group.len], group);
-    return out;
-}
-
-/// E1016's bound on an array's or a pattern's cells: each becomes its own
-/// scalar, so this is an unrolling guard, not a language rule.
-const max_cells = 1 << 20;
-
-/// One declared array dimension, normalized so `lo <= hi`.
-pub const Bounds = struct {
-    lo: i64,
-    hi: i64,
-    /// The declaration wrote `[hi:lo]`.
-    descending: bool = false,
-
-    /// Returns the number of indices in the dimension.
-    pub fn count(b: Bounds) i64 {
-        return b.hi - b.lo + 1;
-    }
-};
-
-/// §3.2/§3.2.2/§3.4.4 `{ [msb:lsb] }` — one `Bounds` per declared dimension,
-/// outermost first, so `flag_array[0:8][0:3]` is `{{0,8},{0,3}}`.
-///
-/// §3.2 puts no limit on the count: a multidimensional array is scalarized
-/// cell by cell (see `shapeCells`). Returns null after reporting E0307/E0308.
-pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u8) Oom!?[]const Bounds {
-    if (dims.len == 0) {
-        try self.err(tok, .E0307, "`{s}` has no dimensions", .{name});
-        return null;
-    }
-    const out = try self.arena.alloc(Bounds, dims.len);
-    for (dims, out) |d, *b| {
-        const a = lower_constfold.shapeEval(self, d.msb) orelse {
-            try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
-            return null;
-        };
-        const c = lower_constfold.shapeEval(self, d.lsb) orelse {
-            try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
-            return null;
-        };
-        const x = a.asInt();
-        const y = c.asInt();
-        b.* = .{ .lo = @min(x, y), .hi = @max(x, y), .descending = x > y };
-    }
-    var cells: i128 = 1;
-    for (out) |b| {
-        cells *= @as(i128, b.hi) - b.lo + 1;
-        if (cells > max_cells) {
-            try self.err(tok, .E1016, "`{s}`", .{name});
-            return null;
-        }
-    }
-    return out;
-}
-
-/// How many scalars a declared shape becomes.
-pub fn shapeCells(dims: []const Bounds) usize {
-    var n: usize = 1;
-    for (dims) |d| n *= @intCast(d.count());
-    return n;
-}
-
-/// The subscripts of the `k`th cell of a ROW-MAJOR walk — the last dimension
-/// varies fastest, which is the order §3.4.8's nested assignment pattern lists
-/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns).
-pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
-    var rest = k;
-    var i = dims.len;
-    while (i > 0) {
-        i -= 1;
-        const n: usize = @intCast(dims[i].count());
-        const offset: i64 = @intCast(rest % n);
-        out[i] = if (dims[i].descending) dims[i].hi - offset else dims[i].lo + offset;
-        rest /= n;
-    }
-}
-
-/// How many subscripts fit on the stack. NOT a proved bound — §3.2 puts no limit
-/// on a declaration's dimension count, though its own examples go two deep — so
-/// this is the spill shape and not a fixed buffer: eight covers everything real
-/// and anything wider allocates. `indexChain` uses the same spill threshold.
-pub const max_stack_dims = 8;
-
-/// Returns scratch for one cell's `n` subscripts: `buf` when it fits, else an
-/// arena slice. Call once per `shapeSubscripts` walk, not once per cell.
-pub fn subscriptBuf(self: *Lower, buf: *[max_stack_dims]i64, n: usize) Oom![]i64 {
-    return if (n <= buf.len) buf[0..n] else try self.arena.alloc(i64, n);
-}
-
-/// The scalarized key for one array element, `name[i]` / `name[i][j]`
-/// (§3.2, §3.2.2, §3.4.4).
-///
-/// Only the two DECLARATION sites need this: `vars` and `param_index` retain
-/// the key, so it has to outlive the call. Every *lookup* goes through
-/// `elemKey` instead — see there.
-pub fn elemName(self: *Lower, name: []const u8, idx: []const i64) Oom![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(self.arena, name);
-    for (idx) |i| try out.print(self.arena, "[{d}]", .{i});
-    return out.toOwnedSlice(self.arena);
-}
-
-/// Widest `name[i][j]…` formatted without spilling: §2.7's 1024-character
-/// identifier plus four subscripts of `[`, a 20-character `i64` and `]`. A
-/// deeper array spills to the arena (see `elemKey`).
-pub const elem_key_len = 1024 + 22 * 4;
-
-/// `name[i][j]` for a *lookup*, formatted into the caller's stack buffer.
-///
-/// `HashMap.get` never retains the key, so a lookup needs no arena copy. The
-/// result borrows `buf` and must not outlive the caller's frame.
-///
-/// ponytail: an over-long identifier, or more than four dimensions, falls back
-/// to the arena. Truncating the key instead would alias two distinct elements.
-pub fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []const i64) Oom![]const u8 {
-    if (name.len > buf.len) return try elemName(self, name, idx);
-    @memcpy(buf[0..name.len], name);
-    var n = name.len;
-    for (idx) |i| {
-        const s = std.mem.print(buf[n..], "[{d}]", .{i}) catch
-            return try elemName(self, name, idx);
-        n += s.len;
-    }
-    return buf[0..n];
-}
-
-// ---- §3.2 variables and scopes ---------------------------------------------
-
-/// Pops the scope log back to `mark`, restoring each variable and array binding
-/// the scope shadowed.
-pub fn closeScope(self: *Lower, mark: usize) void {
-    while (self.scope_log.items.len > mark) {
-        const e = self.scope_log.pop().?;
-        if (e.prev) |p| {
-            self.vars.putAssumeCapacity(e.name, p);
-        } else {
-            _ = self.vars.remove(e.name);
-        }
-        if (e.prev_array) |a| {
-            self.arrays.putAssumeCapacity(e.name, a);
-        } else {
-            _ = self.arrays.remove(e.name);
-        }
-    }
-}
-
-fn shadowName(self: *Lower, name: []const u8) Oom!void {
-    try self.scope_log.append(self.arena, .{
-        .name = name,
-        .prev = self.vars.get(name),
-        .prev_array = self.arrays.get(name),
-    });
-    _ = self.vars.remove(name);
-    _ = self.arrays.remove(name);
-}
-
-/// Binds `name` to an array, remembering what it shadowed (§5.3.2).
-pub fn declareArray(self: *Lower, name: []const u8, info: ArrayInfo) Oom!void {
-    try shadowName(self, name);
-    try self.arrays.put(self.arena, name, info);
-}
-
-/// Bind `name` to a fresh SSA place, remembering what it shadowed (§5.3.2).
-pub fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
-    const slot: VarSlot = .{ .place = self.builder.newPlace(), .ty = ty };
-    try shadowName(self, name);
-    try self.vars.put(self.arena, name, slot);
-    return slot;
-}
-
-/// §6.8: "An identifier shall be used to declare only one item within a scope.
-/// This rule means it is illegal to declare two or more variables which have the
-/// same name, or to name a task the same as a variable within the same module, or
-/// to give an instance the same name as the name of the net connected to its
-/// output."
-///
-/// Checked across parameters, variables and nets over one scope's declaration
-/// lists (not `self.vars`), so shadowing an outer name is not reported. Net
-/// against net is allowed (a port direction and its discipline declare one
-/// item), and so is a discipline against a variable (§7's `reg out; ddiscrete
-/// out;`); only a discipline-less net (`wire x;`) clashes with a variable.
-///
-/// ponytail: O(n²) over one scope's names. A set per scope if a model makes
-/// that show.
-pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: []const Ast.VarDecl, nets: []const Ast.NetDecl) Oom!void {
-    for (params, 0..) |p, i| {
-        if (declares(params[0..i], p.name)) try dupItem(self, p.main_tok, p.name);
-    }
-    for (vars, 0..) |v, i| {
-        if (declares(vars[0..i], v.name) or declares(params, v.name))
-            try dupItem(self, v.main_tok, v.name);
-        for (nets) |n| if (n.name == v.name and n.discipline == .none) try dupItem(self, v.main_tok, v.name);
-    }
-    for (nets) |n| {
-        if (declares(params, n.name)) try dupItem(self, n.main_tok, n.name);
-    }
-}
-
-fn declares(decls: anytype, name: Ast.StrId) bool {
-    for (decls) |d| if (d.name == name) return true;
-    return false;
-}
-
-fn dupItem(self: *Lower, tok: u32, name: Ast.StrId) Oom!void {
-    var b = self.errWith(tok, .E0362);
-    b.msg("`{s}`", .{self.file.str(name)});
-    b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
-    try b.emit();
-}
-
-/// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a
-/// module variable and to a NAMED block's local; an unnamed `begin`'s
-/// declaration is neither, and `block_path` is "" for it.
-pub const VarScope = enum { module, local };
-
-/// §3.2 declare and initialize. Verilog-AMS variables start at zero, so a read
-/// on a path that never assigned is 0 rather than the SSA builder's `.undef`
-/// (which codegen could not emit).
-pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!void {
-    const name = self.file.str(decl.name);
-    const ty = astTy(decl.ty);
-    const reg_width: ?u32 = if (decl.storage == .reg) blk: {
-        const width = if (decl.packed_range) |range| packedShapeWidth(self, range) orelse {
-            try self.err(decl.main_tok, .E0352, "the packed range of `{s}` is not a constant integer range", .{name});
-            return;
-        } else 1;
-        // The limit applies to an analog access, not a declaration. A mixed
-        // module can keep wider registers entirely in its digital processes.
-        // Retain the folded width so analogRead checks the actual access.
-        break :blk width;
-    } else null;
-    // §5.3.2: "All named block variables are static — that is, an unique
-    // location exists for all variables and leaving or entering the block do
-    // not affect the values stored in them." The location is (scope, name), so
-    // the key `markHeldVars` recorded carries the block path; the empty prefix
-    // is module scope, and an UNNAMED block gets no slot because the clause
-    // grants one to named blocks only.
-    const prefix = if (scope == .module) "" else self.block_path;
-    const held_key = if (prefix.len == 0)
-        name
-    else
-        try self.arena.print("{s}{s}", .{ prefix, name });
-    // §5.10. `.string` is deliberately excluded: a string never reaches the
-    // residual (§3.3 strings only feed §9.4 tasks, which re-run every
-    // evaluation anyway), so a persistent slot for one would be storage
-    // nothing can observe.
-    const why = self.param_state.held_names.get(held_key);
-    // VerA's `vera_scratch` (§2.9): no slot, so every evaluation starts from
-    // the initializer below. Only a value an `analog initial` or `@(...)` body
-    // leaves for a later evaluation's read needs one anyway (E0536).
-    var scratch = try scratchOn(self, decl.main_tok);
-    if (scratch != .off and why != null and self.param_state.carried.contains(held_key)) {
-        try self.err(decl.main_tok, .E0536, "`{s}`", .{name});
-        scratch = .off;
-    }
-    // `"uninit"` starts the variable with no value; an initializer gives it one.
-    if (scratch == .uninit and decl.init != .none) {
-        try self.err(decl.main_tok, .E0539, "`{s}`", .{name});
-        scratch = .zero;
-    }
-    const hold = (scope == .module or prefix.len != 0) and ty != .string and why != null and scratch == .off;
-
-    if (decl.dims.len != 0) {
-        const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
-        if (isMemArray(self, decl.name, ty)) {
-            const place = try declareMemArray(self, name, dims, ty, !hold);
-            self.arrays.getPtr(name).?.mem.?.reg_width = reg_width;
-            // Only memory-backed storage has a start to skip: a scalar or a
-            // scalarized element is an SSA value whose zero costs nothing,
-            // and a zero is one of the values an unwritten read may see.
-            self.out.mem_arrays.items[self.arrays.get(name).?.mem.?.id].uninit = scratch == .uninit;
-            const elems = try flattenPattern(self, decl.init, dims);
-            if (hold) {
-                // §5.10 the initializer is the `Instance` field's default and
-                // nothing else, exactly as for a held scalar: every evaluation
-                // starts from what the last accepted one left.
-                const inits = try self.arena.alloc(Mir.Value, elems.len);
-                for (elems, inits) |elem, *iv| iv.* = if (elem != .none)
-                    try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem))
-                else
-                    zeroOf(ty);
-                const id = self.arrays.get(name).?.mem.?.id;
-                try self.builder.writeVariable(place, self.cur, try holdArray(self, try qualifyHeld(self, prefix, name), ty, id, inits, place));
-                return;
-            }
-            // §3.2 an element the pattern does not reach keeps the zero start.
-            for (elems, 0..) |elem, k| {
-                if (elem == .none) continue;
-                const v = try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem));
-                try storeElem(self, place, try self.mir.addIntConst(self.arena, @intCast(k)), v);
-            }
-            return;
-        }
-        try declareArray(self, name, .{ .dims = dims, .ty = ty });
-        // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
-        // the declaration takes an initializer like a §3.4.4 array parameter.
-        // The pattern is positional from the left bound, following the declared
-        // direction, one list per dimension (§3.3, §3.4.8).
-        const elems = try flattenPattern(self, decl.init, dims);
-        var sub: [max_stack_dims]i64 = undefined;
-        const idx = try subscriptBuf(self, &sub, dims.len);
-        for (elems, 0..) |elem, k| {
-            shapeSubscripts(dims, k, idx);
-            // §3.2.2 arrays are scalarized, so a held array is just one held
-            // slot per element — `markHeldVars` records the base name and every
-            // element takes a slot, since the index may be a runtime `case`.
-            const en = try elemName(self, name, idx);
-            const slot = try declareVar(self, en, ty);
-            self.vars.getPtr(en).?.reg_width = reg_width;
-            // §3.2 an element the pattern does not reach keeps the zero start.
-            const init_val: Mir.Value = if (elem != .none)
-                try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem))
-            else
-                zeroOf(ty);
-            try self.builder.writeVariable(slot.place, self.cur, if (hold)
-                try holdSlot(self, try qualifyHeld(self, prefix, en), ty, init_val, slot.place, why.?)
-            else
-                init_val);
-        }
-        return;
-    }
-
-    const slot = try declareVar(self, name, ty);
-    self.vars.getPtr(name).?.reg_width = reg_width;
-    const init_val: Mir.Value = if (decl.init == .none)
-        zeroOf(ty)
-    else
-        try self.coerceTo(decl.init, ty, try lower_expr.lowerExpr(self, decl.init));
-    try self.builder.writeVariable(slot.place, self.cur, if (hold)
-        try holdSlot(self, held_key, ty, init_val, slot.place, why.?)
-    else
-        init_val);
-}
-
-/// The `Instance` field name of a held slot carries the block path too, because
-/// codegen derives one struct field per `held_vars` entry from it and two
-/// blocks may spell a local the same way (§5.3.2's whole point).
-fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
-    if (prefix.len == 0) return name;
-    return self.arena.print("{s}{s}", .{ prefix, name });
-}
-
-/// Codegen makes one `Instance` field per `held_vars` entry out of its name, so
-/// the name has to be unique. It is — until a §6.6.1 unrolled `for` lowers the
-/// SAME named block twice, which is two executions of one source declaration
-/// and so, by §5.3.2, two locations that happen to share a path.
-fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
-    for (self.out.held_vars.items) |h| {
-        if (std.mem.eql(u8, h.name, name)) return self.arena.print("{s}.{d}", .{ name, idx });
-    }
-    return name;
-}
-
-/// §5.10. Give one event-assigned variable its persistent `Instance` slot and
-/// return the Value that READS that slot.
-///
-/// The read replaces the declared initializer AT THE DECLARATION, which is the
-/// whole reason the decision is made here and not at the assignment that
-/// reveals it: a read of the variable that lexically precedes the `@(...)` must
-/// also see the retained value, and by the time lowering reaches that
-/// assignment the earlier read has already been resolved against the
-/// initializer and memoized. Patching the entry def afterwards would leave it
-/// stale.
-///
-/// `$held_real` / `$held_int` are synthetic callees with no op kind
-/// (`callee.opKind`), so they create no unit and renumber no `Instance` state.
-/// The single argument is the index into `held_vars`, which is how codegen
-/// recovers the field.
-fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: Ssa.Place, why: Lower.HeldVar.Why) Oom!Mir.Value {
-    // Emitted into the DECLARATION's block — `.entry`, unless the initializer
-    // itself opened a diamond (§4.2.7 `&&`/`||` short-circuit), in which case it
-    // is that diamond's join. Either way it dominates every statement of the
-    // module, which is all the seed has to do.
-    const idx: i64 = @intCast(self.out.held_vars.items.len);
-    const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
-    try self.out.held_vars.append(self.arena, .{
-        .name = try uniqueHeld(self, name, @intCast(idx)),
-        .ty = ty,
-        .init = init_val,
-        .seed = seed,
-        .why = why,
-    });
-    try self.held_places.append(self.arena, place);
-    return seed;
-}
-
-/// A compiler-owned retained integer discovered during expression lowering.
-/// Seed it in entry so even a branch that skips its first use has a value.
-pub fn hiddenHeldInt(self: *Lower, name: []const u8) Oom!VarSlot {
-    const place = self.builder.newPlace();
-    const at = self.cur;
-    self.cur = .entry;
-    defer self.cur = at;
-    const seed = try holdSlot(self, name, .integer, .zero, place, .retained);
-    try self.builder.writeVariable(place, .entry, seed);
-    return .{ .place = place, .ty = .integer };
-}
-
-/// §5.10 `holdSlot` for a memory-backed array: ONE held row whose seed is the
-/// array's `anew` (which codegen fills from the `Instance` field) and whose
-/// final value is the array version the block ends with.
-fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir.Value, place: Ssa.Place) Oom!Mir.Value {
-    const idx: u32 = @intCast(self.out.held_vars.items.len);
-    const seed = try self.mir.emitAnew(self.arena, self.cur, id);
-    self.out.mem_arrays.items[id].held = idx;
-    try self.out.held_vars.append(self.arena, .{
-        .name = try uniqueHeld(self, name, idx),
-        .ty = ty,
-        .init = zeroOf(ty),
-        .seed = seed,
-        .array = id,
-        .inits = inits,
-    });
-    try self.held_places.append(self.arena, place);
-    return seed;
-}
-
-/// §3.2.2 is `name` a memory-backed array? A string array never is: a string
-/// has no runtime storage (§3.3), so its runtime reads stay `$idx$str`.
-pub fn isMemArray(self: *const Lower, name: Ast.StrId, ty: Ty) bool {
-    return ty != .string and self.param_state.mem_names.contains(name);
-}
-
-/// §3.2.2 declare `name` as ONE storage of `shapeCells(dims)` elements and
-/// return the place that holds its current version — when `zero`, a fresh one
-/// with every element zero (§3.2); otherwise the caller writes the first.
-pub fn declareMemArray(self: *Lower, name: []const u8, dims: []const Bounds, ty: Ty, zero: bool) Oom!Ssa.Place {
-    const id: u32 = @intCast(self.out.mem_arrays.items.len);
-    try self.out.mem_arrays.append(self.arena, .{ .name = name, .len = @intCast(shapeCells(dims)), .ty = ty });
-    const place = self.builder.newPlace();
-    try declareArray(self, name, .{ .dims = dims, .ty = ty, .mem = .{ .place = place, .id = id } });
-    if (zero) try self.builder.writeVariable(place, self.cur, try self.mir.emitAnew(self.arena, self.cur, id));
-    return place;
-}
-
-/// §3.2.2 `a[index] = v` on a memory-backed array: the next version.
-pub fn storeElem(self: *Lower, place: Ssa.Place, index: Mir.Value, v: Mir.Value) Oom!void {
-    const cur = try self.builder.readVariable(place, self.cur);
-    try self.builder.writeVariable(place, self.cur, try self.emit(.store, &.{ cur, index, v }));
-}
-
-/// §3.2.2 element `index` of a memory-backed array's current version.
-pub fn loadElem(self: *Lower, mem: ArrayInfo.Mem, ty: Ty, index: Mir.Value) Oom!Mir.Value {
-    const cur = try self.builder.readVariable(mem.place, self.cur);
-    const value = try self.emit(if (ty == .integer) .iload else .fload, &.{ cur, index });
-    return analogRead(self, value, mem.reg_width);
-}
-
-/// §7.3.1: the analog value of a discrete bit grouping is a nonnegative
-/// 32-bit integer. The source width controls zero extension, not arithmetic.
-pub fn analogRead(self: *Lower, value: Mir.Value, width: ?u32) Oom!Mir.Value {
-    const w = width orelse return value;
-    if (w > 31) {
-        try self.err(self.mir.cur_tok, .E0222, "this analog access reads {d} bits", .{w});
-        return .undef;
-    }
-    const mask = (@as(u32, 1) << @intCast(w)) - 1;
-    return self.emit(.bitand, &.{ value, try self.mir.addIntConst(self.arena, mask) });
-}
-
-/// The flat element index of an in-range subscript tuple: row-major, each
-/// dimension counted from its left bound — `shapeSubscripts`' inverse and
-/// `lower_stmt.runtimeArrayIndex`'s order.
-pub fn flatIndex(dims: []const Bounds, idx: []const i64) i64 {
-    var flat: i64 = 0;
-    for (dims, idx) |d, i| flat = flat * d.count() + (if (d.descending) d.hi - i else i - d.lo);
-    return flat;
-}
-
-/// §3.2.2 constant-subscript element write for either representation: the
-/// element's own place, or a store into the array's storage.
-pub fn writeElem(self: *Lower, name: []const u8, info: ArrayInfo, idx: []const i64, v: Mir.Value) Oom!void {
-    if (info.mem) |m| return storeElem(self, m.place, try self.mir.addIntConst(self.arena, flatIndex(info.dims, idx)), v);
-    var key_buf: [elem_key_len]u8 = undefined;
-    const slot = self.vars.get(try elemKey(self, &key_buf, name, idx)) orelse return;
-    try self.builder.writeVariable(slot.place, self.cur, v);
-}
-
-/// §3.2.2 which arrays does some subscript index at run time? Lowering decides
-/// that per reference (`lower_expr.lowerIndex`: a subscript `foldExpr(.., false)`
-/// cannot fold), after the declaration has already chosen a representation, so
-/// this answers it ahead of time, by NAME and over the whole source, with the
-/// same rule: a subscript reading a variable, a parameter (a model card can
-/// override it) or a call is runtime; a literal, a genvar (§3.5: an unrolled
-/// loop binds it) and a local constant are not.
-///
-/// The answer only picks a representation (both lower every access), so a
-/// wrong guess costs speed, never meaning: a runtime-indexed array kept scalar
-/// reads through a `$idx` switch and writes one masked select per element.
-pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    var vars: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
-    defer vars.deinit(self.arena);
-    for (module.vars) |v| try vars.put(self.arena, v.name, {});
-    for (module.functions) |f| {
-        for (f.vars) |v| try vars.put(self.arena, v.name, {});
-        for (f.args) |a| try vars.put(self.arena, a.name, {});
-    }
-    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| try vars.put(self.arena, v.name, {});
-    const ex = &self.file.exprs;
-    for (0..ex.nodes.len) |i| {
-        const e: Ast.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
-        if (ex.tag(e) != .index or !runtimeSub(self, &vars, module.genvars, ex.rhs(e))) continue;
-        var base = ex.lhs(e);
-        while (ex.tag(base) == .index) base = ex.lhs(base);
-        if (ex.tag(base) == .ident) try self.param_state.mem_names.put(self.arena, ex.strOf(base), {});
-    }
-}
-
-fn runtimeSub(self: *const Lower, vars: *const std.AutoHashMapUnmanaged(Ast.StrId, void), genvars: []const Ast.StrId, e: Ast.ExprId) bool {
-    const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .ident => {
-            const n = ex.strOf(e);
-            if (std.mem.indexOfScalar(Ast.StrId, genvars, n) != null) return false;
-            return vars.contains(n) or self.param_index.contains(self.file.str(n));
-        },
-        .call, .sys_call, .hier_ident, .branch_access, .port_access, .filter_call, .noise_call => return true,
-        else => { // else: every other node is runtime exactly when an operand is
-            var buf: [3]Ast.ExprId = undefined;
-            for (ex.children(e, &buf)) |c| if (runtimeSub(self, vars, genvars, c)) return true;
-            return false;
-        },
-    }
-}
-
-/// §5.10. Collect the variables assigned inside an `@(<event>)` body, before
-/// any of them is declared.
-pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    for (module.analog) |blk| try scanHeld(self, blk.body, false);
-    self.param_state.held_frames.clearRetainingCapacity();
-    // §3.2 retention, beside the §5.10 rule above: see `Exposed`.
-    var x: Exposed = .{ .l = self, .vars = module.vars };
-    for (module.analog) |blk| {
-        // §5.2.1 an `analog initial` body runs on the first evaluation only,
-        // so what it assigns is not assigned on the later ones.
-        x.in_initial = blk.is_initial;
-        if (blk.is_initial) try x.maybe(blk.body, .none) else try x.stmt(blk.body);
-    }
-    self.param_state.held_frames.clearRetainingCapacity();
-    var it = x.reads.keyIterator();
-    while (it.next()) |k| if (x.writes.contains(k.*)) {
-        const gop = try self.param_state.held_names.getOrPut(self.arena, k.*);
-        if (gop.found_existing) continue;
-        // Otherwise the held value is observable only when a write's
-        // placement varies from one evaluation to the next, which only
-        // codegen's solve-invariance can say.
-        gop.value_ptr.* = if (x.reach.contains(k.*) or x.initial.contains(k.*)) .retained else .unless_invariant;
-    };
-    it = x.reads.keyIterator();
-    while (it.next()) |k| if (x.initial.contains(k.*) or self.param_state.held_names.get(k.*) == .event)
-        try self.param_state.carried.put(self.arena, k.*, {});
-}
-
-/// VerA's `vera_scratch` (§2.9) on the variable declared at token `tok`: the
-/// last spec wins; §2.9's default 1 when it has no value, otherwise a
-/// constant that folds without the model card, since it decides whether the
-/// device keeps a slot (E0534, and the variable is held where observable).
-/// The string `"uninit"` drops the zero start too; any other string is E0538.
-fn scratchOn(self: *Lower, tok: u32) Oom!Scratch {
-    const a = scratchSpec(self, tok) orelse return .off;
-    if (a.value == .none) return .zero;
-    const c = lower_constfold.foldExpr(self, a.value, false) orelse {
-        try self.err(a.main_tok, .E0534, "", .{});
-        return .off;
-    };
-    return scratchMode(c) orelse {
-        try self.err(a.main_tok, .E0538, "`\"{s}\"`", .{c.str});
-        return .off;
-    };
-}
-
-const Scratch = enum { off, zero, uninit };
-
-/// The mode a folded `vera_scratch` value names; null for a string other than
-/// `"uninit"` (E0538).
-fn scratchMode(c: Const) ?Scratch {
-    return switch (c) {
-        .str => |s| if (std.mem.eql(u8, s, "uninit")) .uninit else null,
-        .int, .real => if (c.isTrue()) .zero else .off,
-    };
-}
-
-/// §2.9 E0535: every `vera_scratch` in `module` decorates a variable
-/// declaration (§3.2), the only item with a value an evaluation assigns.
-pub fn checkScratchOwners(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    for (module.attrs) |a| {
-        if (!std.mem.eql(u8, self.file.str(a.name), "vera_scratch")) continue;
-        const on_var = outer: for (self.file.attributes.items) |b| {
-            if (b.owner.kind != .declaration) continue;
-            for (b.specs) |s| if (s.main_tok == a.main_tok and isVarTok(self, module, b.owner.tok)) break :outer true;
-        } else false;
-        if (!on_var) try self.err(a.main_tok, .E0535, "", .{});
-    }
-    // E0537: VAMS §7.2.2 gives a variable a discrete process (an `initial`
-    // or `always` block, or a task, A.2.7) assigns to the discrete context,
-    // where IEEE 1364-2005 §4.2.2 says it "shall retain [its] value until the
-    // next assignment". The digital kernel owns that storage, so the analog
-    // evaluation this attribute is about never resets it.
-    var writes: std.ArrayList(Ast.ExprId) = .empty;
-    for (module.discrete) |blk| try lower_context.collectWrites(self, blk.body, &writes);
-    for (module.tasks) |t| try lower_context.collectWrites(self, t.body, &writes);
-    if (writes.items.len == 0) return;
-    var digital: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
-    for (writes.items) |w| try digital.put(self.arena, self.file.exprs.strOf(w), {});
-    for (module.vars) |v| try refuseDigitalScratch(self, &digital, v);
-    for (module.tasks) |t| for (t.vars) |v| try refuseDigitalScratch(self, &digital, v);
-    // A named block's locals inside a discrete process are the process's.
-    const Blocks = struct {
-        l: *Lower,
-        digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void),
-        pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
-        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
-            if (s == .none) return;
-            if (w.l.file.stmt(s) == .block) for (w.l.file.stmt(s).block.vars) |v| try refuseDigitalScratch(w.l, w.digital, v);
-            try w.l.file.stmtEdges(s, w);
-        }
-    };
-    const walk: Blocks = .{ .l = self, .digital = &digital };
-    for (module.discrete) |blk| try walk.stmt(blk.body);
-    for (module.tasks) |t| try walk.stmt(t.body);
-}
-
-/// `vera_scratch` on `v`, when on, and a discrete process writes `v` (E0537).
-/// A value that does not fold (E0534) or names no mode (E0538) is reported at
-/// the declaration.
-fn refuseDigitalScratch(self: *Lower, digital: *const std.AutoHashMapUnmanaged(Ast.StrId, void), v: Ast.VarDecl) Oom!void {
-    if (!digital.contains(v.name)) return;
-    const a = scratchSpec(self, v.main_tok) orelse return;
-    if (a.value != .none) {
-        const c = lower_constfold.foldExpr(self, a.value, false) orelse return;
-        if ((scratchMode(c) orelse return) == .off) return;
-    }
-    try self.err(a.main_tok, .E0537, "`{s}`", .{self.file.str(v.name)});
-}
-
-/// The last `vera_scratch` spec on the declaration at token `tok` (§2.9).
-fn scratchSpec(self: *const Lower, tok: u32) ?Ast.NatureAttr {
-    var spec: ?Ast.NatureAttr = null;
-    for (self.file.attributes.items) |b| if (b.owner.kind == .declaration and b.owner.tok == tok) for (b.specs) |s| {
-        if (std.mem.eql(u8, self.file.str(s.name), "vera_scratch")) spec = s;
-    };
-    return spec;
-}
-
-fn isVarTok(self: *const Lower, module: *const Ast.ModuleDecl, tok: u32) bool {
-    for (module.vars) |v| if (v.main_tok == tok) return true;
-    for (module.functions) |f| for (f.vars) |v| if (v.main_tok == tok) return true;
-    for (module.tasks) |t| for (t.vars) |v| if (v.main_tok == tok) return true;
-    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| if (v.main_tok == tok) return true;
-    return false;
-}
-
-/// §3.2: "Real variables are initialized to zero (0) at the start of a
-/// simulation" — once, not per evaluation — and §5.6.1.3: "Unlike variables,
-/// the contributed value for a branch is only valid for the current
-/// iteration." A variable keeps its value from one evaluation to the next.
-///
-/// Only a READ that some path reaches before any WRITE of the same evaluation
-/// can observe that (an upward-exposed use), so those variables, if the analog
-/// block writes them at all, get a §5.10 slot; one assigned before every read
-/// on every path needs none. §7.3.2's `avar = avar; // hold value` is the case.
-///
-/// Two of those always observe the held value, so they are `.retained`: a
-/// variable an `analog initial` body writes (§5.2.1, read on later
-/// evaluations), and an exposed read that REACHES a later write of the same
-/// evaluation (`avar = avar`: what it reads is what the last evaluation
-/// wrote). The rest are `.unless_invariant`: no read precedes a write, so the
-/// held value is seen only if whether a write runs changes between
-/// evaluations, which `pruneHeld` (codegen/plan/setup.zig) decides.
-///
-/// §3.2.2 an array is its scalarized elements, so a write whose subscripts
-/// are literals assigns that element, and an array read with a subscript that does not
-/// fold (or of the whole array) needs every element assigned.
-///
-/// ponytail: a definite-assignment walk over the AST, conservative where it is
-/// cheap to be — any other subscript assigns nothing, a loop or
-/// event body may not run, and after a §5.11 `disable` nothing counts. Each is
-/// a slot that might not be needed, never a hold that is missed.
-const Exposed = struct {
-    l: *Lower,
-    /// The module's variables; a named block's are in `held_frames`.
-    vars: []const Ast.VarDecl,
-    /// Keys assigned on every path to here; `list` is the same set in the
-    /// order added, so a branch is undone by truncating it.
-    defs: std.StringHashMapUnmanaged(void) = .empty,
-    list: std.ArrayList([]const u8) = .empty,
-    /// Keys read where `defs` did not have them, and keys written anywhere.
-    reads: std.StringHashMapUnmanaged(void) = .empty,
-    writes: std.StringHashMapUnmanaged(void) = .empty,
-    disabled: bool = false,
-    /// Keys with an exposed read on SOME path to here (a may-set, undone per
-    /// arm like `defs`); a write of one of them is reached by that read.
-    pend: std.StringHashMapUnmanaged(void) = .empty,
-    pend_list: std.ArrayList([]const u8) = .empty,
-    reach: std.StringHashMapUnmanaged(void) = .empty,
-    /// Keys an `analog initial` body writes.
-    initial: std.StringHashMapUnmanaged(void) = .empty,
-    in_initial: bool = false,
-
-    fn def(x: *Exposed, k: []const u8) Oom!void {
-        if (x.disabled or x.defs.contains(k)) return;
-        try x.defs.put(x.l.arena, k, {});
-        try x.list.append(x.l.arena, k);
-    }
-
-    fn undo(x: *Exposed, mark: usize) void {
-        for (x.list.items[mark..]) |k| _ = x.defs.remove(k);
-        x.list.shrinkRetainingCapacity(mark);
-    }
-
-    fn exposed(x: *Exposed, k: []const u8) Oom!void {
-        try x.reads.put(x.l.arena, k, {});
-        if (x.pend.contains(k)) return;
-        try x.pend.put(x.l.arena, k, {});
-        try x.pend_list.append(x.l.arena, k);
-    }
-
-    fn write(x: *Exposed, k: []const u8) Oom!void {
-        try x.writes.put(x.l.arena, k, {});
-        if (x.pend.contains(k)) try x.reach.put(x.l.arena, k, {});
-        if (x.in_initial) try x.initial.put(x.l.arena, k, {});
-    }
-
-    /// §5.9 a loop body may run again after itself, so it is walked twice:
-    /// a read in one iteration reaches a write in the next.
-    fn loop(x: *Exposed, body: Ast.StmtId, step: Ast.StmtId) Oom!void {
-        const mark = x.list.items.len;
-        for (0..2) |_| {
-            try x.stmt(body);
-            try x.stmt(step);
-        }
-        x.undo(mark);
-    }
-
-    /// `a` then `b` on a path that may not take them (§5.10, §5.2.1).
-    fn maybe(x: *Exposed, a: Ast.StmtId, b: Ast.StmtId) Oom!void {
-        const mark = x.list.items.len;
-        try x.stmt(a);
-        try x.stmt(b);
-        x.undo(mark);
-    }
-
-    /// One of `arms` runs; `.none` is the empty arm. Keeps what all assign.
-    fn alts(x: *Exposed, arms: []const Ast.StmtId) Oom!void {
-        const mark = x.list.items.len;
-        const pmark = x.pend_list.items.len;
-        var pended: std.ArrayList([]const u8) = .empty;
-        var common: ?[]const []const u8 = null;
-        for (arms) |arm| {
-            try x.stmt(arm);
-            // The arms exclude each other: one's reads reach no write of another.
-            try pended.appendSlice(x.l.arena, x.pend_list.items[pmark..]);
-            for (x.pend_list.items[pmark..]) |k| _ = x.pend.remove(k);
-            x.pend_list.shrinkRetainingCapacity(pmark);
-            const got = x.list.items[mark..];
-            if (common) |c| {
-                var keep: std.ArrayList([]const u8) = .empty;
-                for (c) |k| for (got) |g| if (std.mem.eql(u8, k, g)) {
-                    try keep.append(x.l.arena, k);
-                    break;
-                };
-                common = keep.items;
-            } else common = try x.l.arena.dupe([]const u8, got);
-            x.undo(mark);
-        }
-        for (common orelse &.{}) |k| try x.def(k);
-        for (pended.items) |k| if (!x.pend.contains(k)) {
-            try x.pend.put(x.l.arena, k, {});
-            try x.pend_list.append(x.l.arena, k);
-        };
-    }
-
-    fn stmt(x: *Exposed, id: Ast.StmtId) Oom!void {
-        if (id == .none) return;
-        const self = x.l;
-        const s = self.file.stmt(id);
-        // §5.9.2 the init assignment runs once, before the condition is read.
-        if (s == .for_stmt) try x.stmt(s.for_stmt.init);
-        // §9.4 a print the device drops reads nothing in the device.
-        const dropped = s == .sys_task and self.displays_dropped and
-            Mir.callee.family(.fromName(self.file.str(s.sys_task.name))) == .display;
-        if (!dropped) try self.file.stmtEdges(id, Own{ .x = x });
-        const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
-        var ws: std.ArrayList(Ast.ExprId) = .empty;
-        try self.file.stmtWrites(funcs, id, self.arena, &ws);
-        for (ws.items) |w| {
-            const t = self.file.lvalueBase(w);
-            if (t == .none) continue;
-            const k = try heldKey(self, self.file.str(self.file.exprs.strOf(t)));
-            try x.write(k);
-            if (t == w) try x.def(k) else if (try x.elem(k, w)) |ek| try x.def(ek);
-        }
-        switch (s) {
-            .block => |b| {
-                // The same frames `scanHeld` keeps, so the keys agree.
-                const named = b.name != .none;
-                if (named) {
-                    const outer = if (self.param_state.held_frames.last()) |f| f.prefix else "";
-                    try self.param_state.held_frames.append(self.arena, .{
-                        .prefix = try self.arena.print("{s}{s}.", .{ outer, self.file.str(b.name) }),
-                        .vars = b.vars,
-                    });
-                }
-                for (b.body) |c| try x.stmt(c);
-                if (named) _ = self.param_state.held_frames.pop();
-            },
-            .if_stmt => |c| try x.alts(&.{ c.then_s, c.else_s }),
-            .case_stmt => |c| {
-                var arms: std.ArrayList(Ast.StmtId) = .empty;
-                var dflt = false;
-                for (c.arms) |arm| {
-                    try arms.append(self.arena, arm.body);
-                    dflt = dflt or arm.labels.len == 0;
-                }
-                if (!dflt) try arms.append(self.arena, .none);
-                try x.alts(arms.items);
-            },
-            .for_stmt => |c| try x.loop(c.body, c.step),
-            .while_stmt => |c| try x.loop(c.body, .none),
-            .repeat_stmt => |c| try x.loop(c.body, .none),
-            .event_control => |c| try x.maybe(c.body, .none),
-            .disable => x.disabled = true,
-            // A `break`/`continue` leaves a loop body, whose assignments never
-            // count past the loop anyway; `return` ends a function, not this.
-            .jump, .empty, .event_trigger, .assign, .contribute, .indirect, .sys_task => {},
-        }
-    }
-
-    /// `stmtEdges` visitor: the statement's own expressions, children skipped.
-    const Own = struct {
-        x: *Exposed,
-        pub fn expr(o: Own, e: Ast.ExprId, edge: Ast.SourceFile.Edge) Oom!void {
-            switch (edge) {
-                .read, .branch => try o.x.read(e),
-                .write => try o.x.subscripts(e),
-            }
-        }
-        pub fn stmt(_: Own, _: Ast.StmtId) Oom!void {}
-    };
-
-    fn read(x: *Exposed, e: Ast.ExprId) Oom!void {
-        if (e == .none) return;
-        const file = x.l.file;
-        const ex = &file.exprs;
-        const t = file.lvalueBase(e);
-        if (t != .none) {
-            // Subscripts first; they are reads of their own.
-            var i = e;
-            while (i != t) : (i = ex.lhs(i)) try x.read(ex.rhs(i));
-            const k = try heldKey(x.l, file.str(ex.strOf(t)));
-            if (x.defs.contains(k)) return;
-            if (t != e) if (try x.elem(k, e)) |ek| {
-                if (!x.defs.contains(ek)) try x.exposed(k);
-                return;
-            };
-            // The whole variable, or an element nobody can name statically.
-            if (!x.allCells(k, file.str(ex.strOf(t)))) try x.exposed(k);
-            return;
-        }
-        // §4.7.2.3 an `output` actual is written by the call, not read.
-        if (ex.tag(e) == .call) {
-            const funcs: []const Ast.FuncDecl = if (x.l.out.module) |m| m.functions else &.{};
-            for (funcs) |fd| if (fd.name == ex.strOf(e)) {
-                for (ex.args(e), 0..) |a, i| {
-                    if (i < fd.args.len and fd.args[i].direction == .output) try x.subscripts(a) else try x.read(a);
-                }
-                return;
-            };
-        }
-        var buf: [3]Ast.ExprId = undefined;
-        for (ex.children(e, &buf)) |c| try x.read(c);
-    }
-
-    /// What writing lvalue `e` reads: only its subscripts, and an A.8.1
-    /// assignment pattern's elements' (§4.7.2.3).
-    fn subscripts(x: *Exposed, e: Ast.ExprId) Oom!void {
-        if (e == .none) return;
-        const ex = &x.l.file.exprs;
-        if (ex.tag(e) == .assign_pattern) {
-            for (ex.args(e)) |a| try x.subscripts(a);
-            return;
-        }
-        var t = e;
-        while (ex.tag(t) == .index) : (t = ex.lhs(t)) try x.read(ex.rhs(t));
-    }
-
-    /// `k[i][j]` when every subscript of `e` is a literal, else null.
-    fn elem(x: *Exposed, k: []const u8, e: Ast.ExprId) Oom!?[]const u8 {
-        const ex = &x.l.file.exprs;
-        var idx: std.ArrayList(i64) = .empty;
-        var i = e;
-        while (ex.tag(i) == .index) : (i = ex.lhs(i)) {
-            if (ex.tag(ex.rhs(i)) == .range) return null;
-            // Not through a parameter: a model card may override it (§3.4).
-            const c = lower_constfold.foldExpr(x.l, ex.rhs(i), false) orelse return null;
-            try idx.insert(x.l.arena, 0, c.asInt());
-        }
-        return try elemName(x.l, k, idx.items);
-    }
-
-    /// Is every §3.2.2 element of array `k` (declared `name`) assigned?
-    /// False for a scalar, whose own key `read` has already tried.
-    fn allCells(x: *Exposed, k: []const u8, name: []const u8) bool {
-        const decl = x.declOf(name) orelse return false;
-        if (decl.dims.len == 0) return false;
-        var cells: usize = 1;
-        for (decl.dims) |d| {
-            const a = lower_constfold.constEval(x.l, d.msb) orelse return false;
-            const b = lower_constfold.constEval(x.l, d.lsb) orelse return false;
-            cells *= @abs(a.asInt() - b.asInt()) + 1;
-        }
-        var have: usize = 0;
-        for (x.list.items) |d| have += @intFromBool(d.len > k.len and std.mem.startsWith(u8, d, k) and d[k.len] == '[');
-        return have == cells;
-    }
-
-    /// The nearest declaration of `name`, as `heldKey` resolves it.
-    fn declOf(x: *Exposed, name: []const u8) ?*const Ast.VarDecl {
-        const frames = x.l.param_state.held_frames.items;
-        var i = frames.len;
-        while (i > 0) {
-            i -= 1;
-            for (frames[i].vars) |*v| if (x.l.file.strings.eql(v.name, name)) return v;
-        }
-        for (x.vars) |*v| if (x.l.file.strings.eql(v.name, name)) return v;
-        return null;
-    }
-};
-
-/// §5.3.2: "The block names give a means of uniquely identifying all variables
-/// at any simulation time." Which location an assignment target names is
-/// decided by the NEAREST declaration of it, so the walk looks outward from the
-/// innermost named block and falls back to the bare (module-scope) name — a
-/// module variable assigned from inside a block is still the module's.
-fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
-    var i = self.param_state.held_frames.items.len;
-    while (i > 0) {
-        i -= 1;
-        const f = self.param_state.held_frames.items[i];
-        for (f.vars) |v| {
-            if (!self.file.strings.eql(v.name, name)) continue;
-            return self.arena.print("{s}{s}", .{ f.prefix, name });
-        }
-    }
-    return name;
-}
-
-/// One walk, two modes: outside an event body we are only looking for the
-/// `@(...)`; inside one, every variable a statement WRITES has to survive to
-/// the next evaluation. "Writes" is `Ast.SourceFile.stmtWrites`, not only the
-/// assignment target: an output actual or a `$random` seed counts too.
-fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
-    if (id == .none) return;
-    if (in_event) {
-        const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
-        var writes: std.ArrayList(Ast.ExprId) = .empty;
-        defer writes.deinit(self.arena);
-        try self.file.stmtWrites(funcs, id, self.arena, &writes);
-        // §3.2 `x[i] = …` holds the ARRAY; `declareVarDecl` scalarizes it.
-        for (writes.items) |w| {
-            const t = self.file.lvalueBase(w);
-            if (t == .none) continue;
-            try self.param_state.held_names.put(self.arena, try heldKey(self, self.file.str(self.file.exprs.strOf(t))), .event);
-        }
-    }
-    switch (self.file.stmt(id)) {
-        .block => |b| {
-            // §5.3.2 only a NAMED block's locals are static, so only a label
-            // opens a frame; an unnamed `begin`'s declarations are ordinary.
-            const named = b.name != .none;
-            if (named) {
-                const outer = if (self.param_state.held_frames.last()) |f| f.prefix else "";
-                try self.param_state.held_frames.append(self.arena, .{
-                    .prefix = try self.arena.print("{s}{s}.", .{ outer, self.file.str(b.name) }),
-                    .vars = b.vars,
-                });
-            }
-            for (b.body) |s| try scanHeld(self, s, in_event);
-            if (named) _ = self.param_state.held_frames.pop();
-        },
-        // §5.10 forbids nesting, so `true` is never re-entered; lowering
-        // diagnoses that (E0703) and this walk does not need to.
-        .event_control => |s| try scanHeld(self, s.body, true),
-        // The rest: only their child statements, whose writes the walk collects.
-        else => try self.file.stmtEdges(id, Held{ .l = self, .in_event = in_event }), // else: stmtEdges is exhaustive
-    }
-}
-
-const Held = struct {
-    l: *Lower,
-    in_event: bool,
-    pub fn expr(_: Held, _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
-    pub fn stmt(h: Held, s: Ast.StmtId) Oom!void {
-        try scanHeld(h.l, s, h.in_event);
-    }
-};
-
-/// Returns a variable's §3.2 zero start; a string's is `.undef`.
-pub fn zeroOf(ty: Ty) Mir.Value {
-    return switch (ty) {
-        .real => .f_zero,
-        .integer => .zero,
-        .string => .undef,
-    };
 }
