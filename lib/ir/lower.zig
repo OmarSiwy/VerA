@@ -127,6 +127,16 @@ const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// an ordinary SSA boolean; on a straight line it folds to a constant.
 pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
 
+// Budgets (64-bit host) of the rows lowering keeps one of per value or per
+// variable: `TypedValue` is every expression's result, `VarSlot` a `vars`
+// value (~1.5k on psp103), `BranchRead` one per access-function read.
+comptime {
+    assert(@sizeOf(TypedValue) == 8);
+    assert(@sizeOf(VarSlot) == 16);
+    assert(@sizeOf(BranchRead) == 12);
+    assert(@sizeOf(Accum) == 12);
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
