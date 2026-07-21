@@ -4,6 +4,36 @@
 //! overrides and §6.3.1 defparam, §6.4 paramsets, §6.6 if-generate, §6.7
 //! hierarchical names (`Design.names`), §7.8 connect-module insertion, and
 //! Annex F.2 discipline resolution.
+//!
+//! The spine, `elaborate` then `Flatten.run`:
+//!
+//!     alias.checkSource           §3.4.7 alias reads, before anything folds
+//!     gen_instances, pickTop      §6.6 table, §6.2.2 the root
+//!     names / resolve checks      E.3.3, §7.7, A.2.1.3, §7.4.2 (every module)
+//!     run: seed the top           its own declarations, unrenamed
+//!       instance.walkInstances    per level: override.collectDefparams,
+//!                                 resolve.collectOoc, insert.plan, then per
+//!                                 instance inlineInstance (ports, overrides,
+//!                                 names, clone.*, recurse)
+//!       resolve post-passes       E.3.2.2 primitive ports, F.2.1 step 4
+//!       override.reportUnused...  §6.3.1 E0907
+//!       publish `fate`            one `Ast.ModuleDecl`, plus `Design` tables
+//!       alias.checkFlat           §3.4.7 hierarchical alias reads
+//!
+//! Who writes which `Flatten` table: the synthesized declaration lists,
+//! `unit_paths`, `names`, `implicit_nets`, `unconnected_inputs`,
+//! `port_concats`, `port_widths`, `ps_hidden` and `prim_ports` are
+//! `instance.zig`'s (with `clone.cloneParams` appending `params`/
+//! `aliasparams`); `defparams` and `paramset_defparams` are `override.zig`'s;
+//! `nets`, `disc_of`, `segs`, `port_resolved`, `ooc` and
+//! `signal_disciplines` are `resolve.zig`'s (`addNet` is the only net
+//! append); `inserts` is `insert.zig`'s; `selection_params` is
+//! `paramset.zig`'s; `attribute_disciplines`, `pending_attributes` and
+//! `expression_aliases` are written by `clone.zig` during the clone and
+//! settled by `resolve.resolveMultiCandidates`. `unit` is not a table but the
+//! namespace in force: `inlineInstance` pushes and pops it, and a pass that
+//! clones text written in another scope (`override.collectOverrides`,
+//! `paramset.paramsetOverrides`, `clone.paramsetOomr`) swaps it and restores.
 
 const std = @import("std");
 const hier_param = @import("hier_param.zig");
@@ -15,6 +45,9 @@ const elab_names = @import("elaborate/names.zig");
 const elab_override = @import("elaborate/override.zig");
 const elab_paramset = @import("elaborate/paramset.zig");
 const elab_resolve = @import("elaborate/resolve.zig");
+/// §6.7 a hierarchical expression → the flat name it denotes; lowering's
+/// path resolution and the §3.4.7 alias check share it. See
+/// `elaborate/names.zig`.
 pub const flatReference = elab_names.flatReference;
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
@@ -364,9 +397,14 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
 
 /// The flatten's state: the synthesized module's declaration lists, the rename
 /// map of the unit being cloned, and the side tables `Design` publishes. Every
-/// allocation is in `ctx.arena`.
+/// allocation is in `ctx.arena` and lives as long as the compilation; `run`
+/// hands the lists' `items` to `Design` without copying. The file header
+/// names each table's writer.
 pub const Flatten = struct {
     ctx: Ctx,
+    /// Set by `err` and by the pre-walk checks; `run` turns it into
+    /// `error.DiagnosticsReported` after the walk, so one design reports
+    /// every error it has rather than the first.
     had_error: bool = false,
     /// §6.6 every module's generate-block instances (`genInstanceList`),
     /// indexed like `ctx.file.modules`; read through `genInstancesOf`.
@@ -382,6 +420,8 @@ pub const Flatten = struct {
     ps_hidden: std.ArrayList([]const u8) = .empty,
     /// `Design.paramset_defparams`, before generate schemes have final values.
     paramset_defparams: std.ArrayList(ParamsetDefparam) = .empty,
+    /// `Design.selection_params`: flat parameters a §6.4.2 overload choice
+    /// read. May repeat a name; readers treat it as a set.
     selection_params: std.ArrayList(Ast.StrId) = .empty,
 
     // The synthesized module's declarations, in append order.
@@ -448,7 +488,7 @@ pub const Flatten = struct {
 
     /// §6.3.1 every `defparam` seen so far, keyed by the absolute flat name of
     /// the parameter it overrides: the declaring module's path joined with the
-    /// path the source wrote. Collected on the way down (`walkInstances`),
+    /// path the source wrote. Collected on the way down (`override.collectDefparams`),
     /// which is before any instance below it is inlined, so a defparam is always
     /// in the map before the parameter it names is created.
     defparams: std.StringHashMapUnmanaged(elab_override.Defparam) = .empty,
@@ -491,6 +531,11 @@ pub const Flatten = struct {
         /// Answers for undeclared segments, keyed by their arrival index.
         resolved: std.AutoHashMapUnmanaged(u32, ?Ast.StrId) = .empty,
         tok: u32,
+
+        comptime {
+            // One row per port-bound flat net; three containers and a token, 96 B.
+            std.debug.assert(@sizeOf(Segs) == 96);
+        }
     };
 
     /// Per-instance clone state: the rename map and the §9.18/§9.19 answers
@@ -544,6 +589,9 @@ pub const Flatten = struct {
         return self.ctx.bag.add(.lower, code, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, tok), fmt, args);
     }
 
+    /// The flatten's spine (see the file header): seeds the flat namespace
+    /// with the top's own declarations, walks the instance tree, runs the
+    /// post-walk passes and publishes `Design`.
     fn run(self: *Flatten, top: *const Ast.ModuleDecl) Error!Design {
         // The top's own declarations go in unrenamed and uncloned: it IS the
         // flat namespace, so an identity rename would rewrite every expression

@@ -61,10 +61,10 @@ pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId 
 }
 
 /// A flat name `path ++ local`, not yet joined: the key shape of
-/// `Flatten.defparams` and `Flatten.ooc`, looked up with `getAdapted` so a
-/// probe allocates nothing. A lookup used to print the joined key into the
-/// compilation arena and drop it, once per parameter, alias, port and net of
-/// every instance.
+/// `Flatten.defparams` and `Flatten.ooc`, probed with `getAdapted` and
+/// `Context` so a lookup allocates nothing.
+// A probe used to print the joined key into the compilation arena and drop
+// it, once per parameter, alias, port and net of every instance.
 pub const PathKey = struct {
     path: []const u8,
     local: []const u8,
@@ -73,12 +73,14 @@ pub const PathKey = struct {
     /// over the two halves equals Wyhash of their concatenation, so the probe
     /// lands in the bucket the stored `path ++ local` key hashed to.
     pub const Context = struct {
+        /// Returns `StringContext.hash(k.path ++ k.local)`.
         pub fn hash(_: Context, k: PathKey) u64 {
             var h: std.hash.Wyhash = .init(0);
             h.update(k.path);
             h.update(k.local);
             return h.final();
         }
+        /// Returns whether `stored` is exactly `k.path ++ k.local`.
         pub fn eql(_: Context, k: PathKey, stored: []const u8) bool {
             return stored.len == k.path.len + k.local.len and
                 std.mem.startsWith(u8, stored, k.path) and

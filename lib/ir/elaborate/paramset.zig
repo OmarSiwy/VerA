@@ -283,15 +283,19 @@ const ParamsetEnv = struct {
         return constfold.parameterValue(p.ty, raw orelse return null);
     }
 
+    /// Resolves an identifier naming one of the candidate's parameters to
+    /// its effective value; anything else declines.
     pub fn leaf(env: ParamsetEnv, e: Ast.ExprId) ?constfold.Const {
         const ex = &env.self.ctx.file.exprs;
         if (ex.tag(e) != .ident) return null;
         for (env.ps.params, 0..) |p, i| if (p.name == ex.strOf(e)) return env.value(i);
         return null;
     }
+    /// Leaves operand signedness unknown.
     pub fn signed(_: ParamsetEnv, _: Ast.ExprId) ?bool {
         return null;
     }
+    /// Leaves a parameter's width unknown.
     pub fn width(_: ParamsetEnv, _: Ast.ExprId) ?u32 {
         return null;
     }

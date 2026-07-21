@@ -464,7 +464,7 @@ fn inlineInstance(
     try elab_clone.cloneParams(self, child.params, child.aliasparams, &over);
     for (child.nets) |n| {
         // Annex F.2.1 step 3: a dotted declaration is an out-of-context one,
-        // already collected by `walkInstances`. It declares no net HERE.
+        // already collected by `resolve.collectOoc`. It declares no net HERE.
         if (elab_resolve.isOoc(self.ctx.file.str(n.name))) continue;
         var out = n;
         out.name = elab_names.flat(self, n.name);
