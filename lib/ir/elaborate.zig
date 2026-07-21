@@ -212,9 +212,18 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     if (ctx.file.userModules().len == 0) return error.NoModule;
     try elab_alias.checkSource(ctx); // §3.4.7, before any folding or cloning
 
-    const top = try pickTop(ctx);
+    // §6.6 each module's generate-block instances, walked once: `pickTop`,
+    // the tree-of-one test and every inlined instance read them.
+    const gen_instances = try ctx.arena.alloc([]const Ast.Instance, ctx.file.modules.len);
+    for (ctx.file.modules, gen_instances) |*m, *out| {
+        var list: std.ArrayList(Ast.Instance) = .empty;
+        for (m.analog) |blk| try elab_instance.genInstanceList(ctx.file, blk.body, ctx.arena, &list);
+        out.* = list.items;
+    }
 
-    var f: Flatten = .{ .ctx = ctx };
+    const top = try pickTop(ctx, gen_instances);
+
+    var f: Flatten = .{ .ctx = ctx, .gen_instances = gen_instances };
     try elab_names.warnSpiceShadows(&f);
     // §7.7's names are judged whether or not the design has a hierarchy to
     // resolve: a `connectrules` block is a description of the COMPILATION
@@ -230,9 +239,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // A tree of one goes to lowering by pointer, untouched. A `defparam` with
     // no instance still takes the flatten: §6.3.1's path then names nothing,
     // and the flatten is where that E0907 is reported.
-    var gen: std.ArrayList(Ast.Instance) = .empty;
-    for (top.analog) |blk| try elab_instance.genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
-    if (top.instances.len == 0 and top.defparams.len == 0 and gen.items.len == 0) {
+    if (top.instances.len == 0 and top.defparams.len == 0 and f.genInstancesOf(top).len == 0) {
         if (f.had_error) return error.DiagnosticsReported;
         try elab_alias.checkFlat(ctx, top, top.aliasparams);
         return .{ .top = top };
@@ -245,44 +252,43 @@ pub fn elaborate(ctx: Ctx) Error!Design {
 /// order, that nothing instantiates. A child may be declared before its
 /// parent. Several roots are not diagnosed: A.1.2 lets a source_text hold
 /// unrelated descriptions and §6.2.1 gives no rule for choosing between them.
-fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
-    const mods = ctx.file.modules;
+///
+/// `gen_instances` is `Flatten.gen_instances`. Every instantiated name is
+/// collected once, so the choice costs one pass over the instances rather
+/// than one per candidate.
+fn pickTop(ctx: Ctx, gen_instances: []const []const Ast.Instance) Error!*const Ast.ModuleDecl {
+    const file = ctx.file;
     // Annex E: a candidate is a module the USER wrote. The shipped Table E.1
     // primitives instantiate nothing, so all nineteen are roots of the instance
     // graph and one of them would win every time. They still count as
-    // instantiators, so only the outer loop is narrowed.
-    for (ctx.file.userModules()) |*m| {
+    // instantiators, so every module's instances are collected.
+    var instantiated: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    for (file.modules, gen_instances) |*other, gen| for ([_][]const Ast.Instance{ gen, other.instances }) |list| for (list) |inst| {
+        try instantiated.put(ctx.arena, inst.module, {});
+        // §6.4 an instance that names a paramset is an incoming edge on
+        // the module the paramset specializes.
+        for (file.paramsets) |ps| {
+            if (ps.name != inst.module) continue;
+            // §6.4 "A chain of paramsets may be defined, but the last
+            // paramset in the chain shall reference a module": follow
+            // the second identifier while it keeps naming a paramset.
+            // Bounded by the paramset count, so a cycle terminates.
+            var target = ps.target;
+            for (0..file.paramsets.len) |_| {
+                target = for (file.paramsets) |p2| {
+                    if (p2.name == target) break p2.target;
+                } else break;
+            }
+            try instantiated.put(ctx.arena, target, {});
+        }
+    };
+    for (file.userModules()) |*m| {
         // §7.6: a connect module is placed by the insertion phase, not a
         // design root. Insertion runs later, during the walk, so here every
         // connect module looks like a root. Skipped in both loops, so a file
         // of only connect modules is `NoModule`.
         if (m.is_connect) continue;
-        var instantiated = false;
-        for (mods) |*other| {
-            var gen: std.ArrayList(Ast.Instance) = .empty;
-            for (other.analog) |blk| try elab_instance.genInstanceList(ctx.file, blk.body, ctx.arena, &gen);
-            for (other.instances) |inst| try gen.append(ctx.arena, inst);
-            for (gen.items) |inst| {
-                if (inst.module == m.name) instantiated = true;
-                // §6.4 an instance that names a paramset is an incoming edge on
-                // the module the paramset specializes.
-                for (ctx.file.paramsets) |ps| {
-                    if (ps.name != inst.module) continue;
-                    // §6.4 "A chain of paramsets may be defined, but the last
-                    // paramset in the chain shall reference a module": follow
-                    // the second identifier while it keeps naming a paramset.
-                    // Bounded by the paramset count, so a cycle terminates.
-                    var target = ps.target;
-                    for (0..ctx.file.paramsets.len) |_| {
-                        target = for (ctx.file.paramsets) |p2| {
-                            if (p2.name == target) break p2.target;
-                        } else break;
-                    }
-                    if (target == m.name) instantiated = true;
-                }
-            }
-        }
-        if (!instantiated) return m;
+        if (!instantiated.contains(m.name)) return m;
     }
     // Every module is instantiated by some module, so the graph is all cycles.
     // Start at the first and let E0905 name the one that closes.
@@ -362,6 +368,10 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
 pub const Flatten = struct {
     ctx: Ctx,
     had_error: bool = false,
+    /// §6.6 every module's generate-block instances (`genInstanceList`),
+    /// indexed like `ctx.file.modules`; read through `genInstancesOf`.
+    /// Built once by `elaborate`, read-only after.
+    gen_instances: []const []const Ast.Instance,
 
     /// Last `Ast.AnalogBlock.unit` handed out. 0 is the top, so the first
     /// inlined instance is 1. See that field for what it is for.
@@ -449,7 +459,7 @@ pub const Flatten = struct {
     /// "Apply all out-of-context node and signal declarations. For example,
     /// electrical top.middle.bottom.sig; overrides any discipline which may be
     /// declared for sig in the module where sig was declared."
-    ooc: std.StringHashMapUnmanaged(Ast.NetDecl) = .empty,
+    ooc: std.StringHashMapUnmanaged(Ast.StrId) = .empty,
 
     /// The rename map in force while cloning the current unit's body, plus the
     /// per-instance rewrites §9.19 and §9.18 need. `inlineInstance` saves and
@@ -479,7 +489,7 @@ pub const Flatten = struct {
         /// Each arrival's instance path, parallel to `discs`.
         paths: std.ArrayList([]const u8) = .empty,
         /// Answers for undeclared segments, keyed by their arrival index.
-        resolved: std.AutoHashMapUnmanaged(usize, ?Ast.StrId) = .empty,
+        resolved: std.AutoHashMapUnmanaged(u32, ?Ast.StrId) = .empty,
         tok: u32,
     };
 
@@ -518,6 +528,14 @@ pub const Flatten = struct {
         /// descendant module inherits it even when instantiated by module name.
         paramset_instance: ?[]const u8 = null,
     };
+
+    /// Returns `m`'s §6.6 generate-block instances. Asserts `m` is a row of
+    /// `ctx.file.modules` (what `findModule` returns), not a copy.
+    pub fn genInstancesOf(self: *const Flatten, m: *const Ast.ModuleDecl) []const Ast.Instance {
+        const mods = self.ctx.file.modules;
+        std.debug.assert(@intFromPtr(m) >= @intFromPtr(mods.ptr) and @intFromPtr(m) < @intFromPtr(mods.ptr + mods.len));
+        return self.gen_instances[(@intFromPtr(m) - @intFromPtr(mods.ptr)) / @sizeOf(Ast.ModuleDecl)];
+    }
 
     /// Reports `code` at `tok` and marks the flatten failed, so `elaborate`
     /// returns `error.DiagnosticsReported` once the walk ends.
@@ -593,17 +611,7 @@ pub const Flatten = struct {
         // top's own blocks go last, after every inlined child's.
         try self.analog.appendSlice(self.ctx.arena, top.analog);
 
-        // §6.3.1 a defparam names "the parameter ... in any module instance
-        // throughout the design", so one that matched nothing named nothing.
-        // Reported after the walk because the instance a path names may be
-        // several levels below the module the defparam is written in.
-        var it = self.defparams.iterator();
-        while (it.next()) |dp| if (!dp.value_ptr.used) try self.err(
-            dp.value_ptr.tok,
-            .E0907,
-            "`{s}` names no parameter of the elaborated design",
-            .{dp.key_ptr.*},
-        );
+        try elab_override.reportUnusedDefparams(self); // §6.3.1 E0907
 
         const out = try self.ctx.arena.create(Ast.ModuleDecl);
         const md = @typeInfo(Ast.ModuleDecl).@"struct";

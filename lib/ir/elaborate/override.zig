@@ -12,6 +12,7 @@ const Flatten = elaborate.Flatten;
 const Unit = Flatten.Unit;
 const Error = elaborate.Error;
 const elab_clone = @import("clone.zig");
+const PathKey = @import("names.zig").PathKey;
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 
@@ -27,6 +28,51 @@ pub const Defparam = struct {
     used: bool = false,
 };
 
+comptime {
+    // One row per defparam statement in the instance tree; 12 B budget.
+    std.debug.assert(@sizeOf(Defparam) == 12);
+}
+
+/// Records `module`'s §6.3.1 defparams, at its instance prefix `path`, before
+/// any child is inlined: a defparam applies downward, and the parameters it
+/// overrides are created as those instances are. Under a §6.4 paramset
+/// instance a defparam overrides nothing; it lands in
+/// `Flatten.paramset_defparams` for lowering to judge.
+pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error!void {
+    for (module.defparams) |dp| {
+        if (self.unit.paramset_instance) |instance| {
+            try self.paramset_defparams.append(self.ctx.arena, .{
+                .main_tok = dp.main_tok,
+                .instance = instance,
+                .gate = self.unit.gate,
+            });
+            // An active site is illegal; an inactive site's hierarchy
+            // does not exist. Neither may override a child parameter.
+            continue;
+        }
+        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(dp.path) });
+        try self.defparams.put(self.ctx.arena, key, .{
+            .value = try elab_clone.cloneExpr(self, dp.value),
+            .tok = dp.main_tok,
+        });
+    }
+}
+
+/// Reports E0907 for every defparam no parameter claimed. §6.3.1 a defparam
+/// names "the parameter ... in any module instance throughout the design",
+/// so one that matched nothing named nothing. Runs after the walk because
+/// the instance a path names may be several levels below the module the
+/// defparam is written in.
+pub fn reportUnusedDefparams(self: *Flatten) Error!void {
+    var it = self.defparams.iterator();
+    while (it.next()) |dp| if (!dp.value_ptr.used) try self.err(
+        dp.value_ptr.tok,
+        .E0907,
+        "`{s}` names no parameter of the elaborated design",
+        .{dp.key_ptr.*},
+    );
+}
+
 /// Returns how many of `params` an override can land on: the non-local ones
 /// (§3.4.5).
 pub fn overridableCount(params: []const Ast.ParamDecl) usize {
@@ -39,9 +85,18 @@ pub fn overridableCount(params: []const Ast.ParamDecl) usize {
 /// module; an inline value is still in the instantiating module's namespace.
 pub const ParamBinding = struct {
     value: Ast.ExprId,
+    /// The name the override was written with (an alias or the original), for
+    /// §3.4.7's conflict check; `.none` for an ordered `#(...)` value.
     spelling: Ast.StrId,
+    /// True for a defparam's value, already in the flat namespace; false for
+    /// an inline value, still in the instantiating module's names.
     flat: bool,
 };
+
+comptime {
+    // One row per paramset parameter per §6.4.2 candidate; 12 B budget.
+    std.debug.assert(@sizeOf(ParamBinding) == 12);
+}
 
 /// The same binding feeds overload selection and final parameter assignment.
 /// §6.3 lets a defparam replace an inline value under the same name. §3.4.7
@@ -77,8 +132,7 @@ pub fn parameterBinding(self: *Flatten, inst: *const Ast.Instance, params: []con
 }
 
 fn parameterDefparam(self: *Flatten, path: []const u8, original: Ast.StrId, spelling: Ast.StrId, consume: bool, found: *?ParamBinding) Error!void {
-    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(spelling) });
-    const dp = self.defparams.getPtr(key) orelse return;
+    const dp = self.defparams.getPtrAdapted(PathKey{ .path = path, .local = self.ctx.file.str(spelling) }, PathKey.Context{}) orelse return;
     if (consume) {
         dp.used = true;
         if (found.*) |before| if (before.spelling != .none and before.spelling != spelling)
@@ -243,8 +297,7 @@ pub fn collectOverrides(
 }
 
 fn collectSystemDefparam(self: *Flatten, path: []const u8, kind: hier_param.Kind, name: Ast.StrId, specified: *hier_param.Values, spellings: *std.EnumArray(hier_param.Kind, Ast.StrId)) Error!void {
-    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(name) });
-    const dp = self.defparams.getPtr(key) orelse return;
+    const dp = self.defparams.getPtrAdapted(PathKey{ .path = path, .local = self.ctx.file.str(name) }, PathKey.Context{}) orelse return;
     dp.used = true;
     const previous = spellings.get(kind);
     if (previous != .none and previous != name) {
