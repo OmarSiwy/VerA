@@ -14,7 +14,8 @@ const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
-const declares = Flatten.declares;
+const declares = @import("instance.zig").declares;
+const PathKey = elab_names.PathKey;
 
 // ---- Annex F.2 discipline resolution ----------------------------------
 
@@ -63,12 +64,31 @@ pub fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!vo
 /// diagnosed as an unmatched `defparam` is (E0907): from here it cannot be
 /// told apart from a legal form this pass does not reach. The upgrade is a
 /// `used` flag on `ooc`, like `Defparam.used`.
-pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?Ast.StrId {
-    // The same allocPrint join every sibling key builds (`defparams`,
-    // `walkInstances`); a fixed buffer would silently drop long paths.
-    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(local) });
-    const n = self.ooc.get(key) orelse return null;
-    return if (n.discipline == .none) null else n.discipline;
+pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
+    const d = self.ooc.getAdapted(PathKey{ .path = path, .local = self.ctx.file.str(local) }, PathKey.Context{}) orelse return null;
+    return if (d == .none) null else d;
+}
+
+/// Annex F.2.1 step 3: records `module`'s out-of-context discipline
+/// declarations under its instance prefix `path`, before any child is
+/// inlined, since each names a segment below this module. Reports E0902 for
+/// a second declaration of one segment: "More than one conflicting
+/// out-of-context discipline declaration for the same hierarchical segment
+/// of a signal is an error", and §3.10 makes two declarations at one
+/// precedence level illegal even when compatible, so this is a duplicate-key
+/// test, not a compatibility test.
+pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error!void {
+    for (module.nets) |n| {
+        if (!isOoc(self.ctx.file.str(n.name))) continue;
+        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
+        if (self.ooc.get(key)) |first| {
+            try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
+                key, self.ctx.file.str(first),
+            });
+            continue;
+        }
+        try self.ooc.put(self.ctx.arena, key, n.discipline);
+    }
 }
 
 /// Resolves the discipline of flat net `bound` as port `p` of the instance at
@@ -100,7 +120,7 @@ pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?
 /// discipline from the attribute or the connected net instead, so there is
 /// no declaration to judge.
 pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId, at: ?u32) Error!void {
-    const disc = (try oocDiscipline(self, path, p.name)) orelse p.discipline;
+    const disc = oocDiscipline(self, path, p.name) orelse p.discipline;
     try noteSignalDiscipline(self, bound, disc);
     // F.2 step 4.b's input: this port's lower connection is a child segment
     // of `bound` declaring `disc`. Recorded unconditionally; the post-pass
@@ -199,7 +219,7 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
         if (self.segs.getPtr(a.net)) |s| {
             for (s.paths.items, 0..) |path, i| {
                 if (!std.mem.eql(u8, path, a.path)) continue;
-                local = s.resolved.get(i) orelse null;
+                local = s.resolved.get(@intCast(i)) orelse null;
                 break;
             }
         }
@@ -228,7 +248,7 @@ fn levelOf(paths: []const []const u8, i: usize) ?usize {
 /// 7-2's NetA sees "the resulting cmos3 from module twoblks", not twoblks'
 /// children.
 fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error!?Ast.StrId {
-    if (group) |g| if (s.resolved.get(g)) |cached| return cached;
+    if (group) |g| if (s.resolved.get(@intCast(g))) |cached| return cached;
     var discs: std.ArrayList(Ast.StrId) = .empty;
     for (s.discs.items, 0..) |d, i| {
         const lvl = levelOf(s.paths.items, i);
@@ -238,7 +258,7 @@ fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error
         try discs.append(self.ctx.arena, v);
     }
     const answer = try levelAnswer(self, net, s.tok, discs.items);
-    if (group) |g| try s.resolved.put(self.ctx.arena, g, answer);
+    if (group) |g| try s.resolved.put(self.ctx.arena, @intCast(g), answer);
     if (answer) |disc| try noteSignalDiscipline(self, net, disc);
     return answer;
 }
