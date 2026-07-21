@@ -9,7 +9,7 @@ const hier_param = @import("../hier_param.zig");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
-const elab_paramset = @import("paramset.zig");
+const elab_override = @import("override.zig");
 const Ast = @import("frontend").Ast;
 const dist = @import("../dist.zig");
 const rng = @import("kernels").rng_kernels;
@@ -446,7 +446,7 @@ fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
         const seed = constIntLit(x, eff[0]) orelse break :fold;
         var p = [2]f64{ 0, 0 };
         for (eff[1..], 0..) |arg, i| {
-            p[i] = elab_paramset.constReal(self, arg) orelse break :fold;
+            p[i] = elab_override.constReal(self, arg) orelse break :fold;
             if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
                 try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, dist.paramName(d, i), p[i] });
                 bad = true;

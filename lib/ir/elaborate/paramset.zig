@@ -14,7 +14,8 @@ const constfold = @import("frontend").constfold;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
 const Unit = Flatten.Unit;
-const connectionFor = Flatten.connectionFor;
+const connectionFor = @import("instance.zig").connectionFor;
+const elab_override = @import("override.zig");
 
 // ---- §6.4 paramsets ---------------------------------------------------
 
@@ -109,7 +110,7 @@ pub fn tieBreak(
             var n: i64 = 0;
             for (ps.params, 0..) |p, i| {
                 if (p.is_local) continue;
-                n += @intFromBool(try parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false) == null);
+                n += @intFromBool(try elab_override.parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false) == null);
             }
             break :blk n;
         },
@@ -142,14 +143,6 @@ pub fn tieBreak(
     live.shrinkRetainingCapacity(w);
 }
 
-/// Returns how many of `params` an override can land on: the non-local ones
-/// (§3.4.5).
-pub fn overridableCount(params: []const Ast.ParamDecl) usize {
-    var n: usize = 0;
-    for (params) |p| n += @intFromBool(!p.is_local);
-    return n;
-}
-
 /// Returns whether a named instance override with a value lands on paramset
 /// parameter `name`, directly or through a §3.4.7 alias.
 pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, name: Ast.StrId) bool {
@@ -159,58 +152,6 @@ pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, na
         for (ps.aliasparams) |al| if (al.alias == o.name and al.target == name) return true;
     }
     return false;
-}
-
-/// One effective §6.3 override. A defparam value was cloned in its DECLARING
-/// module; an inline value is still in the instantiating module's namespace.
-pub const ParamBinding = struct {
-    value: Ast.ExprId,
-    spelling: Ast.StrId,
-    flat: bool,
-};
-
-/// The same binding feeds overload selection and final parameter assignment.
-/// §6.3 lets a defparam replace an inline value under the same name. §3.4.7
-/// forbids different original/alias spellings even across the two mechanisms.
-/// Inspection never consumes an override: only the selected instance does.
-pub fn parameterBinding(self: *Flatten, inst: *const Ast.Instance, params: []const Ast.ParamDecl, aliases: []const Ast.AliasParam, index: usize, path: []const u8, consume: bool) Error!?ParamBinding {
-    const p = params[index];
-    if (p.is_local) return null;
-    var found: ?ParamBinding = null;
-    const named = inst.params.len != 0 and inst.params[0].name != .none;
-    if (named) {
-        for (inst.params) |o| {
-            if (o.value == .none) continue;
-            var target = o.name;
-            for (aliases) |al| if (al.alias == o.name) {
-                target = al.target;
-                break;
-            };
-            if (target == p.name) found = .{ .value = o.value, .spelling = o.name, .flat = false };
-        }
-    } else {
-        var ordinal: usize = 0;
-        for (params[0..index]) |before| if (!before.is_local) {
-            ordinal += 1;
-        };
-        if (ordinal < inst.params.len and inst.params[ordinal].value != .none)
-            found = .{ .value = inst.params[ordinal].value, .spelling = .none, .flat = false };
-    }
-    try parameterDefparam(self, path, p.name, p.name, consume, &found);
-    for (aliases) |al| if (al.target == p.name)
-        try parameterDefparam(self, path, p.name, al.alias, consume, &found);
-    return found;
-}
-
-fn parameterDefparam(self: *Flatten, path: []const u8, original: Ast.StrId, spelling: Ast.StrId, consume: bool, found: *?ParamBinding) Error!void {
-    const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(spelling) });
-    const dp = self.defparams.getPtr(key) orelse return;
-    if (consume) {
-        dp.used = true;
-        if (found.*) |before| if (before.spelling != .none and before.spelling != spelling)
-            try self.err(dp.tok, .E0908, "`{s}` and its alias are both given a value", .{self.ctx.file.str(original)});
-    }
-    found.* = .{ .value = dp.value, .spelling = spelling, .flat = true };
 }
 
 /// Whether an external override names a public parameter of this candidate.
@@ -246,7 +187,7 @@ fn exposes(self: *Flatten, ps: *const Ast.ParamsetDecl, name: []const u8) bool {
 ///      fail it; that is E0904 at the use site.
 pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, path: []const u8, reads: ?[]bool) Error!bool {
     const named = inst.params.len != 0 and inst.params[0].name != .none;
-    if (!named and inst.params.len > overridableCount(ps.params)) return false;
+    if (!named and inst.params.len > elab_override.overridableCount(ps.params)) return false;
     if (named) for (inst.params) |o| {
         if (!exposes(self, ps, self.ctx.file.str(o.name))) return false;
     };
@@ -260,8 +201,8 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
         if (std.mem.indexOfScalar(u8, name, sep) != null) continue;
         if (!exposes(self, ps, name)) return false;
     }
-    const bindings = try self.ctx.arena.alloc(?ParamBinding, ps.params.len);
-    for (bindings, 0..) |*b, i| b.* = try parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false);
+    const bindings = try self.ctx.arena.alloc(?elab_override.ParamBinding, ps.params.len);
+    for (bindings, 0..) |*b, i| b.* = try elab_override.parameterBinding(self, inst, ps.params, ps.aliasparams, i, path, false);
     const env: ParamsetEnv = .{ .self = self, .ps = ps, .bindings = bindings, .reads = reads };
     for (ps.params, 0..) |p, i| {
         if (p.ranges.len != 0 and !inRanges(self, env.value(i), p.ranges, env)) return false;
@@ -323,7 +264,7 @@ fn inRanges(self: *Flatten, value: ?constfold.Const, ranges: []const Ast.ValueRa
 const ParamsetEnv = struct {
     self: *Flatten,
     ps: *const Ast.ParamsetDecl,
-    bindings: []const ?ParamBinding,
+    bindings: []const ?elab_override.ParamBinding,
     reads: ?[]bool,
     depth: usize = 0,
 
@@ -379,55 +320,6 @@ fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bo
     return !has_from or in_from;
 }
 
-/// Folds `e` to a real, or null: §2.6 literals, the A.2.5 infinities, and
-/// every operator over them, through the shared constant kernel, so `1/2` is
-/// §4.2.4's integer division as in lowering. This literal-only helper checks
-/// §9.18 domains without freezing host inputs; selection uses ParamsetEnv.
-pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
-    const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
-    return if (c == .str) null else c.asReal();
-}
-
-/// §9.18/Table 9-29 domains, checked when the specified expression folds
-/// without the model card. Every override mechanism uses this same check.
-/// Host-dependent values retain the existing `$mfactor` validation boundary.
-pub fn checkSystemParam(self: *Flatten, kind: hier_param.Kind, tok: u32, e: Ast.ExprId) Error!bool {
-    if (constfold.firstStateRead(self.ctx.file, e, self.vars.items)) |what| {
-        try self.err(tok, .E0363, "`{s}` override reads `{s}`", .{ kind.name(), what });
-        return true;
-    }
-    const v = constReal(self, e) orelse return false;
-    if (kind.allows(v)) return false;
-    try self.err(tok, .E0890, "`{s}` is {d}, and Table 9-29 allows only {s}", .{ kind.name(), v, kind.domain() });
-    return true;
-}
-
-/// Returns whether `child` has an overridable parameter `target`; otherwise
-/// reports E0907 naming it `shown` (an alias reads as written, §3.4.7).
-pub fn checkOverridable(self: *Flatten, child: *const Ast.ModuleDecl, target: Ast.StrId, shown: Ast.StrId, tok: u32) Error!bool {
-    const decl = for (child.params) |*p| {
-        if (p.name == target) break p;
-    } else {
-        try self.err(tok, .E0907, "`{s}` is not a parameter of `{s}`", .{ self.ctx.file.str(shown), self.ctx.file.str(child.name) });
-        return false;
-    };
-    // §3.4.5 a localparam is not overridable.
-    if (decl.is_local) {
-        try self.err(tok, .E0907, "`{s}` is a localparam of `{s}`", .{ self.ctx.file.str(shown), self.ctx.file.str(child.name) });
-        return false;
-    }
-    return true;
-}
-
-/// §9.19 `$param_given` is a fact about the instantiation, one answer per
-/// flattened parameter (an alias shares its target's), so the clone can
-/// substitute a literal.
-pub fn markGiven(self: *Flatten, child: *const Ast.ModuleDecl, over: *const std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId), unit: *Unit) Error!void {
-    for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
-    for (child.aliasparams) |al| if (over.contains(al.target))
-        try unit.given.put(self.ctx.arena, al.alias, true);
-}
-
 /// Computes the module parameter values a paramset instance gives `child`
 /// into `over`, and sets `unit`'s §9.18 hierarchical values and §9.19 `$param_given`
 /// (§6.4). Two levels: the instance overrides the paramset's own parameters,
@@ -467,7 +359,7 @@ pub fn paramsetOverrides(
         .aliasparams = ps.aliasparams,
         .main_tok = ps.main_tok,
     };
-    try self.collectOverrides(inst, &as_module, parent, &ps_over, &ps_unit, path);
+    try elab_override.collectOverrides(self, inst, &as_module, parent, &ps_over, &ps_unit, path);
     for (ps.params) |p| try elab_names.bind(self, &ps_unit, ps_path, p.name);
     for (ps.aliasparams) |al| try elab_names.bind(self, &ps_unit, ps_path, al.alias);
 
@@ -504,7 +396,7 @@ pub fn paramsetOverrides(
                     break;
                 };
                 const system = hier_param.Kind.fromName(self.ctx.file.str(target));
-                if (system == null and !try checkOverridable(self, child, target, o.name, o.main_tok)) continue;
+                if (system == null and !try elab_override.checkOverridable(self, child, target, o.name, o.main_tok)) continue;
                 // §6.4.1 "these variables shall not be used to assign values
                 // to the module's parameters". Named here, where the paramset
                 // is still in hand: once cloned, `t` is only an unknown name.
@@ -516,7 +408,7 @@ pub fn paramsetOverrides(
                 }
                 const value = try elab_clone.cloneExpr(self, o.value);
                 if (system) |kind| {
-                    if (try checkSystemParam(self, kind, o.main_tok, value)) continue;
+                    if (try elab_override.checkSystemParam(self, kind, o.main_tok, value)) continue;
                     hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
                 } else try over.put(self.ctx.arena, target, value);
             },
@@ -534,7 +426,7 @@ pub fn paramsetOverrides(
                     continue;
                 }
                 const value = try elab_clone.cloneExpr(self, o.value);
-                if (try checkSystemParam(self, kind, o.main_tok, value)) continue;
+                if (try elab_override.checkSystemParam(self, kind, o.main_tok, value)) continue;
                 hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, hier.get(kind), value, o.main_tok));
             },
             .output_var => {}, // §6.4.3, dropped in the parser
@@ -544,7 +436,7 @@ pub fn paramsetOverrides(
     self.unit = saved;
 
     unit.hier = hier;
-    try markGiven(self, child, over, unit);
+    try elab_override.markGiven(self, child, over, unit);
 }
 
 /// §6.4.1 the first identifier in `e` that names one of `ps`'s variables.

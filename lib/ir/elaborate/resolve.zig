@@ -14,7 +14,7 @@ const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
-const declares = Flatten.declares;
+const declares = @import("instance.zig").declares;
 
 // ---- Annex F.2 discipline resolution ----------------------------------
 
