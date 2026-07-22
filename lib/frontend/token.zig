@@ -189,7 +189,8 @@ pub const Tag = enum(u8) {
     //
     // A.3.1's `pullup`/`pulldown` and A.3.4's other `*_switchtype` spellings
     // stay `.kw_reserved` and are dispatched by spelling (`Parser.reservedIs`,
-    // `Parser.switch_arms`): no AST node has a slot a tag could select.
+    // `switch_arms` in parser/inst.zig): no AST node has a slot a tag could
+    // select.
     kw_and,
     kw_nand,
     kw_nor,
@@ -524,6 +525,8 @@ pub const KeywordSet = enum(u8) {
         return specifier_map.get(text);
     }
 
+    /// Returns the §10.6 version_specifier string that selects `self`, the
+    /// inverse of `fromSpecifier`.
     pub fn specifier(self: KeywordSet) []const u8 {
         return switch (self) {
             .v1364_1995 => "1364-1995",
