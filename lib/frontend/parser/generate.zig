@@ -274,7 +274,7 @@ pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!vo
             const id = try self.file.intern(self.arena, text);
             if (zeros >= 8 or !declaredIn(b, id)) break id;
         };
-        self.file.stmts.items[@backingInt(g.stmt)].block.gen_name = name;
+        self.file.seqBlockMut(g.stmt).gen_name = name;
     }
     b.gen_auto.clearRetainingCapacity();
 }
