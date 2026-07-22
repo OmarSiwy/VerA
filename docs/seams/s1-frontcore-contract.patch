@@ -1,0 +1,160 @@
+diff --git a/lib/frontend/ast.zig b/lib/frontend/ast.zig
+index dc1baa21..9d2ae41d 100644
+--- a/lib/frontend/ast.zig
++++ b/lib/frontend/ast.zig
+@@ -105,6 +105,8 @@ pub const ConfigDecl = decl_file.ConfigDecl;
+ 
+ // Statements: LRM ch5, A.6 (ast_stmt.zig).
+ pub const Stmt = stmt_file.Stmt;
++pub const StmtRow = stmt_file.StmtRow;
++pub const BlockId = stmt_file.BlockId;
+ pub const ProcContinuous = stmt_file.ProcContinuous;
+ pub const CaseKind = stmt_file.CaseKind;
+ pub const CaseArm = stmt_file.CaseArm;
+@@ -215,8 +217,11 @@ pub const SourceFile = struct {
+     strings: StringInterner = .empty,
+     /// annex A expression grammar, SoA.
+     exprs: ExprStore = .empty,
+-    /// §5 statement pool; a StmtId indexes it.
+-    stmts: std.ArrayList(Stmt) = .empty,
++    /// §5 statement pool; a StmtId indexes it. Read through `stmt`.
++    stmts: std.ArrayList(StmtRow) = .empty,
++    /// The `SeqBlock` of every `.block` row, in statement order; a row's
++    /// `BlockId` indexes it.
++    blocks: std.ArrayList(SeqBlock) = .empty,
+     /// Token index per statement, parallel to `stmts`, kept apart so `Stmt`
+     /// stays a pure union.
+     stmt_toks: std.ArrayList(u32) = .empty,
+@@ -305,6 +310,7 @@ pub const SourceFile = struct {
+         self.strings.deinit(gpa);
+         self.exprs.deinit(gpa);
+         self.stmts.deinit(gpa);
++        self.blocks.deinit(gpa);
+         self.stmt_toks.deinit(gpa);
+         self.attributes.deinit(gpa);
+         self.* = .empty;
+@@ -334,6 +340,7 @@ pub const SourceFile = struct {
+             try self.exprs.logic.append(gpa, copy);
+         }
+         self.stmts = try src.stmts.clone(gpa);
++        self.blocks = try src.blocks.clone(gpa);
+         self.stmt_toks = try src.stmt_toks.clone(gpa);
+         // Attribute specs are immutable borrowed declaration data; owner
+         // rows are copied because a resumed parser appends/reclassifies them.
+@@ -345,20 +352,31 @@ pub const SourceFile = struct {
+         self.connectrules = src.connectrules;
+     }
+ 
+-    /// Appends a statement and its token; both columns stay in lockstep.
++    /// Appends a statement and its token; both columns stay in lockstep, and a
++    /// `.block`'s `SeqBlock` goes to `blocks`. On OOM nothing is appended.
+     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
+         const id: u32 = @intCast(self.stmts.items.len);
+         std.debug.assert(id != @backingInt(StmtId.none));
+         try self.stmts.ensureUnusedCapacity(gpa, 1);
+         try self.stmt_toks.ensureUnusedCapacity(gpa, 1);
+-        self.stmts.appendAssumeCapacity(s);
++        if (s == .block) try self.blocks.ensureUnusedCapacity(gpa, 1);
++        self.stmts.appendAssumeCapacity(switch (s) {
++            .block => |b| blk: {
++                self.blocks.appendAssumeCapacity(b);
++                break :blk .{ .block = @fromBackingInt(@intCast(self.blocks.items.len - 1)) };
++            },
++            inline else => |payload, tag| @unionInit(StmtRow, @tagName(tag), payload), // else: every other arm is stored as it is
++        });
+         self.stmt_toks.appendAssumeCapacity(main_tok);
+         return @fromBackingInt(@intCast(id));
+     }
+ 
+     /// Returns statement `id` by value, since the pool may grow during parsing.
+     pub fn stmt(self: *const SourceFile, id: StmtId) Stmt {
+-        return self.stmts.items[@backingInt(id)];
++        return switch (self.stmts.items[@backingInt(id)]) {
++            .block => |b| .{ .block = self.blocks.items[@backingInt(b)] },
++            inline else => |payload, tag| @unionInit(Stmt, @tagName(tag), payload), // else: every other arm is stored as it is
++        };
+     }
+ 
+     /// Returns the token statement `id` is reported at.
+@@ -369,33 +387,26 @@ pub const SourceFile = struct {
+     /// Returns the §5.3.2 block statement `id` for in-place editing (the
+     /// parser names a generate block after the fact, §6.6.3). Asserts `id`
+     /// is a `.block`. Invalidated by the next `addStmt`.
+-    ///
+-    /// Use this, not `stmts.items[id].block`: a pool row will hold a handle
+-    /// to the block rather than the block (docs/seams/s1-frontcore.md).
+     pub fn seqBlockMut(self: *SourceFile, id: StmtId) *SeqBlock {
+-        return &self.stmts.items[@backingInt(id)].block;
++        return &self.blocks.items[@backingInt(self.stmts.items[@backingInt(id)].block)];
+     }
+ 
+     /// Returns an iterator over every §5.3.2 block statement in the pool, in
+     /// statement order, for a pass that wants every block's declarations.
+-    /// Use it, not a filter over `stmts.items`: the pool will keep blocks in
+-    /// a table of their own.
+     pub fn seqBlocks(self: *const SourceFile) SeqBlockIterator {
+-        return .{ .rows = self.stmts.items };
++        return .{ .blocks = self.blocks.items };
+     }
+ 
+     /// See `seqBlocks`. Valid until the next `addStmt`.
+     pub const SeqBlockIterator = struct {
+-        rows: []const Stmt,
++        blocks: []const SeqBlock,
+         i: u32 = 0,
+ 
+         /// Returns the next block, or null after the last.
+         pub fn next(it: *SeqBlockIterator) ?*const SeqBlock {
+-            while (it.i < it.rows.len) {
+-                defer it.i += 1;
+-                if (it.rows[it.i] == .block) return &it.rows[it.i].block;
+-            }
+-            return null;
++            if (it.i == it.blocks.len) return null;
++            defer it.i += 1;
++            return &it.blocks[it.i];
+         }
+     };
+ 
+diff --git a/lib/frontend/ast_stmt.zig b/lib/frontend/ast_stmt.zig
+index 2c1376c9..17154b89 100644
+--- a/lib/frontend/ast_stmt.zig
++++ b/lib/frontend/ast_stmt.zig
+@@ -36,8 +36,9 @@ pub const Timing = enum {
+     level,
+ };
+ 
+-/// Statement node (LRM §5), a tagged union in a flat pool. Statements are
+-/// walked once by lowering, so the union's width is not a cache concern.
++/// Statement node (LRM §5), the value `SourceFile.stmt` returns. The pool
++/// stores each one as a `StmtRow`, with a `.block`'s `SeqBlock` kept in
++/// `SourceFile.blocks`; build one and hand it to `SourceFile.addStmt`.
+ pub const Stmt = union(enum) {
+     /// A.6.4 `analog_statement_or_null ::= ... | ;`
+     empty,
+@@ -126,6 +127,25 @@ pub const Stmt = union(enum) {
+     pub const JumpKind = enum(u8) { ret, brk, cont };
+ };
+ 
++/// Handle into `SourceFile.blocks`, the §5.3.2 blocks of the statement pool.
++pub const BlockId = enum(u32) { _ };
++
++/// The stored form of a `Stmt`: the same arms, except that `.block` holds a
++/// `BlockId` into `SourceFile.blocks`. A `SeqBlock` is 104 bytes and every
++/// other arm at most 24, so keeping blocks out of the row makes a row 32
++/// bytes instead of 112 (8,239 rows on psp103, 1,806 of them blocks).
++pub const StmtRow = row: {
++    const u = @typeInfo(Stmt).@"union";
++    var types = u.field_types[0..u.field_types.len].*;
++    types[std.meta.fieldIndex(Stmt, "block").?] = BlockId;
++    break :row @Union(.auto, u.tag_type.?, u.field_names, &types, u.field_attrs);
++};
++
++// Budget: the widest non-block arm (24 B) plus the tag.
++comptime {
++    std.debug.assert(@sizeOf(StmtRow) <= 32);
++}
++
+ /// IEEE 1364-2005 §9.3 A.6.2 `procedural_continuous_assignments`.
+ pub const ProcContinuous = enum(u8) { none, assign, deassign, force, release };
+ 
