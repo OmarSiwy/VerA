@@ -189,7 +189,8 @@ pub const Tag = enum(u8) {
     //
     // A.3.1's `pullup`/`pulldown` and A.3.4's other `*_switchtype` spellings
     // stay `.kw_reserved` and are dispatched by spelling (`Parser.reservedIs`,
-    // `Parser.switch_arms`): no AST node has a slot a tag could select.
+    // `switch_arms` in parser/inst.zig): no AST node has a slot a tag could
+    // select.
     kw_and,
     kw_nand,
     kw_nor,
@@ -524,6 +525,8 @@ pub const KeywordSet = enum(u8) {
         return specifier_map.get(text);
     }
 
+    /// Returns the §10.6 version_specifier string that selects `self`, the
+    /// inverse of `fromSpecifier`.
     pub fn specifier(self: KeywordSet) []const u8 {
         return switch (self) {
             .v1364_1995 => "1364-1995",
@@ -654,15 +657,6 @@ pub fn isEventFunction(tag: Tag) bool {
         .kw_absdelta,
         => true,
         else => false, // else: not an A.6.5 event function keyword
-    };
-}
-
-/// A keyword that starts a call-like expression `name ( args )`: the four
-/// groups above plus `analysis` (§4.6.1) and the §5.10.2 step events.
-fn isBuiltinFunction(tag: Tag) bool {
-    return switch (tag) {
-        .kw_analysis, .kw_initial_step, .kw_final_step => true,
-        else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag), // else: the four families above decide the rest
     };
 }
 
@@ -1014,14 +1008,13 @@ test "call groups match annex A.8.2/A.6.5 exactly and are disjoint" {
             n += 1;
         }
         try std.testing.expect(n <= 1);
-        if (n == 1) try std.testing.expect(isBuiltinFunction(t));
     }
     try std.testing.expectEqual([_]u32{ 26, 17, 5, 4 }, counts);
     // §4.5.13: limexp is a filter, never a math builtin (proof.zig must not
     // put a domain on it, codegen must give it state).
     try std.testing.expect(isFilterFunction(.kw_limexp) and !isMathFunction(.kw_limexp));
     // §5.10.2 step events are their own Ast tags, not `event_function`s.
-    try std.testing.expect(!isEventFunction(.kw_initial_step) and isBuiltinFunction(.kw_initial_step));
+    try std.testing.expect(!isEventFunction(.kw_initial_step) and !isEventFunction(.kw_final_step));
 }
 
 test "Stored stays 5 bytes of payload (SoA columns, no len field)" {

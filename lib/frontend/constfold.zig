@@ -367,9 +367,11 @@ pub const MathFn = enum {
     acosh,
     atanh,
 
+    /// Returns the function spelled `name`, or null for any other name.
     pub fn fromName(name: []const u8) ?MathFn {
         return std.meta.stringToEnum(MathFn, name);
     }
+    /// Returns how many arguments §4.3's tables give `f`: 1 or 2.
     pub fn arity(f: MathFn) usize {
         return switch (f) {
             .min, .max, .pow, .hypot, .atan2 => 2,
@@ -627,9 +629,11 @@ fn clog2OperandsSigned(file: *const Ast.SourceFile, a: Ast.ExprId, b: Ast.ExprId
 
 /// One IEEE §5.5.2 type/size context, over the existing i64 carrier.
 pub const IntContext = struct {
+    /// Bits; 64 or more leaves the carrier as it is.
     width: u32,
     signed: bool,
 
+    /// Returns `value` cut to `width` bits and re-extended by `signed`.
     pub fn normalize(c: IntContext, value: i64) i64 {
         if (c.width >= 64) return value;
         const mask = (@as(u64, 1) << @intCast(c.width)) - 1;
@@ -642,11 +646,17 @@ pub const IntContext = struct {
 /// Shared by folding and lowering: where context propagates, where it stops,
 /// and how the result enters its parent. No changes to ordinary analog ops.
 pub const IntPlan = struct {
+    /// The context the node's value enters its parent in.
     result: IntContext,
+    /// The width the node computes at, before `resize` converts it.
     from_width: u32,
+    /// The context each operand is folded in (`lhs`, `rhs`, the `?:` else
+    /// arm); null where the operand is self-determined.
     operands: [3]?IntContext = .{ null, null, null },
+    /// False when the result is wider than the i64 carrier can compute.
     supported: bool = true,
 
+    /// Returns `value`, computed at `from_width`, converted to `result`.
     pub fn resize(p: IntPlan, value: i64) i64 {
         const source: IntContext = .{ .width = p.from_width, .signed = p.result.signed };
         return p.result.normalize(source.normalize(value));
@@ -721,6 +731,7 @@ pub fn clog2(value: i64, width: u32) i64 {
 /// The `env` that knows nothing: `fold(file, e, literal_env)` folds literals
 /// and the operators over them, and declines an identifier and `>>>`.
 pub const literal_env: LiteralEnv = .{};
+/// The type of `literal_env`: every query answers null.
 pub const LiteralEnv = struct {
     pub fn leaf(_: LiteralEnv, _: Ast.ExprId) ?Const {
         return null;
