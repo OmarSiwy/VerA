@@ -187,6 +187,13 @@ pub const Node = struct {
     str: StrId = .none,
 };
 
+// Budget: 21 bytes a row across the SoA columns (50,875 rows on psp103).
+comptime {
+    var bytes: usize = 0;
+    for (@typeInfo(Node).@"struct".field_types) |T| bytes += @sizeOf(T);
+    std.debug.assert(bytes == 21);
+}
+
 /// SoA expression store, one row per expression (LRM annex A). `ExprId`
 /// indexes every column.
 pub const ExprStore = struct {

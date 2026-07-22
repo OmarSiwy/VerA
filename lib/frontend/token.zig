@@ -660,15 +660,6 @@ pub fn isEventFunction(tag: Tag) bool {
     };
 }
 
-/// A keyword that starts a call-like expression `name ( args )`: the four
-/// groups above plus `analysis` (§4.6.1) and the §5.10.2 step events.
-fn isBuiltinFunction(tag: Tag) bool {
-    return switch (tag) {
-        .kw_analysis, .kw_initial_step, .kw_final_step => true,
-        else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag), // else: the four families above decide the rest
-    };
-}
-
 // ---- keyword table construction ------------------------------------------
 
 const KV = struct { []const u8, Tag };
@@ -1017,14 +1008,13 @@ test "call groups match annex A.8.2/A.6.5 exactly and are disjoint" {
             n += 1;
         }
         try std.testing.expect(n <= 1);
-        if (n == 1) try std.testing.expect(isBuiltinFunction(t));
     }
     try std.testing.expectEqual([_]u32{ 26, 17, 5, 4 }, counts);
     // §4.5.13: limexp is a filter, never a math builtin (proof.zig must not
     // put a domain on it, codegen must give it state).
     try std.testing.expect(isFilterFunction(.kw_limexp) and !isMathFunction(.kw_limexp));
     // §5.10.2 step events are their own Ast tags, not `event_function`s.
-    try std.testing.expect(!isEventFunction(.kw_initial_step) and isBuiltinFunction(.kw_initial_step));
+    try std.testing.expect(!isEventFunction(.kw_initial_step) and !isEventFunction(.kw_final_step));
 }
 
 test "Stored stays 5 bytes of payload (SoA columns, no len field)" {
