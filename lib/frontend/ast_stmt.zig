@@ -36,8 +36,9 @@ pub const Timing = enum {
     level,
 };
 
-/// Statement node (LRM §5), a tagged union in a flat pool. Statements are
-/// walked once by lowering, so the union's width is not a cache concern.
+/// Statement node (LRM §5), the value `SourceFile.stmt` returns. The pool
+/// stores each one as a `StmtRow`, with a `.block`'s `SeqBlock` kept in
+/// `SourceFile.blocks`; build one and hand it to `SourceFile.addStmt`.
 pub const Stmt = union(enum) {
     /// A.6.4 `analog_statement_or_null ::= ... | ;`
     empty,
@@ -125,6 +126,25 @@ pub const Stmt = union(enum) {
 
     pub const JumpKind = enum(u8) { ret, brk, cont };
 };
+
+/// Handle into `SourceFile.blocks`, the §5.3.2 blocks of the statement pool.
+pub const BlockId = enum(u32) { _ };
+
+/// The stored form of a `Stmt`: the same arms, except that `.block` holds a
+/// `BlockId` into `SourceFile.blocks`. A `SeqBlock` is 104 bytes and every
+/// other arm at most 24, so keeping blocks out of the row makes a row 32
+/// bytes instead of 112 (8,239 rows on psp103, 1,806 of them blocks).
+pub const StmtRow = row: {
+    const u = @typeInfo(Stmt).@"union";
+    var types = u.field_types[0..u.field_types.len].*;
+    types[std.meta.fieldIndex(Stmt, "block").?] = BlockId;
+    break :row @Union(.auto, u.tag_type.?, u.field_names, &types, u.field_attrs);
+};
+
+// Budget: the widest non-block arm (24 B) plus the tag.
+comptime {
+    std.debug.assert(@sizeOf(StmtRow) <= 32);
+}
 
 /// IEEE 1364-2005 §9.3 A.6.2 `procedural_continuous_assignments`.
 pub const ProcContinuous = enum(u8) { none, assign, deassign, force, release };
