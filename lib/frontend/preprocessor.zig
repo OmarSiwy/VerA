@@ -304,7 +304,13 @@ pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
 /// Sets `opts.bag.map`. Returns arena-owned output; on failure the diagnostic
 /// is in `opts.bag` and the error is `error.PreprocessFailed`.
 pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output {
-    var pp: Pp = .{ .arena = arena, .opts = opts };
+    // Everything that dies with this call (the macro table, the stacks, every
+    // expansion's arguments and substituted body, and the output while it
+    // grows) lives on scratch, freed on return. What outlives the call is
+    // copied to `arena` once, exactly sized, at the end.
+    var scratch_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer scratch_state.deinit();
+    var pp: Pp = .{ .arena = arena, .scratch = scratch_state.allocator(), .opts = opts };
 
     // First, so the compilation unit is `.root`. The prelude files register
     // after it, even though they are processed before it.
@@ -352,17 +358,16 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         return error.PreprocessFailed;
     }
 
-    const directives: Directives = .{
-        .disciplines = try pp.defaults.toOwnedSlice(arena),
-        .transitions = try pp.transitions.toOwnedSlice(arena),
-        .timescales = try pp.timescale_events.toOwnedSlice(arena),
-        .nettypes = try pp.nettypes.toOwnedSlice(arena),
-        .cells = try pp.cells.toOwnedSlice(arena),
-        .drives = try pp.drives.toOwnedSlice(arena),
-    };
-    opts.bag.map = .{ .segs = try pp.segs.toOwnedSlice(arena) };
+    // Publish: each scratch table is copied to `arena` by name, so a new event
+    // list is one field in `Directives` and the same field in `Events`.
+    var directives: Directives = .{};
+    const fields = @typeInfo(Directives).@"struct";
+    inline for (fields.field_names, fields.field_types) |name, F| {
+        @field(directives, name) = try arena.dupe(@typeInfo(F).pointer.child, @field(pp.events, name).items);
+    }
+    opts.bag.map = .{ .segs = try arena.dupe(diag.Segment, pp.segs.items) };
     return .{
-        .text = try pp.out.toOwnedSlice(arena),
+        .text = try arena.dupe(u8, pp.out.items),
         .netlist_modules = netlist_modules,
         .directives = directives,
         .more_starts = more_starts,
@@ -402,11 +407,39 @@ const Cond = struct {
     file: diag.FileId = .root,
 };
 
-/// Preprocessor state for one compilation. Everything is allocated on `arena`.
+/// The `Directives` lists while they fill, in text-stream order, on
+/// `Pp.scratch`. Field for field the names of `Directives`, which `process`
+/// publishes by name.
+pub const Events = struct {
+    disciplines: std.ArrayList(DefaultDiscipline) = .empty,
+    transitions: std.ArrayList(DefaultTransition) = .empty,
+    timescales: std.ArrayList(TimescaleEvent) = .empty,
+    nettypes: std.ArrayList(NetTypeRegion) = .empty,
+    cells: std.ArrayList(CellRegion) = .empty,
+    drives: std.ArrayList(DriveRegion) = .empty,
+};
+
+/// Preprocessor state for one compilation.
+///
+/// Two lifetimes. `arena` is the caller's and holds only what outlives
+/// `process` through the bag: each file's stripped text and marks, an
+/// `include's bytes and path, a suggestion's replacement text, and the
+/// published copies `process` makes at the end. Every table below lives on
+/// `scratch`, which `process` frees on return; a slice of a macro body (also
+/// on scratch) that must outlive it is copied to `arena` where it is stored.
 pub const Pp = struct {
     arena: Allocator,
+    scratch: Allocator,
     opts: Options,
+
+    // ---- outputs, copied to `arena` by `process` ------------------------
     out: std.ArrayList(u8) = .empty,
+    /// Provenance of the output so far. Appended to only, so it stays sorted
+    /// by `out_start` and `SourceMap.resolve` can binary-search it.
+    segs: std.ArrayList(diag.Segment) = .empty,
+    events: Events = .{},
+
+    // ---- scan state ------------------------------------------------------
     macros: std.StringHashMapUnmanaged(Macro) = .empty,
     conds: std.ArrayList(Cond) = .empty,
     /// Macro-expansion cycle guard (§10.4): names currently being expanded.
@@ -417,16 +450,6 @@ pub const Pp = struct {
     expand_depth: u32 = 0,
     /// `include stack, innermost last; its length is the include depth.
     includes: std.ArrayList([]const u8) = .empty,
-    /// Provenance of the output so far. Appended to only, so it stays sorted
-    /// by `out_start` and `SourceMap.resolve` can binary-search it.
-    segs: std.ArrayList(diag.Segment) = .empty,
-    /// The `Directives` lists, filled in text-stream order.
-    defaults: std.ArrayList(DefaultDiscipline) = .empty,
-    transitions: std.ArrayList(DefaultTransition) = .empty,
-    timescale_events: std.ArrayList(TimescaleEvent) = .empty,
-    nettypes: std.ArrayList(NetTypeRegion) = .empty,
-    cells: std.ArrayList(CellRegion) = .empty,
-    drives: std.ArrayList(DriveRegion) = .empty,
     /// IEEE 1364 §19.7 `line remap for §10.7 `__LINE__`; `line_to` is null when
     /// the current file is numbered naturally. `line_from` is the physical
     /// 1-based line after the directive and `line_to` the number §19.7 gives
@@ -452,14 +475,14 @@ pub const Pp = struct {
     /// Appends an event to `list` at the current output length, which is where
     /// the directive's own collapsed text ends and its region begins.
     pub fn mark(pp: *Pp, list: anytype, value: anytype) Allocator.Error!void {
-        try list.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .value = value });
+        try list.append(pp.scratch, .{ .at = @intCast(pp.out.items.len), .value = value });
     }
 
     /// Emits only the newlines in `span`, so dropped text (a dead `ifdef arm,
     /// a collapsed directive) keeps the output's line count.
     pub fn putNewlines(pp: *Pp, span: []const u8) Error!void {
         // Count-then-fill: a one-byte-needle `std.mem.count` is vectorized.
-        try pp.out.appendNTimes(pp.arena, '\n', std.mem.count(u8, span, "\n"));
+        try pp.out.appendNTimes(pp.scratch, '\n', std.mem.count(u8, span, "\n"));
     }
 
     /// Returns a file-local span for `[start, end)` of the text being scanned,
@@ -510,7 +533,7 @@ pub const Pp = struct {
         // Inside a macro body there is no file offset to resync to; the
         // enclosing `.macro` segment already covers the whole expansion.
         if (pp.expand_site != null) return;
-        try pp.segs.append(pp.arena, .{
+        try pp.segs.append(pp.scratch, .{
             .out_start = @intCast(pp.out.items.len),
             .in_start = @intCast(at),
             .file = pp.cur_file_id,
@@ -545,9 +568,9 @@ pub const Pp = struct {
             // renderer maps back to the raw text through the marks.
             pp.opts.bag.setStrippedText(id, f.stripped, f.marks);
         }
-        try pp.out.appendSlice(pp.arena, p.text);
-        try pp.segs.appendSlice(pp.arena, p.segs);
-        for (p.macros) |d| try pp.macros.put(pp.arena, d.name, d.macro);
+        try pp.out.appendSlice(pp.scratch, p.text);
+        try pp.segs.appendSlice(pp.scratch, p.segs);
+        for (p.macros) |d| try pp.macros.put(pp.scratch, d.name, d.macro);
     }
 
     /// Registers `raw`, strips its comments and scans it. Saves and restores
@@ -583,7 +606,7 @@ pub const Pp = struct {
         pp.opts.bag.setStrippedText(id, s.text, s.marks);
         const text = s.text;
 
-        try pp.segs.append(pp.arena, .{
+        try pp.segs.append(pp.scratch, .{
             .out_start = @intCast(pp.out.items.len),
             .in_start = 0,
             .file = id,
@@ -596,10 +619,10 @@ pub const Pp = struct {
     pub fn joinChain(pp: *Pp, stack: []const []const u8, last: []const u8) Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         for (stack) |s| {
-            try out.appendSlice(pp.arena, s);
-            try out.appendSlice(pp.arena, " -> ");
+            try out.appendSlice(pp.scratch, s);
+            try out.appendSlice(pp.scratch, " -> ");
         }
-        try out.appendSlice(pp.arena, last);
+        try out.appendSlice(pp.scratch, last);
         return out.items;
     }
 };
@@ -659,7 +682,7 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
             const closed = i < text.len and text[i] == '"';
             if (closed) i += 1;
             if (pp.emitting()) {
-                try pp.out.appendSlice(pp.arena, text[start..i]);
+                try pp.out.appendSlice(pp.scratch, text[start..i]);
             } else {
                 // IEEE 1364 §19.4: an ignored group "shall still follow the
                 // Verilog HDL lexical conventions"; an emitted one is the
@@ -676,7 +699,7 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         if (c == '\\') {
             const start = i;
             i = escapedEnd(text, i + 1);
-            if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[start..i]);
+            if (pp.emitting()) try pp.out.appendSlice(pp.scratch, text[start..i]);
             continue;
         }
 
@@ -690,7 +713,7 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         // '\n' is not a stop: `putNewlines` counts it in a dead arm. '/' is
         // not either, since no comment survives `stripComments`.
         const end = findStop(text, i, scan_stops);
-        if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[i..end]) else try pp.putNewlines(text[i..end]);
+        if (pp.emitting()) try pp.out.appendSlice(pp.scratch, text[i..end]) else try pp.putNewlines(text[i..end]);
         // `text[i]` is none of the three, so `end > i`: the loop always moves.
         i = end;
     }
@@ -754,26 +777,26 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             // §10.2 opens its reset sentence with "In addition to `resetall",
             // which makes the global reset the second way to withdraw the
             // default discipline. An empty `discipline` is that withdrawal.
-            try pp.defaults.append(pp.arena, .{
+            try pp.events.disciplines.append(pp.scratch, .{
                 .at = @intCast(pp.out.items.len),
                 .qualifier = null,
                 .discipline = "",
             });
             // IEEE 1364 §19.6: `resetall returns every directive to its default.
             // `timescale's is "none specified", which §9.15 reads as not known.
-            try pp.mark(&pp.timescale_events, null);
+            try pp.mark(&pp.events.timescales, null);
             // Events, not cleared lists: a mid-file `resetall must not unsay
             // what earlier directives did to the text above it.
-            try pp.mark(&pp.nettypes, NetType.default);
-            try pp.mark(&pp.cells, false);
-            try pp.mark(&pp.drives, Drive.default);
+            try pp.mark(&pp.events.nettypes, NetType.default);
+            try pp.mark(&pp.events.cells, false);
+            try pp.mark(&pp.events.drives, Drive.default);
             // §10.3's default is "controlled by the simulator": no directive.
-            try pp.mark(&pp.transitions, null);
+            try pp.mark(&pp.events.transitions, null);
             // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
             // to be specified within a module or UDP declaration." Only the
             // parser knows where a module is, so the word is passed through,
             // like §10.6's pair below, for it to judge.
-            try pp.out.appendSlice(pp.arena, text[at..j]);
+            try pp.out.appendSlice(pp.scratch, text[at..j]);
             return j;
         },
         .default_discipline => try pp_directive.handleDefaultDiscipline(pp, text[j..end], j),
@@ -786,15 +809,15 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             switch (kind) {
                 .default_nettype => try pp_directive.handleDefaultNettype(pp, text[j..end], j),
                 .unconnected_drive => try pp_directive.handleUnconnectedDrive(pp, text[j..end], j),
-                else => try pp.mark(&pp.drives, .float), // else: `nounconnected_drive, the one other arm of this prong
+                else => try pp.mark(&pp.events.drives, .float), // else: `nounconnected_drive, the one other arm of this prong
             }
-            try pp.out.appendSlice(pp.arena, text[at..j]);
+            try pp.out.appendSlice(pp.scratch, text[at..j]);
             try pp.putNewlines(text[j..end]);
             return end;
         },
         // IEEE 1364 §19.1's pair takes no operand.
-        .celldefine => try pp.mark(&pp.cells, true),
-        .endcelldefine => try pp.mark(&pp.cells, false),
+        .celldefine => try pp.mark(&pp.events.cells, true),
+        .endcelldefine => try pp.mark(&pp.events.cells, false),
         // `protect` is not unrecognized: IEEE 1364 §28 reserves it, and §28.2
         // obliges decryption that VerA does not do.
         .pragma => {
@@ -807,7 +830,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         // parser see it. The slice carries its own newlines, so the
         // line-number contract in the file header holds unchanged.
         .keywords => {
-            try pp.out.appendSlice(pp.arena, text[at..end]);
+            try pp.out.appendSlice(pp.scratch, text[at..end]);
             return end;
         },
         .ifdef, .ifndef, .elsif, .@"else", .endif => unreachable, // returned above
@@ -835,7 +858,7 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
             const defined = pp.macros.contains(macro);
             const want = if (kind == .ifdef) defined else !defined;
             const active = parent and want;
-            try pp.conds.append(pp.arena, .{
+            try pp.conds.append(pp.scratch, .{
                 .parent_active = parent,
                 .active = active,
                 .taken = active,
