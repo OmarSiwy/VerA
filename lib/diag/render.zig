@@ -6,7 +6,7 @@ const diag = @import("../diag.zig");
 const diag_bag = @import("bag.zig");
 const diag_entry = @import("entry.zig");
 const diag_location = @import("location.zig");
-const Allocator = diag.Allocator;
+const Allocator = std.mem.Allocator;
 const Code = diag.Code;
 const info = diag.info;
 const Severity = diag.Severity;
@@ -27,8 +27,10 @@ pub const Palette = struct {
     help: []const u8 = "",
     good: []const u8 = "",
 
+    /// Plain text, the default: what goldens and the test suites compare.
     pub const off: Palette = .{};
 
+    /// ANSI SGR colours, rustc's scheme.
     pub const on: Palette = .{
         .reset = "\x1b[0m",
         .bold = "\x1b[1m",
@@ -94,7 +96,10 @@ const Placed = struct {
 };
 
 /// Renders `bag` to `w`. Entries are sorted into source order first, so the
-/// output of a run is stable regardless of which stage found what.
+/// output of a run is stable regardless of which stage found what; that sort
+/// invalidates every `Entry.index` taken before. Line-index scratch is
+/// allocated on `bag.arena` and freed before returning. Fails only with
+/// `w`'s write error or `OutOfMemory`.
 pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
     if (bag.isEmpty() and bag.suppressed == 0) return;
     bag.sort();

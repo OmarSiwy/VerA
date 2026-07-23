@@ -6,29 +6,30 @@ const diag_bag = @import("bag.zig");
 const diag_entry = @import("entry.zig");
 const diag_location = @import("location.zig");
 const diag_render = @import("render.zig");
+const diag_suggest = @import("suggest.zig");
 const Severity = diag.Severity;
 const Level = diag.Level;
 const Levels = diag.Levels;
 
 test "edit distance and suggestion" {
-    try std.testing.expectEqual(@as(usize, 0), diag_bag.editDistance("abc", "abc", 4));
-    try std.testing.expectEqual(@as(usize, 1), diag_bag.editDistance("abc", "abd", 4));
+    try std.testing.expectEqual(@as(usize, 0), diag_suggest.editDistance("abc", "abc", 4));
+    try std.testing.expectEqual(@as(usize, 1), diag_suggest.editDistance("abc", "abd", 4));
     // Transposition is one edit, not two.
-    try std.testing.expectEqual(@as(usize, 1), diag_bag.editDistance("abc", "acb", 4));
-    try std.testing.expect(diag_bag.editDistance("abc", "zzzzzz", 2) > 2);
+    try std.testing.expectEqual(@as(usize, 1), diag_suggest.editDistance("abc", "acb", 4));
+    try std.testing.expect(diag_suggest.editDistance("abc", "zzzzzz", 2) > 2);
 
     // The `u8` rows, at the widest input `cap` admits: 64 characters against 64
     // different ones is distance 64, the saturating case, and the whole proof a
     // byte holds every cell. One character more and the guard fires first.
     const wide_a = &@as([64]u8, @splat('a'));
     const wide_b = &@as([64]u8, @splat('b'));
-    try std.testing.expectEqual(@as(usize, 64), diag_bag.editDistance(wide_a, wide_b, 64));
-    try std.testing.expectEqual(@as(usize, 0), diag_bag.editDistance(wide_a, wide_a, 64));
-    try std.testing.expect(diag_bag.editDistance(&@as([65]u8, @splat('a')), wide_b, 64) > 64);
+    try std.testing.expectEqual(@as(usize, 64), diag_suggest.editDistance(wide_a, wide_b, 64));
+    try std.testing.expectEqual(@as(usize, 0), diag_suggest.editDistance(wide_a, wide_a, 64));
+    try std.testing.expect(diag_suggest.editDistance(&@as([65]u8, @splat('a')), wide_b, 64) > 64);
 
     const cands = [_][]const u8{ "vds", "vgs", "temp" };
-    try std.testing.expectEqualStrings("vds", diag_bag.didYouMean("vdss", &cands).?);
-    try std.testing.expect(diag_bag.didYouMean("completely_different", &cands) == null);
+    try std.testing.expectEqualStrings("vds", diag_suggest.didYouMean("vdss", &cands).?);
+    try std.testing.expect(diag_suggest.didYouMean("completely_different", &cands) == null);
 }
 
 test "suggestion ties break lexicographically, not by input order" {
@@ -36,7 +37,7 @@ test "suggestion ties break lexicographically, not by input order" {
     // the answer must be the same.
     const a = [_][]const u8{ "vbs", "vas_" };
     const b = [_][]const u8{ "vas_", "vbs" };
-    try std.testing.expectEqualStrings(diag_bag.didYouMean("vas", &a).?, diag_bag.didYouMean("vas", &b).?);
+    try std.testing.expectEqualStrings(diag_suggest.didYouMean("vas", &a).?, diag_suggest.didYouMean("vas", &b).?);
 }
 
 test "lint levels" {

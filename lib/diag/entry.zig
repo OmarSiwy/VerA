@@ -3,6 +3,7 @@
 //! In: a `Builder`'s parts. Out: one fixed-size `Record` per diagnostic, whose text
 //! lives in `Bag.string_bytes`, and the by-value `Entry`/`Label`/`Note` views of it.
 
+const std = @import("std");
 const diag = @import("../diag.zig");
 const diag_location = @import("location.zig");
 const Code = diag.Code;
@@ -38,8 +39,16 @@ pub const Record = struct {
     n_notes: u8,
     labels: [max_children]LabelRec,
     notes: [max_children]NoteRec,
+
+    // Budget: 156 B, children inline. At most `max_entries` (64) rows, so a
+    // full bag is 10 KB; out-of-line children would save ~128 B a row and
+    // cost `detach` a fix-up pass. See docs/seams/s1-diag.md, Memory.
+    comptime {
+        std.debug.assert(@sizeOf(Record) == 156);
+    }
 };
 
+/// A stored secondary label: `Label` with its text as a pool offset.
 pub const LabelRec = struct {
     span: diag_location.Span,
     text: String,
@@ -69,7 +78,9 @@ pub const Fix = struct {
     replacement: []const u8,
 };
 
+/// A `= note:` or `= help:` line under a diagnostic, optionally with a fix.
 pub const Note = struct {
+    /// Which word the line is rendered with; also the JSON `kind`.
     pub const Kind = enum(u8) { note, help };
 
     kind: Kind,
@@ -84,6 +95,9 @@ pub const Label = struct {
     text: []const u8,
 };
 
+/// One diagnostic as a reader sees it: `Bag.at` decodes it from a `Record`.
+/// Its strings borrow `Bag.string_bytes`; labels and notes are read through
+/// `Bag.labels`/`Bag.notes` with `index`.
 pub const Entry = struct {
     /// Row in `Bag.records` — what `Bag.labels`/`Bag.notes` read. Valid until
     /// the next `Bag.sort`.
