@@ -13,7 +13,6 @@ const Pp = Preprocessor.Pp;
 const scan = Preprocessor.scan;
 const stringStop = Preprocessor.stringStop;
 const Rest = Preprocessor.Rest;
-const indexOfString = Preprocessor.indexOfString;
 const isSpace = Preprocessor.isSpace;
 const isIdentStart = Preprocessor.isIdentStart;
 const isIdentChar = Preprocessor.isIdentChar;
@@ -436,4 +435,12 @@ fn endsInEscapedIdent(text: []const u8) bool {
         }
     }
     return false;
+}
+
+/// Returns the index of the first element of `haystack` equal to `needle`.
+fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
+    for (haystack, 0..) |s, k| {
+        if (std.mem.eql(u8, s, needle)) return k;
+    }
+    return null;
 }
