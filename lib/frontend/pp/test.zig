@@ -26,7 +26,6 @@ const process = Preprocessor.process;
 const Pp = Preprocessor.Pp;
 const scan_stops = Preprocessor.scan_stops;
 const findStop = Preprocessor.findStop;
-const directive = Preprocessor.directive;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -143,7 +142,7 @@ test "putNewlines emits exactly the newlines the byte loop it replaced did" {
         var want: usize = 0;
         for (span) |c| want += @intFromBool(c == '\n');
 
-        var pp: Pp = .{ .arena = arena, .opts = .{ .bag = &bag } };
+        var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
         try pp.putNewlines(span);
         try testing.expectEqual(want, pp.out.items.len);
         for (pp.out.items) |c| try testing.expectEqual(@as(u8, '\n'), c);
@@ -730,7 +729,7 @@ test "the prelude snapshot replays exactly what running annex D.2/D.1/E.1 produc
 
     // Same starting state `process` and `buildPrelude` both establish.
     var bag: diag.Bag = .init(arena);
-    var pp: Pp = .{ .arena = arena, .opts = .{ .bag = &bag } };
+    var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
     _ = try bag.addFile("<source>", "");
     for (predefined_macros) |name| {
         try pp.macros.put(arena, name, .{ .body = "1", .predefined = true });

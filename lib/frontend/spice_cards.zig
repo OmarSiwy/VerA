@@ -45,18 +45,23 @@ const model_types = [_]struct { type_: []const u8, prim: []const u8, ports: []co
 };
 
 /// Returns Verilog-AMS module text for every `.MODEL` and `.SUBCKT` card in
-/// `netlist`, allocated from `arena`. Never fails on malformed input: a line
-/// this does not understand contributes nothing.
+/// `netlist`. The text is allocated from `arena`, exactly sized; the working
+/// copies (the lowered netlist, the joined cards, per-card strings) live on a
+/// scratch arena freed on return. Never fails on malformed input: a line this
+/// does not understand contributes nothing.
 pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthesized {
     if (netlist.len == 0) return .{};
+    var scratch_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer scratch_state.deinit();
+    const scratch = scratch_state.allocator();
 
     // One lowered copy up front (E.2.1: SPICE is case-insensitive), so every
     // slice below is already canonical and nothing has to remember to fold.
     // ponytail: ASCII folding is the ceiling; use a different fold only for a new dialect.
-    const lower = try std.ascii.allocLowerString(arena, netlist);
+    const lower = try std.ascii.allocLowerString(scratch, netlist);
 
     var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(arena,
+    try out.appendSlice(scratch,
         \\// Annex E.2 — synthesized from the `//! spice` cards of this compilation;
         \\// see `spice_cards.synthesize` for what of a netlist is read and what is not.
         \\
@@ -80,16 +85,16 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
             // Joins the card under construction. A `+` with nothing above it has
             // nothing to continue and is dropped.
             if (logical.items.len != 0) {
-                try logical.append(arena, ' ');
-                try logical.appendSlice(arena, std.mem.trim(u8, line[1..], " \t"));
+                try logical.append(scratch, ' ');
+                try logical.appendSlice(scratch, std.mem.trim(u8, line[1..], " \t"));
             }
             continue;
         }
-        if (logical.items.len != 0) try cards.append(arena, try arena.dupe(u8, logical.items));
+        if (logical.items.len != 0) try cards.append(scratch, try scratch.dupe(u8, logical.items));
         logical.clearRetainingCapacity();
-        try logical.appendSlice(arena, line);
+        try logical.appendSlice(scratch, line);
     }
-    if (logical.items.len != 0) try cards.append(arena, logical.items);
+    if (logical.items.len != 0) try cards.append(scratch, logical.items);
 
     // Index-based, because a `.SUBCKT` header is not the whole card it reads:
     // E.2 makes it a module definition, which runs to its `.ENDS`.
@@ -98,12 +103,12 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     var i: usize = 0;
     while (i < cards.items.len) {
         const body = subcktBody(cards.items[i..]);
-        if (try emitCard(arena, &out, cards.items[i], body, &seen)) count += 1;
+        if (try emitCard(scratch, &out, cards.items[i], body, &seen)) count += 1;
         i += 1 + body.len;
     }
 
     if (count == 0) return .{};
-    return .{ .text = out.items, .modules = count };
+    return .{ .text = try arena.dupe(u8, out.items), .modules = count };
 }
 
 /// One physical line with its comments removed: `*` is a full-line comment, `;`

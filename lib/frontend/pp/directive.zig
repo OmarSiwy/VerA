@@ -1,11 +1,19 @@
-//! Directives with operands: one directive's text in, the included file scanned
-//! or a `Directives` event recorded out.
-//! LRM §10.2, §10.3; IEEE 1364 §19.2, §19.5, §19.7, §19.9, §19.10.
+//! Compiler directives: one '`'-led word and its logical line in, its effect
+//! out (a conditional level pushed or popped, an included file scanned, a
+//! `Directives` event recorded, or the word handed to `pp/macro.zig` as a
+//! macro use). `directive` is the dispatch; the handlers follow it.
+//! LRM §10.1-§10.3, §10.6; IEEE 1364 §19.1, §19.2, §19.4-§19.7, §19.9,
+//! §19.10, §28.
 
 const std = @import("std");
 const diag = @import("diag");
 const Preprocessor = @import("../preprocessor.zig");
 const Lexer = @import("../lexer.zig");
+const pp_macro = @import("macro.zig");
+const Directive = Preprocessor.Directive;
+const directive_map = Preprocessor.directive_map;
+const isIdentChar = Preprocessor.isIdentChar;
+const escapedEnd = Preprocessor.escapedEnd;
 const Error = Preprocessor.Error;
 const max_include_depth = Preprocessor.max_include_depth;
 const max_include_bytes = Preprocessor.max_include_bytes;
@@ -16,6 +24,202 @@ const builtin_includes = Preprocessor.builtin_includes;
 const Pp = Preprocessor.Pp;
 const Rest = Preprocessor.Rest;
 const isSpace = Preprocessor.isSpace;
+
+// ---------------------------------------------------------------------------
+// Dispatch and the IEEE 1364 §19.4 conditionals
+// ---------------------------------------------------------------------------
+
+/// Handles the directive or macro use whose '`' is at `at`. Returns the offset
+/// to resume scanning from.
+pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
+    const name_start = at + 1;
+    var j = name_start;
+
+    // §2.8.1 escaped identifier: `\` then printable ASCII, ended by white
+    // space, with neither the backslash nor the terminator part of the name.
+    // Syntax 10-3 makes text_macro_identifier an `identifier` (A.9.3: simple
+    // or escaped), so a use may be spelled `` `\MY-GAIN ``. No compiler
+    // directive is spelled with a backslash, so this can only be a macro use
+    // and goes straight to `expand`.
+    if (j < text.len and text[j] == '\\') {
+        const body = j + 1;
+        j = escapedEnd(text, body);
+        if (j == body) {
+            if (!pp.emitting()) return at + 1;
+            return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
+        }
+        return pp_macro.expand(pp, text, at, j, text[body..j]);
+    }
+
+    while (j < text.len and isIdentChar(text[j])) j += 1;
+    if (j == name_start) {
+        if (!pp.emitting()) return at + 1;
+        return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
+    }
+    const name = text[name_start..j];
+
+    const kind = directive_map.get(name) orelse return pp_macro.expand(pp, text, at, j, name);
+
+    // Conditionals run even inside an inactive arm, because they nest.
+    switch (kind) {
+        .ifdef, .ifndef, .elsif, .@"else", .endif => return conditional(pp, text, at, j, kind),
+        else => {}, // else: the line-oriented directives, below
+    }
+
+    // Everything else dies with the arm it sits in. A directive with no
+    // operand (IEEE 1364 §19.1, §19.6, §19.10) is its word alone; the rest
+    // take their operands to the end of the line.
+    const end = switch (kind) {
+        .celldefine, .endcelldefine, .nounconnected_drive, .resetall => j,
+        else => logicalLineEnd(text, j), // else: every other directive reads its operand from the rest of the line
+    };
+    if (!pp.emitting()) {
+        try pp.putNewlines(text[at..end]);
+        return end;
+    }
+    switch (kind) {
+        .define => try pp_macro.handleDefine(pp, text[j..end], at, j),
+        .undef => try pp_macro.removeDefine(pp, text[j..end], at, j),
+        .include => try handleInclude(pp, text[j..end], at, j),
+        .resetall => {
+            // IEEE 1364 §19.3: "The text macro facility is not affected by the
+            // compiler directive `resetall." Macros are left alone.
+            // §10.2 opens its reset sentence with "In addition to `resetall",
+            // which makes the global reset the second way to withdraw the
+            // default discipline. An empty `discipline` is that withdrawal.
+            try pp.events.disciplines.append(pp.scratch, .{
+                .at = @intCast(pp.out.items.len),
+                .qualifier = null,
+                .discipline = "",
+            });
+            // IEEE 1364 §19.6: `resetall returns every directive to its default.
+            // `timescale's is "none specified", which §9.15 reads as not known.
+            try pp.mark(&pp.events.timescales, null);
+            // Events, not cleared lists: a mid-file `resetall must not unsay
+            // what earlier directives did to the text above it.
+            try pp.mark(&pp.events.nettypes, NetType.default);
+            try pp.mark(&pp.events.cells, false);
+            try pp.mark(&pp.events.drives, Drive.default);
+            // §10.3's default is "controlled by the simulator": no directive.
+            try pp.mark(&pp.events.transitions, null);
+            // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
+            // to be specified within a module or UDP declaration." Only the
+            // parser knows where a module is, so the word is passed through,
+            // like §10.6's pair below, for it to judge.
+            try pp.out.appendSlice(pp.scratch, text[at..j]);
+            return j;
+        },
+        .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
+        .default_transition => try handleDefaultTransition(pp, text[j..end], j),
+        .line => try handleLine(pp, text[j..end], at, j),
+        .timescale => try handleTimescale(pp, text[j..end], j),
+        // Applied here, and the word passed through, as `resetall's is, for
+        // the parser to refuse inside a module (IEEE 1364 §19.2, §19.9).
+        .default_nettype, .unconnected_drive, .nounconnected_drive => {
+            switch (kind) {
+                .default_nettype => try handleDefaultNettype(pp, text[j..end], j),
+                .unconnected_drive => try handleUnconnectedDrive(pp, text[j..end], j),
+                else => try pp.mark(&pp.events.drives, .float), // else: `nounconnected_drive, the one other arm of this prong
+            }
+            try pp.out.appendSlice(pp.scratch, text[at..j]);
+            try pp.putNewlines(text[j..end]);
+            return end;
+        },
+        // IEEE 1364 §19.1's pair takes no operand.
+        .celldefine => try pp.mark(&pp.events.cells, true),
+        .endcelldefine => try pp.mark(&pp.events.cells, false),
+        // `protect` is not unrecognized: IEEE 1364 §28 reserves it, and §28.2
+        // obliges decryption that VerA does not do.
+        .pragma => {
+            var r: Rest = .{ .s = text[j..end] };
+            const pragma_name = r.ident() orelse return pp.fail(pp.spanAt(at, j), .E0147, "", .{});
+            if (std.mem.eql(u8, pragma_name, "protect"))
+                return pp.fail(pp.spanAt(at, j), .E0146, "", .{});
+        },
+        // §10.6: passed through instead of being blanked out, so the lexer and
+        // parser see it. The slice carries its own newlines, so the
+        // line-number contract in the file header holds unchanged.
+        .keywords => {
+            try pp.out.appendSlice(pp.scratch, text[at..end]);
+            return end;
+        },
+        .ifdef, .ifndef, .elsif, .@"else", .endif => unreachable, // returned above
+    }
+    try pp.putNewlines(text[at..end]);
+    return end;
+}
+
+/// `ifdef / `ifndef / `elsif / `else / `endif (IEEE 1364 §19.4).
+fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Directive) Error!usize {
+    // The operand, if any, is on the directive's line; the text after it is
+    // ordinary source (IEEE 1364 §19.4 Syntax 19-5 has no line break).
+    var r: Rest = .{ .s = text[after_name..logicalLineEnd(text, after_name)] };
+    // The directive word itself: `ifdef, `else, ...
+    const sp = pp.spanAt(at, after_name);
+
+    switch (kind) {
+        .ifdef, .ifndef => {
+            // The operand is a text_macro_identifier (Syntax 10-3), simple or
+            // escaped (A.9.3), so `` `ifdef \M-X `` tests what
+            // `` `define \M-X `` created.
+            const macro = r.escapedIdent() orelse r.ident() orelse
+                return pp.fail(sp, .E0104, "`{s}", .{@tagName(kind)});
+            const parent = pp.emitting();
+            const defined = pp.macros.contains(macro);
+            const want = if (kind == .ifdef) defined else !defined;
+            const active = parent and want;
+            try pp.conds.append(pp.scratch, .{
+                .parent_active = parent,
+                .active = active,
+                .taken = active,
+                .span = sp,
+                .file = pp.cur_file_id,
+            });
+        },
+        .elsif, .@"else" => {
+            const n = pp.conds.items.len;
+            if (n == 0) return pp.fail(sp, .E0105, "`{s}", .{@tagName(kind)});
+            const top = &pp.conds.items[n - 1];
+            if (top.seen_else) return pp.fail(sp, .E0106, "`{s}", .{@tagName(kind)});
+            if (kind == .@"else") {
+                top.seen_else = true;
+                top.active = top.parent_active and !top.taken;
+                top.taken = true;
+            } else {
+                // Same A.9.3 pair as `ifdef above: the name may be escaped.
+                const macro = r.escapedIdent() orelse r.ident() orelse
+                    return pp.fail(sp, .E0107, "", .{});
+                top.active = top.parent_active and !top.taken and pp.macros.contains(macro);
+                if (top.active) top.taken = true;
+            }
+        },
+        .endif => {
+            if (pp.conds.pop() == null) return pp.fail(sp, .E0108, "", .{});
+        },
+        else => unreachable,
+    }
+    const end = after_name + r.i;
+    try pp.putNewlines(text[at..end]);
+    return end;
+}
+
+/// Returns the end of the logical line at `i`: the next unescaped newline, or EOF.
+/// A `\` before a newline continues the line (§10.4 multi-line macro text).
+fn logicalLineEnd(text: []const u8, i: usize) usize {
+    var k = i;
+    while (k < text.len) {
+        if (text[k] == '\\') {
+            var n = k + 1;
+            while (n < text.len and (text[n] == ' ' or text[n] == '\t' or text[n] == '\r')) n += 1;
+            if (n < text.len and text[n] == '\n') {
+                k = n + 1;
+                continue;
+            }
+        } else if (text[k] == '\n') return k;
+        k += 1;
+    }
+    return text.len;
+}
 
 // ---------------------------------------------------------------------------
 // `include
@@ -62,13 +266,13 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         if (pp.opts.include_dirs.len == 0) {
             b.note("no include directories were configured; only the built-in annex D headers ({s}) are resolvable", .{"constants.vams, disciplines.vams"});
         } else {
-            b.note("searched: {s}", .{try std.mem.join(pp.arena, ", ", pp.opts.include_dirs)});
+            b.note("searched: {s}", .{try std.mem.join(pp.scratch, ", ", pp.opts.include_dirs)});
         }
         try b.emit();
         return error.PreprocessFailed;
     };
 
-    try pp.includes.append(pp.arena, path);
+    try pp.includes.append(pp.scratch, path);
     defer _ = pp.includes.pop();
     // Registered under the opened path, so `__FILE__` and every diagnostic
     // inside the file name the file that was read (§10.7).
@@ -83,7 +287,8 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the include dirs, else a built-in annex D file by
-/// basename. Null if nothing matched. The bytes are arena-owned.
+/// basename. Null if nothing matched. The bytes and the path are on
+/// `pp.arena`, since the bag keeps both.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
@@ -103,7 +308,8 @@ pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
         }
     }
     const text = builtin_includes.get(std.fs.path.basename(path)) orelse return null;
-    return .{ .text = text, .path = path };
+    // `path` may slice a macro body on scratch, and the bag keeps the name.
+    return .{ .text = text, .path = try pp.arena.dupe(u8, path) };
 }
 
 // ---------------------------------------------------------------------------
@@ -133,10 +339,11 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
     // Anything after the qualifier is not in Syntax 10-1 either. Reported with
     // the same code so the rule reads as one rule.
     try expectEnd(pp, &r, off, .E0127, "qualifier", "Syntax 10-1 is `default_discipline [ discipline_identifier [ qualifier ] ], and nothing more");
-    try pp.defaults.append(pp.arena, .{
+    try pp.events.disciplines.append(pp.scratch, .{
         .at = @intCast(pp.out.items.len),
         .qualifier = qual,
-        .discipline = disc,
+        // Published in `Output`, and `disc` may slice a macro body on scratch.
+        .discipline = try pp.arena.dupe(u8, disc),
     });
 }
 
@@ -173,7 +380,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "a transition time cannot be `{s}`", .{text});
     }
     try expectEnd(pp, &r, off, .E0129, "transition time", "Syntax 10-2 is `default_transition transition_time, and nothing more");
-    try pp.mark(&pp.transitions, t);
+    try pp.mark(&pp.events.transitions, t);
 }
 
 /// Parses an IEEE 1364 §19.9 `` `timescale <unit> / <precision> `` and records
@@ -182,8 +389,8 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
 /// is E0142.
 pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     // Marked null first and filled in on success; a `resetall also writes null.
-    const event = pp.timescale_events.items.len;
-    try pp.mark(&pp.timescale_events, null);
+    const event = pp.events.timescales.items.len;
+    try pp.mark(&pp.events.timescales, null);
     var r: Rest = .{ .s = rest };
     const unit = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time unit");
     r.skipSpace();
@@ -201,7 +408,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     }
     r.skipSpace();
     if (r.i < r.s.len) return badTimescale(pp, off, &r, "nothing more");
-    pp.timescale_events.items[event].value = .{ .unit = unit, .precision = precision };
+    pp.events.timescales.items[event].value = .{ .unit = unit, .precision = precision };
 }
 
 /// Emits E0142 naming what §19.9's grammar wanted. `r.i` is undefined after a
@@ -245,7 +452,7 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
         return error.PreprocessFailed;
     };
     try expectEnd(pp, &r, off, .E0140, "net type", "§19.2 is `default_nettype default_nettype_value, and nothing more");
-    try pp.mark(&pp.nettypes, value);
+    try pp.mark(&pp.events.nettypes, value);
 }
 
 /// Parses an IEEE 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
@@ -272,7 +479,7 @@ pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void 
         return error.PreprocessFailed;
     };
     try expectEnd(pp, &r, off, .E0141, "pull value", "§19.10 takes one operand and nothing more");
-    try pp.mark(&pp.drives, value);
+    try pp.mark(&pp.events.drives, value);
 }
 
 /// Fails with `code` if anything but white space is left on the directive

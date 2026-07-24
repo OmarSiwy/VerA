@@ -113,7 +113,8 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     const arena = arena_state.allocator();
 
     var bag: diag.Bag = .init(arena);
-    var pp: Pp = .{ .arena = arena, .opts = .{ .bag = &bag } };
+    // Both lifetimes are the snapshot's: it keeps the macro table and output.
+    var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
     // The same starting state `process` has: the compilation unit is file 0 and
     // the §10.5 predefined macros are already in scope. Both are observable to a
     // `ifdef in a prelude file, so neither may be skipped here.
@@ -133,13 +134,10 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     // The rest of `Pp`'s output surface is empty: the shipped files hold no
     // positional directive and no unclosed `ifdef. A prelude file that writes
     // one must extend `Prelude` rather than lose the event.
-    std.debug.assert(pp.defaults.items.len == 0);
-    std.debug.assert(pp.transitions.items.len == 0);
-    std.debug.assert(pp.timescale_events.items.len == 0);
+    inline for (@typeInfo(Preprocessor.Events).@"struct".field_names) |name| {
+        std.debug.assert(@field(pp.events, name).items.len == 0);
+    }
     std.debug.assert(pp.conds.items.len == 0);
-    std.debug.assert(pp.nettypes.items.len == 0);
-    std.debug.assert(pp.cells.items.len == 0);
-    std.debug.assert(pp.drives.items.len == 0);
 
     var macros: std.ArrayList(Prelude.Def) = .empty;
     var it = pp.macros.iterator();

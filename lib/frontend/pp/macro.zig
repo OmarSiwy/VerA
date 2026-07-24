@@ -13,7 +13,6 @@ const Pp = Preprocessor.Pp;
 const scan = Preprocessor.scan;
 const stringStop = Preprocessor.stringStop;
 const Rest = Preprocessor.Rest;
-const indexOfString = Preprocessor.indexOfString;
 const isSpace = Preprocessor.isSpace;
 const isIdentStart = Preprocessor.isIdentStart;
 const isIdentChar = Preprocessor.isIdentChar;
@@ -58,7 +57,7 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
             }
             const p = r.ident() orelse
                 return pp.fail(pp.spanAt(off + r.i, off + r.i + 1), .E0110, "`{s}`", .{name});
-            try params.append(pp.arena, p);
+            try params.append(pp.scratch, p);
             r.skipSpace();
             const c = r.peek() orelse
                 return pp.fail(pp.spanAt(off + r.i, off + r.i), .E0111, "`{s}`", .{name});
@@ -94,7 +93,7 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     // §10.4: a redefinition silently replaces. Predefined macros keep their flag
     // so `undef still has no effect on them.
     if (pp.macros.get(name)) |old| m.predefined = old.predefined;
-    try pp.macros.put(pp.arena, name, m);
+    try pp.macros.put(pp.scratch, name, m);
 }
 
 /// Parses a §10.4 `undef and removes the macro; a §10.5 predefined macro is
@@ -117,7 +116,7 @@ pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
 fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, body, '\n') == null) return body;
     var out: std.ArrayList(u8) = .empty;
-    try out.ensureTotalCapacity(pp.arena, body.len);
+    try out.ensureTotalCapacity(pp.scratch, body.len);
     var i: usize = 0;
     while (i < body.len) : (i += 1) {
         if (body[i] == '\\') {
@@ -157,19 +156,19 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         if (std.mem.eql(u8, name, "__LINE__")) {
             // "in the form of a simple decimal number": an integer token.
             var buf: [20]u8 = undefined;
-            try pp.out.appendSlice(pp.arena, std.mem.print(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
+            try pp.out.appendSlice(pp.scratch, std.mem.print(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
             return after_name;
         }
         if (std.mem.eql(u8, name, "__FILE__")) {
             // "in the form of a string literal" (§2.7): quoted, with '"' and
             // '\' in the path escaped.
-            try pp.out.appendSlice(pp.arena, "\"");
+            try pp.out.appendSlice(pp.scratch, "\"");
             // A `line directive's file name replaces the real one (§10.7).
             for (pp.file_override orelse pp.opts.bag.fileName(pp.cur_file_id)) |c| {
-                if (c == '"' or c == '\\') try pp.out.appendSlice(pp.arena, "\\");
-                try pp.out.append(pp.arena, c);
+                if (c == '"' or c == '\\') try pp.out.appendSlice(pp.scratch, "\\");
+                try pp.out.append(pp.scratch, c);
             }
-            try pp.out.appendSlice(pp.arena, "\"");
+            try pp.out.appendSlice(pp.scratch, "\"");
             return after_name;
         }
         var b = pp.failWith(sp, .E0115);
@@ -224,7 +223,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
             if (std.mem.indexOfScalar(u8, a, '`') == null) continue;
             // Some argument invokes a macro: expand from here on into a copy.
             // Backtick-free arguments are substituted verbatim.
-            const copy = try pp.arena.dupe([]const u8, args);
+            const copy = try pp.scratch.dupe([]const u8, args);
             for (copy[first..]) |*slot| slot.* = try expandArg(pp, slot.*, at);
             actuals = copy;
             break;
@@ -232,7 +231,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         break :blk try substitute(pp, m.body, m.params, actuals);
     } else m.body;
 
-    try pp.expanding.append(pp.arena, name);
+    try pp.expanding.append(pp.scratch, name);
     defer _ = pp.expanding.pop();
 
     // Provenance: only the outermost expansion gets segments, since a nested
@@ -245,8 +244,8 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         // A zero-width verbatim segment pinning the invocation site, so
         // `resolve` walking out of the macro lands on the use, not on
         // wherever the enclosing segment happened to start.
-        try pp.segs.append(pp.arena, .{ .out_start = o, .in_start = site, .file = pp.cur_file_id, .kind = .verbatim });
-        try pp.segs.append(pp.arena, .{
+        try pp.segs.append(pp.scratch, .{ .out_start = o, .in_start = site, .file = pp.cur_file_id, .kind = .verbatim });
+        try pp.segs.append(pp.scratch, .{
             .out_start = o,
             .in_start = site,
             .file = pp.cur_file_id,
@@ -270,10 +269,10 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     return end;
 }
 
-/// Returns one actual argument fully macro-expanded, arena-owned. Scans into a
-/// fresh output list with `expand_site` set to `at`, the invocation's '`', so
-/// diagnostics and `__LINE__` behave as in a body rescan. Backtick-free text
-/// is returned as is.
+/// Returns one actual argument fully macro-expanded, on `pp.scratch`. Scans
+/// into a fresh output list with `expand_site` set to `at`, the invocation's
+/// '`', so diagnostics and `__LINE__` behave as in a body rescan.
+/// Backtick-free text is returned as is.
 fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
@@ -306,7 +305,7 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
             // §2.8.1: an escaped identifier runs to white space, commas and
             // brackets included.
             '\\' => i = escapedEnd(text, i + 1) - 1,
-            '(', '[', '{' => try opens.append(pp.arena, c),
+            '(', '[', '{' => try opens.append(pp.scratch, c),
             ')', ']', '}' => {
                 // Non-empty: the first iteration pushes the '(' at `lparen`,
                 // and the list returns the moment the stack empties.
@@ -318,12 +317,12 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
                 };
                 if (c != want) return pp.fail(pp.spanAt(i, i + 1), .E0120, "`{s}`: `{c}` cannot close `{c}`", .{ name, c, open });
                 if (opens.items.len == 0) {
-                    try args.append(pp.arena, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
+                    try args.append(pp.scratch, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
                     return .{ .args = args.items, .end = i + 1 };
                 }
             },
             ',' => if (opens.items.len == 1) {
-                try args.append(pp.arena, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
+                try args.append(pp.scratch, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
                 arg_start = i + 1;
             },
             else => {},
@@ -334,11 +333,11 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
 }
 
 /// Returns `body` with each whole-identifier formal replaced by its actual,
-/// arena-owned. Strings, escaped identifiers, numbers and the name after a
+/// on `pp.scratch`. Strings, escaped identifiers, numbers and the name after a
 /// '`' are never substituted into.
 pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: []const []const u8) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try out.ensureTotalCapacity(pp.arena, body.len);
+    try out.ensureTotalCapacity(pp.scratch, body.len);
 
     var i: usize = 0;
     while (i < body.len) {
@@ -351,14 +350,14 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
                 i += 1;
             }
             if (i < body.len) i += 1;
-            try out.appendSlice(pp.arena, body[start..i]);
+            try out.appendSlice(pp.scratch, body[start..i]);
             continue;
         }
         if (c == '`') {
             const start = i;
             i += 1;
             while (i < body.len and isIdentChar(body[i])) i += 1;
-            try out.appendSlice(pp.arena, body[start..i]);
+            try out.appendSlice(pp.scratch, body[start..i]);
             continue;
         }
         if (c == '\\') {
@@ -366,7 +365,7 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             // `` `define M(x) real \sig-x ; `` the `x` is not the formal.
             const start = i;
             i = escapedEnd(body, i + 1);
-            try out.appendSlice(pp.arena, body[start..i]);
+            try out.appendSlice(pp.scratch, body[start..i]);
             continue;
         }
         if (isIdentStart(c)) {
@@ -374,12 +373,12 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             while (i < body.len and isIdentChar(body[i])) i += 1;
             const word = body[start..i];
             const idx = indexOfString(params, word);
-            try out.appendSlice(pp.arena, if (idx) |k| args[k] else word);
+            try out.appendSlice(pp.scratch, if (idx) |k| args[k] else word);
             // IEEE 1364 §19.3.1 substitutes each actual "literally", and an
             // escaped identifier's terminating white space (§2.8.1) is part of
             // it, and `macroArgs` trimmed that space off with the rest. Put one
             // back, or `(ARG)` turns `\a.b ` into the identifier `\a.b)`.
-            if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.arena, ' ');
+            if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.scratch, ' ');
             continue;
         }
         if (std.ascii.isDigit(c)) {
@@ -393,10 +392,10 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
                 if ((d == '+' or d == '-') and (body[i - 1] | 0x20) == 'e') continue;
                 break;
             }
-            try out.appendSlice(pp.arena, body[start..i]);
+            try out.appendSlice(pp.scratch, body[start..i]);
             continue;
         }
-        try out.append(pp.arena, c);
+        try out.append(pp.scratch, c);
         i += 1;
     }
     return out.items;
@@ -436,4 +435,12 @@ fn endsInEscapedIdent(text: []const u8) bool {
         }
     }
     return false;
+}
+
+/// Returns the index of the first element of `haystack` equal to `needle`.
+fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
+    for (haystack, 0..) |s, k| {
+        if (std.mem.eql(u8, s, needle)) return k;
+    }
+    return null;
 }
