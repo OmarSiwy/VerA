@@ -6,10 +6,12 @@
 //! Static: nothing is compiled or run, so a cite (`//! inherited IEEE 1364-2005
 //! <clause>`) says what a fixture claims, not that it passes. A `.c` fixture's
 //! polarity is per line (`//! inherited-reject IEEE 1364-2005 <clause>` for a
-//! refusal), as `harness.cCites` reads its AMS tags.
+//! refusal), as `harness/coverage.zig`'s `cCites` reads its AMS tags.
 
 const std = @import("std");
 const harness = @import("harness.zig");
+const digital = @import("harness/digital.zig");
+const ClassKind = @import("harness/coverage.zig").ClassKind;
 const options = @import("suite_options");
 
 const Io = std.Io;
@@ -19,7 +21,7 @@ const Clause = struct {
     id: []const u8,
     title: []const u8,
     /// `null` is an ordinary clause (`-` in the file).
-    kind: ?harness.ClassKind,
+    kind: ?ClassKind,
     pos: bool = false,
     neg: bool = false,
 };
@@ -27,14 +29,14 @@ const Clause = struct {
 /// Per clause chapter (`5`, `17`, `A`): the fixtures in its directory and how
 /// its clauses are evidenced.
 const Chapter = struct {
-    fixtures: usize = 0,
-    uncited_fixtures: usize = 0,
-    clauses: usize = 0,
-    both: usize = 0,
-    pos_only: usize = 0,
-    neg_only: usize = 0,
-    uncited: usize = 0,
-    classified: usize = 0,
+    fixtures: u32 = 0,
+    uncited_fixtures: u32 = 0,
+    clauses: u32 = 0,
+    both: u32 = 0,
+    pos_only: u32 = 0,
+    neg_only: u32 = 0,
+    uncited: u32 = 0,
+    classified: u32 = 0,
 };
 
 /// Prints the report to stderr. Returns exit code 1 when a cite names no
@@ -99,7 +101,7 @@ pub fn coverage(init: std.process.Init) !u8 {
         if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".v")) continue;
         const path = try arena.dupe(u8, e.path);
         const source = try dir.readFileAlloc(io, path, arena, .limited(1 << 20));
-        const neg = harness.digitalNegative(source) or hasReject(source);
+        const neg = digital.negative(source) or hasReject(source);
         // A source a case reads through `// digital-runner: files` has no
         // golden and is not a case.
         if (!neg) for ([_][]const u8{ ".expected.txt", ".expected.vcd" }) |ext| {
@@ -126,7 +128,7 @@ pub fn coverage(init: std.process.Init) !u8 {
         }
     }
 
-    // Only a `.c` fixture that runs is evidence, the rule `harness.cCites`
+    // Only a `.c` fixture that runs is evidence, the rule `harness/coverage.zig`'s `cCites`
     // applies: `vpi_runs` is build.zig's list of those, relative to the root.
     const repo = std.fs.path.dirname(std.fs.path.dirname(options.fixture_root).?).?;
     for (options.vpi_runs) |rel| {
@@ -150,7 +152,7 @@ pub fn coverage(init: std.process.Init) !u8 {
         }
     }
 
-    // The same buckets `harness.reportCoverage` prints. A classification moves
+    // The same buckets `harness/coverage.zig`'s `report` prints. A classification moves
     // a one-way or uncited clause out of its work list; two-way evidence wins.
     for (clauses.items) |c| {
         if (c.kind == .no_prohibition and !c.pos) {
@@ -265,7 +267,7 @@ fn parseRow(arena: Allocator, line: []const u8) !Clause {
     if (std.mem.eql(u8, kind_text, "-")) return .{ .id = id, .title = title, .kind = null };
     const spelled = try arena.dupe(u8, kind_text);
     std.mem.replaceScalar(u8, spelled, '-', '_');
-    const kind = std.meta.stringToEnum(harness.ClassKind, spelled) orelse return error.UnknownKind;
+    const kind = std.meta.stringToEnum(ClassKind, spelled) orelse return error.UnknownKind;
     if (evidence.len == 0) return error.MissingEvidence;
     return .{ .id = id, .title = title, .kind = kind };
 }
