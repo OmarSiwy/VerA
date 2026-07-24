@@ -22,7 +22,7 @@ const stdpp = @import("stdpp");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
 const ieee1364 = @import("ieee1364.zig");
-const sweep = @import("harness/sweep.zig");
+const size_sweep = @import("harness/sweep.zig");
 const devices = @import("harness/devices.zig");
 const c_fixtures = @import("harness/c_fixtures.zig");
 const spice_decks = @import("harness/spice_decks.zig");
@@ -35,7 +35,7 @@ test {
     _ = harness;
     _ = torture;
     _ = ieee1364;
-    _ = sweep;
+    _ = size_sweep;
     _ = devices;
     _ = c_fixtures;
     _ = spice_decks;
@@ -107,6 +107,45 @@ pub fn elapsed(io: Io, t0: Io.Timestamp) u64 {
 pub const mode = @tagName(@import("builtin").mode);
 
 // ---------------------------------------------------------------------------
+// The assertions — the half of this file that can fail
+// ---------------------------------------------------------------------------
+
+/// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
+/// shape, in `sweep` order, measured by this bench. Pure functions of the
+/// source, so the same on every machine and optimize mode: a change here is a
+/// change in what VerA emits, and the commit that moves it explains it.
+const Shape = struct { device: usize, defs: usize, insts: usize };
+const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
+    .contrib = .{
+        .{ .device = 32246, .defs = 8, .insts = 5 },
+        .{ .device = 32601, .defs = 35, .insts = 26 },
+        .{ .device = 35344, .defs = 258, .insts = 194 },
+        .{ .device = 57747, .defs = 2050, .insts = 1538 },
+        .{ .device = 240327, .defs = 16386, .insts = 12290 },
+    },
+    .vals = .{
+        .{ .device = 32246, .defs = 8, .insts = 5 },
+        .{ .device = 32428, .defs = 24, .insts = 19 },
+        .{ .device = 33884, .defs = 136, .insts = 131 },
+        .{ .device = 45589, .defs = 1032, .insts = 1027 },
+        .{ .device = 139350, .defs = 8200, .insts = 8195 },
+    },
+    .inst = .{
+        .{ .device = 32246, .defs = 8, .insts = 5 },
+        .{ .device = 33450, .defs = 50, .insts = 40 },
+        .{ .device = 43298, .defs = 386, .insts = 320 },
+        .{ .device = 123832, .defs = 3074, .insts = 2560 },
+        .{ .device = 781617, .defs = 24578, .insts = 20480 },
+    },
+});
+
+/// `expected`, for `harness/sweep.zig`, which asserts it. The table stays in
+/// this file so the change that moves a generated device's size edits it here.
+pub const expected_sizes = expected;
+const sweep = size_sweep.sweep;
+const Axis = size_sweep.Axis;
+
+// ---------------------------------------------------------------------------
 // The step
 // ---------------------------------------------------------------------------
 
@@ -144,7 +183,7 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     const w = &stdout.interface;
     defer w.flush() catch {};
 
-    if (do_sweep) return sweep.report(gpa, io, arena, w);
+    if (do_sweep) return size_sweep.report(gpa, io, arena, w);
 
     // `--coverage` is a question about the FIXTURES — which LRM clauses they
     // cite — so it compiles nothing and there is nothing to time or compare.

@@ -3,8 +3,9 @@
 //! `gen` is swept over `sweep` with the others at 1, so the slope is the
 //! point: an O(n^2) scan and a flat one can cost the same at n = 8.
 //!
-//! The half that can fail is `expected`: the device and MIR sizes of every
-//! generated shape, asserted under `zig build test` (AGENTS.md §8: two agents
+//! The half that can fail is `expected`, kept in `../bench.zig`: the device
+//! and MIR sizes of every generated shape, asserted under `zig build test`
+//! (AGENTS.md §8: two agents
 //! moving these sizes regenerate the table, they do not pick a side).
 
 const std = @import("std");
@@ -26,11 +27,11 @@ const reps = 25;
 
 /// The sweep. Powers of eight, so a doubling and a squaring are visibly
 /// different shapes across four steps rather than two.
-const sweep = [_]u32{ 1, 8, 64, 512, 4096 };
+pub const sweep = [_]u32{ 1, 8, 64, 512, 4096 };
 
 /// The generated cases. Each pins the other two axes at 1, so a bend in one
 /// column is attributable to one axis.
-const Axis = enum { contrib, vals, inst };
+pub const Axis = enum { contrib, vals, inst };
 
 // ---------------------------------------------------------------------------
 // The generator
@@ -81,38 +82,10 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
     return aw.toOwnedSlice();
 }
 
-// ---------------------------------------------------------------------------
-// The assertions — the half of this file that can fail
-// ---------------------------------------------------------------------------
-
-/// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
-/// shape, in `sweep` order, measured by this bench. Pure functions of the
-/// source, so the same on every machine and optimize mode: a change here is a
-/// change in what VerA emits, and the commit that moves it explains it.
-const Shape = struct { device: usize, defs: usize, insts: usize };
-const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
-    .contrib = .{
-        .{ .device = 32246, .defs = 8, .insts = 5 },
-        .{ .device = 32601, .defs = 35, .insts = 26 },
-        .{ .device = 35344, .defs = 258, .insts = 194 },
-        .{ .device = 57747, .defs = 2050, .insts = 1538 },
-        .{ .device = 240327, .defs = 16386, .insts = 12290 },
-    },
-    .vals = .{
-        .{ .device = 32246, .defs = 8, .insts = 5 },
-        .{ .device = 32428, .defs = 24, .insts = 19 },
-        .{ .device = 33884, .defs = 136, .insts = 131 },
-        .{ .device = 45589, .defs = 1032, .insts = 1027 },
-        .{ .device = 139350, .defs = 8200, .insts = 8195 },
-    },
-    .inst = .{
-        .{ .device = 32246, .defs = 8, .insts = 5 },
-        .{ .device = 33450, .defs = 50, .insts = 40 },
-        .{ .device = 43298, .defs = 386, .insts = 320 },
-        .{ .device = 123832, .defs = 3074, .insts = 2560 },
-        .{ .device = 781617, .defs = 24578, .insts = 20480 },
-    },
-});
+/// The device and MIR sizes each shape must come out at: `expected` in
+/// `tests/bench.zig`. The table stays there, where a change that moves the
+/// emitted device's size updates it.
+const expected = bench.expected_sizes;
 
 /// Compile one generated shape and hold it to `expected`. Shared by the bench
 /// run (every point of the sweep) and by the unit test below (the two cheap
