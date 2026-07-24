@@ -8,16 +8,22 @@
 //! hashes every output level, ramp end and next event the device keeps.
 const contract = @import("contract");
 
+/// The `--dyn` hook `vera --emit-so` calls: exports `Run(D).run` as the C
+/// symbol `vdev_run`. `name` is the hook's, unused here.
 pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
     _ = name;
     @export(&Run(D).run, .{ .name = "vdev_run" });
 }
 
+/// The transient over device `D`, as a namespace with one `run`.
 pub fn Run(comptime D: type) type {
     return struct {
         const n = contract.nU(D);
         const V = contract.RefFamily(f64, &@as([n]u8, @splat(contract.no_lane)), .{ .dense = true });
 
+        /// Runs `steps` committed points and returns the FNV-1a hash of every
+        /// output level, ramp end and next event after each; `run(0)` is the
+        /// FNV offset basis, which `vdev_so_host.zig` refuses as "ran nothing".
         pub fn run(steps: u64) callconv(.c) u64 {
             const m: D.Model = .{};
             var inst: D.Instance = .{};

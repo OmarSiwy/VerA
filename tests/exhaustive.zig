@@ -111,6 +111,10 @@ test "every `else` over a boundary enum is written out or annotated" {
     const arena = arena_state.allocator();
     const io = std.testing.io;
 
+    // One file's source, AST and scratch at a time: `scan` prints what it
+    // finds before it returns, so nothing outlives the file.
+    var file_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer file_state.deinit();
     var found: usize = 0;
     for ([_][]const u8{ "lib", "src" }) |sub| {
         const abs = try std.fs.path.join(arena, &.{ repo_root, sub });
@@ -119,8 +123,10 @@ test "every `else` over a boundary enum is written out or annotated" {
         var w = try dir.walk(arena);
         while (try w.next(io)) |e| {
             if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".zig")) continue;
-            const src = try dir.readFileAllocOptions(io, e.path, arena, .limited(1 << 24), .of(u8), 0);
-            found += try scan(arena, try std.fs.path.join(arena, &.{ sub, e.path }), src);
+            _ = file_state.reset(.retain_capacity);
+            const fa = file_state.allocator();
+            const src = try dir.readFileAllocOptions(io, e.path, fa, .limited(1 << 24), .of(u8), 0);
+            found += try scan(fa, try std.fs.path.join(fa, &.{ sub, e.path }), src);
         }
     }
     if (found != 0) {

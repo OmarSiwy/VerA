@@ -10,6 +10,8 @@ const TestFn = std.lang.TestFn;
 /// elsewhere, `contract.validating`), so a contract regression fails CI.
 pub const vera_validate_contract = true;
 
+/// Runs this artifact's tests (`run`). Its own allocations are leak-checked:
+/// a leak in the runner itself is `unreachable`.
 pub fn main(init: std.process.Init.Minimal) !void {
     var gpa: std.heap.DebugAllocator(.{}) = .{};
     defer if (gpa.deinit() == .leak) unreachable;
@@ -30,6 +32,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
     try run(&arena, threaded.io(), init.environ, process_name, &reporter);
 }
 
+/// Runs every test of `builtin.test_functions` in order and writes the report
+/// to `reporter`. Exits the process with status 1 when a test failed or
+/// leaked, and returns only when every test passed or was skipped. Results
+/// and stack traces live in `arena`.
 pub fn run(
     arena: *std.heap.ArenaAllocator,
     io: std.Io,
@@ -119,13 +125,13 @@ fn writeTestResults(
 
 /// One test and the namespace it was declared in.
 const Test = struct {
-    /// A name of the test
+    /// The part after `.test.`/`.decltest.`; borrows `test_fn.name`.
     name: []const u8 = undefined,
-    /// A full name of the namespace, where the test is created
+    /// The part before it, the namespace the report groups by.
     namespace: []const u8 = undefined,
-    /// A builtin test representation
     test_fn: TestFn,
 
+    /// Splits `test_fn.name` at `.test.` or `.decltest.`; both halves borrow it.
     pub fn wrap(test_fn: TestFn) Test {
         var instance: Test = .{ .test_fn = test_fn };
         // Split a full name of a test in two parts:
@@ -210,6 +216,7 @@ pub const TestResult = union(enum) {
     failed: struct { @"test": Test, duration: Duration, err: anyerror, stack_trace: []const u8, is_mem_leak: bool },
     skipped: Test,
 
+    /// The test this result is for, whatever its outcome.
     pub fn @"test"(self: TestResult) Test {
         return switch (self) {
             .passed => |result| result.@"test",
@@ -218,6 +225,7 @@ pub const TestResult = union(enum) {
         };
     }
 
+    /// Whether `std.testing.allocator` reported a leak; a skipped test never does.
     pub fn isMemoryLeak(self: TestResult) bool {
         return switch (self) {
             .passed => |result| result.is_mem_leak,
@@ -263,6 +271,8 @@ const FileReporter = struct {
     file_writer: std.Io.File.Writer,
     mode: std.Io.Terminal.Mode,
 
+    /// Colour follows `NO_COLOR`, `CLICOLOR_FORCE` and whether `file` is a
+    /// terminal. `buffer` must outlive the reporter.
     pub fn init(threaded: *std.Io.Threaded, file: std.Io.File, buffer: []u8) !FileReporter {
         const NO_COLOR = threaded.environ.exist.NO_COLOR;
         const CLICOLOR_FORCE = threaded.environ.exist.CLICOLOR_FORCE;
@@ -274,6 +284,7 @@ const FileReporter = struct {
         return .{ .writer = &self.file_writer.interface, .mode = self.mode };
     }
 
+    /// Writes the banner and flushes, so it prints before any test's own output.
     pub fn writeTitle(
         self: *FileReporter,
         process_name: []const u8,
@@ -293,14 +304,17 @@ const FileReporter = struct {
         try self.file_writer.interface.flush();
     }
 
+    /// One line naming the group the next tests belong to.
     pub fn writeNamespace(self: *FileReporter, namespace: []const u8) anyerror!void {
         try self.colorizeLine(colors.namespace, "{s}", .{namespace});
     }
 
+    /// ` - <name> `, the line `writeTestResult` finishes.
     pub fn writeTestName(self: *FileReporter, test_name: []const u8) anyerror!void {
         try self.colorize(colors.test_name, " - {s} ", .{test_name});
     }
 
+    /// Finishes the line; a failure appends its error-return trace.
     pub fn writeTestResult(self: *FileReporter, test_result: TestResult) anyerror!void {
         switch (test_result) {
             .passed => |result| {
@@ -331,6 +345,7 @@ const FileReporter = struct {
         }
     }
 
+    /// The totals line, then a flush. Prints nothing for an artifact with no tests.
     pub fn writeSummary(
         self: *FileReporter,
         passed: u16,
