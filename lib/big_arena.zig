@@ -9,12 +9,15 @@
 //! compile's resident memory on hisimhv. Passed through, a large buffer grows
 //! by the backing allocator's `remap` (an `mremap` for `smp_allocator`, which
 //! moves page mappings and copies nothing) and a buffer it gives up is
-//! unmapped at once.
+//! returned at once.
 //!
 //! The split is by length alone: every live block of `large` bytes or more is
 //! the backing allocator's, every smaller one the arena's. A resize that would
 //! cross the line is refused, so the caller moves the data, and a block never
 //! changes sides. Not threadsafe.
+//!
+//! Owners: `vera.CompileResult` (one per compilation) and `src/main.zig`'s
+//! `.v` design arena.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -22,23 +25,31 @@ const Alignment = std.mem.Alignment;
 
 const BigArena = @This();
 
-/// `smp_allocator`'s largest size class is a 64 KiB slab; from there up it
-/// maps pages and remaps them in place, which is the growth this wants.
-pub const large = 64 * 1024;
+/// The length from which a block is the backing allocator's. From 64 KiB up
+/// `smp_allocator` maps pages and remaps them in place; from 16 KiB to 64 KiB
+/// it serves a slab size class, so a grown list still copies, but its old
+/// buffer goes back to the slab at once instead of lying dead in the arena.
+/// Measured 2026-10-03 against 64 KiB (ReleaseFast `--emit-zig`, peak RSS,
+/// best of 3): psp103 -7.9%, bsim4va -11.4%, hisimhv -6.2%, at equal user
+/// instructions. 4, 8 and 32 KiB each saved less.
+pub const large = 16 * 1024;
 
 small: std.heap.ArenaAllocator,
 child: Allocator,
 /// Address → extent of every live large block, for `deinit`. Few entries:
-/// one per large table, not per allocation.
+/// one per large table, not per allocation (at most 50 live on hisimhv,
+/// counted at the 64 KiB threshold), so the map's per-entry cost is immaterial.
 blocks: std.AutoHashMapUnmanaged(usize, Block) = .empty,
 
 const Block = struct { len: usize, alignment: Alignment };
 
+/// Returns an empty arena over `child`, which must outlive it.
 pub fn init(child: Allocator) BigArena {
     return .{ .small = .init(child), .child = child };
 }
 
-/// Frees every block, large and small.
+/// Frees every block, large and small, and invalidates every pointer the
+/// arena handed out.
 pub fn deinit(self: *BigArena) void {
     var it = self.blocks.iterator();
     while (it.next()) |e| {
@@ -50,6 +61,10 @@ pub fn deinit(self: *BigArena) void {
     self.* = undefined;
 }
 
+/// Returns the allocator interface. Its `ptr` is `self`, so the arena must
+/// not move while anything holds an allocator taken from it. A `free` returns
+/// a large block to the backing allocator at once and a small one only when
+/// it was the arena's latest allocation.
 pub fn allocator(self: *BigArena) Allocator {
     return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
 }
