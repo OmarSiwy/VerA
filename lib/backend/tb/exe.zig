@@ -3,10 +3,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const tb = @import("../tb.zig");
 const orchestrator = @import("../orchestrator.zig");
-const Io = tb.Io;
-const Allocator = tb.Allocator;
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
 
 /// How `buildExe` builds and where it writes.
 pub const BuildOptions = struct {
@@ -18,7 +17,9 @@ pub const BuildOptions = struct {
     /// Artifact name: the module name, so the binary is `./<module>` plus the
     /// target's executable extension (`.exe` on Windows).
     name: []const u8,
+    /// The binary's path instead of `<work_dir>/<name>`. Copied, never kept.
     out_path: ?[]const u8 = null,
+    /// The compiler to spawn; looked up on `PATH` when bare.
     zig_exe: []const u8 = "zig",
     /// `-O` for the testbench. Debug by default: see `buildExe`.
     optimize: std.lang.Optimize = .debug,
@@ -73,9 +74,7 @@ pub fn buildExe(
     runner_zig: []const u8,
     opts: BuildOptions,
 ) !BuildResult {
-    const cwd = Io.Dir.cwd();
-    try cwd.createDirPath(io, opts.work_dir);
-    var dir = try cwd.openDir(io, opts.work_dir, .{});
+    var dir = try openWorkDir(io, opts);
     defer dir.close(io);
 
     // Every argv string lives for this call only.
@@ -83,35 +82,14 @@ pub fn buildExe(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const bin = if (opts.out_path) |p|
-        try gpa.dupe(u8, p)
-    else
-        try std.mem.concat(gpa, u8, &.{
-            try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
-            builtin.target.exeFileExt(),
-        });
+    const bin = if (opts.out_path) |p| try gpa.dupe(u8, p) else try binPath(gpa, arena, opts);
     errdefer gpa.free(bin);
 
     std.debug.assert(device_zig != null or opts.mixed);
     const m_root = try bind(arena, io, dir, opts, "tb", "root", runner_zig);
 
     // `--dep` binds to the NEXT `-M`, and the FIRST `-M` is the root module.
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{
-        opts.zig_exe,
-        if (opts.shared_lib) "build-lib" else "build-exe",
-        try arena.print("-femit-bin={s}", .{bin}),
-        try arena.print("-O{t}", .{opts.optimize}),
-        "--cache-dir",
-        ".zig-cache",
-    });
-    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
-        .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
-        .llvm => &.{"-fllvm"},
-    });
-    // No debug info where there are no safety checks to trace: emitting it
-    // is most of an unsafe build's LLVM time.
-    if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    var argv = try argvHead(arena, opts, if (opts.shared_lib) "build-lib" else "build-exe", bin);
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
     if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
@@ -135,8 +113,53 @@ pub fn buildExe(
         try argv.appendSlice(arena, &.{ "--dep", "diag", "--dep", "contract", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
         try argv.appendSlice(arena, &.{ "--dep", "contract", try src.m(arena, root, "kernels", "lib/backend/kernels.zig") });
     }
+    return runZig(gpa, io, argv.items, bin);
+}
 
-    const r = try std.process.run(gpa, io, .{ .argv = argv.items });
+/// Creates `opts.work_dir` if absent and opens it. The caller closes it.
+fn openWorkDir(io: Io, opts: BuildOptions) !Io.Dir {
+    const cwd = Io.Dir.cwd();
+    try cwd.createDirPath(io, opts.work_dir);
+    return cwd.openDir(io, opts.work_dir, .{});
+}
+
+/// Returns `<work_dir>/<fileStem(name)>` plus the target's executable
+/// extension. Caller owns the path and must free it with `gpa`.
+fn binPath(gpa: Allocator, arena: Allocator, opts: BuildOptions) ![]const u8 {
+    return std.mem.concat(gpa, u8, &.{
+        try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
+        builtin.target.exeFileExt(),
+    });
+}
+
+/// Returns the argv every build here opens with: compiler, `verb`, output,
+/// `-O`, cache directory, backend, then `-fstrip` when stripping. Allocated in
+/// `arena`, as everything later appended to it must be.
+fn argvHead(arena: Allocator, opts: BuildOptions, verb: []const u8, bin: []const u8) !std.ArrayList([]const u8) {
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{
+        opts.zig_exe,
+        verb,
+        try arena.print("-femit-bin={s}", .{bin}),
+        try arena.print("-O{t}", .{opts.optimize}),
+        "--cache-dir",
+        ".zig-cache",
+    });
+    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
+        .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
+        .llvm => &.{"-fllvm"},
+    });
+    // No debug info where there are no safety checks to trace: emitting it
+    // is most of an unsafe build's LLVM time.
+    if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    return argv;
+}
+
+/// Runs `argv` to its exit. On success `bin`, which `gpa` owns, becomes the
+/// `.ok` payload; on a failed build it is freed and `zig`'s stderr becomes the
+/// `.failed` payload. On an error return `bin` is still the caller's.
+fn runZig(gpa: Allocator, io: Io, argv: []const []const u8, bin: []const u8) !BuildResult {
+    const r = try std.process.run(gpa, io, .{ .argv = argv });
     gpa.free(r.stdout);
     const failed = switch (r.term) {
         .exited => |c| c != 0,
@@ -153,7 +176,7 @@ pub fn buildExe(
 /// Writes one module's source to `<name>.<suffix>.zig` in `dir` and returns
 /// the `-M<binding>=<path>` flag, allocated in `arena`. The name-qualified file
 /// keeps two artifacts sharing a work root from overwriting each other.
-pub fn bind(
+fn bind(
     arena: Allocator,
     io: Io,
     dir: Io.Dir,
@@ -178,9 +201,7 @@ pub const Staged = struct { root: []const u8, device: []const u8 };
 /// Writes the two module files `buildExe` would build for this device and
 /// runner, under `opts.work_dir`, without building. Paths live in `arena`.
 pub fn stage(arena: Allocator, io: Io, device_zig: []const u8, runner_zig: []const u8, opts: BuildOptions) !Staged {
-    const cwd = Io.Dir.cwd();
-    try cwd.createDirPath(io, opts.work_dir);
-    var dir = try cwd.openDir(io, opts.work_dir, .{});
+    var dir = try openWorkDir(io, opts);
     defer dir.close(io);
     return .{
         .root = try writeModule(arena, io, dir, opts, "tb", runner_zig),
@@ -221,31 +242,13 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
     for (0..members.len) |i| try root.print(arena, "        {d} => @import(\"tb{d}\").main(init),\n", .{ i, i });
     try root.appendSlice(arena, "        else => @panic(\"argv[0] names no batch member\"),\n    }\n}\n");
 
-    const cwd = Io.Dir.cwd();
-    try cwd.createDirPath(io, opts.work_dir);
-    var dir = try cwd.openDir(io, opts.work_dir, .{});
+    var dir = try openWorkDir(io, opts);
     defer dir.close(io);
     const root_path = try writeModule(arena, io, dir, opts, "batch", root.items);
-    const bin = try std.mem.concat(gpa, u8, &.{
-        try std.fs.path.join(arena, &.{ opts.work_dir, try orchestrator.fileStem(arena, opts.name) }),
-        builtin.target.exeFileExt(),
-    });
+    const bin = try binPath(gpa, arena, opts);
     errdefer gpa.free(bin);
 
-    var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{
-        opts.zig_exe,
-        "build-exe",
-        try arena.print("-femit-bin={s}", .{bin}),
-        try arena.print("-O{t}", .{opts.optimize}),
-        "--cache-dir",
-        ".zig-cache",
-    });
-    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.target.cpu.arch)) {
-        .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
-        .llvm => &.{"-fllvm"},
-    });
-    if (opts.strip orelse orchestrator.strip(opts.optimize, opts.debug_info)) try argv.append(arena, "-fstrip");
+    var argv = try argvHead(arena, opts, "build-exe", bin);
     for (0..members.len) |i| try argv.appendSlice(arena, &.{ "--dep", try arena.print("tb{d}", .{i}) });
     try argv.append(arena, try arena.print("-Mroot={s}", .{root_path}));
     for (members, 0..) |m, i| try argv.appendSlice(arena, &.{
@@ -255,16 +258,5 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
         "contract",                                     try arena.print("-Mdev{d}={s}", .{ i, m.device }),
     });
     try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
-
-    const r = try std.process.run(gpa, io, .{ .argv = argv.items });
-    gpa.free(r.stdout);
-    if (switch (r.term) {
-        .exited => |c| c != 0,
-        else => true,
-    }) {
-        gpa.free(bin);
-        return .{ .failed = r.stderr };
-    }
-    gpa.free(r.stderr);
-    return .{ .ok = bin };
+    return runZig(gpa, io, argv.items, bin);
 }

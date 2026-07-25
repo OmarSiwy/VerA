@@ -2,6 +2,12 @@
 //! (fixed-grid, mixed-signal, or the Clause 12 VPI library form).
 //! LRM: §1, §2.8.3, §3.4, §3.4.1, §3.4.5, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.1,
 //! §4.6.4.3, §4.6.4.6, §5.10.2, §6.3.4, §8.2, §9.19.
+//!
+//! Order: the compile facts a caller copies into `Directives` first, then the
+//! three renderers, then the pieces they share in the order `renderRunner`
+//! writes them: the head, the card, the point's unknowns, and the checks of
+//! the device tables. Every byte written here is a testbench's source, which
+//! the goldens (`--emit-zig`) do not cover; the fixture suite does.
 
 const std = @import("std");
 const tb = @import("../tb.zig");
@@ -10,12 +16,74 @@ const naming = @import("../naming.zig");
 const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const diag = @import("diag");
-const Io = tb.Io;
-const Allocator = tb.Allocator;
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
 const Error = tb.Error;
 const Sweep = tb.Sweep;
 const Directives = tb.Directives;
 const max_points = tb.max_points;
+
+/// Returns the `//! param` lines that name a shape parameter of `lowered`
+/// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
+/// at compile time, so a non-empty result means the caller must compile again
+/// with it as `Options.param_overrides`, as `--param` would.
+pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lower.ParamOverride {
+    var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
+    for (d.params) |card| for (lowered.params.items) |p| {
+        if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
+    };
+    return out.items;
+}
+
+/// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
+pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
+    var out: std.ArrayList(u16) = .empty;
+    for (lowered.nodes.items(.kind), 0..) |k, i| switch (k) {
+        .op_state => try out.append(arena, @intCast(i)),
+        .net, .branch_flow, .port_flow => {},
+    };
+    return out.items;
+}
+
+/// Returns the mixed-signal plan of a compile, or null for a module with no
+/// discrete half that needs the event queue (`Lowered.mixed_signal`). The
+/// slices borrow from `lowered` and `mir`.
+pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
+    if (!lowered.mixed_signal) return null;
+    const ts = lowered.directives.timescale();
+    return .{
+        .source = lowered.src,
+        .top = mir.name,
+        .unit = if (ts) |t| t.unit else null,
+        .precision = if (ts) |t| t.precision else null,
+        .inputs = lowered.discrete_inputs.keys(),
+        .snaps = lowered.discrete_snaps.keys(),
+        .xz = lowered.discrete_xz.keys(),
+        .events = lowered.discrete_events.values(),
+        .inserts = lowered.inserts,
+        .reads = lowered.discrete_reads.keys(),
+        .held = lowered.held_vars.items,
+        .params = lowered.params.items,
+        .param_reads = lowered.discrete_params.keys(),
+    };
+}
+
+/// Adds W0750 to `bag` at the first §5.10.3 `cross`, `above` or `timer`
+/// call when the module gets the fixed-grid runner (`mixedPlan` is null),
+/// which inserts no timepoint: such an event fires at the first `//! time`
+/// point past its own time.
+pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) !void {
+    if (lowered.mixed_signal) return;
+    for (0..mir.blockCount()) |bi| {
+        var insts = mir.blockInsts(@fromBackingInt(@intCast(bi)));
+        while (insts.next()) |inst| {
+            if (mir.instOp(inst) != .call or mir.instTok(inst) == Mir.no_tok) continue;
+            const k = Mir.callee.opKind(mir.instData(inst).call.callee);
+            if (k == .cross or k == .above or k == .timer)
+                return bag.add(.codegen, .W0750, lowered.tokenSpan(mir.instTok(inst)), "the testbench inserts no timepoint at it", .{});
+        }
+    }
+}
 
 /// Returns the runner's Zig source, allocated in `arena`; dispatches to
 /// `renderMixed` when `d.mixed` is set. `title` keys each transcript block
@@ -34,13 +102,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
-    // §9.10 the temperature is the Model row's, written with the card.
-    try out.print(arena, "    model.temperature__ = {f};\n", .{fmtF64(d.temp)});
     // §6.3.4: the card is complete only now. Unconditional, so a §3.4.5
     // localparam is derived even with no `//! param` line.
+    try deriveCard(&out, arena, "    ", "model", d.temp);
     try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
-        \\    shapeCheck(&model);
         \\
         \\    var inst: D.Instance = .{};
         \\
@@ -159,32 +224,12 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| try setCard(&out, arena, "        ", "pm", s.name, v);
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
-            try out.appendSlice(arena, "        shapeCheck(&pm);\n");
+            try deriveCard(&out, arena, "        ", "pm", null);
             // §6.3.4: setup also derives from the swept card.
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm);\n");
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setupInstance\")) D.setupInstance(&pm, &inst);\n");
         }
-        // `forced` marks the unknowns the host drives rather than Newton. By
-        // default every unknown is tied to the reference; `//! solve` unties
-        // the ones no line names.
-        try out.print(
-            arena,
-            "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n" ++
-                // §3.6.3.2 a nodeset is an initial guess: it seeds `x` and does
-                // not touch `forced`, so it picks which root Newton finds. It
-                // precedes the `//! bias` lines, which override it.
-                "        if (comptime @hasDecl(D, \"u_nodeset\")) for (D.u_nodeset, 0..) |nodeset_i, i| {{\n" ++
-                "            if (nodeset_i) |v| x[i] = v;\n" ++
-                "        }};\n" ++
-                "        var state = newState(&{s}, &inst);\n",
-            .{ if (d.solve_free) "null" else "0.0", mdl },
-        );
-        for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
-        for (d.bias) |b|
-            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-        for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+        try pointUnknowns(&out, arena, d, pt, mdl);
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
                 // A short `wave` holds its last value.
@@ -225,203 +270,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         try out.appendSlice(arena, "    }\n");
     }
 
-    try out.appendSlice(arena, if (d.print_residual)
-        \\}
-        \\
-        \\const print_residual = true;
-        \\
-    else
-        \\}
-        \\
-        \\const print_residual = false;
-        \\
-    );
+    try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
     return out.items;
-}
-
-/// Returns the `//! param` lines that name a shape parameter of `lowered`
-/// (`ParamInfo.shape`, §3.4), allocated in `arena`. A shape parameter is fixed
-/// at compile time, so a non-empty result means the caller must compile again
-/// with it as `Options.param_overrides`, as `--param` would.
-pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lower.ParamOverride {
-    var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
-    for (d.params) |card| for (lowered.params.items) |p| {
-        if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
-    };
-    return out.items;
-}
-
-/// The `U` indices of the §4.5.2 operator unknowns (`Directives.op_states`).
-pub fn opStates(arena: Allocator, lowered: *const Lowered) Error![]const u16 {
-    var out: std.ArrayList(u16) = .empty;
-    for (lowered.nodes.items(.kind), 0..) |k, i| switch (k) {
-        .op_state => try out.append(arena, @intCast(i)),
-        .net, .branch_flow, .port_flow => {},
-    };
-    return out.items;
-}
-
-/// Returns the mixed-signal plan of a compile, or null for a module with no
-/// discrete half that needs the event queue (`Lowered.mixed_signal`). The
-/// slices borrow from `lowered` and `mir`.
-pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
-    if (!lowered.mixed_signal) return null;
-    const ts = lowered.directives.timescale();
-    return .{
-        .source = lowered.src,
-        .top = mir.name,
-        .unit = if (ts) |t| t.unit else null,
-        .precision = if (ts) |t| t.precision else null,
-        .inputs = lowered.discrete_inputs.keys(),
-        .snaps = lowered.discrete_snaps.keys(),
-        .xz = lowered.discrete_xz.keys(),
-        .events = lowered.discrete_events.values(),
-        .inserts = lowered.inserts,
-        .reads = lowered.discrete_reads.keys(),
-        .held = lowered.held_vars.items,
-        .params = lowered.params.items,
-        .param_reads = lowered.discrete_params.keys(),
-    };
-}
-
-/// Adds W0750 to `bag` at the first §5.10.3 `cross`, `above` or `timer`
-/// call when the module gets the fixed-grid runner (`mixedPlan` is null),
-/// which inserts no timepoint: such an event fires at the first `//! time`
-/// point past its own time.
-pub fn warnGridEvents(bag: *diag.Bag, lowered: *const Lowered, mir: *const Mir) !void {
-    if (lowered.mixed_signal) return;
-    for (0..mir.blockCount()) |bi| {
-        var insts = mir.blockInsts(@fromBackingInt(@intCast(bi)));
-        while (insts.next()) |inst| {
-            if (mir.instOp(inst) != .call or mir.instTok(inst) == Mir.no_tok) continue;
-            const k = Mir.callee.opKind(mir.instData(inst).call.callee);
-            if (k == .cross or k == .above or k == .timer)
-                return bag.add(.codegen, .W0750, lowered.tokenSpan(mir.instTok(inst)), "the testbench inserts no timepoint at it", .{});
-        }
-    }
-}
-
-/// Emits the `//! qsite` check (`tb.Directives.qsites`), once before the
-/// points: the site layout is a comptime property of the device.
-fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
-    try out.appendSlice(arena,
-        \\
-        \\    // §5.6.1.2 the charge sites a host tapes one by one: which rows
-        \\    // each stamps (`q_stamps`) and whether `q_lte` checks it.
-        \\    {
-        \\        const want = [_][]const u8{
-        \\
-    );
-    for (d.qsites) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
-    try out.appendSlice(arena,
-        \\        };
-        \\        const nq = if (comptime @hasDecl(D, "q")) contract.nQ(D) else 0;
-        \\        std.debug.print("qsite count got={d} want={d} ok={d}\n", .{ nq, want.len, @intFromBool(nq == want.len) });
-        \\        if (comptime @hasDecl(D, "q")) {
-        \\            inline for (0..nq) |k| {
-        \\                // Built at comptime from comptime stamps, so a site with
-        \\                // many rows is never cut short.
-        \\                const got = comptime blk: {
-        \\                    @setEvalBranchQuota(1_000_000);
-        \\                    var s: []const u8 = "";
-        \\                    for (contract.qStamps(D)) |e| if (e.site == k) {
-        \\                        s = s ++ if (e.sign == 1) @tagName(e.row) ++ "+ " else if (e.sign == -1) @tagName(e.row) ++ "- " else std.fmt.comptimePrint("{s}*{d} ", .{ @tagName(e.row), e.sign });
-        \\                    };
-        \\                    break :blk s ++ if (contract.qLte(D)[k]) "lte" else "nolte";
-        \\                };
-        \\                const w_k: []const u8 = if (k < want.len) want[k] else "<none>";
-        \\                std.debug.print("qsite[{d}] got={s} want={s} ok={d}\n", .{ k, got, w_k, @intFromBool(std.mem.eql(u8, got, w_k)) });
-        \\            }
-        \\        }
-        \\    }
-        \\
-    );
-}
-
-/// Emits the `//! seed` check (`tb.Directives.seeds`), once after `setup`,
-/// where a host calls `seed` before solving.
-fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
-    try out.appendSlice(arena,
-        \\
-        \\    // §9.17.3 the cold start a host writes into its limited image.
-        \\    {
-        \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(Val, &model, &inst, sim_state) else @splat(null);
-        \\        var want: [n_u]?f64 = @splat(null);
-        \\
-    );
-    for (d.seeds) |b| try out.print(arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-    try out.appendSlice(arena,
-        \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
-        \\        for (got, want, 0..) |g, w, i| {
-        \\            if (g == null and w == null) continue;
-        \\            const ok = g != null and w != null and near(g.?, w.?);
-        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @enumFromInt(i))), g, w, @intFromBool(ok) });
-        \\            if (g != null) std.debug.print("seed[{s}] in limit_writes ok={d}\n", .{
-        \\                @tagName(@as(D.U, @enumFromInt(i))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
-        \\            });
-        \\        }
-        \\    }
-        \\
-    );
-}
-
-/// Emits the `//! limit` checks (`tb.Directives.limits`) at the first point,
-/// after the solve, so `x` is the bias the fixture states.
-fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
-    for (d.limits, 0..) |c, k| {
-        try out.appendSlice(arena, "        {\n            var old = x;\n            _ = &old;\n");
-        for (c.old) |b| try out.print(arena, "            old[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-        try out.print(arena,
-            \\            if (comptime !@hasDecl(D, "limit")) {{
-            \\                std.debug.print("limit[{d}] got=none want=limit ok=0\n", .{{}});
-            \\            }} else {{
-            \\                const r = D.limit(Val, &{s}, &inst, x, old, sim_state);
-            \\
-        , .{ k, mdl });
-        for (c.want) |b| {
-            if (std.mem.eql(u8, b.name, "converged")) {
-                try out.print(arena, "                std.debug.print(\"limit[{d}].converged got={{d}} want={d} ok={{d}}\\n\", .{{ @intFromBool(r.converged), @intFromBool(r.converged == {}) }});\n", .{ k, @intFromBool(b.value != 0), b.value != 0 });
-            } else {
-                try out.print(arena, "                std.debug.print(\"limit[{d}].{f} got={{d}} want={{d}} ok={{d}}\\n\", .{{ r.x[ix(\"{f}\")], @as(f64, {f}), @intFromBool(near(r.x[ix(\"{f}\")], {f})) }});\n", .{
-                    k, std.zig.fmtString(b.name), std.zig.fmtString(b.name), fmtF64(b.value), std.zig.fmtString(b.name), fmtF64(b.value),
-                });
-            }
-        }
-        try out.appendSlice(arena, "            }\n        }\n");
-    }
-}
-
-/// The page every runner opens with: the fixed head, `title`, the fixed body.
-fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
-    try out.appendSlice(arena, tb_runner_text.runner_head);
-    try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
-    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
-    try out.appendSlice(arena, tb_runner_text.runner_body);
-}
-
-/// Writes one card line, `<card>.<name> = value`, at `indent`.
-fn setCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: []const u8, name: []const u8, value: f64) Error!void {
-    // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
-    // integer parameter rounds, away from zero on a tie.
-    try out.print(arena, "{s}{s}.{f} = cardValue(@TypeOf({s}.{f}), {f});\n", .{
-        indent, card, std.zig.fmtId(name), card, std.zig.fmtId(name), fmtF64(value),
-    });
-    // §9.19 `$param_given` reads the companion field when codegen emitted one.
-    try out.print(arena, "{s}if (comptime @hasField(D.Model, \"{f}__given\")) @field({s}, \"{f}__given\") = true;\n", .{
-        indent, std.zig.fmtString(name), card, std.zig.fmtString(name),
-    });
-}
-
-/// The `//! time` grid as `times`, and each `//! wave` as `wave_<k>`.
-fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!void {
-    try out.appendSlice(arena, "const times = [_]f64{");
-    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
-    try out.appendSlice(arena, " };\n");
-    for (d.waves, 0..) |wv, k| {
-        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
-        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
-        try out.appendSlice(arena, " };\n");
-    }
 }
 
 /// Returns the VAMS §8 mixed-signal runner, allocated in `arena`: the same
@@ -431,7 +281,7 @@ fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!vo
 /// here, equal to the fixed-grid runner's value at every declared point.
 /// Device-table directives (noise, acstim, qsite, seed, limit) are a compile
 /// error in the emitted runner.
-pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
+fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try head(&out, arena, title, d);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
@@ -617,13 +467,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
-    try out.print(arena, "    model.temperature__ = {f};\n", .{fmtF64(d.temp)});
-    try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
-        \\    shapeCheck(&model);
-        \\    var inst: D.Instance = .{};
-        \\
-    );
+    try deriveCard(&out, arena, "    ", "model", d.temp);
+    try out.appendSlice(arena, "    var inst: D.Instance = .{};\n");
     try out.print(arena, "    sim_state = .{{ .kind = .{t} }};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
@@ -645,36 +490,12 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| try setCard(&out, arena, "        ", "pm", s.name, v);
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
-            try out.appendSlice(arena, "        shapeCheck(&pm);\n");
+            try deriveCard(&out, arena, "        ", "pm", null);
         }
-        try out.print(arena,
-            \\        var x: [n_u]f64 = @splat(0.0);
-            \\        var forced: [n_u]?f64 = @splat({s});
-            \\        if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {{
-            \\            if (nodeset_i) |v| x[i] = v;
-            \\        }};
-            \\        var state = newState(&{s}, &inst);
-            \\
-        , .{ if (d.solve_free) "null" else "0.0", mdl });
-        for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
-        for (d.bias) |b|
-            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-        for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+        try pointUnknowns(&out, arena, d, pt, mdl);
         try out.print(arena, "        runMixed(&{s}, &inst, &x, &forced, &state, &n);\n    }}\n", .{mdl});
     }
-    try out.appendSlice(arena, if (d.print_residual)
-        \\}
-        \\
-        \\const print_residual = true;
-        \\
-    else
-        \\}
-        \\
-        \\const print_residual = false;
-        \\
-    );
+    try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
     return out.items;
 }
 
@@ -700,13 +521,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     for (d.params) |p| try setCard(&out, arena, "    ", "g_model", p.name, p.value);
-    try out.print(arena, "    g_model.temperature__ = {f};\n", .{fmtF64(d.temp)});
-    try out.appendSlice(arena,
-        \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &g_model);
-        \\    shapeCheck(&g_model);
-        \\    g_inst = .{};
-        \\
-    );
+    try deriveCard(&out, arena, "    ", "g_model", d.temp);
+    try out.appendSlice(arena, "    g_inst = .{};\n");
     try out.appendSlice(arena,
         \\    sim_state = .{ .kind = @enumFromInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
@@ -747,6 +563,74 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     return out.items;
+}
+
+/// The page every runner opens with: the fixed head, `title`, the fixed body.
+fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
+    try out.appendSlice(arena, tb_runner_text.runner_head);
+    try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
+    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.appendSlice(arena, tb_runner_text.runner_body);
+}
+
+/// Writes one card line, `<card>.<name> = value`, at `indent`.
+fn setCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: []const u8, name: []const u8, value: f64) Error!void {
+    // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
+    // integer parameter rounds, away from zero on a tie.
+    try out.print(arena, "{s}{s}.{f} = cardValue(@TypeOf({s}.{f}), {f});\n", .{
+        indent, card, std.zig.fmtId(name), card, std.zig.fmtId(name), fmtF64(value),
+    });
+    // §9.19 `$param_given` reads the companion field when codegen emitted one.
+    try out.print(arena, "{s}if (comptime @hasField(D.Model, \"{f}__given\")) @field({s}, \"{f}__given\") = true;\n", .{
+        indent, std.zig.fmtString(name), card, std.zig.fmtString(name),
+    });
+}
+
+/// Writes, at `indent`, the §9.10 temperature into `card` when `temp` is
+/// given (the `Model` row holds it, written with the card), then the §6.3.4
+/// `derive` and the shape check that complete it. Every card a runner builds
+/// ends this way, after its `setCard` lines.
+fn deriveCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: []const u8, temp: ?f64) Error!void {
+    if (temp) |t| try out.print(arena, "{s}{s}.temperature__ = {f};\n", .{ indent, card, fmtF64(t) });
+    try out.print(arena, "{0s}if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &{1s});\n{0s}shapeCheck(&{1s});\n", .{ indent, card });
+}
+
+/// Writes one operating point's unknowns for the fixed-grid and mixed
+/// runners: `x` and `forced`, the §3.6.3.2 nodeset, a fresh `State` on card
+/// `mdl`, then what the directives pin. `pt` is the point's row of `expand`.
+fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: []const f64, mdl: []const u8) Error!void {
+    // `forced` marks the unknowns the host drives rather than Newton. By
+    // default every unknown is tied to the reference; `//! solve` unties
+    // the ones no line names. §3.6.3.2 a nodeset is an initial guess: it
+    // seeds `x` and does not touch `forced`, so it picks which root Newton
+    // finds. It precedes the `//! bias` lines, which override it.
+    try out.print(arena,
+        \\        var x: [n_u]f64 = @splat(0.0);
+        \\        var forced: [n_u]?f64 = @splat({s});
+        \\        if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {{
+        \\            if (nodeset_i) |v| x[i] = v;
+        \\        }};
+        \\        var state = newState(&{s}, &inst);
+        \\
+    , .{ if (d.solve_free) "null" else "0.0", mdl });
+    // §4.5.2 operator unknowns are never forced (`Directives.op_states`).
+    for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
+    for (d.bias) |b|
+        try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+    for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
+        try out.print(arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+}
+
+/// The `//! time` grid as `times`, and each `//! wave` as `wave_<k>`.
+fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!void {
+    try out.appendSlice(arena, "const times = [_]f64{");
+    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    try out.appendSlice(arena, " };\n");
+    for (d.waves, 0..) |wv, k| {
+        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.appendSlice(arena, " };\n");
+    }
 }
 
 /// The relative compare for `white`/`flicker`/`ef`/`points`, emitted locally
@@ -1000,6 +884,96 @@ fn emitAcDyn(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []co
     }
 }
 
+/// Emits the `//! qsite` check (`tb.Directives.qsites`), once before the
+/// points: the site layout is a comptime property of the device.
+fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §5.6.1.2 the charge sites a host tapes one by one: which rows
+        \\    // each stamps (`q_stamps`) and whether `q_lte` checks it.
+        \\    {
+        \\        const want = [_][]const u8{
+        \\
+    );
+    for (d.qsites) |e| try out.print(arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+    try out.appendSlice(arena,
+        \\        };
+        \\        const nq = if (comptime @hasDecl(D, "q")) contract.nQ(D) else 0;
+        \\        std.debug.print("qsite count got={d} want={d} ok={d}\n", .{ nq, want.len, @intFromBool(nq == want.len) });
+        \\        if (comptime @hasDecl(D, "q")) {
+        \\            inline for (0..nq) |k| {
+        \\                // Built at comptime from comptime stamps, so a site with
+        \\                // many rows is never cut short.
+        \\                const got = comptime blk: {
+        \\                    @setEvalBranchQuota(1_000_000);
+        \\                    var s: []const u8 = "";
+        \\                    for (contract.qStamps(D)) |e| if (e.site == k) {
+        \\                        s = s ++ if (e.sign == 1) @tagName(e.row) ++ "+ " else if (e.sign == -1) @tagName(e.row) ++ "- " else std.fmt.comptimePrint("{s}*{d} ", .{ @tagName(e.row), e.sign });
+        \\                    };
+        \\                    break :blk s ++ if (contract.qLte(D)[k]) "lte" else "nolte";
+        \\                };
+        \\                const w_k: []const u8 = if (k < want.len) want[k] else "<none>";
+        \\                std.debug.print("qsite[{d}] got={s} want={s} ok={d}\n", .{ k, got, w_k, @intFromBool(std.mem.eql(u8, got, w_k)) });
+        \\            }
+        \\        }
+        \\    }
+        \\
+    );
+}
+
+/// Emits the `//! seed` check (`tb.Directives.seeds`), once after `setup`,
+/// where a host calls `seed` before solving.
+fn emitSeedCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §9.17.3 the cold start a host writes into its limited image.
+        \\    {
+        \\        const got: [n_u]?f64 = if (comptime @hasDecl(D, "seed")) D.seed(Val, &model, &inst, sim_state) else @splat(null);
+        \\        var want: [n_u]?f64 = @splat(null);
+        \\
+    );
+    for (d.seeds) |b| try out.print(arena, "        want[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+    try out.appendSlice(arena,
+        \\        const writes: u64 = if (comptime @hasDecl(D, "limit_writes")) D.limit_writes else 0;
+        \\        for (got, want, 0..) |g, w, i| {
+        \\            if (g == null and w == null) continue;
+        \\            const ok = g != null and w != null and near(g.?, w.?);
+        \\            std.debug.print("seed[{s}] got={?d} want={?d} ok={d}\n", .{ @tagName(@as(D.U, @enumFromInt(i))), g, w, @intFromBool(ok) });
+        \\            if (g != null) std.debug.print("seed[{s}] in limit_writes ok={d}\n", .{
+        \\                @tagName(@as(D.U, @enumFromInt(i))), @intFromBool(i < 64 and (writes >> @intCast(i)) & 1 != 0),
+        \\            });
+        \\        }
+        \\    }
+        \\
+    );
+}
+
+/// Emits the `//! limit` checks (`tb.Directives.limits`) at the first point,
+/// after the solve, so `x` is the bias the fixture states.
+fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+    for (d.limits, 0..) |c, k| {
+        try out.appendSlice(arena, "        {\n            var old = x;\n            _ = &old;\n");
+        for (c.old) |b| try out.print(arena, "            old[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+        try out.print(arena,
+            \\            if (comptime !@hasDecl(D, "limit")) {{
+            \\                std.debug.print("limit[{d}] got=none want=limit ok=0\n", .{{}});
+            \\            }} else {{
+            \\                const r = D.limit(Val, &{s}, &inst, x, old, sim_state);
+            \\
+        , .{ k, mdl });
+        for (c.want) |b| {
+            if (std.mem.eql(u8, b.name, "converged")) {
+                try out.print(arena, "                std.debug.print(\"limit[{d}].converged got={{d}} want={d} ok={{d}}\\n\", .{{ @intFromBool(r.converged), @intFromBool(r.converged == {}) }});\n", .{ k, @intFromBool(b.value != 0), b.value != 0 });
+            } else {
+                try out.print(arena, "                std.debug.print(\"limit[{d}].{f} got={{d}} want={{d}} ok={{d}}\\n\", .{{ r.x[ix(\"{f}\")], @as(f64, {f}), @intFromBool(near(r.x[ix(\"{f}\")], {f})) }});\n", .{
+                    k, std.zig.fmtString(b.name), std.zig.fmtString(b.name), fmtF64(b.value), std.zig.fmtString(b.name), fmtF64(b.value),
+                });
+            }
+        }
+        try out.appendSlice(arena, "            }\n        }\n");
+    }
+}
+
 /// Returns the cartesian product of `sweeps` then `psweeps`, last varying
 /// fastest, allocated in `arena`. Each point holds the unknown columns, then
 /// the parameter columns. Fails with `error.TooManyPoints` past `max_points`.
@@ -1016,25 +990,27 @@ pub fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
         total *|= col.at(d, k).values.len;
         if (total > max_points) return error.TooManyPoints;
     }
+    // One block of `total * dims` cells; each row is a view into it.
     const rows = try arena.alloc([]const f64, total);
+    const cells = try arena.alloc(f64, total * dims);
     for (rows, 0..) |*row, n| {
-        const cells = try arena.alloc(f64, dims);
+        const row_cells = cells[n * dims ..][0..dims];
         var rem = n;
         var k = dims;
         while (k > 0) {
             k -= 1;
             const vals = col.at(d, k).values;
-            cells[k] = vals[rem % vals.len];
+            row_cells[k] = vals[rem % vals.len];
             rem /= vals.len;
         }
-        row.* = cells;
+        row.* = row_cells;
     }
     return rows;
 }
 
 /// Formats `x` as a Zig expression: shortest round-trip decimal, or a
 /// `std.math` call for inf and nan, which have no literal.
-pub fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
+fn fmtF64(x: f64) std.fmt.Alt(f64, formatF64) {
     return .{ .data = x };
 }
 
