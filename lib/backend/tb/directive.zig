@@ -7,8 +7,7 @@ const std = @import("std");
 const tb = @import("../tb.zig");
 const naming = @import("../naming.zig");
 const Lexer = @import("frontend").Lexer;
-const Allocator = tb.Allocator;
-const marker = tb.marker;
+const Allocator = std.mem.Allocator;
 const Error = tb.Error;
 const Binding = tb.Binding;
 const Sweep = tb.Sweep;
@@ -18,9 +17,45 @@ const NoiseWant = tb.NoiseWant;
 const AcWant = tb.AcWant;
 const AcDynWant = tb.AcDynWant;
 
+/// The directive line prefix. A plain `//` comment is never a directive.
+const marker = "//!";
+
+/// Every keyword a `//!` line may open with, spelled as written. Any other
+/// word is `error.UnknownDirective`, so a typo cannot silently check nothing.
+const Keyword = enum {
+    param,
+    bias,
+    sweep,
+    wave,
+    psweep,
+    temp,
+    time,
+    solve,
+    analysis,
+    exit,
+    checks,
+    plusargs,
+    reject,
+    warn,
+    nowarn,
+    noise,
+    acstim,
+    acdyn,
+    qsite,
+    seed,
+    abstol,
+    limit,
+    spice,
+    lrm,
+    inherited,
+    xfail,
+    print,
+};
+
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
 /// comments (§2.4). Other lines are ignored, so any .va is valid input.
-/// Every slice in the result is allocated in `arena`.
+/// Every slice in the result is allocated in `arena`. Fails on the first
+/// malformed line, with the `tb.Error` that names what was wrong.
 pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var d: Directives = .{};
     var analysis: ?Analysis = null;
@@ -50,134 +85,144 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         if (body.len == 0) continue;
 
         const kw_end = std.mem.indexOfAny(u8, body, " \t") orelse body.len;
-        const kw = body[0..kw_end];
+        const kw = std.meta.stringToEnum(Keyword, body[0..kw_end]) orelse return error.UnknownDirective;
         const rest = std.mem.trim(u8, body[kw_end..], " \t");
 
-        if (std.mem.eql(u8, kw, "param")) {
-            try parseBindings(arena, rest, &params);
-        } else if (std.mem.eql(u8, kw, "bias")) {
-            try parseBindings(arena, rest, &bias);
-        } else if (std.mem.eql(u8, kw, "sweep") or std.mem.eql(u8, kw, "wave") or std.mem.eql(u8, kw, "psweep")) {
-            const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
-            // A parameter has no access-function spelling, so `psweep` takes the
-            // name as written; `unknownName` would only strip a `V(...)` that
-            // cannot be there.
-            const raw_name = std.mem.trim(u8, rest[0..at], " \t");
-            const name = if (std.mem.eql(u8, kw, "psweep")) raw_name else try unknownName(arena, raw_name);
-            if (name.len == 0) return error.BadSyntax;
-            const entry: Sweep = .{
-                .name = try arena.dupe(u8, name),
-                .values = try parseNumbers(arena, rest[at + 1 ..]),
-            };
-            try (if (std.mem.eql(u8, kw, "sweep")) &sweeps else if (std.mem.eql(u8, kw, "psweep")) &psweeps else &waves)
-                .append(arena, entry);
-        } else if (std.mem.eql(u8, kw, "temp")) {
-            d.temp = try number(rest);
-        } else if (std.mem.eql(u8, kw, "time")) {
-            d.times = try parseNumbers(arena, rest);
-        } else if (std.mem.eql(u8, kw, "solve")) {
-            // A bare flag, and it composes with `bias`: `bias` still pins what
-            // it names, `solve` frees only the rest. So a fixture that needs one
-            // terminal grounded and another solved writes both lines, and no
-            // per-unknown list is needed to say it.
-            if (rest.len != 0) return error.BadSyntax;
-            d.solve_free = true;
-        } else if (std.mem.eql(u8, kw, "analysis")) {
-            analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
-        } else if (std.mem.eql(u8, kw, "exit")) {
-            d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
-        } else if (std.mem.eql(u8, kw, "checks")) {
-            if (d.expected_checks != null) return error.BadSyntax;
-            if (!digits(rest)) return error.BadNumber;
-            const count = std.fmt.parseInt(usize, rest, 10) catch return error.BadNumber;
-            if (count == 0) return error.BadNumber;
-            d.expected_checks = count;
-        } else if (std.mem.eql(u8, kw, "plusargs")) {
-            if (rest.len == 0) return error.BadSyntax;
-            var args = std.mem.tokenizeAny(u8, rest, " \t");
-            while (args.next()) |arg| {
-                if (arg.len < 2 or arg[0] != '+') return error.BadSyntax;
-                for (arg) |c| {
-                    if (c < 0x21 or c > 0x7e or c == '\'' or c == '"' or c == '\\')
-                        return error.BadSyntax;
+        switch (kw) {
+            .param => try parseBindings(arena, rest, &params),
+            .bias => try parseBindings(arena, rest, &bias),
+            .sweep, .wave, .psweep => {
+                const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+                // A parameter has no access-function spelling, so `psweep` takes the
+                // name as written; `unknownName` would only strip a `V(...)` that
+                // cannot be there.
+                const raw_name = std.mem.trim(u8, rest[0..at], " \t");
+                const name = if (kw == .psweep) raw_name else try unknownName(arena, raw_name);
+                if (name.len == 0) return error.BadSyntax;
+                const entry: Sweep = .{
+                    .name = try arena.dupe(u8, name),
+                    .values = try parseNumbers(arena, rest[at + 1 ..]),
+                };
+                try (if (kw == .sweep) &sweeps else if (kw == .psweep) &psweeps else &waves)
+                    .append(arena, entry);
+            },
+            .temp => d.temp = try number(rest),
+            .time => d.times = try parseNumbers(arena, rest),
+            .solve => {
+                // A bare flag, and it composes with `bias`: `bias` still pins what
+                // it names, `solve` frees only the rest. So a fixture that needs one
+                // terminal grounded and another solved writes both lines, and no
+                // per-unknown list is needed to say it.
+                if (rest.len != 0) return error.BadSyntax;
+                d.solve_free = true;
+            },
+            .analysis => analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax,
+            .exit => d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber,
+            .checks => {
+                if (d.expected_checks != null) return error.BadSyntax;
+                if (!digits(rest)) return error.BadNumber;
+                const count = std.fmt.parseInt(usize, rest, 10) catch return error.BadNumber;
+                if (count == 0) return error.BadNumber;
+                d.expected_checks = count;
+            },
+            .plusargs => {
+                if (rest.len == 0) return error.BadSyntax;
+                var args = std.mem.tokenizeAny(u8, rest, " \t");
+                while (args.next()) |arg| {
+                    if (arg.len < 2 or arg[0] != '+') return error.BadSyntax;
+                    for (arg) |c| {
+                        if (c < 0x21 or c > 0x7e or c == '\'' or c == '"' or c == '\\')
+                            return error.BadSyntax;
+                    }
+                    try plusargs.append(arena, try arena.dupe(u8, arg));
                 }
-                try plusargs.append(arena, try arena.dupe(u8, arg));
-            }
-        } else if (std.mem.eql(u8, kw, "reject")) {
-            // The whole rest of the line is ONE substring, verbatim: message
-            // fragments contain spaces and commas.
-            if (rest.len == 0) return error.BadSyntax;
-            try reject.append(arena, try arena.dupe(u8, rest));
-        } else if (std.mem.eql(u8, kw, "warn")) {
-            // One verbatim substring, as `reject`.
-            if (rest.len == 0) return error.BadSyntax;
-            try warn.append(arena, try arena.dupe(u8, rest));
-        } else if (std.mem.eql(u8, kw, "nowarn")) {
-            if (rest.len != 0) return error.BadSyntax;
-            d.nowarn = true;
-        } else if (std.mem.eql(u8, kw, "noise")) {
-            // `none` is the empty table, spelled rather than left as an absent
-            // directive: "this model declares no generator" is a claim, and a
-            // missing line is not one.
-            if (!std.mem.eql(u8, rest, "none")) {
-                try noise.append(arena, try parseNoiseEntry(arena, rest));
-            }
-            d.asserts_noise = true;
-        } else if (std.mem.eql(u8, kw, "acstim")) {
-            // `none` is the empty table, for the reason `noise none` is.
-            if (!std.mem.eql(u8, rest, "none")) {
-                try acstim.append(arena, try parseAcEntry(arena, rest));
-            }
-            d.asserts_acstim = true;
-        } else if (std.mem.eql(u8, kw, "acdyn")) {
-            try acdyn.append(arena, try parseAcDynEntry(arena, rest));
-        } else if (std.mem.eql(u8, kw, "qsite")) {
-            // §5.6.1.2 one expected charge site, in slot order, in the form
-            // the runner prints (`tb.Directives.qsites`). `none`: no site.
-            if (rest.len == 0) return error.BadSyntax;
-            if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
-            d.asserts_qsite = true;
-        } else if (std.mem.eql(u8, kw, "seed")) {
-            if (rest.len == 0) return error.BadSyntax;
-            if (!std.mem.eql(u8, rest, "none")) try parseBindings(arena, rest, &seeds);
-            d.asserts_seed = true;
-        } else if (std.mem.eql(u8, kw, "abstol")) {
-            if (rest.len == 0) return error.BadSyntax;
-            try parseBindings(arena, rest, &abstols);
-        } else if (std.mem.eql(u8, kw, "limit")) {
-            const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
-            var old: std.ArrayList(Binding) = .empty;
-            var want: std.ArrayList(Binding) = .empty;
-            try parseBindings(arena, rest[0..at], &old);
-            try parseBindings(arena, rest[at + 2 ..], &want);
-            if (want.items.len == 0) return error.BadSyntax;
-            try limits.append(arena, .{ .old = old.items, .want = want.items });
-        } else if (std.mem.eql(u8, kw, "spice")) {
-            // Verbatim, including a leading `+`: the reader joins continuations
-            // itself, so what it sees is the card as the annex prints it.
-            if (rest.len == 0) return error.BadSyntax;
-            try spice.append(arena, try arena.dupe(u8, rest));
-        } else if (std.mem.eql(u8, kw, "lrm")) {
-            if (!validSection(rest)) return error.BadLrmSection;
-            try lrm.append(arena, try arena.dupe(u8, rest));
-        } else if (std.mem.eql(u8, kw, "inherited")) {
-            // `IEEE 1364-2005 18.1 (...)`: a clause §1.1 inherits whole. Not
-            // an `lrm` cite, since `--coverage` counts this LRM's clauses only.
-            // Checked here, then dropped: tests/ieee1364.zig reads these lines
-            // from raw source for measure B (`zig build test-1364 -- --coverage`).
-            if (!validInherited(rest)) return error.BadLrmSection;
-        } else if (std.mem.eql(u8, kw, "xfail")) {
-            // The whole rest of the line is the reason: prose for a human.
-            if (rest.len == 0) return error.BadSyntax;
-            d.xfail = try arena.dupe(u8, rest);
-        } else if (std.mem.eql(u8, kw, "print")) {
-            if (std.mem.eql(u8, rest, "none")) {
-                d.print_residual = false;
-            } else if (std.mem.eql(u8, rest, "residual")) {
-                d.print_residual = true;
-            } else return error.BadSyntax;
-        } else {
-            return error.UnknownDirective;
+            },
+            .reject => {
+                // The whole rest of the line is ONE substring, verbatim: message
+                // fragments contain spaces and commas.
+                if (rest.len == 0) return error.BadSyntax;
+                try reject.append(arena, try arena.dupe(u8, rest));
+            },
+            .warn => {
+                // One verbatim substring, as `reject`.
+                if (rest.len == 0) return error.BadSyntax;
+                try warn.append(arena, try arena.dupe(u8, rest));
+            },
+            .nowarn => {
+                if (rest.len != 0) return error.BadSyntax;
+                d.nowarn = true;
+            },
+            .noise => {
+                // `none` is the empty table, spelled rather than left as an absent
+                // directive: "this model declares no generator" is a claim, and a
+                // missing line is not one.
+                if (!std.mem.eql(u8, rest, "none")) {
+                    try noise.append(arena, try parseNoiseEntry(arena, rest));
+                }
+                d.asserts_noise = true;
+            },
+            .acstim => {
+                // `none` is the empty table, for the reason `noise none` is.
+                if (!std.mem.eql(u8, rest, "none")) {
+                    try acstim.append(arena, try parseAcEntry(arena, rest));
+                }
+                d.asserts_acstim = true;
+            },
+            .acdyn => try acdyn.append(arena, try parseAcDynEntry(arena, rest)),
+            .qsite => {
+                // §5.6.1.2 one expected charge site, in slot order, in the form
+                // the runner prints (`tb.Directives.qsites`). `none`: no site.
+                if (rest.len == 0) return error.BadSyntax;
+                if (!std.mem.eql(u8, rest, "none")) try qsites.append(arena, try arena.dupe(u8, rest));
+                d.asserts_qsite = true;
+            },
+            .seed => {
+                if (rest.len == 0) return error.BadSyntax;
+                if (!std.mem.eql(u8, rest, "none")) try parseBindings(arena, rest, &seeds);
+                d.asserts_seed = true;
+            },
+            .abstol => {
+                if (rest.len == 0) return error.BadSyntax;
+                try parseBindings(arena, rest, &abstols);
+            },
+            .limit => {
+                const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
+                var old: std.ArrayList(Binding) = .empty;
+                var want: std.ArrayList(Binding) = .empty;
+                try parseBindings(arena, rest[0..at], &old);
+                try parseBindings(arena, rest[at + 2 ..], &want);
+                if (want.items.len == 0) return error.BadSyntax;
+                try limits.append(arena, .{ .old = old.items, .want = want.items });
+            },
+            .spice => {
+                // Verbatim, including a leading `+`: the reader joins continuations
+                // itself, so what it sees is the card as the annex prints it.
+                if (rest.len == 0) return error.BadSyntax;
+                try spice.append(arena, try arena.dupe(u8, rest));
+            },
+            .lrm => {
+                if (!validSection(rest)) return error.BadLrmSection;
+                try lrm.append(arena, try arena.dupe(u8, rest));
+            },
+            .inherited => {
+                // `IEEE 1364-2005 18.1 (...)`: a clause §1.1 inherits whole. Not
+                // an `lrm` cite, since `--coverage` counts this LRM's clauses only.
+                // Checked here, then dropped: tests/ieee1364.zig reads these lines
+                // from raw source for measure B (`zig build test-1364 -- --coverage`).
+                if (!validInherited(rest)) return error.BadLrmSection;
+            },
+            .xfail => {
+                // The whole rest of the line is the reason: prose for a human.
+                if (rest.len == 0) return error.BadSyntax;
+                d.xfail = try arena.dupe(u8, rest);
+            },
+            .print => {
+                if (std.mem.eql(u8, rest, "none")) {
+                    d.print_residual = false;
+                } else if (std.mem.eql(u8, rest, "residual")) {
+                    d.print_residual = true;
+                } else return error.BadSyntax;
+            },
         }
     }
 
@@ -213,7 +258,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
 /// Returns whether `s` is a `//! lrm` cite: a chapter number or annex letter,
 /// then dotted numbers (`5.8`, `A.8.3`, `B`). Syntax only: a well-formed
 /// section the LRM does not have still passes.
-pub fn validSection(s: []const u8) bool {
+fn validSection(s: []const u8) bool {
     var it = std.mem.splitScalar(u8, s, '.');
     const first = it.first();
     const annex = first.len == 1 and first[0] >= 'A' and first[0] <= 'H';
@@ -232,7 +277,7 @@ fn validInherited(s: []const u8) bool {
 }
 
 /// Returns whether `s` is a nonempty run of ASCII decimal digits.
-pub fn digits(s: []const u8) bool {
+fn digits(s: []const u8) bool {
     if (s.len == 0) return false;
     for (s) |c| if (c < '0' or c > '9') return false;
     return true;
@@ -389,7 +434,7 @@ fn parseAcDynEntry(arena: Allocator, s: []const u8) Error!AcDynWant {
 /// This is a text mapping because `ix()` resolves it against `U` at the
 /// runner's compile time. `I(a)` is ambiguous on a module with a net named
 /// `gnd`; such a fixture writes the member as `emitTopology` prints it.
-pub fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
+fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     var s = std.mem.trim(u8, raw, " \t");
     if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) {
         s = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
@@ -417,7 +462,7 @@ pub fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
 /// Appends the `name = value` pairs in `rest`, split on top-level commas so
 /// the comma in §5.4.2's `I(a,b)` stays inside its name. Only `(` nests: a
 /// §6.5.2 element `d[1]` holds no comma. Names are resolved by `unknownName`.
-pub fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding)) Error!void {
+fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding)) Error!void {
     var depth: u32 = 0;
     var start: usize = 0;
     for (rest, 0..) |ch, i| switch (ch) {
@@ -457,7 +502,7 @@ fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
 }
 
 /// Parses a directive number, accepting §2.6 scale factors (`1u`).
-pub fn number(raw: []const u8) Error!f64 {
+fn number(raw: []const u8) Error!f64 {
     const t = std.mem.trim(u8, raw, " \t");
     if (t.len == 0) return error.BadNumber;
     const exp = Lexer.scaleExp(t[t.len - 1]) orelse

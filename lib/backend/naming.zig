@@ -11,6 +11,9 @@ const Lowered = @import("ir").Lowered;
 const opdb = @import("ir").op;
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
+/// One row per unit, built once per compilation by `enumerateUnits` (18 on
+/// psp103, 43 on hisimhv), so its slice-wide `target` costs nothing that a
+/// string handle would win back.
 pub const Unit = struct {
     role: Role,
     /// Contribution: access function plus node pair (`I_drain_source`).
@@ -27,6 +30,12 @@ pub const Unit = struct {
     inst: Mir.Inst = .none,
     /// That call's operator (`Mir.callee.opKind`); `.none` for every other role.
     op: opdb.OpKind = .none,
+
+    // Budget: the 16-byte slice, two 4-byte columns and two one-byte tags,
+    // padded to the slice's 8-byte alignment.
+    comptime {
+        std.debug.assert(@sizeOf(Unit) == 32);
+    }
 };
 
 /// What an emitted unit is. `display` and `common` are never produced by
@@ -62,7 +71,7 @@ fn hexDigit(v: u8) u8 {
     return "0123456789abcdef"[v & 0xf];
 }
 
-/// Appends `name` to `b`, escaping every byte that would break injectivity or
+/// Appends `name` to `w`, escaping every byte that would break injectivity or
 /// Zig's identifier grammar.
 fn sanitizeInto(w: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
     for (name, 0..) |c, i| {
