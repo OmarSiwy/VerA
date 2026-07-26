@@ -17,7 +17,7 @@ Spine, in the order a host drives it (`tests/vpi_host.zig`):
 Ownership (table: owning file; writers; readers):
 
 - vpi_user.h constants, `Obj`/`Scope`/`Iter`/`Design`, `design`, error status: `root.zig`; every sibling reads.
-- `Design.objects` / `Design.scopes` rows: written by `model/analog.zig`, `model/digital.zig`, `model.zig`, `code.zig`, `attributes.zig` during `open` only; afterwards only `delays.zig` (vpi_put_delays rewrites `Obj.delays`) and `iterate.zig` (`Design.iters`).
+- `Design.objects` / `Design.cold` / `Design.scopes` rows: appended to a `model.Rows` by `model/analog.zig`, `model/digital.zig`, `model.zig`, `code.zig`, `attributes.zig` during `open` only, then taken by `model.freeze`; afterwards only `delays.zig` (vpi_put_delays rewrites `Obj.delays`) and `iterate.zig` (`Design.iters`, and `Design.relations` built on first use) write.
 - callback registry: `callback.zig`. systf registry and the active call: `systf.zig`. analog solution and time walk: `analog.zig`. digital run, time queues: `run.zig`. mcd channels: `print.zig`. scheduled events, value-change state: `value.zig`.
 
 Files: `root.zig` 941 lines (was 4289), `code.zig` 1684 (was 2214). New:
@@ -92,25 +92,79 @@ because Zig has no file-group visibility; `test_all.zig`'s `refAllDecls`
 analyses them all. No action proposed beyond knowing that a `pub` in
 `root.zig` is not necessarily API.
 
-## Data-layout notes (measured or reasoned, not changed)
+## Memory
 
-- `Obj` is one struct for every class (a Fleury megastruct: about 55 fields,
-  most of them per-class and defaulted). The handle ABI depends on it: a
-  `vpiHandle` is a `*Obj` into `Design.objects`, and `asObj` validates a handle
-  by address arithmetic on `@sizeOf(Obj)`. A hot/cold split (a dense
-  `kind`/`slot`/`size`/`vtype` column for the value path, the rest cold) is
-  possible without touching the C ABI, because the handle is opaque: encode
-  the row index in the pointer (`base + index` over a byte-sized column) and
-  keep `asObj`'s bounds check. Not done: the value path's cost is the engine
-  read, not the row, and no profile says otherwise.
-- Per-call O(objects) scans, all already marked `ponytail:`: `iterate.uses`,
-  `iterate.driversLoads`, and at `open` `model/analog.zig`'s named-branch
-  match (contributions x objects) and `nodeOfRow`. Each becomes an index
-  built in `freeze` if a design is large enough to matter.
-- `iterate.zig` allocates one heap `Iter` per `vpi_iterate`, registered in a
-  hash map keyed by address. A pool with generation counters would make the
-  stale-handle check exact (today a freed iterator's address can be reused by
-  a new one, and the old handle then validates as the new iterator).
+The data-oriented pass (commits `56329558`, `ee6a6c8a`). Sizes are
+`@sizeOf` in ReleaseFast. Counts are from psp103 opened by `vpi_host` with
+no analyses (the analog model), and from `big3000.v`, a generated digital
+design with 3000 instances in a loop generate, each with a wire, two regs,
+an integer and two continuous assignments (the digital model). "Steady" is
+what the open design holds; "transient" is what only the build held.
+
+| type | size before → after | count psp103 / big3000 | bytes saved psp103 / big3000 | what changed or why not |
+|---|---|---|---|---|
+| `root.Obj` | 472 → 224 | 33,802 / 120,015 | 8.1 MB / 29.8 MB steady, plus 16.0 MB / 56.6 MB transient | Hot/cold split: analog topology, array members/range, attributes, `constant_bits`, `event_ref`, `override_expr` moved to `Cold`. `owner`, `slot`, `parent`, `index`, `expr_scope`, `src_engine` are `OptU32` (a `?u32` in 4 bytes). `freeze` takes the builder's list instead of duplicating it (the duplicate was the transient). Pinned: `@sizeOf(Obj) == 224`. |
+| `root.Cold` (new) | 240 | 1,179 / 0 | costs 0.28 MB / 0 | One row per object that sets a cold field: psp103's attribute rows and analog topology. `delays`, `def_name`, `port_index` and `src_engine` stayed hot: ports, gates, continuous assignments and generated nets are numerous, and §12.29 can give any gate delays after `open`, when `Design.cold` is fixed. |
+| `root.OptU32` (new) | 4 (was `?u32`, 8) | 6 per `Obj` | in `Obj` | An enum, so a missed read or write is a compile error, never a silent `?u32` coercion. |
+| `model.Building`, `code.ScopeLists` | 888, 384 (unchanged) | 1 / 3,001 | 0 / 77 MB transient | Unchanged shape. Their 25 growable lists per scope (and every other builder table) moved from the host's allocator to a scratch arena freed when the build returns. With the hosts' page allocator, each nonempty list had been a 4 KiB page: big3000's model build (already with the `Obj` split) peaked 126 MB over the elaborated run, now 49 MB. |
+| `model.Rows` (new) | 80 | 1 per build | n/a | The hot and cold lists plus the `Design`'s allocator; replaces `std.ArrayList(Obj)` in every builder. |
+| `model.Decls` (new) | 32 + 4 per declaration | 1 per build | n/a | Each scope's attribute-decorated declarations, bucketed by owner once. Replaces a scan of every object per scope (scopes x objects: big3000 spent 89% of its time there). |
+| `attributes.ByOwner` (new) | 40 + 4 per binding | 1 per build | n/a | The source's attribute bindings by owner. `attach` scanned every binding for every element it was asked about: 59% of psp103's run. |
+| `iterate.Relations` (new) | 128 + 4 per row and per index entry | 0 until a vpiUse, vpiDriver or vpiLoad iterate | n/a | Reverse indexes for §26.6.43 vpiUse and §26.6.22/§26.6.23 drivers and loads, built on first use; each query was a scan of every object. Driver candidates are a superset tested with the old predicate, so answers are unchanged. |
+| `root.Design` | 208 → 360 | 1 | -152 B | `cold` slice and the optional `relations`. |
+| `root.Scope` | 320 (unchanged) | 1 / 3,001 | 0 | 17 slices; `u32` start/len pairs into one pool would make it ~150 B, 0.5 MB at 3000 instances. Not worth the churn of every `Scope` reader. |
+| `root.Iter` | 56 (unchanged) | one per live iterator | 0 | Heap-allocated per `vpi_iterate` and keyed by address; `at: usize` could be `u32` (48 B). Left: its address is the handle identity, which carries the known stale-handle bug. |
+| `code.Edge`, `code.Prop` | 8, 8 (unchanged) | on 10,356 / 51,006 and 22,122 / 48,004 rows | 0 | Already a tag and a `u32`. |
+| `code.List` | 24 (unchanged) | on 16,402 / 24,003 rows | 0 | A tag and a slice. See the next step below. |
+| `code.Builder` | 144 → 152 | one per scope, on the stack | -8 B | `attrs`, the shared `ByOwner`. |
+| `callback.Cb`, `systf.Systf`, `value.Event`, `run.Queue` | 120, 136, 24, 8 (unchanged) | one per registration / scheduled event / queue handle | 0 | Heap-allocated one at a time and keyed by address in a `live` map, like `Iter`: the address is the C handle. Few per run. |
+| `callback.CbData`, `Time`, `Value`, `VecVal`, `StrengthVal`, `systf.SystfData`, `AnalogSystfData`, `Partials`, `delays.Delay`, `analog.AnalogValue`, `root.ErrorInfo`, `VlogInfo` | 56, 24, 16, 8, 12, 48, 56, 24, 32, 24, 48, 32 | per call | 0 | `extern`, C-visible: frozen. |
+| `analog.Row`, `analog.Deriv`, `analog.Lib` | 16, 24 (x64 static), 88 | per contribution row / fixed / one | 0 | Few; read per solve. |
+| `root.Kind` | 1 | in `Obj` | 0 | Already `enum(u8)`. |
+| `run.Harness` | 3088 | tests only | 0 | Test fixture. |
+
+Measured, ReleaseFast `vpi_host` apps, best of 3 wall and peak RSS, base
+`2ea64496` vs `ee6a6c8a`. The machine had a load average of 20-80 from other
+agents throughout, so wall times are noisy; user-space instruction counts
+(`perf stat -e instructions:u`, one run) are given as the stable measure.
+
+| workload | wall before → after | peak RSS before → after | instructions before → after |
+|---|---|---|---|
+| psp103.va, model only (`vpi_app`, no analyses) | 0.23 s → 0.11 s | 57.3 MB → 35.1 MB | 8.10 G → 2.76 G |
+| hisimhv_va.va, model only | 0.33 s → 0.17 s | 78.9 MB → 48.0 MB | 10.32 G → 1.88 G |
+| big1000.v (p04_01 app) | 0.20 s → 0.02 s | 83.0 MB → 30.2 MB | 0.60 G → 0.10 G |
+| big3000.v (p04_01 app) | 1.97 s → 0.07 s | 238.1 MB → 80.2 MB | 9.70 G → 0.42 G |
+| flat3000.v, 3000 instances written in the top module | 3.61 s → 0.10 s | 233.0 MB → 79.8 MB | 10.97 G → 0.76 G |
+| the 53 digital `vpi_runs` apps, summed | under 10 ms each, both | 253.7 → 284.0 MB summed (see below) | 39.0 M → 35.1 M |
+| the 19 analog `vpi_runs` apps, summed | 5.70 s → 5.60 s | 149 MB → 149 MB max | (dominated by the `zig build-lib` child) |
+| p03_sampnhold.va (largest analog VPI fixture), model only | 0.00 s, both | 6.4 MB → 6.8 MB | 2.64 M → 2.63 M |
+| p02_design.v (largest digital VPI fixture) | 0.00 s, both | 5.5 MB → 5.3 MB | |
+
+The small apps' peak RSS is 4-6 MB and is mostly the 41 MB static binary's
+text pages: it moves by a few hundred KB between builds that do not touch
+the data layout (min of 7 runs of one app across this pass's builds: 3.8 to
+5.1 MB), and the new binary is 0.3 MB larger. Their data did not grow: peak
+anonymous mappings (strace of mmap/munmap/mremap) fell from 536 to 404 KB
+for p02_01 on p02_design.v and from 324 to 308 KB for p03_sampnhold.va. The
+instruction counts, which do not vary, fell 10%.
+
+Next step, not taken: the six slices left in `Obj` (`name`, `full`, `edges`,
+`lists`, `props`, `delays`, `def_name`: 112 of its 224 bytes) as `u32`
+start/len pairs into per-`Design` pools would make it ~168 B. It touches
+roughly 300 read sites across every routine file, and two of the pools
+(`delays`, written by vpi_put_delays) must stay growable after `open`.
+
+Remaining per-call scans, all small or rare: `handle.zig`'s
+vpiActiveTimeFormat lookup (every object, once per such `vpi_handle`),
+cbStmt registration on a module (every object, once per registration),
+`code.Builder.analogBlocks` (every analog block per scope), and
+`model.addModuleArrays` (a parent's children squared, only for children
+whose names are array elements).
+
+Found while measuring, in another unit: `sim.digital.exec.resolve` is
+quadratic in the number of drivers of one vector net (a 3000-bit wire with a
+driver per bit spent 99.8% of a 120 s run there). Reported here for the sim
+seam; `src/sim` is not this unit's.
 
 ## Bugs found
 
