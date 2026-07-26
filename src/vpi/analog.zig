@@ -284,7 +284,7 @@ pub fn quantityValue(q: *const root.Obj) ValueError!f64 {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
     const d = &root.design.?;
-    const b = &d.objects[q.branch orelse return error.NoAnalysis];
+    const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
     const x = l.x();
     const is_flow = b.flow != null and &d.objects[b.flow.?] == q;
     if (!is_flow) return unknownU16(x, b.hi_row) - unknownU16(x, b.lo_row);

@@ -12,6 +12,7 @@ const std = @import("std");
 const sim = @import("sim");
 const Int = @import("frontend").Integer;
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const property = @import("property.zig");
 const handle = @import("handle.zig");
 const systf = @import("systf.zig");
@@ -118,7 +119,7 @@ fn activeCall(o: *const Obj) bool {
 }
 
 fn source(o: *const Obj) ?Source {
-    if (o.constant_bits) |lit| return literalSource(lit);
+    if (coldOf(o).constant_bits) |lit| return literalSource(lit);
     // §26.6.19(b): the active system function's own handle reads its
     // current return value, without recursively invoking its calltf.
     if (activeCall(o)) if (systf.result) |lit| {
@@ -707,7 +708,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         }
         const r = run.attached() orelse return engineFail();
         var selected = o.slot;
-        if (o.event_ref) |ref| {
+        if (coldOf(o).event_ref) |ref| {
             var scratch = std.heap.ArenaAllocator.init(gpa);
             defer scratch.deinit();
             const scope = r.scope;
@@ -956,7 +957,7 @@ pub fn watch(o: *const Obj) void {
     // An array: every element (§12.31.1 "if the obj is a memory word or a
     // variable array, ... the index field shall contain the index").
     const d = &(root.design orelse return);
-    for (o.members) |m| if (d.objects[m].slot) |at| r.watch[at].insert(.vpi);
+    for (coldOf(o).members) |m| if (d.objects[m].slot) |at| r.watch[at].insert(.vpi);
 }
 
 fn onChange(_: *digital.Run, slot: u32) void {

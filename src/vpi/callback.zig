@@ -12,6 +12,7 @@
 const std = @import("std");
 const digital = @import("sim").digital;
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const value = @import("value.zig");
 const analog = @import("analog.zig");
 
@@ -273,7 +274,7 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 root.fail("AUTOMATIC", "vpi_register_cb: `{s}` is an automatic variable, and a value change callback on one is illegal", .{o.full});
                 return null;
             }
-            if (o.slot == null and (o.members.len == 0 or root.design.?.objects[o.members[0]].slot == null)) {
+            if (o.slot == null and (coldOf(o).members.len == 0 or root.design.?.objects[coldOf(o).members[0]].slot == null)) {
                 root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
                 return null;
             }
@@ -604,7 +605,7 @@ pub fn fireSlot(slot: u32) void {
         // that element's value and "the index of the memory word or variable
         // select which changed value".
         const d = &root.design.?;
-        for (target.members) |m| {
+        for (coldOf(target).members) |m| {
             const word = &d.objects[m];
             if (word.slot != slot) continue;
             _ = call(cb, @intCast(d.objects[word.index.?].value.?.int), word);

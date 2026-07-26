@@ -12,6 +12,7 @@ const callback = @import("callback.zig");
 const code = @import("code.zig");
 const decompile = @import("decompile.zig");
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 const value = @import("value.zig");

@@ -11,6 +11,7 @@ const callback = @import("callback.zig");
 const code = @import("code.zig");
 const property = @import("property.zig");
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 
@@ -130,7 +131,7 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     }
     const o = object("vpi_iterate", ref) orelse return null;
     if (obj_type == code.vpiAttribute and @import("attributes.zig").supports(o))
-        return if (o.attributes.len == 0) null else newIter(d, o.attributes);
+        return if (coldOf(o).attributes.len == 0) null else newIter(d, coldOf(o).attributes);
     if (obj_type == code.vpiUse) return uses(d, o);
     // A behavioural object's double arrows are its `lists` rows, as are a
     // vector's bits. An empty row is an empty set (NULL, no error —
@@ -151,13 +152,13 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         .module_array => obj_type == vpiModule,
         else => false, // else: only the four array classes hold elements
     };
-    if (elements) return newIter(d, o.members);
-    if (obj_type == code.vpiRange and o.range.len != 0) return newIter(d, o.range);
+    if (elements) return newIter(d, coldOf(o).members);
+    if (obj_type == code.vpiRange and coldOf(o).range.len != 0) return newIter(d, coldOf(o).range);
     // The analog double arrows: node ->> net (§11.6.5), nature ->> nature
     // tagged vpiChild and nature ->> discipline (§11.6.2).
     const analog: ?[]const u32 = switch (o.kind) {
-        .node => if (obj_type == vpiNet) o.nets else null,
-        .nature => if (obj_type == vpiChild) o.children else if (obj_type == vpiDiscipline) o.users else null,
+        .node => if (obj_type == vpiNet) coldOf(o).nets else null,
+        .nature => if (obj_type == vpiChild) coldOf(o).children else if (obj_type == vpiDiscipline) coldOf(o).users else null,
         else => null, // else: no other class but module draws a double arrow VerA holds
     };
     if (analog) |items| return if (items.len == 0) null else newIter(d, items);
@@ -319,7 +320,7 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
 /// not to the object whose loads or drivers are being queried. In particular
 /// a load is on the RHS, while the override registry is keyed by the LHS.
 fn activeOverride(d: *const Design, o: *const Obj) bool {
-    if (o.override_expr == .none) return false;
+    if (coldOf(o).override_expr == .none) return false;
     const r = run.attached() orelse return false;
     var it = r.overrides.valueIterator();
     while (it.next()) |layers| {
@@ -336,7 +337,7 @@ fn overrideRange(d: *const Design, o: *const Obj, r: *const sim.digital.Run, ran
     if (range.start == range.end) return false;
     if (r.instanceOf(r.code_scope.items[range.start]) != d.scopes[o.owner.?].engine) return false;
     return switch (r.code.items[range.start]) {
-        .override_eval => |op| op.value == o.override_expr and op.force == (o.vtype == code.vpiForce),
+        .override_eval => |op| op.value == coldOf(o).override_expr and op.force == (o.vtype == code.vpiForce),
         else => false, // else: only an override_eval maintains a procedural continuous assignment
     };
 }
