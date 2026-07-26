@@ -102,18 +102,19 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     // when called rather than handed to the wrong one.
     const n_calls = l.n_systf();
     call_obj = try gpa.alloc(?u32, n_calls);
+    // Each analog call name's object, or null when two objects call it: one
+    // pass over the rows, not one per name.
+    var by_name: std.StringHashMapUnmanaged(?u32) = .empty;
+    defer by_name.deinit(gpa);
+    for (root.design.?.objects, 0..) |o, i| {
+        if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
+        const g = try by_name.getOrPut(gpa, o.name);
+        g.value_ptr.* = if (g.found_existing) null else @intCast(i);
+    }
     for (call_obj, 0..) |*c, k| {
         var len: usize = 0;
         const name = l.systf_name(k, &len)[0..len];
-        c.* = null;
-        var seen: u32 = 0;
-        for (root.design.?.objects, 0..) |o, i| {
-            if (o.kind != .code or !o.in_analog or (o.vtype != code.vpiSysFuncCall and o.vtype != code.vpiSysTaskCall)) continue;
-            if (!std.mem.eql(u8, o.name, name)) continue;
-            seen += 1;
-            c.* = @intCast(i);
-        }
-        if (seen > 1) c.* = null;
+        c.* = by_name.get(name) orelse null;
     }
     if (n_calls != 0) l.systf(deviceCall);
     const n = l.n_rows();
@@ -284,7 +285,7 @@ pub fn quantityValue(q: *const root.Obj) ValueError!f64 {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
     const d = &root.design.?;
-    const b = &d.objects[q.branch orelse return error.NoAnalysis];
+    const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
     const x = l.x();
     const is_flow = b.flow != null and &d.objects[b.flow.?] == q;
     if (!is_flow) return unknownU16(x, b.hi_row) - unknownU16(x, b.lo_row);

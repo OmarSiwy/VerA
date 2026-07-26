@@ -3,7 +3,7 @@
 //! handles it owns), live while it is a key of `Design.iters`: vpi_scan frees
 //! it on exhaustion, vpi_free_object (root.zig) on request. IEEE 1364-2005
 //! §26.6.22/§26.6.23 drivers and loads and §26.6.43 vpiUse are computed per
-//! call rather than stored.
+//! call, from reverse indexes (`Relations`) built on the first such call.
 
 const std = @import("std");
 const sim = @import("sim");
@@ -11,6 +11,7 @@ const callback = @import("callback.zig");
 const code = @import("code.zig");
 const property = @import("property.zig");
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 
@@ -130,7 +131,7 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     }
     const o = object("vpi_iterate", ref) orelse return null;
     if (obj_type == code.vpiAttribute and @import("attributes.zig").supports(o))
-        return if (o.attributes.len == 0) null else newIter(d, o.attributes);
+        return if (coldOf(o).attributes.len == 0) null else newIter(d, coldOf(o).attributes);
     if (obj_type == code.vpiUse) return uses(d, o);
     // A behavioural object's double arrows are its `lists` rows, as are a
     // vector's bits. An empty row is an empty set (NULL, no error —
@@ -151,13 +152,13 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         .module_array => obj_type == vpiModule,
         else => false, // else: only the four array classes hold elements
     };
-    if (elements) return newIter(d, o.members);
-    if (obj_type == code.vpiRange and o.range.len != 0) return newIter(d, o.range);
+    if (elements) return newIter(d, coldOf(o).members);
+    if (obj_type == code.vpiRange and coldOf(o).range.len != 0) return newIter(d, coldOf(o).range);
     // The analog double arrows: node ->> net (§11.6.5), nature ->> nature
     // tagged vpiChild and nature ->> discipline (§11.6.2).
     const analog: ?[]const u32 = switch (o.kind) {
-        .node => if (obj_type == vpiNet) o.nets else null,
-        .nature => if (obj_type == vpiChild) o.children else if (obj_type == vpiDiscipline) o.users else null,
+        .node => if (obj_type == vpiNet) coldOf(o).nets else null,
+        .nature => if (obj_type == vpiChild) coldOf(o).children else if (obj_type == vpiDiscipline) coldOf(o).users else null,
         else => null, // else: no other class but module draws a double arrow VerA holds
     };
     if (analog) |items| return if (items.len == 0) null else newIter(d, items);
@@ -205,8 +206,8 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
 /// access any use of the vector or part-selects or bit-selects thereof", so
 /// an object holding a select of `o` uses it too.
 ///
-/// ponytail: a scan of every object per call, and a bit select's own uses
-/// only (Details b adds the parent vector's and a containing part select's).
+/// ponytail: a bit select's own uses only (Details b adds the parent
+/// vector's and a containing part select's).
 fn uses(d: *Design, o: *const Obj) vpiHandle {
     switch (o.kind) {
         .net, .reg, .integer, .real_var, .time_var, .parameter, .word, .var_select => {},
@@ -214,18 +215,13 @@ fn uses(d: *Design, o: *const Obj) vpiHandle {
         .module, .port, .reg_array, .var_array, .net_array, .module_array, .constant, .discipline, .nature, .node, .branch, .quantity => return useFail(o),
     }
     const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+    const rel = relationsOf(d) orelse return null;
     var out: std.ArrayList(vpiHandle) = .empty;
-    for (d.objects) |*u| {
-        if (u.kind != .code) continue;
-        const hit = for (u.edges) |e| {
-            // A select's vpiParent is the vector it selects from, not a use.
-            if (e.tag != vpiParent and e.tag != vpiScope and e.tag != vpiModule and reaches(d, e.to, target)) break true;
-        } else for (u.lists) |l| {
-            if (for (l.items) |i| {
-                if (reaches(d, i, target)) break true;
-            } else false) break true;
-        } else false;
-        if (hit) out.append(d.gpa, handleOf(u)) catch {
+    var last: u32 = no_obj;
+    for (rel.users.of(target)) |u| {
+        if (u == last) continue;
+        last = u;
+        out.append(d.gpa, handleOf(&d.objects[u])) catch {
             out.deinit(d.gpa);
             fail("NOMEM", "vpi_iterate: out of memory", .{});
             return null;
@@ -241,20 +237,6 @@ fn uses(d: *Design, o: *const Obj) vpiHandle {
         return null;
     };
     return newHandleIter(d, handles);
-}
-
-/// Is object `at` the object `target`, or a part or bit select of it?
-fn reaches(d: *const Design, at: u32, target: u32) bool {
-    if (at == target) return true;
-    if (at == no_obj) return false;
-    const x = &d.objects[at];
-    if (x.kind != .code) return false;
-    switch (x.vtype) {
-        code.vpiPartSelect, code.vpiIndexedPartSelect, code.vpiNetBit, code.vpiRegBit => {},
-        else => return false, // else: only a select names a part of another object
-    }
-    for (x.edges) |e| if (e.tag == vpiParent) return e.to == target;
-    return false;
 }
 
 fn useFail(o: *const Obj) vpiHandle {
@@ -274,12 +256,26 @@ fn useFail(o: *const Obj) vpiHandle {
 /// ports are loads, input and inout ports are drivers)"; the module's ports
 /// are listed for vpiDriver and vpiLoad as well.
 ///
-/// ponytail: a scan of every object per call; the parent's instance ports,
-/// delay terms and cont assign bits are not listed. Each needs its own
-/// relation built at `open`.
+/// The rows tested are `Relations`' candidates for `o`, a superset of the
+/// hits, in object order.
+///
+/// ponytail: the parent's instance ports, delay terms and cont assign bits
+/// are not listed. Each needs its own relation.
 fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle {
+    const rel = relationsOf(d) orelse return null;
+    const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
+    var candidates: std.ArrayList(u32) = .empty;
+    defer candidates.deinit(d.gpa);
+    candidates.appendSlice(d.gpa, rel.by_obj.of(target)) catch return oomIter();
+    if (o.slot.get()) |slot| candidates.appendSlice(d.gpa, rel.by_slot.of(slot)) catch return oomIter();
+    if (o.kind == .net) if (o.owner.get()) |owner| candidates.appendSlice(d.gpa, rel.ports.of(owner)) catch return oomIter();
+    std.mem.sortUnstable(u32, candidates.items, {}, std.sort.asc(u32));
     var out: std.ArrayList(vpiHandle) = .empty;
-    for (d.objects, 0..) |*x, i| {
+    var last: u32 = no_obj;
+    for (candidates.items) |i| {
+        if (i == last) continue;
+        last = i;
+        const x = &d.objects[i];
         if (local and x.owner != o.owner) continue;
         const hit = switch (x.kind) {
             .code => switch (x.vtype) {
@@ -315,11 +311,168 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
     return newHandleIter(d, handles);
 }
 
+fn oomIter() vpiHandle {
+    fail("NOMEM", "vpi_iterate: out of memory", .{});
+    return null;
+}
+
+/// Reverse indexes over the frozen rows for the relations computed per
+/// call: §26.6.43 vpiUse and §26.6.22/§26.6.23 drivers and loads. Built on
+/// the first such vpi_iterate (`relationsOf`) and kept in `Design` until
+/// `close`; nothing it indexes changes after `open`.
+pub const Relations = struct {
+    /// Object -> the `.code` rows with an edge (other than vpiParent,
+    /// vpiScope and vpiModule: a select's vpiParent is the vector it selects
+    /// from, not a use) or list item that is it or a select of it: exactly
+    /// `uses`' answer, ascending, a row repeated once per item.
+    users: Csr,
+    /// Object -> the driver and load candidates (prim terms, continuous
+    /// assignments, force and assign statements) whose `mentions` walk of a
+    /// terminal or side visits it.
+    by_obj: Csr,
+    /// Engine slot -> the candidates whose walk visits a non-`.code` row
+    /// stored in that slot (`mentions`' same-storage case).
+    by_slot: Csr,
+    /// Scope -> its `.port` rows.
+    ports: Csr,
+
+    pub fn deinit(r: *Relations, gpa: std.mem.Allocator) void {
+        r.users.deinit(gpa);
+        r.by_obj.deinit(gpa);
+        r.by_slot.deinit(gpa);
+        r.ports.deinit(gpa);
+    }
+};
+
+/// Rows grouped by a dense u32 key: key `k`'s rows are
+/// `rows[first[k]..first[k + 1]]`, in the order they were given.
+const Csr = struct {
+    first: []u32,
+    rows: []u32,
+
+    /// From `(key, row)` pairs, every key below `n_keys`.
+    fn init(gpa: std.mem.Allocator, n_keys: usize, pairs: []const [2]u32) error{OutOfMemory}!Csr {
+        const first = try gpa.alloc(u32, n_keys + 1);
+        errdefer gpa.free(first);
+        @memset(first, 0);
+        for (pairs) |p| first[p[0] + 1] += 1;
+        for (1..first.len) |k| first[k] += first[k - 1];
+        const rows = try gpa.alloc(u32, pairs.len);
+        errdefer gpa.free(rows);
+        const fill = try gpa.dupe(u32, first[0..n_keys]);
+        defer gpa.free(fill);
+        for (pairs) |p| {
+            rows[fill[p[0]]] = p[1];
+            fill[p[0]] += 1;
+        }
+        return .{ .first = first, .rows = rows };
+    }
+
+    fn deinit(c: *Csr, gpa: std.mem.Allocator) void {
+        gpa.free(c.first);
+        gpa.free(c.rows);
+    }
+
+    fn of(c: Csr, key: u32) []const u32 {
+        if (@as(usize, key) + 1 >= c.first.len) return &.{};
+        return c.rows[c.first[key]..c.first[key + 1]];
+    }
+};
+
+/// `d`'s `Relations`, built on first use; null (and NOMEM recorded) when
+/// they cannot be.
+fn relationsOf(d: *Design) ?*const Relations {
+    if (d.relations == null) d.relations = buildRelations(d) catch {
+        fail("NOMEM", "vpi_iterate: out of memory", .{});
+        return null;
+    };
+    return &d.relations.?;
+}
+
+fn buildRelations(d: *const Design) error{OutOfMemory}!Relations {
+    const gpa = d.gpa;
+    var users: std.ArrayList([2]u32) = .empty;
+    defer users.deinit(gpa);
+    var by_obj: std.ArrayList([2]u32) = .empty;
+    defer by_obj.deinit(gpa);
+    var by_slot: std.ArrayList([2]u32) = .empty;
+    defer by_slot.deinit(gpa);
+    var ports: std.ArrayList([2]u32) = .empty;
+    defer ports.deinit(gpa);
+    var n_slots: usize = 0;
+    for (d.objects, 0..) |*x, at| {
+        const u: u32 = @intCast(at);
+        if (x.slot.get()) |s| n_slots = @max(n_slots, @as(usize, s) + 1);
+        switch (x.kind) {
+            .code => {
+                for (x.edges) |e| if (e.tag != vpiParent and e.tag != vpiScope and e.tag != vpiModule) try addReach(gpa, d, &users, e.to, u);
+                for (x.lists) |l| for (l.items) |i| try addReach(gpa, d, &users, i, u);
+                switch (x.vtype) {
+                    code.vpiPrimTerm => try addMentions(gpa, d, &by_obj, &by_slot, edgeTo(x, code.vpiExpr), u),
+                    code.vpiContAssign, code.vpiForce, code.vpiAssignStmt => {
+                        try addMentions(gpa, d, &by_obj, &by_slot, edgeTo(x, code.vpiLhs), u);
+                        try addMentions(gpa, d, &by_obj, &by_slot, edgeTo(x, code.vpiRhs), u);
+                    },
+                    else => {}, // else: §26.6.22/§26.6.23 list no other behavioural class
+                }
+            },
+            .port => if (x.owner.get()) |s| try ports.append(gpa, .{ s, u }),
+            .module, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .discipline, .nature, .node, .branch, .quantity => {},
+        }
+    }
+    var r: Relations = undefined;
+    r.users = try .init(gpa, d.objects.len, users.items);
+    errdefer r.users.deinit(gpa);
+    r.by_obj = try .init(gpa, d.objects.len, by_obj.items);
+    errdefer r.by_obj.deinit(gpa);
+    r.by_slot = try .init(gpa, n_slots, by_slot.items);
+    errdefer r.by_slot.deinit(gpa);
+    r.ports = try .init(gpa, d.scopes.len, ports.items);
+    return r;
+}
+
+/// Row `u` uses item `at` and, when `at` is a part or bit select, the
+/// object its first vpiParent edge names.
+fn addReach(gpa: std.mem.Allocator, d: *const Design, out: *std.ArrayList([2]u32), at: u32, u: u32) error{OutOfMemory}!void {
+    if (at == no_obj) return;
+    try out.append(gpa, .{ at, u });
+    const x = &d.objects[at];
+    if (x.kind != .code) return;
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiIndexedPartSelect, code.vpiNetBit, code.vpiRegBit => {},
+        else => return, // else: only a select names a part of another object
+    }
+    for (x.edges) |e| if (e.tag == vpiParent) {
+        if (e.to != no_obj) try out.append(gpa, .{ e.to, u });
+        return;
+    };
+}
+
+/// `mentions`' walk from `e`, inverted: every row it visits, and the slot of
+/// every non-`.code` one, lead to candidate `u`.
+fn addMentions(gpa: std.mem.Allocator, d: *const Design, by_obj: *std.ArrayList([2]u32), by_slot: *std.ArrayList([2]u32), e: u32, u: u32) error{OutOfMemory}!void {
+    if (e == no_obj) return;
+    try by_obj.append(gpa, .{ e, u });
+    const x = &d.objects[e];
+    if (x.kind != .code) {
+        if (x.slot.get()) |s| try by_slot.append(gpa, .{ s, u });
+        return;
+    }
+    switch (x.vtype) {
+        code.vpiPartSelect, code.vpiNetBit, code.vpiRegBit => try addMentions(gpa, d, by_obj, by_slot, edgeTo(x, vpiParent), u),
+        code.vpiOperation, code.vpiFuncCall, code.vpiSysFuncCall => for (x.lists) |l| {
+            if (l.tag != code.vpiOperand and l.tag != code.vpiArgument) continue;
+            for (l.items) |i| try addMentions(gpa, d, by_obj, by_slot, i, u);
+        },
+        else => {}, // else: no other class is an expression with operands
+    }
+}
+
 /// §26.6.6 i, j: activity belongs to the statement maintaining an override,
 /// not to the object whose loads or drivers are being queried. In particular
 /// a load is on the RHS, while the override registry is keyed by the LHS.
 fn activeOverride(d: *const Design, o: *const Obj) bool {
-    if (o.override_expr == .none) return false;
+    if (coldOf(o).override_expr == .none) return false;
     const r = run.attached() orelse return false;
     var it = r.overrides.valueIterator();
     while (it.next()) |layers| {
@@ -334,9 +487,9 @@ fn activeOverride(d: *const Design, o: *const Obj) bool {
 fn overrideRange(d: *const Design, o: *const Obj, r: *const sim.digital.Run, range: sim.digital.PcRange) bool {
     // A VPI force has an empty range; it activates no HDL source statement.
     if (range.start == range.end) return false;
-    if (r.instanceOf(r.code_scope.items[range.start]) != d.scopes[o.owner.?].engine) return false;
+    if (r.instanceOf(r.code_scope.items[range.start]) != d.scopes[o.owner.get().?].engine) return false;
     return switch (r.code.items[range.start]) {
-        .override_eval => |op| op.value == o.override_expr and op.force == (o.vtype == code.vpiForce),
+        .override_eval => |op| op.value == coldOf(o).override_expr and op.force == (o.vtype == code.vpiForce),
         else => false, // else: only an override_eval maintains a procedural continuous assignment
     };
 }
@@ -353,7 +506,7 @@ fn edgeTo(x: *const Obj, tag: c_int) u32 {
 fn mentions(d: *const Design, e: u32, target: *const Obj) bool {
     if (e == no_obj) return false;
     const x = &d.objects[e];
-    if (x == target or (x.slot != null and x.slot == target.slot and x.kind != .code)) return true;
+    if (x == target or (x.slot != .none and x.slot == target.slot and x.kind != .code)) return true;
     if (x.kind != .code) return false;
     switch (x.vtype) {
         code.vpiPartSelect, code.vpiNetBit, code.vpiRegBit => return mentions(d, edgeTo(x, vpiParent), target),

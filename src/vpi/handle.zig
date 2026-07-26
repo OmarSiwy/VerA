@@ -10,6 +10,7 @@ const std = @import("std");
 const Elaborate = @import("ir").Elaborate;
 const code = @import("code.zig");
 const root = @import("root.zig");
+const coldOf = root.coldOf;
 const run = @import("run.zig");
 const systf = @import("systf.zig");
 
@@ -79,7 +80,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         const active = r.active_timeformat orelse return null;
         for (d.objects) |*call| {
             if (call.vtype != code.vpiSysTaskCall or call.src_stmt == .none) continue;
-            const owner = call.owner orelse continue;
+            const owner = call.owner.get() orelse continue;
             if (d.scopes[owner].engine == active.scope and r.file.stmtTok(call.src_stmt) == active.tok)
                 return handleOf(call);
         }
@@ -119,9 +120,9 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
                 // An expression is in no scope (§11.6.19 draws no scope
                 // arrow); a statement, process or declaration is (§11.6.21
                 // stmt -> scope).
-                .code => if (o.owner == null) return noEdge(obj_type, o),
+                .code => if (o.owner == .none) return noEdge(obj_type, o),
             }
-            const owner = o.owner orelse return null;
+            const owner = o.owner.get() orelse return null;
             return handleOf(&d.objects[owner]);
         },
         // §11.6.11: a word or variable select's array. A module in an
@@ -129,7 +130,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
         vpiParent, vpiModuleArray => {
             if (obj_type == vpiParent and o.kind != .word and o.kind != .var_select) return noEdge(obj_type, o);
             if (obj_type == vpiModuleArray and o.kind != .module) return noEdge(obj_type, o);
-            const p = o.parent orelse return null;
+            const p = o.parent.get() orelse return null;
             return handleOf(&d.objects[p]);
         },
         // The index expression of an element. A module that is not in an
@@ -139,7 +140,7 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
                 .word, .var_select, .module => {},
                 else => return noEdge(obj_type, o),
             }
-            const c = o.index orelse return null;
+            const c = o.index.get() orelse return null;
             return handleOf(&d.objects[c]);
         },
         else => {
@@ -155,38 +156,38 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
 fn analogEdge(o: *const Obj, obj_type: c_int) ??u32 {
     return switch (o.kind) {
         .net => switch (obj_type) {
-            vpiNode => o.node,
-            vpiDiscipline => o.disc,
+            vpiNode => coldOf(o).node,
+            vpiDiscipline => coldOf(o).disc,
             else => null, // else: every other tag is one of the net's non-analog edges
         },
         .node => switch (obj_type) {
-            vpiDiscipline => o.disc,
+            vpiDiscipline => coldOf(o).disc,
             else => null, // else: vpiModule/vpiScope are the shared owner edge
         },
         .branch => switch (obj_type) {
-            vpiPosNode => o.pos,
-            vpiNegNode => o.neg,
-            vpiDiscipline => o.disc,
-            vpiFlow => o.flow,
-            vpiPotential => o.pot,
+            vpiPosNode => coldOf(o).pos,
+            vpiNegNode => coldOf(o).neg,
+            vpiDiscipline => coldOf(o).disc,
+            vpiFlow => coldOf(o).flow,
+            vpiPotential => coldOf(o).pot,
             else => null, // else: vpiModule/vpiScope are the shared owner edge
         },
         .quantity => switch (obj_type) {
-            vpiBranch => o.branch,
-            vpiNature => o.nature,
+            vpiBranch => coldOf(o).branch,
+            vpiNature => coldOf(o).nature,
             else => null, // else: a quantity draws no other single arrow
         },
         .discipline => switch (obj_type) {
-            vpiFlowNature => o.flow,
-            vpiPotentialNature => o.pot,
+            vpiFlowNature => coldOf(o).flow,
+            vpiPotentialNature => coldOf(o).pot,
             else => null, // else: a discipline draws no other single arrow
         },
         .nature => switch (obj_type) {
-            vpiParent => o.nature,
+            vpiParent => coldOf(o).nature,
             else => null, // else: a nature draws no other single arrow
         },
         .port => switch (obj_type) {
-            vpiNode => o.node,
+            vpiNode => coldOf(o).node,
             else => null, // else: a port's other edges are the shared owner edge
         },
         .module, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .code => null,
@@ -225,7 +226,7 @@ pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle
         // §6.7's upward search. `scope` need not be a module: the scope of a
         // non-module object is the one it is declared in, and the scope of a
         // module is itself.
-        var at: ?u32 = if (from.kind == .module) from.scope else from.owner;
+        var at: ?u32 = if (from.kind == .module) from.scope else from.owner.get();
         while (at) |sc| : (at = if (d.search_up) d.scopes[sc].parent else null) {
             var buf: [name_buf_len]u8 = undefined;
             const full = std.mem.print(&buf, "{s}{c}{s}", .{ d.objects[sc].full, Elaborate.sep, want }) catch continue;
@@ -277,13 +278,13 @@ pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no argument {d}", .{ o.name, index });
         return null;
     }
-    if (o.members.len != 0) {
-        if (o.kind == .code and o.vtype == code.vpiNamedEventArray and o.range.len != 1) {
-            fail("NOINDEX", "vpi_handle_by_index: `{s}` requires {d} event-array indices", .{ o.full, o.range.len });
+    if (coldOf(o).members.len != 0) {
+        if (o.kind == .code and o.vtype == code.vpiNamedEventArray and coldOf(o).range.len != 1) {
+            fail("NOINDEX", "vpi_handle_by_index: `{s}` requires {d} event-array indices", .{ o.full, coldOf(o).range.len });
             return null;
         }
-        for (o.members) |m| {
-            const c = d.objects[m].index orelse continue;
+        for (coldOf(o).members) |m| {
+            const c = d.objects[m].index.get() orelse continue;
             if (d.objects[c].value.?.int == index) return handleOf(&d.objects[m]);
         }
         fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });
@@ -319,7 +320,7 @@ pub export fn vpi_handle_by_multi_index(obj: vpiHandle, num_index: c_int, index_
         return null;
     };
     if (o.kind == .code and o.vtype == code.vpiNamedEventArray) {
-        if (num_index > 0 and num_index == o.range.len) for (o.members) |m| {
+        if (num_index > 0 and num_index == coldOf(o).range.len) for (coldOf(o).members) |m| {
             for (d.objects[m].lists) |l| {
                 if (l.tag != vpiIndex) continue;
                 const matches = for (l.items, 0..) |ix, k| {

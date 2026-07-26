@@ -13,6 +13,7 @@ const Ast = @import("frontend").Ast;
 const Elaborate = @import("ir").Elaborate;
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
+const attributes = @import("../attributes.zig");
 const code = @import("../code.zig");
 const model = @import("../model.zig");
 const root = @import("../root.zig");
@@ -21,6 +22,7 @@ const Building = model.Building;
 const Design = root.Design;
 const Error = root.Error;
 const Obj = root.Obj;
+const Cold = root.Cold;
 const addArray = model.addArray;
 const addModuleArrays = model.addModuleArrays;
 const freeze = model.freeze;
@@ -32,11 +34,11 @@ const nameTable = model.nameTable;
 /// elaborated top (`error.NotElaborated` otherwise). The returned `Design`
 /// owns every string and slice it reports (`Design.arena`); `lowered` may be
 /// freed once this returns. Caller owns the result and frees it with
-/// `Design.deinit`.
-pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
+/// `Design.deinit`. `model_gpa` holds the `Design`'s tables.
+pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     var d: Design = .{
-        .gpa = gpa,
-        .arena = .init(gpa),
+        .gpa = model_gpa,
+        .arena = .init(model_gpa),
         .objects = &.{},
         .scopes = &.{},
         .top_modules = &.{},
@@ -45,6 +47,13 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     };
     errdefer d.deinit();
     const arena = d.arena.allocator();
+    // Everything below but the rows and the `Design` is scratch: many small
+    // lists (a dozen per scope) and lookup tables, freed together on return,
+    // rather than one `model_gpa` allocation each (with a page allocator,
+    // a page each).
+    var scratch: std.heap.ArenaAllocator = .init(model_gpa);
+    defer scratch.deinit();
+    const gpa = scratch.allocator();
 
     const file = lowered.file;
     const flat = lowered.module orelse return error.NotElaborated;
@@ -85,15 +94,15 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     }
 
     // --- the objects -------------------------------------------------------
-    var objects: std.ArrayList(Obj) = .empty;
-    defer objects.deinit(gpa);
+    var objects: model.Rows = .{ .gpa = model_gpa };
+    defer objects.deinit();
 
     // Modules FIRST and in scope order: that is the `Scope` invariant, and it
     // is what lets an object's `owner` scope index double as its owner's
     // object index.
-    for (scopes.items, 0..) |s, i| try objects.append(gpa, .{
+    for (scopes.items, 0..) |s, i| try objects.append(.{
         .kind = .module,
-        .owner = s.parent,
+        .owner = .of(s.parent),
         .scope = @intCast(i),
         .name = if (i == 0) top_name else lastComponent(s.path),
         .full = try joinPath(arena, top_name, s.path),
@@ -113,10 +122,10 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             const local = try arena.dupe(u8, file.str(p.name));
             const path = try joinPath(arena, s.path, local);
             const node = lowered.hier_names.get(path) orelse path;
-            try s.ports.append(gpa, @intCast(objects.items.len));
-            try objects.append(gpa, .{
+            try s.ports.append(gpa, @intCast(objects.hot.items.len));
+            try objects.append(.{
                 .kind = .port,
-                .owner = @intCast(i),
+                .owner = .of(@intCast(i)),
                 .name = local,
                 .full = try joinPath(arena, top_name, path),
                 .size = vectorSize(lowered, node),
@@ -136,10 +145,10 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     for (flat.nets) |n| {
         const flat_name = file.str(n.name);
         const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
-        try scopes.items[split.scope].nets.append(gpa, @intCast(objects.items.len));
-        try objects.append(gpa, .{
+        try scopes.items[split.scope].nets.append(gpa, @intCast(objects.hot.items.len));
+        try objects.append(.{
             .kind = .net,
-            .owner = split.scope,
+            .owner = .of(split.scope),
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .size = vectorSize(lowered, flat_name),
@@ -156,8 +165,8 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             const dim = literalDim(file, v.dims[0]) orelse continue;
             const is_reg = v.storage == .reg;
             if (!is_reg and v.ty != .real and v.ty != .integer) continue;
-            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
-            objects.items[at].src_tok = v.main_tok;
+            const at = try addArray(arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, &.{}, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            objects.hot.items[at].src_tok = v.main_tok;
             const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
             try list.append(gpa, at);
             if (!is_reg) try scopes.items[split.scope].variables.append(gpa, at);
@@ -166,11 +175,11 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
         if (v.dims.len != 0) continue;
         if (v.storage == .variable and (v.ty == .real or v.ty == .integer)) {
             const list = if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
-            try list.append(gpa, @intCast(objects.items.len));
-            try scopes.items[split.scope].variables.append(gpa, @intCast(objects.items.len));
-            try objects.append(gpa, .{
+            try list.append(gpa, @intCast(objects.hot.items.len));
+            try scopes.items[split.scope].variables.append(gpa, @intCast(objects.hot.items.len));
+            try objects.append(.{
                 .kind = if (v.ty == .real) .real_var else .integer,
-                .owner = split.scope,
+                .owner = .of(split.scope),
                 .name = split.local,
                 .full = try joinPath(arena, top_name, flat_name),
                 .size = if (v.ty == .real) 64 else 32,
@@ -180,10 +189,10 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
             continue;
         }
         if (v.storage != .reg) continue;
-        try scopes.items[split.scope].regs.append(gpa, @intCast(objects.items.len));
-        try objects.append(gpa, .{
+        try scopes.items[split.scope].regs.append(gpa, @intCast(objects.hot.items.len));
+        try objects.append(.{
             .kind = .reg,
-            .owner = split.scope,
+            .owner = .of(split.scope),
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .size = packedWidth(file, v),
@@ -194,10 +203,10 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     for (flat.params) |p| {
         const flat_name = file.str(p.name);
         const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
-        try scopes.items[split.scope].params.append(gpa, @intCast(objects.items.len));
-        try objects.append(gpa, .{
+        try scopes.items[split.scope].params.append(gpa, @intCast(objects.hot.items.len));
+        try objects.append(.{
             .kind = .parameter,
-            .owner = split.scope,
+            .owner = .of(split.scope),
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
             .ty = p.ty,
@@ -218,7 +227,7 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
     try addAnalogCode(gpa, arena, &objects, scopes.items, lowered, top_name);
 
-    try freeze(&d, objects.items, scopes.items);
+    try freeze(&d, &objects, scopes.items);
     d.disciplines = analog.disciplines;
     d.natures = analog.natures;
     return d;
@@ -235,7 +244,7 @@ pub fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
 fn addAnalog(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
-    objects: *std.ArrayList(Obj),
+    objects: *model.Rows,
     scopes: []Building,
     by_path: *const std.StringHashMapUnmanaged(u32),
     lowered: *const Lowered,
@@ -250,8 +259,8 @@ fn addAnalog(
     defer nature_at.deinit(gpa);
     for (file.natures, natures) |n, *at| {
         const name = try arena.dupe(u8, file.str(n.name));
-        at.* = @intCast(objects.items.len);
-        try objects.append(gpa, .{ .kind = .nature, .owner = null, .name = name, .full = name });
+        at.* = @intCast(objects.hot.items.len);
+        try objects.append(.{ .kind = .nature, .owner = .none, .name = name, .full = name });
         try nature_at.put(gpa, name, at.*);
     }
     // --- disciplines, each with the natures it binds.
@@ -260,12 +269,8 @@ fn addAnalog(
     defer disc_at.deinit(gpa);
     for (file.disciplines, disciplines) |dd, *at| {
         const name = try arena.dupe(u8, file.str(dd.name));
-        at.* = @intCast(objects.items.len);
-        try objects.append(gpa, .{
-            .kind = .discipline,
-            .owner = null,
-            .name = name,
-            .full = name,
+        at.* = @intCast(objects.hot.items.len);
+        try objects.appendCold(.{ .kind = .discipline, .owner = .none, .name = name, .full = name }, .{
             .flow = if (dd.flow == .none) null else nature_at.get(file.str(dd.flow)),
             .pot = if (dd.potential == .none) null else nature_at.get(file.str(dd.potential)),
         });
@@ -280,25 +285,28 @@ fn addAnalog(
         const parent: ?u32 = if (n.parent_access) |side| blk: {
             const di = disc_at.get(pname) orelse break :blk null;
             break :blk switch (side) {
-                .potential => objects.items[di].pot,
-                .flow => objects.items[di].flow,
+                .potential => objects.coldOf(di).pot,
+                .flow => objects.coldOf(di).flow,
             };
         } else nature_at.get(pname);
-        objects.items[at].nature = parent;
+        (try objects.coldFor(at)).nature = parent;
     }
     // The inverse edges, nature ->> nature (vpiChild) and nature ->> discipline.
     for (natures) |at| {
         var kids: std.ArrayList(u32) = .empty;
         defer kids.deinit(gpa);
-        for (natures) |other| if (objects.items[other].nature == at) try kids.append(gpa, other);
+        for (natures) |other| if (objects.coldOf(other).nature == at) try kids.append(gpa, other);
         var users: std.ArrayList(u32) = .empty;
         defer users.deinit(gpa);
         for (disciplines) |di| {
-            const o = objects.items[di];
+            const o = objects.coldOf(di);
             if (o.flow == at or o.pot == at) try users.append(gpa, di);
         }
-        objects.items[at].children = try arena.dupe(u32, kids.items);
-        objects.items[at].users = try arena.dupe(u32, users.items);
+        const children = try arena.dupe(u32, kids.items);
+        const users_of = try arena.dupe(u32, users.items);
+        const c = try objects.coldFor(at);
+        c.children = children;
+        c.users = users_of;
     }
 
     // --- nodes: one per net of a continuous discipline (§3.6.2.2: a
@@ -308,8 +316,8 @@ fn addAnalog(
     // A top-level port is its own net here (its declaration is the port's,
     // not a separate §11.6.8 object), so it is keyed too — nets after ports,
     // so a name that is both resolves to the net.
-    for (objects.items, 0..) |o, i| if (o.kind == .port and o.owner == 0) try net_at.put(gpa, o.full, @intCast(i));
-    for (objects.items, 0..) |o, i| if (o.kind == .net) try net_at.put(gpa, o.full, @intCast(i));
+    for (objects.hot.items, 0..) |o, i| if (o.kind == .port and o.owner.get() == 0) try net_at.put(gpa, o.full, @intCast(i));
+    for (objects.hot.items, 0..) |o, i| if (o.kind == .net) try net_at.put(gpa, o.full, @intCast(i));
     const Decl = struct { name: Ast.StrId, discipline: Ast.StrId };
     var decls: std.ArrayList(Decl) = .empty;
     defer decls.deinit(gpa);
@@ -322,24 +330,26 @@ fn addAnalog(
         const full = try joinPath(arena, top_name, file.str(n.name));
         const net = net_at.get(full) orelse continue;
         // A port declared and then typed by a net declaration is one node.
-        if (objects.items[net].node != null) continue;
-        const at: u32 = @intCast(objects.items.len);
-        const src = objects.items[net];
-        try objects.append(gpa, .{
+        if (objects.coldOf(net).node != null) continue;
+        const at: u32 = @intCast(objects.hot.items.len);
+        const src = objects.hot.items[net];
+        try objects.appendCold(.{
             .kind = .node,
             .owner = src.owner,
             .name = src.name,
             .full = src.full,
             .size = src.size,
+        }, .{
             .disc = di,
             // node <->> nets: the §11.6.8 net, when the name has one. A
             // top-level port's node reaches its port instead (§11.6.4's
             // port -> nodes edge), and has no net object to list.
             .nets = if (src.kind == .net) try arena.dupe(u32, &.{net}) else &.{},
         });
-        objects.items[net].node = at;
-        objects.items[net].disc = di;
-        try scopes[src.owner.?].nodes.append(gpa, at);
+        const net_cold = try objects.coldFor(net);
+        net_cold.node = at;
+        net_cold.disc = di;
+        try scopes[src.owner.get().?].nodes.append(gpa, at);
     }
     // Each node's solver row: the `Lowered.nodes` row spelled by the node's
     // flattened name (`nodes` rows are named as `nets` are, §6.7 paths).
@@ -347,37 +357,46 @@ fn addAnalog(
         if (kind != .net) continue;
         const denoted = lowered.hier_names.get(name) orelse name;
         const net = net_at.get(try joinPath(arena, top_name, denoted)) orelse continue;
-        const node = objects.items[net].node orelse continue;
-        if (objects.items[node].row == null) objects.items[node].row = @intCast(row);
+        const node = objects.coldOf(net).node orelse continue;
+        if (objects.coldOf(node).row == null) (try objects.coldFor(node)).row = @intCast(row);
     }
+    // The node object each solver row is the row of, the earliest when two
+    // share one: what an unnamed branch's terminals resolve to. Every node
+    // exists by now; branches add none.
+    const node_of_row = try gpa.alloc(?u32, lowered.nodes.len);
+    defer gpa.free(node_of_row);
+    @memset(node_of_row, null);
+    for (objects.hot.items, 0..) |o, i| if (o.kind == .node) if (objects.coldOf(@intCast(i)).row) |row| {
+        if (row < node_of_row.len and node_of_row[row] == null) node_of_row[row] = @intCast(i);
+    };
 
-    // --- branches, each with its two quantities.
+    // --- branches, each with its two quantities. `named` keeps them in
+    // object order: the rows a named contribution below is matched against.
+    var named: std.ArrayList(u32) = .empty;
+    defer named.deinit(gpa);
     for (flat.branches) |b| {
         const flat_name = file.str(b.name);
         const split = (try splitPath(arena, by_path, flat_name)) orelse continue;
-        const pos = try terminalNode(objects.items, &net_at, arena, lowered, top_name, b.hi);
-        const neg = if (b.lo == .none) null else try terminalNode(objects.items, &net_at, arena, lowered, top_name, b.lo);
-        const disc = if (pos) |p| objects.items[p].disc else null;
-        const at: u32 = @intCast(objects.items.len);
+        const pos = try terminalNode(objects, &net_at, arena, lowered, top_name, b.hi);
+        const neg = if (b.lo == .none) null else try terminalNode(objects, &net_at, arena, lowered, top_name, b.lo);
+        const disc = if (pos) |p| objects.coldOf(p).disc else null;
+        const at: u32 = @intCast(objects.hot.items.len);
         const full = try joinPath(arena, top_name, flat_name);
-        try objects.append(gpa, .{
-            .kind = .branch,
-            .owner = split.scope,
-            .name = split.local,
-            .full = full,
+        try objects.appendCold(.{ .kind = .branch, .owner = .of(split.scope), .name = split.local, .full = full }, .{
             .disc = disc,
             .pos = pos,
             .neg = neg,
             .flow = at + 1,
             .pot = at + 2,
-            .hi_row = if (pos) |p| objects.items[p].row orelse Lower.ground else Lower.ground,
-            .lo_row = if (neg) |n| objects.items[n].row orelse Lower.ground else Lower.ground,
+            .hi_row = if (pos) |p| objects.coldOf(p).row orelse Lower.ground else Lower.ground,
+            .lo_row = if (neg) |n| objects.coldOf(n).row orelse Lower.ground else Lower.ground,
         });
+        if (full.len != 0) try named.append(gpa, at);
         // §11.6.7: a quantity's nature is the one its branch's discipline
         // binds on that side.
-        const dobj: ?Obj = if (disc) |di| objects.items[di] else null;
-        try objects.append(gpa, .{ .kind = .quantity, .owner = split.scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.flow else null });
-        try objects.append(gpa, .{ .kind = .quantity, .owner = split.scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
+        const dobj: ?Cold = if (disc) |di| objects.coldOf(di).* else null;
+        try objects.appendCold(.{ .kind = .quantity, .owner = .of(split.scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.flow else null });
+        try objects.appendCold(.{ .kind = .quantity, .owner = .of(split.scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.pot else null });
         try scopes[split.scope].branches.append(gpa, at);
     }
 
@@ -402,20 +421,20 @@ fn addAnalog(
             // keeps to itself, so this model does not guess between them.
             var found: ?u32 = null;
             var twice = false;
-            for (objects.items, 0..) |o, i| {
-                if (o.kind != .branch or o.full.len == 0) continue;
-                if (!branchSpans(objects.items, o, c.hi, c.lo)) continue;
+            for (named.items) |i| {
+                if (!branchSpans(objects, objects.coldOf(i), c.hi, c.lo)) continue;
                 if (found != null) twice = true;
-                found = @intCast(i);
+                found = i;
             }
             const b = found orelse continue;
-            bindRow(&objects.items[b], c, idx);
-            objects.items[b].flow_unknowable = objects.items[b].flow_unknowable or twice;
+            try bindRow(objects, b, c, idx);
+            const bc = try objects.coldFor(b);
+            bc.flow_unknowable = bc.flow_unknowable or twice;
             continue;
         }
-        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, c.unit);
+        try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, node_of_row, c, idx, c.unit);
         for (lowered.contrib_sharers.items) |sh| {
-            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, c, idx, sh.unit);
+            if (sh.row == idx) try unnamedBranch(gpa, objects, scopes, &unnamed, by_path, lowered, node_of_row, c, idx, sh.unit);
         }
     }
     return .{ .disciplines = disciplines, .natures = natures };
@@ -427,11 +446,12 @@ const UnnamedKey = struct { scope: u32, hi: u16, lo: u16 };
 /// made on first sight and bound to the row.
 fn unnamedBranch(
     gpa: std.mem.Allocator,
-    objects: *std.ArrayList(Obj),
+    objects: *model.Rows,
     scopes: []Building,
     unnamed: *std.AutoHashMapUnmanaged(UnnamedKey, u32),
     by_path: *const std.StringHashMapUnmanaged(u32),
     lowered: *const Lowered,
+    node_of_row: []const ?u32,
     c: Lower.Contribution,
     idx: u32,
     unit: u32,
@@ -443,17 +463,18 @@ fn unnamedBranch(
             0;
         const g = try unnamed.getOrPut(gpa, .{ .scope = scope, .hi = c.hi, .lo = c.lo });
         if (!g.found_existing) {
-            const at: u32 = @intCast(objects.items.len);
-            const pos = nodeOfRow(objects.items, c.hi);
-            const neg = nodeOfRow(objects.items, c.lo);
-            const disc = if (pos) |p| objects.items[p].disc else if (neg) |n| objects.items[n].disc else null;
-            try objects.append(gpa, .{
+            const at: u32 = @intCast(objects.hot.items.len);
+            const pos = nodeOfRow(node_of_row, c.hi);
+            const neg = nodeOfRow(node_of_row, c.lo);
+            const disc = if (pos) |p| objects.coldOf(p).disc else if (neg) |n| objects.coldOf(n).disc else null;
+            try objects.appendCold(.{
                 .kind = .branch,
-                .owner = scope,
+                .owner = .of(scope),
                 // §5.4.2 gives an unnamed branch no name; `vpiName` answers
                 // the empty string, as §11.6.7's unnamed quantity does.
                 .name = "",
                 .full = "",
+            }, .{
                 .disc = disc,
                 .pos = pos,
                 .neg = neg,
@@ -462,19 +483,22 @@ fn unnamedBranch(
                 .hi_row = c.hi,
                 .lo_row = c.lo,
             });
-            const dobj: ?Obj = if (disc) |di| objects.items[di] else null;
-            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.flow else null });
-            try objects.append(gpa, .{ .kind = .quantity, .owner = scope, .name = "", .full = "", .branch = at, .nature = if (dobj) |o| o.pot else null });
+            const dobj: ?Cold = if (disc) |di| objects.coldOf(di).* else null;
+            try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.flow else null });
+            try objects.appendCold(.{ .kind = .quantity, .owner = .of(scope), .name = "", .full = "" }, .{ .branch = at, .nature = if (dobj) |o| o.pot else null });
             try scopes[scope].branches.append(gpa, at);
             g.value_ptr.* = at;
         }
-        bindRow(&objects.items[g.value_ptr.*], c, idx);
+        try bindRow(objects, g.value_ptr.*, c, idx);
     }
 }
 
-/// Record contribution row `k` as the source of `b`'s potential or flow.
-fn bindRow(b: *Obj, c: Lower.Contribution, k: u32) void {
-    if (b.full.len == 0) {
+/// Record contribution row `k` as the source of branch `at`'s potential or
+/// flow.
+fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32) Error!void {
+    const unnamed = objects.hot.items[at].full.len == 0;
+    const b = try objects.coldFor(at);
+    if (unnamed) {
         b.hi_row = c.hi;
         b.lo_row = c.lo;
     } else b.flow_neg = b.hi_row != c.hi;
@@ -487,20 +511,20 @@ fn bindRow(b: *Obj, c: Lower.Contribution, k: u32) void {
     }
 }
 
-/// The node object whose solver row is `row`; null for ground (§1.3.1.1 has
-/// no node row for it) and for a row no node object carries.
-fn nodeOfRow(objects: []const Obj, row: u16) ?u32 {
-    if (row == Lower.ground) return null;
-    for (objects, 0..) |o, i| if (o.kind == .node and o.row != null and o.row.? == row) return @intCast(i);
-    return null;
+/// The node object whose solver row is `row` (`node_of_row`, built in
+/// `addAnalog`); null for ground (§1.3.1.1 has no node row for it) and for a
+/// row no node object carries.
+fn nodeOfRow(node_of_row: []const ?u32, row: u16) ?u32 {
+    if (row == Lower.ground or row >= node_of_row.len) return null;
+    return node_of_row[row];
 }
 
 /// Does named branch `o` join rows `hi` and `lo`, in either order? §5.4.2's
 /// reference direction is the declaration's, and contributions are
 /// canonicalised to one spelling of the pair, so both orders are the branch.
-fn branchSpans(objects: []const Obj, o: Obj, hi: u16, lo: u16) bool {
-    const p: u16 = if (o.pos) |n| objects[n].row orelse return false else Lower.ground;
-    const n: u16 = if (o.neg) |m| objects[m].row orelse return false else Lower.ground;
+fn branchSpans(objects: *const model.Rows, o: *const Cold, hi: u16, lo: u16) bool {
+    const p: u16 = if (o.pos) |n| objects.coldOf(n).row orelse return false else Lower.ground;
+    const n: u16 = if (o.neg) |m| objects.coldOf(m).row orelse return false else Lower.ground;
     return (p == hi and n == lo) or (p == lo and n == hi);
 }
 
@@ -509,7 +533,7 @@ fn branchSpans(objects: []const Obj, o: Obj, hi: u16, lo: u16) bool {
 /// for anything else (a bit-select of a vector node is §11.6.5's node BIT,
 /// which the model does not hold).
 fn terminalNode(
-    objects: []const Obj,
+    objects: *const model.Rows,
     net_at: *const std.StringHashMapUnmanaged(u32),
     arena: std.mem.Allocator,
     lowered: *const Lowered,
@@ -521,7 +545,7 @@ fn terminalNode(
     const name = file.str(file.exprs.strOf(e));
     const denoted = lowered.hier_names.get(name) orelse name;
     const net = net_at.get(try joinPath(arena, top_name, denoted)) orelse return null;
-    return objects[net].node;
+    return objects.coldOf(net).node;
 }
 
 /// §11.6.20/§11.6.21 the analog model's behaviour: each flattened `analog`
@@ -530,7 +554,7 @@ fn terminalNode(
 fn addAnalogCode(
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
-    objects: *std.ArrayList(Obj),
+    objects: *model.Rows,
     scopes: []Building,
     lowered: *const Lowered,
     top_name: []const u8,
@@ -539,34 +563,50 @@ fn addAnalogCode(
     var an: code.Builder.Analog = .{ .lowered = lowered };
     defer an.branches.deinit(gpa);
     defer an.flow_access.deinit(gpa);
-    for (objects.items, 0..) |o, i| switch (o.kind) {
+    for (objects.hot.items, 0..) |o, i| switch (o.kind) {
         // Keyed by the declared name a statement spells; an unnamed branch
         // (§5.4.2) has none, and a statement reaches it by its node pair.
         .branch => if (o.full.len > top_name.len) try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
         .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
         .module, .port, .net, .reg, .parameter, .integer, .real_var, .time_var, .reg_array, .var_array, .net_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
     };
-    var names = try nameTable(gpa, objects.items);
+    var names = try nameTable(gpa, objects.hot.items);
     defer names.deinit(gpa);
+    var decls: model.Decls = try .init(gpa, objects.hot.items, scopes.len);
+    defer decls.deinit(gpa);
+    var attrs: attributes.ByOwner = try .init(gpa, lowered.file);
+    defer attrs.deinit(gpa);
     for (scopes, 0..) |*s, i| {
-        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an, .attrs = &attrs };
         try b.attributes(@intCast(i), .{ .kind = .declaration, .tok = s.decl.main_tok }, true);
-        const declarations = objects.items.len;
-        for (0..declarations) |at| {
-            const o = objects.items[at];
-            if (o.owner == @as(u32, @intCast(i)) and o.kind != .code and o.kind != .module and o.src_tok != 0)
-                try b.attributes(@intCast(at), .{ .kind = .declaration, .tok = o.src_tok }, false);
+        for (decls.of(i)) |at|
+            try b.attributes(at, .{ .kind = .declaration, .tok = objects.hot.items[at].src_tok }, false);
+        // The child scopes each instance name made, in child order: `next`
+        // chains the positions in `s.children` that share a name.
+        var heads: std.StringHashMapUnmanaged(u32) = .empty;
+        defer heads.deinit(gpa);
+        const next = try gpa.alloc(u32, s.children.items.len);
+        defer gpa.free(next);
+        var pos = s.children.items.len;
+        while (pos > 0) {
+            pos -= 1;
+            const g = try heads.getOrPut(gpa, objects.hot.items[s.children.items[pos]].name);
+            next[pos] = if (g.found_existing) g.value_ptr.* else code.none;
+            g.value_ptr.* = @intCast(pos);
         }
-        for (s.decl.instances) |inst| for (s.children.items) |child| {
-            if (!std.mem.eql(u8, objects.items[child].name, b.file.str(inst.name))) continue;
-            try b.attributes(child, .{ .kind = .declaration, .tok = inst.main_tok }, false);
-            for (inst.ports, 0..) |conn, k| {
-                const pt = if (conn.name == .none) (if (k < scopes[child].ports.items.len) scopes[child].ports.items[k] else continue) else for (scopes[child].ports.items) |p| {
-                    if (std.mem.eql(u8, objects.items[p].name, b.file.str(conn.name))) break p;
-                } else continue;
-                try b.attributes(pt, .{ .kind = .declaration, .tok = conn.main_tok }, false);
+        for (s.decl.instances) |inst| {
+            var made = heads.get(b.file.str(inst.name)) orelse code.none;
+            while (made != code.none) : (made = next[made]) {
+                const child = s.children.items[made];
+                try b.attributes(child, .{ .kind = .declaration, .tok = inst.main_tok }, false);
+                for (inst.ports, 0..) |conn, k| {
+                    const pt = if (conn.name == .none) (if (k < scopes[child].ports.items.len) scopes[child].ports.items[k] else continue) else for (scopes[child].ports.items) |p| {
+                        if (std.mem.eql(u8, objects.hot.items[p].name, b.file.str(conn.name))) break p;
+                    } else continue;
+                    try b.attributes(pt, .{ .kind = .declaration, .tok = conn.main_tok }, false);
+                }
             }
-        };
+        }
         try b.analogBlocks(flat.analog);
     }
 }
