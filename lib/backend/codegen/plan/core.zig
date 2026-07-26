@@ -31,7 +31,7 @@ pub const Core = struct {
     /// `path_prev` renders `S.con(inst.pb__k)` (the operand at the last
     /// accepted solve), `path_acc` renders `S.con(inst.pq__k)` (the sum of
     /// committed operands, the charge base). `updateState` stages both
-    /// operands into `wb__/wq__` once per Newton iterate; `stateCtl(.commit)`
+    /// operands into `State.wb__/wq__` at each accepted point; `stateCtl(.commit)`
     /// (operating-point exit and accepted transient step) latches `pb = wb`,
     /// `pq += wq` and zeroes `wq`, so a stray double commit adds 0.
     prev_vals: []Mir.Value = &.{},

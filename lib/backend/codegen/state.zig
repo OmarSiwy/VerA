@@ -34,7 +34,8 @@ const Accept = struct {
     uses_core: bool = false,
     /// `State.t_prev` has a reader: `dt`, or a §4.5.7 `absdelay` freezing its
     /// td at the first evaluation. Without one the field and its store are
-    /// not emitted, and a path-latch-only `State` is `struct {}`.
+    /// not emitted, and a path-latch-only `State` holds only the staged
+    /// latch operands.
     reads_t_prev: bool = false,
 };
 
@@ -282,7 +283,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     try self.w("x: *const [n_u]S.V, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, inst: *Instance, {s}: *State, sim: contract.SimState) contract.Sites(Self, S) {{\n", .{
-        if (acc.reads_t_prev) "state" else "_",
+        if (acc.reads_t_prev or gen_instance.pathLatches(self)) "state" else "_",
     });
     const at_core = self.out.items.len;
     // §5.6.1.2 the charges, one per site (`q`'s layout).
@@ -314,10 +315,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     // stateCtl(.commit), so a rejected attempt leaves pb/pq untouched and
     // the retry reopens on the accepted charge.
     for (self.core.prev_lo, 0..) |lo, k| {
-        try self.w("    inst.wb__{d} = m.f{d}{s}; // path_prev staging\n", .{ k, lo, val });
+        try self.w("    state.wb__{d} = m.f{d}{s}; // path_prev staging\n", .{ k, lo, val });
     }
     for (self.core.acc_lo, 0..) |lo, k| {
-        try self.w("    inst.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
+        try self.w("    state.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
     }
     if (uses_dt) try self.w("    const dt = sim.t - state.t_prev;\n", .{});
     // §9.17 reset first, unconditionally: a `$bound_step` that fired on one
