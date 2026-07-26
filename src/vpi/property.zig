@@ -125,7 +125,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         // one is a `.word`). §26.6.8 draws no vpiArray on a var select.
         vpiArray => return switch (o.kind) {
             .reg_array, .var_array, .net_array, .word => 1,
-            .module, .net => @intFromBool(o.parent != null),
+            .module, .net => @intFromBool(o.parent != .none),
             .reg, .integer, .real_var, .time_var, .var_select => 0,
             else => propFail(prop, o),
         },
@@ -146,7 +146,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         // `Elaborate.pickTop` chose.
         vpiTopModule => {
             if (o.kind != .module) return propFail(prop, o);
-            return @intFromBool(o.owner == null);
+            return @intFromBool(o.owner == .none);
         },
         vpiTimeUnit, vpiTimePrecision => {
             if (o.kind != .module) return propFail(prop, o);

@@ -136,7 +136,7 @@ fn callDigital(_: *digital.Run, scope: u32, tok: u32, returned: ?Int.Literal) di
     const d = &(root.design orelse return);
     if (sites.count() == 0) for (d.objects, 0..) |o, i| {
         if (o.kind != .code or o.in_analog or (o.vtype != code.vpiSysTaskCall and o.vtype != code.vpiSysFuncCall)) continue;
-        sites.put(gpa, .{ d.scopes[o.owner.?].engine, o.src_tok }, @intCast(i)) catch return error.OutOfMemory;
+        sites.put(gpa, .{ d.scopes[o.owner.get().?].engine, o.src_tok }, @intCast(i)) catch return error.OutOfMemory;
     };
     const at = sites.get(.{ scope, tok }) orelse return;
     const s = find(d.objects[at].name, .digital) orelse return;

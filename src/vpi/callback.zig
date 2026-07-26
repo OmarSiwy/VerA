@@ -274,7 +274,7 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 root.fail("AUTOMATIC", "vpi_register_cb: `{s}` is an automatic variable, and a value change callback on one is illegal", .{o.full});
                 return null;
             }
-            if (o.slot == null and (coldOf(o).members.len == 0 or root.design.?.objects[coldOf(o).members[0]].slot == null)) {
+            if (o.slot == .none and (coldOf(o).members.len == 0 or root.design.?.objects[coldOf(o).members[0]].slot == .none)) {
                 root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
                 return null;
             }
@@ -597,7 +597,7 @@ pub fn fireSlot(slot: u32) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != cbValueChange) continue;
         const target = root.asObj(cb.obj) orelse continue;
-        if (target.slot == slot) {
+        if (target.slot.get() == slot) {
             _ = call(cb, cb.index, null);
             continue;
         }
@@ -607,8 +607,8 @@ pub fn fireSlot(slot: u32) void {
         const d = &root.design.?;
         for (coldOf(target).members) |m| {
             const word = &d.objects[m];
-            if (word.slot != slot) continue;
-            _ = call(cb, @intCast(d.objects[word.index.?].value.?.int), word);
+            if (word.slot.get() != slot) continue;
+            _ = call(cb, @intCast(d.objects[word.index.get().?].value.?.int), word);
         }
     }
     sweep();
@@ -661,14 +661,14 @@ fn stmtSites(obj: vpiHandle) ?[]const Site {
         return null;
     };
     const d = &root.design.?;
-    const scope = if (one) o.owner.? else o.scope;
+    const scope = if (one) o.owner.get().? else o.scope;
     // The statement objects this registration covers, by AST statement.
     var covered: std.AutoHashMapUnmanaged(@import("frontend").Ast.StmtId, u32) = .empty;
     defer covered.deinit(gpa);
     if (one) {
         covered.put(gpa, o.stmt, @intCast(o - d.objects.ptr)) catch return oomSites();
     } else for (d.objects, 0..) |s, i| {
-        if (s.kind != .code or s.owner != scope or s.stmt == .none or s.vtype == @import("code.zig").vpiNullStmt) continue;
+        if (s.kind != .code or s.owner.get() != scope or s.stmt == .none or s.vtype == @import("code.zig").vpiNullStmt) continue;
         covered.put(gpa, s.stmt, @intCast(i)) catch return oomSites();
     }
     var out: std.ArrayList(Site) = .empty;
