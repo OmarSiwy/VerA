@@ -1,21 +1,43 @@
-//! Module root for the device-runtime kernel files, which are `@embedFile`d
-//! verbatim into generated devices. Each file belongs to exactly one module, so
-//! codegen's tests and `ir/elaborate.zig` (§9.13 folding via `rng_kernels`)
-//! reach them through here; `zig build test-kernels` runs their tests alone.
-//! No device imports this file: its `test` block would pull test code in.
+//! Module root for the device-runtime kernel files: Zig source text that
+//! `codegen/kernel_text.zig` `@embedFile`s verbatim into every generated device
+//! that needs it, and that this module also compiles as ordinary Zig for the
+//! callers that run the same numerics outside a device.
+//!
+//! Each kernel file is one data domain, spliced only into a device that uses
+//! it, and owns the state it declares:
+//!   str_kernels    §9.5.3/§9.5.4.2 format and scan; per-site `zSBuf` rows and
+//!                  `zMonitor` latches (file scope in the device)
+//!   file_kernels   §9.5 descriptor table `zf_slots`, `zf_written` (file scope)
+//!   table_kernels  §9.21 interpolation; stack scratch only
+//!   rng_kernels    §9.13 Table 9-10; the seed is the caller's variable
+//!   filter_kernels §4.5.11/§4.5.12 sections; histories live in `Instance`
+//!   limit_kernels  §4.5.15 SPICE limiters; pure
+//!   timer_kernels  §5.10.3.3 timer deadlines; the controls live in `Instance`
+//! The `Instance`/`Model` fields that hold filter, timer and rng state are
+//! codegen's: these files only read and write the slots they are passed.
+//!
+//! A kernel file must compile alone inside a device: it opens with `//`, not
+//! `//!` (a doc header cannot sit mid-file), names `std` by a private alias, and
+//! calls no other kernel file. Its bytes are device text, so editing one moves
+//! every golden that embeds it. No device imports this root: its `test` block
+//! would pull test code in. `zig build test-kernels` runs the files' tests.
 
-/// §9.5.3/§9.5.4.2 string formatting and scanning.
 /// `tools/contract.zig`'s `abi_version`, re-exported for `backend`, which
 /// cannot import `contract` itself: codegen stamps it into every device.
 pub const abi_version = @import("contract").abi_version;
+/// §9.5.3/§9.5.4.2 string formatting and scanning; the digital engine's
+/// `%e/%f/%g` formatter (`zCReal`).
 pub const str_kernels = @import("str_kernels.zig");
 /// §9.21 `$table_model` interpolation.
 pub const table_kernels = @import("table_kernels.zig");
-/// §9.13 probabilistic distribution functions.
+/// §9.13 probabilistic distribution functions; also elaboration's literal
+/// folds (`ir/elaborate/clone.zig`) and the digital engine's IEEE 1364 §17.9
+/// `$dist_*`, so every path draws the same sequence from a seed.
 pub const rng_kernels = @import("rng_kernels.zig");
 /// §4.5.11/§4.5.12 filter numerics.
 pub const filter_kernels = @import("filter_kernels.zig");
-/// §9.5 file-descriptor I/O.
+/// §9.5 file-descriptor I/O; also the digital engine's IEEE 1364 §17.2
+/// descriptor table when no host shares one (`sim/digital/system.zig` `own`).
 pub const file_kernels = @import("file_kernels.zig");
 /// §4.5.15 SPICE limiting functions.
 pub const limit_kernels = @import("limit_kernels.zig");

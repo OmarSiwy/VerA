@@ -11,6 +11,8 @@ const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
 const discipline_rules = @import("../discipline_rules.zig");
 const lower_event = @import("event.zig");
+const lower_sysfunc = @import("sysfunc.zig");
+const lower_systask = @import("systask.zig");
 const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
@@ -84,7 +86,7 @@ fn usesFiles(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
         hit: *bool,
         fn isFile(name: []const u8) bool {
             return Mir.callee.isFileCall(.fromName(name)) or std.mem.eql(u8, name, "$ungetc") or
-                (std.mem.startsWith(u8, name, "$f") and lower_event.isDigitalOnlySysFunc(name));
+                (std.mem.startsWith(u8, name, "$f") and lower_sysfunc.isDigitalOnlySysFunc(name));
         }
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
             if (e == .none) return;
@@ -568,6 +570,10 @@ fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
     return null;
 }
 
+/// Appends to `out` the base identifier of every lvalue the statement tree
+/// `id` writes (`Ast.SourceFile.stmtWrites`: assignment targets, output
+/// actuals, inout seeds), child statements included, in walk order with
+/// repeats. `out` grows in `self.arena`.
 pub fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
     if (id == .none) return;
     const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
@@ -739,7 +745,7 @@ fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
         },
         // An analog-only task is §9.2's E0821 (`scanContext`), which names the
         // rule; E0433 on top would blame the initial-block model instead.
-        .sys_task => |s| if (!lower_event.isAnalogOnlySysFunc(self.file.str(s.name))) try self.err(
+        .sys_task => |s| if (!lower_sysfunc.isAnalogOnlySysFunc(self.file.str(s.name))) try self.err(
             self.file.stmtTok(id),
             .E0433,
             "only assignments of constant expressions are supported here",
@@ -835,7 +841,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
     if (discrete) if (self.file.stmt(id) == .sys_task) {
         const st = self.file.stmt(id).sys_task;
         const n = self.file.str(st.name);
-        if (lower_event.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where })
+        if (lower_sysfunc.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where })
         // §9.4.3's pairing rule — "For each % character (except %m, %% and
         // %l) that appears in a string, a corresponding expression argument
         // shall be supplied" — is a property of the format text, so it holds in
@@ -843,7 +849,7 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
         // counts. Judged here, before the digital kernel would meet the gap at
         // run time.
         else if (Mir.callee.takesFormat(.fromName(n)))
-            try lower_event.checkFormatPairing(self, self.file.stmtTok(id), st.args);
+            try lower_systask.checkFormatPairing(self, self.file.stmtTok(id), st.args);
     };
     switch (self.file.stmt(id)) {
         // The target is a write, collected above; only the value is read.
@@ -885,7 +891,7 @@ fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_init
         // contexts: an operator carries state from one accepted timepoint to the
         // next, and none of these has a timepoint to advance.
         if (tag == .filter_call) try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where});
-        if (tag == .sys_call and lower_event.isAnalogOnlySysFunc(self.file.str(ex.strOf(e))))
+        if (tag == .sys_call and lower_sysfunc.isAnalogOnlySysFunc(self.file.str(ex.strOf(e))))
             try self.err(ex.mainTok(e), .E0821, "`{s}` in {s}", .{ self.file.str(ex.strOf(e)), ctx.where });
         // What the mixed-signal kernel cannot do yet, named by the clause that
         // asks for it. Both are legal Verilog-AMS (§7.3.3/§7.3.5).

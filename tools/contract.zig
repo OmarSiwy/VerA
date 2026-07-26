@@ -5,6 +5,15 @@
 //! host-supplied scalar family (`family_fns`); `RefFamily` is the reference
 //! one and `gm` the f64 transcendentals it and GPU kernels share. A member with
 //! no consumer yet names the LRM clause that requires it.
+//!
+//! Hosts compile against this one file (installed as `share/vera/contract.zig`
+//! and passed to `vera --contract`), so it imports no file, only std, builtin
+//! and the program's root (`validating`), and is never split.
+//! Sections, in order: the ABI stamp and opt-in checks; `gm`; the per-call
+//! values (`UpdateResult`, `SimState`, the state classes); the per-device
+//! tables (noise, AC, VPI, files, limiting and Jacobian masks); §5.6.1.2 charge
+//! sites; scalar families (the lead protocol, `RefFamily`, `Rows`/`Sites`);
+//! `validate`/`validateHost`; tests.
 
 const std = @import("std");
 
@@ -122,10 +131,14 @@ pub fn formatStatus(comptime D: type, inst: *const D.Instance, w: *std.Io.Writer
 }
 
 /// f64 transcendentals that also compile for NVPTX and AMDGCN, which have no
-/// libm. Used by the scalar paths of generated code (the §4.5.15 limiters) and
-/// by `RefFamily`. On the host each function is the Zig builtin or `std.math`
-/// call; on a GPU target it is a self-contained musl port (<= 1 ulp), so this
-/// file needs no imports beyond std.
+/// libm. Used by the scalar paths of generated code (the §4.5.15 limiters), by
+/// `RefFamily`, and by the compiler's constant folds and the prover's bounds
+/// (`frontend/constfold.zig`, `ir/proof/prover.zig`): `exp`, `log` and `pow`
+/// fold at compile time to the bits a device computes at run time, so changing
+/// their arithmetic changes folded constants. On the host the other functions
+/// are the Zig builtin or `std.math` call; on a GPU target each is a
+/// self-contained musl port (<= 1 ulp), so this file needs no imports beyond
+/// std.
 ///
 /// ponytail: only the functions device code reaches are ported. A model that
 /// reaches another builtin on a GPU fails its kernel compile; extend `gm` then.
@@ -146,12 +159,16 @@ pub const gm = struct {
     pub inline fn exp(x: anytype) @TypeOf(x) {
         return hexp(x);
     }
+    /// log(x), `f64` or `@Vector(n, f64)`; specials as `armLog` lists them.
     pub inline fn log(x: anytype) @TypeOf(x) {
         return hlog(x);
     }
+    /// x^y for one `f64` base; C99 F.10.4.4's special cases (`armPow`).
     pub inline fn pow(x: f64, y: f64) f64 {
         return armPow(x, y);
     }
+    /// tanh, sinh and cosh: `std.math`'s on the host; on a GPU a port over
+    /// `armExp`, not bit-identical to the host's.
     pub inline fn tanh(x: f64) f64 {
         if (comptime !dev) return std.math.tanh(x);
         // Cephes rational below 0.625, else 1 - 2/(e^2|x| + 1).
@@ -185,6 +202,8 @@ pub const gm = struct {
         const e = armExp(@abs(x));
         return 0.5 * e + 0.5 / e;
     }
+    /// sin and cos: the builtins on the host; on a GPU musl's k_sin/k_cos,
+    /// whose phase accuracy decays past |x| ~ 1.6e6 rad (`remPio2`).
     pub inline fn sin(x: f64) f64 {
         return if (comptime dev) softSin(x) else @sin(x);
     }
@@ -195,6 +214,8 @@ pub const gm = struct {
     // `std.mem.doNotOptimizeAway` (`asm volatile ("" :: "rm" (v))`), which the
     // AMDGPU backend cannot match. The device branch is std's algorithm with
     // that line dropped; it only set a flag, so every value is identical.
+    /// e^x - 1 without cancellation near 0; every value equals `std.math`'s
+    /// on every target.
     pub inline fn expm1(x: f64) f64 {
         return if (comptime dev) softExpm1(x) else std.math.expm1(x);
     }
@@ -202,6 +223,8 @@ pub const gm = struct {
     // path, which never reaches the idiom. Two lanes because `@Vector(1, f64)`
     // crashes the compiler; the second is discarded. ponytail: port
     // `atanBinary64` minus its bad line if device atan reaches a profile.
+    /// atan: `std.math`'s on the host; on a GPU std's vector body, within
+    /// 2·eps relative of the host's.
     pub inline fn atan(x: f64) f64 {
         if (comptime !dev) return std.math.atan(x);
         const v: @Vector(2, f64) = @splat(x);
@@ -688,7 +711,6 @@ pub const gm = struct {
         return scale + scale * m.tmp;
     }
 
-    /// exp(x), see the contract above.
     /// exp(x) for |x| < 2^-28: 1 + (x + x^2/2), the next term below
     /// 2^-86 relative, so one final rounding (<= 0.5 + 2^-30 ulp). Cheaper
     /// than the table path for the near-zero arguments a history decay
@@ -698,6 +720,7 @@ pub const gm = struct {
         return sp(T, 1.0) + (x + x * x * sp(T, 0.5));
     }
 
+    /// exp(x), see the contract above.
     pub fn armExp(x: f64) f64 {
         const abstop = top12(x) & 0x7ff;
         if (abstop < top12(0x1p-28)) return expSmall(x);
@@ -712,13 +735,6 @@ pub const gm = struct {
             if (x > 0x1.62e42fefa39efp9) return std.math.inf(f64);
         }
         return expCore(x, 0.0, 0);
-    }
-
-    /// `pow.c` `log_inline`: log(x) as hi + tail for x's (normalized) bits.
-    inline fn powLog(ix: u64, tail: *f64) f64 {
-        const l = powLogG(f64, ix);
-        tail.* = l.tail;
-        return l.y;
     }
 
     /// 0: not an integer, 1: odd, 2: even, for the bits of a non-zero
@@ -816,8 +832,9 @@ pub const gm = struct {
                 ix -%= 52 << 52;
             }
         }
-        var lo: f64 = undefined;
-        const hi = powLog(ix, &lo);
+        const l = powLogG(f64, ix);
+        const hi = l.y;
+        const lo = l.tail;
         // y * (hi + lo) as ehi + elo without fma (`exact_everywhere`).
         const yhi = asF(iy & (~@as(u64, 0) << 27));
         const ylo = y - yhi;
@@ -1035,13 +1052,6 @@ pub const gm = struct {
         .{ 0x1.6c00000000000p-1, 0x1.5d5bddf596000p-2, -0x1.a0b2a08a465dcp-47 },
     };
 
-    // musl exp.c / log.c ports (f64 <= 1 ulp).
-    const P1 = 1.66666666666666019037e-01;
-    const P2 = -2.77777777770155933842e-03;
-    const P3 = 6.61375632143793436117e-05;
-    const P4 = -1.65339022054652515390e-06;
-    const P5 = 4.13813679705723846039e-08;
-
     /// musl expm1.c, by way of `std.math.expm1`, minus its one
     /// `doNotOptimizeAway`, see `expm1` above.
     ///
@@ -1126,14 +1136,6 @@ pub const gm = struct {
         if (k < 20) return (x - e + (1 - uf)) * twopk;
         return (x - (e + uf) + 1) * twopk;
     }
-
-    const Lg1 = 6.666666666666735130e-01;
-    const Lg2 = 3.999999999940941908e-01;
-    const Lg3 = 2.857142874366239149e-01;
-    const Lg4 = 2.222219843214978396e-01;
-    const Lg5 = 1.818357216161805012e-01;
-    const Lg6 = 1.531383769920937332e-01;
-    const Lg7 = 1.479819860511658591e-01;
 
     // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2.
     const pio4 = 0x1.921fb54442d18p-1;
@@ -1508,6 +1510,11 @@ pub const UpdateResult = union(enum) {
     request_reject_at: f64,
 };
 
+comptime {
+    // Budget: returned once per instance per accepted point; a time and a tag.
+    std.debug.assert(@sizeOf(UpdateResult) <= 16);
+}
+
 /// What a device carries across accepted points, declared as `state_class`:
 ///   none: no `State` and no `updateState`.
 ///   path_latch: only the §5.6.1.2 path latches. `updateState` stages them and
@@ -1702,6 +1709,12 @@ pub const PsdTerm = struct {
     coeff: f64 = 1,
 };
 
+comptime {
+    // Budget: `noisePsd` returns one per generator per frequency point (16
+    // on psp103, 768 bytes a call); five f64 and a one-byte index.
+    std.debug.assert(@sizeOf(PsdTerm) <= 48);
+}
+
 /// §2.8.3/§12.32 one `$name` the compiler could not resolve, left to a VPI
 /// application. Position k of `systf_calls` is what `SystfHost.call(ctx, k, ...)`
 /// answers. Keyed by name, as `vpi_register_analog_systf()` registers it, so
@@ -1785,6 +1798,11 @@ pub const AcPhasor = struct {
     /// Phase, in radians.
     phase: f64 = 0,
 };
+
+comptime {
+    // Budget: `acStim` returns one per stimulus per frequency point.
+    std.debug.assert(@sizeOf(AcPhasor) == 16);
+}
 
 /// Returns the device's `ac_dyn_slots`, or empty. Slot `row * n_u + col` is a
 /// local Jacobian entry whose small-signal value depends on frequency: a
@@ -2395,6 +2413,9 @@ fn laneWidth(comptime lane: []const u8) usize {
     return n;
 }
 
+/// `RefFamily`'s dense layout: every `Of(m)` is this one type, the value and
+/// `laneWidth(lane)` lanes of `L`, so a mask only documents intent. The
+/// methods are `family_primitives`, computing the numerics table.
 fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
     return struct {
         v: f64,
@@ -2515,6 +2536,10 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
     };
 }
 
+/// `RefFamily`'s sparse layout: `Of(m)` carries `@popCount(m)` lanes of `L`
+/// in unknown order, and a binary operation returns `Of(m | m')` with each
+/// operand's lanes spread into the joined layout (`spread`). The methods are
+/// `family_primitives`, computing the numerics table.
 fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
     return struct {
         pub const collapse_applied = collapsed;
@@ -2985,7 +3010,24 @@ pub fn validate(comptime D: type) void {
     validateDefaultedStruct(D, "Instance");
     if (@hasDecl(D, "mutable_eval") and @TypeOf(D.mutable_eval) != bool)
         @compileError(name ++ ".mutable_eval must be bool");
-    validateSimState(D);
+    // The host-written `Instance` and `Model` fields (`sim_state_fields`,
+    // `host_model_fields`): a typo would be a field no host writes.
+    for (sim_state_fields) |f| {
+        if (!@hasField(D.Instance, f.name)) continue;
+        if (@FieldType(D.Instance, f.name) != f.T)
+            @compileError(name ++ ".Instance." ++ f.name ++ ": host-written field must be " ++
+                @typeName(f.T));
+    }
+    for (host_model_fields) |f| {
+        if (@hasField(D.Model, f) and @FieldType(D.Model, f) != f64)
+            @compileError(name ++ ".Model." ++ f ++ ": host-written field must be f64");
+    }
+    // `SimState` carries these, so an Instance field of the same name is one
+    // no host writes: a device built for an earlier contract.
+    for ([_][]const u8{ "abstime", "dt", "analysis_kind", "is_initial_step", "is_final_step", "is_analog_initial", "newton_iteration" }) |f| {
+        if (@hasField(D.Instance, f))
+            @compileError(name ++ ".Instance." ++ f ++ ": the host passes it in `contract.SimState`, not in Instance");
+    }
 
     // Generic over S, so only the shape is checkable here.
     validatePhysicsFn(D, "eval");
@@ -3227,7 +3269,10 @@ pub fn validate(comptime D: type) void {
             @compileError(name ++ ".Instance.systf must be `?*const contract.SystfHost`");
     }
 
-    validateMcParam(D);
+    // `mc_param` names the float field of Model or Instance that Monte Carlo
+    // varies (`pub const mc_param = "resist";`).
+    if (@hasDecl(D, "mc_param") and !hasFloatField(D.Instance, D.mc_param) and !hasFloatField(D.Model, D.mc_param))
+        @compileError(name ++ ".mc_param '" ++ D.mc_param ++ "' is not a float field of Model or Instance");
 
     // §6.3.4/§3.4.5 parameters defined over other parameters, and every
     // localparam: `Model` is flat, so a write to a base parameter reaches them
@@ -3593,29 +3638,6 @@ fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
     return false;
 }
 
-/// Checks the host-written `Instance` and `Model` fields (`sim_state_fields`,
-/// `host_model_fields`).
-fn validateSimState(comptime D: type) void {
-    const name = @typeName(D);
-    for (sim_state_fields) |f| {
-        if (!@hasField(D.Instance, f.name)) continue;
-        if (@FieldType(D.Instance, f.name) != f.T)
-            @compileError(name ++ ".Instance." ++ f.name ++ ": host-written field must be " ++
-                @typeName(f.T));
-    }
-    for (host_model_fields) |f| {
-        if (@hasField(D.Model, f) and @FieldType(D.Model, f) != f64)
-            @compileError(name ++ ".Model." ++ f ++ ": host-written field must be f64");
-    }
-
-    // `SimState` carries these, so an Instance field of the same name is one
-    // no host writes: a device built for an earlier contract.
-    for ([_][]const u8{ "abstime", "dt", "analysis_kind", "is_initial_step", "is_final_step", "is_analog_initial", "newton_iteration" }) |f| {
-        if (@hasField(D.Instance, f))
-            @compileError(name ++ ".Instance." ++ f ++ ": the host passes it in `contract.SimState`, not in Instance");
-    }
-}
-
 fn validateDefaultedStruct(comptime D: type, comptime decl: []const u8) void {
     const T = @field(D, decl);
     if (@typeInfo(T) != .@"struct")
@@ -3664,15 +3686,6 @@ fn isDenseEnum(comptime E: type) bool {
         if (value != idx) return false;
     }
     return true;
-}
-
-/// `mc_param` names the float field of Model or Instance that Monte Carlo
-/// varies (`pub const mc_param = "resist";`).
-fn validateMcParam(comptime D: type) void {
-    if (!@hasDecl(D, "mc_param")) return;
-    if (!hasFloatField(D.Instance, D.mc_param) and !hasFloatField(D.Model, D.mc_param))
-        @compileError(@typeName(D) ++ ".mc_param '" ++ D.mc_param ++
-            "' is not a float field of Model or Instance");
 }
 
 // ============================================================================

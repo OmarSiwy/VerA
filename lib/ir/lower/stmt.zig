@@ -13,6 +13,9 @@ const lower_control = @import("control.zig");
 const lower_event = @import("event.zig");
 const lower_expr = @import("expr.zig");
 const lower_param = @import("param.zig");
+const lower_systask = @import("systask.zig");
+const lower_shape = @import("shape.zig");
+const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -100,7 +103,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
             try lower_event.lowerEventControl(self, s.event, s.body),
         .event_trigger => |s| try lowerEventTrigger(self, tok, s.target), // §5.10.4
         .disable => |s| try lowerDisable(self, tok, self.file.str(s.name)),
-        .sys_task => |s| try lower_event.lowerSysTask(self, tok, self.file.str(s.name), s.args),
+        .sys_task => |s| try lower_systask.lowerSysTask(self, tok, self.file.str(s.name), s.args),
         .jump => |j| try lowerJump(self, tok, j.kind, j.value),
     }
 }
@@ -161,7 +164,7 @@ fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
 fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.scope_log.items.len;
-    defer lower_param.closeScope(self, mark);
+    defer lower_var.closeScope(self, mark);
     // §5.3.2's key for a local's static location, in step with `scanHeld`'s.
     const outer_path = self.block_path;
     defer self.block_path = outer_path;
@@ -172,8 +175,8 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     if (try scopeElem(self, b)) |elem|
         self.scope_path = if (outer_scope.len == 0) elem else try self.arena.print("{s}{c}{s}", .{ outer_scope, Elaborate.sep, elem });
     for (b.params) |*p| try lower_param.lowerParamDecl(self, p); // §5.3.2 local parameters
-    try lower_param.checkOneItemPerScope(self, b.params, b.vars, &.{});
-    for (b.vars) |*v| try lower_param.declareVarDecl(self, v, .local);
+    try lower_var.checkOneItemPerScope(self, b.params, b.vars, &.{});
+    for (b.vars) |*v| try lower_var.declareVarDecl(self, v, .local);
     if (b.name != .none) try publishBlockLocals(self, self.file.str(b.name), b);
     // §6.7 a labelled block is a scope, and A.6.5 lets `disable` name it. The
     // exit block is where control lands both when falling off the end and when
@@ -367,12 +370,12 @@ fn timepointSlots(self: *Lower, id: Ast.StmtId, slots: *std.ArrayList(Lower.TpSl
                 try places.append(self.arena, m.place);
                 continue;
             }
-            var key_buf: [lower_param.elem_key_len]u8 = undefined;
-            var sub: [lower_param.max_stack_dims]i64 = undefined;
-            const idx = try lower_param.subscriptBuf(self, &sub, info.dims.len);
-            for (0..lower_param.shapeCells(info.dims)) |k| {
-                lower_param.shapeSubscripts(info.dims, k, idx);
-                const key = try lower_param.elemKey(self, &key_buf, name, idx);
+            var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+            var sub: [lower_shape.max_stack_dims]i64 = undefined;
+            const idx = try lower_shape.subscriptBuf(self, &sub, info.dims.len);
+            for (0..lower_shape.shapeCells(info.dims)) |k| {
+                lower_shape.shapeSubscripts(info.dims, k, idx);
+                const key = try lower_shape.elemKey(self, &key_buf, name, idx);
                 const v = self.vars.get(key) orelse continue;
                 try timepointScalar(self, w, try self.arena.dupe(u8, key), v, slots, places);
             }
@@ -428,16 +431,16 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     if (ex.tag(target) == .ident and (ex.tag(value) == .assign_pattern or ex.tag(value) == .concat)) {
         const name = self.file.str(ex.strOf(target));
         if (self.arrays.get(name)) |info| {
-            const elems = try lower_param.flattenPattern(self, value, info.dims);
-            var key_buf: [lower_param.elem_key_len]u8 = undefined;
-            var sub: [lower_param.max_stack_dims]i64 = undefined;
-            const idx = try lower_param.subscriptBuf(self, &sub, info.dims.len);
+            const elems = try lower_shape.flattenPattern(self, value, info.dims);
+            var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+            var sub: [lower_shape.max_stack_dims]i64 = undefined;
+            const idx = try lower_shape.subscriptBuf(self, &sub, info.dims.len);
             for (elems, 0..) |elem, k| {
                 if (elem == .none) continue;
-                lower_param.shapeSubscripts(info.dims, k, idx);
-                if (info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, name, idx))) continue;
+                lower_shape.shapeSubscripts(info.dims, k, idx);
+                if (info.mem == null and !self.vars.contains(try lower_shape.elemKey(self, &key_buf, name, idx))) continue;
                 const tv = try assignValue(self, elem);
-                try lower_param.writeElem(self, name, info, idx, try self.coerceTo(elem, info.ty, tv));
+                try lower_var.writeElem(self, name, info, idx, try self.coerceTo(elem, info.ty, tv));
             }
             return;
         }
@@ -499,7 +502,7 @@ fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!b
 /// only known at run time; the precondition `assignRuntimeIndex` and §4.7.2.3's
 /// output-argument writeback share.
 fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
-    var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+    var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
     const chain = (try indexChain(self, target, &subs)) orelse return false;
     for (chain.subs) |s| {
         if (lower_constfold.foldExpr(self, s, false) != null) continue;
@@ -514,7 +517,7 @@ fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
 /// diagnostic site for §3.3's string conversion.
 pub fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv: TypedValue) Oom!bool {
     if (!try isRuntimeElem(self, target)) return false;
-    var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+    var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
     const chain = (try indexChain(self, target, &subs)).?;
     const name = self.file.str(chain.name);
     const info = self.arrays.get(name).?;
@@ -525,15 +528,15 @@ pub fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv:
     // A memory-backed array stores one element; an invalid subscript (-1)
     // stores nothing, as every masked write below leaves its cell.
     if (info.mem) |m| {
-        try lower_param.storeElem(self, m.place, iv, new);
+        try lower_var.storeElem(self, m.place, iv, new);
         return true;
     }
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    var sub: [lower_param.max_stack_dims]i64 = undefined;
-    const at = try lower_param.subscriptBuf(self, &sub, info.dims.len);
-    for (0..lower_param.shapeCells(info.dims)) |k| {
-        lower_param.shapeSubscripts(info.dims, k, at);
-        const key = try lower_param.elemKey(self, &key_buf, name, at);
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    var sub: [lower_shape.max_stack_dims]i64 = undefined;
+    const at = try lower_shape.subscriptBuf(self, &sub, info.dims.len);
+    for (0..lower_shape.shapeCells(info.dims)) |k| {
+        lower_shape.shapeSubscripts(info.dims, k, at);
+        const key = try lower_shape.elemKey(self, &key_buf, name, at);
         const slot = self.vars.get(key) orelse {
             try self.err(self.file.exprs.mainTok(target), .E0312, "`{s}`", .{name});
             return true;
@@ -548,7 +551,7 @@ pub fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv:
 /// Flattens a full subscript tuple into one index in declaration order, checking
 /// each dimension so `[i][columns]` cannot alias `[i+1][0]`. An invalid tuple gives
 /// -1, which every masked write leaves untouched.
-pub fn runtimeArrayIndex(self: *Lower, subs: []const Ast.ExprId, dims: []const lower_param.Bounds) Oom!Mir.Value {
+pub fn runtimeArrayIndex(self: *Lower, subs: []const Ast.ExprId, dims: []const lower_shape.Bounds) Oom!Mir.Value {
     var flat = Mir.Value.zero;
     var valid = Mir.Value.one;
     for (subs, dims) |s, d| {
@@ -622,20 +625,20 @@ fn copyWholeArray(
         return true;
     }
 
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    var d_sub: [lower_param.max_stack_dims]i64 = undefined;
-    var s_sub: [lower_param.max_stack_dims]i64 = undefined;
-    const di = try lower_param.subscriptBuf(self, &d_sub, dst.dims.len);
-    const si = try lower_param.subscriptBuf(self, &s_sub, src.dims.len);
-    const n = lower_param.shapeCells(dst.dims);
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    var d_sub: [lower_shape.max_stack_dims]i64 = undefined;
+    var s_sub: [lower_shape.max_stack_dims]i64 = undefined;
+    const di = try lower_shape.subscriptBuf(self, &d_sub, dst.dims.len);
+    const si = try lower_shape.subscriptBuf(self, &s_sub, src.dims.len);
+    const n = lower_shape.shapeCells(dst.dims);
     for (0..n) |k| {
-        lower_param.shapeSubscripts(dst.dims, k, di);
-        lower_param.shapeSubscripts(src.dims, k, si);
+        lower_shape.shapeSubscripts(dst.dims, k, di);
+        lower_shape.shapeSubscripts(src.dims, k, si);
         const v = (try lower_expr.arrayElemValue(self, src_name, si)) orelse continue;
-        if (dst.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, dst_name, di))) continue;
+        if (dst.mem == null and !self.vars.contains(try lower_shape.elemKey(self, &key_buf, dst_name, di))) continue;
         // The element types are already known equivalent, so there is no
         // conversion to make, only the source's `Value` to re-bind.
-        try lower_param.writeElem(self, dst_name, dst, di, v.v);
+        try lower_var.writeElem(self, dst_name, dst, di, v.v);
     }
     return true;
 }
@@ -647,7 +650,7 @@ pub const ArraySlice = struct { name: []const u8, info: ArrayInfo, subs: []const
 
 /// Returns `e` as a whole-array or slice reference, or null for anything else,
 /// including a full subscript list. `subs` may point into `buf`.
-pub fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[lower_param.max_stack_dims]Ast.ExprId) Oom!?ArraySlice {
+pub fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[lower_shape.max_stack_dims]Ast.ExprId) Oom!?ArraySlice {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .ident => {
@@ -687,8 +690,8 @@ pub fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[lower_param.max_stack_dims]A
 /// Returns false when neither side is a slice, so the whole-array and
 /// runtime-element paths keep their own diagnostics.
 fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
-    var tbuf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
-    var vbuf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+    var tbuf: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
+    var vbuf: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
     const dst = (try arrayRef(self, target, &tbuf)) orelse return false;
     const src = (try arrayRef(self, value, &vbuf)) orelse return false;
     if (dst.subs.len == 0 and src.subs.len == 0) return false; // `copyWholeArray`
@@ -714,7 +717,7 @@ fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool 
         return true;
     }
 
-    const n = lower_param.shapeCells(dd);
+    const n = lower_shape.shapeCells(dd);
     const vals = try self.arena.alloc(Mir.Value, n);
     if (!try readSliceCells(self, value, src, dd, vals)) return true;
     return writeSliceCells(self, target, dst, dd, vals);
@@ -722,15 +725,15 @@ fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool 
 
 /// Reads every cell of `s`'s slice into `out`, in the row-major order
 /// `shapeSubscripts` walks. Returns false when a subscript is out of range.
-pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const lower_param.Bounds, out: []Mir.Value) Oom!bool {
-    var full: [lower_param.max_stack_dims]i64 = undefined;
-    const idx = try lower_param.subscriptBuf(self, &full, s.info.dims.len);
+pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const lower_shape.Bounds, out: []Mir.Value) Oom!bool {
+    var full: [lower_shape.max_stack_dims]i64 = undefined;
+    const idx = try lower_shape.subscriptBuf(self, &full, s.info.dims.len);
     const pdims = s.info.dims[0..s.subs.len];
 
     if (try constPrefix(self, at_e, s, idx[0..s.subs.len])) |known| {
         if (!known) return false; // out of range — E0310 already reported
         for (out, 0..) |*v, k| {
-            lower_param.shapeSubscripts(sd, k, idx[s.subs.len..]);
+            lower_shape.shapeSubscripts(sd, k, idx[s.subs.len..]);
             const el = (try lower_expr.arrayElemValue(self, s.name, idx)) orelse return false;
             v.* = el.v;
         }
@@ -746,7 +749,7 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
     if (s.info.mem) |m| {
         const row = try self.emit(.imul, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(out.len)) });
         for (out, 0..) |*v, k|
-            v.* = try lower_param.loadElem(self, m, s.info.ty, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }));
+            v.* = try lower_var.loadElem(self, m, s.info.ty, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }));
         return true;
     }
     const callee: []const u8 = switch (s.info.ty) {
@@ -759,9 +762,9 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
         defer args.deinit(self.arena);
         try args.append(self.arena, .zero);
         try args.append(self.arena, iv);
-        lower_param.shapeSubscripts(sd, k, idx[s.subs.len..]);
-        for (0..lower_param.shapeCells(pdims)) |p| {
-            lower_param.shapeSubscripts(pdims, p, idx[0..s.subs.len]);
+        lower_shape.shapeSubscripts(sd, k, idx[s.subs.len..]);
+        for (0..lower_shape.shapeCells(pdims)) |p| {
+            lower_shape.shapeSubscripts(pdims, p, idx[0..s.subs.len]);
             const el = (try lower_expr.arrayElemValue(self, s.name, idx)) orelse return false;
             try args.append(self.arena, el.v);
         }
@@ -771,18 +774,18 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
 }
 
 /// The mirror image: writes `vals` into every cell of `d`'s slice.
-pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []const lower_param.Bounds, vals: []const Mir.Value) Oom!bool {
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    var full: [lower_param.max_stack_dims]i64 = undefined;
-    const idx = try lower_param.subscriptBuf(self, &full, d.info.dims.len);
+pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []const lower_shape.Bounds, vals: []const Mir.Value) Oom!bool {
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    var full: [lower_shape.max_stack_dims]i64 = undefined;
+    const idx = try lower_shape.subscriptBuf(self, &full, d.info.dims.len);
     const pdims = d.info.dims[0..d.subs.len];
 
     if (try constPrefix(self, at_e, d, idx[0..d.subs.len])) |known| {
         if (!known) return true;
         for (vals, 0..) |v, k| {
-            lower_param.shapeSubscripts(dd, k, idx[d.subs.len..]);
-            if (d.info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, d.name, idx))) continue;
-            try lower_param.writeElem(self, d.name, d.info, idx, v);
+            lower_shape.shapeSubscripts(dd, k, idx[d.subs.len..]);
+            if (d.info.mem == null and !self.vars.contains(try lower_shape.elemKey(self, &key_buf, d.name, idx))) continue;
+            try lower_var.writeElem(self, d.name, d.info, idx, v);
         }
         return true;
     }
@@ -791,15 +794,15 @@ pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []cons
     if (d.info.mem) |m| {
         const row = try self.emit(.imul, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(vals.len)) });
         for (vals, 0..) |v, k|
-            try lower_param.storeElem(self, m.place, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }), v);
+            try lower_var.storeElem(self, m.place, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }), v);
         return true;
     }
-    for (0..lower_param.shapeCells(pdims)) |p| {
-        lower_param.shapeSubscripts(pdims, p, idx[0..d.subs.len]);
+    for (0..lower_shape.shapeCells(pdims)) |p| {
+        lower_shape.shapeSubscripts(pdims, p, idx[0..d.subs.len]);
         const hit = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(p)) });
         for (vals, 0..) |v, k| {
-            lower_param.shapeSubscripts(dd, k, idx[d.subs.len..]);
-            const slot = self.vars.get(try lower_param.elemKey(self, &key_buf, d.name, idx)) orelse continue;
+            lower_shape.shapeSubscripts(dd, k, idx[d.subs.len..]);
+            const slot = self.vars.get(try lower_shape.elemKey(self, &key_buf, d.name, idx)) orelse continue;
             const old = try self.builder.readVariable(slot.place, self.cur);
             try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ hit, v, old }));
         }
@@ -848,7 +851,7 @@ pub fn readLvalue(self: *Lower, lv: Lvalue) Oom!Mir.Value {
 pub fn writeLvalue(self: *Lower, lv: Lvalue, v: Mir.Value) Oom!void {
     switch (lv.at) {
         .place => |p| try self.builder.writeVariable(p, self.cur, v),
-        .elem => |el| try lower_param.storeElem(self, el.place, el.index, v),
+        .elem => |el| try lower_var.storeElem(self, el.place, el.index, v),
     }
 }
 
@@ -876,14 +879,14 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
             return null;
         },
         .index => {
-            var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+            var subs: [lower_shape.max_stack_dims]Ast.ExprId = undefined;
             const chain = (try indexChain(self, e, &subs)) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
                 return null;
             };
             const name = self.file.str(chain.name);
-            var idx: [lower_param.max_stack_dims]i64 = undefined;
-            const at = try lower_param.subscriptBuf(self, &idx, chain.subs.len);
+            var idx: [lower_shape.max_stack_dims]i64 = undefined;
+            const at = try lower_shape.subscriptBuf(self, &idx, chain.subs.len);
             for (chain.subs, at) |s, *o| {
                 const c = lower_constfold.constEval(self, s) orelse {
                     try self.err(self.file.exprs.mainTok(e), .E0311, "indexing `{s}`", .{name});
@@ -925,10 +928,10 @@ fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oo
     if (!try checkSubscripts(self, e, name, info, idx)) return null;
     if (info.mem) |m| return .{ .ty = info.ty, .at = .{ .elem = .{
         .place = m.place,
-        .index = try self.mir.addIntConst(self.arena, lower_param.flatIndex(info.dims, idx)),
+        .index = try self.mir.addIntConst(self.arena, lower_shape.flatIndex(info.dims, idx)),
     } } };
-    var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    const s = self.vars.get(try lower_param.elemKey(self, &key_buf, name, idx)) orelse return null;
+    var key_buf: [lower_shape.elem_key_len]u8 = undefined;
+    const s = self.vars.get(try lower_shape.elemKey(self, &key_buf, name, idx)) orelse return null;
     return .{ .ty = s.ty, .at = .{ .place = s.place } };
 }
 

@@ -14,8 +14,8 @@ const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
-const lower_param = @import("param.zig");
 const lower_table_model = @import("table_model.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
@@ -23,6 +23,13 @@ const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
 const Const = Lower.Const;
 const poison = Lower.poison;
+
+/// This file's private state on `Lower` (`Lower.analog_op_state`).
+pub const State = struct {
+    /// `readsUnknown`'s visited set, cleared and reused per walk rather than
+    /// allocated per `idt` site.
+    unknown_seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty,
+};
 
 /// Reports whether `name` is one of the two A.8.2 `analog_filter_function_call`
 /// names that keep no history (`ddx`, `limexp`). §5.8.1's ban on analog operators
@@ -220,9 +227,9 @@ fn opIdt(self: *Lower, e: Ast.ExprId, vals: []const Mir.Value) Oom!Mir.Value {
 /// Whether `v` can read an unknown of the solve: a probe, or anything the walk
 /// does not see through (a phi, an array, a committed latch).
 fn readsUnknown(self: *Lower, v: Mir.Value) Oom!bool {
-    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
-    defer seen.deinit(self.arena);
-    return unknownWalk(self, v, &seen);
+    const seen = &self.analog_op_state.unknown_seen;
+    seen.clearRetainingCapacity();
+    return unknownWalk(self, v, seen);
 }
 
 fn unknownWalk(self: *Lower, v0: Mir.Value, seen: *std.AutoHashMapUnmanaged(Mir.Value, void)) Oom!bool {
@@ -478,7 +485,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
         .assign_pattern, .concat => {
-            const elems = try lower_param.patternElems(self, a);
+            const elems = try lower_shape.patternElems(self, a);
             try out.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(elems.len)));
             for (elems) |el|
                 try out.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, el)));
@@ -495,7 +502,7 @@ pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.Expr
             try out.append(self.arena, try self.mir.addIntConst(self.arena, d.count()));
             var index: [1]i64 = undefined;
             for (0..@intCast(d.count())) |k| {
-                lower_param.shapeSubscripts(info.dims, k, &index);
+                lower_shape.shapeSubscripts(info.dims, k, &index);
                 const el = (try lower_expr.arrayElemValue(self, name, &index)) orelse return true;
                 try out.append(self.arena, try self.toReal(el));
             }
