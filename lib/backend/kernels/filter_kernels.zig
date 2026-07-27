@@ -172,8 +172,11 @@ pub fn zLaplaceH0(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64)
     return h;
 }
 
-/// A proper §4.5.11 section in STATE-SPACE form: `off` common powers of s
-/// cancelled from both sides, `m` the denominator degree left. Null for a
+/// A proper §4.5.11 section's state-space shape (`zSsForm`): `off` common
+/// powers of s cancelled from both sides, `m` the denominator degree left.
+pub const ZSs = struct { off: usize, m: usize };
+
+/// Returns the STATE-SPACE form of a proper §4.5.11 section. Null for a
 /// section the form cannot hold (an all-zero denominator, or a numerator of
 /// higher degree than the denominator: an improper section), which runs in
 /// direct form I on its bilinear coefficients instead.
@@ -186,8 +189,6 @@ pub fn zLaplaceH0(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64)
 /// written as an increment Δx of continuous-time states, and an input held
 /// at its value leaves a state with A·x + B·u = 0 exactly where it is, so the
 /// steady output is N(0)/D(0) to rounding.
-pub const ZSs = struct { off: usize, m: usize };
-
 pub fn zSsForm(comptime D: usize, sec: [2][D + 1]f64) ?ZSs {
     var off: usize = 0;
     while (off <= D and sec[0][off] == 0.0 and sec[1][off] == 0.0) off += 1;
