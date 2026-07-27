@@ -16,7 +16,7 @@
 // PROVENANCE. Not transcribed from memory: ported from two independent
 // open-source reproductions of the listing, cross-checked constant-by-constant
 // against each other before a line of Zig was written, and the port was then
-// verified bit-exact against the compiled C on the seeds the tests below pin:
+// verified bit-exact against the compiled C on the seeds codegen's tests pin:
 //
 //   - Icarus Verilog, vpi/sys_random.c ("largely copied from the IEEE standard
 //     (section 17.9.3 in IEEE 1364-2005, Annex N in IEEE 1800-2017)"):
@@ -284,7 +284,8 @@ pub fn zRngRand(seed: i64) f64 {
     return zRngRandCore(&s);
 }
 
-// The full-range value adds no state after its single uniform draw.
+/// The seed after `zRngRand`'s draw: the full-range value adds no state after
+/// its single uniform draw, so it is `zRngNext`.
 pub const zRngRandNext = zRngNext;
 
 /// IEEE 1364 §17.9.2 `$dist_uniform(seed, start, end)`: an INTEGER in the
@@ -295,6 +296,8 @@ pub fn zRngIUniform(seed: i64, start: f64, end: f64) f64 {
     return zRngIUniformCore(&s, start, end);
 }
 
+/// The seed `zRngIUniform` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngIUniformNext(seed: i64, start: f64, end: f64) f64 {
     var s = zRngS32(seed);
     _ = zRngIUniformCore(&s, start, end);
@@ -309,6 +312,8 @@ pub fn zRngUniform(seed: i64, start: f64, end: f64) f64 {
     return zRngUniformCore(&s, start, end);
 }
 
+/// The seed `zRngUniform` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngUniformNext(seed: i64, start: f64, end: f64) f64 {
     if (!(start < end)) @panic("VerA: random uniform start shall be smaller than end");
     var s = zRngS32(seed);
@@ -324,6 +329,8 @@ pub fn zRngNormal(seed: i64, mean: f64, sd: f64) f64 {
     return zRngNormalCore(&s, mean, sd);
 }
 
+/// The seed `zRngNormal` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngNormalNext(seed: i64, mean: f64, sd: f64) f64 {
     var s = zRngS32(seed);
     _ = zRngNormalCore(&s, mean, sd);
@@ -338,6 +345,8 @@ pub fn zRngExponential(seed: i64, mean: f64) f64 {
     return zRngExponentialCore(&s, mean);
 }
 
+/// The seed `zRngExponential` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngExponentialNext(seed: i64, mean: f64) f64 {
     var s = zRngS32(seed);
     zRngPositive(mean);
@@ -352,6 +361,8 @@ pub fn zRngPoisson(seed: i64, mean: f64) f64 {
     return zRngPoissonCore(&s, mean);
 }
 
+/// The seed `zRngPoisson` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngPoissonNext(seed: i64, mean: f64) f64 {
     var s = zRngS32(seed);
     zRngPositive(mean);
@@ -366,6 +377,8 @@ pub fn zRngChiSquare(seed: i64, df: f64) f64 {
     return zRngChiSquareCore(&s, n);
 }
 
+/// The seed `zRngChiSquare` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngChiSquareNext(seed: i64, df: f64) f64 {
     var s = zRngS32(seed);
     _ = zRngChiSquareCore(&s, zRngDf(df));
@@ -379,6 +392,8 @@ pub fn zRngT(seed: i64, df: f64) f64 {
     return zRngTCore(&s, n);
 }
 
+/// The seed `zRngT` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngTNext(seed: i64, df: f64) f64 {
     var s = zRngS32(seed);
     const n = zRngDf(df);
@@ -394,6 +409,8 @@ pub fn zRngErlang(seed: i64, k_stage: f64, mean: f64) f64 {
     return zRngErlangCore(&s, k, mean);
 }
 
+/// The seed `zRngErlang` leaves behind: §9.13's seed is inout, so the call
+/// writes this back to the seed variable.
 pub fn zRngErlangNext(seed: i64, k_stage: f64, mean: f64) f64 {
     var s = zRngS32(seed);
     const k = zRngDf(k_stage);

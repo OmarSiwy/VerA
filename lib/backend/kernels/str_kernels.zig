@@ -258,10 +258,12 @@ pub fn zScanI(src: []const u8, fmt: []const u8, k: i64) i64 {
     return zScan(src, fmt, k).i;
 }
 
+/// Item `k` as a real; see `zScanI`.
 pub fn zScanR(src: []const u8, fmt: []const u8, k: i64) f64 {
     return zScan(src, fmt, k).r;
 }
 
+/// Item `k` as a string: a slice of `src`, valid while `src` is; see `zScanI`.
 pub fn zScanS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
     return zScan(src, fmt, k).s;
 }
@@ -678,7 +680,7 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 /// on every step and reported every step. So the emitter hands this kernel one
 /// u64 per watched argument — the bit pattern of a real or integer, a hash of
 /// a string — with the `$abstime`/`$realtime` operands left out, and the text
-/// to write when they changed. `src/sim/digital.zig`'s monitor tracks its
+/// to write when they changed. `src/sim/digital/display.zig`'s monitor tracks its
 /// watched variables the same way (IEEE 1364-2005 §17.1.3's `$time` rule).
 ///
 /// Returns the text when the watched values differ from those this site last

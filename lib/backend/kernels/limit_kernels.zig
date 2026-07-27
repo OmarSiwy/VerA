@@ -11,13 +11,13 @@
 // §9.17.3's "when the simulator has converged, the return value of the $limit()
 // function is the value of the access function reference" — i.e. a converged
 // bias must come back UNCHANGED. That transparency is the property the
-// `annex_e_spice/limit_*.va` fixtures assert and the one the tests below pin.
+// `annex_e_spice/limit_*.va` fixtures assert and the one `kernels/test.zig` pins.
 //
 // BRANCHLESS (simd-first T7): the `*Clamp` bodies compute every candidate
 // unconditionally and combine with selects, so the predictor sees constant
 // behaviour whether or not the clamp fires — the ngspice control flow survives
-// only in the `*Oracle` transcriptions below, kept as the differential-test
-// reference (T8 step 5).
+// only in the `*Oracle` transcriptions in `kernels/test.zig`, kept as the
+// differential-test reference (T8 step 5).
 //
 // EACH KERNEL IS A HOT/COLD PAIR, and the split is the shape, not a tweak. The
 // public name is an `inline fn` holding nothing but the §9.17.3 TRANSPARENT
@@ -171,7 +171,7 @@ pub inline fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
     //                  vto+0.5 ceiling to be clear
     // Checked against `zFetlimOracle` over 20 M draws on the SPICE-realistic
     // grid vto ∈ [-1,1], vold ∈ [-1,6], |delv| ≤ 3: 11.8 M transparent hits,
-    // 0 disagreements, and the test at the foot of this file re-checks it on
+    // 0 disagreements, and `kernels/test.zig` re-checks it on
     // the log-uniform draws and every boundary tie.
     if (comptime !k_dev) {
         const d = vnew0 - vold;
@@ -242,174 +242,8 @@ fn zLimvdsClamp(vnew0: f64, vold: f64) f64 {
 /// clamp, |vnew − vold| ≤ lim. No explicit non-finite guard (ngspice's
 /// "YOU TURKEY" reset): Zig's `@min`/`@max` are maxnum-semantics, so a
 /// NaN/±inf vnew collapses to the near step bound — bounded either way,
-/// and this file cannot name `std` (embedded verbatim, see the test note).
+/// and this file cannot name `std` (embedded verbatim beside the device's own).
 /// Trivially fixed-point-preserving.
 pub fn zSteplim(vnew0: f64, vold: f64, lim: f64) f64 {
     return @max(vold - lim, @min(vold + lim, vnew0));
-}
-
-// ------------------------------------------------------------------ oracles
-// The original branchy ngspice transcriptions, verbatim. NOT emitted callers'
-// API (cg_limit emits `zPnjlim` etc. by name) — these exist so the
-// differential test below can pin the branchless kernels bit-for-bit
-// (simd-first T8: keep the scalar reference after the fast one ships).
-
-fn zPnjlimOracle(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
-    var vnew = vnew0;
-    if (vnew > vcrit and @abs(vnew - vold) > vt + vt) {
-        if (vold > 0.0) {
-            // The guard above makes |arg| > 2, so both logs take a
-            // strictly positive argument (or exactly 0 after rounding).
-            const arg = (vnew - vold) / vt;
-            vnew = if (arg > 0.0)
-                vold + vt * (2.0 + klog(arg - 2.0))
-            else
-                vold - vt * (2.0 + klog(2.0 - arg));
-        } else {
-            vnew = vt * klog(vnew / vt);
-        }
-    } else if (vnew < 0.0) {
-        const arg = if (vold > 0.0) -vold - 1.0 else 2.0 * vold - 1.0;
-        if (vnew < arg) vnew = arg;
-    }
-    return vnew;
-}
-
-fn zFetlimOracle(vnew0: f64, vold: f64, vto: f64) f64 {
-    var vnew = vnew0;
-    const vtsthi = @abs(2.0 * (vold - vto)) + 2.0;
-    const vtstlo = vtsthi * 0.5 + 2.0;
-    const vtox = vto + 3.5;
-    const delv = vnew - vold;
-    if (vold >= vto) {
-        if (vold >= vtox) {
-            if (delv <= 0.0) { // going off
-                if (vnew >= vtox) {
-                    if (-delv > vtstlo) vnew = vold - vtstlo;
-                } else vnew = if (vnew > vto + 2.0) vnew else vto + 2.0; // ngspice MAX(a,b)
-            } else { // staying on
-                if (delv >= vtsthi) vnew = vold + vtsthi;
-            }
-        } else { // middle region
-            vnew = if (delv <= 0.0)
-                (if (vnew > vto - 0.5) vnew else vto - 0.5) // MAX
-            else
-                (if (vnew < vto + 4.0) vnew else vto + 4.0); // MIN
-        }
-    } else { // off
-        if (delv <= 0.0) {
-            if (-delv > vtsthi) vnew = vold - vtsthi;
-        } else {
-            const vtemp = vto + 0.5;
-            if (vnew <= vtemp) {
-                if (delv > vtstlo) vnew = vold + vtstlo;
-            } else vnew = vtemp;
-        }
-    }
-    return vnew;
-}
-
-fn zLimvdsOracle(vnew0: f64, vold: f64) f64 {
-    var vnew = vnew0;
-    if (vold >= 3.5) {
-        if (vnew > vold) {
-            vnew = @min(vnew, 3.0 * vold + 2.0);
-        } else if (vnew < 3.5) vnew = @max(vnew, 2.0);
-    } else {
-        vnew = if (vnew > vold) @min(vnew, 4.0) else @max(vnew, -0.5);
-    }
-    return vnew;
-}
-
-/// ngspice `B4SOIlimit` minus the NaN reset (see zSteplim's header for why
-/// the kernel bounds NaN instead of zeroing it).
-fn zSteplimOracle(vnew0: f64, vold: f64, lim: f64) f64 {
-    const t0 = vnew0 - vold;
-    if (@abs(t0) > lim)
-        return if (t0 > 0.0) vold + lim else vold - lim;
-    return vnew0;
-}
-
-// The differential test lives HERE, not in ref/SIMD-Strategies/verify.zig,
-// because `zig run verify.zig` roots the module at ref/SIMD-Strategies/ and a
-// `@import("../../src/…")` escapes it. codegen.zig's tests `@import` this
-// file, so `zig build test-va` picks this block up.
-test "§4.5.15 branchless limiters ≡ branchy ngspice oracles, bit for bit" {
-    // NOT `std`: this file is embedded verbatim into device.zig, whose file-scope
-    // `std` a test-local of the same name would shadow (AstGen error).
-    const stdx = @import("std");
-    const expectBits = struct {
-        fn eq(a: f64, b: f64) !void {
-            try stdx.testing.expectEqual(@as(u64, @bitCast(a)), @as(u64, @bitCast(b)));
-        }
-    }.eq;
-
-    var prng = stdx.Random.DefaultPrng.init(0x5eed_4515);
-    const rand = prng.random();
-    // Signed magnitude in 1e-12..1e3 (log-uniform), both signs.
-    const draw = struct {
-        fn any(r: stdx.Random) f64 {
-            const m = stdx.math.pow(f64, 10.0, -12.0 + 15.0 * r.float(f64));
-            return if (r.boolean()) m else -m;
-        }
-        fn pos(r: stdx.Random) f64 {
-            return stdx.math.pow(f64, 10.0, -12.0 + 15.0 * r.float(f64));
-        }
-    };
-
-    for (0..1_000_000) |_| {
-        const vnew = draw.any(rand);
-        const vold = draw.any(rand);
-        // vt/vcrit positive: the physical domain (see header) — outside it the
-        // ORACLE logs a negative and NaNs, which the clamped kernel cannot.
-        const vt = draw.pos(rand);
-        const vcrit = draw.pos(rand);
-        const vto = draw.any(rand);
-        const lim = draw.pos(rand);
-        try expectBits(zPnjlim(vnew, vold, vt, vcrit), zPnjlimOracle(vnew, vold, vt, vcrit));
-        try expectBits(zFetlim(vnew, vold, vto), zFetlimOracle(vnew, vold, vto));
-        try expectBits(zLimvds(vnew, vold), zLimvdsOracle(vnew, vold));
-        try expectBits(zSteplim(vnew, vold, lim), zSteplimOracle(vnew, vold, lim));
-        try expectBits(zSteplim(vold + lim, vold, lim), zSteplimOracle(vold + lim, vold, lim)); // |Δ| == lim
-        try expectBits(zSteplim(vold - lim, vold, lim), zSteplimOracle(vold - lim, vold, lim));
-
-        // Exact boundary hits, derived from the same random draws so they land
-        // on every magnitude: each guard's `==` case must stay transparent.
-        try expectBits(zPnjlim(vcrit, vold, vt, vcrit), zPnjlimOracle(vcrit, vold, vt, vcrit)); // vnew == vcrit
-        try expectBits(zPnjlim(vold + (vt + vt), vold, vt, vcrit), zPnjlimOracle(vold + (vt + vt), vold, vt, vcrit)); // |Δ| == 2vt
-        try expectBits(zPnjlim(vold - (vt + vt), vold, vt, vcrit), zPnjlimOracle(vold - (vt + vt), vold, vt, vcrit));
-        try expectBits(zPnjlim(-vold - 1.0, vold, vt, vcrit), zPnjlimOracle(-vold - 1.0, vold, vt, vcrit)); // vnew == floor
-        try expectBits(zPnjlim(vnew, 0.0, vt, vcrit), zPnjlimOracle(vnew, 0.0, vt, vcrit)); // vold on its sign guard
-        try expectBits(zFetlim(vnew, vto, vto), zFetlimOracle(vnew, vto, vto)); // vold == vto
-        try expectBits(zFetlim(vnew, vto + 3.5, vto), zFetlimOracle(vnew, vto + 3.5, vto)); // vold == vtox
-        try expectBits(zFetlim(vold, vold, vto), zFetlimOracle(vold, vold, vto)); // delv == 0
-        try expectBits(zFetlim(vto + 0.5, vold, vto), zFetlimOracle(vto + 0.5, vold, vto)); // vnew == vtemp
-        try expectBits(zFetlim(vto + 2.0, vold, vto), zFetlimOracle(vto + 2.0, vold, vto));
-        try expectBits(zLimvds(vnew, 3.5), zLimvdsOracle(vnew, 3.5)); // vold on 3.5
-        try expectBits(zLimvds(3.5, vold), zLimvdsOracle(3.5, vold)); // vnew on 3.5
-        try expectBits(zLimvds(vold, vold), zLimvdsOracle(vold, vold)); // vnew == vold
-        try expectBits(zLimvds(4.0, vold), zLimvdsOracle(4.0, vold));
-        try expectBits(zLimvds(-0.5, vold), zLimvdsOracle(-0.5, vold));
-        try expectBits(zLimvds(3.0 * vold + 2.0, vold), zLimvdsOracle(3.0 * vold + 2.0, vold));
-    }
-
-    // Signed-zero ties through the MAX/MIN ternaries: vto placing a bound at
-    // exactly 0.0 while vnew is ±0.0.
-    for ([_]f64{ -2.0, 0.5, -4.0 }) |vto| {
-        for ([_]f64{ 0.0, -0.0 }) |z| {
-            for ([_]f64{ 1.0, -1.0, 5.0, -5.0, 0.0 }) |vold| {
-                try expectBits(zFetlim(z, vold, vto), zFetlimOracle(z, vold, vto));
-            }
-        }
-    }
-
-    // fetlim step-bound edges need vtsthi/vtstlo, which depend on (vold, vto).
-    for (0..1_000) |_| {
-        const vold = draw.any(rand);
-        const vto = draw.any(rand);
-        const vtsthi = @abs(2.0 * (vold - vto)) + 2.0;
-        const vtstlo = vtsthi * 0.5 + 2.0;
-        for ([_]f64{ vold + vtsthi, vold - vtsthi, vold + vtstlo, vold - vtstlo }) |vnew|
-            try expectBits(zFetlim(vnew, vold, vto), zFetlimOracle(vnew, vold, vto));
-    }
 }
