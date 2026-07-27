@@ -1,7 +1,7 @@
 // §4.5.11 / §4.5.12 filter kernels — EMITTED VERBATIM into every device that
 // uses a `laplace_*` or `zi_*` operator (`codegen.filt_txt` is `@embedFile` of
-// this file) and `@import`ed by codegen.zig's tests. One source, so the
-// numerics the tests check are the numerics the device runs.
+// this file) and `@import`ed by codegen's tests and `kernels/test.zig`. One
+// source, so the numerics the tests check are the numerics the device runs.
 //
 // A filter is a CASCADE of sections, `H = ∏ num[i]/den[i]`, each section a
 // polynomial ratio in `s` (§4.5.11) or `z⁻¹` (§4.5.12) with ascending
@@ -210,7 +210,7 @@ pub fn zSsForm(comptime D: usize, sec: [2][D + 1]f64) ?ZSs {
 /// solved by back substitution along the companion chain in O(m). Writes
 /// x + Δ into `xn` when given and returns the new output and its gain
 /// ∂y/∂ub, the derivative the solver sees.
-fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f64, ub: f64, dt: f64, xn: ?[]f64) [2]f64 {
+pub fn zSsStep(comptime D: usize, f: ZSs, sec: [2][D + 1]f64, x: []const f64, ua: f64, ub: f64, dt: f64, xn: ?[]f64) [2]f64 {
     const m = f.m;
     const am = sec[1][f.off + m];
     const bm = sec[0][f.off + m] / am;
@@ -443,143 +443,4 @@ pub fn zZiEval(
     var y = uin;
     for (0..NS) |i| y = zSec(S, D, y, sec[i][0], sec[i][1], ub[i * D ..][0..D], yb[i * D ..][0..D]);
     return y;
-}
-
-// ===========================================================================
-// Tests. They live HERE, beside the kernels, for the reason the header gives:
-// this file is the one source, so what the tests check is what the device
-// runs. codegen.zig's tests `@import` this file, so `zig build test-va`
-// collects them; `zig build test-kernels` runs them without codegen.
-//
-// NOT `std`: this file is embedded verbatim into device.zig, whose file-scope
-// `std` a test-local of the same name would shadow (AstGen error). Same
-// reason limit_kernels.zig spells it `stdx`.
-//
-// `zBilin` is NOT re-tested here beyond the degree below: codegen.zig's
-// "§4.5.11 the bilinear transform is the one the emitted filter runs" already
-// pins D = 0 and D = 2 exactly and the DC/Nyquist closed forms at D = 3.
-// `zSec`/`zLaplace`/`zLaplaceStep`/`zZiStep` remain uncovered — they need a
-// solver scalar type or a coefficient cascade, which is a fixture, not a
-// one-liner.
-// ===========================================================================
-
-test "zBilin: D = 1, the degree the other rows skip" {
-    const stdx = @import("std");
-    // P(s) = 2 + 3s, k = 10. Clearing (1+z⁻¹) by hand:
-    //   P·(1+z⁻¹) = 2(1+z⁻¹) + 3k(1−z⁻¹) = (2+3k) + (2−3k)z⁻¹.
-    // Dyadic, so exact. codegen.zig covers D = 0, 2 and 3; a first-order
-    // section is the commonest filter there is and was the gap between them.
-    const qz = zBilin(1, .{ 2.0, 3.0 }, 10.0, 1);
-    try stdx.testing.expectEqual([2]f64{ 32.0, -28.0 }, qz);
-}
-
-test "zDeg/zBilin: a zero-padded section transforms at its own degree" {
-    const stdx = @import("std");
-    // The same 2 + 3s padded to D = 3. Its effective degree is 1, and the
-    // transform at d = 1 is the row above, bit for bit, with zeros after.
-    // Untrimmed, `(1+z⁻¹)²` would multiply both sides: poles on z = −1.
-    const sec: [2][4]f64 = .{ .{ 2.0, 3.0, 0.0, 0.0 }, .{ 1.0, 0.0, 0.0, 0.0 } };
-    try stdx.testing.expectEqual(@as(usize, 1), zDeg(3, sec));
-    try stdx.testing.expectEqual([4]f64{ 32.0, -28.0, 0.0, 0.0 }, zBilin(3, sec[0], 10.0, 1));
-    // Either side sets the degree: a denominator-only s² is degree 2.
-    try stdx.testing.expectEqual(@as(usize, 2), zDeg(2, .{ .{ 1.0, 0.0, 0.0 }, .{ 1.0, 0.0, 5.0 } }));
-    try stdx.testing.expectEqual(@as(usize, 0), zDeg(2, .{ .{ 4.0, 0.0, 0.0 }, .{ 2.0, 0.0, 0.0 } }));
-}
-
-test "zPush: newest first, and an empty history is a no-op" {
-    const stdx = @import("std");
-    var uh: [3]f64 = .{ 0, 0, 0 };
-    var yh: [3]f64 = .{ 0, 0, 0 };
-    for ([_]f64{ 1, 2, 3 }) |v| zPush(&uh, &yh, v, -v);
-    // Newest at index 0, oldest last — the order zSec/zSecR index with.
-    try stdx.testing.expectEqualSlices(f64, &.{ 3, 2, 1 }, &uh);
-    try stdx.testing.expectEqualSlices(f64, &.{ -3, -2, -1 }, &yh);
-
-    // A degree-0 section keeps no history; the guard is what makes that legal.
-    var none: [0]f64 = .{};
-    zPush(&none, &none, 1.0, 1.0);
-}
-
-test "zH0: the gain at s = 0, common powers of s cancelled, a pole answers 0" {
-    const stdx = @import("std");
-    // den[0] != 0: num[0]/den[0], the pair unchanged.
-    try stdx.testing.expectEqual([2]f64{ 3.0, 2.0 }, zH0(1, .{ .{ 3.0, 5.0 }, .{ 2.0, 7.0 } }));
-    // s / (s + s²) = 1 / (1 + s): H(0) = 1, not 0/0.
-    try stdx.testing.expectEqual([2]f64{ 1.0, 1.0 }, zH0(2, .{ .{ 0.0, 1.0, 0.0 }, .{ 0.0, 1.0, 1.0 } }));
-    // s² / (s + s²): a zero at s = 0 remains, H(0) = 0.
-    const z = zH0(2, .{ .{ 0.0, 0.0, 1.0 }, .{ 0.0, 1.0, 1.0 } });
-    try stdx.testing.expectEqual(@as(f64, 0.0), z[0] / z[1]);
-    // 1 / s: a pole at s = 0, VerA's static output 0.
-    try stdx.testing.expectEqual([2]f64{ 0.0, 1.0 }, zH0(1, .{ .{ 1.0, 0.0 }, .{ 0.0, 1.0 } }));
-}
-
-test "zLaplaceStep: a slow pole holds H(0), and a step follows the bilinear difference equation" {
-    const stdx = @import("std");
-    // 0.625 / ((1 + s/1e5)(1 + s/1e9)) at dt = 0.1 ns: ω·dt = 1e-5 on the
-    // slow pole. Direct form on the bilinear coefficients drifts off H(0)
-    // here (docs/IMPLEMENTATION.md); the state-space step may not move at all.
-    const sec: [1][2][3]f64 = .{.{ .{ 0.625, 0.0, 0.0 }, .{ 1.0, 1e-5 + 1e-9, 1e-14 } }};
-    var uh: [2]f64 = undefined;
-    var yh: [2]f64 = undefined;
-    zLaplaceStep(1, 2, 1.0, sec, 0.0, &uh, &yh);
-    for (0..2000) |_| zLaplaceStep(1, 2, 1.0, sec, 1e-10, &uh, &yh);
-    const f = zSsForm(2, sec[0]).?;
-    try stdx.testing.expectEqual(ZSs{ .off = 0, .m = 2 }, f);
-    try stdx.testing.expectEqual(@as(f64, 0.625), zSsStep(2, f, sec[0], &yh, 1.0, 1.0, 1e-10, null)[0]);
-
-    // First order, 1/(1 + s), stepped 0 -> 1 from rest with h = 0.5: the
-    // bilinear difference equation of y' = u − y,
-    //   (1 + h/2) y_n = (1 − h/2) y_{n−1} + h/2 (u_{n−1} + u_n),
-    // so y = 0.2, 0.52, 0.712, ... (u_0 = 0 is the static point).
-    const one: [1][2][2]f64 = .{.{ .{ 1.0, 0.0 }, .{ 1.0, 1.0 } }};
-    var uh1: [1]f64 = undefined;
-    var yh1: [1]f64 = undefined;
-    zLaplaceStep(1, 1, 0.0, one, 0.0, &uh1, &yh1);
-    var want: f64 = 0.0;
-    var u_prev: f64 = 0.0;
-    for (0..5) |_| {
-        want = (0.75 * want + 0.25 * (u_prev + 1.0)) / 1.25;
-        u_prev = 1.0;
-        const got = zSsStep(1, zSsForm(1, one[0]).?, one[0], &yh1, uh1[0], 1.0, 0.5, null)[0];
-        zLaplaceStep(1, 1, 1.0, one, 0.5, &uh1, &yh1);
-        try stdx.testing.expectApproxEqRel(want, got, 1e-15);
-    }
-    // A bare gain (D = 0) has no state to index: 3/2 at every point.
-    var none: [0]f64 = .{};
-    zLaplaceStep(1, 0, 2.0, .{.{ .{3.0}, .{2.0} }}, 0.0, &none, &none);
-    zLaplaceStep(1, 0, 2.0, .{.{ .{3.0}, .{2.0} }}, 1e-9, &none, &none);
-    // An improper section (s / 1) keeps direct form.
-    try stdx.testing.expectEqual(@as(?ZSs, null), zSsForm(1, .{ .{ 0.0, 1.0 }, .{ 1.0, 0.0 } }));
-}
-
-test "zRootSecs: conjugates pair within tolerance, reals pair in order, an orphan is NaN" {
-    const stdx = @import("std");
-    // -1 ± 1j (the partner off by 1e-12 relative) and -2: (1 + s + s²/2), (1 + s/2).
-    const s = zRootSecs(3, false, .{ -1, 1, -2, 0, -1, -1 - 1e-12 });
-    try stdx.testing.expectApproxEqRel(@as(f64, 1.0), s[0][1], 1e-12);
-    try stdx.testing.expectApproxEqRel(@as(f64, 0.5), s[0][2], 1e-12);
-    try stdx.testing.expectEqual([3]f64{ 1, 0.5, 0 }, s[1]);
-    // Two reals and a zero root in z⁻¹: (1 − 0.5z⁻¹)(1 − 0.25z⁻¹), z⁻¹.
-    const z = zRootSecs(3, true, .{ 0.5, 0, 0.25, 0, 0, 0 });
-    try stdx.testing.expectEqual([3]f64{ 1, -0.75, 0.125 }, z[0]);
-    try stdx.testing.expectEqual([3]f64{ 0, 1, 0 }, z[1]);
-    // -1 + 1j alone has no conjugate.
-    try stdx.testing.expect(zRootSecs(1, false, .{ -1, 1 })[0][0] != zRootSecs(1, false, .{ -1, 1 })[0][0]);
-}
-
-test "zSecR: unit section is the identity, and gain is b0/a0" {
-    const stdx = @import("std");
-    const uh: [1]f64 = .{0};
-    const yh: [1]f64 = .{0};
-    try stdx.testing.expectApproxEqAbs(
-        @as(f64, 4.25),
-        zSecR(1, 4.25, .{ 1, 0 }, .{ 1, 0 }, &uh, &yh),
-        1e-12,
-    );
-    // b[0]/a[0] is the instantaneous gain the solver differentiates through.
-    try stdx.testing.expectApproxEqAbs(
-        @as(f64, 2.0),
-        zSecR(1, 4.0, .{ 3, 0 }, .{ 6, 0 }, &uh, &yh),
-        1e-12,
-    );
 }
