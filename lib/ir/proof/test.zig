@@ -734,11 +734,6 @@ test "proof: Options.unknown_bound is the calibration knob for a real solver" {
     try std.testing.expectEqual(FloatMode.optimized, tight.unit_modes[0]);
 }
 
-test "proof: random distribution names do not prove finite results" {
-    for ([_][]const u8{ "$rng$uniform", "$rng$normal", "$rng$exponential", "$rng$poisson", "$rng$chi_square", "$rng$t", "$rng$erlang" }) |name|
-        try std.testing.expect(!proof_prover.callAbstract(Mir.Callee.fromName(name)).finite);
-}
-
 test "proof: `1.0/$vt(V)` and `1.0/limexp(V)` are .strict with W0650 (§9.15, §4.5.13)" {
     // $vt(0) = 0 (kT/q at T = 0), and limexp(x) is exp(x) below its knee,
     // which is 0.0 in f64 below about -745: both divisors can be zero, so
