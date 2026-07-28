@@ -34,14 +34,22 @@ const absent: u32 = 0;
 /// a biased Value: `writeVariable` keeps the Value space two short of it.
 const pending: u32 = std.math.maxInt(u32);
 
-/// log2 of the cells per chunk of the `(place, block)` map. A chunk is the
+/// log2 of the cells per chunk of the `(place, slot)` map. A chunk is the
 /// unit that becomes resident, so this is the map's memory granularity: 64
 /// cells (256 B) against the 1024 of a 4 KiB page. A place's cells cluster
-/// along the blocks between its definition and its last read, so finer
+/// along the slots between its definition and its last read, so finer
 /// chunks keep the map near its written cells and coarser ones only add
 /// zeros; a narrower one makes the directory, which is dense, grow instead.
+/// Measured on the memo cells psp103 and hisimhv_va leave behind: 64 cells
+/// fill 70-77%, 16 fill 89-92% but double the directory, which costs more
+/// than the zeros it saves.
 const chunk_bits = 6;
 const chunk_len = 1 << chunk_bits;
+
+/// `BlockState.slot` of a block with no memo cell yet.
+const no_slot: u32 = std.math.maxInt(u32);
+/// `BlockState.slot` of a block whose cells live in `arm_cells`, not the map.
+const arm_slot: u32 = no_slot - 1;
 
 /// The builder's own tables (the map, the predecessor and phi-user pools,
 /// the per-block state) live outside the caller's allocator: lowering passes
@@ -56,29 +64,42 @@ const map_gpa = std.heap.page_allocator;
 pub const SsaBuilder = struct {
     gpa: std.mem.Allocator,
     mir: *Mir,
-    /// (place, block) → Value as a two-level place-major table: `dir[place *
-    /// dir_stride + block >> chunk_bits]` names a `chunk_len`-cell chunk of
-    /// `cells`, and the cell is `block`'s low bits within it. A cell holds
+    /// (place, slot) → Value as a two-level place-major table: `dir[place *
+    /// dir_stride + slot >> chunk_bits]` names a `chunk_len`-cell chunk of
+    /// `cells`, and the cell is `slot`'s low bits within it. A cell holds
     /// `absent` (= 0) where unwritten and `@intFromEnum(value) + 1` where
     /// written. Chunk 0 is all `absent` and never written: every directory
     /// entry starts on it, so a read needs no presence test.
     ///
-    /// Two-level, not one dense matrix: Braun's reads memoize along every
-    /// block they walk, so on a compact model a place is written across the
-    /// blocks it is live in and nowhere else (psp103: 19% of the 2070 x 4234
-    /// matrix). The dense matrix touched each page that held one cell, and
-    /// regrowing its block axis copied every row whole, zeros included, while
-    /// the old copy was still mapped: a 100 MB transient on psp103. A hash
-    /// map cost more in both time and memory. Place-major because the hot
-    /// recursion walks predecessor blocks for one fixed place, so consecutive
-    /// probes land in one chunk.
+    /// The column is a block's `slot`, numbered in order of its first memo
+    /// cell, not the block itself: `readFrom` memoizes only in joins, so
+    /// keyed by block a place's cells sat one block in three (the arms in
+    /// between) and the chunks were 29% full. Numbered by slot they are
+    /// 70-77% full, and the map is a third the size (psp103 9.2 → 3.7 MB,
+    /// hisimhv_va 13.3 → 5.2 MB), which is the compile's peak.
+    ///
+    /// Two-level, not one dense matrix: a place has cells only between its
+    /// definition and its last read. The dense matrix touched each page that
+    /// held one cell, and regrowing it copied every row whole, zeros
+    /// included, while the old copy was still mapped: a 100 MB transient on
+    /// psp103. A hash map cost more in both time and memory. Place-major
+    /// because a read climbs predecessor blocks for one fixed place, so
+    /// consecutive probes land in one chunk.
     dir: []u32 = &.{},
-    /// Directory row length: chunks per place, capacity along the block axis.
+    /// Directory row length: chunks per place, capacity along the slot axis.
     dir_stride: u32 = 0,
     /// Directory rows: capacity along the place axis.
     place_cap: u32 = 0,
     /// The chunks, `chunk_len` cells each, appended as first written.
     cells: std.ArrayList(u32) = .empty,
+    /// Slots handed out so far; the next block to need one gets this.
+    next_slot: u32 = 0,
+    /// The cells of arm blocks (sealed, one predecessor; `arm_slot`): a
+    /// short list per block, headed by `BlockState.arm_head`. Only lowering
+    /// writes there (an assignment inside an `if` arm), so a slot each would
+    /// put back the gaps the slot numbering removes: psp103 has 3396 such
+    /// cells, hisimhv_va 6955, a few per arm.
+    arm_cells: std.ArrayList(ArmCell) = .empty,
     /// Row per Mir.Block, grown lazily (lower.zig owns block creation).
     block_state: std.MultiArrayList(BlockState) = .empty,
     /// Flat pools; BlockState holds head/tail indices into them.
@@ -108,9 +129,19 @@ pub const SsaBuilder = struct {
         preds_len: u32 = 0,
         /// Phis created before the block was sealed; filled by `sealBlock`.
         phis_head: u32 = list_end,
+        /// The block's column in the memo map, fixed at its first cell:
+        /// `no_slot` before that, `arm_slot` when its cells are `arm_cells`.
+        slot: u32 = no_slot,
+        /// The block's first `arm_cells` node, or `list_end`.
+        arm_head: u32 = list_end,
+        /// Bit `place % 32` set for every place in the block's `arm_cells`:
+        /// a climb through an arm skips the list for a place it never wrote.
+        arm_mask: u32 = 0,
     };
 
     const PredNode = struct { block: Mir.Block, next: u32 };
+    /// One memo cell of an arm block (`raw` as in `cells`).
+    const ArmCell = struct { place: Place, raw: u32, next: u32 };
     const IncompletePhi = struct { place: Place, value: Mir.Value, next: u32 };
     const UserNode = struct { phi: Mir.Value, next: u32 };
 
@@ -124,6 +155,7 @@ pub const SsaBuilder = struct {
     pub fn deinit(self: *SsaBuilder) void {
         map_gpa.free(self.dir);
         self.cells.deinit(map_gpa);
+        self.arm_cells.deinit(map_gpa);
         self.block_state.deinit(map_gpa);
         self.pred_pool.deinit(map_gpa);
         self.incomplete_pool.deinit(map_gpa);
@@ -187,8 +219,25 @@ pub const SsaBuilder = struct {
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@backingInt(value) < std.math.maxInt(u32) - 1);
-        const i = try self.defsIndex(place, block);
-        self.cells.items[i] = @backingInt(value) + 1;
+        const b = try self.ensureState(block);
+        const raw = @backingInt(value) + 1;
+        const slot = self.slotOf(b);
+        if (slot != arm_slot) {
+            self.cells.items[try self.cellIndex(place, slot)] = raw;
+            return;
+        }
+        const head = &self.block_state.items(.arm_head)[b];
+        var node = head.*;
+        while (node != list_end) : (node = self.arm_cells.items[node].next) {
+            if (self.arm_cells.items[node].place == place) {
+                self.arm_cells.items[node].raw = raw;
+                return;
+            }
+        }
+        const new: u32 = @intCast(self.arm_cells.items.len);
+        try self.arm_cells.append(map_gpa, .{ .place = place, .raw = raw, .next = head.* });
+        self.block_state.items(.arm_head)[b] = new;
+        self.block_state.items(.arm_mask)[b] |= armBit(place);
     }
 
     /// Returns the value of `place` in `block`, emitting phis as needed. A place
@@ -213,9 +262,10 @@ pub const SsaBuilder = struct {
         const sealed = self.block_state.items(.sealed);
         const preds_len = self.block_state.items(.preds_len);
         const preds_head = self.block_state.items(.preds_head);
+        const slots = self.block_state.items(.slot);
         var b = block;
         while (true) {
-            const raw = self.defsRaw(place, b);
+            const raw = self.cellRaw(place, @backingInt(b), slots[@backingInt(b)]);
             if (raw == pending) {
                 // The read came round a cycle (§5.9) into a join whose
                 // predecessors are still being read: the join needs a real
@@ -235,11 +285,31 @@ pub const SsaBuilder = struct {
     /// Load without growing: an unallocated cell reads as absent, exactly like an
     /// allocated-but-unwritten one. Keeps the read path free of the resize branch.
     fn defsRaw(self: *const SsaBuilder, place: Place, block: Mir.Block) u32 {
-        const p = @backingInt(place);
         const b = @backingInt(block);
-        if (p >= self.place_cap or b >> chunk_bits >= self.dir_stride) return absent;
-        const chunk: usize = self.dir[@as(usize, p) * self.dir_stride + (b >> chunk_bits)];
-        return self.cells.items[chunk << chunk_bits | (b & (chunk_len - 1))];
+        if (b >= self.block_state.len) return absent;
+        return self.cellRaw(place, b, self.block_state.items(.slot)[b]);
+    }
+
+    fn armBit(place: Place) u32 {
+        return @as(u32, 1) << @truncate(@backingInt(place));
+    }
+
+    /// `defsRaw` for block row `b`, whose slot the caller has read.
+    fn cellRaw(self: *const SsaBuilder, place: Place, b: u32, slot: u32) u32 {
+        const p = @backingInt(place);
+        if (slot == no_slot) return absent;
+        if (slot == arm_slot) {
+            if (self.block_state.items(.arm_mask)[b] & armBit(place) == 0) return absent;
+            var node = self.block_state.items(.arm_head)[b];
+            while (node != list_end) : (node = self.arm_cells.items[node].next) {
+                const c = self.arm_cells.items[node];
+                if (c.place == place) return c.raw;
+            }
+            return absent;
+        }
+        if (p >= self.place_cap or slot >> chunk_bits >= self.dir_stride) return absent;
+        const chunk: usize = self.dir[@as(usize, p) * self.dir_stride + (slot >> chunk_bits)];
+        return self.cells.items[chunk << chunk_bits | (slot & (chunk_len - 1))];
     }
 
     fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
@@ -248,15 +318,30 @@ pub const SsaBuilder = struct {
         return if (v == absent) null else @fromBackingInt(@intCast(v - 1));
     }
 
-    /// Index into `cells` of (place, block), growing the directory to cover it
+    /// Returns block `b`'s slot, giving it one at its first cell: `arm_slot`
+    /// for a sealed single-predecessor block, the next map column otherwise.
+    /// Fixed from then on, so the cell is always looked for where it was put;
+    /// an unsealed block that ends with one predecessor keeps its column.
+    fn slotOf(self: *SsaBuilder, b: u32) u32 {
+        const slots = self.block_state.items(.slot);
+        if (slots[b] != no_slot) return slots[b];
+        const arm = self.block_state.items(.sealed)[b] and self.block_state.items(.preds_len)[b] == 1;
+        assert(self.next_slot < arm_slot);
+        slots[b] = if (arm) arm_slot else self.next_slot;
+        if (!arm) self.next_slot += 1;
+        return slots[b];
+    }
+
+    /// Index into `cells` of (place, slot), growing the directory to cover it
     /// and giving the pair's chunk its own cells on first write. Both axes
     /// grow geometrically: exact growth on either axis is quadratic. The
     /// index stays valid for the builder's life (chunks are only appended and
     /// keep their numbers when the directory regrows); a pointer into `cells`
     /// does not survive the next new chunk.
-    fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
+    fn cellIndex(self: *SsaBuilder, place: Place, slot: u32) Error!usize {
+        assert(slot < arm_slot);
         const p = @backingInt(place);
-        const col = @backingInt(block) >> chunk_bits;
+        const col = slot >> chunk_bits;
 
         if (col >= self.dir_stride or p >= self.place_cap) {
             const stride = if (col < self.dir_stride) self.dir_stride else @max(col + 1, self.dir_stride * 2, 1);
@@ -281,7 +366,7 @@ pub const SsaBuilder = struct {
             try self.cells.appendNTimes(map_gpa, absent, chunk_len);
             self.dir[d] = @intCast(chunk);
         }
-        return @as(usize, self.dir[d]) << chunk_bits | (@backingInt(block) & (chunk_len - 1));
+        return @as(usize, self.dir[d]) << chunk_bits | (slot & (chunk_len - 1));
     }
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
@@ -320,7 +405,9 @@ pub const SsaBuilder = struct {
         //
         // `cell` stays valid across the reads: they may regrow `cells` and
         // the directory, but a chunk keeps its number in both.
-        const cell = try self.defsIndex(place, block);
+        const slot = self.slotOf(b);
+        assert(slot != arm_slot); // sealed and not single-predecessor
+        const cell = try self.cellIndex(place, slot);
         self.cells.items[cell] = pending;
         const top = self.scratch.items.len;
         defer self.scratch.shrinkRetainingCapacity(top);
@@ -615,8 +702,12 @@ test "ssa: map growth preserves values, undefined cells and unused rows" {
     try b.writeVariable(x, entry, .f_one);
     try b.writeVariable(y, entry, .undef);
     var last = entry;
-    for (0..2 * chunk_len) |_| last = try mir.addBlock(gpa);
-    try b.writeVariable(x, last, .f_two); // grow the block axis with spare rows
+    const w = b.newPlace();
+    for (0..2 * chunk_len) |_| { // a slot per block: grows the slot axis with spare rows
+        last = try mir.addBlock(gpa);
+        try b.writeVariable(w, last, .f_ten);
+    }
+    try b.writeVariable(x, last, .f_two);
     try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
     try std.testing.expectEqual(Mir.Value.undef, try b.readVariable(y, entry));
     try std.testing.expectEqual(Mir.Value.f_two, try b.readVariable(x, last));
@@ -636,4 +727,33 @@ test "ssa: map growth preserves values, undefined cells and unused rows" {
     try std.testing.expectEqual(Mir.Value.f_neg_one, try b.readVariable(z, last));
     try std.testing.expectEqual(null, b.defsPeek(z, entry));
     try std.testing.expectEqual(null, b.defsPeek(y, last));
+}
+
+test "ssa: an arm block's cells live in arm_cells and the climb finds them" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{ .name = "ssa_arm" };
+    defer mir.deinit(gpa);
+    var b = SsaBuilder.init(gpa, &mir);
+    defer b.deinit();
+
+    const entry = try mir.addBlock(gpa);
+    const arm = try mir.addBlock(gpa);
+    const inner = try mir.addBlock(gpa);
+    try b.sealBlock(entry);
+    try b.addPredecessor(arm, entry);
+    try b.sealBlock(arm);
+    try b.addPredecessor(inner, arm);
+    try b.sealBlock(inner);
+
+    const x = b.newPlace();
+    const y = b.newPlace();
+    try b.writeVariable(x, entry, .f_one);
+    try b.writeVariable(x, arm, .f_two);
+    try b.writeVariable(y, arm, .f_ten);
+    try b.writeVariable(x, arm, .f_inf); // overwrites, no second node
+    try std.testing.expectEqual(arm_slot, b.block_state.items(.slot)[@backingInt(arm)]);
+    try std.testing.expectEqual(@as(usize, 2), b.arm_cells.items.len);
+    try std.testing.expectEqual(Mir.Value.f_inf, try b.readVariable(x, inner));
+    try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(y, inner));
+    try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
 }
