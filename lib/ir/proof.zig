@@ -133,5 +133,6 @@ const proof_test = @import("proof/test.zig");
 test {
     _ = proof_lattice;
     _ = proof_prover;
+    _ = @import("proof/transfer.zig");
     _ = proof_test;
 }

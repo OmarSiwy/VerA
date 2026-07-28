@@ -29,7 +29,9 @@ pub const VTy = Mir.callee.Ty;
 
 /// Owns every table below.
 arena: std.mem.Allocator,
+/// Borrowed; must outlive the Analysis and not change after `build`.
 mir: *const Mir,
+/// Borrowed, as `mir` is.
 lowered: *const Lowered,
 
 /// Block count.
@@ -44,8 +46,12 @@ idom: []u32 = &.{},
 preds: [][]u32 = &.{},
 /// Successors per block, in branch order.
 succs: [][]u32 = &.{},
-/// Dominator-tree children per block, in RPO order.
-dom_kids: [][]u32 = &.{},
+/// Dominator-tree children of block `b`, in RPO order:
+/// `kid_pool[kid_off[b]..kid_off[b + 1]]` (`domKids`). One pool, not a slice
+/// per block: every block has a parent but the entry, so the pool is exactly
+/// `nb - 1` words.
+kid_pool: []u32 = &.{},
+kid_off: []u32 = &.{},
 /// Euler-tour numbering of the dominator tree, so `dominates` is O(1)
 /// instead of an idom walk (`none_u32` = block not in the tree).
 dom_in: []u32 = &.{},
@@ -202,6 +208,11 @@ pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
     return self.alias[@backingInt(v)];
 }
 
+/// Returns block `b`'s dominator-tree children, in RPO order.
+pub fn domKids(self: *const Analysis, b: u32) []const u32 {
+    return self.kid_pool[self.kid_off[b]..self.kid_off[b + 1]];
+}
+
 /// Returns block `bi`'s instructions as a contiguous window (see `inst_pool`).
 pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
     return self.inst_pool[self.inst_off[bi]..self.inst_off[bi + 1]];
@@ -342,25 +353,26 @@ fn buildCfg(self: *Analysis) Error!void {
         }
     }
 
-    // Dominator children, in RPO order (deterministic emission order).
-    var kid_count = try a.alloc(u32, nb);
-    @memset(kid_count, 0);
-    for (self.rpo[1..]) |bi| kid_count[self.idom[bi]] += 1;
-    self.dom_kids = try a.alloc([]u32, nb);
-    for (0..nb) |bi| self.dom_kids[bi] = try a.alloc(u32, kid_count[bi]);
-    @memset(kid_count, 0);
+    // Dominator children, in RPO order (deterministic emission order):
+    // counted, prefix-summed into `kid_off`, then filled.
+    self.kid_off = try a.alloc(u32, nb + 1);
+    @memset(self.kid_off, 0);
+    for (self.rpo[1..]) |bi| self.kid_off[self.idom[bi] + 1] += 1;
+    for (1..nb + 1) |bi| self.kid_off[bi] += self.kid_off[bi - 1];
+    self.kid_pool = try a.alloc(u32, self.kid_off[nb]);
+    const kid_fill = try a.dupe(u32, self.kid_off[0..nb]);
     for (self.rpo[1..]) |bi| {
         const p = self.idom[bi];
-        self.dom_kids[p][kid_count[p]] = bi;
-        kid_count[p] += 1;
+        self.kid_pool[kid_fill[p]] = bi;
+        kid_fill[p] += 1;
     }
 
-    // Merge-block dominator children, flattened in `dom_kids` order.
+    // Merge-block dominator children, flattened in `domKids` order.
     self.mk_off = try a.alloc(u32, nb + 1);
     var n_mk: u32 = 0;
     for (0..nb) |bi| {
         self.mk_off[bi] = n_mk;
-        for (self.dom_kids[bi]) |k| {
+        for (self.domKids(@intCast(bi))) |k| {
             if (self.is_merge[k]) n_mk += 1;
         }
     }
@@ -368,7 +380,7 @@ fn buildCfg(self: *Analysis) Error!void {
     self.mk_pool = try a.alloc(u32, n_mk);
     var mk: u32 = 0;
     for (0..nb) |bi| {
-        for (self.dom_kids[bi]) |k| {
+        for (self.domKids(@intCast(bi))) |k| {
             if (self.is_merge[k]) {
                 self.mk_pool[mk] = k;
                 mk += 1;
@@ -391,7 +403,7 @@ fn buildCfg(self: *Analysis) Error!void {
     clock += 1;
     while (sp > 0) {
         const f = &stack[sp - 1];
-        const kids = self.dom_kids[f.node];
+        const kids = self.domKids(f.node);
         if (f.kid < kids.len) {
             const k = kids[f.kid];
             f.kid += 1;
@@ -407,7 +419,7 @@ fn buildCfg(self: *Analysis) Error!void {
     }
 
     // Per-block phi and statement pools, counted then filled (same two-pass
-    // shape as `dom_kids`, so neither pool needs to grow).
+    // shape as `kid_pool`, so neither pool needs to grow).
     self.phi_off = try a.alloc(u32, nb + 1);
     self.stmt_off = try a.alloc(u32, nb + 1);
     var n_phis: u32 = 0;

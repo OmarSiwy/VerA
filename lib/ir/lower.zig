@@ -539,6 +539,25 @@ fn lowered(self: *Lower) Lowered {
     return self.out;
 }
 
+/// Sizes the MIR from the elaborated AST (`Mir.reserve`): rows per AST
+/// expression, `exprs` counted after elaboration, prelude modules included.
+//
+// The ratios are the median over the 13 compiles with more than 5000
+// expressions (the ARPice models, 2026-10-03): instructions 0.59, values
+// 0.54, extra words 0.50 per expression. Straight-line compact models sit
+// on it (psp103 0.55/0.47/0.23, bsim4va 0.59/0.51/0.52); loop-heavy ones
+// run far past it (hisimhv_va 2.04/1.95/6.30, coupled_ltra 8.2/8.0/21.5,
+// their Braun phis) and grow from the estimate as before. A large source
+// with little analog code (a gate-level `.v`) over-reserves; the tables are
+// large blocks of the compile arena's backing allocator, mapped but never
+// touched past what lowering writes, so that costs address space, not RSS.
+// `max_exprs` caps it at about 30 MB of address space all the same.
+fn reserveMir(self: *Lower) Oom!void {
+    const max_exprs = 1 << 20;
+    const n: u64 = @min(self.file.exprs.nodes.len, max_exprs);
+    try self.mir.reserve(self.arena, @intCast(n * 59 / 100), @intCast(n * 54 / 100), @intCast(n / 2));
+}
+
 /// LRM §6.2/§6.9. Register ports (§6.5) into `nodes`, elaborate the
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
@@ -550,6 +569,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // `endcelldefine" means once the directives are positional regions.
     self.mir.is_cell = Preprocessor.CellRegion.inForce(self.directives.cells, self.tokStart(module.main_tok), false);
 
+    try reserveMir(self);
     const entry = try self.mir.addBlock(self.arena);
     assert(entry == .entry);
     try self.builder.sealBlock(entry);
