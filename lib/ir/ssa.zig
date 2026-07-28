@@ -9,7 +9,7 @@ const std = @import("std");
 const Mir = @import("mir.zig");
 const assert = std.debug.assert;
 
-// Spelled out, not inferred: readVariable, readVariableRecursive and
+// Spelled out, not inferred: readFrom, readVariableRecursive and
 // addPhiOperands are mutually recursive.
 const Error = std.mem.Allocator.Error;
 
@@ -195,6 +195,13 @@ pub const SsaBuilder = struct {
     /// undefined on some path yields `.undef` there; initializing declared
     /// variables (§3.4.4) is the caller's job.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
+        _ = try self.ensureState(block);
+        return self.readFrom(place, block);
+    }
+
+    /// `readVariable` for a block that has a `block_state` row. Every block it
+    /// reaches has one too: `addPredecessor` gives each predecessor a row.
+    fn readFrom(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         // A sealed block with one predecessor reads what that predecessor
         // ends with, so the walk climbs through it and memoizes nothing
         // there: two thirds of Braun's memo writes landed in such blocks (the
@@ -202,10 +209,7 @@ pub const SsaBuilder = struct {
         // model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). It
         // also makes the climb a loop, so a long single-predecessor chain no
         // longer costs a stack frame per block.
-        //
-        // One `ensureState` covers the whole climb: `addPredecessor` gives
-        // every predecessor a row, so no block the loop reaches lacks one.
-        _ = try self.ensureState(block);
+        assert(@backingInt(block) < self.block_state.len);
         const sealed = self.block_state.items(.sealed);
         const preds_len = self.block_state.items(.preds_len);
         const preds_head = self.block_state.items(.preds_head);
@@ -247,7 +251,9 @@ pub const SsaBuilder = struct {
     /// Index into `cells` of (place, block), growing the directory to cover it
     /// and giving the pair's chunk its own cells on first write. Both axes
     /// grow geometrically: exact growth on either axis is quadratic. The
-    /// index stays valid while the directory regrows, not while `cells` does.
+    /// index stays valid for the builder's life (chunks are only appended and
+    /// keep their numbers when the directory regrows); a pointer into `cells`
+    /// does not survive the next new chunk.
     fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
         const p = @backingInt(place);
         const col = @backingInt(block) >> chunk_bits;
@@ -289,46 +295,49 @@ pub const SsaBuilder = struct {
         const b = @backingInt(block);
         assert(b < self.block_state.len); // `readVariable` ensured it
 
-        var val: Mir.Value = undefined;
         if (!self.block_state.items(.sealed)[b]) {
             // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
-            val = try self.mir.emitPhi(self.gpa, block, &.{});
+            const phi = try self.mir.emitPhi(self.gpa, block, &.{});
             const node: u32 = @intCast(self.incomplete_pool.items.len);
             try self.incomplete_pool.append(map_gpa, .{
                 .place = place,
-                .value = val,
+                .value = phi,
                 .next = self.block_state.items(.phis_head)[b],
             });
             self.block_state.items(.phis_head)[b] = node;
-        } else {
-            assert(self.block_state.items(.preds_len)[b] != 1); // `readVariable` climbs those
-            // ≥2 preds (or 0: an undefined read in a source-less block).
-            //
-            // Braun emits the phi first and collapses a trivial one by aliasing,
-            // which leaves a dead row behind; on a compact model with long `if`
-            // chains nearly every phi row was dead. So the cell is marked
-            // `pending` instead, and a phi is emitted only when a read cycles
-            // back here (`readVariable` mints it) or the predecessors disagree.
-            // An acyclic trivial join gets no row at all.
-            const cell = try self.defsIndex(place, block);
-            self.cells.items[cell] = pending;
-            const top = self.scratch.items.len;
-            defer self.scratch.shrinkRetainingCapacity(top);
-            try self.readPreds(place, block);
-            const pairs = self.scratch.items[top..];
-            // Re-read: the reads may have regrown `cells`, and the cell is
-            // already allocated, so this cannot allocate again.
-            const now = self.cells.items[try self.defsIndex(place, block)];
-            if (now != pending) {
-                val = try self.fillPhi(@fromBackingInt(@intCast(now - 1)), pairs);
-            } else if (sameValue(self.mir, pairs)) |same| {
-                val = same;
-            } else {
-                val = try self.mir.emitPhi(self.gpa, block, pairs);
-                for (pairs) |p| try self.addUser(p.value, val);
-            }
+            try self.writeVariable(place, block, phi);
+            return phi;
         }
-        try self.writeVariable(place, block, val);
+        assert(self.block_state.items(.preds_len)[b] != 1); // `readFrom` climbs those
+        // ≥2 preds (or 0: an undefined read in a source-less block).
+        //
+        // Braun emits the phi first and collapses a trivial one by aliasing,
+        // which leaves a dead row behind; on a compact model with long `if`
+        // chains nearly every phi row was dead. So the cell is marked
+        // `pending` instead, and a phi is emitted only when a read cycles
+        // back here (`readFrom` mints it) or the predecessors disagree.
+        // An acyclic trivial join gets no row at all.
+        //
+        // `cell` stays valid across the reads: they may regrow `cells` and
+        // the directory, but a chunk keeps its number in both.
+        const cell = try self.defsIndex(place, block);
+        self.cells.items[cell] = pending;
+        const top = self.scratch.items.len;
+        defer self.scratch.shrinkRetainingCapacity(top);
+        try self.readPreds(place, block);
+        const pairs = self.scratch.items[top..];
+        const now = self.cells.items[cell];
+        const val = if (now != pending)
+            try self.fillPhi(@fromBackingInt(@intCast(now - 1)), pairs)
+        else if (sameValue(self.mir, pairs)) |same|
+            same
+        else blk: {
+            const phi = try self.mir.emitPhi(self.gpa, block, pairs);
+            for (pairs) |p| try self.addUser(p.value, phi);
+            break :blk phi;
+        };
+        assert(@backingInt(val) < std.math.maxInt(u32) - 1); // see `writeVariable`
+        self.cells.items[cell] = @backingInt(val) + 1;
         return val;
     }
 
@@ -349,7 +358,7 @@ pub const SsaBuilder = struct {
         while (node != list_end) {
             const pred = self.pred_pool.items[node]; // copy: recursion may realloc
             node = pred.next;
-            const v = try self.readVariable(place, pred.block);
+            const v = try self.readFrom(place, pred.block);
             try self.scratch.append(map_gpa, .{ .block = pred.block, .value = v });
         }
     }
