@@ -505,7 +505,11 @@ pub const Builder = struct {
             .deny, .forbid => .err,
         };
 
-        try bag.records.append(bag.arena, .{
+        // The cap above bounds the rows, so the first one reserves them all
+        // at once instead of growing through copies the arena keeps. A no-op
+        // after that; after `detach` (an exact-size slice) it regrows once.
+        try bag.records.ensureTotalCapacityPrecise(bag.arena, max_entries);
+        bag.records.appendAssumeCapacity(.{
             .code = self.code,
             .severity = severity,
             .stage = self.stage,
