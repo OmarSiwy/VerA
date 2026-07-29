@@ -191,12 +191,12 @@ pub fn sliceCore(self: *Gen, suffix: []const u8, keep: []const bool, doc: []cons
     @memset(idx, none_u32);
     const remap = try self.arena.alloc(u32, full.lo_vals.len);
     @memset(remap, none_u32);
-    var vals: std.ArrayList(Mir.Value) = .empty;
+    var vals: std.ArrayList(Mir.Value) = try .initCapacity(self.arena, std.mem.countScalar(bool, keep, true));
     for (full.lo_vals, keep, 0..) |v, kept, k| {
         if (!kept) continue;
         remap[k] = @intCast(vals.items.len);
         idx[@backingInt(v)] = remap[k];
-        try vals.append(self.arena, v);
+        vals.appendAssumeCapacity(v);
     }
     var sc = full;
     sc.name = try self.arena.print("{s}__{s}", .{ full.name, suffix });
@@ -483,8 +483,11 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
     // most of a large body's sema time (psp103 `setup`: 1,576 fields, 9
     // masks; `docs/measurements/codegen-levers-2026-09-30.md` lever 5), and
     // every element keeps exactly the type its tuple field had.
+    // One `grp`/`pos` entry per hoist element.
     self.hoist.grp.clearRetainingCapacity();
+    try self.hoist.grp.ensureTotalCapacityPrecise(self.arena, n);
     self.hoist.pos.clearRetainingCapacity();
+    try self.hoist.pos.ensureTotalCapacityPrecise(self.arena, n);
     self.hoist.gmask.clearRetainingCapacity();
     self.hoist.glen.clearRetainingCapacity();
     for (self.hoist.mask.items) |m| {
@@ -494,8 +497,8 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
             try self.hoist.glen.append(self.arena, 0);
             break :blk self.hoist.gmask.items.len - 1;
         };
-        try self.hoist.grp.append(self.arena, @intCast(g));
-        try self.hoist.pos.append(self.arena, self.hoist.glen.items[g]);
+        self.hoist.grp.appendAssumeCapacity(@intCast(g));
+        self.hoist.pos.appendAssumeCapacity(self.hoist.glen.items[g]);
         self.hoist.glen.items[g] += 1;
     }
 }

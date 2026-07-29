@@ -96,15 +96,16 @@ pub fn postDominators(in: Input) Error![]u32 {
     // ipdom.
     const reaches = try a.alloc(bool, nb + 1);
     @memset(reaches, false);
-    var stack: std.ArrayList(u32) = .empty;
+    // Each block is pushed at most once (its flag is set first).
+    var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
     for (0..nb) |b| if (in.an.succs[b].len == 0) {
         reaches[b] = true;
-        try stack.append(a, @intCast(b));
+        stack.appendAssumeCapacity(@intCast(b));
     };
     while (stack.pop()) |b| for (in.an.preds[b]) |p| {
         if (reaches[p]) continue;
         reaches[p] = true;
-        try stack.append(a, p);
+        stack.appendAssumeCapacity(p);
     };
     const to_exit = try a.alloc(bool, nb);
     for (0..nb) |b| to_exit[b] = in.an.succs[b].len == 0 or !reaches[b];
@@ -118,8 +119,9 @@ pub fn postDominators(in: Input) Error![]u32 {
     @memset(seen, false);
     var n_po: u32 = 0;
     const Frame = struct { b: u32, i: u32 };
-    var dfs: std.ArrayList(Frame) = .empty;
-    try dfs.append(a, .{ .b = exit, .i = 0 });
+    // Each block and `exit` is pushed at most once (`seen`).
+    var dfs: std.ArrayList(Frame) = try .initCapacity(a, nb + 1);
+    dfs.appendAssumeCapacity(.{ .b = exit, .i = 0 });
     seen[exit] = true;
     while (dfs.items.len != 0) {
         const top = &dfs.items[dfs.items.len - 1];
@@ -139,7 +141,7 @@ pub fn postDominators(in: Input) Error![]u32 {
         if (next) |n| {
             top.i += 1;
             seen[n] = true;
-            try dfs.append(a, .{ .b = n, .i = 0 });
+            dfs.appendAssumeCapacity(.{ .b = n, .i = 0 });
         } else {
             num[top.b] = n_po;
             po[n_po] = top.b;
@@ -459,7 +461,8 @@ fn solve(in: Input, placing: bool) Error!Sinv {
     @memset(s.val, true);
     @memset(s.plc, true);
     const reach = try a.alloc(bool, nb);
-    var stack: std.ArrayList(u32) = .empty;
+    // Each block is pushed at most once (its flag is set first).
+    var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
     while (true) {
         var changed = false;
         // Loops with a per-eval branch, and everything they can reach.
@@ -472,12 +475,12 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         @memset(reach, false);
         for (0..nb) |bi| if (s.varying[bi]) {
             reach[bi] = true;
-            try stack.append(a, @intCast(bi));
+            stack.appendAssumeCapacity(@intCast(bi));
         };
         while (stack.pop()) |b| for (in.an.succs[b]) |x| {
             if (reach[x]) continue;
             reach[x] = true;
-            try stack.append(a, x);
+            stack.appendAssumeCapacity(x);
         };
         // Placeable blocks, and the initial-step else arms.
         for (0..nb) |bi| {
@@ -568,15 +571,16 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     const nv = in.an.nv;
     const inside = try a.alloc(bool, nb);
     @memset(inside, false);
-    var stack: std.ArrayList(u32) = .empty;
+    // Each block is pushed at most once (its flag is set first).
+    var stack: std.ArrayList(u32) = try .initCapacity(a, nb);
     const miss: u32 = @backingInt(t.miss);
     const join: u32 = @backingInt(t.join);
     inside[miss] = true;
-    try stack.append(a, miss);
+    stack.appendAssumeCapacity(miss);
     while (stack.pop()) |b| for (in.an.succs[b]) |x| {
         if (x == join or inside[x]) continue;
         inside[x] = true;
-        try stack.append(a, x);
+        stack.appendAssumeCapacity(x);
     };
     const cds = try controlDeps(in, try postDominators(in));
     const vary = try a.alloc(bool, nv);

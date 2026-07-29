@@ -71,10 +71,13 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
     if (!std.mem.endsWith(u8, text, "\n}\n\n")) return null;
     const head_end = (std.mem.indexOfScalarPos(u8, text, fn_at, '\n') orelse return null) + 1;
 
-    var all: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, text[head_end .. text.len - 3], '\n');
-    while (it.next()) |l| try all.append(a, dedent(l, 4));
-    var body = all.items;
+    // One line per '\n' plus the last, so the table is sized before the split.
+    const src = text[head_end .. text.len - 3];
+    const all = try a.alloc([]const u8, std.mem.countScalar(u8, src, '\n') + 1);
+    var it = std.mem.splitScalar(u8, src, '\n');
+    for (all) |*l| l.* = dedent(it.next().?, 4);
+    std.debug.assert(it.next() == null);
+    var body: Lines = all;
 
     // The prologue: the float mode, the scalar alias and the hoisted arrays.
     var fields: std.ArrayList(Piece) = .empty;
@@ -326,15 +329,17 @@ fn stripTail(a: Allocator, body: Lines, br: []const u8) Error!?Lines {
     const arms = try splitIf(a, s) orelse return body;
     const t = try stripTail(a, arms.then, br) orelse return null;
     const e = try stripTail(a, arms.@"else", br) orelse return null;
-    var out: std.ArrayList([]const u8) = .empty;
-    try out.appendSlice(a, body[0..last]);
-    try out.append(a, try a.print("if ({s}) {{", .{arms.cond}));
-    for (t) |l| try out.append(a, try indent(a, l));
-    if (arms.@"else".len != 0 or arms.has_else) {
-        try out.append(a, "} else {");
-        for (e) |l| try out.append(a, try indent(a, l));
+    const has_else = arms.@"else".len != 0 or arms.has_else;
+    var out: std.ArrayList([]const u8) = try .initCapacity(a, last + t.len + 2 + if (has_else) e.len + 1 else 0);
+    out.appendSliceAssumeCapacity(body[0..last]);
+    out.appendAssumeCapacity(try a.print("if ({s}) {{", .{arms.cond}));
+    for (t) |l| out.appendAssumeCapacity(try indent(a, l));
+    if (has_else) {
+        out.appendAssumeCapacity("} else {");
+        for (e) |l| out.appendAssumeCapacity(try indent(a, l));
     }
-    try out.append(a, "}");
+    out.appendAssumeCapacity("}");
+    std.debug.assert(out.items.len == out.capacity);
     return out.items;
 }
 

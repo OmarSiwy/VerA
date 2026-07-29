@@ -359,8 +359,7 @@ fn pieceNames(arena: Allocator, chunks: u32) ![]const []const u8 {
 /// `zig build-lib --listen=- -dynamic` over the parts' objects. The link
 /// takes `-O` and `-fstrip` for the compiler_rt it adds.
 fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []const u8 {
-    var a: std.ArrayList([]const u8) = .empty;
-    try a.appendSlice(arena, &.{
+    const head = [_][]const u8{
         o.zig_exe,
         "build-lib",
         "--listen=-",
@@ -370,10 +369,14 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
         o.name,
         "--cache-dir",
         try std.fs.path.join(arena, &.{ o.work_dir, ".zig-cache" }),
-    });
-    if (strip(o.optimize, o.debug_info)) try a.append(arena, "-fstrip");
-    try a.appendSlice(arena, objs);
-    if (o.engine) |e| try a.append(arena, e);
+    };
+    const stripped = strip(o.optimize, o.debug_info);
+    var a: std.ArrayList([]const u8) = try .initCapacity(arena, head.len + @intFromBool(stripped) + objs.len + @intFromBool(o.engine != null));
+    a.appendSliceAssumeCapacity(&head);
+    if (stripped) a.appendAssumeCapacity("-fstrip");
+    a.appendSliceAssumeCapacity(objs);
+    if (o.engine) |e| a.appendAssumeCapacity(e);
+    std.debug.assert(a.items.len == a.capacity);
     return a.items;
 }
 
