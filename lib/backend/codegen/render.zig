@@ -917,16 +917,23 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     const tail = @tagName(c)["$rng$".len..];
     // The kernel name is the callee's tail in camel case (`zRngChiSquare`),
     // so the two lists cannot drift apart by a typo.
-    var fn_name: std.ArrayList(u8) = .empty;
-    defer fn_name.deinit(self.gpa);
-    try fn_name.appendSlice(self.gpa, "zRng");
+    // Bounded by the longest callee tag, so it is a stack buffer.
+    const cap = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var m: usize = 0;
+        for (std.meta.fieldNames(Mir.Callee)) |n| m = @max(m, n.len);
+        break :blk "zRng".len + m;
+    };
+    var buf: [cap]u8 = undefined;
+    var fn_name: std.ArrayList(u8) = .initBuffer(&buf);
+    fn_name.appendSliceAssumeCapacity("zRng");
     var up = true;
     for (tail) |ch| {
         if (ch == '_') {
             up = true;
             continue;
         }
-        try fn_name.append(self.gpa, if (up) std.ascii.toUpper(ch) else ch);
+        fn_name.appendAssumeCapacity(if (up) std.ascii.toUpper(ch) else ch);
         up = false;
     }
     try self.b("S.con({s}(", .{fn_name.items});

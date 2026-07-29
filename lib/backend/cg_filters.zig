@@ -87,7 +87,8 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
 
     var num: std.ArrayList(Poly) = .empty;
     var den: std.ArrayList(Poly) = .empty;
-    var lets: std.ArrayList([]const u8) = .empty;
+    // At most one `zRootSecs` let per side (`runtimeRoots`).
+    var lets: std.ArrayList([]const u8) = try .initCapacity(g.arena, 2);
     if (try filterSide(g, &num, &lets, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
     if (try filterSide(g, &den, &lets, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
 
@@ -266,7 +267,7 @@ fn runtimeRoots(
         try t.appendSlice(g.arena, try g.f64Expr(e));
     }
     try t.appendSlice(g.arena, " });");
-    try lets.append(g.arena, t.items);
+    lets.appendAssumeCapacity(t.items);
     for (0..(m + 1) / 2) |s| {
         const poly = try g.arena.alloc([]const u8, 3);
         for (poly, 0..) |*c, j| c.* = try g.arena.print("zr{d}[{d}][{d}]", .{ k, s, j });
