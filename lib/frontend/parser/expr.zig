@@ -235,10 +235,12 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 // `Elaborate.sep` is the same `.`. This join and
                 // `Lower.flatName` must change together.
                 if (self.peek() == .lparen) {
-                    var joined: std.ArrayList(u8) = .empty;
+                    var n = parts.items.len - 1;
+                    for (parts.items) |part| n += self.file.str(part).len;
+                    var joined: std.ArrayList(u8) = try .initCapacity(self.arena, n);
                     for (parts.items, 0..) |part, i| {
-                        if (i != 0) try joined.append(self.arena, '.');
-                        try joined.appendSlice(self.arena, self.file.str(part));
+                        if (i != 0) joined.appendAssumeCapacity('.');
+                        joined.appendSliceAssumeCapacity(self.file.str(part));
                     }
                     const flat = try self.file.strings.intern(self.arena, joined.items);
                     return parseCall(self, .call, tok, flat);
@@ -378,8 +380,8 @@ fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 /// `Ast.AnalogBlock.unit`, which `Lower.discardOpposite` already keys on.
 /// The production's `( < port_identifier > )` alternatives are not parsed.
 fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
-    var parts: std.ArrayList(Ast.StrId) = .empty;
-    {
+    // The lookahead counts the parts the loop below then reads.
+    const n_parts = blk: {
         var i = self.pos;
         if (!self.identLike(i)) return null;
         while (self.tags[i + 1] == .dot) : (i += 2) {
@@ -389,9 +391,11 @@ fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprI
             }
             if (!self.identLike(i + 2)) return null;
         } else return null;
-    }
+        break :blk (i - self.pos) / 2 + 1;
+    };
+    var parts: std.ArrayList(Ast.StrId) = try .initCapacity(self.arena, n_parts);
     while (true) {
-        try parts.append(self.arena, try self.expectIdent());
+        parts.appendAssumeCapacity(try self.expectIdent());
         _ = try self.expect(.dot);
         if (self.eat(.kw_branch)) break;
     }

@@ -474,14 +474,19 @@ pub const Pp = struct {
     // ---- scan state ------------------------------------------------------
     macros: std.StringHashMapUnmanaged(Macro) = .empty,
     conds: std.ArrayList(Cond) = .empty,
-    /// Macro-expansion cycle guard (§10.4): names currently being expanded.
-    expanding: std.ArrayList([]const u8) = .empty,
+    /// Macro-expansion cycle guard (§10.4): names currently being expanded,
+    /// `expanding[0..n_expanding]`. A name is pushed only inside a live
+    /// `expand` call, so `n_expanding <= expand_depth <= max_expansion_depth`.
+    expanding: [max_expansion_depth][]const u8 = undefined,
+    n_expanding: u8 = 0,
     /// Live `expand` calls, argument pre-expansion included. E0119 bounds this
     /// and not `expanding.items.len`, because pre-expansion runs before the
     /// name is pushed and `` `M(`M(`M(... `` would otherwise recurse unbounded.
     expand_depth: u32 = 0,
-    /// `include stack, innermost last; its length is the include depth.
-    includes: std.ArrayList([]const u8) = .empty,
+    /// `include stack, innermost last: `includes[0..n_includes]`, whose
+    /// length is the include depth. E0125 refuses one past the array.
+    includes: [max_include_depth][]const u8 = undefined,
+    n_includes: u8 = 0,
     /// IEEE 1364 §19.7 `line remap for §10.7 `__LINE__`; `line_to` is null when
     /// the current file is numbered naturally. `line_from` is the physical
     /// 1-based line after the directive and `line_to` the number §19.7 gives
@@ -650,12 +655,16 @@ pub const Pp = struct {
     /// Returns `stack` and `last` joined as `A -> B -> C`, on `scratch`: for a
     /// diagnostic's format arguments, which the bag copies.
     pub fn joinChain(pp: *Pp, stack: []const []const u8, last: []const u8) Error![]const u8 {
-        var out: std.ArrayList(u8) = .empty;
+        const sep = " -> ";
+        var n = last.len + stack.len * sep.len;
+        for (stack) |s| n += s.len;
+        var out: std.ArrayList(u8) = try .initCapacity(pp.scratch, n);
         for (stack) |s| {
-            try out.appendSlice(pp.scratch, s);
-            try out.appendSlice(pp.scratch, " -> ");
+            out.appendSliceAssumeCapacity(s);
+            out.appendSliceAssumeCapacity(sep);
         }
-        try out.appendSlice(pp.scratch, last);
+        out.appendSliceAssumeCapacity(last);
+        std.debug.assert(out.items.len == n);
         return out.items;
     }
 };

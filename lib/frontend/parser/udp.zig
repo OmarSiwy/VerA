@@ -43,7 +43,10 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     _ = try self.expect(.lparen);
     // A.5.2 puts the output port first in both header arms, so
     // `ports[0]` is the output and `ports[1..]` the inputs.
-    var ports: std.ArrayList(Ast.StrId) = .empty;
+    // E1017 refuses past `max_udp_inputs` inputs once the list is read, so
+    // the ports past the array are counted, not kept.
+    var ports: [max_udp_inputs + 1]Ast.StrId = undefined;
+    var n_ports: usize = 0;
     var outputs: u8 = 0;
     var output: Ast.StrId = .none;
     var has_reg = false;
@@ -63,7 +66,8 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
             if (self.eat(.kw_reg)) has_reg = true;
         }
         const port = try self.expectIdent();
-        try ports.append(self.arena, port);
+        if (n_ports < ports.len) ports[n_ports] = port;
+        n_ports += 1;
         if (dir == .kw_output) {
             outputs +|= 1;
             output = port;
@@ -78,8 +82,9 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
-    if (ports.items.len - 1 > max_udp_inputs)
-        return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), ports.items.len - 1 });
+    if (n_ports - 1 > max_udp_inputs)
+        return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), n_ports - 1 });
+    const port_ids = try self.arena.dupe(Ast.StrId, ports[0..n_ports]);
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
     while (true) {
@@ -117,7 +122,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     self.pos += 1;
     return .{
         .name = name,
-        .ports = ports.items,
+        .ports = port_ids,
         .is_sequential = sequential,
         .init = init_val,
         .init_target = init_target,

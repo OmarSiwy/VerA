@@ -198,11 +198,11 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
             return pp.fail(sp, .E0117, "expected {d}, found {d}", .{ m.params.len, args.len });
     }
 
-    for (pp.expanding.items) |active| {
+    for (pp.expanding[0..pp.n_expanding]) |active| {
         if (!std.mem.eql(u8, active, name)) continue;
         var b = pp.failWith(sp, .E0118);
         b.msg("`{s}`", .{name});
-        b.note("expansion chain: {s}", .{try pp.joinChain(pp.expanding.items, name)});
+        b.note("expansion chain: {s}", .{try pp.joinChain(pp.expanding[0..pp.n_expanding], name)});
         try b.emit();
         return error.PreprocessFailed;
     }
@@ -231,8 +231,10 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         break :blk try substitute(pp, m.body, m.params, actuals);
     } else m.body;
 
-    try pp.expanding.append(pp.scratch, name);
-    defer _ = pp.expanding.pop();
+    // Fits: `expand_depth` was checked and bumped above.
+    pp.expanding[pp.n_expanding] = name;
+    pp.n_expanding += 1;
+    defer pp.n_expanding -= 1;
 
     // Provenance: only the outermost expansion gets segments, since a nested
     // one resolves to the same invocation site.
