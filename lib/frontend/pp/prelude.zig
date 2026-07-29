@@ -139,13 +139,17 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     }
     std.debug.assert(pp.conds.items.len == 0);
 
-    var macros: std.ArrayList(Prelude.Def) = .empty;
+    // `process` inserts the §10.5 predefined macros itself.
+    var n_macros: usize = 0;
+    var vit = pp.macros.valueIterator();
+    while (vit.next()) |m| n_macros += @intFromBool(!m.predefined);
+    var macros: std.ArrayList(Prelude.Def) = try .initCapacity(arena, n_macros);
     var it = pp.macros.iterator();
     while (it.next()) |e| {
-        // `process` inserts the §10.5 predefined macros itself.
         if (e.value_ptr.predefined) continue;
-        try macros.append(arena, .{ .name = e.key_ptr.*, .macro = e.value_ptr.* });
+        macros.appendAssumeCapacity(.{ .name = e.key_ptr.*, .macro = e.value_ptr.* });
     }
+    std.debug.assert(macros.items.len == n_macros);
 
     // Lex the same bytes.
     var toks = try Lexer.Lexer.tokenize(arena, pp.out.items);
@@ -171,9 +175,10 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     std.debug.assert(!parser.in_analog_fn and !parser.in_connect_module and !parser.in_discrete and !parser.in_digital_delay);
     std.debug.assert(parser.gen_depth == 0 and parser.gen_construct_depth == 0);
 
-    var access: std.ArrayList([]const u8) = .empty;
+    const access = try arena.alloc([]const u8, parser.access_names.count());
     var ait = parser.access_names.keyIterator();
-    while (ait.next()) |k| try access.append(arena, k.*);
+    for (access) |*a| a.* = ait.next().?.*;
+    std.debug.assert(ait.next() == null);
 
     // Drop `.eof` from the seed columns: the compilation's buffer ends past the
     // user's source, not here.
@@ -186,7 +191,7 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
         .starts = toks.items(.start),
         .ast = .{
             .file = file,
-            .access_names = access.items,
+            .access_names = access,
             .pos = parser.pos,
             .gen_construct = parser.gen_construct,
         },
