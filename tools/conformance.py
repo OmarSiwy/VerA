@@ -255,5 +255,88 @@ def main(argv):
     return measures(mode, version)
 
 
+# ---------------------------------------------------------------------------
+# tally-b: CLAUSE-AUDIT.md §7.1's inherited §§17-18 obligation table
+# ---------------------------------------------------------------------------
+
+def tally_b(argv):
+    """Re-add CLAUSE-AUDIT.md §7.1's table and fail if the per-section rows stop
+    summing to the total, or closed + open stops summing to the row count.
+
+    B is the one measure with no suite behind its §§17-18 detail: those
+    obligations are outside `--coverage`'s denominator by construction
+    (CLAUSE-AUDIT.md §1.1 c), so the rows are hand-read. What CAN be checked is
+    the arithmetic, and that is this check's whole job. It answers "is the
+    hand-read tally self-consistent?", not "is it right?": re-deriving the rows
+    is reading, and AGENTS.md §2 says so. Never report it as a measurement.
+
+    ponytail: a split on `|` over the one table, not a markdown parser. The
+    table is pinned by its header row, so a reshuffle of §7 cannot silently
+    match the wrong one.
+    """
+    doc = ROOT / "docs/CLAUSE-AUDIT.md"
+    if not os.access(doc, os.R_OK):
+        print(f"tally-b: {doc} is missing (it was deleted once: 2cc1c08)", file=sys.stderr)
+        return 2
+
+    def cells(fields):
+        """Columns Rows..unspecified as numbers: digits only, a dash is 0."""
+        out = []
+        for i in range(2, 9):
+            digits = re.sub(r"[^0-9]", "", fields[i]) if i < len(fields) else ""
+            out.append(int(digits) if digits else 0)
+        return out
+
+    intable, rows, verdicts, trows, tsum, closed, opened = False, 0, 0, 0, 0, 0, 0
+    per, bad = [], []
+    for line in doc.read_text().split("\n"):
+        fields = line.split("|")
+        if re.match(r"^\| Section \| Rows \| missing \|", line):
+            intable = True
+            continue
+        if intable and line.startswith("| **Total**"):
+            v = cells(fields)
+            trows, tsum, intable = v[0], sum(v[1:]), False
+            continue
+        if intable and line.startswith("| §4"):
+            v = cells(fields)
+            rows += v[0]
+            verdicts += sum(v[1:])
+            per.append(f"{fields[1]}  rows={v[0]}  verdicts={sum(v[1:])}")
+            if v[0] != sum(v[1:]):
+                bad.append(per[-1])
+        if line.startswith("| **closed** |"):
+            closed = cells(fields)[0]
+        if line.startswith("| **open** |"):
+            opened = cells(fields)[0]
+
+    rc = 0
+    for p in per:
+        print("  " + p)
+    print(f"\n  section rows       {rows}\n  section verdicts   {verdicts}\n  stated total       {trows} / {tsum}")
+    print(f"  closed + open      {closed} + {opened} = {closed + opened}\n")
+    for b in bad:
+        print(f"FAIL: section does not sum: {b}")
+        rc = 1
+    if rows != verdicts:
+        print(f"FAIL: rows {rows} != verdicts {verdicts}")
+        rc = 1
+    if trows != rows:
+        print(f"FAIL: stated total {trows} != summed rows {rows}")
+        rc = 1
+    if tsum != verdicts:
+        print(f"FAIL: stated verdict total {tsum} != summed {verdicts}")
+        rc = 1
+    if closed + opened != rows:
+        print(f"FAIL: closed+open {closed + opened} != rows {rows}")
+        rc = 1
+    if rc == 0:
+        print(f"measure B: {closed} / {rows} closed, {opened} open — tally is self-consistent")
+    return rc
+
+
+SUBCOMMANDS["tally-b"] = tally_b
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
