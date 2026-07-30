@@ -47,7 +47,7 @@ jobs:
           exit "${PIPESTATUS[0]}"
 
       # Verdict prose (`FAIL <path>: why`) goes to stderr and the TSV tables go
-      # to stdout, so both streams are merged into one log — conformance.sh
+      # to stdout, so both streams are merged into one log — conformance.py
       # parses the TSV and the name list below comes from the prose.
       - name: Verilog-AMS suite — every fixture, strict
         continue-on-error: true
@@ -95,7 +95,7 @@ jobs:
           {
             echo '## Conformance'
             echo
-            tools/conformance.sh || echo '(conformance.sh could not parse this run)'
+            python3 tools/conformance.py || echo '(conformance.py could not parse this run)'
             echo
             echo '## Verilog-AMS suite — verdicts'
             echo '```'; tail -40 /tmp/strict.txt; echo '```'

@@ -13,7 +13,7 @@
 //!   `vpi`        `harness/c_fixtures.zig`
 //!   `spice`      `harness/spice_decks.zig`
 //!
-//! `tools/conformance.sh` parses the `pass fail unasserted xfail` row this
+//! `tools/conformance.py` parses the `pass fail unasserted xfail` row this
 //! file prints: that row's text is frozen.
 
 const std = @import("std");

@@ -81,7 +81,7 @@ nothing.
    (lib, more, search, incdirs) with the refusals as diagnostics, the CLI only
    reporting. Owner: lib/frontend/libmap. Callers: cli/digital.zig, vpi_host.zig.
 4. **References by line number or old path, in files this agent does not own:**
-   - `tools/conformance.sh:12-14, 51, 67` cite `bench.zig:828` and
+   - `tools/conformance.sh:12-14, 51, 67` cited `bench.zig:828` and (fixed: `tools/conformance.py` names the files)
      `harness.zig:564`. The verdict row is now `tests/bench.zig` `summary` and
      the tally `tests/harness/coverage.zig` `report`; cite the function names.
    - `docs/CLAUSE-AUDIT.md:223, 500`: `tests/bench.zig`'s `digitalCases` is now

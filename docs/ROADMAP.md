@@ -116,7 +116,7 @@ its derivation in its header and is reviewed by someone who opened the clause.
 
 Every version is a published tag, made with the ritual in `AGENTS.md` §3.
 `publish.yaml` re-measures on a clean runner and refuses a tag whose
-`CHANGELOG.md` entry disagrees with the tree. `tools/conformance.sh` writes each
+`CHANGELOG.md` entry disagrees with the tree. `tools/conformance.py` writes each
 entry's numbers; this table never carries them.
 
 Semver, applied literally. A **minor** (`0.N.0`) changes something a consumer can
@@ -133,7 +133,7 @@ change ships as a patch of the minor before it.
 
 | Version | Content | Closes | Gate |
 |---|---|---|---|
-| **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.sh --changelog v0.9.0`; every `build.zig` step green |
+| **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.py --changelog v0.9.0`; every `build.zig` step green |
 | v0.9.1 | Hygiene: the §5.5 fixture headers, `CLAUSE-AUDIT.md` refreshed (§5.8), the passing fixtures on branch `audit-wip/ch5`, the rollback host wired or deleted, CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
 | v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/vs-verilator.sh` |
 | v0.11.0 | Measure B scoped: the out-of-scope 1364 chapters classified and refused with named diagnostics (§1 B) | the classification half of §1 B | `test-1364 -- --coverage`: no unclassified clause outside the §1 B scope |

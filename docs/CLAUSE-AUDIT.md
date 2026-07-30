@@ -186,7 +186,7 @@ are all 0. The 63 rows behind that exit code are named in `CHANGELOG.md`'s
 v0.0.1 entry and are `ROADMAP.md`'s measure A, not this document's subject.
 
 **These clause numbers are measure C and this document no longer owns them.**
-`tools/conformance.sh` writes them into `CHANGELOG.md` and `publish.yaml`
+`tools/conformance.py` writes them into `CHANGELOG.md` and `publish.yaml`
 re-measures them on a clean runner. §7.2 below is kept only as the cross-check it
 always was. This document owns **measure B** — §7.1 — which has no command.
 
@@ -922,7 +922,7 @@ top of this file.
 
 ### 7.2 Independent measure, from the LRM side — **measure C**
 
-**This document no longer owns these numbers.** `tools/conformance.sh` writes
+**This document no longer owns these numbers.** `tools/conformance.py` writes
 them into `CHANGELOG.md` from `zig build benchmark -- --coverage`, and
 `publish.yaml` re-measures them on a clean runner. Reproduced here as the
 cross-check they have always been, measured 2026-09-21 at `a99a37f` and re-confirmed at `05ae554`:
