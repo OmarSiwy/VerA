@@ -202,7 +202,7 @@ pub fn build(b: *std.Build) void {
         .dependOn(&spice.step);
 
     // The VPI acceptance test. A VPI implementation is only tested from C:
-    // `tests/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
+    // `tests/fixtures/ch11_vpi/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
     // it names is the header's number, and links against the `export fn`s in
     // `src/vpi/root.zig`, which puts the ABI itself under test.
     // `tests/vpi_host.zig` is the simulator half; it calls the application's
@@ -234,9 +234,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const test_vpi = &b.top_level_steps.get("test-vpi").?.step;
-    const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/vpi_app.c", "tests");
+    const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/fixtures/ch11_vpi/vpi_app.c", "tests/fixtures/ch11_vpi");
     vpi_app.expectExitCode(0);
-    // The counts are tests/vpi_design.va's shape, and `checks` is how many
+    // The counts are tests/fixtures/ch11_vpi/vpi_design.va's shape, and `checks` is how many
     // assertions the application reached: a walk that returns early, or a
     // startup table never called, still exits 0.
     vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
@@ -436,7 +436,7 @@ pub fn build(b: *std.Build) void {
         run.addFileArg(wf.add("dyn.zig", "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"));
         run.addArg("--work-dir");
         _ = run.addOutputDirectoryArg2("so", .{});
-        run.addFileArg(b.path("tests/vpi_design.va"));
+        run.addFileArg(b.path("tests/fixtures/ch11_vpi/vpi_design.va"));
         run.expectExitCode(1);
         run.expectStdOutEqual("");
         run.addCheck(.{ .expect_stderr_match = "vpi_design.va: codegen produced Zig that does not compile" });
@@ -465,24 +465,24 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch03_data_types/nodeset_metadata_host.zig", .va = "tests/fixtures/ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
-    .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
-    .{ .host = "tests/status_host.zig", .va = "tests/status_ops.va" },
-    .{ .host = "tests/port_mask_host.zig", .va = "tests/port_mask.va" },
-    .{ .host = "tests/table_status_host.zig", .va = "tests/table_status.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_reg_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_clog2_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_array_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_index_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_context_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_array_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_constant_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_precomputed_controls.va" },
+    .{ .host = "tests/revert_host.zig", .va = "tests/fixtures/ch04_expressions/revert_ops.va" },
+    .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
+    .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
+    .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_fixed.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_dynamic.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_reg_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_clog2_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_index_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_function_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_context_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_function_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_effect_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_constant_effect_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_precomputed_controls.va" },
     .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },

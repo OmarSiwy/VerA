@@ -102,7 +102,8 @@ That commit re-homed nothing — `git show --diff-filter=A 2cc1c08` returns the
 PDF alone. **Three of the fifteen have since been restored**, by `6f2e1c5`
 (2026-09-20, before `v0.0.1`), whose subject names the cause exactly: *"tests:
 restore the VPI acceptance test a docs commit deleted, and renumber to 2023"*.
-`tests/vpi_app.c`, `tests/vpi_design.va` and `tests/vpi_host.zig` are back and
+`tests/vpi_app.c`, `tests/vpi_design.va` and `tests/vpi_host.zig` are back (the first two
+now in `tests/fixtures/ch11_vpi/`) and
 `build.zig:206` links them again.
 
 **Twelve are still gone:** the six RNG files, the three `literal_nul` files,
