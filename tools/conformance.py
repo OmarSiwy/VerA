@@ -338,5 +338,346 @@ def tally_b(argv):
 SUBCOMMANDS["tally-b"] = tally_b
 
 
+# ---------------------------------------------------------------------------
+# lrm-audit: the LRM PDF against docs/*.html, section by section
+# ---------------------------------------------------------------------------
+
+LRM_PDF = ROOT / "docs/VAMS-LRM-2023.pdf"
+LRM_SHA256 = "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134"
+SECTION = re.compile(r"^((?:[1-9][0-9]?|[A-H])(?:\.[0-9]+)+)\s+(.+)$")
+CHAPTER = re.compile(r"^([1-9][0-9]?)\.\s+([A-Z].+)$")
+ANNEX = re.compile(r"^Annex ([A-H])(?:\s|$)")
+
+
+def heading(text):
+    match = SECTION.match(text) or CHAPTER.match(text) or ANNEX.match(text)
+    return match.group(1) if match else None
+
+
+def tokens(text):
+    # Do not guess which hyphens are line-wrap artifacts: Verilog-\nAMS and
+    # arithmetic a-\nb retain meaningful '-'. Compatibility normalization
+    # would also erase distinctions such as superscript ² versus ordinary 2.
+    # Canonical Unicode equivalence is safe for this text-token worklist;
+    # ligatures, soft hyphens and typography still require explicit review.
+    text = unicodedata.normalize("NFC", text)
+    return re.findall(r"\w+|[^\w\s]", text)
+
+
+class ChapterHTML(HTMLParser):
+    """Collect headings and body text, excluding navigation/style metadata."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.sections = {}
+        self.current = None
+        self.skip = 0
+        self.in_heading = False
+        self.heading_text = []
+        self.heading_line = 0
+        self.duplicates = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("head", "nav", "script", "style"):
+            self.skip += 1
+        if self.skip:
+            return
+        if re.fullmatch(r"h[1-6]", tag):
+            self.in_heading = True
+            self.heading_text = []
+            self.heading_line = self.getpos()[0]
+        elif tag in ("p", "div", "pre", "tr", "li", "br", "figure"):
+            self.append("\n")
+        elif tag in ("td", "th"):
+            self.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag in ("head", "nav", "script", "style"):
+            self.skip -= 1
+            return
+        if self.skip:
+            return
+        if re.fullmatch(r"h[1-6]", tag) and self.in_heading:
+            title = "".join(self.heading_text).strip()
+            section = heading(title)
+            if section:
+                if section in self.sections:
+                    self.duplicates.append(section)
+                self.current = section
+                self.sections[section] = {
+                    "title": title, "line": self.heading_line, "text": ""
+                }
+            else:
+                self.append("\n" + title + "\n")
+            self.in_heading = False
+        elif tag in ("p", "div", "pre", "tr", "li", "figure"):
+            self.append("\n")
+
+    def append(self, text):
+        if self.current:
+            self.sections[self.current]["text"] += text
+
+    def handle_data(self, text):
+        if self.skip:
+            return
+        if self.in_heading:
+            self.heading_text.append(text)
+        else:
+            self.append(text)
+
+
+def pdf_sections(pdf):
+    proc = subprocess.run(
+        ["pdftotext", "-layout", str(pdf), "-"],
+        capture_output=True, text=True, check=True,
+    )
+    sections = {}
+    current = None
+    chapter = None
+    started = False
+    duplicates = []
+    for page, text in enumerate(proc.stdout.split("\f"), 1):
+        lines = text.splitlines()
+        # Exclude front matter/TOC using the first body heading, without dotted
+        # leaders. PDF physical page indices remain attached to every section.
+        if not started:
+            if "1. Verilog-AMS introduction" not in lines:
+                continue
+            started = True
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if (not stripped or "Accellera Std VAMS-2023" in line
+                    or "Accellera Standard for VERILOG-AMS" in line
+                    or "Copyright © 2024 Accellera" in line
+                    or (re.fullmatch(r"\d+", stripped) and
+                        next((tail.strip() for tail in lines[index + 1:]
+                              if tail.strip()), "").startswith(
+                                  "Copyright © 2024 Accellera"))):
+                continue
+            # Body headings have varying indentation. Restrict candidates
+            # to the current chapter so references cannot create foreign rows.
+            top = CHAPTER.match(stripped) or re.fullmatch(r"Annex ([A-H])", stripped)
+            sec = SECTION.match(stripped)
+            new_id = None
+            if top:
+                proposed = top.group(1)
+                # §1.5 repeats chapter titles as a contents description.
+                # A new chapter follows its predecessor, never inside §1.5.
+                order = [str(n) for n in range(1, 13)] + list("ABCDEFGH")
+                expected = order[0] if chapter is None else (
+                    order[order.index(chapter) + 1] if chapter != "H" else None
+                )
+                if proposed == expected and (current != "1.5" or page >= 24):
+                    chapter = proposed
+                    new_id = proposed
+            elif sec and sec.group(1).split(".")[0] == chapter:
+                # Cross references have prose continuations and sometimes
+                # start at column zero. Repeated ids are retained as body text.
+                if sec.group(1) not in sections:
+                    new_id = sec.group(1)
+            if new_id and new_id not in sections:
+                current = new_id
+                sections[current] = {"title": stripped, "page": page, "text": ""}
+            elif current:
+                sections[current]["text"] += line.rstrip() + "\n"
+    return sections, duplicates
+
+
+def sort_key(section):
+    return tuple((0, int(p)) if p.isdigit() else (1, p) for p in section.split("."))
+
+
+def html_sections(root):
+    """Every numbered heading of docs/*.html: {section: {title, line, text, file}},
+    and the headings declared twice."""
+    html, duplicates = {}, []
+    for path in sorted((root / "docs").glob("*.html")):
+        if path.name == "index.html":
+            continue
+        parsed = ChapterHTML()
+        parsed.feed(path.read_text())
+        duplicates.extend(f"{path.name}:{s}" for s in parsed.duplicates)
+        for section, item in parsed.sections.items():
+            if section in html:
+                duplicates.append(section)
+            html[section] = dict(item, file=str(path.relative_to(root)))
+    return html, duplicates
+
+
+def inventory(root):
+    pdf = root / "docs/VAMS-LRM-2023.pdf"
+    source, pdf_duplicates = pdf_sections(pdf)
+    html, duplicates = html_sections(root)
+    duplicates = list(pdf_duplicates) + duplicates
+    rows = []
+    for section in sorted(source.keys() | html.keys(), key=sort_key):
+        p, h = source.get(section), html.get(section)
+        row = {"section": section, "pdf": p, "html": h}
+        if p is None:
+            row["comparison"] = "html-only-heading"
+        elif h is None:
+            row["comparison"] = "pdf-only-heading"
+        else:
+            row["comparison"] = (
+                "same-text-tokens" if tokens(p["text"]) == tokens(h["text"])
+                else "review-difference"
+            )
+        rows.append(row)
+    return {
+        "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+        "warning": "Mechanical worklist only; no claim of semantic fidelity or conformance.",
+        "duplicate_html_headings": duplicates,
+        "sections": rows,
+    }
+
+
+def lrm_audit(argv):
+    """Source-fidelity worklist, NOT a conformance score.
+
+    Read the checked-in PDF with Poppler and compare each numbered section with
+    the HTML. Keep differences visible: equations, diagrams, tables, grammar and
+    normative scope still require human review. No fixture earns credit here.
+    """
+    parser = argparse.ArgumentParser(prog="conformance.py lrm-audit", description=lrm_audit.__doc__)
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--section", help="Show a section and its descendants")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--diff", action="store_true", help="Print token differences")
+    args = parser.parse_args(argv)
+    report = inventory(args.root)
+    if args.section:
+        report["sections"] = [r for r in report["sections"] if
+                              r["section"] == args.section or
+                              r["section"].startswith(args.section + ".")]
+        if not report["sections"]:
+            parser.error("section not found")
+    if args.json:
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return 0
+    print(report["warning"])
+    print("PDF SHA256:", report["pdf_sha256"])
+    for row in report["sections"]:
+        p, h = row["pdf"], row["html"]
+        loc = f'{h["file"]}:{h["line"]}' if h else "MISSING HTML"
+        page = p["page"] if p else "MISSING PDF HEADING"
+        print(f'{row["section"]}\tPDF page {page}\t{loc}\t{row["comparison"]}')
+        if args.diff and p and h:
+            a, b = tokens(p["text"]), tokens(h["text"])
+            matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+            for tag, i, j, k, l in matcher.get_opcodes():
+                if tag != "equal":
+                    print("  PDF:", " ".join(a[max(0, i-5):j+5]))
+                    print("  HTML:", " ".join(b[max(0, k-5):l+5]))
+    for duplicate in report["duplicate_html_headings"]:
+        print("DUPLICATE:", duplicate)
+    return 0
+
+
+SUBCOMMANDS["lrm-audit"] = lrm_audit
+
+
+# ---------------------------------------------------------------------------
+# ieee1364-audit: the IEEE 1364-2005 heading worklist (the licensed local PDF)
+# ---------------------------------------------------------------------------
+
+IEEE_SHA256 = "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e"
+# The pinned PDF's TOC lists 212; the body heading is on printed page 213.
+# Explicitly retain both, rather than silently searching past a bad anchor.
+ANCHOR_CORRECTIONS = {"14.2.1": 213}
+IEEE_ROW = re.compile(r"^\s*((?:[0-9]+|[A-I])(?:\.[0-9]+)*)\.?\s+(.+?)\s*\.{3,}\s*(\d+)\s*$")
+IEEE_ANNEX = re.compile(r"^\s*Annex ([A-I]) \((normative|informative)\)\s+(.+?)\s*\.{3,}\s*(\d+)\s*$")
+
+
+def worklist(text):
+    pages = text.split("\f")
+    if not pages[-1].strip():
+        pages.pop()
+    body_start = next((i for i, page in enumerate(pages)
+                       if re.search(r"(?m)^\s*1\. Overview\s*$", page)), None)
+    if body_start is None:
+        raise ValueError("cannot locate body heading 1. Overview")
+    toc = "\n".join(pages[:body_start])
+    start = re.search(r"(?m)^\s*Contents\s*$", toc)
+    if not start:
+        raise ValueError("cannot locate Contents")
+    rows = []
+    seen = set()
+    ended = False
+    for line in toc[start.end():].splitlines():
+        annex = IEEE_ANNEX.match(line)
+        match = IEEE_ROW.match(line)
+        if annex:
+            clause, kind, title, printed = annex.groups()
+        elif match:
+            clause, title, printed = match.groups()
+            kind = "informative" if clause.split(".")[0] in ("C", "D", "H", "I") else "normative"
+        elif re.search(r"\.{3,}\s*\d+\s*$", line):
+            raise ValueError("unparsed TOC entry: " + line.strip())
+        else:
+            continue
+        if clause in seen:
+            raise ValueError("duplicate TOC clause: " + clause)
+        seen.add(clause)
+        if clause.split(".")[0] in ("21", "22", "23", "24", "25", "E", "F"):
+            kind = "deprecated-removed"
+        body_printed = ANCHOR_CORRECTIONS.get(clause, int(printed))
+        physical = body_printed + body_start
+        if not 1 <= physical <= len(pages):
+            raise ValueError("page outside document: " + clause)
+        page = pages[physical - 1]
+        # Require the heading identifier at a line start on its listed page.
+        # This does not verify title typography or complete body boundaries.
+        prefix = "Annex " + clause if annex else re.escape(clause) + (r"\." if "." not in clause else "")
+        located = bool(re.search(r"(?m)^\s*" + prefix + r"(?:\s|$)", page))
+        rows.append({"id": "IEEE1364-2005:" + clause, "clause": clause,
+                     "title": title.strip(), "toc_printed_page": int(printed),
+                     "printed_page": body_printed,
+                     "pdf_page": physical, "classification": kind,
+                     "heading_located": located, "rule_review": "not-assessed"})
+        if clause == "I":
+            ended = True
+            break
+    if not ended:
+        raise ValueError("TOC incomplete: Annex I endpoint absent")
+    return rows
+
+
+def ieee1364_audit(argv):
+    """Local licensed-source heading worklist, never a conformance denominator.
+
+    No source body text is written. Requires the user's local IEEE PDF and
+    Poppler. The table of contents locates headings; it does not enumerate
+    atomic rules. `tests/fixtures/ieee1364/CLAUSES.tsv` was cut from this
+    output and is reviewed, never regenerated.
+    """
+    parser = argparse.ArgumentParser(prog="conformance.py ieee1364-audit", description=ieee1364_audit.__doc__)
+    parser.add_argument("--pdf", type=Path, default=ROOT / "docs/1364-2005.pdf")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        digest = hashlib.sha256(args.pdf.read_bytes()).hexdigest()
+        if digest != IEEE_SHA256:
+            raise ValueError("source hash differs; verify edition/pagination before updating provenance")
+        text = subprocess.run(["pdftotext", "-layout", str(args.pdf), "-"],
+                              check=True, capture_output=True, text=True).stdout
+        rows = worklist(text)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        print("IEEE source audit: " + str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps({"source_sha256": digest, "warning": "Heading worklist only; no rule coverage claim",
+                          "sections": rows}, indent=2))
+    else:
+        print("Heading worklist only; no rule coverage claim. SHA256 " + digest)
+        for row in rows:
+            print("\t".join((row["id"], str(row["pdf_page"]), row["classification"],
+                              "located" if row["heading_located"] else "REVIEW-ANCHOR", row["title"])))
+    return 1 if any(not row["heading_located"] for row in rows) else 0
+
+
+SUBCOMMANDS["ieee1364-audit"] = ieee1364_audit
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

@@ -2,7 +2,7 @@
 # denominator of `zig build test-1364 -- --coverage`. The PDF is licensed and
 # not in git, so this file is its committed stand-in; titles are headings, no
 # body text is reproduced. 672 rows are the table of contents
-#   tools/ieee1364_audit.py | awk -F'\t' 'NR>1 {sub(/^IEEE1364-2005:/, "", $1); print $1 "\t-\t" $5}'
+#   tools/conformance.py ieee1364-audit | awk -F'\t' 'NR>1 {sub(/^IEEE1364-2005:/, "", $1); print $1 "\t-\t" $5}'
 # and 136 are the body's depth-4+ headings the contents omit (4.6.3.1,
 # 17.1.1.2, ...): lines of `pdftotext -layout` matching
 #   ^ {0,8}([0-9]+|[A-G])(\.[0-9]+){3,} +[A-Z`$]
