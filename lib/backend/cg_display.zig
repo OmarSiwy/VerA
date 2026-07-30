@@ -120,7 +120,7 @@ fn buildArgs(
     g: *Gen,
     args: []const Mir.Value,
     fmt: *std.ArrayList(u8),
-    ops: *std.ArrayList(PrintArg),
+    ops: *Ops,
     site: usize,
 ) Error!void {
     var i: usize = 0;
@@ -136,9 +136,9 @@ fn buildArgs(
     // One call's conversions become one Zig format call, and Zig's formatter
     // takes at most 32 arguments (`std.fmt.ArgSetType`). Refused here rather
     // than as a compile error in generated Zig.
-    if (ops.items.len > max_format_args)
-        return refuse(g, fmt, ops, site, .E1010, "this call formats {d} values; one call formats at most {d}", .{ ops.items.len, max_format_args });
-    for (ops.items) |p| if (p.spec.width > Spec.max_field or (p.spec.prec orelse 0) > Spec.max_field)
+    if (ops.n > max_format_args)
+        return refuse(g, fmt, ops, site, .E1010, "this call formats {d} values; one call formats at most {d}", .{ ops.n, max_format_args });
+    for (ops.items()) |p| if (p.spec.width > Spec.max_field or (p.spec.prec orelse 0) > Spec.max_field)
         return refuse(g, fmt, ops, site, .E1011, "a field width or precision here exceeds {d}", .{Spec.max_field});
 }
 
@@ -147,7 +147,7 @@ fn buildArgs(
 fn refuse(
     g: *Gen,
     fmt: *std.ArrayList(u8),
-    ops: *std.ArrayList(PrintArg),
+    ops: *Ops,
     site: usize,
     code: diag.Code,
     comptime msg: []const u8,
@@ -157,11 +157,28 @@ fn refuse(
     g.any_fatal = true;
     if (g.fatal == null) g.fatal = "a display or format call exceeds a formatter limit";
     fmt.clearRetainingCapacity();
-    ops.clearRetainingCapacity();
+    ops.n = 0;
 }
 
 /// E1010's bound: the argument count Zig's `std.fmt` accepts in one call.
 pub const max_format_args = 32;
+
+/// One call's print operands, bounded by E1010. `n` keeps counting past the
+/// bound so the diagnostic names the call's real operand count; operands past
+/// it are never stored because the call is refused.
+const Ops = struct {
+    buf: [max_format_args]PrintArg = undefined,
+    n: u32 = 0,
+
+    fn append(self: *Ops, p: PrintArg) void {
+        if (self.n < max_format_args) self.buf[self.n] = p;
+        self.n += 1;
+    }
+
+    fn items(self: *const Ops) []const PrintArg {
+        return self.buf[0..@min(self.n, max_format_args)];
+    }
+};
 
 /// The per-op scratch declarations of one emitted display block.
 fn emitScratch(g: *Gen, ops: []const PrintArg) Error!void {
@@ -182,7 +199,7 @@ fn renderPrintArgs(g: *Gen, ops: []const PrintArg) Error!void {
 /// data). `site` keys `$monitor`'s scratch row. `$fatal` also halts.
 pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: std.ArrayList(PrintArg) = .empty;
+    var ops: Ops = .{};
     // §9.7.3: the severity is the message's whole reason for existing, and a
     // reader cannot recover it from the text.
     if (severityWord(c)) |word| {
@@ -207,20 +224,20 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     // writes `+42` where §9.4.3 writes ` 42`; its scratch is a stack array
     // in this block.
     try g.b("zd: {{ ", .{});
-    try emitScratch(g, ops.items);
+    try emitScratch(g, ops.items());
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when a watched argument VALUE differs from the step this site
         // last reported (`monitorValues`). An overrun is `emitStringFormat`'s
         // E1011.
         try g.b("if (zMonitor({d}, ", .{monitorKey(g, args)});
-        try monitorValues(g, ops.items);
+        try monitorValues(g, ops.items());
         try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-        try renderPrintArgs(g, ops.items);
+        try renderPrintArgs(g, ops.items());
         try g.b("}}) catch zSOver())) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
     } else {
         try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
-        try renderPrintArgs(g, ops.items);
+        try renderPrintArgs(g, ops.items());
         try g.b("}}); ", .{});
     }
     // §9.7.3: `$fatal` "terminates the simulation with an errorcode". The
@@ -273,14 +290,14 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 /// formatting, so field widths count the original bytes.
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: std.ArrayList(PrintArg) = .empty;
+    var ops: Ops = .{};
     try buildArgs(g, args, &fmt, &ops, site);
     try g.b("zs: {{ ", .{});
-    try emitScratch(g, ops.items);
+    try emitScratch(g, ops.items());
     // An overrun ends the run with E1011 (`zSOver`): §9.5.3 states no
     // truncation rule, and an empty or half string is a wrong answer.
     try g.b("break :zs zStringStore(std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    try renderPrintArgs(g, ops.items);
+    try renderPrintArgs(g, ops.items());
     try g.b("}}) catch zSOver()); }}", .{});
 }
 
@@ -425,7 +442,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     const all = if (mon) args[1..] else args;
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
-    var ops: std.ArrayList(PrintArg) = .empty;
+    var ops: Ops = .{};
     try buildArgs(g, rest, &fmt, &ops, site);
     // The §9.4.1 task §9.5.2 names this one after decides the newline:
     // `$write` is the member that does not end the line, and so is `$fwrite`.
@@ -435,7 +452,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     // written, which is `emitStringFormat`'s sink with a descriptor instead of a
     // string variable. An overrun is E1011, as for §9.5.3.
     try g.b("zf: {{ ", .{});
-    try emitScratch(g, ops.items);
+    try emitScratch(g, ops.items());
     // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
     // front, so §9.4.1's change condition travels with it: the record is
     // composed either way, and `zMonitor` decides whether it is written.
@@ -445,11 +462,11 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
         try g.b(", ", .{});
     }
     try g.b("std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    try renderPrintArgs(g, ops.items);
+    try renderPrintArgs(g, ops.items());
     try g.b("}}) catch zSOver()", .{});
     if (mon) {
         try g.b("; break :zf if (zMonitor({d}, ", .{monitorKey(g, args)});
-        try monitorValues(g, ops.items);
+        try monitorValues(g, ops.items());
         try g.b(", zt)) |zm| zFPut(", .{});
         try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", zm) else 0; }}", .{});
@@ -535,7 +552,7 @@ pub fn translateFormat(
     src: []const u8,
     operands: []const Mir.Value,
     fmt: *std.ArrayList(u8),
-    ops: *std.ArrayList(PrintArg),
+    ops: *Ops,
 ) Error!usize {
     const a = g.arena;
     var next: usize = 0;
@@ -640,7 +657,7 @@ fn appendStrField(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, full: bool) Erro
 pub fn appendConv(
     g: *Gen,
     fmt: *std.ArrayList(u8),
-    ops: *std.ArrayList(PrintArg),
+    ops: *Ops,
     operand: Mir.Value,
     conv_raw: u8,
     spec_arg: Spec,
@@ -682,7 +699,7 @@ pub fn appendConv(
         // integer operand converts to real first (§4.2.1.1).
         'e', 'f', 'g', 'r' => {
             try fmt.appendSlice(a, "{s}");
-            try ops.append(a, .{ .v = v, .want = .real, .how = .creal, .spec = spec, .conv = conv_raw });
+            ops.append(.{ .v = v, .want = .real, .how = .creal, .spec = spec, .conv = conv_raw });
         },
         // §9.4.3 Table 9-22: a radix conversion shows the operand's
         // two's-complement bit pattern at its width (IEEE 1364 §17.1.1.2):
@@ -695,7 +712,7 @@ pub fn appendConv(
             try fmt.append(a, if (conv == 'h') 'x' else conv);
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            try ops.append(a, .{ .v = v, .want = .int, .how = .bits, .spec = spec, .bits = bits });
+            ops.append(.{ .v = v, .want = .int, .how = .bits, .spec = spec, .bits = bits });
         },
         // Table 9-22 gives %c the single character: the operand's low byte,
         // whatever its type (a string goes through its §2.7 integer value).
@@ -703,7 +720,7 @@ pub fn appendConv(
             try fmt.appendSlice(a, "{c");
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            try ops.append(a, .{ .v = v, .want = .int, .how = .chr, .spec = spec });
+            ops.append(.{ .v = v, .want = .int, .how = .chr, .spec = spec });
         },
         's' => {
             if (ty == .int) {
@@ -713,7 +730,7 @@ pub fn appendConv(
                 try appendZigSpec(g, fmt, spec, null);
                 try fmt.append(a, '}');
             }
-            try ops.append(a, .{ .v = v, .want = ty, .how = if (ty == .int) .ascii else .plain, .spec = spec, .bits = bits });
+            ops.append(.{ .v = v, .want = ty, .how = if (ty == .int) .ascii else .plain, .spec = spec, .bits = bits });
         },
         'd' => {
             // §2.7 makes a string literal an unsigned base-256 integer when
@@ -726,15 +743,15 @@ pub fn appendConv(
                 // `-0042`). Zig's `{d:0>5}` writes `00-42`, so the field is
                 // composed in scratch (`renderPrintArg`'s .cint arm).
                 try appendStrField(g, fmt, spec, zero_fill);
-                try ops.append(a, .{ .v = v, .want = .int, .how = .cint, .spec = spec });
+                ops.append(.{ .v = v, .want = .int, .how = .cint, .spec = spec });
             } else if (spec.width > 0) {
                 // A width alone makes std.fmt spell the sign (`{d:>5}` writes
                 // `+42`), so the decimal TEXT pads instead, via `zPadInt`.
                 try appendStrField(g, fmt, spec, false);
-                try ops.append(a, .{ .v = v, .want = .int, .how = .pad, .spec = spec });
+                ops.append(.{ .v = v, .want = .int, .how = .pad, .spec = spec });
             } else {
                 try fmt.appendSlice(a, "{d}");
-                try ops.append(a, .{ .v = v, .want = .int, .spec = spec });
+                ops.append(.{ .v = v, .want = .int, .spec = spec });
             }
         },
         else => {
@@ -752,7 +769,7 @@ pub fn appendConv(
             try fmt.appendSlice(a, verb);
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
-            try ops.append(a, .{ .v = v, .want = ty, .spec = spec });
+            ops.append(.{ .v = v, .want = ty, .spec = spec });
         },
     }
 }
