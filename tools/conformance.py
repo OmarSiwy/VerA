@@ -796,5 +796,133 @@ def keywords(argv):
 SUBCOMMANDS["keywords"] = keywords
 
 
+# ---------------------------------------------------------------------------
+# figures: the LRM's figures in docs/figures, cropped from the pinned PDF
+# ---------------------------------------------------------------------------
+
+# Requires Poppler's pdftoppm. Coordinates are PDF points measured from the
+# top-left of a physical page: (physical page, left, top, width, height).
+# Crops include the original caption. Adding an entry requires visual
+# comparison against the source page. Direct PDF rasterization preserves
+# patterned guide lines that were lost in a pdftocairo-SVG/librsvg round trip
+# during visual validation.
+FIG_SCALE = 3  # 216 dpi; lossless PNG, no resampling or generative processing.
+
+# Chapters 1-9 (`lrm-figure-<n>.png`).
+LRM_FIGURES = {
+    "1-1": (15, 152, 349, 310, 150),
+    "1-2": (16, 163, 403, 285, 104),
+    "1-3": (17, 88, 312, 436, 262),
+    "3-1": (62, 180, 78, 252, 154),
+    "3-2": (62, 184, 293, 244, 150),
+    "4-3": (81, 135, 78, 345, 290),
+    "4-4": (85, 88, 175, 437, 220),
+    "4-5": (85, 127, 565, 359, 137),
+    "4-6": (86, 136, 103, 340, 130),
+    "4-7": (87, 150, 439, 310, 154),
+    "4-8": (88, 150, 140, 310, 154),
+    "4-9": (88, 150, 332, 310, 153),
+    "4-10": (89, 150, 90, 310, 152),
+    "4-11": (89, 150, 280, 310, 150),
+    "4-12": (90, 150, 90, 310, 152),
+    "4-13": (91, 148, 590, 316, 114),
+    "4-14": (104, 125, 202, 360, 352),
+    "5-1": (113, 130, 404, 352, 131),
+    "5-2": (114, 130, 79, 352, 210),
+    "5-3": (124, 105, 551, 402, 143),
+    "5-4": (125, 119, 127, 374, 146),
+    "5-5": (126, 128, 79, 355, 225),
+    "5-6": (140, 88, 93, 436, 144),
+    "7-1": (178, 105, 390, 402, 206),
+    "7-2": (187, 111, 294, 390, 242),
+    "7-3": (188, 87, 463, 500, 258),
+    "7-4": (189, 87, 258, 500, 258),
+    "7-5": (190, 87, 162, 500, 260),
+    "7-6": (197, 87, 150, 500, 262),
+    "7-7": (199, 152, 78, 308, 600),
+    # One source drawing has an empty 7-8 caption above and the 7-9 caption
+    # below. Keep both captions in this single crop, not duplicate drawings.
+    "7-9": (201, 119, 67, 374, 465),
+    "7-10": (202, 117, 210, 378, 458),
+    "7-11": (212, 87, 78, 438, 380),
+    "8-1": (214, 158, 78, 296, 469),
+    "8-2": (216, 158, 78, 296, 516),
+    "8-3": (220, 130, 78, 352, 202),
+    "8-4": (221, 90, 238, 470, 310),
+    "8-5": (222, 90, 90, 471, 309),
+    "8-6": (224, 90, 90, 470, 292),
+    "8-7": (225, 88, 98, 474, 280),
+    "9-1": (268, 160, 86, 305, 214),
+    "9-2": (268, 137, 463, 370, 222),
+    "9-3": (276, 64, 403, 484, 141),
+    "9-4": (277, 150, 417, 312, 216),
+}
+
+# Chapter 6 (`lrm-figure-6-<n>.png`).
+CH6_FIGURES = {
+    "6-1": (151, 190, 247, 232, 132),
+    "6-2": (174, 103, 300, 423, 110),
+}
+
+# Chapter 11 source graphs (`ch11-<name>.png`). All source pages were visually
+# checked on 2026-09-23. Broad model-page crops retain the original notes as
+# well as edges; HTML also transcribes those notes.
+CH11_CROPS = {"figure-11-1": (288, 110, 493, 390, 158),
+              "legend-11-5-1-2": (293, 85, 68, 475, 660),
+              "legend-11-5-3": (294, 85, 68, 475, 660)}
+CH11_CROPS.update({f"model-page-{p}": (p, 60, 60, 500, 668)
+                   for p in range(296, 322)})
+
+# Annex E figure and table crops (`annex-e-<name>.png`).
+ANNEX_E_CROPS = {
+    "figure-e-1": (415, 220, 584, 175, 120),
+    "table-e-1-a": (417, 78, 242, 455, 400),
+    "table-e-1-b": (418, 78, 68, 455, 555),
+    "table-e-1-c": (419, 78, 68, 455, 590),
+}
+
+# set: (crops, output prefix, message when the PDF changed, report line)
+FIGURE_SETS = {
+    "lrm": (LRM_FIGURES, "lrm-figure-", "Source PDF changed: re-audit page and crop coordinates first",
+            "Figure {name}: PDF page {page}, box {left} {top} {width} {height}"),
+    "ch6": (CH6_FIGURES, "lrm-figure-", "Source PDF changed: re-audit crop coordinates first",
+            "Figure {name}: PDF page {page}, box {left} {top} {width} {height}"),
+    "ch11": (CH11_CROPS, "ch11-", "Source PDF changed: re-audit every crop first",
+             "{name}: physical {page}; rectangle {left} {top} {width} {height}"),
+    "annex-e": (ANNEX_E_CROPS, "annex-e-", "Source changed: visually re-audit rectangles",
+                "{name}: physical {page}; rectangle {left} {top} {width} {height}"),
+}
+
+
+def figures(argv):
+    """Re-crop the LRM figures in docs/figures from docs/VAMS-LRM-2023.pdf.
+
+        tools/conformance.py figures [lrm|ch6|ch11|annex-e ...]   # default: all
+    """
+    names = argv or list(FIGURE_SETS)
+    for name in names:
+        if name not in FIGURE_SETS:
+            print(f"usage: conformance.py figures [{'|'.join(FIGURE_SETS)} ...]", file=sys.stderr)
+            return 2
+    destination = ROOT / "docs/figures"
+    for name in names:
+        crops, prefix, changed, report = FIGURE_SETS[name]
+        if hashlib.sha256(LRM_PDF.read_bytes()).hexdigest() != LRM_SHA256:
+            raise SystemExit(changed)
+        destination.mkdir(exist_ok=True)
+        for crop, (page, left, top, width, height) in crops.items():
+            subprocess.run([
+                "pdftoppm", "-f", str(page), "-l", str(page), "-singlefile",
+                "-r", str(72 * FIG_SCALE), "-x", str(left * FIG_SCALE),
+                "-y", str(top * FIG_SCALE), "-W", str(width * FIG_SCALE),
+                "-H", str(height * FIG_SCALE), "-png", str(LRM_PDF), str(destination / f"{prefix}{crop}"),
+            ], check=True)
+            print(report.format(name=crop, page=page, left=left, top=top, width=width, height=height))
+    return 0
+
+
+SUBCOMMANDS["figures"] = figures
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
