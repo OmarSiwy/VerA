@@ -91,7 +91,7 @@ nothing.
      (already stale at base); cite `verifyRejected` and `failureContains`.
    - `docs/IMPLEMENTATION.md:20` names `src/main.zig` `fileStem`; it is
      `lib/backend/orchestrator.zig` `fileStem` (stale at base).
-   - `docs/UNITS.md` needs `tools/units.py` re-run: new files under
+   - `docs/UNITS.md` needs `zig build archmap` re-run: new files under
      `src/cli/` and `tests/harness/`.
    `engineCache`, `max_source_bytes` and `typeCheck` stayed in src/main.zig
    because docs/IMPLEMENTATION.md and docs/measurements cite them there.

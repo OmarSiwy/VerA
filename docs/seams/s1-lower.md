@@ -48,7 +48,7 @@ from lower.zig into `tables.zig`; `Lower.<Name>` still resolves to each.
    - Fixture comments (`m01_02`, `m01_03`: `lib/ir/lower/param.zig scanHeld`;
      `s01_05`: `lower_event.armMonitor`) are out of scope for every step-1
      agent; whoever next edits those fixtures should update them.
-   - `docs/UNITS.md` is generated: rerun `tools/units.py`.
+   - `docs/UNITS.md` is generated: rerun `zig build archmap`.
    - Comments elsewhere spell `Lower.foo` for functions that live in a
      sub-file (`Lower.lowerRandom`, `Lower.armMonitor`, `Lower.finishDisplays`,
      ...). They never resolved literally; the names are unchanged, so grep
