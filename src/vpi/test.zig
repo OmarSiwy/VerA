@@ -1,7 +1,7 @@
 //! The model's and the routines' unit tests: a design compiled with
 //! `vera.compileSource` (or the digital `run.Harness`), opened, and its rows
 //! and failure paths checked. The ABI, the header's constants and C object
-//! lifetimes are `zig build test-vpi` (tests/vpi_app.c against
+//! lifetimes are `zig build test-vpi` (tests/fixtures/ch11_vpi/vpi_app.c against
 //! src/vpi/vpi_user.h).
 
 const std = @import("std");

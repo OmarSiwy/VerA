@@ -149,7 +149,7 @@ unchanged here.
 
 1. **Stale kernel paths in documents I don't own.** After the move,
    `docs/CLAUSE-AUDIT.md`, `docs/IMPLEMENTATION.md` and `docs/UNITS.md`
-   (regenerate with `tools/units.py`) cite `lib/backend/<x>_kernels.zig`. So do
+   (regenerate with `zig build archmap`) cite `lib/backend/<x>_kernels.zig`. So do
    two fixture comments
    (`ch09_system_tasks/171_random_ieee1364_digits.va`,
    `s01_13_long_record_is_not_truncated.va`) and

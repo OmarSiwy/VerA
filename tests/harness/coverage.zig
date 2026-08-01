@@ -3,7 +3,7 @@
 //! table of contents read out of `docs/*.html` -> the static citation
 //! inventory on stderr (measure C). Nothing is compiled or run.
 //!
-//! The report's lines are parsed by `tools/conformance.sh`: the
+//! The report's lines are parsed by `tools/conformance.py`: the
 //! `<n> of <m> LRM clauses cited` tally and its polarity row are frozen text.
 //!
 //! Clauses: `docs/CLAUSE-AUDIT.md` §5 (the classification kinds) and §5.7

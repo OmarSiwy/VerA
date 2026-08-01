@@ -108,6 +108,7 @@ pub fn build(b: *std.Build) void {
     // roots here keeps every runner grading the same suite.
     const o = b.addOptions();
     o.addOption([]const u8, "fixture_root", pathFromRoot(b, "tests/fixtures"));
+    o.addOption([]const u8, "repo_root", pathFromRoot(b, "."));
     o.addOption([]const u8, "docs_root", pathFromRoot(b, "docs"));
     o.addOption([]const u8, "work_root", pathFromRoot(b, ".zig-cache/vera-suite"));
     o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
@@ -201,8 +202,27 @@ pub fn build(b: *std.Build) void {
     b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
         .dependOn(&spice.step);
 
+    // What vera says about every fixture, snapshotted so a refactor phase can
+    // prove it changed nothing (AGENTS.md §4): `-- before`, `-- after`, then
+    // `-- diff`. No check on the step, for the cacheability reason
+    // `test-devices` gives: the fixtures are read at run time.
+    const golden = b.addRunArtifact(suite_exe);
+    golden.addArtifactArg2(exe, .{});
+    golden.addArg("golden");
+    golden.addPassthruArgs();
+    b.step("golden", "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)")
+        .dependOn(&golden.step);
+
+    // docs/UNITS.md and the architecture map in AGENTS.md, read from the code.
+    const map = b.addRunArtifact(suite_exe);
+    map.addArtifactArg2(exe, .{});
+    map.addArg("archmap");
+    map.addPassthruArgs();
+    b.step("archmap", "Regenerate docs/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)")
+        .dependOn(&map.step);
+
     // The VPI acceptance test. A VPI implementation is only tested from C:
-    // `tests/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
+    // `tests/fixtures/ch11_vpi/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
     // it names is the header's number, and links against the `export fn`s in
     // `src/vpi/root.zig`, which puts the ABI itself under test.
     // `tests/vpi_host.zig` is the simulator half; it calls the application's
@@ -234,9 +254,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const test_vpi = &b.top_level_steps.get("test-vpi").?.step;
-    const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/vpi_app.c", "tests");
+    const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/fixtures/ch11_vpi/vpi_app.c", "tests/fixtures/ch11_vpi");
     vpi_app.expectExitCode(0);
-    // The counts are tests/vpi_design.va's shape, and `checks` is how many
+    // The counts are tests/fixtures/ch11_vpi/vpi_design.va's shape, and `checks` is how many
     // assertions the application reached: a walk that returns early, or a
     // startup table never called, still exits 0.
     vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
@@ -356,7 +376,7 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide" }) |name| {
         const gen = b.addRunArtifact(exe);
         gen.addArg("--emit-zig");
-        gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
+        gen.addFileArg(b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name})));
         gen.addArg("-o");
         const device = gen.addOutputFileArg2(b.fmt("{s}.zig", .{name}), .{});
         const dev_mod = b.createModule(.{
@@ -375,20 +395,20 @@ pub fn build(b: *std.Build) void {
             so.addFileArg(b.path("tests/vdev_dyn.zig"));
             so.addArg("--work-dir");
             const wd = so.addOutputDirectoryArg2(name, .{});
-            so.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
+            so.addFileArg(b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name})));
             so_opts.addOptionPath(name, wd.path(b, b.fmt("lib{s}.1.so", .{name})));
         }
     }
     test_step.dependOn(testRun(b, "vdev_host", vdev_host, runner));
     test_step.dependOn(testRun(b, "vdev_so_host", vdev_so_host, runner));
     for ([_]struct { args: []const []const u8, file: []const u8, exit: u8, says: []const u8 }{
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_pins.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_pins`: more than 256 pins" },
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_tran.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_tran`: a §7.6 pass switch" },
-        .{ .args = &.{ "--emit-zig", "--state=auto" }, .file = "tests/vdev/v_inv.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: a contract device is 4-state: --state=auto" },
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_sv.sv", .exit = 2, .says = "error[E1104]: a SystemVerilog source is not supported" },
-        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_seconds.v", .exit = 0, .says = "warning[W1155]: device digital tick is 1 s" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_pins.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_pins`: more than 256 pins" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_tran.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_tran`: a §7.6 pass switch" },
+        .{ .args = &.{ "--emit-zig", "--state=auto" }, .file = "tests/fixtures/ch07_mixed_signal/v_inv.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: a contract device is 4-state: --state=auto" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_sv.sv", .exit = 2, .says = "error[E1104]: a SystemVerilog source is not supported" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/fixtures/ch07_mixed_signal/v_seconds.v", .exit = 0, .says = "warning[W1155]: device digital tick is 1 s" },
     }) |r| {
         const run = b.addRunArtifact(exe);
         run.addArgs(r.args);
@@ -436,7 +456,7 @@ pub fn build(b: *std.Build) void {
         run.addFileArg(wf.add("dyn.zig", "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"));
         run.addArg("--work-dir");
         _ = run.addOutputDirectoryArg2("so", .{});
-        run.addFileArg(b.path("tests/vpi_design.va"));
+        run.addFileArg(b.path("tests/fixtures/ch11_vpi/vpi_design.va"));
         run.expectExitCode(1);
         run.expectStdOutEqual("");
         run.addCheck(.{ .expect_stderr_match = "vpi_design.va: codegen produced Zig that does not compile" });
@@ -465,24 +485,24 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch03_data_types/nodeset_metadata_host.zig", .va = "tests/fixtures/ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
-    .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
-    .{ .host = "tests/status_host.zig", .va = "tests/status_ops.va" },
-    .{ .host = "tests/port_mask_host.zig", .va = "tests/port_mask.va" },
-    .{ .host = "tests/table_status_host.zig", .va = "tests/table_status.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_fixed.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_dynamic.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_reg_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_clog2_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_array_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_index_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_context_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_array_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_constant_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/timer_body_precomputed_controls.va" },
+    .{ .host = "tests/revert_host.zig", .va = "tests/fixtures/ch04_expressions/revert_ops.va" },
+    .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
+    .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
+    .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_fixed.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_dynamic.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_reg_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_clog2_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_index_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_function_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_context_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_function_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_effect_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_constant_effect_controls.va" },
+    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_precomputed_controls.va" },
     .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
     .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },

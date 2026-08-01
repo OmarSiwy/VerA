@@ -89,7 +89,7 @@ extern PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...);
 #endif
 
 /* ==========================================================================
- * The plugins' shared self-check, same contract as tests/vpi_app.c's: first
+ * The plugins' shared self-check, same contract as tests/fixtures/ch11_vpi/vpi_app.c's: first
  * failure prints the check and exits 1, success prints one census line.
  * ========================================================================== */
 
@@ -123,7 +123,7 @@ extern PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...);
             "%s: got %.17g want %.17g (tol %g)", (what), (double)(got),       \
             (double)(want), (double)(tol))
 
-/* §12.2, as tests/vpi_app.c uses it: a call that must fail has to SAY so. */
+/* §12.2, as tests/fixtures/ch11_vpi/vpi_app.c uses it: a call that must fail has to SAY so. */
 static P03_UNUSED int p03_saw_error(const char *what)
 {
   s_vpi_error_info info;

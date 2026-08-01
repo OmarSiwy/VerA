@@ -1,11 +1,11 @@
 // The design `zig build test-vpi` walks from C. LRM §6.2.2 (instantiation),
 // §11.6 (the object model the walk is against).
 //
-// Not a `tests/fixtures/**` file on purpose: a fixture asserts a NUMBER a
-// compiled device produces, and nothing here is about the device. This source
-// exists to have a SHAPE — three levels of instance, a class of object at every
-// level, and a distinct spelling for each property `tests/vpi_app.c` reads:
-//
+// Not a fixture, on purpose (no `//!` line, so the suite does not collect it):
+// a fixture asserts a NUMBER a compiled device produces, and nothing here is
+// about the device. This source exists to have a SHAPE — three levels of
+// instance, a class of object at every level, and a distinct spelling for each
+// property `vpi_app.c`, beside this file, reads:
 //   - three scopes deep, so §11.6.1's `vpiInternalScope` is recursive rather
 //     than one hop, and so §6.7's upward name search has somewhere to walk up
 //     THROUGH rather than straight to the top;
