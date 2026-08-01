@@ -1150,5 +1150,496 @@ def comments(argv):
 SUBCOMMANDS["comments"] = comments
 
 
+# ---------------------------------------------------------------------------
+# selftest: regression checks for the subcommands above and for the LRM text
+# they read. Documentation integrity, not language conformance: no fixture
+# earns credit here, and none of these runs the compiler.
+# ---------------------------------------------------------------------------
+
+import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+
+
+class WorklistTests(unittest.TestCase):
+    """lrm-audit's heading, token and HTML rules."""
+
+    def test_heading_forms(self):
+        for title, expected in (("2. Lexical conventions", "2"),
+                                ("2.6.1 Integer constants", "2.6.1"),
+                                ("Annex C (normative)", "C"),
+                                ("C.3 Lexical conventions", "C.3"),
+                                ("Table 2-2: Escapes", None)):
+            self.assertEqual(heading(title), expected)
+
+    def test_tokens_preserve_semantically_significant_symbols(self):
+        self.assertEqual(tokens("first\n word"), tokens("first word"))
+        self.assertNotEqual(tokens("a <= b"), tokens("a < b"))
+        self.assertNotEqual(tokens("1M"), tokens("1m"))
+        self.assertNotEqual(tokens("x ** 2"), tokens("x * 2"))
+
+    def test_no_lossy_hyphen_or_compatibility_folding(self):
+        self.assertEqual(tokens("Verilog-\nAMS"), tokens("Verilog-AMS"))
+        self.assertNotEqual(tokens("Verilog-\nAMS"), tokens("VerilogAMS"))
+        self.assertNotEqual(tokens("a-\nb"), tokens("ab"))
+        self.assertNotEqual(tokens("x²"), tokens("x2"))
+        self.assertNotEqual(tokens("ﬁ"), tokens("fi"))
+        self.assertNotEqual(tokens("a­b"), tokens("ab"))
+
+    def test_html_excludes_navigation_but_keeps_tables_and_subheadings(self):
+        parser = ChapterHTML()
+        parser.feed('<head><title>ignored</title></head><nav>ignored</nav>'
+                    '<h1>2. Lexical conventions</h1><h2>2.7 Strings</h2>'
+                    '<p>A &lt; B</p><h3>Table 2-2</h3>'
+                    '<table><tr><td>escape</td><td>value</td></tr></table>')
+        text = parser.sections['2.7']['text']
+        self.assertIn('A < B', text)
+        self.assertIn('Table 2-2', text)
+        self.assertIn('escape value', text)
+        self.assertNotIn('ignored', text)
+
+    def test_duplicate_html_heading_is_visible(self):
+        parser = ChapterHTML()
+        parser.feed('<h2>2.7 Strings</h2><p>first</p>'
+                    '<h2>2.7 Strings again</h2>')
+        self.assertEqual(parser.duplicates, ['2.7'])
+
+    @patch.object(subprocess, "run")
+    def test_pdf_front_matter_footer_and_numeric_table_cells(self, run):
+        run.return_value = SimpleNamespace(stdout=(
+            'Contents\n2. Lexical conventions .... 11\f'
+            '1. Verilog-AMS introduction\n1.1 Scope\nsource text\n'
+            '2. Lexical conventions\n2.7 Strings\n377\nbyte boundary\n'
+            '12\nCopyright © 2024 Accellera\f'))
+        sections, _ = pdf_sections('source.pdf')
+        self.assertEqual(list(sections), ['1', '1.1', '2', '2.7'])
+        self.assertIn('377', sections['2.7']['text'])
+        self.assertNotIn('12\n', sections['2.7']['text'])
+        self.assertEqual(sections['2.7']['page'], 2)
+
+
+class InheritedWorklistTests(unittest.TestCase):
+    """ieee1364-audit's table-of-contents reader, on synthetic text (no PDF)."""
+
+    def test_namespace_page_anchor_and_informative_distinction(self):
+        text = ("Contents\n1. Overview ........ 1\n1.1 Scope ........ 1\n"
+                "Annex I (informative) Bibliography ........ 2\f"
+                "1. Overview\n1.1 Scope\fAnnex I\n(informative)\f")
+        rows = worklist(text)
+        self.assertEqual([r["id"] for r in rows],
+                         ["IEEE1364-2005:1", "IEEE1364-2005:1.1", "IEEE1364-2005:I"])
+        self.assertEqual(rows[0]["pdf_page"], 2)
+        self.assertEqual(rows[-1]["classification"], "informative")
+        self.assertTrue(all(r["heading_located"] for r in rows))
+        self.assertTrue(all(r["rule_review"] == "not-assessed" for r in rows))
+
+    def test_missing_anchor_is_not_verified(self):
+        text = ("Contents\n1. Overview ........ 1\n1.2 Missing ........ 1\n"
+                "Annex I (informative) Bibliography ........ 2\f"
+                "1. Overview\fAnnex I\f")
+        self.assertFalse(worklist(text)[1]["heading_located"])
+
+    def test_incomplete_toc_rejected(self):
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            worklist("Contents\n1. Overview ........ 1\f1. Overview\f")
+
+    def test_known_contents_error_keeps_original_page(self):
+        pages = [""] * 215
+        pages[0] = ("Contents\n1. Overview ........ 1\n"
+                    "14.2.1 Module path restrictions ........ 212\n"
+                    "Annex I (informative) Bibliography ........ 214")
+        pages[1] = "1. Overview"
+        pages[213] = "14.2.1 Module path restrictions"
+        pages[214] = "Annex I"
+        row = worklist("\f".join(pages))[1]
+        self.assertEqual(row["toc_printed_page"], 212)
+        self.assertEqual(row["printed_page"], 213)
+        self.assertEqual(row["pdf_page"], 214)
+        self.assertTrue(row["heading_located"])
+
+    def test_deprecated_is_not_silently_normative_or_closed(self):
+        text = ("Contents\n1. Overview ........ 1\n21. Removed ........ 2\n"
+                "Annex I (informative) Bibliography ........ 3\f"
+                "1. Overview\f21. Removed\fAnnex I\f")
+        self.assertEqual(worklist(text)[1]["classification"], "deprecated-removed")
+
+
+class KeywordInventory(unittest.TestCase):
+    """keywords: the independent inventory and its fixture generator."""
+
+    def test_editorial_notes_do_not_add_keywords(self):
+        parser = KeywordTable()
+        parser.feed('<table><tr><td><code>if</code></td>'
+                    '<td><code>module</code></td></tr></table>'
+                    '<p>Not a keyword: <code>negedgenmos</code></p>')
+        self.assertEqual(parser.words, ['if', 'module'])
+
+    def test_escaped_generation_terminates_names_and_pins_observation_count(self):
+        source = keyword_fixture(['analog', 'if'], 'escaped')
+        self.assertIn('//! checks 2\n', source)
+        self.assertIn('real \\analog ;', source)
+        self.assertIn('observed = \\if ;', source)
+        self.assertLess(source.index('\\if  = 2.0;'), source.index('observed ='))
+        self.assertIn('`CHECKX("escaped if", observed, 2.0);', source)
+        self.assertEqual(source.count('`CHECKX('), 2)
+
+    def test_case_variants_have_independent_values(self):
+        source = keyword_fixture(['analog', 'if'], 'case')
+        self.assertIn('//! checks 4\n', source)
+        for name, value in [('ANALOG', 1), ('Analog', 2), ('IF', 3), ('If', 4)]:
+            self.assertIn(f'{name} = {value}.0;', source)
+            self.assertIn(f'observed = {name};', source)
+        self.assertLess(source.index('If = 4.0;'), source.index('observed ='))
+        self.assertEqual(source.count('`CHECKX('), 4)
+
+
+class FigureImages(HTMLParser):
+    """Every <img>'s attributes, every id, and how many inline <svg>s."""
+
+    def __init__(self):
+        super().__init__()
+        self.images = []
+        self.ids = []
+        self.figures = set()
+        self.svg_count = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "img":
+            self.images.append(attrs)
+        if tag == "svg":
+            self.svg_count += 1
+        if tag == "figure":
+            self.figures.add(attrs.get("id"))
+        if "id" in attrs:
+            self.ids.append(attrs["id"])
+
+
+def png_size(data):
+    return struct.unpack(">II", data[16:24])
+
+
+class SourceFigures(unittest.TestCase):
+    """figures: structural guards for the PDF figure assets; visual fidelity is
+    reviewed separately."""
+
+    def test_source_revision(self):
+        self.assertEqual(hashlib.sha256(LRM_PDF.read_bytes()).hexdigest(), LRM_SHA256)
+
+    def test_chapter_one_figures_and_convention_colors(self):
+        expected = {"1-1", "1-2", "1-3"}
+        self.assertEqual({key for key in LRM_FIGURES if key.startswith("1-")}, expected)
+        html = (ROOT / "docs/ch1-intro.html").read_text()
+        self.assertIn('.syntax b { color: #c00000; }', html)
+        self.assertIn('.syntax.extension { color: #2020b0; }', html)
+        self.assertIn('<div class="syntax extension">connectrules_declaration', html)
+
+    def test_chapter_five_uses_all_source_figures(self):
+        # These redraws previously changed open probe paths into wires and
+        # moved the timing-event dot. Guard against silently reintroducing
+        # inline substitutes; visual comparison remains a separate review.
+        expected = {f"5-{n}" for n in range(1, 7)}
+        self.assertEqual({key for key in LRM_FIGURES if key.startswith("5-")}, expected)
+        parser = FigureImages()
+        parser.feed((ROOT / "docs/ch5-analog.html").read_text())
+        self.assertEqual(parser.svg_count, 0)
+        for key in expected:
+            self.assertEqual(parser.ids.count(f"figure-{key}"), 1)
+
+    def test_chapter_six_crop_bounds_png_and_accessible_html(self):
+        self.assertEqual(set(CH6_FIGURES), {"6-1", "6-2"})
+        parser = FigureImages()
+        parser.feed((ROOT / "docs/ch6-hierarchy.html").read_text())
+        images = {i.get("src"): i for i in parser.images}
+        for figure, (page, left, top, width, height) in CH6_FIGURES.items():
+            self.assertIn(page, (151, 174))
+            self.assertGreaterEqual(min(left, top), 0)
+            self.assertGreater(min(width, height), 0)
+            self.assertLessEqual(left + width, 612)
+            self.assertLessEqual(top + height, 792)
+            path = f"figures/lrm-figure-{figure}.png"
+            data = (ROOT / "docs" / path).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(png_size(data), (width * FIG_SCALE, height * FIG_SCALE))
+            self.assertIn(f"figure-{figure}", parser.figures)
+            attrs = images[path]
+            self.assertIn(f"Source Figure {figure}", attrs["alt"])
+            self.assertEqual(int(attrs["width"]), width * FIG_SCALE)
+            self.assertEqual(int(attrs["height"]), height * FIG_SCALE)
+
+    def test_chapter_seven_preserves_shared_figure_captions(self):
+        expected = {f"7-{n}" for n in range(1, 12)} - {"7-8"}
+        self.assertEqual({key for key in LRM_FIGURES if key.startswith("7-")}, expected)
+        parser = FigureImages()
+        parser.feed((ROOT / "docs/ch7-mixed-signal.html").read_text())
+        self.assertEqual(parser.svg_count, 0)
+        # 7-8 is a source caption above the same drawing captioned 7-9 below.
+        # Both remain addressable, without fabricating a separate image.
+        for n in range(1, 12):
+            self.assertEqual(parser.ids.count(f"figure-7-{n}"), 1)
+        matches = [i for i in parser.images if i.get("src") == "figures/lrm-figure-7-9.png"]
+        self.assertEqual(len(matches), 1)
+
+    def test_chapter_nine_source_figures(self):
+        expected = {f"9-{n}" for n in range(1, 5)}
+        self.assertEqual({key for key in LRM_FIGURES if key.startswith("9-")}, expected)
+        parser = FigureImages()
+        parser.feed((ROOT / "docs/ch9-system.html").read_text())
+        for key in expected:
+            self.assertEqual(parser.ids.count(f"figure-{key}"), 1)
+            filename = f"figures/lrm-figure-{key}.png"
+            matches = [item for item in parser.images if item.get("src") == filename]
+            self.assertEqual(len(matches), 1)
+            self.assertTrue(matches[0].get("alt"))
+            data = (ROOT / "docs" / filename).read_bytes()
+            _, _, _, width, height = LRM_FIGURES[key]
+            self.assertEqual(png_size(data), (width * 3, height * 3))
+
+    def test_crops_are_inside_source_pages(self):
+        for figure, (page, x, y, width, height) in LRM_FIGURES.items():
+            with self.subTest(figure=figure):
+                self.assertGreater(page, 0)
+                self.assertLessEqual(page, 442)
+                self.assertGreaterEqual(x, 0)
+                self.assertGreaterEqual(y, 0)
+                self.assertGreater(width, 0)
+                self.assertGreater(height, 0)
+                self.assertLessEqual(x + width, 612)
+                self.assertLessEqual(y + height, 792)
+
+    def test_assets_and_html_references(self):
+        for figure, (_, _, _, width, height) in LRM_FIGURES.items():
+            with self.subTest(figure=figure):
+                filename = f"figures/lrm-figure-{figure}.png"
+                data = (ROOT / "docs" / filename).read_bytes()
+                self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(data[12:16], b"IHDR")
+                self.assertEqual(png_size(data), (width * 3, height * 3))
+                chapter = figure.split("-")[0]
+                paths = list((ROOT / "docs").glob(f"ch{chapter}-*.html"))
+                self.assertEqual(len(paths), 1)
+                parser = FigureImages()
+                parser.feed(paths[0].read_text())
+                matches = [i for i in parser.images if i.get("src") == filename]
+                self.assertEqual(len(matches), 1)
+                self.assertTrue(matches[0].get("alt"))
+                self.assertEqual(parser.ids.count(f"figure-{figure}"), 1)
+
+    def test_chapter_eleven_source_and_assets(self):
+        # Documentation integrity only: this is not an executed VPI test.
+        parsed = FigureImages()
+        parsed.feed((ROOT / "docs/ch11-vpi.html").read_text())
+        self.assertEqual(len(parsed.ids), len(set(parsed.ids)))
+        expected = {f"figures/ch11-{name}.png" for name in CH11_CROPS}
+        self.assertEqual({item["src"] for item in parsed.images}, expected)
+        for item in parsed.images:
+            self.assertTrue(item.get("alt"))
+            data = (ROOT / "docs" / item["src"]).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            name = Path(item["src"]).stem.removeprefix("ch11-")
+            width, height = CH11_CROPS[name][-2:]
+            self.assertEqual(png_size(data), (width * 3, height * 3))
+        for clause in range(1, 26):
+            self.assertIn(f"s11-6-{clause}", parsed.ids)
+
+    def test_annex_e_source_links_and_dimensions(self):
+        # Documentation integrity, not primitive simulation evidence.
+        html = (ROOT / "docs/annex-e-spice.html").read_text()
+        for name, (_, _, _, width, height) in ANNEX_E_CROPS.items():
+            relative = f"figures/annex-e-{name}.png"
+            self.assertIn(f'src="{relative}"', html)
+            data = (ROOT / "docs" / relative).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(png_size(data), (width * 3, height * 3))
+
+
+class SyntaxText(HTMLParser):
+    """The text of every `<div class="syntax">` display, entities decoded."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.parts = []
+        self.blocks = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "div":
+            if self.depth:
+                self.depth += 1
+            elif "syntax" in dict(attrs).get("class", "").split():
+                self.depth = 1
+                self.parts = []
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self.depth:
+            self.depth -= 1
+            if not self.depth:
+                self.blocks.append("".join(self.parts))
+
+    def handle_data(self, data):
+        if self.depth:
+            self.parts.append(data)
+
+
+def syntax_text(source):
+    parser = SyntaxText()
+    parser.feed(source)
+    parser.close()
+    if parser.depth:
+        raise ValueError("Unclosed syntax display")
+    return parser.blocks
+
+
+# The rendered Chapter 4 syntax text from root HTML SHA256
+# c452aae6c5868af5538ce84d989bb3ae83b51e3047b9157784190688dca188fe.
+CH4_SYNTAX_SHA256 = "c206b78ed2fa1dbba040bb45b5056ecb6ce58f10dfce7c977f8f595a0f6f4ff3"
+
+
+class LrmSource(unittest.TestCase):
+    """Bounded source-review guards on docs/*.html, not grammar completeness
+    proof and not proof of whole-chapter source fidelity."""
+
+    def test_annex_a_signed_base_separates_terminals_from_meta_symbols(self):
+        page = (ROOT / "docs/annex-a-syntax.html").read_text()
+        for base in "dDbBoOhH":
+            spelling = "<b>'</b>[<b>s</b>|<b>S</b>]<b>" + base + "</b>"
+            self.assertIn(spelling, page)
+            self.assertEqual(html.unescape(re.sub(r"<[^>]*>", "", spelling)), "'[s|S]" + base)
+        self.assertIn("lexical character classes", page)
+        self.assertIn("Editorial source note", page)
+
+    def test_ch2_comment_delimiters_are_literals_not_repetition_notation(self):
+        page = (ROOT / "docs/ch2-lexical.html").read_text()
+        block = re.search(r'<div class="syntax">(.*?)</div>', page, re.S).group(1)
+        # AMS2023 physical24/printed11, visually reviewed2026-09-23.
+        self.assertEqual(re.findall(r"<b>(.*?)</b>", block), ["//", "/*", "*/"])
+        self.assertIn("one_line_comment ::= <b>//</b> comment_text \\n", block)
+        self.assertIn("block_comment ::= <b>/*</b> comment_text <b>*/</b>", block)
+        self.assertIn("comment_text ::= { Any_ASCII_character }", block)
+        self.assertIn("      | block_comment", block)
+
+    def test_ch4_rendered_syntax_matches_pre_markup_root(self):
+        # Guards typography-only edits; it is not proof of full LRM fidelity.
+        blocks = syntax_text((ROOT / "docs/ch4-expressions.html").read_text())
+        self.assertTrue(blocks)
+        digest = hashlib.sha256(json.dumps(blocks, ensure_ascii=False).encode()).hexdigest()
+        self.assertEqual(digest, CH4_SYNTAX_SHA256)
+
+    def test_entities_are_not_split_by_markup(self):
+        for path in sorted((ROOT / "docs").glob("*.html")):
+            with self.subTest(path=path.name):
+                source = path.read_text()
+                self.assertIsNone(re.search(r"&(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#x[0-9a-fA-F]+)<", source))
+
+    def test_regression_rejects_tag_stripping_before_entity_decode(self):
+        good = '<div class="syntax">&zeta;</div>'
+        broken = '<div class="syntax">&zeta<b>;</b></div>'
+        self.assertEqual(syntax_text(good), ["ζ"])
+        self.assertNotEqual(syntax_text(good), syntax_text(broken))
+
+    def test_ch12_literal_source_entities_and_editorial_boundary(self):
+        page = (ROOT / "docs/ch12-vpi-routines.html").read_text()
+        rendered = html.unescape(page)
+        self.assertIn("systf_data_p = &amp;(systf_data_list[0]);", rendered)
+        self.assertIn("while (systf_data_p-&gt;type)", rendered)
+        for name in ("callback-layout", "resistor-source-defects",
+                     "sampler-source-defects", "startup-source-defects",
+                     "control-source-count"):
+            self.assertIn('id="editorial-' + name + '"', page)
+        self.assertEqual(page.count("Editorial source note (not LRM text)."), 5)
+
+    def test_ch12_no_numbered_hdl_fixture_claims_vpi_execution(self):
+        fixtures = ROOT / "tests/fixtures/ch12_vpi_routines"
+        for path in fixtures.glob("[0-9]*.va"):
+            with self.subTest(path=path.name):
+                self.assertNotRegex(path.read_text(), r"(?m)^//! lrm 12(?:\.|$)")
+
+
+class InformativeContent(HTMLParser):
+    """Glossary terms and table cells of an informative annex."""
+
+    def __init__(self):
+        super().__init__()
+        self.terms = []
+        self.tables = []
+        self.in_term = False
+        self.term = ""
+        self.in_cell = False
+        self.cell = ""
+        self.row = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "dt":
+            self.in_term, self.term = True, ""
+        elif tag == "table":
+            self.tables.append([])
+        elif tag == "tr":
+            self.row = []
+        elif tag in ("td", "th"):
+            self.in_cell, self.cell = True, ""
+
+    def handle_data(self, data):
+        if self.in_term:
+            self.term += data
+        if self.in_cell:
+            self.cell += data
+
+    def handle_endtag(self, tag):
+        if tag == "dt":
+            self.terms.append(self.term)
+            self.in_term = False
+        elif tag in ("td", "th"):
+            self.row.append(self.cell)
+            self.in_cell = False
+        elif tag == "tr":
+            self.tables[-1].append(self.row)
+
+
+class InformativeSource(unittest.TestCase):
+    """Source-review guards for informative annex content, not compiler coverage."""
+
+    def test_glossary_exact_term_inventory(self):
+        expected = [
+            "AMS", "behavioral description", "behavioral model", "block",
+            "branch", "compact model", "component", "constitutive relationships",
+            "control flow", "child module", "flow", "instance", "instantiation",
+            "Kirchhoff’s Laws", "level", "model", "module", "net declaration",
+            "node", "NR method", "parameter", "parameter declaration", "port",
+            "potential", "primitive", "probe", "reference direction",
+            "reference node", "scope", "structural definitions", "terminal",
+            "Verilog-A", "Verilog-AMS",
+        ]
+        parsed = InformativeContent()
+        parsed.feed((ROOT / "docs/annex-h-glossary.html").read_text())
+        self.assertEqual(parsed.terms, expected)
+
+    def test_history_preserves_source_gaps_and_table_cells(self):
+        page = (ROOT / "docs/annex-g-changes.html").read_text()
+        parsed = InformativeContent()
+        parsed.feed(page)
+        self.assertEqual(len(parsed.tables), 7)
+        for index, table in enumerate(parsed.tables):
+            for row in table:
+                self.assertEqual(len(row), 4 if index == 0 else 3)
+        # Printed 415 omits item 14; printed 416 omits item 13.
+        self.assertNotIn("14", [row[0] for row in parsed.tables[1][1:]])
+        self.assertNotIn("13", [row[0] for row in parsed.tables[2][1:]])
+        # Printed 423 contains a genuinely blank Mantis row, not lost HTML.
+        self.assertIn(["7893", "", ""], parsed.tables[6])
+        self.assertIn("Editorial context (not LRM text)", page)
+        self.assertIn("$roi()", page)  # source typo; do not silently rewrite
+
+
+def selftest(argv):
+    """Run the regression checks above (`unittest` arguments pass through,
+    e.g. `selftest -v` or `selftest SourceFigures`)."""
+    sys.dont_write_bytecode = True
+    program = unittest.main(module=sys.modules[__name__], argv=["conformance.py selftest"] + argv, exit=False)
+    return 0 if program.result.wasSuccessful() else 1
+
+
+SUBCOMMANDS["selftest"] = selftest
+
+
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
