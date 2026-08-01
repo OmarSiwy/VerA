@@ -135,7 +135,7 @@ change ships as a patch of the minor before it.
 |---|---|---|---|
 | **v0.9.0** | The current tree (§3.2) | the old ladder, except what §5 lists | `tools/conformance.py --changelog v0.9.0`; every `build.zig` step green |
 | v0.9.1 | Hygiene: the §5.5 fixture headers, `CLAUSE-AUDIT.md` refreshed (§5.8), the passing fixtures on branch `audit-wip/ch5`, the rollback host wired or deleted, CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
-| v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/vs-verilator.sh` |
+| v0.10.0 | Native `.v`: the second static-schedule fork fix, then build time | §5.3 native rows | `test-1364 -- --native` in every mode; `tools/conformance.py verilator` |
 | v0.11.0 | Measure B scoped: the out-of-scope 1364 chapters classified and refused with named diagnostics (§1 B) | the classification half of §1 B | `test-1364 -- --coverage`: no unclassified clause outside the §1 B scope |
 | v0.12.0 | Measure A to zero: the AMS and digital XFAILs implemented, and the AMS rows of §5.2 and §5.3 | §1 A; §5.2, §5.3 AMS rows | `--strict` exits 0 |
 | v0.13.0 | IEEE 1364 language gaps: net arrays, upward hierarchical references, continuous assignment in a generate block, then §5.2 and §5.3's IEEE rows | §5.2, §5.3 IEEE rows | `test-1364`, `--strict` |

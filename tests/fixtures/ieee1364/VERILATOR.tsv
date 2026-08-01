@@ -1,5 +1,5 @@
 # Verilator 5.048 2026-04-26 rev v5.048 — `verilator --binary --timing -Wno-fatal -Wno-lint -Wno-style`,
-# written by `tools/vs-verilator.sh --oracle`. agrees: a transcript fixture's stdout
+# written by `tools/conformance.py verilator --oracle`. agrees: a transcript fixture's stdout
 # (Verilator's `- ` report lines dropped) equals its .expected.txt, a reject fixture is
 # refused at build or exits nonzero. Verilator is 2-state by default, so a golden
 # showing x/z is expected to differ. Disagreements are listed, never resolved.
