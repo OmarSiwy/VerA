@@ -16,3 +16,6 @@ ref/
 /s01_13_built.dat
 /s01_13_wide.dat
 __pycache__/
+
+# tools/report.py output: generated, never committed.
+/report/
