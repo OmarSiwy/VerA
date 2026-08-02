@@ -61,32 +61,7 @@ MODELS = ["diode", "mos1", "bsim4va", "psp103", "psp103_nqs", "vbic13_4t"]
 # dense one failed to build psp103_nqs on 2026-10-04) with every operand from the
 # caller, so the device's eval and charge code is compiled. A real host
 # (ARPice's vtable) also compiles updateState and the rest: a lower bound.
-DYN = """const std = @import("std");
-const contract = @import("contract");
-
-pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
-    _ = name;
-    @export(&Bench(D).evalQ, .{ .name = "bench_evalq" });
-}
-
-fn Bench(comptime D: type) type {
-    return struct {
-        const n = contract.nU(D);
-        const S = contract.RefFamily(f64, &lanes, .{ .dense = false });
-        const lanes = blk: {
-            var a: [n]u8 = undefined;
-            for (&a, 0..) |*l, i| l.* = i;
-            break :blk a;
-        };
-        // Every operand comes from the caller, so nothing folds: the whole
-        // device is compiled, as a host's Newton loop would compile it.
-        fn evalQ(x: *const [n]f64, m: *const D.Model, inst: *D.Instance, sim: *const contract.SimState, out: *anyopaque) callconv(.c) void {
-            const r = D.evalQ(S, x, m, inst, sim.*);
-            @as(*@TypeOf(r), @ptrCast(@alignCast(out))).* = r;
-        }
-    };
-}
-"""
+DYN = (Path(__file__).resolve().parent.parent / "tests" / "arpice_dyn.zig").read_text()
 # bench.yaml's arpice-models `dyn`: exports nothing, so no device code compiles.
 NOOP_DYN = "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"
 BUILD_TIMEOUT_S = 1800
@@ -277,34 +252,36 @@ def chapter_table(rows, std):
 # Gaps: what the documents say is open
 # ---------------------------------------------------------------------------
 
-def roadmap_items():
-    """Every item under ROADMAP.md §5: table rows, numbered and bulleted items."""
-    text = (ROOT / "docs/ROADMAP.md").read_text()
-    body = text.split("\n## 5.", 1)[1].split("\n## ", 1)[0]
-    items, sub, cur = [], "", None
+def open_defects():
+    """The named open defects (a paragraph opening with a bold name) of the
+    "Open defects" section, in docs/IMPLEMENTATION.md or, once it is folded
+    in, docs/Vague_Decisions.md. Unnamed paragraphs there record what is gone."""
+    out = []
+    for name in ("docs/IMPLEMENTATION.md", "docs/Vague_Decisions.md"):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        m = re.search(r"(?ms)^##+ (?:[\w.]+ )?Open defects\s*$(.*?)(?=^## |\Z)", path.read_text())
+        if not m:
+            continue
+        for para in re.split(r"\n\s*\n", m.group(1)):
+            para = " ".join(para.split())
+            t = re.match(r"\*\*(.+?)\*\*\s*(.*)", para)
+            if t:
+                out.append({"source": name, "title": t.group(1).rstrip("."), "text": t.group(2)})
+    return out
 
-    def flush():
-        if cur is not None:
-            items.append({"section": sub, "text": " ".join(cur.split())})
 
-    for line in body.split("\n"):
-        m = re.match(r"### (5\.\d+ .*)", line)
-        if m:
-            flush(); cur = None; sub = m.group(1); continue
-        if line.startswith("|"):
-            flush(); cur = None
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            if cells[0] in ("Clause", "") or set(cells[0]) <= set("-"):
-                continue
-            items.append({"section": sub, "text": f"{cells[0]}: {cells[1]} ({cells[2] if len(cells) > 2 else ''})"})
-        elif re.match(r"(\d+\.|-) ", line):
-            flush(); cur = re.sub(r"^(\d+\.|-) ", "", line)
-        elif line.startswith("  ") and cur is not None:
-            cur += " " + line.strip()
-        elif not line.strip():
-            flush(); cur = None
-    flush()
-    return [i for i in items if i["section"]]
+def vpi_xfails():
+    """build.zig `vpi_runs` rows carrying `.xfail`: a known gap that must exit 1 saying so."""
+    text = (ROOT / "build.zig").read_text()
+    block = text[text.index("const vpi_runs = "):]
+    block = block[:block.index("\n};")]
+    return [{"path": c, "reason": x} for c, x in VPI_XFAIL.findall(block)]
+
+
+# One `VpiRun` row's `.c` path and its `.xfail`, never reaching into the next row.
+VPI_XFAIL = re.compile(r'\.c = "([^"]+)"(?:(?!\.c = ).)*?\.xfail = "([^"]*)"', re.S)
 
 
 def vague_open():
@@ -710,12 +687,10 @@ def render(d):
                        f"<td>{E(c['kind'])}</td></tr>" for c in g["classified_normative"]) + "</table></div></details>")
     o.append(f"<h3>XFAIL fixtures ({len(g['xfail'])})</h3>"
              + ("<ul>" + "".join(f"<li class=mono>{E(x['path'])}: {E(x['reason'])}</li>" for x in g["xfail"]) + "</ul>"
-                if g["xfail"] else "<p>None: no fixture carries <code>//! xfail</code>.</p>"))
-    o.append(f"<h3>ROADMAP.md §5 open items ({len(g['roadmap'])})</h3>")
-    for sec in dict.fromkeys(i["section"] for i in g["roadmap"]):
-        its = [i for i in g["roadmap"] if i["section"] == sec]
-        o.append(f"<details><summary>{E(sec)} ({len(its)})</summary><ul>"
-                 + "".join(f"<li>{E(i['text'])}</li>" for i in its) + "</ul></details>")
+                if g["xfail"] else "<p>None: no fixture carries <code>//! xfail</code> and no <code>vpi_runs</code> row an <code>.xfail</code>.</p>"))
+    o.append(f"<h3>Open defects ({len(g['defects'])})</h3>"
+             + ("<ul>" + "".join(f"<li><b>{E(x['title'])}</b> {E(x['text'])} <span class=note>({E(x['source'])})</span></li>"
+                                 for x in g["defects"]) + "</ul>" if g["defects"] else "<p>None named.</p>"))
     o.append(f"<h3>docs/Vague_Decisions.md: CHANGE NEEDED, not DONE ({len(g['vague'])})</h3><details><summary>list</summary><ul>"
              + "".join(f"<li><b>{E(v['id'])}</b> {E(v['title'])}: {E(v['change'])}</li>" for v in g["vague"]) + "</ul></details>")
 
@@ -809,6 +784,9 @@ def selftest():
     assert buckets("POSITIVE CITATIONS ONLY — x:\n§17.1 Display tasks\n") == {"17.1": ("positive-only", "Display tasks")}
     assert tsv("a\tb\n1\t2\n3\t4\n\nx", "a\tb") == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
     assert quantile([1, 2, 3, 4], 50) == 3
+    assert VPI_XFAIL.findall('.{ .c = "a.c", .xfail = "why" }, .{ .c = "b.c" }, .{ .c = "d.c", .xfail = "" }') \
+        == [("a.c", "why"), ("d.c", "")]
+    assert isinstance(open_defects(), list) and isinstance(vpi_xfails(), list)
     print("report.py: selftest ok", file=sys.stderr)
     return 0
 
@@ -881,7 +859,7 @@ def main(argv):
         "clauses": clauses,
         "gaps": {"classified_normative": [{k: r[k] for k in ("std", "id", "title", "kind")} for r in clauses
                                           if r["kind"] and r["kind"] != "non-normative"],
-                 "xfail": xfail, "roadmap": roadmap_items(), "vague": vague_open()},
+                 "xfail": xfail + vpi_xfails(), "defects": open_defects(), "vague": vague_open()},
         "speed": speed(strict, sweep),
         "models": models,
     }
