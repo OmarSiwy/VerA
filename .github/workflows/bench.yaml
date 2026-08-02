@@ -198,7 +198,7 @@ jobs:
   # The consumer check ARPice asked for (2026-10-04): the device models it
   # ships compile to a host-loadable .so through this tree's vera, and the
   # contract ABI handshake (`contract.abi_version`, checked on every
-  # --emit-so) passes. ARPice pins a VerA sha; this job catches a break
+  # --emit-so, plus the opted-in contract checks) passes. ARPice pins a VerA sha; this job catches a break
   # before ARPice re-pins onto it.
   arpice-models:
     runs-on: ubuntu-latest
@@ -219,9 +219,12 @@ jobs:
           version: 0.17.0
       - name: Build vera
         run: zig build -Doptimize=ReleaseFast install
-      # The same no-op `dyn` module build.zig hands --emit-so for a .va device.
+      # tests/arpice_dyn.zig exports a real evalQ, so Zig compiles the whole
+      # device, and opts into the contract's checks. A no-op dyn would make a
+      # ~1 KB stub that proves nothing (measured 2026-10-04).
       - name: Compile ${{ matrix.model }}.va to a .so
         run: |
-          printf 'pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n' > dyn.zig
-          ./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn dyn.zig -I arpice/models \
-            --work-dir out arpice/models/${{ matrix.model }}.va
+          so=$(./zig-out/bin/vera --emit-so --contract tools/contract.zig --dyn tests/arpice_dyn.zig \
+            -I arpice/models --work-dir out arpice/models/${{ matrix.model }}.va)
+          ls -l "$so"
+          nm -D "$so" | grep -q bench_evalq
