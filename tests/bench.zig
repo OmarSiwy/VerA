@@ -20,7 +20,6 @@
 
 const std = @import("std");
 const vera = @import("vera");
-const stdpp = @import("stdpp");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
 const ieee1364 = @import("ieee1364.zig");
@@ -330,8 +329,8 @@ fn summary(w: *Io.Writer, arena: Allocator, times: []const u64, depth: harness.C
 fn stats(w: *Io.Writer, arena: Allocator, scope: []const u8, name: []const u8, samples: []const u64) !void {
     if (samples.len == 0) return;
     const s = try arena.dupe(u64, samples);
-    var all = stdpp.of(s);
-    const total = all.sumWrapping(u64);
+    var total: u64 = 0;
+    for (s) |v| total +%= v;
     std.mem.sort(u64, s, {}, std.sort.asc(u64));
     try w.print("{s}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
         scope, name, s.len, total, pct(s, 50), pct(s, 90), pct(s, 99), s[s.len - 1],
