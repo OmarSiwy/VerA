@@ -45,7 +45,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, the release ladder, and the open items | which release your work belongs to, and which row it closes |
+| `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `docs/Vague_Decisions.md` |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
@@ -53,7 +53,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
 | `docs/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
 | `docs/IMPLEMENTATION.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
-| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items are in `docs/ROADMAP.md` §5 |
+| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `ROADMAP.md` §5 (at ae9633f1) and from there into `docs/Vague_Decisions.md` |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`
 entry, or by running the commands in §2. When two disagree, the newest wins and
@@ -69,7 +69,7 @@ reduces to another. Every change you make should say which one it moves.
 | | Measure | Command |
 |---|---|---|
 | **A** | Fixtures behaving as stated | `zig build benchmark -- --strict` |
-| **B** | IEEE 1364-2005 clauses with **two-way** evidence; out-of-scope chapters `not-supported` (`ROADMAP.md` §1 B, `CLAUSE-AUDIT.md` §5.7) | `zig build test-1364 -- --coverage` (§§17-18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
+| **B** | IEEE 1364-2005 clauses with **two-way** evidence; out-of-scope chapters `not-supported` (`CLAUSE-AUDIT.md` §5.7) | `zig build test-1364 -- --coverage` (§§17-18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
 | **C** | LRM clauses with **two-way** evidence | `zig build benchmark -- --coverage` |
 | **D** | `ARCHITECTURE.md` §6 phases landed | hand-read against its §6/§8 (`git show 297e97d^:ARCHITECTURE.md`) |
 
@@ -456,7 +456,7 @@ Checked against the code on 2026-09-27.
   "step" tier was measured and not built: compact models gain 0-16 values each.
 - **Known gaps are markers, in both trees.** `grep -rl '^//! xfail'
   tests/fixtures` lists them; `.v` fixtures under `tests/fixtures/ieee1364` carry
-  them too. Gaps no fixture pins yet are in `docs/ROADMAP.md` §5.
+  them too. Decisions still to implement are the `CHANGE NEEDED` entries of `docs/Vague_Decisions.md` not marked `DONE`.
 
 ---
 
