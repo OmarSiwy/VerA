@@ -7,7 +7,7 @@
     tools/conformance.py <subcommand> [...]   # one of the signals below
 
 Every number comes from a command in this file. There is no second place a
-percentage is written down, which is the point: ROADMAP.md §1 defines v1.0.0
+percentage is written down, which is the point: AGENTS.md §2 defines v1.0.0
 as four measures, and three of them are machine-readable today. Only the
 measures block may write A, B and C; every subcommand is a separate signal and
 none of them changes the block or CHANGELOG.md:

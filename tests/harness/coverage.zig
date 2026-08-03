@@ -265,7 +265,7 @@ pub fn report(
 /// a positive fixture cites the clause.
 ///
 /// `not_supported` (CLAUSE-AUDIT §5.7) is IEEE 1364-only: a clause
-/// `ROADMAP.md` §1 B puts out of scope, which VerA refuses or warns about by
+/// `CLAUSE-AUDIT.md` §5.7 puts out of scope, which VerA refuses or warns about by
 /// name. An AMS `CLAUSES.tsv` row naming it is rejected.
 pub const ClassKind = enum {
     non_normative,
