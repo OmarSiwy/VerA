@@ -398,8 +398,11 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
     return switch (f) {
         // Wrapping, like unary minus: |minInt(i64)| is not an i64.
         .abs => if (int) Const{ .int = wrapFrom(args[0].int, if (args[0].int < 0) 0 -% args[0].int else args[0].int) } else Const{ .real = @abs(x) },
-        .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = @min(x, y) },
-        .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = @max(x, y) },
+        // §4.3.1 "min(x,y) is equivalent to (x < y) ? x : y", bit for bit:
+        // @min/@max drop a NaN and leave a zero's sign open, and run time
+        // (kernel_text zMin/zMax) uses the conditional form.
+        .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = if (x < y) x else y },
+        .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = if (x > y) x else y },
         .pow => .{ .real = gm.pow(x, y) },
         .hypot => .{ .real = std.math.hypot(x, y) },
         .atan2 => .{ .real = std.math.atan2(x, y) },

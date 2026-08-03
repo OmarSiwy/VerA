@@ -49,6 +49,10 @@ pub const math_txt =
     \\// than inheriting a host min/max primitive's possibly different tie rule.
     \\fn zMin(comptime S: type, a: S, b: S) S { return a.lt(b).sel(a, b); }
     \\fn zMax(comptime S: type, a: S, b: S) S { return b.lt(a).sel(a, b); }
+    \\// The plain-f64 form (`opcode_zig.host_f64`: derive, setup), the same
+    \\// strict comparison: `@min`/`@max` drop a NaN and leave a zero's sign open.
+    \\fn zMinF(a: f64, b: f64) f64 { return if (a < b) a else b; }
+    \\fn zMaxF(a: f64, b: f64) f64 { return if (a > b) a else b; }
     \\
     \\// ---- per-operating-point decisions (`batch_lead`, contract.zig) ----
     \\// A real compared, rounded to an integer or stripped of its lanes is one
