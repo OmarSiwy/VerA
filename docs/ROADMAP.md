@@ -310,7 +310,6 @@ native compilation backlog separately from passing interpreter behavior.
 
 | Clause | Item | Source |
 |---|---|---|
-| AMS 4.2.4 | Integer `%` with a probe-dependent divisor is refused (E0601). | `conformance-expressions.md:77-79` |
 | AMS 7.3.1 | E0222 checks the declared bus width, so a legal 31-bit part-select of a wider `reg` is refused. | `conformance-mixed-signal.md:206-210` |
 | AMS 3.6.3.2 | A hierarchical nodeset (`electrical top.foo.w = 2.75;`) is ignored without a diagnostic. | `a08_nodeset_SPEC.md:264-269`; found 2026-09-27 |
 | AMS 4.6.4.3, A.8.2 | `noise_table` on a parameter slice (`tbl[0:3]`) is refused (E0329). | `a06_SPEC.md:250-252` |
