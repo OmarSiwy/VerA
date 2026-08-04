@@ -767,7 +767,8 @@ pub const Prover = struct {
             // (0) as the second argument to the modulus operator" applies when
             // the divisor is zero, so a provably-zero divisor is E0601 and an
             // unprovable one is accepted and forfeits `finite`:
-            //   - real `%`: `@rem(x, 0.0)` is NaN, IEEE-defined under `.strict`;
+            //   - real `%`: `zFmod` reports E0601 at execution (or traps in a
+            //     solver device), as the integer `%` does;
             //   - integer `/`: codegen guards it (`render.zig`'s `.idiv`), since
             //     `@divTrunc(i64, 0)` is illegal behavior in Zig, and a zero
             //     divisor yields 0, which W0653 announces.
