@@ -314,7 +314,6 @@ native compilation backlog separately from passing interpreter behavior.
 | AMS 3.6.3.2 | A hierarchical nodeset (`electrical top.foo.w = 2.75;`) is ignored without a diagnostic. | `a08_nodeset_SPEC.md:264-269`; found 2026-09-27 |
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |
 | AMS 5.6.8.2, 6.7.1 | Two instances between the same two nodes share one branch: `I(r1.branch(p,n))` reads the parallel sum. | `h04_SPEC.md:284-292`; found 2026-09-27 |
-| AMS 5.10, 3.3 | A string written inside an event body is not held. `lib/ir/lower/param.zig` says nothing can observe it; `$strobe` does. | `a03_SPEC.md:186-189` |
 | AMS 6.6.3 | Same-named instances in two generate blocks collide (E0362). | `ch06_hierarchy/COVERAGE.md:191-193` |
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |

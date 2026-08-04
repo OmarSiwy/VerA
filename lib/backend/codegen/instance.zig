@@ -222,6 +222,19 @@ pub fn emitInstance(self: *Gen) Error!void {
             );
             continue;
         }
+        if (h.ty == .string) {
+            // §3.3 a string's initial value is "" unless declared; a slice
+            // of a literal, or of a `$sformat` site's file-scope `zSBuf`.
+            // ponytail: a site buffer is rewritten when its site runs again,
+            // so a held `$sformat` result can change under a rejected step;
+            // an owned [4096]u8 per held string is the upgrade.
+            const s = switch (self.mir.valueDef(self.an.rv(h.init))) {
+                .str_const => |s| s,
+                else => "", // else: a non-literal initializer starts from §3.3's empty string, as a real starts from its spec default
+            };
+            try self.w("    {s}: []const u8 = \"{f}\", // §5.10 held across evaluations\n", .{ self.names.held_names[i], std.zig.fmtString(s) });
+            continue;
+        }
         const init = self.an.foldConst(self.an.rv(h.init), true);
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
