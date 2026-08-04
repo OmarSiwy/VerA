@@ -22,7 +22,6 @@ const Ssa = @import("../ssa.zig");
 const Elaborate = @import("../elaborate.zig");
 const diag = @import("diag");
 const Oom = Lower.Oom;
-const NoiseSrc = Lower.NoiseSrc;
 const TypedValue = Lower.TypedValue;
 const ArrayInfo = Lower.ArrayInfo;
 
@@ -469,22 +468,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     };
     const tv = try assignValue(self, value);
     try writeLvalue(self, lv, try self.coerceTo(value, lv.ty, tv));
-    // §4.6.4: remember that this name now carries a noise source, so a later
-    // `I(a,b) <+ n;` still exports the generator. Recorded after the rhs is
-    // lowered so the walk below sees the expression the value came from.
-    if (ex.tag(target) == .ident) {
-        var srcs: std.ArrayList(NoiseSrc) = .empty;
-        try lower_contrib.noiseSrcsOf(self, value, &srcs);
-        if (srcs.items.len != 0) {
-            const g = try self.var_noise.getOrPut(self.arena, self.file.str(ex.strOf(target)));
-            if (g.found_existing) {
-                // Union by identity: re-lowering a loop body or a second
-                // assignment through the same call is still one generator.
-                for (g.value_ptr.*) |s| try lower_contrib.addNoiseSrc(self.arena, &srcs, s);
-            }
-            g.value_ptr.* = srcs.items;
-        }
-    }
+    if (ex.tag(target) == .ident) try lower_contrib.noteVarNoise(self, self.file.str(ex.strOf(target)), value);
 }
 
 /// Runtime scalar-element assignment. Each cell receives `select(index == k,
