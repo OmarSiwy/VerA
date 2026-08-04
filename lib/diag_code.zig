@@ -453,6 +453,9 @@ pub const Code = enum(u16) {
     /// A `$limit` seed on a branch `seed` does not start: named, never
     /// silently dropped.
     W0854,
+    /// §9.16 a `$simprobe` name that does not fold: run-time resolution is
+    /// not implemented, and the fallback would answer a valid name wrongly.
+    E0823,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -4973,6 +4976,27 @@ fn infoOf(c: Code) Info {
             .lrm = "9.14",
             .explain = "Inside an analog $clog2 operand, arithmetic, unary negation and shifts retain at most 32 bits per intermediate. Bitwise, conditional and comparison contexts retain at most 64 bits. Above 64 bits only exact wide literals and parameter aliases preserving their width retain proven high bits. The compiler refuses a wider intermediate rather than inventing erased bits; digital execution preserves arbitrary vector widths.",
         },
+        .E0823 => .{
+            .title = "$simprobe name known only at run time",
+            .lrm = "9.16",
+            .explain =
+            \\    $simprobe ( inst_name , param_name [, expression] )
+            \\
+            \\LRM 9.16: "The arguments inst_name and param_name are string values,
+            \\either a string literal, string parameter, or a string variable."
+            \\A string variable's value can be set while the analog block runs, so
+            \\the clause asks the simulator to resolve the name at run time.
+            \\
+            \\VerA resolves a $simprobe name at compile time, against the
+            \\elaborated design, and has no run-time instance table to look one up
+            \\in. A name whose value the compiler cannot fold is therefore refused,
+            \\with or without the fallback expression: "cannot be resolved" is about
+            \\whether the name exists, so returning the fallback for a name that
+            \\exists would be a wrong value with no diagnostic. This is an
+            \\implementation limit (docs/IMPLEMENTATION.md §2), not a rule of the
+            \\LRM. Spell the name as a literal or a string parameter.
+            ,
+        },
         .E0888 => .{
             .title = "descriptor argument is not an integer",
             .lrm = "9.5.2",
@@ -5413,10 +5437,11 @@ fn infoOf(c: Code) Info {
             \\by its hierarchical path. So the names that resolve are the ones a
             \\path could reach from this device.
             \\
-            \\A name built at run time cannot resolve here. That is what the third
-            \\argument is for, and supplying it is also what makes a probe of
-            \\something OUTSIDE this device — a sibling instance the compiler never
-            \\sees — a legal call with a defined value.
+            \\Supplying the third argument is what makes a probe of something
+            \\OUTSIDE this device — a sibling instance the compiler never sees — a
+            \\legal call with a defined value. A name built at run time is a
+            \\different case, E0823: it is refused, because it may name something
+            \\that exists.
             ,
         },
         .E0815 => .{
