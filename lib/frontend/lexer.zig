@@ -546,7 +546,7 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
                     v = v * 8 + (body[i] - '0');
                     i += 1;
                 }
-                out[n] = @truncate(v);
+                out[n] = @truncate(v); // above \377 is refused first (`badEscape`)
             },
             // ponytail: backslash, quote and undefined escapes pass through;
             // add an arm only for an escape with a distinct byte mapping.
@@ -558,6 +558,43 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
         n += 1;
     }
     return gpa.realloc(out, n);
+}
+
+/// An escape in a `.string_literal` that `stringContents` would decode by
+/// VerA's choice rather than by Table 2-2, as byte offsets into the text.
+pub const BadEscape = struct {
+    start: u32,
+    end: u32,
+    /// `\ddd` above `\377` (E0148); otherwise an escape Table 2-2 does not
+    /// list (W0149).
+    above_377: bool,
+};
+
+/// Returns the first escape at or after byte `from` of a `.string_literal`'s
+/// text (quotes included) that LRM §2.7 Table 2-2 does not define, or null.
+pub fn badEscape(text: []const u8, from: u32) ?BadEscape {
+    var i: u32 = @max(from, 1);
+    const end: u32 = @intCast(text.len -| 1);
+    while (i < end) : (i += 1) {
+        if (text[i] != '\\' or i + 1 >= end) continue;
+        const start = i;
+        i += 1;
+        switch (text[i]) {
+            'n', 't', '\\', '"' => {},
+            '0'...'7' => {
+                var v: u16 = 0;
+                var k: usize = 0;
+                while (k < 3 and i < end and text[i] >= '0' and text[i] <= '7') : (k += 1) {
+                    v = v * 8 + (text[i] - '0');
+                    i += 1;
+                }
+                if (v > 0o377) return .{ .start = start, .end = i, .above_377 = true };
+                i -= 1;
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 // ---- checks ---------------------------------------------------------------
@@ -758,6 +795,13 @@ test "stringContents decodes Table 2-2 escapes (§2.7)" {
     const s3 = try stringContents(testing.allocator, "\"A\\101\\0\"");
     defer testing.allocator.free(s3);
     try testing.expectEqualStrings("AA\x00", s3);
+}
+
+test "badEscape finds an octal escape above \\377 (§2.7)" {
+    try testing.expectEqual(null, badEscape("\"\\377\\\\477 \\n\\t\\\"\"", 0));
+    const b = badEscape("\"x\\4777\"", 0).?;
+    try testing.expectEqual(BadEscape{ .start = 2, .end = 6, .above_377 = true }, b);
+    try testing.expectEqual(null, badEscape("\"x\\4777\"", b.end));
 }
 
 test "tokenSpan covers exactly the token" {

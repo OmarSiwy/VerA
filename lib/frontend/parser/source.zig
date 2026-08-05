@@ -4,7 +4,7 @@
 //! discipline, connectrules, paramset, library, config and primitive declarations,
 //! each parsed by the file that owns its grammar (`udp.zig` for a primitive).
 //!
-//! LRM clauses cited: §1, §1.1, §2.2, §6.2, §6.4, §7.6, §7.7, §10.6.
+//! LRM clauses cited: §1, §1.1, §2.2, §2.7, §6.2, §6.4, §7.6, §7.7, §10.6.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -19,6 +19,7 @@ const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
+const diag = @import("diag");
 
 // -----------------------------------------------------------------------
 // A.1.2 source_text
@@ -31,6 +32,7 @@ const Error = parser.Error;
 pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     try self.access_names.put(self.arena, "V", {});
     try self.access_names.put(self.arena, "I", {});
+    try checkEscapes(self);
 
     // Seeded (`initSeeded`), these already hold the prefix's declarations in
     // source order; unseeded, they are empty.
@@ -129,6 +131,22 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     self.file.configs = configs.items;
     if (self.failed) return error.ParseError;
     return self.file;
+}
+
+/// §2.7 Table 2-2 over every string literal still to be parsed, wherever the
+/// grammar later takes it: an octal escape above `\377` is E0148.
+fn checkEscapes(self: *Parser) error{OutOfMemory}!void {
+    for (self.tags[self.pos..], self.pos..) |tag, tok| {
+        if (tag != .string_literal) continue;
+        const span = lexer.tokenSpan(self.src, self.starts, @intCast(tok));
+        const text = self.src[span.start..span.end];
+        var from: u32 = 0;
+        while (lexer.badEscape(text, from)) |b| : (from = b.end) {
+            const at: diag.Span = .{ .start = span.start + b.start, .end = span.start + b.end };
+            self.failed = true;
+            try self.bag.add(.parse, .E0148, at, "`{s}`", .{text[b.start..b.end]});
+        }
+    }
 }
 
 /// Applies one LRM §10.6 `begin_keywords "<version_specifier>" or
