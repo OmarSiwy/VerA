@@ -141,11 +141,15 @@ checks invalid indices beside valid elements in both the interpreter and
 native executable.
 
 For AMS §9.18, E0890 diagnoses specified values that fold over literals
-outside Table 9-29's domains. As with the existing `$mfactor` path, expressions
-depending on model-card parameters are composed at runtime; the host must
-keep their values within those domains. Generated devices currently do not
-validate these dynamic domains. `geometry_parameter_sweep.va` exercises valid
-host-dependent values, and `geometry_*_rejected.va` isolates literal domain
+outside Table 9-29's domains. A value that depends on model-card parameters
+(an instance override over a parameter, or a top-level system alias the card
+writes) is checked when the card is written: the device's `checkCard(model)`,
+called after `derive`, returns the first such value's name (`path$mfactor`,
+or the alias) outside its domain, and null otherwise; it costs `eval`
+nothing. The testbench stops with E0890; another host decides what to do with
+the name (`docs/Vague_Decisions.md` VD-079). `geometry_parameter_sweep.va`
+exercises valid host-dependent values, `geometry_card_mfactor_outside_domain_is_fatal.va`
+an invalid card, and `geometry_*_rejected.va` isolates literal domain
 errors. The top-level `$mfactor` alias retains its existing ABI: a host using
 it must also keep `Instance.mfactor`, which controls automatic scaling,
 consistent with the alias's model-card value.

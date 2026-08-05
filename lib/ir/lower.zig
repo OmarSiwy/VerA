@@ -396,6 +396,8 @@ ps_hidden: []const []const u8 = &.{},
 paramset_defparams: []const Elaborate.ParamsetDefparam = &.{},
 /// §6.4.2 parameters whose values selected an overloaded paramset.
 selection_params: []const Ast.StrId = &.{},
+/// §9.18 card-dependent system parameter values (`Elaborate.Design.system_checks`).
+system_checks: []const Elaborate.SystemCheck = &.{},
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected before the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -513,6 +515,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.ps_hidden = design.ps_hidden; // §6.4.3
     self.paramset_defparams = design.paramset_defparams;
     self.selection_params = design.selection_params;
+    self.system_checks = design.system_checks;
     self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
@@ -583,6 +586,12 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // expression over them (§6.5.2.2's `input [1:width] dt`).
     try lower_param.lowerParams(self, module);
     try lower_control.checkParamsetDefparams(self);
+    // §9.18 the card-time domain checks: expressions over parameters only.
+    for (self.system_checks) |c| try self.out.system_checks.append(self.arena, .{
+        .kind = c.kind,
+        .name = c.name,
+        .v = try self.toReal(try lower_expr.lowerExpr(self, c.value)),
+    });
     // §7.3.6.5: a mixed module's digital-owned values are host-written inputs.
     // Before the ports and nets, so none of them becomes an analog node.
     try lower_context.declareDiscreteInputs(self, module);

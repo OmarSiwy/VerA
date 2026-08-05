@@ -56,6 +56,14 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns whether Table 9-29 restricts the kind's values at all.
+    pub fn constrained(self: Kind) bool {
+        return switch (self) {
+            .angle, .hflip, .vflip, .mfactor => true,
+            .xposition, .yposition => false,
+        };
+    }
+
     /// Returns the domain `allows` checks, worded for a diagnostic.
     pub fn domain(self: Kind) []const u8 {
         return switch (self) {
