@@ -521,6 +521,9 @@ pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const
     // The two rows that come from the source; unknown when no `timescale was given.
     if (eq(u8, name, "timeUnit")) return if (directives.timescale()) |t| t.unit else null;
     if (eq(u8, name, "timePrecision")) return if (directives.timescale()) |t| t.precision else null;
+    // `gmin` and `sourceScaleFactor` are host fields: a host steps both
+    // (gmin stepping, source-stepping homotopy, Table 9-27's own rows), so
+    // these are only the defaults of `Model.gmin__`/`source_scale__`.
     if (eq(u8, name, "gmin")) return 1e-12;
     // Table 9-27 gives `tnom` in degrees Celsius. 27 is only the default: `tnom`
     // is also a `simparamHostField`, so codegen reads the host's Model field and
@@ -532,8 +535,8 @@ pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const
     if (eq(u8, name, "reltol")) return 1e-3;
     if (eq(u8, name, "abstol")) return 1e-12;
     if (eq(u8, name, "vntol")) return 1e-6;
-    // Three unit-valued homotopy/geometry factors: a device compiled here is
-    // never being stepped or shrunk, so 1.0 is the true answer, not a stand-in.
+    // Geometry scaling is applied when the card is built, so 1.0 is the true
+    // answer for `scale` and `shrink`, not a stand-in.
     if (eq(u8, name, "scale") or eq(u8, name, "shrink") or eq(u8, name, "sourceScaleFactor")) return 1.0;
     return null;
 }
@@ -550,7 +553,7 @@ pub fn simparamIsRuntime(name: []const u8) bool {
 /// The §9.15 simulation parameters whose value is the host's, in `Model` field
 /// order: the name, its reserved `Model` field (written before `derive()`), and
 /// the `uses` flag that emits the field. Each is SPICE's `.options` entry of that
-/// name; `tnom` (degrees Celsius) is the temperature a model card without its own
+/// name, `sourceScaleFactor` the source-stepping factor; `tnom` (degrees Celsius) is the temperature a model card without its own
 /// `TNOM` was extracted at. The `__` suffix cannot collide: `naming.sanitize`
 /// escapes a trailing `_` and every `__` run in an identifier.
 pub const host_simparams = [_]struct { name: []const u8, field: []const u8, use: Lower.Lowered.Kernel }{
@@ -558,6 +561,8 @@ pub const host_simparams = [_]struct { name: []const u8, field: []const u8, use:
     .{ .name = "reltol", .field = "reltol__", .use = .host_reltol },
     .{ .name = "abstol", .field = "abstol__", .use = .host_abstol },
     .{ .name = "vntol", .field = "vntol__", .use = .host_vntol },
+    .{ .name = "gmin", .field = "gmin__", .use = .host_gmin },
+    .{ .name = "sourceScaleFactor", .field = "source_scale__", .use = .host_source_scale },
 };
 
 /// Returns the reserved `Model` field of a `host_simparams` name, or null for a

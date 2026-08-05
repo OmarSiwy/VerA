@@ -330,7 +330,7 @@ outside measure A; see §1.1 b′.
 | 17.1-03 | 17.1.1.1 escape sequences | present — `lib/frontend/lexer.zig:624`, `lib/ir/lower.zig:10367` ("direct output literals retain their lexical bytes (§9.4.2)"); `lexer.zig:918` and `188_numeric_string.va`'s `"\377"`/`"\001A"` | present (`lib/frontend/parser.zig:5043` keeps octal NUL); **no d09 golden contains an escape** | **implemented-without-evidence (digital)** / verified (analog) | §9.4.2 Table 9-21. **`zig build test-literal-output` no longer exists** — deleted in `2cc1c08`; the old citation is dead and survives only in `ch09_system_tasks/COVERAGE.md:50` |
 | 17.1-04 | 17.1.1.2 format specifications | full C prefix `%[flags][width][.prec]conv` via `lib/backend/cg_display.zig:641`; `171_display_c_format_flags.va` plus `s01_01`–`s01_04` all pass (`%g` significant digits, sign before zero fill, round-half-to-even, `%r` engineering notation) | Table 9-22 radix only, `%e/%f/%g` restricted to `$realtime` (`src/sim/digital.zig:1548`), `%t` (`:1516`); `%c %l %m %s %r` refused (`:1525-1528`); bare width, no flags, no precision (`:1499-1503`) | **partial (digital)** / verified (analog) | Boundary nameable: digital has Table 9-22's radix rows, a width and `%t`; it lacks `%c %l %m %s`, C flags/precision, and **§9.4.7's `%r` on reals in the digital context** (row AMS-02) |
 | 17.1-05 | 17.1.1.3 automatic sizing of displayed data | documented **deviation** — `cg_display.zig:136-141`: a bare integer prints minimal-width where 1364 auto-sizes `%d` to 20 columns for 64-bit | implemented — `src/sim/digital.zig:1683` `width orelse autoWidth(v, radix)`, `:1693`; `d09_01` pins `%d` of an 8-bit 7 as `[  7]`, `%0d` as `[7]`, `%h`→2, `%o`→3, `%b`→8 | **partial** | was `missing`. Digital half verified; analog half deviates deliberately and the deviation is in-source |
-| 17.1-06 | 17.1.1.4 unknown / high-impedance display | `x`/`z` cannot reach a display operand — E0130 at `lib/ir/lower.zig:1310` | implemented — `src/sim/digital.zig:1716` `groupText`, `:1739-1744` ("all unknown prints lowercase, partly unknown prints uppercase"); `d09_02_display_unknown_radix.v` pins `ax`/`2Xx`, `z3`/`zZ3`, LSB-first octal grouping | **partial** | was `missing`. Digital verified. **The analog half is contested inside this repo — see §7.5 item 1; not settled here** |
+| 17.1-06 | 17.1.1.4 unknown / high-impedance display | refused on the prohibition: AMS 7.3.2 makes an x/z operand an error outside ===/!==/case comparisons (`docs/Vague_Decisions.md` VD-017) — E0130, `ch07_mixed_signal/reject_display_x_operand_analog.va`, legal neighbour `display_binary_operand_analog.va` | implemented — `src/sim/digital.zig:1716` `groupText`, `:1739-1744` ("all unknown prints lowercase, partly unknown prints uppercase"); `d09_02_display_unknown_radix.v` pins `ax`/`2Xx`, `z3`/`zZ3`, LSB-first octal grouping | **verified** | was `partial`. Digital verified; the analog half is verified on the prohibition (§7.5 item 1, settled 2026-10-04) |
 | 17.1-07 | 17.1.1.5 strength format `%v` | **fabricated value** — `cg_display.zig:725` maps `'t','u','z','v' => "d"`, so `$display("%v", 65)` silently prints `65` | refused, E1100 (`src/sim/digital.zig:1525`) | **missing** | Verdict unchanged, reason sharper: analog does not refuse `%v`, it *answers* it with a decimal. Needs D03 drivers/strengths |
 | 17.1-08 | 17.1.1.6 hierarchical name `%m`, takes no argument | **verified** — `cg_display.zig:560-571` (`%m`/`%l` consume no operand); `192_m_format_hierarchical_name.va` passes 3/3: the name prints, `%m` consumes no argument so a following `%d` still takes 7 | **refused** (`src/sim/digital.zig:1525`) — a conforming input rejected | **missing (digital)** / verified (analog) | §9.4.4 is explicit and Table 9-1 gives `$display` digital Yes, so this refuses a legal construct. The old `implemented-without-evidence` conflated the halves; `COVERAGE.md:37` is superseded by `192` |
 | 17.1-09 | 17.1.1.7 `%s` ASCII-code output | **verified** — `cg_display.zig:669`; seven `188_numeric_string*.va` files pin byte order, width, leading-zero suppression, interior/trailing NUL, signed carriers | **refused** (`src/sim/digital.zig:1525`) | **missing (digital)** / verified (analog, integer operands) | §9.4.5. Real operands and packed digital expressions still untested; the digital half is now a measured refusal, not an absence |
@@ -854,14 +854,14 @@ the split is noted in the row.
 
 | Section | Rows | missing | partial | impl-without-evidence | verified | resource-limit only | unspecified only |
 |---|---|---|---|---|---|---|---|
-| §4.1 §17.1 display | 17 | 5 | 5 | 5 | 2 | — | — |
+| §4.1 §17.1 display | 17 | 5 | 4 | 5 | 3 | — | — |
 | §4.2 §17.2 file I/O | 25 | 6 | 2 | 3 | 10 | 4 | — |
 | §4.3 §17.3–§17.11 | 54 | 27 | 13 | 1 | 12 | — | 1 |
 | §4.4 §18 VCD | 22 | 22 | — | — | — | — | — |
 | §4.5 AMS additions | 9 | 5 | — | 1 | 3 | — | — |
-| **Total** | **127** | **65** | **20** | **10** | **27** | **4** | **1** |
+| **Total** | **127** | **65** | **19** | **10** | **28** | **4** | **1** |
 
-65 + 20 + 10 + 27 + 4 + 1 = **127**. Row counts expand the ranges:
+65 + 19 + 10 + 28 + 4 + 1 = **127** (17.1-06 moved partial → verified on 2026-10-04, VD-017). Row counts expand the ranges:
 `17.5-01…16` = 16, `17.6-01…05` = 5, `17.9-03…09` = 7, and **`17.11-02…23`, the
 22 real math functions, counts as one row group** — the convention the 2026-09-16
 text set, preserved so the two are comparable.
@@ -999,7 +999,9 @@ re-derivation.
 
 Recorded rather than guessed. Each would change a §7.1 row.
 
-1. **17.1-06's analog half — a contradiction inside this repository.** §4.1 as
+1. **Settled 2026-10-04 (`docs/Vague_Decisions.md` VD-017): AMS 7.3.2 prohibits
+   x/z in an analog display operand, so 17.1-06 is `verified on the prohibition`.**
+   The original question follows. **17.1-06's analog half — a contradiction inside this repository.** §4.1 as
    written says §7.3.2 makes `x`/`z` legal analog display operands, which makes
    E0130 a refusal of a legal construct (`missing`).
    `tests/fixtures/ch09_system_tasks/s01_SPEC.md` says the refusal is *correct*

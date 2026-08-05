@@ -82,6 +82,10 @@ pub const runner_body =
     \\    return .init(0.0, 0.0);
     \\}
     \\fn shapeCheck(m: *const D.Model) void {
+    \\    if (comptime @hasDecl(D, "checkCard")) if (D.checkCard(m)) |name| {
+    \\        std.debug.print("error[E0890]: LRM 9.18: the model card puts `{s}` outside Table 9-29's allowed values\n", .{name});
+    \\        std.process.exit(1);
+    \\    };
     \\    if (comptime !@hasDecl(D, "checkShape")) return;
     \\    const name = D.checkShape(m) orelse return;
     \\    std.debug.print("error: LRM 3.4: the model card sets shape parameter `{s}` to a value this device was not compiled for\n", .{name});

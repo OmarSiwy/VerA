@@ -152,13 +152,21 @@ pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
 
 /// §9.18/Table 9-29 domains, checked when the specified expression folds
 /// without the model card. Every override mechanism uses this same check.
-/// Host-dependent values retain the existing `$mfactor` validation boundary.
-pub fn checkSystemParam(self: *Flatten, kind: hier_param.Kind, tok: u32, e: Ast.ExprId) Error!bool {
+/// A value that reads the card is recorded for the card-time `checkCard`
+/// instead (`Design.system_checks`), under the name `path$kind`.
+pub fn checkSystemParam(self: *Flatten, kind: hier_param.Kind, tok: u32, e: Ast.ExprId, path: []const u8) Error!bool {
     if (constfold.firstStateRead(self.ctx.file, e, self.vars.items)) |what| {
         try self.err(tok, .E0363, "`{s}` override reads `{s}`", .{ kind.name(), what });
         return true;
     }
-    const v = constReal(self, e) orelse return false;
+    const v = constReal(self, e) orelse {
+        if (kind.constrained()) try self.system_checks.append(self.ctx.arena, .{
+            .kind = kind,
+            .value = e,
+            .name = try std.mem.concat(self.ctx.arena, u8, &.{ path, kind.name() }),
+        });
+        return false;
+    };
     if (kind.allows(v)) return false;
     try self.err(tok, .E0890, "`{s}` is {d}, and Table 9-29 allows only {s}", .{ kind.name(), v, kind.domain() });
     return true;
@@ -280,7 +288,7 @@ pub fn collectOverrides(
             try collectSystemDefparam(self, path, kind, al.alias, &specified, &spellings);
         const value = specified.get(kind);
         unit.hier.set(kind, parent.hier.get(kind));
-        if (value == .none or try checkSystemParam(self, kind, self.ctx.file.exprs.mainTok(value), value)) continue;
+        if (value == .none or try checkSystemParam(self, kind, self.ctx.file.exprs.mainTok(value), value, path)) continue;
         unit.hier.set(kind, try kind.compose(self.ctx.file, self.ctx.arena, parent.hier.get(kind), value, self.ctx.file.exprs.mainTok(value)));
     }
 
