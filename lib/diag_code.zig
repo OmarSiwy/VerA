@@ -824,11 +824,18 @@ fn infoOf(c: Code) Info {
             .lrm = "2.6.1",
             .explain =
             \\The frontend preserves Verilog-AMS four-state and wide integer
-            \\literals. The current analog execution backend stores two-state
-            \\integers in 64 bits and cannot execute this literal exactly.
+            \\literals; this one reached an analog expression, where it has no
+            \\value. Two cases share the code:
             \\
-            \\This diagnostic marks an implementation boundary, not a claim
-            \\that the literal is forbidden by full Verilog-AMS.
+            \\  - an x or z bit (`1'bx`, `4'b10z1`). LRM 7.3.2: "It is an error
+            \\    if these operands return x or z bit values when solved." Only
+            \\    ===, !==, case/casex/casez and the x/z digits they compare
+            \\    against may meet x/z in an analog block, so in any other
+            \\    operand, a $display argument included, this is the LRM's
+            \\    prohibition, not a VerA limit;
+            \\  - a two-state literal wider than the 64-bit carrier the analog
+            \\    backend stores integers in. That is an implementation limit
+            \\    (docs/IMPLEMENTATION.md §2), not a rule of the LRM.
             ,
         },
         .E0131 => .{
