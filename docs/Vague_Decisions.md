@@ -84,7 +84,7 @@ correction.
 | VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | yes |
 | VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | yes |
-| VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | yes |
+| VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | DONE |
 | VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | yes |
 | VD-045 | IEEE 1364-2005 26.3.5 vs Annex G | `vpiIsProtected` = `vpiProtected` (10), FALSE on every object | yes |
 | VD-046 | IEEE 1364-2005 26.6.40(c) vs VAMS 11.6.25 note 5 | Current queue listed iff a pending event precedes read-only sync | yes |
@@ -527,6 +527,7 @@ correction.
 - **Decision**: `DECIDED:` (b). 19.11 says "The `begin_keywords and `end_keywords directives only specify the set of identifiers that are reserved as keywords", and the reserved set holds "until the matching `end_keywords directive is encountered". A region closed only by its matching directive is not a directive setting with a "default value". Under (a), 19.6's recommended usage ("place `resetall at the beginning of each source text file") inside a `` `begin_keywords "1364-1995" `` region would break the pairing rule. VAMS 10.6 inherits this.
 - **VerA today**: The parser skips `` `resetall `` at file level (`lib/frontend/parser/source.zig:70`), and the keyword stack (`source.zig:64`, `keywordsDirective`) is untouched. That is the decision, but no fixture pins it. `CHANGE NEEDED:` add a positive fixture: `` `begin_keywords "1364-1995" `` / `` `resetall `` / a module using `uwire` (2005-only) as an identifier / `` `end_keywords ``, compiles. Fixture only, so a patch.
 - **Measure impact**: B: 19.6 and 19.11 (both `-`) gain a pinned interaction. A: +1 fixture.
+- **Status**: DONE: `ieee1364/19_compiler_directives/b_19_6_resetall_keeps_begin_keywords.v` (uwire under "1364-1995" across a `` `resetall ``); `b_19_11_uwire_in_2005_rejected.v` is the refusal it would hit.
 
 ### VD-044: Walking the design inside `vlog_startup_routines`
 - **Source**: ROADMAP §5.6, "IEEE 26.2.4 vs AMS 12.33.2" bullet (`conformance-ieee-vpi-interface-review.md:24-31` at 8b1514d4).
