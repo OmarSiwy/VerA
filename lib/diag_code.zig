@@ -754,9 +754,12 @@ fn infoOf(c: Code) Info {
             .title = "cannot find include file",
             .lrm = "10.3",
             .explain =
-            \\The named file was not found relative to the including file, in
-            \\any configured include directory, or among the built-in annex D
-            \\standard definitions (disciplines.vams, constants.vams).
+            \\The named file was not found. IEEE 1364-2005 19.5 lets the name be
+            \\"a full or relative path name" and says no more; VerA opens a full
+            \\path as written, and looks for a relative one in the directory of
+            \\the file that holds the `include, then in each -I directory in
+            \\order, then among the built-in annex D standard definitions
+            \\(disciplines.vams, constants.vams).
             \\
             \\Note that annex D headers are built in: including them works
             \\with no search path configured at all.

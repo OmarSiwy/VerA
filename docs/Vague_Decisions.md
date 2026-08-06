@@ -34,9 +34,10 @@ How to read an entry:
 - **Measure impact** names the measures (A, B or C, AGENTS.md §2) the change
   would move. No count is given, because counts are measured, not typed.
 
-This document changes no code and no fixture. 51 of the 90
-entries need a change. Those marked `yes (doc)` need only a document
-correction.
+As first written, this document changed no code and no fixture, and 51 of
+its 90 entries needed a change. Those marked `yes (doc)` need only a document
+correction. An entry that has since been implemented says `DONE` in the
+summary and has a **Status** line naming what landed.
 
 ## Summary
 
@@ -132,6 +133,7 @@ correction.
 | VD-088 | IEEE 1364-2005 5.2.2, 4.8.2 | Invalid real-array read gives +0.0 | no |
 | VD-089 | IEEE 1364-2005 17.11.1, 4.10.1; VAMS 9.14 | Host number is an unsized integer for `$clog2` unless a range/type fixes width | yes |
 | VD-090 | VAMS 9.18, 6.3.6, 3.4.7 | Top-level system parameter values via a top `aliasparam` card slot | no |
+| VD-091 | VAMS 10.1; IEEE 1364-2005 19.5 | A relative `` `include `` name is looked for beside the including file, then on `-I`, then among the annex D built-ins | DONE |
 
 ## 1. Open decisions (ROADMAP §5.1, CLAUSE-AUDIT §7.5)
 
@@ -954,3 +956,13 @@ correction.
 - **Decision**: `DECIDED:` (c). It uses a construct 9.18 itself names ("can also be used as targets in parameter alias declarations"), costs nothing in devices that do not declare one, and is what a compact model author already writes (`aliasparam m = $mfactor`) to accept a netlist `m=`. Descendants keep the dependency so the 9.18 combination rules still apply below the top.
 - **VerA today**: `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam`; fixture `ch09_system_tasks/geometry_top_alias_host.va`. No change.
 - **Measure impact**: none.
+
+### VD-091: Where a relative `` `include `` file name is looked for
+- **Source**: ARPice's `psp103_nqs.va`, which does `` `include "psp103.va" `` with both files in one directory, failed with E0126 unless the build passed `-I` for that directory (the `arpice-models` CI job, `ae9633f1`).
+- **Rule**: VAMS 10.1 lists `` `include `` as "[IEEE Std 1364 Verilog]" and says nothing else about it (10.7 only adds that `` `__FILE__ `` is "the path by which a tool opened the file, not the short name specified in `include"). IEEE 1364-2005 19.5: "The filename can be a full or relative path name."
+- **Why vague**: neither standard says what a relative name is relative to: the tool's working directory, the including file's directory, the first source file's directory, or only user-given search paths. Nor does either standard define a search-path option.
+- **Options**: (a) only the `-I` directories (VerA before this entry); (b) the including file's directory first, then `-I`; (c) `-I` first, then the including file's directory; (d) the working directory first.
+- **Decision**: `DECIDED:` (b). The claim that mainstream tools search the including file's directory first could not be checked against any text available here: 1364-2005 19.5 and VAMS 10.1 are silent, IEEE 1800 was not available, and no other simulator was installed to try. It is therefore not used as the reason. The reasons are these. A model split across files in one directory, like `psp103_nqs.va` and `psp103.va`, should compile wherever the directory is copied, without a build flag that names its own location. A nested include inside a library directory should find its siblings whatever the top file's directory is. (b) is also how C's `#include "..."` behaves, so it is what a model author most likely expects. Looking beside the includer first means a header shipped next to a model wins over a same-named file elsewhere on `-I`, which (c) would invert. (d) makes the result depend on where the tool was started, which no source text can see. "The including file's directory" is per file: an included file's own includes look beside it, not beside the top file. A unit that is not a file (in-memory source) has no such directory. Annex D's built-in headers stay last, so a model's own `disciplines.vams` overrides them as before.
+- **VerA today**: before this entry, `lib/frontend/pp/directive.zig` `readInclude` tried only `opts.include_dirs`, then the built-ins, while E0126's `--explain` text already claimed the including file's directory was searched. Implemented in `readInclude`/`includerDir`; E0126's note lists the directories in search order. Semver: minor (source that VerA refused now compiles).
+- **Measure impact**: A (+2 fixtures). C: 10.1 / 1364 19.5 gain a positive fixture and a refusal neighbour for the search rule.
+- **Status**: DONE: `ch10_directives/include_searches_the_including_files_directory.va` (a nested include found only beside its includer, and the includer's copy chosen over a `-I` copy), `include_including_dir_is_per_file_rejected.va` (E0126: the directory is per file); IMPLEMENTATION §1 row added.
