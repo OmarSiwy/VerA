@@ -93,6 +93,7 @@ pub const Code = enum(u16) {
     E0147,
     // Lexical (LRM 2.7) — parser.zig's string-literal scan.
     E0148,
+    W0149,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1096,6 +1097,20 @@ fn infoOf(c: Code) Info {
             \\
             \\Write the byte you mean: \377 is the largest, and "\477" was
             \\probably "\47" followed by the character 7.
+            ,
+        },
+        .W0149 => .{
+            .title = "escape is not in Table 2-2",
+            .lrm = "2.7",
+            .explain =
+            \\LRM 2.7 Table 2-2 (and IEEE 1364-2005 3.6.3) defines five escapes
+            \\in a string: \n, \t, \\, \" and \ddd. Neither standard says what
+            \\a backslash before any other character means. VerA keeps the
+            \\character and drops the backslash, so "\q" is "q" and "\%" is
+            \\"%", the C-family convention. Another tool may keep both bytes or
+            \\refuse the literal, so the string is not portable.
+            \\
+            \\Write the character without the backslash, or \\ for a backslash.
             ,
         },
 

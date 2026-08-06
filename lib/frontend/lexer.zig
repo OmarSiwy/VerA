@@ -548,8 +548,9 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
                 }
                 out[n] = @truncate(v); // above \377 is refused first (`badEscape`)
             },
-            // ponytail: backslash, quote and undefined escapes pass through;
-            // add an arm only for an escape with a distinct byte mapping.
+            // ponytail: backslash, quote and undefined escapes pass through
+            // (an undefined one warns W0149, `badEscape`); add an arm only
+            // for an escape with a distinct byte mapping.
             else => {
                 out[n] = body[i];
                 i += 1;
@@ -591,7 +592,7 @@ pub fn badEscape(text: []const u8, from: u32) ?BadEscape {
                 if (v > 0o377) return .{ .start = start, .end = i, .above_377 = true };
                 i -= 1;
             },
-            else => {},
+            else => return .{ .start = start, .end = i + 1, .above_377 = false },
         }
     }
     return null;
@@ -802,6 +803,12 @@ test "badEscape finds an octal escape above \\377 (§2.7)" {
     const b = badEscape("\"x\\4777\"", 0).?;
     try testing.expectEqual(BadEscape{ .start = 2, .end = 6, .above_377 = true }, b);
     try testing.expectEqual(null, badEscape("\"x\\4777\"", b.end));
+}
+
+test "badEscape finds an escape Table 2-2 does not list (§2.7)" {
+    const b = badEscape("\"\\n\\q\\\\\"", 0).?;
+    try testing.expectEqual(BadEscape{ .start = 3, .end = 5, .above_377 = false }, b);
+    try testing.expectEqual(null, badEscape("\"\\n\\q\\\\\"", b.end));
 }
 
 test "tokenSpan covers exactly the token" {
