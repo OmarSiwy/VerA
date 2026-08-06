@@ -122,7 +122,7 @@ const ClogEnv = struct {
 /// (IEEE 1364-2005 §12.2, "the type and range of the final value assigned"),
 /// and null for one the host may override, or anything not an integer.
 /// `$clog2` additionally reads an inferred parameter's final elaborated HDL
-/// default: numeric host bindings carry a value, never new width metadata.
+/// default, or, under `clog2_host`, a card value's unsized width (VD-089).
 fn nameWidth(self: *const Lower, e: Ast.ExprId, depth: u32) ?u32 {
     return nameWidthFor(self, e, depth, false);
 }
@@ -145,6 +145,7 @@ fn nameWidthFor(self: *const Lower, e: Ast.ExprId, depth: u32, comptime self_det
     const p = self.out.params.items[pi];
     if (p.ty != .integer) return null;
     if (p.integer32) return 32;
+    if (self_determined and self.clog2_host != 0 and hostSizedParam(self, name) != null) return self.clog2_host;
     if (self_determined) return p.source_width;
     if (!p.is_local) return null;
     const module = self.out.module orelse return null;
@@ -200,7 +201,28 @@ fn nameSignedForClog2(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
     }
     const pi = self.param_index.get(name) orelse return null;
     const p = self.out.params.items[pi];
+    if (self.clog2_host != 0 and hostSizedParam(self, name) != null) return true;
     return if (p.ty != .integer) null else if (p.integer32) true else p.source_signed;
+}
+
+/// The `params` row of `name` when a host card value can set it and IEEE
+/// 1364-2005 4.10.1 then sizes it: "A parameter declaration with no type or
+/// range specification shall default to the type and range of the final value
+/// assigned to the parameter, after any value overrides have been applied." A
+/// card value is a number with no Verilog width, so VerA reads it as an
+/// unsized integer (3.5.1: at least 32 bits, signed) where `$clog2` asks for a
+/// width (docs/Vague_Decisions.md VD-089). Null for a local parameter, an
+/// `integer` or ranged one (whose width no override changes), or a non-integer.
+pub fn hostSizedParam(self: *const Lower, name: []const u8) ?usize {
+    if (self.vars.contains(name) or lower_expr.funcParamShadows(self, name)) return null;
+    const pi = self.param_index.get(name) orelse return null;
+    const p = self.out.params.items[pi];
+    if (p.ty != .integer or p.integer32 or p.is_local) return null;
+    const module = self.out.module orelse return null;
+    for (module.params) |decl| {
+        if (std.mem.eql(u8, self.file.str(decl.name), name)) return if (decl.packed_range == null) pi else null;
+    }
+    return null;
 }
 
 /// The width-and-sign plan `lower/expr.zig` lowers a `$clog2` operand by, under
