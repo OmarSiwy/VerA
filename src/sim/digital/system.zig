@@ -739,7 +739,8 @@ fn setBitsOfByte(v: Int.Literal, lo: u32, byte: u8) void {
 /// logic is applied to each personality row's selected inputs.
 pub const Pla = struct {
     logic: enum { @"and", @"or", nand, nor },
-    /// `plane` (§17.5.4): 0 selects the complement, 1 the input, z/? nothing.
+    /// `plane` (§17.5.4): 0 selects the complement, 1 the input, x an
+    /// unknown term (`plaEval`), z/? nothing.
     /// `array`: 1 selects the input, 0 nothing.
     plane: bool,
     /// `async` re-evaluates whenever an input or the personality changes.
@@ -788,11 +789,14 @@ pub fn plaEval(p: Pla, rows: []const Int.Literal, in: Int.Literal, out: Int.Lite
             const sel = row.bit(@intCast(row.width - 1 - j));
             var b = in.bit(@intCast(in.width - 1 - j));
             if (p.plane) {
+                // x is "the worst case of the input value": it may be
+                // the true or the complemented input, which differ for
+                // every input value, so the term is x. z is "do-not-care".
                 if (sel == .zero) b = switch (b) {
                     .zero => .one,
                     .one => .zero,
                     else => .x,
-                } else if (sel != .one) continue;
+                } else if (sel == .x) b = .x else if (sel != .one) continue;
             } else if (sel == .zero) continue else if (sel != .one) b = .x;
             // `and` is decided by a 0, `or` by a 1.
             if (b == (if (and_like) Int.Bit.zero else Int.Bit.one)) decided = true;
