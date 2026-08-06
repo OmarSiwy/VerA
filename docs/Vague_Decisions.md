@@ -65,7 +65,7 @@ correction.
 | VD-021 | VAMS 2.7, A.8.8, G change 2535 | A string stays on one line; a raw newline or continuation is E0138 | no |
 | VD-022 | VAMS 2.3, 2.7 Table 2-2 | A raw TAB in a string is legal and is byte 9 | no |
 | VD-023 | VAMS 2.9.2 (`op`) | An absent `op` means included; only `"no"` excludes | no |
-| VD-024 | VAMS 2.9 Syntax 2-4, A.9.1, Annex B | Only `units` is exempt as a keyword attribute name; other keywords are refused | yes |
+| VD-024 | VAMS 2.9 Syntax 2-4, A.9.1, Annex B | Only `units` is exempt as a keyword attribute name; other keywords are refused | DONE |
 | VD-025 | VAMS 3.4; IEEE 1364-2005 4.10.1 | "Previously defined" means textual order; a forward reference is E0314 | no |
 | VD-026 | VAMS 4.3.1 Table 4-14 | `min`/`max` use the conditional form for value and derivative, folding included | yes |
 | VD-027 | VAMS 8.2 vs 8.4.1 | Nodeset vs `analog initial` order is unobservable; follow 8.2, assert neither | no |
@@ -352,6 +352,7 @@ correction.
 - **Decision**: `DECIDED:` (a). `units` is legal because 2.9.2 standardizes it and prints it unescaped. Nothing grants the same exception to any other keyword, and IEEE 1364-2005 A.9.1 gives the same `attr_name ::= identifier`. A keyword used as an attribute name is refused with a named diagnostic; the legal form is an escaped identifier (`(* \module = 1 *)`). This keeps VerA's accepted set inside what a 1364/1800 front end accepts.
 - **VerA today**: every keyword is accepted as an attribute name (`lib/frontend/parser.zig:580-585`: "every keyword is taken as a name"). CHANGE NEEDED: in `parseAttributes`, accept identifiers, escaped identifiers and `kw_units` only, and refuse any other keyword with E0208 (or a dedicated code) citing 2.9/A.9.1. Add a rejection fixture (`(* module *)`) with its legal neighbours (`(* \module *)`, `(* units = "V" *)`). Semver: minor (VerA newly refuses source).
 - **Measure impact**: A (+2 fixtures); C (2.9 gains a refusal with a legal neighbour).
+- **Status**: DONE: E0208 with a keyword note, `ch02_lexical/attribute_keyword_name_rejected.va`; legal neighbour `attribute_keyword_name_escaped.va` (`\module`, `units`).
 
 ### VD-025: Forward parameter references
 - **Source**: ROADMAP §5.6 bullet 4 (`conformance-parameter-core-ledger-review.md:43-45`).
