@@ -5225,6 +5225,11 @@ fn infoOf(c: Code) Info {
             \\Only a literal name is checked. 9.15 also allows a string
             \\parameter or a string variable, whose value is not available
             \\here, and the fallback is the user's cover for that case.
+            \\
+            \\"$simparam$str is similar to $simparam" but takes no fallback,
+            \\so a literal name outside Table 9-28 ("analysis_name",
+            \\"analysis_type", "cwd", "module", "instance", "path") is this
+            \\error too.
             ,
         },
         .E0812 => .{

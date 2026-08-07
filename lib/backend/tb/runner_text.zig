@@ -55,6 +55,12 @@ pub const runner_body =
     \\    return argv[@min(1, argv.len)..];
     \\}
     \\
+    \\/// §9.15 Table 9-28 "cwd": the directory this testbench was started in,
+    \\/// "" if it cannot be read.
+    \\fn cwdPath() []const u8 {
+    \\    return std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), std.heap.page_allocator) catch "";
+    \\}
+    \\
     \\/// What `contract.validateHost` checks this host by, when the checks are on
     \\/// (`vera_validate_contract`). The fixture suite always turns them on: this
     \\/// is the host that runs against every device the torture suite compiles.
