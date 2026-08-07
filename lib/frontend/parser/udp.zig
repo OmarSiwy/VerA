@@ -5,7 +5,8 @@
 //! An analog compile has no event queue to run a table on, so an instance
 //! warns W0252 there.
 //!
-//! LRM clauses cited: §1.1, §8.5.3; IEEE 1364-2005 §8, §8.1.2, §8.1.4, §8.4.
+//! LRM clauses cited: §1.1, §8.5.3; IEEE 1364-2005 §8, §8.1.2, §8.1.4, §8.4,
+//! §8.8, Table 8-1.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -117,6 +118,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     var rows: std.ArrayList(Ast.UdpRow) = .empty;
     const sequential = try parseUdpTable(self, &rows);
+    try checkUdpConflicts(self, name, rows.items, n_ports - 1, sequential, main_tok);
     if (!self.reservedIs(self.pos, "endprimitive"))
         return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
     self.pos += 1;
@@ -251,6 +253,103 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
         .state = if (is_seq and cols[1].len != 0) cols[1].text[0] else 0,
         .output = last[0],
     });
+}
+
+/// One input field of an entry as the concrete values it covers: a level
+/// symbol as a set over {0, 1, x} (bit 0, 1, 2), an edge as a set over the
+/// (from, to) transitions, bit `3 * from + to` (Table 8-1).
+const UdpField = union(enum) { level: u3, edge: u9 };
+
+fn udpLevelSet(c: u8) u3 {
+    return switch (std.ascii.toLower(c)) {
+        '0' => 0b001,
+        '1' => 0b010,
+        'x' => 0b100,
+        'b' => 0b011,
+        else => 0b111, // `?`: the alphabet check left nothing else
+    };
+}
+
+/// Table 8-1's transitions between two level sets, a change only.
+fn udpEdgeSet(from: u3, to: u3) u9 {
+    var set: u9 = 0;
+    for (0..3) |f| for (0..3) |t| {
+        if (f != t and from & (@as(u3, 1) << @intCast(f)) != 0 and to & (@as(u3, 1) << @intCast(t)) != 0)
+            set |= @as(u9, 1) << @intCast(3 * f + t);
+    };
+    return set;
+}
+
+/// Splits an entry's input characters into `out`, one field per input;
+/// returns the field count, which may differ from the port count
+/// (elaboration diagnoses that).
+fn udpFields(inputs: []const u8, out: []UdpField) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < inputs.len) : (i += 1) {
+        const f: UdpField = switch (std.ascii.toLower(inputs[i])) {
+            '(' => blk: {
+                if (i + 3 >= inputs.len) return out.len + 1;
+                defer i += 3;
+                break :blk .{ .edge = udpEdgeSet(udpLevelSet(inputs[i + 1]), udpLevelSet(inputs[i + 2])) };
+            },
+            'r' => .{ .edge = udpEdgeSet(0b001, 0b010) },
+            'f' => .{ .edge = udpEdgeSet(0b010, 0b001) },
+            // (01) (0x) (x1), and (10) (1x) (x0).
+            'p' => .{ .edge = udpEdgeSet(0b001, 0b110) | udpEdgeSet(0b100, 0b010) },
+            'n' => .{ .edge = udpEdgeSet(0b010, 0b101) | udpEdgeSet(0b100, 0b001) },
+            '*' => .{ .edge = udpEdgeSet(0b111, 0b111) },
+            else => .{ .level = udpLevelSet(inputs[i]) },
+        };
+        if (n == out.len) return n + 1;
+        out[n] = f;
+        n += 1;
+    }
+    return n;
+}
+
+/// IEEE 1364-2005 §8.1.4: "It is illegal to have the same combination of
+/// inputs, including edges, specified for different outputs." Two entries
+/// overlap where every field (and a sequential entry's current state)
+/// covers a common value; they conflict where, on that overlap, their next
+/// states differ, `-` reading as the current state. A level entry and an
+/// edge entry never conflict: §8.8 lets the level entry dominate. Neither
+/// do edge entries on different inputs, which one event cannot both match.
+fn checkUdpConflicts(self: *Parser, name: Ast.StrId, rows: []const Ast.UdpRow, inputs: usize, sequential: bool, main_tok: u32) Error!void {
+    var a_buf: [max_udp_inputs]UdpField = undefined;
+    var b_buf: [max_udp_inputs]UdpField = undefined;
+    for (rows, 0..) |a, i| {
+        if (udpFields(a.inputs, &a_buf) != inputs) continue;
+        for (rows[i + 1 ..], i + 1..) |b, j| {
+            if (udpFields(b.inputs, &b_buf) != inputs) continue;
+            const overlap = for (a_buf[0..inputs], b_buf[0..inputs]) |fa, fb| {
+                const meet = switch (fa) {
+                    .level => |la| switch (fb) {
+                        .level => |lb| la & lb != 0,
+                        .edge => false,
+                    },
+                    .edge => |ea| switch (fb) {
+                        .level => false,
+                        .edge => |eb| ea & eb != 0,
+                    },
+                };
+                if (!meet) break false;
+            } else true;
+            if (!overlap) continue;
+            const states: u3 = if (sequential) udpLevelSet(a.state) & udpLevelSet(b.state) else 0b001;
+            for (0..3) |s| {
+                if (states & (@as(u3, 1) << @intCast(s)) == 0) continue;
+                const cur = "01x"[s];
+                const out_a = if (a.output == '-') cur else std.ascii.toLower(a.output);
+                const out_b = if (b.output == '-') cur else std.ascii.toLower(b.output);
+                if (out_a == out_b) continue;
+                try self.report(main_tok, .E0248, "`{s}`: entries {d} and {d} share an input combination and give it {c} and {c}", .{
+                    self.file.str(name), i + 1, j + 1, out_a, out_b,
+                });
+                break;
+            }
+        }
+    }
 }
 
 fn udpBodyName(sequential: bool) []const u8 {
