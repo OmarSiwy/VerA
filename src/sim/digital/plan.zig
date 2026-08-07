@@ -507,7 +507,9 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
                 try inputs.append(self.arena, t.slot);
             }
         },
-        .wait_slots => |slots| try inputs.appendSlice(self.arena, slots),
+        // §9.7.5 an `@*` over a body that reads nothing never wakes; a
+        // settle node would run it once.
+        .wait_slots => |slots| if (slots.len == 0) return null else try inputs.appendSlice(self.arena, slots),
         else => return null,
     }
     var outputs: std.ArrayList(u32) = .empty;
