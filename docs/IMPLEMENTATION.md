@@ -335,6 +335,18 @@ the direct emitted read remains an independent gap. The wide-card paramset
 fixture uses a representable integer control and does not claim this read is
 fixed. `tests/paramset_host.zig` checks the effective integer selection only.
 
+**Upward defparams bind in instance order on the analog path.** A defparam
+path whose first identifier names the declaring instance or a module above it
+(IEEE 1364-2005 §12.6, Syntax 12-7) is resolved from that scope
+(`lib/ir/elaborate/override.zig` `defparamKey`), but the flatten binds each
+instance's parameters as it inlines it. A target that is an ancestor, the
+declaring instance itself, or a sibling written before the declaring one is
+already bound, so the defparam is refused with E0907 naming that cause
+(`boundEarlier`) instead of being applied as §12.8.1's collect-first order
+would. The digital engine applies them (`src/sim/digital/root.zig`
+`bindDefparam`). Fixture: `ch06_hierarchy/defparam_upward_module_name_path.va`
+(a later sibling, applied).
+
 The earlier limit defects below are gone rather than named:
 the `absdelay` history counts steps in a u64; unit names count collisions in
 a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
