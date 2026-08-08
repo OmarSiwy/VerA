@@ -10,7 +10,7 @@ const options = @import("vdev_so_options");
 const vdyn = @import("vdev_dyn");
 
 fn same(comptime name: []const u8, comptime D: type) !void {
-    var lib = try std.DynLib.open(@field(options, name));
+    var lib = try @import("dynlib").DynLib.open(@field(options, name));
     defer lib.close();
     const run = lib.lookup(*const fn (u64) callconv(.c) u64, "vdev_run") orelse return error.MissingSymbol;
     const steps = 400;

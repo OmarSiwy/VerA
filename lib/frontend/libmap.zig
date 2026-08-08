@@ -110,7 +110,7 @@ const Loader = struct {
             return l.fail(at, "cannot read library map `{s}`: {t}", .{ path, e });
         const real = Io.Dir.cwd().realPathFileAlloc(l.io, path, l.arena) catch |e|
             return l.fail(at, "cannot resolve library map `{s}`: {t}", .{ path, e });
-        const dir = std.fs.path.dirname(real) orelse "/";
+        const dir = try slashed(l.arena, std.fs.path.dirname(real) orelse "/");
         const file = try l.bag.addFile(path, text);
         var t: Tokens = .{ .text = text };
         while (t.next()) |kw| {
@@ -238,10 +238,28 @@ pub fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) e
     return .{ .pattern = if (class == .directory) try std.mem.concat(arena, u8, &.{ path, "/*" }) else path, .class = class };
 }
 
+/// `path` with the host's separator written `/`, the one §13.2.1 paths use,
+/// so a Windows map directory resolves against a spec like a POSIX one.
+fn slashed(arena: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]const u8 {
+    if (std.fs.path.sep == '/') return path;
+    const out = try arena.dupe(u8, path);
+    std.mem.replaceScalar(u8, out, std.fs.path.sep, '/');
+    return out;
+}
+
 /// Does `file` match `pattern`, both absolute? §13.2.1's wildcards: `?` one
 /// character, `*` any run within one name, `...` any number of directories.
+/// `pattern` is `/`-separated (`resolveSpec`); `file` is a host path, split
+/// on the host's separators.
 pub fn matches(pattern: []const u8, file: []const u8) bool {
-    return segments(std.mem.trimStart(u8, pattern, "/"), std.mem.trimStart(u8, file, "/"));
+    var f = file;
+    while (f.len != 0 and std.fs.path.isSep(f[0])) f = f[1..];
+    return segments(std.mem.trimStart(u8, pattern, "/"), f);
+}
+
+fn nextSep(f: []const u8) ?usize {
+    for (f, 0..) |c, i| if (std.fs.path.isSep(c)) return i;
+    return null;
 }
 
 fn segments(p: []const u8, f: []const u8) bool {
@@ -252,12 +270,12 @@ fn segments(p: []const u8, f: []const u8) bool {
         var rest = f;
         while (true) {
             if (segments(p_rest, rest)) return true;
-            const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return false;
+            const slash = nextSep(rest) orelse return false;
             rest = rest[slash + 1 ..];
         }
     }
     if (f.len == 0) return false;
-    const f_end = std.mem.indexOfScalar(u8, f, '/') orelse f.len;
+    const f_end = nextSep(f) orelse f.len;
     return glob(p[0..p_end], f[0..f_end]) and segments(p_rest, if (f_end == f.len) "" else f[f_end + 1 ..]);
 }
 
