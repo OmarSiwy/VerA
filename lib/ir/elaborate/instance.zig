@@ -61,23 +61,92 @@ pub fn genInstanceList(file: *const Ast.SourceFile, id: Ast.StmtId, arena: std.m
 /// ponytail: if-generate only. A loop or case generate's instance is
 /// E0235 (`refuseGen`): the loop needs one renamed instance per
 /// iteration, the case an equality chain per arm.
-fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
+/// `locals` are the localparams of the generate blocks enclosing `id`,
+/// outermost first (`bindGenLocals`).
+fn genInstances(self: *Flatten, id: Ast.StmtId, gate: Ast.ExprId, locals: []const Ast.ParamDecl, out: *std.ArrayList(Ast.Instance), gates: *std.ArrayList(Ast.ExprId)) Error!void {
     if (id == .none) return;
     switch (self.ctx.file.stmt(id)) {
         .block => |b| {
-            try out.appendSlice(self.ctx.arena, b.instances);
+            const inner = if (b.params.len == 0) locals else try std.mem.concat(self.ctx.arena, Ast.ParamDecl, &.{ locals, b.params });
+            for (b.instances) |inst| {
+                var bound = inst;
+                if (inner.len != 0) {
+                    const params = try self.ctx.arena.dupe(Ast.ParamOverride, inst.params);
+                    for (params) |*o| o.value = try bindGenLocals(self, o.value, inner);
+                    bound.params = params;
+                }
+                try out.append(self.ctx.arena, bound);
+            }
             try gates.appendNTimes(self.ctx.arena, gate, b.instances.len);
-            for (b.body) |s| try genInstances(self, s, gate, out, gates);
+            for (b.body) |s| try genInstances(self, s, gate, inner, out, gates);
         },
         .if_stmt => |s| if (s.is_generate) {
             const c = try elab_clone.cloneExpr(self, s.cond);
-            try genInstances(self, s.then_s, try conj(self, gate, c, false), out, gates);
-            try genInstances(self, s.else_s, try conj(self, gate, c, true), out, gates);
+            try genInstances(self, s.then_s, try conj(self, gate, c, false), locals, out, gates);
+            try genInstances(self, s.else_s, try conj(self, gate, c, true), locals, out, gates);
         },
         .for_stmt => |s| try refuseGen(self, s.body),
         .case_stmt => |s| for (s.arms) |a| try refuseGen(self, a.body),
         else => {}, // else: no other statement holds a generate block
     }
+}
+
+/// §6.6.2 a generate block's localparams are declared in the block's scope,
+/// so an instance's `#(...)` written there may read them, and §6.9.2 selects
+/// a paramset only once "the generate construct has been evaluated", with
+/// the values the block supplies. The flatten keeps an override in the
+/// instantiating module's names, where a block localparam does not exist, so
+/// each identifier in `e` naming one of `locals` (the innermost, latest
+/// declared, when several share a name) is replaced by that localparam's
+/// value expression, itself read in the scope it was declared in. The
+/// result is still in the module's names and depends on the module's
+/// parameters as the localparam did.
+/// ponytail: the localparam's declared type is not applied to the
+/// substituted value; the receiving parameter's type converts it.
+fn bindGenLocals(self: *Flatten, e: Ast.ExprId, locals: []const Ast.ParamDecl) Error!Ast.ExprId {
+    if (e == .none) return e;
+    const x = &self.ctx.file.exprs;
+    var n = x.get(e);
+    switch (n.tag) {
+        .ident => {
+            var k = locals.len;
+            while (k > 0) {
+                k -= 1;
+                if (locals[k].name == n.str and locals[k].dims.len == 0) return bindGenLocals(self, locals[k].default, locals[0..k]);
+            }
+            return e;
+        },
+        .unary => {
+            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
+            if (n.lhs == x.lhs(e)) return e;
+        },
+        .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl => {
+            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
+            n.rhs = try bindGenLocals(self, x.rhs(e), locals);
+            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e)) return e;
+        },
+        .ternary => {
+            const third = x.ternaryElse(e);
+            n.lhs = try bindGenLocals(self, x.lhs(e), locals);
+            n.rhs = try bindGenLocals(self, x.rhs(e), locals);
+            const t = try bindGenLocals(self, third, locals);
+            if (n.lhs == x.lhs(e) and n.rhs == x.rhs(e) and t == third) return e;
+            n.extra = @backingInt(t);
+        },
+        .call, .sys_call, .builtin_call, .concat, .assign_pattern => {
+            const src = x.args(e);
+            const args = try self.ctx.arena.alloc(Ast.ExprId, src.len);
+            var changed = false;
+            for (src, args) |a, *o| {
+                o.* = try bindGenLocals(self, a, locals);
+                changed = changed or o.* != a;
+            }
+            if (!changed) return e;
+            n.extra = try x.addExprList(self.ctx.arena, args);
+        },
+        else => return e, // else: literals, dotted names and the analog-only forms name no block localparam a constant override can read
+    }
+    return x.add(self.ctx.arena, n);
 }
 
 fn refuseGen(self: *Flatten, id: Ast.StmtId) Error!void {
@@ -134,7 +203,7 @@ pub fn walkInstances(
                 if (ps.name == inst.module) break true;
             } else false;
             if (!known) {
-                try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
+                try elab_names.unknownModule(self, &inst);
                 return;
             }
         }
@@ -180,7 +249,7 @@ pub fn walkInstances(
     var all: std.ArrayList(Ast.Instance) = .empty;
     try all.appendSlice(self.ctx.arena, insts);
     var gates: std.ArrayList(Ast.ExprId) = .empty;
-    for (module.analog) |blk| try genInstances(self, blk.body, .none, &all, &gates);
+    for (module.analog) |blk| try genInstances(self, blk.body, .none, &.{}, &all, &gates);
     std.debug.assert(all.items.len == insts.len + gates.items.len);
     for (all.items, 0..) |inst, idx| {
         const auto = idx >= module.instances.len and idx < insts.len;

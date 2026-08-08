@@ -54,7 +54,7 @@ summary and has a **Status** line naming what landed.
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | DONE (ea6b1cb6) |
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
-| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
+| VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes (`.MODEL` half DONE e7900531) |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE (9d434792) |
 | VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
@@ -119,7 +119,7 @@ summary and has a **Status** line naming what landed.
 | VD-074 | VAMS 9.17.3 | Extra $limit args: frame sign, then seed; more declines (W0853) | no |
 | VD-075 | VAMS 12.36 | vpiRejectTransientStep = 730 | no |
 | VD-076 | VAMS E.1, E.2 | SPICE flavour; see VD-012 | no |
-| VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt (stale ROADMAP row) | yes (doc) |
+| VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt (stale ROADMAP row) | DONE (no code change: W0951 verified, ROADMAP deleted) |
 | VD-078 | VAMS 9.15 | Temperature per Model row; IMPLEMENTATION cite §9.10 -> §9.15 | yes (doc) |
 | VD-079 | VAMS 9.18, Table 9-29 | Card-time domain check for host-set hierarchical system parameters | DONE (76f344c7) |
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
@@ -246,6 +246,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). VerA claims SPICE3 card syntax for `.MODEL` and for flat `.SUBCKT` bodies made of numeric-valued R/C/L/V/I/E/F/G/H cards. `PARAMS:`, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB` and model-referenced body devices (`R1 A B RMOD`) are not claimed. Cards outside a definition (`.tran`, top-level devices) are not module definitions and may still be skipped. A card that cannot be read inside a `.SUBCKT` body is refused with a named E.1.2 diagnostic. Skipping it changes the circuit, for example a dropped R becomes an open, and that is the silent wrong answer AGENTS.md §4 forbids.
 - **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in IMPLEMENTATION §1; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
 - **Measure impact**: A (new fixtures), C (E.1.2 refusal evidence).
+- **PARTIAL** (branch w-bugs1): the `.MODEL X SW` mis-blame is DONE (e7900531): a `.MODEL` of a type with no Table E.1 row is recorded and its instance is E0952, `annex_e_spice/spice_unsupported_model_type_rejected.va` beside `spice_supported_model_type_neighbour.va`. The `.SUBCKT` body half (unreadable cards, `PARAMS:`, `{}`, nesting) and the IMPLEMENTATION claim remain.
 
 ### VD-013: "Shall be controlled by a simulator option" (F.2.2)
 - **Source**: ROADMAP §5.1 item 13; `annex_f_resolution/COVERAGE.md:16-21` at 8b1514d4.
@@ -847,6 +848,7 @@ summary and has a **Status** line naming what landed.
 - **Options**: warn; stay silent.
 - **Decision**: `DECIDED:` silent for primitives, and W0951 for the required model/subcircuit case. Writing one's own `resistor` or `capacitor` module is routine Verilog-AMS (the LRM's own examples do it), so a warning would fire on ordinary libraries and teach users to ignore warnings. The required half is already implemented.
 - **VerA today**: `lib/ir/elaborate/names.zig` `warnSpiceShadows`. Fixtures `annex_e_spice/spice_paramset_primitive_shadow.va`, `spice_module_shadow_warning.va` and `spice_paramset_shadow_warning.va`. No change in code. `CHANGE NEEDED:` documentation only. ROADMAP §5.2's AMS E.3.3 row ("No warning when a module shadows a SPICE model or subcircuit") is stale now that W0951 exists; delete it. Patch.
+- **DONE**: re-checked 2026-10-04 on branch w-bugs1: `spice_module_shadow_warning.va` (model), `h04_10_verilog_module_wins_over_netlist_subckt.va` (subcircuit) and `spice_paramset_shadow_warning.va` each require W0951 and pass. The ROADMAP row goes with ROADMAP.md itself.
 - **Measure impact**: none.
 
 ### VD-078: Where a device's temperature lives (ABI 6: the Model row)

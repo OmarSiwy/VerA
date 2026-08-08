@@ -47,6 +47,9 @@ pub const Output = struct {
     /// How many modules `Options.spice_netlist` contributed. E.2.1's
     /// case-insensitive fallback applies to this tail of the prelude only.
     netlist_modules: u32 = 0,
+    /// `spice_cards.Synthesized.unsupported`: the netlist's `.MODEL` cards of
+    /// a type VerA has no primitive for.
+    netlist_unsupported: []const []const u8 = &.{},
     directives: Directives = .{},
     /// Where each of `Options.more` begins in `text`.
     more_starts: []const u32 = &.{},
@@ -330,6 +333,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
     }
 
     var netlist_modules: u32 = 0;
+    var netlist_unsupported: []const []const u8 = &.{};
     if (opts.std_defs) {
         // Replayed from the process-lifetime snapshot (`Prelude`), which
         // pp/test.zig checks against a fresh `runStdDefs`.
@@ -341,6 +345,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
             try pp.runFile(cards.text, "spice_netlist.vams", null);
             netlist_modules = cards.modules;
         }
+        netlist_unsupported = cards.unsupported;
     }
 
     // The compilation unit's output is about its own length (comments out,
@@ -381,6 +386,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
     return .{
         .text = try arena.dupe(u8, pp.out.items),
         .netlist_modules = netlist_modules,
+        .netlist_unsupported = netlist_unsupported,
         .directives = directives,
         .more_starts = more_starts,
     };

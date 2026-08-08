@@ -1594,6 +1594,12 @@ const sim_state_fields = [_]SimStateField{
     // host-owned; only `+` entries are plusargs. Left at `&.{}`, every
     // $test$plusargs/$value$plusargs search answers 0.
     .{ .name = "plusargs", .T = []const [:0]const u8 },
+    // §9.15 Table 9-28 `$simparam$str("cwd")`: the directory the simulator
+    // was started in. Left at "", the device answers "".
+    .{ .name = "cwd", .T = []const u8 },
+    // §9.15 Table 9-28 `$simparam$str("analysis_name")`: the host's name for
+    // the current analysis ("tran1", "mydc"), written before each analysis.
+    .{ .name = "analysis_name", .T = []const u8 },
 };
 
 /// Host-written `Model` fields, all `f64`: §9.15 `$simparam` names whose value

@@ -48,7 +48,7 @@ pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance, path: []const u
     const candidates = try matchingParamsets(self, inst, path, &live);
     if (live.items.len == 0) {
         if (candidates == 0) {
-            try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
+            try elab_names.unknownModule(self, inst);
         } else {
             try self.err(inst.main_tok, .E0911, "`{s}`: no paramset named `{s}` admits these parameter values", .{
                 self.ctx.file.str(inst.name), self.ctx.file.str(inst.module),

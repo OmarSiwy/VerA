@@ -124,6 +124,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
+        \\    if (comptime @hasField(D.Instance, "cwd")) inst.cwd = cwdPath();
+        \\    if (comptime @hasField(D.Instance, "analysis_name")) inst.analysis_name = analysis_name;
         \\    // The solve-invariant slice: after the card and the temperature
         \\    // write, before the first evaluation — the ordering a host keeps.
         \\    // With `Dual` itself as the value scalar, so every latched value is
@@ -481,6 +483,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
+        \\    if (comptime @hasField(D.Instance, "cwd")) inst.cwd = cwdPath();
+        \\    if (comptime @hasField(D.Instance, "analysis_name")) inst.analysis_name = analysis_name;
         \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model);
         \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
         \\    std.debug.print("=== {s} ===\n", .{title});
@@ -535,6 +539,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    sim_state = .{ .kind = @enumFromInt(kind) };
         \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = if (host_call != null) &host_systf else &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
+        \\    if (comptime @hasField(D.Instance, "cwd")) g_inst.cwd = cwdPath();
+        \\    if (comptime @hasField(D.Instance, "analysis_name")) g_inst.analysis_name = @tagName(sim_state.kind);
         \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model);
         \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&g_model, &g_inst);
         \\    g_x = @splat(0.0);
@@ -578,6 +584,9 @@ fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directi
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
     try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    // §9.15 `$simparam$str("analysis_name")`: this testbench's one analysis.
+    const name = if (d.analysis_name.len != 0) d.analysis_name else @tagName(d.analysis);
+    try out.print(arena, "const analysis_name = \"{f}\";\n\n", .{std.zig.fmtString(name)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
 }
 

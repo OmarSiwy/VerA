@@ -322,6 +322,7 @@ fn compileInArena(
     };
     file.builtin_modules = builtins;
     file.netlist_modules = netlist_modules;
+    file.netlist_unsupported = pp.netlist_unsupported;
     // §3.7/§6.5.3 wreal structure rules. The digital runner calls the same
     // check, so both routes refuse the same wirings.
     try @import("frontend").wreal.check(file, starts, bag);

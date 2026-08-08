@@ -3,7 +3,7 @@
 //! its §9.18 hierarchical system-parameter values and its §9.19
 //! `$param_given` answers. Owns `Flatten.defparams`. LRM §3.4.4, §3.4.5,
 //! §3.4.7, §6.3, §6.3.1, §6.3.3, §9.18 Table 9-29, §9.19; IEEE 1364-2005
-//! §12.2.2.2.
+//! §12.2.1, §12.2.2.2, §12.6.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
@@ -50,11 +50,48 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
             // does not exist. Neither may override a child parameter.
             continue;
         }
-        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(dp.path) });
+        const key = try defparamKey(self, module, path, self.ctx.file.str(dp.path));
         try self.defparams.put(self.ctx.arena, key, .{
             .value = try elab_clone.cloneExpr(self, dp.value),
             .tok = dp.main_tok,
         });
+    }
+}
+
+/// The flat key of defparam path `dp` written in `module` at instance
+/// prefix `path` (IEEE 1364-2005 §12.6, as §12.2.1 applies it to a defparam).
+/// A first segment naming an instance of `module`, its generate blocks'
+/// included, starts a downward path. Otherwise it is looked up the
+/// hierarchy, this instance first: an instance whose name or module name
+/// (Syntax 12-7's `module_identifier`) it is becomes the base, and the rest
+/// of the path runs down from there. A top-level module's instance name is
+/// its module name. Nothing matching leaves the path downward, for E0907.
+fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, dp: []const u8) Error![]const u8 {
+    const downward = try self.ctx.arena.print("{s}{s}", .{ path, dp });
+    const dot = std.mem.indexOfScalar(u8, dp, elaborate.sep) orelse return downward;
+    const first = dp[0..dot];
+    for (module.instances) |inst| if (std.mem.eql(u8, self.ctx.file.str(inst.name), first)) return downward;
+    var gen: std.ArrayList(Ast.Instance) = .empty;
+    for (module.analog) |blk| try @import("instance.zig").genInstanceList(self.ctx.file, blk.body, self.ctx.arena, &gen);
+    for (gen.items) |inst| if (std.mem.eql(u8, self.ctx.file.str(inst.name), first)) return downward;
+    // `path` ends in `sep`; each shorter prefix ending in `sep` (or empty)
+    // is an ancestor's.
+    var end = path.len;
+    while (true) {
+        const prefix = path[0..end];
+        const unit = for (self.unit_paths.items) |u| {
+            if (std.mem.eql(u8, u.path, prefix)) break u;
+        } else null;
+        if (unit) |u| {
+            const own = if (end == 0) u.module else blk: {
+                const parent_end = if (std.mem.lastIndexOfScalar(u8, prefix[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+                break :blk prefix[parent_end .. end - 1];
+            };
+            if (std.mem.eql(u8, own, first) or std.mem.eql(u8, u.module, first))
+                return self.ctx.arena.print("{s}{s}", .{ prefix, dp[dot + 1 ..] });
+        }
+        if (end == 0) return downward;
+        end = if (std.mem.lastIndexOfScalar(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
     }
 }
 
@@ -65,12 +102,29 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
 /// defparam is written in.
 pub fn reportUnusedDefparams(self: *Flatten) Error!void {
     var it = self.defparams.iterator();
-    while (it.next()) |dp| if (!dp.value_ptr.used) try self.err(
-        dp.value_ptr.tok,
-        .E0907,
-        "`{s}` names no parameter of the elaborated design",
-        .{dp.key_ptr.*},
-    );
+    while (it.next()) |dp| if (!dp.value_ptr.used) {
+        const key = dp.key_ptr.*;
+        if (boundEarlier(self, key)) try self.err(
+            dp.value_ptr.tok,
+            .E0907,
+            "`{s}` is a parameter of an instance elaborated before this defparam was reached; an upward defparam applies only to instances after the declaring one in instance order",
+            .{key},
+        ) else try self.err(dp.value_ptr.tok, .E0907, "`{s}` names no parameter of the elaborated design", .{key});
+    };
+}
+
+/// Whether flat parameter name `key` is a parameter of an inlined instance:
+/// a §12.6 upward defparam (`defparamKey`) found its target already bound.
+/// ponytail: the flatten binds an instance's parameters as it inlines it,
+/// one pass top-down, so such a defparam (to an ancestor, or a sibling
+/// written earlier) is refused rather than applied; IEEE 1364-2005 §12.8.1's
+/// collect-everything-first order would need a second walk.
+fn boundEarlier(self: *Flatten, key: []const u8) bool {
+    const k = (std.mem.lastIndexOfScalar(u8, key, elaborate.sep) orelse return false) + 1;
+    for (self.unit_paths.items) |u| if (std.mem.eql(u8, u.path, key[0..k])) {
+        for (u.decl.params) |p| if (!p.is_local and std.mem.eql(u8, self.ctx.file.str(p.name), key[k..])) return true;
+    };
+    return false;
 }
 
 /// Returns how many of `params` an override can land on: the non-local ones

@@ -144,6 +144,7 @@ pub const Code = enum(u16) {
     E0245,
     E0246,
     E0247,
+    E0248,
     E0296,
     W0250,
     W0251,
@@ -423,6 +424,7 @@ pub const Code = enum(u16) {
     W1050,
     W0950,
     W0951,
+    E0952,
     E0820,
     E0821,
     E0822,
@@ -1822,6 +1824,28 @@ fn infoOf(c: Code) Info {
             \\Write digital delays in the module's `timescale units, using
             \\an integer, decimal or scientific value. With `timescale 1ns/1ps,
             \\a five-microsecond delay is #5000 or #5e3, never #5u.
+            ,
+        },
+        .E0248 => .{
+            .title = "a UDP table gives one input combination two outputs",
+            .lrm = "IEEE 1364-2005 8.1.4",
+            .explain =
+            \\IEEE 1364-2005 8.1.4: "It is illegal to have the same combination
+            \\of inputs, including edges, specified for different outputs."
+            \\
+            \\A symbol stands for every value it covers (`?` is 0, 1 and x; `b`
+            \\is 0 and 1; `p` is (01), (0x) and (x1), per Table 8-1), so two
+            \\entries share a combination wherever each column, and a sequential
+            \\entry's current state, covers a common value. They conflict when
+            \\the next states differ there, `-` reading as the current state:
+            \\
+            \\    0 ? : 1 ;
+            \\    0 0 : 0 ;   // 0 0 is specified for both 1 and 0
+            \\
+            \\Narrow one entry so the sets no longer meet (`0 1 : 1 ;`), or give
+            \\both the same output. A level-sensitive entry overlapping an
+            \\edge-sensitive one is not a conflict: 8.8 makes the level entry
+            \\dominate.
             ,
         },
         .E0245 => .{
@@ -5268,6 +5292,11 @@ fn infoOf(c: Code) Info {
             \\Only a literal name is checked. 9.15 also allows a string
             \\parameter or a string variable, whose value is not available
             \\here, and the fallback is the user's cover for that case.
+            \\
+            \\"$simparam$str is similar to $simparam" but takes no fallback,
+            \\so a literal name outside Table 9-28 ("analysis_name",
+            \\"analysis_type", "cwd", "module", "instance", "path") is this
+            \\error too.
             ,
         },
         .E0812 => .{
@@ -6199,6 +6228,27 @@ fn infoOf(c: Code) Info {
             .title = "multiple discipline resolution rules match",
             .lrm = "7.7.2.1",
             .explain = "The first matching rule is used. Exact matches take precedence over subset matches. Remove the ambiguity to silence this warning.",
+        },
+        .E0952 => .{
+            .title = "a SPICE model names a primitive VerA does not support",
+            .lrm = "E.1.2",
+            .explain =
+            \\E.1.2: "Not all SPICE simulators support the same set of component
+            \\primitives. Thus, a particular SPICE netlist can reference a
+            \\primitive which is unsupported. Verilog-AMS HDL offers no
+            \\alternative in this case other than the possibility that if the
+            \\model equations are known, the primitive can be rewritten as a
+            \\module."
+            \\
+            \\A `.MODEL name type` card declares `name` as a model of the SPICE
+            \\primitive `type`. VerA reads the types Table E.1 names (r, c, l,
+            \\d, npn, pnp, nmos, pmos, njf, pjf, nmf, pmf); any other (`sw`,
+            \\`csw`, `ltra`, `urc`, ...) declares no module, and an instance of
+            \\the model is this error, at the instance.
+            \\
+            \\As the clause says, write the primitive's equations as a
+            \\Verilog-AMS module of the same name: E.3.3 then selects the module.
+            ,
         },
         .W0951 => .{
             .title = "a Verilog-AMS definition shadows a SPICE model or subcircuit",
