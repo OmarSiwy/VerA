@@ -203,7 +203,7 @@ pub fn walkInstances(
                 if (ps.name == inst.module) break true;
             } else false;
             if (!known) {
-                try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
+                try elab_names.unknownModule(self, &inst);
                 return;
             }
         }
