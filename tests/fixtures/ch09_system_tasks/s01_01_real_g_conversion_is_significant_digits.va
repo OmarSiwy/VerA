@@ -58,12 +58,12 @@
 // which is C's %e and which VerA already reproduces for an explicit `%e` — see
 // tests/fixtures/ch09_system_tasks/171_display_c_format_flags.va.
 //
-// WHY THE FOUR THAT REMAIN STILL HAVE TEETH. `lib/backend/cg_display.zig`
-// renders a real through Zig's shortest-round-trip formatting, so `%g` of 1e8
-// prints `100000000` — nine characters where Table 9-23 demands the shorter of
-// the two renderings, five. All four rows fail today and each names a distinct
-// branch of the rule: below the -4 floor, above the precision ceiling, and the
-// two sides of the decimal window.
+// WHY THE FOUR THAT REMAIN STILL HAVE TEETH. A renderer that formats a real
+// through shortest-round-trip text prints `%g` of 1e8 as `100000000`: nine
+// characters where Table 9-23 demands the shorter of the two renderings, five.
+// Each row names a distinct branch of the rule: below the -4 floor, above the
+// precision ceiling, and the two sides of the decimal window. All four pass
+// (re-run 2026-10-04 at ae9633f1 with AGENTS.md §6's `vera --emit-exe` command: four ok=1).
 //
 // WHY THE ASSERTION IS A STRING COMPARISON. The value of a conversion is text,
 // and the only way to hold text in a Verilog-AMS fixture is §9.5.3's

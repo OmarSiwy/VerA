@@ -43,12 +43,12 @@ summary and has a **Status** line naming what landed.
 
 | ID | Clause | Decision | Change needed |
 |---|---|---|---|
-| VD-001 | AGENTS.md §2, §6 (house rule) | A green fixture with teeth is an ordinary fixture; its header names the wrong implementation it catches | yes |
+| VD-001 | AGENTS.md §2, §6 (house rule) | A green fixture with teeth is an ordinary fixture; its header names the wrong implementation it catches | DONE (4ef087d6) |
 | VD-002 | VAMS 9.21, Syntax 9-16, Table 9-32 | `";2"` is legal; a null head defaults every dimension, dependent = N + ignored + selector | no |
 | VD-003 | AGENTS.md §6 (house rule); VAMS 9.17.2 | Delete invented quotes (done); ship the 9.17.2 smallest-bound fixture | DONE (70c42167) |
-| VD-004 | AGENTS.md §0 rule 1 (house rule) | Re-measure figures that gate an assertion; delete prose-only ones | yes |
-| VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | yes |
-| VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | yes |
+| VD-004 | AGENTS.md §0 rule 1 (house rule) | Re-measure figures that gate an assertion; delete prose-only ones | DONE (4ef087d6) |
+| VD-005 | IEEE 1364-2005 17.10; VAMS 9.12 Table 9-9 | No 17.10-03 row; re-score 17.10-01/-02 on the existing digital fixtures | DONE (4ef087d6) |
+| VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | DONE (4ef087d6) |
 | VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | yes |
 | VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
 | VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
@@ -57,12 +57,12 @@ summary and has a **Status** line naming what landed.
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes (`.MODEL` half DONE e7900531) |
 | VD-013 | VAMS F.2.2, F.1 | Provide `--discipline-resolution=basic\|detail`; a folded pass is fine if results are equal | yes |
 | VD-014 | VAMS A.8.8; IEEE 1364-2005 3.6 | Accept bytes above 0x7F as opaque 8-bit characters, one byte each | DONE (9d434792) |
-| VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | yes |
+| VD-015 | VAMS 9.17.3, Syntax 9-12 | A non-access first argument is E0891 (already implemented) | DONE (4ef087d6) |
 | VD-016 | ROADMAP §5.1 (scope) | `.v` contract device: implemented | no |
 | VD-017 | VAMS 7.3.2; IEEE 1364-2005 17.1.1.4 | An x/z analog display operand is an error; fix E0130's explanation, add a fixture | DONE (73d3f9dd) |
-| VD-018 | IEEE 1364-2005 17.2.9 | Excess `$readmem` data: warning, load continues (implemented, W1150) | yes |
-| VD-019 | CLAUSE-AUDIT §2 (house rule) | A parsed AST path is not `partial`; re-score AMS-06 on executing fixtures | yes |
-| VD-020 | AGENTS.md §2 (house rule) | A kernel unit test never carries `verified` alone | yes |
+| VD-018 | IEEE 1364-2005 17.2.9 | Excess `$readmem` data: warning, load continues (implemented, W1150) | DONE (4ef087d6) |
+| VD-019 | CLAUSE-AUDIT §2 (house rule) | A parsed AST path is not `partial`; re-score AMS-06 on executing fixtures | DONE (4ef087d6) |
+| VD-020 | AGENTS.md §2 (house rule) | A kernel unit test never carries `verified` alone | DONE (4ef087d6) |
 | VD-021 | VAMS 2.7, A.8.8, G change 2535 | A string stays on one line; a raw newline or continuation is E0138 | no |
 | VD-022 | VAMS 2.3, 2.7 Table 2-2 | A raw TAB in a string is legal and is byte 9 | no |
 | VD-023 | VAMS 2.9.2 (`op`) | An absent `op` means included; only `"no"` excludes | no |
@@ -99,10 +99,10 @@ summary and has a **Status** line naming what landed.
 | VD-054 | VAMS 2.8 | No identifier length limit | no |
 | VD-055 | VAMS 4.2.4 | Integer % by zero: E0601 at compile time if provable, runtime report or trap otherwise | no |
 | VD-056 | VAMS 4.2.4 | Real % by a runtime zero reports E0601 like the integer path, not NaN | DONE (86e06853) |
-| VD-057 | VAMS 4.5.4 | idt without ic: c from the feedback loop when the argument reads an unknown, else 0 (row rewording) | yes (doc) |
-| VD-058 | VAMS 4.5.5 | idtmod c = 0 is required by the prose; not implementation-defined | yes (doc) |
+| VD-057 | VAMS 4.5.4 | idt without ic: c from the feedback loop when the argument reads an unknown, else 0 (row rewording) | DONE (4ef087d6) |
+| VD-058 | VAMS 4.5.5 | idtmod c = 0 is required by the prose; not implementation-defined | DONE (4ef087d6) |
 | VD-059 | VAMS 4.5.5 | idtmod integrates inside the device, wrapped each accepted step | no |
-| VD-060 | VAMS 4.5.7 | absdelay linear interpolation is required; vera_interp=2 is an extension | yes (doc) |
+| VD-060 | VAMS 4.5.7 | absdelay linear interpolation is required; vera_interp=2 is an extension | DONE (4ef087d6) |
 | VD-061 | VAMS 4.5.11 | Pole at s = 0: DC value 0 (in-device state, no loop reading) | no |
 | VD-062 | VAMS 4.5.11, 4.5.12 | Card root vectors pair at runtime (1e-9 rel.); an unpaired root gives NaN | no |
 | VD-063 | VAMS 4.6.1 | No analysis names beyond Table 4-21; others are false, silently | no |
@@ -120,11 +120,11 @@ summary and has a **Status** line naming what landed.
 | VD-075 | VAMS 12.36 | vpiRejectTransientStep = 730 | no |
 | VD-076 | VAMS E.1, E.2 | SPICE flavour; see VD-012 | no |
 | VD-077 | VAMS E.3.3 | No primitive-shadow warning; W0951 for model/subckt (stale ROADMAP row) | DONE (no code change: W0951 verified, ROADMAP deleted) |
-| VD-078 | VAMS 9.15 | Temperature per Model row; IMPLEMENTATION cite §9.10 -> §9.15 | yes (doc) |
+| VD-078 | VAMS 9.15 | Temperature per Model row; IMPLEMENTATION cite §9.10 -> §9.15 | DONE (4ef087d6) |
 | VD-079 | VAMS 9.18, Table 9-29 | Card-time domain check for host-set hierarchical system parameters | DONE (76f344c7) |
 | VD-080 | IEEE 1364-2005 8.1.2 | 64 UDP inputs for both kinds, E1017 past it | no |
 | VD-081 | IEEE 1364-2005 11.4.2 | Source-order FIFO active events; resume in suspend order; interpreter = native | no |
-| VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | yes |
+| VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | DONE (4ef087d6) |
 | VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | yes |
 | VD-084 | IEEE 1364-2005 17.2.4.1 | 16-deep pushback, EOF past it; every read routine sees it | yes |
 | VD-085 | IEEE 1364-2005 17.2.1, 27.25; VAMS 12.24, 12.27 | Lowest free mcd bit from 1; from channel 4 under VPI, one shared table | no |
@@ -145,6 +145,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). A fixture is kept if its expected value is derived from the clause and some wrong implementation fails it. Whether VerA passes today does not matter. A green fixture with teeth is the normal case, not a defect. The test is the one MANIFEST §5.8 item 12 applied: show, in the header, the named wrong implementation and what it prints (`got=... ok=0`). A fixture that no plausible wrong implementation fails is deleted. "Regression gate" is not a separate category and gets no separate counting rule.
 - **VerA today**: the `.va` files above exist and carry no `//! xfail`. The `.sp` decks are compile-checked only (`zig build test-spice`, `build.zig`), not executed (ARPice). No change to code. CHANGE NEEDED: a header line in each of the six `.va` files naming the wrong implementation it catches and the value that implementation prints, where the header does not already say so. Patch, documentation only.
 - **Measure impact**: none. These files already count in A and C.
+- **Status**: DONE (4ef087d6). The four `.va` files in this tree already named their wrong implementation and value except `a04_09`, which now does (a ddx through slew() as identity reads 1 where 0 is wanted). The X01 `.op` decks live in ARPice and the A10 `.sp` decks are compile-only; neither carries a VerA header to change.
 
 ### VD-002: Can `";2"` carry a dependent selector with no interpolation control?
 - **Source**: ROADMAP §5.1 item 2; MANIFEST §5.8 item 8 at 8b1514d4.
@@ -173,6 +174,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (c). A figure that sets a tolerance or a `//! checks` count is re-measured by a command named in the header. A figure that only appears in prose is deleted. A header that is not re-measured in the same commit may not keep a measured figure.
 - **VerA today**: the remaining items are those listed in ROADMAP §5.5. I did not re-check each one here. CHANGE NEEDED: work through the ROADMAP §5.5 list. Patch, fixture headers only.
 - **Measure impact**: none.
+- **Status**: DONE (4ef087d6). Pass figures in `a01_06`, `a01_07`, `a04_09`, `a05_07` and `s01_01` re-run at `ae9633f1` and the command named; `s01_01`'s "all four rows fail today" did not reproduce (all four pass) and was removed.
 
 ### VD-005: Does §17.10 get its own digital row?
 - **Source**: ROADMAP §5.1 item 5; CLAUSE-AUDIT §7.5 item 2.
@@ -182,6 +184,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b), and the 17.9/17.11 split is not copied. Table 9-9 puts both contexts in one row per function. Measure B is per clause (`tests/fixtures/ieee1364/CLAUSES.tsv` rows 17.10, 17.10.1, 17.10.2), not per CLAUSE-AUDIT ledger row. The digital half now exists, so the original question is moot. Both rows are re-scored on today's evidence.
 - **VerA today**: the digital plusargs are implemented (`src/sim/digital/evaluate.zig`, `compile.zig`). They have positive and refusal `.v` fixtures: `ieee1364/17_system_tasks/b_17_10_1_plusargs_variable_query.v`, `audit_test_plusargs_absent.v`, `audit_value_plusargs_absent.v`, `b_17_10_1_test_plusargs_real_rejected.v`, `b_17_10_1_test_plusargs_arguments_rejected.v`, `b_17_10_2_value_plusargs_format_rejected.v` and `b_17_10_2_value_plusargs_arguments_rejected.v`. CLAUSE-AUDIT rows 17.10-01/-02 still read `missing (digital)`. CHANGE NEEDED: re-score CLAUSE-AUDIT 17.10-01/-02 against these fixtures and close §7.5 item 2. Documentation only.
 - **Measure impact**: none from the document. Measure B already counts these from CLAUSES.tsv.
+- **Status**: DONE (4ef087d6). CLAUSE-AUDIT 17.10-01/-02 re-scored `verified` on the listed `.v` fixtures; §7.5 item 2 closed; §7.1 tally updated.
 
 ### VD-006: May `.v` transcript evidence support `verified`?
 - **Source**: ROADMAP §5.1 item 6; CLAUSE-AUDIT §7.5 item 6.
@@ -191,6 +194,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). A `.v` transcript is the compiler's output run in a host, with its result diffed against a recorded `.expected.txt`. That is exactly the runtime evidence AGENTS.md §2 asks for. Measure B (`zig build test-1364 -- --coverage`) is itself built from these transcripts. The condition is that the step passes: a verdict rests on a transcript only while its step is green, and the name-list diff in AGENTS.md §0 rule 3 applies to it as well.
 - **VerA today**: AGENTS.md §0 records every `test-devices` case passing as of 2026-09-24, so the "47/66" in CLAUSE-AUDIT §7.5 item 6 is stale. CHANGE NEEDED: update CLAUSE-AUDIT §7.5 item 6 (documentation only). No verdict changes.
 - **Measure impact**: none (confirms B's basis).
+- **Status**: DONE (4ef087d6). CLAUSE-AUDIT §7.5 item 6 closed; `zig build test-devices` passes at `ae9633f1` (`tools/conformance.py`).
 
 ### VD-007: Discrete and electrical ports on one undeclared net with no connect statement
 - **Source**: ROADMAP §5.1 item 7; `docs/conformance-mixed-signal.md:211-215` at 8b1514d4.
@@ -275,6 +279,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The clause's own syntax is the narrower and more specific rule. The legal way to write it is `$limit(V(a,k), "pnjlim", vte, vcrit, typ)`, with the polarity as VerA's frame-sign argument (AGENTS.md §6), so no expressible model loses anything.
 - **VerA today**: already decided and implemented as E0891. `lib/ir/lower/sysfunc.zig:160` enforces it, `ch09_system_tasks/232_limit_scaled_probe_rejected.va` pins it (`//! reject E0891`), and `231_limit_polarity_sign_argument_honoured.va` is the legal neighbour. ROADMAP §5.1 item 15 is stale. CHANGE NEEDED: close the ROADMAP row only (documentation).
 - **Measure impact**: none (already counted).
+- **Status**: DONE (4ef087d6). Nothing to change in code or fixtures; the stale open-question row was in a document since removed.
 
 ### VD-016: A `.v` design as a contract device
 - **Source**: ROADMAP §5.1 item 16.
@@ -303,6 +308,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b), as the clause says. Loading stops at the finish address, and the warning is required.
 - **VerA today**: matches. `ieee1364/17_system_tasks/d09_91_readmem_overflow_rejected.v` is now a positive fixture. It requires W1150 ("memory file data word count does not match load range"), its data file `91_readmem_overflow_rejected.hex` sits beside it, and `.expected.txt` is `11 22 33 44`. CHANGE NEEDED: update CLAUSE-AUDIT 17.2-21 and §7.5 item 3, which still say excess data is dropped silently and that `d09_91` "is run by nothing" (documentation only). Optional: rename the file to drop the misleading `_rejected`. Patch.
 - **Measure impact**: none (B already counts it).
+- **Status**: DONE (4ef087d6). CLAUSE-AUDIT 17.2-21 and §7.5 item 3 now record W1150 and the positive `d09_91`. The file was not renamed.
 
 ### VD-019: A parsed AST path is not `partial` (AMS-06 `driver_update`)
 - **Source**: CLAUSE-AUDIT §7.5 item 4.
@@ -312,6 +318,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). Parsing is not an obligation of VAMS 9.22.5. The clause's obligation is that the statement executes on every driver update. This is the same line AGENTS.md §2 draws for "it compiles".
 - **VerA today**: the premise is stale. `driver_update` now executes (`src/sim/digital/driver.zig`; AGENTS.md §7). `ch07_mixed_signal/m04_12_driver_update_without_resolved_change.va` asserts that it fires without a change in the resolved value, and `ch09_system_tasks/213_driver_update_in_analog_event_rejected.va` is the refusal. CLAUSE-AUDIT row AMS-06 still says `missing`. CHANGE NEEDED: re-score AMS-06 on today's fixtures (at least `partial`, `verified` if both directions hold) and close §7.5 item 4. Documentation only.
 - **Measure impact**: none from the document (C is measured by `benchmark -- --coverage`).
+- **Status**: DONE (4ef087d6). AMS-06 re-scored `verified` on `m04_12` and `213` (both pass in the strict suite at `ae9633f1`); §7.5 item 4 closed.
 
 ### VD-020: Can a kernel unit test support `verified`?
 - **Source**: CLAUSE-AUDIT §7.5 item 5.
@@ -321,6 +328,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b), which AGENTS.md §2 already settles. A kernel test can add to a verdict but never carries one.
 - **VerA today**: 17.1-12 now has fixture evidence that runs the emitted device. `ch09_system_tasks/s01_05_monitor_suppresses_an_unchanged_step.va` and `s01_06_monitor_reports_every_change.va` carry no `//! xfail`, whereas CLAUSE-AUDIT recorded them as failing. 17.1-04 rests on `171_display_c_format_flags.va` and `s01_01`-`s01_04`. CHANGE NEEDED: re-score 17.1-12 on s01_05/s01_06 (confirm they pass in the FAIL name list first), and re-check that no other row rests on a kernel test alone. Documentation only.
 - **Measure impact**: none (documentation).
+- **Status**: DONE (4ef087d6). 17.1-12's analog half re-scored on `s01_05`/`s01_06` (both pass, strict suite 0 FAIL at `ae9633f1`); the row is now `partial` (digital governs). No other CLAUSE-AUDIT row rests on a kernel test alone. §7.5 item 5 closed.
 
 ## 2. Readings the standards leave open: Verilog-AMS (ROADMAP §5.6)
 
@@ -672,6 +680,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` the mix VerA already implements. When the argument reads an unknown, the static solve keeps the row `-x`, so c is whatever the feedback loop forces, as the table and prose describe. When the argument reads no unknown, there is no loop and the output is undefined; VerA takes 0, the value an ic of 0 gives, which keeps the static Jacobian regular. "c = 0" in the IMPLEMENTATION row describes only the second case.
 - **VerA today**: `lib/ir/lower/analog_op.zig:199-226` (`opIdt`, `readsUnknown`). Fixtures `exhaustive/062_idt_integral.va` and `ch04_expressions/idt_no_ic_dc_feedback.va`. `CHANGE NEEDED:` documentation only. Reword the IMPLEMENTATION row to say: "argument reads an unknown: the static solve forces it to zero (c from the loop); otherwise c = 0", and cite `idt_no_ic_dc_feedback.va`. Patch.
 - **Measure impact**: none.
+- **Status**: DONE (4ef087d6). IMPLEMENTATION §1 row reworded and cites `idt_no_ic_dc_feedback.va`.
 
 ### VD-058: `idtmod` with no `ic`: the table and the prose disagree
 - **Source**: IMPLEMENTATION §1 row "AMS 4.5.4, 4.5.5"
@@ -681,6 +690,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The prose is the more specific normative sentence ("defaults to zero") and is the only one with "shall". VerA's c = 0 is therefore required by the clause, not chosen.
 - **VerA today**: `zIdtmod` (`lib/backend/codegen/kernel_text.zig:504`) starts at ic, and the ic is 0 when omitted. The header of `ch04_expressions/idtmod_one_argument_starts_at_zero.va` calls the starting point "the tool's choice", and `17_idtmod.va` "declines" to assert it. `CHANGE NEEDED:` documentation and fixture headers only. Move idtmod out of the implementation-defined row. Rewrite the `idtmod_one_argument_starts_at_zero.va` header to quote the prose sentence as the requirement. Patch.
 - **Measure impact**: C. The fixture now evidences a §4.5.5 requirement instead of a tool choice; whether the count moves depends on the §4.5.5 row in `CLAUSE-AUDIT.md`.
+- **Status**: DONE (4ef087d6). idtmod removed from the IMPLEMENTATION §1 row; `idtmod_one_argument_starts_at_zero.va` and `17_idtmod.va` headers quote the prose as the requirement.
 
 ### VD-059: Where `idtmod` integrates
 - **Source**: IMPLEMENTATION §1 row "AMS 4.5.5" (where)
@@ -699,6 +709,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` linear interpolation is required. `(* vera_interp = 2 *)` (quadratic) is a §2.9 vendor extension that deliberately departs from §4.5.7 on the author's request, and it is not a choice the clause leaves open.
 - **VerA today**: linear by default (`lib/backend/codegen/kernel_text.zig`, the `absdelay` kernels; `absdelay_vera_interp_linear.va`, `absdelay_vera_interp_quadratic.va`). `CHANGE NEEDED:` documentation only. Move the row's interpolation entry under the `vera_*` attribute row, labelled "departs from §4.5.7 when set", and let `absdelay_vera_interp_linear.va` cite §4.5.7 as a requirement. Patch.
 - **Measure impact**: C, if the linear fixture becomes §4.5.7 evidence.
+- **Status**: DONE (4ef087d6). The §4.5.7 row is gone; the `vera_*` row says `vera_interp = 2` departs from §4.5.7 when set. `absdelay_vera_interp_linear.va` already tagged `//! lrm 4.5.7` and quoted the requirement.
 
 ### VD-061: DC value of a `laplace_*` filter with a pole at s = 0
 - **Source**: IMPLEMENTATION §1 row "AMS 4.5.11" (DC)
@@ -850,6 +861,7 @@ summary and has a **Status** line naming what landed.
 - **VerA today**: `lib/ir/elaborate/names.zig` `warnSpiceShadows`. Fixtures `annex_e_spice/spice_paramset_primitive_shadow.va`, `spice_module_shadow_warning.va` and `spice_paramset_shadow_warning.va`. No change in code. `CHANGE NEEDED:` documentation only. ROADMAP §5.2's AMS E.3.3 row ("No warning when a module shadows a SPICE model or subcircuit") is stale now that W0951 exists; delete it. Patch.
 - **DONE**: re-checked 2026-10-04 on branch w-bugs1: `spice_module_shadow_warning.va` (model), `h04_10_verilog_module_wins_over_netlist_subckt.va` (subcircuit) and `spice_paramset_shadow_warning.va` each require W0951 and pass. The ROADMAP row goes with ROADMAP.md itself.
 - **Measure impact**: none.
+- **Status**: DONE (4ef087d6). Nothing to change in code or IMPLEMENTATION (its E.3.3 row was already right); the stale row was in a document since removed.
 
 ### VD-078: Where a device's temperature lives (ABI 6: the Model row)
 - **Source**: IMPLEMENTATION §1 "Device ABI 6" (cites "§9.10")
@@ -859,6 +871,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` per Model row. It is a superset of the per-circuit reading the clause describes, and it still lets a host give one instance its own temperature by giving it its own row. It also keeps the whole solve-invariant cache a function of the row: measured `Instance` shrink of 3,520 to 200 bytes on bsim4va.
 - **VerA today**: `Model.temperature__`, `contract.host_model_fields` (`tools/contract.zig`). `CHANGE NEEDED:` documentation only. The IMPLEMENTATION "Device ABI 6" prose should cite VAMS §9.15, not §9.10. Patch.
 - **Measure impact**: none.
+- **Status**: DONE (4ef087d6). IMPLEMENTATION "Device ABI 6" cites §9.15.
 
 ### VD-079: Host-supplied hierarchical system parameters outside Table 9-29's domains
 - **Status**: DONE (76f344c7)
@@ -898,6 +911,7 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b), as CLAUSE-AUDIT §5.5 already says. A clause-tagged fixture may assert only what every conforming tool prints; VerA's particular choice is pinned by a fixture that cites no clause and is listed in IMPLEMENTATION §1.
 - **VerA today**: followed: `ieee1364/11_scheduling/audit_sched_allowed_active_race.v` (membership), `ieee1364/12_hierarchy/b_12_3_10_net_type_warning.v` (merge-independent cells). But `tests/fixtures/ieee1364/CLAUSES.tsv` has 13 `unspecified` rows (5.1.4, 11.4.2, 11.5, 12.3.10.1, 12.3.10.2, 20.2, 26.1, 26.2.4, 26.6.16, 26.6.21, 27.20, 27.34, 27.34.1) and IMPLEMENTATION §3 lists five. `CHANGE NEEDED:` IMPLEMENTATION §3 should list all 13 (or say "every `unspecified` row of CLAUSES.tsv") and name each row's fixture policy. Doc only, patch.
 - **Measure impact**: none (B's `unspecified` rows are already classified).
+- **Status**: DONE (4ef087d6). IMPLEMENTATION §3 covers every `unspecified` CLAUSES.tsv row and names each group's fixture policy.
 
 ### VD-083: Which of several configs configures the design
 - **Source**: IMPLEMENTATION §1 row "1364 13.4.4".
