@@ -22,12 +22,10 @@
 // referenced: they do not exist. All values are exact in binary.
 //
 // SCOPE. What this pins is that the member is chosen per generated instance
-// from the values of the arm that exists. It does not pin the stronger half of
-// the clause's second sentence — an override whose VALUE only exists after the
-// scheme is evaluated, such as a localparam declared inside the generate block:
-// `begin : g1 localparam real ww = 10.0; ch6_psg_sel #(.w(ww)) u1(p, n); end`
-// is refused today with E0914 (selection cannot see `ww`, so both members stay
-// applicable). That is an open defect under §6.9.2, recorded in docs/ROADMAP.md (Open items).
+// from the values of the arm that exists. The stronger half of the clause's
+// second sentence, an override whose VALUE only exists after the scheme is
+// evaluated (a localparam declared inside the generate block), is
+// paramset_selected_by_generate_localparam.va.
 //
 // (The four instances have distinct names because VerA flattens an instance in
 // a generate block under its own name rather than under `g1.`/`g2.`; two
