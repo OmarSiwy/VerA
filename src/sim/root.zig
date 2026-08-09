@@ -1,7 +1,7 @@
 //! The simulators behind `vera --run` and `--emit-exe`: the IEEE 1364 event
 //! scheduler and interpreter (`digital`), the native executable's runtime
-//! (`rt`), the VAMS §8 mixed-signal coordinator (`mixed`), and the shared
-//! time and value formatting.
+//! (`rt`), the VAMS §8 mixed-signal coordinator (`mixed`), the SPICE deck
+//! runner's analyses (`spice`), and the shared time and value formatting.
 //!
 //! Every declaration here is reached from outside the module: `src/main.zig`,
 //! `src/vpi/`, `lib/backend/tb*`, `tests/`, and the Zig text that
@@ -21,6 +21,8 @@ pub const mixed = @import("mixed.zig");
 pub const fmt = @import("fmt.zig");
 /// The runtime an `--emit-exe` executable links: native designs and devices.
 pub const rt = @import("rt/root.zig");
+/// The SPICE deck runner's op, `.tran` and `.noise` over one device.
+pub const spice = @import("spice/root.zig");
 
 test {
     _ = scheduler;
@@ -29,4 +31,5 @@ test {
     _ = mixed;
     _ = fmt;
     _ = rt;
+    _ = spice;
 }
