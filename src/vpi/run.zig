@@ -11,6 +11,10 @@ const iterate = @import("iterate.zig");
 const handle = @import("handle.zig");
 const callback = @import("callback.zig");
 const analog = @import("analog.zig");
+const va = @import("va.zig");
+
+/// `varargs.c`, for the tests below.
+extern fn vpi_sim_control(operation: c_int, ...) c_int;
 
 const digital = sim.digital;
 const Time = callback.Time;
@@ -227,25 +231,14 @@ pub const vpiRejectTransientStep: c_int = 730;
 /// analog solution being attempted (`analog.rejectStep`), and fails when none
 /// is. vpiTransientFailConverge is not answered: the walk's solver has no
 /// iteration an application can extend.
-pub export fn vpi_sim_control(operation: c_int, ...) callconv(.c) c_int {
-    var ap = @cVaStart();
-    defer @cVaEnd(&ap);
-    return control(operation, &ap);
-}
-
-/// IEEE 1364-2005 §27.3: the same routine under its 1364 name.
-pub export fn vpi_control(operation: c_int, ...) callconv(.c) c_int {
-    var ap = @cVaStart();
-    defer @cVaEnd(&ap);
-    return control(operation, &ap);
-}
-
-/// C calling convention because `@cVaArg` is only legal in one.
-fn control(operation: c_int, ap: *std.lang.VaList) callconv(.c) c_int {
+///
+/// The body of `varargs.c`'s vpi_sim_control and of vpi_control, the same
+/// routine under its IEEE 1364-2005 §27.3 name.
+export fn vera_vpi_control(operation: c_int, ap: *va.List) c_int {
     root.clearError();
     switch (operation) {
         vpiFinish => {
-            _ = @cVaArg(ap, c_int); // the diagnostic level, as $finish(n)
+            _ = va.arg(ap, c_int); // the diagnostic level, as $finish(n)
             const r = engine orelse {
                 root.fail("NORUN", "vpi_sim_control(vpiFinish): no simulation is running", .{});
                 return 0;
@@ -254,7 +247,7 @@ fn control(operation: c_int, ap: *std.lang.VaList) callconv(.c) c_int {
             return 1;
         },
         vpiRejectTransientStep => {
-            _ = @cVaArg(ap, f64); // the current timestep, as vpi_get_analog_delta
+            _ = va.arg(ap, f64); // the current timestep, as vpi_get_analog_delta
             if (analog.rejectStep()) return 1;
             root.fail("NOSTEP", "vpi_sim_control(vpiRejectTransientStep): no analog solution after the first is awaiting acceptance", .{});
             return 0;
