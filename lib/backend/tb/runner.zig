@@ -210,6 +210,25 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     , .{ std.zig.fmtString(b.name), fmtF64(b.value) });
 
+    // --- a SPICE deck's one analysis (`zig build test-spice`) ----------------
+    if (d.tran != null or d.onoise != null) {
+        if (d.sweeps.len != 0 or d.psweeps.len != 0 or (d.tran != null and d.onoise != null)) return error.BadSyntax;
+        try out.appendSlice(arena, "    {\n");
+        try pointUnknowns(&out, arena, d, &.{}, "model");
+        if (d.tran) |tr| {
+            try out.print(arena, "        runTran(&model, &inst, &x, &forced, &state, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
+        } else {
+            const on = d.onoise.?;
+            try out.appendSlice(arena, "        _ = &state;\n        const freqs = [_]f64{");
+            for (on.values, 0..) |f, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(f) });
+            try out.print(arena, " }};\n        runNoise(&model, &inst, &x, &forced, ix(\"{f}\"), &freqs);\n", .{std.zig.fmtString(on.name)});
+        }
+        try out.appendSlice(arena, "    }\n");
+        try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
+        try out.appendSlice(arena, tb_runner_text.deck_body);
+        return out.items;
+    }
+
     // --- one straight-line block per operating point ------------------------
     // Sweep outer, time inner. Each sweep point is its own transient run with a
     // fresh `State`, so no bias inherits another's §4.5 operator history.
