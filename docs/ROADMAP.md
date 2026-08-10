@@ -451,8 +451,6 @@ Settle each before a fixture asserts one side.
 - IEEE 26.2.4 vs AMS 12.33.2: `tests/fixtures/ch11_vpi/vpi_app.c` walks the design inside
   `vlog_startup_routines`; IEEE allows only registration there.
   (`conformance-ieee-vpi-interface-review.md:24-31`.)
-- IEEE 26.3.5 vs Annex G: `vpiIsProtected` or `vpiProtected`. Neither is
-  declared. (`conformance-ieee-vpi-interface-review.md:65-70`.)
 - IEEE 26.6.40(c) vs AMS 11.6.25 note 5: whether the current time queue comes
   before or after read-only synchronization. (`conformance-ieee-vpi-objects-review.md:179-186`.)
 - AMS 11.6.25, 12.16, 12.27: `p02` conventions set by fiat. The time-33

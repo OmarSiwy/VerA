@@ -518,7 +518,7 @@
 26.3.2	-	Object type properties
 26.3.3	-	Object file and line properties
 26.3.4	-	Delays and values
-26.3.5	not-supported	Object protection properties	"Unless otherwise specified, access to relationships and properties of a protected object shall be an error." A protected object "represents code contained in a decryption envelope" (clause 28), and VerA refuses any `pragma protect` (E0146), so no protected object exists to refuse access to. The FALSE half cannot be written portably: Annex G defines no vpiIsProtected (ROADMAP 5.6); its vpiProtected is 26.6.1's module property, asserted there by ieee_pli/b_26_6_structure.c.
+26.3.5	-	Object protection properties
 26.4	non-normative	List of VPI routines by functional category	"Table 26-1 through Table 26-9 list the VPI routines by major category. Clause 27 defines each of the VPI routines, listed in alphabetical order." An index of Clause 27.
 26.5	non-normative	Key to data model diagrams	"This subclause contains the keys to the symbols used in the data model diagrams." A preamble; the access rules the keys carry are 26.5.2 and 26.5.3, cited both ways.
 26.5.1	no-prohibition	Diagram key for objects and classes	"Bold italic letters in a dotted enclosure indicate a class definition, where the class groups other objects and classes. Properties of the class are defined in this location." The notation that gives a class's properties to each member; nothing is illegal. Positive: ieee_pli/b_26_6_20_frames.c (vpiAutomatic, a property of the frame diagram's class, read on its reg member; xfail).

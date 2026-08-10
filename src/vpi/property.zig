@@ -80,6 +80,13 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // Not `enter`: callbacks, time queues, events and systf registrations are
     // objects without a design, and a handle to one still has a type.
     clearError();
+    // IEEE 1364-2005 §26.3.5: "All objects have a vpiIsProtected property",
+    // which vpi_user.h numbers as Annex G's vpiProtected (VD-045). No object
+    // is protected: §28's `pragma protect` is refused where it is written
+    // (E0146).
+    if (prop == vpiProtected and (asIter(obj) != null or callback.asCb(obj) != null or
+        value.asEvent(obj) != null or systf.asSystf(obj) != null or
+        run.asQueue(obj) != null or asObj(obj) != null)) return 0;
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
@@ -152,12 +159,6 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             if (o.kind != .module) return propFail(prop, o);
             const sc = root.design.?.scopes[o.scope];
             return (if (prop == vpiTimeUnit) sc.time_unit else sc.time_precision) orelse propFail(prop, o);
-        },
-        // IEEE 1364-2005 §26.6.1: no module is protected, since §28's
-        // `pragma protect` is refused where it is written (E0146).
-        vpiProtected => {
-            if (o.kind != .module) return propFail(prop, o);
-            return 0;
         },
         vpiSize, vpiScalar, vpiVector => {
             // An array's size counts ELEMENTS (§26.6.9 "array size counts

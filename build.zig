@@ -852,6 +852,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p02: b_26_1_systf checks=45\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/b_26_3_5_protected.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: b_26_3_5_protected checks=43\n",
+    },
+    .{
         .c = "tests/fixtures/ch11_vpi/p02_10_systf_digital.c",
         .design = "tests/fixtures/digital/p02_systf.v",
         .stdout = "p02: 10_systf_digital checks=92\n",
