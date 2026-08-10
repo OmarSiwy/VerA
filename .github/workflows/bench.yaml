@@ -88,7 +88,7 @@ jobs:
         if: always()
         run: zig build test-vpi-fixtures
 
-      # Every .sp deck runs on the testbench solver and is graded against its
+      # Every .sp deck runs on sim.spice (ESPice's solver) and is graded against its
       # .expected.json oracle; any FAIL exits 1. NOT RUN is not a FAIL.
       - name: SPICE decks run against their oracles
         if: always()

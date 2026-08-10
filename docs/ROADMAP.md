@@ -21,7 +21,7 @@ All of these hold at one commit, and a reader can reproduce each one.
 **A. The fixture suite passes over every fixture in the tree.**
 `zig build benchmark -- --strict` reports 0 FAIL, 0 unasserted and 0 XFAIL.
 `zig build test`, `test-devices`, `test-1364`, `test-vpi-fixtures` and
-`test-spice` exit 0. `test-spice` runs each deck on the testbench solver and
+`test-spice` exit 0. `test-spice` runs each deck on `sim.spice` (ESPice's solver) and
 grades it against its oracle; a deck needing a card or analysis that solver
 lacks is reported NOT RUN, naming what is missing.
 

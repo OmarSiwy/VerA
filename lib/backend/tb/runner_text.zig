@@ -1170,228 +1170,50 @@ pub const mixed_body =
 ;
 
 /// The `//! tran` and `//! onoise` analyses, appended only to a testbench that
-/// declares one: a SPICE deck's `.tran` and `.noise` cards run on this file's
-/// solver (`zig build test-spice`, `tests/harness/spice_decks.zig`). Each
-/// accepted point or frequency prints one full-precision row for the harness
-/// to grade against the deck's oracle.
+/// declares one: a SPICE deck's `.tran` and `.noise` cards, run on
+/// `sim.spice` (ESPice's solver, copied; `zig build test-spice`). Each accepted
+/// point or frequency prints one full-precision row for the harness to grade
+/// against the deck's oracle.
 pub const deck_body =
-    \\/// §5.10.3.1 the step a `cross`/`above` flip is cut down to. The device
-    \\/// does not publish its `time_tol`, so the host resolves every crossing
-    \\/// to this, which is inside any `time_tol` a model writes above it.
-    \\const cross_resolution = 1e-12;
-    \\
-    \\/// `//! tran tstep, tstop`: SPICE `.tran`, stepped as the device asks.
-    \\/// The step is at most min(tstep, tstop/50), SPICE's own ceiling, and
-    \\/// §9.17.2's `bound_step`; it lands ON the next §5.10.3.3 timer
-    \\/// (`nextBreakpoint`/`pendingBreakpoint`) and on tstop; a step whose
-    \\/// solution flips a §5.10.3.1 `cross`/`above` latch (`stateCtl(.query)`)
-    \\/// is rejected and halved until it is no longer than `cross_resolution`,
-    \\/// so the event fires after the crossing and within that of it; and a
-    \\/// `$vera_reject_step` request is retried at its time. Every accepted
-    \\/// point prints `tran t=<t> <unknown>=<x> ...`.
-    \\///
-    \\/// ponytail: backward Euler (`solve`), no truncation-error control. A
-    \\/// deck whose answer needs LTE control is outside this runner.
-    \\fn runTran(model: *const D.Model, inst: *D.Instance, x: *[n_u]f64, forced: *const [n_u]?f64, state: *State, tstep: f64, tstop: f64) void {
-    \\    const dt_max = @min(tstep, tstop / 50.0);
-    \\    sim_state.t = 0.0;
-    \\    sim_state.dt = 0.0;
-    \\    sim_state.initial_step = true;
-    \\    sim_state.final_step = false;
-    \\    sim_state.analog_initial = true;
-    \\    const solved0 = solve(x, forced, model, inst);
-    \\    if (stepPost(model, inst, x, state, solved0)) |r| deckFail("the operating point requested a retry at {e}", .{r});
-    \\    commitState(model, inst, state);
-    \\    tranRow(x);
-    \\    sim_state.initial_step = false;
-    \\    sim_state.analog_initial = false;
-    \\    var t: f64 = 0.0;
-    \\    var h = dt_max;
-    \\    var retry_at: ?f64 = null;
-    \\    // The accepted point before `t`, for the predictor.
-    \\    var x_old: ?[n_u]f64 = null;
-    \\    var t_old: f64 = 0.0;
-    \\    while (t < tstop) {
-    \\        var t_new = retry_at orelse @min(t + @min(h, boundStep(inst)), tstop);
-    \\        retry_at = null;
-    \\        if (breakpointAfter(model, inst, t)) |bp| t_new = @min(t_new, bp);
-    \\        const x0 = x.*;
-    \\        const inst0 = inst.*;
-    \\        const state0 = state.*;
-    \\        const q0 = q_prev;
-    \\        sim_state.t = t_new;
-    \\        sim_state.dt = t_new - t;
-    \\        sim_state.final_step = t_new >= tstop;
-    \\        // SPICE's predictor: Newton starts on the line through the last two
-    \\        // accepted points. Without it a step shorter than a voltage's
-    \\        // abstol converges on an iterate evaluated at the OLD solution, and
-    \\        // a `cross` that fires only at the new one fires in `updateState`
-    \\        // but never reaches x.
-    \\        if (x_old) |xo| for (0..n_u) |i| {
-    \\            x[i] += (x[i] - xo[i]) * (t_new - t) / (t - t_old);
-    \\        };
-    \\        const solved = solve(x, forced, model, inst);
-    \\        // `stepPost` undoes its own writes on a request; x is this loop's.
-    \\        if (stepPost(model, inst, x, state, solved)) |r| {
-    \\            if (!(r > t and r < t_new)) deckFail("retry at {e} is not inside ({e}, {e})", .{ r, t, t_new });
-    \\            x.* = x0;
-    \\            retry_at = r;
-    \\            continue;
-    \\        }
-    \\        const flipped = if (comptime @hasDecl(D, "stateCtl") and State != void) D.stateCtl(model, inst, state, .query) else false;
-    \\        if (flipped and t_new - t > cross_resolution) {
-    \\            x.* = x0;
-    \\            inst.* = inst0;
-    \\            state.* = state0;
-    \\            q_prev = q0;
-    \\            h = (t_new - t) / 2.0;
-    \\            continue;
-    \\        }
-    \\        commitState(model, inst, state);
-    \\        x_old = x0;
-    \\        t_old = t;
-    \\        t = t_new;
-    \\        tranRow(x);
-    \\        // Bisecting toward a flip keeps the halved step until the flip is
-    \\        // accepted; every other step starts again from the ceiling.
-    \\        if (flipped or h == dt_max) h = dt_max;
-    \\    }
-    \\}
-    \\
-    \\fn commitState(model: *const D.Model, inst: *D.Instance, state: *State) void {
-    \\    if (comptime @hasDecl(D, "stateCtl") and State != void) _ = D.stateCtl(model, inst, state, .commit);
-    \\}
-    \\
-    \\fn boundStep(inst: *const D.Instance) f64 {
-    \\    if (comptime !@hasField(D.Instance, "bound_step")) return std.math.inf(f64);
-    \\    return if (inst.bound_step > 0.0) inst.bound_step else std.math.inf(f64);
-    \\}
-    \\
-    \\/// §5.10.3.3 the earliest timer instant strictly after `t`.
-    \\fn breakpointAfter(model: *const D.Model, inst: *const D.Instance, t: f64) ?f64 {
-    \\    const m: ?f64 = if (comptime @hasDecl(D, "nextBreakpoint")) D.nextBreakpoint(model, t) else null;
-    \\    const i: ?f64 = if (comptime @hasDecl(D, "pendingBreakpoint")) D.pendingBreakpoint(inst, t) else null;
-    \\    return if (m != null and i != null) @min(m.?, i.?) else m orelse i;
-    \\}
-    \\
-    \\fn tranRow(x: *const [n_u]f64) void {
-    \\    std.debug.print("tran t={e}", .{sim_state.t});
-    \\    for (0..n_u) |i| std.debug.print(" {s}={e}", .{ u_names[i], x[i] });
-    \\    std.debug.print("\n", .{});
-    \\}
+    \\const sim = @import("sim");
+    \\const Ckt = sim.spice.Circuit(D);
     \\
     \\fn deckFail(comptime fmt: []const u8, args: anytype) noreturn {
     \\    std.debug.print(title ++ ": " ++ fmt ++ "\n", args);
     \\    std.process.exit(1);
     \\}
     \\
-    \\const Cx = std.math.Complex(f64);
-    \\
-    \\/// `//! onoise V(out) = f, ...`: SPICE `.noise`'s output spectrum. At the
-    \\/// operating point, per frequency, the small-signal matrix G + jωC (+
-    \\/// `acDyn`) is solved transposed for the adjoint y of `out`, so a
-    \\/// current injected from row to col reaches `out` as y[row] - y[col] (a
-    \\/// to-ground row, row == col, as y[row]). §4.6.4.6: rows sharing a
-    \\/// `source` add as phasors before squaring. Prints
-    \\/// `noise f=<f> onoise=<V/sqrt(Hz)>`.
-    \\///
-    \\/// ponytail: every generator is injected as a current, which is every
-    \\/// `I(...) <+` source; `noise_gens` does not say a row is a potential
-    \\/// contribution, so a `V(...) <+` generator would be mis-injected. A
-    \\/// `corr_with` term (BSIM4/PSP) is refused rather than dropped.
-    \\fn runNoise(model: *const D.Model, inst: *D.Instance, x: *[n_u]f64, forced: *const [n_u]?f64, out: usize, freqs: []const f64) void {
-    \\    sim_state.t = 0.0;
-    \\    sim_state.dt = 0.0;
-    \\    sim_state.initial_step = true;
-    \\    sim_state.final_step = true;
-    \\    sim_state.analog_initial = true;
-    \\    _ = solve(x, forced, model, inst);
-    \\    const g = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
-    \\    const c = if (comptime @hasDecl(D, "q")) withConst(Dual, qRowsOf(Dual, x, model, inst), model, true) else {};
-    \\    for (freqs) |f| {
-    \\        const w = 2.0 * std.math.pi * f;
-    \\        // Transposed as it is built: at[j][i] is entry (i, j).
-    \\        var at: [n_u][n_u]Cx = undefined;
-    \\        for (0..n_u) |i| for (0..n_u) |j| {
-    \\            at[j][i] = if (forced[i] != null)
-    \\                Cx.init(if (i == j) 1.0 else 0.0, 0.0)
-    \\            else
-    \\                Cx.init(g[i].d[j], if (comptime @hasDecl(D, "q")) w * c[i].d[j] else 0.0).add(acDynAt(i, j, w, x, model, inst));
-    \\        };
-    \\        var y: [n_u]Cx = @splat(Cx.init(0.0, 0.0));
-    \\        y[out] = Cx.init(1.0, 0.0);
-    \\        cxSolve(&at, &y);
-    \\        var total: f64 = 0.0;
-    \\        if (comptime @hasDecl(D, "noise_gens")) {
-    \\            const psd = D.noisePsd(Val, x.*, model, inst, sim_state);
-    \\            for (D.noise_gens, psd, 0..) |gen, term, k| {
-    \\                if (term.corr_with != null) deckFail("noise_gens[{d}] has a corr_with term, which this runner does not add", .{k});
-    \\                // A shared generator is summed once, at its first row.
-    \\                if (gen.source) |s| if (for (D.noise_gens[0..k]) |e| {
-    \\                    if (e.source == s) break true;
-    \\                } else false) continue;
-    \\                var z = Cx.init(0.0, 0.0);
-    \\                for (D.noise_gens, psd, 0..) |e, et, j| {
-    \\                    if (j != k and (gen.source == null or e.source != gen.source)) continue;
-    \\                    const yr = if (e.row == e.col) y[e.row] else y[e.row].sub(y[e.col]);
-    \\                    z = z.add(yr.mul(Cx.init(et.coeff, 0.0)));
-    \\                }
-    \\                const zz = z.re * z.re + z.im * z.im;
-    \\                total += zz * (term.white + term.flicker / std.math.pow(f64, f, term.ef) + tableAt(model, gen.table, f));
-    \\            }
-    \\        }
-    \\        std.debug.print("noise f={e} onoise={e}\n", .{ f, @sqrt(total) });
+    \\/// Prints `tran t=<t> <unknown>=<x> ...` per accepted point.
+    \\const TranRows = struct {
+    \\    pub fn record(_: TranRows, t: f64, x: []const f64) !void {
+    \\        std.debug.print("tran t={e}", .{t});
+    \\        for (u_names, x) |name, v| std.debug.print(" {s}={e}", .{ name, v });
+    \\        std.debug.print("\n", .{});
     \\    }
+    \\};
+    \\
+    \\/// `//! tran tstep, tstop`: the operating point (a transient's own, so
+    \\/// `analysis("ic")`), then `sim.spice.tran.simulate`.
+    \\fn runTran(model: *const D.Model, inst: *D.Instance, tstep: f64, tstop: f64) void {
+    \\    var ckt: Ckt = .init(model, inst);
+    \\    var ws: sim.spice.converger.Workspace(n_u) = .{};
+    \\    var x: [n_u]f64 = undefined;
+    \\    _ = sim.spice.op.solve(&ckt, &ws, &x, .ic) catch |e| deckFail("operating point: {t}", .{e});
+    \\    const r = sim.spice.tran.simulate(&ckt, &ws, &x, .{ .t_stop = tstop, .dt_init = tstep }, TranRows{}) catch |e| deckFail("transient: {t}", .{e});
+    \\    if (!r.completed) deckFail("transient: timestep too small at t = {e}", .{r.t_final});
     \\}
     \\
-    \\/// §4.6.4.3/.4 a table generator's PSD at `f`, from the card's knots when
-    \\/// the device has `noiseTablePoints`; 0 for a parametric row.
-    \\fn tableAt(model: *const D.Model, table: ?u16, f: f64) f64 {
-    \\    if (comptime !@hasDecl(D, "noise_tables")) return 0.0;
-    \\    const ti = table orelse return 0.0;
-    \\    var tbl = D.noise_tables[ti];
-    \\    if (comptime @hasDecl(D, "noiseTablePoints")) {
-    \\        const card = D.noiseTablePoints(model);
-    \\        var off: usize = 0;
-    \\        for (D.noise_tables[0..ti]) |t0| off += t0.points.len;
-    \\        var pts: [card.len][2]f64 = undefined;
-    \\        const mine = pts[0..tbl.points.len];
-    \\        @memcpy(mine, card[off..][0..tbl.points.len]);
-    \\        contract.sortNoiseTable(mine);
-    \\        tbl.points = mine;
-    \\        return contract.noiseTableAt(tbl, f);
-    \\    }
-    \\    return contract.noiseTableAt(tbl, f);
-    \\}
-    \\
-    \\/// Dense complex LU with partial pivoting, in place: `b` becomes the
-    \\/// solution. A singular small-signal matrix has no answer to print.
-    \\fn cxSolve(a: *[n_u][n_u]Cx, b: *[n_u]Cx) void {
-    \\    var scale: f64 = 0.0;
-    \\    for (a) |row| for (row) |e| {
-    \\        scale = @max(scale, e.magnitude());
-    \\    };
-    \\    for (0..n_u) |k| {
-    \\        var p = k;
-    \\        for (k + 1..n_u) |i| if (a[i][k].magnitude() > a[p][k].magnitude()) {
-    \\            p = i;
-    \\        };
-    \\        if (a[p][k].magnitude() <= 1e-14 * scale) deckFail("the small-signal matrix is singular at column {s}", .{u_names[k]});
-    \\        std.mem.swap([n_u]Cx, &a[k], &a[p]);
-    \\        std.mem.swap(Cx, &b[k], &b[p]);
-    \\        for (k + 1..n_u) |i| {
-    \\            const m = a[i][k].div(a[k][k]);
-    \\            for (k..n_u) |j| a[i][j] = a[i][j].sub(m.mul(a[k][j]));
-    \\            b[i] = b[i].sub(m.mul(b[k]));
-    \\        }
-    \\    }
-    \\    var k = n_u;
-    \\    while (k > 0) {
-    \\        k -= 1;
-    \\        var s = b[k];
-    \\        for (k + 1..n_u) |j| s = s.sub(a[k][j].mul(b[j]));
-    \\        b[k] = s.div(a[k][k]);
-    \\    }
+    \\/// `//! onoise V(out) = f, ...`: the operating point, then
+    \\/// `sim.spice.noise.sweep`; prints `noise f=<f> onoise=<V/sqrt(Hz)>`.
+    \\fn runNoise(model: *const D.Model, inst: *D.Instance, out: usize, freqs: []const f64) void {
+    \\    var ckt: Ckt = .init(model, inst);
+    \\    var ws: sim.spice.converger.Workspace(n_u) = .{};
+    \\    var x: [n_u]f64 = undefined;
+    \\    _ = sim.spice.op.solve(&ckt, &ws, &x, .dc) catch |e| deckFail("operating point: {t}", .{e});
+    \\    var dens: [64]f64 = undefined;
+    \\    if (freqs.len > dens.len) deckFail("more than {d} noise frequencies", .{dens.len});
+    \\    sim.spice.noise.sweep(&ckt, &x, out, freqs, dens[0..freqs.len]) catch |e| deckFail("noise: {t}", .{e});
+    \\    for (freqs, dens[0..freqs.len]) |f, d| std.debug.print("noise f={e} onoise={e}\n", .{ f, @sqrt(d) });
     \\}
     \\
     \\

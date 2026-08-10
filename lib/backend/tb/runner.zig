@@ -212,18 +212,17 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 
     // --- a SPICE deck's one analysis (`zig build test-spice`) ----------------
     if (d.tran != null or d.onoise != null) {
-        if (d.sweeps.len != 0 or d.psweeps.len != 0 or (d.tran != null and d.onoise != null)) return error.BadSyntax;
-        try out.appendSlice(arena, "    {\n");
-        try pointUnknowns(&out, arena, d, &.{}, "model");
+        // `sim.spice` solves every unknown: a deck's sources are its circuit.
+        if (!d.solve_free or d.bias.len != 0 or d.sweeps.len != 0 or d.psweeps.len != 0 or d.waves.len != 0 or
+            (d.tran != null and d.onoise != null)) return error.BadSyntax;
         if (d.tran) |tr| {
-            try out.print(arena, "        runTran(&model, &inst, &x, &forced, &state, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
+            try out.print(arena, "    runTran(&model, &inst, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
         } else {
             const on = d.onoise.?;
-            try out.appendSlice(arena, "        _ = &state;\n        const freqs = [_]f64{");
+            try out.appendSlice(arena, "    const freqs = [_]f64{");
             for (on.values, 0..) |f, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(f) });
-            try out.print(arena, " }};\n        runNoise(&model, &inst, &x, &forced, ix(\"{f}\"), &freqs);\n", .{std.zig.fmtString(on.name)});
+            try out.print(arena, " }};\n    runNoise(&model, &inst, ix(\"{f}\"), &freqs);\n", .{std.zig.fmtString(on.name)});
         }
-        try out.appendSlice(arena, "    }\n");
         try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
         try out.appendSlice(arena, tb_runner_text.deck_body);
         return out.items;
