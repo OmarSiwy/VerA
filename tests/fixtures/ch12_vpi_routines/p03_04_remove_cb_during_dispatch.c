@@ -137,7 +137,7 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
-static void p03_04_startup(void)
+static void p03_04_after_compile(void)
 {
   static s_cb_data rem_cb, vic_cb, cvg_cb, fin_cb;
   int k;
@@ -165,6 +165,13 @@ static void p03_04_startup(void)
 
   fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
   P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p03_defer). */
+static void p03_04_startup(void)
+{
+  p03_defer(p03_04_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_04_startup, 0 };

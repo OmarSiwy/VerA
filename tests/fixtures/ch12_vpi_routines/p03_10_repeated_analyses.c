@@ -4,8 +4,10 @@
  *            acbFinalStep   "Upon acceptance of the last analog solution";
  *            acbAbsTime     "shall force a solution at that time".
  *   12.33.2  vlog_startup_routines runs "just after the simulator is invoked" —
- *            ONCE, not once per analysis. Everything a plugin arms there has to
- *            survive, or not survive, the analysis boundary on its own terms.
+ *            ONCE, not once per analysis, and so does the cbEndOfCompile it
+ *            registers (IEEE 1364-2005 26.2.4), where this plugin arms its
+ *            callbacks. Everything armed there has to survive, or not
+ *            survive, the analysis boundary on its own terms.
  *
  * "First" and "last" are relative to an ANALYSIS, not to the process: two
  * transients in one run are two first solutions and two last ones. That is the
@@ -120,13 +122,20 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
-static void p03_10_startup(void)
+static void p03_10_after_compile(void)
 {
   static s_cb_data icb, fcb;
   icb.reason = acbInitialStep; icb.cb_rtn = on_initial;
   fcb.reason = acbFinalStep;   fcb.cb_rtn = on_final;
   P03_CHECK(vpi_register_cb(&icb) != NULL, "acbInitialStep registration failed");
   P03_CHECK(vpi_register_cb(&fcb) != NULL, "acbFinalStep registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p03_defer). */
+static void p03_10_startup(void)
+{
+  p03_defer(p03_10_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_10_startup, 0 };

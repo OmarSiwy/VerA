@@ -379,6 +379,11 @@ typedef struct t_vpi_delay {
 #define vpiFile                 5   /* str */
 #define vpiLineNo               6   /* int */
 #define vpiProtected           10   /* bool */
+/* IEEE 1364-2005 §26.3.5: "All objects have a vpiIsProtected property".
+ * Annex G numbers no vpiIsProtected; its vpiProtected (10, "source protected
+ * module") is the same question asked of a module, so the two share the
+ * number and every object answers it (FALSE: VerA refuses `pragma protect`). */
+#define vpiIsProtected         vpiProtected
 #define vpiTimeUnit            11   /* int: power of ten of a second */
 #define vpiTimePrecision       12   /* int: power of ten of a second */
 #define vpiConnByName          21   /* bool */

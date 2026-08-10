@@ -14,8 +14,11 @@
 int vera_vpi_emit(unsigned mcd, const char *format, va_list *ap);
 int vera_vpi_control(int operation, va_list *ap);
 size_t vera_vpi_cformat(char *buf, size_t len, const char *format, va_list *ap);
+/* VD-044: nonzero when IEEE 1364-2005 26.2.4 refuses the routine (startup). */
+int vera_vpi_refused(int which);
 
 PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...) {
+  if (vera_vpi_refused(0)) return -1;
   va_list ap;
   va_start(ap, format);
   int r = vera_vpi_emit(1, format, &ap);
@@ -24,6 +27,7 @@ PLI_INT32 vpi_printf(const PLI_BYTE8 *format, ...) {
 }
 
 PLI_INT32 vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...) {
+  if (vera_vpi_refused(1)) return -1;
   va_list ap;
   va_start(ap, format);
   int r = vera_vpi_emit(mcd, format, &ap);
@@ -34,6 +38,7 @@ PLI_INT32 vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...) {
 /* A va_list parameter of array type has decayed to a pointer, so `&ap` is
  * not a `va_list *`: copy it into one that is. */
 PLI_INT32 vpi_vprintf(PLI_BYTE8 *format, va_list ap) {
+  if (vera_vpi_refused(2)) return -1;
   va_list cp;
   va_copy(cp, ap);
   int r = vera_vpi_emit(1, format, &cp);
@@ -42,6 +47,7 @@ PLI_INT32 vpi_vprintf(PLI_BYTE8 *format, va_list ap) {
 }
 
 PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8 *format, va_list ap) {
+  if (vera_vpi_refused(3)) return -1;
   va_list cp;
   va_copy(cp, ap);
   int r = vera_vpi_emit(mcd, format, &cp);
@@ -50,6 +56,7 @@ PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8 *format, va_list ap) {
 }
 
 PLI_INT32 vpi_sim_control(PLI_INT32 operation, ...) {
+  if (vera_vpi_refused(4)) return 0;
   va_list ap;
   va_start(ap, operation);
   int r = vera_vpi_control(operation, &ap);
@@ -58,6 +65,7 @@ PLI_INT32 vpi_sim_control(PLI_INT32 operation, ...) {
 }
 
 PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
+  if (vera_vpi_refused(4)) return 0;
   va_list ap;
   va_start(ap, operation);
   int r = vera_vpi_control(operation, &ap);
