@@ -555,9 +555,13 @@ pub fn nextDue(after: u64, inclusive: bool) ?u64 {
 }
 
 /// Every pending time a time callback holds, for §11.6.25's vpiTimeQueue.
-pub fn pendingTimes(out: *std.ArrayList(u64), a: std.mem.Allocator) !void {
+/// A cbReadOnlySynch due at `now` holds none: IEEE 1364-2005 §26.6.40(c)
+/// returns the current queue only "if there are events that precede read
+/// only sync" (VD-046). One due later still makes its time a queue (VD-047).
+pub fn pendingTimes(out: *std.ArrayList(u64), a: std.mem.Allocator, now: u64) !void {
     for (cbs.items) |cb| {
         if (cb.dead or !isTimeReason(cb.reason) or cb.reason == cbNextSimTime) continue;
+        if (cb.reason == cbReadOnlySynch and cb.due == now) continue;
         try out.append(a, cb.due);
     }
 }

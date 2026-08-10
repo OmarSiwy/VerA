@@ -319,7 +319,7 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
         try r.scheduler.pendingPayloads(a, &live);
         for (live.items) |e| try times.append(a, e.time);
     }
-    try callback.pendingTimes(&times, a);
+    try callback.pendingTimes(&times, a, clock);
     std.mem.sort(u64, times.items, {}, std.sort.asc(u64));
     var out: std.ArrayList(root.vpiHandle) = .empty;
     errdefer out.deinit(a);
