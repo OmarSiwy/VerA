@@ -453,10 +453,9 @@ Settle each before a fixture asserts one side.
   (`conformance-ieee-vpi-interface-review.md:24-31`.)
 - IEEE 26.6.40(c) vs AMS 11.6.25 note 5: whether the current time queue comes
   before or after read-only synchronization. (`conformance-ieee-vpi-objects-review.md:179-186`.)
-- AMS 11.6.25, 12.16, 12.27: `p02` conventions set by fiat. The time-33
-  callback-only entry in `vpiTimeQueue`, `vpi_mcd_printf`'s return for a
-  multi-channel write, and `vpiIntVal` on a 64-bit object (never asserted).
-  (`p02_SPEC.md:341-343,382-395,426-427`.)
+- AMS 11.6.25, 12.27: `p02` conventions set by fiat. The time-33
+  callback-only entry in `vpiTimeQueue` and `vpi_mcd_printf`'s return for a
+  multi-channel write. (`p02_SPEC.md:341-343,382-395`.)
 - Implementation choices still to add to `docs/IMPLEMENTATION.md` §1 with a
   fixture: `"\q"` is accepted (AMS 2.7); `$q_exam` returns status 2 for an
   unknown code, code 3 reports the observed peak, and means use integer
