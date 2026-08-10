@@ -449,6 +449,12 @@ Checked against the code on 2026-09-27.
   mixed runner inserts solver-chosen points (crossings, and timers through the
   optional `pendingBreakpoint` hook). A fixture whose reasoning needs an
   inserted point runs on the mixed path or puts the event on a declared point.
+  The exception is `zig build test-spice`: a deck's `//! tran` runs
+  `src/sim/spice/` (ESPice's Newton, transient and noise, copied CPU-only):
+  ngspice's LTE and breakpoint step control, `$bound_step`, a
+  `cross`/`above` flip (`stateCtl(.query)`) cut to 5e-5·tmax, and
+  `$vera_reject_step` retries. `//! onoise` is its small-signal noise.
+  Both are for generated decks.
 - **VPI.** Every `.c` fixture compiles against `src/vpi/vpi_user.h`
   (`zig build test-vpi-fixtures`). The ones in `build.zig`'s `vpi_runs` also run
   in-process under `zig build test`, analog routines included. The rest only

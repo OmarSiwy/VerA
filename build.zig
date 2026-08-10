@@ -208,13 +208,14 @@ pub fn build(b: *std.Build) void {
         .dependOn(&vpi_fx.step);
 
     // The `.sp` decks: SPICE netlists naming models through `.hdl`, each
-    // paired with an `.expected.json` analytic oracle. Not executed: that
-    // needs the circuit simulator (ARPice, outside this repository). The step
-    // checks the oracle exists and every named model resolves and compiles.
+    // paired with an `.expected.json` analytic oracle. The step checks the
+    // oracle exists and every named model resolves and compiles, then runs
+    // each deck on `sim.spice`, ESPice's solver (`//! tran`, `//! onoise`), and grades
+    // it against the oracle; a deck needing what the runner lacks is NOT RUN.
     const spice = b.addRunArtifact(suite_exe);
     spice.addArtifactArg2(exe, .{});
     spice.addArg("spice");
-    b.step("test-spice", "Check the 7 .sp decks pair with an oracle and name models that compile")
+    b.step("test-spice", "Run the .sp decks on sim.spice and grade each against its oracle")
         .dependOn(&spice.step);
 
     // What vera says about every fixture, snapshotted so a refactor phase can

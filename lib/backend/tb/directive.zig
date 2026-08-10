@@ -50,6 +50,8 @@ const Keyword = enum {
     inherited,
     xfail,
     print,
+    tran,
+    onoise,
 };
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
@@ -223,6 +225,17 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 // The whole rest of the line is the reason: prose for a human.
                 if (rest.len == 0) return error.BadSyntax;
                 d.xfail = try arena.dupe(u8, rest);
+            },
+            .tran => {
+                const v = try parseNumbers(arena, rest);
+                if (v.len != 2 or !(v[0] > 0) or !(v[1] > 0)) return error.BadSyntax;
+                d.tran = .{ v[0], v[1] };
+            },
+            .onoise => {
+                const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+                const name = try unknownName(arena, std.mem.trim(u8, rest[0..at], " \t"));
+                if (name.len == 0) return error.BadSyntax;
+                d.onoise = .{ .name = try arena.dupe(u8, name), .values = try parseNumbers(arena, rest[at + 1 ..]) };
             },
             .print => {
                 if (std.mem.eql(u8, rest, "none")) {

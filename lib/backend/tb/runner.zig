@@ -212,6 +212,23 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     , .{ std.zig.fmtString(b.name), fmtF64(b.value) });
 
+    // --- a SPICE deck's one analysis (`zig build test-spice`) ----------------
+    if (d.tran != null or d.onoise != null) {
+        // `sim.spice` solves every unknown: a deck's sources are its circuit.
+        if (!d.solve_free or d.bias.len != 0 or d.sweeps.len != 0 or d.psweeps.len != 0 or d.waves.len != 0 or
+            (d.tran != null and d.onoise != null)) return error.BadSyntax;
+        if (d.tran) |tr| {
+            try out.print(arena, "    @import(\"sim\").spice.deck.runTran(D, title, &model, &inst, {f}, {f});\n", .{ fmtF64(tr[0]), fmtF64(tr[1]) });
+        } else {
+            const on = d.onoise.?;
+            try out.print(arena, "    @import(\"sim\").spice.deck.runNoise(D, title, &model, &inst, @enumFromInt(ix(\"{f}\")), &.{{", .{std.zig.fmtString(on.name)});
+            for (on.values, 0..) |f, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(f) });
+            try out.appendSlice(arena, " });\n");
+        }
+        try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
+        return out.items;
+    }
+
     // --- one straight-line block per operating point ------------------------
     // Sweep outer, time inner. Each sweep point is its own transient run with a
     // fresh `State`, so no bias inherits another's §4.5 operator history.
