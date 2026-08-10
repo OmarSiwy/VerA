@@ -103,10 +103,17 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
+static void register_final(void)
+{
+  static s_cb_data fin_cb;
+  fin_cb.reason = acbFinalStep;
+  fin_cb.cb_rtn = on_final;
+  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
 static void p03_93_startup(void)
 {
   static s_vpi_analog_systf_data systf;
-  static s_cb_data fin_cb;
 
   systf.type = vpiAnalogSysFunc;
   systf.sysfunctype = vpiRealFunc;
@@ -114,9 +121,8 @@ static void p03_93_startup(void)
   systf.calltf = env_calltf;
   P03_CHECK(vpi_register_analog_systf(&systf) != NULL, "12.32: registering $p03_env failed");
 
-  fin_cb.reason = acbFinalStep;
-  fin_cb.cb_rtn = on_final;
-  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+  /* IEEE 1364-2005 26.2.4: acbFinalStep waits for cbEndOfCompile. */
+  p03_defer(register_final);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_93_startup, 0 };

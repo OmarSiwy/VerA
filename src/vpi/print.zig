@@ -45,7 +45,7 @@ var name_buf: [root.name_buf_len]u8 = undefined;
 /// multichannel descriptor number ... shall return a zero (0) on error. If the
 /// file is already opened, vpi_mcd_open() shall return the descriptor number."
 pub export fn vpi_mcd_open(file: [*c]const u8) c_uint {
-    root.clearError();
+    if (root.refused("vpi_mcd_open")) return 0;
     if (file == null) {
         root.fail("BADNAME", "vpi_mcd_open: the file name is NULL", .{});
         return 0;
@@ -86,7 +86,7 @@ fn bit(i: usize) c_uint {
 /// "can also be used to close file descriptors that were opened using the
 /// system function $fopen()".
 pub export fn vpi_mcd_close(mcd: c_uint) c_uint {
-    root.clearError();
+    if (root.refused("vpi_mcd_close")) return mcd;
     if (mcd & fd_bit != 0) {
         if (fdName(mcd) == null) {
             root.fail("NOCLOSE", "vpi_mcd_close: 0x{x} is no file descriptor $fopen opened", .{mcd});
@@ -124,7 +124,7 @@ fn closeChannels(mcd: c_uint) c_uint {
 /// On error, the routine shall return NULL." IEEE 1364-2005 §27.24: "The
 /// channel descriptor cd could be an fd file descriptor returned from $fopen".
 pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
-    root.clearError();
+    if (root.refused("vpi_mcd_name")) return null;
     const s: []const u8 = if (cd & fd_bit != 0) fdName(cd) orelse {
         root.fail("BADMCD", "vpi_mcd_name: 0x{x} is no file descriptor $fopen opened", .{cd});
         return null;
@@ -253,7 +253,7 @@ fn channelFile(i: usize) error{NotOpen}!?Io.File {
 /// §12.28 "shall write to both stdout and the current product log file ...
 /// shall return the number of characters printed or EOF if an error occurred."
 pub export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
-    root.clearError();
+    if (root.refused("vpi_printf")) return -1;
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
     return emit(1, format, &ap);
@@ -264,7 +264,7 @@ pub export fn vpi_printf(format: [*c]const u8, ...) callconv(.c) c_int {
 /// of the format and its arguments, and a count multiplied by the channel set
 /// would change with a bit of the mcd that has nothing to do with the text.
 pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c) c_int {
-    root.clearError();
+    if (root.refused("vpi_mcd_printf")) return -1;
     var ap = @cVaStart();
     defer @cVaEnd(&ap);
     return emit(mcd, format, &ap);
@@ -277,20 +277,20 @@ pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c
 /// and AAPCS64 ABIs pass one; a target that passes it by value needs its own
 /// entry point.
 pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.lang.VaList) c_int {
-    root.clearError();
+    if (root.refused("vpi_vprintf")) return -1;
     return emit(1, format, ap);
 }
 
 /// IEEE 1364-2005 §27.27: vpi_mcd_printf over a started `va_list`.
 pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.lang.VaList) c_int {
-    root.clearError();
+    if (root.refused("vpi_mcd_vprintf")) return -1;
     return emit(mcd, format, ap);
 }
 
 /// IEEE 1364-2005 §27.4: "0 if successful; nonzero if unsuccessful". Every
 /// write here is unbuffered, so there is nothing to flush.
 pub export fn vpi_flush() c_int {
-    root.clearError();
+    if (root.refused("vpi_flush")) return 1;
     return 0;
 }
 
@@ -298,7 +298,7 @@ pub export fn vpi_flush() c_int {
 /// are unbuffered, so an open channel is already flushed); nonzero and an
 /// error when a user channel it names is not open.
 pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
-    root.clearError();
+    if (root.refused("vpi_mcd_flush")) return 1;
     if (mcd & 0x8000_0000 != 0) {
         root.fail("BADMCD", "vpi_mcd_flush: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
         return 1;

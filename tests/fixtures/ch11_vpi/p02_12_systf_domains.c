@@ -52,8 +52,10 @@
  * refusal check in the P02 set.
  *
  * No design source is read: every assertion here is about the registration
- * table, so this application does its work from vlog_startup_routines and
- * nothing it registers is ever called.
+ * table, and nothing it registers is ever called. The registrations, refused
+ * ones included, are made from vlog_startup_routines; the comparison and the
+ * read-backs wait for cbEndOfCompile, since IEEE 1364-2005 26.2.4 allows only
+ * the registration routines at startup.
  */
 
 //! lrm 11.2.3
@@ -74,50 +76,15 @@ static PLI_INT32 d_compiletf(PLI_BYTE8 *u) { (void)u; return 0; }
 static PLI_INT32 a_calltf(p_cb_data c)     { (void)c; return 0; }
 static PLI_INT32 a_compiletf(p_cb_data c)  { (void)c; return 0; }
 
-static void setup(void)
-{
-  static s_vpi_systf_data digital = {
-    vpiSysFunction, vpiRealFunc, "$p02_both", d_calltf, d_compiletf, NULL, "digital"
-  };
-  static s_vpi_systf_data digital_again = {
-    vpiSysFunction, vpiRealFunc, "$p02_both", d_calltf, d_compiletf, NULL, "dup"
-  };
-  static s_vpi_analog_systf_data analog = {
-    vpiAnalogSysTask, 0, "$p02_both", a_calltf, a_compiletf, NULL, NULL, "analog"
-  };
-  static s_vpi_analog_systf_data analog_again = {
-    vpiAnalogSysTask, 0, "$p02_both", a_calltf, a_compiletf, NULL, NULL, "dup"
-  };
-  static s_vpi_systf_data nodollar = {
-    vpiSysTask, 0, "p02_nodollar", d_calltf, NULL, NULL, NULL
-  };
+static vpiHandle d, a;
 
-  vpiHandle d, a;
+static void read_back(void)
+{
   s_vpi_systf_data        dinfo;
   s_vpi_analog_systf_data ainfo;
 
-  /* 1 — the digital registration. */
-  d = vpi_register_systf(&digital);
-  expect_no_error("vpi_register_systf($p02_both)");
-  CHECK(d != NULL, "the first digital registration must succeed");
-
-  /* 2 — the same name again, same domain. */
-  CHECK(vpi_register_systf(&digital_again) == NULL,
-        "a duplicate name in the digital domain must be refused");
-  expect_error("duplicate vpi_register_systf");
-
-  /* 3 — the same name in the other domain. */
-  a = vpi_register_analog_systf(&analog);
-  expect_no_error("vpi_register_analog_systf($p02_both)");
-  CHECK(a != NULL,
-        "12.32: the same name may be shared across the two domains");
   CHECK(vpi_compare_objects(d, a) == 0,
         "the two registrations are two sets of callbacks, so two objects");
-
-  /* 4 — the same name again, analog domain. */
-  CHECK(vpi_register_analog_systf(&analog_again) == NULL,
-        "a duplicate name in the analog domain must be refused");
-  expect_error("duplicate vpi_register_analog_systf");
 
   /* The refusals must not have damaged the two that succeeded. */
   memset(&dinfo, 0, sizeof dinfo);
@@ -137,12 +104,56 @@ static void setup(void)
   CHECK(ainfo.user_data != NULL && strcmp(ainfo.user_data, "analog") == 0,
         "the two domains must not share user_data");
 
+  p02_done("12_systf_domains");
+}
+
+static void setup(void)
+{
+  static s_vpi_systf_data digital = {
+    vpiSysFunction, vpiRealFunc, "$p02_both", d_calltf, d_compiletf, NULL, "digital"
+  };
+  static s_vpi_systf_data digital_again = {
+    vpiSysFunction, vpiRealFunc, "$p02_both", d_calltf, d_compiletf, NULL, "dup"
+  };
+  static s_vpi_analog_systf_data analog = {
+    vpiAnalogSysTask, 0, "$p02_both", a_calltf, a_compiletf, NULL, NULL, "analog"
+  };
+  static s_vpi_analog_systf_data analog_again = {
+    vpiAnalogSysTask, 0, "$p02_both", a_calltf, a_compiletf, NULL, NULL, "dup"
+  };
+  static s_vpi_systf_data nodollar = {
+    vpiSysTask, 0, "p02_nodollar", d_calltf, NULL, NULL, NULL
+  };
+
+  /* 1 — the digital registration. */
+  d = vpi_register_systf(&digital);
+  expect_no_error("vpi_register_systf($p02_both)");
+  CHECK(d != NULL, "the first digital registration must succeed");
+
+  /* 2 — the same name again, same domain. */
+  CHECK(vpi_register_systf(&digital_again) == NULL,
+        "a duplicate name in the digital domain must be refused");
+  expect_error("duplicate vpi_register_systf");
+
+  /* 3 — the same name in the other domain. */
+  a = vpi_register_analog_systf(&analog);
+  expect_no_error("vpi_register_analog_systf($p02_both)");
+  CHECK(a != NULL,
+        "12.32: the same name may be shared across the two domains");
+
+  /* 4 — the same name again, analog domain. */
+  CHECK(vpi_register_analog_systf(&analog_again) == NULL,
+        "a duplicate name in the analog domain must be refused");
+  expect_error("duplicate vpi_register_analog_systf");
+
   /* The '$' rule. */
   CHECK(vpi_register_systf(&nodollar) == NULL,
         "a tfname whose first character is not `$` must be refused");
   expect_error("vpi_register_systf with a tfname lacking `$`");
 
-  p02_done("12_systf_domains");
+  /* IEEE 1364-2005 26.2.4: the two registrations are all a startup routine
+   * may call; the comparisons and read-backs wait for cbEndOfCompile. */
+  p02_defer(read_back);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

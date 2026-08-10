@@ -140,6 +140,31 @@ static P03_UNUSED void p03_no_error(const char *what)
   if (vpi_chk_error(NULL) != 0) P03_FAIL("%s unexpectedly set an error", what);
 }
 
+/* IEEE 1364-2005 26.2.4: a startup routine may call only
+ * vpi_register_systf() (here, vpi_register_analog_systf()) and
+ * vpi_register_cb() for cbEndOfCompile, cbStartOfSimulation,
+ * cbEndOfSimulation, cbUnresolvedSystf, cbError and cbPLIError. The analog
+ * callbacks and every other routine wait for cbEndOfCompile, where "all
+ * functionality is available": p03_defer(fn) runs fn there
+ * (docs/Vague_Decisions.md VD-044). One deferral per plugin. */
+static P03_UNUSED void (*p03_deferred)(void);
+
+static P03_UNUSED PLI_INT32 p03_run_deferred(p_cb_data d)
+{
+  (void)d;
+  p03_deferred();
+  return 0;
+}
+
+static P03_UNUSED void p03_defer(void (*fn)(void))
+{
+  static s_cb_data cb;
+  p03_deferred = fn;
+  cb.reason = cbEndOfCompile;
+  cb.cb_rtn = p03_run_deferred;
+  P03_CHECK(vpi_register_cb(&cb) != NULL, "the cbEndOfCompile deferral failed to register");
+}
+
 /* §11.6.6/§11.6.7 in two lines: "the bit-level branch has tagged one-to-one
  * relationships ... to Quantity via vpiFlow, and to Quantity via vpiPotential",
  * and §11.6.7 gives Quantity its "real value"/"imaginary value" through

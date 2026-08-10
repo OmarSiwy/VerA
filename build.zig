@@ -802,7 +802,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p04_05_vlog_info.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_05_vlog_info checks=29\n",
+        .stdout = "p02: p04_05_vlog_info checks=30\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p04_06_analog_objects.c",
@@ -822,7 +822,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch11_vpi/p04_09_systf_build.c",
         .design = "tests/fixtures/ch11_vpi/p04_analog.va",
-        .stdout = "p02: p04_09_systf_build checks=62\n",
+        .stdout = "p02: p04_09_systf_build checks=58\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p04_10_primitives.c",
@@ -850,6 +850,11 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
         .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
         .stdout = "p02: b_26_1_systf checks=45\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_2_4_startup_phase.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "b264 eoc\np02: b_26_2_4_startup_phase checks=27\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_26_3_5_protected.c",

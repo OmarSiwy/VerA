@@ -167,10 +167,17 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
+static void register_final(void)
+{
+  static s_cb_data fin_cb;
+  fin_cb.reason = acbFinalStep;
+  fin_cb.cb_rtn = on_final;
+  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
 static void p03_90_startup(void)
 {
   static s_vpi_analog_systf_data res_systf, cub_systf;
-  static s_cb_data fin_cb;
 
   res_systf.type = vpiAnalogSysTask;  res_systf.sysfunctype = 0;
   res_systf.tfname = (PLI_BYTE8 *)"$resistor";
@@ -184,8 +191,8 @@ static void p03_90_startup(void)
   cub_systf.sizetf = 0; cub_systf.derivtf = cube_derivtf; cub_systf.user_data = 0;
   P03_CHECK(vpi_register_analog_systf(&cub_systf) != NULL, "registering $cube failed");
 
-  fin_cb.reason = acbFinalStep; fin_cb.cb_rtn = on_final;
-  P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+  /* IEEE 1364-2005 26.2.4: acbFinalStep waits for cbEndOfCompile. */
+  p03_defer(register_final);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_90_startup, 0 };

@@ -141,6 +141,12 @@ static void walk(void)
   expect_error("vpi_handle(vpiCondition, process)");
 }
 
+static void walk_and_report(void)
+{
+  walk();
+  p02_done("p04_08_analog_behaviour");
+}
+
 static void startup(void)
 {
   static s_vpi_analog_systf_data tap = {
@@ -148,8 +154,8 @@ static void startup(void)
   };
   tap_reg = vpi_register_analog_systf(&tap);
   CHECK(tap_reg != NULL, "$p04_tap registers");
-  walk();
-  p02_done("p04_08_analog_behaviour");
+  /* IEEE 1364-2005 26.2.4: the walk waits for cbEndOfCompile. */
+  p02_defer(walk_and_report);
 }
 
 void (*vlog_startup_routines[])(void) = { startup, 0 };

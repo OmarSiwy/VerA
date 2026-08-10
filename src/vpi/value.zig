@@ -511,7 +511,7 @@ fn decimal(out: *std.ArrayList(u8), b: Bits) !void {
 /// §12.16. The object must carry a value; the string, vector and time
 /// storage belongs to this routine until its next call.
 pub export fn vpi_get_value(obj: vpiHandle, value_p: ?*Value) void {
-    root.clearError();
+    if (root.refused("vpi_get_value")) return;
     const v = value_p orelse {
         root.fail("BADVALUE", "vpi_get_value: value_p is NULL", .{});
         return;
@@ -612,7 +612,7 @@ var put_buf: std.ArrayList(u64) = .empty;
 /// modes". Returns a vpiSchedEvent handle when vpiReturnEvent is set AND an
 /// event was scheduled; otherwise NULL, which is not in itself an error.
 pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Time, flags: c_int) vpiHandle {
-    root.clearError();
+    if (root.refused("vpi_put_value")) return null;
     const mode = flags & ~vpiReturnEvent;
     if (mode == vpiCancelEvent) {
         // "It shall not be an error to cancel an event which has already

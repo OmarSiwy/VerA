@@ -345,7 +345,7 @@ pub export fn vpi_register_analog_systf(systf_data_p: ?*const AnalogSystfData) v
 /// §12.14 "shall return information about a user-defined system task or
 /// function callback in an s_vpi_systf_data structure".
 pub export fn vpi_get_systf_info(obj: vpiHandle, systf_data_p: ?*SystfData) void {
-    root.clearError();
+    if (root.refused("vpi_get_systf_info")) return;
     const s = asSystf(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_systf_info: that handle is not a vpiUserSystf", .{});
         return;
@@ -363,7 +363,7 @@ pub export fn vpi_get_systf_info(obj: vpiHandle, systf_data_p: ?*SystfData) void
 
 /// §12.13, the analog twin of §12.14.
 pub export fn vpi_get_analog_systf_info(obj: vpiHandle, systf_data_p: ?*AnalogSystfData) void {
-    root.clearError();
+    if (root.refused("vpi_get_analog_systf_info")) return;
     const s = asSystf(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_analog_systf_info: that handle is not a vpiUserSystf", .{});
         return;
@@ -403,7 +403,7 @@ fn callIndex(comptime who: []const u8, obj: vpiHandle) ?u32 {
 /// IEEE 1364-2005 §27.31: "The routine will return a value of 1 on success or
 /// a 0 if it fails."
 pub export fn vpi_put_userdata(obj: vpiHandle, data: ?*anyopaque) c_int {
-    root.clearError();
+    if (root.refused("vpi_put_userdata")) return 0;
     const i = callIndex("vpi_put_userdata", obj) orelse return 0;
     userdata.put(gpa, i, data) catch {
         root.fail("NOMEM", "vpi_put_userdata: out of memory", .{});
@@ -415,7 +415,7 @@ pub export fn vpi_put_userdata(obj: vpiHandle, data: ?*anyopaque) c_int {
 /// IEEE 1364-2005 §27.13: "If no user data had been previously associated
 /// with the object or if the routine fails, the return value shall be NULL."
 pub export fn vpi_get_userdata(obj: vpiHandle) ?*anyopaque {
-    root.clearError();
+    if (root.refused("vpi_get_userdata")) return null;
     const i = callIndex("vpi_get_userdata", obj) orelse return null;
     return userdata.get(i) orelse null;
 }
@@ -428,7 +428,7 @@ pub export fn vpi_get_userdata(obj: vpiHandle) ?*anyopaque {
 /// vpiInterModPath, whose module paths (specify blocks) the model does not
 /// hold.
 pub export fn vpi_handle_multi(obj_type: c_int, ref1: vpiHandle, ref2: vpiHandle, ...) callconv(.c) vpiHandle {
-    root.clearError();
+    if (root.refused("vpi_handle_multi")) return null;
     switch (obj_type) {
         vpiDerivative => return @import("analog.zig").derivative(ref1, ref2),
         // §11.6.15's inter-module path joins two PORTS, and exists where a

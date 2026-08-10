@@ -21,9 +21,10 @@
  *     one, with no acbAcceptedPoint between (the same ordering p03_05 pins);
  *   - the run still reaches acbFinalStep at t == 5e-3 exactly.
  *
- * And the refusal: from the startup routine no analysis is running, so there
- * is no "current analog simulation time point" and the call must fail — 0,
- * with vpi_chk_error set.
+ * And the refusal: at cbEndOfCompile, where the startup routine defers its
+ * work (IEEE 1364-2005 26.2.4), no analysis is running, so there is no
+ * "current analog simulation time point" and the call must fail — 0, with
+ * vpi_chk_error set.
  *
  *! design   p03_ramp_load.va
  *! analysis tran 0 5m
@@ -90,7 +91,7 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
-static void p03_12_startup(void)
+static void p03_12_after_compile(void)
 {
   static s_cb_data cvg_cb, acc_cb, fin_cb;
   P03_CHECK(vpi_sim_control(vpiRejectTransientStep, 0.0) == 0,
@@ -102,6 +103,13 @@ static void p03_12_startup(void)
   P03_CHECK(vpi_register_cb(&cvg_cb) != NULL, "acbConvergenceTest registration failed");
   P03_CHECK(vpi_register_cb(&acc_cb) != NULL, "acbAcceptedPoint registration failed");
   P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p03_defer). */
+static void p03_12_startup(void)
+{
+  p03_defer(p03_12_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_12_startup, 0 };

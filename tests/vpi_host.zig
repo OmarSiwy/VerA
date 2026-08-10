@@ -41,8 +41,8 @@ fn host(design: ?[]const u8, app: ?[]const u8) !u8 {
     try vpi.open(std.heap.page_allocator, res.lowered);
     defer vpi.close();
 
-    // §12.33.2. Everything the acceptance test asserts happens inside this
-    // call, because that is where a VPI application's code runs.
+    // §12.33.2, then cbEndOfCompile: the acceptance test registers at
+    // startup (IEEE 1364-2005 §26.2.4) and asserts everything from there.
     vpi.runStartupRoutines();
     vpi.callback.endOfCompile();
     return 0;

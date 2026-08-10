@@ -181,7 +181,7 @@ static void at(PLI_INT32 reason, PLI_INT32 (*fn)(p_cb_data), PLI_UINT32 when)
   CHECK(vpi_register_cb(&cbs[i]) != NULL, "registration at t=%u failed", when);
 }
 
-static void setup(void)
+static void setup_after_compile(void)
 {
   static s_vpi_value fv = { vpiIntVal, { 0 } };
   static s_vpi_time  ft = { vpiSuppressTime, 0, 0, 0.0 };
@@ -200,6 +200,13 @@ static void setup(void)
   at(cbReadOnlySynch,  at7,   7);
   at(cbReadWriteSynch, at10, 10);
   at(cbReadOnlySynch,  at12, 12);
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p02_defer). */
+static void setup(void)
+{
+  p02_defer(setup_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

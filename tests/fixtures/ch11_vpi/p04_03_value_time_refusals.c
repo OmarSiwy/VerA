@@ -139,7 +139,7 @@ static PLI_INT32 census(p_cb_data cb_data)
   return 0;
 }
 
-static void setup(void)
+static void setup_after_compile(void)
 {
   static s_vpi_time t = { vpiSimTime, 0, 0, 0.0 };
   static s_cb_data rw, ro;
@@ -151,6 +151,13 @@ static void setup(void)
   ro.cb_rtn = census;
   ro.time = &t;
   CHECK(vpi_register_cb(&ro) != NULL, "cbReadOnlySynch(0) registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p02_defer). */
+static void setup(void)
+{
+  p02_defer(setup_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { setup, 0 };

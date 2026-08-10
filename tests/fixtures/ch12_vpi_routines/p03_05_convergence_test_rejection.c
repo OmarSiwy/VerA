@@ -112,7 +112,7 @@ static PLI_INT32 on_final(p_cb_data cb)
   return 0;
 }
 
-static void p03_05_startup(void)
+static void p03_05_after_compile(void)
 {
   static s_cb_data cvg_cb, acc_cb, fin_cb;
   cvg_cb.reason = acbConvergenceTest; cvg_cb.cb_rtn = on_convergence;
@@ -121,6 +121,13 @@ static void p03_05_startup(void)
   P03_CHECK(vpi_register_cb(&cvg_cb) != NULL, "acbConvergenceTest registration failed");
   P03_CHECK(vpi_register_cb(&acc_cb) != NULL, "acbAcceptedPoint registration failed");
   P03_CHECK(vpi_register_cb(&fin_cb) != NULL, "acbFinalStep registration failed");
+}
+
+/* IEEE 1364-2005 26.2.4: a startup routine only registers; the work above
+ * runs at cbEndOfCompile (p03_defer). */
+static void p03_05_startup(void)
+{
+  p03_defer(p03_05_after_compile);
 }
 
 void (*vlog_startup_routines[])(void) = { p03_05_startup, 0 };

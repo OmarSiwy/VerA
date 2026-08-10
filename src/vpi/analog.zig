@@ -452,7 +452,7 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
 /// accepted solution otherwise. The function shall return zero (0) during DC
 /// or the time zero transient solution."
 pub export fn vpi_get_analog_time() f64 {
-    root.clearError();
+    if (root.refused("vpi_get_analog_time")) return 0;
     if (current) |a| if (a.kind == .op) return 0;
     return t_now;
 }
@@ -463,7 +463,7 @@ pub export fn vpi_get_analog_time() f64 {
 /// acceptance callback the solution "being calculated" is the one just
 /// accepted, so it is the step that reached it.
 pub export fn vpi_get_analog_delta() f64 {
-    root.clearError();
+    if (root.refused("vpi_get_analog_delta")) return 0;
     if (current) |a| if (a.kind == .op) return 0;
     return delta;
 }
@@ -472,7 +472,7 @@ pub export fn vpi_get_analog_delta() f64 {
 /// function shall return zero (0) during DC or transient analysis." No
 /// small-signal analysis runs in this process, so it is zero throughout.
 pub export fn vpi_get_analog_freq() f64 {
-    root.clearError();
+    if (root.refused("vpi_get_analog_freq")) return 0;
     return 0;
 }
 

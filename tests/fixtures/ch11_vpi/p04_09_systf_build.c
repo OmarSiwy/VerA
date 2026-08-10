@@ -48,10 +48,14 @@
  *
  * 12.18: vpi_get_real() "is available to analog tasks and functions only.
  * Should an error occur, vpi_get_real() shall return vpiUndefined." Asked
- * from the startup routine and from cbEndOfCompile - neither an analog task
- * nor function - it returns vpiUndefined with an error; asked inside
- * $p04_tap's compiletf for property 9999, which is no real property at all,
- * likewise.
+ * from cbEndOfCompile - no analog task or function - it returns vpiUndefined
+ * with an error; asked inside $p04_tap's compiletf for property 9999, which
+ * is no real property at all, likewise. (Not from the startup routine: IEEE
+ * 1364-2005 26.2.4 refuses every routine but the registrations there, so a
+ * refusal at startup would not be 12.18's.)
+ *
+ * The registrations are made from the startup routine, the only routines
+ * 26.2.4 allows there; each reads back (12.14, 12.13) at cbEndOfCompile.
  */
 
 //! lrm 12.32.1
@@ -109,12 +113,15 @@ static p_vpi_stf_partials tap_derivtf(p_cb_data d)
 
 static PLI_INT32 d_tf(PLI_BYTE8 *u) { (void)u; return 0; }
 
+/* The registrations' handles, read back at cbEndOfCompile: IEEE 1364-2005
+ * 26.2.4 allows only the registration routines in a startup routine. */
+static const PLI_INT32 types[] = { vpiIntFunc, vpiRealFunc, vpiTimeFunc, vpiSizedFunc };
+static vpiHandle f_h[4], t_h, ai_h;
+
 static void digital(void)
 {
-  static const PLI_INT32 types[] = { vpiIntFunc, vpiRealFunc, vpiTimeFunc, vpiSizedFunc };
   static char names[4][8] = { "$p04_f0", "$p04_f1", "$p04_f2", "$p04_f3" };
-  s_vpi_systf_data d, got;
-  vpiHandle h;
+  s_vpi_systf_data d;
   int k;
 
   for (k = 0; k < 4; k++) {
@@ -123,21 +130,16 @@ static void digital(void)
     d.sysfunctype = types[k];
     d.tfname = names[k];
     d.calltf = d_tf;
-    h = vpi_register_systf(&d);
-    CHECK(h != NULL, "12.33.1: a function of sysfunctype %d registers", (int)types[k]);
-    vpi_get_systf_info(h, &got);
-    CHECK(got.type == vpiSysFunction && got.sysfunctype == types[k], "and reads back");
+    f_h[k] = vpi_register_systf(&d);
+    CHECK(f_h[k] != NULL, "12.33.1: a function of sysfunctype %d registers", (int)types[k]);
   }
   memset(&d, 0, sizeof d);
   d.type = vpiSysTask;
   d.sysfunctype = 12345;
   d.tfname = (PLI_BYTE8 *)"$p04_t";
-  h = vpi_register_systf(&d);
-  CHECK(h != NULL, "12.33.1: a task's sysfunctype is not used, so any value registers");
+  t_h = vpi_register_systf(&d);
+  CHECK(t_h != NULL, "12.33.1: a task's sysfunctype is not used, so any value registers");
   expect_no_error("vpi_register_systf(task, all callbacks NULL)");
-  vpi_get_systf_info(h, &got);
-  CHECK(got.type == vpiSysTask && got.calltf == NULL && got.compiletf == NULL && got.sizetf == NULL,
-        "the task reads back, every callback NULL");
 
   d.type = 7;
   d.tfname = (PLI_BYTE8 *)"$p04_bad_type";
@@ -152,8 +154,8 @@ static void digital(void)
 
 static vpiHandle analog(void)
 {
-  s_vpi_analog_systf_data a, got;
-  vpiHandle h, tap;
+  s_vpi_analog_systf_data a;
+  vpiHandle tap;
 
   memset(&a, 0, sizeof a);
   a.type = vpiAnalogSysTask;
@@ -170,10 +172,8 @@ static vpiHandle analog(void)
   a.type = vpiAnalogSysFunction;
   a.sysfunctype = vpiIntFunc;
   a.tfname = (PLI_BYTE8 *)"$p04_ai";
-  h = vpi_register_analog_systf(&a);
-  CHECK(h != NULL, "12.32.1: an analog function of vpiIntFunc, every callback NULL");
-  vpi_get_analog_systf_info(h, &got);
-  CHECK(got.type == vpiAnalogSysFunction && got.sysfunctype == vpiIntFunc && got.derivtf == NULL, "reads back");
+  ai_h = vpi_register_analog_systf(&a);
+  CHECK(ai_h != NULL, "12.32.1: an analog function of vpiIntFunc, every callback NULL");
   a.sysfunctype = vpiRealFunc;
   a.tfname = (PLI_BYTE8 *)"$p04_ar";
   CHECK(vpi_register_analog_systf(&a) != NULL, "12.32.1: and of vpiRealFunc");
@@ -198,7 +198,19 @@ static vpiHandle analog(void)
 
 static PLI_INT32 end_of_compile(p_cb_data d)
 {
+  s_vpi_systf_data got;
+  s_vpi_analog_systf_data agot;
+  int k;
   (void)d;
+  for (k = 0; k < 4; k++) {
+    vpi_get_systf_info(f_h[k], &got);
+    CHECK(got.type == vpiSysFunction && got.sysfunctype == types[k], "and reads back");
+  }
+  vpi_get_systf_info(t_h, &got);
+  CHECK(got.type == vpiSysTask && got.calltf == NULL && got.compiletf == NULL && got.sizetf == NULL,
+        "the task reads back, every callback NULL");
+  vpi_get_analog_systf_info(ai_h, &agot);
+  CHECK(agot.type == vpiAnalogSysFunction && agot.sysfunctype == vpiIntFunc && agot.derivtf == NULL, "reads back");
   CHECK(compiles == 1, "compiletf ran once, at the build, got %d", compiles);
   CHECK(derivs == 1, "derivtf ran once, at the build, got %d", derivs);
   CHECK(calls == 0, "calltf has not run: nothing was simulated, got %d", calls);
@@ -213,8 +225,6 @@ static PLI_INT32 end_of_compile(p_cb_data d)
 static void startup(void)
 {
   static s_cb_data cb;
-  CHECK(vpi_get_real(vpiStartTime, NULL) == (double)vpiUndefined, "12.18: a startup routine is no analog task");
-  expect_error("vpi_get_real in startup");
   digital();
   analog();
   CHECK(compiles == 0 && derivs == 0, "nothing is built while the startup routines run");
