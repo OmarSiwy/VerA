@@ -118,7 +118,7 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
             const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
             const value: u64 = switch (in1 orelse 0) {
                 1 => q.jobs.items.len,
-                2 => if (q.interarrivals == 0) 0 else q.interarrival_sum / q.interarrivals,
+                2 => mean(q.interarrival_sum, q.interarrivals),
                 3 => q.peak,
                 4 => q.wait_min orelse 0,
                 5 => longest: {
@@ -126,12 +126,19 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
                     for (q.jobs.items) |j| w = @max(w, t - j.arrived);
                     break :longest w;
                 },
-                6 => if (q.waits == 0) 0 else q.wait_sum / q.waits,
+                6 => mean(q.wait_sum, q.waits),
                 else => return .{ .status = undefined_id },
             };
             return .{ .status = ok, .out = .{ null, @intCast(value) } };
         },
     }
+}
+
+/// A §17.6.5 mean as an integer: §3.5.3 rounds a real to the nearest
+/// integer "rather than by truncating it", ties away from zero (VD-052); 0
+/// over an empty population.
+fn mean(sum: u64, n: u64) u64 {
+    return if (n == 0) 0 else (2 * sum + n) / (2 * n);
 }
 
 /// §17.6.5 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
