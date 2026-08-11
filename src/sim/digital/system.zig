@@ -112,7 +112,8 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
             q.wait_min = @min(q.wait_min orelse wait, wait);
             return .{ .status = ok, .out = .{ job.id, job.info } };
         },
-        // §17.6.4 Table 17-15's statistics codes.
+        // §17.6.5 Table 17-15's statistics codes; any other is status 2
+        // with no value (VD-050).
         .exam => {
             const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
             const value: u64 = switch (in1 orelse 0) {

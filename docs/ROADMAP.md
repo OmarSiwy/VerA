@@ -464,9 +464,9 @@ Settle each before a fixture asserts one side.
   multi-channel write, and `vpiIntVal` on a 64-bit object (never asserted).
   (`p02_SPEC.md:341-343,382-395,426-427`.)
 - Implementation choices still to add to `docs/IMPLEMENTATION.md` §1 with a
-  fixture: `"\q"` is accepted (AMS 2.7); `$q_exam` returns status 2 for an
-  unknown code, code 3 reports the observed peak, and means use integer
-  division (IEEE 17.6.4). (`conformance-ams-lexical-core-review.md:170-172`;
+  fixture: `"\q"` is accepted (AMS 2.7); `$q_exam` code 3 reports the observed
+  peak, and means use integer division (IEEE 17.6.5; an unknown code is in
+  §1 since VD-050). (`conformance-ams-lexical-core-review.md:170-172`;
   `conformance-ieee-queue-review.md:26-47`.)
 
 ### 5.7 Untested
