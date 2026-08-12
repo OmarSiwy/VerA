@@ -73,7 +73,7 @@ correction.
 | VD-029 | VAMS 8.4.4 example; IEEE 1364-2005 9.2.2 | 9.2.2 governs; the "cancel" is the D2A's driver look-ahead | no |
 | VD-030 | VAMS 9.16 | Run-time `$simprobe` names should resolve; until then, refuse by name, never fall back silently | yes |
 | VD-031 | VAMS 9.21, 9.21.1 | Refuse a duplicate abscissa only when the conflict is proven; otherwise check at capture | no |
-| VD-032 | VAMS 3.7; IEEE 1364-2005 9.7.2, 6.1.2 | A real "change" is IEEE 754 `!=`; the new bits are still stored | yes |
+| VD-032 | VAMS 3.7; IEEE 1364-2005 9.7.2, 6.1.2 | A real "change" is IEEE 754 `!=`; the new bits are still stored | DONE (0db0a690) |
 | VD-033 | VAMS 3.7; IEEE 1364-2005 11.3 | `m04_01`'s time-0 read of a declaration-assigned wreal is a race; sample after `#0` | yes |
 | VD-034 | VAMS 5.10 Syntax 5-13, 5.10.5, 7.3.6.2 | `posedge`/`negedge` on a continuous operand is E0704; use `cross` | no |
 | VD-035 | VAMS 3.3 vs A.2.1.3/A.2.8 | A module-level `string` variable is legal (3.3 governs) | no |
@@ -81,8 +81,8 @@ correction.
 | VD-037 | IEEE 1364-2005 5.5.4 | Signed x/z gives all-x for arithmetic and resizing only; bitwise and `?:` keep their bit tables | yes |
 | VD-038 | IEEE 1364-2005 6.1.3, 4.3 | A 1-bit `[0:0]` LHS takes the scalar (gate) delay rule: width decides | yes |
 | VD-039 | IEEE 1364-2005 13.2.2 vs A.1.1 | A `config` in a lib.map is refused (E0244); the prose beats the grammar superset | yes |
-| VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | yes |
-| VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | yes |
+| VD-040 | IEEE 1364-2005 17.2.9 | File address outside the declared memory with no task bounds: named warning, words skipped | DONE (418338cf) |
+| VD-041 | IEEE 1364-2005 17.2.9, 3.5.1 | Address: hex digits plus `_` after the first char (trailing included); x/z/? malformed | DONE (22fb2c50) |
 | VD-042 | IEEE 1364-2005 18.4.3.2 | Strength 5..7 is the strong range by number; "(large)" is a slip | yes |
 | VD-043 | IEEE 1364-2005 19.6, 19.11 | `` `resetall `` does not touch the `` `begin_keywords `` region | yes |
 | VD-044 | IEEE 1364-2005 26.2.4 vs 27.34.2 / VAMS 12.33.2 | Startup routines may only register; VerA refuses other routines then; fixtures walk at cbEndOfCompile | yes |
@@ -91,9 +91,9 @@ correction.
 | VD-047 | VAMS 11.6.25, 12.31.2 | A callback-only time is a vpiTimeQueue entry | no |
 | VD-048 | VAMS 12.27 / IEEE 27.26 | `vpi_mcd_printf` returns one expansion's length, regardless of channel count | no |
 | VD-049 | VAMS 12.16 / IEEE 27.14 | `vpiIntVal` of a wide object is its low 32 bits | yes |
-| VD-050 | IEEE 1364-2005 17.6.5, 17.6.6 | Unknown `q_stat_code`: constant refused; run time gives status 2, value unchanged | yes |
-| VD-051 | IEEE 1364-2005 17.6.5 | Code 3 is the observed peak length | yes |
-| VD-052 | IEEE 1364-2005 17.6.5, 3.5.3 | Means are rounded to nearest (real-to-integer rule), not truncated | yes |
+| VD-050 | IEEE 1364-2005 17.6.5, 17.6.6 | Unknown `q_stat_code`: constant refused; run time gives status 2, value unchanged | DONE (99a70532) |
+| VD-051 | IEEE 1364-2005 17.6.5 | Code 3 is the observed peak length | DONE (259c554a) |
+| VD-052 | IEEE 1364-2005 17.6.5, 3.5.3 | Means are rounded to nearest (real-to-integer rule), not truncated | DONE (ca0e6529) |
 | VD-053 | VAMS 2.7 | Octal escape above \377 is refused with a named error (the LRM permits it) | yes |
 | VD-054 | VAMS 2.8 | No identifier length limit | no |
 | VD-055 | VAMS 4.2.4 | Integer % by zero: E0601 at compile time if provable, runtime report or trap otherwise | no |
@@ -125,7 +125,7 @@ correction.
 | VD-081 | IEEE 1364-2005 11.4.2 | Source-order FIFO active events; resume in suspend order; interpreter = native | no |
 | VD-082 | IEEE 1364-2005 5.1.4, 11.4.2, 11.5, 12.3.10.x (CLAUSE-AUDIT §5.5) | Tagged fixtures assert only the permitted set; VerA's choice pinned untagged | yes |
 | VD-083 | IEEE 1364-2005 13.4.4, 13.3.2 | The config no `use` clause names sets the top; zero or several is E0243 | yes |
-| VD-084 | IEEE 1364-2005 17.2.4.1 | 16-deep pushback, EOF past it; every read routine sees it | yes |
+| VD-084 | IEEE 1364-2005 17.2.4.1 | 16-deep pushback, EOF past it; every read routine sees it | DONE (78df5df4) |
 | VD-085 | IEEE 1364-2005 17.2.1, 27.25; VAMS 12.24, 12.27 | Lowest free mcd bit from 1; from channel 4 under VPI, one shared table | no |
 | VD-086 | IEEE 1364-2005 17.9.1 | One hidden per-run seed from 0 for seedless digital `$random` | no |
 | VD-087 | IEEE 1364-2005 19.8 | No `timescale: 1 s / 1 s | no |
@@ -424,6 +424,7 @@ correction.
 - **Decision**: `DECIDED:` (a). It is the language's own real `!=` (1364 4.1.7), so `@(w)` fires exactly when `w != old` would be true in source. "Not a change" governs events only. The variable or net still holds the new bit pattern, so `1.0/w` after writing `-0.0` is `-inf`.
 - **VerA today**: events follow (a) (`src/sim/digital/waiters.zig:134-137`; `tests/fixtures/digital/m04_03_wreal_event_on_change.v`). The new bits are copied only `if (changed)` (waiters.zig:140), so writing `-0.0` over `+0.0` leaves `+0.0` stored. CHANGE NEEDED: store the planes whenever they differ bitwise, and suppress only the event. Add a `.v` fixture: `r = 0.0; r = -0.0; $display("%g", 1.0/r)` prints `-inf`, and `@(r)` stays silent. Semver: patch (runtime value fix; no accepted/refused source or device text changes).
 - **Measure impact**: B (1364 9.7.2 / 4.1.7 evidence); `test-devices` +1 case.
+- **Status**: DONE (0db0a690; native_real_events corrected in d9ee5d65).
 
 ### VD-033: `m04_01` samples a declaration-assigned wreal at time 0
 - **Source**: ROADMAP §5.6 bullet 11, second question (`conformance-wreal.md:29-34`).
@@ -498,6 +499,7 @@ correction.
 - **Decision**: `DECIDED:` (c). A named run-time warning gives the address and the declared range, and words outside the declaration are skipped. (b) would extend an error rule the text explicitly conditions on task arguments, which would turn a run that is legal by the letter into a failure. (a) is a wrong answer with no diagnostic. The clause already uses a warning for the closest sibling case: "A warning message shall be issued if the number of data words in the file differs from the number of words in the range". Other tools: not established.
 - **VerA today**: `src/sim/digital/display.zig:215` drops a word outside `low..high` with no message. `mismatch` (`:229`) is suppressed once the file has an address, so the case is entirely silent. `CHANGE NEEDED:` warn (a new W11xx or a W1150 variant) the first time an unbounded load's file address falls outside the declared range. Add a fixture `reg [7:0] m[0:3]` + `@8` that expects the warning and expects in-range words still loaded. Patch: no source acceptance or device text changes; a run-time warning appears.
 - **Measure impact**: B: 17.2.9 (currently `-`) gains a pinned edge. A: +1 fixture.
+- **Status**: DONE (418338cf).
 
 ### VD-041: x, z and `_` in a `$readmem` file address
 - **Source**: ROADMAP §5.6, "IEEE 17.2.9" bullet, second question.
@@ -507,6 +509,7 @@ correction.
 - **Decision**: `DECIDED:` (b). An address names one word, and an x or z address names none, so refuse it with the malformed-address error. An address is still "a hexadecimal number", and 3.5.1 makes `_` legal anywhere but first, including last. That gives: `@1_0` and `@10_` are legal, `@_10`, `@x` and `@?` are malformed.
 - **VerA today**: `src/sim/digital/display.zig:192` parses with `std.fmt.parseInt(i64, .., 16)`. Measured 2026-10-04: `1_0` -> 16 and `1__0` -> 16 are accepted, `_10`, `x` -> InvalidCharacter, but **`10_` -> InvalidCharacter**, which 3.5.1 allows. Pinned: `ieee1364/17_system_tasks/audit_readmem_edge_address_bad_digit_rejected.v` (`@g`). `CHANGE NEEDED:` accept a trailing `_` in an address (strip underscores after the first character before parsing). Add fixtures: `@x` rejected (malformed address), and `@1_` legal next to it. Patch.
 - **Measure impact**: B: 17.2.9 two-way evidence on address spelling. A: +2 fixtures.
+- **Status**: DONE (22fb2c50).
 
 ### VD-042: Extended VCD strength 5, "large" or "pull"
 - **Source**: ROADMAP §5.6, "IEEE 18.4.3.2" bullet (`conformance-vcd-review.md:137`, EVCD-017).
@@ -588,6 +591,7 @@ correction.
 - **Decision**: `DECIDED:` (d). A constant `q_stat_code` outside 1..6 is refused with a named diagnostic citing Table 17-15. A run-time value outside it returns status 2 and leaves `q_stat_value` unchanged. 2 is the nearest Table 17-16 row (the request names nothing the queue defines), it stays inside the table every portable caller checks, and a nonzero status is the observable failure. (b) invents a code no other tool knows. (c) reports success for a request that has no answer.
 - **VerA today**: `src/sim/digital/system.zig:128` returns `undefined_id` (2) at run time for any other code and assigns no value (`out[1]` null). A constant bad code is not refused at compile time. `CHANGE NEEDED:` refuse a constant code outside 1..6 (E1100-style, citing Table 17-15), with a rejection fixture whose legal neighbour is `ieee1364/17_system_tasks/b_17_6_5_q_exam.v`. Add a run-time fixture (code from a variable = 7) expecting status 2 and an unchanged value. Minor (newly refused source).
 - **Measure impact**: B: 17.6.5 (`-`) gains two-way evidence. A: +2 fixtures.
+- **Status**: DONE (99a70532).
 
 ### VD-051: `$q_exam` code 3, "Maximum queue length"
 - **Source**: ROADMAP §5.6, last bullet ("code 3 reports the observed peak").
@@ -597,6 +601,7 @@ correction.
 - **Decision**: `DECIDED:` (b). The task reports "statistical information about activity", and its siblings (codes 2, 4, 5, 6) are all measurements of history. The configured limit is an input the caller already passed and can read back through `$q_full`'s behaviour, so returning it would not be a statistic.
 - **VerA today**: Matches: `system.zig:103` tracks `q.peak` and `:122` returns it. `ieee1364/17_system_tasks/audit_queue_capacity_stats.v` cannot tell the readings apart (both are 2). `CHANGE NEEDED:` add a fixture with `max_length` 4 and a peak of 2 that expects 2. Fixture only, so a patch.
 - **Measure impact**: B: 17.6.5 gains a discriminating case. A: +1 fixture.
+- **Status**: DONE (259c554a).
 
 ### VD-052: `$q_exam` mean statistics (codes 2 and 6) in an integer result
 - **Source**: ROADMAP §5.6, last bullet ("means use integer division").
@@ -606,6 +611,7 @@ correction.
 - **Decision**: `DECIDED:` (b). When the language puts a non-integral value into an integer it rounds, and it says so explicitly "rather than by truncating it". Truncation is an artefact of computing in integers. An empty population (no interarrivals, no completed waits) stays 0.
 - **VerA today**: `src/sim/digital/system.zig:121` (`interarrival_sum / interarrivals`) and `:127` (`wait_sum / waits`) truncate. No fixture asks codes 2 or 6 (`b_17_6_5_q_exam.v` deliberately skips them). `CHANGE NEEDED:` compute `(2*sum + n) / (2*n)` (non-negative round half up, which equals ties away from zero here). Add a fixture whose mean is x.5 (for example, arrivals at 0, 2, 5 give a mean interarrival of 2.5, so 3). Patch (run-time value, no source or device text change).
 - **Measure impact**: B: 17.6.5 statistics pinned. A: +1 fixture.
+- **Status**: DONE (ca0e6529).
 
 ## 4. Implementation-defined choices: Verilog-AMS (IMPLEMENTATION.md §1)
 
@@ -895,6 +901,7 @@ correction.
 - **Decision**: `DECIDED:` depth 16 per descriptor, the 17th push returns EOF (the clause's own error value), never a silently dropped character. Every read routine reads the pushback before the file: "the buffer specified by fd" is the descriptor's buffer, and 17.2's routines are modelled on C stdio, where `fgets`/`fscanf`/`fread` after `ungetc` read the pushed character. A push at file position 0 may stay refused (EOF): the NOTE leaves pushback to the host, and C leaves the position after it indeterminate; document it.
 - **VerA today**: `lib/backend/kernels/file_kernels.zig:77` `back: [16]u8`, `zFUngetc` at `:518` (EOF when full or at `pos == 0`); the comment at `:75-76` says "`$fgets`/`$fscanf` after an `$ungetc` read the file". Fixture `ieee1364/17_system_tasks/b_17_2_4_1_ungetc_pushback_limit.v`. `CHANGE NEEDED:` (1) `$fgets`, `$fscanf` and `$fread` consume `back` before the file, with a fixture (`b_17_2_4_1_ungetc_then_fgets.v`: push "Z", `$fgets` returns a line starting "Z"); this changes the run-time file kernel every generated program links, so minor; (2) IMPLEMENTATION's row should state the position-0 refusal and give the path `lib/backend/kernels/file_kernels.zig` (it says `lib/backend/file_kernels.zig:74`); (3) the doc comment at `file_kernels.zig:514` cites §17.2.4.2 for `$ungetc`, which is 17.2.4.1.
 - **Measure impact**: A (+1 fixture); B: strengthens 17.2.4.1.
+- **Status**: DONE (78df5df4).
 
 ### VD-085: Which bit an mcd `$fopen` returns
 - **Source**: IMPLEMENTATION §1 row "1364 17.2.1, 27.25".
