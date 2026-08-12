@@ -149,6 +149,9 @@ pub const MemLoad = struct {
     words: u128 = 0,
     addressed: bool = false,
     exhausted: bool = false,
+    /// The first file address outside `low..high` in a load with no
+    /// bounds arguments, which `outside_text` warns of (W1156).
+    outside: ?i64 = null,
 
     /// One word: element `index` (from the lowest declared address) takes
     /// `value`, `width` bits wide.
@@ -189,8 +192,14 @@ pub const MemLoad = struct {
         while (self.it.next()) |token| {
             if (token[0] == '@') {
                 self.addressed = true;
-                self.at = std.fmt.parseInt(i64, token[1..], 16) catch return error.BadAddress;
+                // §3.5.1: `_` is legal anywhere but first, so also last,
+                // which `parseInt` refuses (VD-041). x, z and ? name no
+                // word and stay malformed.
+                self.at = std.fmt.parseInt(i64, std.mem.trimEnd(u8, token[1..], "_"), 16) catch return error.BadAddress;
                 if (self.bounded and (self.at < self.range_low or self.at > self.range_high)) return error.AddressOutOfRange;
+                // No bounds: the clause's error does not apply, so its
+                // words are skipped with a warning (VD-040).
+                if (!self.bounded and self.outside == null and (self.at < self.low or self.at > self.high)) self.outside = self.at;
                 self.exhausted = false;
                 continue;
             }
@@ -242,6 +251,9 @@ pub const MemLoad = struct {
 
     /// The W1150 text; the arguments are `found` then `expected`.
     pub const mismatch_text = "memory file data word count does not match load range: found {d}, expected {d}";
+
+    /// The W1156 text; the arguments are `outside`, then `low` and `high`.
+    pub const outside_text = "memory file address @{x} is outside the memory's declared range [{d}:{d}]; its words are skipped";
 };
 
 /// The interpreter's `$readmemb` / `$readmemh` (`MemLoad`).
@@ -265,6 +277,11 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
         const tok = ex.mainTok(args[0]);
         const at = self.starts[@min(tok, self.starts.len - 1)];
         try self.bag.add(.lower, .W1150, .{ .start = at, .end = at }, MemLoad.mismatch_text, .{ m.found, m.expected });
+    }
+    if (load.outside) |o| {
+        const tok = ex.mainTok(args[0]);
+        const at = self.starts[@min(tok, self.starts.len - 1)];
+        try self.bag.add(.lower, .W1156, .{ .start = at, .end = at }, MemLoad.outside_text, .{ o, arr.low, arr.high });
     }
 }
 

@@ -112,12 +112,13 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
             q.wait_min = @min(q.wait_min orelse wait, wait);
             return .{ .status = ok, .out = .{ job.id, job.info } };
         },
-        // §17.6.5 Table 17-15's statistics codes.
+        // §17.6.5 Table 17-15's statistics codes; any other is status 2
+        // with no value (VD-050).
         .exam => {
             const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
             const value: u64 = switch (in1 orelse 0) {
                 1 => q.jobs.items.len,
-                2 => if (q.interarrivals == 0) 0 else q.interarrival_sum / q.interarrivals,
+                2 => mean(q.interarrival_sum, q.interarrivals),
                 3 => q.peak,
                 4 => q.wait_min orelse 0,
                 5 => longest: {
@@ -125,12 +126,19 @@ pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64,
                     for (q.jobs.items) |j| w = @max(w, t - j.arrived);
                     break :longest w;
                 },
-                6 => if (q.waits == 0) 0 else q.wait_sum / q.waits,
+                6 => mean(q.wait_sum, q.waits),
                 else => return .{ .status = undefined_id },
             };
             return .{ .status = ok, .out = .{ null, @intCast(value) } };
         },
     }
+}
+
+/// A §17.6.5 mean as an integer: §3.5.3 rounds a real to the nearest
+/// integer "rather than by truncating it", ties away from zero (VD-052); 0
+/// over an empty population.
+fn mean(sum: u64, n: u64) u64 {
+    return if (n == 0) 0 else (2 * sum + n) / (2 * n);
 }
 
 /// §17.6.4 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
@@ -389,7 +397,9 @@ fn fscanf(self: *Run, a: std.mem.Allocator, t: contract.FileIo, args: []const As
 /// §17.2.4.3's input snapshot and original descriptor position. The native
 /// executable and interpreter use the same scanner and restore only the
 /// consumed prefix, so a failed conversion leaves the offending byte unread.
-pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0 };
+/// `pushed`: how many of the input's first bytes are §17.2.4.1 pushback
+/// that differs from the file under it, which a reposition would lose.
+pub const FileScan = struct { scan: Scan, descriptor: ?i64 = null, start: i64 = 0, input_len: usize = 0, pushed: usize = 0 };
 
 /// Starts a `$fscanf` on descriptor `descriptor_`: the rest of the file is
 /// read into `a` and the descriptor left at its end until `finishFileScan`
@@ -407,7 +417,15 @@ pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, for
         if (c < 0) break;
         try rest.append(a, @intCast(c));
     }
-    return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len };
+    // `$ungetc`'s characters came first (VD-084). The file's own bytes under
+    // them (at most 16, `file_kernels.ZFSlot.back`) tell which ones
+    // `finishFileScan` must push back after it repositions.
+    _ = t.seek(d, start, 0);
+    var pushed: usize = 0;
+    for (rest.items[0..@min(rest.items.len, 16)], 0..) |c, i| {
+        if (t.getc(d) != c) pushed = i + 1;
+    }
+    return .{ .scan = .init(rest.items, format, outs), .descriptor = d, .start = start, .input_len = rest.items.len, .pushed = pushed };
 }
 
 /// Ends a `fileScan`: the descriptor is repositioned just past what `scan`
@@ -415,6 +433,16 @@ pub fn fileScan(a: std.mem.Allocator, t: contract.FileIo, descriptor_: ?i64, for
 /// every `fileScan` whose descriptor was readable.
 pub fn finishFileScan(t: contract.FileIo, file: FileScan, scan: Scan) i64 {
     const d = file.descriptor orelse return scan.result;
+    if (scan.at < file.pushed) {
+        // The pushback the scan left unread stays the next input.
+        _ = t.seek(d, file.start + @as(i64, @intCast(file.pushed)), 0);
+        var k = file.pushed;
+        while (k > scan.at) {
+            k -= 1;
+            _ = t.ungetc(scan.input[k], d);
+        }
+        return scan.result;
+    }
     _ = t.seek(d, file.start + @as(i64, @intCast(scan.at)), 0);
     // A scan that ran to the end of the input met EOF (§17.2.8), which the
     // repositioning cleared.

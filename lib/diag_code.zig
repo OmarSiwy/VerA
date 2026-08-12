@@ -420,6 +420,8 @@ pub const Code = enum(u16) {
     W1154,
     /// A `.v` device whose digital tick is 1 s.
     W1155,
+    /// A `$readmem` file address outside the memory, with no bounds given.
+    W1156,
     W1160,
     W1050,
     W0950,
@@ -6446,6 +6448,11 @@ fn infoOf(c: Code) Info {
             .title = "device digital tick is 1 s",
             .lrm = "IEEE 1364-2005 19.8",
             .explain = "A design with no `timescale directive runs at the simulator's default time unit and precision, which for VerA is 1 s. A contract device built from it delivers every analog-to-digital event at a whole second and schedules every delay in seconds, which an analog host rarely means. Add a `timescale directive (for example `timescale 1ns/1ps) to the design.",
+        },
+        .W1156 => .{
+            .title = "memory file address outside the memory",
+            .lrm = "IEEE 1364-2005 17.2.9",
+            .explain = "A `$readmemb`/`$readmemh` call with no start or finish argument met an `@` address outside the memory's declared range. The clause's error for an address outside the load range applies only when the task gives addresses, so VerA does not stop the load: the words at addresses outside the memory are skipped, and loading continues at the next in-range address. The warning names the first such address (docs/Vague_Decisions.md VD-040).",
         },
         .W1160 => .{
             .title = "dissimilar net types joined through a port",
