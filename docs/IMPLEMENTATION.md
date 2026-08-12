@@ -326,16 +326,9 @@ cite no clause. The `$ferror` fixtures assert only a nonzero code.
 
 ## 4. Open defects
 
-**Direct reads of host-written integer parameters.** The generated Model uses
-an i64 carrier for a declared `integer`. Writing `4294967297` to a parameter
-declared `integer word=1` still makes a direct `word` expression read that raw
-carrier, rather than the required low-32-bit value 1. Compile-time card
-conversion, paramset selection, `checkShape`, and width-aware `$clog2` use 1;
-the direct emitted read remains an independent gap. The wide-card paramset
-fixture uses a representable integer control and does not claim this read is
-fixed. `tests/paramset_host.zig` checks the effective integer selection only.
-
 The earlier limit defects below are gone rather than named:
+a direct read of a host-written `integer` parameter is its low 32 bits
+(`derive` reduces the i64 carrier; `tests/integer_param_host.zig`);
 the `absdelay` history counts steps in a u64; unit names count collisions in
 a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
 reals and the testbench's noise, AC-stimulus, charge-site and mixed-signal
