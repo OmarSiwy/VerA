@@ -7,14 +7,14 @@
 // unrolled body owns its own analog operator state (§4.5.15), so the statement
 // has no meaning here.
 //
-// VerA reaches the right verdict by the shorter route — its E0404 counts only
-// runtime loops as loops, so an analog_for looks like no loop at all and the
-// diagnostic reads "outside a loop". The code is what is pinned; if VerA ever
-// grows a distinct analog_for jump diagnostic this fixture will say so.
+// E0440 names that rule. (Until 2026-10 VerA counted only runtime loops as
+// loops, so this read E0404 "outside a loop": the right verdict, the wrong
+// reason.) The legal neighbour, a procedural for nested in the analog_for
+// with the jump inside it, is jump_in_runtime_for_in_analog_for.va.
 //
 //! lrm 5.11
 //! lrm 5.9.3
-//! reject E0404
+//! reject E0440
 module ch5_jump_in_analog_for(p);
   inout p; electrical p; genvar k; real x;
   analog begin

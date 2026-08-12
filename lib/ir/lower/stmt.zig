@@ -1000,8 +1000,13 @@ fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId)
             try self.gotoBlock(rc.exit);
         },
         .brk, .cont => {
+            const what = if (kind == .brk) "break" else "continue";
+            if (self.analog_for_base == self.loops.items.len) {
+                try self.err(tok, .E0440, "`{s}`", .{what});
+                return;
+            }
             const l = self.loops.last() orelse {
-                try self.err(tok, .E0404, "`{s}`", .{if (kind == .brk) "break" else "continue"});
+                try self.err(tok, .E0404, "`{s}`", .{what});
                 return;
             };
             try self.gotoBlock(if (kind == .brk) l.brk else l.cont);
