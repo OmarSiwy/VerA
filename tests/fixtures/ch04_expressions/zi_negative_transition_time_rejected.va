@@ -1,0 +1,16 @@
+// §4.5.12: "τ specifies the transition time, is optional, and shall be
+// nonnegative." A τ of -1n names no transition. The refusal is E0540 with the
+// clause's sentence; the legal neighbour, τ = 1n and τ = 0 on the same filter,
+// runs in zi_transition_time_and_first_transition.va.
+//
+//! lrm 4.5.12
+//! reject E0540
+//! reject shall be nonnegative
+module zi_negative_transition_time_rejected(in, n);
+  inout in, n; electrical in, n;
+  real y;
+  analog begin
+    y = zi_nd(V(in, n), {1.0}, {1.0}, 2n, -1n);
+    I(in, n) <+ y * 1.0e-3;
+  end
+endmodule

@@ -479,7 +479,35 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             // The step bound keeps the solver from stepping over a sample.
             .zi => {
                 const p = cg_filters.planOf(self, i);
-                if (p.err == null) try self.w(
+                // §4.5.12 τ/t0: the samples fall on t0 + k·T, and each starts a
+                // τ-long transition from wherever the previous one had reached
+                // (`zZiRamp`). Before a positive t0 the output holds the
+                // operating point's value, H(1)·in. The step bound keeps the
+                // solver inside a transition as well as between samples.
+                if (p.err == null and p.tau != null) try self.w(
+                    \\        const period = {1s};
+                    \\        const zi_t0: f64 = {4s};
+                    \\        const zi_tau: f64 = {5s};
+                    \\        if (!(sim.dt > 0.0) and inst.{0s}__nk == 0.0 and zi_t0 > 0.0) {{
+                    \\            inst.{0s}__out = in * zZiGain({2d}, {3d}, {0s}__sec(model));
+                    \\            inst.{0s}__from = inst.{0s}__out;
+                    \\        }}
+                    \\        var zi_k = zZiDue(sim.t - zi_t0, inst.{0s}__nk, period);
+                    \\        if (zi_k > 0) {{
+                    \\            const zi_ts = zi_t0 + (inst.{0s}__nk + @as(f64, @floatFromInt(zi_k)) - 1.0) * period;
+                    \\            inst.{0s}__from = zZiRamp(inst.{0s}__from, inst.{0s}__out, inst.{0s}__ts, zi_tau, zi_ts);
+                    \\            inst.{0s}__ts = zi_ts;
+                    \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
+                    \\            while (zi_k > 0) : (zi_k -= 1)
+                    \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
+                    \\            // §9.17.1: a step in value, or with τ > 0 a corner in slope.
+                    \\            const zi_order: i32 = if (zi_tau > 0.0) 1 else 0;
+                    \\            if (inst.discontinuity_order < 0 or inst.discontinuity_order > zi_order) inst.discontinuity_order = zi_order;
+                    \\        }}
+                    \\        inst.bound_step = @min(inst.bound_step, period);
+                    \\        if (zi_tau > 0.0) inst.bound_step = @min(inst.bound_step, zi_tau);
+                    \\
+                , .{ n, p.period orelse "0.0", p.ns, p.deg, p.t0.?, p.tau.? }) else if (p.err == null) try self.w(
                     \\        const period = {1s};
                     \\        // §4.5.12: "T specifies the sampling period of the filter".
                     \\        // The recurrence runs once per T of SIMULATED TIME, so a step that

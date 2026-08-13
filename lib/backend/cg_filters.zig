@@ -40,6 +40,10 @@ pub const FilterPlan = struct {
     uses_model: bool = false,
     /// §4.5.12 sampling period T. Null for a laplace filter.
     period: ?[]const u8 = null,
+    /// §4.5.12 τ and t0, rendered, when the call writes either and it is not
+    /// the literal 0 (`zZiEvalRamp`). Null on both: the abrupt, t0 = 0 form.
+    tau: ?[]const u8 = null,
+    t0: ?[]const u8 = null,
     /// `const zr<k> = zRootSecs(...)` lines `__sec` runs before its return:
     /// one per root vector whose parts the card sets (`cardRoots`).
     lets: []const []const u8 = &.{},
@@ -116,24 +120,31 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         }
         p.period = try g.f64Expr(args[dv.next]);
         p.uses_model = g.uses.model;
-        // §4.5.12 τ and t0. The emitted sampler steps abruptly at t = 0, which
-        // is exactly the clause's τ = 0 form ("the output is abruptly
-        // discontinuous") with t0 = 0. Any other value is a different
-        // waveform, so it is refused rather than silently approximated.
-        // Whether a τ = 0 filter may feed a branch directly is a property of
-        // the statement: `lower.checkZeroTransitionZFilter` (E0518).
-        for (args[@min(dv.next + 1, args.len)..]) |a| {
+        // §4.5.12 τ and t0. Absent or the literal 0, the sampler steps
+        // abruptly on the k·T grid (the plain `zZiEval`). Otherwise the samples
+        // fall on t0 + k·T and each one is reached by a τ-long transition
+        // (`zZiEvalRamp`); a value the card sets is read at run time, so a
+        // parameter is rendered, not folded. Whether a τ = 0 filter may feed a
+        // branch directly is a property of the statement:
+        // `lower.checkZeroTransitionZFilter` (E0518).
+        const extra = args[@min(dv.next + 1, args.len)..];
+        for (extra, 0..) |a, i| {
             const c = g.an.foldConst(a, true) orelse return .{
                 .err = "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
             };
-            if (c.f < 0.0) return .{
+            if (i == 0 and c.f < 0.0) return .{
                 .err = "LRM 4.5.12: the transition time τ of a zi_* filter shall be nonnegative",
             };
-            if (c.f != 0.0) return .{
-                .err = "VerA implements only the τ = 0 / t0 = 0 form of a zi_* filter, whose output " ++
-                    "is abruptly discontinuous at the sample (LRM 4.5.12)",
-            };
+            const lit = g.an.foldConst(a, false);
+            if (lit != null and lit.?.f == 0.0) continue;
+            const text = try g.f64Expr(a);
+            if (i == 0) p.tau = text else p.t0 = text;
         }
+        if (p.tau != null or p.t0 != null) {
+            p.tau = p.tau orelse "0.0";
+            p.t0 = p.t0 orelse "0.0";
+        }
+        p.uses_model = g.uses.model;
     }
     // §4.5.11 the optional ε argument only "deriv[es] an absolute
     // tolerance (if needed)"; VerA has no per-signal tolerance table, so

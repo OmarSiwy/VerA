@@ -382,6 +382,63 @@ pub fn zZiDue(t: f64, nk: f64, period: f64) u32 {
     return if (n > 4096.0) 4096 else @intFromFloat(n);
 }
 
+/// §4.5.12 "τ specifies the transition time": the output `t` seconds into a
+/// linear transition from `from` to `to` that began at `ts`. τ = 0 is "abruptly
+/// discontinuous", the held `to` at once.
+pub fn zZiRamp(from: f64, to: f64, ts: f64, tau: f64, t: f64) f64 {
+    if (!(tau > 0.0) or !(t < ts + tau)) return to;
+    if (!(t > ts)) return from;
+    return from + (to - from) * ((t - ts) / tau);
+}
+
+/// §4.5.12 the DC gain H(1) = ∏ Σ_k num[i][k] / Σ_k den[i][k], `zZiEval`'s
+/// static answer as one number.
+pub fn zZiGain(comptime NS: usize, comptime D: usize, sec: [NS][2][D + 1]f64) f64 {
+    var g: f64 = 1.0;
+    for (0..NS) |i| {
+        var num: f64 = 0.0;
+        var den: f64 = 0.0;
+        for (sec[i][0]) |c| num += c;
+        for (sec[i][1]) |c| den += c;
+        g *= num / den;
+    }
+    return g;
+}
+
+/// §4.5.12 a Z-filter written with τ or t0: `zZiEval` on the sample grid
+/// t0 + k·T ("t0 specifies the time of the first transition"), its output
+/// reached by a τ-long linear transition (`zZiRamp`) from the value the
+/// previous transition had reached when the sample was due. Between samples
+/// the output carries no derivative; during the transition a sample's share
+/// `w` of it does, which is 0 at the sample instant itself.
+pub fn zZiEvalRamp(
+    comptime S: type,
+    comptime NS: usize,
+    comptime D: usize,
+    uin: S,
+    sec: [NS][2][D + 1]f64,
+    dt: f64,
+    out: f64,
+    from: f64,
+    ts: f64,
+    t: f64,
+    nk: f64,
+    period: f64,
+    t0: f64,
+    tau: f64,
+    uh: []const f64,
+    yh: []const f64,
+) S {
+    if (!(dt > 0.0)) return zZiEval(S, NS, D, uin, sec, dt, out, t - t0, nk, period, uh, yh);
+    const k = zZiDue(t - t0, nk, period);
+    if (k == 0) return S.con(zZiRamp(from, out, ts, tau, t));
+    const y = zZiEval(S, NS, D, uin, sec, dt, out, t - t0, nk, period, uh, yh);
+    const ts_new = t0 + (nk + @as(f64, @floatFromInt(k)) - 1.0) * period;
+    const f = zZiRamp(from, out, ts, tau, ts_new);
+    const w: f64 = if (tau > 0.0) @min(1.0, @max(0.0, (t - ts_new) / tau)) else 1.0;
+    return y.scale(w).addC(f * (1.0 - w));
+}
+
 /// §4.5.12 the Z-filter as the RESIDUAL sees it, the counterpart of
 /// `zZiStep`'s accepted-step side.
 ///
