@@ -565,14 +565,16 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     .printtimescale => try display.printTimescale(self, s.args),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .ports => |op| try @import("evcd.zig").task(self, scratch, op, s.args, s.tok),
-                    .finish => {
+                    .finish => |stop| {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.
                         const verbose = s.args.len == 0 or ((try evaluate.eval(self, scratch, s.args[0], 0)).asInt() orelse 1) != 0;
                         if (verbose) {
                             const start_byte = self.starts[s.tok];
                             const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);
-                            try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.scheduler.now, self.bag.fileName(loc.file), loc.offset });
+                            const fmt_s = "{s} at tick {d}, {s} byte {d}\n";
+                            const args = .{ if (stop) "$stop" else "$finish", self.scheduler.now, self.bag.fileName(loc.file), loc.offset };
+                            if (stop) std.debug.print(fmt_s, args) else try self.out.print(fmt_s, args);
                         }
                         try @import("vcd.zig").finish(self, scratch);
                         self.scheduler.finish();

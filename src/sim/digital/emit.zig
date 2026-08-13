@@ -1001,8 +1001,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .task => |t| {
             switch (t.task) {
                 .show => |sh| try show(self, t.args, sh),
-                .finish => {
-                    try self.print("            return s.finish(", .{});
+                .finish => |stop| {
+                    try self.print("            return s.{s}(", .{if (stop) "stopRun" else "finish"});
                     if (t.args.len == 0) try self.print("true", .{}) else {
                         try self.print("(L.asInt(", .{});
                         const ty = try expr.selfDetermined(self, t.args[0]);
