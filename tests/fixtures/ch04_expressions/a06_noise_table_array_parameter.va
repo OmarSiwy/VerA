@@ -47,8 +47,13 @@
 // override is REPRESENTABLE; it is still untested here, for the `//! param`
 // reason above, and the later fixture is still owed.
 //
-// The second half of the module is a plain resistor so the branch has a dc
-// current to check; the tabulated generator sits on the same branch.
+// The `//! noise` line is the main assertion: the device publishes the three
+// knots of the array parameter's default. The CHECK reads the last knot's
+// frequency back in the analog block, from the same `Model` array the export
+// is built from, so a parameter array that never reached the device fails it.
+// (Two CHECKs that could not fail were dropped: the ratio of two default
+// elements, which is the source's own arithmetic, and the bias V(p,n)/R,
+// which the harness sets.)
 //
 //! lrm 4.6.4.3
 //! noise table(p,n)#0 name=tbl interp=linear points=1.0:1e-18,1000.0:1e-21,1000000.0:1e-24
@@ -63,10 +68,7 @@ module a06_noise_table_array_parameter(p, n);
     parameter real tbl[0:5] = '{1.0, 1e-18, 1e3, 1e-21, 1e6, 1e-24};
 
     analog begin
-        `CHECKR("the knots fall a decade in power per decade in frequency",
-            tbl[1] / tbl[3], 1000.0, 1e-12);
-        `CHECKR("the dc current is the resistive term alone", V(p, n) / R, 1e-3, 1e-15);
-
+        `CHECKX("the array parameter's last knot reaches the device", tbl[4], 1e6);
         I(p, n) <+ V(p, n) / R + noise_table(tbl, "tbl");
     end
 endmodule

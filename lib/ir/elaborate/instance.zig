@@ -6,7 +6,7 @@
 //! declaration (§6.7), clones the body (`clone.zig`) and recurses.
 //! LRM §3.6.5, §6.2.2, §6.3, §6.3.1, §6.4, §6.4.3, §6.5, §6.5.5, §6.5.7.1,
 //! §6.6, §6.7.1, §7.1, §7.8.4, §9.15, §9.19, A.4.1, A.5.4, Annex E.3.2;
-//! IEEE 1364-2005 §12.3.3, §12.3.6, §19.10.
+//! IEEE 1364-2005 §12.3.3, §12.3.6, §19.9.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -402,7 +402,7 @@ fn inlineInstance(
                 .discipline = elab_resolve.oocDiscipline(self, path, p.name) orelse p.discipline,
                 .main_tok = p.main_tok,
             });
-            // IEEE 1364 §19.10 applies to unconnected input ports of the
+            // IEEE 1364 §19.9 applies to unconnected input ports of the
             // modules declared between the directive pair, so the site is
             // the port's declaration in the child (`p.main_tok`), not the
             // instance.

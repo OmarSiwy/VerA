@@ -1,4 +1,4 @@
-// IEEE Std 1364 §19.10's other operand, carried over by §10.1 Table 10-1:
+// IEEE Std 1364 §19.9's other operand, carried over by §10.1 Table 10-1:
 // `unconnected_drive pull0 pulls an unconnected input DOWN.
 //
 // The module is 58's, character for character, with the one word changed. That
@@ -15,6 +15,7 @@
 // the second assertion. Under `nounconnected_drive (60) that current is zero.
 //
 //! lrm 10.1
+//! inherited IEEE 1364-2005 19.9
 //! lrm 6.2.2
 //! bias V(p) = 0.5
 //! solve

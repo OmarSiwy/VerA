@@ -308,7 +308,7 @@ pub const Source = union(enum) {
     /// A §7.6 MOS switch, whose `s0`/`s1` are the strengths it passes, set at
     /// each evaluation.
     mos: Mos,
-    /// §19.10 `unconnected_drive`: a pull-strength driver of an unconnected
+    /// §19.9 `unconnected_drive`: a pull-strength driver of an unconnected
     /// input port, resolved against the net's own type through `Signal` like
     /// any other. A constant with an empty sensitivity list: it is evaluated
     /// once, at the initial `.continuous` dispatch.

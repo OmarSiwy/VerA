@@ -67,7 +67,7 @@ pub const Directives = struct {
     nettypes: []const NetTypeRegion = &.{},
     /// IEEE 1364 §19.1 `celldefine/`endcelldefine (`Mir.is_cell`).
     cells: []const CellRegion = &.{},
-    /// IEEE 1364 §19.10 `unconnected_drive/`nounconnected_drive, for §6.2.2's
+    /// IEEE 1364 §19.9 `unconnected_drive/`nounconnected_drive, for §6.2.2's
     /// blank port connections (`Lower.applyUnconnectedDrive`).
     drives: []const DriveRegion = &.{},
 
@@ -110,7 +110,7 @@ pub const Directive = enum {
     default_nettype, // IEEE 1364 §19.2: read by implicit-net creation
     celldefine, // IEEE 1364 §19.1: cell membership, `endcelldefine closes it
     endcelldefine,
-    unconnected_drive, // IEEE 1364 §19.10: read by §6.2.2 port binding
+    unconnected_drive, // IEEE 1364 §19.9: read by §6.2.2 port binding
     nounconnected_drive,
     pragma, // IEEE 1364 §19.10: no effect, except §28's `protect` (E0146)
 };
@@ -225,7 +225,7 @@ pub const NetTypeRegion = Region(NetType);
 /// not change what a module means.
 pub const CellRegion = Region(bool);
 
-/// IEEE 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
+/// IEEE 1364 §19.9 `` `unconnected_drive pull1 | pull0 `` and
 /// `` `nounconnected_drive ``: how an unconnected input port of a module
 /// declared in this region is driven.
 pub const Drive = enum {
@@ -238,7 +238,7 @@ pub const Drive = enum {
     pub const default: Drive = .float;
 };
 
-/// One IEEE 1364 §19.10 drive directive (or the `resetall that restores
+/// One IEEE 1364 §19.9 drive directive (or the `resetall that restores
 /// `.float`).
 pub const DriveRegion = Region(Drive);
 
@@ -270,7 +270,7 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
 
     // The three IEEE 1364 directives that, like §10.2's, carry state past their
     // own line: §19.2 decides whether an undeclared name may become a net at
-    // all, §19.1 tags the modules that follow, §19.10 drives their unconnected
+    // all, §19.1 tags the modules that follow, §19.9 drives their unconnected
     // inputs. All three are published as `Region` event lists.
     .{ "default_nettype", .default_nettype },
     .{ "celldefine", .celldefine },

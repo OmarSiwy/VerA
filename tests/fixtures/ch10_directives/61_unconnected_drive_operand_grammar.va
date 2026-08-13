@@ -1,4 +1,4 @@
-// IEEE Std 1364 §19.10, carried over by §10.1 Table 10-1, writes the directive
+// IEEE Std 1364 §19.9, carried over by §10.1 Table 10-1, writes the directive
 // as a two-way alternation with no brackets round the operand:
 //
 //     `unconnected_drive pull1 | pull0
@@ -17,6 +17,7 @@
 // under test.
 //
 //! lrm 10.1
+//! inherited IEEE 1364-2005 19.9
 //! reject E0141
 `unconnected_drive
 module ch10_unconnected_drive_operand_grammar(p, n);

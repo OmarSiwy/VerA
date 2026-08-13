@@ -678,7 +678,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the end-of-block read even when the site is under an `if`.
     for (module.analog) |blk| try lower_func.scanCallSites(self, blk.body, true, {}, {});
 
-    // IEEE 1364 §19.10, also before the body and for a related reason: the pull
+    // IEEE 1364 §19.9, also before the body and for a related reason: the pull
     // on an unconnected `input` is the OUTSIDE driving the port, so it is there
     // when the child's equations read it, not added after them.
     try lower_node.applyUnconnectedDrive(self);

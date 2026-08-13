@@ -34,6 +34,7 @@
 // NOT match and the fixture fails, as it must until the operand is resolved.
 //
 //! lrm 5.3.2
+//! inherited IEEE 1364-2005 10.3
 //! reject names no named block
 module a03_disable_bad_target(p);
   inout p; electrical p;

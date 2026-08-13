@@ -1,4 +1,4 @@
-// §9.14 Table 9-11 lists $ln1p and makes it an alias of the §4.3.1 operator.
+// §9.2 Table 9-11 lists $ln1p and §9.14 makes it an alias of the §4.3.1 operator.
 // Table 4-14: "$ln1p(x) ... C log1p ... Natural logarithm of 1 plus x", domain
 // x > -1. §4.3.1 adds "For small magnitude values of x, ln1p(x) can be more
 // accurate than ln(1+x)".
@@ -16,6 +16,7 @@
 //   passes.
 //
 //! bias V(p) = 0.5
+//! lrm 9.2
 //! lrm 9.14
 //! lrm 4.3.1
 `include "check.vh"

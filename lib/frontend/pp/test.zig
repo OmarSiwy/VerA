@@ -383,7 +383,7 @@ test "directives that contribute no text, and rejected ones" {
 
 // ---------------------------------------------------------------------------
 // The three IEEE 1364 directives that scope forward: §19.2 `default_nettype,
-// §19.1 `celldefine, §19.10 `unconnected_drive. §10.1's scope sentence is the
+// §19.1 `celldefine, §19.9 `unconnected_drive. §10.1's scope sentence is the
 // shared rule; `Region.inForce` is the shared reader.
 // ---------------------------------------------------------------------------
 
@@ -483,7 +483,7 @@ test "IEEE 1364 §19.1 `celldefine tags the modules between the pair" {
     try testing.expect(!reset.cells[1].value);
 }
 
-test "IEEE 1364 §19.10 `unconnected_drive publishes pull0/pull1 regions" {
+test "IEEE 1364 §19.9 `unconnected_drive publishes pull0/pull1 regions" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -499,14 +499,14 @@ test "IEEE 1364 §19.10 `unconnected_drive publishes pull0/pull1 regions" {
     try testing.expectEqual(Drive.pull1, r.drives[0].value);
     try testing.expectEqual(Drive.float, r.drives[1].value);
     try testing.expectEqual(Drive.pull0, r.drives[2].value);
-    // Above the first directive there is no region, and §19.10's state there is
+    // Above the first directive there is no region, and §19.9's state there is
     // "not pulled". A query at a directive's offset is inside its region (the
     // offset is where the directive's own collapsed text ends), which is what
     // makes a module declared on the next line the subject of it.
     try testing.expectEqual(Drive.float, DriveRegion.inForce(r.drives, 0, .default));
     try testing.expectEqual(Drive.pull1, DriveRegion.inForce(r.drives, r.drives[0].at, .default));
 
-    // §19.10's operand is a two-way alternation and it is not optional: the
+    // §19.9's operand is a two-way alternation and it is not optional: the
     // form that takes none is the separate directive `nounconnected_drive.
     for ([_][]const u8{
         "`unconnected_drive\n",

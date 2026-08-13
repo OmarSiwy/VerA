@@ -1,4 +1,4 @@
-// §9.4.1 / Table 9-1. The display family is split down the middle by the analog
+// §9.2 Table 9-1 (the §9.4.1 tasks). The display family is split down the middle by the analog
 // context column, and the split is by RADIX VARIANT, not by task:
 //
 //     $display                            Yes  Yes
@@ -31,6 +31,7 @@
 //
 // A reject, so there is nothing to run and no `want` to write.
 //
+//! lrm 9.2
 //! lrm 9.4.1
 //! reject analog context
 //! reject E0806

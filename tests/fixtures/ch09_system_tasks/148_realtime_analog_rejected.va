@@ -1,4 +1,4 @@
-// §9.10 / Table 9-7: `$realtime  Yes  No` — digital context only. This one row
+// §9.2 Table 9-7 (the §9.10 functions): `$realtime  Yes  No` — digital context only. This one row
 // the LRM states twice, and the second time in prose, with a note none of the
 // other three rows gets:
 //

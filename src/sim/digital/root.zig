@@ -3,7 +3,7 @@
 //! state, §6.2.2 per-instance names (§12.5/§12.6 hierarchical references),
 //! and `elaborate`, the spine: preprocess and parse, §19.8 timescales, pass
 //! one (`elab.zig`: elaboration into slots, nets and driver rows, §6.5,
-//! §6.5.7.1, §19.10), pass two (every driver, switch and process compiled
+//! §6.5.7.1, §19.9), pass two (every driver, switch and process compiled
 //! and queued at time 0). `run` then drains the §11 scheduler.
 //! Siblings: elab.zig (pass one), compile.zig (AST -> bytecode), exec.zig
 //! (interpreter), net.zig (resolution tables).
@@ -337,7 +337,7 @@ pub const Run = struct {
     /// §12.5 the scope of each named block that declares something, keyed by
     /// the scope it runs in and its statement (`blockScope`).
     block_scopes: std.AutoHashMapUnmanaged(struct { scope: u32, stmt: Ast.StmtId }, u32) = .empty,
-    /// IEEE 1364 §19.10's regions, in text-stream order. Read once per
+    /// IEEE 1364 §19.9's regions, in text-stream order. Read once per
     /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
     drives: []const Front.Preprocessor.DriveRegion = &.{},
@@ -1779,7 +1779,7 @@ test "§12.4 a hierarchical path descends one instance per part" {
 // clogb2(5) = 3 from a fresh `value`.
 // IEEE 1364-2005 §4.5 with §19.2: an implicit net takes the `default_nettype
 // in force, so an undriven `tri0` one reads 0; under `none` there is none.
-// IEEE 1364 §19.10. The directive drives at pull strength, so the level it
+// IEEE 1364 §19.9. The directive drives at pull strength, so the level it
 // asks for is not always the level the net shows: `strong0` outranks it.
 // §10: an untimed task runs in place, a timed one suspends its caller; a
 // static task's storage outlives its activation and an automatic one's does
