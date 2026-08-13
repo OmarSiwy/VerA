@@ -24,14 +24,15 @@
 // after a net type being unparseable at all — and would stay satisfied after
 // the strength parser lands even if `wire (small)` were refused for an
 // unrelated reason. The substring below is the wording the diagnostic must
-// carry, following the `expectRejected` convention in
-// `src/sim/digital.zig:1392-1429`. No E-code is named: none is allocated for
-// this rule yet.
+// carry, and E0257 is the code allocated for the rule (until 2026-10 the
+// refusal was the generic E0207 "unexpected token", so only the wording could
+// pin it).
 //
 // ROUTE. This is a digital rule, so the file runs under the digital runner
 // (`vera --run`). On the legacy analog compile route `assign` is itself
 // E0205, which says nothing about the rule above.
 // digital-runner: reject
+//! reject E0257
 //! reject charge strength is only legal on a trireg
 //! lrm A.2.2.1
 //! lrm A.2.1.3
