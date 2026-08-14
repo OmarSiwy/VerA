@@ -36,6 +36,11 @@
 
 #ifndef VERA_VPI_USER_H
 #define VERA_VPI_USER_H
+/* Annex G's own include guard, so an application that tests it (or a vendor
+ * header guarded by it) sees this file as the one already included. */
+#ifndef VPI_USER_H
+#define VPI_USER_H
+#endif
 
 #include <stdarg.h> /* va_list, for vpi_vprintf and vpi_mcd_vprintf */
 
@@ -59,6 +64,42 @@ typedef short           PLI_INT16;
 typedef unsigned short  PLI_UINT16;
 typedef char            PLI_BYTE8;
 typedef unsigned char   PLI_UBYTE8;
+#endif
+
+/* Annex G's portability macros, guarded as Annex G guards them. They name
+ * no question an application can ask, so (unlike an unanswered constant)
+ * declaring them costs nothing. */
+#if defined(WIN32) && WIN32
+#ifndef PLI_DLLISPEC
+#define PLI_DLLISPEC __declspec(dllimport)
+#define VPI_USER_DEFINED_DLLISPEC 1
+#endif
+#else
+#ifndef PLI_DLLISPEC
+#define PLI_DLLISPEC
+#endif
+#endif
+#if defined(WIN32) && WIN32
+#ifndef PLI_DLLESPEC
+#define PLI_DLLESPEC __declspec(dllexport)
+#define VPI_USER_DEFINED_DLLESPEC 1
+#endif
+#else
+#ifndef PLI_DLLESPEC
+#define PLI_DLLESPEC
+#endif
+#endif
+#ifndef PLI_EXTERN
+#define PLI_EXTERN
+#endif
+#ifndef PLI_VEXTERN
+#define PLI_VEXTERN extern
+#endif
+#ifndef PLI_PROTOTYPES
+#define PLI_PROTOTYPES
+#define PROTO_PARAMS(params) params
+#define XXTERN PLI_EXTERN PLI_DLLISPEC
+#define EETERN PLI_EXTERN PLI_DLLESPEC
 #endif
 
 /* §11.3.1: the handle is the application's opaque reference to one object.

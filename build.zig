@@ -979,7 +979,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 85 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=358\n",
+        .stdout = "xfail G: 85 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=359\n",
     },
 };
 
