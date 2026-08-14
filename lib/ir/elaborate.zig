@@ -258,6 +258,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
 
     var f: Flatten = .{ .ctx = ctx, .gen_instances = gen_instances };
     try elab_names.warnSpiceShadows(&f);
+    try elab_names.warnRedefinedModules(&f); // IEEE 1364-2005 §13.2.1.1 W1152
     // §7.7's names are judged whether or not the design has a hierarchy to
     // resolve: a `connectrules` block is a description of the COMPILATION
     // (A.1.2), not of the top module, so the tree-of-one shortcut below must
@@ -321,12 +322,21 @@ fn pickTop(ctx: Ctx, gen_instances: []const []const Ast.Instance) Error!*const A
         // connect module looks like a root. Skipped in both loops, so a file
         // of only connect modules is `NoModule`.
         if (m.is_connect) continue;
-        if (!instantiated.contains(m.name)) return m;
+        // IEEE 1364-2005 §13.2.1.1 the last same-named module is the cell.
+        if (!instantiated.contains(m.name)) return lastNamed(file, m);
     }
     // Every module is instantiated by some module, so the graph is all cycles.
     // Start at the first and let E0905 name the one that closes.
-    for (ctx.file.userModules()) |*m| if (!m.is_connect) return m;
+    for (ctx.file.userModules()) |*m| if (!m.is_connect) return lastNamed(file, m);
     return error.NoModule;
+}
+
+fn lastNamed(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl) *const Ast.ModuleDecl {
+    var last = m;
+    for (file.userModules()) |*o| if (o.name == m.name) {
+        last = o;
+    };
+    return last;
 }
 
 // ---------------------------------------------------------------------------

@@ -19,8 +19,12 @@ pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) s
         for (m.nets) |n| if (n.kind == .wreal) try wrealDrivers(file, starts, bag, m, n.name, n.init != .none);
         for (m.ports) |p| if (p.kind == .wreal) try wrealDrivers(file, starts, bag, m, p.name, false);
         for (m.instances) |inst| {
-            const child = for (file.modules) |*c| {
-                if (c.name == inst.module) break c;
+            // The last same-named module (IEEE 1364-2005 §13.2.1.1), as
+            // `elaborate.findModule` binds it.
+            var k = file.modules.len;
+            const child = while (k > 0) {
+                k -= 1;
+                if (file.modules[k].name == inst.module) break &file.modules[k];
             } else continue;
             for (inst.ports, 0..) |conn, i| {
                 if (conn.expr == .none or ex.tag(conn.expr) != .ident) continue;

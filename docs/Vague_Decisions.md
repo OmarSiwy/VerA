@@ -50,7 +50,7 @@ correction.
 | VD-006 | AGENTS.md §2 (house rule) | A passing `.v` transcript is runtime evidence and may support `verified` | yes |
 | VD-007 | VAMS 6.5.7, 7.8.4 rule 3 | A mixed port matching zero connect statements is a named error | DONE |
 | VD-008 | VAMS 7.4.4, 7.4.4.2 | Basic is the testable normative default; detail mode is required, so its absence is `missing` | yes |
-| VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | yes |
+| VD-009 | IEEE 1364-2005 13.2.1.1 vs 4.11 | Last same-named module wins with W1152, in both the `.v` and `.va` paths | DONE |
 | VD-010 | VAMS 5.6.1.3, A.6.5 | Contributions made before an event-triggered `disable` stand | yes |
 | VD-011 | VAMS 3.4.5, 6.3.3; IEEE 12.2.2.1 | `#(.lp())` on a localparam is E0907 | yes |
 | VD-012 | VAMS E.1.2 | Claim SPICE3 `.MODEL` + flat numeric `.SUBCKT`; refuse unreadable body cards, `PARAMS:`, `{}`, nesting | yes |
@@ -216,6 +216,7 @@ correction.
 - **Decision**: `DECIDED:` (b) in both languages. 13.2.1.1 is the specific rule: it names the case and gives a reason (the separate-compile model). 4.11 predates libraries. Option (c) satisfies neither clause. The `.va` path must agree with the `.v` path, so that one design does not elaborate differently depending on which engine reads it.
 - **VerA today**: the digital path already conforms. `src/sim/digital/bind.zig:28-51` emits W1152 and binds the later cell, and `ieee1364/13_configuration/b_13_2_1_1_same_name_cell_last_wins.v` pins it. The analog elaborator does not conform: `lib/ir/elaborate/names.zig:131-132` `findModule` returns the first match and does not warn. CHANGE NEEDED: make `findModule` (and the module list it scans) take the last same-named user module, emit W1152, and add a `.va` fixture with two `module leaf` declarations whose behaviour differs. Minor: device text changes for source that is already accepted.
 - **Measure impact**: A (+1 fixture), C (13.2.1.1 evidence in the analog path). B already counts the `.v` fixture.
+- **Status**: DONE. `findModule` and `pickTop` take the last definition, `warnRedefinedModules` emits W1152, `wreal.check` binds the same module; `ch06_hierarchy/same_named_module_last_wins.va`.
 
 ### VD-010: A disabled block's contributions already made
 - **Source**: ROADMAP §5.1 item 10; `a03_SPEC.md:170-177` at 8b1514d4.
