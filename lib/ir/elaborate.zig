@@ -445,6 +445,9 @@ pub const Flatten = struct {
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// See `Design.inserts`.
     inserts: std.ArrayList(Inserted) = .empty,
+    /// Ports `insert.plan` bridged with nothing, judged once every net's
+    /// discipline is resolved (`insert.checkUnbridged`, E0927).
+    unbridged: std.ArrayList(elab_insert.Unbridged) = .empty,
 
     /// The discipline every flat net has been declared with, keyed by the flat
     /// name: §3.10's precedence orders 1 and 2 after they have been decided.
@@ -654,6 +657,7 @@ pub const Flatten = struct {
         // walk collected. After the walk because 4.b matches the complete
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
+        try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
 
         // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
         // ordered: `I(b)` after a flow contribution to `b` reads the retained

@@ -236,9 +236,7 @@ These need a call, not another agent pass.
    17.7-01, the digital half of 17.11-01, 17.11-24) rest on
    `zig build test-devices`. (`CLAUSE-AUDIT.md` §7.5 item 6.)
 7. **§6.5.7 / §7.8.4: discrete and electrical ports on one undeclared net with no
-   connect statement** are accepted. Error, or legal when nothing crosses
-   domains? `lrm_7_4_4_1.va` relies on acceptance.
-   (`conformance-mixed-signal.md:211-215`.)
+   connect statement.** Decided and implemented: E0927 (Vague_Decisions VD-007).
 8. **§7.4.4 detail discipline resolution.** VerA has basic mode only. Is detail
    mode testable with a mode-selecting runner, or not at all (as
    `lrm_7_4_5.va:6-7` says)? (`conformance-mixed-signal.md:193-201`.)

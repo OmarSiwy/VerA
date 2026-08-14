@@ -432,6 +432,7 @@ pub const Code = enum(u16) {
     E0924,
     E0925,
     E0926,
+    E0927,
     E0960,
     E0982,
     E0482,
@@ -5951,6 +5952,26 @@ fn infoOf(c: Code) Info {
             \\them: 7.7.2.1's "first match" rule is for `resolveto` statements
             \\only. Keep one statement per discipline pair and direction, or use
             \\7.7.1's overrides to make the pairs differ.
+            ,
+        },
+        .E0927 => .{
+            .title = "a mixed port matches no connect statement",
+            .lrm = "7.8.4",
+            .explain =
+            \\LRM 6.5.7: "Ports of both analog and digital discipline may be
+            \\connected to a net provided the appropriate connect statements exist
+            \\(see 7.7)." LRM 7.8.4: "A connection shall be selected for a port only
+            \\if one of the connections to the port is digital and the other is
+            \\analog. In this case, the port shall match one (and only one) connect
+            \\statement."
+            \\
+            \\A port is mixed by the disciplines of its two connections after 7.4
+            \\resolution, not by what the design does with it: a discrete port on a
+            \\net that resolved continuous is mixed whether or not anything crosses.
+            \\Zero matching statements break "one (and only one)" as two do
+            \\(E0922). Add a `connectrules` block with a `connect` statement whose
+            \\connect module bridges the two disciplines (7.7.1), or give both
+            \\connections disciplines of one domain.
             ,
         },
         .E0923 => .{
