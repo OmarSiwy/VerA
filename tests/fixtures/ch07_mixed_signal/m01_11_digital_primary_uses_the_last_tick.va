@@ -44,13 +44,9 @@
 // t = 20n — the two points that exist only to catch it. All four failures are
 // whole integers apart.
 //
-// WHAT FAILS TODAY. `error[E0209]: expected an expression: found `#``: the
-// `.va` dialect has no `#` delay (`lib/frontend/parser.zig:2324` gates it on
-// `self.digital`, which is set by file extension), so a discrete variable
-// cannot change value at a time at all. VerA does already read a `reg [3:0]`
-// written by a CONSTANT `initial` assignment into the analog block as an
-// integer — that much is green — so what is missing is precisely the timeline,
-// which is the whole of this clause.
+// (Until the .va dialect gained digital `#` delays in `initial` blocks this
+// file failed with E0209 at the `#`; it passes now, and the paragraph that
+// described the failure is withdrawn.)
 //
 //! lrm 7.3.6.5
 //! lrm 7.3.1

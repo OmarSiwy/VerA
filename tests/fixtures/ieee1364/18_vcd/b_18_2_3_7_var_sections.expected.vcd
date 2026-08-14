@@ -1,3 +1,5 @@
+$date $end
+$version $end
 $timescale 100ps $end
 $scope module b_18_2_3_7_var_sections $end
 $var wire 1 ! w $end

@@ -36,10 +36,11 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 }
 
 /// Parses one statement (A.6.4), null statement included. Outside the
-/// discrete grammar (`discreteGrammar`), `#`, `wait`, `forever`, a task
-/// enable and the procedural continuous assignments are not statements:
-/// they fall through to the expression statement and report "expected
-/// expression". `fork` parses only in a digital source. `casex`/`casez`
+/// discrete grammar (`discreteGrammar`), `#`, `wait`, `forever`, `fork` and
+/// the procedural continuous assignments are digital statements A.6.4's
+/// `analog_statement` does not derive: each is parsed in full and refused by
+/// its own clause (E0258, E0249, E0254, E0255, E0256), so the parse goes on.
+/// A task enable falls through to the expression statement. `casex`/`casez`
 /// parse everywhere: §7.3.2 makes them analog statements in Verilog-AMS.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     try self.enter();
@@ -58,14 +59,16 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
 
 fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
-    if (self.discreteGrammar() and self.eat(.hash)) {
+    if (self.eat(.hash)) {
+        if (!self.discreteGrammar()) try self.report(tok, .E0254, "", .{});
         const delay = try parseDelay(self);
         const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = delay, .body = body, .kind = .delay } }, tok);
     }
     // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`:
     // digital only, like `#`; A.6.4 has no analog alternative for it.
-    if (self.discreteGrammar() and self.peek() == .kw_wait) {
+    if (self.peek() == .kw_wait) {
+        if (!self.discreteGrammar()) try self.report(tok, .E0255, "", .{});
         self.pos += 1;
         _ = try self.expect(.lparen);
         const cond = try parse_expr.parseExpr(self);
@@ -76,9 +79,10 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     // A.6.2 `procedural_continuous_assignments` (IEEE 1364-2005 §9.3),
     // digital statements only: `assign`/`force lvalue = expr;`,
     // `deassign`/`release lvalue;`. §8.5.3.2 gives each its process.
-    if (self.discreteGrammar()) {
+    {
         const kind: ?Ast.ProcContinuous = if (self.peek() == .kw_assign) .assign else if (self.reservedIs(self.pos, "force")) .force else if (self.reservedIs(self.pos, "deassign")) .deassign else if (self.reservedIs(self.pos, "release")) .release else null;
         if (kind) |k| {
+            if (!self.discreteGrammar()) try self.report(tok, .E0258, "`{s}`", .{@tagName(k)});
             self.pos += 1;
             const target = try parse_expr.parsePostfix(self);
             var value: Ast.ExprId = .none;
@@ -93,23 +97,27 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     // A.6.8 `loop_statement ::= forever statement` (IEEE 1364-2005 §9.6:
     // "Continuously executes a statement"), digital only. A.6.8's
     // `analog_loop_statement` has no forever (annex G.2.1 retired it), so
-    // outside the discrete context the keyword falls through to the
-    // expression statement and is E0209. The body is `statement`, not
+    // outside the discrete context it is parsed and refused (E0256). The body is `statement`, not
     // `statement_or_null`, so `forever ;` is E0296 (a null body would also
     // never suspend).
     //
     // Recorded as `while (1) body`: §9.6 gives the two the same meaning, so
     // no walk over `Ast.StmtKind` needs a separate arm. The `1` is an
     // unsized decimal (§2.6.1: signed, 32-bit) anchored on `forever`.
-    if (self.discreteGrammar() and self.peek() == .kw_forever) {
+    if (self.peek() == .kw_forever) {
+        if (!self.discreteGrammar()) try self.report(tok, .E0256, "", .{});
         self.pos += 1;
         const always = try self.file.exprs.addIntLiteral(self.arena, tok, .{ .value = 1, .width = 0, .signed = true });
         if (self.peek() == .semicolon) return self.failAt(self.pos, .E0296, "", .{});
         const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .while_stmt = .{ .cond = always, .body = body } }, tok);
     }
-    // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2, digital only.
-    if (self.digital and self.reservedIs(self.pos, "fork")) return parseSeqBlock(self);
+    // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2, digital only. A.6.4's
+    // `analog_statement` has `analog_seq_block` and no par_block (E0249).
+    if (self.reservedIs(self.pos, "fork")) {
+        if (!self.discreteGrammar()) try self.report(tok, .E0249, "", .{});
+        return parseSeqBlock(self);
+    }
     switch (self.peek()) {
         .semicolon => {
             self.pos += 1;

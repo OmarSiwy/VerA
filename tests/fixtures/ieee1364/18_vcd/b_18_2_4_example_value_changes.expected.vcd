@@ -1,3 +1,5 @@
+$date $end
+$version $end
 $timescale 1ns $end
 $scope module top $end
 $scope module m1 $end

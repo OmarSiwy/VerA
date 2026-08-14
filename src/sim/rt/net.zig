@@ -3,7 +3,7 @@
 //! store wakes them, plus the delayed transitions in flight. The tables are
 //! `digital/net.zig`'s; the one fold here, the all-strong one, is `Signal`'s.
 //! Clauses: IEEE 1364-2005 §7.9 Tables 7-4 to 7-7, §7.10, §3.7, §3.8, §6.1.3,
-//! §7.14 `delay3`, §7.8.5 gates, §7.6 MOS and pass switches, §8 UDPs, §19.10.
+//! §7.14 `delay3`, §7.8.5 gates, §7.6 MOS and pass switches, §8 UDPs, §19.9.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -359,7 +359,7 @@ pub fn bridge(s: *State, i: u32) Error!void {
     return drive(s, i, planes, false);
 }
 
-/// §19.10 `unconnected_drive` driver `i`: its level on every bit.
+/// §19.9 `unconnected_drive` driver `i`: its level on every bit.
 pub fn pull(s: *State, i: u32) Error!void {
     const t = &s.nets;
     const w = t.nets[t.drivers[i].net].width;

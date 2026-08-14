@@ -1,3 +1,5 @@
+$date $end
+$version $end
 $timescale 1ns $end
 $scope module b_18_2_2_table_18_2_shortening $end
 $var reg 1 ! s $end

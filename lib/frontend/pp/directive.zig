@@ -67,7 +67,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     }
 
     // Everything else dies with the arm it sits in. A directive with no
-    // operand (IEEE 1364 §19.1, §19.6, §19.10) is its word alone; the rest
+    // operand (IEEE 1364 §19.1, §19.6, §19.9) is its word alone; the rest
     // take their operands to the end of the line.
     const end = switch (kind) {
         .celldefine, .endcelldefine, .nounconnected_drive, .resetall => j,
@@ -468,7 +468,7 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
     try pp.mark(&pp.events.nettypes, value);
 }
 
-/// Parses an IEEE 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
+/// Parses an IEEE 1364 §19.9 `` `unconnected_drive pull1 | pull0 `` and
 /// records its region. The operand is mandatory (E0141); the operand-less
 /// form is `` `nounconnected_drive ``.
 pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void {
@@ -487,11 +487,11 @@ pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void 
         } else {
             b.msg("`{s}` is not a pull value", .{word});
         }
-        b.note("§19.10 is `unconnected_drive pull1 | pull0; the form with no operand is `nounconnected_drive", .{});
+        b.note("§19.9 is `unconnected_drive pull1 | pull0; the form with no operand is `nounconnected_drive", .{});
         try b.emit();
         return error.PreprocessFailed;
     };
-    try expectEnd(pp, &r, off, .E0141, "pull value", "§19.10 takes one operand and nothing more");
+    try expectEnd(pp, &r, off, .E0141, "pull value", "§19.9 takes one operand and nothing more");
     try pp.mark(&pp.events.drives, value);
 }
 

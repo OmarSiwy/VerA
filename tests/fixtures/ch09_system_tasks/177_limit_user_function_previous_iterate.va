@@ -35,7 +35,13 @@
 // contributed current uses the LIMITED voltage, so the residual is the one a
 // SPICE load routine would stamp.
 //
-//! lrm 9.17.3
+//
+// UNTAGGED (VD-082: a pinned choice carries no clause tag): §9.17.3 says the
+// second argument is "generally" the previous return; which evaluation counts
+// as "previous" (here, the harness's last evaluated point) and the per-access-
+// function keying are VerA's.
+// The callbacks call $discontinuity(-1) when they return other than their
+// first argument, as §9.17.3 requires of a user-defined limiter.
 //! time 0, 1, 2, 3
 //! wave V(p) = 0, 2, 4, 6
 `include "check.vh"
@@ -50,6 +56,9 @@ module ch09_limit_previous_iterate(p, n);
     real vnew, vold;
     begin
       getold = vold;
+      // §9.17.3: "shall call $discontinuity(-1) when its return value is not
+      // sufficiently close to the value of its first argument".
+      if (abs(vold - vnew) > 1e-12) $discontinuity(-1);
     end
   endfunction
 

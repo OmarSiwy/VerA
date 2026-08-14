@@ -8,7 +8,7 @@
 //! parameters and defparams, §6.5/§6.5.7.1 ports, §7.1, §7.6 and §7.8 gates,
 //! switches and pulls, §8 UDPs, §10 subroutine frames, §12.1.2 instance
 //! arrays, §12.3 port connections, §12.4 generate, §12.5 named blocks,
-//! §12.8.2, §19.10 unconnected_drive; VAMS §3.7 wreal, §6.3 the host's
+//! §12.8.2, §19.9 unconnected_drive; VAMS §3.7 wreal, §6.3 the host's
 //! parameters, §7.2 continuous and discrete, §7.8.4 inserted connect modules.
 const std = @import("std");
 const Front = @import("frontend");
@@ -346,9 +346,14 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
             if (!merging and outer.resolved.width != width)
                 return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
-            if (warnCell(p.kind, outer.kind)) {
-                const at = r.starts[@min(p.main_tok, r.starts.len - 1)];
-                try r.bag.add(.lower, .W1160, .{ .start = at, .end = at }, "§12.3.10: a `{s}` port joined to a `{s}` net is a Table 12-1 warn cell of the net type table", .{ @tagName(p.kind), @tagName(outer.kind) });
+            _ = try warnPort(r, p, outer.kind);
+            // §12.3.10.1: the merged net takes the dominating type, which in
+            // Table 12-1's "int" cells is the port's own (`tri0` inside a
+            // `wire` stays a tri0 and reads 0 undriven).
+            if (!merging and internalDominates(p.kind, outer.kind)) {
+                outer.kind = p.kind;
+                e.values.items[outer.slot] = try filled(arena, width, e.values.items[outer.slot].signed, undriven(p.kind));
+                r.values = e.values.items;
             }
             try r.bind(p.name, outer.slot, p.main_tok);
             if (p.is_signed != e.values.items[outer.slot].signed)
@@ -364,7 +369,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             .lsb = try r.declaredBound(range.lsb, p.main_tok),
         });
         switch (bind) {
-            // IEEE 1364 §19.10: an unconnected input port declared in an
+            // IEEE 1364 §19.9: an unconnected input port declared in an
             // `unconnected_drive` region is pulled to a logic level through a
             // pull-strength driver: one driver among drivers, meeting the net's
             // own type in §7.9 resolution. The analog half
@@ -382,13 +387,25 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
                 });
             },
             .collapse => {},
-            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok }),
+            .receive => |c| {
+                // §12.3.10 a select of one net still joins the port to that
+                // net, so Table 12-1's warn cells apply (no merge: a select is
+                // not a whole net).
+                const ex = &r.file.exprs;
+                if (ex.tag(c.expr) == .index and ex.tag(ex.lhs(c.expr)) == .ident) {
+                    if (r.lookup(c.scope, ex.strOf(ex.lhs(c.expr)))) |slot| if (r.net_of.get(slot)) |net| {
+                        _ = try warnPort(r, p, e.nets.items[net].kind);
+                    };
+                }
+                try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok });
+            },
             .group => unreachable, // `groupPorts` takes an expression-ported module's
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
                 var lo: u32 = 0;
                 var k = c.operands.len;
+                for (c.operands) |op| if (try warnPort(r, p, e.nets.items[op.net].kind)) break;
                 while (k != 0) {
                     k -= 1;
                     const op = c.operands[k];
@@ -459,6 +476,35 @@ fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []con
         if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
     }
     r.values = g.items;
+}
+
+/// IEEE 1364-2005 §12.3.10 Table 12-1's "warn" (W1160) for port `p` joined
+/// to a net of type `external`, whole or through a select. Returns whether
+/// it warned.
+fn warnPort(r: *Run, p: Ast.Port, external: Ast.NetKind) Error!bool {
+    if (!warnCell(p.kind, external)) return false;
+    const at = r.starts[@min(p.main_tok, r.starts.len - 1)];
+    try r.bag.add(.lower, .W1160, .{ .start = at, .end = at }, "§12.3.10: a `{s}` port joined to a `{s}` net is a Table 12-1 warn cell of the net type table", .{ @tagName(p.kind), @tagName(external) });
+    return true;
+}
+
+/// IEEE 1364-2005 §12.3.10 Table 12-1's "int" cells: does the internal (port)
+/// net type dominate the external one? Every other cell is "ext".
+fn internalDominates(internal: Ast.NetKind, external: Ast.NetKind) bool {
+    const wire = external == .wire or external == .tri;
+    return switch (internal) {
+        .wire, .tri, .wreal => false,
+        .wand, .triand, .wor, .trior, .trireg => wire,
+        .tri0, .tri1 => wire or external == .trireg,
+        .uwire => wire or switch (external) {
+            .wand, .triand, .wor, .trior, .trireg, .tri0, .tri1 => true,
+            else => false, // else: uwire, the supplies and wreal are "ext" in the uwire row
+        },
+        .supply0, .supply1 => switch (external) {
+            .supply0, .supply1, .wreal => false,
+            else => true, // else: every non-supply column of the supply rows is "int"
+        },
+    };
 }
 
 /// IEEE 1364-2005 §12.3.10 Table 12-1: is the pair of an internal (port)
@@ -1971,7 +2017,7 @@ test "§4.5 an implicit net is of the default net type; `default_nettype none ma
     , "undeclared");
 }
 
-test "§19.10 unconnected_drive pulls an open input port and loses to a stronger driver" {
+test "§19.9 unconnected_drive pulls an open input port and loses to a stronger driver" {
     try expectRun(
         \\`timescale 1ns/1ps
         \\`unconnected_drive pull1
@@ -1990,7 +2036,7 @@ test "§19.10 unconnected_drive pulls an open input port and loses to a stronger
     , "open=1 driven=0\n");
 }
 
-test "§19.10 nounconnected_drive leaves an open input port floating" {
+test "§19.9 nounconnected_drive leaves an open input port floating" {
     try expectRun(
         \\`timescale 1ns/1ps
         \\module child(a);

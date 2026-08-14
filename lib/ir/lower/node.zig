@@ -465,13 +465,13 @@ pub fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void
     try b.emit();
 }
 
-/// Applies IEEE 1364 §19.10 `unconnected_drive to the internal nets §6.2.2 gave
+/// Applies IEEE 1364 §19.9 `unconnected_drive to the internal nets §6.2.2 gave
 /// unconnected `input` ports: `pull0` holds the port at potential 0 and `pull1` at 1,
 /// in its discipline's potential units, through a potential source. Must run after
 /// the declarations are interned and before the analog blocks lower. Skips a net
 /// whose discipline binds no potential.
 ///
-/// ponytail: 1.0 stands in for §19.10's Pu1 strength; the upgrade is discrete net
+/// ponytail: 1.0 stands in for §19.9's Pu1 strength; the upgrade is discrete net
 /// resolution, where a pull is a driver rather than a potential.
 pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
     if (self.directives.drives.len == 0) return;

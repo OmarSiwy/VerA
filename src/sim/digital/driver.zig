@@ -339,7 +339,7 @@ fn level(s: Signal) u32 {
     return @max(@abs(s.lo), @abs(s.hi));
 }
 
-/// §9.23.4 and Annex D.3's masks. `DRIVER_KERNEL` marks the §19.10 pull a
+/// §9.23.4 and Annex D.3's masks. `DRIVER_KERNEL` marks the §19.9 pull a
 /// kernel adds for `unconnected_drive`.
 fn typeBits(r: *const Run, dr: Driver) u32 {
     var t: u32 = 0;

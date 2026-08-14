@@ -1,7 +1,8 @@
 //! Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1).
 //!
 //! In: tokens from `specify` to `endspecify`, and module-level `specparam`.
-//! Out: `ModuleDecl.paths` and `.timing_checks`, and specparams as local parameters.
+//! Out: `ModuleDecl.paths` and `.timing_checks`, and specparams (module-level or
+//! inside the block) as local parameters.
 //!
 //! LRM clauses cited: §1.1, §2.6.2, §2.8, §3.4.1, §3.4.5, §8, §11.6.15, §14.2.6.
 
@@ -72,10 +73,10 @@ fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     switch (self.peek()) {
         .kw_reserved => {
             const w = self.tokenText(self.pos);
-            // A.2.1.1's declaration as a specify_item. The list is
-            // discarded: a specparam declared inside the block is scoped to
-            // it, and the block is not elaborated.
-            if (std.mem.eql(u8, w, "specparam")) return parseSpecparamDecl(self, null);
+            // A.2.1.1's declaration as a specify_item. A specify block is
+            // no scope (IEEE 1364-2005 4.10.3 lets the body use it, e.g. as a
+            // §9.7.1 delay), so it joins the module's specparams.
+            if (std.mem.eql(u8, w, "specparam")) return parseSpecparamDecl(self, &b.params);
             // A.7.1 `pulsestyle_declaration` / `showcancelled_declaration`,
             // four keywords over one `list_of_path_outputs ;`.
             if (std.mem.eql(u8, w, "pulsestyle_onevent") or
@@ -551,17 +552,16 @@ fn edgeDescriptor(a: u8, b: u8) bool {
 ///             specparam_identifier = constant_mintypmax_expression
 ///             | pulse_control_specparam
 ///
-/// `out` is the module's parameter list for the Syntax 6-1 module-item
-/// form, where each specparam becomes a §3.4.5 `localparam` (a constant
-/// with a mandatory default that no `parameter_value_assignment` can name).
-/// `out` is null for an A.7.1 `specify_item`, whose specparams are scoped to
-/// a block this compiler does not elaborate.
+/// `out` is the module's parameter list, for both the Syntax 6-1
+/// module-item form and an A.7.1 `specify_item`: each specparam becomes a
+/// §3.4.5 `localparam` (a constant with a mandatory default that no
+/// `parameter_value_assignment` can name).
 ///
 /// A.2.4's `pulse_control_specparam`, `PATHPULSE$[input$output] = (
 /// reject_limit_value [ , error_limit_value ] )`, is parsed and dropped: it
 /// declares no constant, and the pulse limits it sets are §14.6's simulation,
 /// which VerA does not run (W0251).
-pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
+pub fn parseSpecparamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
     // ponytail: 1364's specparams are what SDF back-annotation overrides,
     // and a `localparam` cannot be overridden. VerA reads no SDF; reading
     // it needs separate storage.
@@ -580,7 +580,7 @@ pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Er
             continue;
         }
         const default = try parse_expr.parseMinTypMax(self);
-        if (out) |o| try o.append(self.arena, .{
+        try out.append(self.arena, .{
             .name = name,
             .ty = .unspecified, // §3.4.1: derived from the default, as for `parameter`
             .default = default,

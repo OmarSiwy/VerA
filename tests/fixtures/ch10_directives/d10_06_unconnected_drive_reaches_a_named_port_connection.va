@@ -1,4 +1,4 @@
-// IEEE Std 1364 §19.10 pulls an UNCONNECTED input port; §6.2.2 is what decides
+// IEEE Std 1364 §19.9 pulls an UNCONNECTED input port; §6.2.2 is what decides
 // which ports those are. It gives two spellings and ch10_directives/58, 59 and
 // 60 only exercise the first:
 //
@@ -9,7 +9,7 @@
 // which is what 58 writes. In the NAMED list the same situation has two
 // spellings: an explicit `.a()` with an empty expression, and a port simply
 // left out of the list altogether. §6.2.2's sentence is about the CONNECTION,
-// not about the punctuation, so all three must reach §19.10 identically.
+// not about the punctuation, so all three must reach §19.9 identically.
 //
 // This file instantiates the same child three ways under one `pull0 region and
 // asserts one number for all three. A front end that collects unconnected
@@ -17,7 +17,7 @@
 // floating and prints 0.5 for them, half a volt away, while u3 stays green.
 //
 // THE ORACLE. `pull0 holds the unconnected input at 0 of the potential nature's
-// units (58's header argues the number; §19.10 fixes the LEVEL and the fact of
+// units (58's header argues the number; §19.9 fixes the LEVEL and the fact of
 // being driven). So V(u1.a) = V(u2.a) = V(u3.a) = 0 exactly.
 //
 // The current is the corroborating half and it is a derivation, not a repeat:

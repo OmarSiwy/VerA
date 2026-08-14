@@ -35,6 +35,7 @@ differently also conforms.
 | AMS 4.5.11 | how a `laplace_*` section is integrated in a transient (the clause gives H(s) only) | the trapezoidal rule (bilinear transform, s = (2/dt)(1 − z⁻¹)/(1 + z⁻¹)), realised for a proper section (numerator degree ≤ denominator degree, after common powers of s cancel) as the controllable canonical states of the monic denominator stepped in increment form, (I − (dt/2)A)Δx = (dt/2)(2(Ax + Bu_prev) + B(u − u_prev)), solved along the companion chain in O(degree). Mathematically the same discrete filter as direct form on the bilinear coefficients, which VerA used until 2026-10-01; numerically, a held input leaves a state with Ax + Bu = 0 where it is, so the steady output is H(0) to rounding. Direct form made the fixed point Σb/Σa, which is roundoff when a pole is slow against the step (Σa ~ (ω·dt)^degree of its terms): a degree-6 section with ω·dt = 1e-5 drifted 5.3e-7 off H(0) in 200 steps, and a fitted line with a 3 kHz pole settled 0.6% low at dt = 0.1 ns. The states are continuous-time, so a step size change needs no history rewrite. An improper section (s/1) keeps direct form I on its bilinear coefficients | `lib/backend/kernels/filter_kernels.zig` `zSsForm`, `zSsStep`, `zSsRest`, `zLaplace`, `zLaplaceStep` | `ch04_expressions/laplace_nd_slow_pole_holds_dc_gain.va`; the transient laplace fixtures (`a04_11_laplace_nd_ramp_response.va`, `23_laplace_filters.va`, ...) within their stated tolerances |
 | AMS 4.6.1 | analysis names beyond Table 4-21 | none: any other name is false | `lib/backend/codegen/call.zig` `analysisMatch` | `ch04_expressions/143_analysis_transient.va` |
 | AMS 4.6.3 | the small-signal analysis name | `"ac"` | `lib/ir/lower/contrib.zig` `acAnalysisName` | `ch04_expressions/a06_ac_stim_ac_analysis.va` |
+| AMS 4.5.12 | a `zi_*` filter's τ and t0: the shape of a non-zero transition, the output before the first transition at t0, how the corners are resolved, and an absent τ | samples fall on t0 + k·T. Each sample starts a linear transition, τ long, from the value the previous transition had reached at that instant. Before a positive t0 the output holds H(1) times the operating-point input. The corners are resolved by bounding the step at τ (and T); no breakpoint is published. AC small-signal ignores τ and t0. An absent τ is the abrupt τ = 0 form, not `` `default_transition ``. A τ that does not fold without the card is read from the card; a negative one is E0540 | `lib/backend/cg_filters.zig` `filterPlan`; `lib/backend/kernels/filter_kernels.zig` `zZiEvalRamp`, `zZiRamp`; `lib/backend/codegen/state.zig` | `ch04_expressions/zi_transition_time_and_first_transition.va`, `zi_negative_transition_time_rejected.va` |
 | AMS 5.10.3.1 | the `time_tol` of a `.v` contract device's A2D bridge (7.8 supplies no connect module) | card `ttol`, by default min(trise, tfall)/50; only a step where some process wakes is held to it | `src/sim/rt/device.zig` `ttol` | `tests/vdev_host.zig`, "v_edge and v_any" |
 | AMS 5.10.3.1, 5.10.3.3 | `cross`/`above` tolerances and `timer` time_tol when the tool sets them | the fixed-grid testbench (`--run`, `--emit-exe`, no discrete half) inserts no timepoint: the event fires at the first `//! time` point past its time (W0750); a `//! time` grid with no `//! analysis` line is `tran` | `lib/backend/tb/runner.zig` `warnGridEvents`, `lib/backend/tb/directive.zig` | `ch05_analog_behavior/event_cross_fires_on_a_time_grid.va` |
 | AMS 5.10.3.4 | absent or zero `absdelta` tolerances and interpolation within the event window | `time_tol` defaults to 1 ps and is at least the digital precision; `expr_tol` defaults to 1e-12 in expression units; delta events use the interpolated delta crossing when eligible, otherwise the first time outside the time-tolerance exclusion; significant reversals use the observed point | `src/sim/mixed.zig` `absdeltaArgs`, `nextAbsdelta` | `ch07_mixed_signal/absdelta_runtime_default_tolerances.va`, `absdelta_runtime_time_precision.va`, `absdelta_runtime_time_tol.va`, `absdelta_runtime_reversal.va` |
@@ -347,15 +348,6 @@ cite no clause. The `$ferror` fixtures assert only a nonzero code.
 
 ## 4. Open defects
 
-**Direct reads of host-written integer parameters.** The generated Model uses
-an i64 carrier for a declared `integer`. Writing `4294967297` to a parameter
-declared `integer word=1` still makes a direct `word` expression read that raw
-carrier, rather than the required low-32-bit value 1. Compile-time card
-conversion, paramset selection, `checkShape`, and width-aware `$clog2` use 1;
-the direct emitted read remains an independent gap. The wide-card paramset
-fixture uses a representable integer control and does not claim this read is
-fixed. `tests/paramset_host.zig` checks the effective integer selection only.
-
 **Upward defparams bind in instance order on the analog path.** A defparam
 path whose first identifier names the declaring instance or a module above it
 (IEEE 1364-2005 §12.6, Syntax 12-7) is resolved from that scope
@@ -369,6 +361,8 @@ would. The digital engine applies them (`src/sim/digital/root.zig`
 (a later sibling, applied).
 
 The earlier limit defects below are gone rather than named:
+a direct read of a host-written `integer` parameter is its low 32 bits
+(`derive` reduces the i64 carrier; `tests/integer_param_host.zig`);
 the `absdelay` history counts steps in a u64; unit names count collisions in
 a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
 reals and the testbench's noise, AC-stimulus, charge-site and mixed-signal

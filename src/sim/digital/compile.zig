@@ -1303,10 +1303,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 },
                 // §17.4.1: the argument is an expression selecting how much
                 // is printed (0, 1 or 2), read when the task runs.
-                .finish => {
-                    if (s.args.len > 1) return self.fail(tok, "$finish accepts zero or one argument", .{});
+                .finish => |stop| {
+                    const task_name = if (stop) "$stop" else "$finish";
+                    if (s.args.len > 1) return self.fail(tok, "{s} accepts zero or one argument", .{task_name});
                     if (s.args.len == 1) {
-                        if (s.args[0] == .none) return self.fail(tok, "$finish's argument is an expression", .{});
+                        if (s.args[0] == .none) return self.fail(tok, "{s}'s argument is an expression", .{task_name});
                         try checkExpr(self, s.args[0]);
                     }
                 },

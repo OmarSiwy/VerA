@@ -25,8 +25,14 @@
 // arise — there is no digit for the example to reinterpret — and the answer is
 // fixed twice over, once by C and once by Table 9-23's own "whichever format
 // results in the shorter printed output". Every row below is derived both ways
-// and the two derivations agree, which is why these four are assertable and the
-// explicit-precision pair is not.
+// and the two derivations agree. A third reading would carry the example's
+// "fractional digits" gloss over to C's default precision of 6: row 1 would
+// then be %f with six fractional digits, trailing zeros removed, "1234.5678".
+// This file does not take it: the gloss is attached to an explicit field
+// ("%10.3g"), and with no field written there is nothing for it to gloss, so
+// C's significant-digit default (the sentence's normative half) decides. That
+// is a reading, stated so it can be challenged, which is why the
+// explicit-precision pair is withdrawn and these four are kept.
 //
 // C's rule, written out (P = precision, default 6; X = the decimal exponent the
 // value would get in %e style):
@@ -69,7 +75,7 @@
 // and the only way to hold text in a Verilog-AMS fixture is §9.5.3's
 // `$sformat(string_variable, format_string, …)`, which "supports all the format
 // specifiers supported by $display". §3.3 gives `string` an equality operator,
-// so the comparison is an integer (§4.2.5) and stays out of a conditional — the
+// so the comparison is an integer (§4.2.7) and stays out of a conditional — the
 // shape `check.vh` documents.
 //
 // WITHDRAWN, AND WHERE IT WENT. The two explicit-precision rows —

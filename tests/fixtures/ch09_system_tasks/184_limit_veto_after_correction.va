@@ -1,6 +1,8 @@
 // A correction below voltage tolerance can cross a rejection boundary.
-//! lrm 9.17.1
-//! lrm 9.15
+//
+// UNTAGGED (VD-082: a pinned choice carries no clause tag): which iteration a
+// §9.17.1 $discontinuity(-1) veto lands on, and the accepted count of 2, are
+// VerA's solver loop.
 //! solve
 //! bias V(n) = 0
 `include "check.vh"
