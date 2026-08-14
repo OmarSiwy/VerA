@@ -74,6 +74,7 @@
 //! lrm A.1.2
 //! lrm A.1.1
 //! lrm 1.1
+//! warn W0253
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 config annex_a_cfg;

@@ -1,0 +1,57 @@
+// §3.11.1, two of the six discipline rules:
+//   "Natureless Discipline Rule: A natureless discipline is compatible with
+//    all other disciplines of the same domain."
+//   "Domainless Discipline Rule: A domainless discipline is compatible with
+//    all disciplines as there is no nature or domain conflict."
+//
+// 30/31 declare such nets and 79/80 refuse an access through them; neither
+// joins one to another discipline, which is where compatibility is decided
+// (§3.11: "if two nets are connected via a port, the two nets must be
+// compatible"). Here a natureless net `w` and a domainless net `d` in the
+// parent each join two `electrical` ports: a 2.0 V source and a probe on `w`,
+// a 3.0 V source and a probe on `d`. Compatible, each pair is one node, so
+// each probe reads its source exactly: 2.0 and 3.0. A compiler that refused
+// the binding fails to compile; one that kept the two sides as separate nodes
+// leaves the probe floating at 0 (its own port has no other contribution).
+//
+// No refusal neighbour yet: the natureless rule is scoped to "the same
+// domain", and a different-domain binding is §6.5.7's connect-statement
+// question. docs/Vague_Decisions.md VD-007 decides it needs a new named error
+// that does not exist yet, so no fixture asserts a code for it.
+//
+//! lrm 3.11.1
+//! lrm 3.11
+//! xfail an access in the child reads the joined node's natureless/domainless discipline, so `V(a)` on an electrical port is E0501
+`include "check.vh"
+discipline ch3c_natureless;
+  domain continuous;
+enddiscipline
+discipline ch3c_domainless;
+enddiscipline
+module ch3c_src(a);
+  inout a; electrical a;
+  parameter real v = 0.0;
+  analog V(a) <+ v;
+endmodule
+module ch3c_probe2(a);
+  inout a; electrical a;
+  analog begin
+    I(a) <+ V(a) * 1.0e-3;
+    `CHECKX("the probe sees the 2.0 V source through the natureless net", V(a), 2.0);
+  end
+endmodule
+module ch3c_probe3(a);
+  inout a; electrical a;
+  analog begin
+    I(a) <+ V(a) * 1.0e-3;
+    `CHECKX("the probe sees the 3.0 V source through the domainless net", V(a), 3.0);
+  end
+endmodule
+module ch3c_compat;
+  ch3c_natureless w;
+  ch3c_domainless d;
+  ch3c_src #(.v(2.0)) s1(w);
+  ch3c_probe2 p1(w);
+  ch3c_src #(.v(3.0)) s2(d);
+  ch3c_probe3 p2(d);
+endmodule
