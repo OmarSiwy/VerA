@@ -64,11 +64,14 @@ gates).
 
 ```zig
 const vera = b.dependency("vera", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("vera", vera.module("vera"));
-exe.root_module.addImport("contract", vera.module("contract"));
+exe.root_module.addImport("va", vera.module("va"));            // Verilog-A engine
+exe.root_module.addImport("contract", vera.module("contract")); // the ABI
 // the CLI wants contract as a PATH, not a module:
 run.addFileArg(vera.path("src/contract.zig"));
 ```
+
+There is no aggregate module over `va` and `vf` — every consumer so far wants one
+frontend or the other, never both.
 
 ## Build
 
