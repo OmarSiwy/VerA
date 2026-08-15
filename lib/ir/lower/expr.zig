@@ -1087,9 +1087,15 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// — see `potentialSourceHere` for the case where this unit's OWN source is the
 /// branch being read.
 fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
-    for (self.out.contributions.items, self.accum.items) |c, acc| {
-        if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
+    for (self.out.contributions.items, self.accum.items, 0..) |c, acc, i| {
+        if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br) {
+            // §5.6.8.2/§6.7.1 an instance's own unnamed branch, when several
+            // share the row. An instance that contributed nothing to the pair
+            // reads the row, as a parent reading its child's flow always has.
+            if (c.shared and t.br == Lower.unnamed_branch)
+                if (self.unit_accum.get(.{ .row = @intCast(i), .unit = t.unit })) |pa| return pa;
             return acc;
+        }
     }
     return null;
 }
