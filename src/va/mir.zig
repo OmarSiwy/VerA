@@ -141,7 +141,7 @@ pub const Opcode = enum(u8) {
     // --- casts §4.2.1.1 (real→integer, rounds) / §4.2.1.2 (integer→real) ---
     fi_cast,
     if_cast,
-    /// Optimization fence (no LRM basis, see SPEC-MAP "engine-internal"): stops
+    /// Optimization fence (no LRM basis, engine-internal): stops
     /// codegen from folding/reassociating across it. Unary, value-preserving.
     opt_barrier,
     // --- value-form conditional §4.2.12 (`?:` that needs no CFG split) ---

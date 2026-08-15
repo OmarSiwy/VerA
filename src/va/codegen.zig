@@ -978,7 +978,7 @@ const Gen = struct {
         @memset(self.inlined, false);
         @memset(self.slot, none_u32);
         // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few
-        // KB, nothing like the `0..nv` per-unit sweeps fix 5 in PERF.md deleted.
+        // KB, nothing like the `0..nv` per-unit sweeps that were deleted.
         self.blk_work = try a.alloc(bool, self.nb);
         self.blk_phi = try a.alloc(bool, self.nb);
         self.dead_branch = try a.alloc(bool, self.nb);
@@ -2069,7 +2069,7 @@ const Gen = struct {
 
     /// What taking `from → to` reduces to for this unit, or null when the edge
     /// does something the unit can observe. Iterative, not recursive: the chain
-    /// of empty blocks is bounded by nothing syntactic (PERF.md fix 10).
+    /// of empty blocks is bounded by nothing syntactic.
     const Act = union(enum) { cont: u32, brk: u32 };
 
     fn edgeAct(self: *const Gen, from0: u32, to0: u32) ?Act {
@@ -2334,8 +2334,8 @@ const Gen = struct {
     /// special case because it emits flat, readable `const` code.
     ///
     /// Iterates `live`, not `0..nv`: it is called once per unit, and `live` is
-    /// the small set `mark` actually reached — the same reason fix 5 in PERF.md
-    /// gives for every other per-unit sweep.
+    /// the small set `mark` actually reached — the same reason every other
+    /// per-unit sweep iterates it.
     fn isStraightLine(self: *const Gen) bool {
         for (self.live.items) |lv| {
             const v = @intFromEnum(lv);
