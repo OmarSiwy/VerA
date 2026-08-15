@@ -1262,7 +1262,7 @@ const Gen = struct {
     /// Does this model need the §4.5.2 accepted-step machinery at all? A §5.10
     /// held variable does, for the same reason an operator does: its value is
     /// carried in `Instance` and only `updateState` may advance it.
-    /// `contract.validate` (modules/devices/src/contract.zig) then requires
+    /// `contract.validate` (tools/contract.zig) then requires
     /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
     /// emits together.
     fn hasStatefulOps(self: *const Gen) bool {
@@ -1826,7 +1826,7 @@ const Gen = struct {
     /// `orchestrator.writeTree` splices `pub ` when the declaration is written
     /// to its own `u/<key>.zig`. It is NOT emitted `pub` here: `text` is also
     /// the single-file `--emit-zig` form, and `contract.rejectStrayPubDecls`
-    /// (modules/devices/src/contract.zig) allows only contract-recognized names
+    /// (tools/contract.zig) allows only contract-recognized names
     /// to be public on a device type. A per-unit name can never be one of
     /// those, so the visibility belongs to the split, not to the emission.
     fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u8, comment: []const u8) Error!usize {
@@ -5638,7 +5638,7 @@ test "codegen: §5.6.7.1 two indirect contributions to one branch get one source
 }
 
 test "codegen: §5.10.5 only a `timer` module gets a nextBreakpoint hook" {
-    // The hook is OPTIONAL in modules/devices/src/contract.zig, and emitting it
+    // The hook is OPTIONAL in tools/contract.zig, and emitting it
     // for a module with no timer would claim a schedule that does not exist —
     // the host reads "no breakpoints ever" and stops asking. `transition` is the
     // trap case: it is stateful and discontinuity-adjacent, but nothing about it

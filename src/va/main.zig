@@ -1,4 +1,4 @@
-//! The Verilog-A half of `vera` — the command-line driver.
+//! `vera` — the command-line driver.
 //!
 //! The engine is a library; this is the thin shell that makes its diagnostics
 //! reachable from a terminal. It exists because the diagnostics themselves
@@ -88,7 +88,7 @@ const usage_text =
     \\
 ;
 
-pub fn run(init: std.process.Init) !u8 {
+pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
@@ -238,6 +238,29 @@ pub fn run(init: std.process.Init) !u8 {
         try err.writeAll(usage_text);
         return 2;
     };
+
+    // These four used to route to a second frontend that shelled out to
+    // verilator/sv2v/ghdl. It was removed rather than kept limping: it had no IR
+    // of its own — the translator spliced Zig statements into a template as
+    // strings — so it shared nothing with this side but the device contract.
+    // Verilog returns through the shared IR, which is what a netlist backend
+    // wants anyway. Naming the removal beats letting the preprocessor report a
+    // syntax error on line 1 of a Verilog file.
+    //
+    // ONLY these four. Every other extension reached the Verilog-A frontend
+    // before this check existed and still does, `.vams` included — the old
+    // router sent anything it did not recognize here.
+    for ([_][]const u8{ ".v", ".sv", ".vhd", ".vhdl" }) |ext| {
+        if (!std.mem.eql(u8, std.fs.path.extension(in_path), ext)) continue;
+        try err.print(
+            "error: {s}: vera compiles Verilog-A; the Verilog frontend was removed\n",
+            .{in_path},
+        );
+        try err.writeAll(
+            "note: it returns through the shared IR, which is also what a netlist backend needs\n",
+        );
+        return 2;
+    }
 
     const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(64 * 1024 * 1024)) catch |e| {
         try err.print("error: cannot read `{s}`: {t}\n", .{ in_path, e });
