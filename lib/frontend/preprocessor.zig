@@ -337,6 +337,18 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
         // Annex E.2 after Table E.1: a `.MODEL` wrapper instantiates the
         // primitive its type names, so the primitive has to be declared first.
         const cards = try spice_cards.synthesize(arena, opts.spice_netlist);
+        if (cards.refused.len != 0) {
+            // E.1.2: a card inside a definition outside VerA's claimed SPICE
+            // subset is refused, not skipped (see `spice_cards`).
+            const netlist = try opts.bag.addFile("<spice netlist>", opts.spice_netlist);
+            for (cards.refused) |r| {
+                var b = opts.bag.build(.preprocess, .E0928, .{ .start = r.at, .end = r.at + r.len });
+                b.inFile(netlist);
+                b.msg("{s}", .{r.why});
+                try b.emit();
+            }
+            return error.PreprocessFailed;
+        }
         if (cards.modules != 0) {
             try pp.runFile(cards.text, "spice_netlist.vams", null);
             netlist_modules = cards.modules;
