@@ -38,6 +38,7 @@
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
 const Analysis = @import("../ir/analysis.zig");
+const UnitPlan = @import("unit_plan.zig");
 const Lower = @import("../ir/lower.zig");
 const proof = @import("../ir/proof.zig");
 const diag = @import("../diag.zig");
@@ -219,6 +220,10 @@ const F64Context = struct {
 const Gen = struct {
     /// Owns `out` and nothing else — see `generate`.
     gpa: std.mem.Allocator,
+    /// Per-unit state: the slice, use counts, inline decisions and slots for the
+    /// declaration being written. Carries deliberate cross-unit residue — see
+    /// unit_plan.zig's header before touching its reset.
+    plan: UnitPlan = undefined,
     /// The derived facts this emitter reads and never writes: CFG, dominators,
     /// loops, block pools, instruction columns, value types, aliases
     /// (ir/analysis.zig). Everything policy-shaped — what to name a unit, what
@@ -287,10 +292,6 @@ const Gen = struct {
     /// of a struct that does not exist yet; the §9.4 display unit — the only
     /// other body — slices from one target and reads the rest.
     emitting_common: bool = false,
-    /// Did `analyzeUnit` leave this body reading the core? Drives the one
-    /// `const c = <module>__common__core(...)` line at the top of it. Only the
-    /// §9.4 display unit can still set it.
-    uses_cache: bool = false,
     /// `<module>__common__core`, or empty for a model with no targets at all.
     common_name: []const u8 = "",
     common_mode: proof.FloatMode = .optimized,
@@ -321,35 +322,7 @@ const Gen = struct {
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
 
-    /// PER UNIT, indexed by loop header: does the unit being analyzed run this
-    /// loop itself, so its values must be recomputed rather than read from the
-    /// core? Reset and refilled by `analyzeUnit`.
-    loop_recompute: []bool = &.{},
 
-    // ---- per-unit scratch ----
-    needed: []bool = &.{},
-    /// The values `mark` reached for this unit, sorted ascending. Everything
-    /// per-unit iterates this instead of `0..nv` — a unit touches a small slice
-    /// of a 600 K-line model's values, and there are hundreds of units.
-    live: std.ArrayList(Mir.Value) = .empty,
-    eager_use: []u32 = &.{},
-    arm_use: []u32 = &.{},
-    inlined: []bool = &.{},
-    /// The slice fits in the entry block with no phi (the common case).
-    straight: bool = false,
-    /// Blocks this unit defines something in, and blocks it needs a phi of.
-    /// Per-block, per-unit; `planDeadBranches` is the only reader.
-    blk_work: []bool = &.{},
-    blk_phi: []bool = &.{},
-    /// A `branch` whose two arms are indistinguishable to THIS unit: it neither
-    /// defines anything nor copies a phi on either side before they reconverge.
-    /// The condition is then never marked live, never slotted and never
-    /// emitted — see `planDeadBranches`.
-    dead_branch: []bool = &.{},
-    /// Local slot of a needed value, or `none_u32`. UNIT-LOCAL — never a MIR
-    /// index (03-codegen.html#canonicalization).
-    slot: []u32 = &.{},
-    n_slots: u32 = 0,
     /// Where each slot's declaration goes — `probeBody` fills this, and it is
     /// only meaningful for the out-of-SSA path (`straight` declares everything
     /// at its definition by construction).
@@ -378,33 +351,19 @@ const Gen = struct {
         // guess up front beats a dozen doublings even on a gpa, where a regrow
         // can at least remap in place.
         try self.out.ensureTotalCapacity(self.gpa, self.mir.insts.len * 24 + 4096);
-        // Per-unit scratch, sized from the analysis. These used to be allocated
-        // by `buildValueTypes` and `buildCfg` purely because those knew `nv` and
-        // `nb`; a typing pass allocating eight scheduling tables was the kind of
-        // side job the ir/backend split exists to make visible.
-        const a = self.arena;
-        self.loop_recompute = try a.alloc(bool, self.an.nb);
-        @memset(self.loop_recompute, false);
-        // Cleared here once; every later unit clears only its own live set.
-        self.needed = try a.alloc(bool, self.an.nv);
-        self.eager_use = try a.alloc(u32, self.an.nv);
-        self.arm_use = try a.alloc(u32, self.an.nv);
-        self.inlined = try a.alloc(bool, self.an.nv);
-        self.slot = try a.alloc(u32, self.an.nv);
-        @memset(self.needed, false);
-        @memset(self.eager_use, 0);
-        @memset(self.arm_use, 0);
-        @memset(self.inlined, false);
-        @memset(self.slot, none_u32);
-        // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few
-        // KB, nothing like the `0..nv` per-unit sweeps that were deleted.
-        self.blk_work = try a.alloc(bool, self.an.nb);
-        self.blk_phi = try a.alloc(bool, self.an.nb);
-        self.dead_branch = try a.alloc(bool, self.an.nb);
+        // Per-unit scratch, owned by unit_plan.zig. `buildValueTypes` and
+        // `buildCfg` used to allocate these on the side purely because they knew
+        // `nv` and `nb` — a typing pass allocating eight scheduling tables was
+        // the kind of side job the split exists to make visible.
+        self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
         try self.buildUnits();
         try self.buildNames();
         try self.buildJobs();
         try self.planCommon();
+        // After `planCommon`, which is what fills them. Stable for the rest of
+        // the compilation; `cached` reads them for every unit.
+        self.plan.lo_idx = self.lo_idx;
+        self.plan.lo_vals = self.lo_vals;
     }
 
     // ---------------------------------------------------- the shared core ----
@@ -509,19 +468,6 @@ const Gen = struct {
     }
 
 
-    /// Is this Value read out of the common declaration's cache HERE?
-    /// False inside the common declaration itself, where it is computed.
-    inline fn cached(self: *const Gen, v: Mir.Value) bool {
-        if (self.emitting_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
-        // §5.9 A unit that re-materializes a loop must not read that loop's
-        // values out of the cache — see `analyzeUnit`'s fixpoint.
-        const blk = self.an.def_block[@intFromEnum(v)];
-        if (blk != none_u32) {
-            const l = self.an.loop_of[blk];
-            if (l != none_u32 and self.loop_recompute[l]) return false;
-        }
-        return true;
-    }
 
     fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         try self.out.print(self.gpa, fmt, args);
@@ -916,7 +862,7 @@ const Gen = struct {
     }
 
     fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
-        const c = self.foldConst(p.default, 0, true);
+        const c = self.an.foldConst(p.default, 0, true);
         return switch (want) {
             .real => try self.fmtF64(if (c) |k| k.f else 0.0),
             .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| @as(i64, @intFromFloat(@round(k.f))) else 0}),
@@ -930,63 +876,6 @@ const Gen = struct {
         };
     }
 
-    const Folded = struct { f: f64 };
-
-    /// §4.2 constant expression folding over MIR, used for parameter defaults
-    /// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
-    /// arguments. Anything touching an unknown or a call is not constant.
-    fn foldConst(self: *const Gen, v0: Mir.Value, depth: u32, resolve_params: bool) ?Folded {
-        if (depth > 32) return null;
-        const v = self.an.rv(v0);
-        switch (self.mir.valueDef(v)) {
-            .float_const => |x| return .{ .f = x },
-            .int_const => |x| return .{ .f = @floatFromInt(x) },
-            // Only a Model DEFAULT may look through a parameter: everywhere
-            // else the value is whatever the host overrode it with.
-            .param_ref => |p| return if (resolve_params)
-                self.foldConst(self.lower.params.items[p].default, depth + 1, true)
-            else
-                null,
-            .inst_result => |inst| {
-                const row = self.mir.instRow(inst);
-                switch (Mir.opClass(row.op)) {
-                    .unary => {
-                        const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
-                        return switch (row.op) {
-                            .fneg, .ineg => .{ .f = -a.f },
-                            .fabs, .iabs => .{ .f = @abs(a.f) },
-                            .sqrt => .{ .f = @sqrt(a.f) },
-                            .exp => .{ .f = @exp(a.f) },
-                            .ln => .{ .f = @log(a.f) },
-                            .log10 => .{ .f = @log10(a.f) },
-                            .floor => .{ .f = @floor(a.f) },
-                            .ceil => .{ .f = @ceil(a.f) },
-                            .fi_cast => .{ .f = @round(a.f) },
-                            .if_cast, .opt_barrier => .{ .f = a.f },
-                            else => null,
-                        };
-                    },
-                    .binary => {
-                        const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
-                        const b2 = self.foldConst(@enumFromInt(row.b), depth + 1, resolve_params) orelse return null;
-                        return switch (row.op) {
-                            .fadd, .iadd => .{ .f = a.f + b2.f },
-                            .fsub, .isub => .{ .f = a.f - b2.f },
-                            .fmul, .imul => .{ .f = a.f * b2.f },
-                            .fdiv => .{ .f = a.f / b2.f },
-                            .idiv => .{ .f = @trunc(a.f / b2.f) },
-                            .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
-                            .fmin, .imin => .{ .f = @min(a.f, b2.f) },
-                            .fmax, .imax => .{ .f = @max(a.f, b2.f) },
-                            else => null,
-                        };
-                    },
-                    else => return null,
-                }
-            },
-            else => return null,
-        }
-    }
 
     /// Rendered form of a float constant, memoized on its BIT PATTERN.
     ///
@@ -1093,7 +982,7 @@ const Gen = struct {
             // (`f64Expr`/`argF64`), because a struct field default is a comptime
             // value and a model card is not. Upgrade path: write it in
             // `initState`, which already takes a mutable `*Instance`.
-            const init = self.foldConst(self.an.rv(h.init), 0, true);
+            const init = self.an.foldConst(self.an.rv(h.init), 0, true);
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
                 try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
@@ -1298,7 +1187,7 @@ const Gen = struct {
             }
         }
         const pre = self.fatal;
-        try self.analyzeUnit(.undef); // `emitting_common` ⇒ the live-outs are the targets
+        try self.plan.analyze(.undef, self.emitting_common); // `emitting_common` ⇒ the live-outs are the targets
 
         const lo = self.out.items.len;
         try self.w(
@@ -1389,7 +1278,7 @@ const Gen = struct {
         self.uses_model = false;
         self.uses_inst = false;
         self.fatal = self.pre_fatal;
-        try self.analyzeUnit(target);
+        try self.plan.analyze(target, self.emitting_common);
 
         try self.w("/// {s}\n", .{comment});
         const at_fn = self.out.items.len;
@@ -1427,423 +1316,24 @@ const Gen = struct {
 
     // ---- slicing: what this unit actually has to compute -------------------
 
-    /// §5.9 Which loops must this unit run for itself?
-    ///
-    /// The common declaration runs a loop to completion and publishes ONE
-    /// snapshot of it. A unit with a private value inside the same loop
-    /// re-materializes the loop around that snapshot — and then reads its
-    /// counter and its exit condition from a cache already holding their FINAL
-    /// values, so the copy runs zero times. (`102_loops` printed
-    /// `for sums 1..5 got=0 want=15`.)
-    ///
-    /// The fix is per UNIT, not per model: a unit that runs a loop locally uses
-    /// only local values of it, and every other unit keeps reading the core.
-    /// Refusing to hoist loop values at all is sound too and costs 2-5x the
-    /// generated output on the models that have loops (hisimhv_va: 17 MB → 78 MB).
-    ///
-    /// Monotone — marking a loop only ADDS private values, which can only mark
-    /// more loops — so the fixpoint converges; in practice after one extra round.
-    fn markRecomputedLoops(self: *Gen) bool {
-        if (self.emitting_common) return false;
-        var grew = false;
-        for (self.live.items) |lv| {
-            const v = @intFromEnum(lv);
-            if (self.cached(lv)) continue; // computed by the core, not here
-            const blk = self.an.def_block[v];
-            if (blk == none_u32) continue;
-            const l = self.an.loop_of[blk];
-            if (l == none_u32 or self.loop_recompute[l]) continue;
-            self.loop_recompute[l] = true;
-            grew = true;
-        }
-        return grew;
-    }
 
-    fn analyzeUnit(self: *Gen, target: Mir.Value) Error!void {
-        @memset(self.loop_recompute, false);
-        while (true) {
-            try self.analyzeUnitOnce(target);
-            if (!self.markRecomputedLoops()) return;
-        }
-    }
 
-    fn analyzeUnitOnce(self: *Gen, target: Mir.Value) Error!void {
-        // Only the previous unit's live values can be dirty: every write below
-        // is guarded by `needed`, which only `mark` sets. Clearing the whole
-        // per-value tables per unit was O(units × values).
-        for (self.live.items) |lv| {
-            const i = @intFromEnum(lv);
-            self.needed[i] = false;
-            self.eager_use[i] = 0;
-            self.arm_use[i] = 0;
-            self.inlined[i] = false;
-            self.slot[i] = none_u32;
-        }
-        self.live.clearRetainingCapacity();
-        self.n_slots = 0;
 
-        var work: std.ArrayList(Mir.Value) = .empty;
-        defer work.deinit(self.arena);
-        // The common declaration has many targets — its whole live-out set —
-        // and `target` is ignored. One entry point, so the slicing, the use
-        // counting and the CFG reconstruction below are shared verbatim.
-        if (self.emitting_common) {
-            for (self.lo_vals) |v| try self.mark(&work, v);
-        } else {
-            try self.mark(&work, target);
-        }
-        try self.closeSlice(&work);
-        // Whether the unit needs the CFG at all is decided from the target's
-        // own slice; only then do the branch conditions become live (emitting a
-        // condition the unit never branches on would declare a local nothing
-        // reads — a hard error in Zig).
-        self.straight = self.isStraightLine();
-        if (!self.straight) {
-            // Only the branches this unit can OBSERVE. Hoisting the shared core
-            // leaves most units with a handful of private values scattered
-            // through a CFG of hundreds of blocks, and reconstructing all of it
-            // was, measured on `bsimsoi_va`, 754 of the 5 431 lines of every
-            // unit being `if (c) { break :B } else { break :B }`.
-            //
-            // Marking is monotone — a newly live condition can only ADD work to
-            // a block, which can only revive a branch — so this converges, and
-            // in practice after two rounds.
-            while (true) {
-                self.planDeadBranches();
-                var grew = false;
-                for (self.an.rpo) |bi| {
-                    const t = self.an.term[bi];
-                    if (t == .none) continue;
-                    if (self.mir.instOp(t) != .branch) continue;
-                    if (self.dead_branch[bi]) continue;
-                    const cond = self.an.rv(self.mir.instData(t).branch.cond);
-                    if (self.needed[@intFromEnum(cond)]) continue;
-                    try self.mark(&work, cond);
-                    grew = true;
-                }
-                try self.closeSlice(&work);
-                if (!grew) break;
-            }
-        }
-
-        // Ascending value order, so the two sweeps below see exactly the order a
-        // full 0..nv scan would. Values are unique ⇒ unstable sort is fine.
-        std.mem.sortUnstable(Mir.Value, self.live.items, {}, ltValue);
-
-        // Use counting: a `select` arm (§4.2.12) is a LAZY position.
-        self.countUses(target);
-
-        // Descending value order is a topological order for pure ops (a result
-        // is always created after its operands), so one sweep suffices.
-        var k = self.live.items.len;
-        while (k > 0) {
-            k -= 1;
-            const v = @intFromEnum(self.live.items[k]);
-            if (v < Mir.Value.first_dynamic) break; // sentinels sort first
-            if (self.eager_use[v] != 0 or self.arm_use[v] == 0) continue;
-            // A live-out is a FIELD of the returned cache, so it has to exist as
-            // a value; inlining it into its uses would render its expression at
-            // every one of them, including the `return`.
-            if (self.emitting_common and self.lo_idx[v] != none_u32) continue;
-            const def = self.mir.valueDef(@as(Mir.Value, @enumFromInt(v)));
-            if (def != .inst_result) continue;
-            const op = self.mir.instOp(def.inst_result);
-            // A `call` is never inlined: §4.5 operators and ch9 functions are
-            // evaluated once per step regardless of which arm is taken.
-            if (op == .call or op == .phi) continue;
-            self.inlined[v] = true;
-            self.reattribute(def.inst_result);
-        }
-
-        self.fuseSingleUse();
-
-        // Slots for everything that survives as a statement, in ascending value
-        // order — a UNIT-LOCAL dense index, never a MIR value index.
-        self.uses_cache = false;
-        for (self.live.items) |lv| {
-            const v = @intFromEnum(lv);
-            if (v < Mir.Value.first_dynamic or self.inlined[v]) continue;
-            // A cache read is a field access, as cheap as a parameter read, and
-            // it is valid anywhere in the body — it needs no statement and no
-            // slot. This is also what lets most units come out straight-line.
-            if (self.cached(lv)) {
-                self.uses_cache = true;
-                continue;
-            }
-            const def = self.mir.valueDef(lv);
-            if (def != .inst_result) continue;
-            // §4.5 an operator's INPUT is not a `mark`ed operand — `callArgIsValue`
-            // deliberately says no, so the §4.5.2 one-evaluation-per-step rule
-            // holds — but `emitOperator` still renders it, and outside the core
-            // that rendering is a cache read. Without this the §9.4 display unit
-            // (the one unit not folded into the core) emits `c.f1` with no `c`.
-            const d = self.mir.instData(def.inst_result);
-            if (d == .call and opNeedsInput(opKind(d.call.name)) and d.call.args.len != 0 and
-                self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
-            self.slot[v] = self.n_slots;
-            self.n_slots += 1;
-        }
-    }
-
-    /// Which `branch`es this unit cannot tell apart.
-    ///
-    /// A branch is dead here when both of its edges reduce to the SAME control
-    /// action once the empty blocks between are skipped, and neither copies a
-    /// phi on the way: the unit then computes the same values and reaches the
-    /// same place whichever arm runs, so the condition is unobservable and the
-    /// whole `if` can go. This is the per-unit half of the hoist — the shared
-    /// core takes the values, this takes the scaffolding that held them.
-    fn planDeadBranches(self: *Gen) void {
-        @memset(self.blk_work, false);
-        @memset(self.blk_phi, false);
-        for (self.live.items) |lv| {
-            const v = @intFromEnum(lv);
-            if (v < Mir.Value.first_dynamic) continue;
-            const db = self.an.def_block[v];
-            if (db == none_u32) continue;
-            // A phi marks its block EVEN WHEN CACHED. `blk_phi` means "the two
-            // arms disagree at this SSA join", which is a property of the CFG
-            // and the value — not of whether this unit happens to read the
-            // result out of the cache. Measured: with a `cached` skip here,
-            // `hisimhv_va` moved 4 000 of 128 000 residual entries.
-            const def = self.mir.valueDef(lv);
-            if (def == .inst_result and self.an.i_op[@intFromEnum(def.inst_result)] == .phi)
-                self.blk_phi[db] = true;
-            if (self.cached(lv)) continue; // a cache read has no block of its own
-            self.blk_work[db] = true;
-        }
-        @memset(self.dead_branch, false);
-        for (self.an.rpo) |bi| {
-            const t = self.an.term[bi];
-            if (t == .none or self.mir.instOp(t) != .branch) continue;
-            const d = self.mir.instData(t).branch;
-            const a = self.edgeAct(bi, @intFromEnum(d.then_block)) orelse continue;
-            const b2 = self.edgeAct(bi, @intFromEnum(d.else_block)) orelse continue;
-            if (std.meta.eql(a, b2)) self.dead_branch[bi] = true;
-        }
-    }
 
     /// What taking `from → to` reduces to for this unit, or null when the edge
     /// does something the unit can observe. Iterative, not recursive: the chain
     /// of empty blocks is bounded by nothing syntactic.
-    const Act = union(enum) { cont: u32, brk: u32 };
 
-    fn edgeAct(self: *const Gen, from0: u32, to0: u32) ?Act {
-        var from = from0;
-        var to = to0;
-        var hops: u32 = 0;
-        while (hops <= self.an.nb) : (hops += 1) {
-            // A phi in `to` means `emitEdge` copies a value on this edge, which
-            // is the one thing the two arms cannot share.
-            if (self.blk_phi[to]) return null;
-            if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };
-            if (self.an.is_merge[to]) return .{ .brk = to };
-            // Otherwise `to` is emitted INLINE here, so it has to be empty and
-            // end in a plain jump for the two arms to stay indistinguishable.
-            //
-            // §5.9 and NOT inside a loop, even when empty. "Empty of values
-            // this unit computes" is not "no effect" on a back edge: the arms
-            // decide which loop-carried phi values get copied on the way round,
-            // and `blk_phi` only guards a phi's OWN block — a loop-carried phi
-            // the unit reads from the cache leaves it clear, so the two arms are
-            // NOT interchangeable. It is the same hazard `markRecomputedLoops`
-            // re-materializes a loop for. Measured: without this clause,
-            // `hisimhv_va` moved 4 000 of 128 000 residual entries.
-            if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
-            if (self.an.mk_off[to + 1] != self.an.mk_off[to]) return null; // opens labels
-            const t = self.an.term[to];
-            if (t == .none or self.mir.instOp(t) != .jump) return null;
-            from = to;
-            to = @intFromEnum(self.mir.instData(t).jump.target);
-        }
-        return null;
-    }
 
-    fn ltValue(_: void, lhs: Mir.Value, rhs: Mir.Value) bool {
-        return @intFromEnum(lhs) < @intFromEnum(rhs);
-    }
 
-    fn closeSlice(self: *Gen, work: *std.ArrayList(Mir.Value)) Error!void {
-        while (work.pop()) |v| {
-            const def = self.mir.valueDef(v);
-            if (def != .inst_result) continue;
-            try self.markOperands(work, def.inst_result);
-        }
-    }
 
-    fn mark(self: *Gen, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!void {
-        const v = self.an.rv(v0);
-        if (self.needed[@intFromEnum(v)]) return;
-        self.needed[@intFromEnum(v)] = true;
-        try self.live.append(self.arena, v);
-        // A value read out of the common declaration's cache is a LEAF here:
-        // its operands were computed there, and pulling them in is exactly the
-        // duplication the hoist removes.
-        if (self.cached(v)) return;
-        try work.append(self.arena, v);
-    }
 
-    fn markOperands(self: *Gen, work: *std.ArrayList(Mir.Value), inst: Mir.Inst) Error!void {
-        switch (self.mir.instData(inst)) {
-            .unary => |d| try self.mark(work, d.operand),
-            .binary => |d| {
-                try self.mark(work, d.lhs);
-                if (!self.foldedExponent(d)) try self.mark(work, d.rhs);
-            },
-            .ternary => |d| {
-                try self.mark(work, d.cond);
-                try self.mark(work, d.then_val);
-                try self.mark(work, d.else_val);
-            },
-            .call => |d| for (d.args, 0..) |a, i| {
-                if (callArgIsValue(d.name, i, self.display)) try self.mark(work, a);
-            },
-            .phi => |d| {
-                var i: u32 = 0;
-                while (i < d.count) : (i += 1) try self.mark(work, self.mir.phiPair(inst, i).value);
-            },
-            .branch => |d| try self.mark(work, d.cond),
-            .jump => {},
-        }
-    }
 
-    fn countUses(self: *Gen, target: Mir.Value) void {
-        if (self.emitting_common) {
-            for (self.lo_vals) |v| self.eager_use[@intFromEnum(v)] += 1;
-        } else {
-            self.eager_use[@intFromEnum(self.an.rv(target))] += 1;
-        }
-        for (self.live.items) |lv| {
-            if (self.cached(lv)) continue; // a leaf: its operands are not here
-            const def = self.mir.valueDef(lv);
-            if (def != .inst_result) continue;
-            self.addUses(def.inst_result, false);
-        }
-        if (self.straight) return;
-        for (self.an.rpo) |bi| {
-            const t = self.an.term[bi];
-            if (t == .none) continue;
-            if (self.mir.instOp(t) != .branch) continue;
-            // A dead branch emits no `if`, so its condition has no use here. It
-            // must not be counted, or the value would be slotted and assigned
-            // with nothing reading it — which Zig rejects.
-            if (self.dead_branch[bi]) continue;
-            self.eager_use[@intFromEnum(self.an.rv(self.mir.instData(t).branch.cond))] += 1;
-        }
-    }
 
-    /// `undo = false` counts, `undo = true` moves this instruction's eager uses
-    /// into arm uses (called when the instruction itself became lazy).
-    fn addUses(self: *Gen, inst: Mir.Inst, undo: bool) void {
-        const bump = struct {
-            fn f(g: *Gen, v: Mir.Value, arm: bool, un: bool) void {
-                const i = @intFromEnum(g.an.rv(v));
-                if (!g.needed[i]) return;
-                if (un) {
-                    if (arm) return; // already an arm use
-                    if (g.eager_use[i] > 0) g.eager_use[i] -= 1;
-                    g.arm_use[i] += 1;
-                } else if (arm) {
-                    g.arm_use[i] += 1;
-                } else {
-                    g.eager_use[i] += 1;
-                }
-            }
-        }.f;
-        switch (self.mir.instData(inst)) {
-            .unary => |d| bump(self, d.operand, false, undo),
-            .binary => |d| {
-                bump(self, d.lhs, false, undo);
-                if (!self.foldedExponent(d)) bump(self, d.rhs, false, undo);
-            },
-            .ternary => |d| {
-                bump(self, d.cond, false, undo);
-                bump(self, d.then_val, true, undo);
-                bump(self, d.else_val, true, undo);
-            },
-            .call => |d| for (d.args, 0..) |a, i| {
-                if (callArgIsValue(d.name, i, self.display)) bump(self, a, false, undo);
-            },
-            .phi => |d| {
-                var i: u32 = 0;
-                while (i < d.count) : (i += 1) bump(self, self.mir.phiPair(inst, i).value, false, undo);
-            },
-            .branch, .jump => {},
-        }
-    }
 
-    fn reattribute(self: *Gen, inst: Mir.Inst) void {
-        self.addUses(inst, true);
-    }
 
-    /// A value read EXACTLY ONCE, by the very next statement of its own block,
-    /// is rendered inside that statement instead of getting a `const` of its
-    /// own. `renderValueRef` already falls through to `renderInst` for anything
-    /// without a slot, so clearing the slot IS the fusion — no new rendering
-    /// path, and chains collapse transitively because the fallthrough recurses.
-    ///
-    /// Measured on the emitted text before writing this: 14,930 of 16,242 `const
-    /// tN` temps (92%) have exactly one use, and 11,366 of those are consumed on
-    /// the very next line. That adjacency is the whole safety argument and the
-    /// reason this is not the same pass as the lazy-arm inlining above:
-    ///
-    ///   - ONE use, so the expression is rendered once — no duplicated work.
-    ///     `eager_use == 1 and arm_use == 0` is exactly that, since an arm use
-    ///     is re-rendered per arm by design.
-    ///   - the use is the NEXT statement in `stmt_pool`, so the computation
-    ///     moves later by one statement, inside the same block. Nothing can be
-    ///     hoisted into a loop body or sunk past a side effect, which is what a
-    ///     general "def dominates use" rule would have to reason about.
-    ///
-    /// So this must NOT call `reattribute`: the operands stay eager because the
-    /// expression is still evaluated exactly once, eagerly, one statement later.
-    fn fuseSingleUse(self: *Gen) void {
-        for (0..self.an.nb) |bi| {
-            const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
-            if (stmts.len < 2) continue;
-            for (stmts[0 .. stmts.len - 1], stmts[1..]) |inst, next| {
-                const v = @intFromEnum(self.an.rv(self.an.i_res[@intFromEnum(inst)]));
-                if (v < Mir.Value.first_dynamic) continue;
-                if (!self.needed[v] or self.inlined[v]) continue;
-                if (self.eager_use[v] != 1 or self.arm_use[v] != 0) continue;
-                // A live-out is a FIELD of the returned cache (same reason as
-                // the sweep above), and a cached value renders as `c.fN`
-                // wherever it appears, so neither is ours to fuse.
-                if (self.emitting_common and self.lo_idx[v] != none_u32) continue;
-                if (self.cached(@enumFromInt(v))) continue;
-                const op = self.mir.instOp(inst);
-                // `call` is an operator/function evaluated once per step (§4.5),
-                // `phi` is materialised as a `var` — neither is an expression.
-                if (op == .call or op == .phi) continue;
-                if (!self.eagerlyUses(next, @enumFromInt(v))) continue;
-                self.inlined[v] = true;
-            }
-        }
-    }
 
-    /// Does `inst` read `v` in an EAGER position? Mirrors `addUses`, including
-    /// its two exclusions — a folded constant exponent is never materialised,
-    /// and a non-value call argument is not an operand — so that the counts this
-    /// is checked against and the answer here cannot drift apart. A `ternary`'s
-    /// arms are lazy positions, which is `arm_use`, not this.
-    fn eagerlyUses(self: *const Gen, inst: Mir.Inst, v: Mir.Value) bool {
-        return switch (self.mir.instData(inst)) {
-            .unary => |d| self.an.rv(d.operand) == v,
-            .binary => |d| self.an.rv(d.lhs) == v or
-                (!self.foldedExponent(d) and self.an.rv(d.rhs) == v),
-            .ternary => |d| self.an.rv(d.cond) == v,
-            .call => |d| for (d.args, 0..) |a, i| {
-                if (callArgIsValue(d.name, i, self.display) and self.an.rv(a) == v) break true;
-            } else false,
-            else => false,
-        };
-    }
 
-    /// §4.3.1 `pow(x, k)` with a constant exponent goes through the scalar's
-    /// `pow(S, f64)`, so the exponent is never materialised as a value.
-    fn foldedExponent(self: *const Gen, d: anytype) bool {
-        return d.op == .pow and self.foldConst(d.rhs, 0, true) != null;
-    }
 
     // ---- body emission ------------------------------------------------------
 
@@ -1871,7 +1361,7 @@ const Gen = struct {
     /// or an element of its type's hoist array. The ONE place that knows the
     /// difference, so declaration and use can never drift apart.
     fn writeSlotRef(self: *Gen, i: usize) Error!void {
-        const s = self.slot[i];
+        const s = self.plan.slot[i];
         const h = if (s < self.hoist_idx.items.len) self.hoist_idx.items[s] else none_u32;
         if (h == none_u32) return self.b("t{d}", .{s});
         return self.b("{s}[{d}]", .{ hoistArray(self.an.vty[i]), h });
@@ -1885,28 +1375,6 @@ const Gen = struct {
         };
     }
 
-    /// True when the slice lives entirely in the entry block and uses no phi —
-    /// the common case (no `if` on the path to this contribution), and worth a
-    /// special case because it emits flat, readable `const` code.
-    ///
-    /// Iterates `live`, not `0..nv`: it is called once per unit, and `live` is
-    /// the small set `mark` actually reached — the same reason every other
-    /// per-unit sweep iterates it.
-    fn isStraightLine(self: *const Gen) bool {
-        for (self.live.items) |lv| {
-            const v = @intFromEnum(lv);
-            if (v < Mir.Value.first_dynamic) continue;
-            // A cache read is a field of a value the body already holds, so it
-            // has no block of its own — which is what collapses most units to a
-            // flat body once the shared core is hoisted out of them.
-            if (self.cached(lv)) continue;
-            const db = self.an.def_block[v];
-            if (db != none_u32 and db != 0) return false;
-            const def = self.mir.valueDef(lv);
-            if (def == .inst_result and self.mir.instOp(def.inst_result) == .phi) return false;
-        }
-        return true;
-    }
 
     /// Where one slot's declaration ends up, and the evidence for it.
     ///
@@ -1980,7 +1448,7 @@ const Gen = struct {
     /// effects (`fatal` is set-once and reproduces the same message).
     fn probeBody(self: *Gen, target: Mir.Value) Error!void {
         self.place.clearRetainingCapacity();
-        try self.place.appendNTimes(self.arena, .{}, self.n_slots);
+        try self.place.appendNTimes(self.arena, .{}, self.plan.n_slots);
         self.sc_end.clearRetainingCapacity();
         self.sc_open.clearRetainingCapacity();
 
@@ -2008,19 +1476,19 @@ const Gen = struct {
         // straight-line path returns early, and `probeBody` dry-runs the whole
         // body — so clearing anywhere later is too late.
         self.hoist_idx.clearRetainingCapacity();
-        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.n_slots);
+        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
 
         // One call, at the top of the body, so the shared core is evaluated
         // exactly once per unit — the same number of times it is evaluated
         // today, when every unit inlines a copy of it.
-        if (self.uses_cache) {
+        if (self.plan.uses_cache) {
             self.uses_x = true;
             self.uses_model = true;
             self.uses_inst = true;
             try self.ind(1);
             try self.b("const c = core(S, x, model, inst);\n", .{});
         }
-        if (self.straight) {
+        if (self.plan.straight) {
             try self.emitBlockInsts(0, 1, true);
             try self.emitReturn(1, target);
             return;
@@ -2070,17 +1538,17 @@ const Gen = struct {
         // explicit store after the declaration instead.
         var seeded: std.ArrayList(Mir.Value) = .empty;
         defer seeded.deinit(self.arena);
-        for (self.live.items) |lv| {
+        for (self.plan.live.items) |lv| {
             const v = @intFromEnum(lv);
-            if (self.slot[v] == none_u32) continue;
-            const p = self.place.items[self.slot[v]];
+            if (self.plan.slot[v] == none_u32) continue;
+            const p = self.place.items[self.plan.slot[v]];
             if (p.at_def) continue;
             // Never assigned and never read: `mark` kept the value alive but
             // the emitted tree reaches neither end of it. Declaring it would be
             // an unused local.
             if (p.defs == 0 and p.uses == 0) continue;
             const ty = @intFromEnum(self.an.vty[v]);
-            self.hoist_idx.items[self.slot[v]] = n_hoist[ty];
+            self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
             n_hoist[ty] += 1;
             const returned = if (self.emitting_common) self.lo_idx[v] != none_u32 else lv == ret;
             if (returned) try seeded.append(self.arena, lv);
@@ -2125,14 +1593,14 @@ const Gen = struct {
     fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
         for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
             const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-            if (!self.needed[i] or self.slot[i] == none_u32) continue;
-            self.probeDef(self.slot[i], true);
+            if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
+            self.probeDef(self.plan.slot[i], true);
             // `or` short-circuits, so the straight-line path (`decl`, which runs
             // without a probe) never touches `place`.
-            const at_def = decl or self.place.items[self.slot[i]].at_def;
+            const at_def = decl or self.place.items[self.plan.slot[i]].at_def;
             try self.ind(depth);
             if (at_def) {
-                try self.b("const t{d}: {s} = ", .{ self.slot[i], zigTy(self.an.vty[i]) });
+                try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], zigTy(self.an.vty[i]) });
             } else {
                 try self.writeSlotRef(i);
                 try self.b(" = ", .{});
@@ -2227,7 +1695,7 @@ const Gen = struct {
             .branch => |d| {
                 // `planDeadBranches`: both arms reconverge with nothing this
                 // unit can observe in between, so emit the common action once.
-                if (self.dead_branch[bi])
+                if (self.plan.dead_branch[bi])
                     return self.emitEdge(bi, @intFromEnum(d.then_block), depth, target);
                 try self.ind(depth);
                 try self.b("if (", .{});
@@ -2297,7 +1765,7 @@ const Gen = struct {
             if (par) {
                 try self.b("const c{d}: {s} = ", .{ k, zigTy(self.an.vty[i]) });
             } else {
-                self.probeDef(self.slot[i], false);
+                self.probeDef(self.plan.slot[i], false);
                 try self.writeSlotRef(i);
                 try self.b(" = ", .{});
             }
@@ -2310,7 +1778,7 @@ const Gen = struct {
         for (phis) |inst| {
             if (!self.slotted(inst)) continue;
             try self.ind(d2);
-            self.probeDef(self.slot[@intFromEnum(self.an.i_res[@intFromEnum(inst)])], false);
+            self.probeDef(self.plan.slot[@intFromEnum(self.an.i_res[@intFromEnum(inst)])], false);
             try self.writeSlotRef(@intFromEnum(self.an.i_res[@intFromEnum(inst)]));
             try self.b(" = c{d};\n", .{k});
             k += 1;
@@ -2324,7 +1792,7 @@ const Gen = struct {
     /// A pooled phi this unit actually materializes into a local slot.
     fn slotted(self: *const Gen, inst: Mir.Inst) bool {
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-        return self.needed[i] and self.slot[i] != none_u32;
+        return self.plan.needed[i] and self.plan.slot[i] != none_u32;
     }
 
 
@@ -2397,9 +1865,9 @@ const Gen = struct {
         const i = @intFromEnum(v);
         // Hoisted: computed once by the common declaration, read here out of the
         // cache the body opened with (03-codegen.html#hoisting).
-        if (i < self.an.nv and self.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
-        if (i < self.an.nv and self.slot[i] != none_u32) {
-            self.probeUse(self.slot[i]);
+        if (i < self.an.nv and self.plan.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
+        if (i < self.an.nv and self.plan.slot[i] != none_u32) {
+            self.probeUse(self.plan.slot[i]);
             try self.writeSlotRef(i);
             return;
         }
@@ -2514,7 +1982,7 @@ const Gen = struct {
                 // The scalar interface only has pow(S, f64); a constant exponent
                 // (the overwhelming case) uses it, anything else goes through
                 // exp(y·ln x).
-                if (self.foldConst(b2, 0, true)) |k| {
+                if (self.an.foldConst(b2, 0, true)) |k| {
                     try self.b("(", .{});
                     try self.renderVal(a, .real);
                     try self.b(").pow({s})", .{try self.fmtF64(k.f)});
@@ -2723,7 +2191,7 @@ const Gen = struct {
     // parameter's DEFAULT, because the host overrides parameters at run time.
     fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
-        if (self.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
+        if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
         const v = self.an.rv(v0);
         switch (self.mir.valueDef(v)) {
             .param_ref => |p| {
@@ -2822,7 +2290,7 @@ const Gen = struct {
     /// unfoldable one is a source error, not a direction; it degrades to
     /// "either", which is the LRM's own default.
     fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value) Error![]const u8 {
-        const dir: i64 = if (self.foldConst(if (args.len > 1) args[1] else .zero, 0, true)) |c|
+        const dir: i64 = if (self.an.foldConst(if (args.len > 1) args[1] else .zero, 0, true)) |c|
             @intFromFloat(c.f)
         else
             0;
@@ -2840,7 +2308,7 @@ const Gen = struct {
     /// §5.10 the `held_vars` index a `$held_*` call carries as its only
     /// argument. Always a literal `Lower` emitted, so the fold cannot fail.
     fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
-        const c = self.foldConst(if (args.len != 0) args[0] else .zero, 0, false) orelse return 0;
+        const c = self.an.foldConst(if (args.len != 0) args[0] else .zero, 0, false) orelse return 0;
         const i: usize = @intFromFloat(c.f);
         return @min(i, self.held_names.len -| 1);
     }
@@ -2858,7 +2326,7 @@ const Gen = struct {
 
         // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
         if (std.mem.eql(u8, name, "ddx")) {
-            const u = if (d.args.len > 1) self.foldConst(d.args[1], 0, true) else null;
+            const u = if (d.args.len > 1) self.an.foldConst(d.args[1], 0, true) else null;
             try self.b("S.con((", .{});
             try self.renderVal(if (d.args.len > 0) d.args[0] else .f_zero, .real);
             try self.b(").ddxAt({d}))", .{if (u) |x| @as(i64, @intFromFloat(x.f)) else 0});
@@ -3561,7 +3029,7 @@ const Gen = struct {
             if (dv.next >= args.len) return planErr(
                 "LRM 4.5.12: the sampling period T of a zi_* filter is mandatory",
             );
-            if (self.foldConst(args[dv.next], 0, true)) |c| {
+            if (self.an.foldConst(args[dv.next], 0, true)) |c| {
                 if (!(c.f > 0.0)) return planErr(
                     "LRM 4.5.12: the sampling period T of a zi_* filter shall be positive",
                 );
@@ -3619,7 +3087,7 @@ const Gen = struct {
             var all_zero = true;
             for (elems, 0..) |e, i| {
                 poly[i] = try self.f64Expr(e);
-                const c = self.foldConst(e, 0, true);
+                const c = self.an.foldConst(e, 0, true);
                 if (c == null or c.?.f != 0.0) all_zero = false;
             }
             if (is_den and all_zero)
@@ -3641,11 +3109,11 @@ const Gen = struct {
             // The conjugate PAIRING is structural — it decides how many
             // sections exist and of what degree — so the imaginary part has to
             // be known here. The real part may stay a runtime parameter.
-            const im = self.foldConst(elems[2 * k + 1], 0, true) orelse
+            const im = self.an.foldConst(elems[2 * k + 1], 0, true) orelse
                 return "LRM 4.5.11/4.5.12: the imaginary part of a filter root must be a constant expression " ++
                     "(the conjugate pairing decides the section structure)";
             const re = try self.f64Expr(elems[2 * k]);
-            const re_c = self.foldConst(elems[2 * k], 0, true);
+            const re_c = self.an.foldConst(elems[2 * k], 0, true);
             if (im.f == 0.0) {
                 // "If a root is zero, then the term associated with it is
                 // implemented as s, rather than (1 − s/r)". In z⁻¹ the LRM's
@@ -3703,7 +3171,7 @@ const Gen = struct {
     fn conjugateOf(self: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
         for (used, 0..) |u, j| {
             if (u) continue;
-            const jm = self.foldConst(elems[2 * j + 1], 0, true) orelse continue;
+            const jm = self.an.foldConst(elems[2 * j + 1], 0, true) orelse continue;
             if (jm.f != -im) continue;
             // `f64Const`, not `f64Expr`: this is a SPECULATIVE render used only
             // to pair roots, so a root that does not resolve is "not the
@@ -4248,7 +3716,7 @@ fn mathOpByName(name: []const u8) ?Mir.Opcode {
 /// exception is the display family under `display == .emit`: there the operands
 /// are the entire point, and forgetting them here renders every one of them as
 /// an undefined leaf — which is what `S.con(0.0)` in a print means.
-fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
+pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
     if (opKind(name) != .none) return false;
     const eq = std.mem.eql;
     if (display == .emit and Lower.isDisplayTask(name)) return true;
@@ -4294,7 +3762,7 @@ fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
 /// Stateful analog operators (§4.5) and monitored events (§5.10.3). MUST agree
 /// with `naming.isStatefulAnalogOp`: that predicate decides which calls get a
 /// unit, and this one decides which get Instance state — they are the same set.
-const OpKind = enum {
+pub const OpKind = enum {
     none,
     ddt, // §4.5.3
     idt, // §4.5.4
@@ -4312,7 +3780,7 @@ const OpKind = enum {
     discontinuity, // §9.17.1
 };
 
-fn opKind(name: []const u8) OpKind {
+pub fn opKind(name: []const u8) OpKind {
     const map = std.StaticStringMap(OpKind).initComptime(.{
         .{ "ddt", .ddt },
         .{ "idt", .idt },
@@ -4355,7 +3823,7 @@ fn opHasState(k: OpKind) bool {
 /// leave the unit claiming a parameter (or a cache) nothing references.
 /// `emitOperator` renders `in` exactly for these; `planSlots` has to agree,
 /// which is why the set lives here and not in either of them.
-fn opNeedsInput(k: OpKind) bool {
+pub fn opNeedsInput(k: OpKind) bool {
     return switch (k) {
         .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace => true,
         else => false,
