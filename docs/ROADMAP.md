@@ -312,7 +312,6 @@ native compilation backlog separately from passing interpreter behavior.
 | AMS 4.6.4 | `real w = white_noise(...)` as a declaration initializer exports no noise generator. The assignment form does. | `ch04_expressions/COVERAGE.md:108` |
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |
 | AMS 5.10, 3.3 | A string written inside an event body is not held. `lib/ir/lower/param.zig` says nothing can observe it; `$strobe` does. | `a03_SPEC.md:186-189` |
-| AMS 6.6.3 | Same-named instances in two generate blocks collide (E0362). | `ch06_hierarchy/COVERAGE.md:191-193` |
 | AMS 6.9.2 | A paramset override that reads a generate block's localparam is refused (E0914). | `ch06_hierarchy/COVERAGE.md:195-197` |
 | AMS 7.3.2 | The LRM's `a2d` example with an undriven `dnet` is refused (E0315, E0369). | `ch07_mixed_signal/COVERAGE.md:155-159` |
 | AMS 9.15 | `$simparam$str("cwd")` and `("analysis_name")` return `""`. | `a10_SPEC.md:71-73,210-215` |
