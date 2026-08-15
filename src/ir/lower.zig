@@ -12,11 +12,11 @@
 //! mir.zig. proof.zig / naming.zig / codegen.zig already spell it that way.
 
 const std = @import("std");
-const Ast = @import("ast.zig");
+const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
-const Lexer = @import("lexer.zig");
-const diag = @import("diag.zig");
+const Lexer = @import("../frontend/lexer.zig");
+const diag = @import("../diag.zig");
 const assert = std.debug.assert;
 
 pub const Lower = @This(); // so `Lower.Lower` also resolves
@@ -3302,8 +3302,8 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 // through an arena, so a leaked byte fails the test.
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("preprocessor.zig");
-const Parser = @import("parser.zig");
+const Preprocessor = @import("../frontend/preprocessor.zig");
+const Parser = @import("../frontend/parser.zig");
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,

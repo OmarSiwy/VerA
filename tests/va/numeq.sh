@@ -15,7 +15,7 @@
 # join guard. Neither changes any diagnostic and both change the physics.
 #
 # Getting a reference binary (any commit or any saved tree):
-#   zig build-exe -OReleaseFast -Mroot=src/va/main.zig -femit-bin=/tmp/vera-ref
+#   zig build-exe -OReleaseFast -Mroot=src/cli.zig -femit-bin=/tmp/vera-ref
 #
 # A model that fails to compile under EITHER binary is skipped, not failed —
 # `bsim4va` and `hicumL2_va` are expected to fail (see TODO.md), and several
@@ -30,7 +30,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 new="$work/vera-new"
-zig build-exe -OReleaseFast -Mroot="$here/src/va/main.zig" -femit-bin="$new" >/dev/null || exit 1
+zig build-exe -OReleaseFast -Mroot="$here/src/cli.zig" -femit-bin="$new" >/dev/null || exit 1
 
 list=("$@"); [ ${#list[@]} -eq 0 ] && { list=(); for f in "$models"/*.va; do list+=("$(basename "$f" .va)"); done; }
 

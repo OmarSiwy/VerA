@@ -6,18 +6,28 @@
 //! the engine hangs off.
 //!
 //! Architecture: a Verilog-A source becomes a loadable device through a
-//! fixed, index-based, cache-friendly pipeline.
-//! Frontend is shared by all targets; only the backend differs.
+//! fixed, index-based, cache-friendly pipeline. The directories ARE the
+//! pipeline — a file's position in it is its position on disk:
 //!
 //!   .va text
-//!     → preprocessor.zig   (class 1)  text → text
-//!     → lexer.zig/token.zig (class 1) text → tokens (SoA {tag,start})
-//!     → parser.zig/ast.zig  (class 2) tokens → AST (SoA, u32 handles)
-//!     → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR (SoA SSA)
-//!     → proof.zig           (class 6) MIR → per-unit finiteness verdict
-//!     → codegen.zig+naming  (classes 4,5,8,10) MIR → device.zig (per-unit decls)
-//!     → orchestrator.zig    (ch.2/5) device.zig → .so (+ GPU kernels)
-//!     runtime: eval_batch.zig (ch.4) SIMD device evaluation
+//!  frontend/  → preprocessor.zig  (class 1)  text → text
+//!             → lexer.zig/token.zig (class 1) text → tokens (SoA {tag,start})
+//!             → parser.zig/ast.zig  (class 2) tokens → AST (SoA, u32 handles)
+//!  ir/        → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR
+//!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
+//!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
+//!             → orchestrator.zig   (ch.2/5) device.zig → .so (+ GPU kernels)
+//!             runtime: eval_batch.zig (ch.4) SIMD device evaluation
+//!
+//! `frontend/` and `ir/` are shared by all targets; only `backend/` differs. The
+//! split exists so a second frontend lowering into this MIR, or a second backend
+//! reading it, is a sibling file rather than a rewrite: `ir/` never imports
+//! `backend/`, and the compiler enforces that because there is no such import.
+//!
+//! Two files are reachable by neither import graph:
+//!   - `backend/filter_kernels.zig` is `@embedFile`d by codegen (§4.5.11/12
+//!     kernels emitted verbatim into a device), so it must stay ADJACENT to it.
+//!   - `ir/ifconv.zig` is a complete MIR→MIR pass that nothing calls yet.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
@@ -43,22 +53,22 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const token = @import("token.zig");
-pub const Preprocessor = @import("preprocessor.zig");
-pub const Lexer = @import("lexer.zig");
-pub const Ast = @import("ast.zig");
-pub const Parser = @import("parser.zig");
-pub const Mir = @import("mir.zig");
-pub const Ssa = @import("ssa.zig");
-pub const Lower = @import("lower.zig");
-pub const proof = @import("proof.zig");
+pub const token = @import("frontend/token.zig");
+pub const Preprocessor = @import("frontend/preprocessor.zig");
+pub const Lexer = @import("frontend/lexer.zig");
+pub const Ast = @import("frontend/ast.zig");
+pub const Parser = @import("frontend/parser.zig");
+pub const Mir = @import("ir/mir.zig");
+pub const Ssa = @import("ir/ssa.zig");
+pub const Lower = @import("ir/lower.zig");
+pub const proof = @import("ir/proof.zig");
 pub const diag = @import("diag.zig");
 pub const diag_code = @import("diag_code.zig");
-pub const naming = @import("naming.zig");
-pub const codegen = @import("codegen.zig");
-pub const eval_batch = @import("eval_batch.zig");
-pub const orchestrator = @import("orchestrator.zig");
-pub const tb = @import("tb.zig");
+pub const naming = @import("backend/naming.zig");
+pub const codegen = @import("backend/codegen.zig");
+pub const eval_batch = @import("backend/eval_batch.zig");
+pub const orchestrator = @import("backend/orchestrator.zig");
+pub const tb = @import("backend/tb.zig");
 
 /// The three build targets. Frontend is identical for all three; the backend
 /// and float behavior differ.
@@ -102,7 +112,7 @@ pub const Error = codegen.Error || error{
 // ---------------------------------------------------------------------------
 //
 // There is no diagnostic type here any more. Every stage reports into one
-// `diag.Bag` (src/diag.zig) keyed by a stable code from src/diag_code.zig, and
+// `diag.Bag` (diag.zig) keyed by a stable code from diag_code.zig, and
 // the driver's only job is to create it, hand it to each stage, and detach it
 // from the compilation arena on the way out.
 //

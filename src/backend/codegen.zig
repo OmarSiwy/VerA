@@ -36,10 +36,10 @@
 //! trivial-phi removal) never gets one — every Value is `resolveAlias`d first.
 
 const std = @import("std");
-const Mir = @import("mir.zig");
-const Lower = @import("lower.zig");
-const proof = @import("proof.zig");
-const diag = @import("diag.zig");
+const Mir = @import("../ir/mir.zig");
+const Lower = @import("../ir/lower.zig");
+const proof = @import("../ir/proof.zig");
+const diag = @import("../diag.zig");
 const naming = @import("naming.zig");
 const assert = std.debug.assert;
 
@@ -112,7 +112,7 @@ pub const Output = struct {
 /// source that asked to is told so (W0850) rather than silently obeyed.
 ///
 /// `.emit` is the other product VerA makes out of the same .va: a runnable
-/// testbench, where the whole point is the text. See `--emit-exe` and src/tb.zig.
+/// testbench, where the whole point is the text. See `--emit-exe` and tb.zig.
 pub const Display = enum { drop, emit };
 
 /// Knobs that change WHAT is generated (not how fast). One field today; it is a
@@ -4757,7 +4757,7 @@ fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
     };
 }
 
-fn tyOfParam(t: @import("ast.zig").Type) VTy {
+fn tyOfParam(t: @import("../frontend/ast.zig").Type) VTy {
     return switch (t) {
         .real, .unspecified => .real,
         .integer => .int,
@@ -5239,10 +5239,10 @@ const rscalar_txt =
 // Tests
 // ---------------------------------------------------------------------------
 
-const Ast = @import("ast.zig");
-const Preprocessor = @import("preprocessor.zig");
-const Lexer = @import("lexer.zig");
-const Parser = @import("parser.zig");
+const Ast = @import("../frontend/ast.zig");
+const Preprocessor = @import("../frontend/preprocessor.zig");
+const Lexer = @import("../frontend/lexer.zig");
+const Parser = @import("../frontend/parser.zig");
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -5260,7 +5260,7 @@ const Harness = struct {
             .bag = undefined,
         };
         const arena = out.arena_state.allocator();
-        // One diagnostic bag threaded through every stage (src/diag.zig).
+        // One diagnostic bag threaded through every stage (diag.zig).
         out.bag = diag.Bag.init(arena);
         const text = try Preprocessor.process(arena, src, .{ .bag = &out.bag });
         const toks = try Lexer.Lexer.tokenize(arena, text);

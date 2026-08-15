@@ -39,7 +39,7 @@ trap 'rm -rf "$exe" "$exe.o" "$scratch"' EXIT
 mode="${1:-check}"
 runs="${2:-1}"
 
-zig build-exe -OReleaseFast -Mroot="$here/src/va/main.zig" -femit-bin="$exe" >/dev/null
+zig build-exe -OReleaseFast -Mroot="$here/src/cli.zig" -femit-bin="$exe" >/dev/null
 
 # A model that FAILS to compile is recorded as an empty `NAME.fail` marker
 # rather than skipped, so the comparison catches a change that silently starts

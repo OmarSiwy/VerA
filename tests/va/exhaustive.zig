@@ -9,7 +9,7 @@
 //!   tests/fixtures/exhaustive/NNN_name.expected.txt   its transcript
 //!
 //! For each `.va` the runner compiles with §9.4 display tasks ENABLED, generates
-//! the operating-point driver from the file's own `//!` lines (src/tb.zig),
+//! the operating-point driver from the file's own `//!` lines (src/backend/tb.zig),
 //! builds one native binary, runs it, and compares the transcript byte for byte.
 //!
 //! WHY THIS IS AN ORACLE AND A SNAPSHOT IS NOT. The deleted `.expected.zig`
