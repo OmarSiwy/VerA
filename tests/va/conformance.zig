@@ -1,6 +1,6 @@
 //! Conformance runner — the behavioral oracle.
 //!
-//! Walks `tests/fixtures/`, compiles every `.va` through `fastvaf.compileSource`
+//! Walks `tests/fixtures/`, compiles every `.va` through `vera.compileSource`
 //! and checks it against the fixture's verdict:
 //!
 //!   no `<stem>.expected-error.txt`  ⇒ MUST compile and generate device.zig
@@ -16,7 +16,7 @@
 //! reproducible and diffable.
 
 const std = @import("std");
-const fastvaf = @import("fastvaf");
+const vera = @import("vera");
 const options = @import("conformance_options");
 
 const Io = std.Io;
@@ -27,7 +27,7 @@ const Failure = struct {
     /// `@errorName` of the returned error, or a synthetic name for the two
     /// failure modes that are not Zig errors (see `compileFixture`).
     error_name: []const u8,
-    diags: fastvaf.diag.Bag,
+    diags: vera.diag.Bag,
     /// Non-null only for `GeneratedCompileError`; borrowed from the result arena.
     generated: ?[]const u8 = null,
 };
@@ -122,11 +122,11 @@ fn runFixture(
 ///   `GeneratedCompileError` — codegen deliberately emitted `@compileError`.
 fn compileFixture(gpa: std.mem.Allocator, io: Io, path: []const u8, source: []const u8) !Attempt {
     _ = io;
-    var diags: fastvaf.diag.Bag = .init(gpa);
+    var diags: vera.diag.Bag = .init(gpa);
     const dir = std.fs.path.dirname(path) orelse ".";
     // `.debug` (not `.lint`) so stage 6 runs: some fixtures are rejected by
     // codegen emitting `@compileError`, which `.lint` would never see.
-    var result = fastvaf.compileSourceOpts(gpa, source, .debug, .{
+    var result = vera.compileSourceOpts(gpa, source, .debug, .{
         .file_name = path,
         .include_dirs = &.{dir},
         .diags = &diags,
@@ -249,11 +249,11 @@ fn verifyRejected(path: []const u8, attempt: Attempt, patterns: []const u8, w: *
 /// Codes are the preferred form: they are stable, so the prose of a diagnostic
 /// can be improved without touching 293 fixture files, and they pin WHICH rule
 /// fired rather than how it happened to be worded.
-fn asCode(pattern: []const u8) ?fastvaf.diag.Code {
+fn asCode(pattern: []const u8) ?vera.diag.Code {
     if (pattern.len != 5) return null;
     if (pattern[0] != 'E' and pattern[0] != 'W') return null;
     for (pattern[1..]) |c| if (c < '0' or c > '9') return null;
-    return std.meta.stringToEnum(fastvaf.diag.Code, pattern);
+    return std.meta.stringToEnum(vera.diag.Code, pattern);
 }
 
 fn failureContains(f: Failure, pattern: []const u8) bool {
@@ -282,12 +282,12 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
     // `Info.title` — a fixture pinning the old prose still matches. Notes are
     // searched with it, in the same pass: they trail their own diagnostic in
     // the bundle now, so there is no all-notes pool to walk separately.
-    var nbuf: [fastvaf.diag.max_children]fastvaf.diag.Note = undefined;
+    var nbuf: [vera.diag.max_children]vera.diag.Note = undefined;
     for (diags) |mi| {
         const d = f.diags.get(mi);
         if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
         if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
-        if (std.mem.indexOf(u8, fastvaf.diag.info(d.code).title, pattern) != null) return true;
+        if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
         for (f.diags.notes(d, &nbuf)) |n| {
             if (std.mem.indexOf(u8, n.text, pattern) != null) return true;
         }
@@ -300,7 +300,7 @@ fn printDiags(f: Failure, w: *Io.Writer) !void {
     // would see — snippet, carets, notes and all. Colour is off: this output
     // is read from a log as often as from a terminal.
     var bag = f.diags;
-    fastvaf.diag.render(&bag, w, .{ .explain_hint = false, .summary = false }) catch {};
+    vera.diag.render(&bag, w, .{ .explain_hint = false, .summary = false }) catch {};
     // A `@compileError` carries the whole reason; without it "GeneratedCompileError"
     // says nothing about WHICH construct codegen refused.
     if (f.generated) |g| {

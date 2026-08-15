@@ -25,5 +25,5 @@ Atomic expansion inventory: `06_voltage_source.va` (potential source), `07_curre
 
 - `11_potential_signal_flow.va` uses an actual potential-only discipline, `input`/`output` ports, its declared access function, and a potential source.
 - `12_flow_signal_flow.va` uses an actual flow-only discipline, `input`/`output` ports, its declared access function, and a flow source.
-- `13_mixed_conservative_signal_flow.va` mixes a potential-only signal-flow port with a conservative electrical port in one behavioral model; its generated-code failure records FastVAF's present custom-access ABI boundary.
+- `13_mixed_conservative_signal_flow.va` mixes a potential-only signal-flow port with a conservative electrical port in one behavioral model; its generated-code failure records VerA's present custom-access ABI boundary.
 - `14_signal_flow_illegal_quantity.va` snapshots rejection of attempting a flow contribution on a potential-only signal-flow discipline, covering 1.3.5's declared-quantity rule.

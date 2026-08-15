@@ -2,7 +2,7 @@
 
 Source: docs/VAMS-LRM/ch8-scheduling.html. Every HTML section id is listed literally. Device dumps cover equations and event metadata; global queues, engine arbitration and time advancement belong to the simulator host.
 
-Parser-boundary disclosure: FastVAF rejects digital `initial`/`always` module items
+Parser-boundary disclosure: VerA rejects digital `initial`/`always` module items
 before entering their statement bodies. Consequently the blocking-timing,
 assign/deassign, force/release, and nonblocking fixtures preserve the normative source
 forms but do not validate queue-region semantics. The mixed analog/digital initial-order

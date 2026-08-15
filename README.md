@@ -70,11 +70,11 @@ device, are the two directions of one seam.
 ## Embedding
 
 ```zig
-const vera = b.dependency("vera", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("va", vera.module("va"));            // Verilog-A engine
-exe.root_module.addImport("contract", vera.module("contract")); // the ABI
+const dep = b.dependency("vera", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("vera", dep.module("vera"));         // the Verilog-A engine
+exe.root_module.addImport("contract", dep.module("contract")); // the ABI
 // the CLI wants contract as a PATH, not a module:
-run.addFileArg(vera.path("tools/contract.zig"));
+run.addFileArg(dep.path("tools/contract.zig"));
 ```
 
 `contract` lives in `tools/`, not `src/`, because nothing in the compiler imports

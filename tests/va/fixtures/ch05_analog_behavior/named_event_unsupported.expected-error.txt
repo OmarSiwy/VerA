@@ -9,7 +9,7 @@
 #     supported in Verilog-A" excludes DIGITAL events, not this one — C.2 lists
 #     "a set of events to control when certain code is simulated" as a
 #     Verilog-A feature. So the fixture's own header comment ("Named events need
-#     the digital scheduler") is wrong; FastVAF simply does not implement them,
+#     the digital scheduler") is wrong; VerA simply does not implement them,
 #     and says so rather than accepting `@(tick)` as a guard that is silently
 #     never true.
 #

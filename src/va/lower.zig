@@ -2247,7 +2247,7 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
             degree = c.asInt();
         }
         // §9.17.1 "A special form of the $discontinuity task, $discontinuity(-1),
-        // is used with the $limit() function". FastVAF leaves the limiting
+        // is used with the $limit() function". VerA leaves the limiting
         // ALGORITHM to the host (codegen renders `$limit` as its own argument),
         // so there is no -1 announcement to make and dropping it here is exact —
         // it is not a substitute value, it is the whole content of the request.
@@ -2261,7 +2261,7 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
     return false;
 }
 
-/// ch9 functions FastVAF deliberately does not implement. Rejecting by exact
+/// ch9 functions VerA deliberately does not implement. Rejecting by exact
 /// name (rather than silently returning 0) is what the fixtures pin.
 fn isRejectedSysFunc(name: []const u8) bool {
     const rejected = [_][]const u8{

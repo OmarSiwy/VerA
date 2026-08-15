@@ -160,7 +160,7 @@ snapshot would have frozen the wrong answer:
 ## Known gaps
 
 - **An analog operator under a RUNTIME condition is accepted, and wrong.**
-  §5.8 requires the condition be an analysis-or-constant expression; FastVAF
+  §5.8 requires the condition be an analysis-or-constant expression; VerA
   does not diagnose the violation and feeds the operator `0` on every step its
   branch was off. Every fixture here is therefore written without such a guard.
   Full write-up and repro in [../TODO.md](../TODO.md).

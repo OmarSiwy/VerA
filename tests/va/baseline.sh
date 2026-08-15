@@ -7,7 +7,7 @@
 # the identical byte stream — which is the only thing that catches a reordered
 # emit, a lost back-patch, or a nondeterministic thread interleaving.
 #
-#   tests/va/baseline.sh gen           # record  -> /tmp/fastvaf-baseline/
+#   tests/va/baseline.sh gen           # record  -> /tmp/vera-baseline/
 #   tests/va/baseline.sh check         # compare against the recording
 #   tests/va/baseline.sh check 20      # compare 20x (races show 1-in-N, not 1-in-1)
 #
@@ -16,21 +16,21 @@
 set -euo pipefail
 
 # Repo root. `/..` from tests/va was right when this lived at
-# modules/FastVAF/tests/; 436cf42 promoted the tree, so it needs one more level.
+# modules/VerA/tests/; 436cf42 promoted the tree, so it needs one more level.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The 38 foundry models live in the HOST repo, not this one — this is the only
 # oracle here with an external input. Overridable, and SKIPPED rather than failed
 # when the host is not checked out beside us, the way the old Verilog suite
 # skipped on a missing verilator.
 models="${VERA_MODELS:-$here/../ARPice/src/devices/models}"
-out="${BASELINE_DIR:-/tmp/fastvaf-baseline}"
+out="${BASELINE_DIR:-/tmp/vera-baseline}"
 if [ ! -d "$models" ]; then
     echo "baseline.sh: no models at $models — set VERA_MODELS. Skipping."
     exit 0
 fi
 # Per-invocation, so two agents/shells checking concurrently do not overwrite
 # each other's binary mid-run.
-exe="$(mktemp -u /tmp/fastvaf-oracle.XXXXXX)"
+exe="$(mktemp -u /tmp/vera-oracle.XXXXXX)"
 scratch="$(mktemp -d)"
 # One trap for the whole script: bash REPLACES a trap rather than adding to it,
 # so a second `trap ... EXIT` further down would silently leak the 8 MB binary.

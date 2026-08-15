@@ -31,5 +31,5 @@ Fixture-name audit: `01_analog_only_device.va`, `02_named_branch.va`, `03_parame
 ## Subset boundary completion
 
 - `17_case_inequality.va` covers the Annex C permitted `!==` operator independently of `===`.
-- `18_no_discipline_analog_net.va` exercises an analog behavioral port with no discipline declaration and snapshots FastVAF's current implicit-electrical acceptance gap.
+- `18_no_discipline_analog_net.va` exercises an analog behavioral port with no discipline declaration and snapshots VerA's current implicit-electrical acceptance gap.
 - `19_digital_event_trigger.va` contains both a digital event declaration and `->` trigger inside an otherwise analog module and pins the Annex C rejection boundary.

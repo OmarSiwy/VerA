@@ -1,7 +1,7 @@
 # Chapter 9 coverage
 
 Source: `docs/VAMS-LRM/ch9-system.html`. A fixture with an
-`expected-error.txt` exercises a construct that FastVAF must reject rather
+`expected-error.txt` exercises a construct that VerA must reject rather
 than silently compile. Other fixtures freeze the generated Zig, including
 the backend's documented simulator-free placeholders.
 
@@ -17,7 +17,7 @@ the backend's documented simulator-free placeholders.
 | `s9.4.4` | `%m`: `06_display_formats.va`; hierarchy formatting is runtime-only. |
 | `s9.4.5` | `%s`: `06_display_formats.va`. |
 | `s9.4.6` | Display call sites are present in `01`-`05`, but the iterative-solve emission rule is not executable in the simulator-free fixture harness. |
-| `s9.4.7` | Digital-context `%r`: syntax in `03_display_write.va`; digital simulation is outside FastVAF's Verilog-A backend. |
+| `s9.4.7` | Digital-context `%r`: syntax in `03_display_write.va`; digital simulation is outside VerA's Verilog-A backend. |
 | `s9.5` | File-I/O family: `07`-`11`. |
 | `s9.5.1` | `$fopen` descriptor forms and `$fclose`: `07_file_open_close.va`. |
 | `s9.5.1.1` | Reopen behavior across analyses is simulator runtime policy; call forms are covered by `07`. |
@@ -37,13 +37,13 @@ the backend's documented simulator-free placeholders.
 | `s9.7.1` | `$finish` optional diagnostic level: `12_finish_stop.va`. |
 | `s9.7.2` | `$stop` optional diagnostic level: `12_finish_stop.va`. |
 | `s9.7.3` | `$fatal`, `$error`, `$warning`, `$info`: `13_severity_tasks.va`. |
-| `s9.8` | PLA tasks are expressly not extended to analog context; non-applicable to FastVAF device code. |
+| `s9.8` | PLA tasks are expressly not extended to analog context; non-applicable to VerA device code. |
 | `s9.9` | Stochastic queue tasks are expressly not extended to analog context; non-applicable. |
 | `s9.10` | `$abstime`: `14_abstime.va`. |
 | `s9.11` | Conversion function call forms: `15_conversion_functions.va`; the current backend emits placeholders for conversion functions. |
 | `s9.12` | `$test$plusargs` and `$value$plusargs`: `16_plusargs.va`; invocation options are unavailable to compiled devices. |
 | `s9.13` | Every named random/distribution call family has an atomic source fixture in `32`-`35` and `115`-`130`; the paramset-only type-string spellings are retained in `132`-`133`. These fixtures assert exact lowering or diagnostics, never distribution quality. |
-| `s9.13.1` | `$random` is covered both without a seed (`115_random_no_seed_unsupported.va`) and with an integer-variable seed (`32_random_unsupported.va`). `$arandom` is covered without a seed (`116_arandom_no_seed_unsupported.va`), with an integer variable (`33_arandom_unsupported.va`), integer parameter (`117_arandom_parameter_seed_unsupported.va`), and signed decimal constant (`118_arandom_negative_seed_unsupported.va`). `132_arandom_type_string_paramset_unsupported.va` contains the paramset-only `"instance"` form, but FastVAF rejects the enclosing paramset before parsing or lowering the call. Supported seed mutation, repeatable streams, and Monte-Carlo scoping are therefore not claimed. |
+| `s9.13.1` | `$random` is covered both without a seed (`115_random_no_seed_unsupported.va`) and with an integer-variable seed (`32_random_unsupported.va`). `$arandom` is covered without a seed (`116_arandom_no_seed_unsupported.va`), with an integer variable (`33_arandom_unsupported.va`), integer parameter (`117_arandom_parameter_seed_unsupported.va`), and signed decimal constant (`118_arandom_negative_seed_unsupported.va`). `132_arandom_type_string_paramset_unsupported.va` contains the paramset-only `"instance"` form, but VerA rejects the enclosing paramset before parsing or lowering the call. Supported seed mutation, repeatable streams, and Monte-Carlo scoping are therefore not claimed. |
 | `s9.13.2` | All seven integer names are atomic: `$dist_normal` in `34_distribution_unsupported.va` plus `$dist_uniform`, `$dist_exponential`, `$dist_poisson`, `$dist_chi_square`, `$dist_t`, and `$dist_erlang` in `119`-`124`; each is rejected by its exact function name. All seven real names are atomic: `$rdist_uniform` in `35_real_distribution_unsupported.va`, `$rdist_normal` in `125_rdist_normal_unsupported.va`, and the remaining five in `126`-`130`. The first two are rejected; `126`-`130` currently lower the call result to zero. `133_rdist_type_string_paramset_unsupported.va` contains a negative constant seed and the paramset-only `"global"` form, but stops at the unsupported paramset boundary. Argument-domain rules, seed updates, Monte-Carlo scope, and returned distributions are not exercised. |
 | `s9.13.3` | No fixture claims the specified probability algorithms: the functions either receive an exact unsupported diagnostic, stop at the paramset boundary, or produce a zero-placeholder Zig snapshot. |
 | `s9.14` | Unary, trigonometric, binary, min/max/abs, and 2023 math forms: `17`-`20`. |
@@ -81,7 +81,7 @@ Known implementation gaps deliberately frozen by expected Zig dumps include
 placeholder-zero conversion, plusarg, `ln1p`/`expm1`, string-simparam,
 hierarchical placement, alias, and driver-access calls. Binding detection is
 also approximate as described for `s9.19`. A dump fixture is not a claim that
-FastVAF implements the simulator-side semantic effect, and the driver-access
+VerA implements the simulator-side semantic effect, and the driver-access
 dumps are specifically nonconforming context-acceptance snapshots.
 
 ## Literal fixture inventory

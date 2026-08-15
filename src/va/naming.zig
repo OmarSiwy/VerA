@@ -1,18 +1,17 @@
 //! Codegen support — stable declaration naming + the source-unit tracker.
-//! This is the ONE Zig-like algorithm FastVAF owns. No LRM section; it exists to
+//! This is the ONE Zig-like algorithm VerA owns. No LRM section; it exists to
 //! make the external `zig -fincremental` skip unchanged units.
 //!
 //! Why it matters: `zig` re-analyzes at per-declaration granularity and tracks
-//! declarations by NAME across edits (TrackedInst + src_hash). If FastVAF emits
+//! declarations by NAME across edits (TrackedInst + src_hash). If VerA emits
 //! a stable name for an unchanged unit, `zig` skips it. If names churn (the old
-//! `v{d}` scheme), everything re-Semas. FastVAF's only job is stable names +
+//! `v{d}` scheme), everything re-Semas. VerA's only job is stable names +
 //! stable order; `zig` does the actual incremental work.
 //!
 //! DOD: names are built into a reused scratch buffer; no per-call allocation
 //! beyond the returned owned slice.
 //!
-//! ABSOLUTE RULE: nothing
-//! that feeds a name may be a MIR index. Not `@intFromEnum(Mir.Value)`, not
+//! ABSOLUTE RULE: nothing that feeds a name may be a MIR index. Not `@intFromEnum(Mir.Value)`, not
 //! `Mir.Inst`, not a `node_order` index. Only stable leaf identities — module
 //! name, node NAMES, source identifiers — plus, where two units genuinely
 //! collide, a group-local ordinal. Inserting one line in the .va renumbers
@@ -56,8 +55,7 @@ pub const Role = enum {
     display,
     /// Not a source unit: the declaration codegen hoists the subexpressions
     /// SHARED by several units into, so the common core is emitted once instead
-    /// of once per unit. It is
-    /// deliberately NOT produced by `enumerateUnits` — `proof.Verdict`'s
+    /// of once per unit. It is deliberately NOT produced by `enumerateUnits` — `proof.Verdict`'s
     /// `unit_modes` is indexed by the canonical unit order below, and a phantom
     /// entry there would desynchronize the two. codegen builds its name
     /// directly with `unitName`.

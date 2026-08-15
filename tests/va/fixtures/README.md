@@ -30,7 +30,7 @@ zig build exhaustive -- --bless   # (re)write them, then READ the diff
 ```
 
 A transcript is an oracle in a way a compiler snapshot is not. The deleted
-`.expected.zig` files were FastVAF's own output fed back to it, so a wrong
+`.expected.zig` files were VerA's own output fed back to it, so a wrong
 answer was frozen as correct. Here the fixture carries the expectation:
 
 ```

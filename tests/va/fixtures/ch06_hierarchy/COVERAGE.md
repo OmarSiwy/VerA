@@ -2,7 +2,7 @@
 
 Source: docs/VAMS-LRM/ch6-hierarchy.html. Every HTML section id is listed literally below.
 
-Boundary disclosure: FastVAF currently lowers `$mfactor` to the constant `1.0` and
+Boundary disclosure: VerA currently lowers `$mfactor` to the constant `1.0` and
 emits no instance multiplicity field or automatic flow/probe/noise scaling. The five
 `mfactor_*` sources therefore snapshot the currently *unscaled* affected constructs;
 propagation stops at unsupported hierarchy. `instance_array_unsupported.va` stops at
@@ -52,6 +52,6 @@ hierarchical semantic checks.
 | `s6.9.1` | analog block concatenation | `multiple_analog_blocks.va` |
 | `s6.9.2` | elaboration/paramsets | `paramset_unsupported.va` |
 | `s6.9.3` | elaboration/connectmodules | Chapter 7 diagnostics |
-| `s6.9.4` | elaboration order | `generate_loop.va`; full hierarchy order outside FastVAF device codegen |
+| `s6.9.4` | elaboration order | `generate_loop.va`; full hierarchy order outside VerA device codegen |
 | generate-region restrictions | non-nesting and directly-in-module restrictions | `generate_nested_region_rejected.va`, `generate_region.va` |
 | atomic expansion | individual direction, dependency, generation and geometry rules | `input_port.va`, `output_port.va`, `inout_port.va`, `localparam_dependency.va`, `three_dependent_parameters.va`, `generate_loop_descending.va`, `generate_if_true.va`, `generate_if_false.va`, `generate_two_loops.va`, `geometric_system_parameters.va` |

@@ -6,11 +6,11 @@ HTML section-ID audit: `s2-1` `s2-2` `s2-3` `s2-4` `s2-5` `s2-6` `s2-6-1` `s2-6-
 
 | LRM section/rule | Fixture or disposition |
 |---|---|
-| 2.1–2.3 free-format tokens and whitespace separators | `01_whitespace_comments.va` uses spaces, tabs, and newlines; `27_form_feed_whitespace.va` contains literal form feeds and records FastVAF's current lexer rejection |
+| 2.1–2.3 free-format tokens and whitespace separators | `01_whitespace_comments.va` uses spaces, tabs, and newlines; `27_form_feed_whitespace.va` contains literal form feeds and records VerA's current lexer rejection |
 | 2.4 `//` and `/*…*/`; `//` inside a block comment; unclosed block | `01_whitespace_comments.va`, `12_unclosed_comment.va` |
 | 2.5 single/double/triple-character operators | token/operator semantics are exercised exhaustively in `ch04_expressions` |
 | 2.6.1 decimal, binary, octal, hexadecimal, sizes, underscores | `04_integer_bases.va`, `35_uppercase_bases_hex.va`, `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va` |
-| 2.6.1 x/z/? four-state digits | `05_xz_integer_rejected.va` records FastVAF's explicit two-state-codegen rejection; padding/truncation is therefore not representable in the device contract |
+| 2.6.1 x/z/? four-state digits | `05_xz_integer_rejected.va` records VerA's explicit two-state-codegen rejection; padding/truncation is therefore not representable in the device contract |
 | 2.6.2 decimal/scientific real notation | `06_real_notation.va`, `34_real_underscores.va` |
 | 2.6.2 all scale symbols T/G/M/K/k/m/u/n/p/f/a | `07_si_scale_factors.va` |
 | 2.7 strings, whitespace, `\n`, `\t`, `\\`, `\"`, octal escapes | `08_string_escapes.va` |
@@ -34,6 +34,6 @@ Boundary and negative lexical fixtures: `13_nested_comment_rejected.va` (non-nes
 - `31_analog_statement_attributes.va`, `32_function_call_attribute.va`, and `33_conditional_attribute.va` place attributes on analog statements, after an analog function name, and after `?`; current parser diagnostics are pinned.
 - `34_real_underscores.va` covers underscores in decimal, fractional, and exponent-adjacent real notation.
 - `35_uppercase_bases_hex.va` covers uppercase base letters and mixed-case hexadecimal digits.
-- `36_based_number_digit_whitespace.va` covers the normative whitespace boundary between base format and digit token and records FastVAF's current rejection.
+- `36_based_number_digit_whitespace.va` covers the normative whitespace boundary between base format and digit token and records VerA's current rejection.
 - `37_macro_based_number_tokens.va` expands separate macros for the base-format and digit tokens of a based number and records the current preprocessor/parser boundary.
-- `38_string_line_continuation_rejected.va` is `bsim4va.va:3658` verbatim: a `$strobe` string ending its line with `\`. 2.7 requires a literal be "contained on a single line" and Table 2-2 lists no `\<newline>` escape, so the continuation — an IEEE 1800 5.9 SystemVerilog addition that Verilog-AMS did not inherit from IEEE 1364-2005 — is rejected as E0138. Normative, not a snapshot: it pins that FastVAF does *not* adopt the vendor extension.
+- `38_string_line_continuation_rejected.va` is `bsim4va.va:3658` verbatim: a `$strobe` string ending its line with `\`. 2.7 requires a literal be "contained on a single line" and Table 2-2 lists no `\<newline>` escape, so the continuation — an IEEE 1800 5.9 SystemVerilog addition that Verilog-AMS did not inherit from IEEE 1364-2005 — is rejected as E0138. Normative, not a snapshot: it pins that VerA does *not* adopt the vendor extension.

@@ -1,7 +1,7 @@
 # Chapter 11 coverage
 
 Source: `docs/VAMS-LRM/ch11-vpi.html`. VPI is a simulator-host C API,
-not Verilog-A syntax and not part of FastVAF's generated-device contract.
+not Verilog-A syntax and not part of VerA's generated-device contract.
 Consequently the exhaustive inventory below marks C-only rules as
 non-codegen-applicable. `09` and `10` prove that C VPI routine names are not
 silently treated as Verilog-A functions. `01`-`08` supply representative HDL
@@ -22,7 +22,7 @@ objects and system-task/function call sites that a host VPI would inspect.
 | `s11-5-1` | Object/class enclosure legend; informative, non-codegen. |
 | `s11-5-2` | Property access legend; host C API, non-codegen. |
 | `s11-5-3` | Relationship traversal legend; host C API, non-codegen. |
-| `s11-6` | Object-model inventory; representative source objects are `01`-`08`; FastVAF exposes no VPI model. |
+| `s11-6` | Object-model inventory; representative source objects are `01`-`08`; VerA exposes no VPI model. |
 | `s11-6-1` | Module properties/relations: `01_module_port_node.va`. |
 | `s11-6-2` | Standard nature/discipline source objects and their access functions are isolated by `11_nature_discipline_objects.va`; VPI properties remain host metadata. |
 | `s11-6-3` | Function and IO declarations: `12_function_io_objects.va`; module scope is also present in every valid fixture. |
@@ -31,9 +31,9 @@ objects and system-task/function call sites that a host VPI would inspect.
 | `s11-6-6` | Branch objects: `14_branch_object.va`. |
 | `s11-6-7` | Potential/flow quantity objects and probes: `15_quantity_objects.va`. |
 | `s11-6-8` | Net objects and relations: `01_module_port_node.va`. |
-| `s11-6-9` | Reg objects are discrete Verilog objects outside FastVAF's Verilog-A device subset. |
-| `s11-6-10` | Real/integer variables: `16_variable_objects.va`; named events are not supported by FastVAF. |
-| `s11-6-11` | Verilog memory object model is discrete-host metadata; no FastVAF VPI layer. |
+| `s11-6-9` | Reg objects are discrete Verilog objects outside VerA's Verilog-A device subset. |
+| `s11-6-10` | Real/integer variables: `16_variable_objects.va`; named events are not supported by VerA. |
+| `s11-6-11` | Verilog memory object model is discrete-host metadata; no VerA VPI layer. |
 | `s11-6-12` | Parameter objects: `17_parameter_object.va`; specparam/defparam/param-assign VPI relations are not exposed. |
 | `s11-6-13` | Primitive/terminal object model is a host elaboration concern; no generated-device VPI. |
 | `s11-6-14` | UDP definitions/table entries are discrete Verilog and non-applicable. |
