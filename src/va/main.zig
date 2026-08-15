@@ -1,14 +1,14 @@
-//! `fastvaf` — the command-line driver.
+//! The Verilog-A half of `vera` — the command-line driver.
 //!
 //! The engine is a library; this is the thin shell that makes its diagnostics
 //! reachable from a terminal. It exists because the diagnostics themselves
-//! advertise it: every rendered message ends with "run `fastvaf --explain
+//! advertise it: every rendered message ends with "run `vera --explain
 //! EXXXX`", and `--allow=`/`--deny=` are the documented way to tune the
 //! finiteness warning (W0650).
 //!
 //! usage:
-//!   fastvaf [options] FILE.va      compile (or lint) one Verilog-A source
-//!   fastvaf --explain CODE         print the catalogue entry for a code
+//!   vera [options] FILE.va      compile (or lint) one Verilog-A source
+//!   vera --explain CODE         print the catalogue entry for a code
 //!
 //! It is also the BUILD-TIME generator: `--emit-zig -o OUT.zig` is what a
 //! dependent build step runs once per `models/NAME.va`, which is why the
@@ -63,8 +63,8 @@ const diag = fastvaf.diag;
 const Io = std.Io;
 
 const usage_text =
-    \\usage: fastvaf [options] FILE.va
-    \\       fastvaf --explain CODE
+    \\usage: vera [options] FILE.va
+    \\       vera --explain CODE
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
     \\  --emit-zig              generate the device; to stdout unless -o is given
@@ -88,7 +88,7 @@ const usage_text =
     \\
 ;
 
-pub fn main(init: std.process.Init) !u8 {
+pub fn run(init: std.process.Init) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
