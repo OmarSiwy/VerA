@@ -8,7 +8,7 @@
 //! Transformation: MIR + Lower side tables → per-unit float-mode verdict, OR a
 //! compile error for a provably-unsafe domain violation.
 //!
-//! CONTRACT (see docs/architecture/03-codegen.html#finiteness):
+//! CONTRACT:
 //!   - Runs on EVERY target (lint/debug/release). Debug and Release accept the
 //!     exact same set of models — no mode-specific semantics. Nothing in this
 //!     file reads a target.
@@ -79,7 +79,7 @@
 //!
 //!   1. INPUTS ARE FINITE. Solver unknowns (§4.4 probes) and model-card
 //!      parameters (§3.4) are finite IEEE doubles — that is the host artifact
-//!      contract (docs/architecture/05-build-artifact.html). Being *finite* is
+//!      contract. Being *finite* is
 //!      separate from being *bounded*: a probe is finite with an unknown
 //!      magnitude, so its interval is (-inf, inf) but its `finite` bit is set.
 //!      A parameter whose declared range explicitly ADMITS `inf` (`from [0:inf]`)

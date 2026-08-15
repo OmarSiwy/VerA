@@ -1,6 +1,6 @@
 //! Runtime device evaluation — the SIMD inner loop. LRM §8.3 (analog simulation
 //! cycle, nodal analysis). This is the ONE place explicit @Vector lives; the
-//! frontend stays scalar (small data). See docs/architecture/04-runtime-simd.html.
+//! frontend stays scalar (small data).
 //!
 //! Transformation (per Newton iteration): SoA instance params + node voltages
 //! → residual currents + Jacobian entries, scattered into the sparse matrix.

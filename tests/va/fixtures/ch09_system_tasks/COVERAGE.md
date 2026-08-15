@@ -1,6 +1,6 @@
 # Chapter 9 coverage
 
-Source: `modules/FastVAF/docs/ch9-system.html`. A fixture with an
+Source: `docs/VAMS-LRM/ch9-system.html`. A fixture with an
 `expected-error.txt` exercises a construct that FastVAF must reject rather
 than silently compile. Other fixtures freeze the generated Zig, including
 the backend's documented simulator-free placeholders.

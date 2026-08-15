@@ -1,6 +1,6 @@
 # Chapter 10 coverage
 
-Source: `modules/FastVAF/docs/ch10-directives.html`.
+Source: `docs/VAMS-LRM/ch10-directives.html`.
 
 | Documentation id | Rules and fixtures |
 |---|---|

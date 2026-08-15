@@ -1,6 +1,6 @@
 # Annex F — discipline resolution methods
 
-Source: docs/annex-f-resolution.html. Every HTML section id is listed literally. Discipline resolution traverses an elaborated signal hierarchy, while FastVAF emits a single flattened analog device; source-level declarations are tested and traversal cases are explicit diagnostics.
+Source: docs/VAMS-LRM/annex-f-resolution.html. Every HTML section id is listed literally. Discipline resolution traverses an elaborated signal hierarchy, while FastVAF emits a single flattened analog device; source-level declarations are tested and traversal cases are explicit diagnostics.
 
 Boundary disclosure: `conflicting_declarations.va` is a well-formed exact snapshot of
 FastVAF's missing conflict diagnostic. Out-of-context dotted declarations stop at a

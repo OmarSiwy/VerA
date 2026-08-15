@@ -12,8 +12,8 @@
 //!   - The FIRST LETTER carries the severity: `E` = error, `W` = warning.
 //!     `diag.severityOf` reads it from `@tagName`, so there is no second table
 //!     to keep in sync.
-//!   - The NUMBER's leading digits are the SPEC-MAP class
-//!     (docs/architecture/SPEC-MAP.md), so a code says which stage owns it:
+//!   - The NUMBER's leading digits are the engine's stage class, so a code says
+//!     which stage owns it:
 //!       01xx class 1  lexical + preprocessing      (preprocessor.zig, lexer.zig)
 //!       02xx class 2  syntax / annex A             (parser.zig)
 //!       03xx class 3  types, disciplines, decls    (lower.zig)

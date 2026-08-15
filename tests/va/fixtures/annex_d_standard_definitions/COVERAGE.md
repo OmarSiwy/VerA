@@ -1,6 +1,6 @@
 # Annex D coverage — standard definitions
 
-Source: `docs/annex-d-stddefs.html`. Annex D is normative and publishes the
+Source: `docs/VAMS-LRM/annex-d-stddefs.html`. Annex D is normative and publishes the
 verbatim `disciplines.vams`, `constants.vams`, and `driver_access.vams`
 packages. These fixtures isolate their literal identifiers, macro families,
 override branches, selector precedence, nature relationships, and values.

@@ -4,7 +4,7 @@ Two suites, answering two different questions.
 
 ## `zig build conformance` — does it compile, and is it rejected correctly?
 
-One directory per document in `modules/FastVAF/docs`, plus `combined/` for rules
+One directory per document in `docs/VAMS-LRM/`, plus `combined/` for rules
 that only become meaningful when features interact. Each directory's
 `COVERAGE.md` maps its source document section by section to fixtures.
 

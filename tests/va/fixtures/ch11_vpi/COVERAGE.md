@@ -1,6 +1,6 @@
 # Chapter 11 coverage
 
-Source: `modules/FastVAF/docs/ch11-vpi.html`. VPI is a simulator-host C API,
+Source: `docs/VAMS-LRM/ch11-vpi.html`. VPI is a simulator-host C API,
 not Verilog-A syntax and not part of FastVAF's generated-device contract.
 Consequently the exhaustive inventory below marks C-only rules as
 non-codegen-applicable. `09` and `10` prove that C VPI routine names are not

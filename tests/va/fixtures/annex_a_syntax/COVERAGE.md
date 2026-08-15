@@ -1,6 +1,6 @@
 # Annex A coverage
 
-Source: `docs/annex-a-syntax.html`, read as the normative grammar. Fixtures target the productions that can occur in an analog-only, contract-shaped device; the rest are explicitly classified below.
+Source: `docs/VAMS-LRM/annex-a-syntax.html`, read as the normative grammar. Fixtures target the productions that can occur in an analog-only, contract-shaped device; the rest are explicitly classified below.
 
 HTML section-ID audit: `a-1` `a-1-1` `a-1-2` `a-1-3` `a-1-4` `a-1-5` `a-1-6` `a-1-7` `a-1-8` `a-1-9` `a-2` `a-2-1` `a-2-1-1` `a-2-1-2` `a-2-1-3` `a-2-2` `a-2-2-1` `a-2-2-2` `a-2-2-3` `a-2-3` `a-2-4` `a-2-5` `a-2-6` `a-2-7` `a-2-8` `a-3` `a-3-1` `a-3-2` `a-3-3` `a-3-4` `a-4` `a-4-1` `a-4-2` `a-5` `a-5-1` `a-5-2` `a-5-3` `a-5-4` `a-6` `a-6-1` `a-6-2` `a-6-3` `a-6-4` `a-6-5` `a-6-6` `a-6-7` `a-6-8` `a-6-9` `a-6-10` `a-7` `a-7-1` `a-7-2` `a-7-3` `a-7-4` `a-7-5` `a-7-5-1` `a-7-5-2` `a-7-5-3` `a-8` `a-8-1` `a-8-2` `a-8-3` `a-8-4` `a-8-5` `a-8-6` `a-8-7` `a-8-8` `a-8-9` `a-9` `a-9-1` `a-9-2` `a-9-3` `a-9-4` `a-10`.
 

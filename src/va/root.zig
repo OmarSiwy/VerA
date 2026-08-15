@@ -5,7 +5,7 @@
 //! sequence them, plus the ownership root (`CompileResult`) that every arena in
 //! the engine hangs off.
 //!
-//! Architecture (see docs/architecture/): a Verilog-A source becomes a
+//! Architecture: a Verilog-A source becomes a
 //! loadable device through a fixed, index-based, cache-friendly pipeline.
 //! Frontend is shared by all targets; only the backend differs.
 //!
@@ -61,7 +61,7 @@ pub const orchestrator = @import("orchestrator.zig");
 pub const tb = @import("tb.zig");
 
 /// The three build targets. Frontend is identical for all three; the backend
-/// and float behavior differ. See docs/architecture/index.html.
+/// and float behavior differ.
 pub const Target = enum {
     /// Frontend only: parse + lower + finiteness proof, emit diagnostics.
     /// No codegen, no `zig` spawn. Microseconds.
@@ -93,8 +93,7 @@ pub const Error = codegen.Error || error{
     /// `.lint` produces no artifact by definition.
     NoArtifact,
     /// `.debug` builds through a session-scoped resident `zig build --listen=-`
-    /// child; cross-process -fincremental does not exist on ELF 0.16
-    /// (docs/architecture/02-incremental.html).
+    /// child; cross-process -fincremental does not exist on ELF 0.16.
     NoResidentChild,
 };
 
@@ -449,7 +448,7 @@ fn compileInArena(
 // ---------------------------------------------------------------------------
 
 /// Stage 6 then 7–8. FastVAF's responsibility ends at the artifact: the host
-/// owns dlopen/dlclose and simulation state (docs/architecture/05-build-artifact).
+/// owns dlopen/dlclose and simulation state.
 ///
 /// `resident` is the session-scoped `zig build --listen=-` child required by
 /// `.debug`; pass `null` for `.release_fast`, which always builds cold.
@@ -515,7 +514,7 @@ pub const Update = struct {
 };
 
 /// Session-scoped frontend cache. Dirtiness is decided on the PREPROCESSED
-/// bytes (docs/architecture/01-pipeline.html §stage 1), so a macro or `include
+/// bytes, so a macro or `include
 /// change invalidates even when the .va file itself is untouched.
 ///
 /// This is deliberately whole-unit, not fine-grained: per-declaration change

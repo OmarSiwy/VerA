@@ -1,6 +1,6 @@
 # Chapter 3 coverage
 
-Source: `docs/ch3-datatypes.html`, read in full through Section 3.13.4.
+Source: `docs/VAMS-LRM/ch3-datatypes.html`, read in full through Section 3.13.4.
 
 HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s3-4-3` `s3-4-4` `s3-4-5` `s3-4-6` `s3-4-7` `s3-4-8` `s3-5` `s3-6` `s3-6-1` `s3-6-1-1` `s3-6-1-2` `s3-6-1-3` `s3-6-2` `s3-6-2-1` `s3-6-2-2` `s3-6-2-3` `s3-6-2-4` `s3-6-2-5` `s3-6-2-6` `s3-6-2-7` `s3-6-3` `s3-6-3-1` `s3-6-3-2` `s3-6-4` `s3-6-5` `s3-7` `s3-8` `s3-9` `s3-10` `s3-11` `s3-11-1` `s3-12` `s3-12-1` `s3-13` `s3-13-1` `s3-13-2` `s3-13-3` `s3-13-4`.
 

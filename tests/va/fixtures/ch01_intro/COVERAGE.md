@@ -1,6 +1,6 @@
 # Chapter 1 coverage
 
-Source: `docs/ch1-intro.html`, read section by section.
+Source: `docs/VAMS-LRM/ch1-intro.html`, read section by section.
 
 HTML section-ID audit: `s1-1` `s1-2` `s1-3` `s1-3-1` `s1-3-1-1` `s1-3-1-2` `s1-3-2` `s1-3-3` `s1-3-4` `s1-3-4-1` `s1-3-4-2` `s1-3-5` `s1-4` `s1-5`.
 

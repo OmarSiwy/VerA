@@ -928,7 +928,7 @@ fn isIdentChar(c: u8) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Annex D standard definitions (transcribed verbatim from docs/annex-d-stddefs.html)
+// Annex D standard definitions (transcribed verbatim from docs/VAMS-LRM/annex-d-stddefs.html)
 // ---------------------------------------------------------------------------
 
 /// annex D.2 — constants.vams. Mathematical and physical constants (§10.5).
