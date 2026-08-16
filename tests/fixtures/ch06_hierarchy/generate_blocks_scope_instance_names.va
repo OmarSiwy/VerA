@@ -4,7 +4,7 @@
 // interfaces". So an instance `u` inside block `g1` is `g1.u`, and another
 // `u` inside `g2` is `g2.u`: two instances, no clash.
 //
-// ROADMAP §5.3 (AMS 6.6.3): VerA flattened a generate block's instance under
+// VerA used to flatten a generate block's instance under
 // its own name, so `g1.u` and `g2.u` were both `u` and the second collided
 // (E0362) with the first.
 //

@@ -12,7 +12,7 @@
 // statements. VerA does not implement F.2.2 step 5's top-down pass, so a
 // signal the two modes decide differently is refused by name (E0930), not
 // given basic mode's answer under detail mode's name. 7.4.4.2 stays
-// `missing` until the pass lands (ROADMAP §5.3), so this file cites no
+// `missing` until the pass lands, so this file cites no
 // clause: the refusal is VerA's limit, not something 7.4.4.2 rules out.
 //
 // The flattened signal NetD/NetA/NetB joins cmos1..cmos4 and electrical
