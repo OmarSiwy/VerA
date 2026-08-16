@@ -137,425 +137,422 @@ pub fn build(
     return self;
 }
 
-    /// Snapshot the whole alias forest, root-first, so `rv` never touches the
-    /// Mir again. Values below `first_dynamic` are their own root by definition.
-    fn buildAlias(self: *Analysis) Error!void {
-        self.alias = try self.arena.alloc(Mir.Value, self.nv);
-        for (self.alias, 0..) |*p, v| p.* = self.mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
+/// Snapshot the whole alias forest, root-first, so `rv` never touches the
+/// Mir again. Values below `first_dynamic` are their own root by definition.
+fn buildAlias(self: *Analysis) Error!void {
+    self.alias = try self.arena.alloc(Mir.Value, self.nv);
+    for (self.alias, 0..) |*p, v| p.* = self.mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
+}
+
+pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
+    return self.alias[@intFromEnum(v)];
+}
+
+/// Block `bi`'s instructions as a contiguous window — see `inst_pool`.
+pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
+    return self.inst_pool[self.inst_off[bi]..self.inst_off[bi + 1]];
+}
+
+// ---------------------------------------------------------------- CFG ----
+
+fn buildCfg(self: *Analysis) Error!void {
+    const a = self.arena;
+    const nb = self.mir.blockCount();
+    self.nb = nb;
+    self.i_op = self.mir.insts.items(.op);
+    self.i_res = self.mir.insts.items(.result);
+    self.term = try a.alloc(Mir.Inst, nb);
+    self.succs = try a.alloc([]u32, nb);
+    self.preds = try a.alloc([]u32, nb);
+    self.rpo_num = try a.alloc(u32, nb);
+    self.idom = try a.alloc(u32, nb);
+    self.is_merge = try a.alloc(bool, nb);
+    self.is_loop = try a.alloc(bool, nb);
+    self.loop_of = try a.alloc(u32, nb);
+    @memset(self.rpo_num, none_u32);
+    @memset(self.idom, none_u32);
+    @memset(self.is_merge, false);
+    @memset(self.is_loop, false);
+    @memset(self.loop_of, none_u32);
+
+    // Flatten the intrusive `next` chain ONCE (count, then fill — the same
+    // two-pass shape as `dom_kids`, so the pool never grows). Every later
+    // walk in `prepare` reads `blockInstsFlat` instead. Order is the chain
+    // order, which is emission order and therefore load-bearing.
+    self.inst_off = try a.alloc(u32, nb + 1);
+    var n_insts: u32 = 0;
+    for (0..nb) |bi| {
+        self.inst_off[bi] = n_insts;
+        var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        while (it.next()) |_| n_insts += 1;
+    }
+    self.inst_off[nb] = n_insts;
+    self.inst_pool = try a.alloc(Mir.Inst, n_insts);
+    var ki: u32 = 0;
+    for (0..nb) |bi| {
+        var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        while (it.next()) |inst| {
+            self.inst_pool[ki] = inst;
+            ki += 1;
+        }
     }
 
-    pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
-        return self.alias[@intFromEnum(v)];
+    // Terminator + successors. ssa.zig warns that a phi may sit ANYWHERE in
+    // the chain (created on demand), so the terminator is found by opcode,
+    // not by position.
+    var pred_count = try a.alloc(u32, nb);
+    @memset(pred_count, 0);
+    for (0..nb) |bi| {
+        self.term[bi] = .none;
+        var s: [2]u32 = undefined;
+        var ns: usize = 0;
+        for (self.blockInstsFlat(@intCast(bi))) |inst| switch (self.mir.instOp(inst)) {
+            .branch => {
+                const d = self.mir.instData(inst).branch;
+                self.term[bi] = inst;
+                s[0] = @intFromEnum(d.then_block);
+                s[1] = @intFromEnum(d.else_block);
+                ns = 2;
+            },
+            .jump => {
+                self.term[bi] = inst;
+                s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
+                ns = 1;
+            },
+            else => {},
+        };
+        self.succs[bi] = try a.dupe(u32, s[0..ns]);
     }
 
-    /// Block `bi`'s instructions as a contiguous window — see `inst_pool`.
-    pub inline fn blockInstsFlat(self: *const Analysis, bi: u32) []const Mir.Inst {
-        return self.inst_pool[self.inst_off[bi]..self.inst_off[bi + 1]];
-    }
-
-    // ---------------------------------------------------------------- CFG ----
-
-    fn buildCfg(self: *Analysis) Error!void {
-        const a = self.arena;
-        const nb = self.mir.blockCount();
-        self.nb = nb;
-        self.i_op = self.mir.insts.items(.op);
-        self.i_res = self.mir.insts.items(.result);
-        self.term = try a.alloc(Mir.Inst, nb);
-        self.succs = try a.alloc([]u32, nb);
-        self.preds = try a.alloc([]u32, nb);
-        self.rpo_num = try a.alloc(u32, nb);
-        self.idom = try a.alloc(u32, nb);
-        self.is_merge = try a.alloc(bool, nb);
-        self.is_loop = try a.alloc(bool, nb);
-        self.loop_of = try a.alloc(u32, nb);
-        @memset(self.rpo_num, none_u32);
-        @memset(self.idom, none_u32);
-        @memset(self.is_merge, false);
-        @memset(self.is_loop, false);
-        @memset(self.loop_of, none_u32);
-
-        // Flatten the intrusive `next` chain ONCE (count, then fill — the same
-        // two-pass shape as `dom_kids`, so the pool never grows). Every later
-        // walk in `prepare` reads `blockInstsFlat` instead. Order is the chain
-        // order, which is emission order and therefore load-bearing.
-        self.inst_off = try a.alloc(u32, nb + 1);
-        var n_insts: u32 = 0;
-        for (0..nb) |bi| {
-            self.inst_off[bi] = n_insts;
-            var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
-            while (it.next()) |_| n_insts += 1;
-        }
-        self.inst_off[nb] = n_insts;
-        self.inst_pool = try a.alloc(Mir.Inst, n_insts);
-        var ki: u32 = 0;
-        for (0..nb) |bi| {
-            var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
-            while (it.next()) |inst| {
-                self.inst_pool[ki] = inst;
-                ki += 1;
-            }
-        }
-
-        // Terminator + successors. ssa.zig warns that a phi may sit ANYWHERE in
-        // the chain (created on demand), so the terminator is found by opcode,
-        // not by position.
-        var pred_count = try a.alloc(u32, nb);
-        @memset(pred_count, 0);
-        for (0..nb) |bi| {
-            self.term[bi] = .none;
-            var s: [2]u32 = undefined;
-            var ns: usize = 0;
-            for (self.blockInstsFlat(@intCast(bi))) |inst| switch (self.mir.instOp(inst)) {
-                .branch => {
-                    const d = self.mir.instData(inst).branch;
-                    self.term[bi] = inst;
-                    s[0] = @intFromEnum(d.then_block);
-                    s[1] = @intFromEnum(d.else_block);
-                    ns = 2;
-                },
-                .jump => {
-                    self.term[bi] = inst;
-                    s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
-                    ns = 1;
-                },
-                else => {},
-            };
-            self.succs[bi] = try a.dupe(u32, s[0..ns]);
-        }
-
-        // Reachability + postorder (iterative DFS, successor order = branch
-        // order ⇒ deterministic).
-        var post = try a.alloc(u32, nb);
-        var n_post: u32 = 0;
-        {
-            var seen = try a.alloc(bool, nb);
-            @memset(seen, false);
-            const Frame = struct { b: u32, i: u32 };
-            var stack: std.ArrayList(Frame) = .empty;
-            defer stack.deinit(a);
-            try stack.append(a, .{ .b = 0, .i = 0 });
-            seen[0] = true;
-            while (stack.items.len != 0) {
-                const top = &stack.items[stack.items.len - 1];
-                if (top.i < self.succs[top.b].len) {
-                    const s = self.succs[top.b][top.i];
-                    top.i += 1;
-                    if (!seen[s]) {
-                        seen[s] = true;
-                        try stack.append(a, .{ .b = s, .i = 0 });
-                    }
-                } else {
-                    post[n_post] = top.b;
-                    n_post += 1;
-                    _ = stack.pop();
+    // Reachability + postorder (iterative DFS, successor order = branch
+    // order ⇒ deterministic).
+    var post = try a.alloc(u32, nb);
+    var n_post: u32 = 0;
+    {
+        var seen = try a.alloc(bool, nb);
+        @memset(seen, false);
+        const Frame = struct { b: u32, i: u32 };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(a);
+        try stack.append(a, .{ .b = 0, .i = 0 });
+        seen[0] = true;
+        while (stack.items.len != 0) {
+            const top = &stack.items[stack.items.len - 1];
+            if (top.i < self.succs[top.b].len) {
+                const s = self.succs[top.b][top.i];
+                top.i += 1;
+                if (!seen[s]) {
+                    seen[s] = true;
+                    try stack.append(a, .{ .b = s, .i = 0 });
                 }
-            }
-        }
-        for (post[0..n_post], 0..) |bi, i| self.rpo_num[bi] = n_post - 1 - @as(u32, @intCast(i));
-        self.rpo = try a.alloc(u32, n_post);
-        for (post[0..n_post], 0..) |bi, i| self.rpo[n_post - 1 - i] = bi;
-
-        // Predecessors (reachable only).
-        for (0..nb) |bi| {
-            if (self.rpo_num[bi] == none_u32) continue;
-            for (self.succs[bi]) |s| pred_count[s] += 1;
-        }
-        for (0..nb) |bi| self.preds[bi] = try a.alloc(u32, pred_count[bi]);
-        @memset(pred_count, 0);
-        for (self.rpo) |bi| {
-            for (self.succs[bi]) |s| {
-                self.preds[s][pred_count[s]] = bi;
-                pred_count[s] += 1;
-            }
-        }
-        for (0..nb) |bi| self.is_merge[bi] = self.preds[bi].len > 1;
-        self.is_merge[0] = false; // entry is never re-entered
-
-        // Cooper/Harvey/Kennedy iterative dominators over reverse postorder.
-        self.idom[0] = 0;
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (self.rpo[1..]) |bi| {
-                var new: u32 = none_u32;
-                for (self.preds[bi]) |p| {
-                    if (self.idom[p] == none_u32 and p != 0) continue;
-                    new = if (new == none_u32) p else self.intersect(new, p);
-                }
-                if (new != none_u32 and self.idom[bi] != new) {
-                    self.idom[bi] = new;
-                    changed = true;
-                }
-            }
-        }
-
-        // Dominator children, in RPO order (deterministic emission order).
-        var kid_count = try a.alloc(u32, nb);
-        @memset(kid_count, 0);
-        for (self.rpo[1..]) |bi| kid_count[self.idom[bi]] += 1;
-        self.dom_kids = try a.alloc([]u32, nb);
-        for (0..nb) |bi| self.dom_kids[bi] = try a.alloc(u32, kid_count[bi]);
-        @memset(kid_count, 0);
-        for (self.rpo[1..]) |bi| {
-            const p = self.idom[bi];
-            self.dom_kids[p][kid_count[p]] = bi;
-            kid_count[p] += 1;
-        }
-
-        // Merge-block dominator children, flattened in the same order the
-        // per-unit rebuild produced.
-        self.mk_off = try a.alloc(u32, nb + 1);
-        var n_mk: u32 = 0;
-        for (0..nb) |bi| {
-            self.mk_off[bi] = n_mk;
-            for (self.dom_kids[bi]) |k| {
-                if (self.is_merge[k]) n_mk += 1;
-            }
-        }
-        self.mk_off[nb] = n_mk;
-        self.mk_pool = try a.alloc(u32, n_mk);
-        var mk: u32 = 0;
-        for (0..nb) |bi| {
-            for (self.dom_kids[bi]) |k| {
-                if (self.is_merge[k]) {
-                    self.mk_pool[mk] = k;
-                    mk += 1;
-                }
-            }
-        }
-
-        // Euler tour of the dominator tree (explicit stack: 600 K-line models
-        // nest deeply enough to blow a recursive walk).
-        self.dom_in = try a.alloc(u32, nb);
-        self.dom_out = try a.alloc(u32, nb);
-        @memset(self.dom_in, none_u32);
-        @memset(self.dom_out, none_u32);
-        const Frame = struct { node: u32, kid: u32 };
-        const stack = try a.alloc(Frame, nb);
-        var sp: usize = 1;
-        var clock: u32 = 0;
-        stack[0] = .{ .node = 0, .kid = 0 };
-        self.dom_in[0] = clock;
-        clock += 1;
-        while (sp > 0) {
-            const f = &stack[sp - 1];
-            const kids = self.dom_kids[f.node];
-            if (f.kid < kids.len) {
-                const k = kids[f.kid];
-                f.kid += 1;
-                self.dom_in[k] = clock;
-                clock += 1;
-                stack[sp] = .{ .node = k, .kid = 0 };
-                sp += 1;
             } else {
-                self.dom_out[f.node] = clock;
-                clock += 1;
-                sp -= 1;
+                post[n_post] = top.b;
+                n_post += 1;
+                _ = stack.pop();
             }
         }
+    }
+    for (post[0..n_post], 0..) |bi, i| self.rpo_num[bi] = n_post - 1 - @as(u32, @intCast(i));
+    self.rpo = try a.alloc(u32, n_post);
+    for (post[0..n_post], 0..) |bi, i| self.rpo[n_post - 1 - i] = bi;
 
-        // Per-block phi and statement pools, counted then filled (same two-pass
-        // shape as `dom_kids`, so neither pool needs to grow).
-        self.phi_off = try a.alloc(u32, nb + 1);
-        self.stmt_off = try a.alloc(u32, nb + 1);
-        var n_phis: u32 = 0;
-        var n_stmts: u32 = 0;
-        for (0..nb) |bi| {
-            self.phi_off[bi] = n_phis;
-            self.stmt_off[bi] = n_stmts;
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.livePhi(inst)) n_phis += 1;
-                if (self.liveStmt(inst)) n_stmts += 1;
-            }
+    // Predecessors (reachable only).
+    for (0..nb) |bi| {
+        if (self.rpo_num[bi] == none_u32) continue;
+        for (self.succs[bi]) |s| pred_count[s] += 1;
+    }
+    for (0..nb) |bi| self.preds[bi] = try a.alloc(u32, pred_count[bi]);
+    @memset(pred_count, 0);
+    for (self.rpo) |bi| {
+        for (self.succs[bi]) |s| {
+            self.preds[s][pred_count[s]] = bi;
+            pred_count[s] += 1;
         }
-        self.phi_off[nb] = n_phis;
-        self.stmt_off[nb] = n_stmts;
-        self.phi_pool = try a.alloc(Mir.Inst, n_phis);
-        self.stmt_pool = try a.alloc(Mir.Inst, n_stmts);
-        var kp: u32 = 0;
-        var ks: u32 = 0;
-        for (0..nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.livePhi(inst)) {
-                    self.phi_pool[kp] = inst;
-                    kp += 1;
-                }
-                if (self.liveStmt(inst)) {
-                    self.stmt_pool[ks] = inst;
-                    ks += 1;
-                }
-            }
-        }
+    }
+    for (0..nb) |bi| self.is_merge[bi] = self.preds[bi].len > 1;
+    self.is_merge[0] = false; // entry is never re-entered
 
-        // A loop header dominates at least one of its predecessors (back edge).
-        for (self.rpo) |bi| {
+    // Cooper/Harvey/Kennedy iterative dominators over reverse postorder.
+    self.idom[0] = 0;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (self.rpo[1..]) |bi| {
+            var new: u32 = none_u32;
             for (self.preds[bi]) |p| {
-                if (self.dominates(bi, p)) self.is_loop[bi] = true;
+                if (self.idom[p] == none_u32 and p != 0) continue;
+                new = if (new == none_u32) p else self.intersect(new, p);
+            }
+            if (new != none_u32 and self.idom[bi] != new) {
+                self.idom[bi] = new;
+                changed = true;
             }
         }
+    }
 
-        // The NATURAL LOOP BODY of every header, for the §5.9 `loop_recompute`
-        // fixpoint and for `edgeAct`'s `inLoop` guard. Standard construction:
-        // walk predecessors backwards from each back edge, stopping at the
-        // header; every block reached is inside that loop.
-        //
-        // NOT "everything the header dominates": that also covers the region
-        // past the loop's exit, so a model whose analog block opens with a `for`
-        // would lose hoisting for its entire body — which is the 182 MB output
-        // the shared core exists to prevent.
-        //
-        // `rpo` visits an outer header before an inner one, and the first write
-        // wins, so `loop_of` ends up naming the OUTERMOST nest. That is what
-        // makes a nest one decision: re-materializing an inner loop needs the
-        // outer loop's structure too, so they stand or fall together.
-        var body: std.ArrayList(u32) = .empty;
-        defer body.deinit(self.arena);
-        for (self.rpo) |h| {
-            if (!self.is_loop[h]) continue;
-            if (self.loop_of[h] == none_u32) self.loop_of[h] = h;
-            for (self.preds[h]) |p| {
-                if (!self.dominates(h, p)) continue; // not a back edge
-                if (self.loop_of[p] != none_u32 and p != h) continue;
-                if (p != h) {
-                    self.loop_of[p] = self.loop_of[h];
-                    try body.append(self.arena, p);
+    // Dominator children, in RPO order (deterministic emission order).
+    var kid_count = try a.alloc(u32, nb);
+    @memset(kid_count, 0);
+    for (self.rpo[1..]) |bi| kid_count[self.idom[bi]] += 1;
+    self.dom_kids = try a.alloc([]u32, nb);
+    for (0..nb) |bi| self.dom_kids[bi] = try a.alloc(u32, kid_count[bi]);
+    @memset(kid_count, 0);
+    for (self.rpo[1..]) |bi| {
+        const p = self.idom[bi];
+        self.dom_kids[p][kid_count[p]] = bi;
+        kid_count[p] += 1;
+    }
+
+    // Merge-block dominator children, flattened in the same order the
+    // per-unit rebuild produced.
+    self.mk_off = try a.alloc(u32, nb + 1);
+    var n_mk: u32 = 0;
+    for (0..nb) |bi| {
+        self.mk_off[bi] = n_mk;
+        for (self.dom_kids[bi]) |k| {
+            if (self.is_merge[k]) n_mk += 1;
+        }
+    }
+    self.mk_off[nb] = n_mk;
+    self.mk_pool = try a.alloc(u32, n_mk);
+    var mk: u32 = 0;
+    for (0..nb) |bi| {
+        for (self.dom_kids[bi]) |k| {
+            if (self.is_merge[k]) {
+                self.mk_pool[mk] = k;
+                mk += 1;
+            }
+        }
+    }
+
+    // Euler tour of the dominator tree (explicit stack: 600 K-line models
+    // nest deeply enough to blow a recursive walk).
+    self.dom_in = try a.alloc(u32, nb);
+    self.dom_out = try a.alloc(u32, nb);
+    @memset(self.dom_in, none_u32);
+    @memset(self.dom_out, none_u32);
+    const Frame = struct { node: u32, kid: u32 };
+    const stack = try a.alloc(Frame, nb);
+    var sp: usize = 1;
+    var clock: u32 = 0;
+    stack[0] = .{ .node = 0, .kid = 0 };
+    self.dom_in[0] = clock;
+    clock += 1;
+    while (sp > 0) {
+        const f = &stack[sp - 1];
+        const kids = self.dom_kids[f.node];
+        if (f.kid < kids.len) {
+            const k = kids[f.kid];
+            f.kid += 1;
+            self.dom_in[k] = clock;
+            clock += 1;
+            stack[sp] = .{ .node = k, .kid = 0 };
+            sp += 1;
+        } else {
+            self.dom_out[f.node] = clock;
+            clock += 1;
+            sp -= 1;
+        }
+    }
+
+    // Per-block phi and statement pools, counted then filled (same two-pass
+    // shape as `dom_kids`, so neither pool needs to grow).
+    self.phi_off = try a.alloc(u32, nb + 1);
+    self.stmt_off = try a.alloc(u32, nb + 1);
+    var n_phis: u32 = 0;
+    var n_stmts: u32 = 0;
+    for (0..nb) |bi| {
+        self.phi_off[bi] = n_phis;
+        self.stmt_off[bi] = n_stmts;
+        for (self.blockInstsFlat(@intCast(bi))) |inst| {
+            if (self.livePhi(inst)) n_phis += 1;
+            if (self.liveStmt(inst)) n_stmts += 1;
+        }
+    }
+    self.phi_off[nb] = n_phis;
+    self.stmt_off[nb] = n_stmts;
+    self.phi_pool = try a.alloc(Mir.Inst, n_phis);
+    self.stmt_pool = try a.alloc(Mir.Inst, n_stmts);
+    var kp: u32 = 0;
+    var ks: u32 = 0;
+    for (0..nb) |bi| {
+        for (self.blockInstsFlat(@intCast(bi))) |inst| {
+            if (self.livePhi(inst)) {
+                self.phi_pool[kp] = inst;
+                kp += 1;
+            }
+            if (self.liveStmt(inst)) {
+                self.stmt_pool[ks] = inst;
+                ks += 1;
+            }
+        }
+    }
+
+    // A loop header dominates at least one of its predecessors (back edge).
+    for (self.rpo) |bi| {
+        for (self.preds[bi]) |p| {
+            if (self.dominates(bi, p)) self.is_loop[bi] = true;
+        }
+    }
+
+    // The NATURAL LOOP BODY of every header, for the §5.9 `loop_recompute`
+    // fixpoint and for `edgeAct`'s `inLoop` guard. Standard construction:
+    // walk predecessors backwards from each back edge, stopping at the
+    // header; every block reached is inside that loop.
+    //
+    // NOT "everything the header dominates": that also covers the region
+    // past the loop's exit, so a model whose analog block opens with a `for`
+    // would lose hoisting for its entire body — which is the 182 MB output
+    // the shared core exists to prevent.
+    //
+    // `rpo` visits an outer header before an inner one, and the first write
+    // wins, so `loop_of` ends up naming the OUTERMOST nest. That is what
+    // makes a nest one decision: re-materializing an inner loop needs the
+    // outer loop's structure too, so they stand or fall together.
+    var body: std.ArrayList(u32) = .empty;
+    defer body.deinit(self.arena);
+    for (self.rpo) |h| {
+        if (!self.is_loop[h]) continue;
+        if (self.loop_of[h] == none_u32) self.loop_of[h] = h;
+        for (self.preds[h]) |p| {
+            if (!self.dominates(h, p)) continue; // not a back edge
+            if (self.loop_of[p] != none_u32 and p != h) continue;
+            if (p != h) {
+                self.loop_of[p] = self.loop_of[h];
+                try body.append(self.arena, p);
+            }
+            while (body.pop()) |cur| {
+                for (self.preds[cur]) |q| {
+                    if (self.loop_of[q] != none_u32) continue;
+                    self.loop_of[q] = self.loop_of[h];
+                    try body.append(self.arena, q);
                 }
-                while (body.pop()) |cur| {
-                    for (self.preds[cur]) |q| {
-                        if (self.loop_of[q] != none_u32) continue;
-                        self.loop_of[q] = self.loop_of[h];
-                        try body.append(self.arena, q);
-                    }
-                }
             }
         }
     }
+}
 
-    fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
-        var x = x0;
-        var y = y0;
-        while (x != y) {
-            while (self.rpo_num[x] > self.rpo_num[y]) x = self.idom[x];
-            while (self.rpo_num[y] > self.rpo_num[x]) y = self.idom[y];
+fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
+    var x = x0;
+    var y = y0;
+    while (x != y) {
+        while (self.rpo_num[x] > self.rpo_num[y]) x = self.idom[x];
+        while (self.rpo_num[y] > self.rpo_num[x]) y = self.idom[y];
+    }
+    return x;
+}
+
+/// `a` dominates `x` iff `x` sits inside `a`'s Euler-tour interval. Blocks
+/// outside the dominator tree (unreachable) dominate only themselves.
+pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
+    const ia = self.dom_in[a];
+    const ix = self.dom_in[x];
+    if (ia == none_u32 or ix == none_u32) return a == x;
+    return ia <= ix and self.dom_out[x] <= self.dom_out[a];
+}
+
+// -------------------------------------------------------------- values ----
+
+fn buildValueTypes(self: *Analysis) Error!void {
+    const a = self.arena;
+    self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `prepare`
+    self.def_block = try a.alloc(u32, self.nv);
+    @memset(self.def_block, none_u32);
+    for (self.vty) |*t| t.* = .real;
+
+    for (0..self.nb) |bi| {
+        for (self.blockInstsFlat(@intCast(bi))) |inst| {
+            const r = self.mir.instResult(inst);
+            if (r == .undef) continue;
+            self.def_block[@intFromEnum(r)] = @intCast(bi);
         }
-        return x;
     }
 
-    /// `a` dominates `x` iff `x` sits inside `a`'s Euler-tour interval. Blocks
-    /// outside the dominator tree (unreachable) dominate only themselves.
-    pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
-        const ia = self.dom_in[a];
-        const ix = self.dom_in[x];
-        if (ia == none_u32 or ix == none_u32) return a == x;
-        return ia <= ix and self.dom_out[x] <= self.dom_out[a];
+    // Base pass: constants and opcodes decide themselves.
+    var v: u32 = 0;
+    while (v < self.nv) : (v += 1) {
+        const val: Mir.Value = @enumFromInt(v);
+        self.vty[v] = switch (self.mir.valueDef(val)) {
+            .undef => .real,
+            .float_const => .real,
+            .int_const => .int,
+            .str_const => .str,
+            .param_ref => |p| tyOfParam(self.lower.params.items[p].ty),
+            .block_param => .real,
+            .inst_result => |inst| blk: {
+                const op = self.mir.instOp(inst);
+                if (op == .call) break :blk callTy(self.mir.instData(inst).call.name);
+                if (op == .phi or op == .select) break :blk .real; // refined below
+                break :blk if (Mir.opIsInteger(op)) .int else .real;
+            },
+        };
     }
-
-
-    // -------------------------------------------------------------- values ----
-
-    fn buildValueTypes(self: *Analysis) Error!void {
-        const a = self.arena;
-        self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `prepare`
-        self.def_block = try a.alloc(u32, self.nv);
-        @memset(self.def_block, none_u32);
-        for (self.vty) |*t| t.* = .real;
-
-        for (0..self.nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                const r = self.mir.instResult(inst);
-                if (r == .undef) continue;
-                self.def_block[@intFromEnum(r)] = @intCast(bi);
-            }
-        }
-
-        // Base pass: constants and opcodes decide themselves.
-        var v: u32 = 0;
+    // Refine `select` and `phi` from their operands. Two sweeps in value
+    // order settle every acyclic chain; a loop-carried phi keeps `.real`,
+    // and a wrong guess only costs a redundant §4.2.1 conversion.
+    var round: u32 = 0;
+    while (round < 2) : (round += 1) {
+        v = Mir.Value.first_dynamic;
         while (v < self.nv) : (v += 1) {
             const val: Mir.Value = @enumFromInt(v);
-            self.vty[v] = switch (self.mir.valueDef(val)) {
-                .undef => .real,
-                .float_const => .real,
-                .int_const => .int,
-                .str_const => .str,
-                .param_ref => |p| tyOfParam(self.lower.params.items[p].ty),
-                .block_param => .real,
-                .inst_result => |inst| blk: {
-                    const op = self.mir.instOp(inst);
-                    if (op == .call) break :blk callTy(self.mir.instData(inst).call.name);
-                    if (op == .phi or op == .select) break :blk .real; // refined below
-                    break :blk if (Mir.opIsInteger(op)) .int else .real;
+            const def = self.mir.valueDef(val);
+            if (def != .inst_result) continue;
+            const inst = def.inst_result;
+            switch (self.mir.instOp(inst)) {
+                .select => {
+                    const d = self.mir.instData(inst).ternary;
+                    self.vty[v] = self.vty[@intFromEnum(self.rv(d.then_val))];
                 },
-            };
-        }
-        // Refine `select` and `phi` from their operands. Two sweeps in value
-        // order settle every acyclic chain; a loop-carried phi keeps `.real`,
-        // and a wrong guess only costs a redundant §4.2.1 conversion.
-        var round: u32 = 0;
-        while (round < 2) : (round += 1) {
-            v = Mir.Value.first_dynamic;
-            while (v < self.nv) : (v += 1) {
-                const val: Mir.Value = @enumFromInt(v);
-                const def = self.mir.valueDef(val);
-                if (def != .inst_result) continue;
-                const inst = def.inst_result;
-                switch (self.mir.instOp(inst)) {
-                    .select => {
-                        const d = self.mir.instData(inst).ternary;
-                        self.vty[v] = self.vty[@intFromEnum(self.rv(d.then_val))];
-                    },
-                    .phi => {
-                        const d = self.mir.instData(inst).phi;
-                        if (d.count == 0) continue;
-                        const first = self.rv(self.mir.phiPair(inst, 0).value);
-                        if (first == .undef) continue;
-                        self.vty[v] = self.vty[@intFromEnum(first)];
-                    },
-                    else => {},
-                }
+                .phi => {
+                    const d = self.mir.instData(inst).phi;
+                    if (d.count == 0) continue;
+                    const first = self.rv(self.mir.phiPair(inst, 0).value);
+                    if (first == .undef) continue;
+                    self.vty[v] = self.vty[@intFromEnum(first)];
+                },
+                else => {},
             }
         }
-
     }
+}
 
-    pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
-        return self.vty[@intFromEnum(v)];
+pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
+    return self.vty[@intFromEnum(v)];
+}
+
+/// Is this block inside some loop's natural body?
+pub fn inLoop(self: *const Analysis, block: u32) bool {
+    return self.loop_of[block] != none_u32;
+}
+
+/// A phi whose result survives aliasing — the `phi_pool` filter, CFG-wide.
+pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
+    if (self.i_op[@intFromEnum(inst)] != .phi) return false;
+    const r = self.i_res[@intFromEnum(inst)];
+    return self.rv(r) == r;
+}
+
+/// The `stmt_pool` filter: everything a unit body may emit as a statement.
+/// Phis are block headers, terminators are `emitTerm`'s, and an aliased
+/// result was rewritten away by ssa.zig.
+pub fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
+    switch (self.i_op[@intFromEnum(inst)]) {
+        .phi, .branch, .jump => return false,
+        else => {},
     }
+    const r = self.i_res[@intFromEnum(inst)];
+    return r != .undef and self.rv(r) == r;
+}
 
-
-    /// Is this block inside some loop's natural body?
-    pub fn inLoop(self: *const Analysis, block: u32) bool {
-        return self.loop_of[block] != none_u32;
+pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
+    const d = self.mir.instData(inst).phi;
+    var i: u32 = 0;
+    while (i < d.count) : (i += 1) {
+        const p = self.mir.phiPair(inst, i);
+        if (@intFromEnum(p.block) == from) return p.value;
     }
-
-    /// A phi whose result survives aliasing — the `phi_pool` filter, CFG-wide.
-    pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
-        if (self.i_op[@intFromEnum(inst)] != .phi) return false;
-        const r = self.i_res[@intFromEnum(inst)];
-        return self.rv(r) == r;
-    }
-
-    /// The `stmt_pool` filter: everything a unit body may emit as a statement.
-    /// Phis are block headers, terminators are `emitTerm`'s, and an aliased
-    /// result was rewritten away by ssa.zig.
-    pub fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
-        switch (self.i_op[@intFromEnum(inst)]) {
-            .phi, .branch, .jump => return false,
-            else => {},
-        }
-        const r = self.i_res[@intFromEnum(inst)];
-        return r != .undef and self.rv(r) == r;
-    }
-
-    pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
-        const d = self.mir.instData(inst).phi;
-        var i: u32 = 0;
-        while (i < d.count) : (i += 1) {
-            const p = self.mir.phiPair(inst, i);
-            if (@intFromEnum(p.block) == from) return p.value;
-        }
-        return .undef;
-    }
+    return .undef;
+}
 
 // ---------------------------------------------------------------------------
 // The VTy lattice — a Value's type is a property of the MIR, so both the
@@ -582,14 +579,16 @@ pub fn tyOfParam(t: Ast.Type) VTy {
 /// here — see tests/fixtures/exhaustive/122_bit_conversions.va.
 pub fn callTy(name: []const u8) VTy {
     const ints = [_][]const u8{
-        "$param_given",       "$port_connected",
-        "$test$plusargs",     "$value$plusargs",
-        "$rtoi",              "$clog2",
-        "$realtobits",        "$driver_count",
-        "$receiver_count",    "$driver_state",
-        "$driver_strength",   "$driver_delay",
-        "$driver_next_state", "$driver_next_strength",
-        "$driver_type",
+        "$param_given",          "$port_connected",
+        "$test$plusargs",        "$value$plusargs",
+        "$rtoi",                 "$clog2",
+        "$realtobits",           "$driver_count",
+        "$receiver_count",       "$driver_state",
+        // §9.23.1: `$driver_delay` "is a real number ... The fractional part
+        // arises from the possibility of a driver being updated by an A2D event
+        // off the digital timeticks", so it is NOT in this list.
+        "$driver_strength",      "$driver_next_state",
+        "$driver_next_strength", "$driver_type",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .int;
     if (std.mem.eql(u8, name, "$simparam$str")) return .str;

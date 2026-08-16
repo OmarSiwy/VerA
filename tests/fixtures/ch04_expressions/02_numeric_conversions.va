@@ -1,0 +1,31 @@
+// LRM 4.2.1.1 real-to-integer conversion, and 4.2.2 integer vs real division.
+//
+// 4.2.1.1: "Real numbers are converted to integers by rounding the real number
+// to the nearest integer, rather than by truncating it. ... If the fractional
+// part of the real number is exactly 0.5, it shall be rounded away from zero."
+// So 35.5 -> 36 (not 35), and -1.5 -> -2 (not -1, and not a truncation to -1).
+//
+// 4.2.2: "Integer division truncates any fractional part toward zero." Both
+// operands of 1/2 are integers, so the result is 0. In 1/2.0 the denominator is
+// real, so the operation is real division and the result is 0.5 exactly.
+//
+// Sum: 36 + (-2) + 0 + 0.5 = 34.5.
+`include "check.vh"
+module ch04_numeric_conversions(p, n);
+    inout p, n;
+    electrical p, n;
+    integer rounded_positive, rounded_negative, integer_division;
+    real mixed_division;
+
+    analog begin
+        rounded_positive = 35.5;
+        rounded_negative = -1.5;
+        integer_division = 1 / 2;
+        mixed_division = 1 / 2.0;
+        `CHECKI("35.5 rounds away from zero", rounded_positive, 36);
+        `CHECKI("-1.5 rounds away from zero", rounded_negative, -2);
+        `CHECKI("1 / 2 is integer division", integer_division, 0);
+        `CHECKX("1 / 2.0 is real division", mixed_division, 0.5);
+        I(p, n) <+ rounded_positive + rounded_negative + integer_division + mixed_division;
+    end
+endmodule

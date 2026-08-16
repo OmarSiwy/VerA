@@ -1,0 +1,41 @@
+// §4.5.7 absolute transport delay. The LRM gives the time-domain behaviour as a
+// formula rather than a filter shape:
+//
+//   Output(t) = Input(max(t - td, 0))
+//
+// and "In DC and operating point analyses, absdelay() returns the value of its
+// input", which is the t = 0 point below.
+//
+// The driven waveform is a 1 V/ns ramp sampled at every nanosecond, so V(p,n)
+// numerically EQUALS the time in ns and the LRM formula with td = 2ns reads
+// max(V(p,n) - 2, 0). Writing the check as output minus that gives one want,
+// 0.0, at every point:
+//
+//   t/ns    0    1    2    3    4    5
+//   in      0    1    2    3    4    5
+//   out     0    0    0    1    2    3
+//
+// A first-order lag substituted for the transport delay misses every point from
+// t = 3ns on; a delay of the wrong length misses t = 3ns onward too.
+//
+//! bias V(n) = 0
+//! wave V(p) = 0, 1, 2, 3, 4, 5
+//! time 0, 1n, 2n, 3n, 4n, 5n
+//! analysis tran
+//! print none
+`include "check.vh"
+module ch04_absdelay(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECK("output(t) == input(max(t - 2ns, 0))",
+               absdelay(V(p, n), 2n) - max(V(p, n) - 2.0, 0.0), 0.0, 1e-12);
+        // The delay is transport, not attenuation: on a rising ramp the delayed
+        // value can never lead the input.
+        `CHECKI("a delayed rising ramp never leads its input",
+                absdelay(V(p, n), 2n) <= V(p, n), 1);
+
+        V(p, n) <+ absdelay(I(p, n), 1n);
+    end
+endmodule

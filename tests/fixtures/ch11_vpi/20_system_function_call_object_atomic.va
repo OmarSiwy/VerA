@@ -1,0 +1,7 @@
+// ch11 VPI is outside the Verilog-A subset: a VPI-registered system function
+// has no compile-time definition, so it must be refused rather than faked.
+//! reject $fixture_vpi_function_object
+module ch11_system_function_call_object_atomic(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ $fixture_vpi_function_object(V(p,n));
+endmodule

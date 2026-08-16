@@ -1,0 +1,8 @@
+//! reject E0512
+//! reject vpi_get_time
+// EXPECT: error
+module ch12_atomic_get_time(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ vpi_get_time(0);
+endmodule
+

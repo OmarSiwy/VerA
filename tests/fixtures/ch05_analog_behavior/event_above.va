@@ -1,0 +1,21 @@
+// §5.10.3.2 above(). "The cross() function will not generate events for
+// non-transient analyses, such as ac, dc, or noise analyses ... but the
+// above() function can", and it generates one when its expression is positive.
+//
+// Biased at V(c)=1.25 the expression V(c)-0.5 is +0.75, so the event fires in
+// this dc point and `held` takes V(p)=0.3. §3.2.1 initialises a real variable
+// to zero, so an implementation that treated above() like cross() and skipped
+// the dc event would leave `held` at 0 and fail — the assertion is restricting
+// in both directions.
+//
+//! bias V(c) = 1.25, V(p) = 0.3
+`include "check.vh"
+module ch5_above(p, c);
+  inout p, c; electrical p, c; real held;
+  analog begin
+    `CHECK("the above() expression is positive here", V(c) - 0.5, 0.75, 1e-15);
+    @(above(V(c) - 0.5, 1p)) held = V(p);
+    `CHECK("above() fires in dc, so held sampled V(p)", held, 0.3, 1e-15);
+    I(p) <+ held;
+  end
+endmodule

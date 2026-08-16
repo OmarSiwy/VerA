@@ -1,0 +1,17 @@
+// LRM 5.6.7 indirect branch contribution: `V(p) : V(c) == 2.0*V(p)` asks the
+// solver to move V(p) until the stated equation holds, so the row it stamps is
+// the CONSTRAINT itself. The testbench pins the operating point that satisfies
+// it — V(p) = 0.75, V(c) = 1.5 — and asserts the constraint residual is zero
+// there, which is the value the equation, not the compiler, determines.
+//
+//! bias V(p) = 0.75
+//! bias V(c) = 1.5
+//! print none
+`include "check.vh"
+module annex_a_indirect(p,c); inout p,c; electrical p,c;
+analog begin
+    `CHECK("V(c) == 2*V(p) holds at the declared operating point",
+           V(c) - 2.0*V(p), 0.0, 1e-15);
+    V(p):V(c)==2.0*V(p);
+end
+endmodule

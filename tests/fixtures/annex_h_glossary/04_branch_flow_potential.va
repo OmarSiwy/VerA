@@ -1,0 +1,16 @@
+// Annex H "branch": a relationship between two nodes with two quantities, a
+// value (potential) and a flow. Naming the (p,n) pair must not change either:
+// at 0.75 V and 0.25 V the branch potential is 0.5 V and the flow the
+// constitutive relation assigns it is 0.5/1000 = 500 uA.
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module glossary_branch_flow_potential(p, n);
+  inout p, n; electrical p, n;
+  branch (p,n) b;
+  analog begin
+    `CHECKX("branch potential is the node-pair potential", V(b), 0.5);
+    `CHECKR("branch flow from the constitutive relation", V(b)/1000.0, 5e-4, 1e-15);
+    I(b) <+ V(b)/1000.0;
+  end
+endmodule

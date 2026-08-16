@@ -1,0 +1,16 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-9.13.2-03  (ch9-system.html)
+// For each system function, the seed argument shall be an integer.
+//
+//! reject E0801
+//! reject $arandom
+// EXPECT: error
+module ch09_arandom_parameter_seed_unsupported(p, n);
+  inout p, n; electrical p, n;
+  parameter integer seed = 7;
+  analog I(p,n) <+ $arandom(seed);
+endmodule

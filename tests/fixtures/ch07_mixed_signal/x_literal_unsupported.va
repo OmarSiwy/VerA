@@ -1,0 +1,14 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-2.6.1-14  (ch2-lexical.html)
+// An x shall set 4 bits to unknown in the hexadecimal base, 3 bits in the octal base, and 1 bit in the binary base.
+//
+//! reject E0130
+// EXPECT: error -- FastVAF numeric IR cannot represent X.
+module ch7_x_literal(p);
+  inout p; electrical p; integer state;
+  analog begin state = 1'bx; I(p) <+ state; end
+endmodule

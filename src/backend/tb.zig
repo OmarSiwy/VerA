@@ -79,12 +79,23 @@ pub const Directives = struct {
     /// step is written. Without this every §4.5 operator could only ever be
     /// shown its step response from zero.
     waves: []const Sweep = &.{},
+    /// Swept PARAMETERS — the sub-tasks of a §8.2 parametric sweep, as opposed
+    /// to `sweeps`, which moves an unknown within one solve. A parameter sweep
+    /// needs its own model card per point (and its own `derive`, §6.3.4), so it
+    /// is a separate list rather than another `sweep` line. Ordered after
+    /// `sweeps` in the cartesian product, so it varies fastest.
+    psweeps: []const Sweep = &.{},
     /// §4.6.1.
     analysis: Analysis = .dc,
     /// Print the residual and its Jacobian after each point's display output.
     /// `//! print none` leaves the transcript to the model's own `$strobe`s,
     /// which is what a fixture that tests §9.4 formatting wants.
     print_residual: bool = true,
+    /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
+    /// fixture: it must NOT compile, and every substring here must appear
+    /// somewhere in the resulting diagnostic. A fixture that cannot run states
+    /// its expectation the same way one that can does — in the .va itself.
+    reject: []const []const u8 = &.{},
 };
 
 /// Guard against a fixture that asks for a million points and a gigabyte of
@@ -104,6 +115,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var bias: std.ArrayList(Binding) = .empty;
     var sweeps: std.ArrayList(Sweep) = .empty;
     var waves: std.ArrayList(Sweep) = .empty;
+    var psweeps: std.ArrayList(Sweep) = .empty;
+    var reject: std.ArrayList([]const u8) = .empty;
     var saw_time = false;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -121,15 +134,20 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             try parseBindings(arena, rest, &params);
         } else if (eq(kw, "bias")) {
             try parseBindings(arena, rest, &bias);
-        } else if (eq(kw, "sweep") or eq(kw, "wave")) {
+        } else if (eq(kw, "sweep") or eq(kw, "wave") or eq(kw, "psweep")) {
             const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
-            const name = unknownName(std.mem.trim(u8, rest[0..at], " \t"));
+            // A parameter has no access-function spelling, so `psweep` takes the
+            // name as written; `unknownName` would only strip a `V(...)` that
+            // cannot be there.
+            const raw_name = std.mem.trim(u8, rest[0..at], " \t");
+            const name = if (eq(kw, "psweep")) raw_name else unknownName(raw_name);
             if (name.len == 0) return error.BadSyntax;
             const entry: Sweep = .{
                 .name = try arena.dupe(u8, name),
                 .values = try parseNumbers(arena, rest[at + 1 ..]),
             };
-            try (if (eq(kw, "sweep")) &sweeps else &waves).append(arena, entry);
+            try (if (eq(kw, "sweep")) &sweeps else if (eq(kw, "psweep")) &psweeps else &waves)
+                .append(arena, entry);
         } else if (eq(kw, "temp")) {
             d.temp = try number(rest);
         } else if (eq(kw, "time")) {
@@ -137,6 +155,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             saw_time = true;
         } else if (eq(kw, "analysis")) {
             d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
+        } else if (eq(kw, "reject")) {
+            // The whole rest of the line is ONE substring, verbatim: the
+            // expectations being migrated are message fragments like
+            // `module instantiation is not supported`, which contain spaces and
+            // commas and must not be split on either.
+            if (rest.len == 0) return error.BadSyntax;
+            try reject.append(arena, try arena.dupe(u8, rest));
         } else if (eq(kw, "print")) {
             if (eq(rest, "none")) {
                 d.print_residual = false;
@@ -153,6 +178,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.bias = bias.items;
     d.sweeps = sweeps.items;
     d.waves = waves.items;
+    d.psweeps = psweeps.items;
+    d.reject = reject.items;
     return d;
 }
 
@@ -256,7 +283,12 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
         );
     }
+    // §6.3.4: the model card is complete only now, so this is where a parameter
+    // defined over another one gets its value. It runs unconditionally — a
+    // §3.4.5 localparam is re-derived even with no `//! param` line, since the
+    // point of `derive` is also that a localparam is not overridable.
     try w.raw(
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
         \\
         \\    var inst: D.Instance = .{};
         \\
@@ -276,12 +308,39 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // and starts from a fresh `State`, or the second bias would inherit the
     // first one's history and no transcript line would mean anything on its own.
     const points = try expand(arena, d);
+    // §5.10.2 / Table 5-1: `initial_step` is active on the FIRST point of an
+    // analysis and `final_step` on the LAST. What counts as "an analysis" here
+    // is read off the runner's own shape. With `//! time` each sweep block is a
+    // separate transient run — it restarts the time walk at dt = 0 with a fresh
+    // `State` — so every block carries its own first and last point. Without it
+    // the blocks are the steps of ONE dc sweep, and only the first and last step
+    // of the whole sweep carry the events. A one-point fixture is both at once,
+    // which is exactly the DCOP column of Table 5-1: both events, one point.
+    const per_block = d.times.len > 1;
     var n: usize = 0;
+    // `//! psweep` gives each point its OWN model card: §8.2 makes a parametric
+    // sweep a series of sub-tasks, and §6.3.4 says anything derived from the
+    // swept parameter has to be recomputed with it, which is `derive`'s job.
+    // Without a psweep line not one byte of this changes — the shared `model`
+    // built above is passed straight through, as it always was.
+    const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points) |pt| {
-        try w.raw("    {\n        var x: [n_u]f64 = @splat(0.0);\n        var state = newState(&model, &inst);\n");
+        try w.raw("    {\n");
+        if (d.psweeps.len != 0) {
+            try w.raw("        var pm = model;\n");
+            for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
+                try w.print("        pm.{f} = {f};\n", .{ std.zig.fmtId(s.name), fmtF64(v) });
+                try w.print(
+                    "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n",
+                    .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
+                );
+            }
+            try w.raw("        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+        }
+        try w.print("        var x: [n_u]f64 = @splat(0.0);\n        var state = newState(&{s}, &inst);\n", .{mdl});
         for (d.bias) |b|
             try w.print("        x[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
-        for (d.sweeps, pt) |s, v|
+        for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
             try w.print("        x[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
@@ -296,11 +355,19 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // §4.5.11 the filter's DC gain).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
             try w.print("        inst.abstime = {f};\n        inst.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
-            try w.print("        point({d}, &x, {f}, &model, &inst);\n", .{ n, fmtF64(t) });
+            // Both are written at every point, never left over from the last
+            // one: the guard codegen emits reads the field as it stands when
+            // `eval`/`display` runs, so a stale `true` would fire the body a
+            // second time.
+            try w.print("        inst.is_initial_step = {};\n        inst.is_final_step = {};\n", .{
+                k == 0 and (per_block or n == 0),
+                k + 1 == d.times.len and (per_block or n + 1 == points.len),
+            });
+            try w.print("        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
-            try w.raw("        step(&model, &inst, &x, &state);\n");
+            try w.print("        step(&{s}, &inst, &x, &state);\n", .{mdl});
             n += 1;
         }
         try w.raw("    }\n");
@@ -322,23 +389,32 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 
 /// The cartesian product of the sweep lines, last varying fastest. One
 /// allocation per point; a point is `sweeps.len` wide.
+/// A point is `sweeps.len + psweeps.len` wide: the unknown columns first, then
+/// the parameter columns, so `psweep` varies fastest and a parameter sweep reads
+/// as the inner loop it is.
 fn expand(arena: Allocator, d: Directives) Error![]const []const f64 {
-    if (d.sweeps.len == 0) return &.{&.{}};
+    const dims = d.sweeps.len + d.psweeps.len;
+    if (dims == 0) return &.{&.{}};
+    const col = struct {
+        fn at(dd: Directives, k: usize) Sweep {
+            return if (k < dd.sweeps.len) dd.sweeps[k] else dd.psweeps[k - dd.sweeps.len];
+        }
+    };
     var total: usize = 1;
-    for (d.sweeps) |s| {
-        total *|= s.values.len;
+    for (0..dims) |k| {
+        total *|= col.at(d, k).values.len;
         if (total > max_points) return error.TooManyPoints;
     }
     const rows = try arena.alloc([]const f64, total);
     for (rows, 0..) |*row, n| {
-        const cells = try arena.alloc(f64, d.sweeps.len);
+        const cells = try arena.alloc(f64, dims);
         var rem = n;
-        var k = d.sweeps.len;
+        var k = dims;
         while (k > 0) {
             k -= 1;
-            const len = d.sweeps[k].values.len;
-            cells[k] = d.sweeps[k].values[rem % len];
-            rem /= len;
+            const vals = col.at(d, k).values;
+            cells[k] = vals[rem % vals.len];
+            rem /= vals.len;
         }
         row.* = cells;
     }
@@ -761,6 +837,30 @@ test "each sweep point starts its transient from a fresh State" {
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "= newState("));
     // Point numbers are global, so no two transcript blocks share a label.
     try testing.expect(std.mem.indexOf(u8, src, "point(5, &x") != null);
+}
+
+test "§5.10.2 global events mark the first and last point of each analysis" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A dc sweep is ONE analysis: first step only, last step only.
+    const swept = try renderRunner(arena, "062_sweep", try parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_initial_step = true;"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_final_step = true;"));
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        point(0,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        point(2,") != null);
+
+    // With `//! time` each sweep block is its own transient run, so each gets
+    // its own first and last timepoint.
+    const tran = try renderRunner(arena, "063_tran", try parse(arena, "//! sweep V(a) = 0, 1\n//! time 0, 1n, 2n\n"));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_initial_step = true;"));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_final_step = true;"));
+
+    // The single-point default is the Table 5-1 DCOP column: both events fire.
+    const op = try renderRunner(arena, "064_op", .{});
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, op, "inst.is_initial_step = true;"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, op, "inst.is_final_step = true;"));
 }
 
 test "renderRunner emits parseable Zig" {

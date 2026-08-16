@@ -1,0 +1,25 @@
+// §5.10.3.3 "If the period expression evaluates to a value less than or equal
+// to 0.0, the timer shall trigger only once at the specified start_time (if the
+// start_time is in the future with respect to the current simulation time)."
+//
+// timer(1n, 0.0) has exactly one event, at t = 1n. Every declared timepoint
+// here is strictly BEFORE that, so the body has not run at any of them and `x`
+// holds the 0.0 §3.2.1 gives a real. A timer that fired at t = 0 — start_time
+// read as "now" rather than as an absolute time — sets x to 1 at the second
+// point and fails this.
+//
+// (The one-shot half of the rule is not observable from inside this module: the
+// body assigns the constant 1.0, so a repeating timer would write the same
+// value again and leave no trace.)
+//
+//! analysis tran
+//! time 0, 0.25n, 0.5n, 0.75n
+`include "check.vh"
+module ch5_timer_once(p);
+  inout p; electrical p; real x;
+  analog begin
+    @(timer(1n, 0.0)) x = 1.0;
+    `CHECK("timer(1n,0) has no event before its start_time", x, 0.0, 0.0);
+    I(p) <+ x + 0.0*V(p);
+  end
+endmodule

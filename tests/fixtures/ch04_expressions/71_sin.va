@@ -1,0 +1,15 @@
+// §4.3.2 Table 4-15: `sin(x)` is C `sin` and its argument is in RADIANS, for
+// all x. The bias puts the argument at 0.5 rad, giving
+// sin(0.5) = 0.47942553860420300538..., nearest double 0.479425538604203. A
+// degree-based implementation would answer 0.0087, so the unit is pinned too.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch04_sin(p, n);
+  inout p, n;
+  electrical p, n;
+  analog begin
+    `CHECK("sin(0.5 rad)", sin(V(p, n)), 0.479425538604203, 1e-15);
+    I(p, n) <+ sin(V(p, n));
+  end
+endmodule

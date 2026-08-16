@@ -1,0 +1,26 @@
+// §5.6.7 indirect branch contribution. `V(p,n) : V(ctrl) == 2.0*V(p,n)` reads
+// "drive V(p,n) so that the stated equation is satisfied": the branch becomes a
+// potential source whose value the solver adjusts, and the row it stamps is the
+// CONSTRAINT itself rather than a constitutive relation. Everything to the right
+// of the `:` is only measured — "Any branches referenced in the equation are
+// only probed and not driven" — so V(ctrl) here is a voltage probe.
+//
+// Solving the equation by hand: V(ctrl) == 2*V(p,n) has the single solution
+// V(p,n) = V(ctrl)/2. The testbench declares the operating point that satisfies
+// it, V(ctrl) = 1.5 with V(p) = 0.75 and V(n) = 0, so the branch potential is
+// 0.75 = 1.5/2 and the constraint residual V(ctrl) - 2*V(p,n) is exactly zero
+// there. Both numbers come from the equation, not from the compiler.
+//
+//! bias V(ctrl) = 1.5
+//! bias V(p) = 0.75
+//! bias V(n) = 0.0
+`include "check.vh"
+module ch5_indirect(p, n, ctrl);
+  inout p, n, ctrl; electrical p, n, ctrl;
+  analog begin
+    `CHECKX("the driven branch sits at the equation's solution V(ctrl)/2", V(p, n), 0.75);
+    `CHECK("the constraint residual V(ctrl) - 2*V(p,n) vanishes there",
+           V(ctrl) - 2.0 * V(p, n), 0.0, 1e-15);
+    V(p, n) : V(ctrl) == 2.0 * V(p, n);
+  end
+endmodule

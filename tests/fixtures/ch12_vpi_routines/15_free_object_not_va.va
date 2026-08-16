@@ -1,0 +1,8 @@
+//! reject E0512
+//! reject vpi_free_object
+// EXPECT: error
+module ch12_atomic_free_object(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ vpi_free_object(0);
+endmodule
+

@@ -1,0 +1,26 @@
+// §9.12 command-line plusargs. The testbench binary is spawned with NO arguments
+// (tests/torture.zig uses `argv = &.{bin}`), so neither `+feature` nor `+gain=`
+// is present, and IEEE 1364-2005 §17.10 — which §9.12 carries over unchanged —
+// fixes both answers for the absent case:
+//
+//   $test$plusargs  returns nonzero when a plusarg matching the string is on the
+//                   command line, and ZERO when it is not.
+//   $value$plusargs returns zero when no plusarg matches the format string, and
+//                   in that case leaves the destination variable untouched.
+//
+// Both are therefore 0, and that is a property of the command line rather than
+// of the compiler: run the same binary with `+feature` and the first legitimately
+// becomes nonzero. It is also the direction a naive implementation gets wrong —
+// "not found" is easy to spell as a -1 sentinel or as an uninitialised read.
+`include "check.vh"
+module ch09_plusargs(p, n);
+  inout p, n; electrical p, n;
+  integer enabled, value;
+  analog begin
+    enabled = $test$plusargs("feature");
+    `CHECKI("§9.12: no +feature on the command line, so $test$plusargs is 0", enabled, 0);
+    value = $value$plusargs("gain=%d", value);
+    `CHECKI("§9.12: no +gain= matched, so $value$plusargs returns 0", value, 0);
+    I(p,n) <+ enabled + value + 0.0*V(p,n);
+  end
+endmodule

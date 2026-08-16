@@ -1,0 +1,18 @@
+// Annex D.1: `discipline thermal` binds `potential Temperature` / `flow Power`,
+// whose natures give the access functions `Temp` and `Pwr`. The observable claim
+// is the BINDING: on a thermal node, `Temp` reads the node's potential (in K),
+// so a node held at 350 K must probe as 350.
+//
+//! bias p = 350
+`include "check.vh"
+discipline thermal;
+  potential Temperature;
+  flow Power;
+enddiscipline
+module annex_d_literal_thermal(p);
+  inout p; thermal p;
+  analog begin
+    `CHECKX("Temp is the thermal potential access", Temp(p), 350.0);
+    Pwr(p) <+ Temp(p);
+  end
+endmodule

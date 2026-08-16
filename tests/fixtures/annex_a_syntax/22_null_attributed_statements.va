@@ -1,0 +1,18 @@
+// Attribute instances may precede a null statement and a statement (LRM 2.9.1,
+// Annex A.9.x); they are parsed and skipped, so this must COMPILE — and the
+// statement AFTER an attributed null statement must still be the statement the
+// author wrote. Biased at V(p) = -0.5, the probe read immediately past
+// `(* explicit_null *) ;` must be -0.5: an attribute swallowed together with
+// the following statement, or a null statement that consumed the next one,
+// changes what runs here.
+//
+//! bias V(p) = -0.5
+//! print none
+`include "check.vh"
+module annex_a_null_attr(p); inout p; electrical p;
+analog begin
+    (* explicit_null *) ;
+    `CHECK("the statement after an attributed null statement still runs", V(p), -0.5, 1e-15);
+    if(V(p)>0.0) (* conditional_null *) ; else (* contribution_attr *) I(p)<+V(p);
+end
+endmodule

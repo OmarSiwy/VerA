@@ -1,0 +1,22 @@
+// Annex G Table G.1 ("Analog time: $realtime -> $abstime, new"). The two are
+// not spellings of one thing: the same table's last row records that $realtime
+// is scaled by the timescale (OVI Verilog-A v1.0 pinned it at 1 s, v2.0 moved
+// it to the `timescale directive, default 1 ns), while §9.10 $abstime is the
+// absolute analog time IN SECONDS, whatever the timescale says.
+//
+// So with a 1 ns timescale in force and the solver at t = 1 us, a $realtime
+// answer reads 1000 and an $abstime answer reads 1e-6. One literal tells them
+// apart; the relative tolerance is ~1 ulp because both sides are the same
+// decimal text parsed to a double.
+//
+//! time 1e-6
+//! print none
+`timescale 1ns/1ns
+`include "check.vh"
+module annex_g_abstime(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKR("$abstime is seconds, not timescale units", $abstime, 1e-6, 1e-15);
+    I(p,n) <+ $abstime + 0.0 * V(p,n);
+  end
+endmodule

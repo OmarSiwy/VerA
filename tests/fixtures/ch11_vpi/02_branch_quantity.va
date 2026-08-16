@@ -1,0 +1,18 @@
+// §11.6.6/11.6.7 branch and quantity objects: a branch owns a potential
+// quantity and a flow quantity, and the branch declared `branch (p,n) measured`
+// takes its potential from that node pair (§3.6, §5.4.1).
+//
+// V(p) = 0.75, V(n) = 0.25 (both exact in binary) so V(measured) = 0.5 V, and
+// the flow the module drives through it is 0.5/1000 = 500 uA.
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module ch11_branch_quantity(p, n);
+  inout p, n; electrical p, n;
+  branch (p,n) measured;
+  analog begin
+    `CHECK("named branch potential is its node pair", V(measured), 0.5, 1e-15);
+    `CHECKR("the flow quantity the branch carries", V(measured)/1000.0, 5.0e-4, 1e-15);
+    I(measured) <+ V(measured)/1000.0;
+  end
+endmodule

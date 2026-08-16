@@ -1,0 +1,17 @@
+// Annex H "behavioral model": a version of a module with a unique set of
+// parameters. The override is the point — with resistance overridden to 2k the
+// §2.6 scale factor makes it 2000 exactly, and Ohm's law at V(p,n) = 0.5 gives
+// 0.5/2000 = 250 uA, not the 500 uA the 1k default would give.
+//
+//! param resistance = 2k
+//! bias V(p) = 0.5
+`include "check.vh"
+module glossary_behavioral_model(p, n);
+  inout p, n; electrical p, n;
+  parameter real resistance = 1k from (0:inf);
+  analog begin
+    `CHECKX("overridden parameter, 2k = 2000", resistance, 2000.0);
+    `CHECKR("Ohm's law at 0.5 V", V(p,n)/resistance, 2.5e-4, 1e-15);
+    I(p,n) <+ V(p,n)/resistance;
+  end
+endmodule

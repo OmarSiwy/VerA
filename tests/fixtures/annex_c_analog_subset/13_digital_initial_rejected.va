@@ -1,0 +1,8 @@
+// annex C: the digital `initial` procedural block is outside Verilog-A.
+//! reject E0205
+//! reject initial
+// EXPECT: error
+module annex_c_digital_initial_rejected;
+    integer state;
+    initial state = 1;
+endmodule

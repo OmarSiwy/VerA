@@ -1,0 +1,45 @@
+// Annex A.6.4-A.6.6 behavioral statements, traced by hand at V(p,n) = 1:
+//
+//   result = 0.0
+//   if (1 > 0)                       result = 1.0
+//   case (index): index is an integer assigned in an analog context, so LRM
+//     3.3.1 gives it an initial value of 0 -> the `0:` arm runs, result = 2.0
+//   for (index = 0; index < 2; ...)  result += 0 then += 1  -> 3.0, index = 2
+//   while (index < 3)                index = 3
+//   repeat (2)                       result += 1.0 twice    -> 5.0
+//
+// `index` is checked separately because its final value depends only on the
+// loop bounds, not on any initializer: the `for` must leave 2 and the `while`
+// must then run exactly once.
+//
+//! bias V(p) = 1.0
+//! print none
+`include "check.vh"
+module annex_a_behavioral_statements(p, n);
+    inout p, n;
+    electrical p, n;
+    integer index;
+    real result;
+
+    analog begin : behavior
+        result = 0.0;
+        if (V(p, n) > 0.0)
+            result = 1.0;
+        else
+            result = -1.0;
+        case (index)
+            0: result = result + 1.0;
+            1, 2: result = result + 2.0;
+            default: result = result + 3.0;
+        endcase
+        for (index = 0; index < 2; index = index + 1)
+            result = result + index;
+        while (index < 3)
+            index = index + 1;
+        repeat (2)
+            result = result + 1.0;
+        `CHECKX("if + case + for + repeat accumulate to 5", result, 5.0);
+        `CHECKI("for leaves index at its bound, while raises it to 3", index, 3);
+        I(p, n) <+ result;
+    end
+endmodule

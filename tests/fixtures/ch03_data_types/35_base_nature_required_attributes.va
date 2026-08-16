@@ -1,0 +1,13 @@
+// §3.6.1: "Each nature definition ... shall include all the required
+// attributes specified in 3.6.1.2." §3.6.1.2 says of abstol: "This attribute is
+// required for all base natures."
+//
+// `ch3_incomplete_nature` is a BASE nature (no `:` parent) that declares units
+// and access but not abstol, so it is incomplete and shall be diagnosed. The
+// discipline and module below are well-formed on purpose — the only defect in
+// the file is the missing attribute, so a rejection can only be about that.
+//
+//! reject DiagnosticsReported
+nature ch3_incomplete_nature; units="V"; access=IncompleteV; endnature
+discipline ch3_incomplete_disc; potential ch3_incomplete_nature; enddiscipline
+module ch3_incomplete(p); inout p; ch3_incomplete_disc p; analog IncompleteV(p)<+0.0; endmodule

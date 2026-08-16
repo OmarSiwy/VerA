@@ -1,0 +1,23 @@
+// Annex D.3 driver_access.vams, the low six flags. Their bit patterns are set
+// by the standard and are disjoint: UNKNOWN 0, DELAYED 1, GATE 2, UDP 4,
+// ASSIGN 8, BEHAVIORAL 16 — so the OR of all six is 0+1+2+4+8+16 = 31.
+`include "check.vh"
+`ifdef DRIVER_ACCESS_VAMS
+`else
+`define DRIVER_ACCESS_VAMS 1
+`define DRIVER_UNKNOWN 32'b00000000000
+`define DRIVER_DELAYED 32'b00000000001
+`define DRIVER_GATE 32'b00000000010
+`define DRIVER_UDP 32'b00000000100
+`define DRIVER_ASSIGN 32'b00000001000
+`define DRIVER_BEHAVIORAL 32'b00000010000
+module annex_d_driver_low(p);
+  inout p; electrical p; integer flags;
+  analog begin
+    flags = `DRIVER_UNKNOWN | `DRIVER_DELAYED | `DRIVER_GATE | `DRIVER_UDP | `DRIVER_ASSIGN | `DRIVER_BEHAVIORAL;
+    `CHECKI("driver_access.vams low six flags OR to 31", flags, 31);
+    `CHECKI("DRIVER_BEHAVIORAL is bit 4", `DRIVER_BEHAVIORAL, 16);
+    I(p) <+ flags + 0.0*V(p);
+  end
+endmodule
+`endif

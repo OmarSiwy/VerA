@@ -1,0 +1,22 @@
+// Annex H "NR method": Newton-Raphson solves a NONLINEAR relationship by
+// linearizing it, so the exponential's value has to be right before its slope
+// can be. $vt is kT/q (§4.5.14); at 300 K every constant set Annex D offers —
+// SPICE, LRM 1.0, NIST 1998/2010/2018 — puts it in 25.8512..25.8521 mV, which
+// pins it to 1e-4 relative. The diode law at 100 mV then follows: the argument
+// 3.868 is far below limexp's linearization knee, so limexp is exp there, and
+// 1e-14*(exp(0.1/0.0258516) - 1) = 4.6855e-13 A holds to four digits across that
+// whole spread. At zero bias exp(0) - 1 is zero to the last bit.
+//
+//! temp 300.0
+//! bias V(p) = 0.1
+`include "check.vh"
+module glossary_nonlinear_nr_relationship(p, n);
+  inout p, n; electrical p, n;
+  parameter real saturation = 1e-14;
+  analog begin
+    `CHECKR("$vt is kT/q at 300 K", $vt, 0.025852, 1e-4);
+    `CHECKX("zero bias draws no current", saturation*(limexp(0.0/$vt) - 1.0), 0.0);
+    `CHECKR("diode law at 100 mV", saturation*(limexp(V(p,n)/$vt) - 1.0), 4.6855e-13, 1e-3);
+    I(p,n) <+ saturation*(limexp(V(p,n)/$vt) - 1.0);
+  end
+endmodule

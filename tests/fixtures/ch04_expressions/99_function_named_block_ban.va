@@ -1,0 +1,34 @@
+// LRM 4.7.1 lists, among the things an analog user-defined function
+// "shall not" do: "shall not use named blocks". `begin : forbidden` inside
+// `named` is exactly that, so a conforming tool diagnoses this file. VerA has
+// no diagnostic for the rule today (see the note filed with this fixture), so
+// the fixture instead pins what the construct is required to produce IF it is
+// accepted -- which is the same claim a ban would rest on.
+//
+// 4.7.2.1: "The analog user-defined function definition implicitly declares a
+// variable, internal to the analog user-defined function, with the same name as
+// the analog_function_identifier ... This internal variable is initialized to
+// zero (0) if the inherited type is numerical."
+//
+// So the assignment `named = x` inside the named block must reach THAT
+// variable: a named block is a §5.3.2 sequential block, not a new function
+// scope, and it declares no `named` of its own. named(0.75) is therefore 0.75
+// exactly. A tool that let `forbidden` shadow the implicit variable -- the
+// concrete hazard the 4.7.1 ban exists to head off -- returns the initial 0
+// and fails this.
+`include "check.vh"
+module ch4_fn_named(p);
+  inout p;
+  electrical p;
+  analog function real named;
+    input x;
+    real x;
+    begin : forbidden
+      named = x;
+    end
+  endfunction
+  analog begin
+    `CHECKX("named block does not shadow the function's return variable", named(0.75), 0.75);
+    I(p) <+ named(V(p));
+  end
+endmodule

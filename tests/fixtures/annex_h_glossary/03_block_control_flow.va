@@ -1,0 +1,19 @@
+// Annex H "block" (a level delimited by begin-end) and "control flow" (the
+// conditional statements selecting a section of the description). The if/else
+// computes |V(p,n)|, so at a bias of -0.4 V the guard must be false (§4.2.5: a
+// comparison is an integer, 0 here) and the else arm must leave 0.4 behind.
+//
+//! bias V(p) = -0.4
+`include "check.vh"
+module glossary_block_control_flow(p, n);
+  inout p, n; electrical p, n;
+  real result;
+  analog begin : constitutive_block
+    if (V(p,n) > 0.0) result = V(p,n);
+    else result = -V(p,n);
+    // The verdict is an operand, never a branch: check.vh explains W0851.
+    `CHECKI("guard is false at negative bias", V(p,n) > 0.0, 0);
+    `CHECKX("the else arm's value survives the block", result, 0.4);
+    I(p,n) <+ result;
+  end
+endmodule

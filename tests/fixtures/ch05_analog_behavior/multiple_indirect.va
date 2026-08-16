@@ -1,0 +1,30 @@
+// §5.6.7.1 multiple indirect contributions: a set of indirect statements is a
+// SYSTEM of equations the solver satisfies simultaneously, which is why the LRM
+// can pair the targets with the equations in any order "without affecting the
+// results".
+//
+// Both statements here name the same branch, so the system is
+//     V(c1) == V(p,n)   and   V(c2) == 2*V(p,n)
+// in the single unknown V(p,n). It is consistent only where V(c2) == 2*V(c1),
+// and there V(p,n) = V(c1). The testbench declares that point: V(c1) = 0.5,
+// V(c2) = 1.0, V(p) = 0.5, V(n) = 0, giving V(p,n) = 0.5, so both residuals and
+// the consistency condition 2*V(c1) - V(c2) are exactly zero. Every digit is
+// read off the two equations.
+//
+//! bias V(c1) = 0.5
+//! bias V(c2) = 1.0
+//! bias V(p) = 0.5
+//! bias V(n) = 0.0
+`include "check.vh"
+module ch5_multiple_indirect(p, n, c1, c2);
+  inout p, n, c1, c2; electrical p, n, c1, c2;
+  analog begin
+    `CHECK("first constraint V(c1) == V(p,n)", V(c1) - V(p, n), 0.0, 1e-15);
+    `CHECK("second constraint V(c2) == 2*V(p,n) at the same point",
+           V(c2) - 2.0 * V(p, n), 0.0, 1e-15);
+    `CHECKX("one branch under both equations forces V(c2) == 2*V(c1)",
+            2.0 * V(c1) - V(c2), 0.0);
+    V(p, n) : V(c1) == V(p, n);
+    V(p, n) : V(c2) == 2.0 * V(p, n);
+  end
+endmodule

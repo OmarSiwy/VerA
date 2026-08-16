@@ -1,0 +1,18 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-7.7.1-02  (ch7-mixed-signal.html)
+// The form is connect connect_module_identifier connect_attributes direction discipline_identifier , direction discipline_identifier ; where the specifi
+// VAMS-7.8.3-01  (ch7-mixed-signal.html)
+// The connect_mode indicates how input, output, or inout ports of the given discipline shall be combined for the purpose of inserting connect modules. [
+// VAMS-7.8.3.2-01  (ch7-mixed-signal.html)
+// Example 1: connect elect_to_logic split; This connect statement specifies the module elect_to_logic shall be split across the discrete module ports. [
+//
+//! reject NoModule
+// EXPECT: error -- merged/split connect mode needs signal segmentation.
+connectrules ch7_mode;
+  connect ch7_a2d merged input electrical, output logic;
+  connect ch7_d2a split input logic, output electrical;
+endconnectrules

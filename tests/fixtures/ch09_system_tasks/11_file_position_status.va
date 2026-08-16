@@ -1,0 +1,39 @@
+// §9.5 file positioning and error status. Two rules here have an answer the LRM
+// writes down, and both hold because "fixture.dat" does not exist next to the
+// testbench binary:
+//
+//   §9.5.1  "If a file cannot be opened (either the file does not exist and the
+//            type specified is "r", "rb", "r+", "r+b", or "rb+", or the
+//            permissions do not allow the file to be opened at that path), a
+//            zero is returned for the mcd or fd."
+//           The type here is "r+" and the file is absent, so fd is 0 — not a
+//           descriptor, and not the -1 the C fopen convention would hand back.
+//
+//   §9.5.8  "$feof ... Returns a nonzero value when EOF has previously been
+//            detected reading fd; returns zero otherwise."
+//           Nothing is ever read from fd here, so no EOF has been detected and
+//           the answer is zero. An implementation that reported EOF merely
+//           because the descriptor is unusable fails this.
+//
+// The positioning calls in between ($ftell/$fseek/$rewind/$fflush/$ferror) stay
+// deliberately unasserted: §9.5.5/§9.5.7 say only "if an error occurs, EOF is
+// returned", and the LRM never fixes EOF's numeric value, so there is no digit
+// to write for them.
+`include "check.vh"
+module ch09_file_position_status(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code, pos;
+  string message;
+  analog begin
+    fd = $fopen("fixture.dat", "r+");
+    `CHECKI("§9.5.1: opening a missing file with type r+ yields fd = 0", fd, 0);
+    pos = $ftell(fd);
+    code = $fseek(fd, 0, 0);
+    code = $rewind(fd);
+    $fflush(fd);
+    code = $ferror(fd, message);
+    code = $feof(fd);
+    `CHECKI("§9.5.8: nothing was read from fd, so no EOF was detected", code, 0);
+    I(p,n) <+ pos + code + 0.0*V(p,n);
+  end
+endmodule

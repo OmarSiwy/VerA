@@ -1,0 +1,25 @@
+// Annex A.2.6 / LRM 4.7.1 analog function: the return value is whatever was
+// assigned to the function's own name. `square` is x*x, so at V(p,n) = 1.5 the
+// call must be 2.25 — a value the function definition fixes and nothing else
+// in the module can change.
+//
+//! bias V(p) = 1.5
+//! print none
+`include "check.vh"
+module annex_a_analog_function(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function real square;
+        input real value;
+        begin
+            square = value * value;
+        end
+    endfunction
+
+    analog begin
+        `CHECK("analog function returns the value assigned to its own name",
+               square(V(p, n)), 2.25, 1e-15);
+        I(p, n) <+ square(V(p, n));
+    end
+endmodule

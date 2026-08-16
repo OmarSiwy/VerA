@@ -1,0 +1,21 @@
+// Annex C.4: "the `default_discipline compiler directive is not supported in
+// Verilog-A. All Verilog-A modules shall have a discipline defined for each
+// module." This module declares `electrical p, n` explicitly, so §3.8 leaves the
+// directive with nothing to apply to: a net with its own declaration keeps it.
+// The values below are what "electrical p, n" means and what the directive
+// therefore cannot change — §5.4.1's one-argument probe against the reference
+// node, and the two-argument probe across the pair.
+//
+//! bias V(p) = 1.25
+//! bias V(n) = 0.25
+`default_discipline electrical
+`include "check.vh"
+module annex_c_default_discipline_current_behavior(p, n);
+    inout p, n;
+    electrical p, n;
+    analog begin
+        `CHECKX("V(p) is p against the reference node", V(p), 1.25);
+        `CHECKX("V(p,n) is the potential across the declared pair", V(p, n), 1.0);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

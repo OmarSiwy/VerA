@@ -1,0 +1,56 @@
+// The engine prepends annex D (constants.vams / disciplines.vams), which already
+// defines CONSTANTS_VAMS and DISCIPLINES_VAMS, so this fixture carries its own
+// include guard instead of the standard one -- otherwise its body is skipped.
+`include "check.vh"
+`ifdef ANNEX_D_ELECTRICAL_DEFINITIONS
+`else
+`define ANNEX_D_ELECTRICAL_DEFINITIONS 1
+nature Current;
+  units = "A";
+  access = I;
+  idt_nature = Charge;
+  abstol = 1e-12;
+endnature
+nature Charge;
+  units = "coul";
+  access = Q;
+  ddt_nature = Current;
+  abstol = 1e-14;
+endnature
+nature Voltage;
+  units = "V";
+  access = V;
+  idt_nature = Flux;
+  abstol = 1e-6;
+endnature
+nature Flux;
+  units = "Wb";
+  access = Phi;
+  ddt_nature = Voltage;
+  abstol = 1e-9;
+endnature
+discipline electrical_d;
+  potential Voltage;
+  flow Current;
+enddiscipline
+discipline voltage_d;
+  potential Voltage;
+enddiscipline
+discipline current_d;
+  flow Current;
+enddiscipline
+// §3.5.1/§3.6: the access function named by a nature reads that nature's value
+// on a net of a discipline that binds it. `electrical_d` binds Voltage (access
+// V) as its potential, so `V(p)` is the node potential the bias holds at 0.7 V
+// — not the flow, and not the Charge/Flux natures that only appear as
+// idt_nature/ddt_nature here.
+//
+//! bias V(p) = 0.7
+module annex_d_electrical(p);
+  inout p; electrical_d p;
+  analog begin
+    `CHECK("V() reads the potential of the user-declared electrical_d", V(p), 0.7, 1e-12);
+    I(p) <+ V(p);
+  end
+endmodule
+`endif

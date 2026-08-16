@@ -1,0 +1,34 @@
+// §4.5.8 transition filter, at the one operating point the LRM assigns it a
+// value at: "In DC analysis, transition() passes the value of the expr directly
+// to its output." Directly — the td/rise/fall arguments below shape the ramp
+// between levels, and a DC point has no ramp to shape.
+//
+// Two different operands are passed through, 1 and 3*1 + 1.5 = 4.5, because one
+// would not distinguish "passes its input through" from "answers 1".
+//
+// The transient shape is deliberately not pinned here: §4.5.8 draws a
+// piecewise-linear ramp but leaves the simulator to place the time points, and
+// tests/fixtures/exhaustive/063_transition.va already pins the implemented
+// kernel and names the divergence.
+//
+//! bias V(p) = 1.0
+//! bias V(n) = 0
+//! print none
+`include "check.vh"
+module ch04_transition(p, n);
+    inout p, n;
+    electrical p, n;
+    integer level;
+
+    analog begin
+        level = V(p, n) > 0.0;
+
+        // §4.2.5: a relational operator yields an integer, 1 when true.
+        `CHECKI("a relational yields integer 1", level, 1);
+        `CHECKX("DC passes the expr straight through", transition(level, 1n, 2n, 3n), 1.0);
+        `CHECKX("and it is the expr, not a constant",
+                transition(3.0 * level + 1.5, 1n, 2n, 3n), 4.5);
+
+        I(p, n) <+ transition(level, 1n, 2n, 3n);
+    end
+endmodule

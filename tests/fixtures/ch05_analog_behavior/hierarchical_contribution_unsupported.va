@@ -1,0 +1,7 @@
+//! reject module instantiation is not supported
+// EXPECT: error -- contributions through instance hierarchy need elaboration.
+module ch5_hier_contribution(p);
+  inout p; electrical p;
+  analog I(u.internal) <+ 1m;
+  child u(p);
+endmodule

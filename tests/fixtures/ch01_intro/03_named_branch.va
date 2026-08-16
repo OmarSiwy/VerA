@@ -1,0 +1,18 @@
+// §1.3.1 "a branch is a path of flow between two nodes ... every branch has an
+// associated potential (the potential difference between the two nodes)".
+// Giving the pair a name changes nothing numeric: at V(a)=1.0, V(b)=0.5 the
+// branch potential is 0.5 V and 0.5/50 = 10 mA.
+//
+//! bias V(a) = 1.0, V(b) = 0.5
+`include "check.vh"
+module ch01_named_branch(a, b);
+    inout a, b;
+    electrical a, b;
+    branch (a, b) path_ab;
+
+    analog begin
+        `CHECK("named branch potential", V(path_ab), 0.5, 1e-15);
+        `CHECK("named branch flow", V(path_ab) / 50.0, 1.0e-2, 1e-15);
+        I(path_ab) <+ V(path_ab) / 50.0;
+    end
+endmodule

@@ -1,0 +1,18 @@
+// §6.6.2 if-generate with a false constant condition. The generate scheme is
+// evaluated at elaboration, so `if (0)` does not produce a runtime branch: the
+// then-block is never instantiated and the else-block is, exactly as if only
+// the else-block had been written. `arm` must therefore read 2 — 1 says the
+// wrong alternative was elaborated, 0 says neither was.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch6_gen_false(p);
+  inout p; electrical p;
+  integer arm;
+  analog arm = 0;
+  generate
+    if (0) begin arm = 1; I(p) <+ 1.0; end
+    else   begin arm = 2; I(p) <+ V(p); end
+  endgenerate
+  analog `CHECKI("if(0) elaborates the else block", arm, 2);
+endmodule

@@ -41,6 +41,7 @@ const Analysis = @import("../ir/analysis.zig");
 const UnitPlan = @import("unit_plan.zig");
 const cg_display = @import("cg_display.zig");
 const cg_filters = @import("cg_filters.zig");
+const cg_limit = @import("cg_limit.zig");
 const Lower = @import("../ir/lower.zig");
 const proof = @import("../ir/proof.zig");
 const diag = @import("../diag.zig");
@@ -323,7 +324,11 @@ pub const Gen = struct {
     held_idx: []u32 = &.{},
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
-
+    /// §4.5.15 the `$limit` call sites this device honours, in source order,
+    /// and one line per site it does not. Filled by `cg_limit.collect` before
+    /// `buildJobs`, which queues their algorithm arguments into the core.
+    limits: []cg_limit.LimitCall = &.{},
+    limits_declined: [][]const u8 = &.{},
 
     /// Where each slot's declaration goes — `probeBody` fills this, and it is
     /// only meaningful for the out-of-SSA path (`straight` declares everything
@@ -360,6 +365,9 @@ pub const Gen = struct {
         self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
         try self.buildUnits();
         try self.buildNames();
+        // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
+        // `$limit` become core live-outs, and `buildJobs` is what queues them.
+        try cg_limit.collect(self);
         try self.buildJobs();
         try self.planCommon();
         // After `planCommon`, which is what fills them. Stable for the rest of
@@ -469,8 +477,6 @@ pub const Gen = struct {
         self.common_name = try a.dupe(u8, n);
     }
 
-
-
     pub fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         try self.out.print(self.gpa, fmt, args);
     }
@@ -488,9 +494,6 @@ pub const Gen = struct {
     fn ind(self: *Gen, n: u32) Error!void {
         try self.out.appendNTimes(self.gpa, ' ', n * 4);
     }
-
-
-
 
     // --------------------------------------------------------------- units ----
 
@@ -660,16 +663,23 @@ pub const Gen = struct {
         // has to go the other way.
         if (filt) try depublish(self.gpa, &self.out, filt_txt);
         if (self.display == .emit) try self.out.appendSlice(self.gpa, display_txt);
+        if (self.limits.len != 0) try self.out.appendSlice(self.gpa, cg_limit.helpers_txt);
         try self.out.appendSlice(self.gpa, "\n");
-        if (stateful) try self.out.appendSlice(self.gpa, rscalar_txt);
+        // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
+        // they need `R` for the same reason `updateState` does. It stays out of
+        // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
+        // renders as the identity inside one.
+        if (stateful or cg_limit.usesCore(self)) try self.out.appendSlice(self.gpa, rscalar_txt);
 
         try self.emitTopology();
         try self.emitModel();
+        try self.emitDerive();
         try self.emitInstance();
         try self.emitUnits();
         try self.emitDispatchers();
         try self.emitNoiseTable();
         if (stateful) try self.emitStateMachine();
+        try cg_limit.emit(self);
         try self.emitNextBreakpoint();
         try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
     }
@@ -838,7 +848,7 @@ pub const Gen = struct {
         return null;
     }
 
-    fn isFlowUnknown(self: *const Gen, i: u32) bool {
+    pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
         if (i >= self.lower.node_order.items.len) return true; // codegen-added branch current
         return std.mem.startsWith(u8, self.lower.node_order.items[i], "flow(");
     }
@@ -863,6 +873,63 @@ pub const Gen = struct {
         try self.w("}};\n\n", .{});
     }
 
+    /// §6.3.4/§3.4.5 — recompute every parameter whose value is not its own.
+    ///
+    /// The Model is a flat struct of independent fields, so a host write to
+    /// `base` cannot by itself reach a `doubled = 2.0*base` declared over it;
+    /// §6.3.4 requires that it does ("an update of gate_width ... automatically
+    /// updates gate_cap"). This is that seam: the host writes the model card,
+    /// calls `derive`, and only then builds an Instance.
+    ///
+    /// Two kinds of field are rewritten, and nothing else — a parameter with a
+    /// literal default keeps costing exactly one field initializer:
+    ///   - one whose default mentions another parameter (§6.3.4);
+    ///   - every §3.4.5 localparam, whatever its default. "Local parameters ...
+    ///     shall not be directly modified" — and since the field has to stay
+    ///     readable as `model.<name>` from the units, the way to enforce that
+    ///     against a host that writes it anyway is to overwrite it here.
+    ///
+    /// Declaration order IS dependency order: a default may only name a
+    /// parameter declared before it (a forward or self reference is E0314 at
+    /// lowering), so a chain a→b→c derives correctly in one pass and a cycle
+    /// cannot be built in the first place — no SCC pass, no cycle diagnostic.
+    ///
+    /// The field initializer is left as the fold-through-declared-defaults
+    /// value, so `Model{}` on its own is still the spec default and a host that
+    /// overrides nothing need not call this at all.
+    fn emitDerive(self: *Gen) Error!void {
+        const at = self.out.items.len;
+        try self.w(
+            \\/// §6.3.4 parameter dependence + §3.4.5 localparam. Call ONCE after
+            \\/// writing the model card and before the first solve: the fields below
+            \\/// are defined by expressions over other parameters, so they are not
+            \\/// valid until the parameters they read have their final values.
+            \\pub fn derive(model: *Model) void {{
+            \\
+        , .{});
+        const body = self.out.items.len;
+        for (self.lower.params.items, 0..) |p, i| {
+            const ty = Analysis.tyOfParam(p.ty);
+            // A string parameter has no arithmetic to redo; a string localparam
+            // is left overridable rather than growing a second renderer for it.
+            if (ty == .str) continue;
+            // `resolve_params = false` ⇒ this folds only if the default is
+            // self-contained, which is exactly "not derived from a parameter".
+            if (self.an.foldConst(p.default, 0, false) != null and !p.is_local) continue;
+            // Not renderable in the host's f64 domain (a default over an op
+            // `f64Const` does not carry): leave the folded field initializer, as
+            // before. Widening the op set there is the fix if a model asks.
+            const e = try self.f64Const(p.default, 0) orelse continue;
+            switch (ty) {
+                .real => try self.w("    model.{s} = {s};\n", .{ self.p_names[i], e }),
+                .int => try self.w("    model.{s} = @intFromFloat(@round({s}));\n", .{ self.p_names[i], e }),
+                .str => unreachable,
+            }
+        }
+        if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
+        try self.w("}}\n\n", .{});
+    }
+
     fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
         const c = self.an.foldConst(p.default, 0, true);
         return switch (want) {
@@ -877,7 +944,6 @@ pub const Gen = struct {
             },
         };
     }
-
 
     /// Rendered form of a float constant, memoized on its BIT PATTERN.
     ///
@@ -950,8 +1016,12 @@ pub const Gen = struct {
                     .{ n, hist_len, n, hist_len, n },
                 ),
                 .last_crossing => try self.w("    {s}__prev: f64 = 0.0, // §4.5.10\n    {s}__t_last: f64 = -1.0,\n", .{ n, n }),
-                .cross => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3\n    {s}__hit: bool = false,\n", .{ n, n }),
-                .timer => try self.w("    {s}__next: f64 = 0.0, // §5.10.3\n    {s}__hit: bool = false,\n", .{ n, n }),
+                // §5.10.3 the history the event test compares against, and
+                // nothing else: there is no `__hit` flag any more, because a
+                // flag written on the accepted step is a flag read one timepoint
+                // after the event (see `emitOperator`).
+                .cross => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3\n", .{n}),
+                .timer => try self.w("    {s}__next: f64 = 0.0, // §5.10.3\n", .{n}),
                 // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
                 // past inputs and past outputs per section, newest first. The
                 // SHAPE is structural (it comes from the flattened call), which
@@ -1095,6 +1165,25 @@ pub const Gen = struct {
                 .mode = .strict,
                 .comment = "§5.10 event-assigned variable, held across evaluations",
             });
+        }
+        // §4.5.15 the arguments of every honoured `$limit`, so `limit` can read
+        // them out of the core instead of re-deriving the temperature prelude.
+        // Queued after the held variables and before the §9.4 display job for
+        // the same insert-tolerance reason: a model that gains a `$limit`
+        // appends core fields, it renumbers none.
+        for (self.limits) |lc| {
+            for (lc.argv) |v| {
+                if (v == .f_zero) continue;
+                try jobs.append(self.arena, .{
+                    // Only the §9.4 display job is emitted as a declaration of
+                    // its own (see `emitUnits`); every other job exists to put
+                    // its target in the core, so this name is never written.
+                    .name = "$limit",
+                    .target = v,
+                    .mode = .strict,
+                    .comment = "§4.5.15 $limit algorithm argument",
+                });
+            }
         }
         // §9.4 the display tasks, as ONE unit. Queued last, so no existing job —
         // and therefore no existing declaration name — moves when a model gains
@@ -1318,24 +1407,9 @@ pub const Gen = struct {
 
     // ---- slicing: what this unit actually has to compute -------------------
 
-
-
-
-
     /// What taking `from → to` reduces to for this unit, or null when the edge
     /// does something the unit can observe. Iterative, not recursive: the chain
     /// of empty blocks is bounded by nothing syntactic.
-
-
-
-
-
-
-
-
-
-
-
 
     // ---- body emission ------------------------------------------------------
 
@@ -1376,7 +1450,6 @@ pub const Gen = struct {
             .str => "\"\"",
         };
     }
-
 
     /// Where one slot's declaration ends up, and the evidence for it.
     ///
@@ -1789,14 +1862,11 @@ pub const Gen = struct {
         try self.b("}}\n", .{});
     }
 
-
-
     /// A pooled phi this unit actually materializes into a local slot.
     fn slotted(self: *const Gen, inst: Mir.Inst) bool {
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
         return self.plan.needed[i] and self.plan.slot[i] != none_u32;
     }
-
 
     // ---- value / instruction rendering --------------------------------------
 
@@ -2291,20 +2361,44 @@ pub const Gen = struct {
     /// The argument is a `constant_expression` in both grammars, so an
     /// unfoldable one is a source error, not a direction; it degrades to
     /// "either", which is the LRM's own default.
-    fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value) Error![]const u8 {
+    /// `in` is the CURRENT input as a plain `f64` expression: the local
+    /// `updateState` binds, or the rendered operand `.val()` in `eval`. Both
+    /// spellings compare against the same `__prev`, which holds the last
+    /// ACCEPTED input either way.
+    fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const u8) Error![]const u8 {
         const dir: i64 = if (self.an.foldConst(if (args.len > 1) args[1] else .zero, 0, true)) |c|
             @intFromFloat(c.f)
         else
             0;
         return switch (dir) {
-            1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and in > 0.0", .{n}),
-            -1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and in < 0.0", .{n}),
+            1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in }),
+            -1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in }),
             else => std.fmt.allocPrint(
                 self.arena,
-                "(inst.{0s}__prev <= 0.0 and in > 0.0) or (inst.{0s}__prev >= 0.0 and in < 0.0)",
-                .{n},
+                "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
+                .{ n, in },
             ),
         };
+    }
+
+    /// §5.10.3.1/§5.10.3.2/§5.10.3.3, one sentence repeated verbatim for
+    /// `cross`, `above` and `timer`: "If enable argument is specified and it is
+    /// zero, then <op>() is inactive, meaning that it does not generate an
+    /// event". Absent means active, so an operator without the argument gets a
+    /// literal `true` and the emitted `and` folds away.
+    ///
+    /// The enable is the ONE operator argument that is a live expression rather
+    /// than a codegen-time constant — `enableArgIdx` is what makes `UnitPlan`
+    /// give it a slot, so a `cross(…, enable)` whose enable is a variable
+    /// assigned in the block renders as that variable and not as its phi's zero.
+    fn enableTest(self: *Gen, name: []const u8, args: []const Mir.Value) Error![]const u8 {
+        const i = enableArgIdx(name) orelse return "true";
+        if (i >= args.len) return "true";
+        const at = self.out.items.len;
+        try self.renderCond(args[i]);
+        const s = try self.arena.dupe(u8, self.out.items[at..]);
+        self.out.shrinkRetainingCapacity(at);
+        return s;
     }
 
     /// §5.10 the `held_vars` index a `$held_*` call carries as its only
@@ -2469,10 +2563,32 @@ pub const Gen = struct {
         if (eq(u8, name, "$simparam")) {
             if (args.len > 1) return self.b("S.con({s})", .{try self.f64Expr(args[1])});
             const nm = self.strArg(args, 0) orelse "";
-            const dflt: f64 = if (eq(u8, nm, "gmin")) 1e-12 else if (eq(u8, nm, "tnom")) 300.15 else if (eq(u8, nm, "scale") or eq(u8, nm, "shrink") or eq(u8, nm, "sourceScaleFactor")) 1.0 else 0.0;
+            // Table 9-27 gives `tnom` in DEGREES CELSIUS ("Default value of
+            // temperature at which model parameters were extracted"), so the
+            // conforming default is 27, not the 300.15 it used to answer — the
+            // right temperature written in the wrong unit, which a model that
+            // formed `$vt($simparam("tnom") + 273.15)` then read as 300 K too hot.
+            const dflt: f64 = if (eq(u8, nm, "gmin")) 1e-12 else if (eq(u8, nm, "tnom")) 27.0 else if (eq(u8, nm, "scale") or eq(u8, nm, "shrink") or eq(u8, nm, "sourceScaleFactor")) 1.0 else 0.0;
             return self.b("S.con({s})", .{try self.fmtF64(dflt)});
         }
-        if (eq(u8, name, "$simparam$str")) return self.b("\"\"", .{});
+        // §9.15 "Table 9-28 gives a list of simulation string parameter names
+        // that shall be supported by $simparam$str" — no "if they support the
+        // parameter" escape, unlike Table 9-27's numeric side, so the two names
+        // this engine actually knows are answered. The rest ("cwd", "instance",
+        // "path") describe the host's filesystem and instantiation hierarchy,
+        // which a flat elaborated device has no view of: "" is the honest answer
+        // there, an invented path is not.
+        if (eq(u8, name, "$simparam$str")) {
+            const nm = self.strArg(args, 0) orelse "";
+            // §4.6.1's analysis names ARE the `AnalysisKind` tag spellings, so
+            // the enum is the table — no second list to drift out of step.
+            if (eq(u8, nm, "analysis_type")) {
+                self.uses_inst = true;
+                return self.b("@tagName(inst.analysis_kind)", .{});
+            }
+            if (eq(u8, nm, "module")) return self.b("\"{f}\"", .{std.zig.fmtString(self.mir.name)});
+            return self.b("\"\"", .{});
+        }
         // §9.19 $param_given / $port_connected.
         if (eq(u8, name, "$param_given")) {
             const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
@@ -2500,10 +2616,20 @@ pub const Gen = struct {
         // exactly 0 and no driver index is in range. Zero is the true answer
         // here, not a substitute — but the call site is nonconforming, hence
         // the acceptance is a snapshot (tests/fixtures/ch09_system_tasks §9.22).
+        // $driver_delay is NOT in the list below, for two reasons that arrive
+        // together. §9.23.1 types it REAL — "The returned delay value is a real
+        // number … The fractional part arises from the possibility of a driver
+        // being updated by an A2D event off the digital timeticks" — so an i64
+        // literal lands in an S(Dual) slot and the device does not compile at
+        // all. And zero is not its no-driver answer: §9.23.1 gives it a
+        // sentinel, "If there is no pending value on a signal, it returns the
+        // value minus one (-1.0)", which is exactly the flat-analog case the
+        // comment above describes for the counts.
+        if (eq(u8, name, "$driver_delay")) return self.b("S.con(-1.0)", .{});
         const driver_queries = [_][]const u8{
-            "$driver_count",         "$receiver_count", "$driver_state",
-            "$driver_strength",      "$driver_delay",   "$driver_next_state",
-            "$driver_next_strength", "$driver_type",
+            "$driver_count",    "$receiver_count",    "$driver_state",
+            "$driver_strength", "$driver_next_state", "$driver_next_strength",
+            "$driver_type",
         };
         for (driver_queries) |q| {
             if (eq(u8, name, q)) return self.b("@as(i64, 0)", .{});
@@ -2632,7 +2758,12 @@ pub const Gen = struct {
             .zi => {
                 const p = try cg_filters.filterPlan(self, inst, args);
                 if (p.err) |m| return self.abort("{s}", .{m});
-                try self.b("S.con(inst.{s}__out)", .{n});
+                // Same reason `.laplace` above forces it: `__sec` takes a
+                // `*const Model` whatever its coefficients read.
+                self.uses_model = true;
+                try self.b("zZiHold(S, {d}, {d}, {s}, {s}__sec(model), inst.dt, inst.{s}__out)", .{
+                    p.ns, p.deg, in, n, n,
+                });
             },
             .ddt => try self.b("zDdt(S, {s}, inst.{s}__prev, inst.dt)", .{ in, n }),
             // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
@@ -2666,9 +2797,33 @@ pub const Gen = struct {
                 });
             },
             .last_crossing => try self.b("S.con(inst.{s}__t_last)", .{n}),
-            .cross => try self.b("S.con(if (inst.{s}__hit) 1.0 else 0.0)", .{n}),
-            .timer => try self.b("S.con(if (inst.{s}__hit) 1.0 else 0.0)", .{n}),
-            .above => try self.b("S.con(if (({s}).val() > 0.0) 1.0 else 0.0)", .{in}),
+            // §5.10.3 THE EVENT IS DECIDED HERE, not in `updateState`. The flag
+            // used to be read out of `Instance`, and `updateState` runs on the
+            // ACCEPTED solution — after this point has been evaluated — so every
+            // cross()/timer() event was observed one timepoint late, the exact
+            // mirror of "at that time point, the event evaluates to True".
+            // `updateState` now only advances `__prev`/`__next`.
+            // §5.10.3.1 "The cross() function will not generate events for
+            // non-transient analyses, such as ac, dc, or noise analyses … it can
+            // only generate an event after the simulation time has advanced from
+            // zero." Both halves are the guard: the analysis has to be a
+            // transient AND a step has to have been taken, which is what a
+            // positive `dt` means everywhere else in this file. (§5.10.3.2
+            // `above` is the operator that is explicitly exempt from both.)
+            .cross => try self.b("S.con(if (inst.analysis_kind == .tran and inst.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
+                try self.crossTest(n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in})),
+                try self.enableTest("cross", args),
+            }),
+            // §5.10.3.3 fires at `start_time` and every `period` after it.
+            // `__next` carries the schedule, but it initialises to 0.0 and is
+            // only clamped up to `start_time` by `updateState`, so the clamp is
+            // repeated here — without it a `timer(1n, …)` fires at t = 0.
+            .timer => try self.b("S.con(if (inst.abstime >= @max(inst.{s}__next, ({s}).val()) and ({s})) 1.0 else 0.0)", .{
+                n, in, try self.enableTest("timer", args),
+            }),
+            .above => try self.b("S.con(if (({s}).val() > 0.0 and ({s})) 1.0 else 0.0)", .{
+                in, try self.enableTest("above", args),
+            }),
             // §9.17 tasks return no value ("It does not return a value").
             // Unreachable in practice — lowering never leaves one in an eval
             // expression — but a void task read as a value is a zero, not a
@@ -3018,16 +3173,20 @@ pub const Gen = struct {
                     \\        }}
                     \\        inst.{0s}__prev = in;
                     \\
-                , .{ n, try self.crossTest(n, args) }),
-                .cross => {
-                    // §5.10.3 the direction argument selects rising/falling/both.
-                    try self.w("        inst.{0s}__hit = {1s};\n", .{ n, try self.crossTest(n, args) });
-                    try self.w("        inst.{s}__prev = in;\n", .{n});
-                },
+                , .{ n, try self.crossTest(n, args, "in") }),
+                // §5.10.3 only the HISTORY moves here; `eval` raises the event
+                // (see `emitOperator`), so nothing an accepted step writes can
+                // still be read one timepoint later than it happened. The
+                // `enable` is not consulted: it gates the EVENT, not the record
+                // of where the signal was, and a disabled operator that later
+                // re-enables must not compare against a stale sample.
+                .cross => try self.w("        inst.{s}__prev = in;\n", .{n}),
+                // §5.10.3.3 the schedule is absolute — "at start_time, and every
+                // period after that" — so it advances past the accepted time
+                // whether or not the enable let the event through.
                 .timer => try self.w(
                     \\        if (inst.{0s}__next < in) inst.{0s}__next = in;
-                    \\        inst.{0s}__hit = inst.abstime >= inst.{0s}__next;
-                    \\        if (inst.{0s}__hit) {{
+                    \\        if (inst.abstime >= inst.{0s}__next) {{
                     \\            const period = {1s};
                     \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else std.math.inf(f64);
                     \\        }}
@@ -3129,11 +3288,13 @@ pub const Gen = struct {
     /// to the host as "this device wants no other timepoints", which is a claim
     /// this code would not be entitled to make.
     ///
-    // ponytail: the §5.10.5 `enable` argument is ignored here — because the
-    // `.timer` arm of `updateState` ignores it too, so agreeing with the code
-    // that actually raises `__hit` is the property that matters. When `enable`
-    // is honoured there, gate it here the same way; an extra breakpoint costs a
-    // timepoint, never an answer, so a Model-renderable enable can just AND in.
+    // ponytail: the §5.10.3.3 `enable` is honoured here only where it FOLDS.
+    // A timer whose enable is the constant zero generates no events at all, so
+    // proposing its fire times would be a lie about where a discontinuity is; a
+    // timer whose enable is a solved quantity keeps its breakpoints, because
+    // this hook has no `Instance` to evaluate one against and an extra timepoint
+    // costs a step, never an answer. Widen it when a Model-renderable enable
+    // shows up in a real model — it can simply AND into `zNextTimer`.
     fn emitNextBreakpoint(self: *Gen) Error!void {
         if (!self.usesOp(.timer)) return;
 
@@ -3148,6 +3309,16 @@ pub const Gen = struct {
             if (u.role != .analog_op or opKind(u.target) != .timer) continue;
             const inst = self.opInstOf(@intCast(i)) orelse return;
             const args = self.mir.instData(inst).call.args;
+            // §5.10.3.3 "if enable is specified and it is zero, then timer() is
+            // inactive": a constant-zero enable means this timer never fires, so
+            // it contributes no breakpoint — and it must not veto the others.
+            if (enableArgIdx("timer")) |ei| {
+                if (ei < args.len) {
+                    if (self.an.foldConst(args[ei], 0, true)) |c| {
+                        if (c.f == 0.0) continue;
+                    }
+                }
+            }
             // No diagnostic: `f64Expr` already fired one for the period if it is
             // unrenderable, and a start_time that is a solved quantity is legal
             // Verilog-A that this hook simply cannot describe.
@@ -3197,7 +3368,9 @@ fn mathOpByName(name: []const u8) ?Mir.Opcode {
 /// are the entire point, and forgetting them here renders every one of them as
 /// an undefined leaf — which is what `S.con(0.0)` in a print means.
 pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
-    if (opKind(name) != .none) return false;
+    // The §5.10.3 `enable` is the exception: it is a live expression the event
+    // test reads every evaluation, so it needs a slot like any other operand.
+    if (opKind(name) != .none) return (enableArgIdx(name) orelse return false) == i;
     const eq = std.mem.eql;
     if (display == .emit and Lower.isDisplayTask(name)) return true;
     if (eq(u8, name, "ddx")) return i == 0;
@@ -3305,8 +3478,25 @@ fn opHasState(k: OpKind) bool {
 /// which is why the set lives here and not in either of them.
 pub fn opNeedsInput(k: OpKind) bool {
     return switch (k) {
-        .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace => true,
+        // `cross` and `timer` joined this set when the §5.10.3 event moved into
+        // `eval`: the hit test compares the CURRENT input against `__prev`
+        // (`timer`'s "input" being its `start_time`), so the operand has to be
+        // rendered there and not only in `updateState`. `zi` joined it for the
+        // §4.5.12 static branch, which is a gain on the input, not a held value.
+        .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace, .cross, .timer, .zi => true,
         else => false,
+    };
+}
+
+/// §5.10.3.1/.2/.3 where each event operator carries its `enable` — the one
+/// argument of an analog operator that is a runtime expression, so `UnitPlan`
+/// has to keep it live (see `callArgIsValue`) while every other control
+/// argument is folded at codegen time.
+pub fn enableArgIdx(name: []const u8) ?usize {
+    return switch (opKind(name)) {
+        .cross => 4, // cross(expr, dir, time_tol, expr_tol, enable)
+        .above, .timer => 3, // above(expr, time_tol, expr_tol, enable) / timer(start, period, time_tol, enable)
+        else => null,
     };
 }
 
@@ -3500,7 +3690,44 @@ const timer_txt =
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
 /// device runs. Only devices that actually use a filter carry them.
 const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
-    @embedFile("filter_kernels.zig") ++ "\n";
+    @embedFile("filter_kernels.zig") ++ "\n" ++ zi_hold_txt;
+
+/// §4.5.12 the residual side of a Z-filter, the counterpart of `zZiStep`'s
+/// sampling side. It lives here rather than in `filter_kernels.zig` only
+/// because it is the piece `emitOperator` calls; the numerics are the same
+/// sections `__sec` builds.
+const zi_hold_txt =
+    \\/// §4.5.12 the Z-filter as the residual sees it. Between samples it "acts
+    \\/// like a simple sample-and-hold", so the output is the held constant and
+    \\/// carries no derivative. `dt <= 0` is a static analysis: there is no
+    \\/// history and no clock, a constant input makes every sample equal, so
+    \\/// z = 1 and the filter IS its DC gain H(1) = ∏ Σ_k num[i][k] / Σ_k den[i][k]
+    \\/// — the exact value of the transfer function at z = 1, applied to the
+    \\/// input so the operating point gets the right Jacobian too. This mirrors
+    \\/// `zLaplace`'s H(0) branch; without it every zi_* answered a DC operating
+    \\/// point with the 0.0 its `__out` field initialises to.
+    \\pub fn zZiHold(
+    \\    comptime S: type,
+    \\    comptime NS: usize,
+    \\    comptime D: usize,
+    \\    uin: S,
+    \\    sec: [NS][2][D + 1]f64,
+    \\    dt: f64,
+    \\    out: f64,
+    \\) S {
+    \\    if (dt > 0.0) return S.con(out);
+    \\    var y = uin;
+    \\    for (0..NS) |i| {
+    \\        var num: f64 = 0.0;
+    \\        var den: f64 = 0.0;
+    \\        for (sec[i][0]) |c| num += c;
+    \\        for (sec[i][1]) |c| den += c;
+    \\        y = y.scale(num / den);
+    \\    }
+    \\    return y;
+    \\}
+    \\
+;
 
 const hist_txt =
     \\/// §4.5.7 absdelay history: a fixed ring of (t, v) samples, linearly
@@ -3616,6 +3843,7 @@ const prelude_filt_txt =
     \\const zLaplace = h.zLaplace;
     \\const zLaplaceStep = h.zLaplaceStep;
     \\const zZiStep = h.zZiStep;
+    \\const zZiHold = h.zZiHold;
     \\
 ;
 
@@ -4115,7 +4343,7 @@ test "codegen: §5.10.5 a timer whose start is a solved quantity emits NO hook" 
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "__hit") != null); // the timer IS compiled
+    try std.testing.expect(std.mem.indexOf(u8, src, "__next") != null); // the timer IS compiled
     try std.testing.expect(std.mem.indexOf(u8, src, "nextBreakpoint") == null);
 }
 

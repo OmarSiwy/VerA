@@ -1,0 +1,19 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.3-01  (ch6-hierarchy.html)
+// If a defparam assignment conflicts with a module instance parameter, the parameter shall take the value specified by the defparam.
+// VAMS-6.3.1-01  (ch6-hierarchy.html)
+// A defparam statement in a hierarchy in or under a generate block instance or an array of instances shall not change a parameter value outside that hie
+// VAMS-6.3.1-02  (ch6-hierarchy.html)
+// The right-hand side shall be a constant expression involving only constant numbers and references to parameters declared in the same module as the def
+//
+//! reject E0205
+// EXPECT: error -- defparam is explicitly rejected.
+module ch6_defparam(p);
+  inout p; electrical p;
+  defparam u.gain = 2.0;
+  analog I(p) <+ V(p);
+endmodule

@@ -1,0 +1,17 @@
+// §11.6.18 simple expression: an expression built only from parameters and
+// literals is constant — its operands never change during the solve, so
+// `gain + 1.0` is 3.0 at every operating point (§3.4 pins gain at its 2.0
+// default). At V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V and the
+// current is 3.0 * 1.25 = 3.75 exactly.
+//
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
+module ch11_simple_expression_object(p, n);
+  inout p, n; electrical p, n;
+  parameter real gain = 2.0;
+  analog begin
+    `CHECKX("the constant subexpression", gain + 1.0, 3.0);
+    `CHECKX("the contributed flow", (gain + 1.0) * V(p,n), 3.75);
+    I(p,n) <+ (gain + 1.0) * V(p,n);
+  end
+endmodule

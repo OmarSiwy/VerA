@@ -1,0 +1,29 @@
+// §11.6.25 callback object. A VPI callback is registered from C with
+// `vpi_register_cb` (§11.2.1) and there is no Verilog-A spelling for a callback
+// call site, so this is just a system task call that nothing has registered.
+// §2.8.3 makes that legal source: `$` introduces a construct that is "not
+// design semantics, but refer[s] to simulator functionality", and §12.32's
+// compiletf hook is where an application — not the compiler — gets to refuse a
+// name it does not recognize. An earlier revision of this fixture demanded a
+// rejection; no clause requires one.
+//
+// With nothing registered there is no callback to fire and no value it could
+// hand back, so the assertion is §5.3.1 ordering across the call site: 1
+// before, +2 after. At V(p)=0.75, V(n)=0.25 the branch potential is 0.5 V —
+// both bias values are exact in binary, so exact equality is the right
+// strength.
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module ch11_callback_call_site(p, n);
+  inout p, n; electrical p, n;
+  integer seq;
+  analog begin
+    seq = 1;
+    $fixture_value_change_callback(V(p,n));
+    seq = seq + 2;
+    `CHECKI("the block continues past an unregistered callback call site", seq, 3);
+    `CHECKX("and the probe is unchanged by it", V(p,n), 0.5);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

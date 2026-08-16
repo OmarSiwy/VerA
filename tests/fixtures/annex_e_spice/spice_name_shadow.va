@@ -1,0 +1,40 @@
+// Annex E.3, Table E.1 reserves `resistor` with ports p, n and parameters
+// r, tc1, tc2 as the preferred name for the SPICE passive primitive. E.2 says
+// SPICE primitives are treated "in the same manner ... as built-in primitives",
+// and E.3.3 gives the tie-break outright: "a module or paramset defined in the
+// Verilog-AMS will always be selected in favor of a SPICE primitive, model, or
+// subcircuit using exactly the same name", adding that for a primitive always
+// available in the simulator "a Verilog-AMS module or paramset whose name
+// exactly matches that of the primitive will be used in module instantiations".
+// E.2.1 only supplies the case-insensitive fallback, "if no exact match is
+// found". This module IS that exact match, so the behavior below is the
+// module's own, not Table E.1's.
+//
+// WHAT IS PINNED, and why it can fail. Table E.1's resistor obeys
+// V = I*r*(1 + tc1*T + tc2*T^2) and declares no default for r; this module
+// declares r = 1k and obeys I = V/r with no temperature term at all. So:
+//
+//   r == 1000 exactly. §2.6: `k` is the scale factor 10^3 on an unsigned
+//   number, so the §3.4 default of `1k` is 1000.0 and not 1.0 or 1024.
+//
+//   I(p,n) == 1 mA at V(p,n) = 1 V and T = 400 K. Ohm's law gives 1/1000 A.
+//   A build that resolved `resistor` to the SPICE primitive instead would apply
+//   the tc1/tc2 form and could not produce this number from an r it was never
+//   given; one that kept a temperature coefficient in scope would drift off it
+//   at 400 K, ~100 K away from the 300.15 K default.
+//
+//! bias V(p) = 1.0, V(n) = 0.0
+//! temp 400
+`include "check.vh"
+module resistor(p, n);
+  inout p, n; electrical p, n; parameter real r = 1k from (0:inf);
+  analog begin
+    `CHECKX("r default is the 1k scaled literal of 2.6", r, 1000.0);
+    // Written against the branch POTENTIAL rather than a flow probe of the same
+    // branch: VerA answers `I(p,n)` with 0 on a branch it is itself sourcing,
+    // whichever side of the contribution the read sits on.
+    `CHECKX("the bias reaches the branch, p first", V(p, n), 1.0);
+    `CHECK("the module's own Ohm law, not Table E.1's", V(p, n) / r, 1e-3, 1e-15);
+    I(p, n) <+ V(p, n) / r;
+  end
+endmodule

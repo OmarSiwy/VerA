@@ -1,0 +1,31 @@
+// §9.10 environment parameters. `$temperature` is the ambient temperature in
+// KELVIN, and `$vt` is the thermal voltage kT/q at that temperature — so the
+// value is physics, not a simulator preference, and can be written down:
+//
+//   k/q = 1.380649e-23 / 1.602176634e-19  = 8.6173333e-5 V/K  (CODATA 2018)
+//   k/q = 1.3806488e-23 / 1.602176565e-19 = 8.6173324e-5 V/K  (CODATA 2010,
+//         which is what Verilog-AMS `constants.vams` still carries)
+//
+// The two constant sets differ by 1e-7 relative, which is why the thermal
+// voltages are checked with `CHECKR` at 1e-6: tight enough to catch a wrong
+// formula or a Celsius/Kelvin slip, loose enough that revising `P_K`/`P_Q`
+// is not a regression.
+//
+//   $vt(300.0)  = 8.61733e-5 * 300.00 = 0.02585200 V
+//   $vt         = $vt($temperature)   = 8.61733e-5 * 300.15 = 0.02586492 V
+//
+// The 300.15/300 ratio between the two is the whole content of "$vt without
+// the optional input temperature argument returns the thermal voltage using
+// $temperature".
+//
+//! temp 300.15
+`include "check.vh"
+module ch09_temperature_vt(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECK("$temperature is the ambient in kelvin", $temperature, 300.15, 1e-12);
+    `CHECKR("$vt(300.0) is k*300/q", $vt(300.0), 0.02585200, 1e-6);
+    `CHECKR("bare $vt uses $temperature = 300.15 K", $vt, 0.02586492, 1e-6);
+    I(p,n) <+ $temperature + $vt + $vt(300.0) + 0.0*V(p,n);
+  end
+endmodule

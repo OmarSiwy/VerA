@@ -1,0 +1,17 @@
+// §11.6.21 process/block: naming the analog block (§5.3.2) makes it a named
+// scope, but it does not change WHAT it does — the statements still run once,
+// in order, per §5.3.1. So `value` holds the probe by the time the block ends.
+// At V(p)=1.5, V(n)=0.25 that is 1.25 V; a block whose body never ran would
+// leave `value` at its 0 initialisation.
+//
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
+module ch11_named_process_object(p, n);
+  inout p, n; electrical p, n;
+  real value;
+  analog begin : behavior
+    value = V(p,n);
+    `CHECKX("the named block runs its body in order", value, 1.25);
+    I(p,n) <+ value;
+  end
+endmodule

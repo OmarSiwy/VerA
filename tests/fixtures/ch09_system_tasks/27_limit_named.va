@@ -1,0 +1,26 @@
+// §9.17.3 `$limit(access, "pnjlim", vte, vcrit)`. The LRM prints the algorithm
+// this string names (the `spicepnjlim` analog function in its diode example):
+//
+//     vlimit = vnew;
+//     if ((vnew > vcrit) && (abs(vnew - vold) > (vt + vt))) begin ... end
+//     spicepnjlim = vlimit;
+//
+// The guard is a conjunction, so BELOW the critical voltage pnjlim is the
+// identity — no branch of it can fire, whatever the iteration history in the
+// function's internal state happens to be. The bias here is 0.3 V against a
+// vcrit of 0.7 V, so the returned value is the branch potential exactly, and
+// the check does not depend on which iteration the transcript was taken at.
+// (Above vcrit there would be nothing to write down: §9.17.3 leaves the choice
+// of whether to limit at all to the simulator.)
+//
+//! bias V(p) = 0.3
+`include "check.vh"
+module ch09_limit_named(p, n);
+  inout p, n; electrical p, n;
+  real limited;
+  analog begin
+    limited = $limit(V(p,n), "pnjlim", $vt, 0.7);
+    `CHECK("pnjlim is the identity below its critical voltage", limited, 0.3, 1e-15);
+    I(p,n) <+ limited;
+  end
+endmodule

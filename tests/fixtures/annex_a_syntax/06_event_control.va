@@ -1,0 +1,29 @@
+// Annex A.6.5 event control. The two events differ in exactly one way that a
+// DC operating point can see (LRM 5.10.3.1/5.10.3.2):
+//
+//   cross()  "will not generate events for non-transient analyses, such as ac,
+//            dc, or noise analyses"
+//   above()  "also triggers during initialization or dc analysis ... If the
+//            expression is positive at the conclusion of the initial condition
+//            analysis ... above() shall generate an event"
+//
+// Biased at V(p,n) = 2, the above() argument is +1, so the or-ed event list
+// fires and `active` ends at 1 — even though the cross() half cannot fire in
+// dc. Had only cross() been honoured, `active` would still hold the 0 that
+// @(initial_step) put there.
+//
+//! bias V(p) = 2.0
+//! print none
+`include "check.vh"
+module annex_a_event_control(p, n);
+    inout p, n;
+    electrical p, n;
+    integer active;
+
+    analog begin
+        @(initial_step) active = 0;
+        @(cross(V(p, n), 1) or above(V(p, n) - 1.0)) active = 1;
+        `CHECKI("above() fires in dc when its expression is positive", active, 1);
+        I(p, n) <+ active;
+    end
+endmodule

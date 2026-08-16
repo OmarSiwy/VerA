@@ -1,0 +1,49 @@
+// §3.6.2 discipline declarations. A conservative discipline binds a potential
+// nature and a flow nature, and §3.6.1.3 says the nature's `access` attribute
+// is what names the access function — so a net declared `ch03_conservative`
+// is read with V() and driven with I() for no reason other than that the two
+// natures above say `access = V` and `access = I`.
+//
+// `c1`/`c2` are nets of the user-declared discipline, biased 2.5 V and 0.5 V,
+// so the potential access function must return their difference. The potential-
+// only and flow-only disciplines are declared to show both halves are optional.
+//
+//! bias V(c1) = 2.5, V(c2) = 0.5
+`include "check.vh"
+nature ch03_potential;
+    units = "V";
+    access = V;
+    abstol = 1u;
+endnature
+
+nature ch03_flow;
+    units = "A";
+    access = I;
+    abstol = 1p;
+endnature
+
+discipline ch03_conservative;
+    domain continuous;
+    potential ch03_potential;
+    flow ch03_flow;
+enddiscipline
+
+discipline ch03_potential_only;
+    potential ch03_potential;
+enddiscipline
+
+discipline ch03_flow_only;
+    flow ch03_flow;
+enddiscipline
+
+module ch03_discipline_declarations(p, n);
+    inout p, n;
+    electrical p, n;
+    ch03_conservative c1, c2;
+
+    analog begin
+        `CHECKX("the bound potential nature's access function reads the branch", V(c1, c2), 2.0);
+        I(p, n) <+ V(p, n);
+        I(c1, c2) <+ 0.001 * V(c1, c2);
+    end
+endmodule

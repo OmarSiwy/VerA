@@ -1,0 +1,19 @@
+// LRM 6.5.6 / 9.19: `$port_connected(port)` returns one (1) if a connection was
+// specified for that port when the module was instantiated, and zero (0)
+// otherwise. The device under test is instantiated with every terminal bound to
+// a node — that is what makes it stampable at all — so the answer for `p` is 1,
+// and the conditional in the contribution must take its THEN arm.
+//
+// With p held at 0.5 V the flow is therefore V(p) = 0.5, not the 0.0 an
+// unconnected port would give.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch6_port_connected(p);
+  inout p; electrical p;
+  analog begin
+    `CHECKI("a bound terminal reports as connected", $port_connected(p), 1);
+    `CHECK("the connected arm selects V(p), not the 0.0 fallback", $port_connected(p) ? V(p) : 0.0, 0.5, 1e-15);
+    I(p) <+ $port_connected(p) ? V(p) : 0.0;
+  end
+endmodule

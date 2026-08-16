@@ -1,0 +1,13 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-7.6-01  (ch7-mixed-signal.html)
+// The port disciplines define the default type of disciplines which shall be bridged by the connect module. [needs: `connectmodule`/`endconnectmodule` d
+//
+//! reject NoModule
+// EXPECT: error -- connectmodules are handled by a mixed-signal elaborator.
+connectmodule ch7_a2d(a, d);
+  input a; output d; electrical a;
+endmodule

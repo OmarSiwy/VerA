@@ -1,0 +1,16 @@
+// §2.4: block comments do not nest and `//` has no special meaning inside one,
+// so `2.0 /* // */ + 3.0` is one addition of two operands, not a truncated line.
+// §2.6.2: an underscore anywhere in a number after the first character is
+// IGNORED, so `1_000.0` is the same double as `1000.0` — not 1.0, and not an
+// identifier `_000` glued to a 1.
+`include "check.vh"
+module ch02_whitespace_comments(p, n); // a one-line comment
+	/* The // token is ordinary text inside a block comment. */
+	inout p, n;
+	electrical p, n;
+	analog begin
+		`CHECKX("underscore in a real literal is ignored", 1_000.0, 1000.0);
+		`CHECKX("// inside a block comment does not start a comment", 2.0 /* // */ + 3.0, 5.0);
+		I(p, n) <+ V(p, n) / 1_000.0;
+	end
+endmodule

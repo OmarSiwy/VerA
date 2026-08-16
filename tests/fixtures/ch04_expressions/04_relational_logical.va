@@ -1,0 +1,30 @@
+// LRM 4.2.4/4.2.5/4.2.6: a relational, equality or logical operator yields the
+// INTEGER 1 when the relation holds and 0 when it does not -- never -1 and never
+// a distinct boolean type, which is what lets the nine results be summed.
+//
+// The bias fixes a = V(p,n) = 0.5 against b = 1.0, so with 0 < a < b:
+//   (a<b)=1  (a<=b)=1  (a>b)=0  (a>=b)=0  (a==b)=0  (a!=b)=1
+//   !(a==0.0) = !0 = 1
+//   ((a>0)&&(b>0)) = 1      ((a<0)||(b>0)) = 1
+// value = 1+1+0+0+0+1+1+1+1 = 6.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch04_relational_logical(p, n);
+    inout p, n;
+    electrical p, n;
+    real a, b;
+    integer value;
+
+    analog begin
+        a = V(p, n);
+        b = 1.0;
+        value = (a < b) + (a <= b) + (a > b) + (a >= b) +
+                (a == b) + (a != b) + !(a == 0.0) +
+                ((a > 0.0) && (b > 0.0)) + ((a < 0.0) || (b > 0.0));
+        `CHECKI("a true relation is exactly 1", (a != b), 1);
+        `CHECKI("a false relation is exactly 0", (a >= b), 0);
+        `CHECKI("sum of the nine results at a=0.5, b=1.0", value, 6);
+        I(p, n) <+ value;
+    end
+endmodule

@@ -1,0 +1,26 @@
+// Annex E.4.1: SPICE gives a subcircuit a multiplicity factor M that is never
+// declared anywhere in the subcircuit. Since LRM 2.2 a module carries the same
+// thing as the hierarchical system parameter $mfactor (§6.3.6, §9.18) — note
+// this module declares no parameters at all, and $mfactor is still readable.
+//
+// WHAT IS PINNED. Table 9-29 fixes the TOP-LEVEL value of $mfactor at 1.0
+// exactly, and resolves an instance as $mfactor_specified * $mfactor_hier. A
+// device compiled on its own is the top of the hierarchy with nothing specified,
+// so the product is empty and the value is 1.0 — not 0, and not "unset". The
+// digit matters because §6.3.6 makes every flow contribution scale by it: a
+// $mfactor that defaulted to 0 would silently stamp an open circuit, and one
+// that defaulted to 2 would double every current in the netlist.
+//
+//! bias V(p) = 2.0
+`include "check.vh"
+module annex_e_mfactor(p);
+  inout p; electrical p;
+  analog begin
+    `CHECKX("$mfactor at the top of the hierarchy", $mfactor, 1.0);
+    // §6.3.6 rule 1: "All contributions to a branch flow quantity in the analog
+    // block shall be multiplied by $mfactor." One device in parallel with
+    // itself carries the whole 2 A, not a fraction or a multiple of it.
+    `CHECK("one device carries the unscaled flow", $mfactor * V(p), 2.0, 1e-15);
+    I(p) <+ V(p) + 0.0 * $mfactor;
+  end
+endmodule

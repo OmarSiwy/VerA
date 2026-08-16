@@ -1,0 +1,15 @@
+// LRM 5.2.1 analog initial: it runs once per analysis, BEFORE the analog block
+// that uses what it set. `state` is a real, so LRM 3.3.1 starts it at 0; if the
+// analog initial block were dropped or ordered after the analog block, `state`
+// would read 0.0 here instead of the 1.0 it assigns.
+//
+//! bias V(p) = 0.25
+//! print none
+`include "check.vh"
+module annex_a_analog_initial(p); inout p; electrical p; real state;
+analog initial state=1.0;
+analog begin
+    `CHECKX("analog initial ran before the analog block", state, 1.0);
+    I(p)<+state*V(p);
+end
+endmodule

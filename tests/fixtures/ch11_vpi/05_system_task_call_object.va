@@ -1,0 +1,35 @@
+// §11.6.16 system task call object, on the statement side. A user-defined
+// system task exists only because a C application registered it with
+// `vpi_register_systf` (§11.2.1), so `$fixture_vpi_task` has no compile-time
+// definition here — and §2.8.3 says that is not the compiler's call to make:
+// `$` "introduces a language construct which enables development of
+// user-defined system tasks and functions", and those constructs "are not
+// design semantics, but refer to simulator functionality". An unregistered
+// `$name` is grammatical source, and §12.32 hands the application a compiletf
+// routine precisely so the APPLICATION decides whether a call is acceptable.
+// Annex C.13/C.14 do keep Clauses 11-12 in the Verilog-A subset, but what they
+// keep is a C interface; no clause makes this text a compile error. An earlier
+// revision of this fixture demanded a rejection — the LRM does not require one.
+//
+// What is left to assert is what the language DOES define here. Nothing is
+// registered, so there is no simulator functionality to invoke and the call has
+// no effect to have; §5.3.1 still runs the enclosing sequential block in order.
+// `seq` pins that: 1 before the call, +2 after, so a compiler that stopped at,
+// reordered around, or swallowed the block tail at an unrecognized system task
+// leaves 1 or 0 instead of 3. The probe is the other half — at V(p)=1.5,
+// V(n)=0.25 the branch potential is 1.25 V on both sides of the call.
+//
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
+module ch11_system_task_call_object(p, n);
+  inout p, n; electrical p, n;
+  integer seq;
+  analog begin
+    seq = 1;
+    $fixture_vpi_task(V(p,n));
+    seq = seq + 2;
+    `CHECKI("the block continues past an unregistered system task call", seq, 3);
+    `CHECKX("and the probe is unchanged by it", V(p,n), 1.25);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

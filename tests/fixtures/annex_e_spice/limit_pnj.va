@@ -1,0 +1,25 @@
+// Annex E.3.4 / §9.17.3 $limit with the built-in "pnjlim" algorithm. Table E.2
+// gives pnjlim two extra arguments, vte and vcrit; §9.17.3 makes both REQUIRED
+// when the string is "pnjlim", and names vcrit = vte*ln(vte/(sqrt(2)*Is)).
+//
+// WHAT IS PINNED. §9.17.3: the simulator is "prevented from terminating the
+// iteration" while $limit()'s output differs from the value of its access
+// function. A solved operating point is therefore one where the limiter is
+// transparent: the junction current the model stamps is the one V(p) implies,
+// never a damped stand-in.
+//
+// The bias makes that true even under SPICE's DEVpnjlim, which limits only when
+// vnew > vcrit AND |vnew - vold| > 2*vte. Here vnew = 0.5 V is below the
+// vcrit = 0.6 V passed in, so the first conjunct fails for ANY previous value
+// and the function is the identity on every iteration, not merely the last.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module annex_e_pnjlim(p);
+  inout p; electrical p; real limited;
+  analog begin
+    limited = $limit(V(p), "pnjlim", 0.026, 0.6);
+    I(p) <+ limited;
+    `CHECK("pnjlim is transparent below vcrit", limited, 0.5, 1e-12);
+  end
+endmodule

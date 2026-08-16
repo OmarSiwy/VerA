@@ -1,0 +1,24 @@
+// §9.5.1: "If a file cannot be opened (either the file does not exist and the
+// type specified is r ... ), a zero is returned for the mcd or fd." No
+// fixture.dat exists beside the testbench, so this open MUST yield 0.
+//
+// §9.5.4.2 then fixes the scan: "The number of successfully matched and
+// assigned input items is returned in code; this number can be 0 in the event
+// of an early matching failure... If the input ends before the first matching
+// failure or conversion, EOF is returned." There is no input at all, so code is
+// 0 or EOF — never the 1 that a satisfied %d would report. The check is written
+// as `code <= 0` because the LRM leaves the numeric value of EOF to IEEE 1364
+// rather than stating it here.
+//
+`include "check.vh"
+module ch09_atomic_fscanf(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code, value;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    code = $fscanf(fd, "%d", value);
+    `CHECKI("open r of a missing file returns 0", fd, 0);
+    `CHECKI("nothing to read, so no item is matched", (code <= 0), 1);
+    I(p,n) <+ V(p,n) + code + value;
+  end
+endmodule

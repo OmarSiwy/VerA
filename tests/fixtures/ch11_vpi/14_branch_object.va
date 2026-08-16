@@ -1,0 +1,19 @@
+// §11.6.6 branch object: a branch reaches its two nodes and the quantities it
+// carries. §5.4.1 fixes the potential of `branch (p,n) path` as V(p) - V(n), and
+// §2.5.1 makes `1k` the real number 1 scaled by k = 1e3, i.e. 1000.0.
+//
+// V(p) = 0.875, V(n) = 0.125 (exact in binary) give V(path) = 0.75 V, so the
+// contributed flow is 0.75/1000 = 750 uA. Read `k` as anything but 1e3 and the
+// second number moves by orders of magnitude.
+//
+//! bias V(p) = 0.875, V(n) = 0.125
+`include "check.vh"
+module ch11_branch_object(p, n);
+  inout p, n; electrical p, n;
+  branch (p,n) path;
+  analog begin
+    `CHECK("the branch potential is its declared node pair", V(path), 0.75, 1e-15);
+    `CHECKR("the k scale factor is 1e3", V(path) / 1k, 7.5e-4, 1e-15);
+    I(path) <+ V(path) / 1k;
+  end
+endmodule

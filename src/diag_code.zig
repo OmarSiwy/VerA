@@ -144,6 +144,16 @@ pub const Code = enum(u16) {
     E0329,
     E0330,
     E0331,
+    /// §3.6.1/§3.6.1.2 a base nature missing a required attribute.
+    E0332,
+    /// §3.6.1.2 a derived nature that defines or changes `units`.
+    E0333,
+    /// §3.6.1.2 a derived nature that changes `access`.
+    E0334,
+    /// §3.13.2 two base natures claiming the same access function.
+    E0335,
+    /// §3.13.1 a nature and a discipline sharing one global-scope identifier.
+    E0336,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -1135,6 +1145,85 @@ pub fn info(c: Code) Info {
             \\`a` field becomes dead — writing it changes nothing.
             \\
             \\Rename the alias, or delete the parameter it collides with.
+            ,
+        },
+        .E0332 => .{
+            .title = "base nature is missing a required attribute",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1: "Each nature definition ... shall include all the
+            \\required attributes specified in 3.6.1.2", and 3.6.1.2 says of
+            \\abstol, access and units that each "is required for all base
+            \\natures".
+            \\
+            \\    nature Voltage;
+            \\      units  = "V";
+            \\      access = V;
+            \\      abstol = 1e-6;
+            \\    endnature
+            \\
+            \\A nature that means to inherit them is a DERIVED nature and says
+            \\so with a parent: `nature High_Voltage : Voltage;`.
+            ,
+        },
+        .E0333 => .{
+            .title = "derived nature redefines `units`",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1.2, units: "It is illegal for a derived nature to define
+            \\or change the units; the derived nature always inherits its parent
+            \\nature units."
+            \\
+            \\Units are what makes the parent's tolerance and the child's
+            \\comparable at all, so a child in different units is not a
+            \\refinement of its parent — it is a different quantity, and wants a
+            \\base nature of its own.
+            \\
+            \\Contrast abstol, which 3.6.1.2 explicitly allows a derived nature
+            \\to change.
+            ,
+        },
+        .E0334 => .{
+            .title = "derived nature changes `access`",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1.2, access: "It is illegal for a derived nature to change
+            \\the access attribute; the derived nature always inherits the
+            \\access attribute of its parent nature."
+            \\
+            \\The access function is how source text names the quantity (LRM
+            \\4.4). A derived nature narrows the TOLERANCE of its parent's
+            \\quantity, not its spelling, so `V(n)` keeps working on a net whose
+            \\discipline binds the derived nature.
+            ,
+        },
+        .E0335 => .{
+            .title = "two base natures share an access function",
+            .lrm = "3.13.2",
+            .explain =
+            \\LRM 3.13.2: "the access function of each base nature shall be
+            \\unique". The name in an access function call (LRM 4.4) has to
+            \\identify one nature, and with two claiming it there is no reading
+            \\of `MyAccess(n)` that a compiler could pick.
+            \\
+            \\Two natures that are meant to be the same quantity are spelled as
+            \\one base nature plus a derived nature (LRM 3.6.1.1), which
+            \\inherits the access name instead of re-declaring it.
+            ,
+        },
+        .E0336 => .{
+            .title = "identifier is already declared as a nature or a discipline",
+            .lrm = "3.13.1",
+            .explain =
+            \\LRM 3.13.1: "Natures and disciplines are defined at the same level
+            \\of scope as modules. Thus, identifiers defined as natures or
+            \\disciplines have a global scope" — one namespace, and LRM 3.6.1
+            \\adds that each nature "shall have a unique identifier".
+            \\
+            \\The ambiguity is real, not cosmetic: annex A takes a bare
+            \\identifier for both `parent_nature ::= nature_identifier` and
+            \\`net_declaration ::= discipline_identifier ...`, so a name bound to
+            \\both kinds leaves those productions with no unique reading.
             ,
         },
 

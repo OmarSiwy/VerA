@@ -1,0 +1,16 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.2-03  (ch6-hierarchy.html)
+// The optional list of parameter definitions shall specify an ordered list of the parameters for the module.
+//
+//! reject expected `;`
+module ch6_parameter_port_list #(
+  parameter real gain = 2.0,
+  parameter integer enabled = 1
+)(p, n);
+  inout p, n; electrical p, n;
+  analog I(p, n) <+ (enabled ? gain : 0.0) * V(p, n);
+endmodule

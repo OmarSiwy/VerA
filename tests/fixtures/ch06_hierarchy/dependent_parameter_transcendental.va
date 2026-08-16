@@ -1,0 +1,43 @@
+// §6.3.4 parameter dependence, for a default whose expression is NOT plain
+// arithmetic: "an update of gate_width ... automatically updates gate_cap."
+// The clause says nothing about which operators the dependent expression is
+// allowed to use, so `exp(a)` tracks `a` exactly as `2.0*a` does.
+//
+// KNOWN GAP — this fails today, and the want is not in doubt.
+//
+// VerA emits a `derive(model: *Model)` seam that recomputes dependent
+// parameters from the CURRENT model values, which is what makes `scaled` below
+// correct. But the renderer behind it (`f64Const` in src/backend/codegen.zig)
+// only knows arithmetic, abs, sqrt, min, max and pow. A default it cannot
+// render gets NO derive line at all and silently keeps the initializer folded
+// against the DECLARED default of `a` — so `curved` freezes at exp(2.0) and an
+// override of `a` never reaches it.
+//
+// The failure is silent in exactly the way that matters: the two parameters sit
+// side by side, one tracks and one does not, and nothing in the source or the
+// diagnostics says which is which. That is why this fixture asserts BOTH — a
+// fix that only made `curved` derive while breaking `scaled` would still fail.
+//
+// The wants are the two products written out. `a` is overridden to 3.0 below:
+//   scaled = 2.0 * 3.0 = 6.0                 (exact in binary)
+//   curved = exp(3.0)  = 20.085536923187668  (the double nearest e^3)
+// Today VerA answers 6.0 and 7.38905609893065, the latter being exp(2.0) — the
+// value `curved` folded to before the override was applied.
+//
+//! param a = 3.0
+`include "check.vh"
+module ch6_dependent_transcendental(p);
+  inout p;
+  electrical p;
+  parameter real a = 2.0 from (0:inf);
+  // Arithmetic: VerA derives this one correctly.
+  parameter real scaled = 2.0 * a;
+  // Transcendental: same §6.3.4 rule, no derive line emitted.
+  parameter real curved = exp(a);
+  analog begin
+    `CHECKX("an arithmetic dependent parameter tracks the override", scaled, 6.0);
+    `CHECKR("a transcendental dependent parameter tracks it too", curved,
+            20.085536923187668, 1e-15);
+    I(p) <+ 0.0;
+  end
+endmodule

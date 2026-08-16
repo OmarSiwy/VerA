@@ -1,0 +1,3 @@
+//! reject DiagnosticsReported
+module annex_a_named_event(p); inout p; electrical p; event tick; analog begin -> tick; @(tick) I(p)<+V(p); end endmodule
+// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

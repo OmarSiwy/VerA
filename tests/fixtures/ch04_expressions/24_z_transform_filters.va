@@ -1,0 +1,48 @@
+// §4.5.12 the four Z-transform filter forms. A DC operating point is a constant
+// input held forever, so every sample is equal and z = 1; the output is H(1)
+// times the input.
+//
+//   zi_zp(x, '{0,0}, '{0.5,0}, 1u)          §4.5.12.1
+//     H(z) = (1 - z^-1 * 0) / (1 - z^-1 * 0.5).  At z=1: 1 / 0.5 = 2.
+//     (The zero sits at the origin, so §4.5.12.1's "implemented as z" special
+//     case applies — and z = 1 at DC, so that factor is 1 either way.)
+//
+//   zi_zd(x, '{0,0}, '{1,-0.5}, 1u)         §4.5.12.2
+//     H(z) = 1 / (1*z^0 + (-0.5)*z^-1).  At z=1: 1 / 0.5 = 2.
+//
+//   zi_np(x, '{1,0}, '{0.5,0}, 1u)          §4.5.12.3
+//     H(z) = (1 + 0*z^-1) / (1 - 0.5*z^-1).  At z=1: 1 / 0.5 = 2.
+//
+//   zi_nd(x, '{1,0}, '{1,-0.5}, 1u)         §4.5.12.4
+//     H(z) = (1 + 0*z^-1) / (1 - 0.5*z^-1).  At z=1: 2.
+//
+// All four are the same one-pole accumulator written four ways, so the DC gain
+// is 2 in every case. With V(p,n) = 1 V each output is 2.0 — a pass-through
+// (gain 1) or a filter that dropped the feedback term (gain 1) fails.
+//
+//! analysis dc
+//! bias V(p) = 1.0
+//! bias V(n) = 0.0
+`include "check.vh"
+module ch04_z_transform_filters(p, n);
+    inout p, n;
+    electrical p, n;
+    real y_zp, y_zd, y_np, y_nd;
+
+    analog begin
+        y_zp = zi_zp(V(p, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u);
+        y_zd = zi_zd(V(p, n), '{0.0, 0.0}, '{1.0, -0.5}, 1u);
+        y_np = zi_np(V(p, n), '{1.0, 0.0}, '{0.5, 0.0}, 1u);
+        y_nd = zi_nd(V(p, n), '{1.0, 0.0}, '{1.0, -0.5}, 1u);
+
+        `CHECK("zi_zp DC gain is 1/(1 - pole)", y_zp, 2.0, 1e-12);
+        `CHECK("zi_zd DC gain is 1/sum(d_k)", y_zd, 2.0, 1e-12);
+        `CHECK("zi_np DC gain is sum(n_k)/(1 - pole)", y_np, 2.0, 1e-12);
+        `CHECK("zi_nd DC gain is sum(n_k)/sum(d_k)", y_nd, 2.0, 1e-12);
+
+        I(p, n) <+ y_zp;
+        I(p, n) <+ y_zd;
+        I(p, n) <+ y_np;
+        I(p, n) <+ y_nd;
+    end
+endmodule

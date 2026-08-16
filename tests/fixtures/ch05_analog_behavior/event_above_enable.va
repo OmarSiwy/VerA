@@ -1,0 +1,23 @@
+// §5.10.3.2 the enable argument: `above(expr, time_tol, expr_tol, enable)` —
+// "If enable argument is specified and it is zero, then above() is inactive,
+// meaning that it does not generate an event at threshold crossings".
+//
+// `enabled` is never assigned, and the only context in this module is the
+// analog block, where §3.2.1 gives an integer variable a default of zero. So
+// the enable is 0, above() is inactive, and `held` keeps the zero §3.2.1 gives
+// a real variable — even though V(c)-0.5 = +0.75 is exactly the condition the
+// three-argument form in event_above.va fires on. An implementation that
+// dropped the fourth argument would sample V(p)=0.3 and fail.
+//
+//! bias V(c) = 1.25, V(p) = 0.3
+`include "check.vh"
+module ch5_above_enable(p, c);
+  inout p, c; electrical p, c; real held; integer enabled;
+  analog begin
+    `CHECKI("an unassigned integer defaults to 0 in the analog context", enabled, 0);
+    `CHECK("the condition above() would otherwise fire on", V(c) - 0.5, 0.75, 1e-15);
+    @(above(V(c) - 0.5, 1p, 1u, enabled)) held = V(p);
+    `CHECK("enable = 0 makes above() inactive", held, 0.0, 0.0);
+    I(p) <+ held;
+  end
+endmodule

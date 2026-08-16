@@ -1,0 +1,17 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-3.6.2-03  (ch3-datatypes.html)
+// It shall be an error to hierarchically override the discipline of a net that was explicitly declared unless it is a compatible discipline.
+// VAMS-3.6.2.4-01  (ch3-datatypes.html)
+// [Undeclared nets / nets whose discipline resolution yields nothing:] In these cases, the net shall be treated as having no discipline.
+// VAMS-3.6.2.4-02  (ch3-datatypes.html)
+// If the net is referenced in behavioral code, then it shall be treated as having no discipline with a domain binding of discrete [...]
+// VAMS-3.6.2.4-03  (ch3-datatypes.html)
+// [...] otherwise it shall be treated as having no discipline and no domain binding.
+//
+//! reject ParseError
+module ch3_implicit_top(p); inout p; electrical p; child u(p, implicit_link); endmodule
+// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

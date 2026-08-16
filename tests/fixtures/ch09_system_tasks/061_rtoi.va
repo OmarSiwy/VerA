@@ -1,0 +1,19 @@
+// §9.11 / Table 9-8: `$rtoi` is the IEEE 1364 real-to-integer conversion, made
+// legal in the analog context. IEEE 1364 §17.8 defines it as TRUNCATION of the
+// real value ("123.45 becomes 123") — deliberately unlike §4.2.1.1, which
+// rounds to nearest (ties away from zero) whenever a real is ASSIGNED to an
+// integer. The two checks separate $rtoi from both alternatives:
+//
+//   $rtoi(2.7)  = 2   (rounding would give 3)
+//   $rtoi(-2.7) = -2  (truncation is toward zero; floor would give -3)
+//
+//! bias V(p) = 2.7
+`include "check.vh"
+module ch09_atomic_rtoi(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("$rtoi truncates, it does not round", $rtoi(V(p,n)), 2);
+    `CHECKI("$rtoi truncates toward zero, not down", $rtoi(-2.7), -2);
+    I(p,n) <+ $rtoi(V(p,n));
+  end
+endmodule

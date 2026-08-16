@@ -1,0 +1,16 @@
+// A branch may name the same net twice. LRM 4.4 / Table 4-16 makes V(a,b) the
+// potential DIFFERENCE between the two terminals, so a branch from p to p has a
+// potential of exactly zero no matter what p sits at, and the flow it carries
+// enters and leaves the same node — KCL at p is untouched by the 1 mA below.
+`include "check.vh"
+//! bias V(p) = 0.7
+module ch4_same_flow(p);
+  inout p; electrical p;
+  analog begin
+    I(p,p) <+ 1m;
+    // p is biased at 0.7 V, so this is not the trivial all-zeros answer.
+    `CHECKX("V(p) is the declared bias", V(p), 0.7);
+    // ...yet the difference of a net with itself is identically zero.
+    `CHECKX("V(p,p) = 0", V(p,p), 0.0);
+  end
+endmodule

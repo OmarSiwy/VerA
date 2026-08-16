@@ -1,0 +1,38 @@
+// §5.4.1/§5.4.2 the four controlled sources, all driven off one sensed branch.
+//
+// §5.4.2 makes `I(sensed)` a solver unknown of its own, so the testbench can
+// hold it the way it holds a node potential; §5.4.1 makes `V(sensed)` the
+// potential of the branch's node pair, cp - cn.
+//
+// At V(cp)=0.7, V(cn)=0.2 the sensed potential is 0.5 V, and the sensed flow is
+// held at 1 mA:
+//
+//   VCVS  2.0 * 0.5   = 1.0 V
+//   VCCS  3m  * 0.5   = 1.5 mA
+//   CCVS  4.0 * 1m    = 4.0 mV
+//   CCCS  5.0 * 1m    = 5.0 mA
+//
+// `flowZ28cpZ2ccnZ29` is the §5.4.2 branch-flow unknown `flow(cp,cn)` under the
+// codegen's identifier mangling (Z28 `(`, Z2c `,`, Z29 `)`). It has to be
+// spelled that way here because tb.zig's `ix()` looks the directive name up in
+// the generated enum, and `bias` splits its line on commas — so a `sweep` of
+// one point is the only way to hold a branch current.
+//
+//! bias V(cp) = 0.7, V(cn) = 0.2
+//! sweep flowZ28cpZ2ccnZ29 = 1m
+`include "check.vh"
+module ch5_controlled_sources(op, on, cp, cn);
+  inout op, on, cp, cn; electrical op, on, cp, cn;
+  branch (cp, cn) sensed;
+  analog begin
+    `CHECK("named branch potential is its node difference", V(sensed), 0.5, 1e-15);
+    `CHECK("VCVS: 2 * V(cp,cn)", 2.0 * V(cp, cn), 1.0, 1e-15);
+    `CHECK("VCCS: 3m * V(cp,cn)", 3m * V(cp, cn), 1.5e-3, 1e-18);
+    `CHECK("CCVS: 4 ohm * I(sensed)", 4.0 * I(sensed), 4.0e-3, 1e-18);
+    `CHECK("CCCS: 5 * I(sensed)", 5.0 * I(sensed), 5.0e-3, 1e-18);
+    V(op, on) <+ 2.0 * V(cp, cn);
+    I(op, on) <+ 3m * V(cp, cn);
+    V(sensed) <+ 4.0 * I(sensed);
+    I(op, on) <+ 5.0 * I(sensed);
+  end
+endmodule

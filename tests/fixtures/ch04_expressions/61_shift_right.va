@@ -1,0 +1,23 @@
+// LRM 4.2.11: `>>` shifts its left operand right by the number of bit positions
+// given by the right operand, filling the vacated positions with zeroes. Bits
+// shifted off the bottom are DISCARDED, not rounded.
+//
+//   8 >> 2 = 1000 shifted two places = 0010 = 2
+//
+// The second line is the LRM's own worked example verbatim: "start = 3;
+// result = (start >> 1)" is "assigned the binary value 0001", i.e. 1 — so the
+// dropped low bit is truncated, not rounded up to 2.
+//
+`include "check.vh"
+module ch04_shift_right(p, n);
+    inout p, n;
+    electrical p, n;
+    integer a;
+
+    analog begin
+        a = 8 >> 2;
+        `CHECKI("8 >> 2 = 0010", a, 2);
+        `CHECKI("LRM 4.2.11 example: 3 >> 1 = 0001, truncated", (3 >> 1), 1);
+        I(p, n) <+ a;
+    end
+endmodule

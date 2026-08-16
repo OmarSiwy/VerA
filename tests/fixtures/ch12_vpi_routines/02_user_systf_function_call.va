@@ -1,0 +1,25 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-12.32-01  (ch12-vpi-routines.html)
+// The VPI routine vpi_register_analog_systf() shall register callbacks for user-defined analog system tasks or functions.
+// VAMS-12.32.1-09  (ch12-vpi-routines.html)
+// Callbacks to the application pointed to by the calltf routine shall occur each time the system task or function is invoked during simulation execution
+// VAMS-12.33.1-10  (ch12-vpi-routines.html)
+// Callbacks to the application pointed to by the calltf routine shall occur each time the system task or function is invoked during simulation execution
+//
+// §2.8.3 makes an unregistered `$name` grammatical source — it "refer[s] to
+// simulator functionality", and §12.32's compiletf hook is where an application
+// gets to refuse one — so nothing REQUIRES this rejection, which is why it is
+// filed above as debt. What VerA does instead: an unregistered systf in
+// EXPRESSION position has no value, and codegen will not invent one for a
+// contribution (invariant 5), so the unit collapses to an `@compileError`
+// carrying the name. That is a codegen refusal, not the E0512 unknown-call
+// diagnostic; the statement-position spelling in 01 is dropped and compiles.
+//! reject $fixture_vpi_gain
+module ch12_user_systf_function_call(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ $fixture_vpi_gain(V(p,n));
+endmodule

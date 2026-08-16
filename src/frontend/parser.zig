@@ -1655,31 +1655,32 @@ pub const Parser = struct {
         return if (lit.width == 0) null else lit;
     }
 
-    /// §2.7 string literal contents, with escapes processed. Only allocates
-    /// when the literal actually contains a backslash.
+    /// §2.7 string literal contents, with escapes processed, then §3.3's
+    /// literal→string conversion applied. Only allocates when the literal
+    /// actually contains a backslash.
+    ///
+    /// The escape decode is `lexer.stringContents` and not a copy of it: a
+    /// second decoder here is what left `\ddd` (§2.7 Table 2-2) undecoded on
+    /// the live path, so `"\0"` became the character `0` while the lexer's
+    /// tested decoder had it right all along.
     fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
         const raw = self.tokenText(tok);
         const body = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
         if (std.mem.indexOfScalar(u8, body, '\\') == null) {
             return self.file.intern(self.arena, body);
         }
-        var out: std.ArrayList(u8) = .empty;
-        var i: usize = 0;
-        while (i < body.len) : (i += 1) {
-            if (body[i] != '\\' or i + 1 == body.len) {
-                try out.append(self.arena, body[i]);
-                continue;
-            }
-            i += 1;
-            try out.append(self.arena, switch (body[i]) {
-                'n' => '\n',
-                't' => '\t',
-                '\\' => '\\',
-                '"' => '"',
-                else => body[i],
-            });
+        const decoded = try lexer.stringContents(self.arena, raw);
+        // §3.3 spells the conversion out in three steps: "all the \0 characters
+        // are ignored", an empty remainder becomes the empty string, otherwise
+        // the rest is kept — so `"hello\0world"` is `helloworld`, NOT a
+        // C-style truncation at the NUL. Compacting in place is that rule.
+        var n: usize = 0;
+        for (decoded) |c| {
+            if (c == 0) continue;
+            decoded[n] = c;
+            n += 1;
         }
-        return self.file.intern(self.arena, out.items);
+        return self.file.intern(self.arena, decoded[0..n]);
     }
 
     /// Source text of a token. `token.Stored` has no length (DOD: recompute,

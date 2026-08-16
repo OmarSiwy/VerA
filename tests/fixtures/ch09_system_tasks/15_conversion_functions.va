@@ -1,0 +1,29 @@
+// §9.11 conversion system functions, carried into the analog context from
+// IEEE 1364-2005 §17.8/Table 17-4. Two independent round trips, biased at
+// V(p,n) = 3.7 so that each one has a wrong answer close enough to be tempting:
+//
+//   $rtoi CONVERTS BY TRUNCATION ("123.456 becomes 123"), so $rtoi(3.7) is 3 and
+//   $itor(3) is 3.0. Rounding — the other plausible reading — would give 4.0, so
+//   the fraction 0.7 is chosen to be on the far side of the halfway point.
+//
+//   $realtobits yields the 64-bit IEEE-754 PATTERN of the real and $bitstoreal
+//   maps that pattern back, so the pair is the identity on any real: bit-exact,
+//   hence CHECKX rather than a tolerance. An implementation that routed the
+//   pattern through a double (or truncated it like $rtoi) loses the mantissa and
+//   fails on the .7.
+//
+//! bias V(p) = 3.7
+`include "check.vh"
+module ch09_conversion_functions(p, n);
+  inout p, n; electrical p, n;
+  real x;
+  analog begin
+    `CHECKX("§9.11 $rtoi truncates: 3.7 -> 3, and $itor(3) -> 3.0",
+            $itor($rtoi(V(p,n))), 3.0);
+    `CHECKX("§9.11 $bitstoreal of $realtobits is the identity on 3.7",
+            $bitstoreal($realtobits(V(p,n))), 3.7);
+    x = $itor($rtoi(V(p,n))) + $bitstoreal($realtobits(V(p,n)));
+    `CHECKX("the two round trips sum to 3.0 + 3.7", x, 6.7);
+    I(p,n) <+ x;
+  end
+endmodule

@@ -1,0 +1,40 @@
+// §9.5.7: `errno = $ferror(fd, str)` — "should any error be detected by one of
+// the file I/O routines, an error code is returned … the integral value of the
+// error code is returned in errno. If the most recent operation did not result
+// in an error, then the value returned shall be zero, and the string variable
+// str shall be empty."
+//
+// The errno itself is not writable as a digit: when there IS an error its value
+// is the host's, and whether there is one here depends on whether `fixture.dat`
+// exists in the working directory, which this fixture never creates and a
+// sibling opening the same name for append would. So zero is not assertable and
+// neither is any particular nonzero.
+//
+// What the LRM pins with no host in it is the BICONDITIONAL between the two
+// halves of §9.5. §9.5.1: "if a file cannot be opened (…), a zero is returned
+// for the mcd or fd. Applications can call $ferror to determine the cause of the
+// most recent error." A zero fd therefore means the open failed, a nonzero fd
+// means it succeeded, and the $fopen is the most recent file I/O operation when
+// the $ferror runs. So, either way the open went:
+//
+//     the open failed  <=>  fd == 0  <=>  errno != 0
+//
+// Both sides are §4.2.5 relationals, so both are 1 or 0 and they must agree.
+// That is the whole of what §9.5.7 says here and there is no value to write
+// down, so it is a CHECKEQ.
+//
+// It is restricting in both directions. An implementation that hands back a zero
+// fd while reporting errno zero claims a file that could not be opened raised no
+// error; one that opens the file and still reports a nonzero errno invents an
+// error §9.5.7 says shall be zero. Either disagreement fails it.
+`include "check.vh"
+module ch09_atomic_ferror(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code; string text;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    code = $ferror(fd, text);
+    `CHECKEQ("§9.5.1+§9.5.7: a zero fd is an open error and $ferror reports it", (fd == 0), (code != 0), 0);
+    I(p,n) <+ V(p,n) + code;
+  end
+endmodule

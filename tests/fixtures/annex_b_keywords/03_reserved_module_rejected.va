@@ -1,0 +1,4 @@
+//! reject identifier
+// EXPECT: error
+module module;
+endmodule

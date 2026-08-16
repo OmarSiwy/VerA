@@ -1,0 +1,18 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-7.4.2-02  (ch7-mixed-signal.html)
+// In addition, the real-value nets shall obey the rules imposed by 3.7. [needs: `wreal` real-valued net type; `wreal` is in the lexer's reserved list an
+//
+// annex C: `wreal` and the digital continuous `assign` are outside Verilog-A.
+//! reject E0205
+//! reject wreal
+//! reject assign
+// EXPECT: error -- an analog-event-owned variable may drive a continuous assign.
+module ch7_continuous_assign(p, out);
+  inout p; electrical p; output out; wreal out; real analog_value;
+  analog @(cross(V(p), 0)) analog_value = V(p);
+  assign out = analog_value;
+endmodule

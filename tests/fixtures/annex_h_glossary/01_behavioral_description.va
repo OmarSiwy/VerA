@@ -1,0 +1,18 @@
+// Annex H "behavioral description": a mathematical mapping of inputs to outputs
+// for a module, INCLUDING intermediate variables. So the check is that the
+// intermediate carries the mapping: at V(p)-V(n) = 0.75-0.25 = 0.5 the variable
+// must hold 2*0.5 = 1.0 before the contribution reads it (§4.4.1 the potential
+// probe is the node-pair difference, §5.2 procedural assignment).
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module glossary_behavioral_description(p, n);
+  inout p, n; electrical p, n;
+  real intermediate;
+  analog begin
+    intermediate = 2.0*V(p,n);
+    `CHECKX("probe is the node-pair difference", V(p,n), 0.5);
+    `CHECKX("intermediate variable carries the mapping", intermediate, 1.0);
+    I(p,n) <+ intermediate;
+  end
+endmodule

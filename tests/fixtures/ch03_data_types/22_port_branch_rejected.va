@@ -1,0 +1,7 @@
+//! reject identifier
+// EXPECT: error
+module ch03_port_branch_rejected(p);
+    inout p;
+    electrical p;
+    branch (<p>) port_path;
+endmodule

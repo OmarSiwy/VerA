@@ -1,0 +1,18 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-2.6.1-14  (ch2-lexical.html)
+// An x shall set 4 bits to unknown in the hexadecimal base, 3 bits in the octal base, and 1 bit in the binary base.
+// VAMS-2.6.1-21  (ch2-lexical.html)
+// In a decimal constant, the unsigned number token shall not contain any x , z , or ? digits, unless there is exactly one digit in the token, indicating
+//
+// LRM 2.6: x/z (and their `?` alias) are 4-state digital values, outside the
+// Verilog-A subset.
+//! reject E0130
+// EXPECT: error
+module ch02_question_digit_rejected;
+    integer value;
+    analog value = 4'b?;
+endmodule

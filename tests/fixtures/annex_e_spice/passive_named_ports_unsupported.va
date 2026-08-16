@@ -1,0 +1,14 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-E.1.2-01  (annex-e-spice.html)
+// When instantiating SPICE primitives in Verilog-AMS HDL, the primitives shall, and parameters and ports can, be named.
+//
+//! reject module instantiation is not supported
+// EXPECT: error -- preferred p/n names support named passive connections.
+module annex_e_passive_named_ports(p, n);
+  inout p, n; electrical p, n;
+  resistor #(.r(1k), .tc1(1m), .tc2(1u)) r1(.p(p), .n(n));
+endmodule

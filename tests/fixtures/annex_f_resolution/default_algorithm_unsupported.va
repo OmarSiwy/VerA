@@ -1,0 +1,22 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-F.2.1-01  (annex-f-resolution.html)
+// Insertion of interface elements shall occur at each level of the hierarchy where both continuous and discrete disciplines meet.
+// VAMS-F.2.1-02  (annex-f-resolution.html)
+// It shall be determined whether the net is analog or digital.
+// VAMS-F.2.1-03  (annex-f-resolution.html)
+// Any net which is used in digital behavioral code shall be considered digital.
+// VAMS-F.2.1-04  (annex-f-resolution.html)
+// Any net whose child nets are all digital shall be considered digital (discrete domain).
+// … and 1 more rule(s); see tests/lrm-rules/
+//
+//! reject module instantiation is not supported
+// EXPECT: error -- post-order signal traversal requires hierarchy elaboration.
+module annex_f_default(sig);
+  electrical sig;
+  analog_leaf a(sig);
+  digital_leaf d(sig);
+endmodule

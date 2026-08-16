@@ -1,0 +1,16 @@
+// Annex H "reference node": the global node against which potentials are
+// measured, declared with §3.6.4 `ground`. Its potential is zero by definition,
+// so V(p,gnd) must be the potential of p alone — 0.5 V here — and the flow it
+// drives 0.5/1000 = 500 uA.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module glossary_reference_node(p);
+  inout p; electrical p;
+  electrical gnd; ground gnd;
+  analog begin
+    `CHECKX("the reference node contributes zero potential", V(p,gnd), 0.5);
+    `CHECKR("flow into the reference node", V(p,gnd)/1000.0, 5e-4, 1e-15);
+    I(p,gnd) <+ V(p,gnd)/1000.0;
+  end
+endmodule

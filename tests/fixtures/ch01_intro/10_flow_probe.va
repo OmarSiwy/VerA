@@ -1,0 +1,21 @@
+// §1.3.1 the other half of the probe/source pair (§5.4.2): the FLOW through a
+// branch is read back and fed to a flow source on the same branch. Holding the
+// branch flow at 5 mA, the probe reads 5 mA and the contributed flow is twice
+// that, 10 mA — which is why the only consistent solution of I = 2*I is zero.
+//
+// (The branch-flow unknown is `flow(p,n)`, which codegen spells with its
+// punctuation escaped; `sweep` and not `bias` because a bias line splits its
+// bindings on commas.)
+//
+//! sweep flowZ28pZ2cnZ29 = 0.005
+`include "check.vh"
+module ch01_flow_probe(p, n);
+    inout p, n;
+    electrical p, n;
+    branch (p, n) measured;
+    analog begin
+        `CHECK("flow probe of the named branch", I(measured), 5.0e-3, 1e-15);
+        `CHECK("doubled flow contribution", 2.0 * I(measured), 1.0e-2, 1e-15);
+        I(measured) <+ 2.0 * I(measured);
+    end
+endmodule

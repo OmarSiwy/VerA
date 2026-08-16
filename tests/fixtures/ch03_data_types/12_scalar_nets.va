@@ -1,0 +1,25 @@
+// §3.6.3 scalar net declarations. `internal_a` and `internal_b` are declared
+// exactly like the ports but are not in the terminal list, yet they are real
+// nodes: each carries its own potential and obeys KCL/KVL with the rest.
+//
+// The bias below puts 3 V across the chain in three 1 V steps, so each branch
+// potential is a difference of two node potentials and the three of them sum to
+// the port-to-port potential. That is Kirchhoff's voltage law around the chain,
+// and it fails if an internal net is folded to ground or aliased to a port.
+//
+//! bias V(p) = 3, V(internal_a) = 2, V(internal_b) = 1, V(n) = 0
+`include "check.vh"
+module ch03_scalar_nets(p, n);
+    inout p, n;
+    electrical p, n;
+    electrical internal_a, internal_b;
+
+    analog begin
+        `CHECKX("port to first internal net", V(p, internal_a), 1.0);
+        `CHECKX("internal net to internal net", V(internal_a, internal_b), 1.0);
+        `CHECKX("KVL around the chain", V(p, internal_a) + V(internal_a, internal_b) + V(internal_b, n), 3.0);
+        I(p, internal_a) <+ V(p, internal_a);
+        I(internal_a, internal_b) <+ 2.0 * V(internal_a, internal_b);
+        I(internal_b, n) <+ 3.0 * V(internal_b, n);
+    end
+endmodule

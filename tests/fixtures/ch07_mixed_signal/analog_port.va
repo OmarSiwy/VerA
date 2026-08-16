@@ -1,0 +1,19 @@
+// §7.2.3: "a port whose connections are both analog is an analog port". Both
+// ports here carry a continuous discipline, so both are read by the potential
+// access function regardless of direction — `input` does not make a net
+// unreadable from the other side, nor `output` unprobeable.
+//
+// The body is a potential source, whose branch equation is V(driven) - V(sense)
+// = 0 (§1.3.1.2 associated reference directions). Probed away from its solution
+// at V(sense) = 0.7, V(driven) = 0.2 the mismatch is 0.2 - 0.7 = -0.5, which is
+// the residual a solver would drive to zero.
+//
+//! bias V(sense) = 0.7, V(driven) = 0.2
+`include "check.vh"
+module ch7_analog_port(input electrical sense, output electrical driven);
+  analog begin
+    `CHECK("the input analog port is readable", V(sense), 0.7, 1e-15);
+    `CHECK("potential-source mismatch V(driven) - V(sense)", V(driven) - V(sense), -0.5, 1e-15);
+    V(driven) <+ V(sense);
+  end
+endmodule

@@ -1,0 +1,18 @@
+// §3.4.4 parameter arrays, from the LRM's `poles` example. The assignment
+// pattern fills the declared range LEFT INDEX FIRST: with `[0:3]` the literal
+// 1.0 lands at index 0 and 2.0 at index 3. Element 1 and element 3 differ, and
+// both differ from the reversed order, so an implementation that filled the
+// array backwards fails both lines below.
+`include "check.vh"
+module ch03_parameter_array(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real coefficients[0:3] = '{1.0, 3.198, 4.554, 2.0};
+
+    analog begin
+        `CHECKX("assignment pattern fills index 0 first", coefficients[0], 1.0);
+        `CHECKX("interior element keeps its own value", coefficients[1], 3.198);
+        `CHECKX("last element is the last literal", coefficients[3], 2.0);
+        I(p, n) <+ coefficients[0] * V(p, n) + coefficients[3];
+    end
+endmodule

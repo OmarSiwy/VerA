@@ -1,0 +1,8 @@
+// annex C: the digital `always` procedural block is outside Verilog-A.
+//! reject E0205
+//! reject always
+// EXPECT: error
+module annex_c_digital_always_rejected;
+    integer state;
+    always state = !state;
+endmodule

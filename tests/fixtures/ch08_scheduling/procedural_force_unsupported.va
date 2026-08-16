@@ -1,0 +1,10 @@
+// annex C: `reg`, the digital `initial` block and procedural force/release
+// are outside Verilog-A.
+//! reject E0205
+//! reject reg
+//! reject initial
+// EXPECT: error -- force updates are scheduled digital processes.
+module ch8_procedural_force;
+  reg source, target;
+  initial force target = source;
+endmodule
