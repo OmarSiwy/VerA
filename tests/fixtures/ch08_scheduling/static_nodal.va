@@ -9,6 +9,8 @@
 // so i = 2e-3 * 1.25 = 2.5e-3 A. KFL makes that same flow leave p and enter n,
 // so the relation read across the reversed branch is its negation.
 //
+//! lrm 8.3.1
+//! lrm 2.5.1
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch8_static(p, n);

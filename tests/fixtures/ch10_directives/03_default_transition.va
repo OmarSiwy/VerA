@@ -16,6 +16,7 @@
 // directive absent §10.3 leaves the transition time to the simulator, so there
 // would be no LRM digit to write either.
 //
+//! lrm 10.3
 //! bias V(p) = 0.5
 `default_transition 1n
 `include "check.vh"

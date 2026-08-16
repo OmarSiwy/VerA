@@ -3,6 +3,7 @@
 // example). `gain_factor` and `Gain_Factor` are therefore two distinct
 // variables: a compiler that folded case would leave one variable holding 3.0,
 // making the difference below 0.0 instead of 1.0.
+//! lrm 2.8
 `include "check.vh"
 module Ch02_CaseSensitive(_port0, n$657);
     inout _port0, n$657;

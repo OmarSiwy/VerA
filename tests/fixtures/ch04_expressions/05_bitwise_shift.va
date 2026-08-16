@@ -1,16 +1,24 @@
-// LRM 4.2.9: "The arithmetic shift operators can not be used in an analog
-// block."
+// LRM 4.2.11, verbatim: "There are two types of shift operators: the logical
+// shift operators, << and >>, and the arithmetic shift operators, <<< and >>>.
+// The arithmetic shift operators can not be used in an analog block."
+//
+// The clause is 4.2.11 Shift operators, not 4.2.9 — 4.2.9 is Bitwise
+// operators, and every operator in that clause IS legal here (56..62 run them).
+//
+// The expression is the single banned token and nothing else, so the
+// diagnostic can only have come from `>>>`. 117_arithmetic_shift_left_rejected.va
+// is the `<<<` half; 60 and 61 are the legal `<<` and `>>`.
+//
+//! lrm 4.2.11
 //! reject E0324
 module ch04_bitwise_shift(p, n);
     inout p, n;
     electrical p, n;
-    integer a, b, value;
+    integer a, value;
 
     analog begin
         a = 5;
-        b = 3;
-        value = (~a) + (a & b) + (a | b) + (a ^ b) + (a ^~ b) +
-                (a ~^ b) + (a << 2) + (a >> 1) + (a <<< 1) + (a >>> 1);
+        value = a >>> 1;
         I(p, n) <+ value;
     end
 endmodule

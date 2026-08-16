@@ -9,6 +9,7 @@
 // (5.9 forbids contribution statements inside a loop, so the contribution is
 // where it has to be: after the loop, of the accumulated variable.)
 //
+//! lrm 5.9.1
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch5_while(p);

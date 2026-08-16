@@ -1,6 +1,6 @@
 # The torture suite
 
-857 `.va` files. One runner, `tests/torture.zig`. No sidecar files.
+859 `.va` files. One runner, `tests/torture.zig`. No sidecar files.
 
 A fixture states its own expected behavior, in the file, in one of exactly two
 forms. Nothing else is needed to read it, and there is no second file to drift
@@ -17,8 +17,29 @@ diagnostic. A line is either a diagnostic CODE (`E0130`, `W0650`), a phase label
 (`ParseError`, `DiagnosticsReported`), or a message substring.
 
 Codes are the preferred form: they are stable, so the prose of a diagnostic can
-be improved without touching 301 fixtures, and they pin WHICH rule fired rather
+be improved without touching 312 fixtures, and they pin WHICH rule fired rather
 than how it happened to be worded.
+
+## Citing the rule — `//! lrm`
+
+```verilog
+//! lrm 4.5.11
+//! lrm A.8.3
+```
+
+One or more, naming the normative clause the fixture pins. A chapter number or
+an annex letter, then dotted numbers. It is **not** an expectation and changes no
+verdict — it does two things:
+
+- a failing fixture prints its cites, so the report says which RULE broke and not
+  only which file;
+- `zig build torture -- --coverage` prints every cited section, sorted, with the
+  fixtures citing it. That cannot prove a clause is *un*cited — nothing in the
+  runner has the LRM's table of contents — but it makes the cited set greppable,
+  diffable and countable, which is the only mechanical backing a "chapter 4 is
+  covered" claim can have.
+
+A cite that is not a section number is a fixture error and FAILs.
 
 ## A fixture that must run
 
@@ -108,8 +129,28 @@ grammar is `src/backend/tb.zig`.
 ```
 zig build torture                 # every fixture
 zig build torture -- ch04         # only paths matching `ch04`
-zig build torture -- --strict     # unasserted and CANNOT RUN fixtures FAIL instead of warn
+zig build torture -- --strict     # unasserted, CANNOT RUN and XFAIL fixtures FAIL instead of warn
+zig build torture -- --coverage   # every cited LRM section and who cites it
+zig build torture -- -j1          # one at a time, streaming; the debugging path
+zig build torture -- --fixture-opt=ReleaseFast
 ```
+
+A fixture is a `zig build-exe`, so the suite runs one per core by default (`-jN`
+/ `--jobs=N` to change it). Workers finish in any order; the OUTPUT does not —
+each buffers its whole report into the slot for its position in the sorted walk,
+and the report is printed from those slots afterwards. A parallel run is
+byte-for-byte the output of `-j1`. `-j1` keeps the fully sequential path, which
+prints as it goes and is therefore the one to use when a run is stuck.
+
+The fixture binaries are built `-ODebug`, and not out of caution about floats:
+Zig has no `-ffast-math`, so float arithmetic is strict IEEE in every optimize
+mode unless the code asks for `@setFloatMode(.optimized)`, which a generated
+device does not. Debug is the default because a testbench compiles for seconds
+and runs for microseconds — compile time *is* the run time, and ReleaseFast makes
+the whole suite slower — and because Debug keeps the safety checks on, so a
+codegen bug traps loudly instead of returning a plausible wrong number.
+`--fixture-opt=<mode>` (or `-Dfixture-optimize=<mode>` at build time) is there to
+ask the separate question "does this still pass under optimization?".
 
 ## Known blocker — the `CANNOT RUN` verdict
 
@@ -130,3 +171,79 @@ the generated testbench can fail to compile is a genuine codegen bug and still
 FAILs loudly.
 
 Do not add ports to work around it — that changes what the fixture tests.
+
+## Known gap — the `XFAIL` verdict
+
+`CANNOT RUN` is the fixture being right and the *host* being unable. `XFAIL` is
+the fixture being right and **VerA** being wrong. It marks either expectation,
+because the gap comes in both directions.
+
+Deleting such a fixture loses the requirement. Leaving it FAILing buries the
+regressions. So it gets its own verdict, on exactly the terms `CANNOT RUN` gets:
+
+- it is **not** a pass — nothing was proved;
+- it is **not** a FAIL — the gap is known and written down, with its reason;
+- `--strict` fails on it.
+
+### On a `reject` fixture — VerA does not diagnose it
+
+```verilog
+//! lrm 3.6.2
+//! reject E0421
+//! xfail VerA does not check the discipline of a branch port yet
+```
+
+The LRM says the construct is an error, the fixture demands the diagnostic, and
+VerA compiles it happily. The verdict is `XFAIL` instead of FAIL.
+
+### On a run fixture — VerA does not compile it
+
+```verilog
+//! lrm 4.7.2.4
+//! xfail VerA rejects an array formal in an analog function (E0511)
+```
+
+No `//! reject` line, so the fixture must compile, run, and print `ok=1` — that
+is what the LRM says, because the LRM *prints this example*. VerA cannot get
+there yet. Any failure at all is the one the fixture predicted: it did not
+compile, codegen refused a construct, the testbench would not build, the binary
+exited nonzero, or an assertion came back `ok=0`. All of them are `XFAIL`.
+
+This direction is the common one, and it is why the marker has to work here.
+Written the other way — `//! reject`, because VerA happens to refuse the
+construct today — the fixture is **inverted**: it now demands a diagnostic the
+LRM never asked for, a conforming compiler fails it, and only VerA passes. The
+honest form is "this must run green" plus "we know it does not yet".
+
+`CANNOT RUN` keeps priority over `XFAIL`. A fixture with no port list is refused
+by the host whatever VerA does, and reporting that as a VerA gap loses which of
+the two it was.
+
+### Write the reason so it can be triaged
+
+The reason is the only thing a reader gets — the failing output is not printed,
+because for a known gap it is not news. So say **what VerA does not do**, not
+that something is wrong:
+
+- good: `xfail VerA rejects an array formal in an analog function (E0511)`
+- bad: `xfail not supported yet`
+
+A reason with a diagnostic code or a construct name is greppable, and tells the
+next person whether their change closed this gap. "Not supported yet" makes them
+rerun the suite to find out what was even being tested.
+
+### XPASS is a hard FAIL
+
+The day VerA does meet the rule, that fixture FAILs — both directions:
+
+```
+FAIL …/branch_discipline.va: XPASS — marked `//! xfail`, but VerA now rejects it
+  exactly as the LRM says it must. Delete the `//! xfail` line: …
+
+FAIL …/arrayadd.va: XPASS — marked `//! xfail`, but it compiled, ran, and printed
+  ok=1 for every assertion. Delete the `//! xfail` line: …
+```
+
+That is the point of the verdict. A marker left on a rule VerA now meets stops
+the fixture from ever being reported again, so the next regression there is
+silent. The fix is one deleted line.

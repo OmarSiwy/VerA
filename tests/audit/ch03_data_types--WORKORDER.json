@@ -1,0 +1,833 @@
+[
+ {
+  "id": "ch03-001",
+  "section": "3 (harness)",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/torture.zig",
+  "title": "torture.zig has no verdict for 'the LRM permits it, VerA rejects it', so all nine inverted fixtures below can only be fixed by turning red",
+  "detail": "Verified in tests/torture.zig:19-20,500-560 and src/backend/tb.zig:200. `//! xfail` is legal ONLY together with `//! reject` (tb.zig returns error.XfailWithoutReject otherwise), and its meaning is the opposite of what this chapter needs: verifyRejected treats xfail as 'the LRM says REJECT, VerA does not reject yet', and turns a matched reject into a hard XPASS FAIL. The nine fixtures in items 2-10 are the inverse case -- the construct is LEGAL and VerA refuses it -- and there is no directive for that. Rewriting them as positive run-fixtures (what three of the four lenses propose) makes nine hard FAILs on the day of the commit, which is exactly the 'engine limitation reported as FAIL buries the real conformance bugs' failure the runner's own header argues against. Lazy fix: allow `//! xfail <reason>` on a run-fixture and add the mirror verdict in verifyRuns -- a fixture that must compile, does not, and says so in advance is `xfail`, not `fail`; if it starts compiling and asserting, that is an XPASS FAIL and the marker comes off. That is one guard removed in tb.zig plus one branch in verifyRuns, versus nine fixtures that stay wrong.",
+  "expected": "`zig build torture -- ch03 --strict` reports nine xfail lines naming \u00a73.2/\u00a73.3/\u00a73.6.3.2/\u00a73.12/\u00a73.12.1/\u00a73.13.2/\u00a76.4 by cite, and zero of them counts as a pass.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-002",
+  "section": "3.13.2",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/40_access_name_shadow.va",
+  "title": "40_access_name_shadow.va rejects the shadowing \u00a73.13.2 explicitly permits",
+  "detail": "Verified against ch3-datatypes.html \u00a73.13.2: 'Each access function name ... is automatically added to that module's namespace UNLESS THERE IS ANOTHER IDENTIFIER DEFINED WITH THE SAME NAME AS THE ACCESS FUNCTION IN THAT MODULE'S NAMESPACE.' The fixture declares `real ShadowV;` where ShadowV is the nature's access name and pins `//! reject DiagnosticsReported`. The declaration is legal; it merely suppresses the access-function binding, and the module then reaches the signal through `potential(p)`, which is precisely what line 4 already writes. A conforming compiler accepts this file, so the fixture is green only because VerA is wrong.",
+  "expected": "Rewrite as a run-fixture: `//! lrm 3.13.2`, `//! bias potential(p) = 2.0`, `real ShadowV; analog begin ShadowV = 1.0; `CHECKX(\"a same-named identifier shadows the access function\", ShadowV, 1.0); `CHECKX(\"the net is still reachable through the generic form\", potential(p), 2.0); potential(p) <+ ShadowV; end`. Carry `//! xfail` (item 1) until VerA stops rejecting it.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-003",
+  "section": "3.2",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/18_multidimensional_array_rejected.va",
+  "title": "18_multidimensional_array_rejected.va rejects `real values[0:2][0:3]`, which \u00a73.2 declares legal in its own examples",
+  "detail": "Verified at ch3-datatypes.html \u00a73.2: `integer flag_array[0:8][0:3]; // a multidimensional integer array` and `real vtable[0:16][0:7][0:64]; // a multidimensional real array`. The fixture pins the parser substring 'expected `;`' and carries no DEBT header and no `//! lrm`, unlike 21/32/33/34. A conforming compiler FAILS it.",
+  "expected": "Rewrite to the LRM's own `integer flag_array[0:8][0:3];`, write and read three distinct cells, and assert each independently (e.g. flag_array[0][0]=1, flag_array[8][3]=7, `CHECKI` both plus a third interior cell so a row/column transposition cannot pass). `//! lrm 3.2`, plus `//! xfail` per item 1. Also delete the sidecar (item 59).",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-004",
+  "section": "3.3",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/24_multidimensional_strings.va",
+  "title": "24_multidimensional_strings.va rejects multidimensional string arrays, which \u00a73.3 supports with a verbatim worked example",
+  "detail": "Verified at \u00a73.3: 'Arrays and multidimensional arrays of string are also supported. For example: string names[1:3] = '{\"first\", \"middle\", \"last\"}; string paths[0:2][0:1] = '{ '{\"dir1\",\"fileA\"}, '{\"dir2\",\"fileA\"}, '{\"dir1\",\"fileB\"}};'. The fixture's own body is a near-copy of that example and it pins `//! reject DiagnosticsReported`.",
+  "expected": "Rewrite to the LRM's `paths[0:2][0:1]` literally and assert paths[0][0]==\"dir1\", paths[1][1]==\"fileA\", paths[2][0]==\"dir1\" -- the repeated values are what make a flattening bug visible. `//! lrm 3.3` + `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-005",
+  "section": "3.3",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/28_string_replication.va",
+  "title": "28_string_replication.va rejects `{3{\"ab\"}}` while \u00a73.3 writes `b = {5{\"Hi\"}}; // OK`",
+  "detail": "Verified at \u00a73.3's second worked example, which annotates each line: `b = {5{\"Hi\"}}; // OK`, `a = {i{\"Hi\"}}; // OK (non constant replication)`, `r = {i{\"Hi\"}}; // invalid (non constant replication)`. Table 3-3's Replication row confirms: 'multiplier must be of integral type and can be nonconstant. If multiplier is nonconstant or Str is of type string, the result is a string containing N concatenated copies.' Only the integral-target/non-constant-multiplier form is invalid, and that is not what the fixture writes.",
+  "expected": "Rewrite as a run-fixture over the LRM's own three legal lines: `string b; b = {5{\"Hi\"}}; `CHECKI(\"constant replication of a literal\", (b == \"HiHiHiHiHi\"), 1);` plus `integer i = 1; a = {i{\"Hi\"}}; `CHECKI(\"non-constant multiplier with a string target\", (a == \"Hi\"), 1);`. The invalid `r = {i{\"Hi\"}}` integral-target case is a separate negative (item 26 family). `//! lrm 3.3` + `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-006",
+  "section": "3.12.1",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/22_port_branch_rejected.va",
+  "title": "22_port_branch_rejected.va rejects `branch (<p>) port_path;` -- Syntax 3-9 and \u00a73.12.1's own current_sink example",
+  "detail": "Verified: Syntax 3-9 lists `port_branch_declaration ::= branch ( < port_identifier > ) list_of_branch_identifiers ;` as an alternative of branch_declaration, and \u00a73.12.1 gives `module current_sink(p); electrical p; branch (<p>) probe_p; analog $strobe(\"current probed is %g\", I(probe_p)); endmodule`. The fixture pins the bare substring 'identifier', which would also match a dozen unrelated diagnostics.",
+  "expected": "Rewrite to the LRM's current_sink shape with a numeric assertion instead of $strobe: bias the port, contribute a known current, and `CHECKX(\"a port branch measures the flow into the port\", I(probe_p), <exact>)`. `//! lrm 3.12.1` + `//! xfail`. Never re-pin a bare word like 'identifier'.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-007",
+  "section": "3.6.3.2",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/21_net_nodeset_rejected.va",
+  "title": "21_net_nodeset_rejected.va rejects `electrical node = 5.0;`, which \u00a73.6.3.2 permits for continuous disciplines",
+  "detail": "Verified at \u00a73.6.3.2: 'Nets with continuous disciplines are allowed to have initializers on their net discipline declarations; however, nets of non-continuous disciplines are not', with `electrical a = 5.0;` as the first example. The file already admits this in a DEBT header but carries no `//! lrm` and no `//! xfail`, so torture scores it a silent PASS -- the exact 'a broken compiler passes' shape this triage ranks first.",
+  "expected": "Rewrite as a run-fixture: keep `electrical node = 5.0;`, then assert the module still solves with the initializer present (a nodeset is a solver hint, not a value, so the assertion must be on behaviour, not on V(node) equalling 5.0). The genuine negative -- an initializer on a NON-continuous discipline -- is a separate file. `//! lrm 3.6.3.2` + `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-008",
+  "section": "3.6.3",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/32_vector_nets.va",
+  "title": "32_vector_nets.va pins a rejection of `electrical [3:0] p`, a form \u00a73.6.3 and Syntax 3-9 define",
+  "detail": "Verified: \u00a73.12's branch_terminal production takes `net_identifier [ constant_range_expression ]` and \u00a73.12 discusses vector terminals at length with Figures 3-1/3-2. Vector nets are legal. The DEBT header is honest but the file cites VAMS-3.12-03 (the branch size rule), which is not the rule its body exercises -- its body is four scalar accesses into one 4-bit port. No `//! lrm`, no `//! xfail`, so it scores PASS.",
+  "expected": "Rewrite: keep `electrical [3:0] p`, bias each element to a distinct potential, and assert `V(p[0])`, `V(p[3])` separately so an off-by-one or reversed index fails. Cite `//! lrm 3.6.3` (not 3.12) + `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-009",
+  "section": "3.12",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/33_vector_branches.va",
+  "title": "33_vector_branches.va cites the vector-size rule and then tests a size-MATCHING pair, so it will XPASS by accident",
+  "detail": "Two verified defects. (1) Vector branches are legal -- \u00a73.12 defines them and gives `electrical [3:5]a; electrical [1:3]b; branch (a,b) br1; // Branch br1 is of size 3 and can be indexed from 0 to 2`. (2) The fixture quotes 'If one of the terminals of a branch is a vector net, then the other terminal shall either be a scalar net or a vector net of the same size' and then declares `electrical [3:1] a; electrical [1:3] b;` -- both size 3. Its body SATISFIES the rule it claims to test, so the day VerA gains vectors this file goes green while proving nothing about the size rule.",
+  "expected": "Split. Rewrite 33 into the LRM's legal `[3:5]a`/`[1:3]b` case with `//! lrm 3.12` + `//! xfail`, asserting the 0-based branch indexing the LRM spells out ('can be indexed from 0 to 2'). Then a NEW reject fixture for the actual prohibition: `electrical [3:0] a; electrical [1:0] b; branch (a,b) bad;` -- 4 against 2.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-010",
+  "section": "6.4 / Annex C.8",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/16_paramset_rejected.va",
+  "title": "16_paramset_rejected.va asserts paramset is outside the Verilog-A subset; Annex C.8 says Clause 6 applies",
+  "detail": "Verified at annex-c-veriloga.html C.8: 'The hierarchical structure defined in Clause 6 is applicable to both Verilog-AMS HDL and Verilog-A, except support for real value ports is only applicable to Verilog-AMS HDL.' \u00a76.4 paramset is inside Clause 6 and is not excepted. COVERAGE.md line 41 calls this 'the intentional loud rejection', which is a statement about VerA and not about the LRM. Note: pinning E0201 itself is fine -- it is a stable VerA code, better than a phase label -- the defect is the CLAIM the file makes, not the substring.",
+  "expected": "Keep `//! reject E0201`. Add `//! lrm 6.4` and a header saying the rejection is a VerA subset decision contradicted by Annex C.8, plus `//! xfail paramset is Clause 6 and C.8 keeps Clause 6 in Verilog-A` once item 1 lands.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak"
+  ]
+ },
+ {
+  "id": "ch03-011",
+  "section": "3.6.5 / 3.6.2.4",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/34_implicit_nets.va",
+  "title": "34_implicit_nets.va quotes four normative rules and tests none of them, pinning the phase label ParseError",
+  "detail": "Verified: the header quotes VAMS-3.6.2-03, 3.6.2.4-01, -02 and -03, but the body is `child u(p, implicit_link);` -- a module instantiation, which VerA rejects at parse time for reasons that have nothing to do with any of the four quoted rules. The pin is the phase label `ParseError`, so the file would stay green if VerA started rejecting it for a completely different reason. \u00a73.6.2.4's rules are about discipline resolution of an undeclared net, which is real but needs hierarchy.",
+  "expected": "Cut the header down to the ONE thing the body tests (VerA rejects module instantiation, \u00a76.x) and pin the specific diagnostic text, not `ParseError`. Move the three \u00a73.6.2.4 quotes to the ch06/annex_f COVERAGE row where discipline resolution actually lives.",
+  "severity": "medium",
+  "sourceLenses": [
+   "weak",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-012",
+  "section": "3.6.1.2 / 3.6.2.6",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/20_derived_nature_from_discipline_rejected.va",
+  "title": "20_derived_nature_from_discipline_rejected.va derives from `ch03_base.potential` where `ch03_base` is declared nowhere, and its header claims the file must COMPILE",
+  "detail": "Verified by reading the file: five lines, no `discipline ch03_base` anywhere in the file or the chapter, and Annex D's prepended definitions do not define one either. The header says 'deriving a nature from `<discipline>.potential` is legal and this must COMPILE (file name is historical)'. Both cannot hold: the derived nature would inherit units/access/abstol from a discipline that does not exist, so it has none of the three attributes \u00a73.6.1.2 requires. There is no `//! reject`, no port list and no analog block, so torture scores it `unasserted` at best and FAIL at worst. Reported by all three structural lenses.",
+  "expected": "Rewrite: declare a real base nature and a real conservative discipline in the file, derive from `<that discipline>.potential`, bind the derived nature into a second discipline, put a net of it on a port, bias it, and assert the inherited access function returns the biased potential. That is the only shape in which \u00a73.6.2.6 has an observable.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered",
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-013",
+  "section": "3.4.7",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/07_parameter_alias.va",
+  "title": "07_parameter_alias.va reads the alias inside the analog block (\u00a73.4.7 forbids it) and overrides by the ORIGINAL name, so deleting the aliasparam leaves it passing",
+  "detail": "Verified at \u00a73.4.7 bullet 2: 'The alias_identifier shall not occur anywhere else in the module; in particular, it shall not conflict with a different parameter_identifier, and the equations in the module shall reference the parameter by its original name, not the alias.' Line 23 is `CHECKEQ(\"aliasparam names the same storage\", trise, dtemp, 0.0)` -- the forbidden occurrence, and the file's own header admits it. Separately, line 13 is `//! param dtemp = 25`, an override by the original name, so line 22 passes with the `aliasparam` line deleted: nothing in the file tests the alias. The LRM's nmos2 example overrides THROUGH the alias (`nmos2 #(.trise(5)) m1`), which is the only form that tests anything. HARNESS NOTE (verified in src/backend/tb.zig:320-330): `//! param X = V` emits `model.X = V`, and codegen names model fields by the ORIGINAL parameter only (src/ir/lower.zig:575-593 maps the alias into param_index but emits no field), so `//! param trise = 25` produces a GeneratedCompileError today. The alias-override form needs one line in codegen to emit the alias as a second field or setter.",
+  "expected": "`//! param trise = 25` (override through the alias) and a single `CHECKX(\"an override through the alias reaches the original parameter\", dtemp, 25.0)`. Drop the CHECKEQ line entirely -- it is both illegal and non-independent. `//! lrm 3.4.7`.",
+  "severity": "high",
+  "sourceLenses": [
+   "literals",
+   "weak",
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-014",
+  "section": "3.3",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/03_string_variables.va",
+  "title": "03_string_variables.va declares three strings, asserts nothing, and has no port list so it cannot run",
+  "detail": "Verified: four lines, no `//! reject`, no CHECK macro, no ports, no analog block. torture scores it `unasserted`. It is also the only place \u00a73.3's default would be visible: 'If an initial value is not specified in the declaration, the variable is initialized to \"\", the empty string. An empty string has zero length.' -- `string empty_name;` is declared on line 3 and never read.",
+  "expected": "`CHECKI(\"an uninitialised string is the empty string\", (empty_name == \"\"), 1);` and `CHECKI(\"a string parameter initialises a string variable\", (my_name == \"John Smith\"), 1);` inside an analog block on a one-port module. `//! lrm 3.3`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-015",
+  "section": "3.4.2",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/17_string_parameter_range.va",
+  "title": "17_string_parameter_range.va declares two string value sets and never reads or enforces either",
+  "detail": "Verified: two parameter lines, no module body, no ports. COVERAGE.md line 15 discharges \u00a73.4.2 string value sets with 'records current parsing/codegen behavior', which is a statement about VerA. \u00a73.4.2's rule is that the SET constrains the instance value, and nothing here supplies one.",
+  "expected": "Split in two. (a) Run-fixture: `//! param` cannot carry a string, so assert instead that the default survives the `from '{...}` suffix -- `CHECKI(\"the default survives a string value set\", (device_type == \"NMOS\"), 1)` -- and that `filename` survives `exclude '{\"\"}`. (b) New reject fixture for the enforcement half once string overrides exist. `//! lrm 3.4.2`.",
+  "severity": "high",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-016",
+  "section": "3.6.2.5",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/19_discipline_override.va",
+  "title": "19_discipline_override.va declares a `flow.abstol = 10u` override, asserts nothing, and has no ports",
+  "detail": "Verified: the discipline override is syntactically the nature_attribute_override of Syntax 3-5 and the declaration is correct, but the module is empty and there is no analog block. COVERAGE.md line 28: 'records the accepted declaration and current lack of downstream effect'.",
+  "expected": "`abstol` is a solver tolerance and has no transcript observable, so the honest assertion is that a net of the overriding discipline still solves and its access functions still read: put a port of `ch03_override_discipline` on the module, bias it, and `CHECKX` the potential. The immutability half (a discipline may NOT override `units` or `access`, \u00a73.6.1.2) is a separate reject fixture -- item 30's sibling.",
+  "severity": "medium",
+  "sourceLenses": [
+   "weak",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-017",
+  "section": "3.6.2.3 / 3.6.3",
+  "action": "rewrite",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/30_natureless_discipline.va",
+  "title": "30_natureless_discipline.va and 31_domainless_discipline.va build the setup for \u00a73.6.3's prohibition and never trigger it",
+  "detail": "Verified: each file is two lines -- a discipline declaration and a module with one net of it and no analog block. \u00a73.6.2.3 legalises both declarations, so there is nothing to reject; the rule worth testing is one step further on, \u00a73.6.3/\u00a73.11: a net with no nature has no access function, so referencing it behaviourally is an error. Both files stop exactly before that line. Merged from four lens reports (weak reports 'asserts nothing' twice, negatives and uncovered both report the missing behavioural negative).",
+  "expected": "Two files each. Keep 30/31 as declaration-only but give them a port and an analog block so they RUN (asserting the module still elaborates with a natureless net present). Add 43_natureless_net_behavioral.va and 44_domainless_net_behavioral.va: same disciplines, but `analog begin potential(link) <+ 1.0; end` -- `//! reject` on the diagnostic that says the net has no potential nature. `//! lrm 3.6.3`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "weak",
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-018",
+  "section": "3.4.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/45_parameter_range_enforcement.va",
+  "title": "No fixture ever supplies an out-of-range parameter value, and the six endpoint verdicts of the LRM's own range example are all unstated",
+  "detail": "Verified at \u00a73.4.2: 'Here, the value of a parameter is checked against the specified range. Range checking applies to the value of the parameter for the instance and not against the default values specified in the device. It shall be an error only if the value of the parameter is out of range during simulation.' 05_parameter_ranges.va asserts only that the five DEFAULTS survive their range suffixes, so a compiler that parses the range metadata and throws it away passes the whole chapter. The bracket/parenthesis semantics are equally unstated: \u00a73.4.2 says '[ and ] indicate inclusion of the end points ... ( and ) indicate exclusion', and its example `parameter real val3 = 0 from [0:inf) exclude (10:20) exclude (30:40]` has six decidable endpoints. Merges uncovered's out-of-range, endpoint-precedence and `exclude <single value>` items into one authoring session. COVERAGE.md line 14 already concedes 'runtime override validation remains a compiler gap', so every file here needs `//! xfail`.",
+  "expected": "A small family driven by `//! param`, one verdict per file so a failure names the endpoint: LEGAL (must run) 0, 10, 20, 30 on `from [0:inf) exclude (10:20) exclude (30:40]`; ILLEGAL (must reject) 15, 40, plus -1 below the closed lower bound, plus `//! param gain = 2000` against `from [1:1000]`, plus `//! param nonzero = 0` against `exclude 0`. Every one of the ten is decided by a sentence in \u00a73.4.2 with no arithmetic.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-019",
+  "section": "3.6.2.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/46_same_nature_both_bindings.va",
+  "title": "No fixture provokes \u00a73.6.2.1's 'Conservative disciplines shall not have the same nature specified for both the potential and the flow'",
+  "detail": "Verified verbatim in \u00a73.6.2.1. 11_discipline_declarations.va declares three well-formed disciplines (conservative, potential-only, flow-only) and never the illegal fourth. One nature, one discipline, one empty module -- no hierarchy, no ports needed.",
+  "expected": "`nature ch3_both; units=\"V\"; access=B; abstol=1u; endnature` then `discipline ch3_bad; potential ch3_both; flow ch3_both; enddiscipline`. `//! reject` on the diagnostic; `//! lrm 3.6.2.1`. If VerA has no such check, `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-020",
+  "section": "3.6.2.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/47_discrete_domain_with_natures.va",
+  "title": "\u00a73.6.2.2's 'It is an error for a discipline to have a domain binding of discrete if it has nature bindings' has no fixture; COVERAGE.md concedes it in prose",
+  "detail": "Verified in \u00a73.6.2.2 verbatim, and independently in Annex C ('the domain binding type discrete shall be an error in Verilog-A'). COVERAGE.md line 25 discharges it with 'Annex C makes discrete an error in Verilog-A; VerA currently lacks that semantic diagnostic' -- prose, no fixture. The neighbouring annex_c_analog_subset/07_discrete_discipline_current_behavior.va declares a discrete discipline with NO nature bindings, so it does not reach this rule.",
+  "expected": "`discipline ch3_discrete_natured; domain discrete; potential <a real nature>; enddiscipline`. `//! reject` + `//! lrm 3.6.2.2`. Replace the COVERAGE.md prose row with the fixture name.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-021",
+  "section": "3.13.3",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/48_net_local_to_block.va",
+  "title": "\u00a73.13.3's 'a net can not be declared local to a block' has no fixture",
+  "detail": "Verified verbatim in \u00a73.13.3. ch05_analog_behavior/named_block_locals.va declares a block-local PARAMETER and a block-local real -- both legal under \u00a75.3 -- so it does not reach this rule. One module, one named analog block.",
+  "expected": "`analog begin : blk electrical inner; ... end`. `//! reject` + `//! lrm 3.13.3`.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-022",
+  "section": "3.13.4",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/49_branch_local_to_block.va",
+  "title": "\u00a73.13.4's 'a branch can not be declared local to a block' has no fixture",
+  "detail": "Verified verbatim in \u00a73.13.4. Same shape as item 48 and the same one-module cost; separate file because a compiler can plausibly get one right and the other wrong (nets and branches are declared by different productions).",
+  "expected": "`analog begin : blk branch (p, n) inner; ... end`. `//! reject` + `//! lrm 3.13.4`.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-023",
+  "section": "3.5",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/50_genvar_assigned_outside_loop.va",
+  "title": "With no negative, a genvar is indistinguishable from an integer and the whole of \u00a73.5 passes",
+  "detail": "Verified at \u00a73.5: 'The genvar variable i can only be assigned within the for-loop control. Assignments to the genvar variable i can consist only of expressions of static values, e.g., parameters, literals, and other genvar variables.' 09_genvar.va uses a genvar correctly and would pass identically with `integer index;`, so nothing in the chapter distinguishes the two types. Highest ratio of value to effort in the negatives census.",
+  "expected": "Two files, one per half of the sentence: (a) `genvar i; analog begin i = 3; ... end` -- assigned outside any for-loop control; (b) `genvar i; analog for (i = 0; i < 3; i = i + V(p)) ...` -- loop control, but from a non-static expression. `//! reject` + `//! lrm 3.5` on both.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-024",
+  "section": "3.4",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/51_parameter_assigned_at_runtime.va",
+  "title": "\u00a73.4's 'Parameters represent constants, hence it is illegal to modify their value at runtime' has no fixture",
+  "detail": "Verified verbatim in \u00a73.4. Nothing in the chapter writes to a parameter. This is the single sentence that makes `parameter` different from `real`, and it is free to test: one module, one analog assignment.",
+  "expected": "`parameter real g = 2.0; analog begin g = 3.0; ... end`. `//! reject` + `//! lrm 3.4`.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-025",
+  "section": "3.3",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/52_string_to_integral_rejected.va",
+  "title": "\u00a73.3's 'A string cannot be assigned to an integral type' has no fixture, and the string/integral boundary is the one place \u00a73.3 states a hard prohibition",
+  "detail": "Verified at \u00a73.3: 'A string literal can be assigned to a string or an integral type. ... A string or a string literal can be assigned directly to a string variable. A string cannot be assigned to an integral type.' The distinction is literal-vs-variable and it is easy to get backwards, which is why the negative is worth its file. Table 3-3's replication row supplies a second instance: `r = {i{\"Hi\"}}; // invalid (non constant replication)` with r integral.",
+  "expected": "`string s = \"hi\"; integer n; analog begin n = s; ... end`. `//! reject` + `//! lrm 3.3`. A sibling file for the `r = {i{\"Hi\"}}` non-constant-multiplier-into-integral form.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-026",
+  "section": "3.4.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/53_parameter_type_conversion_rejected.va",
+  "title": "\u00a73.4.1's 'No conversion shall be applied for strings' -- neither the numeric-to-string nor the string-to-real half has a fixture",
+  "detail": "Verified verbatim: 'No conversion shall be applied for strings; it shall be an error to assign a numeric value to a parameter declared as string or to assign a string value to a real parameter, whether that parameter was declared as real or had its type derived from the type of the value of the constant expression.' One sentence, three prohibitions -- the third (derived type) is the one a compiler is most likely to miss. 04_parameter_types.va tests only the legal `parameter real size = 10` coercion.",
+  "expected": "Three one-line files: `parameter string s = 42;`, `parameter real r = \"hi\";`, and `parameter x = \"hi\"; ... x + 1.0` for the derived-type half. `//! reject` + `//! lrm 3.4.1` on each.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-027",
+  "section": "3.11",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/54_incompatible_nets_access.va",
+  "title": "COVERAGE.md writes off \u00a73.9-3.11 as needing hierarchy; the Signal Connection Rule needs one module and two nets",
+  "detail": "Verified at \u00a73.11: 'Certain operations can be done on nets only if the two (or more) nets are compatible. For example, if an access function has two nets as arguments, they must be compatible' and 'Signal Connection Rule: It shall be an error to connect two ports or nets of the same domain with incompatible disciplines.' \u00a73.11.1's own example says 'electrical and rotational are incompatible disciplines because the natures for both potential and flow are not derived from the same base natures'. ch07_mixed_signal/compatible_disciplines.va tests only the COMPATIBLE case (two disciplines naming the same natures). COVERAGE.md line 38 is therefore too broad and must change with this fixture.",
+  "expected": "One module with an `electrical` net and a `rotational` net (both continuous, both from Annex D) and `V(e, r)` in the analog block. `//! reject` + `//! lrm 3.11`. Update the COVERAGE.md \u00a73.9-3.11 row to cite it.",
+  "severity": "high",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-028",
+  "section": "3.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/55_integer_real_default_init.va",
+  "title": "The default initialisation of integer to 0 and real to 0.0 is never exercised",
+  "detail": "Verified at \u00a73.2: 'Integer variables whose values are assigned in an analog context default to an initial value of zero (0). ... Real variables are initialized to zero (0) at the start of a simulation.' 01_integer_real_variables.va declares `integer count = 3; real gain = 2.5;` -- both with explicit initialisers -- so the default appears only in that file's header comment. This is the one \u00a73.2 value rule with no fixture, and it costs four lines.",
+  "expected": "`integer count; real gain;` at module scope with NO initialiser, read as the FIRST statements of the analog block: `CHECKI(\"an unassigned integer starts at 0\", count, 0);` and `CHECKX(\"an unassigned real starts at 0.0\", gain, 0.0);`. Both literals are stated verbatim by \u00a73.2. `//! lrm 3.2`.",
+  "severity": "high",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-029",
+  "section": "3.4.7",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/56_alias_identifier_collision.va",
+  "title": "\u00a73.4.7's 'The alias_identifier shall not occur anywhere else in the module' has no fixture, although VerA already diagnoses it",
+  "detail": "Verified at \u00a73.4.7 bullet 2, and verified in src/ir/lower.zig:585-588 that VerA already emits a diagnostic with the help text 'an aliasparam gives `{s}` a second NAME, it does not declare a second parameter'. So this negative should pass on the day it is written -- the cheapest real coverage in the chapter.",
+  "expected": "`parameter real dtemp = 0; parameter real trise = 1; aliasparam trise = dtemp;` -- the alias collides with an existing parameter. `//! reject` on the existing diagnostic text + `//! lrm 3.4.7`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-030",
+  "section": "3.6.1.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/57_base_nature_missing_units_access.va",
+  "title": "Only the missing-abstol case of \u00a73.6.1's required-attribute rule is covered; missing `units` and missing `access` are not",
+  "detail": "Verified: \u00a73.6.1 says 'Each nature definition shall have a unique identifier as the name of the nature and shall include all the required attributes specified in 3.6.1.2', and 35_base_nature_required_attributes.va covers only the abstol half. A compiler can easily check one required attribute and not the others.",
+  "expected": "Two files mirroring 35's shape exactly, one dropping `units` and one dropping `access`. `//! reject E0332` (verified present in src/diag_code.zig and emitted at src/ir/lower.zig:806) + `//! lrm 3.6.1.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-031",
+  "section": "3.4",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/58_nonconstant_parameter_initializer.va",
+  "title": "\u00a73.4's 'the initializer shall be a constant expression, that is, an expression containing only constant numbers and previously defined parameters' has no fixture",
+  "detail": "Verified verbatim in \u00a73.4. The 'previously defined' half is the discriminating one: forward-referencing a parameter declared LATER in the same module is the error a compiler misses when it resolves parameters in two passes.",
+  "expected": "Two files: (a) `parameter real a = b; parameter real b = 1.0;` -- forward reference; (b) `real v; parameter real a = v;` -- a variable in an initialiser. `//! reject` + `//! lrm 3.4`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-032",
+  "section": "3.4.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/59_parameter_without_default.va",
+  "title": "\u00a73.4.1's 'A default value for the parameter shall be specified' has no fixture",
+  "detail": "Verified verbatim in \u00a73.4.1. One line: `parameter real g;`. Distinct from item 58 (which is about the initialiser's contents) because this one is about its absence, and the grammar in Syntax 3-2 makes `param_assignment ::= parameter_identifier = constant_mintypmax_expression` require it.",
+  "expected": "`parameter real gain;` in an otherwise well-formed module. `//! reject` + `//! lrm 3.4.1`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-033",
+  "section": "3.4.4",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/60_parameter_array_untyped.va",
+  "title": "\u00a73.4.4's 'A type of a parameter array shall be given in the declaration' has no fixture",
+  "detail": "Verified at \u00a73.4.4's restriction list ('Failure to follow these restrictions shall result in an error') and independently at \u00a73.4.1 ('the type of a string parameter and any of the array parameters is mandatory'). 08_parameter_array.va always writes `parameter real coefficients[0:3]`.",
+  "expected": "`parameter coefficients[0:3] = '{1.0, 2.0, 3.0, 4.0};` -- no type. A sibling file for the untyped STRING parameter, the other half of \u00a73.4.1's sentence. `//! reject` + `//! lrm 3.4.4`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-034",
+  "section": "3.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/61_nonconstant_array_dimension.va",
+  "title": "\u00a73.2's 'Both indices shall be constant expressions' has no fixture, and is easy to conflate with the legal non-constant INDEX that 15 already tests",
+  "detail": "Verified: \u00a73.2 states it twice, once for integer/real arrays and once for parameter arrays. 15_dynamic_array_index.va tests a run-time INDEX (legal, \u00a73.2 says nothing against it) while this is about a run-time BOUND. The two read alike in a diff, which is the argument for the fixture.",
+  "expected": "`integer n; real vals[0:n];` with `n` assigned in the analog block. `//! reject` + `//! lrm 3.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives"
+  ]
+ },
+ {
+  "id": "ch03-035",
+  "section": "3.6.4",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/62_ground_non_continuous.va",
+  "title": "\u00a73.6.4's 'The net must be assigned a continuous discipline to be declared ground' has no fixture",
+  "detail": "Verified verbatim in \u00a73.6.4. 13_ground_declaration.va grounds an `electrical` net, i.e. the legal case only. Reachable with a natureless-but-not-continuous or a discrete discipline declared in the same file.",
+  "expected": "`discipline ch3_disc_d; domain discrete; enddiscipline` then `ch3_disc_d n; ground n;`. `//! reject` + `//! lrm 3.6.4`. Also covers uncovered's 'the ground declaration may name the discipline itself' as the legal sibling assertion in 13.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-036",
+  "section": "3.12",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/63_branch_incompatible_terminals.va",
+  "title": "\u00a73.12's 'The disciplines for the specified nets shall be compatible (see 3.11)' has no fixture",
+  "detail": "Verified verbatim in \u00a73.12. 14_named_branches.va declares both branches over `electrical` nets. Distinct from item 54: that one is the access function over two nets, this one is the branch DECLARATION, and a compiler can check one and not the other.",
+  "expected": "`electrical a; rotational b; branch (a, b) bad;`. `//! reject` + `//! lrm 3.12`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-037",
+  "section": "3.6.3 / 3.6.2.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/64_flow_on_potential_only_net.va",
+  "title": "11_discipline_declarations.va declares signal-flow disciplines and never makes a net of one; the flow-on-a-potential-only-net error is untested",
+  "detail": "Verified: \u00a73.6.2.1 'A signal-flow discipline may specify either the potential or the flow nature', and \u00a73.13.3 'a net can only be accessed through its access functions'. 11 declares `ch03_potential_only` and `ch03_flow_only` on lines 31-37 and then uses only `ch03_conservative`. Two work items in one file: make a net of each (legal, assert it) and apply the WRONG access function (illegal, reject).",
+  "expected": "Legal half as an edit to 11: a net of `ch03_potential_only`, biased, read with V(). Illegal half as a new reject file: `I(potential_only_net) <+ 1.0`. `//! reject E0501` (verified in src/diag_code.zig and src/ir/lower.zig:1651) + `//! lrm 3.6.3`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-038",
+  "section": "3.6.1.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/65_nature_attribute_type_errors.va",
+  "title": "\u00a73.6.1.2's type rules for `access` (an identifier) and `units` (a string) have no fixture",
+  "detail": "Verified at \u00a73.6.1.2: `access` names an access function, i.e. an identifier, and the idt_nature paragraph makes the point explicitly for the neighbouring attribute -- 'the constant expression assigned to idt_nature shall be the name (NOT A STRING) of a nature'. All existing natures in the chapter write `units=\"V\"; access=V;` correctly.",
+  "expected": "Two files: `access = \"V\";` and `units = V;`. `//! reject` + `//! lrm 3.6.1.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-039",
+  "section": "3.6.1.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/66_idt_ddt_nature_rules.va",
+  "title": "The idt_nature/ddt_nature paragraph of \u00a73.6.1.2 is untouched -- neither the legal self-reference nor the two prohibitions",
+  "detail": "Verified at \u00a73.6.1.2: 'If specified, the constant expression assigned to idt_nature shall be the name (not a string) of a nature which is defined elsewhere. It is possible for a nature to be self-referencing with respect to its idt_nature attribute. ... While it is possible to override the parent's value of idt_nature using a derived nature, the nature thus specified shall be related (share the same base nature) to the nature the parent uses for its idt_nature.' Three decidable cases, none present. Annex D's electrical definitions use idt_nature but no ch03 fixture asserts anything about it.",
+  "expected": "One legal run-fixture (self-referencing idt_nature, plus idt() over a net of it) and two rejects: idt_nature naming a non-nature identifier, and a derived nature overriding idt_nature with a nature from an unrelated base. `//! lrm 3.6.1.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-040",
+  "section": "3.6.1 / 3.6.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/67_duplicate_nature_discipline_name.va",
+  "title": "Duplicate nature name and duplicate discipline name are untested; 39 covers only the nature-vs-discipline collision",
+  "detail": "Verified: \u00a73.6.1 'Each nature definition shall have a unique identifier as the name of the nature', and \u00a73.13.1 puts natures, disciplines and modules in one global scope. 39_nature_discipline_namespace_collision.va declares one name as a nature and then as a discipline; the same-kind duplicates are a different code path.",
+  "expected": "Two two-line files: two `nature ch3_dup` declarations, and two `discipline ch3_dup` declarations. `//! reject E0336` + `//! lrm 3.6.1`.",
+  "severity": "low",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-041",
+  "section": "3.6.1.3",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/68_user_attribute_rules.va",
+  "title": "\u00a73.6.1.3's uniqueness and constant-value rules for user-defined nature attributes have no fixture",
+  "detail": "Verified: \u00a73.6.1.2 'In addition, user-defined attributes can be defined in a nature (see 3.6.1.3). Attribute declaration assigns a CONSTANT EXPRESSION to the attribute name.' 10_nature_declarations.va adds `maxval = 12.3` (the LRM's own example) and never a duplicate or a non-constant one.",
+  "expected": "Two files: the same user attribute name twice in one nature, and a user attribute whose value is a variable. `//! reject` + `//! lrm 3.6.1.3`.",
+  "severity": "low",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-042",
+  "section": "3.6.1 / 3.13.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/69_nature_inside_module.va",
+  "title": "Nothing tests that nature and discipline declarations do not nest inside a module",
+  "detail": "Verified at \u00a73.13.1: 'Natures and disciplines are defined at the same level of scope as modules', and Annex A's `description ::= module_declaration | udp_declaration | config_declaration | paramset_declaration | nature_declaration | discipline_declaration | connectrules_declaration` puts them at source-text level, not among module_items. Every ch03 fixture declares them correctly at file scope, so the rule is never provoked.",
+  "expected": "`module m; nature n; units=\"V\"; access=V; abstol=1u; endnature endmodule`. `//! reject` + `//! lrm 3.13.1`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-043",
+  "section": "3.13.3",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/70_bare_net_name_not_a_value.va",
+  "title": "\u00a73.13.3's 'a net can only be accessed through its access functions' is tested only for a WRONG access function, never for NO access function",
+  "detail": "Verified at \u00a73.13.3 verbatim. 42_wrong_access_function.va misspells the access function; using the bare net name as a value (`x = p;` or `I(a) <+ b;`) is a different error and a different code path.",
+  "expected": "`electrical p; real x; analog begin x = p; ... end`. `//! reject` + `//! lrm 3.13.3`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-044",
+  "section": "3.4.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/71_range_first_expression_larger.va",
+  "title": "\u00a73.4.2's 'The first expression in the range shall be numerically smaller than the second' has no fixture",
+  "detail": "Verified verbatim in \u00a73.4.2. Distinct from item 19: this is a malformed DECLARATION, decidable at compile time with no instance value, so it is testable today even though range enforcement is not.",
+  "expected": "`parameter real g = 5 from [10:1];`. `//! reject` + `//! lrm 3.4.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-045",
+  "section": "3.2",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/72_integer_overflow_wrap.va",
+  "title": "\u00a73.2's 32-bit integer range and 2's complement wrap are untested -- and VerA lowers `integer` to i64, so this fixture will find a real bug",
+  "detail": "Verified at \u00a73.2: 'These variables can hold values ranging from -2^31 to 2^31-1' and 'Arithmetic operations performed on integer variables produce 2's complement results.' Verified in src/backend/codegen.zig:198,862,1419 that VerA emits `i64` for the int type, with the comment 'plain i64 (LRM \u00a73.2 integer)'. The width is wrong by the clause it cites, so this is not a low-value coverage row -- it is a live conformance defect with no fixture holding the line. Promoted from the uncovered lens's 'low'.",
+  "expected": "`integer big = 2147483647; ... `CHECKI(\"integer wraps 2's complement at 2^31\", big + 1, -2147483648);` and the negative boundary. `//! lrm 3.2`. Expect a FAIL against today's i64 lowering -- that is the point.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-046",
+  "section": "3.3",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/73_string_literal_to_integral.va",
+  "title": "String-literal-to-integral truncation and zero-fill -- the LRM gives three worked results and none is asserted",
+  "detail": "Verified at \u00a73.3: 'If their size differs, the literal is right justified and either truncated on the left or zero filled on the left, as necessary. For example: reg [8*4:1] h = \"hello\"; // assigns to h \"ello\"; reg [10:0] a = \"A\"; // assigns to a 'b000_0100_0001', plus `r = {\"H\",\"\"}; // yields \"H\\0\". \"\" is converted to 8'b0`. Recomputed: \"ello\" = 0x656C6C6F = 1701604463; \"A\" = 65; {\"H\",\"\"} = 0x4800 = 18432. CORRECTION to the uncovered lens: it proposes `reg` declarations, and Annex C says 'No digital behavior or events are supported in Verilog-A' -- `reg` is out of subset and VerA rejects it. Use `integer`, which \u00a73.2 makes an integral type; the 32-bit width then also makes the \"hello\" truncation observable, IF item 72's i64 defect is fixed first.",
+  "expected": "`integer h = \"hello\"; integer a = \"A\"; integer r = {\"H\",\"\"};` with `CHECKI` wants 1701604463, 65, 18432. Depends on item 72. `//! lrm 3.3`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-047",
+  "section": "3.4.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/74_untyped_parameter_type_derivation.va",
+  "title": "\u00a73.4.1's 'If the type of a parameter is not specified, it is derived from the type of the final value assigned' is untested",
+  "detail": "Verified verbatim in \u00a73.4.1, including 'after any value overrides have been applied', which is the discriminating half. 04_parameter_types.va declares all three of its parameters with an explicit type. Reachable through `//! param` (verified in src/backend/tb.zig:148).",
+  "expected": "`parameter n = 4;` (derives integer) and `parameter x = 4.0;` (derives real), then `CHECKI(\"an untyped parameter derived from an integer divides as an integer\", n / 3, 1);` against `CHECKX(\"... from a real divides as a real\", x / 3.0, 1.3333333333333333);`. `//! lrm 3.4.1`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-048",
+  "section": "3.4.5",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/06_local_parameter.va",
+  "title": "\u00a73.4.5's 'localparam ... cannot directly be modified' is untested; 06 proves the opposite direction only",
+  "detail": "Verified at \u00a73.4.5 verbatim, and verified in src/backend/tb.zig:333-334 that `D.derive(&model)` runs unconditionally, so a `//! param doubled_gain = 9.0` line is written and then overwritten by the derivation. That makes the rule observable as a RUN assertion rather than as a rejection -- CORRECTION to the negatives lens, which proposes a reject fixture; the harness cannot express a defparam or an instance override, both of which VerA rejects outright.",
+  "expected": "Add `//! param doubled_gain = 9.0` alongside the existing `//! param base_gain = 3.0` and keep the existing `CHECKX(..., doubled_gain, 6.0)`. The assertion now says: the override did not stick, the derivation did. `//! lrm 3.4.5`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-049",
+  "section": "3.4.7",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/75_aliasparam_mfactor.va",
+  "title": "\u00a73.4.7's `aliasparam m = $mfactor;` -- an alias for a hierarchical parameter system function -- is untested",
+  "detail": "Verified at \u00a73.4.7's closing example verbatim. ch06_hierarchy/mfactor.va reads `$mfactor` directly and never aliases it. Distinct from an ordinary aliasparam because the target is a system function, not a parameter_identifier -- Syntax 3-2's `aliasparam_declaration ::= aliasparam parameter_identifier = parameter_identifier ;` does not even cover it, which is why \u00a73.4.7 spells it out in prose.",
+  "expected": "`aliasparam m = $mfactor;` with `CHECKX(\"$mfactor through its alias at the top level\", $mfactor, 1.0)` -- Table 9-29 gives 1.0 for an un-overridden top-level instance, as ch06/mfactor.va already establishes. `//! lrm 3.4.7`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-050",
+  "section": "3.11.1",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/76_nature_compatibility_rules.va",
+  "title": "The Base Nature Rule, Derived Nature Rule and Units Value Rule of \u00a73.11.1 have no fixture",
+  "detail": "Verified at \u00a73.11.1: 'Base Nature Rule: A derived nature is compatible with its base nature. Derived Nature Rule: Two natures are compatible if they are derived from the same base nature. Units Value Rule: Two natures are compatible if they have the same value for the units attribute.' 10_nature_declarations.va declares a derived nature and uses two nets of the SAME derived discipline, so it never spans a derived net and a parent net. The Units Value Rule is the surprising one -- two natures with no derivation relationship at all are compatible on the strength of a matching string -- and nothing tests it.",
+  "expected": "One module, three net pairs: parent-nature net with derived-nature net (Base Nature Rule), two sibling-derived nets (Derived Nature Rule), and two unrelated natures both with `units=\"V\"` (Units Value Rule). `V(a, b)` across each pair must compile and return the biased difference. `//! lrm 3.11.1`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-051",
+  "section": "3.12",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/14_named_branches.va",
+  "title": "\u00a73.12's 'There shall be at most one unnamed branch between any two nets ... in addition to any number of named branches' is untested",
+  "detail": "Verified verbatim in \u00a73.12. 14_named_branches.va declares two named branches with different terminal pairs. The untested claim is that two named branches over the SAME pair are independent, and that they coexist with the unnamed branch created by a bare `I(p, n)`.",
+  "expected": "Add `branch (p, n) second_branch;` and a bare `I(p, n) <+ ...` contribution, then assert V(differential_branch), V(second_branch) and V(p, n) are all 1.5 while the three flows sum as three parallel paths. `//! lrm 3.12`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-052",
+  "section": "3.4.4",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/08_parameter_array.va",
+  "title": "\u00a73.4.4's 'array range in the parameter array declaration may depend on previously-declared parameters' is untested",
+  "detail": "Verified verbatim in \u00a73.4.4. 08_parameter_array.va uses the literal range `[0:3]`. Reachable through `//! param` on the size parameter, which is exactly the 'the array size may be changed by overriding the appropriate parameters' case the LRM goes on to describe.",
+  "expected": "`parameter integer n = 3; parameter real coefficients[0:n] = '{...};` with the existing assertions unchanged, so the fixture proves the declared range tracked the parameter. `//! lrm 3.4.4`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-053",
+  "section": "3.4.8",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/77_assignment_patterns.va",
+  "title": "\u00a73.4.8's assignment-pattern forms -- replication inside a pattern, and whole-array assignment from non-constant elements -- are untested",
+  "detail": "Verified: \u00a73.4.8 is a dedicated subclause ('various usages of assignment patterns') whose module `test` demonstrates several forms. COVERAGE.md line 21 discharges it with 'one-dimensional executable subset in 08_parameter_array.va', which covers only the plain `'{a, b, c, d}` literal.",
+  "expected": "A run-fixture over the one-dimensional forms VerA can reach: replication inside a pattern (`'{2{1.5}}`) and a whole-array assignment to a real array VARIABLE from non-constant elements. Assert each element. `//! lrm 3.4.8`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-054",
+  "section": "3.2",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/02_variable_arrays.va",
+  "title": "\u00a73.2 permits negative and zero array bounds; only `[0:2]` is ever declared in the chapter",
+  "detail": "Verified at \u00a73.2: 'Both indices shall be constant expressions and shall evaluate to a positive integer, a negative integer, or zero (0)', and the LRM's own examples use `[1:64]` and `[1:30]`. A backend that assumed a zero lower bound passes everything in ch03 today.",
+  "expected": "Add `integer offset[-2:2];` and `real one[4:4];`, write and read the negative index and the single-element array. `//! lrm 3.2`.",
+  "severity": "medium",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-055",
+  "section": "3.4.2",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/05_parameter_ranges.va",
+  "title": "`-inf` as a range bound is never written, although `inf` is",
+  "detail": "Verified at \u00a73.4.2: 'The keyword inf can be used to indicate infinity. If preceded by a negative sign, it indicates negative infinity.' 05_parameter_ranges.va writes `from [0:inf)` and never the negative form. One line.",
+  "expected": "Add `parameter real unbounded = -5 from (-inf:inf);` and `CHECKX(\"a default inside a doubly-infinite range\", unbounded, -5.0);`. Folds into item 19's family if that lands first.",
+  "severity": "low",
+  "sourceLenses": [
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-056",
+  "section": "3.4.7",
+  "action": "create",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/78_alias_double_override.va",
+  "title": "\u00a73.4.7's 'it shall be an error to specify an override for a parameter by its original name and one or more aliases' has no fixture",
+  "detail": "Verified at \u00a73.4.7 bullet 4 and its worked error case: `nmos2 #(.trise(5), .dtemp(5)) m3(...); //error`, 'because an override is specified for the parameter dtemp and its alias, even though the values are equal.' BLOCKED on the same harness gap as item 13: `//! param` writes `model.<name>` and codegen emits no field for the alias, so `//! param trise = 5, dtemp = 5` is a GeneratedCompileError for the wrong reason. Write it after item 13's codegen change.",
+  "expected": "`//! param dtemp = 5, trise = 5` against `parameter real dtemp = 0; aliasparam trise = dtemp;`. `//! reject` + `//! lrm 3.4.7`.",
+  "severity": "low",
+  "sourceLenses": [
+   "negatives",
+   "uncovered"
+  ]
+ },
+ {
+  "id": "ch03-057",
+  "section": "3.6.1.2 / 3.13.1 / 3.13.2 / 3.13.3",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/35_base_nature_required_attributes.va (and 37, 38, 39, 41, 42)",
+  "title": "Six correct reject fixtures pin the phase label `DiagnosticsReported` although VerA emits stable codes for exactly those rules, and none of the ten rejects in the chapter carries a `//! lrm` cite",
+  "detail": "Verified: E0332 (base nature missing abstol), E0333 (derived units), E0334 (derived access), E0336 (nature/discipline collision), E0335 (duplicate access name) all exist in src/diag_code.zig:145-156 and are emitted at src/ir/lower.zig:806-835; E0501 exists at src/diag_code.zig:185 and is emitted at src/ir/lower.zig:1651. `DiagnosticsReported` is torture's synthetic label for 'a stage reported ANY message' (tests/torture.zig, compileFixture), so each of these six files would stay green if VerA started rejecting for an unrelated reason. Verified separately that no ch03 reject fixture has a `//! lrm` line, so `zig build torture -- --coverage` reports zero cited sections for the whole chapter's negative half.",
+  "expected": "35 -> `//! reject E0332` + `//! lrm 3.6.1.2`; 37 -> E0333 + 3.6.1.2; 38 -> E0334 + 3.6.1.2; 39 -> E0336 + 3.13.1; 41 -> E0335 + 3.13.2; 42 -> E0501 + 3.13.3. Six two-line edits.",
+  "severity": "medium",
+  "sourceLenses": [
+   "weak"
+  ]
+ },
+ {
+  "id": "ch03-058",
+  "section": "3.6.4 / 3.12 / 3.6.1.2",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/13_ground_declaration.va (and 14, 36)",
+  "title": "Three fixtures put an absolute tolerance on a result that is exact in binary, while the sibling fixture 12_scalar_nets uses CHECKX for the identical class",
+  "detail": "Verified by reading all four: 13:15 `CHECK(..., V(p, local_reference), 1.5, 1e-12)`, 14:21-22 `CHECK(..., 1.5, 1e-12)` and `(..., 2.0, 1e-12)`, 36:26 `CHECK(..., ParentV(p), 0.75, 1e-15)` -- against 12:18-20 which uses `CHECKX` for 1.0, 1.0 and 3.0 from the same kind of imposed-bias node difference. 1.5, 2.0 and 0.75 are all exact in binary and the arithmetic is one subtraction, so the tolerance buys nothing and hides up to 12 ulp on values \u00a73.6.4 and \u00a73.12 define exactly. This is the only literals-lens finding besides item 13, and it is a consistency defect, not a wrong number -- every one of the 44 CHECK wants in the chapter recomputed correct.",
+  "expected": "Replace the three `CHECK(..., TOL)` calls with `CHECKX(...)`, matching 12_scalar_nets. No want changes.",
+  "severity": "low",
+  "sourceLenses": [
+   "literals"
+  ]
+ },
+ {
+  "id": "ch03-059",
+  "section": "3",
+  "action": "delete",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/*.expected-error.txt",
+  "title": "Ten stale `.expected-error.txt` sidecars survive although torture.zig is the only runner and reads the expectation from the .va",
+  "detail": "Verified: build.zig wires exactly one test step (`torture`, build.zig:110-122) and tests/torture.zig's header states 'a fixture is one .va and nothing else is required to read it' and 'THERE IS NO GOLDEN FILE. Not \"there is one and we also assert\" -- there is none, deliberately.' tests/conformance.zig still reads sidecars but is not built by any step. Each of the ten sidecars duplicates a `//! reject` line already present in its .va (checked all ten: 16/18/21/22/24/28/32/33/34/40). Two files stating one expectation is exactly the drift the runner's header argues against.",
+  "expected": "Delete all ten. If any .va turns out to lack the matching `//! reject`, add it before deleting the sidecar.",
+  "severity": "low",
+  "sourceLenses": [
+   "weak"
+  ]
+ },
+ {
+  "id": "ch03-060",
+  "section": "3",
+  "action": "edit",
+  "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch03_data_types/COVERAGE.md",
+  "title": "COVERAGE.md discharges at least ten normative rules with prose that describes VerA rather than the LRM, and one row is factually too broad",
+  "detail": "Verified row by row against the fixtures and the LRM. Rows that state a VerA limitation in place of a fixture: line 10 (multidimensional arrays), 12 ('unsupported ... grammar is diagnostic-pinned'), 14 ('runtime override validation remains a compiler gap'), 15 ('records current parsing/codegen behavior'), 21, 24, 25 ('VerA currently lacks that semantic diagnostic'), 28, 29, 31, 33, 39, 41. Line 38 is the one that is wrong rather than merely evasive: it writes off \u00a73.9-3.11 as 'topology/elaboration semantics requiring hierarchy and mixed domains; not expressible in a single generated device Zig dump', but \u00a73.11's own framing -- 'if an access function has two nets as arguments, they must be compatible' -- is one module and two nets (item 28), and \u00a73.11.1's compatibility rules are equally single-module (item 50).",
+  "expected": "One pass after items 2-51 land: every row cites a fixture, and a row that cannot cite one says which LRM sentence is unheld and why, not what VerA does. Rewrite line 38 to cite the new \u00a73.11 fixtures and narrow the hierarchy claim to \u00a73.9-3.10.",
+  "severity": "medium",
+  "sourceLenses": [
+   "weak",
+   "negatives"
+  ]
+ }
+]

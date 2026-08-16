@@ -1,5 +1,23 @@
+// §7.8.5 gives auto-inserted connect modules generated instance names, so a
+// parameter inside one can be reached by hierarchical `defparam`: merged
+// insertion spells the name SigName__ModuleName__BottomDiscipline, split
+// insertion spells it SigName__InstName__PortName.
+//
+// The naming convention itself is NOT tested here and cannot be. It lives
+// entirely in the identifier TEXT, which no compiler interprets — a parser sees
+// one identifier either way — so a fixture per spelling would be the same test
+// twice. (connect_generated_split_name_unsupported.va was exactly that
+// duplicate and was deleted; only the identifier differed.) What is testable is
+// the verdict, and it is the same for both spellings.
+//
+// C.9 settles it: "Clause 7 only applies to Verilog-AMS HDL". There is no
+// auto-insertion in Verilog-A, hence no generated instance to name, and
+// `defparam` is not an analog-subset module item in any case — E0205. Refusing
+// this is conformance, not debt.
+//
+//! lrm 7.8.5
+//! lrm C.9
 //! reject E0205
-// EXPECT: error -- generated connector names make per-instance defparam possible.
 module ch7_connect_generated_defparam;
   defparam signal__converter__ddiscrete.threshold = 0.6;
 endmodule

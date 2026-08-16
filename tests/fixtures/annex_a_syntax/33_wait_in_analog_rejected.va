@@ -1,0 +1,18 @@
+// A.6.5 `wait_statement ::= wait ( expression ) statement_or_null` is an
+// alternative of `procedural_timing_control_statement`, which A.6.4 lists under
+// the digital `statement` only. `analog_statement` has one timing alternative,
+// `analog_event_control_statement` (`@(...)`), and no way to block on a level.
+//
+// §5.2 makes the analog block a continuous relationship evaluated at every
+// solution point; there is no thread to suspend, so `wait` has no analog
+// meaning to give it.
+//
+// See 32_fork_in_analog_rejected.va for why this is a separate file.
+//
+//! lrm A.6.4
+//! lrm A.6.5
+//! lrm 5.2
+//! reject E0209
+module annex_a_wait_in_analog(p); inout p; electrical p; real x;
+analog begin x = 0.0; wait (V(p) > 1.0) x = 1.0; I(p) <+ x * V(p); end
+endmodule

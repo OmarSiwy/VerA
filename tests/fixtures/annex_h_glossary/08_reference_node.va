@@ -1,16 +1,34 @@
-// Annex H "reference node": the global node against which potentials are
-// measured, declared with §3.6.4 `ground`. Its potential is zero by definition,
-// so V(p,gnd) must be the potential of p alone — 0.5 V here — and the flow it
-// drives 0.5/1000 = 500 uA.
+// Annex H "reference node" carries the only `shall` in the whole annex: "The
+// global node (which equals zero (0)) against whose potentials all node values
+// are measured. Nets declared as ground shall be bound to the reference node."
+// §3.6.4 says the same normatively — "The node associated with the net will be
+// THE global reference node in the circuit" — and the article is singular, so
+// two ground declarations name one node, not two.
 //
-//! bias V(p) = 0.5
+// Both claims are separated by biasing the ground nets OFF zero. A compiler
+// that binds `ground` to the reference node reads both back as 0, so V(p,g1)
+// and V(p,g2) are both V(p) = 0.5 and V(g1,g2) is exactly 0. A compiler that
+// made a ground net an ordinary unknown reads its bias instead and would print
+// 0.5 - 0.25 = 0.25, 0.5 - (-0.125) = 0.625 and 0.375. Every subtraction is
+// against an exact zero, so CHECKX and not a tolerance.
+//
+// The one-argument form V(p) is the branch to the reference node (§4.4,
+// Table 4-16), so it must agree with the explicit pair.
+//! lrm H
+//! lrm 3.6.4
+//! lrm 4.4
+//! bias V(p) = 0.5, V(g1) = 0.25, V(g2) = -0.125
 `include "check.vh"
 module glossary_reference_node(p);
   inout p; electrical p;
-  electrical gnd; ground gnd;
+  electrical g1, g2;
+  ground g1;
+  ground g2;
   analog begin
-    `CHECKX("the reference node contributes zero potential", V(p,gnd), 0.5);
-    `CHECKR("flow into the reference node", V(p,gnd)/1000.0, 5e-4, 1e-15);
-    I(p,gnd) <+ V(p,gnd)/1000.0;
+    `CHECKX("both ground nets are the one reference node", V(g1,g2), 0.0);
+    `CHECKX("potential to the first ground", V(p,g1), 0.5);
+    `CHECKX("potential to the second ground", V(p,g2), 0.5);
+    `CHECKX("the one-argument form is the reference branch", V(p), 0.5);
+    I(p,g1) <+ V(p,g1)/1000.0;
   end
 endmodule

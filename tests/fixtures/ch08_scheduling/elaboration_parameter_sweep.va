@@ -1,0 +1,51 @@
+// LRM 8.2 has two sentences about elaboration, and this file is the pair of
+// them:
+//
+//   "Elaboration is the process where the system is hierarchically
+//    instantiated. During this process, as each design element is elaborated,
+//    PARAMETER DECLARATION ASSIGNMENTS ARE EVALUATED and module-level generate
+//    constructs expanded."
+//
+//   "It is important to note that for parametric sweep type analyses like dc
+//    sweep, the tool SHALL RE-EVALUATE the Elaboration and Pre-simulation steps
+//    as outlined in Figure 8-1 FOR EACH SWEEP POINT to ensure that all
+//    parameter value changes are captured."
+//
+// So a DERIVED parameter -- one whose declaration assignment reads another
+// parameter -- is final before pre-simulation begins, and is recomputed from
+// scratch at every sub-task of a sweep. 6.3.4 is the parameter-value half of
+// the same rule.
+//
+// The chapter's other sweep fixture, analog_initial_parameter_sweep.va, sweeps
+// a parameter that nothing derives from, so it exercises the Pre-simulation
+// step only. This one derives `area` from the swept `w` and asserts in the
+// ORDINARY analog block, deliberately NOT in an analog initial block, so the
+// file is independent of the initial-block re-execution defect that one
+// documents. Elaboration is the only thing under test here.
+//
+//   w = 1.0  ->  area = 1.0
+//   w = 2.0  ->  area = 4.0
+//   w = 4.0  ->  area = 16.0
+//
+// All three exact in binary (squares of powers of two). The primary want is the
+// sweep-INVARIANT literal area/(w*w) = 1.0, which holds at every sub-task and
+// which an elaboration frozen at the first sweep point -- area stuck at 1.0 --
+// answers 0.25 and then 0.0625. The second line is the row-invariant backstop:
+// once w is past 1.5 the area cannot still be the first point's 1.0.
+//
+//! lrm 8.2
+//! lrm 6.3.4
+//! psweep w = 1.0, 2.0, 4.0
+//! analysis dc
+//! print none
+`include "check.vh"
+module ch8_elaboration_psweep(p);
+  inout p; electrical p;
+  parameter real w = 1.0 from (0:inf);
+  parameter real area = w * w;
+  analog begin
+    `CHECKX("a derived parameter is re-elaborated at every sweep sub-task", area / (w * w), 1.0);
+    `CHECKI("the derived value is not frozen at the first sub-task", (w > 1.5) ? (area > 3.5) : 1, 1);
+    I(p) <+ 0.0;
+  end
+endmodule

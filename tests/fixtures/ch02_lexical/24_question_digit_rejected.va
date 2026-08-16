@@ -1,17 +1,15 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// Annex C.3 is the authority here, not §2.6.1. §2.6.1 makes `?` "a Verilog-AMS
+// HDL alternative for the z character", and Annex C.3 withdraws it from
+// Verilog-A in the same sentence that withdraws x and z: "In the same
+// paragraph, the use of the question mark character as an alternative for z is
+// also limited to the mixed signal context."
 //
-// VAMS-2.6.1-14  (ch2-lexical.html)
-// An x shall set 4 bits to unknown in the hexadecimal base, 3 bits in the octal base, and 1 bit in the binary base.
-// VAMS-2.6.1-21  (ch2-lexical.html)
-// In a decimal constant, the unsigned number token shall not contain any x , z , or ? digits, unless there is exactly one digit in the token, indicating
-//
-// LRM 2.6: x/z (and their `?` alias) are 4-state digital values, outside the
-// Verilog-A subset.
+// `4'b?` is in an analog block with no mixed-signal context, so refusing it is
+// conformance, not debt — the alias is exactly as unavailable as the `z` it
+// stands for.
+//! lrm C.3
+//! lrm 2.6.1
 //! reject E0130
-// EXPECT: error
 module ch02_question_digit_rejected;
     integer value;
     analog value = 4'b?;

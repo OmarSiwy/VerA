@@ -1,5 +1,20 @@
-//! reject expected `;`
-// EXPECT: error -- LRM 6.7.1 forbids hierarchical analog-variable access.
+// §6.7.1, fifth bullet: "It shall be an error to access analog variables
+// hierarchically." Unlike its neighbours in the same list — branch potentials and
+// flows, parameters, analog user defined functions, all of which the clause
+// expressly PERMITS through a hierarchical name — an analog variable is off
+// limits, so this rejection is correct conformance and carries no `//! xfail`.
+//
+// The diagnostic is a parse boundary and not the rule, which is worth writing
+// down. VerA's parser has no `hierarchical_identifier`, so the `.` in
+// `device.local_value` is E0207 ("unexpected token: found `.`", labelled "expected
+// `;`" at the caret) — the right verdict for the wrong reason, and it fires
+// identically for the hierarchical names §6.7.1 permits. Tighten this to a
+// semantic code the day a hierarchical reference resolves and only the variable
+// case is refused. The old directive demanded the bare label; the code pins which
+// diagnostic.
+//
+//! lrm 6.7.1
+//! reject E0207
 module ch6_oomr_variable_read(p);
   inout p; electrical p;
   analog I(p) <+ device.local_value;

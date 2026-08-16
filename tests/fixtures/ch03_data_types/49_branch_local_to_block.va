@@ -1,0 +1,28 @@
+// §3.13.4: "The scope rules for branch identifiers are the same as the scope
+// rules for net identifiers. A branch can only be declared inside a module
+// scope; a branch can not be declared local to a block."
+//
+// `inner` is declared inside the named analog block `blk`. The same declaration
+// at module scope is 14_named_branches.va, which compiles and runs.
+//
+// This is a separate file from 48_net_local_to_block.va although the sentence
+// is word for word the same one: a net declaration and a branch declaration are
+// different productions (A.2.1.3 `net_declaration` against A.2.1.3
+// `branch_declaration`), so a compiler can plausibly place one correctly and
+// not the other.
+//
+// The pinned substring is only the phase label, for the reason given in
+// 48_net_local_to_block.va: VerA's E0209 here is the expression-statement
+// recovery path, not a scope rule.
+//
+//! lrm 3.13.4
+//! reject DiagnosticsReported
+module ch3_branch_local_to_block(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin : blk
+        branch (p, n) inner;
+        I(p, n) <+ V(p, n);
+    end
+endmodule

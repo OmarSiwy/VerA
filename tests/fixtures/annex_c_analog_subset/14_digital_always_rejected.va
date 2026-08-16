@@ -1,7 +1,12 @@
-// annex C: the digital `always` procedural block is outside Verilog-A.
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." A.6.2 `always_construct ::= always statement` is the digital
+// procedural block; Verilog-A has exactly one procedural block, the `analog`
+// block of §5.2.
+//
+//! lrm C.7
+//! lrm A.6.2
 //! reject E0205
 //! reject always
-// EXPECT: error
 module annex_c_digital_always_rejected;
     integer state;
     always state = !state;

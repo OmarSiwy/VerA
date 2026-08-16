@@ -1,0 +1,27 @@
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." A.6.4 lists `disable_statement ::= disable hierarchical_task_
+// identifier ; | disable hierarchical_block_identifier ;` among the digital
+// statements; A.6.4's analog_statement production has no counterpart, because
+// killing a named block mid-flight is a control-flow move only a digital
+// scheduler can make.
+//
+// Its own file rather than an arm of 25: `disable` parses and is caught one
+// stage later (E0401, "`disable` is not an analog statement"), and that stage
+// does not run at all once a parse error exists — put next to fork/join/wait it
+// is silently never reported.
+//
+//! lrm C.7
+//! lrm A.6.4
+//! reject E0401
+//! reject disable
+module annex_c_disable_rejected(p);
+    inout p;
+    electrical p;
+    integer state;
+
+    analog begin : main
+        state = 1;
+        disable main;
+        I(p) <+ V(p);
+    end
+endmodule

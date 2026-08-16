@@ -10,6 +10,7 @@
 // potential difference of its two nets, 0.75 - 0.25 = 0.5, whichever arm ran.
 // Both operands are exact in binary, so the difference is exact.
 //
+//! lrm 5.6.5
 //! bias V(c) = 1.0, V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch5_switch(p, n, c);

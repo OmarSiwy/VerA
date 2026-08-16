@@ -1,4 +1,10 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A." The
+// delay and event controls on a blocking assignment are digital timing controls,
+// and the `reg`/`initial` items carrying them are refused before them.
+//! lrm C.7
+//! reject E0205
+//! reject reg
+//! reject initial
 // EXPECT: error -- blocking assignment delay/event controls use the active queue.
 module ch8_blocking_timing;
   reg source, target;

@@ -1,0 +1,26 @@
+// LRM 4.5.7, verbatim: "input is delayed by the amount td. In all cases td
+// shall be a positive number."
+//
+// "In all cases" is the LRM closing the door on the optional-maxdelay form as
+// well as the two-argument one, so both spellings are written below. A negative
+// td asks the operator for Output(t) = Input(max(t - td, 0)) with t - td in the
+// FUTURE, which the transport-delay history buffer cannot supply — a delay line
+// only holds the past.
+//
+// Both delays are constants, so the check is static. 19_absdelay.va is the
+// legal side with td = 2n.
+//
+//! lrm 4.5.7
+//! reject td
+//! xfail VerA validates none of 4.5.7's argument bounds: absdelay(x, -2n) and absdelay(x, -2n, 5n) both compile with only W0650, and src/diag_code.zig has no code for a non-positive transport delay
+module ch04_absdelay_negative_delay_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    real two_arg, three_arg;
+
+    analog begin
+        two_arg = absdelay(V(p, n), -2n);
+        three_arg = absdelay(V(p, n), -2n, 5n);
+        I(p, n) <+ two_arg + three_arg;
+    end
+endmodule

@@ -10,6 +10,7 @@
 // Every one fits its declared size (12'o7460 needs 12 bits exactly, and
 // 0x12ABF001 has a clear MSB so it is positive in a 32-bit signed integer),
 // so none of them exercises the left-truncation rule.
+//! lrm 2.6.1
 `include "check.vh"
 module ch02_integer_bases(p, n);
     inout p, n;

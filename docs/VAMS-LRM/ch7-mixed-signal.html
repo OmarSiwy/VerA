@@ -58,7 +58,11 @@ nav a:hover { text-decoration: underline; }
 
 <h3 id="s7-2-2">7.2.2 Contexts</h3>
 
+<p>Statements in a Verilog-AMS HDL module description can appear in the body of an <b>analog</b> block, in the body of an <b>initial</b> or <b>always</b> block, or outside of any block (in the body of the module itself). Those statements which appear in the body of an <b>analog</b> block are said to be in the <em>continuous</em> (analog) <em>context</em>; all others are said to be in the <em>discrete</em> (digital) <em>context</em>. A given variable can be assigned values only in one context or the other, but not in both. The domain of a variable is that of the context from which its value is assigned.</p>
+
 <p>The domain of a variable is determined based upon the context in which it is assigned. Assignment statements which appear within an <b>analog</b> block or <b>analog initial</b> block are considered to be in the <em>continuous</em> (analog) context. Assignment statements within an <b>initial</b> or <b>always</b> block, or within a <em>continuous_assign</em> statement, are said to be within the <em>discrete</em> (digital) context. Module-level variable declaration assignments are considered to be context free and do not associate the variable with a particular domain. It shall be an error to assign to a given variable in both contexts. The domain of an unassigned variable is undefined and left up to implementations to determine. The implementation may issue a warning if an unassigned variable is referenced.</p>
+
+<div class="note">Source fidelity: the first paragraph above is 7.2.2 as printed in the source. The second paragraph restates the same context rule with two refinements that the printed paragraph does not make: it names the <b>analog initial</b> block and the <em>continuous_assign</em> statement explicitly, and it treats module-level variable declaration assignments as context free rather than as statements &ldquo;outside of any block&rdquo; in the discrete context. Where the two differ on a declaration assignment, the printed rule governs.</div>
 
 <h3 id="s7-2-3">7.2.3 Nets, nodes, ports, and signals</h3>
 
@@ -120,7 +124,7 @@ nav a:hover { text-decoration: underline; }
       | function_call
       | system_function_call
       | ( mintypmax_expression )
-      | string_literal
+      | string
       | branch_probe_function_call
       | port_probe_function_call
 
@@ -214,7 +218,7 @@ endcase</code></pre>
       var2 = 1'bz;          // error
       var1 = 1 + dnet;      // error after #50
 
-      if (dnet === 1'bx)    // error
+      if (dnet == 1'bx)     // error
          $display("Error to access x bit in continuous context");
 
       V(anet) &lt;+ 1'bz;      // error
@@ -270,13 +274,13 @@ analog_event_expression ::=
       | analog_event_expression or analog_event_expression
 analog_event_functions ::=
         cross ( analog_expression [ , analog_expression_or_null
-            [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] ] )
-      | above ( analog_expression [ , analog_expression_or_null
-            [ , analog_expression_or_null [ , analog_expression ] ] ] )
+            [ , constant_expression_or_null [ , constant_expression_or_null [ , analog_expression ] ] ] ] )
+      | above ( analog_expression [ , constant_expression_or_null
+            [ , constant_expression_or_null [ , analog_expression ] ] ] )
       | timer ( analog_expression [ , analog_expression_or_null
-            [ , analogt_expression_or_null [ , analog_expression ] ] ] )
+            [ , constant_expression_or_null [ , analog_expression ] ] ] )
       | absdelta ( analog_expression , analog_expression
-            [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] )
+            [ , constant_expression_or_null [ , constant_expression_or_null [ , analog_expression ] ] ] )
 analog_event_statement ::=
         { attribute_instance } analog_loop_statement
       | { attribute_instance } analog_case_statement
@@ -290,7 +294,7 @@ analog_event_statement ::=
 
 <b>Syntax 7-2&mdash;Syntax for event control statement</b></div>
 
-<div class="note">Source fidelity: Syntax 7-2 prints <code>analogt_expression_or_null</code> in the <code>timer</code> production. That spelling is retained above; the corresponding productions in 5.10.3.3 and Annex A use <code>analog_expression_or_null</code>.</div>
+<div class="note">Source fidelity: in the <code>cross</code>, <code>above</code>, and <code>timer</code> productions the tolerance arguments are <code>constant_expression_or_null</code>, not <code>analog_expression_or_null</code>; only the first argument of each function, the second argument of <code>cross</code> and <code>timer</code> (the expected crossing direction and the timer period), and the trailing <em>enable</em> argument are analog expressions. Syntax 7-2 as printed in 7.3.4 lists only <code>cross</code>, <code>above</code>, and <code>timer</code>; the <code>absdelta</code> production is retained above from the full <em>analog_event_functions</em> rule given in 5.10.3.4 and A.6.5.</div>
 
 <p>The following example shows a discrete event being detected in an <b>analog</b> block.</p>
 

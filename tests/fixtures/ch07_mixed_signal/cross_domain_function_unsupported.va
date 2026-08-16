@@ -1,5 +1,16 @@
-//! reject unsupported module item
-// EXPECT: error -- a digital caller requires the mixed-signal scheduler.
+// §7.3.7 function calls, both directions at once: an `always` block (the
+// digital context, §7.2.2) calls a digital `function` whose argument is an
+// analog probe `V(p)`. Whichever way the call is read, §7.3.7 forbids it.
+//
+// The rule is MASKED here, not exercised. C.7: "No digital behavior or events
+// are supported in Verilog-A", so BOTH the `always` block and the non-analog
+// `function` are outside the subset, and the module item dies (E0205,
+// "unsupported module item") before the call is analysed. Conformance for this
+// dialect, but nothing here reaches the domain-crossing rule.
+//
+//! lrm 7.3.7
+//! lrm C.7
+//! reject E0205
 module ch7_cross_domain_function(p);
   inout p; electrical p; real sampled;
   function real probe;

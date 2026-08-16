@@ -10,8 +10,11 @@
 //   conductance = 9e-12 / 1e-6 = 9e-6      (S)
 // Both wants are the rounded decimal; the double products are
 // 9.000000000000001e-12 and 9.000000000000002e-6, which is why these are
-// CHECKR and not CHECKX.
+// CHECKR and not CHECKX. Both are 1 ulp out — relative error 1.8e-16 and
+// 2.2e-16 — so 1e-15 is the tolerance the arithmetic earns, the same one the
+// exact `width` line uses. Anything looser stops being a check.
 //
+//! lrm 6.3.4
 //! param width = 3u
 //! bias V(p) = 2.0
 `include "check.vh"
@@ -22,8 +25,8 @@ module ch6_dependent(p);
   parameter real conductance = area / 1u;
   analog begin
     `CHECKR("width takes the override, not its 2u default", width, 3e-6, 1e-15);
-    `CHECKR("area re-derives from the overridden width", area, 9e-12, 1e-12);
-    `CHECKR("conductance re-derives through two levels", conductance, 9e-6, 1e-12);
+    `CHECKR("area re-derives from the overridden width", area, 9e-12, 1e-15);
+    `CHECKR("conductance re-derives through two levels", conductance, 9e-6, 1e-15);
     I(p) <+ conductance * V(p);
   end
 endmodule

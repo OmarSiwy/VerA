@@ -8,6 +8,8 @@
 // V(p) is p's potential measured against the reference node. Biased at 2.5 V
 // that access function must return 2.5.
 //
+//! lrm 3.6.2
+//! lrm 7.2.1
 //! bias V(p) = 2.5
 `include "check.vh"
 nature ch7_voltage;

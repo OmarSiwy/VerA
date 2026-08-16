@@ -1,0 +1,27 @@
+// Two §5.10 sentences meet on this one line. §5.10: "Null arguments are not
+// allowed in analog events." §5.10.3.1: "If either or both tolerances are
+// defined, then the direction shall also be defined."
+//
+// The call supplies a time_tol but elides the direction, so the dir slot is
+// null. Both sentences forbid it, and they forbid it for the same reason: the
+// tolerance is the window around a crossing whose DIRECTION selects which
+// crossings count, so a tolerance without a direction narrows nothing.
+//
+// event_cross_any.va is the legal way to say "either direction" — dir written
+// as 0, not left out — and must keep compiling.
+//
+// No VerA code exists for this, so the expectation is the phase label: the file
+// must not compile at all.
+//
+//! lrm 5.10
+//! lrm 5.10.3.1
+//! reject DiagnosticsReported
+//! xfail VerA accepts an elided argument in an analog event expression: `cross(expr, , 1n)` compiles with the direction slot empty
+module ch5_event_null_argument(p);
+  inout p; electrical p; real x;
+  analog begin
+    x = 0.0;
+    @(cross(V(p) - 1.0, , 1n)) x = 1.0;
+    I(p) <+ x;
+  end
+endmodule

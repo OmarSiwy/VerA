@@ -1,0 +1,48 @@
+// Two BNF-backed prohibitions with one root cause: a directive's operands are
+// grammar, not free text after the accent grave.
+//
+//   Syntax 10-1:  `default_discipline [ discipline_identifier [ qualifier ] ]
+//                 qualifier ::= integer | real | reg | wreal | wire | tri
+//                             | wand | triand | wor | trior | trireg | tri0
+//                             | tri1 | supply0 | supply1
+//
+//     A closed alternation of fifteen names. `electrical` is a discipline, not
+//     a qualifier, so `default_discipline electrical electrical is a syntax
+//     error — and it is exactly the typo the rule exists to catch, because the
+//     two operands are adjacent identifiers and swapping or duplicating one
+//     reads as plausible source.
+//
+//   Syntax 10-2:  `default_transition transition_time
+//                 transition_time ::= constant_expression
+//
+//     No brackets: the operand is mandatory. A bare `default_transition is a
+//     syntax error, not a request for the simulator default — §10.3 already
+//     spells out what happens when there is no directive at all ("If a
+//     `default_transition directive is not used in the description,
+//     transition_time is controlled by the simulator"), so a tool that treats
+//     the operand-less form as that case silently loses the author's line.
+//
+// Both are in one file because the runner requires EVERY `//! reject` substring
+// to appear, so the merged fixture demands both diagnostics rather than either.
+//
+// Substrings rather than codes: VerA has no code for either rule to name yet.
+// "qualifier" is the term Syntax 10-1 uses and any diagnostic about the closed
+// list will use it; "default_transition" is the directive itself and any
+// diagnostic about its missing operand must quote it. Replace both with codes
+// when the checks land.
+//
+// Lowest-value fixture in the chapter, and honestly so: the failure mode it
+// guards is a mistyped directive being silently ignored, which costs nothing
+// numerically and everything in debugging time.
+//
+//! lrm 10.2
+//! lrm 10.3
+//! reject qualifier
+//! reject default_transition
+//! xfail VerA consumes both directives to end of line without parsing their operands (preprocessor.zig marks them .ignored), so it accepts any text after either one
+`default_discipline electrical electrical
+`default_transition
+module ch10_directive_operand_grammar(p, n);
+  inout p, n; electrical p, n;
+  analog I(p, n) <+ V(p, n);
+endmodule

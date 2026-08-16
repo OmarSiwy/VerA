@@ -1,7 +1,45 @@
-//! reject ParseError
-module annex_b_task;
-  integer state; time ticks; realtime seconds;
-  task automatic worker; begin fork state=1; state=2; join wait(state) state=3; deassign state; release state; disable worker; end endtask
-  always @(negedge state) state=0;
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// The task, process and procedural-control family of IEEE 1364-2005 A.2.7 /
+// A.6.  Annex C.7 separately excludes digital behaviour from Verilog-A, but that
+// is a C.7 claim about statements; the Annex B claim is only that the spellings
+// are reserved, which is what is tested here.
+//
+// This is a reservedness census, not a feature test: one declaration per line so
+// the parser resynchronises at each `;` and reports every spelling separately,
+// and one `//! reject` line per spelling so each keyword is proved individually
+// rather than the file passing on whichever token the parser tripped over first.
+//! lrm B
+//! reject E0208
+//! reject automatic
+//! reject deassign
+//! reject disable
+//! reject endtask
+//! reject force
+//! reject fork
+//! reject join
+//! reject negedge
+//! reject posedge
+//! reject realtime
+//! reject release
+//! reject task
+//! reject time
+//! reject wait
+module annex_b_reserved_task_control_keywords;
+    real automatic;
+    real deassign;
+    real disable;
+    real endtask;
+    real force;
+    real fork;
+    real join;
+    real negedge;
+    real posedge;
+    real realtime;
+    real release;
+    real task;
+    real time;
+    real wait;
 endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

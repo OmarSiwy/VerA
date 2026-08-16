@@ -7,6 +7,7 @@
 // the source relation 10*I(b) = 1.25, and the flow contributed onto node p is
 // V(b) + I(b) = 0.875. Every value is a dyadic rational, hence exact.
 //
+//! lrm 5.4.2.2
 //! bias V(p) = 1.0, V(n) = 0.25
 //! sweep flowZ28pZ2cnZ29 = 0.125
 `include "check.vh"

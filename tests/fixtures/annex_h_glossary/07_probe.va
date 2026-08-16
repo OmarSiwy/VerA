@@ -1,17 +1,30 @@
-// Annex H "probe": a branch which does not alter the behavior of the circuit,
-// but lets the simulator read out the potential at that point. Read at 0.75 V
-// and 0.25 V it must hand back 0.5 V — the same number the unnamed node pair
-// gives — and reading it must contribute nothing of its own.
+// Annex H "probe": "A branch in a circuit (or system), which DOES NOT ALTER
+// ITS BEHAVIOR, but lets the simulator read out the potential OR FLOW at that
+// point." Three claims, and the previous fixture made none of them: it read a
+// potential off the probe branch and contributed a flow back into that same
+// branch, which is the definition of altering it.
 //
-//! bias V(p) = 0.75, V(n) = 0.25
+// Here the probe branch carries no contribution at all. Held at V(p) = 0.75,
+// V(n) = 0.25 and a branch flow of 5 mA it must read back 0.5 V and 5.0e-3 A —
+// both exact in binary64, so CHECKX. The does-not-alter half is what the
+// residual dump shows rather than a macro: res[p], res[n] and the probe
+// branch's own row are all 0, because the module's source sits on `out`.
+//
+// (The branch-flow unknown is spelled `flow(p,n)` with its punctuation escaped,
+// and `sweep` rather than `bias` because a bias line splits on commas — the
+// same spelling ch01_intro/10_flow_probe.va uses.)
+//! lrm H
+//! lrm 4.4
+//! lrm 5.4.2
+//! sweep flowZ28pZ2cnZ29 = 0.005
+//! bias V(p) = 0.75, V(n) = 0.25, V(out) = 0.0
 `include "check.vh"
-module glossary_probe(p, n);
-  inout p, n; electrical p, n;
+module glossary_probe(p, n, out);
+  inout p, n, out; electrical p, n, out;
   branch (p,n) probe_branch;
-  real measured;
   analog begin
-    measured = V(probe_branch);
-    `CHECKX("the probe reads the branch potential", measured, 0.5);
-    I(p,n) <+ measured;
+    `CHECKX("the probe reads the potential", V(probe_branch), 0.5);
+    `CHECKX("the probe reads the flow", I(probe_branch), 5.0e-3);
+    I(out) <+ V(probe_branch)/1000.0;
   end
 endmodule

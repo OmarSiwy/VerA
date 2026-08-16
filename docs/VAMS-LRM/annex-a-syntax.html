@@ -70,6 +70,7 @@ module_keyword ::= <b>module</b> | <b>macromodule</b> | <b>connectmodule</b></di
 list_of_ports ::= <b>(</b> port { <b>,</b> port } <b>)</b>
 list_of_port_declarations ::=
         <b>(</b> port_declaration { <b>,</b> port_declaration } <b>)</b>
+        | <b>()</b>
 port ::=
         [ port_expression ]
         | <b>.</b> port_identifier <b>(</b> [ port_expression ] <b>)</b>
@@ -860,8 +861,8 @@ specify_item ::=
         | path_declaration
         | system_timing_check
 pulsestyle_declaration ::=
-        <b>pulsestyle_onevent</b> list_of_path_outputs <b>;</b></div>
-<div class="syntax">        | <b>pulsestyle_ondetect</b> list_of_path_outputs <b>;</b>
+        <b>pulsestyle_onevent</b> list_of_path_outputs <b>;</b>
+        | <b>pulsestyle_ondetect</b> list_of_path_outputs <b>;</b>
 showcancelled_declaration ::=
         <b>showcancelled</b> list_of_path_outputs <b>;</b>
         | <b>noshowcancelled</b> list_of_path_outputs <b>;</b></div>
@@ -1145,6 +1146,7 @@ analog_expression ::=
 base_expression ::= expression
 conditional_expression ::= expression1 <b>?</b> { attribute_instance } expression2 <b>:</b> expression3
 constant_base_expression ::= constant_expression
+constant_expression_or_null ::= [ constant_expression ]
 constant_expression ::=
         constant_primary
         | unary_operator { attribute_instance } constant_primary
@@ -1342,7 +1344,8 @@ x_digit ::= <b>x</b> | <b>X</b>
 z_digit ::= <b>z</b> | <b>Z</b> | <b>?</b></div>
 
 <h3 id="a-8-8">A.8.8 Strings</h3>
-<div class="syntax">string_literal ::= <b>"</b> { Any_ASCII_Characters } <b>"</b></div>
+<div class="syntax">string ::= <b>"</b> { Any_ASCII_Characters } <b>"</b>
+string_literal ::= <b>"</b> { Any_ASCII_Characters } <b>"</b></div>
 
 <h3 id="a-8-9">A.8.9 Analog references</h3>
 <div class="syntax">nature_attribute_reference ::= net_identifier <b>.</b> potential_or_flow <b>.</b> nature_attribute_identifier

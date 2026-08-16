@@ -1,0 +1,20 @@
+// §1.3.4.2 "Nets of flow signal-flow disciplines in modules may only be bound to
+// input or output ports of the module, not to inout ports."
+//
+// The mirror of 15_sf_potential_on_inout.va. `current` is Annex D's flow-only
+// signal-flow discipline, so binding it to an `inout` port is the violation on
+// its own; the contribution below is present only so the module is a device.
+//
+// E0337 is not yet allocated in src/diag_code.zig — see the note in
+// 15_sf_potential_on_inout.va. Both halves of the restriction are one rule and
+// share the code.
+//
+//! lrm 1.3.4.2
+//! reject E0337
+//! xfail nothing rejects the DECLARATION of a single-nature discipline on an inout port; this module lints AND emits clean
+module ch01_sf_flow_on_inout(p);
+    inout p;
+    current p;
+
+    analog I(p) <+ 1.0e-3;
+endmodule

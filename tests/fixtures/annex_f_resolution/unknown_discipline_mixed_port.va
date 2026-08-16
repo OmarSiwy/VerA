@@ -1,0 +1,46 @@
+// LRM Annex F.2.1 step 4.b, fourth bullet (verbatim in F.2.2 4.b and F.2.2 5.b):
+// "Otherwise the discipline is unknown. This is legal provided the net has no
+// mixed-port connections (i.e., it does not connect through a port to a segment
+// of a different domain). Otherwise this is an error."
+//
+// `sig` is left undeclared, so it goes into step 4 with no discipline:
+//
+//   4.a  its child nets are not all digital (two are continuous), so per
+//        "any others shall be considered analog" sig is in the CONTINUOUS domain;
+//   4.b  the list of child disciplines whose domain matches that of the segment
+//        is {annex_f_a, annex_f_b} — more than one, and there is no `connect`
+//        resolution statement whose discipline list matches, so the first three
+//        bullets are all skipped and the discipline is UNKNOWN;
+//   4.b  fourth bullet: unknown is legal only with no mixed-port connections, and
+//        sig connects through the port of `annex_f_dig_leaf` to a discrete
+//        segment. Different domain => mixed-port connection => this is an error.
+//
+// Both disciplines are natureless so §3.11.1 keeps them compatible: the error is
+// the unresolvable-plus-mixed-port one, not a compatibility one.
+//
+// There is no value to CHECK: the only observable is the diagnostic. The reject
+// substring names the rule rather than using `DiagnosticsReported`, because VerA
+// stops at E0204 on the instantiations and a generic substring would match that
+// unrelated diagnostic and XPASS.
+//
+//! lrm F.2.1
+//! reject mixed-port
+//! xfail VerA compiles one flat module — `annex_f_a_leaf la(sig)` is refused with E0204 "module instantiation is not supported", so no signal hierarchy is ever built and step 4 never runs
+discipline annex_f_a; domain continuous; enddiscipline
+discipline annex_f_b; domain continuous; enddiscipline
+discipline annex_f_dig; domain discrete; enddiscipline
+module annex_f_a_leaf(p);
+  inout p; annex_f_a p;
+endmodule
+module annex_f_b_leaf(p);
+  inout p; annex_f_b p;
+endmodule
+module annex_f_dig_leaf(d);
+  inout d; annex_f_dig d;
+endmodule
+module annex_f_unknown_mixed(sig);
+  inout sig;
+  annex_f_a_leaf   la(sig);
+  annex_f_b_leaf   lb(sig);
+  annex_f_dig_leaf ld(sig);
+endmodule

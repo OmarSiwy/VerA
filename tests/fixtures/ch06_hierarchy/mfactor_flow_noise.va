@@ -9,6 +9,9 @@
 // runs the default DC analysis, so the value the source contributes to the
 // residual is exactly zero — a device that folded the noise power into the DC
 // current would print 1e-18 instead.
+//
+//! lrm 6.3.6
+//! lrm 4.6.4
 `include "check.vh"
 module ch6_mfactor_flow_noise(p, n);
   inout p, n; electrical p, n;

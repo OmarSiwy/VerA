@@ -1,0 +1,28 @@
+// §6.6.1, an "It shall be an error" bullet, verbatim: "It shall be an error if the
+// loop generate scheme does not terminate." The scheme is evaluated during
+// elaboration, "before simulation begins" (§6.6), so a loop that never falsifies
+// its condition is not a hang at run time — it is a model that cannot be
+// elaborated at all, and the LRM requires the diagnostic.
+//
+// `i` starts at 0 and the step DECREMENTS it, so `i < 3` is true forever. VerA
+// reports it at the rule: E0420, "genvar loop did not terminate", after giving up
+// at its unroll cap (4096 iterations, ir/lower.zig). The cap is an implementation
+// choice and deliberately not asserted here; what the LRM fixes is that an error
+// is produced, which is what the directive pins.
+//
+// The neighbouring bullet, "It shall be an error if a genvar value is repeated
+// during the evaluation of the loop generate scheme", has no separate fixture on
+// purpose: the genvar is the loop's entire state and the step is a function of it
+// alone, so a repeated value is a cycle, and a cycle in a condition that already
+// passed once means the loop never terminates. Every repeated-value source is a
+// non-terminating source, and this file is it.
+//
+//! lrm 6.6.1
+//! reject E0420
+module ch6_generate_nonterminating(p);
+  inout p; electrical p;
+  genvar i;
+  generate
+    for (i = 0; i < 3; i = i - 1) I(p) <+ V(p);
+  endgenerate
+endmodule

@@ -1,3 +1,24 @@
-//! reject DiagnosticsReported
-module ch4_op_initial(p); inout p; electrical p; real x; initial x=ddt(V(p)); analog I(p)<+x; endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+// LRM 4.5.15, verbatim: analog operators "can not be used inside an initial or
+// always block".
+//
+// The reason is the one 4.5.15 gives for the whole family: an analog operator
+// carries state from one accepted timepoint to the next, so it has to be
+// evaluated exactly once per timepoint at a fixed place in the analog block.
+// An `initial` block runs once, before the solve, at a point where there is no
+// timepoint to advance — so `ddt` there has no history to differentiate.
+//
+// The expectation is the CODE and not a phase label: `DiagnosticsReported`
+// would be satisfied by a typo in this file.
+//
+//! lrm 4.5.15
+//! reject E0422
+//! xfail VerA refuses `initial` wholesale at E0205 "unsupported module item" (annex A.1.4), so the parse dies before the 4.5.15 analog-operator rule is ever reached; E0422 never fires here
+module ch04_operator_in_initial(p, n);
+    inout p, n;
+    electrical p, n;
+    real x;
+
+    initial x = ddt(V(p, n));
+
+    analog I(p, n) <+ x;
+endmodule

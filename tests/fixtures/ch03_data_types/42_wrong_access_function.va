@@ -9,7 +9,8 @@
 // net's access functions. `RightAccess(p) <+ 0.0` would compile — the wrong
 // spelling is the whole defect.
 //
-//! reject DiagnosticsReported
+//! lrm 3.13.3
+//! reject E0501
 nature ch3_right_n; units="V"; access=RightAccess; abstol=1u; endnature
 discipline ch3_right_d; potential ch3_right_n; enddiscipline
 module ch3_wrong_access(p); inout p; ch3_right_d p; analog V(p)<+0.0; endmodule

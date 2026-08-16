@@ -1,0 +1,30 @@
+// §10.6: the `begin_keywords directive affects the source "until the matching
+// `end_keywords directive is encountered." Nothing in the suite observed what
+// happens AFTER that point — 16, 25 and 26 each wrap their only module in the
+// pair, so the file ends immediately after `end_keywords and a completely
+// no-op `end_keywords passes all three.
+//
+// This is the discriminator. m1 is the §10.6 worked example itself: under
+// "1364-2005" the identifier `sin` is not reserved and the port name is legal.
+// m2 is the same text after the pair closes, where the implementation's default
+// Verilog-AMS set is back in force and `sin` is a reserved keyword again
+// (Annex B) — which the LRM's second example calls out as an error in exactly
+// these words: 'ERROR: "sin" is a keyword in Verilog-AMS'.
+//
+// So the file must be rejected, and rejected at m2: a tool that never restores
+// the set compiles both modules and passes nothing.
+//
+//! lrm 10.6
+//! reject E0208
+`begin_keywords "1364-2005"
+module ch10_end_keywords_inner(sin, n);
+  inout sin, n;
+  electrical sin, n;
+  analog I(sin, n) <+ V(sin, n);
+endmodule
+`end_keywords
+module ch10_end_keywords_restores_previous_set(sin, n); // ERROR: sin is reserved again
+  inout sin, n;
+  electrical sin, n;
+  analog I(sin, n) <+ V(sin, n);
+endmodule

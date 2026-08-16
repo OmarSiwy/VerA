@@ -1,0 +1,31 @@
+// LRM 4.7.3: an analog user-defined function "shall only be called within the
+// analog context, either from an analog block or from within another analog
+// user-defined function".
+//
+// The restriction follows from what an analog function IS. 4.7.1 forbids it
+// access functions, filters and contribution statements precisely so that it is
+// a pure value computation on the analog solver's timeline; calling it from an
+// `initial` block, which runs once before the solve, asks for a value at a
+// point where that timeline does not exist yet.
+//
+// 28_user_function.va is the legal call from an analog block, and
+// 105_function_indirect_recursion.va is the other legal context — a call from
+// inside another analog function — being used illegally.
+//
+//! lrm 4.7.3
+//! reject 4.7.3
+//! xfail VerA refuses `initial` wholesale at E0205 "unsupported module item" (annex A.1.4), so the parse dies before the 4.7.3 calling-context rule is reached
+module ch04_function_called_outside_analog_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    real r;
+
+    analog function real scale;
+        input real x;
+        scale = x * 2.0;
+    endfunction
+
+    initial r = scale(1.0);
+
+    analog I(p, n) <+ r;
+endmodule

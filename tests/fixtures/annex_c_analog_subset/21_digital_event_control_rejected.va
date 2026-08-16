@@ -1,0 +1,25 @@
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." `posedge` and `negedge` are the digital edge event expressions of
+// §8/A.6.5; the analog block admits only the analog events of §5.10 (`initial_step`,
+// `cross`, `timer`, ...), which 05_analog_event.va pins on the positive side.
+//
+// Both edges appear, and both are pinned, because the parser recovers and
+// reports each one: a fixture naming a single edge would leave the other
+// unproven.
+//
+//! lrm C.7
+//! lrm 5.10
+//! reject E0209
+//! reject posedge
+//! reject negedge
+module annex_c_digital_event_control_rejected(p);
+    inout p;
+    electrical p;
+    integer state;
+
+    analog begin
+        @(posedge V(p)) state = 1;
+        @(negedge V(p)) state = 2;
+        I(p) <+ V(p);
+    end
+endmodule

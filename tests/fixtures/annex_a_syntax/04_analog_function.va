@@ -1,8 +1,15 @@
-// Annex A.2.6 / LRM 4.7.1 analog function: the return value is whatever was
-// assigned to the function's own name. `square` is x*x, so at V(p,n) = 1.5 the
-// call must be 2.25 — a value the function definition fixes and nothing else
-// in the module can change.
+// Annex A.2.6 / §4.7.2.1: the return value of an analog function is whatever
+// was assigned to the function's own name. `square` is x*x, so at V(p,n) = 1.5
+// the call must be 2.25 — a value the function definition fixes and nothing
+// else in the module can change. 1.5 and 2.25 are both exact in binary.
 //
+// The explicit `real` return type is the point of contrast with
+// 36_analog_function_default_type.va (type omitted) and
+// 37_analog_function_integer_string.va (the other two types).
+//
+//! lrm A.2.6
+//! lrm 4.7.1
+//! lrm 4.7.2.1
 //! bias V(p) = 1.5
 //! print none
 `include "check.vh"

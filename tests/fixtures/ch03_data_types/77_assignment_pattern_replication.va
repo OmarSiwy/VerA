@@ -1,0 +1,35 @@
+// §3.4.8 assignment patterns, the replication form. The LRM's own §3.3 example
+// writes it nested —
+//
+//     string above_0p5[0:2][0:2] = '{ 3{ '{3{" "}}}};
+//
+// — and the one-dimensional inner form `'{3{" "}}` is what this fixture takes:
+// a replication INSIDE an assignment pattern, which fills N consecutive elements
+// with one value.
+//
+// `'{2{1.5}, 2{2.5}}` is four elements, 1.5 1.5 2.5 2.5. The two halves have
+// different values so the fixture fails if a compiler replicated the first
+// group over the whole array, and the elements are read individually so it
+// fails differently if the count were applied once instead of twice.
+//
+// 08_parameter_array.va is the plain `'{a, b, c, d}` form and
+// 77_assignment_pattern_variable.va is the non-constant form; this is the third
+// shape §3.4.8 shows and the only one with a repeat count.
+//
+//! lrm 3.4.8
+//! lrm 3.3
+//! xfail VerA's parser has no replication inside an assignment pattern: the `{` of `2{1.5}` is E0207
+`include "check.vh"
+module ch03_assignment_pattern_replication(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real steps[0:3] = '{2{1.5}, 2{2.5}};
+
+    analog begin
+        `CHECKX("the first replication group fills element 0", steps[0], 1.5);
+        `CHECKX("the first replication group fills element 1 too", steps[1], 1.5);
+        `CHECKX("the second replication group starts at element 2", steps[2], 2.5);
+        `CHECKX("the second replication group fills element 3", steps[3], 2.5);
+        I(p, n) <+ steps[0] * V(p, n);
+    end
+endmodule

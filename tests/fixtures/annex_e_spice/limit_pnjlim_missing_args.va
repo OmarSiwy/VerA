@@ -1,0 +1,35 @@
+// §9.17.3, on the Table E.2 algorithm E.3.4 spells `pnjlim`: "Two additional
+// arguments to the $limit() function are required when the second argument to
+// the limit function is the string “pnjlim”: the third argument to $limit()
+// indicates a step size vte and the fourth argument is a critical voltage
+// vcrit."
+//
+// "are required" is normative, and it is TWO. The call below names "pnjlim" and
+// supplies only vte, so vcrit is missing and the call is not legal. A tool that
+// accepts it has silently invented the critical voltage that decides whether the
+// junction clamp fires at all.
+//
+// WHY THIS IS NOT THE UNKNOWN-STRING CASE. §9.17.3 lets a simulator ignore a
+// string it does not recognise ("just as if no string had been supplied"), so no
+// fixture may demand a diagnostic for an unknown algorithm name. "pnjlim" is not
+// unknown — §9.17.3 names it outright — and naming it is what imposes the arity
+// this file violates.
+//
+// WHY THE PROBE IS AN INTERNAL NET. A $limit on a module PORT is one a simulator
+// may decline outright (see limit_pnj.va), which would mask the arity question
+// behind an earlier and unrelated refusal. `mid` is private to the device.
+//
+// The expectation is the PHASE label rather than a code: the LRM fixes that this
+// is an error, not what any tool calls it, and VerA has no code for it yet.
+//
+//! lrm 9.17.3
+//! lrm E.3.4
+//! reject DiagnosticsReported
+//! xfail VerA silently DECLINES an under-supplied $limit — cg_limit.zig appends "too few arguments for the algorithm named" to a list rendered as a COMMENT in the emitted device, and exits 0 with no diagnostic
+module annex_e_pnjlim_missing_args(p);
+  inout p; electrical p; electrical mid; real limited;
+  analog begin
+    limited = $limit(V(mid), "pnjlim", 0.026);
+    I(mid, p) <+ (limited - V(p)) / 1.0;
+  end
+endmodule

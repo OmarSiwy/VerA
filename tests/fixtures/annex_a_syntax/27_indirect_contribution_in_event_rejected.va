@@ -1,0 +1,16 @@
+// A.6.4 `analog_event_statement` has no `indirect_contribution_statement`
+// alternative either — see 26_contribution_in_event_rejected.va for the list.
+// §5.6.7's indirect form states an equation the solver must satisfy across the
+// whole solve, so an event body, which runs at isolated instants, is the one
+// place it cannot appear.
+//
+// It needs its own file because a `//! reject` fixture stops at the first
+// diagnostic: with the direct contribution of 26 in the same module, E0406
+// fires and E0411 is never reached.
+//
+//! lrm A.6.4
+//! lrm 5.6.7
+//! reject E0411
+module annex_a_indirect_in_event(p, c); inout p, c; electrical p, c;
+analog begin @(cross(V(p), 1)) V(p) : V(c) == 2.0 * V(p); I(c) <+ 0.0; end
+endmodule

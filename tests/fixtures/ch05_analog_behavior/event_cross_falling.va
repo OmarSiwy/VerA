@@ -4,7 +4,7 @@
 // V(p) is walked 0 -> 1 -> 2, which is a single RISING crossing of zero and no
 // falling crossing at all. A cross(V(p), -1) must therefore stay silent for the
 // whole run, so the sampled `x` keeps the 0.0 a real variable starts at
-// (§3.2.1). Had the direction argument been dropped and the event fired on any
+// (§3.2). Had the direction argument been dropped and the event fired on any
 // sign change, x would have been sampled at the rising crossing and read 1 or 2.
 //
 // Transient on purpose: §5.10.3.1 also says "the cross() function will not
@@ -12,6 +12,7 @@
 // analyses", so under the default dc analysis x would read 0.0 whatever the
 // direction argument did and this fixture would pin nothing.
 //
+//! lrm 5.10.3.1
 //! analysis tran
 //! time 0, 1n, 2n
 //! wave V(p) = 0, 1, 2

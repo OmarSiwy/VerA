@@ -5,13 +5,23 @@
 // J*s); mu0 and eps0 became measured, hence 1.25663706212e-6 H/m and
 // 8.8541878128e-12 F/m -- the 2018 arm is the only one that moves `P_U0 off
 // 4e-7*pi (1.2566370614e-6), which is what makes it observable here.
+//
+// The chain under test is the IMPLEMENTATION's constants.vams, not a local
+// copy. The engine prepends that file with no selector defined, so it has
+// already taken the NIST1998 arm; `undef CONSTANTS_VAMS reopens its own include
+// guard and the re-include re-runs the chain with the selectors set. Every
+// `P_* is then a redefinition, which is what makes the move observable — if
+// nothing moves, `P_Q is still 1.602176462e-19 and the first check fails.
+//
+//! lrm D.2
 `include "check.vh"
+`undef CONSTANTS_VAMS
 `define PHYSICAL_CONSTANTS_NIST2018 1
 // Define every lower-priority selector too: NIST2018 must still win.
 `define PHYSICAL_CONSTANTS_SPICE 1
 `define PHYSICAL_CONSTANTS_OLD 1
 `define PHYSICAL_CONSTANTS_NIST2010 1
-`include "physical_constants_select.vh"
+`include "constants.vams"
 module annex_d_nist2018(p);
   inout p; electrical p;
   analog begin

@@ -44,6 +44,8 @@ pub const Error = Allocator.Error || error{
     BadSyntax,
     /// The cartesian product of the `sweep` lines exceeded `max_points`.
     TooManyPoints,
+    /// A `//! lrm` cite is not a section number: see `validSection`.
+    BadLrmSection,
 };
 
 /// One `name = value` binding: a model parameter, or a fixed unknown.
@@ -96,6 +98,22 @@ pub const Directives = struct {
     /// somewhere in the resulting diagnostic. A fixture that cannot run states
     /// its expectation the same way one that can does — in the .va itself.
     reject: []const []const u8 = &.{},
+    /// `//! lrm <section>`, one per line: the normative clause this fixture
+    /// pins. It is not an expectation and changes no verdict — it is what lets
+    /// a FAIL name the RULE that broke rather than only the file, and what a
+    /// coverage report counts.
+    lrm: []const []const u8 = &.{},
+    /// `//! xfail <reason>`: the fixture states a genuine LRM requirement that
+    /// VerA is KNOWN not to meet yet, and the reason says WHAT it does not do.
+    /// It points both ways, because the gap does:
+    ///   with `reject` — the LRM says the construct is an error and VerA
+    ///                   still accepts it;
+    ///   without       — the LRM prints this as a legal worked example, so it
+    ///                   must compile and run green, and VerA cannot yet.
+    /// The second is the common case: a fixture written `//! reject` because
+    /// VerA lacks the construct inverts the test, since a CONFORMING compiler
+    /// then fails it.
+    xfail: ?[]const u8 = null,
 };
 
 /// Guard against a fixture that asks for a million points and a gigabyte of
@@ -117,6 +135,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var waves: std.ArrayList(Sweep) = .empty;
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
+    var lrm: std.ArrayList([]const u8) = .empty;
     var saw_time = false;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -162,6 +181,14 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
+        } else if (eq(kw, "lrm")) {
+            if (!validSection(rest)) return error.BadLrmSection;
+            try lrm.append(arena, try arena.dupe(u8, rest));
+        } else if (eq(kw, "xfail")) {
+            // The whole rest of the line is the reason, verbatim — it is prose
+            // a human reads out of a failing run, not an operand.
+            if (rest.len == 0) return error.BadSyntax;
+            d.xfail = try arena.dupe(u8, rest);
         } else if (eq(kw, "print")) {
             if (eq(rest, "none")) {
                 d.print_residual = false;
@@ -180,7 +207,28 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.waves = waves.items;
     d.psweeps = psweeps.items;
     d.reject = reject.items;
+    d.lrm = lrm.items;
     return d;
+}
+
+/// Is this a `//! lrm` cite — `5.8`, `4.5.11`, `A.8.3`, `B`?
+///
+/// A chapter number or an annex letter, then dotted numbers. Loose on purpose:
+/// nothing here has the LRM's table of contents, so this catches a typo or an
+/// empty cite, not a section that does not exist.
+fn validSection(s: []const u8) bool {
+    var it = std.mem.splitScalar(u8, s, '.');
+    const first = it.first();
+    const annex = first.len == 1 and first[0] >= 'A' and first[0] <= 'H';
+    if (!annex and !digits(first)) return false;
+    while (it.next()) |part| if (!digits(part)) return false;
+    return true;
+}
+
+fn digits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| if (c < '0' or c > '9') return false;
+    return true;
 }
 
 /// `V(a)`, `x[a]` and a bare `a` all name the unknown `a`. The first two are
@@ -632,6 +680,9 @@ pub const BuildOptions = struct {
     name: []const u8,
     out_path: ?[]const u8 = null,
     zig_exe: []const u8 = "zig",
+    /// `-O` for the testbench. Debug by default; see `buildExe` for why that is
+    /// not the timid choice.
+    optimize: std.builtin.OptimizeMode = .Debug,
 };
 
 pub const BuildResult = union(enum) {
@@ -654,8 +705,15 @@ pub const BuildResult = union(enum) {
 /// `build-exe` directly rather than through orchestrator.zig: that path exists
 /// to produce a hot-reloadable `.so` with a generation counter and an incremental
 /// resident compiler, and none of that applies to a testbench that is built once
-/// and run once. Debug, not ReleaseFast — a transcript is a float comparison,
-/// and `-OReleaseFast` is exactly where the backend is allowed to reassociate.
+/// and run once.
+///
+/// `opts.optimize` defaults to Debug, and NOT because floats would move: Zig has
+/// no `-ffast-math`, so float arithmetic is strict IEEE in every optimize mode
+/// unless the code itself asks for `@setFloatMode(.optimized)`, which generated
+/// devices do not. The two real reasons are that a testbench runs for
+/// microseconds and compiles for seconds — so compile time is the whole cost —
+/// and that Debug keeps the safety checks on, which turns a codegen bug into a
+/// loud trap instead of a plausible wrong number.
 pub fn buildExe(
     gpa: Allocator,
     io: Io,
@@ -694,13 +752,15 @@ pub fn buildExe(
     defer gpa.free(m_dev);
     const m_contract = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{opts.contract});
     defer gpa.free(m_contract);
+    const opt = try std.fmt.allocPrint(gpa, "-O{t}", .{opts.optimize});
+    defer gpa.free(opt);
 
     const argv = [_][]const u8{
         opts.zig_exe,  "build-exe",  emit,
-        "--cache-dir", ".zig-cache", "--dep",
-        "device",      "--dep",      "contract",
-        m_root,        "--dep",      "contract",
-        m_dev,         m_contract,
+        opt,           "--cache-dir", ".zig-cache",
+        "--dep",       "device",      "--dep",
+        "contract",    m_root,        "--dep",
+        "contract",    m_dev,         m_contract,
     };
 
     var child = try std.process.spawn(io, .{
@@ -780,6 +840,31 @@ test "directives: a typo is an error, not a silently skipped test" {
     try testing.expectError(error.UnknownDirective, parse(arena_state.allocator(), "//! sweeep V(a) = 1\n"));
     try testing.expectError(error.BadSyntax, parse(arena_state.allocator(), "//! sweep V(a)\n"));
     try testing.expectError(error.BadNumber, parse(arena_state.allocator(), "//! temp warm\n"));
+}
+
+test "directives: an lrm cite is a section, and an xfail points either way" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try parse(arena, "//! lrm 4.5.11\n//! lrm A.8.3\n//! reject E0130\n//! xfail VerA accepts it\n");
+    try testing.expectEqual(@as(usize, 2), d.lrm.len);
+    try testing.expectEqualStrings("4.5.11", d.lrm[0]);
+    try testing.expectEqualStrings("A.8.3", d.lrm[1]);
+    try testing.expectEqualStrings("VerA accepts it", d.xfail.?);
+
+    try testing.expectError(error.BadLrmSection, parse(arena, "//! lrm §5.8\n"));
+    try testing.expectError(error.BadLrmSection, parse(arena, "//! lrm 5.\n"));
+    try testing.expectError(error.BadLrmSection, parse(arena, "//! lrm Z.1\n"));
+    try testing.expectError(error.BadLrmSection, parse(arena, "//! lrm\n"));
+
+    // On a RUN fixture too: "the LRM prints this example and VerA cannot build
+    // it yet" is the more common gap, and it has to be sayable.
+    const run = try parse(arena, "//! xfail no array formals in analog functions\n");
+    try testing.expectEqual(@as(usize, 0), run.reject.len);
+    try testing.expectEqualStrings("no array formals in analog functions", run.xfail.?);
+    // A reason is still required — a bare marker names no gap.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! xfail\n"));
 }
 
 test "sweep expansion is the cartesian product, last fastest" {

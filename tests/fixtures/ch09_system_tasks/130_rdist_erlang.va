@@ -1,0 +1,35 @@
+// §9.13: "Verilog-AMS HDL extends the probabilistic distribution functions so
+// that they are supported in the analog context." Table 9-10 lists all 17 names
+// and every row reads `Yes  Yes` — digital context AND analog context. So this
+// file must COMPILE and run green; a compiler that refuses the call is the one
+// that is wrong, which is why the expectation is a run and not a reject.
+//
+// The value itself is implementation-defined — §9.13.3 points at the IEEE 1364
+// §17.9.3 C code, which no clause of this LRM requires a tool to reproduce — so
+// no digits are written for it. What §9.13.2 DOES fix is repeatability: "The
+// system functions shall always return the same value given the same seed."
+// Two seeds initialized to the same integer must therefore agree, and that
+// holds for any conforming RNG whatever its stream.
+//
+// §9.13.2 adds one more fixed fact for the real family: "All functions return
+// a real value." Table 9-26 cross-lists each $rdist_* name to the IEEE 1364
+// §17.9.3 C routine, so the stream is defined there and not here.
+//
+// Arguments: k_stage = 2.0 and mean = 3.0, both of which §9.13.2 requires to be greater
+// than zero.
+//
+//! lrm 9.13.2
+//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
+`include "check.vh"
+module ch09_rdist_erlang(p, n);
+  inout p, n; electrical p, n;
+  integer sa, sb;
+  real a, b;
+  analog begin
+    sa = 7; sb = 7;
+    a = $rdist_erlang(sa, 2.0, 3.0);
+    b = $rdist_erlang(sb, 2.0, 3.0);
+    `CHECKI("§9.13.2 the same seed gives the same value", a == b, 1);
+    I(p,n) <+ V(p,n) + a;
+  end
+endmodule

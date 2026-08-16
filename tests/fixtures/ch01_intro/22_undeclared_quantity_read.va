@@ -1,0 +1,41 @@
+// §1.3.5: "port and net declarations only require types for those values which
+// are actually used in the description ... In summary, only those signals types
+// declared on the ports are accessible in the body of the model." Read the
+// other way round, a type that was NOT declared is not accessible — and §1.3.4
+// says why in so many words: for a node bound only to potential-nature
+// disciplines, "flow for such a node is not defined".
+//
+// This is the READ side, and it is a separate claim from the write side.
+// 14_signal_flow_illegal_quantity.va and 19_potential_contribution_to_flow_only.va
+// pin the two halves of the contribution rule; a compiler can perfectly well
+// reject a contribution to an undefined quantity (the left of a `<+` is a
+// distinguished position it already inspects) while letting the same quantity be
+// read in an expression. Here `V(vonly) <+ 1.0` is LEGAL — `voltage` is Annex D's
+// potential-only discipline and potential is exactly what it declares — and the
+// sole defect is `I(vonly)` appearing as an operand.
+//
+// `vonly` is an internal net rather than a port on purpose: a single-nature
+// discipline on a port drags in the §1.3.4.1/§1.3.4.2 direction rules, which
+// 15-18 already pin separately. The rule under test here is about the declared
+// nature, not about the port direction.
+//
+// Same pinned code as the write-side pair, E0501 "unknown access function":
+// lower.zig routes every access expression through checkAccessMatch, reads
+// included, so a read is the same rule in the same place — not a new one.
+//
+//! lrm 1.3.5
+//! lrm 1.3.4
+//! reject E0501
+//! xfail lower.zig checkAccessMatch returns early on `want.len == 0`, so reading `I(vonly)` on a discipline that binds no flow nature is silent; this module lints AND emits clean
+module ch01_undeclared_quantity_read(p, n);
+    inout p, n;
+    electrical p, n;
+    voltage vonly;
+    real x;
+
+    analog begin
+        x = I(vonly);
+        V(vonly) <+ 1.0;
+        I(p, n) <+ V(p, n) * 1.0e-3 + x;
+    end
+endmodule

@@ -1,26 +1,22 @@
-// NONCONFORMING ACCEPTANCE SNAPSHOT: $receiver_count is connectmodule-only.
-//
 // Annex G item 7793 is "Support $receiver_count() function, 9.22.2" — the
-// function this fixture exists to show is new. Its call site here is
-// nonconforming: 9.22 states "Driver access functions can only be called from
-// connect modules", and this is an ordinary module.
+// function this fixture exists to pin. What §9.22 fixes about it is not a
+// value but a CALL SITE: "Driver access functions can only be called from
+// connect modules." That sentence is unqualified, so the call below, in an
+// ordinary module, shall be diagnosed.
 //
-// The DEFINITION is still unambiguous for this netlist. 9.22.2: $receiver_count
-// "returns an integer representing the number of receivers associated with the
-// signal in question", and 9.22 defines the drivers/receivers it counts as the
-// ones "found in ordinary modules" — digital processes and instance ports. `p`
-// is an analog port of a flat design elaborated on its own, with no digital
-// receivers anywhere in it, so the count is exactly 0. That is a fact about the
-// netlist, not about what this compiler chooses to return; it is why the
-// contribution below carries V(p,n) and not the count.
-`include "check.vh"
-
-//! bias V(p) = 0.5
-
+// No `want` is derivable and none is written. §9.22.2 defines the result as
+// "the number of receivers associated with the signal in question", a property
+// of the elaborated netlist, and §9.22 scopes the whole family to what a
+// simulator provides. Asserting 0 would pin an implementation-defined number
+// and fail a conforming compiler; the portable claim is the restriction.
+//
+//! lrm 9.22
+//! reject E0801
+//! reject $receiver_count
+//! xfail VerA lowers every 9.22 driver-access query to the constant 0 in any module (codegen.zig `driver_queries`) instead of diagnosing the call outside a connectmodule
 module annex_g_receiver_count(p, n);
   inout p, n; electrical p, n;
   analog begin
-    `CHECKI("receivers on an analog port of a receiverless design", $receiver_count(p), 0);
-    I(p,n) <+ V(p,n) + $receiver_count(p);
+    I(p,n) <+ V(p,n) * $receiver_count(p);
   end
 endmodule

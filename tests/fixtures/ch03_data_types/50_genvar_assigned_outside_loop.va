@@ -1,0 +1,29 @@
+// §3.5: "The genvar variable i can only be assigned within the for-loop
+// control."
+//
+// `index` is assigned by a plain statement in the analog block, with no for
+// loop anywhere in the file. 09_genvar.va is the legal side: the same genvar,
+// assigned only in the three slots of `for (index = 0; index < 3; index = index
+// + 1)`.
+//
+// Without this file a genvar is indistinguishable from an integer — 09_genvar
+// passes unchanged if `genvar index;` is rewritten `integer index;` — so this
+// is the fixture that makes the type mean something.
+//
+// The pinned substring is only the phase label. VerA rejects the assignment
+// because a genvar is not in the variable namespace (E0313/E0314), which is a
+// consequence of the rule rather than a diagnostic for it, and the code would
+// move if genvars were ever given a scope of their own.
+//
+//! lrm 3.5
+//! reject DiagnosticsReported
+module ch3_genvar_assigned_outside_loop(p, n);
+    inout p, n;
+    electrical p, n;
+    genvar index;
+
+    analog begin
+        index = 3;
+        I(p, n) <+ index * V(p, n);
+    end
+endmodule

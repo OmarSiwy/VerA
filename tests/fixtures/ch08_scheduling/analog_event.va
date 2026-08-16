@@ -10,6 +10,7 @@
 // dc prints 0.75 for sample. The first check pins that the probe really is
 // nonzero, so the second one cannot pass by accident.
 //
+//! lrm 5.10.3.1
 //! bias V(p) = 0.75, V(c) = 0.9
 `include "check.vh"
 module ch8_event(p, c);

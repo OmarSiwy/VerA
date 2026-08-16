@@ -1,0 +1,18 @@
+// A.6.5 `delay_control ::= # delay_value | # ( mintypmax_expression )`, reached
+// through `procedural_timing_control_statement`, is an alternative of the
+// digital A.6.4 `statement`. `analog_statement` derives no `#` at all: analog
+// time advances by the solver's own step control (§5.2), not by a delay written
+// into the statement stream.
+//
+// Suite-wide the only `#N` before this was ch08_scheduling/blocking_timing_unsupported.va,
+// inside `reg` + a digital `initial`, so the analog position was untested.
+//
+// See 32_fork_in_analog_rejected.va for why this is a separate file.
+//
+//! lrm A.6.4
+//! lrm A.6.5
+//! lrm 5.2
+//! reject E0209
+module annex_a_delay_in_analog(p); inout p; electrical p; real x;
+analog begin #5 x = 1.0; I(p) <+ x * V(p); end
+endmodule

@@ -1,12 +1,29 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §6.5.2.2: "A port can be declared in both a port type declaration and a port
+// direction declaration. If a port is declared as a vector, the range
+// specification between the two declarations of a port shall be identical."
 //
-// VAMS-6.5.2.2-02  (ch6-hierarchy.html)
-// If a port is declared as a vector, the range specification between the two declarations shall be identical.
+// THIS REJECTION IS CORRECT CONFORMANCE, and this file used to say the opposite.
+// `p` is declared `inout p` — no range, so one bit — and `electrical [3:0] p` —
+// four bits. The two range specifications are not identical, which is the LRM's
+// own error case: the clause's third example, `input [3:0] in; electrical [0:3]
+// in;`, is rejected for exactly this reason ("error, MSB and LSB in the port type
+// declaration does not evaluate to the same value as the port direction
+// declaration"). A conforming compiler diagnoses this source; so does VerA; there
+// is no debt here, so there is no `//! xfail` either.
 //
-//! reject identifier
+// It reaches the verdict by a different road, and that is worth writing down
+// rather than hiding. VerA's parser accepts no range on a port declaration at
+// all, so the `[` in `electrical [3:0] p` is a parse boundary (E0208, "expected
+// an identifier: found `[`") and never becomes a range that could be compared
+// with another. The right diagnostic for the wrong reason: the day ranged port
+// declarations parse, this fixture must keep failing, and it will then be the
+// §6.5.2.2 comparison that fails it, with a different code.
+//
+// Its sibling vector_ports_range_equal.va is the other half of the same clause —
+// the pair the LRM calls VALID — and that one is genuinely blocked.
+//
+//! lrm 6.5.2.2
+//! reject E0208
 module ch6_vector(p);
   inout p; electrical [3:0] p;
   analog begin I(p[0]) <+ V(p[1]); I(p[2]) <+ V(p[3]); end

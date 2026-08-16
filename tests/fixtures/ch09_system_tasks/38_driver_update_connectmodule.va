@@ -1,0 +1,32 @@
+// §9.22.4 driver_update. Table 9-19 marks `@(driver_update)` supported in the
+// DIGITAL context of a connectmodule, and §9.22 paragraph 3 makes a connect
+// module the only place any of this family may be called from: "Driver access
+// functions can only be called from connect modules."
+//
+// So a connectmodule with `always @(driver_update d)` is the one context in
+// which the construct is legal, and a compiler must ACCEPT it. The previous
+// expectation here was `//! reject NoModule` — VerA's phase label for "no
+// ordinary module in this file", not an LRM rule — which demanded a diagnostic
+// against the legal case and cited no clause at all.
+//
+// §9.22.4 in full: "always @(driver_update clock) statement; causes the
+// statement to execute any time a driver of the signal clock is updated. Here,
+// an update is defined as the addition of a new pending value to the driver.
+// This is true whether or not there is a change in the resolved value of the
+// signal."
+//
+// Nothing is asserted. There is no value to write down: the clause defines a
+// TRIGGER, and how often it fires depends on how many drivers the elaborated
+// netlist puts on `d` — a property of the instantiating design, not of this
+// source. Counting the firings here would pin the harness, not the LRM. The
+// positive semantics of §9.22.6 (a real connectmodule, $driver_count == N, the
+// 0..N-1 loop) needs a driven connectmodule instance and has no fixture yet.
+//
+//! lrm 9.22.4
+//! xfail VerA has no connectmodule support at all (the file has no ordinary module, so it stops at NoModule) and so refuses the one context in which @(driver_update) is legal
+connectmodule ch09_driver_update_connectmodule(d, a);
+  input d; output a;
+  logic d;
+  electrical a;
+  always @(driver_update d) $strobe("driver updated");
+endconnectmodule

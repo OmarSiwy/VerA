@@ -8,7 +8,8 @@
 // abstol"), so the parent's abstol is left alone here and the access override
 // is the only defect.
 //
-//! reject DiagnosticsReported
+//! lrm 3.6.1.2
+//! reject E0334
 nature ch3_access_parent; units="V"; access=AccessV; abstol=1u; endnature
 nature ch3_access_child:ch3_access_parent; access=ChangedV; endnature
 module ch3_bad_access; endmodule

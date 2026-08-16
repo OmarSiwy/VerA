@@ -1,15 +1,34 @@
-// LRM 5.10.3.2 above(): "almost identical to the cross() function, except that
-// it also triggers during initialization or dc analysis". Where "cross() will
-// not generate events for non-transient analyses ... the above() function can".
+// LRM 5.10.3.2 above() has exactly two "shall"s, and this fixture is placed on
+// the first of them:
 //
-// At this dc operating point V(c) - 0.5 = 0.9 - 0.5 = +0.4 is positive while the
-// initial state is being solved, so the event fires and the guarded assignment
-// runs: sample takes V(p) = 0.75.
+//   "The above() function can generate an event during initialization. If the
+//    expression is positive at the conclusion of the initial condition analysis
+//    THAT PRECEDES A TRANSIENT ANALYSIS, the above() function SHALL generate an
+//    event."
+//
+// (The second is "During a dc sweep, the above() function shall also generate
+// an event when the expression crosses zero from below" -- a sweep with a
+// crossing, which this is not.)
+//
+// Hence `//! analysis tran` and a two-point walk starting at the origin: the
+// initial condition analysis that precedes it is the normative trigger. A
+// standalone single-point dc operating point, which this file used to declare,
+// matches NEITHER "shall" -- it lands on the permissive "can generate an event
+// during initialization", and a tool that fires above() only where the clause
+// says "shall" is conformant and would fail it. No digit changes.
+//
+// At the initial condition V(c) - 0.5 = 0.9 - 0.5 = +0.4 is positive, so the
+// event fires and the guarded assignment runs: sample takes V(p) = 0.75, at
+// that point and at every later one (the bias is held, so nothing re-arms).
 //
 // Restricting both ways: an implementation that treats above() like cross()
 // leaves sample at the 0.0 LRM 3.5 gives an unassigned real, and one that
 // samples the threshold expression instead of V(p) prints 0.9 or 0.4.
 //
+//! lrm 5.10.3.2
+//! lrm 8.4.7
+//! analysis tran
+//! time 0, 1n
 //! bias V(p) = 0.75, V(c) = 0.9
 `include "check.vh"
 module ch8_above(p, c);

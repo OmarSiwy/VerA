@@ -9,6 +9,7 @@
 // 3 mA the probe must read 3e-3 — and V(out), driven by it, is the same
 // number. A stray division or multiplication by anything but 1.0 moves it.
 //
+//! lrm 6.3.6
 //! sweep flowZ28pZ2cnZ29 = 0.003
 `include "check.vh"
 module ch6_mfactor_flow_probe(p, n, out);

@@ -7,7 +7,15 @@
 // `doubled_gain` 6.0; a backend that constant-folded `2.0 * base_gain` at
 // elaboration time against the default would answer 4.0.
 //
+// §3.4.5 also says a localparam "cannot directly be modified with the defparam
+// statement or by the ordered or named parameter value assignment". The second
+// override below aims 9.0 straight at `doubled_gain`; the derivation from the
+// overridden `base_gain` must win, so the answer is still 6.0. A backend that
+// let an override stick to a localparam answers 9.0.
+//
+//! lrm 3.4.5
 //! param base_gain = 3.0
+//! param doubled_gain = 9.0
 `include "check.vh"
 module ch03_local_parameter(p, n);
     inout p, n;

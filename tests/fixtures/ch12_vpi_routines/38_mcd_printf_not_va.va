@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_mcd_printf
-// EXPECT: error
+//! reject `vpi_mcd_printf`
 module ch12_atomic_mcd_printf(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_mcd_printf(0);

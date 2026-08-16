@@ -1,0 +1,23 @@
+// §2.8: "Identifiers shall be case sensitive." Annex B reserves the LOWERCASE
+// spellings only. That is a two-sided claim, and 02_keyword_case.va tests only
+// the permissive side — that `Analog` and `ANALOG` are usable as ordinary
+// identifiers, distinct from each other.
+//
+// This is the other side: `ANALOG` must not be able to ACT as `analog`. A
+// compiler that folds keyword case to be forgiving still passes 02 (the names
+// are declared, never used as keywords there) and passes every other fixture in
+// this chapter, because nothing else asks an upper-case spelling to do a
+// keyword's job.
+//
+// `ANALOG begin ... end` is an identifier followed by `begin`, which matches no
+// module_item production in A.1.4; a conforming compiler must reject it.
+//! lrm B
+//! lrm 2.8
+//! reject E0205
+//! reject ANALOG
+module annex_b_uppercase_keyword_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    real x;
+    ANALOG begin x = 1.0; end
+endmodule

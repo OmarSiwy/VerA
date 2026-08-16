@@ -1,30 +1,41 @@
-// §5.6.7.1 multiple indirect contributions: a set of indirect statements is a
-// SYSTEM of equations the solver satisfies simultaneously, which is why the LRM
-// can pair the targets with the equations in any order "without affecting the
-// results".
+// §5.6.7.1 multiple indirect contributions: "For multiple indirect contribution
+// statements, the targets frequently can be paired with any equation." The
+// clause's example is three equations across three DISTINCT targets, written
+// three times with the pairings permuted, "without affecting the results".
 //
-// Both statements here name the same branch, so the system is
-//     V(c1) == V(p,n)   and   V(c2) == 2*V(p,n)
-// in the single unknown V(p,n). It is consistent only where V(c2) == 2*V(c1),
-// and there V(p,n) = V(c1). The testbench declares that point: V(c1) = 0.5,
-// V(c2) = 1.0, V(p) = 0.5, V(n) = 0, giving V(p,n) = 0.5, so both residuals and
-// the consistency condition 2*V(c1) - V(c2) are exactly zero. Every digit is
-// read off the two equations.
+// That is the point being pinned, so the shape has to match: three unknowns,
+// three independent equations, and the pairing deliberately rotated one place
+// off the obvious one. This file used to aim two equations at a single branch,
+// which is an over-determined system in one unknown — a thing §5.6.7.1 never
+// defines, and whose "solution" was just the declared bias read back.
 //
-//! bias V(c1) = 0.5
-//! bias V(c2) = 1.0
-//! bias V(p) = 0.5
-//! bias V(n) = 0.0
+// The system, with a unique solution because its matrix is nonsingular
+// (determinant 4):
+//
+//     2*V(x) +   V(y)            == 1.25
+//                V(y) + 2*V(z)   == 0.5
+//       V(x) +          V(z)     == 0.625
+//
+//   =>  V(x) = 0.5, V(y) = 0.25, V(z) = 0.125
+//
+// Every coefficient and every solution component is a negative power of two, so
+// the arithmetic is exact and the three answers cannot be reached by rounding.
+// Nothing in the operating point declares them: the three nets are free, and the
+// only thing that can put 0.5 on V(x) is the solver honouring the constraints.
+// That is what makes this a §5.6.7 test rather than a restatement of `//! bias`.
+//
+//! lrm 5.6.7.1
+//! lrm 5.6.7
+//! xfail VerA's generated testbench forces every unknown to its declared operating point instead of solving, so an indirect contribution's target cannot move: V(x), V(y) and V(z) all read 0
 `include "check.vh"
-module ch5_multiple_indirect(p, n, c1, c2);
-  inout p, n, c1, c2; electrical p, n, c1, c2;
+module ch5_multiple_indirect(x, y, z);
+  inout x, y, z; electrical x, y, z;
   analog begin
-    `CHECK("first constraint V(c1) == V(p,n)", V(c1) - V(p, n), 0.0, 1e-15);
-    `CHECK("second constraint V(c2) == 2*V(p,n) at the same point",
-           V(c2) - 2.0 * V(p, n), 0.0, 1e-15);
-    `CHECKX("one branch under both equations forces V(c2) == 2*V(c1)",
-            2.0 * V(c1) - V(c2), 0.0);
-    V(p, n) : V(c1) == V(p, n);
-    V(p, n) : V(c2) == 2.0 * V(p, n);
+    `CHECKX("the system's unique solution for x", V(x), 0.5);
+    `CHECKX("its unique solution for y", V(y), 0.25);
+    `CHECKX("its unique solution for z", V(z), 0.125);
+    V(y) : 2.0*V(x) + V(y)          == 1.25;
+    V(z) :        V(y) + 2.0*V(z)   == 0.5;
+    V(x) : V(x)        +     V(z)   == 0.625;
   end
 endmodule

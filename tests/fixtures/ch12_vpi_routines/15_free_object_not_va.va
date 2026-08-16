@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_free_object
-// EXPECT: error
+//! reject `vpi_free_object`
 module ch12_atomic_free_object(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_free_object(0);

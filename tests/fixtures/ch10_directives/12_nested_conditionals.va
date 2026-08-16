@@ -7,6 +7,7 @@
 // 1.0 give three different products, so a mis-paired `else or `endif — the
 // failure mode nesting has — shows up as a different number, not as silence.
 //
+//! lrm 10.1
 //! bias V(p) = 0.5
 `define OUTER_ON
 `define INNER_ON

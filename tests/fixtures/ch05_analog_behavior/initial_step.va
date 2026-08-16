@@ -1,8 +1,10 @@
 // LRM 5.10.2: `initial_step` generates a global event on the FIRST point of an
 // analysis, and with no analysis list it is active in every analysis. This
 // testbench runs one dc point, which is that first point, so the guarded
-// assignment runs and x = 1.0. LRM 3.3.1 starts a real at 0, so an
+// assignment runs and x = 1.0. LRM 3.2 starts a real at 0, so an
 // `initial_step` that never fired would leave 0.0 — the two are distinguishable.
+//
+//! lrm 5.10.2
 `include "check.vh"
 module ch5_initial_step(p);
   inout p; electrical p; real x;

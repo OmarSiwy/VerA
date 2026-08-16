@@ -2,12 +2,20 @@
 // §9.10 `$temperature` is in kelvin, so `$temperature - `P_CELSIUS0` is that
 // same operating point in Celsius: 350 K - 273.15 = 76.85 C.
 //
+// The macro comes from the implementation's constants.vams, which the engine
+// prepends; nothing here `defines it, so a compiler that ships no annex D file
+// fails at the first `P_CELSIUS0. 273.15 is exact in binary64, hence CHECKX on
+// the constant itself; the subtraction is not — 350.0 - 273.15 evaluates to
+// 76.85000000000002, which is 2.8e-14 from the decimal 76.85 and so inside the
+// 1e-12 absolute tolerance.
+//
+//! lrm D.2
 //! temp 350
 `include "check.vh"
-`define P_CELSIUS0 273.15
 module annex_d_celsius(p);
   inout p; electrical p;
   analog begin
+    `CHECKX("P_CELSIUS0 is zero Celsius in kelvin", `P_CELSIUS0, 273.15);
     `CHECK("350 K is 76.85 C via P_CELSIUS0", $temperature - `P_CELSIUS0, 76.85, 1e-12);
     I(p) <+ V(p) - `P_CELSIUS0;
   end

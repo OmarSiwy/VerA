@@ -1,0 +1,23 @@
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." The nonblocking assignment `<=` is the digital procedural
+// assignment of §5.6; inside an analog block §5.6/A.6.4 give exactly two
+// assignment forms — `=` for a variable and `<+` for a branch contribution.
+//
+// ch08_scheduling/nonblocking_unsupported.va writes `always @(source) target <=
+// source;`, so what it actually rejects is `always`. This fixture puts `<=` in
+// an `analog` block, where nothing else is out of subset and the diagnostic can
+// only be about the operator.
+//
+//! lrm C.7
+//! lrm 5.6
+//! reject E0214
+module annex_c_nonblocking_assign_rejected(p);
+    inout p;
+    electrical p;
+    integer state;
+
+    analog begin
+        state <= 1;
+        I(p) <+ V(p);
+    end
+endmodule

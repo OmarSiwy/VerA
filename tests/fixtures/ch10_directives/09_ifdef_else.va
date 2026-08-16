@@ -6,6 +6,7 @@
 // produce: 4.0*0.5 = 2.0 at V(p,n) = 0.5. The `else arm would print got = 0.5
 // against want = 2.0 and fail, so the digit pins which arm survived.
 //
+//! lrm 10.1
 //! bias V(p) = 0.5
 `define ENABLE_GAIN
 `include "check.vh"

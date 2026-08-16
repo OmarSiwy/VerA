@@ -5,6 +5,7 @@
 // V(p) = 0.5 the innermost block sees 1.5. A nested block hoisted out of order
 // would leave 0.5 (the assignment lost) or 1.0 (the addition lost).
 //
+//! lrm 5.3.1
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch5_nested_blocks(p);

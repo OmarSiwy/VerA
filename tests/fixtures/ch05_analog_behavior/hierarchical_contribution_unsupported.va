@@ -1,7 +1,46 @@
-//! reject module instantiation is not supported
-// EXPECT: error -- contributions through instance hierarchy need elaboration.
+// §5.6.8.1 hierarchical direct contributions to nets: a contribution statement
+// may name nets in other module instances, and "a new unnamed branch is created
+// in the module containing the direct contribution statements".
+//
+// This is the clause's source_driver example. As in §5.5.4 there is no
+// instantiation anywhere in it — the hierarchical names resolve at elaboration
+// — so a fixture that adds a child instance to reach a diagnostic is asserting
+// a §6.4 rule instead of this one.
+//
+// The nets in the other instance belong to a design this file does not
+// describe, so their solved values are not something a fixture can write down.
+// What §5.6.8.1 fixes and this pins is that the local unnamed branch keeps its
+// own source: V(m) is driven to vref by the first line, and the three
+// hierarchical sources are on other branches (m-to-ground versus
+// m-to-top.drv.y), so none of them may move it.
+//
+// The port `p` is here only because the runner refuses a device with zero
+// terminals (README, CANNOT RUN), which would outrank the xfail and hide the
+// gap. source_driver itself has an empty port list.
+//
+//! lrm 5.6.8.1
+//! xfail VerA has no hierarchical net references: the `.` in `V(top.drv.x) <+ 1.8` dies at E0207 (expected `)`)
+`include "check.vh"
 module ch5_hier_contribution(p);
-  inout p; electrical p;
-  analog I(u.internal) <+ 1m;
-  child u(p);
+  parameter real vref = 1.25;
+  inout p;
+  electrical p, m;
+  analog begin
+    V(m) <+ vref;
+
+    // Creates an unnamed voltage source branch of 1.8 volts between the net
+    // top.drv.x and implicit ground.
+    V(top.drv.x) <+ 1.8;
+
+    // Creates an unnamed voltage source branch of 1.2 volts between nets
+    // top.drv.x and top.drv.y.
+    V(top.drv.x, top.drv.y) <+ 1.2;
+
+    // Creates an unnamed voltage source branch of 0.9 volts between the local
+    // net m and top.drv.y.
+    V(m, top.drv.y) <+ 0.9;
+
+    `CHECK("the local unnamed branch keeps its own source value", V(m), 1.25, 1e-12);
+    I(p) <+ 0.0;
+  end
 endmodule

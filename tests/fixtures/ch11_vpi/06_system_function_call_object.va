@@ -1,7 +1,38 @@
-// ch11 VPI is outside the Verilog-A subset: a VPI-registered system function
-// has no compile-time definition, so it must be refused rather than faked.
-//! reject $fixture_vpi_function
+// §11.6.16 system function call object. Like the system TASK call of 05, a
+// user-defined system function exists only because a C application registered
+// it with `vpi_register_systf` (§11.2.1), so `$fixture_vpi_function` has no
+// compile-time definition here. §2.8.3 says that is not the compiler's call to
+// make: `$` "introduces a language construct which enables development of
+// user-defined system tasks and functions", and those constructs "are not
+// design semantics, but refer to simulator functionality". §12.32 hands the
+// application a compiletf routine precisely so the APPLICATION decides whether
+// a call is acceptable. Clause 11 states no error rule of any kind — an earlier
+// revision of this fixture demanded a rejection; no clause requires one.
+//
+// Nothing is registered, so there is no simulator functionality to invoke and
+// the call has no effect to have; §5.3.1 still runs the enclosing sequential
+// block in order. `seq` pins that: 1 before the call, +2 after, so a compiler
+// that stopped at, reordered around, or swallowed the block tail at an
+// unrecognized system call leaves 1 or 0 instead of 3. The probe is the other
+// half — at V(p)=1.5, V(n)=0.25 the branch potential is 1.5 - 0.25 = 1.25 V on
+// both sides of the call, and both biases are dyadic so equality is exact.
+//
+// The VALUED spelling of a sys func call — one with a return type the language
+// actually declares — is 20, which uses the LRM-defined `$temperature`.
+//
+//! lrm 11.6.16
+//! lrm 2.8.3
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
 module ch11_system_function_call_object(p, n);
   inout p, n; electrical p, n;
-  analog I(p,n) <+ $fixture_vpi_function(V(p,n));
+  integer seq;
+  analog begin
+    seq = 1;
+    $fixture_vpi_function(V(p,n));
+    seq = seq + 2;
+    `CHECKI("the block continues past an unregistered system call", seq, 3);
+    `CHECKX("and the probe is unchanged by it", V(p,n), 1.25);
+    I(p,n) <+ V(p,n);
+  end
 endmodule

@@ -1,0 +1,17 @@
+// §5.7, on analog procedural assignments: "Concatenation expressions cannot be
+// used as part of the analog_expression (assigning to list of variables is not
+// allowed)."
+//
+// A concatenation names an ordered bundle of bits, not a storage location, so
+// there is nothing on the left of the `=` to assign to. procedural_assignments.va
+// is the positive §5.7 fixture and keeps compiling.
+//
+//! lrm 5.7
+//! reject E0317
+module ch5_assignment_concatenation(p);
+  inout p; electrical p; real x, y;
+  analog begin
+    {x, y} = 1.0;
+    I(p) <+ x;
+  end
+endmodule

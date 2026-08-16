@@ -10,8 +10,12 @@
 // order, drop one, or give each its own copy of `acc`, and the number moves.
 //
 // The third contribution also pins §4.5.3: "In DC analysis, ddt() returns
-// zero (0)", and this is the DC operating point.
+// zero (0)", and this is the DC operating point. The clause fixes the value at
+// zero, not near it, so that line is CHECKX — a tolerance would be a slack
+// nothing in the LRM authorizes, and it hides nothing it should hide.
 //
+//! lrm 6.2
+//! lrm 4.5.3
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch6_concat(p);
@@ -27,7 +31,7 @@ module ch6_concat(p);
   end
   analog begin
     `CHECKX("the three analog blocks concatenate in source order", acc, 0.501);
-    `CHECK("ddt() at the dc operating point", ddt(V(p)), 0.0, 1e-30);
+    `CHECKX("ddt() at the dc operating point", ddt(V(p)), 0.0);
     I(p) <+ ddt(V(p));
   end
 endmodule

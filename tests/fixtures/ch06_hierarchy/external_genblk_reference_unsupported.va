@@ -1,12 +1,52 @@
-//! reject expected `)`
-// EXPECT: error -- genblk<n> external names exist only after generate elaboration.
+// §6.6.3, the numbering rule, verbatim: "Each generate construct in a given scope
+// is assigned a number. The number will be 1 for the construct that appears
+// textually first in that scope and will increase by 1 for each subsequent
+// generate construct in that scope. All unnamed generate blocks will be given the
+// name `genblk<n>` where <n> is the number assigned to its enclosing generate
+// construct. If such a name would conflict with an explicitly declared name, then
+// leading zeroes are added in front of the number until the name does not
+// conflict." The clause exists so that "external interfaces can refer to" an
+// unnamed block, and the LRM's own `module top` writes the resulting hierarchical
+// names in its comments — `top.genblk1.a`, `top.genblk02.a`. So the references
+// below are REQUIRED to resolve; this is a run fixture, not the `//! reject` it
+// used to be, and that old directive pinned a stray `expected `)`` from the
+// parser rather than anything in §6.6.3.
+//
+// This is the LRM's worked case reduced to two constructs and given values to
+// read. `genblk2` is declared as a parameter, which is the whole point of the
+// second name: the first unnamed if-generate block is `genblk1`, the second would
+// be `genblk2`, that name is taken, so it becomes `genblk02`. A compiler that
+// numbered by generate BLOCK rather than by generate CONSTRUCT, or that ignored
+// the collision and produced `genblk2`, cannot resolve both names below.
+//
+// `localparam` and not `parameter` inside the blocks: §6.6 forbids a generate
+// block to contain parameter declarations, and Syntax 6-8's
+// `module_or_generate_item` admits `local_parameter_declaration` and no
+// `parameter_declaration`.
+//
+// Values: tag 1.0 and 2.0, and at V(p) = 0.25 the stamp is (1.0+2.0)*0.25 = 0.75,
+// all binary-exact. Swap the two names and the sum is unchanged but each CHECKX
+// moves, which is why both are asserted separately.
+//
+//! lrm 6.6.3
+//! lrm 6.7
+//! bias V(p) = 0.25
+//! xfail VerA's parser has no hierarchical_identifier and does not name unnamed generate blocks: the `.` in `genblk1.tag` dies at E0207 "unexpected token: found `.`"
+`include "check.vh"
 module ch6_external_genblk_reference(p);
   inout p; electrical p;
-  parameter integer enabled = 1;
+  parameter integer genblk2 = 0;
   generate
-    if (enabled) begin
-      electrical internal;
+    if (1) begin
+      localparam real tag = 1.0;
+    end
+    if (1) begin
+      localparam real tag = 2.0;
     end
   endgenerate
-  analog I(p) <+ V(genblk1.internal);
+  analog begin
+    `CHECKX("the textually first generate construct in the scope is genblk1", genblk1.tag, 1.0);
+    `CHECKX("the second collides with the declared genblk2, so it is genblk02", genblk02.tag, 2.0);
+    I(p) <+ (genblk1.tag + genblk02.tag) * V(p);
+  end
 endmodule

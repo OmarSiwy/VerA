@@ -7,6 +7,9 @@
 // second adds 2, so the second block sees 3. Concatenated the other way round —
 // or with the first block dropped — the second block would see 0 + 2 = 2, and
 // with the second block's own statement dropped it would see 1.
+//
+//! lrm 5.2
+//! lrm 6.2
 `include "check.vh"
 module ch5_multiple_blocks(p, n);
   inout p, n; electrical p, n; integer order;

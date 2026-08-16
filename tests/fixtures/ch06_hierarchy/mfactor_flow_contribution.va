@@ -8,6 +8,7 @@
 // that current is 0.25/1000 = 2.5e-4 A. Both checks are exact: 0.5, 0.25 and
 // 1000 are binary-exact and the quotient is correctly rounded.
 //
+//! lrm 6.3.6
 //! bias V(p) = 0.5, V(n) = 0.25
 `include "check.vh"
 module ch6_mfactor_flow_contribution(p, n);

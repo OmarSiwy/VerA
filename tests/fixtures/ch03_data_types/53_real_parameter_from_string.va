@@ -1,0 +1,28 @@
+// §3.4.1: "No conversion shall be applied for strings; it shall be an error ...
+// to assign a string value to a real parameter, whether that parameter was
+// declared as real or had its type derived from the type of the value of the
+// constant expression."
+//
+// This file is the declared-real half: `parameter real gain = "hi"`. It is the
+// mirror of 53_string_parameter_from_numeric.va and a separate file because the
+// two directions are separate checks — a compiler that coerces everything to
+// real passes the string-parameter case and fails this one.
+//
+// The derived-type half of the same sentence is not testable here: it needs an
+// override that supplies a string to a parameter whose type was derived as real,
+// and the harness's `//! param` binding takes a number, so there is no way to
+// present that override to the front end. It is the one clause of §3.4.1 this
+// chapter leaves unheld.
+//
+//! lrm 3.4.1
+//! reject DiagnosticsReported
+//! xfail VerA accepts a string literal as the initializer of a `parameter real`; there is no string/numeric parameter type check in lower.zig
+module ch3_real_parameter_from_string(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = "hi";
+
+    analog begin
+        I(p, n) <+ gain * V(p, n);
+    end
+endmodule

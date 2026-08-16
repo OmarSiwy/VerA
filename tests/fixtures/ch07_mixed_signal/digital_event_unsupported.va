@@ -1,15 +1,16 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §7.3.6.2 digital event appearing in an analog event control: when the event
+// occurs in the digital domain, "the statements under the event control shall
+// be executed in the analog domain". `posedge d` is that digital event.
 //
-// VAMS-7.3.6.2-01  (ch7-mixed-signal.html)
-// When it is determined the event has occurred in the digital domain, the statements under the event control shall be executed in the analog domain at t
+// C.7 removes it from this dialect — "No digital behavior or events are
+// supported in Verilog-A" — so refusing `posedge` inside `@()` is conformance,
+// not debt. (E0704, "posedge/negedge is digital-only", is the code that names
+// the rule; the parser gets there first and reports the malformed event
+// expression, which is why E0209 is pinned as well.)
 //
-// annex C: posedge/negedge digital event controls are outside Verilog-A.
+//! lrm 7.3.6.2
+//! lrm C.7
 //! reject E0209
-//! reject posedge
-// EXPECT: error -- posedge is a digital event expression.
 module ch7_digital_event(p);
   inout p; electrical p; integer d; real held;
   analog begin

@@ -1,0 +1,25 @@
+// §9.13: "Verilog-AMS HDL extends the probabilistic distribution functions so
+// that they are supported in the analog context." Table 9-10 lists all 17 names
+// and every row reads `Yes  Yes` — digital context AND analog context. So this
+// file must COMPILE and run green; a compiler that refuses the call is the one
+// that is wrong, which is why the expectation is a run and not a reject.
+//
+// The seed "may be omitted, in which case the simulator picks a seed", so
+// repeatability is NOT claimable here and is not asserted. What survives is the
+// printed example of §9.13.1: "Where b > 0, the expression ($random % b) gives
+// a number in the following range: [(-b+1) : (b-1)]" — for b = 60, -59..59.
+// That holds for whatever seed the simulator picked.
+//
+//! lrm 9.13.1
+//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
+`include "check.vh"
+module ch09_random_no_seed(p, n);
+  inout p, n; electrical p, n;
+  integer a;
+  analog begin
+    a = $random;
+    `CHECKI("§9.13.1 example: $random % 60 lands in [-59:59]",
+            (a % 60 >= -59) && (a % 60 <= 59), 1);
+    I(p,n) <+ V(p,n) + a;
+  end
+endmodule

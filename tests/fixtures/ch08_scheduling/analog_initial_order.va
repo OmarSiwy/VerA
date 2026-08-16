@@ -8,6 +8,7 @@
 // the two readings differ: at V(p) = 0.4 the contribution is 3.0 * 0.4 = 1.2 A,
 // while a block that ran before `analog initial` would contribute 0.
 //
+//! lrm 8.2
 //! bias V(p) = 0.4
 `include "check.vh"
 module ch8_initial(p);

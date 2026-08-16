@@ -1,5 +1,6 @@
 // annex C: `reg`, the digital `initial` block and procedural force/release
 // are outside Verilog-A.
+//! lrm C.7
 //! reject E0205
 //! reject reg
 //! reject initial

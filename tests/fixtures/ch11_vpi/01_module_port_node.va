@@ -12,7 +12,7 @@ module ch11_module_port_node(p, n);
   inout p, n;
   electrical p, n;
   analog begin
-    `CHECK("each header port binds to its own node", V(p, n), 0.5, 1e-15);
+    `CHECKX("each header port binds to its own node", V(p, n), 0.5);
     I(p,n) <+ V(p,n);
   end
 endmodule

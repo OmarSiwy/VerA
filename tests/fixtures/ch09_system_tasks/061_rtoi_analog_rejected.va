@@ -1,0 +1,30 @@
+// §9.11 / Table 9-8: the conversion extension is TWO functions, not four.
+// §9.11 reads, in full: "Verilog AMS HDL extends the conversion functions
+// defined in IEEE Std 1364-2005 Verilog HDL so that $bitstoreal and
+// $realtobits can be used in the analog context." Table 9-8 spells out the
+// consequence for the rest of the family:
+//
+//     $bitstoreal   digital Yes   analog Yes
+//     $realtobits   digital Yes   analog Yes
+//     $itor         digital Yes   analog No
+//     $rtoi         digital Yes   analog No
+//     $signed       digital Yes   analog No
+//     $unsigned     digital Yes   analog No
+//
+// So $rtoi in an `analog` block is not a value with a wrong answer — it is not
+// a legal call site at all, and there is nothing to write a `want` for. The
+// call site IS the whole test. (IEEE 1364 §17.8 truncation semantics are real
+// but purely digital-context, and this suite compiles one flat analog device,
+// so they have no home here.)
+//
+//! lrm 9.11
+//! reject analog context
+//! xfail VerA has no Table 9-8 analog-context check; lower.zig lowers $rtoi like any other math call and codegen emits a truncation
+module ch09_atomic_rtoi_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  integer x;
+  analog begin
+    x = $rtoi(1.5);
+    I(p,n) <+ V(p,n) + x;
+  end
+endmodule

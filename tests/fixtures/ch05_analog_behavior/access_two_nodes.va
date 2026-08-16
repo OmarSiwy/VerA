@@ -3,6 +3,7 @@
 // n1 to n2)". At V(p)=0.9 and V(n)=0.25 that difference is 0.9 - 0.25 = 0.65 V;
 // naming the nets the other way round reverses the branch, giving -0.65 V.
 //
+//! lrm 5.4.1
 //! bias V(p) = 0.9, V(n) = 0.25
 `include "check.vh"
 module ch5_access_two(p, n);

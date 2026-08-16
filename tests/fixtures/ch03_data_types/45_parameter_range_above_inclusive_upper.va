@@ -1,0 +1,23 @@
+// §3.4.2, on its own `gain` example: "the default value for gain is 1 and it is
+// allowed to acquire values within the range of 1 <= gain <= 1000." 2000 is
+// above that closed upper bound, so the override must be diagnosed. The bound
+// here is FINITE, unlike `[0:inf)` in the siblings — an implementation that only
+// checked lower bounds, or that treated every upper bound as infinite, passes
+// every other file in this family and fails this one.
+//
+// No code is pinned: VerA never consults the range. §3.4.2 puts the error at
+// simulation time and the reject side of this suite reads compile-time
+// diagnostics only.
+//
+//! param gain = 2000
+//! lrm 3.4.2
+//! reject DiagnosticsReported
+//! xfail VerA does not range-check a parameter override: `//! param gain = 2000` is written straight into the model card with no comparison against the declared `from [1:1000]`
+`include "check.vh"
+module ch03_parameter_range_above_inclusive_upper(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = 1 from [1:1000];
+
+    analog I(p, n) <+ gain * V(p, n);
+endmodule

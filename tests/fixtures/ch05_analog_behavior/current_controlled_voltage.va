@@ -10,6 +10,7 @@
 // (Z28 `(`, Z2c `,`, Z29 `)`), which is what tb.zig's `ix()` looks up. `sweep`
 // rather than `bias` because `bias` splits its line on commas.
 //
+//! lrm 5.4.2
 //! bias V(op) = 0.1
 //! sweep flowZ28cpZ2ccnZ29 = 2m
 `include "check.vh"

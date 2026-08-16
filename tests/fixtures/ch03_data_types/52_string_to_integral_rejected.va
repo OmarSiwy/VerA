@@ -1,0 +1,28 @@
+// §3.3: "A string literal can be assigned to a string or an integral type. ...
+// A string or a string literal can be assigned directly to a string variable.
+// A string cannot be assigned to an integral type."
+//
+// The distinction is literal-versus-variable and it is easy to get backwards.
+// `integer code = "A";` is a string LITERAL into an integral type and is legal
+// (73_string_literal_to_integral.va asserts what it produces); `code = label;`
+// is a string VARIABLE into the same integral type and is the error. Both lines
+// are in this file, so a compiler that rejected string-to-integer wholesale
+// fails on the legal one instead of passing for the wrong reason.
+//
+// The pinned substring is only the phase label: VerA has no diagnostic for this
+// rule at all today, so a code would pin the wrong one.
+//
+//! lrm 3.3
+//! reject DiagnosticsReported
+//! xfail VerA assigns a string variable into an `integer` without complaint; there is no string-to-integral assignment check in lower.zig
+module ch3_string_to_integral(p, n);
+    inout p, n;
+    electrical p, n;
+    string label = "hi";
+    integer code = "A";
+
+    analog begin
+        code = label;
+        I(p, n) <+ code * V(p, n);
+    end
+endmodule

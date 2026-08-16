@@ -4,6 +4,8 @@
 // `((1.0 + 2.0) * 2.0)` = 6.0; a preprocessor that dropped the parameter's
 // parentheses would produce `1.0 + 2.0 * 2.0` = 5.0, which is why the argument
 // here is a sum and not a single number.
+//! lrm 2.8.4
+//! lrm 10.3
 `include "check.vh"
 `define CH02_GAIN(value) ((value) * 2.0)
 module ch02_compiler_directive_macro(p, n);

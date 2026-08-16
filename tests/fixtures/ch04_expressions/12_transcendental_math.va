@@ -10,6 +10,7 @@
 // They hold at every x, so they are claims about the functions rather than
 // about this operating point.
 //
+//! lrm 4.3.2
 //! bias V(p) = 1
 //! bias V(n) = 0
 //! print none
@@ -43,11 +44,17 @@ module ch04_transcendental_math(p, n);
         `CHECK("cosh^2 - sinh^2 == 1", cosh(x)*cosh(x) - sinh(x)*sinh(x), 1.0, 1e-15);
         `CHECK("asin(x) + acos(x) == pi/2", asin(x) + acos(x), 1.5707963267948966, 1e-15);
         // Table 4-15 defines atan2(y,x) as the arc-tangent of y/x, so with
-        // x = 1 it must agree with atan.
-        `CHECK("atan2(x, 1) == atan(x)", atan2(x, 1.0) - atan(x), 0.0, 1e-16);
+        // x = 1 it must agree with atan. The tolerance is 1e-15 — about 18 ulp
+        // of atan(x) = 0.36384332848986, whose ulp is 5.55e-17. Table 4-15
+        // names atan2 and atan as two SEPARATE C entry points, and neither it
+        // nor C requires them to agree bit for bit; glibc happens to return an
+        // exact 0.0 for this difference today. The previous 1e-16 was 1.8 ulp,
+        // which a different libm would fail for a reason that is not a bug.
+        `CHECK("atan2(x, 1) == atan(x)", atan2(x, 1.0) - atan(x), 0.0, 1e-15);
 
-        // All fourteen rows summed, left to right in source order.
-        `CHECKR("the whole table summed", value, 8.51602305493742, 1e-14);
+        // All fourteen rows summed, left to right in source order. The double
+        // is 8.516023054937422; the last digit is part of the value, not noise.
+        `CHECKR("the whole table summed", value, 8.516023054937422, 1e-14);
 
         I(p, n) <+ value;
     end

@@ -1,5 +1,28 @@
-// LRM 4.7.1: an analog function body may reference only its own arguments,
-// its locals and module-level parameters -- never a module-level variable.
+// LRM 4.7.1, verbatim: an analog user-defined function "shall only reference
+// locally-defined variables, variables passed as arguments, locally-defined
+// parameters and module-level parameters". A module-level VARIABLE is on none
+// of those four lists, so `outer` is out of scope inside `nonlocal` even though
+// it is perfectly visible one nesting level out.
+//
+// The observable consequence is a scope-lookup failure, and that is what the
+// expectation pins: E0314 "unknown identifier" naming `outer`. VerA has no
+// code specific to the 4.7.1 restriction, so the fixture cannot demand one —
+// but the substring `outer` keeps it from passing on any unrelated unknown
+// identifier, and the identifier being unknown IS the rule taking effect.
+//
+//! lrm 4.7.1
 //! reject E0314
 //! reject outer
-module ch4_fn_nonlocal(p); inout p; electrical p; real outer; analog function real nonlocal; input x; real x; nonlocal=x+outer; endfunction analog I(p)<+nonlocal(V(p)); endmodule
+module ch04_function_nonlocal_variable(p, n);
+    inout p, n;
+    electrical p, n;
+    real outer;
+
+    analog function real nonlocal;
+        input x;
+        real x;
+        nonlocal = x + outer;
+    endfunction
+
+    analog I(p, n) <+ nonlocal(V(p, n));
+endmodule

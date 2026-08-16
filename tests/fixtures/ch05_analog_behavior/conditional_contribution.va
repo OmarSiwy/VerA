@@ -4,6 +4,8 @@
 // an integer 1 — and the then-arm contributes V(p) = 0.4 A rather than the
 // else-arm's -0.4 A. A guard lowered as `>` would read 0 here.
 //
+//! lrm 5.8.2
+//! lrm 5.8.4
 //! bias V(c) = 0.0, V(p) = 0.4
 `include "check.vh"
 module ch5_conditional(p, c);

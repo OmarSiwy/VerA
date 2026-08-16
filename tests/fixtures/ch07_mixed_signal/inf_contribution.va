@@ -1,24 +1,27 @@
 // §7.3.2.1 special floating point values: "Floating point arithmetic can
-// produce special values representing plus and minus infinity ... While use of
-// these special numbers in digital expressions is not an error, it is illegal
-// to assign these values to a branch through contribution in the analog
-// context."
+// produce special values representing plus and minus infinity and Not-a-Number
+// (NaN) ... While use of these special numbers in digital expressions is not an
+// error, it is illegal to assign these values to a branch through contribution
+// in the analog context."
 //
-// The contribution below is the illegal half, and VerA does not yet diagnose
-// it — that gap is not something the fixture can assert, since a `//! reject`
-// here would only record an expectation the compiler does not meet.
+// The contribution below is that illegal form and nothing else: `inf` reaches a
+// branch through `<+`. VerA accepts it — it emits only W0650 ("unit is not
+// provably finite") and stamps the value — so the rule is unmet, not unstated,
+// and the fixture is marked accordingly rather than softened.
 //
-// What IS assertable is the value itself. `inf` must be IEEE 754 +infinity and
-// not some large finite stand-in, so it compares greater than the largest
-// finite double, 2^1024 - 2^971 = 1.7976931348623157e308. A tool that folded
-// `inf` to that maximum, or to zero, fails this line.
+// There is deliberately no run-side assertion left here. `inf` is a reserved
+// word with exactly one grammar position: annex A gives
+// `value_range_expression ::= constant_expression | -inf | inf`, and it is
+// absent from the A.8.4 `primary` list this very chapter reprints as Syntax
+// 7-1. So `inf` cannot legally appear in an expression at all, and a guard like
+// `inf > 1.7976931348623157e308` would put a second non-conformance in the file
+// to stand in for the first. If a DBL_MAX bound is ever wanted here, write the
+// literal, not the keyword.
 //
-`include "check.vh"
-module ch7_infinity_guard(p);
+//! lrm 7.3.2.1
+//! reject contribution of an infinite value
+//! xfail VerA does not diagnose an infinite contribution; `I(p) <+ inf` yields only W0650
+module ch7_infinity_contribution(p);
   inout p; electrical p;
-  analog begin
-    `CHECKI("inf is +infinity, above every finite double", (inf > 1.7976931348623157e308), 1);
-    // The LRM forbids this at runtime; the snapshot records current codegen.
-    I(p) <+ inf + 0.0*V(p);
-  end
+  analog I(p) <+ inf + 0.0*V(p);
 endmodule

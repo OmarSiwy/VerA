@@ -1,5 +1,15 @@
-//! reject module item
-// EXPECT: error
+// LRM 2.4: "Block comments shall not be nested." So the comment below ends at
+// the FIRST */, and `still_outer */` is left behind as source text where a
+// module item is expected. That leftover is the observable consequence of the
+// no-nesting rule, and it is what must be diagnosed: a compiler that nested
+// comments would swallow the whole line and accept the module.
+//
+// E0205 (`unsupported module item`) is a generic code -- VerA has no
+// nested-comment-specific diagnostic, because per 2.4 there is no such
+// construct to name. It is still the right pin: it is stable, and it fires
+// exactly where the non-nesting rule leaves the trailing tokens.
+//! lrm 2.4
+//! reject E0205
 module ch02_nested_comment_rejected;
     /* outer /* nested */ still_outer */
 endmodule

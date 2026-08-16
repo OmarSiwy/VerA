@@ -1,0 +1,72 @@
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// The built-in mathematical functions of §4.3.1 and §4.3.2. A chapter 4 fixture
+// CALLS `sin(x)`, which is a different claim: it shows the name resolves to the
+// function, not that the name is unavailable for a variable. Only `sin` was
+// pinned anywhere, and only under an explicit `begin_keywords set.
+//
+// `expm1` and `ln1p` are in the Table B.1 of this repo's Annex B but not in the
+// 2.4.0 PDF table; see 20_reserved_2023_additions.va.
+//
+// This is a reservedness census, not a feature test: one declaration per line so
+// the parser resynchronises at each `;` and reports every spelling separately,
+// and one `//! reject` line per spelling so each keyword is proved individually
+// rather than the file passing on whichever token the parser tripped over first.
+//! lrm B
+//! reject E0208
+//! reject abs
+//! reject acos
+//! reject acosh
+//! reject asin
+//! reject asinh
+//! reject atan
+//! reject atan2
+//! reject atanh
+//! reject ceil
+//! reject cos
+//! reject cosh
+//! reject exp
+//! reject expm1
+//! reject floor
+//! reject hypot
+//! reject ln
+//! reject ln1p
+//! reject log
+//! reject max
+//! reject min
+//! reject pow
+//! reject sin
+//! reject sinh
+//! reject sqrt
+//! reject tan
+//! reject tanh
+module annex_b_reserved_math_functions;
+    real abs;
+    real acos;
+    real acosh;
+    real asin;
+    real asinh;
+    real atan;
+    real atan2;
+    real atanh;
+    real ceil;
+    real cos;
+    real cosh;
+    real exp;
+    real expm1;
+    real floor;
+    real hypot;
+    real ln;
+    real ln1p;
+    real log;
+    real max;
+    real min;
+    real pow;
+    real sin;
+    real sinh;
+    real sqrt;
+    real tan;
+    real tanh;
+endmodule

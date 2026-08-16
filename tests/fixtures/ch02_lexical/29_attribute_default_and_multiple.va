@@ -5,6 +5,7 @@
 // assertable here is INERTNESS: prefixing the module with three attr_specs —
 // one valueless, one =1, one =0 — must leave the module's behaviour untouched.
 // V(p) is held at 0.375 (exact in binary), so V(p)*8 is exactly 3.
+//! lrm 2.9
 `include "check.vh"
 //! bias V(p) = 0.375
 (* optimize_power, full_case=1, parallel_case=0 *) module ch2_attr_defaults(p); inout p; electrical p; analog begin I(p)<+V(p);

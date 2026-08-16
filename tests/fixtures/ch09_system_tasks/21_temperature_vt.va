@@ -1,31 +1,40 @@
-// §9.10 environment parameters. `$temperature` is the ambient temperature in
-// KELVIN, and `$vt` is the thermal voltage kT/q at that temperature — so the
-// value is physics, not a simulator preference, and can be written down:
+// §9.15 Analog Kernel Parameter System Functions. `$temperature` is the
+// ambient temperature in KELVIN — that one IS fixed by the LRM and is checked
+// exactly. `$vt` "returns the thermal voltage (kT/q) at the given temperature",
+// and §9.15 mandates NO value for k or q, so the digits depend on which
+// constant set the tool picked.
 //
-//   k/q = 1.380649e-23 / 1.602176634e-19  = 8.6173333e-5 V/K  (CODATA 2018)
-//   k/q = 1.3806488e-23 / 1.602176565e-19 = 8.6173324e-5 V/K  (CODATA 2010,
-//         which is what Verilog-AMS `constants.vams` still carries)
+// Annex D.2 offers four sets, selected by `PHYSICAL_CONSTANTS_SPICE / _OLD /
+// _NIST2010, with NIST1998 as the `else fallback taken when no macro is
+// defined. There is no NIST2018 set in the standard header. At 300 K:
 //
-// The two constant sets differ by 1e-7 relative, which is why the thermal
-// voltages are checked with `CHECKR` at 1e-6: tight enough to catch a wrong
-// formula or a Celsius/Kelvin slip, loose enough that revising `P_K`/`P_Q`
-// is not a regression.
+//   SPICE     1.38062e-23   / 1.60219e-19      = 0.025851241113725592 V
+//   OLD       1.3806226e-23 / 1.6021918e-19    = 0.025851260754174377 V
+//   NIST1998  1.3806503e-23 / 1.602176462e-19  = 0.025852026903638286 V  <- default
+//   NIST2010  1.3806488e-23 / 1.602176565e-19  = 0.025851997154882865 V
 //
-//   $vt(300.0)  = 8.61733e-5 * 300.00 = 0.02585200 V
-//   $vt         = $vt($temperature)   = 8.61733e-5 * 300.15 = 0.02586492 V
+// The four spread by 3.04e-5 relative, so the literals below are the NIST1998
+// default at full precision and the tolerance is rtol 1e-4: every conforming
+// choice of constants passes, four significant figures are still pinned, and a
+// wrong formula or a Celsius/Kelvin slip (300.15 vs 27.0 -> 40% off) still
+// fails. rtol 1e-6 would fail the LRM's OWN default set by 1.04x.
+//
+//   $vt(300.0)  = 0.025852026903638286 V
+//   $vt         = $vt($temperature) at 300.15 K = 0.025864952917090102 V
 //
 // The 300.15/300 ratio between the two is the whole content of "$vt without
 // the optional input temperature argument returns the thermal voltage using
 // $temperature".
 //
+//! lrm 9.15
 //! temp 300.15
 `include "check.vh"
 module ch09_temperature_vt(p, n);
   inout p, n; electrical p, n;
   analog begin
     `CHECK("$temperature is the ambient in kelvin", $temperature, 300.15, 1e-12);
-    `CHECKR("$vt(300.0) is k*300/q", $vt(300.0), 0.02585200, 1e-6);
-    `CHECKR("bare $vt uses $temperature = 300.15 K", $vt, 0.02586492, 1e-6);
+    `CHECKR("$vt(300.0) is k*300/q", $vt(300.0), 0.025852026903638286, 1e-4);
+    `CHECKR("bare $vt uses $temperature = 300.15 K", $vt, 0.025864952917090102, 1e-4);
     I(p,n) <+ $temperature + $vt + $vt(300.0) + 0.0*V(p,n);
   end
 endmodule

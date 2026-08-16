@@ -1,0 +1,43 @@
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// Annex C.16 lists the keywords "not used by Verilog-A" and closes with
+// "NOTE-All keywords of Verilog-AMS HDL are reserved words for Verilog-A": not
+// used is not the same as free, so none of them may serve as an identifier.
+//
+// The file previously declared nine of them in two comma-separated lists and
+// pinned only `connect`. A declarator list does not resynchronise, so that
+// spelled nine keywords and proved one. One declaration per line makes the
+// parser report each spelling separately, and one `//! reject` line per spelling
+// proves each one individually.
+//
+// Table B.1 spells it `resolveto`; the C.16 list in the 2.4.0 PDF spells it
+// `resolvedto`. Table B.1 is the reserved-word list, so this follows Table B.1.
+//
+// The tenth C.16 word, `net_resolution`, is NOT here: VerA does not reserve it,
+// so it would need `//! xfail` on the whole file and turn a nine-keyword proof
+// into a known gap. It has its own fixture, 20_net_resolution_reserved.va.
+//! lrm B
+//! lrm C.16
+//! reject E0208
+//! reject connect
+//! reject connectmodule
+//! reject connectrules
+//! reject driver_update
+//! reject endconnectrules
+//! reject merged
+//! reject resolveto
+//! reject split
+//! reject wreal
+module annex_c_unused_ams_words_rejected;
+    real connect;
+    real connectmodule;
+    real connectrules;
+    real driver_update;
+    real endconnectrules;
+    real merged;
+    real resolveto;
+    real split;
+    real wreal;
+endmodule

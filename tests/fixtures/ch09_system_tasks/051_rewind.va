@@ -1,26 +1,42 @@
-// §9.5.5 states $rewind as an IDENTITY and not as a value: "$rewind is
-// equivalent to $fseek (fd,0,0)". Both set the position to zero bytes from the
-// beginning, both "cancel any $ungetc operations", and both return the same
-// status — 0, or -1 if repositioning errored.
+// §9.5.5 states $rewind twice: as a value — it shares $fseek's return, "if an
+// error occurs repositioning the file, then code is set to -1, otherwise code
+// is set to 0" — and as an IDENTITY, "$rewind is equivalent to $fseek (fd,0,0)".
 //
-// There is no number to write down: whether the status is 0 or -1 depends on
-// whether `fixture.dat` exists in the working directory, which this fixture does
-// not control. What the LRM does pin is that the two spellings agree, so this is
-// a CHECKEQ. It is restricting: a $rewind lowered to something other than a
-// seek-to-zero — a no-op returning success on a dead descriptor, say, or one
-// that reports the new position — disagrees with the $fseek beside it.
+// This fixture writes its own four-byte file "abc\n" and reads the line, so
+// there is a position to undo, and then pins four claims:
 //
-// Ordering is not a factor: both calls leave the file at byte 0, so the second
-// starts from the state the first produced and must still report the same
-// status.
+//   the $ftell BEFORE it ->  4   there was somewhere to come back from
+//   $rewind(fd)          ->  0   the success status
+//   the $ftell after it  ->  0   it really did go back to the beginning
+//   $fseek(fd,0,0)       ->  the same status, by the LRM's own equivalence
+//
+// The first two of those are what make this more than a tautology. Without the
+// before-position, an implementation whose $ftell always answers 0 passes the
+// after-position for free; without the after-position, a $rewind lowered to a
+// no-op that returns success passes. The previous version of this fixture had
+// only the CHECKEQ, on a descriptor from a failed open, where both sides
+// errored and agreed for nothing.
+//
+//! lrm 9.5.5
+//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $rewind is a no-op returning 0 and $ftell cannot observe the position it did not change
 `include "check.vh"
 module ch09_atomic_rewind(p, n);
   inout p, n; electrical p, n;
-  integer fd, code;
+  integer fd, count, code, pos, was; string text;
   analog begin
-    fd = $fopen("fixture.dat", "r");
+    fd = $fopen("ch09_051_rewind.dat", "w");
+    $fwrite(fd, "abc\n");
+    $fclose(fd);
+    fd = $fopen("ch09_051_rewind.dat", "r");
+    count = $fgets(text, fd);
+    was = $ftell(fd);
     code = $rewind(fd);
+    pos = $ftell(fd);
+    `CHECKI("the 4-byte line was read, so the position to undo is byte 4", was, 4);
+    `CHECKI("§9.5.5 $rewind returns a status, and success is 0", code, 0);
+    `CHECKI("§9.5.5 and the position really is back at byte 0", pos, 0);
     `CHECKEQ("§9.5.5: $rewind(fd) is $fseek(fd,0,0)", code, $fseek(fd, 0, 0), 0);
-    I(p,n) <+ V(p,n) + code;
+    $fclose(fd);
+    I(p,n) <+ V(p,n) + code + pos + count + was;
   end
 endmodule

@@ -14,6 +14,14 @@
 // The operating point is nonzero so that a ddx() that merely passed its first
 // argument through would report 0.5 rather than 1.
 //
+// The `else arm carries no §10.5 claim and its label says so: "if and only if
+// all the compact modeling extensions are supported" makes the macro's presence
+// unassertable in either direction, so all that arm can honestly report is
+// which arm the preprocessor selected. A tool that supports every extension and
+// never defines the macro is conforming and lands there.
+//
+//! lrm 10.5
+//! lrm 4.5.6
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch10_predefined_compact_modeling(p, n);
@@ -25,7 +33,7 @@ module ch10_predefined_compact_modeling(p, n);
     `CHECKX("ddx(V(p,n), V(n)) is -1", ddx(V(p,n), V(n)), -1.0);
     I(p,n) <+ ddx(V(p,n), V(p));
 `else
-    `CHECKX("without the extensions the model is the plain resistor", 2.0*V(p,n), 1.0);
+    `CHECKX("__VAMS_COMPACT_MODELING__ is not defined, so the else arm compiled", 2.0*V(p,n), 1.0);
     I(p,n) <+ V(p,n);
 `endif
   end

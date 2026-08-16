@@ -1,0 +1,24 @@
+// §5.10.3.1 on cross(): "The tolerances (time_tol and expr_tol) are specified
+// as a constant_expression and shall be non-negative."
+//
+// A tolerance is a window the kernel narrows the crossing time into; a negative
+// one names an empty window, so the argument is not merely unhelpful but
+// unsatisfiable. -1n is written as a literal so the constant_expression half of
+// the sentence is met and the sign is the only defect — event_cross.va and
+// event_cross_falling.va pass +1n through the same argument position and must
+// keep compiling.
+//
+// No VerA code exists for this, so the expectation is the phase label: the file
+// must not compile at all.
+//
+//! lrm 5.10.3.1
+//! reject DiagnosticsReported
+//! xfail VerA does not range-check cross()'s time_tol/expr_tol arguments; a negative tolerance compiles
+module ch5_cross_tolerance_negative(p);
+  inout p; electrical p; real x;
+  analog begin
+    x = 0.0;
+    @(cross(V(p) - 1.0, +1, -1n)) x = 1.0;
+    I(p) <+ x;
+  end
+endmodule

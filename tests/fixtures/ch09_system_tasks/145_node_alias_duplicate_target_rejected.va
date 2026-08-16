@@ -1,0 +1,34 @@
+// §9.20: "It shall be an error for the hierarchical_reference_string to
+// reference a node that is used as an analog_net_reference in ANOTHER
+// $analog_node_alias or $analog_port_alias() system function call."
+//
+// Aliasing is not a name binding, it is a matrix-position merge: the aliased
+// node "shall refer to the same circuit matrix position" as its target. Chaining
+// two of them — alias A onto something, then alias B onto A — asks for a merge
+// whose result depends on evaluation order, and §9.20 already spends its
+// last-writer rule on a different case ("If a particular node is involved in
+// multiple calls to either system function, then the LAST evaluated call shall
+// take precedence" — the same LEFT argument twice, which is legal). This one,
+// the left argument of one call appearing as the right argument of another, is
+// the case it makes an error instead.
+//
+// Below, `first` is the analog_net_reference of call one, and call two names it
+// as its target.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.20
+//! reject alias
+//! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) and never relates two calls to each other
+module ch09_node_alias_duplicate_target_rejected(p, n);
+  inout p, n; electrical p, n;
+  electrical first, second;
+  integer s1, s2;
+  analog initial begin
+    s1 = $analog_node_alias(first, "$root.top.a");
+    s2 = $analog_node_alias(second, "first");
+  end
+  analog begin
+    I(p,n) <+ V(p,n) + s1 + s2;
+  end
+endmodule

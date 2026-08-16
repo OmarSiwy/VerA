@@ -5,6 +5,9 @@
 // distinct objects. `ANALOG` is assigned LAST, so a compiler that folded case
 // would either reject the second declaration as a duplicate or leave `Analog`
 // holding 2.0. It must read 1.0.
+//
+// This is only the permissive half. 15_uppercase_keyword_rejected.va tests the
+// other: an upper-case spelling must not be able to ACT as its keyword.
 `include "check.vh"
 module Module(p, n);
     inout p, n;

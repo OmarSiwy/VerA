@@ -1,4 +1,4 @@
-// §9.10 `$simparam(param_name [, expression])`: "If param_name is not known,
+// §9.15 `$simparam(param_name [, expression])`: "If param_name is not known,
 // and the optional expression is not supplied, then an error is generated. If
 // the optional expression is supplied, its value is returned if param_name is
 // not known and no error is generated."
@@ -12,6 +12,11 @@
 // The two calls in the contribution below are deliberately NOT checked:
 // Table 9-27 names "gmin" and "scale" but fixes neither's value, so any digits
 // written for them would be a recording of this engine's own defaults.
+//
+// The second sentence quoted above — the unknown name with NO fallback, which
+// is an error — is 147_simparam_unknown_no_fallback_rejected.va.
+//
+//! lrm 9.15
 `include "check.vh"
 module ch09_simparam(p, n);
   inout p, n; electrical p, n;

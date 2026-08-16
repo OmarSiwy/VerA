@@ -2,6 +2,7 @@
 // newlines, and formfeeds." Every separator in the module header below is a
 // FORM FEED (U+000C), so the file only lexes if a formfeed is ordinary white
 // space. The bias holds V(p) at 0.75 (exact in binary), so V(p)*4 is exactly 3.
+//! lrm 2.3
 `include "check.vh"
 //! bias V(p) = 0.75
 modulech2_form_feed(p);inoutp;electricalp;analogbegin

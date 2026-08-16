@@ -1,0 +1,79 @@
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// The analog operators of §4.5, the analog events of §5.10 and the noise and
+// analysis functions of §4.4/§4.6. Chapters 4 and 5 invoke these operators;
+// invoking a name and reserving it are two different rules, and only the second
+// one is Annex B.
+//
+// `absdelta` is obsolete (it survives only in Table B.1), and is included for
+// exactly that reason: an implementation that tracks the operator set rather
+// than the keyword table is the one that drops it.
+//
+// This is a reservedness census, not a feature test: one declaration per line so
+// the parser resynchronises at each `;` and reports every spelling separately,
+// and one `//! reject` line per spelling so each keyword is proved individually
+// rather than the file passing on whichever token the parser tripped over first.
+//! lrm B
+//! reject E0208
+//! reject absdelay
+//! reject absdelta
+//! reject above
+//! reject ac_stim
+//! reject analysis
+//! reject cross
+//! reject ddt
+//! reject ddx
+//! reject flicker_noise
+//! reject idt
+//! reject idtmod
+//! reject laplace_nd
+//! reject laplace_np
+//! reject laplace_zd
+//! reject laplace_zp
+//! reject last_crossing
+//! reject limexp
+//! reject noise_table
+//! reject noise_table_log
+//! reject slew
+//! reject timer
+//! reject transition
+//! reject white_noise
+//! reject zi_nd
+//! reject zi_np
+//! reject zi_zd
+//! reject zi_zp
+//! reject final_step
+//! reject initial_step
+module annex_b_reserved_analog_operators;
+    real absdelay;
+    real absdelta;
+    real above;
+    real ac_stim;
+    real analysis;
+    real cross;
+    real ddt;
+    real ddx;
+    real flicker_noise;
+    real idt;
+    real idtmod;
+    real laplace_nd;
+    real laplace_np;
+    real laplace_zd;
+    real laplace_zp;
+    real last_crossing;
+    real limexp;
+    real noise_table;
+    real noise_table_log;
+    real slew;
+    real timer;
+    real transition;
+    real white_noise;
+    real zi_nd;
+    real zi_np;
+    real zi_zd;
+    real zi_zp;
+    real final_step;
+    real initial_step;
+endmodule

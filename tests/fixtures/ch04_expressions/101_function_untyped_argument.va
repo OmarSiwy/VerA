@@ -1,21 +1,23 @@
-// LRM 4.7.3: "The argument expressions are assigned to the declared inputs,
-// outputs, and inouts in the order of their declaration", and 4.7.2.1 returns
-// the last value assigned to the function-name variable. `untyped` assigns its
-// single input straight to that variable, so the call is the identity on its
-// actual: at the bias below it must be 0.75, not the 0.0 the return variable
-// starts at and not a value read from anywhere else.
+// LRM 4.7.1 bullet list, verbatim: "all formal arguments shall have an
+// associated block item declaration specifying the data type of the argument".
+// `untyped` gives `x` a direction with `input x;` and never a type, so a
+// conforming tool diagnoses this module.
 //
-// 0.75 is a dyadic rational, so the round trip literal -> bias -> V(p) -> formal
-// -> return value is exact in IEEE 754 (3.2) and CHECKX is the right macro.
+// 4.7.1's "if unspecified, the default is real" does NOT rescue it. That
+// sentence is about `analog_function_type`, the FUNCTION's return type — "type
+// can be real, integer, or string; if unspecified, the default is real" — and
+// the bullet list grants no default for a formal, it requires the declaration.
+// The header this file used to carry cited that default for the formal, which
+// is the wrong thing defaulted.
 //
-// NOTE for a reviewer: 4.7.1 requires that "all formal arguments shall have an
-// associated block item declaration specifying the data type of the argument",
-// so `input x;` with no `real x;` is strictly a violation and a conforming tool
-// may reject this module. VerA applies the 4.7.1 default of real; the assertion
-// pins what that default then has to produce.
+// It also carried no `reject` and asserted CHECKX(untyped(V(p)), 0.75) instead.
+// The pass-the-actual-through-the-formal rule it was pinning holds on a
+// properly typed formal, where 28_user_function.va pins it.
 //
-//! bias V(p) = 0.75
-`include "check.vh"
+//! lrm 4.7.1
+//! reject formal
+//! reject data type
+//! xfail VerA silently types an undeclared formal as real, so `input x;` with no `real x;` compiles. No diag code covers the 4.7.1 block-item-declaration requirement
 module ch4_fn_untyped(p);
   inout p;
   electrical p;
@@ -24,7 +26,6 @@ module ch4_fn_untyped(p);
     untyped = x;
   endfunction
   analog begin
-    `CHECKX("untyped formal carries the actual through", untyped(V(p)), 0.75);
     I(p) <+ untyped(V(p));
   end
 endmodule

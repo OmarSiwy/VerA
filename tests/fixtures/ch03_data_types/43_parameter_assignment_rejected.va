@@ -1,0 +1,19 @@
+// §3.4: "Parameters represent constants, hence it is illegal to modify their
+// value at runtime." Annex H says it informatively too — a parameter is "A constant
+// for characterizing the behavior of an instance of a module." A parameter may
+// be overridden at instantiation and may take a value from a constant
+// expression over other parameters, but an analog procedural assignment to one
+// is not a redefinition, it is an assignment to storage that has none.
+//
+// Nothing else in the suite pinned this: E0312 was cited by zero fixtures, so a
+// refactor that dropped the check would have broken nothing.
+//! lrm 3.4
+//! reject E0312
+module ch3_parameter_assignment(p);
+  inout p; electrical p;
+  parameter real gain = 2.0;
+  analog begin
+    gain = 3.0;              // illegal: `gain` is a constant, not a variable
+    I(p) <+ gain*V(p);
+  end
+endmodule

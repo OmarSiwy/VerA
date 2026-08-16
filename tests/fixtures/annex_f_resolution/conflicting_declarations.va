@@ -1,15 +1,28 @@
-//! reject DiagnosticsReported
-// LRM Annex F.2.1, discipline resolution step 3: "More than one conflicting
-// in-context discipline declaration ... for the same hierarchical segment of a
-// signal is an error. In this case, conflicting simply means an attempt to
-// declare more than one discipline regardless of whether the disciplines are
-// compatible or not."  `sig` below is declared both annex_f_a and annex_f_b,
-// so a conforming compiler must diagnose it.  There is no value to CHECK here:
-// the only observable is the diagnostic.
+// LRM Annex F.2.1 / F.2.2, discipline resolution step 3: "More than one
+// conflicting in-context discipline declaration ... for the same hierarchical
+// segment of a signal is an error. In this case, conflicting simply means an
+// attempt to declare more than one discipline regardless of whether the
+// disciplines are compatible or not."  §3.10 says the same from the other side:
+// the two declarations are at the SAME level of precedence (both local, order 2)
+// and "it is not legal to have two different disciplines at the same level of
+// precedence for the same net".
 //
-// KNOWN VerA BUG: VerA accepts this silently (zero diagnostics, exit 0), so
-// this fixture is expected to be RED until a conflicting-discipline diagnostic
-// exists.  Do not "fix" it by deleting the `//! reject` line.
+// This file IS the "compatible or not" half of that sentence: annex_f_a and
+// annex_f_b are both natureless with `domain continuous`, so §3.11.1's Natureless
+// Discipline Rule makes them COMPATIBLE with each other — and step 3 is an error
+// anyway. No second fixture is needed for the compatible case.
+//
+// There is no value to CHECK: the only observable is the diagnostic. The reject
+// substring names the rule rather than the generic `DiagnosticsReported`, to
+// match conflicting_ooc_declarations.va (the other half of the same sentence):
+// VerA emits nothing here today, so a generic substring would XPASS on the first
+// unrelated diagnostic VerA ever learns to emit on this source and the step-3
+// requirement would be quietly lost.
+//
+//! lrm F.2.1
+//! lrm 3.10
+//! reject conflicting discipline declaration
+//! xfail VerA has no conflicting-discipline diagnostic; two declarations for one net are accepted silently (zero diagnostics, exit 0)
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 module annex_f_conflict(sig);

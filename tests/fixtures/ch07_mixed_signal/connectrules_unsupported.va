@@ -1,19 +1,23 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §7.7 connect specification statements. A `connectrules` block names the
+// connect modules a mixed-signal elaborator may auto-insert at a
+// discrete/continuous port boundary (§7.7.1).
 //
-// VAMS-7.2.4-02  (ch7-mixed-signal.html)
-// If an undeclared net segment has multiple compatible disciplines connected to it, a connect statement shall specify which discipline to use during dis
-// VAMS-7.7.1-01  (ch7-mixed-signal.html)
-// The form is connect connect_module_identifier connect_attributes discipline_identifier , discipline_identifier ; where the specified disciplines shall
-// VAMS-7.7.1-02  (ch7-mixed-signal.html)
-// The form is connect connect_module_identifier connect_attributes direction discipline_identifier , direction discipline_identifier ; where the specifi
-// VAMS-7.8-02  (ch7-mixed-signal.html)
-// When two disciplines are specified in a connect statement, one shall be discrete and the other continuous. [needs: `connect` statement parsing + a per
+// C.9 settles the verdict for a Verilog-A compiler: "Clause 7 only applies to
+// Verilog-AMS HDL", and C.16 lists `connect`, `connectrules` and
+// `endconnectrules` among the keywords "not used by Verilog-A". Refusing this
+// is conformance, not debt — but the refusal has to be ABOUT the construct. A
+// module is present below so the file cannot instead be refused for containing
+// no module at all, which would say nothing about connect specifications.
 //
-//! reject NoModule
-// EXPECT: error -- connectrules need post-elaboration insertion.
+//! lrm 7.7
+//! lrm C.9
+//! lrm C.16
+//! reject E0201
+//! reject connectrules
+module ch7_host(p);
+  inout p; electrical p;
+  analog I(p) <+ V(p);
+endmodule
 connectrules ch7_rules;
   connect ch7_a2d;
 endconnectrules

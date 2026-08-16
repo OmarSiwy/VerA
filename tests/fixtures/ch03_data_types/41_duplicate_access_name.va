@@ -6,7 +6,8 @@
 // cannot be read as one nature declared twice — §3.6.1.1 makes an "alias" only
 // through derivation, which is not what this is.
 //
-//! reject DiagnosticsReported
+//! lrm 3.13.2
+//! reject E0335
 nature ch3_dup_a; units="V"; access=DuplicateAccess; abstol=1u; endnature
 nature ch3_dup_b; units="A"; access=DuplicateAccess; abstol=1p; endnature
 module ch3_duplicate_access; endmodule

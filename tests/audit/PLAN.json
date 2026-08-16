@@ -1,0 +1,402 @@
+[
+ {
+  "chapter": "annex_a_syntax",
+  "workOrder": "/tmp/vams/audit/annex_a_syntax--WORKORDER.json",
+  "count": 41,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    40
+   ],
+   [
+    40,
+    41
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_b_keywords",
+  "workOrder": "/tmp/vams/audit/annex_b_keywords--WORKORDER.json",
+  "count": 23,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    23
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_c_analog_subset",
+  "workOrder": "/tmp/vams/audit/annex_c_analog_subset--WORKORDER.json",
+  "count": 18,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    18
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_d_standard_definitions",
+  "workOrder": "/tmp/vams/audit/annex_d_standard_definitions--WORKORDER.json",
+  "count": 26,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    26
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_e_spice",
+  "workOrder": "/tmp/vams/audit/annex_e_spice--WORKORDER.json",
+  "count": 14,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    14
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_f_resolution",
+  "workOrder": "/tmp/vams/audit/annex_f_resolution--WORKORDER.json",
+  "count": 11,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    11
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_g_change_history",
+  "workOrder": "/tmp/vams/audit/annex_g_change_history--WORKORDER.json",
+  "count": 24,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    24
+   ]
+  ]
+ },
+ {
+  "chapter": "annex_h_glossary",
+  "workOrder": "/tmp/vams/audit/annex_h_glossary--WORKORDER.json",
+  "count": 12,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    12
+   ]
+  ]
+ },
+ {
+  "chapter": "ch01_intro",
+  "workOrder": "/tmp/vams/audit/ch01_intro--WORKORDER.json",
+  "count": 28,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    28
+   ]
+  ]
+ },
+ {
+  "chapter": "ch02_lexical",
+  "workOrder": "/tmp/vams/audit/ch02_lexical--WORKORDER.json",
+  "count": 39,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    39
+   ]
+  ]
+ },
+ {
+  "chapter": "ch03_data_types",
+  "workOrder": "/tmp/vams/audit/ch03_data_types--WORKORDER.json",
+  "count": 60,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    40
+   ],
+   [
+    40,
+    50
+   ],
+   [
+    50,
+    60
+   ]
+  ]
+ },
+ {
+  "chapter": "ch04_expressions",
+  "workOrder": "/tmp/vams/audit/ch04_expressions--WORKORDER.json",
+  "count": 56,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    40
+   ],
+   [
+    40,
+    50
+   ],
+   [
+    50,
+    56
+   ]
+  ]
+ },
+ {
+  "chapter": "ch05_analog_behavior",
+  "workOrder": "/tmp/vams/audit/ch05_analog_behavior--WORKORDER.json",
+  "count": 45,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    40
+   ],
+   [
+    40,
+    45
+   ]
+  ]
+ },
+ {
+  "chapter": "ch06_hierarchy",
+  "workOrder": "/tmp/vams/audit/ch06_hierarchy--WORKORDER.json",
+  "count": 36,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    36
+   ]
+  ]
+ },
+ {
+  "chapter": "ch07_mixed_signal",
+  "workOrder": "/tmp/vams/audit/ch07_mixed_signal--WORKORDER.json",
+  "count": 19,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    19
+   ]
+  ]
+ },
+ {
+  "chapter": "ch08_scheduling",
+  "workOrder": "/tmp/vams/audit/ch08_scheduling--WORKORDER.json",
+  "count": 14,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    14
+   ]
+  ]
+ },
+ {
+  "chapter": "ch09_system_tasks",
+  "workOrder": "/tmp/vams/audit/ch09_system_tasks--WORKORDER.json",
+  "count": 34,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    34
+   ]
+  ]
+ },
+ {
+  "chapter": "ch10_directives",
+  "workOrder": "/tmp/vams/audit/ch10_directives--WORKORDER.json",
+  "count": 31,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    20
+   ],
+   [
+    20,
+    30
+   ],
+   [
+    30,
+    31
+   ]
+  ]
+ },
+ {
+  "chapter": "ch11_vpi",
+  "workOrder": "/tmp/vams/audit/ch11_vpi--WORKORDER.json",
+  "count": 11,
+  "batches": [
+   [
+    0,
+    10
+   ],
+   [
+    10,
+    11
+   ]
+  ]
+ },
+ {
+  "chapter": "ch12_vpi_routines",
+  "workOrder": "/tmp/vams/audit/ch12_vpi_routines--WORKORDER.json",
+  "count": 8,
+  "batches": [
+   [
+    0,
+    8
+   ]
+  ]
+ }
+]

@@ -3,10 +3,11 @@
 // the LRM assigns the construct no semantics -- there is no value a CHECK could
 // pin, the expected behavior IS the diagnostic.
 //
-// KNOWN GAP: VerA has no non-nesting check.  It accepts this silently and emits
-// a device, so this fixture fails until the frontend grows the rule.  Tighten
-// the directive to the E-code once one exists.
+// KNOWN GAP: see the `//! xfail` below.  Tighten the reject directive to the
+// E-code once one exists.
+//! lrm 6.6
 //! reject DiagnosticsReported
+//! xfail VerA has no generate-region non-nesting check; a `generate` inside a `generate` parses and elaborates silently
 module ch6_generate_nested_region(p);
   inout p; electrical p;
   generate

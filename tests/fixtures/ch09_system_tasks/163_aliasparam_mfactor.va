@@ -1,0 +1,33 @@
+// §3.4.7 prints this exact declaration among its aliasparam examples, beside
+// `aliasparam trise = dtemp;`:
+//
+//     aliasparam m = $mfactor;
+//
+// which is the one case where an alias names a HIERARCHICAL PARAMETER SYSTEM
+// FUNCTION (§9.18) rather than a declared parameter. It exists because "m" is
+// what every SPICE netlist calls the shunt multiplicity and $mfactor is what
+// Verilog-AMS calls it, so a model has to answer to both spellings.
+//
+// An alias is a second name for one storage location, not a copy, so the first
+// check is a CHECKEQ — check.vh's own doc comment names "an aliasparam must
+// name the same storage" as the case it exists for, and there is no value in
+// that claim to write down.
+//
+// The second check does have one. Table 9-29 (§9.18) gives $mfactor the
+// top-level value 1.0, and this module is elaborated on its own, so nothing
+// multiplies into it — the same reasoning 097_mfactor.va and
+// 28_hierarchical_parameters.va use. 1.0 is exact.
+//
+//! lrm 3.4.7
+//! lrm 9.18
+//! xfail VerA does not accept a system function as an aliasparam target: `aliasparam m = $mfactor;` is E0208 `expected an identifier`, so §3.4.7's own printed example does not parse
+`include "check.vh"
+module ch09_aliasparam_mfactor(p, n);
+  inout p, n; electrical p, n;
+  aliasparam m = $mfactor;
+  analog begin
+    `CHECKEQ("§3.4.7: an aliasparam names the same storage as $mfactor", m, $mfactor, 0);
+    `CHECKX("Table 9-29 top-level $mfactor", m, 1.0);
+    I(p,n) <+ V(p,n) + m;
+  end
+endmodule

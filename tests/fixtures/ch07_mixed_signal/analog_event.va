@@ -1,17 +1,23 @@
-// §7.3.4 events in a continuous context, driving a sample-and-hold. The event
-// here is cross(), and §5.10.3.1 pins what it may NOT do:
+// §5.10.3.1 cross(), driving a sample-and-hold. This file lives in ch07 for
+// historical reasons and does NOT pin §7.3.4: that clause is "Detecting
+// discrete events in a continuous context", and cross() is an ANALOG event, so
+// nothing here crosses a domain. What it pins is the one thing §5.10.3.1 fixes
+// about cross() without reference to any solver:
 //
 //   "the cross() function can only generate an event after the simulation time
 //    has advanced from zero. The cross() function will not generate events for
 //    non-transient analyses, such as ac, dc, or noise analyses"
 //
 // The default analysis is dc, so the sampler cannot fire and `held` keeps the
-// value §3.4 gives every real variable: "Real variables are initialized to
-// zero (0) at the start of a simulation."
+// value §3.2 gives every real variable: "Real variables are initialized to
+// zero (0) at the start of a simulation." (§3.2 Integer and real data types —
+// not §3.4, which is Parameters.)
 //
 // V(p) is biased to 2.0 so the two answers differ: a compiler that executed the
 // event's body unconditionally would sample 2.0 rather than hold 0.
 //
+//! lrm 5.10.3.1
+//! lrm 3.2
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch7_analog_event(p, threshold);

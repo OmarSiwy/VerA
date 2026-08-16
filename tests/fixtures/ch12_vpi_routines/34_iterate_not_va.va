@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_iterate
-// EXPECT: error
+//! reject `vpi_iterate`
 module ch12_atomic_iterate(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_iterate(0);

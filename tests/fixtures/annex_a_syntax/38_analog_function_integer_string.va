@@ -1,0 +1,44 @@
+// A.2.6 `analog_function_type ::= integer | real | string`. The `real` arm is
+// everywhere in the suite; the other two had no user at all.
+//
+// §4.7.1: the type "specifies the return value of the function". So:
+//
+//   integer  `sgn` assigns the integer literal 3, and the call site must see
+//            the integer 3 — `CHECKI` is exact, so a real-returning
+//            implementation that produced 3.0 still passes, but one that
+//            widened and then rounded differently, or truncated the wrong way,
+//            does not.
+//   string   `label` assigns "hi", and §4.2.7's equality on strings makes
+//            `label(1.0) == "hi"` the integer 1 (§4.2.5: a comparison is an
+//            integer in Verilog-A). A function that returned an empty string,
+//            or a numeric 0, gives 0.
+//
+// Both are in one file because both are positives: a run fixture reports every
+// assertion, unlike a `//! reject`, which stops at the first diagnostic.
+//
+//! lrm A.2.6
+//! lrm 4.7.1
+//! lrm 4.2.7
+//! bias V(p) = 1.5
+//! print none
+`include "check.vh"
+module annex_a_function_integer_string(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function integer sgn;
+        input real x;
+        sgn = (x > 0.0) ? 3 : -3;
+    endfunction
+
+    analog function string label;
+        input real x;
+        label = "hi";
+    endfunction
+
+    analog begin
+        `CHECKI("an integer-typed analog function returns an integer", sgn(V(p, n)), 3);
+        `CHECKI("a string-typed analog function returns its assigned string", (label(1.0) == "hi"), 1);
+        I(p, n) <+ sgn(V(p, n)) * V(p, n);
+    end
+endmodule

@@ -4,6 +4,8 @@
 // else. A named branch resolved to the wrong pair, or to a node against ground,
 // does not read 0.5.
 //
+//! lrm C.2
+//! lrm 3.12
 //! bias V(p) = 0.75
 //! bias V(n) = 0.25
 `include "check.vh"

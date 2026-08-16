@@ -6,6 +6,7 @@
 // At V(p) = 0.75: x = 1.5 (exact, 0.75 is a dyadic rational), select = 1 because
 // 1.5 > 0, and the conditional's true arm is x itself.
 //
+//! lrm 5.7
 //! bias V(p) = 0.75
 `include "check.vh"
 module ch5_proc_assign(p);

@@ -8,18 +8,16 @@
 // `access = CustomV` (3.6.2.1: "The access function defined in the nature bound
 // to potential ... is called the potential access function"). So `CustomV` is
 // the only discipline-derived spelling for p's potential; `V` is electrical's
-// access function and does not match p's discipline.
+// access function and does not match p's discipline, so `V(p) <+ 0.0;` is the
+// violation and this module shall not compile.
 //
-// The assertion pins the half of that rule which has a value: the custom
-// nature's access function reads p's potential relative to ground (4.4, "If the
-// signal or port access function is used in an expression, the access function
-// returns the value of the signal"). Biased to 0.7, CustomV(p) is 0.7 --
-// renaming the access function changes nothing about what it returns.
+// One rule, one file: what the LEGAL spelling then returns is 4.4's other half
+// and lives in 110_custom_discipline_access.va. Before the split this file had
+// no `reject` at all and its only assertion was on the legal spelling — a want
+// a conforming compiler never reaches, because it diagnoses line 22 first.
 //
-// The `V(p)` contribution below is the construct the file is named for and is
-// left exactly as it was.
-`include "check.vh"
-//! bias V(p) = 0.7
+//! lrm 4.4
+//! reject E0501
 nature ch4_custom_p; units="V"; access=CustomV; abstol=1u; endnature
 nature ch4_custom_f; units="A"; access=CustomI; abstol=1p; endnature
 discipline ch4_custom_d; potential ch4_custom_p; flow ch4_custom_f; enddiscipline
@@ -27,7 +25,6 @@ module ch4_wrong_discipline(p);
   inout p;
   ch4_custom_d p;
   analog begin
-    `CHECK("CustomV(p) reads p's potential", CustomV(p), 0.7, 1e-15);
     V(p) <+ 0.0;
   end
 endmodule

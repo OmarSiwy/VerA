@@ -1,0 +1,38 @@
+// E.3.2.1 Setting the discipline of analog primitives, final sentence: "This
+// attribute shall only apply to analog primitives or the ports of analog
+// primitives; for other modules as well as the ports of all other modules it
+// shall be ignored."
+//
+// WHAT IS PINNED. `pd_ignored` is a plain behavioural module — not one of the
+// Table E.1 analog primitives — so its ports are "the ports of all other
+// modules" and `port_discipline` on one of them is required to be IGNORED. Not
+// diagnosed, not honoured: ignored. The module therefore behaves exactly as if
+// the attribute were absent, and the `electrical p, n;` declaration two lines
+// down is what fixes the discipline.
+//
+// WHY IT DISCRIMINATES. `rotational` is Annex D's mechanical discipline, whose
+// natures are Angle and Angular_Force with access functions Theta() and Tau().
+// A tool that HONOURED the attribute here would give `p` a discipline in which
+// V() is not an access function at all, and this file would fail to compile
+// (§4.4: the access function must belong to the net's discipline). A tool that
+// diagnosed the attribute would also fail. Only "ignored" gets to ok=1. §2.9
+// already permits an unrecognised attribute to be parsed and dropped, so this
+// is a positive test of the whole path: parse the attribute, then discard it.
+//
+// THE DIGITS. Nothing in E.3.2.1 fixes a voltage — the clause is about which
+// discipline a port has, not what it carries — so the number asserted is the one
+// the harness imposes, and the claim is that the attribute did not disturb it.
+// 1.25 - 0.0 = 1.25, a dyadic rational and exact in binary64, hence CHECKX.
+//
+//! lrm E.3.2.1
+//! lrm 2.9
+//! bias V(p) = 1.25, V(n) = 0.0
+`include "check.vh"
+module pd_ignored((* port_discipline="rotational" *) p, n);
+  inout p, n;
+  electrical p, n;
+  analog begin
+    `CHECKX("port_discipline on a non-primitive port is ignored", V(p, n), 1.25);
+    I(p, n) <+ V(p, n) / 1000.0;
+  end
+endmodule

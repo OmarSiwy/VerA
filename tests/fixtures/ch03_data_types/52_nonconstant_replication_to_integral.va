@@ -1,0 +1,29 @@
+// §3.3, Table 3-3, the replication row, with the LRM's own two lines:
+//
+//     r = {3{"Hi"}};  // yields "HiHiHi"
+//     r = {i{"Hi"}};  // invalid (non constant replication)
+//
+// where `r` is integral and `i` is an integer variable. A replication count is
+// a constant expression, so a run-time multiplier has no width and no value at
+// elaboration and cannot be assigned anywhere. 28_string_replication.va is the
+// legal side with the constant count.
+//
+// The pinned substring is only the phase label. VerA rejects the line, but at
+// E0207 — its expression parser has no replication form at all, constant or
+// not — so pinning that code would pin the absence of the construct rather than
+// the non-constant multiplier, and it would stop matching the day replication
+// lands, which is exactly when this fixture starts being worth something.
+//
+//! lrm 3.3
+//! reject DiagnosticsReported
+module ch3_nonconstant_replication_to_integral(p, n);
+    inout p, n;
+    electrical p, n;
+    integer count = 1;
+    integer packed_value;
+
+    analog begin
+        packed_value = {count{"Hi"}};
+        I(p, n) <+ packed_value * V(p, n);
+    end
+endmodule

@@ -1,0 +1,46 @@
+// Annex C.7 excludes DIGITAL events ("No digital behavior or events are
+// supported in Verilog-A"), and C.2 lists "a set of events to control when
+// certain code is simulated" among the features the subset provides. §5.10
+// enumerates three kinds of ANALOG event — global (5.10.2), monitored (5.10.3)
+// and named (5.10.4) — so a named event declared and triggered inside the
+// analog block is on the Verilog-A side of the C.7 line, and the digital edge
+// events that are on the other side are 21_digital_event_control_rejected.va.
+//
+// This file replaces 19_digital_event_trigger.va, which asserted the opposite:
+// it demanded a diagnostic for `event tick; -> tick;` and pinned it on the
+// substring "DiagnosticsReported", a torture.zig phase label that every rejected
+// fixture in the suite matches and that names no rule. A conforming compiler
+// accepts this source, so as a `//! reject` the fixture was inverted. It also
+// contradicted ch05_analog_behavior/named_event_unsupported.va, which argues the
+// same reading from Clause 5; the two now agree.
+//
+// §5.10.4: "Named events can be triggered from always and initial blocks, or
+// from an analog event statement", and the clause's own example triggers its
+// event from an analog event statement and detects it with `@(ana_event)` in the
+// same analog block. That is the shape here, with initial_step (§5.10.2, Table
+// 5-1: 1 at the DC operating point) as the triggering event so the fixture needs
+// only the one dc timepoint.
+//
+// Statements in an analog block run in order, so the trigger has happened by the
+// time the detection statement is reached and `seen` is 1.0. §3.2.1 starts a real
+// at 0.0, so a compiler that treats `@(tick)` as a guard that is never true reads
+// 0.0 — the two outcomes are distinguishable.
+//
+//! lrm C.2
+//! lrm C.7
+//! lrm 5.10.4
+//! xfail VerA does not implement named events: `event tick;` is E0203, `-> tick` is E0209, `@(tick)` is E0705
+`include "check.vh"
+module annex_c_named_event_in_subset(p);
+    inout p;
+    electrical p;
+    real seen;
+    event tick;
+
+    analog begin
+        @(initial_step) -> tick;
+        @(tick) seen = 1.0;
+        `CHECKX("a named event triggered in the analog block is detected in it", seen, 1.0);
+        I(p) <+ 1m * seen;
+    end
+endmodule

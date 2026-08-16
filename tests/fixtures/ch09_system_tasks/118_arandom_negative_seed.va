@@ -1,0 +1,27 @@
+// §9.13: "Verilog-AMS HDL extends the probabilistic distribution functions so
+// that they are supported in the analog context." Table 9-10 lists all 17 names
+// and every row reads `Yes  Yes` — digital context AND analog context. So this
+// file must COMPILE and run green; a compiler that refuses the call is the one
+// that is wrong, which is why the expectation is a run and not a reject.
+//
+// Syntax 9-8 spells the seed as `analog_random_seed ::= ... | [ sign ]
+// decimal_number`, so a negative literal is a legal seed and the call must be
+// accepted. No equality is claimed between the two calls: the constant seeds an
+// INTERNAL seed which "gets updated every time the call to $arandom is made",
+// so the second call is free to differ. Only the range of the result is fixed.
+//
+//! lrm 9.13.1
+//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
+`include "check.vh"
+module ch09_arandom_negative_seed(p, n);
+  inout p, n; electrical p, n;
+  integer a, c;
+  analog begin
+    a = $arandom(-7);
+    c = $arandom(-7);
+    `CHECKI("Syntax 9-8 admits a signed decimal_number as the seed",
+            (a % 60 >= -59) && (a % 60 <= 59), 1);
+    `CHECKI("and so does the second call site", (c % 60 >= -59) && (c % 60 <= 59), 1);
+    I(p,n) <+ V(p,n) + a + c;
+  end
+endmodule

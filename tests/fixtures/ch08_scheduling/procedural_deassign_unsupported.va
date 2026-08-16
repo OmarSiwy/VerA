@@ -1,4 +1,11 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A."
+// `deassign` removes a procedural continuous assignment, which is a digital
+// scheduling construct; it and its `reg`/`initial` host are all refused.
+//! lrm C.7
+//! reject E0205
+//! reject reg
+//! reject initial
+//! reject deassign
 // EXPECT: error -- deassign removes a procedural continuous assignment.
 module ch8_procedural_deassign;
   reg source, target;

@@ -1,8 +1,28 @@
-//! reject module instantiation is not supported
-// EXPECT: error -- Verilog-AMS cannot pass a controlling instance name.
+// E.3.1 Unsupported primitives: "Verilog-AMS HDL does not support the concept of
+// passing an instance name as a parameter. As such, the following primitives are
+// not supported: ccvs, cccs, and mutual inductors". `cccs` is the current-
+// controlled current source: its controlling argument is the NAME of a voltage
+// source instance, not a net, and Verilog-AMS has no syntax for that argument.
+// So unlike the rest of Annex E, a rejection here is what the LRM asks for.
+//
+// `sense` is therefore a free identifier, and must stay one: the construct that
+// would give it a meaning is the one E.3.1 forbids. An earlier revision followed
+// the cccs with `vsine #(.dc(0.0)) sense(.p(p), .n(n));` so the controlling name
+// would refer to something — but that instantiation raises the SAME diagnostic,
+// so the fixture rejected whether or not the cccs line was present at all. It is
+// gone, and the reject is now attributable to the line the fixture names.
+//
+// HONEST CEILING. VerA answers with E0204 "module instantiation is not
+// supported", whose own cite is §6.2.2 — the flat-module limit, not E.3.1. This
+// fixture therefore cannot tell a tool that refuses `cccs` per E.3.1 from one
+// that refuses all hierarchy. Full discrimination needs a diagnostic dedicated
+// to the E.3.1 primitives and is not this fixture's to buy; what it does buy is
+// that the source below never compiles.
+//
+//! lrm E.3.1
+//! reject E0204
 module annex_e_unsupported_cccs(p, n);
   inout p, n; electrical p, n;
-  // The controlling name denotes the concrete voltage-source instance below.
+  // Third argument is a controlling INSTANCE name, which E.3.1 has no way to pass.
   cccs f1(p, n, sense, 2.0);
-  vsine #(.dc(0.0)) sense(.p(p), .n(n));
 endmodule

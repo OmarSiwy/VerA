@@ -1,0 +1,39 @@
+// VAMS-12.32.3  (ch12-vpi-routines.html) — the LRM's own sampnhold example,
+// verbatim except for the port directions Annex A.2.1.2 requires and the
+// assertion below.
+//
+// §12.32.3 prints this module as the illustration of vpi_register_analog_systf():
+//
+//   module sampnhold(out, in);
+//      electrical out, in;
+//      parameter real period = 1e-3;
+//      analog begin
+//        V(out) <+ $sampler(V(in), period);
+//      end
+//   endmodule
+//
+// So an unregistered analog system FUNCTION in expression position is legal
+// source text. §2.8.3 makes `$name` grammatical and lists "defined using the
+// VPI as described in Clause 11 and Clause 12" as one of its definition sites;
+// §12.32 hands the application a compiletf routine so that IT, not the
+// compiler, decides what an unknown systf means; §12.31.4 gives cbUnresolvedSystf
+// as the host's disposition when nothing registered it. No clause makes the
+// source an error, so this is a RUN fixture and not a `//! reject` one — an
+// earlier revision demanded a diagnostic here, which inverted the test: a
+// conforming compiler failed it and only VerA passed.
+//
+// The only number §12.32.3 fixes without a linked host is the parameter:
+// `parameter real period = 1e-3` is 0.001, exact in double, hence CHECKX.
+// What $sampler() returns lives in sampler_calltf() and is out of reach.
+//
+//! lrm 12.32.3
+//! xfail VerA has no VPI host: an unregistered analog system function has no value, and codegen will not invent one for a contribution, so the unit collapses to @compileError carrying $sampler
+`include "check.vh"
+module ch12_analog_systf_sampler_call(out, in);
+  inout out, in; electrical out, in;
+  parameter real period = 1e-3;
+  analog begin
+    V(out) <+ $sampler(V(in), period);
+    `CHECKX("12.32.3 sampler period", period, 0.001);
+  end
+endmodule

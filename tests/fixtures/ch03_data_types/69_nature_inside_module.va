@@ -1,0 +1,34 @@
+// §3.13.1: "Natures and disciplines are defined at the same level of scope as
+// modules. Thus, identifiers defined as natures or disciplines have a global
+// scope." §3.6.2 repeats it for disciplines: "disciplines are declared at the
+// top level and discipline declarations do not nest inside other discipline
+// declarations, nature declarations, or MODULE DECLARATIONS."
+//
+// Annex A settles it grammatically: `description ::= module_declaration |
+// udp_declaration | config_declaration | paramset_declaration |
+// nature_declaration | discipline_declaration | connectrules_declaration` puts
+// nature_declaration beside module_declaration in source_text, and
+// `module_item` has no production for it.
+//
+// `ch3_inner_nature` is written between the port declaration and the analog
+// block of a module. Every other nature in the chapter is declared correctly at
+// file scope, so nothing else provokes this. Moving the four lines above
+// `module` makes the file legal.
+//
+//! lrm 3.13.1
+//! lrm 3.6.2
+//! reject E0205
+module ch3_nature_inside_module(p);
+    inout p;
+    electrical p;
+
+    nature ch3_inner_nature;
+        units = "V";
+        access = InnerV;
+        abstol = 1u;
+    endnature
+
+    analog begin
+        V(p) <+ 0.0;
+    end
+endmodule

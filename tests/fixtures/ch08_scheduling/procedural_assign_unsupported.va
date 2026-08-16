@@ -1,4 +1,10 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A." A
+// procedural continuous assignment lives in a digital `initial` block on `reg`
+// storage, and both of those are refused as module items first.
+//! lrm C.7
+//! reject E0205
+//! reject reg
+//! reject initial
 // EXPECT: error -- procedural assign updates require the digital scheduler.
 module ch8_procedural_assign;
   reg source, target;

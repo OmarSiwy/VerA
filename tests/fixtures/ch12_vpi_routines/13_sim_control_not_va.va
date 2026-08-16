@@ -1,7 +1,0 @@
-//! reject E0512
-//! reject vpi_sim_control
-// EXPECT: error
-module ch12_sim_control_not_va(p, n);
-  inout p, n; electrical p, n;
-  analog I(p,n) <+ vpi_sim_control(1);
-endmodule

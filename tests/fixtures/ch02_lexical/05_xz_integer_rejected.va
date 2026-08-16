@@ -1,20 +1,14 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// Annex C.3 is the authority here, not §2.6.1. §2.6.1 gives x and z their bit
+// semantics for Verilog-AMS, and Annex C.3 then withdraws them from Verilog-A:
+// "From 2.6, Numbers: support for x and z values is limited in the analog block
+// to the mixed signal context, as defined in 7.3.2."
 //
-// VAMS-2.6.1-14  (ch2-lexical.html)
-// An x shall set 4 bits to unknown in the hexadecimal base, 3 bits in the octal base, and 1 bit in the binary base.
-// VAMS-2.6.1-15  (ch2-lexical.html)
-// Similarly, a z shall set 4 bits, 3 bits, and 1 bit, respectively, to the high-impedance value.
-// VAMS-2.6.1-17  (ch2-lexical.html)
-// If the left-most bit in the unsigned number is an x or a z , then an x or a z shall be used to pad to the left respectively.
-// VAMS-2.6.1-20  (ch2-lexical.html)
-// Unsized unsigned constants where the high order bit is unknown ( X or x ) or three-state ( Z or z ) shall be extended to the size of the expression co
-// … and 1 more rule(s); see tests/lrm-rules/
-//
+// `4'b01xz` is in an analog block with no mixed-signal context, so refusing it
+// is conformance, not debt. A Verilog-AMS compiler with the mixed-signal
+// context available is outside what this fixture claims.
+//! lrm C.3
+//! lrm 2.6.1
 //! reject E0130
-// EXPECT: error
 module ch02_xz_integer_rejected;
     integer value;
     analog value = 4'b01xz;

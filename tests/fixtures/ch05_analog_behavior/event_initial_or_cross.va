@@ -5,7 +5,7 @@
 // The cross() operand cannot be what does it: §5.10.3.1 says "the cross()
 // function will not generate events for non-transient analyses, such as ac, dc,
 // or noise analyses". So x = 2.0 here is attributable to initial_step alone,
-// and x = 0.0 — the value §3.2.1 gives an untouched real — means the global
+// and x = 0.0 — the value §3.2 gives an untouched real — means the global
 // event never fired.
 //
 // FAILS TODAY — known VerA defect, not a wrong want. Codegen answers
@@ -13,6 +13,9 @@
 // src/backend/tb.zig never assigns that field (nor `is_final_step`), so §5.10.2
 // global events cannot fire in ANY generated testbench.
 //
+//! lrm 5.10.1
+//! lrm 5.10.2
+//! lrm 5.10.3.1
 //! analysis dc
 //! bias V(p) = 2.0
 `include "check.vh"

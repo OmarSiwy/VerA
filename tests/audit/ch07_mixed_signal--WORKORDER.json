@@ -1,0 +1,211 @@
+[
+{
+  "id": "ch07-01",
+  "section": "7.3.2.1",
+  "action": "rewrite",
+  "path": "tests/fixtures/ch07_mixed_signal/inf_contribution.va",
+  "title": "A run fixture asserts ok=1 through a contribution 7.3.2.1 declares illegal, using `inf` outside its only grammar position",
+  "detail": "The file has no `//! reject`, so the contract makes it compile, run and print ok=1. Two independent facts, both verified, make that unreachable for a conforming compiler. (1) ch7 line 373: 'it is illegal to assign these values to a branch through contribution in the analog context' — line 22 does exactly `I(p) <+ inf + 0.0*V(p);`, and line 21 admits it ('the snapshot records current codegen'). A compiler that happily contributes infinity PASSES this file today. (2) `inf` is a reserved keyword but the grammar admits it in exactly one production: annex-a-syntax line 449 / ch3 line 286, `value_range_expression ::= constant_expression | -inf | inf`. It is absent from the A.8.4 primary list reprinted as Syntax 7-1 in this very chapter (ch7 lines 226-238). So the surviving CHECKI on line 20 is ALSO ungrammatical — the literals lens's advice to keep it runnable is wrong and would leave a second non-conformance behind. The digits are correct and are not the defect: 1.7976931348623157e308 = 2^1024-2^971 = DBL_MAX, verified.",
+  "expected": "Whole file becomes a reject fixture: `//! lrm 7.3.2.1`, `//! reject <code for illegal special-value contribution>`, `//! xfail VerA does not diagnose an infinite contribution`. Drop the `inf > 1.7976931348623157e308` CHECKI entirely rather than relocating it — `inf` has no primary position to relocate it to. If a DBL_MAX guard is still wanted, write the literal, not the keyword.",
+  "severity": "high",
+  "sourceLenses": ["literals", "negatives", "weak", "uncovered"]
+},
+{
+  "id": "ch07-02",
+  "section": "7.3.1",
+  "action": "rewrite",
+  "path": "tests/fixtures/ch07_mixed_signal/discrete_bus_over31_rejected.va (+ discrete_bus_31_unsupported.va, discrete_bus_narrow_unsupported.va)",
+  "title": "All three bus fixtures assert the same substring `//! reject identifier`, so the >31-bit prohibition is indistinguishable from the two widths Table 7-1 makes legal",
+  "detail": "Verified against ch7 lines 205-222 (Table 7-1): the LSB of the bit grouping maps to bit 0, higher bits are zero when the bus is under 31 wide, the sign bit (bit 31) is always zero, and only 'Access of discrete bit groupings with greater than 31 bits is illegal.' The 8-bit and 31-bit files are therefore LEGAL forms and the 32-bit one is the only prohibition — yet all three carry the identical unfalsifiable `//! reject identifier`, and all three die at the `input [0:N] d; wire [0:N] d;` DECLARATION, never at the analog access where the width rule lives. discrete_bus_over31_rejected.va is named `_rejected` (this directory's marker for a real LRM prohibition) but passes for a reason that has nothing to do with 31 bits. A compiler that got the boundary exactly backwards passes all three files.",
+  "expected": "over31 gets `//! lrm 7.3.1` plus a diagnostic that names the width rule, `//! xfail` while VerA has no such check. The two legal widths cannot be made to run in this dialect (see ch07-14): re-point them at `//! lrm C.9` with a code that names the subset, and make the three substrings mutually exclusive so the boundary is falsifiable. Whatever happens, the three files must not share one substring.",
+  "severity": "high",
+  "sourceLenses": ["uncovered", "negatives", "weak"]
+},
+{
+  "id": "ch07-03",
+  "section": "7.7",
+  "action": "rewrite",
+  "path": "tests/fixtures/ch07_mixed_signal/connectrules_unsupported.va (+ connectmodule, connect_mode, connect_parameter, connect_supply, resolution_connect, supply_hierarchical_connectmodule)",
+  "title": "Seven files assert only `//! reject NoModule`, which means 'the file contained zero modules' and says nothing about connectrules",
+  "detail": "Verified: src/ir/lower.zig:525 and src/root.zig:404 are both `if (modules.len == 0) return error.NoModule;`. NoModule fires for ANY source that parses without producing a module_declaration. Each of these seven files is nothing but a `connectrules`/`connectmodule` block, so a compiler that parses connect specifications perfectly and then notices there is no `module` keyword passes all seven — which is what a correct tool would do. They pin zero of 7.5-7.8. Note the fix is NOT to relax them: Annex C.9 ('Clause 7 only applies to Verilog-AMS HDL', annex-c line 126) makes rejection the right answer for a Verilog-A compiler. The defect is the diagnostic, not the verdict.",
+  "expected": "Add a trivial one-port `module` to each file so NoModule cannot fire, then pin the diagnostic the connect construct itself produces, with `//! lrm C.9` (and C.16 for the keyword list). If no such diagnostic exists, that is the finding — `//! xfail` it and open the code gap.",
+  "severity": "high",
+  "sourceLenses": ["weak", "uncovered", "negatives"]
+},
+{
+  "id": "ch07-04",
+  "section": "C.4 / 7.4.2",
+  "action": "rewrite",
+  "path": "tests/fixtures/ch07_mixed_signal/discrete_discipline.va",
+  "title": "discrete_discipline.va asserts nothing, cannot run, and COVERAGE.md credits it with a rule it never touches",
+  "detail": "The file declares `discipline ch7_discrete; domain discrete; enddiscipline` and then never uses it — the module below is a plain `electrical p` one-liner with no port list, no `check.vh`, no CHECK and no `//! reject`. Verified it is already listed in TODO.md:334 under CANNOT RUN (zero-terminal device, contract refuses it), so it produces no transcript at all. COVERAGE.md maps `s7-4-2` ('discrete discipline connection') to it, which is fiction. There is a correct disposition available: annex-c line 78, C.4 — 'From 3.6.2.2, Domain binding: the domain binding type discrete shall be an error in Verilog-A.' VerA currently accepts it (src/ir/lower.zig:726 sets `is_discrete` and moves on), so this is a clean reject+xfail.",
+  "expected": "`//! lrm C.4`, `//! reject <domain-discrete-in-Verilog-A code>`, `//! xfail VerA accepts a user-declared discrete domain`. Delete the vestigial `electrical p` module — as a reject fixture it needs no port list, which also removes the file from the CANNOT RUN bucket. Fix the `s7-4-2` COVERAGE row (see ch07-18).",
+  "severity": "high",
+  "sourceLenses": ["weak", "uncovered"]
+},
+{
+  "id": "ch07-05",
+  "section": "7.3.7",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/digital_function_from_analog_unsupported.va (+ analog_function_from_digital, cross_domain_function)",
+  "title": "All three 7.3.7 fixtures reject the digital construct; the cross-domain call rule is never reached, and one file says so in its own header",
+  "detail": "7.3.7 is two sentences (ch7 lines 630-631): 'Digital functions cannot be called from within the analog context. Analog functions cannot be called from within the digital context.' digital_function_from_analog rejects E0205 + `function` (the non-analog function DECLARATION); analog_function_from_digital rejects E0205 + `initial` (the digital block); cross_domain_function rejects `unsupported module item`. In every case the module item dies first and the CALL is never analysed — digital_function_from_analog's line 4 admits it ('the snapshot exposes the missing domain diagnostic'). COVERAGE.md's `s7-3-7` row claims all three exercise 'both prohibited cross-domain function-call directions'; none does. Under C.7 ('No digital behavior or events are supported in Verilog-A') there is no way to write a digital caller at all, so this cannot be fixed by a better fixture — only by an honest label.",
+  "expected": "Keep the E0205 rejects (they are correct for the subset) and add `//! lrm C.7`. Add `//! xfail the domain-crossing rule is masked by the module-item rejection` to the one file that can express it. Rewrite the `s7-3-7` COVERAGE row to say masked, not exercised.",
+  "severity": "high",
+  "sourceLenses": ["negatives", "weak", "uncovered"]
+},
+{
+  "id": "ch07-06",
+  "section": "C.9 / 7.3.2",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/*.va (10 DEBT files; cites for all 41)",
+  "title": "Ten files carry a DEBT header whose premise is false for a Verilog-A compiler, and not one file in the chapter has an `//! lrm` cite",
+  "detail": "Counted: 10 files carry 'DEBT — this rejection is NOT conformance. The LRM permits what VerA refuses here.' (connect_mode, connectmodule, connectrules, continuous_assign, digital_cross, digital_event, digital_probe, resolution_connect, x_literal, z_literal). The premise is wrong. README.md line 3: VerA is 'A Verilog-A compiler.' annex-c line 126, C.9: 'Clause 7 only applies to Verilog-AMS HDL.' A Verilog-A tool that refuses a Clause-7 construct is conforming, not in debt. VerA's own diagnostics already know this — src/diag_code.zig E0323 cites `C.5` and E0130's explain text names annex C — so the fixture headers contradict the compiler they wrap. x_literal/z_literal are wrong twice over: ch7 lines 352-353 literally annotate `var1 = 1'bx; // error` and `var2 = 1'bz; // error`, so those rejections are conformance under BOTH dialects. Separately, `grep -c '//! lrm' *.va` returns 0 for all 41 files, so `torture -- --coverage` reports this chapter as citing nothing.",
+  "expected": "Delete the DEBT block from the 8 Clause-7 files and replace with `//! lrm C.9` (plus C.3/C.5/C.7/C.16 as apt). x_literal/z_literal get `//! lrm 7.3.2` and `//! lrm C.3` and lose the DEBT note outright. Every remaining .va in the directory gains at least one `//! lrm`. Do NOT relax any of these rejects.",
+  "severity": "high",
+  "sourceLenses": ["weak", "negatives"]
+},
+{
+  "id": "ch07-07",
+  "section": "7.4.3",
+  "action": "create",
+  "path": "tests/fixtures/ch07_mixed_signal/incompatible_disciplines_rejected.va",
+  "title": "No fixture for 'It shall be an error to connect incompatible continuous disciplines together'",
+  "detail": "Verified at ch7 line 723. This is the cheapest high-value gap in the chapter: it needs no hierarchy, no digital, no elaborator — two disciplines whose natures differ (different `units`/`abstol`, or distinct nature identifiers) on the two arguments of one access function is enough, because 3.11 says 'if an access function has two nets as arguments, they must be compatible'. compatible_disciplines.va already builds the COMPATIBLE half of exactly this shape (two disciplines naming the same natures, read with `V(p, q)`), so the negative is a five-line derivative of a file that already exists. Verified there is no diagnostic to pin: `grep -rni compatib src/diag_code.zig src/ir/*.zig` returns one unrelated comment at lower.zig:1583 and nothing else, so this is a genuine xfail.",
+  "expected": "Mirror compatible_disciplines.va with two disciplines built on DIFFERENT natures, probe `V(p, q)` across them. `//! lrm 7.4.3`, `//! lrm 3.11`, `//! reject <incompatible-discipline code>`, `//! xfail VerA has no discipline-compatibility diagnostic`.",
+  "severity": "high",
+  "sourceLenses": ["negatives", "uncovered"]
+},
+{
+  "id": "ch07-08",
+  "section": "7.4.4",
+  "action": "create",
+  "path": "tests/fixtures/ch07_mixed_signal/conflicting_discipline_declaration_rejected.va",
+  "title": "No fixture declares a net twice — 7.4.4's 'conflicting regardless of compatibility' rule is untested",
+  "detail": "Verified at ch7 lines 738-740: 'More than one conflicting discipline declaration from the same context ... for the same hierarchical segment of a signal is an error. In this case, conflicting simply means an attempt to declare more than one discipline regardless of whether the disciplines are compatible or not.' The 'regardless of compatibility' clause is the whole point and is what makes this distinct from ch07-07 — it must be provoked with two COMPATIBLE disciplines so that a compiler which only checks compatibility still fails. No fixture in the chapter declares any net twice. Needs no hierarchy: two declarations of the same identifier in one module body. Same verified gap as ch07-07: no compatibility or redeclaration-of-discipline diagnostic exists.",
+  "expected": "One module, one net name, two discipline declarations that ARE compatible (reuse ch7_disc_a / ch7_disc_b from compatible_disciplines.va). `//! lrm 7.4.4`, `//! reject <conflicting-declaration code>`, `//! xfail`.",
+  "severity": "high",
+  "sourceLenses": ["negatives", "uncovered"]
+},
+{
+  "id": "ch07-09",
+  "section": "7.2.2",
+  "action": "create",
+  "path": "tests/fixtures/ch07_mixed_signal/both_contexts_assignment_rejected.va",
+  "title": "No fixture for 'It shall be an error to assign to a given variable in both contexts'",
+  "detail": "Verified in docs/VAMS-LRM/ch7-mixed-signal.html, 7.2.2 second paragraph (the HTML carries a refinement the plaintext does not): 'It shall be an error to assign to a given variable in both contexts.' Zero hits chapter-wide. The nearest file, discrete_real_from_analog_unsupported.va, assigns `digital_real` in exactly ONE context (the `initial`) and only reads it from analog, so it does not violate 7.2.2 at all. Downgraded from the lenses' `high`: writing the violation requires a discrete process, which C.7 removes from Verilog-A and which VerA rejects at E0205 before the both-contexts rule can be reached. It is still worth filing, as an honest masked-rule record rather than as a live check. Note the HTML's own source-fidelity paragraph resolves the declaration-assignment question against the lens reading — see the drop list.",
+  "expected": "A `real x;` written by a statement in an `initial` block AND by a statement in the `analog` block. `//! lrm 7.2.2`, `//! reject E0205`, `//! xfail the both-contexts rule is masked by the digital module-item rejection`.",
+  "severity": "medium",
+  "sourceLenses": ["negatives", "uncovered"]
+},
+{
+  "id": "ch07-10",
+  "section": "7.3.2",
+  "action": "create",
+  "path": "tests/fixtures/ch07_mixed_signal/xz_contribution_rejected.va (+ xz_ordinary_equality_rejected.va)",
+  "title": "The converter example's own `// error` lines for `V(anet) <+ 1'bz;` and `if (dnet == 1'bx)` have no fixture",
+  "detail": "Verified at ch7 lines 356 and 359 — the LRM annotates both forms `// error` in its own example, and lines 332-334 give the rule: 'It is an error if these operands return x or z bit values when solved.' The chapter has fixtures for the ASSIGNMENT forms (x_literal, z_literal, both `state = 1'bN;`) but neither for contributing an x/z literal to a branch nor for the ORDINARY equality operator applied to one. Both are writable today and both should already reject with E0130 (title 'x/z digit in a number literal', whose explain text cites annex C), so unlike most of this chapter these are ordinary green reject fixtures, not xfails.",
+  "expected": "Two small files, each one module: `V(p) <+ 1'bz;` and `if (d == 1'bx) ...`. `//! lrm 7.3.2`, `//! lrm C.3`, `//! reject E0130`. No xfail expected — confirm E0130 actually fires before landing them.",
+  "severity": "medium",
+  "sourceLenses": ["negatives", "uncovered"]
+},
+{
+  "id": "ch07-11",
+  "section": "7.3.2.1",
+  "action": "create",
+  "path": "tests/fixtures/ch07_mixed_signal/nan_contribution_rejected.va",
+  "title": "7.3.2.1 names three special values; only +inf has any fixture, and that one is broken",
+  "detail": "ch7 lines 370-373 cover 'plus and minus infinity and Not-a-Number (NaN)'. inf_contribution.va (see ch07-01) touches only `+inf`, and asserts it as a passing run. Nothing anywhere contributes NaN or -inf. Companion to ch07-01 and should land in the same pass. Note the same grammar constraint applies: `-inf` is only legal inside a `value_range_expression` (annex-a line 449), so the values must be formed arithmetically (`0.0/0.0`, `-1.0/0.0`) rather than written as keywords, or the fixture rejects on the grammar and never reaches 7.3.2.1.",
+  "expected": "Contribute a NaN and a -inf formed by arithmetic, not by the `inf` keyword. `//! lrm 7.3.2.1`, `//! reject <illegal special-value contribution code>`, `//! xfail` alongside ch07-01.",
+  "severity": "medium",
+  "sourceLenses": ["negatives", "uncovered"]
+},
+{
+  "id": "ch07-12",
+  "section": "7.3.1 / 7.3.2 / C.7 / 6.2.2",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/*.va (unfalsifiable `//! reject` substrings)",
+  "title": "Unfalsifiable reject substrings where a stable diagnostic code already exists",
+  "detail": "Each of these matches far more than the rule it stands for, and every one has a code available. `//! reject identifier` (3 bus files) — see ch07-02. `//! reject expression` (xz_casex, xz_casez) matches E0209 whose title is literally 'expected an expression', i.e. it matches essentially every parse failure. `//! reject and` (primitive_generated_ports) is a three-character substring that matches any message containing the word; the same file already pins E0205 and `defparam`, so the line is pure noise. `//! reject unsupported module item` (digital_always, digital_initial, digital_probe, digital_cross, cross_domain_function, hierarchy) is E0205's title verbatim — use the code, which is the form README.md calls preferred precisely so prose can be improved without touching fixtures. `//! reject module instantiation is not supported` (hierarchy_unsupported) is E0204's title verbatim. `//! reject wreal` / `assign` / `function` / `initial` / `posedge` are keyword echoes that pin nothing about which rule fired.",
+  "expected": "Replace every prose substring with its code: E0205, E0204, E0209, E0130, E0315, E0323. Delete the redundant keyword-echo lines. Where no code names the actual rule (casex/casez have no C.7 subset diagnostic — they die at E0209), record that as a code gap rather than papering it with a substring.",
+  "severity": "medium",
+  "sourceLenses": ["weak", "negatives"]
+},
+{
+  "id": "ch07-13",
+  "section": "C.5 / 7.3.2",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/x_case_equality_unsupported.va (+ z_case_inequality_unsupported.va)",
+  "title": "Both files pin E0130 (the literal) when E0323 (the operator, which cites C.5) is the rule they are named for, and their EXPECT lines state the inverse of what they assert",
+  "detail": "Both are `(d === 1'bx) ? ... : ...`, which trips two independent subset rules; the lexer's E0130 wins the race, so the `===` never matters to the verdict and x_literal_unsupported.va already covers E0130. Verified E0323 exists and is exactly right: title 'case equality is not in the analog subset', lrm field `C.5`. Meanwhile each file's EXPECT comment reads '7.3.2 permits explicit X testing with case equality' — a line that tells a reader the opposite of the assertion beneath it. Verdict stays reject (C.5 + C.9 both hold); the pin and the prose are what is wrong.",
+  "expected": "Add `//! reject E0323` so the operator is pinned and the files stop duplicating x_literal. `//! lrm C.5`. Replace the inverted EXPECT lines with the C.5 sentence.",
+  "severity": "medium",
+  "sourceLenses": ["weak", "negatives"]
+},
+{
+  "id": "ch07-14",
+  "section": "7.4.4.1, 7.6, 7.7.x, 7.8.x, 7.9, 7.3.1",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/COVERAGE.md",
+  "title": "One out-of-subset block for the ~18 Clause-7 elaboration rules, replacing the lenses' proposal to write ~15 new .va files a Verilog-A compiler must reject",
+  "detail": "Verified present and normative, and verified unwritable here: Table 7-2's legal direction pairings (ch7 line 941), `resolveto exclude` (lines 1085-1110), connect_mode defaulting to merged (line 1450), 'one (and only one) connect statement' (line 1670), the 7.8.4 insertion rules, 7.8.5 generated instance names, the five untested 7.8.5.1 primitive port-naming families (lines 1730-1744 — VerA covers only the N-input gate family, and only inside a defparam identifier it never reaches), 7.8.6 supply-sensitive modules, 7.9 driver-receiver segregation, 7.4.4.1/7.4.4.2 resolution, 7.2.4 abstol-is-the-smallest (line 148), 7.2.1 ddt-of-a-digital-value-is-zero (lines 66-68), and Table 7-1's numeric bit mapping (lines 205-222). Every one needs either a digital domain or an elaborated hierarchy. C.9 (annex-c line 126) removes Clause 7 from Verilog-A and src/ir/lower.zig elaborates only `modules[0]`, so none can become a passing .va. The uncovered lens filed 12 of these as `create`; that is ~15 wasted fixtures. One honest table beats them.",
+  "expected": "A single COVERAGE.md section listing each rule with the reason it is out of reach (C.9 subset, or no elaborator) and the id it would take if a Verilog-AMS frontend lands. No .va files. Fold in the 7.3.1 Table 7-1 numeric mapping: the chapter's 41 files never form one mixed-signal value, and under C.9 they cannot.",
+  "severity": "medium",
+  "sourceLenses": ["uncovered", "negatives"]
+},
+{
+  "id": "ch07-15",
+  "section": "7.2.1, 7.2.4, 7.3.1, 7.3.6.5, 7.4.2, 7.4.3",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/COVERAGE.md",
+  "title": "Six COVERAGE.md rows credit fixtures with rules those fixtures demonstrably do not exercise",
+  "detail": "Each verified by reading the named file. `s7-2-1` -> continuous_context.va: contains no ddt() and no discrete primary, so it covers the continuous half of 7.2.1 and nothing of the discrete half the row implies. `s7-3-1` and `s7-3-6-5` -> analog_reads_integer.va: its OWN header (lines 6-9) explains that `digital_value` is assigned in the analog block, so 7.2.2 makes it continuous — it is not a discrete primary and tests neither row. `s7-4-2` -> discrete_discipline.va: asserts nothing and cannot run (ch07-04). `s7-4-3` -> compatible_disciplines.va: only the compatible case exists, so the row's 'connection of continuous-time disciplines' is half-covered at best and its error clause not at all (ch07-07). `s7-2-4` -> custom_disciplines.va: a good 3.6.2 fixture with a single net and a single abstol, credited with 7.2.4's smallest-abstol aggregation across multiple nets, which it cannot reach. Separately, analog_event.va wears a 7.3.4 header ('Detecting discrete events in a continuous context', ch7 line 414) while testing cross(), an ANALOG event — it is a 5.10.3.1 fixture in the wrong chapter's clothes.",
+  "expected": "Rewrite the six rows to name what each file actually pins, and move the claim to the honest section from ch07-14 where nothing pins it. Re-head analog_event.va as 5.10.3.1 (its content is correct and its value of 0 is right) or move it out of ch07.",
+  "severity": "medium",
+  "sourceLenses": ["weak", "uncovered"]
+},
+{
+  "id": "ch07-16",
+  "section": "7.2.3",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/analog_port.va",
+  "title": "Line 16 wants -0.5 but the binary64 result is -0.49999999999999994, and the check it labels a 'potential-source mismatch' only subtracts two supplied biases",
+  "detail": "Recomputed: 0.2 - 0.7 = -0.49999999999999994, err 5.551115123125783e-17 against the written -0.5. It passes today only because the call uses `CHECK` with TOL=1e-15 and the error sits 18x inside it; converting the line to `CHECKX` as most of this chapter does would break it. TOL itself is correctly conditioned (~4.5 ulp at O(1)) — the digit string is what to fix. Second, smaller defect in the same file: the check is titled 'potential-source mismatch V(driven) - V(sense)' but both operands are `//! bias` values the runner supplied, so the expression is arithmetic on two constants and would hold for a compiler with no branch equation at all. Merged into one edit since it is one file.",
+  "expected": "Either write -0.49999999999999994 and switch to CHECKX, or keep -0.5 and CHECK and note in the header why the tolerance is load-bearing. Retitle the second check so it does not claim to observe a solver residual it cannot see.",
+  "severity": "low",
+  "sourceLenses": ["literals", "weak"]
+},
+{
+  "id": "ch07-17",
+  "section": "3.2",
+  "action": "edit",
+  "path": "tests/fixtures/ch07_mixed_signal/analog_event.va (+ continuous_context.va)",
+  "title": "Both files cite '§3.4' for the real-variable-initialised-to-zero sentence; the correct clause is §3.2, not §3.3 as the literals lens claimed",
+  "detail": "Both headers quote 'Real variables are initialized to zero (0) at the start of a simulation.' and attribute it to §3.4. §3.4 is Parameters (ch3 line 233), so the cite is wrong. But the literals lens's correction is ALSO wrong: it proposed §3.3, which is String data type (ch3 line 103). The sentence is at ch3 line 55, inside §3.2 Integer and real data types (lines 20-80). Values in both fixtures are correct and unaffected; this is purely the cite, and it matters now because ch07-06 will carry these strings mechanically into `//! lrm` directives, where a wrong section number is a fixture error the runner FAILs on.",
+  "expected": "`//! lrm 3.2` in both files, and correct the prose cite in both headers. Do not use 3.3 or 3.4.",
+  "severity": "low",
+  "sourceLenses": ["literals"]
+},
+{
+  "id": "ch07-18",
+  "section": "7.x",
+  "action": "delete",
+  "path": "tests/fixtures/ch07_mixed_signal/*.expected-error.txt",
+  "title": "33 stale .expected-error.txt sidecars remain after the contract abolished sidecar files",
+  "detail": "Counted 33, not the 30 the weak lens reported. tests/fixtures/README.md line 3 states the contract plainly: '859 .va files. One runner, tests/torture.zig. No sidecar files.' Every reject fixture in this directory still ships one, and several contain nothing but a fragment ('and', 'identifier', 'expression') that no longer participates in any verdict. They are read by nothing and can only drift.",
+  "expected": "Delete all 33. Confirm with a run that no runner opens them first.",
+  "severity": "low",
+  "sourceLenses": ["weak"]
+},
+{
+  "id": "ch07-19",
+  "section": "7.8.5",
+  "action": "delete",
+  "path": "tests/fixtures/ch07_mixed_signal/connect_generated_split_name_unsupported.va",
+  "title": "connect_generated_defparam and connect_generated_split_name are byte-for-byte the same test with a different identifier spelling",
+  "detail": "Both are a module containing one `defparam <a>__<b>__<c>.threshold = 0.6;` and nothing else, both assert `//! reject E0205`, and both reject because `defparam` is not a module_item in the analog subset. The generated-name convention they are named for (7.8.5's SigName__ModuleName__BottomDiscipline vs SigName__InstName__PortName) lives entirely in the identifier text, which the parser never interprets, so the two files are indistinguishable to the runner. Keeping one costs nothing; keeping both implies the naming distinction is tested.",
+  "expected": "Delete connect_generated_split_name_unsupported.va and its sidecar. Give the survivor `//! lrm C.9` and a header saying the naming convention is recorded in COVERAGE.md (ch07-14), not tested.",
+  "severity": "low",
+  "sourceLenses": ["weak"]
+}
+]

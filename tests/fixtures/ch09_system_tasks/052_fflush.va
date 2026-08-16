@@ -11,12 +11,16 @@
 // determine how the file was opened". That bit is exactly the discrimination
 // $fflush has to make between its two overloads, since a multichannel
 // descriptor's bit 31 "shall always be cleared".
+//
+//! lrm 9.5.1
+//! lrm 9.5.6
+//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers 0 (bit 31 clear) and $fflush is a no-op. lower.zig:2362 records the reason — the file family "needs a descriptor the compiled device has no way to own"
 `include "check.vh"
 module ch09_atomic_fflush(p, n);
   inout p, n; electrical p, n;
   integer fd;
   analog begin
-    fd = $fopen("fixture.dat", "a");
+    fd = $fopen("ch09_052_fflush.dat", "a");
     // Masked, not shifted: `>>` fills with zeros on a 32-bit integer, but VerA
     // carries integers in an i64 where a sign-extended fd would answer a shift
     // differently. `& 2147483648` is bit 31 whatever the width.

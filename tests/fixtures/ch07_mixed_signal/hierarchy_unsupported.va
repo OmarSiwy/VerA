@@ -1,4 +1,5 @@
-//! reject module instantiation is not supported
+//! lrm 7.2.3
+//! reject E0204
 // EXPECT: error -- mixed signals require a complete elaborated hierarchy.
 module ch7_mixed_parent(p);
   inout p; electrical p;

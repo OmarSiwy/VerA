@@ -1,4 +1,33 @@
-// LRM 4.7.2: every formal of an analog function must be declared input,
-// output or inout, so `real x;` alone declares a local, not an argument.
+// LRM 4.7.1 requires that "all formal arguments shall have an associated
+// direction specification that shall be either input, output, or inout".
+//
+// `undirected` declares `real x;` and nothing else, so `x` is a local variable
+// and the function has ZERO formals. That is the only observable form the
+// violation can take: a declaration with no direction is not a formal that is
+// missing something, it is not a formal at all, and no compiler can tell the
+// two intentions apart from the source.
+//
+// So what the call site sees is an arity mismatch — one actual passed to a
+// function that declares no arguments — and E0511 "wrong number of arguments to
+// an analog function" (4.7.2) is the diagnostic. The header used to claim this
+// fixture pinned the direction rule directly; it does not, and cannot. It pins
+// the consequence, which is the only thing there is to pin.
+//
+// 4.7.1's separate "shall have at least one formal argument declared" is
+// 100_function_no_arguments.va, where the call site's arity MATCHES the empty
+// formal list and so E0511 cannot fire.
+//
+//! lrm 4.7.1
+//! lrm 4.7.2
 //! reject E0511
-module ch4_fn_undirected(p); inout p; electrical p; analog function real undirected; real x; undirected=x; endfunction analog I(p)<+undirected(V(p)); endmodule
+module ch04_function_undirected_argument(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function real undirected;
+        real x;
+        undirected = x;
+    endfunction
+
+    analog I(p, n) <+ undirected(V(p, n));
+endmodule

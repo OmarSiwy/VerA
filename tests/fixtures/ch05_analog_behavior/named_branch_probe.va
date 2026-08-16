@@ -4,6 +4,8 @@
 // that is 0.75; the reversed orientation would read -0.75, and a probe that
 // ignored n would read 1.0.
 //
+//! lrm 5.4.1
+//! lrm 3.6.3
 //! bias V(p) = 1.0
 //! bias V(n) = 0.25
 `include "check.vh"

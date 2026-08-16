@@ -18,6 +18,9 @@
 // is the $fdebug").
 //
 //! bias V(p) = 1.25, V(n) = 0.25
+//! lrm 9.5.1
+//! lrm 9.5.2
+//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers 0 (bit 31 clear) and all five output tasks are no-ops — lower.zig:2365 `isDisplayTask` deliberately excludes them, so unlike $display they never even reach cg_display.zig
 `include "check.vh"
 module ch09_file_output(p, n);
   inout p, n; electrical p, n;

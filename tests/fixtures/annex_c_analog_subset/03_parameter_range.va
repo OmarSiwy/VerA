@@ -4,6 +4,8 @@
 // override is accepted (a parenthesis there would make it an out-of-range
 // error), and the device it produces carries no current across a 1 V bias.
 //
+//! lrm C.2
+//! lrm 3.4.2
 //! param gain = 0
 //! bias V(p) = 1.0
 `include "check.vh"

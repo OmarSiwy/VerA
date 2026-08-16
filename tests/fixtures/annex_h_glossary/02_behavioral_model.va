@@ -1,8 +1,13 @@
 // Annex H "behavioral model": a version of a module with a unique set of
 // parameters. The override is the point — with resistance overridden to 2k the
-// §2.6 scale factor makes it 2000 exactly, and Ohm's law at V(p,n) = 0.5 gives
-// 0.5/2000 = 250 uA, not the 500 uA the 1k default would give.
+// §2.6.2 scale factor (Table 2-1: k = 1e3) makes it 2000 exactly, and Ohm's law
+// at V(p,n) = 0.5 gives 0.5/2000 = 250 uA, not the 500 uA the 1k default gives.
+// §3.4: "parameters can be modified at compilation time to have values which are
+// different from those specified in the declaration assignment."
 //
+//! lrm H
+//! lrm 3.4
+//! lrm 2.6.2
 //! param resistance = 2k
 //! bias V(p) = 0.5
 `include "check.vh"

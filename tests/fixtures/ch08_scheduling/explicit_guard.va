@@ -11,6 +11,8 @@
 // doing exactly the job the clause describes, and an implementation that leaks
 // the unguarded probe through prints 1.25.
 //
+//! lrm 8.4.3.2
+//! lrm 5.10.3.1
 //! bias V(p) = 1.25, V(clock) = 1.0
 `include "check.vh"
 module ch8_guard(p, clock);

@@ -1,0 +1,29 @@
+// §9.13: "Verilog-AMS HDL extends the probabilistic distribution functions so
+// that they are supported in the analog context." Table 9-10 lists all 17 names
+// and every row reads `Yes  Yes` — digital context AND analog context. So this
+// file must COMPILE and run green; a compiler that refuses the call is the one
+// that is wrong, which is why the expectation is a run and not a reject.
+//
+// This one has a digit the LRM fixes outright. §9.13.1: "The
+// analog_random_seed argument can also be a parameter or a constant, in which
+// case the system function does not update the parameter value. However an
+// internal seed is created which is assigned the initial value of the parameter
+// or constant". So after the call the parameter still reads its declared 7 —
+// an implementation that treated the parameter as the inout seed of the
+// variable form fails that check and nothing else would catch it.
+//
+//! lrm 9.13.1
+//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
+`include "check.vh"
+module ch09_arandom_parameter_seed(p, n);
+  inout p, n; electrical p, n;
+  parameter integer seed = 7;
+  integer a;
+  analog begin
+    a = $arandom(seed);
+    `CHECKI("§9.13.1 a parameter seed is NOT updated by the call", seed, 7);
+    `CHECKI("and the §9.13.1 modulo example still holds",
+            (a % 60 >= -59) && (a % 60 <= 59), 1);
+    I(p,n) <+ V(p,n) + a;
+  end
+endmodule

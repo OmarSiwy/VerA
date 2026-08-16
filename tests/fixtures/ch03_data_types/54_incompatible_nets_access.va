@@ -1,0 +1,33 @@
+// §3.11: "Certain operations can be done on nets only if the two (or more) nets
+// are compatible. For example, if an access function has two nets as arguments,
+// they must be compatible." §3.11.1 decides this pair by name: "electrical and
+// rotational are incompatible disciplines because the natures for both potential
+// and flow are not derived from the same base natures."
+//
+// `elec` is electrical (potential Voltage, units "V") and `shaft` is rotational
+// (potential Angle, units "rads"), both from annex D, both continuous, so no
+// rule in §3.11.1 makes them compatible: not the Self Rule, not the Base or
+// Derived Nature Rules, and not the Units Value Rule, since "V" and "rads"
+// differ. `V(elec, shaft)` is therefore an access function over two
+// incompatible nets.
+//
+// 76_nature_compatibility_rules.va is the legal side — three pairs that each
+// pass one of §3.11.1's nature rules.
+//
+// The pinned substring is only the phase label: VerA has no compatibility
+// diagnostic, so a code would pin the wrong rule.
+//
+//! lrm 3.11
+//! lrm 3.11.1
+//! reject DiagnosticsReported
+//! xfail VerA resolves V(elec, shaft) across an electrical net and a rotational net and stamps the branch; there is no §3.11 net compatibility check in lower.zig
+module ch3_incompatible_nets_access(p, n);
+    inout p, n;
+    electrical p, n;
+    electrical elec;
+    rotational shaft;
+
+    analog begin
+        I(p, n) <+ V(elec, shaft) * V(p, n);
+    end
+endmodule

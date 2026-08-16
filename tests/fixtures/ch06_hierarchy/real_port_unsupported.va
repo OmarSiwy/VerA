@@ -1,5 +1,24 @@
-//! reject identifier
-// EXPECT: error -- real-valued ports are not in the analog-device ABI.
+// THIS REJECTION IS CORRECT CONFORMANCE for Verilog-A, and the authority is the
+// annex, not Clause 6. Annex C.8: "The hierarchical structure defined in Clause 6
+// is applicable to both Verilog-AMS HDL and Verilog-A, except support for real
+// value ports is only applicable to Verilog-AMS HDL and IEEE Std 1364-2005
+// Verilog HDL (see 6.5.3)." Annex C also strikes the net type such a port would
+// need: "From 3.7, Real net declarations: the wreal data type is not supported in
+// Verilog-A."
+//
+// So `input real x` is outside the language this suite compiles, a conforming
+// Verilog-A compiler diagnoses it, and there is no `//! xfail` here.
+//
+// The road to the verdict is a parse boundary, which is worth writing down rather
+// than hiding: VerA's port direction declaration takes an identifier or a
+// discipline, so the keyword `real` is E0208 ("expected an identifier: found
+// `real`"). It never becomes a real-valued port that a later rule could refuse.
+// §6.5.3's own content — the wreal net type and its one-driver rule — stays
+// untested here on purpose: it is Verilog-AMS-only and out of this subset.
+//
+//! lrm C.8
+//! lrm 6.5.3
+//! reject E0208
 module ch6_real_port(x);
   input real x;
   electrical p;

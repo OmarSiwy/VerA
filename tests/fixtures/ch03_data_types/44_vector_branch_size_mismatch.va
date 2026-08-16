@@ -1,0 +1,29 @@
+// §3.12: "If one of the terminals of a branch is a vector net, then the other
+// terminal shall either be a scalar net or a vector net of the same size."
+//
+// `a` is size 4 and `b` is size 2, and neither is scalar, so there is no
+// one-to-one pairing (Figure 3-1) and no vector-to-scalar fan-in (Figure 3-2)
+// that this declaration could mean. It is an error.
+//
+// 33_vector_branches.va is the legal side of the same rule: [3:5] against
+// [1:3], both size 3.
+//
+// The pinned substring is deliberately only the phase label. This rule has no
+// diagnostic code of its own in VerA — today the parser refuses the net range
+// itself, at E0208, long before anything compares two terminal sizes — so
+// pinning E0208 would pin the WRONG rule and would stop matching the day
+// vector nets land, which is exactly when this fixture starts being worth
+// something. Any conforming compiler must produce some diagnostic here.
+//
+//! lrm 3.12
+//! reject DiagnosticsReported
+module ch3_vector_branch_size_mismatch(a, b);
+    inout a, b;
+    electrical [3:0] a;
+    electrical [1:0] b;
+    branch (a, b) bad;
+
+    analog begin
+        I(bad[0]) <+ V(bad[0]) / 1000.0;
+    end
+endmodule

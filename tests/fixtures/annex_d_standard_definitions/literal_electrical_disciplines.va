@@ -1,25 +1,26 @@
-// Literal standard electrical conservative and signal-flow discipline names.
+// The literal standard electrical disciplines, taken from the implementation's
+// disciplines.vams and not re-declared here — an earlier revision declared
+// `electrical`, `voltage` and `current` itself, so the assertion read back the
+// fixture's own text and a compiler shipping no annex D file passed.
 //
-// Annex D.1 makes `electrical` potential Voltage / flow Current, so `V(p)` is
-// the potential and `I(p) <+ V(p)` is a 1 S element: at the biased 0.9 V the
-// element carries 0.9 A out of p.
+// Annex D.1 makes `electrical` conservative, potential Voltage / flow Current,
+// so `V(p)` is the potential and `I(p) <+ V(p)` is a 1 S element; and it makes
+// `voltage` a SIGNAL-FLOW discipline with a potential nature only, whose access
+// is the same `V`. Both wants are the bias the testbench stores into the
+// unknown vector, loaded straight back, so the difference is exactly 0.0 and
+// CHECKX is the honest macro.
 //
+//! lrm D.1
 //! bias V(p) = 0.9
+//! bias V(vn) = 0.4
 `include "check.vh"
-discipline electrical;
-  potential Voltage;
-  flow Current;
-enddiscipline
-discipline voltage;
-  potential Voltage;
-enddiscipline
-discipline current;
-  flow Current;
-enddiscipline
-module annex_d_literal_electrical(p);
-  inout p; electrical p;
+module annex_d_literal_electrical(p, vn);
+  inout p, vn;
+  electrical p;
+  voltage vn;
   analog begin
-    `CHECK("V() is the potential of the standard-named electrical discipline", V(p), 0.9, 1e-12);
+    `CHECKX("V is the potential access of the standard-named `electrical`", V(p), 0.9);
+    `CHECKX("V is the potential access of the signal-flow `voltage`", V(vn), 0.4);
     I(p) <+ V(p);
   end
 endmodule

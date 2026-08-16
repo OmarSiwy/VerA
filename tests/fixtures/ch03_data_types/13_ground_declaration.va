@@ -4,6 +4,7 @@
 // 1.5 V, V(p, local_reference) is 1.5, not 1.5 minus some separately solved
 // value of local_reference.
 //
+//! lrm 3.6.4
 //! bias V(p) = 1.5
 `include "check.vh"
 module ch03_ground_declaration(p);
@@ -12,7 +13,7 @@ module ch03_ground_declaration(p);
     ground local_reference;
 
     analog begin
-        `CHECK("a ground net is the 0 V global reference", V(p, local_reference), 1.5, 1e-12);
+        `CHECKX("a ground net is the 0 V global reference", V(p, local_reference), 1.5);
         V(p, local_reference) <+ 5.0;
     end
 endmodule

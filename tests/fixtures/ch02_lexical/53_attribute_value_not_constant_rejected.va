@@ -1,0 +1,36 @@
+// LRM 2.9, Syntax 2-4, spells the value slot of an attribute as a CONSTANT
+// expression and nothing weaker:
+//
+//     attribute_instance ::= (* attr_spec { , attr_spec } *)
+//     attr_spec          ::= attr_name [ = constant_expression ]
+//     attr_name          ::= identifier
+//
+// It has to be constant. 2.9 says attributes carry "properties about objects,
+// statements and groups of statements in the HDL source that can be used by
+// various tools" — a tool that is not a simulator, reading the source without
+// solving it. `z` below is an analog block variable whose value exists only
+// during a solve, so there is no value for such a tool to read, and no point in
+// the elaboration at which the attribute could be said to have one.
+//
+// This is the value half of the rule; 30_nested_attribute_rejected.va is the
+// other half of the same sentence pair ("It shall be illegal to specify the
+// value of an attribute with a constant expression that contains an attribute
+// instance"), and 29_attribute_default_and_multiple.va pins what a legal
+// constant value does.
+//
+// Inert today — nothing downstream in VerA reads attribute values, so the wrong
+// acceptance has no observable consequence yet. It will the moment one does.
+//! lrm 2.9
+//! lrm A.9.1
+//! reject E0209
+//! xfail VerA does not require an attribute value to be a constant expression; `(* q = z *)` with `real z` in scope compiles with no diagnostic
+module ch02_attribute_value_not_constant_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    real z;
+    (* q = z *) parameter real gain = 1.0;
+    analog begin
+        z = 2.0;
+        I(p, n) <+ gain * V(p, n);
+    end
+endmodule

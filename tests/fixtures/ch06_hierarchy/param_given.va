@@ -9,6 +9,8 @@
 // the contributed current is 2.0 * 0.25 = 0.5 exactly, twice what the
 // not-given arm would give.
 //
+//! lrm 6.3.5
+//! lrm 9.19
 //! param gain = 2.0
 //! bias V(p) = 0.25
 `include "check.vh"

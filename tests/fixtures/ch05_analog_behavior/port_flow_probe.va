@@ -8,6 +8,7 @@
 // 0.0625 and the contributed flow is 0.0625 + 0.25 = 0.3125. Both are exact in
 // IEEE 754, so exact equality is the right claim.
 //
+//! lrm 5.4.3
 //! bias V(p) = 0.25
 //! sweep flowZ28Z3cpZ3eZ29 = 0.0625
 `include "check.vh"

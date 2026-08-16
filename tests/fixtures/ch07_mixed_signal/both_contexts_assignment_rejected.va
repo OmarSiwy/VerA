@@ -1,0 +1,32 @@
+// §7.2.2 contexts: "A given variable can be assigned values only in one context
+// or the other, but not in both. The domain of a variable is that of the
+// context from which its value is assigned", refined two paragraphs later into
+// "It shall be an error to assign to a given variable in both contexts."
+//
+// `sampled` below is assigned by a statement in an `initial` block — the
+// discrete context — and by a statement in the `analog` block — the continuous
+// one. Both are statements, not declaration assignments: §7.2.2's own source
+// note flags that a module-level declaration assignment is read as context-free
+// by one paragraph and as an out-of-block discrete assignment by the other, so
+// provoking the rule that way would test the ambiguity instead of the rule.
+//
+// The rule is MASKED, not exercised. Writing the violation needs a discrete
+// process, and C.7 removes it — "No digital behavior or events are supported in
+// Verilog-A" — so the `initial` block dies as an unsupported module item
+// (E0205) before any variable has a domain to conflict over. Filed as an honest
+// record of an unreachable clause rather than as a live check; when a digital
+// context exists, this file must reject for the reason below.
+//
+//! lrm 7.2.2
+//! lrm C.7
+//! reject assigned in both contexts
+//! xfail the §7.2.2 both-contexts rule is masked: VerA rejects the `initial` block itself at E0205 first
+module ch7_both_contexts(p);
+  inout p; electrical p;
+  real sampled;
+  initial sampled = 1.25;
+  analog begin
+    sampled = V(p);
+    I(p) <+ sampled;
+  end
+endmodule

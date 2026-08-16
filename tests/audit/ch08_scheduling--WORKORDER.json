@@ -1,0 +1,156 @@
+[
+  {
+    "id": "ch08-01",
+    "section": "8.4.x, 8.5.x (dispositions); Annex C.7, C.10 (governing rules)",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/COVERAGE.md",
+    "title": "14 COVERAGE.md rows claim Clause 8 coverage from //! reject fixtures; five are outright mis-mappings",
+    "detail": "VerA is a Verilog-A compiler (README line 1). Annex C.7: 'No digital behavior or events are supported in Verilog-A'; Annex C.10: 'The mixed-signal simulation cycle from 8.2 is only applicable to Verilog-AMS HDL.' So s8-4-1, s8-4-3-3, s8-4-6, s8-5, s8-5-1, s8-5-2, s8-5-3, s8-5-3-1..s8-5-3-6 are OUT OF SCOPE for this tool, and a //! reject proves only that the parser refuses the source form - it is not coverage of the scheduling rule. Five rows are worse than optimistic, they are wrong: s8-4-4 (synchronization loop and event cancellation, Figure 8-5) -> cross_wakeup.va, which is a dc cross fixture with no timer, no transition, no delay and no cancellation; s8-4-3-3 (A/D boundary timing, whose whole content is the 5.2e-9 -> 5.0e-9 rounding and the 0.5 ns bound) -> digital_boundary_unsupported.va, which pins no time value; s8-5-3-6 (explicit D2A region 1b) -> the same bare reject, which has no explicit event control and no region-1 write; s8-4-6 -> absdelta_unsupported.va, whose diagnostic fires on the `always` item and never reaches absdelta; s8-4-1 -> analog_digital_initial_order_unsupported.va, which rejects the very module whose ordering the row claims to test. Verified: docs/VAMS-LRM/annex-c-veriloga.html C.7/C.10 quoted verbatim; docs/VAMS-LRM/ch8-scheduling.html section ids s8-1..s8-5-3-7 all present; every cited fixture read in full.",
+    "expected": "Each of the 14 digital/mixed-signal rows carries an explicit disposition column reading 'not applicable to Verilog-A - Annex C.7 / C.10; the fixture is a source-form inventory, not coverage', and the five mis-mapped rows lose their fixture reference. s8-1, s8-2, s8-3, s8-3-1/2/3, s8-4-3-1 and s8-4-7 stay as real coverage. The chapter's honest score becomes analog-only, and no row can be read as 'VerA implements Clause 8 digital scheduling'.",
+    "severity": "high",
+    "sourceLenses": ["uncovered", "negatives", "weak"]
+  },
+  {
+    "id": "ch08-02",
+    "section": "Annex C.7, C.10",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/digital_boundary_unsupported.va, digital_process_unsupported.va, switch_primitive_unsupported.va",
+    "title": "Three DEBT headers assert the OPPOSITE of Annex C: they call a conformant Verilog-A rejection a VerA defect",
+    "detail": "All three carry 'DEBT - this rejection is NOT conformance. The LRM permits what VerA refuses here.' For digital_boundary_unsupported.va (`always @(cross(...)) d = 1;`) and digital_process_unsupported.va (`always @(state) state = !state;`) that is false: C.7 forbids digital behavior and events in Verilog-A outright, so refusing the `always` item is the conformant answer and the header charges VerA with a debt it does not owe. switch_primitive_unsupported.va (`tran (a, b);`) is the only defensible one - C.16 does not exclude `tran` from Verilog-A - but its debt is VerA's blanket lack of instance/primitive instantiation, not clause 8.5.3.5 scheduling. Extra rot: all three headers say '`zig build ledger` counts this rule against VerA', and build.zig:69 records that the `ledger` step was removed. Verified by reading all three fixtures, annex-c-veriloga.html C.7/C.16 and build.zig.",
+    "expected": "digital_boundary and digital_process: DEBT block deleted, replaced by 'Annex C.7 - no digital behavior or events in Verilog-A; the always item is refused before its body is read, so nothing here pins 8.4.3.3 or 8.5' plus `//! lrm C.7`. switch_primitive: DEBT block kept but re-aimed at the real gap (no primitive/instance instantiation in VerA) and its dead `zig build ledger` sentence removed. No fixture in the tree claims VerA owes conformance to a clause Annex C excludes from the language it compiles.",
+    "severity": "high",
+    "sourceLenses": ["negatives", "weak"]
+  },
+  {
+    "id": "ch08-03",
+    "section": "5.10.3.4, 8.4.6",
+    "action": "delete",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/absdelta_unsupported.va (+ its .expected-error.txt)",
+    "title": "absdelta_unsupported.va's stated expectation contradicts the rule it quotes, and the real test already exists elsewhere",
+    "detail": "The file says 'EXPECT: error -- absdelta is permitted only in digital initial/always' and then puts absdelta in an always block and demands an error. Verified against docs/VAMS-LRM/ch5-analog.html: 5.10.3.4 reads 'This function is only allowed in an initial or always block of a Verilog-AMS module' - the fixture's own quote makes its own code the ALLOWED placement, so the sentence in the header cannot be the reason for the diagnostic. The diagnostic is actually E0205 on the `always` module item (Annex C.7), which absdelta has nothing to do with; the fixture would produce the identical error with the absdelta call replaced by anything. The correct negative for the placement rule already exists at ch05_analog_behavior/absdelta_digital_only.va (`analog @(absdelta(...))`, //! reject E0513 + absdelta), and the pure `always` inventory already exists at annex_c_analog_subset/14_digital_always_rejected.va. Its only COVERAGE row (s8-4-6) is AMS-only per C.10 and dies with item ch08-01. NOTE for the author: two lenses argued this file should die because 'the LRM requires acceptance' - that reasoning is wrong for a Verilog-A tool; the file dies because it tests nothing its two siblings do not already test, and its header states a false reason for its own verdict.",
+    "expected": "Both files gone. ch05_analog_behavior/absdelta_digital_only.va remains the sole absdelta-placement negative and annex_c_analog_subset/14 the sole bare-`always` inventory. Fixture count in ch08 drops 28 -> 27.",
+    "severity": "high",
+    "sourceLenses": ["negatives", "weak"]
+  },
+  {
+    "id": "ch08-04",
+    "section": "5.10.3.3, 8.4.3.2",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/timer_wakeup.va",
+    "title": "The chapter's four wake-up fixtures all assert that NOTHING fired, and the one timer fixture never enters transient",
+    "detail": "timer_wakeup.va declares `//! time 0, 0.25n, 0.5n, 0.75n` and no `//! analysis`, so src/backend/tb.zig:94 leaves analysis_kind = .dc while the time walk still runs (tb.zig:402 sets inst.abstime per point). VerA today happens to keep the discriminator alive because codegen.zig:2821 does not gate `timer` on analysis_kind - but 5.10.3.3 makes timer a transient service, so any implementation that DOES gate it (as codegen.zig:2813 already gates `cross`) passes the fixture's want vacuously, and the off-by-one the header promises to catch is caught by nothing. Compounding it: cross_wakeup.va, timer_wakeup.va, explicit_guard.va and analog_event.va all assert only the untriggered 0.0, so a lowering that silently discards `@(...) stmt;` scores 4/4 on them. Partial correction to the weak lens, which claimed no ch08 fixture ever fires a wake-up: above_initial_event.va (0.75) and event_state.va (0.625) both assert a body that DID run, so the chapter is not blind - but no TIMER or CROSS wake-up in the tree is ever observed to fire.",
+    "expected": "Add `//! analysis tran` and extend the point list past start_time, e.g. `//! time 0, 0.5n, 1n, 1.5n` with a second module-level accumulator: the existing want (state = 0.0 strictly inside [0, 1n)) stays for the early points, and one new unconditional check pins the post-1n state that only a timer firing at exactly 1 ns can produce. Both directions - fired and not-fired - then have a literal, and dropping `@(...) stmt;` fails the file.",
+    "severity": "high",
+    "sourceLenses": ["weak"]
+  },
+  {
+    "id": "ch08-05",
+    "section": "4.5.13 (via 8.3.3)",
+    "action": "relax",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/nonlinear_safe.va",
+    "title": "limexp() is pinned bit-for-bit to exp(0.5) at a single non-iterated bias evaluation",
+    "detail": "The digits are right - exp(0.5) = 1.6487212707001282 recomputed and confirmed. The CLAIM is over-strong. Verified against docs/VAMS-LRM/ch4-expressions.html 4.5.13: limexp 'internally limits the change of its output from iteration to iteration', the equality with exp holds because 'the simulator can only converge when the output of limexp() equals the exponential of the input', and 'There are different ways of implementing limiting algorithms for the exponential'. The testbench evaluates one bias point with no Newton history, which is exactly the non-converged first iteration where a conformant limiter is entitled to damp its output. The fixture is a trap for any future VerA that implements real limiting.",
+    "expected": "Keep `CHECKX(\"the 1m scale factor\", scale, 0.001)`. Replace the two CHECKR lines with `CHECKEQ(\"limexp equals the exponential at the converged solution\", limexp(V(p,n)), exp(V(p,n)), 1e-12)` - the README's stated use for an identity the LRM asserts with no value to write down - and keep one literal on the branch current only if the fixture is first given the iteration history 4.5.13 requires. Nothing in the suite then fails because a limiter limits.",
+    "severity": "medium",
+    "sourceLenses": ["literals"]
+  },
+  {
+    "id": "ch08-06",
+    "section": "5.2.1, 8.2",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/analog_initial_parameter_sweep.va",
+    "title": "The sweep fixture writes 10.0/20.0/40.0 in prose but asserts them relationally, when an exact sweep-invariant literal exists",
+    "detail": "The header spells out the three wants and even says 'All three are exact in binary', then asserts `CHECKEQ(seeded, 10.0*gain, 1e-15)` plus a `seeded > 15.0` threshold. CHECKEQ is the weakest macro in check.vh - an error common to both sides passes it - and the README is explicit: 'If you can write digits, write digits.' Verified arithmetically: gain in {1.0, 2.0, 4.0} are powers of two, so 10.0*gain is exact and seeded/gain is exactly 10.0 at every sub-task, i.e. a row-INVARIANT literal exists and the relational form is unnecessary. The `(gain > 1.5) ? (seeded > 15.0) : 1` row-invariant is also weaker than it needs to be.",
+    "expected": "`CHECKX(\"analog initial re-runs for each sub-task, so the seed tracks the swept parameter\", seeded/gain, 10.0)` as the primary assertion - one exact literal, valid at all three sub-tasks, and it still answers 0 (not 10.0) under the frozen-initial_step defect the header documents. Keep one CHECKEQ only if the author wants the per-row value as well. The KNOWN GAP note and //! psweep line are unchanged.",
+    "severity": "medium",
+    "sourceLenses": ["literals", "weak"]
+  },
+  {
+    "id": "ch08-07",
+    "section": "5.10.3.2",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/above_initial_event.va",
+    "title": "above_initial_event.va's 0.75 rests on a 'can', not on either of 5.10.3.2's two 'shall's",
+    "detail": "Verified verbatim in docs/VAMS-LRM/ch5-analog.html 5.10.3.2. The clause has exactly two 'shall's for above(): 'If the expression is positive at the conclusion of the initial condition analysis THAT PRECEDES A TRANSIENT ANALYSIS, the above() function shall generate an event', and 'During a DC SWEEP, the above() function shall also generate an event when the expression crosses zero from below'. The fixture is a standalone single-point DCOP with the expression already positive, which matches neither - it lands on the permissive 'The above() function CAN generate an event during initialization' and on 'cross() will not generate events for non-transient analyses ... but the above() function can'. A tool that fires above() only in the two 'shall' cases is conformant and fails this file.",
+    "expected": "Add `//! analysis tran` and `//! time 0, 1n`. The same want (sample = 0.75 with V(p) = 0.75, V(c) = 0.9, so the expression is +0.4 at the IC that precedes the transient) is then backed by the first 'shall' and the fixture becomes normative without a digit changing.",
+    "severity": "low",
+    "sourceLenses": ["literals"]
+  },
+  {
+    "id": "ch08-08",
+    "section": "8.3.2 (with 4.5.3)",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/transient_derivative.va",
+    "title": "The dq/dt -> finite-difference substitution is exercised by ZERO fixtures in the whole tree",
+    "detail": "8.3.2: 'The simulator replaces the time derivative operator (dq/dt) with a discrete-time finite difference approximation.' Grep proof, run over all of tests/fixtures: 28 .va files carry a `//! time` list, 0 of them contain `ddt(` (11 contain idt/transition/slew/absdelay). ch08's only ddt fixtures - dynamic_nodal.va and multiple_analog_blocks.va - are single-point dc, where 4.5.3 makes ddt identically zero, so they test the dc special case and not the discretization. A lowering that computed v/dt instead of (v - v_prev)/h is caught by nothing in the suite. ch08 has exactly one multi-timepoint fixture (timer_wakeup.va) and it has no state operator.",
+    "expected": "The dynamic_nodal.va module with `//! analysis tran`, `//! time 0, 1n, 2n, 3n` and a bias held CONSTANT across the walk (V(p) = 1.0, V(n) = 0.25). A constant history makes ddt exactly 0.0 at every accepted step under any consistent rule (backward Euler (0.75-0.75)/h = 0; trapezoidal 2*0/h - dx_prev = 0 given dx(0) = 0), so the literal is implementation-independent: CHECKX(ddt(V(p,n)), 0.0) and CHECKX(1p*ddt(V(p,n)), 0.0) at every point, plus CHECKX(V(p,n), 0.75) so the zero is not a dead branch. The wrong answer is concrete and large: a naive v/dt at t = 1 ns gives 0.75/1e-9 = 7.5e8. Do NOT assert ddt of a ramp - the first-step value differs legitimately between BE and trapezoidal.",
+    "severity": "high",
+    "sourceLenses": ["uncovered"]
+  },
+  {
+    "id": "ch08-09",
+    "section": "8.2",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/declaration_assignment_order.va",
+    "title": "'Variable declaration assignments are evaluated FOLLOWED BY analog initial blocks' - the first half of the edge is untested",
+    "detail": "Verified verbatim in ch8-scheduling.html 8.2: 'It is during this process that module-level variable declaration assignments are evaluated followed by the execution of analog initial blocks. Once analog initial blocks are evaluated, analog net declaration assignments and simulator nodeset values are then applied.' The chapter's fixture for this, analog_initial_order.va, declares `real initialized;` with NO initializer and tests only the SECOND edge (analog initial before the ordinary analog block). Grep proof over the whole tree: `^[[:space:]]*(real|integer)[[:space:]]+ident[[:space:]]*=` matches exactly two lines, both in ch03_data_types/01_integer_real_variables.va, and that file has no analog initial block. So no fixture anywhere pairs a declaration initializer with an analog initial that reads it: a compiler that runs analog initial first, or that re-applies declaration initializers afterwards, passes the suite today.",
+    "expected": "`real seed = 2.5; real scaled;` with `analog initial scaled = seed * 2.0;` and the ordinary block asserting CHECKX(scaled, 5.0) - exact in binary, and 0.0 (the 3.2.1 default seen by an analog initial that ran first) is the discriminator. A second CHECKX(seed, 2.5) pins that the initializer survived. Cite `//! lrm 8.2`.",
+    "severity": "high",
+    "sourceLenses": ["uncovered"]
+  },
+  {
+    "id": "ch08-10",
+    "section": "8.2 (with 6.3.4)",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/elaboration_parameter_sweep.va",
+    "title": "Elaboration-time parameter evaluation, and its re-run per sweep sub-task, is covered for neither the single point nor the sweep",
+    "detail": "Merges two lens items that are one fixture. 8.2: 'as each design element is elaborated, parameter declaration assignments are evaluated and module-level generate constructs expanded' - i.e. a DERIVED parameter is already final before pre-simulation - and 'for parametric sweep type analyses like dc sweep, the tool shall re-evaluate the Elaboration and Pre-simulation steps ... for each sweep point'. Both verified verbatim. The chapter's only sweep fixture, analog_initial_parameter_sweep.va, sweeps `gain`, which nothing derives from, so it exercises the Pre-simulation half only; the Elaboration half (derived parameters recomputed per sub-task) has no fixture. src/backend/tb.zig:367-372 shows the runner already builds a per-point model card and calls `derive` for exactly this reason, so the machinery exists and is untested.",
+    "expected": "`parameter real w = 1.0; parameter real area = w*w;` with `//! psweep w = 1.0, 2.0, 4.0` and `//! analysis dc`. Assert in the ORDINARY analog block, not in analog initial, so the fixture is independent of the known analog-initial/initial_step defect: area must be 1.0, 4.0, 16.0 (all exact in binary). Write the invariant literal CHECKX(area/(w*w), 1.0) plus the row-invariant CHECKI((w > 1.5) ? (area > 3.5) : 1, 1), which a first-point-frozen elaboration (area stuck at 1.0) cannot pass. Cite `//! lrm 8.2` and `//! lrm 6.3.4`.",
+    "severity": "medium",
+    "sourceLenses": ["uncovered"]
+  },
+  {
+    "id": "ch08-11",
+    "section": "8.4.7",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch05_analog_behavior/final_step.va",
+    "title": "final_step is one of the four analog events 8.4.7 says force a solution, and no fixture pins it with a value that can fail",
+    "detail": "Verified verbatim in ch8-scheduling.html 8.4.7: 'Certain analog events (above, cross, initial_step, and final_step) cause an analog solution of the time where they occur.' above -> above_initial_event.va, cross -> analog_event.va/cross_wakeup.va, initial_step -> event_state.va, all with real wants. final_step -> ch05_analog_behavior/final_step.va, which assigns 0.0 and admits in its own header that 0.0 'is also what 3.2.1 gives an untouched real, so the firing itself leaves no trace'. Nothing in the tree fails if final_step never fires. Lazy fix: this is a one-line edit to the existing ch05 fixture, not a new ch08 file - the shape is already correct and duplicating it under ch08 buys nothing. src/backend/tb.zig:407 does assign inst.is_final_step (and on a one-point dc both step flags are true, tb.zig:356-363), so the edited fixture should pass; note in passing that ch05_analog_behavior/event_initial_or_cross.va's 'tb.zig never assigns that field' comment is stale.",
+    "expected": "`@(final_step) x = V(p);` with the existing `//! bias V(p) = 0.7`, then CHECKX(x, 0.7) and CHECK(x + V(p), 1.4, 1e-15). 0.7 is not the 3.2.1 default, so a final_step that never fires now turns ok=1 into ok=0. Add `//! lrm 8.4.7` and point the ch08 COVERAGE.md s8-4-7 row at it alongside event_state.va.",
+    "severity": "medium",
+    "sourceLenses": ["uncovered"]
+  },
+  {
+    "id": "ch08-12",
+    "section": "8 (all), Annex C.7/C.10",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/*.va (27 files after ch08-03)",
+    "title": "Not one ch08 fixture carries //! lrm, so the chapter contributes nothing to --coverage",
+    "detail": "Verified: `grep -c '//! lrm' ch08_scheduling/*.va` returns 0 for all 28 files. tests/fixtures/README.md makes `//! lrm` the only mechanical backing a coverage claim can have ('zig build torture -- --coverage prints every cited section'), and src/backend/tb.zig documents the field as what lets a FAIL name the rule rather than only the file. Depends on ch08-01: the analog fixtures cite their Clause 8 section, and the 12 surviving digital rejects cite `C.7` (and `C.10` where the clause they inventory is a mixed-signal one) - NOT `8.5.3.x`, which would assert that Clause 8 prohibits the construct when Clause 8 in fact specifies how to schedule it. The reject fixtures' basis is the Verilog-A subset, and the cite must say so.",
+    "expected": "Every ch08 fixture carries at least one `//! lrm`. Analog fixtures: 8.2, 8.3, 8.3.1, 8.3.2, 8.3.3, 8.4.3.1, 8.4.7 per the corrected COVERAGE.md. Digital rejects: `//! lrm C.7` (+ `//! lrm C.10` where applicable). --coverage then shows the chapter's true analog cite set and shows zero Verilog-A cites for 8.5.x, which is the correct answer.",
+    "severity": "medium",
+    "sourceLenses": ["negatives", "weak"]
+  },
+  {
+    "id": "ch08-13",
+    "section": "n/a (suite contract)",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/{blocking_timing,digital_boundary,digital_process,nonblocking,procedural_assign,procedural_continuous,procedural_deassign,procedural_release,switch_primitive}_unsupported.va",
+    "title": "10 of 13 rejects pin the prose 'unsupported module item' where the stable code E0205 exists",
+    "detail": "Census of `//! reject` lines in ch08: 10x 'unsupported module item', 3x 'E0205' (plus keyword substrings initial/reg/assign). Verified src/diag_code.zig:690 - E0205's title IS the string 'unsupported module item', so the ten are pinning the wording of the code the other three pin properly. README.md: 'Codes are the preferred form: they are stable, so the prose of a diagnostic can be improved without touching 312 fixtures, and they pin WHICH rule fired rather than how it happened to be worded.' Count is 10, not the 9 the weak lens reported. absdelta_unsupported.va is one of the ten and is deleted by ch08-03, leaving nine to edit.",
+    "expected": "Each becomes `//! reject E0205` plus the keyword substring that identifies WHICH item was refused (`always`, `assign`, `tran`, `force`, `release`, `deassign`, `initial`), matching the shape digital_assignment_unsupported.va and procedural_force_unsupported.va already use. Renaming the diagnostic then breaks nothing.",
+    "severity": "low",
+    "sourceLenses": ["negatives", "weak"]
+  },
+  {
+    "id": "ch08-14",
+    "section": "n/a (suite contract)",
+    "action": "delete",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/ch08_scheduling/*.expected-error.txt (13 files)",
+    "title": "13 stale .expected-error.txt sidecars survive against the README's 'No sidecar files'",
+    "detail": "Verified: 13 sidecars, one per reject fixture. tests/fixtures/README.md line 3: 'One runner, tests/torture.zig. No sidecar files.' followed by 'A fixture states its own expected behavior, in the file ... there is no second file to drift out of step with it.' The //! reject lines already carry the expectation; the sidecars are the previous runner's residue and are exactly the second file the README exists to forbid.",
+    "expected": "All 13 removed (12 if ch08-03 lands first and takes absdelta_unsupported.expected-error.txt with it). Same sweep is due in every other fixture directory that still has them.",
+    "severity": "low",
+    "sourceLenses": ["negatives", "weak"]
+  }
+]

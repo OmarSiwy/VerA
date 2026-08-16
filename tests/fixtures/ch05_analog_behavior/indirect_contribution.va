@@ -5,21 +5,27 @@
 // of the `:` is only measured — "Any branches referenced in the equation are
 // only probed and not driven" — so V(ctrl) here is a voltage probe.
 //
-// Solving the equation by hand: V(ctrl) == 2*V(p,n) has the single solution
-// V(p,n) = V(ctrl)/2. The testbench declares the operating point that satisfies
-// it, V(ctrl) = 1.5 with V(p) = 0.75 and V(n) = 0, so the branch potential is
-// 0.75 = 1.5/2 and the constraint residual V(ctrl) - 2*V(p,n) is exactly zero
-// there. Both numbers come from the equation, not from the compiler.
+// V(ctrl) == 2*V(p,n) has the single solution V(p,n) = V(ctrl)/2, so with ctrl
+// held at 1.5 the branch must come to rest at 0.75. 1.5 and 0.75 are exact in
+// binary and 0.75 is exactly half of 1.5, so the digit is the equation's and
+// nothing rounds.
 //
+// The operating point pins ONLY the probe. p and n are free, and that is
+// deliberate: this file used to declare V(p) = 0.75 as well, which made 0.75 an
+// input rather than an answer — delete the `:` statement and both assertions
+// still passed. A want an indirect contribution is under test for has to be one
+// the harness does not supply.
+//
+//! lrm 5.6.7
 //! bias V(ctrl) = 1.5
-//! bias V(p) = 0.75
-//! bias V(n) = 0.0
+//! xfail VerA's generated testbench forces every unknown to its declared operating point instead of solving, so an indirect contribution's target cannot move: V(p,n) reads 0
 `include "check.vh"
 module ch5_indirect(p, n, ctrl);
   inout p, n, ctrl; electrical p, n, ctrl;
   analog begin
-    `CHECKX("the driven branch sits at the equation's solution V(ctrl)/2", V(p, n), 0.75);
-    `CHECK("the constraint residual V(ctrl) - 2*V(p,n) vanishes there",
+    `CHECKX("the probed control voltage is the harness input", V(ctrl), 1.5);
+    `CHECKX("the driven branch settles at the equation's solution V(ctrl)/2", V(p, n), 0.75);
+    `CHECK("so the constraint residual V(ctrl) - 2*V(p,n) vanishes",
            V(ctrl) - 2.0 * V(p, n), 0.0, 1e-15);
     V(p, n) : V(ctrl) == 2.0 * V(p, n);
   end

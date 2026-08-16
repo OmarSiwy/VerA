@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_mcd_close
-// EXPECT: error
+//! reject `vpi_mcd_close`
 module ch12_atomic_mcd_close(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_mcd_close(0);

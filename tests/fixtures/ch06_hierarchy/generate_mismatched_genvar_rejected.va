@@ -1,5 +1,6 @@
 // LRM 6.6.1: the genvar loop init, condition and step must all use the same
 // genvar; `j` in the step is not a constant expression of `i`.
+//! lrm 6.6.1
 //! reject E0419
 // EXPECT: error -- LRM 6.6.1 requires the same genvar in the loop init,
 // condition and step; this uses `i` in the init and `j` in the step.

@@ -18,6 +18,16 @@
 // the generated enum, and `bias` splits its line on commas — so a `sweep` of
 // one point is the only way to hold a branch current.
 //
+// On tolerances: 0.7 - 0.2 is 0.49999999999999994, not 0.5 — the subtraction is
+// exactly rounded but its operands are not exact in binary. So the two products
+// that carry that factor are one or two ulp off their decimal want, and the
+// right form is a RELATIVE tolerance: 3m * 0.49999999999999994 is
+// 1.4999999999999998e-3, which sat only 4.6x inside its old absolute 1e-18.
+// The two products taken off the swept branch flow have no such factor — 1e-3
+// times a small integer is exact — so those are CHECKX.
+//
+//! lrm 5.4.1
+//! lrm 5.4.2
 //! bias V(cp) = 0.7, V(cn) = 0.2
 //! sweep flowZ28cpZ2ccnZ29 = 1m
 `include "check.vh"
@@ -25,11 +35,11 @@ module ch5_controlled_sources(op, on, cp, cn);
   inout op, on, cp, cn; electrical op, on, cp, cn;
   branch (cp, cn) sensed;
   analog begin
-    `CHECK("named branch potential is its node difference", V(sensed), 0.5, 1e-15);
-    `CHECK("VCVS: 2 * V(cp,cn)", 2.0 * V(cp, cn), 1.0, 1e-15);
-    `CHECK("VCCS: 3m * V(cp,cn)", 3m * V(cp, cn), 1.5e-3, 1e-18);
-    `CHECK("CCVS: 4 ohm * I(sensed)", 4.0 * I(sensed), 4.0e-3, 1e-18);
-    `CHECK("CCCS: 5 * I(sensed)", 5.0 * I(sensed), 5.0e-3, 1e-18);
+    `CHECKR("named branch potential is its node difference", V(sensed), 0.5, 1e-15);
+    `CHECKR("VCVS: 2 * V(cp,cn)", 2.0 * V(cp, cn), 1.0, 1e-15);
+    `CHECKR("VCCS: 3m * V(cp,cn)", 3m * V(cp, cn), 1.5e-3, 1e-15);
+    `CHECKX("CCVS: 4 ohm * I(sensed)", 4.0 * I(sensed), 4.0e-3);
+    `CHECKX("CCCS: 5 * I(sensed)", 5.0 * I(sensed), 5.0e-3);
     V(op, on) <+ 2.0 * V(cp, cn);
     I(op, on) <+ 3m * V(cp, cn);
     V(sensed) <+ 4.0 * I(sensed);

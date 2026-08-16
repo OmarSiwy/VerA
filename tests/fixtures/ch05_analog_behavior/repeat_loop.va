@@ -1,4 +1,4 @@
-// §5.7.2 `repeat()` executes its statement a fixed number of times, and the
+// §5.9.1 `repeat()` executes its statement a fixed number of times, and the
 // count expression is evaluated ONCE before the first iteration. Three passes of
 // `x = x + V(p)` starting from zero leave x = 3*V(p).
 //
@@ -6,6 +6,7 @@
 // in IEEE 754, so a two-pass or four-pass loop cannot round its way to the same
 // answer.
 //
+//! lrm 5.9.1
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch5_repeat(p);

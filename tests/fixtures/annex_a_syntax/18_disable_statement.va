@@ -13,5 +13,8 @@
 // Citation note: there is no clause-5 section for `disable` — 5.11 is
 // `jump_statement` (return/break/continue) — so annex A is the citation. The
 // engine used to cite "LRM 5.11"; that was wrong and is fixed.
+//
+//! lrm A.6.4
+//! lrm A.6.5
 //! reject E0401
 module annex_a_disable(p); inout p; electrical p; analog begin : work if(V(p)>1.0) disable work; I(p)<+V(p); end endmodule

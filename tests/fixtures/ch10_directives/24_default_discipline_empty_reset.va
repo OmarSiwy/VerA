@@ -17,6 +17,7 @@
 // potential access function, and the value below would not exist. §1.3.1 fixes
 // it at 0.75 - 0.25 = 0.5 V.
 //
+//! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
 `default_discipline electrical
 `default_discipline

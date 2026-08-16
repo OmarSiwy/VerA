@@ -24,7 +24,7 @@ module ch11_process_statement_objects(p, n);
       default: result = 0.0;
     endcase
     `CHECKI("the for loop exits one past its bound", k, 3);
-    `CHECK("three trips, the true arm, then the matching case item", result, 5.5, 1e-15);
+    `CHECKX("three trips, the true arm, then the matching case item", result, 5.5);
     I(p,n) <+ result;
   end
 endmodule

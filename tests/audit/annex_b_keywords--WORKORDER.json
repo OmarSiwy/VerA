@@ -1,0 +1,328 @@
+[
+  {
+    "id": "B01",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/05_config_library_keywords.va",
+    "title": "config/library keyword family: rejects a LEGAL config/library source with `NoModule` instead of proving reservedness",
+    "detail": "The file is a well-formed A.1.1 `library_declaration` + `config_declaration`. §1.1 makes the whole of IEEE 1364-2005 part of Verilog-AMS and Annex C.16 (verified against /tmp/vams/annex-c-veriloga.txt:162-188) lists ONLY connect, connectmodule, connectrules, driver_update, endconnectrules, merged, net_resolution, resolvedto, split, wreal as not-used-by-Verilog-A — none of these nine. A conforming AMS compiler ACCEPTS this source and FAILS the fixture. The expectation `//! reject NoModule` is not a diagnostic code: `NoModule` is a VerA error enum (src/root.zig:106, raised at src/root.zig:404 when `p.file.modules.len == 0`), and it is what VerA actually returns here — the visible diagnostic is E0201 `construct is not in the supported subset: `library``. So the fixture asserts VerA's parser state, not an LRM rule. An analog-only tool that happily accepts `real config;` passes it. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 9 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject cell\n//! reject config\n//! reject design\n//! reject endconfig\n//! reject incdir\n//! reject instance\n//! reject liblist\n//! reject library\n//! reject use\nmodule annex_b_reserved_config_library_keywords;\n    real cell, config, design, endconfig, incdir, instance, liblist, library, use;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B02",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/06_udp_keywords.va",
+    "title": "UDP keyword family: rejects a LEGAL `primitive`/`table` declaration with `NoModule`",
+    "detail": "A well-formed A.5.1 UDP. Not excluded by Annex C.16. Current behaviour is E0201 `construct is not in the supported subset: `primitive`` → error.NoModule; the fixture pins the enum name, which is pure implementation state and says nothing about `primitive` being unusable as an identifier. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 4 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject endprimitive\n//! reject endtable\n//! reject primitive\n//! reject table\nmodule annex_b_reserved_udp_keywords;\n    real endprimitive, endtable, primitive, table;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B03",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/07_gate_primitive_keywords.va",
+    "title": "gate-primitive family: rejects LEGAL A.3.1 gate instantiations with the phase label `ParseError`",
+    "detail": "Five legal `gate_instantiation`s. Current behaviour is E0205 `unsupported module item: found buf`. `ParseError` is a phase label (tests/torture.zig:617-624) meaning only \"every diagnostic came from stage 1/2/3\" — it pins WHEN VerA gave up, not WHICH rule fired, and it is satisfied by any parse-stage failure whatsoever. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 5 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject buf\n//! reject bufif0\n//! reject bufif1\n//! reject cmos\n//! reject nand\nmodule annex_b_reserved_gate_primitive_keywords;\n    real buf, bufif0, bufif1, cmos, nand;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B04",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/07b_switch_primitive_keywords.va",
+    "title": "switch-primitive family: rejects LEGAL switch/gate instantiations with `ParseError`",
+    "detail": "Same defect as B03; current behaviour is E0205 `unsupported module item: found nmos`. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 10 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject nmos\n//! reject nor\n//! reject notif0\n//! reject notif1\n//! reject pmos\n//! reject pulldown\n//! reject pullup\n//! reject rcmos\n//! reject rnmos\n//! reject rpmos\nmodule annex_b_reserved_switch_primitive_keywords;\n    real nmos, nor, notif0, notif1, pmos, pulldown, pullup, rcmos, rnmos, rpmos;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B05",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/07c_pass_logic_primitive_keywords.va",
+    "title": "pass/logic-primitive family: rejects LEGAL pass-transistor and logic gate instantiations with `ParseError`",
+    "detail": "Same defect as B03; current behaviour is E0205 `unsupported module item: found rtran`. Note `tran` is in Table B.1 and in VerA's reserved list but appears in NO fixture in this chapter today — add it to the rewrite. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 8 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject rtran\n//! reject rtranif0\n//! reject rtranif1\n//! reject tran\n//! reject tranif0\n//! reject tranif1\n//! reject xnor\n//! reject xor\nmodule annex_b_reserved_pass_logic_primitive_keywords;\n    real rtran, rtranif0, rtranif1, tran, tranif0, tranif1, xnor, xor;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B06",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/08_net_strength_keywords.va",
+    "title": "net-type/strength family: rejects LEGAL A.2.1.3 net declarations, and its diagnostic does not even name a keyword",
+    "detail": "26 legal net declarations with drive/charge strengths and ranges. Worst instance of the pattern: the diagnostic VerA actually emits is `E0208: expected an identifier: found `(`` — it fires on the strength parenthesis, so the file proves nothing about ANY of its 26 keywords, not even accidentally. `wire` and `reg` are in Table B.1 and belong in the rewrite too. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 27 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject highz0\n//! reject highz1\n//! reject large\n//! reject medium\n//! reject pull0\n//! reject pull1\n//! reject scalared\n//! reject signed\n//! reject small\n//! reject strong0\n//! reject strong1\n//! reject supply0\n//! reject supply1\n//! reject tri\n//! reject tri0\n//! reject tri1\n//! reject triand\n//! reject trior\n//! reject trireg\n//! reject unsigned\n//! reject uwire\n//! reject vectored\n//! reject wand\n//! reject weak0\n//! reject weak1\n//! reject wire\n//! reject wor\nmodule annex_b_reserved_net_strength_keywords;\n    real highz0, highz1, large, medium, pull0, pull1, scalared, signed, small, strong0, strong1, supply0, supply1, tri, tri0, tri1, triand, trior, trireg, unsigned, uwire, vectored, wand, weak0, weak1, wire, wor;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B07",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/09_specify_keywords.va",
+    "title": "specify-block family: rejects a LEGAL A.7.1 specify block with `ParseError`",
+    "detail": "A legal `specify_block`. Current behaviour is E0205 `unsupported module item: found specify`, which fires on the first token and leaves the other eight keywords untouched. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 9 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject edge\n//! reject endspecify\n//! reject ifnone\n//! reject noshowcancelled\n//! reject pulsestyle_ondetect\n//! reject pulsestyle_onevent\n//! reject showcancelled\n//! reject specify\n//! reject specparam\nmodule annex_b_reserved_specify_keywords;\n    real edge, endspecify, ifnone, noshowcancelled, pulsestyle_ondetect, pulsestyle_onevent, showcancelled, specify, specparam;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B08",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/10_task_control_keywords.va",
+    "title": "task/process family: rejects a source that Annex C.7 does exclude — but cites Annex B and pins `ParseError`",
+    "detail": "The only one of the nine with a defensible normative hook: Annex C.7 says \"No digital behavior or events are supported in Verilog-A\". But that is a C.7 claim, not the Annex B claim the file is filed under, and `ParseError` pins the phase rather than the rule. Current behaviour is E0205 `unsupported module item: found task`, which fires before `fork`/`join`/`wait`/`deassign`/`release`/`negedge` are ever reached. If the C.7 exclusion is worth a fixture it belongs in annex_c_analog_subset next to 13_digital_initial_rejected.va and 14_digital_always_rejected.va, which already state it correctly with `//! reject E0205` + the spelling. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 14 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject automatic\n//! reject deassign\n//! reject disable\n//! reject endtask\n//! reject force\n//! reject fork\n//! reject join\n//! reject negedge\n//! reject posedge\n//! reject realtime\n//! reject release\n//! reject task\n//! reject time\n//! reject wait\nmodule annex_b_reserved_task_control_keywords;\n    real automatic, deassign, disable, endtask, force, fork, join, negedge, posedge, realtime, release, task, time, wait;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B09",
+    "section": "B",
+    "action": "rewrite",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/11_macromodule_keyword.va",
+    "title": "macromodule: rejects a LEGAL A.1.2 macromodule declaration with `NoModule`",
+    "detail": "`module_keyword ::= module | macromodule` (A.1.2). Nothing in Annex B or C.16 excludes it. Current behaviour is E0201 `construct is not in the supported subset: ``macromodule``` → error.NoModule. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660). Rewrite in place as an Annex B reservedness census over the same 1 keyword(s): one module, one declaration list, one `//! reject <spelling>` line each. Keep the file name and number so COVERAGE.md's family table still resolves. Add `//! lrm B`, drop the `// EXPECT: error -- normative syntax/restriction snapshot for this rule family.` footer, and delete the matching .expected-error.txt (item B23).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject macromodule\nmodule annex_b_reserved_macromodule_keyword;\n    real macromodule;\nendmodule\n(short spellings that are substrings of other words — `or`, `not`, `use`, `tri`, `end` — may match a neighbour's message; the AND-ing makes that harmless but it weakens the proof, so give those their own file if you want the attribution airtight.)",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B10",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/12_escaped_keyword_is_not_the_keyword.va",
+    "title": "The prohibition half of \"An escaped identifier shall not be treated as a keyword\" is untested tree-wide",
+    "detail": "Annex B para 1 sentence 2 is a `shall not`. The whole corpus tests only the permissive half (this chapter's 01_escaped_keyword.va, plus ch02_lexical/03_escaped_identifiers.va and ch02_lexical/26_escaped_keyword.va, all of which make an escaped keyword a VARIABLE). VERIFIED by grep: of the 313 `//! reject` fixtures in tests/fixtures/, exactly one contains a backslash (ch02_lexical/38_string_line_continuation_rejected.va) and it is about strings. So a compiler that strips the backslash before the keyword lookup — the single most common way to get §2.8.1 wrong — passes every fixture in the tree. VERIFIED VerA is already correct: `\\module  m5;` → E0201 `construct is not in the supported subset: `module``, and `\\analog  begin ... end` inside a module → E0205 `unsupported module item: found analog`. No xfail. Write the in-module form as the primary — it proves the rule inside a design unit rather than at file scope, where a stray identifier is rejected for boring reasons.",
+    "expected": "//! lrm B\n//! lrm 2.8.1\n//! reject E0205\n//! reject analog\nmodule annex_b_escaped_keyword_is_not_the_keyword(p, n);\n    inout p, n;\n    electrical p, n;\n    real x;\n    \\analog  begin x = 1.0; end\nendmodule",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives"
+    ]
+  },
+  {
+    "id": "B11",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/13_assert_reserved.va",
+    "title": "`assert` is in Table B.1 but VerA does not reserve it — `real assert;` compiles today",
+    "detail": "VERIFIED three ways. (1) `assert` is in Table B.1 in BOTH sources: docs/VAMS-LRM/annex-b-keywords.html and the 2.4.0 PDF text (/tmp/vams/annex-b-keywords.txt, page 395, between `asinh` and `assign`). (2) Programmatic diff of Table B.1 against src/frontend/token.zig — both the `kw_*` enum fields and the `reserved_keywords` array that feeds `keyword_kvs` (token.zig:594-702) — gives exactly two Table B.1 spellings VerA does not know: `assert` and `net_resolution`. (3) `vera --lint` on `module m; real assert; endmodule` exits clean with no diagnostic. (4) Zero occurrences of the string in the whole 861-file fixture corpus. Verilog-AMS 2.4 has no assert STATEMENT, so reservedness is the only testable fact. The real fix is one line in token.zig's reserved_keywords; the fixture is the requirement that outlives the gap.",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject assert\n//! xfail `assert` is missing from src/frontend/token.zig `reserved_keywords`, so it lexes as an ordinary identifier\nmodule annex_b_assert_reserved;\n    real assert;\nendmodule",
+    "severity": "high",
+    "sourceLenses": [
+      "uncovered",
+      "negatives"
+    ]
+  },
+  {
+    "id": "B12",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/14_net_resolution_reserved.va",
+    "title": "`net_resolution` is in Table B.1 AND in Annex C.16, is unreserved by VerA, and is the one keyword with zero occurrences in the corpus",
+    "detail": "Same verification chain as B11: in the HTML table, in the PDF (page 395, between `nature` and `nmos`), in the C.16 not-used-by-Verilog-A list (/tmp/vams/annex-c-veriloga.txt:183), absent from token.zig, and `real net_resolution;` compiles clean. VERIFIED it is the ONLY Table B.1 spelling with zero occurrences anywhere in tests/fixtures/. It must be its own file rather than an addition to annex_c_analog_subset/16_unused_ams_words_current_behavior.va (item B17): `//! xfail` applies to the whole file, and folding it into 16 would turn a passing 9-keyword census into an xfail.",
+    "expected": "//! lrm B\n//! lrm C.16\n//! reject E0208\n//! reject net_resolution\n//! xfail `net_resolution` is missing from src/frontend/token.zig `reserved_keywords`, so it lexes as an ordinary identifier\nmodule annex_b_net_resolution_reserved;\n    real net_resolution;\nendmodule",
+    "severity": "high",
+    "sourceLenses": [
+      "uncovered",
+      "negatives"
+    ]
+  },
+  {
+    "id": "B13",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/15_uppercase_keyword_rejected.va",
+    "title": "02_keyword_case.va proves only that `Analog` is a legal identifier, never that `ANALOG` cannot ACT as `analog`",
+    "detail": "§2.8 \"Identifiers shall be case sensitive\" plus Annex B reserving only the lowercase spellings is a two-sided claim; 02 checks the permissive side (`CHECKX(Analog, 1.0)`, which the literals lens confirms is exact and correctly derived). A compiler that folds keyword case passes 02 and the rest of the chapter. VERIFIED the negative already holds in VerA: `ANALOG begin x=1.0; end` inside a module → E0205 `unsupported module item: found ANALOG`, and `Module m9; endmodule` → E0201. No xfail. This also absorbs the uncovered lens's \"case-sensitivity corollary asserts nothing about a keyword's own role\"; its other half — that only two spellings are tested — was dropped, more spellings prove nothing new.",
+    "expected": "//! lrm B\n//! lrm 2.8\n//! reject E0205\n//! reject ANALOG\nmodule annex_b_uppercase_keyword_rejected(p, n);\n    inout p, n;\n    electrical p, n;\n    real x;\n    ANALOG begin x = 1.0; end\nendmodule\n(add a one-line cross-reference comment in 02_keyword_case.va pointing at this file, so the pair reads as one two-sided claim.)",
+    "severity": "medium",
+    "sourceLenses": [
+      "negatives",
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B14",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/16_reserved_math_functions.va",
+    "title": "The 26 built-in math function names are never proved reserved — the group real tools most often leave open",
+    "detail": "COVERAGE.md files these under \"Chapter 4 math fixtures\", but a ch04 fixture CALLS `sin(x)`; it does not prove `real sin;` is an error. Only `sin` is pinned anywhere, by ch10_directives/17_begin_keywords_vams.va and /27, and only under an explicit `` `begin_keywords `` set. VERIFIED all 26 give E0208 today. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject abs\n//! reject acos\n//! reject acosh\n//! reject asin\n//! reject asinh\n//! reject atan\n//! reject atan2\n//! reject atanh\n//! reject ceil\n//! reject cos\n//! reject cosh\n//! reject exp\n//! reject expm1\n//! reject floor\n//! reject hypot\n//! reject ln\n//! reject ln1p\n//! reject log\n//! reject max\n//! reject min\n//! reject pow\n//! reject sin\n//! reject sinh\n//! reject sqrt\n//! reject tan\n//! reject tanh\nmodule annex_b_reserved_math_functions;\n    real abs, acos, acosh, asin, asinh, atan, atan2, atanh, ceil, cos, cosh, exp, expm1, floor, hypot, ln, ln1p, log, max, min, pow, sin, sinh, sqrt, tan, tanh;\nendmodule",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B15",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/17_reserved_analog_operators.va",
+    "title": "The 29 analog-operator / event / noise / analysis keywords are never proved reserved",
+    "detail": "Same shape as B14: ch04/ch05 fixtures invoke these operators, which is a different claim from reservedness. VERIFIED all give E0208 today, including the obsolete `absdelta`. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject absdelay\n//! reject absdelta\n//! reject above\n//! reject ac_stim\n//! reject analysis\n//! reject cross\n//! reject ddt\n//! reject ddx\n//! reject flicker_noise\n//! reject idt\n//! reject idtmod\n//! reject laplace_nd\n//! reject laplace_np\n//! reject laplace_zd\n//! reject laplace_zp\n//! reject last_crossing\n//! reject limexp\n//! reject noise_table\n//! reject noise_table_log\n//! reject slew\n//! reject timer\n//! reject transition\n//! reject white_noise\n//! reject zi_nd\n//! reject zi_np\n//! reject zi_zd\n//! reject zi_zp\n//! reject final_step\n//! reject initial_step\nmodule annex_b_reserved_analog_operators;\n    real absdelay, absdelta, above, ac_stim, analysis, cross, ddt, ddx, flicker_noise, idt, idtmod, laplace_nd, laplace_np, laplace_zd, laplace_zp, last_crossing, limexp, noise_table, noise_table_log, slew, timer, transition, white_noise, zi_nd, zi_np, zi_zd, zi_zp, final_step, initial_step;\nendmodule",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B16",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/18_reserved_discipline_nature.va",
+    "title": "The 19 discipline/nature declarative keywords are never proved reserved",
+    "detail": "These are the highest-risk group for an implementation that parses nature/discipline bodies with an ad-hoc attribute-name lookup rather than the lexer: `abstol`, `access`, `units`, `from`, `exclude`, `inf` all read naturally as ordinary identifiers. VERIFIED all give E0208 today. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject abstol\n//! reject access\n//! reject branch\n//! reject continuous\n//! reject ddt_nature\n//! reject discipline\n//! reject discrete\n//! reject domain\n//! reject enddiscipline\n//! reject endnature\n//! reject flow\n//! reject ground\n//! reject idt_nature\n//! reject nature\n//! reject potential\n//! reject units\n//! reject aliasparam\n//! reject exclude\n//! reject from\n//! reject inf\nmodule annex_b_reserved_discipline_nature;\n    real abstol, access, branch, continuous, ddt_nature, discipline, discrete, domain, enddiscipline, endnature, flow, ground, idt_nature, nature, potential, units, aliasparam, exclude, from, inf;\nendmodule",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B18",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/19_reserved_core_keywords.va",
+    "title": "Reservedness of the 30-odd core structural/control keywords rests on `module` and `if` alone",
+    "detail": "03 and 04 pin `module` and `if`. Everything else in the core group is inventoried in COVERAGE.md by prose only. Low value — no real compiler gets `module` right and `endmodule` wrong — but it is a one-file census and it closes the row. VERIFIED all give E0208 today. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject always\n//! reject analog\n//! reject and\n//! reject assign\n//! reject begin\n//! reject case\n//! reject casex\n//! reject casez\n//! reject default\n//! reject defparam\n//! reject else\n//! reject end\n//! reject endcase\n//! reject endfunction\n//! reject endgenerate\n//! reject endmodule\n//! reject endparamset\n//! reject event\n//! reject for\n//! reject forever\n//! reject function\n//! reject generate\n//! reject genvar\n//! reject initial\n//! reject inout\n//! reject input\n//! reject integer\n//! reject localparam\n//! reject not\n//! reject or\n//! reject output\n//! reject parameter\n//! reject paramset\n//! reject real\n//! reject reg\n//! reject repeat\n//! reject return\n//! reject string\n//! reject while\nmodule annex_b_reserved_core_keywords;\n    real always, analog, and, assign, begin, case, casex, casez, default, defparam, else, end, endcase, endfunction, endgenerate, endmodule, endparamset, event, for, forever, function, generate, genvar, initial, inout, input, integer, localparam, not, or, output, parameter, paramset, real, reg, repeat, return, string, while;\nendmodule",
+    "severity": "low",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B19",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/20_reserved_2023_additions.va",
+    "title": "The five spellings the repo's Annex B table adds over the 2.4.0 PDF have no fixture pinning them as keywords",
+    "detail": "VERIFIED by diffing docs/VAMS-LRM/annex-b-keywords.html (217 `<code>` entries) against the extracted PDF table (/tmp/vams/annex-b-keywords.txt): exactly these five are HTML-only, and nothing is PDF-only. NOTE the uncovered lens said SIX; the count is five. These matter precisely because a tool built to the 2.4.0 PDF will accept `real break;`. VERIFIED all five give E0208 in VerA today. VERIFIED empirically: all 217 Table B.1 spellings were fed to `zig-out/bin/vera --lint` as `module kk; real <kw>; endmodule`. 215 produce E0208 (\"expected an identifier: found <kw>\"); only `assert` and `net_resolution` are accepted. So every rewrite below passes on the day it lands — no `//! xfail`. Also verified the parser RECOVERS: a module with `real buf; real nand; real xor;` emits three separate E0208 diagnostics, each naming its spelling, so one family file with one `//! reject <spelling>` line per keyword really does prove each keyword individually (the runner ANDs the lines, tests/torture.zig:625-660).",
+    "expected": "//! lrm B\n//! reject E0208\n//! reject break\n//! reject continue\n//! reject expm1\n//! reject ln1p\n//! reject return\nmodule annex_b_reserved_2023_additions;\n    real break, continue, expm1, ln1p, return;\nendmodule",
+    "severity": "low",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B17",
+    "section": "B / C.16",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_c_analog_subset/16_unused_ams_words_current_behavior.va",
+    "title": "The C.16 census fixture declares nine keywords but pins only `connect`, so eight of them are unproved",
+    "detail": "The file already has the right shape — it is the template every census item above should copy — but it carries a single `//! reject connect` line beside `//! reject E0208`, and a reject fixture is satisfied once each of its lines matches SOMETHING. Since VerA reports all nine (parser recovery verified), adding the eight missing `//! reject <spelling>` lines costs eight lines and converts a one-keyword proof into a nine-keyword one. Do NOT add `net_resolution` here — it is unreserved and would need `//! xfail` on the whole file; it gets its own fixture (B12). Also worth a comment: Table B.1 spells it `resolveto` while the C.16 list in the 2.4.0 PDF spells it `resolvedto` (/tmp/vams/annex-c-veriloga.txt:184) — the fixture correctly follows Table B.1.",
+    "expected": "add:\n//! reject connectmodule\n//! reject connectrules\n//! reject driver_update\n//! reject endconnectrules\n//! reject merged\n//! reject resolveto\n//! reject split\n//! reject wreal\n(plus `//! lrm B` and `//! lrm C.16`)",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered",
+      "negatives"
+    ]
+  },
+  {
+    "id": "B20",
+    "section": "B",
+    "action": "create",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/21_escaped_keyword_port.va",
+    "title": "No fixture pairs the escaped-identifier rule with a reserved spelling: `\\sin ` must be a legal port exactly where `sin` is not",
+    "detail": "ch10_directives/17 and /27 prove a port named `sin` is an error under a VAMS keyword set; ch10_directives/26 proves it is legal under \"1364-2001\" with `CHECKX(V(sin,n), 0.5)`. The escaped complement — same port, same bias, backslash — is the sharpest single test of \"an escaped identifier shall not be treated as a keyword\", because it puts the two rules in direct opposition. VERIFIED it compiles today: a module with ports `\\sin , n` lints clean. CORRECTION to the uncovered lens: it proposed `` `begin_keywords \"VAMS-2023\" ``. There is no such version string in LRM 10.6 (the list is 1364-1995 / 1364-2001 / 1364-2001-noconfig / 1364-2005 / VAMS-2.3 / VAMS-2.4), and VerA silently ACCEPTS the bogus string, so writing it would bake a second bug into the fixture. Use no directive at all — VerA's default set already reserves `sin` — or `VAMS-2.3` as ch10/27 does. want = 0.5 is exact (0.75 - 0.25, binary-exact), so CHECKX is right.",
+    "expected": "`include \"check.vh\"\n//! lrm B\n//! lrm 2.8.1\n//! bias V(\\sin ) = 0.75, V(n) = 0.25\nmodule annex_b_escaped_keyword_port(\\sin , n);\n    inout \\sin , n;\n    electrical \\sin , n;\n    analog begin\n        `CHECKX(\"escaped sin is a port, not the sine function\", V(\\sin , n), 0.5);\n        I(\\sin , n) <+ V(\\sin , n);\n    end\nendmodule",
+    "severity": "low",
+    "sourceLenses": [
+      "uncovered",
+      "literals"
+    ]
+  },
+  {
+    "id": "B21",
+    "section": "B",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/03_reserved_module_rejected.va and /home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/04_reserved_if_rejected.va",
+    "title": "The chapter's two correct fixtures pin a prose fragment and cite no clause",
+    "detail": "Both carry `//! reject identifier`, a bare message substring, where E0208 exists and is exactly the rule that fires (VERIFIED: `expected an identifier: found `module`` / `found `if``). tests/fixtures/README.md:19-21 states codes are the preferred form because prose can be improved without touching fixtures — and `identifier` currently matches the catalogue TITLE \"expected an identifier\", so a reworded title silently breaks both. Zero fixtures in this chapter carry `//! lrm`, so `zig build torture -- --coverage` reports Annex B as cited by nothing. One line changed and one line added per file.",
+    "expected": "//! lrm B\n//! reject E0208\n(replacing `//! reject identifier`; keep the existing `// EXPECT: error` line only if the delete in B23 has not landed)",
+    "severity": "medium",
+    "sourceLenses": [
+      "weak",
+      "negatives"
+    ]
+  },
+  {
+    "id": "B22",
+    "section": "B",
+    "action": "edit",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/COVERAGE.md",
+    "title": "COVERAGE.md claims a complete inventory that omits two keywords, and claims fixtures 05-11 prove reservedness when they prove parser state",
+    "detail": "Three defects, VERIFIED. (1) The keyword inventory tables are missing exactly `assert` and `net_resolution` (programmatic diff of the 217 Table B.1 spellings against the file's word set) while the closing sentence claims \"these family probes make every Annex B keyword occur as source syntax\". (2) Line 19 says 05-11 \"pin VerA's reservedness/grammar boundary\" — naming the implementation as the thing under test, which is the framing that produced the nine anti-conformant fixtures. (3) The \"Reserved keyword family probes\" section lists the keywords each of 05-11 supposedly probes; after the B01-B09 rewrites those lists become true for the first time, so the section needs re-stating in reservedness terms rather than \"in library/configuration grammar\", \"as primitive tokens\", etc. Do this LAST, after B01-B09 and B11/B12 land.",
+    "expected": "Inventory rows covering all 217 spellings including `assert` and `net_resolution`, each marked with the fixture that proves it reserved; the two xfail entries flagged as VerA gaps; and the boundary language replaced by the Annex B claim the fixtures now actually make.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered",
+      "weak"
+    ]
+  },
+  {
+    "id": "B23",
+    "section": "B",
+    "action": "delete",
+    "path": "/home/omare/Documents/Projects/Zig/VerA/tests/fixtures/annex_b_keywords/*.expected-error.txt (11 files)",
+    "title": "Eleven orphan .expected-error.txt sidecars contradict the fixture contract",
+    "detail": "tests/fixtures/README.md:3 says \"One runner, tests/torture.zig. No sidecar files.\" VERIFIED they are dead: build.zig wires only the `torture` step and its comment at line 69 records that it \"replaced `conformance`, `exhaustive`, `sema.sh` and `ledger`\"; nothing builds tests/conformance.zig, which is the only reader of these files. Each of the 11 duplicates a `//! reject` line already in its .va, so they are a second copy of the oracle free to drift. CORRECTIONS: both lenses said NINE; there are ELEVEN (03, 04, 05, 06, 07, 07b, 07c, 08, 09, 10, 11). CAVEAT: this is a tree-wide leftover, not an Annex B defect — 301 sidecars exist across 20 chapters. Deleting only these 11 leaves the tree inconsistent; either sweep all 301 in one commit or leave all of them. Lowest priority in this work order either way, and it changes no verdict.",
+    "expected": "The 11 files gone; `zig build torture -- annex_b_keywords` still reports 13/13.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak",
+      "negatives"
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+// §9.4.3, stated twice in the chapter — once in §9.4.1 and once here:
+//
+//   "For each % character (except %m, %% and %l) that appears in a string, a
+//    corresponding expression argument shall be supplied after the string."
+//
+// The parenthesis is what makes this a checkable rule rather than a formatting
+// preference: three specifiers consume no argument and every other one consumes
+// exactly one, so the count is determined by the format string alone and a
+// compiler can check it without running anything.
+//
+// `$display("%d %d", 1)` has two consuming specifiers and one argument. The
+// legal neighbour is 06_display_formats.va, whose first line carries six
+// specifiers and six arguments; the second line carries %%, %m and no arguments
+// at all, which is the exception the parenthesis names.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.4.1
+//! lrm 9.4.3
+//! reject argument
+//! xfail VerA does not check the % count in a display format string against the argument list
+module ch09_display_argument_pairing_rejected(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    $display("%d %d", 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

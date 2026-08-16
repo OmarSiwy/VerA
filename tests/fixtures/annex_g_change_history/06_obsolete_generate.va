@@ -1,6 +1,20 @@
-//! reject expression
+// Annex G Table G.1 ("Generate statement | generate | N/A | Obsolete") and
+// G.2.3 Figure G-1: the v1.0 form is `generate index (start, end [, incr])
+// statement`, an ANALOG statement unrolled at elaboration, and it is gone.
+// It is not the modern §6.6.2 loop generate (`genvar`, `generate ... endgenerate`
+// at module level), which is current language and is owned by
+// ch06_hierarchy/generate_loop.va -- that file records VerA's blanket rejection
+// of the modern form as DEBT, so the bare word `generate` in a diagnostic proves
+// nothing on its own. The code below is the obsolete form: inside an analog
+// block, with the parenthesised index bounds of Figure G-1.
+//
+// E0209 pins WHERE it dies: `generate` is not an analog statement keyword, so
+// the parser is still looking for an expression when it meets it.
+//
+//! lrm G.1
+//! lrm G.2.3
+//! reject E0209
 //! reject generate
-// EXPECT: error
 module annex_g_obsolete_generate(p, n);
   inout p, n; electrical p, n;
   analog begin

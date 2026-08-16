@@ -9,6 +9,11 @@
 // escapes as Z28/Z2c/Z29 — `sweep` and not `bias` because a bias line splits on
 // commas.)
 //
+// The two strengths differ on purpose: 0.75 is a difference of two dyadic
+// biases and is exact to the last bit, so it is CHECKX; 0.002 is not dyadic and
+// reaches the probe through the sweep, so it keeps an absolute tolerance of
+// 1e-18, about 2 ulp at 2e-3.
+//
 //! bias V(p) = 0.875, V(n) = 0.125
 //! sweep flowZ28pZ2cnZ29 = 0.002
 `include "check.vh"
@@ -19,7 +24,7 @@ module ch11_quantity_objects(p, n);
   analog begin
     v_value = V(path);
     i_value = I(path);
-    `CHECK("the branch's potential quantity", v_value, 0.75, 1e-15);
+    `CHECKX("the branch's potential quantity", v_value, 0.75);
     `CHECK("the branch's flow quantity", i_value, 2.0e-3, 1e-18);
     I(path) <+ v_value / 1k + i_value * 0.0;
   end

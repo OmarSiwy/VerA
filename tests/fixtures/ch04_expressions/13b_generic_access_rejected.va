@@ -1,7 +1,0 @@
-//! reject expression
-// EXPECT: error
-module ch04_generic_access_rejected(p, n);
-    inout p, n;
-    electrical p, n;
-    analog I(p, n) <+ potential(p, n) + flow(p, n);
-endmodule

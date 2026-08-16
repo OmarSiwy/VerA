@@ -1,16 +1,23 @@
 // §3.4.7 parameter aliases — the LRM's own `nmos2` example. An `aliasparam` is
-// a second NAME for one parameter, not a second parameter: overriding either
-// name leaves "the value of the parameter dtemp, as used in the module
-// equations, [equal to] 5".
+// a second NAME for one parameter, not a second parameter, and the only thing
+// the alias exists to do is carry an OVERRIDE:
 //
-// `dtemp` is overridden to 25 below, so the literal below is what the equations
-// must see. The relational line is the storage claim, which is the one thing
-// §3.4.7 states as an identity with no value of its own to write down; note
-// that §3.4.7 also says a conforming module shall reference the parameter by
-// its ORIGINAL name in its equations, so reading `trise` here is a deliberate
-// probe of the alias table rather than a pattern to copy.
+//     nmos2 #(.trise(5)) m1(...);
+//     nmos2 #(.dtemp(5)) m2(...);
+//     "and the value of the parameter dtemp, as used in the module equations
+//      for both instances, is 5."
 //
-//! param dtemp = 25
+// So the override below names the ALIAS and the equations read the ORIGINAL,
+// which is the one arrangement in which the alias table is load-bearing. This
+// file used to override `dtemp` — the original name — so it stayed green with
+// the `aliasparam` line deleted, and it also read `trise` inside the analog
+// block, which §3.4.7 forbids outright: "the alias_identifier shall not occur
+// anywhere else in the module ... the equations in the module shall reference
+// the parameter by its original name, not the alias."
+//
+//! param trise = 25
+//! lrm 3.4.7
+//! xfail VerA lowers an aliasparam into its parameter table but codegen emits no Model field for the alias, so `//! param trise = 25` fails to build the testbench: "no field named 'trise' in struct Model"
 `include "check.vh"
 module ch03_parameter_alias(p, n);
     inout p, n;
@@ -19,8 +26,7 @@ module ch03_parameter_alias(p, n);
     aliasparam trise = dtemp;
 
     analog begin
-        `CHECKX("the override reaches the aliased parameter", dtemp, 25.0);
-        `CHECKEQ("aliasparam names the same storage", trise, dtemp, 0.0);
+        `CHECKX("an override through the alias reaches the original parameter", dtemp, 25.0);
         I(p, n) <+ dtemp + V(p, n);
     end
 endmodule

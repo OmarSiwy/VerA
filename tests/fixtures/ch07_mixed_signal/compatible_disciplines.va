@@ -11,6 +11,8 @@
 //
 // Biased 2.5 V and 0.5 V, that access function must return the difference, 2.0.
 //
+//! lrm 3.11
+//! lrm 7.4.1
 //! bias V(p) = 2.5, V(q) = 0.5
 `include "check.vh"
 nature ch7_potential;

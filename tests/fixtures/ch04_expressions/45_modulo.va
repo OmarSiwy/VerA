@@ -10,6 +10,25 @@
 // i.e. the sign follows a and NOT the C-truncation-free floor form, which would
 // have given +0.5. Every value here is exact in IEEE 754 binary.
 //
+// Table 4-6 "Examples of modulus operations" hands over five worked rows, all
+// asserted below, verbatim:
+//
+//     11 % 3      2     11/3 yields a remainder of 2.
+//     12 % 3      0     12/3 yields no remainder.
+//    -10 % 3     -1     The result takes the sign of the first operand.
+//     11 % -3     2     The result takes the sign of the first operand.
+//     10 % 3.75   2.5   [10 - floor(10/3.75)*3.75] yields a remainder of 2.5.
+//
+// -10 % 3 == -1 is the load-bearing row here: the sign comes from the FIRST
+// operand, so a floor-modulus or Euclidean lowering returns +2 and passes every
+// other row in the table. Its mirror image, 11 % -3 == 2, lives in
+// 118_modulo_negative_divisor.va — VerA cannot compile a negative divisor, and
+// keeping it here would take the other four rows down with it.
+//
+// 10 % 3.75 goes through the real formula: 10/3.75 = 2.666... >= 0, so
+// 10 - floor(2.666...)*3.75 = 10 - 2*3.75 = 2.5, exact in binary.
+//
+//! lrm 4.2.4
 //! bias V(p) = 5.5
 `include "check.vh"
 module ch04_modulo(p, n);
@@ -18,6 +37,10 @@ module ch04_modulo(p, n);
     analog begin
         `CHECKX("5.5 % 2.0", V(p, n) % 2.0, 1.5);
         `CHECKX("-5.5 % 2.0 takes the sign of the first operand", (-V(p, n)) % 2.0, -1.5);
+        `CHECKI("Table 4-6: 11 % 3", 11 % 3, 2);
+        `CHECKI("Table 4-6: 12 % 3 divides exactly", 12 % 3, 0);
+        `CHECKI("Table 4-6: -10 % 3 takes the sign of the first operand", (-10) % 3, -1);
+        `CHECKX("Table 4-6: 10 % 3.75", 10 % 3.75, 2.5);
         I(p, n) <+ V(p, n) % 2.0;
     end
 endmodule

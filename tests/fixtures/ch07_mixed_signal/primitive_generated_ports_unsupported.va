@@ -1,6 +1,7 @@
 // annex C: gate primitives and `defparam` are outside Verilog-A.
+//! lrm 7.8.5.1
+//! lrm C.9
 //! reject E0205
-//! reject and
 //! reject defparam
 // EXPECT: error -- built-in primitive ports have specified auto-connector names.
 module ch7_primitive_generated_ports(a, b, y);

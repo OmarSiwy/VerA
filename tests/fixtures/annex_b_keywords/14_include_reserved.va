@@ -1,0 +1,24 @@
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// `include` is in Table B.1 in both this repo's Annex B and the 2.4.0 printing
+// (page 395, between `incdir` and `inf`), and it is the one spelling in the
+// table that the language never uses bare: it appears only as the compiler
+// directive `` `include ``, behind a backtick, which the lexer sees before the
+// identifier rule is ever reached. Table B.1 reserves the bare word anyway.
+//
+// That is the trap, and why this gets its own file rather than a line in one of
+// the family censuses: an implementation that reserves directive names only in
+// the post-backtick position — the natural way to write a preprocessor — accepts
+// `real include;` and passes every other fixture in this chapter. `include`
+// belongs to no keyword family, so no census would have caught it either.
+//
+// With this file the chapter's reject lines cover all 217 Table B.1 spellings.
+//! lrm B
+//! lrm 2.8
+//! reject E0208
+//! reject include
+module annex_b_include_reserved;
+    real include;
+endmodule

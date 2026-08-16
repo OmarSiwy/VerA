@@ -15,6 +15,8 @@
 // for a MULTIPLICATIVE rule ($hflip_specified * $hflip_hier), so a zero default
 // would silently collapse every layout-dependent model that uses it.
 //
+//! lrm 6.3.6
+//! lrm 9.18
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch6_geometry(p);

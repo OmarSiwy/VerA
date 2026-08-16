@@ -8,6 +8,7 @@
 // reports gain=2 here. At V(p,n) = 0.75 - 0.25 = 0.5 V (§1.3.1) the gain-scaled
 // potential is then 1.0*0.5 = 0.5 rather than 1.0.
 //
+//! lrm 10.5
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch10_predefined_vams_enable(p, n);

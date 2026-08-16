@@ -7,7 +7,7 @@
 // bars cross() from non-transient analyses besides). The timer half is
 // timer(1n, 1n), whose first event is at t = 1n (§5.10.3.3). So
 //
-//     t = 0    neither event -> held keeps the 0.0 of §3.2.1
+//     t = 0    neither event -> held keeps the 0.0 of §3.2
 //     t = 1n   timer event   -> held = V(p) = 0.7
 //     t = 2n   timer event   -> held = V(p) = 0.7
 //
@@ -21,6 +21,9 @@
 // evaluated, so the t = 1n event is not seen until t = 2n. The or-list itself
 // is fine; t = 0 and t = 2n both pass.
 //
+//! lrm 5.10.1
+//! lrm 5.10.3.1
+//! lrm 5.10.3.3
 //! analysis tran
 //! bias V(p) = 0.7, V(c) = -1.0
 //! time 0, 1n, 2n

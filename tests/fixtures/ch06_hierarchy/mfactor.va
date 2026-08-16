@@ -7,6 +7,9 @@
 //
 // The contribution keeps `0.0 * $mfactor` so the system parameter is read from
 // the residual path as well as from the assertion.
+//
+//! lrm 6.3.6
+//! lrm 9.18
 `include "check.vh"
 module ch6_mfactor(p);
   inout p; electrical p;

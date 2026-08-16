@@ -1,0 +1,28 @@
+// §3.4.4, in the restriction list whose closing sentence is "Failure to follow
+// these restrictions shall result in an error": "A type of a parameter array
+// shall be given in the declaration." §3.4.1 says it a second time from the
+// other side: "the type of a string parameter (see 3.4.6) and any of the array
+// parameters (see 3.4.4) is mandatory."
+//
+// `coefficients` has a range and an assignment pattern but no `real`. The rule
+// exists because §3.4.1's fallback — "If the type of a parameter is not
+// specified, it is derived from the type of the final value assigned" — has
+// nothing to derive from once the value is a pattern rather than a scalar.
+// 08_parameter_array.va is the same declaration with the type present.
+//
+// The pinned substring is only the phase label: VerA has no diagnostic for this
+// rule, so a code would pin the wrong one.
+//
+//! lrm 3.4.4
+//! lrm 3.4.1
+//! reject DiagnosticsReported
+//! xfail VerA accepts an untyped parameter array declaration and gives it a real type by inference; there is no mandatory-type check on array parameters in lower.zig
+module ch3_parameter_array_untyped(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter coefficients[0:3] = '{1.0, 3.198, 4.554, 2.0};
+
+    analog begin
+        I(p, n) <+ coefficients[0] * V(p, n);
+    end
+endmodule

@@ -11,6 +11,8 @@
 // out of c = -250u + 100u = -150 uA. The three sum to zero, as KFL demands of a
 // network with no external source.
 //
+//! lrm 8.3.1
+//! lrm 2.5.1
 //! bias V(p) = 1.0, V(n) = 0.2, V(c) = 0.5
 `include "check.vh"
 module ch8_kfl(p, n, c);

@@ -1,29 +1,48 @@
-// Annex A.6.5 event control. The two events differ in exactly one way that a
-// DC operating point can see (LRM 5.10.3.1/5.10.3.2):
+// Annex A.6.5 event control, pinned to the two things §5.10 makes NORMATIVE at
+// a standalone DC operating point:
 //
-//   cross()  "will not generate events for non-transient analyses, such as ac,
-//            dc, or noise analyses"
-//   above()  "also triggers during initialization or dc analysis ... If the
-//            expression is positive at the conclusion of the initial condition
-//            analysis ... above() shall generate an event"
+//   §5.10.2  "initial_step and final_step generate global events on the first
+//            and the last point in an analysis" — a DC operating point is one
+//            point, so initial_step fires. `started` must end at 1.
+//   §5.10.3.1 "The cross() function will not generate events for non-transient
+//            analyses, such as ac, dc, or noise analyses" — so `crossed` must
+//            still be 0, even though V(p,n) = 2 sits above the threshold.
 //
-// Biased at V(p,n) = 2, the above() argument is +1, so the or-ed event list
-// fires and `active` ends at 1 — even though the cross() half cannot fire in
-// dc. Had only cross() been honoured, `active` would still hold the 0 that
-// @(initial_step) put there.
+// The pair is what makes either half worth anything: a compiler that never
+// fires any event fails the first check, and one that treats cross() as a plain
+// comparison fails the second.
 //
+// WHY above() IS NOT ASSERTED HERE. §5.10.3.2's two `shall` sentences are both
+// scoped, and neither scope is this fixture: "If the expression is positive at
+// the conclusion of the initial condition analysis THAT PRECEDES A TRANSIENT
+// ANALYSIS, the above() function shall generate an event", and "During a DC
+// SWEEP, the above() function shall also generate an event when the expression
+// crosses zero from below". What covers a plain DC point is only the permissive
+// "the cross() function will not generate events for non-transient analyses
+// ... but the above() function CAN". This file used to demand `active == 1`
+// from an or-ed cross/above list at exactly such a point, which a conforming
+// compiler that declines the option fails. Asserting above() needs a fixture
+// that runs one of the two scoped analyses.
+//
+//! lrm A.6.5
+//! lrm 5.10.2
+//! lrm 5.10.3.1
 //! bias V(p) = 2.0
 //! print none
 `include "check.vh"
 module annex_a_event_control(p, n);
     inout p, n;
     electrical p, n;
-    integer active;
+    integer started;
+    integer crossed;
 
     analog begin
-        @(initial_step) active = 0;
-        @(cross(V(p, n), 1) or above(V(p, n) - 1.0)) active = 1;
-        `CHECKI("above() fires in dc when its expression is positive", active, 1);
-        I(p, n) <+ active;
+        started = 0;
+        crossed = 0;
+        @(initial_step) started = 1;
+        @(cross(V(p, n), 1)) crossed = 1;
+        `CHECKI("initial_step fires on the first point of any analysis", started, 1);
+        `CHECKI("cross() generates no event in a non-transient analysis", crossed, 0);
+        I(p, n) <+ (started - crossed) * V(p, n);
     end
 endmodule

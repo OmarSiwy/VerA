@@ -1,25 +1,54 @@
-// §4.5.12 the four Z-transform filter forms. A DC operating point is a constant
-// input held forever, so every sample is equal and z = 1; the output is H(1)
-// times the input.
+// §4.5.12 the four Z-transform filter forms, and the one thing the clause
+// actually fixes about them.
 //
-//   zi_zp(x, '{0,0}, '{0.5,0}, 1u)          §4.5.12.1
-//     H(z) = (1 - z^-1 * 0) / (1 - z^-1 * 0.5).  At z=1: 1 / 0.5 = 2.
-//     (The zero sits at the origin, so §4.5.12.1's "implemented as z" special
-//     case applies — and z = 1 at DC, so that factor is 1 either way.)
+// WHAT 4.5.12 DOES NOT SAY. Read end to end, 4.5.12 specifies T ("is
+// mandatory, and shall be positive"), tau, t0, the null argument, and the four
+// transfer functions of 4.5.12.1-.4. It says NOTHING about DC or the operating
+// point. Compare its neighbours, which each get an explicit sentence: ddt
+// (4.5.3) "In DC analysis, ddt() returns zero (0)", absdelay (4.5.7) "In DC and
+// operating point analyses, absdelay() returns the value of its input", slew
+// (4.5.9) "In DC analysis, slew() simply passes the value of the destination to
+// its output". The Z-filters have no such sentence.
 //
-//   zi_zd(x, '{0,0}, '{1,-0.5}, 1u)         §4.5.12.2
-//     H(z) = 1 / (1*z^0 + (-0.5)*z^-1).  At z=1: 1 / 0.5 = 2.
+// So a DC output of 2.0 for a one-pole accumulator — the H(z=1) steady-state
+// reading, every sample equal so z = 1 — is a DEFENSIBLE implementation choice,
+// not a normative value. 4.5.15's "All analog operators are considered to have
+// no state history prior to time t == 0" supports 1.0 just as well: with x[-1]
+// taken as zero, the first output of 1/(1 - 0.5 z^-1) is the input itself. This
+// file used to assert 2.0 four times as if 4.5.12 had said so. It did not, and
+// a conforming simulator that reads 4.5.15 the other way would have failed it.
 //
-//   zi_np(x, '{1,0}, '{0.5,0}, 1u)          §4.5.12.3
-//     H(z) = (1 + 0*z^-1) / (1 - 0.5*z^-1).  At z=1: 1 / 0.5 = 2.
+// WHAT 4.5.12 DOES SAY, and what is asserted below.
 //
-//   zi_nd(x, '{1,0}, '{1,-0.5}, 1u)         §4.5.12.4
-//     H(z) = (1 + 0*z^-1) / (1 - 0.5*z^-1).  At z=1: 2.
+// 1. A filter with no delay term is a pure gain, whatever the history
+//    convention is, because there is no history in it:
 //
-// All four are the same one-pole accumulator written four ways, so the DC gain
-// is 2 in every case. With V(p,n) = 1 V each output is 2.0 — a pass-through
-// (gain 1) or a filter that dropped the feedback term (gain 1) fails.
+//      zi_nd(x, '{2,0}, '{1,0}, 1u)          §4.5.12.4
+//        H(z) = (2 + 0*z^-1) / (1 + 0*z^-1) = 2 for every z.
 //
+//    Both readings agree on 2.0 here, and it is exact in IEEE 754. That is the
+//    one number in this file with digits, and it is earned. It also excludes
+//    the two boring wrong lowerings — a pass-through and a dropped numerator.
+//
+// 2. The four forms of 4.5.12.1-.4 are four SPELLINGS of one transfer function,
+//    so they shall produce the same output from the same input. The four
+//    coefficient sets below are all H(z) = 1/(1 - 0.5 z^-1):
+//
+//      zi_zp(x, '{0,0}, '{0.5,0}, 1u)        §4.5.12.1  zero at the origin,
+//        which 4.5.12.1 implements "as z", over one real pole at 0.5
+//      zi_zd(x, '{0,0}, '{1,-0.5}, 1u)       §4.5.12.2  same zero, denominator
+//        written out as d0 + d1 z^-1 = 1 - 0.5 z^-1
+//      zi_np(x, '{1,0}, '{0.5,0}, 1u)        §4.5.12.3  numerator written out
+//        as n0 + n1 z^-1 = 1, same pole
+//      zi_nd(x, '{1,0}, '{1,-0.5}, 1u)       §4.5.12.4  both written out
+//
+//    Whatever value the implementation picks at the DC point, it shall pick the
+//    SAME one for all four — that claim IS in 4.5.12 and there are no digits to
+//    write for it, which is the case the README reserves `CHECKEQ for. It still
+//    bites: it is exactly what a lowering that special-cases one of the four
+//    forms, or that drops a feedback term in one of them, fails.
+//
+//! lrm 4.5.12
 //! analysis dc
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0
@@ -27,19 +56,25 @@
 module ch04_z_transform_filters(p, n);
     inout p, n;
     electrical p, n;
-    real y_zp, y_zd, y_np, y_nd;
+    real gain, y_zp, y_zd, y_np, y_nd;
 
     analog begin
+        gain = zi_nd(V(p, n), '{2.0, 0.0}, '{1.0, 0.0}, 1u);
+
         y_zp = zi_zp(V(p, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u);
         y_zd = zi_zd(V(p, n), '{0.0, 0.0}, '{1.0, -0.5}, 1u);
         y_np = zi_np(V(p, n), '{1.0, 0.0}, '{0.5, 0.0}, 1u);
         y_nd = zi_nd(V(p, n), '{1.0, 0.0}, '{1.0, -0.5}, 1u);
 
-        `CHECK("zi_zp DC gain is 1/(1 - pole)", y_zp, 2.0, 1e-12);
-        `CHECK("zi_zd DC gain is 1/sum(d_k)", y_zd, 2.0, 1e-12);
-        `CHECK("zi_np DC gain is sum(n_k)/(1 - pole)", y_np, 2.0, 1e-12);
-        `CHECK("zi_nd DC gain is sum(n_k)/sum(d_k)", y_nd, 2.0, 1e-12);
+        // The only digits 4.5.12 fixes here: a delay-free filter is its gain.
+        `CHECKX("a Z-filter with no z^-1 term is the pure gain n0/d0", gain, 2.0);
 
+        // One transfer function, four spellings, one output.
+        `CHECKEQ("zi_zd spells the same H(z) as zi_zp", y_zd, y_zp, 1e-12);
+        `CHECKEQ("zi_np spells the same H(z) as zi_zp", y_np, y_zp, 1e-12);
+        `CHECKEQ("zi_nd spells the same H(z) as zi_zp", y_nd, y_zp, 1e-12);
+
+        I(p, n) <+ gain;
         I(p, n) <+ y_zp;
         I(p, n) <+ y_zd;
         I(p, n) <+ y_np;

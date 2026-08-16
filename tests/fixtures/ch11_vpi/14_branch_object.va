@@ -6,14 +6,19 @@
 // contributed flow is 0.75/1000 = 750 uA. Read `k` as anything but 1e3 and the
 // second number moves by orders of magnitude.
 //
+// Both are exact equalities. 0.75 and 1000.0 are exact doubles and IEEE
+// division is correctly rounded, so 0.75/1k is the double nearest 0.00075 —
+// which is what the literal 7.5e-4 parses to. Same bits, so CHECKX, not a
+// tolerance nine ulp wide.
+//
 //! bias V(p) = 0.875, V(n) = 0.125
 `include "check.vh"
 module ch11_branch_object(p, n);
   inout p, n; electrical p, n;
   branch (p,n) path;
   analog begin
-    `CHECK("the branch potential is its declared node pair", V(path), 0.75, 1e-15);
-    `CHECKR("the k scale factor is 1e3", V(path) / 1k, 7.5e-4, 1e-15);
+    `CHECKX("the branch potential is its declared node pair", V(path), 0.75);
+    `CHECKX("the k scale factor is 1e3", V(path) / 1k, 7.5e-4);
     I(path) <+ V(path) / 1k;
   end
 endmodule

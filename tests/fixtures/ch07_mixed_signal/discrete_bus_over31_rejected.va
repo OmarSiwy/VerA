@@ -1,6 +1,24 @@
-//! reject identifier
-// EXPECT: error -- LRM 7.3.1 forbids analog access to bit groupings wider than 31.
-module ch7_discrete_bus_over31(p, d);
-  inout p; electrical p; input [0:31] d; wire [0:31] d;
-  analog I(p) <+ d;
+// §7.3.1 Table 7-1, the `bit` row, last sentence: "Access of discrete bit
+// groupings with greater than 31 bits is illegal." This is the only prohibition
+// in that row — the mapping rules above it make 8 and 31 bits legal (see
+// discrete_bus_narrow_unsupported.va and discrete_bus_31_unsupported.va, which
+// must RUN) — so a diagnostic here has to be about the WIDTH and not about
+// vector syntax, or the boundary is untested in both directions.
+//
+// 32 bits is one over the limit, and it is the width that makes the rule
+// necessary: bit 31 of a 32-bit grouping has nowhere to go, because Table 7-1
+// also requires the integer's sign bit to be zero.
+//
+// VerA rejects this file, but for the wrong reason and identically to the two
+// legal widths: its parser has no vector-net syntax at all, so `reg [31:0] r`
+// dies at E0208 long before any width is compared against 31.
+//
+//! lrm 7.3.1
+//! reject bit grouping wider than 31 bits
+//! xfail VerA has no >31-bit width check: `reg [31:0] r` dies at E0208 in the parser first
+module ch7_discrete_bus_over31(p);
+  inout p; electrical p;
+  reg [31:0] r;
+  initial r = 32'h00000001;
+  analog I(p) <+ r;
 endmodule

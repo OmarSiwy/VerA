@@ -1,0 +1,24 @@
+// §3.6.2: "A discipline shall be defined between the keywords discipline and
+// enddiscipline. Each discipline shall have a unique identifier as the name of
+// the discipline." §3.13.1 puts disciplines in the same single global scope as
+// natures and modules.
+//
+// `ch3_twice_d` is declared twice with different nature bindings, so a net
+// declared `ch3_twice_d n;` would have two different sets of access functions.
+//
+// Mirror of 67_duplicate_nature_name.va and a separate file: A.1.7 gives
+// nature_declaration and discipline_declaration as different productions, so a
+// compiler can register one kind uniquely and not the other.
+//
+// The pinned substring is only the phase label, for the reason given in
+// 67_duplicate_nature_name.va.
+//
+//! lrm 3.6.2
+//! lrm 3.13.1
+//! reject DiagnosticsReported
+//! xfail VerA keeps the last of two disciplines declared with the same name and reports nothing; the E0336 collision check in lower.zig only fires across natures and disciplines
+nature ch3_twice_d_p; units="V"; access=TwiceDV; abstol=1u; endnature
+nature ch3_twice_d_f; units="A"; access=TwiceDI; abstol=1p; endnature
+discipline ch3_twice_d; potential ch3_twice_d_p; enddiscipline
+discipline ch3_twice_d; potential ch3_twice_d_p; flow ch3_twice_d_f; enddiscipline
+module ch3_duplicate_discipline_name; endmodule

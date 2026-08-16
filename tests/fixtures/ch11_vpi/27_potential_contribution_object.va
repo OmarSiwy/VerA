@@ -1,0 +1,27 @@
+// §11.6.20 contribs: the class carries `-> flow — bool: vpiFlow`, so the object
+// model distinguishes a flow contribution from a potential one. Every other
+// contribution in this chapter is `I(...) <+`, which can only ever make that
+// boolean true; 23 is the flow representative and this is the potential one.
+//
+// §5.6.2 gives the potential (branch) contribution: `V(p,n) <+ expr` states the
+// equation V(p,n) - expr = 0, driving the branch as a potential source rather
+// than adding to the flow through it. §5.4.1 keeps V(p,n) the probe of the node
+// pair on the right-hand side, so probing away from the solution measures the
+// mismatch.
+//
+// At V(p)=1.5, V(n)=0.25 the branch potential is 1.5 - 0.25 = 1.25 V; the
+// source value is `vsrc`'s own §3.4 default, 1.25. Both dyadic, so exact.
+//
+//! lrm 11.6.20
+//! lrm 5.6.2
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
+module ch11_potential_contribution_object(p, n);
+  inout p, n; electrical p, n;
+  parameter real vsrc = 1.25;
+  analog begin
+    `CHECKX("the potential source value driven onto the branch", vsrc, 1.25);
+    `CHECKX("the branch probe alongside the potential source", V(p,n), 1.25);
+    V(p,n) <+ vsrc;
+  end
+endmodule

@@ -11,11 +11,13 @@
 // The bias check is the second half — at V(p)=1.5, V(n)=0.25 the branch
 // potential is 1.25 V and the contribution below still runs on it.
 //
-// This fixture deliberately uses an LRM-DEFINED task. The unregistered VPI
-// spelling (`$fixture_vpi_task`) belongs to 05/08/20, which require it to be
-// REFUSED; asserting continuation across one of those would bake the opposite
-// expectation into the suite.
+// 05, 06 and 08 make the same §5.3.1 ordering claim across an UNREGISTERED
+// `$name`, which §2.8.3 makes legal source; this one makes it across $strobe,
+// which §9.4.1 defines, so it holds even for a compiler that refuses
+// unregistered names.
 //
+//! lrm 11.6.16
+//! lrm 9.4.1
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch11_system_task_call_object_atomic(p, n);

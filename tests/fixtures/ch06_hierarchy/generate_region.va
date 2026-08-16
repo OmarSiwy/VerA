@@ -1,4 +1,29 @@
-//! reject expression
+// THIS REJECTION IS CORRECT CONFORMANCE, and the file used to say nothing at all
+// about why. Syntax 6-8: `generate_region ::= generate { module_or_generate_item }
+// endgenerate`. A bare `begin [: name] ... end` is a `generate_block`, and a
+// `generate_block` appears in the grammar only as the body of a loop generate
+// construct or of a conditional generate construct — never directly inside a
+// generate region. §6.6 says the same in prose: the region is "a textual span in
+// the module description where GENERATE CONSTRUCTS may appear", and a naked named
+// block is not one. So this source has no production and a conforming compiler
+// diagnoses it; there is no `//! xfail`.
+//
+// What is legal, and is deliberately NOT what this file writes, is the region
+// holding a module_or_generate_item directly — `generate analog I(p) <+ V(p);
+// endgenerate` — which VerA already accepts.
+//
+// The road to the verdict is a parse boundary and a different one from the rule:
+// VerA's parser reads a generate body as an analog STATEMENT, so it dies on the
+// `analog` keyword (E0209, "expected an expression: found `analog`") rather than
+// on the missing production for `begin`. The day generate blocks hold module
+// items (the gap the five generate_if*/generate_two_loops fixtures name), this
+// file must keep failing — with a different code, from Syntax 6-8.
+//
+// The old directive demanded the single word `expression`, which any parser error
+// in the file could satisfy. E0209 pins which one.
+//
+//! lrm 6.6
+//! reject E0209
 module ch6_generate_region(p);
   inout p; electrical p;
   generate

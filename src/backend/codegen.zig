@@ -70,7 +70,7 @@ const none_u32 = std.math.maxInt(u32);
 /// for a one-line edit, and every declaration re-hashed. Splitting the WRITE
 /// fixes that without splitting the codegen buffer: `text` stays the single
 /// contiguous emission (`--emit-zig` still writes it verbatim, which is what
-/// keeps `tests/baseline.sh` a byte oracle), and the split is a view over it —
+/// keeps `--emit-zig` a byte oracle), and the split is a view over it —
 /// two `u32` appends per unit, no second buffer, the same reserve-and-record
 /// trick as the signature back-patch.
 ///
@@ -3655,7 +3655,7 @@ const ops_txt =
 
 /// §5.10.5 the `nextBreakpoint` kernel. Its own block, gated on `usesOp(.timer)`
 /// like the history and filter kernels, so the 36 foundry models — none of which
-/// uses `timer` — keep a byte-identical device.zig (tests/baseline.sh).
+/// uses `timer` — keep a byte-identical device.zig.
 const timer_txt =
     \\// ---- §5.10.5 timer breakpoints ----
     \\

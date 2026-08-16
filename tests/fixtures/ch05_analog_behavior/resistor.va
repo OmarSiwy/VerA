@@ -6,6 +6,7 @@
 // At V(p) = 1.5, V(n) = 0.25 the branch potential is 1.25 V and the flow is
 // 1.25/1000 = 1.25 mA.
 //
+//! lrm 5.6.1
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch5_resistor(p, n);

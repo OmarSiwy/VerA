@@ -1,5 +1,7 @@
 // LRM 4.4: a net may only be read through an access function; the rejection
 // lands at the ACCESS, which is the more useful diagnostic.
+//! lrm 7.3.1
+//! lrm C.9
 //! reject E0315
 // A scalar discrete bit is promoted to an analog integer; this snapshots current lowering.
 module ch7_discrete_scalar_bit(p, d);
