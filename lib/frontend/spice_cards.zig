@@ -9,10 +9,10 @@
 //! E.1.2: "with which particular variant of SPICE it is compatible, is solely
 //! determined by the authors of the simulator". VerA claims SPICE3 card
 //! syntax for `.MODEL` (the `model_types` rows) and for flat `.SUBCKT` bodies
-//! of numeric-valued R/C/L/V/I/E/F/G/H cards. Inside a definition, anything
+//! of numeric-valued R/C/L/V/I/E/F/G/H cards. Inside a `.SUBCKT`, anything
 //! else (`PARAMS:`, a `{expr}` value, a nested `.SUBCKT`, a model-referenced
-//! or unlisted device card, an unknown model type) is a `Refusal` (E0928):
-//! skipping it would change the circuit, a dropped R being an open.
+//! or unlisted device card) is a `Refusal` (E0928): skipping it would change
+//! the circuit, a dropped R being an open.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -59,9 +59,9 @@ const Refusals = struct {
 /// type, and the interface comes from Table E.1's row for that type.
 ///
 /// The rows are the SPICE model-type letters, mapped to the Table E.1 primitive
-/// each names. An absent type (`sw`, `ltra`, `core`, ...) is outside the claim
-/// in the module header and is refused (E0928): E.1.2's first bullet makes the
-/// recognised flavor "solely determined by the authors of the simulator".
+/// each names. Absent types (`sw`, `ltra`, `core`, ...) are skipped cards, not
+/// errors: E.1.2's first bullet makes the recognised flavor "solely determined by
+/// the authors of the simulator".
 ///
 /// `ports` is pre-joined in Table E.1's order, which E.3 makes normative for
 /// connection by order. A test pins each row against
@@ -193,11 +193,11 @@ fn emitCard(
     if (!is_model and !std.mem.eql(u8, kw, ".subckt")) return false; // a device card, .tran, .include, ...
 
     const name = it.next() orelse {
-        try refusals.add(card, "`{s}` names no definition", .{kw});
+        if (!is_model) try refusals.add(card, "`{s}` names no definition", .{kw});
         return false;
     };
     if (!isSpiceName(name)) {
-        try refusals.add(card, "`{s}` is not a name for a definition", .{name});
+        if (!is_model) try refusals.add(card, "`{s}` is not a name for a definition", .{name});
         return false;
     }
     for (seen.items) |s| if (std.mem.eql(u8, s, name)) return false;
@@ -206,21 +206,15 @@ fn emitCard(
     const decl = try spell(arena, name);
 
     if (is_model) {
-        const type_ = it.next() orelse {
-            try refusals.add(card, "`.model {s}` names no model type", .{name});
-            return false;
-        };
+        const type_ = it.next() orelse return false;
         const row = for (model_types) |r| {
             if (std.mem.eql(u8, r.type_, type_)) break r;
-        } else {
-            try refusals.add(card, "model type `{s}` of `{s}` is not one VerA reads (npn, pnp, d, nmos, pmos, njf, pjf, nmf, pmf, r, c, l)", .{ type_, name });
-            return false;
-        };
+        } else return false;
         // E.2.2.1: the interface is the primitive's. The body instantiates the
         // primitive, so the model behaves as Table E.1's Behavior column gives
         // that row; an empty column (bjt, mosfet, diode) gives nothing, which
         // E.2 makes implementation dependent.
-        const params = try modelParams(arena, row.prim, &it, card, refusals);
+        const params = try modelParams(arena, row.prim, &it);
         try out.print(arena,
             \\module {s}({s});
             \\   inout {s};
@@ -487,8 +481,6 @@ fn modelParams(
     arena: Allocator,
     prim: []const u8,
     it: *std.mem.TokenIterator(u8, .any),
-    card: Card,
-    refusals: *Refusals,
 ) Allocator.Error!ModelParams {
     // The card's `k=v` tail. ponytail: `k = v` with spaces around the `=` is not
     // a shape SPICE writes; split on the token if a dialect turns up that does.
@@ -497,11 +489,7 @@ fn modelParams(
     while (it.next()) |t| {
         const at = std.mem.indexOfScalar(u8, t, '=') orelse continue;
         if (at == 0 or at + 1 == t.len) continue;
-        const v = spiceNumber(t[at + 1 ..]) orelse {
-            // `R={rval}`: an expression value is not claimed.
-            try refusals.add(card, "`{s}`: the value `{s}` is not a number; expression values are not read", .{ t[0..at], t[at + 1 ..] });
-            continue;
-        };
+        const v = spiceNumber(t[at + 1 ..]) orelse continue;
         try keys.append(arena, t[0..at]);
         try vals.append(arena, v);
     }
@@ -826,15 +814,13 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
     try std.testing.expect(std.mem.indexOf(u8, p.refused[0].why, "`params:`") != null);
 }
 
-test "a repeat and an empty netlist contribute nothing; an unrecognised model type is refused" {
+test "an unrecognised model type, a repeat and an empty netlist all contribute nothing" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "")).modules);
-    const sw = try synthesize(arena, ".MODEL SW1 SW RON=1\n");
-    try std.testing.expectEqual(@as(u32, 0), sw.modules);
-    try std.testing.expectEqual(@as(usize, 1), sw.refused.len);
+    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, ".MODEL SW1 SW RON=1\n")).modules);
     try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "R1 a b 1k\n.TRAN 1n 1u\n")).modules);
     const dup = try synthesize(arena, ".MODEL M1 NPN\n.MODEL M1 PNP\n");
     try std.testing.expectEqual(@as(u32, 1), dup.modules);
@@ -874,7 +860,7 @@ test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or
     try std.testing.expect(std.mem.indexOf(u8, s.text, "vsine") == null);
 }
 
-test "E.1.2 nested .SUBCKT, {expr} values and trailing fields are refused, top-level cards are not" {
+test "E.1.2 nested .SUBCKT, {expr} values and trailing fields in a body are refused, top-level cards are not" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -885,13 +871,11 @@ test "E.1.2 nested .SUBCKT, {expr} values and trailing fields are refused, top-l
         \\R1 A B {RVAL}
         \\R2 A B 1K TC=0.01
         \\.ENDS
-        \\.MODEL RM R R={X}
         \\R9 X Y RMOD
         \\.TRAN 1N 1U
     );
-    try std.testing.expectEqual(@as(usize, 4), s.refused.len);
+    try std.testing.expectEqual(@as(usize, 3), s.refused.len);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "nested") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "{rval}") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "tc=0.01") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s.refused[3].why, "{x}") != null);
 }
