@@ -23,6 +23,8 @@ pub const Preprocessor = @import("frontend").Preprocessor;
 pub const libmap = @import("frontend").libmap;
 /// A `--param name=value` compile-time override (`Options.param_overrides`, LRM §3.4).
 pub const ParamOverride = Lower.ParamOverride;
+/// §7.4.4 resolution mode, `Options.discipline_resolution`.
+pub const DisciplineResolution = @import("ir").Elaborate.DisciplineResolution;
 /// The keyword set a `--std=` selects (`Options.language`).
 pub const KeywordSet = token.KeywordSet;
 /// Diagnostic codes, the `Bag` every stage reports into, and rendering.
@@ -86,6 +88,9 @@ pub const Options = struct {
     /// and its card may not move it; any other stays a run-time card value
     /// whose default this replaces.
     param_overrides: []const Lower.ParamOverride = &.{},
+    /// §7.4.4 basic or detail discipline resolution
+    /// (`--discipline-resolution=`); see `Elaborate.DisciplineResolution`.
+    discipline_resolution: Elaborate.DisciplineResolution = .basic,
     /// Prepend annex D.2 constants.vams + annex D.1 disciplines.vams (§3.6.2).
     std_defs: bool = true,
     /// The source language, `vera --std=`. See `Parser.setLanguage`.
@@ -335,6 +340,7 @@ fn compileInArena(
         .include_dirs = opts.include_dirs, // §9.21.1 a $table_model data file
         .param_overrides = opts.param_overrides, // §3.4 `--param`
         .displays_dropped = opts.display == .drop, // §3.2 retention, see `Exposed`
+        .discipline_resolution = opts.discipline_resolution,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.NoModule => {

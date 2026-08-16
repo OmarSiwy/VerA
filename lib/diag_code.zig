@@ -434,6 +434,8 @@ pub const Code = enum(u16) {
     E0926,
     E0927,
     E0928,
+    E0929,
+    E0930,
     E0960,
     E0982,
     E0482,
@@ -5995,6 +5997,45 @@ fn infoOf(c: Code) Info {
             \\Cards outside any definition (`.TRAN`, top-level devices) are not
             \\module definitions and are still skipped. Rewrite the card with a
             \\numeric value, or write the subcircuit as a Verilog-AMS module.
+            ,
+        },
+        .E0929 => .{
+            .title = "a mixed port's connect module cannot be inserted",
+            .lrm = "7.8.4",
+            .explain =
+            \\LRM 7.8.4: "A connection shall be selected for a port only if one of
+            \\the connections to the port is digital and the other is analog. In
+            \\this case, the port shall match one (and only one) connect
+            \\statement." A connect statement matches this port, but VerA places a
+            \\connect module only where it can judge the port while elaborating
+            \\the port's upper connection: both connections declare a discipline,
+            \\or the upper one resolves continuous at that level (7.4.4.1). Here
+            \\the upper connection's discipline was decided further up the
+            \\hierarchy, so the bridge has no place VerA can put it.
+            \\
+            \\This is a limit of VerA, not of the design: declare the upper
+            \\connection's discipline at the level of the port, or instantiate
+            \\the connect module by hand (7.8).
+            ,
+        },
+        .E0930 => .{
+            .title = "detail discipline resolution is not implemented for this signal",
+            .lrm = "7.4.4.2",
+            .explain =
+            \\LRM 7.4.4: "There are two modes for this method of resolution, basic
+            \\(the default) and detail". 7.4.4.2: "In this mode continuous
+            \\disciplines propagate up and then back down to meet discrete
+            \\disciplines. Discrete disciplines do not propagate up the
+            \\hierarchy." Annex F.2.2 is that algorithm, selected by
+            \\`--discipline-resolution=detail`.
+            \\
+            \\The two modes agree on a signal with segments of one domain only, or
+            \\with no undeclared segment, and VerA compiles those under either
+            \\mode. On a signal that joins continuous and discrete segments
+            \\through undeclared interconnect, detail mode's top-down pass (F.2.2
+            \\step 5) re-decides the undeclared segments, and VerA does not
+            \\implement it. Compile in the default basic mode, or declare the
+            \\interconnect's disciplines (7.4.4.3 coercion).
             ,
         },
         .E0923 => .{

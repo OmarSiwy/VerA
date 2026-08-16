@@ -237,9 +237,8 @@ These need a call, not another agent pass.
    `zig build test-devices`. (`CLAUSE-AUDIT.md` §7.5 item 6.)
 7. **§6.5.7 / §7.8.4: discrete and electrical ports on one undeclared net with no
    connect statement.** Decided and implemented: E0927 (Vague_Decisions VD-007).
-8. **§7.4.4 detail discipline resolution.** VerA has basic mode only. Is detail
-   mode testable with a mode-selecting runner, or not at all (as
-   `lrm_7_4_5.va:6-7` says)? (`conformance-mixed-signal.md:193-201`.)
+8. **§7.4.4 detail discipline resolution.** Decided: testable once selected
+   (Vague_Decisions VD-008). The selector exists; the mode itself is a §5.3 gap.
 9. **IEEE §13.2.1.1 vs §4.11: two modules with one name.** Decided and
    implemented: the last wins with W1152 in both engines (Vague_Decisions VD-009).
 10. **§5.6.1.3 / A.6.5: a disabled block's contributions already made.** VerA
@@ -250,9 +249,8 @@ These need a call, not another agent pass.
 12. **§E.1.2: which SPICE flavour VerA claims.** Decided and implemented: SPICE3
     `.MODEL` and flat numeric `.SUBCKT` bodies, everything else inside a
     definition is E0928 (Vague_Decisions VD-012, IMPLEMENTATION §1).
-13. **§F.2.2 "shall be controlled by a simulator option"**: no such option
-    exists, and step 5's top-down re-pass is folded into one pass.
-    (`annex_f_resolution/COVERAGE.md:16-21`.)
+13. **§F.2.2 "shall be controlled by a simulator option".** Implemented:
+    `--discipline-resolution=basic|detail` (Vague_Decisions VD-013).
 14. **§A.8.8: UTF-8 bytes above 0x7F** are accepted in string literals.
     (`annex_a_syntax/COVERAGE.md:332-335`.)
 15. **§9.17.3, Syntax 9-12: `$limit(typ*V(a,k), ...)`**, whose first argument is
@@ -308,6 +306,7 @@ native compilation backlog separately from passing interpreter behavior.
 |---|---|---|
 | AMS 4.2.4 | Integer `%` with a probe-dependent divisor is refused (E0601). | `conformance-expressions.md:77-79` |
 | AMS 7.3.1 | A legal 31-bit select that reaches above bit 31 of a wider `reg` is refused (E0329): the analog context holds a `reg` as a 32-bit integer. Selects within bits 0-31 run (`discrete_bus_part_select_31.va`). | `conformance-mixed-signal.md:206-210` |
+| AMS 7.4.4.2, F.2.2 | Detail discipline resolution: `--discipline-resolution=detail` is accepted, but F.2.2 step 5's top-down pass is not implemented, so a signal joining continuous and discrete segments through undeclared interconnect is refused (E0930). Figure 7-4 is the case. | `discipline_resolution_detail_figure_7_4_refused.va`; Vague_Decisions VD-008 |
 | AMS 4.6.4.3, A.8.2 | `noise_table` on a parameter slice (`tbl[0:3]`) is refused (E0329). | `a06_SPEC.md:250-252` |
 | AMS 4.6.4 | `real w = white_noise(...)` as a declaration initializer exports no noise generator. The assignment form does. | `ch04_expressions/COVERAGE.md:108` |
 | AMS 9.20 | A whole-vector analog net reference is refused (E0812). | `a02_SPEC.md:261-264` |

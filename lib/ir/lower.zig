@@ -321,6 +321,8 @@ in_analog_initial: bool = false,
 /// `Options`; the default, false, counts those reads. Only `lower_var.Exposed`
 /// asks: a §3.2 hold that only a print could observe is no hold.
 displays_dropped: bool = false,
+/// §7.4.4's resolution mode (`Options.discipline_resolution`).
+discipline_resolution: Elaborate.DisciplineResolution = .basic,
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
 /// wrote it. Read by `discardOpposite` only; see `newContrib`.
 cur_unit: u32 = 0,
@@ -462,6 +464,7 @@ pub const Options = struct {
     include_dirs: []const []const u8 = &.{},
     param_overrides: []const ParamOverride = &.{},
     displays_dropped: bool = false,
+    discipline_resolution: Elaborate.DisciplineResolution = .basic,
 };
 
 /// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's map
@@ -481,6 +484,7 @@ pub fn lower(
     self.include_dirs = opts.include_dirs;
     self.param_overrides = opts.param_overrides;
     self.displays_dropped = opts.displays_dropped;
+    self.discipline_resolution = opts.discipline_resolution;
     defer {
         self.deinit();
         assert(self.builder.dir.len == 0);
@@ -516,6 +520,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .tok_starts = self.tok_starts,
         .bag = self.bag,
         .param_overrides = self.param_overrides,
+        .discipline_resolution = self.discipline_resolution,
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
