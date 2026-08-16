@@ -138,12 +138,14 @@ const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 
         .{ .device = 45964, .defs = 1032, .insts = 1027 },
         .{ .device = 139725, .defs = 8200, .insts = 8195 },
     },
+    // Parallel instances share one (p, n) row; the MIR also carries each
+    // instance's share of it (`lower_contrib.unitAccum`), dead in the device.
     .inst = .{
         .{ .device = 32621, .defs = 8, .insts = 5 },
-        .{ .device = 33825, .defs = 50, .insts = 40 },
-        .{ .device = 43673, .defs = 386, .insts = 320 },
-        .{ .device = 124207, .defs = 3074, .insts = 2560 },
-        .{ .device = 781992, .defs = 24578, .insts = 20480 },
+        .{ .device = 33825, .defs = 57, .insts = 47 },
+        .{ .device = 43673, .defs = 449, .insts = 383 },
+        .{ .device = 124207, .defs = 3585, .insts = 3071 },
+        .{ .device = 781992, .defs = 28673, .insts = 24575 },
     },
 });
 

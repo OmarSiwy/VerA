@@ -121,7 +121,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     if (split.react) |v| try checkFiniteContribution(self, lhs, v);
     const acc = self.accum.items[idx];
     // The owning instance's share of an unnamed branch row (`unit_accum`).
-    const part: ?Accum = if (target.br == unnamed_branch) try unitAccum(self, idx, target.unit) else null;
+    const part: ?Accum = if (target.br == unnamed_branch and self.out.contributions.items[idx].shared)
+        try unitAccum(self, idx, target.unit)
+    else
+        null;
     // §5.6.1.3 value retention, the half that is a REPLACEMENT and not a sum.
     // Before this statement's own value is added, anything retained for the
     // OTHER quantity of the same branch is thrown away.
@@ -923,7 +926,22 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
 /// so its flow read (`lower_expr.flowAccum`) is what THAT instance's branch
 /// carries: its own `<+` plus §5.6.8.2's hierarchical contributions aimed at
 /// it. Seeded in the entry block like `accum`.
+///
+/// Kept only once a row is shared (`Contribution.shared`): until then the row
+/// IS its one writer's branch. On first use the row's own writer gets a share
+/// holding everything the row accumulated so far, which was all its.
 pub fn unitAccum(self: *Lower, row: u32, unit: u32) Oom!Accum {
+    const first = self.out.contributions.items[row].unit;
+    if (!self.unit_accum.contains(.{ .row = row, .unit = first })) {
+        const full = self.accum.items[row];
+        const own = try unitAccumSeeded(self, row, first);
+        try self.builder.writeVariable(own.resist, self.cur, try self.builder.readVariable(full.resist, self.cur));
+        try self.builder.writeVariable(own.react, self.cur, try self.builder.readVariable(full.react, self.cur));
+    }
+    return unitAccumSeeded(self, row, unit);
+}
+
+fn unitAccumSeeded(self: *Lower, row: u32, unit: u32) Oom!Accum {
     const gop = try self.unit_accum.getOrPut(self.arena, .{ .row = row, .unit = unit });
     if (!gop.found_existing) {
         gop.value_ptr.* = .{
