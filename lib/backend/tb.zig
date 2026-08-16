@@ -106,6 +106,9 @@ pub const Directives = struct {
     /// the Annex E SPICE netlist the fixture is compiled against. Verbatim,
     /// `+` continuations included; `spice_cards.synthesize` reads it.
     spice: []const u8 = "",
+    /// `//! discipline-resolution basic|detail`: the §7.4.4 mode the fixture
+    /// is compiled in (`vera --discipline-resolution=`).
+    discipline_resolution: @import("ir").Elaborate.DisciplineResolution = .basic,
     /// `//! noise <kind>(<row>,<col>)#<source>`, one per expected `noise_gens`
     /// entry, in table order; `//! noise none` asserts an empty table. Equal
     /// `#k` on two lines assert one shared generator (§4.6.4.6), distinct `#k`

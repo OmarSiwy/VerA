@@ -240,7 +240,16 @@ pub const Ctx = struct {
     tok_starts: []const u32,
     bag: *diag.Bag,
     param_overrides: []const ParamOverride = &.{},
+    discipline_resolution: DisciplineResolution = .basic,
 };
+
+/// §7.4.4 "There are two modes for this method of resolution, basic (the
+/// default) and detail"; F.2.2: "The selection of this algorithm instead of
+/// the default shall be controlled by a simulator option" (VerA's is
+/// `--discipline-resolution=`). Detail mode is parsed and selected, then
+/// refused where it would decide something basic mode decides differently
+/// (`resolve.refuseDetail`, E0930).
+pub const DisciplineResolution = enum { basic, detail };
 
 /// §3.4 compile-time overrides, shared with Lower.Options. Elaboration needs
 /// their final values when a §6.4.2 overload choice depends on a top parameter.
@@ -267,6 +276,7 @@ pub fn elaborate(ctx: Ctx) Error!Design {
 
     var f: Flatten = .{ .ctx = ctx, .gen_instances = gen_instances };
     try elab_names.warnSpiceShadows(&f);
+    try elab_names.warnRedefinedModules(&f); // IEEE 1364-2005 §13.2.1.1 W1152
     // §7.7's names are judged whether or not the design has a hierarchy to
     // resolve: a `connectrules` block is a description of the COMPILATION
     // (A.1.2), not of the top module, so the tree-of-one shortcut below must
@@ -330,12 +340,21 @@ fn pickTop(ctx: Ctx, gen_instances: []const []const Ast.Instance) Error!*const A
         // connect module looks like a root. Skipped in both loops, so a file
         // of only connect modules is `NoModule`.
         if (m.is_connect) continue;
-        if (!instantiated.contains(m.name)) return m;
+        // IEEE 1364-2005 §13.2.1.1 the last same-named module is the cell.
+        if (!instantiated.contains(m.name)) return lastNamed(file, m);
     }
     // Every module is instantiated by some module, so the graph is all cycles.
     // Start at the first and let E0905 name the one that closes.
-    for (ctx.file.userModules()) |*m| if (!m.is_connect) return m;
+    for (ctx.file.userModules()) |*m| if (!m.is_connect) return lastNamed(file, m);
     return error.NoModule;
+}
+
+fn lastNamed(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl) *const Ast.ModuleDecl {
+    var last = m;
+    for (file.userModules()) |*o| if (o.name == m.name) {
+        last = o;
+    };
+    return last;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +475,9 @@ pub const Flatten = struct {
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// See `Design.inserts`.
     inserts: std.ArrayList(Inserted) = .empty,
+    /// Ports `insert.plan` bridged with nothing, judged once every net's
+    /// discipline is resolved (`insert.checkUnbridged`, E0927).
+    unbridged: std.ArrayList(elab_insert.Unbridged) = .empty,
 
     /// The discipline every flat net has been declared with, keyed by the flat
     /// name: §3.10's precedence orders 1 and 2 after they have been decided.
@@ -511,6 +533,11 @@ pub const Flatten = struct {
     /// electrical top.middle.bottom.sig; overrides any discipline which may be
     /// declared for sig in the module where sig was declared."
     ooc: std.StringHashMapUnmanaged(Ast.StrId) = .empty,
+    /// §3.6.3.2's nodeset on an out-of-context declaration
+    /// (`electrical u.w = 2.75;`), in `collectOoc` order (top-down), with the
+    /// initializer cloned in the declaring module's namespace. Applied after
+    /// the walk by `resolve.applyOocInits`.
+    ooc_inits: std.ArrayList(elab_resolve.OocInit) = .empty,
 
     /// The rename map in force while cloning the current unit's body, plus the
     /// per-instance rewrites §9.19 and §9.18 need. `inlineInstance` saves and
@@ -673,6 +700,11 @@ pub const Flatten = struct {
         // walk collected. After the walk because 4.b matches the complete
         // candidate set of a signal against §7.7.2's resolution statements.
         try elab_resolve.resolveMultiCandidates(self);
+        try elab_resolve.applyOocInits(self); // §3.6.3.2 hierarchical nodesets
+        // §7.4.4.2 / F.2.2 detail mode, refused where it differs from basic.
+        // Its refusal makes basic's insertion verdicts moot, so they wait.
+        if (self.ctx.discipline_resolution != .detail or !try elab_resolve.refuseDetail(self))
+            try elab_insert.checkUnbridged(self); // §7.8.4 E0927, on resolved nets
 
         // §5.2 analog blocks are concurrent, but §5.4.2.2's flow read is
         // ordered: `I(b)` after a flow contribution to `b` reads the retained

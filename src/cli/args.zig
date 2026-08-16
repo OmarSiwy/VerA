@@ -99,6 +99,10 @@ pub const usage_text =
     \\  --color=auto|always|never
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
     \\  --unknown-bound=X       solver compliance limit (see --explain W0650)
+    \\  --discipline-resolution=basic|detail
+    \\                          LRM 7.4.4's mode for undeclared interconnect
+    \\                          (default: basic). Detail mode is refused where it
+    \\                          would decide differently (see --explain E0930)
     \\
 ;
 
@@ -123,6 +127,7 @@ pub const Cli = struct {
     json: bool = false,
     color: enum { auto, always, never } = .auto,
     unknown_bound: ?f64 = null,
+    discipline_resolution: vera.DisciplineResolution = .basic,
     std_defs: bool = true,
     language: vera.KeywordSet = if (ams) .vams_2023 else .v1364_2005,
     out_path: ?[]const u8 = null,
@@ -301,6 +306,11 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
             cli.color = .never;
         } else if (std.mem.eql(u8, arg, "--color=auto")) {
             cli.color = .auto;
+        } else if (std.mem.startsWith(u8, arg, "--discipline-resolution=")) {
+            cli.discipline_resolution = std.meta.stringToEnum(vera.DisciplineResolution, arg["--discipline-resolution=".len..]) orelse {
+                try err.print("error: `{s}`: not basic|detail\n", .{arg});
+                return 2;
+            };
         } else if (std.mem.startsWith(u8, arg, "--unknown-bound=")) {
             cli.unknown_bound = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch {
                 try err.print("error: `{s}` is not a number\n", .{arg});

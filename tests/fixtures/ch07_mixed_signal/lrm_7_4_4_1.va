@@ -17,7 +17,16 @@
 // Ordering is load-bearing and deliberate: child1 (discrete) is instantiated
 // BEFORE child2 (continuous), so a first-wins resolution cannot pass by luck.
 //
+// Once `shared` resolves continuous, child1's port is mixed (§7.8.4: "one of
+// the connections to the port is digital and the other is analog"), and §6.5.7
+// lets it join the net only "provided the appropriate connect statements
+// exist". `ch7441_bridge` is that statement's module (inout/inout, Table 7-2);
+// without it the file is E0927 (`reject_mixed_port_no_connect_statement.va`).
+// The bridge sits between child1 and `shared` and adds no current, so the
+// resolution and the asserted access are unchanged.
+//
 //! lrm 7.4.4.1
+//! lrm 6.5.7
 //! bias V(shared) = 0.5
 `include "check.vh"
 discipline ch7441_discrete;
@@ -29,6 +38,13 @@ endmodule
 module ch7441_electrical_child(port);
   inout port; electrical port;
 endmodule
+connectmodule ch7441_bridge(a, d);
+  inout a; electrical a;
+  inout d; ch7441_discrete d;
+endmodule
+connectrules ch7441_rules;
+  connect ch7441_bridge;
+endconnectrules
 module ch7441_parent;
   // `shared` is undeclared; it meets discrete (child1) and electrical (child2)
   // at this level. Resolution must make it electrical.
