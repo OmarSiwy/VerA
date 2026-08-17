@@ -1,6 +1,6 @@
 // §9.15: "There is no fixed list of simulation parameters. However,
 // simulators shall accept the strings in Table 9-27". VerA also knows "dt"
-// (docs/IMPLEMENTATION.md, §9.15): the host's `SimState.dt`, the step since
+// (docs/Vague_Decisions.md, §9.15): the host's `SimState.dt`, the step since
 // the last accepted point, 0 in a static solve. It is the host's f64 itself,
 // so a model can rebuild the host's previous time as `$abstime - dt` bit for
 // bit (a host keying history on trunc((t - dt) * 1e12) needs exactly that).

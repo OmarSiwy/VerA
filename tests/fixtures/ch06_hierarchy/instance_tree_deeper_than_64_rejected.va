@@ -1,6 +1,6 @@
 // An engine limit, not a language rule: §6.2.2 builds a finite instance tree
 // and bounds nothing about its depth. VerA elaborates at most 64 nested
-// instances below the top module (docs/IMPLEMENTATION.md). Here d0
+// instances below the top module (docs/Vague_Decisions.md). Here d0
 // instantiates d1, d1 instantiates d2, and so on to d65: 65 nested instances,
 // no module repeated, so no cycle (E0905) exists. The 65th is refused with
 // E1018, which names the limit. instance_tree_64_levels.va is the legal

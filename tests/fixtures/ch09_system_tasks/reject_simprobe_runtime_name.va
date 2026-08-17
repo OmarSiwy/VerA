@@ -10,7 +10,7 @@
 // does exist; returning the fallback would be a wrong value with no
 // diagnostic. VerA resolves names at compile time only, so it refuses the
 // call with E0823, a named implementation limit (docs/Vague_Decisions.md
-// VD-030, docs/IMPLEMENTATION.md §2), even though a fallback is supplied.
+// VD-030, docs/Vague_Decisions.md §7), even though a fallback is supplied.
 // Legal neighbour: simprobe_string_parameter_name_resolves.va, the same probe
 // with the names in string parameters.
 //

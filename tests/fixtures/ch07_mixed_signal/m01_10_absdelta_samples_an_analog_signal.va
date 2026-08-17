@@ -11,7 +11,7 @@
 // digital update. A sampler stuck at its initial zero fails both by 20 ns.
 //
 // These bounds are not universal LRM timing guarantees. They use VerA's
-// documented default tolerances (IMPLEMENTATION.md §1), with the 100 ps
+// documented default tolerances (Vague_Decisions.md §6), with the 100 ps
 // digital precision, and do not close same-point A2D/D2A visibility.
 // absdelta_runtime_*.va separately exercises explicit tolerances, enables,
 // reversals and the default policy. Equality at an interpolated event is

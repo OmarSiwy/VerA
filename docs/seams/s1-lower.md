@@ -36,7 +36,7 @@ from lower.zig into `tables.zig`; `Lower.<Name>` still resolves to each.
 
 1. **Stale paths outside the unit.** The splits moved code that these
    non-owned files name by path. Nothing breaks; the text is wrong.
-   - `docs/IMPLEMENTATION.md`: line 23 (`scratchOn`, now `lib/ir/lower/var.zig`),
+   - `docs/Vague_Decisions.md`: line 23 (`scratchOn`, now `lib/ir/lower/var.zig`),
      24 (`lowerKernelCtl`, now `systask.zig`), 26 (`lowerStatus`, now
      `systask.zig`), 42 (`lowerRandom`, now `random.zig`), 250 (`max_cells`,
      now `shape.zig`), 309 (the timer check is still `event.zig`; fine).

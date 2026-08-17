@@ -1,7 +1,7 @@
 // §3.3 Table 3-3 concatenation "Str1, ..., Strn" gives a string of every
 // operand's characters, and §9.5.3 gives $sformat no truncation rule. VerA
 // composes a run-time string in a 4096-byte buffer per call site
-// (docs/IMPLEMENTATION.md), so a result longer than that cannot be produced.
+// (docs/Vague_Decisions.md), so a result longer than that cannot be produced.
 // The limit has to fail loudly: the run ends with E1011 and exit status 1
 // rather than returning a cut or empty string as if it were the answer.
 //

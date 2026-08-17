@@ -1,7 +1,7 @@
 // §9.17.3: "When the second argument is a string, it refers to a built-in
 // function of the simulator." Which built-ins exist is the tool's choice.
 // VerA's set is pnjlim, pnjlimds, fetlim, fetlimds, limvds and steplim
-// (docs/IMPLEMENTATION.md); steplim(step) clamps each Newton iterate to within
+// (docs/Vague_Decisions.md); steplim(step) clamps each Newton iterate to within
 // `step` of the previous one. This is steplim HONOURED: `//! nowarn` pins that
 // VerA takes the call silently (a declined $limit warns W0853), and the checks
 // assert what the clause fixes about the answer: "When the simulator has

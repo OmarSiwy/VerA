@@ -2,7 +2,7 @@
 // of a transient step, ask the host to reject that step and retry it ending
 // at `t_retry` (`contract.UpdateResult.request_reject_at`). §2.8.3 leaves
 // `$` names beyond the LRM's to the tool; this one is VerA's
-// (docs/IMPLEMENTATION.md §1).
+// (docs/Vague_Decisions.md §6).
 //
 // WHY. A device that knows where its next event lies (an LTRA wavefront, a
 // switch threshold) can make the host land on it instead of stepping over it.

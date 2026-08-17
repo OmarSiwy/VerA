@@ -8,7 +8,7 @@ marked `DECIDED`.
 The items come from three places:
 
 - `docs/ROADMAP.md` §5.1 (decisions) and §5.6 (readings the standards leave open);
-- `docs/IMPLEMENTATION.md` §1 and §3, for choices that had no recorded rationale;
+- `docs/Vague_Decisions.md` §6 and §3, for choices that had no recorded rationale;
 - `docs/CLAUSE-AUDIT.md` §7.5 (open questions).
 
 A citation with `at 8b1514d4` points to a removed audit note. Read it with
@@ -207,12 +207,12 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (8a719d2a). E0927 (`insert.checkUnbridged`, judged after §7.4 resolution); `lrm_7_4_4_1.va` carries a `connectrules` block; `reject_mixed_port_no_connect_statement.va` pins the refusal.
 
 ### VD-008: Detail discipline resolution is testable, and its absence is a gap
-- **Source**: ROADMAP §5.1 item 8; `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; IMPLEMENTATION §1 row "AMS 7.4.4.2".
+- **Source**: ROADMAP §5.1 item 8; `docs/conformance-mixed-signal.md:193-201` at 8b1514d4; Vague_Decisions.md §6 row "AMS 7.4.4.2".
 - **Rule**: VAMS 7.4.4: "There are two modes for this method of resolution, basic (the default) and detail ... The selection of these discipline resolution modes shall be vendor-specific." VAMS 7.4.4.2 (detail mode).
 - **Why vague**: "vendor-specific selection" can be read as permission to offer only one mode. `lrm_7_4_5.va:6-12` reads it that way and argues that a fixture for either mode would fail a conforming compiler.
 - **Options**: (a) detail mode is optional, and basic-only conforms; (b) both modes are required, only the selection mechanism is vendor-specific, and basic is the normative default.
 - **Decision**: `DECIDED:` (b). The clause defines two modes and makes basic the default. Only how a user selects a mode is left to the vendor. So a fixture that pins basic mode without any selection is not vendor-specific. It tests the normative default. Detail mode is testable once a selector exists, by a fixture that selects it and asserts the Figure 7-4 result. Until then, 7.4.4.2 is `missing`, not implementation-defined. See VD-013 for the selector.
-- **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; IMPLEMENTATION §1 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap under ROADMAP §5.3 rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
+- **VerA today**: basic only (`lib/ir/elaborate/resolve.zig`; Vague_Decisions.md §6 row "AMS 7.4.4.2 ... basic only"). `lrm_7_4_4_1.va` pins basic. CHANGE NEEDED: (1) correct the `lrm_7_4_5.va:6-12` header so it says basic is the testable default and detail is not implemented; (2) re-file IMPLEMENTATION's 7.4.4.2 row as a gap under ROADMAP §5.3 rather than a choice; (3) when VD-013 lands, add a detail-mode fixture. Patch for (1) and (2). Minor for (3), because it adds a CLI option and new resolution results.
 - **Measure impact**: C (7.4.4.2 stays one-way until detail mode lands; no change from the documentation fix).
 - **Status**: PARTIAL (4735daab). (1) `lrm_7_4_5.va` header corrected; (2) IMPLEMENTATION's row removed (it is a gap, not a choice) and `ch07_mixed_signal/CLAUSES.tsv` no longer classifies 7.4.4.2; (3) in the parse-in-full-then-refuse form: detail mode is selectable (VD-013) and compiles a signal both modes decide alike (`discipline_resolution_detail_one_level.va`), and the Figure 7-4 design, where they differ, is E0930 (`discipline_resolution_detail_figure_7_4_refused.va`). F.2.2 step 5 is not implemented.
 
@@ -247,12 +247,12 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (2df23aa8). `ch03_data_types/reject_localparam_empty_named_override.va`.
 
 ### VD-012: Which SPICE flavour VerA claims
-- **Source**: ROADMAP §5.1 item 12; `h04_SPEC.md:116-119` at 8b1514d4; IMPLEMENTATION §1 row "AMS E.1, E.2".
+- **Source**: ROADMAP §5.1 item 12; `h04_SPEC.md:116-119` at 8b1514d4; Vague_Decisions.md §6 row "AMS E.1, E.2".
 - **Rule**: VAMS E.1.2 item 1: "whether a particular Verilog-AMS simulator is SPICE compatible, and with which particular variant of SPICE it is compatible, is solely determined by the authors of the simulator."
 - **Why vague**: the standard leaves the dialect to the tool. VerA has stated parse limits but no claim, and it skips every card it cannot read without saying so.
 - **Options**: (a) claim nothing and skip silently (today); (b) claim a named subset and refuse what falls outside it inside a definition; (c) adopt a full dialect (HSPICE/Spectre `PARAMS:`, `{expr}`, nested `.SUBCKT`).
 - **Decision**: `DECIDED:` (b). VerA claims SPICE3 card syntax for `.MODEL` and for flat `.SUBCKT` bodies made of numeric-valued R/C/L/V/I/E/F/G/H cards. `PARAMS:`, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB` and model-referenced body devices (`R1 A B RMOD`) are not claimed. Cards outside a definition (`.tran`, top-level devices) are not module definitions and may still be skipped. A card that cannot be read inside a `.SUBCKT` body is refused with a named E.1.2 diagnostic. Skipping it changes the circuit, for example a dropped R becomes an open, and that is the silent wrong answer AGENTS.md §4 forbids.
-- **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in IMPLEMENTATION §1; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
+- **VerA today**: `lib/frontend/spice_cards.zig:1-4` ("every other card is skipped without a diagnostic"), `:254-260` (an unreadable body card "contributes nothing and is not diagnosed"), `:123-125` (a nested `.SUBCKT` closes early), `:186` (`params:` ends the port list and is ignored). CHANGE NEEDED: (1) a new error for an unreadable card inside a `.SUBCKT` body, for `PARAMS:`/`{}`, and for a nested `.SUBCKT`; (2) state the claim in Vague_Decisions.md §6; (3) add reject fixtures with legal neighbours in `annex_e_spice/`. Minor: netlists that were accepted are now refused. The `.MODEL X SW` E0904 mis-blame (ROADMAP §5.3) is fixed by the same diagnostic.
 - **Measure impact**: A (new fixtures), C (E.1.2 refusal evidence).
 - **Status**: DONE. The `.MODEL` half (e7900531): a `.MODEL` of a type with no Table E.1 row is recorded and its instance is E0952. The `.SUBCKT` half (aeb2b5cc): unreadable body cards, `PARAMS:`, `{}` and nesting are E0928, reported at the card's line in the netlist.
 
@@ -271,10 +271,10 @@ summary and has a **Status** line naming what landed.
 - **Rule**: VAMS A.8.8: `string_literal ::= " { Any_ASCII_Characters } "`. IEEE 1364-2005 3.6: a string is "a sequence of 8-bit ASCII values, with one 8-bit ASCII value representing one character".
 - **Why vague**: ASCII is 7-bit, but 1364 3.6 describes strings as "8-bit ASCII values". Bytes 0x80-0xFF are therefore excluded by the production and included by the storage model.
 - **Options**: (a) refuse bytes above 0x7F; (b) accept them as opaque bytes, one byte per character; (c) decode UTF-8 so that a code point is one character.
-- **Decision**: `DECIDED:` (b). 1364 3.6 defines a string's value as its bytes, 8 bits each, so a byte above 0x7F has a well-defined value and length. Refusing would break real models that write unit strings like `"°C"` for no semantic gain. Decoding would contradict "one 8-bit ... value representing one character". `"°C"` is three characters to `len()`/`$strlen`-style operations. This is an implementation-defined choice and belongs in IMPLEMENTATION §1.
-- **VerA today**: accepted without a diagnostic (COVERAGE note). I found no fixture that asserts the value or length of a non-ASCII string. CHANGE NEEDED: an IMPLEMENTATION §1 row, and a fixture that asserts the byte count of `"°C"` is 3. Patch.
+- **Decision**: `DECIDED:` (b). 1364 3.6 defines a string's value as its bytes, 8 bits each, so a byte above 0x7F has a well-defined value and length. Refusing would break real models that write unit strings like `"°C"` for no semantic gain. Decoding would contradict "one 8-bit ... value representing one character". `"°C"` is three characters to `len()`/`$strlen`-style operations. This is an implementation-defined choice and belongs in Vague_Decisions.md §6.
+- **VerA today**: accepted without a diagnostic (COVERAGE note). I found no fixture that asserts the value or length of a non-ASCII string. CHANGE NEEDED: an Vague_Decisions.md §6 row, and a fixture that asserts the byte count of `"°C"` is 3. Patch.
 - **Measure impact**: A (+1). C none, since it is implementation-defined.
-- **Status**: DONE (9d434792): `ch02_lexical/string_bytes_above_7f.va` pins `"°C"` as three bytes (0xC2B043); IMPLEMENTATION §1 row added.
+- **Status**: DONE (9d434792): `ch02_lexical/string_bytes_above_7f.va` pins `"°C"` as three bytes (0xC2B043); Vague_Decisions.md §6 row added.
 
 ### VD-015: `$limit(typ*V(a,k), ...)`
 - **Source**: ROADMAP §5.1 item 15 (found 2026-09-27).
@@ -427,7 +427,7 @@ summary and has a **Status** line naming what landed.
 - **Why vague**: a string variable's value is known only at run time. The clause does not say whether a tool may treat a name it cannot fold at compile time as "cannot be resolved" and return the fallback.
 - **Options**: (a) resolve at run time against the sibling's output variables; (b) treat a non-constant name as unresolved and return the fallback, which is VerA today; (c) refuse a non-constant name with a named implementation-limit diagnostic.
 - **Decision**: `DECIDED:` (a) is the reading of the clause. Until VerA implements it, (c) applies. "Cannot be resolved" is about whether the name exists, not about when the tool learns it, so returning the fallback for a valid run-time name gives a wrong answer with no diagnostic. A refusal that names the limit is better (AGENTS.md §4, "never open a gate without an executor").
-- **VerA today**: `lib/ir/lower/hier_name.zig` (the `$simprobe` lowering, around :360-395) resolves only names that `constStrArg` folds. Otherwise it returns the third argument silently. With no third argument it reports E0817 "names no parameter of the elaborated design", which is misleading for a valid run-time name. CHANGE NEEDED: when either name does not fold, refuse with a dedicated diagnostic citing 9.16 ("a run-time $simprobe name is not supported"), whether or not a fallback is given, and record it as a limit in IMPLEMENTATION §2. Add a rejection fixture (a string variable name with a fallback) with a legal string-parameter neighbour. Semver: minor (VerA newly refuses source).
+- **VerA today**: `lib/ir/lower/hier_name.zig` (the `$simprobe` lowering, around :360-395) resolves only names that `constStrArg` folds. Otherwise it returns the third argument silently. With no third argument it reports E0817 "names no parameter of the elaborated design", which is misleading for a valid run-time name. CHANGE NEEDED: when either name does not fold, refuse with a dedicated diagnostic citing 9.16 ("a run-time $simprobe name is not supported"), whether or not a fallback is given, and record it as a limit in Vague_Decisions.md §7. Add a rejection fixture (a string variable name with a fallback) with a legal string-parameter neighbour. Semver: minor (VerA newly refuses source).
 - **Measure impact**: A (+2 fixtures); C (9.16, refusal with a legal neighbour; the clause stays partial until (a) exists).
 
 ### VD-031: `$table_model` duplicate abscissa that cannot be proved equal
@@ -483,7 +483,7 @@ summary and has a **Status** line naming what landed.
 - **Why vague**: neither standard says what a backslash followed by any other character means, or whether it is an error.
 - **Options**: (a) error; (b) accept, drop the backslash and keep the character; (c) accept and keep both bytes; (d) (b) plus a warning.
 - **Decision**: `DECIDED:` (d). The source is lexically a string under A.8.8, so refusing it would reject models that write `"\%"` or similar by habit. Dropping the backslash is the C-family convention and keeps the literal's visible text. Since the meaning is VerA's choice and other tools may differ, a warning names it, so a portability hazard is never silent. What IEEE 1800, Icarus and VCS do with an undefined escape was not established here.
-- **VerA today**: (b) with no diagnostic (`lib/frontend/lexer.zig:551-556`, "undefined escapes pass through"). No fixture pins it, and IMPLEMENTATION §1 has no row. CHANGE NEEDED: add a named warning for an escape outside Table 2-2. Add `ch02_lexical/` fixture `//! warn <code>` with `CHECKI("\q", 113)`, and an IMPLEMENTATION §1 row. Semver: patch (warning only; acceptance and device text unchanged).
+- **VerA today**: (b) with no diagnostic (`lib/frontend/lexer.zig:551-556`, "undefined escapes pass through"). No fixture pins it, and Vague_Decisions.md §6 has no row. CHANGE NEEDED: add a named warning for an escape outside Table 2-2. Add `ch02_lexical/` fixture `//! warn <code>` with `CHECKI("\q", 113)`, and an Vague_Decisions.md §6 row. Semver: patch (warning only; acceptance and device text unchanged).
 - **Measure impact**: A (+1 fixture); none of B/C (implementation-defined, AGENTS.md: "a fixture here tests VerA's choice").
 - **Status**: DONE (dac6eb2b): W0149, `ch02_lexical/undefined_escape_keeps_character.va`; `08_string_escapes.va` (`//! nowarn`) is the neighbour that warns nothing.
 
@@ -647,10 +647,10 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: B: 17.6.5 statistics pinned. A: +1 fixture.
 - **Status**: DONE (ca0e6529).
 
-## 4. Implementation-defined choices: Verilog-AMS (IMPLEMENTATION.md §1)
+## 4. Implementation-defined choices: Verilog-AMS (Vague_Decisions.md §6)
 
 ### VD-053: Octal escape above `\377`
-- **Source**: IMPLEMENTATION §1 row "AMS 2.7"
+- **Source**: Vague_Decisions.md §6 row "AMS 2.7"
 - **Rule**: VAMS 2.7, Table 2-2 (and IEEE 1364-2005 3.6.3, same text): "Implementations may issue an error if the character represented is greater than \377."
 - **Why vague**: the clause permits an error and says nothing about what a tool that does not issue one should produce. `\400`..`\777` names no byte.
 - **Options**: (a) accept and keep the low 8 bits silently (today); (b) accept with a warning; (c) refuse with a named error.
@@ -661,7 +661,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (35e427ed): E0148, `ch02_lexical/octal_escape_above_377_rejected.va` and its neighbour `octal_escape_377_largest_byte.va`.
 
 ### VD-054: Identifier length limit
-- **Source**: IMPLEMENTATION §1 row "AMS 2.8"
+- **Source**: Vague_Decisions.md §6 row "AMS 2.8"
 - **Rule**: VAMS 2.8: "Implementations may set a limit on the maximum length of identifiers, but the limit shall be at least 1024 characters."
 - **Why vague**: the limit is the tool's choice, and an error is required only past whatever limit the tool sets.
 - **Options**: a fixed limit of 1024 or more with an error past it; no limit.
@@ -670,7 +670,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-055: How the integer-modulus zero-divisor error is reported
-- **Source**: IMPLEMENTATION §1 row "AMS 4.2.4"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.2.4"
 - **Rule**: VAMS 4.2.4: "It shall be an error to pass zero (0) as the second argument to the modulus operator."
 - **Why vague**: the clause gives no phase (compile or run time) and no form for the error. A compiled device has no I/O channel.
 - **Options**: compile-time only, which misses runtime zeros; a runtime result such as 0 or the dividend, which is silent; a runtime report or trap.
@@ -680,7 +680,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-056: Real modulus by a runtime zero yields NaN
 - **Status**: DONE (86e06853)
-- **Source**: IMPLEMENTATION §1, the prose note under "Host math" ("Modulus with real operands retains its existing NaN behavior")
+- **Source**: Vague_Decisions.md §6, the prose note under "Host math" ("Modulus with real operands retains its existing NaN behavior")
 - **Rule**: VAMS 4.2.4: "It shall be an error to pass zero (0) as the second argument to the modulus operator." The same clause then gives the real-operand formula `a % b = ((a/b) < 0) ? ... : (a - floor(a/b)*b)`.
 - **Why vague**: the error sentence names no operand type. The real formula divides by b, so IEEE arithmetic gives NaN, and that makes NaN look like an acceptable "defined" result.
 - **Options**: (a) NaN at run time (today), with W0650 only for losing the finiteness proof; (b) the same runtime report or trap as the integer path.
@@ -689,27 +689,27 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (one new fixture). C: §4.2.4's real half becomes two-way at run time.
 
 ### VD-057: `idt` with no `ic`: the starting constant c
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.4, 4.5.5"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.4, 4.5.5"
 - **Rule**: VAMS 4.5.4, Table 4-18: "c is the initial starting point as determined by the simulator and is generally the DC value (the value that makes expr equal to zero)". The prose adds that without ic "the idt operator must be contained within a negative feedback loop that forces its argument to zero. Otherwise the output of the idt operator is undefined."
 - **Why vague**: c is left to the simulator, and the output is undefined when no loop exists.
 - **Options**: c = 0 always; let the static solve choose c so that expr = 0, which is the DC reading the table says is "generally" used; a mix of the two.
 - **Decision**: `DECIDED:` the mix VerA already implements. When the argument reads an unknown, the static solve keeps the row `-x`, so c is whatever the feedback loop forces, as the table and prose describe. When the argument reads no unknown, there is no loop and the output is undefined; VerA takes 0, the value an ic of 0 gives, which keeps the static Jacobian regular. "c = 0" in the IMPLEMENTATION row describes only the second case.
 - **VerA today**: `lib/ir/lower/analog_op.zig:199-226` (`opIdt`, `readsUnknown`). Fixtures `exhaustive/062_idt_integral.va` and `ch04_expressions/idt_no_ic_dc_feedback.va`. `CHANGE NEEDED:` documentation only. Reword the IMPLEMENTATION row to say: "argument reads an unknown: the static solve forces it to zero (c from the loop); otherwise c = 0", and cite `idt_no_ic_dc_feedback.va`. Patch.
 - **Measure impact**: none.
-- **Status**: DONE (4ef087d6). IMPLEMENTATION §1 row reworded and cites `idt_no_ic_dc_feedback.va`.
+- **Status**: DONE (4ef087d6). Vague_Decisions.md §6 row reworded and cites `idt_no_ic_dc_feedback.va`.
 
 ### VD-058: `idtmod` with no `ic`: the table and the prose disagree
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.4, 4.5.5"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.4, 4.5.5"
 - **Rule**: VAMS 4.5.5, Table 4-19, `idtmod(expr)`: "c is the initial starting point as determined by the simulator". The prose below the table says: "If the initial condition is not specified, it defaults to zero (0). Regardless, the initial condition shall force the DC solution to the system."
 - **Why vague**: the table makes c a tool choice, and the prose fixes it at 0.
 - **Options**: (a) treat c as tool-defined, as the table does; (b) treat it as 0, as the prose does.
 - **Decision**: `DECIDED:` (b). The prose is the more specific normative sentence ("defaults to zero") and is the only one with "shall". VerA's c = 0 is therefore required by the clause, not chosen.
 - **VerA today**: `zIdtmod` (`lib/backend/codegen/kernel_text.zig:504`) starts at ic, and the ic is 0 when omitted. The header of `ch04_expressions/idtmod_one_argument_starts_at_zero.va` calls the starting point "the tool's choice", and `17_idtmod.va` "declines" to assert it. `CHANGE NEEDED:` documentation and fixture headers only. Move idtmod out of the implementation-defined row. Rewrite the `idtmod_one_argument_starts_at_zero.va` header to quote the prose sentence as the requirement. Patch.
 - **Measure impact**: C. The fixture now evidences a §4.5.5 requirement instead of a tool choice; whether the count moves depends on the §4.5.5 row in `CLAUSE-AUDIT.md`.
-- **Status**: DONE (4ef087d6). idtmod removed from the IMPLEMENTATION §1 row; `idtmod_one_argument_starts_at_zero.va` and `17_idtmod.va` headers quote the prose as the requirement.
+- **Status**: DONE (4ef087d6). idtmod removed from the Vague_Decisions.md §6 row; `idtmod_one_argument_starts_at_zero.va` and `17_idtmod.va` headers quote the prose as the requirement.
 
 ### VD-059: Where `idtmod` integrates
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.5" (where)
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.5" (where)
 - **Rule**: VAMS 4.5.5 gives the mathematical integral and the wrap range (`offset <= idtmod < offset+modulus`) and says nothing about numerical method or ownership.
 - **Why vague**: the clause does not say whether the integrator is a solver unknown (as `idt` is under §4.5.2) or internal state.
 - **Options**: (a) a host unknown, as for `idt`; (b) state inside the device, wrapped on each accepted step.
@@ -718,7 +718,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-060: `absdelay` interpolation is not implementation-defined
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.7"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.7"
 - **Rule**: VAMS 4.5.7: "When calculating the output at time t, the absdelay() operator will use linear interpolation as needed to determine the input around time" max(t - td, 0).
 - **Why vague**: it is not vague. The IMPLEMENTATION row lists interpolation as left open, but the clause names linear interpolation.
 - **Options**: the row has none to offer; linear is the clause's answer.
@@ -728,7 +728,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4ef087d6). The §4.5.7 row is gone; the `vera_*` row says `vera_interp = 2` departs from §4.5.7 when set. `absdelay_vera_interp_linear.va` already tagged `//! lrm 4.5.7` and quoted the requirement.
 
 ### VD-061: DC value of a `laplace_*` filter with a pole at s = 0
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.11" (DC)
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.11" (DC)
 - **Rule**: VAMS 4.5.11 gives H(s) for each form and says a zero root "is implemented as s". It has no DC rule (unlike §4.5.4's `idt` and §4.5.7's `absdelay`).
 - **Why vague**: H(0) is infinite, and the clause gives no initial-state or feedback reading.
 - **Options**: (a) 0, the state starting at 0; (b) the `idt` feedback reading, where the static solve forces the input to 0; (c) refuse.
@@ -737,7 +737,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-062: Root vectors from the model card: pairing conjugates at run time
-- **Source**: IMPLEMENTATION §1 row "AMS 4.5.11, 4.5.12"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.5.11, 4.5.12"
 - **Rule**: VAMS 4.5.11.1-4.5.11.3 and 4.5.12.1-4.5.12.3: "If a root is complex, its conjugate shall also be present." 4.5.11 also says a vector "may be represented as ... a reference to a vector parameter".
 - **Why vague**: a parameter vector's values arrive with the card, so "shall also be present" cannot be checked at compile time. The clause gives no pairing tolerance and no runtime outcome.
 - **Options**: (a) refuse every parameter root vector; (b) pair at run time with a tolerance and give a defined failure for an unpaired root; (c) pair blindly.
@@ -746,7 +746,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-063: Analysis names beyond Table 4-21
-- **Source**: IMPLEMENTATION §1 row "AMS 4.6.1"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.6.1"
 - **Rule**: VAMS 4.6.1: "Any unsupported type names are assumed to not be a match."
 - **Why vague**: which names a tool supports beyond the table is the tool's choice.
 - **Options**: support vendor names (`pss`, `hb`, `pac`); none.
@@ -755,7 +755,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-064: The small-signal analysis name
-- **Source**: IMPLEMENTATION §1 row "AMS 4.6.3"
+- **Source**: Vague_Decisions.md §6 row "AMS 4.6.3"
 - **Rule**: VAMS 4.6.3: "The name of a small-signal analysis is implementation dependent, although the expected name (of the equivalent of a SPICE AC analysis) is “ac”, which is the default value of analysis_name."
 - **Why vague**: the name is explicitly implementation-dependent.
 - **Options**: "ac"; a vendor name.
@@ -764,7 +764,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-065: `time_tol` of a `.v` contract device's A2D bridge
-- **Source**: IMPLEMENTATION §1 row "AMS 5.10.3.1" (`.v` device)
+- **Source**: Vague_Decisions.md §6 row "AMS 5.10.3.1" (`.v` device)
 - **Rule**: VAMS 5.10.3.1: time_tol and expr_tol "represent the maximum allowable error between the true crossing point and when the event triggers". Clause 7.8 supplies connect modules but gives a bare `.v` device none.
 - **Why vague**: a `.v` device has no connect module, so no source states the crossing's time_tol.
 - **Options**: a fixed absolute value; a fraction of the edge time; none (crossings at step ends).
@@ -773,7 +773,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-066: Event tolerances on the fixed-grid testbench
-- **Source**: IMPLEMENTATION §1 row "AMS 5.10.3.1, 5.10.3.3"
+- **Source**: Vague_Decisions.md §6 row "AMS 5.10.3.1, 5.10.3.3"
 - **Rule**: VAMS 5.10.3.1 requires the event inside the box set by time_tol and expr_tol. VAMS 5.10.3.3: "If time_tol is not specified, the default time point is at, or just beyond, the time of the event."
 - **Why vague**: the tolerances, when absent, are the tool's, and a fixed-grid harness cannot insert a point.
 - **Options**: insert points (a variable-step solver); fire at the next grid point with a warning; refuse such fixtures.
@@ -782,7 +782,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-067: `absdelta` default tolerances
-- **Source**: IMPLEMENTATION §1 row "AMS 5.10.3.4"
+- **Source**: Vague_Decisions.md §6 row "AMS 5.10.3.4"
 - **Rule**: VAMS 5.10.3.4: "If a value of zero (0.0) is specified, the simulator shall apply a suitable value." "If the tolerances are not specified, then the tool (e.g., the simulator) sets them." Also: "A specified time_tol that is smaller than the time precision is ignored and the time precision is used instead."
 - **Why vague**: "suitable" is undefined.
 - **Options**: tolerances from the expression's nature abstol; small fixed constants.
@@ -791,14 +791,14 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-068: Discipline resolution mode (basic only)
-- **Source**: IMPLEMENTATION §1 row "AMS 7.4.4.2"
+- **Source**: Vague_Decisions.md §6 row "AMS 7.4.4.2"
 - **Rule**: VAMS 7.4.4. This one is decided in VD-008, so see that entry.
 - **Decision**: `DECIDED:` as in VD-008. This row only records that `lib/ir/elaborate/resolve.zig` implements basic mode and `ch07_mixed_signal/lrm_7_4_4_1.va` pins it.
 - **VerA today**: no change from this row.
 - **Measure impact**: see VD-008.
 
 ### VD-069: `$ferror` error codes
-- **Source**: IMPLEMENTATION §1 row "AMS 9.5.7, 1364 17.2.7"
+- **Source**: Vague_Decisions.md §6 row "AMS 9.5.7, 1364 17.2.7"
 - **Rule**: VAMS 9.5.7 (and IEEE 1364-2005 17.2.7): "The integral value of the error code is returned in errno. If the most recent operation did not result in an error, then the value returned shall be zero".
 - **Why vague**: only zero is defined. Nonzero values and the text are the tool's.
 - **Options**: host errno passed through (varies by OS); fixed C/POSIX values; one generic code.
@@ -807,7 +807,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-070: `$stop` in a batch run
-- **Source**: IMPLEMENTATION §1 row "AMS 9.7.2"
+- **Source**: Vague_Decisions.md §6 row "AMS 9.7.2"
 - **Rule**: VAMS 9.7.2 inherits IEEE 1364-2005 17.4.2: `$stop` "causes simulation to be suspended". VerA's artifacts have no interactive mode to suspend into.
 - **Why vague**: the clause assumes an interactive simulator and is silent on batch runs.
 - **Options**: exit 0 after the diagnostic; exit nonzero; ignore and continue.
@@ -816,7 +816,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-071: Seed of an omitted-seed analog `$random`/`$arandom`
-- **Source**: IMPLEMENTATION §1 row "AMS 9.13.1"
+- **Source**: Vague_Decisions.md §6 row "AMS 9.13.1"
 - **Rule**: VAMS 9.13.1: the seed "may be omitted, in which case the simulator picks a seed."
 - **Why vague**: the clause gives no value, no rule for per-site independence, and no reproducibility rule.
 - **Options**: one shared stream; a time- or entropy-based seed; a distinct deterministic seed per site.
@@ -826,7 +826,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-072: Which `$simparam` names exist, and whether `gmin` and `sourceScaleFactor` are constants
 - **Status**: DONE (d73ae0cc)
-- **Source**: IMPLEMENTATION §1 row "AMS 9.15"
+- **Source**: Vague_Decisions.md §6 row "AMS 9.15"
 - **Rule**: VAMS 9.15: "There is no fixed list of simulation parameters. However, simulators shall accept the strings in Table 9-27 to access commonly-known simulation parameters, if they support the parameter." Table 9-27 describes `gmin` as "Minimum conductance placed in parallel with nonlinear branches" and `sourceScaleFactor` as the "Multiplicative factor for independent sources for source stepping homotopy".
 - **Why vague**: the list is open, and the supported set and the values are the tool's.
 - **Options**: per name, either a compile-time constant, a host-written `Model` field, or unknown (E0811 when no fallback is given).
@@ -835,7 +835,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (one new fixture). C: no change.
 
 ### VD-073: Which `$limit` built-ins exist, and what an unknown name does
-- **Source**: IMPLEMENTATION §1 row "AMS 9.17.3" (built-ins)
+- **Source**: Vague_Decisions.md §6 row "AMS 9.17.3" (built-ins)
 - **Rule**: VAMS 9.17.3: "Simulators may support other built-in functions and need not support pnjlim or fetlim. If the string refers to an unknown or unsupported function, the simulator is responsible for determining the appropriate limiting algorithm, just as if no string had been supplied." Also: "the simulator may simply choose to have $limit() return the value of its first argument". Table E.2 lists the preferred names.
 - **Why vague**: the set of names and the fallback algorithm are both the tool's.
 - **Options**: refuse unknown names; return the probe silently; return the probe with a warning.
@@ -844,7 +844,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-074: `$limit` arguments past the algorithm's own (sign, seed) and the initial junction seed
-- **Source**: IMPLEMENTATION §1 rows "AMS 9.17.3" (arguments; starting value)
+- **Source**: Vague_Decisions.md §6 rows "AMS 9.17.3" (arguments; starting value)
 - **Rule**: VAMS 9.17.3: "Two additional arguments to the $limit() function are required when the second argument to the limit function is the string “pnjlim”", and one for "fetlim". Nothing is said about further arguments or about the first iteration's value.
 - **Why vague**: arguments after the required ones are not addressed, and neither is the starting value of the limiter's state. SPICE's MODEINITJCT, which compact models rely on, has no Verilog-AMS spelling.
 - **Options**: refuse extra arguments; ignore them; give them a defined meaning.
@@ -853,7 +853,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-075: The number of `vpiRejectTransientStep`
-- **Source**: IMPLEMENTATION §1 row "AMS 12.36"
+- **Source**: Vague_Decisions.md §6 row "AMS 12.36"
 - **Rule**: VAMS 12.36 defines `vpiRejectTransientStep` ("cause the current analog simulation time point to be rejected"). The LRM prints no `#define` for it, and the other AMS constants in `vpi_user.h` are not from the LRM text either.
 - **Why vague**: there is no normative number.
 - **Options**: any value outside 1364's `vpi_sim_control` operations (`vpiStop` 66 through `vpiSetInteractiveScope` 69).
@@ -862,14 +862,14 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-076: SPICE flavour and primitive behaviour (E.1, E.2)
-- **Source**: IMPLEMENTATION §1 row "AMS E.1, E.2"
+- **Source**: Vague_Decisions.md §6 row "AMS E.1, E.2"
 - **Rule**: VAMS E.1/E.2. This one is decided in VD-012, so see that entry.
 - **Decision**: `DECIDED:` as in VD-012. This row records only today's `.MODEL`/`.SUBCKT`-only reader (`lib/frontend/spice_cards.zig`).
 - **VerA today**: no change from this row.
 - **Measure impact**: see VD-012.
 
 ### VD-077: No warning when a module shadows an always-available SPICE primitive
-- **Source**: IMPLEMENTATION §1 row "AMS E.3.3"
+- **Source**: Vague_Decisions.md §6 row "AMS E.3.3"
 - **Rule**: VAMS E.3.3: for a primitive, "The Verilog-AMS simulator may issue a warning stating that the Verilog-AMS module or paramset is used instead of the SPICE primitive." For a model or subcircuit it "shall issue an warning message".
 - **Why vague**: the primitive warning is optional.
 - **Options**: warn; stay silent.
@@ -880,7 +880,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (4ef087d6). Nothing to change in code or IMPLEMENTATION (its E.3.3 row was already right); the stale row was in a document since removed.
 
 ### VD-078: Where a device's temperature lives (ABI 6: the Model row)
-- **Source**: IMPLEMENTATION §1 "Device ABI 6" (cites "§9.10")
+- **Source**: Vague_Decisions.md §6 "Device ABI 6" (cites "§9.10")
 - **Rule**: VAMS 9.15: "$temperature does not take any input arguments and returns the circuit’s ambient temperature in Kelvin units." §9.10 is "Simulator time system functions" and says nothing about temperature, so the IMPLEMENTATION cite is wrong.
 - **Why vague**: "the circuit's ambient temperature" suggests one value per circuit. Per-instance temperature (SPICE `dtemp`/`temp`) is a host feature the LRM does not mention.
 - **Options**: per circuit (global); per instance; per Model row.
@@ -891,7 +891,7 @@ summary and has a **Status** line naming what landed.
 
 ### VD-079: Host-supplied hierarchical system parameters outside Table 9-29's domains
 - **Status**: DONE (76f344c7)
-- **Source**: IMPLEMENTATION §1 prose note "For AMS §9.18, E0890 ..." (dynamic domains not validated)
+- **Source**: Vague_Decisions.md §6 prose note "For AMS §9.18, E0890 ..." (dynamic domains not validated)
 - **Rule**: VAMS 9.18, Table 9-29, column "Allowed values": `$mfactor > 0`, `$hflip`/`$vflip` = +1 or -1, `0 <= $angle < 360`.
 - **Why vague**: the table states allowed values but no "shall be an error" and no point at which a value is checked. A value set on a host card is known only at card time.
 - **Options**: check only literals at compile time (today); check card-dependent values when the host writes the card; trust the host.
@@ -899,10 +899,10 @@ summary and has a **Status** line naming what landed.
 - **VerA today**: E0890 for literals only (`lib/diag_code.zig:5003`). There is no card-time check: `lib/backend/codegen/file.zig:583` `derive` and `:645` `checkShape` validate nothing about domains. `CHANGE NEEDED:` emit a card-time domain check, either a `checkCard(model) ?[]const u8` returning the first parameter out of Table 9-29's domain or the same check inside `derive`, together with a host test such as `tests/geometry_host.zig` that writes `$mfactor = 0` and expects the name back. **Minor**, because emitted device text changes.
 - **Measure impact**: A (a new host test, under `zig build test`). C: §9.18 gains a runtime invalid-input test.
 
-## 5. Implementation-defined choices: IEEE 1364 (IMPLEMENTATION.md §1, §3)
+## 5. Implementation-defined choices: IEEE 1364 (Vague_Decisions.md §6, §3)
 
 ### VD-080: UDP input limit
-- **Source**: IMPLEMENTATION §1 row "1364 8.1.2"; §2 row "UDP inputs".
+- **Source**: Vague_Decisions.md §6 row "1364 8.1.2"; §2 row "UDP inputs".
 - **Rule**: IEEE 1364-2005 8.1.2: "Implementations may limit the maximum number of inputs to a UDP, but they shall allow at least 9 inputs for sequential UDPs and 10 inputs for combinational UDPs."
 - **Why vague**: the clause sets a floor and leaves the ceiling to the tool.
 - **Options**: (a) the floors, 9/10; (b) a fixed larger cap with a named refusal; (c) no cap.
@@ -911,7 +911,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-081: Order of active events
-- **Source**: IMPLEMENTATION §1 row "1364 11.4.2".
+- **Source**: Vague_Decisions.md §6 row "1364 11.4.2".
 - **Rule**: IEEE 1364-2005 11.4.2: "active events can be taken off the queue and processed in any order."
 - **Why vague**: the order is explicitly nondeterministic; a tool must still run them in some order, and a user sees it in any race.
 - **Options**: (a) source-order FIFO; (b) LIFO; (c) randomised order (to flush out races).
@@ -920,27 +920,27 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-082: Tests over clauses that permit several outcomes
-- **Source**: IMPLEMENTATION §3 "Unspecified behaviour" (1364 5.1.4, 11.4.2, 11.5, 12.3.10.1, 12.3.10.2).
+- **Source**: Vague_Decisions.md §8 "Unspecified behaviour" (1364 5.1.4, 11.4.2, 11.5, 12.3.10.1, 12.3.10.2).
 - **Rule**: e.g. IEEE 1364-2005 11.5: "The simulator is correct in displaying either a 1 or a 0."; 5.1.4: "the entire expression need not be evaluated"; 12.3.10: merging dissimilar nets is permitted, not required.
 - **Why vague**: these clauses permit a set of outcomes; a fixture asserting one of them tests the tool, not the standard.
 - **Options**: (a) assert VerA's outcome under the clause tag; (b) assert membership in the permitted set, or pick inputs where every permitted outcome agrees, and pin VerA's own order only in untagged fixtures; (c) leave the clause untested.
-- **Decision**: `DECIDED:` (b), as CLAUSE-AUDIT §5.5 already says. A clause-tagged fixture may assert only what every conforming tool prints; VerA's particular choice is pinned by a fixture that cites no clause and is listed in IMPLEMENTATION §1.
-- **VerA today**: followed: `ieee1364/11_scheduling/audit_sched_allowed_active_race.v` (membership), `ieee1364/12_hierarchy/b_12_3_10_net_type_warning.v` (merge-independent cells). But `tests/fixtures/ieee1364/CLAUSES.tsv` has 13 `unspecified` rows (5.1.4, 11.4.2, 11.5, 12.3.10.1, 12.3.10.2, 20.2, 26.1, 26.2.4, 26.6.16, 26.6.21, 27.20, 27.34, 27.34.1) and IMPLEMENTATION §3 lists five. `CHANGE NEEDED:` IMPLEMENTATION §3 should list all 13 (or say "every `unspecified` row of CLAUSES.tsv") and name each row's fixture policy. Doc only, patch.
+- **Decision**: `DECIDED:` (b), as CLAUSE-AUDIT §5.5 already says. A clause-tagged fixture may assert only what every conforming tool prints; VerA's particular choice is pinned by a fixture that cites no clause and is listed in Vague_Decisions.md §6.
+- **VerA today**: followed: `ieee1364/11_scheduling/audit_sched_allowed_active_race.v` (membership), `ieee1364/12_hierarchy/b_12_3_10_net_type_warning.v` (merge-independent cells). But `tests/fixtures/ieee1364/CLAUSES.tsv` has 13 `unspecified` rows (5.1.4, 11.4.2, 11.5, 12.3.10.1, 12.3.10.2, 20.2, 26.1, 26.2.4, 26.6.16, 26.6.21, 27.20, 27.34, 27.34.1) and Vague_Decisions.md §8 lists five. `CHANGE NEEDED:` Vague_Decisions.md §8 should list all 13 (or say "every `unspecified` row of CLAUSES.tsv") and name each row's fixture policy. Doc only, patch.
 - **Measure impact**: none (B's `unspecified` rows are already classified).
-- **Status**: DONE (4ef087d6). IMPLEMENTATION §3 covers every `unspecified` CLAUSES.tsv row and names each group's fixture policy.
+- **Status**: DONE (4ef087d6). Vague_Decisions.md §8 covers every `unspecified` CLAUSES.tsv row and names each group's fixture policy.
 
 ### VD-083: Which of several configs configures the design
-- **Source**: IMPLEMENTATION §1 row "1364 13.4.4".
+- **Source**: Vague_Decisions.md §6 row "1364 13.4.4".
 - **Rule**: IEEE 1364-2005 13.4.4: "In the case where the config includes a design statement, then the specified cell shall be the top-level module, regardless of the presence of any uninstantiated cells in the rest of the source files."
 - **Why vague**: the clause speaks of "the config" as if there were one. With several configs in the compiled source (13.3.2 hierarchical configs reach a second config only through a `use ... :config` clause), nothing says which one sets the top, and the command-line mechanism 13.4.4 assumes is tool-specific.
 - **Options**: (a) the first config in source order; (b) the last; (c) the config no other config's `use` clause names, refusing when there are zero or several such; (d) require a CLI flag naming the config.
 - **Decision**: `DECIDED:` (c). It is the configuration analogue of 12.1.1's "uninstantiated module is a top", it needs no flag VerA does not have, and it never silently picks between two candidates: two unreferenced configs, or none, is E0243 naming 13.4.4. (d) is what commercial tools do through their command line, but VerA's CLI table (ARCHITECTURE §4.7) was declined; (a)/(b) make the design depend on file order without a diagnostic.
-- **VerA today**: implemented: `src/sim/digital/bind.zig:107-117` `top` (E0243, "configurations `a` and `b` are both unreferenced", "every configuration is named by another's `use` clause"). `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v` passes and is no longer an xfail. `CHANGE NEEDED:` (1) IMPLEMENTATION §1's row still says "not implemented ... (xfail)": correct it; (2) no fixture pins either E0243 refusal (grep finds neither phrase under `tests/fixtures`): add `b_13_4_4_two_unreferenced_configs_rejected.v` and `b_13_4_4_every_config_referenced_rejected.v`, each with `//! reject` on its distinctive phrase, legal neighbour `b_13_3_2_hierarchical_config.v`. Fixtures and docs only: patch.
+- **VerA today**: implemented: `src/sim/digital/bind.zig:107-117` `top` (E0243, "configurations `a` and `b` are both unreferenced", "every configuration is named by another's `use` clause"). `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v` passes and is no longer an xfail. `CHANGE NEEDED:` (1) Vague_Decisions.md §6's row still says "not implemented ... (xfail)": correct it; (2) no fixture pins either E0243 refusal (grep finds neither phrase under `tests/fixtures`): add `b_13_4_4_two_unreferenced_configs_rejected.v` and `b_13_4_4_every_config_referenced_rejected.v`, each with `//! reject` on its distinctive phrase, legal neighbour `b_13_3_2_hierarchical_config.v`. Fixtures and docs only: patch.
 - **Measure impact**: A (+2 fixtures); B: gives 13.4.4 its rejection half if the row is not already two-way.
-- **Status**: DONE (02af6a29). `b_13_4_4_two_unreferenced_configs_rejected.v`, `b_13_4_4_every_config_referenced_rejected.v`; IMPLEMENTATION §1's row corrected.
+- **Status**: DONE (02af6a29). `b_13_4_4_two_unreferenced_configs_rejected.v`, `b_13_4_4_every_config_referenced_rejected.v`; Vague_Decisions.md §6's row corrected.
 
 ### VD-084: `$ungetc` pushback depth, and which reads see it
-- **Source**: IMPLEMENTATION §1 row "1364 17.2.4.1".
+- **Source**: Vague_Decisions.md §6 row "1364 17.2.4.1".
 - **Rule**: IEEE 1364-2005 17.2.4.1: `$ungetc` "inserts the character specified by c into the buffer specified by file descriptor fd. The character c shall be returned by the next $fgetc call on that file descriptor." NOTE: "The features of the underlying implementation of file I/O on the host system limit the number of characters that can be pushed back onto a stream."
 - **Why vague**: the depth is left to the host; the clause names only `$fgetc` as the reader of a pushed character, though it says the character goes into the descriptor's buffer, which every read routine (17.2.4.2-17.2.4.4) reads.
 - **Options**: depth: 1 (C's only guarantee), a fixed N with EOF past it, unbounded. Readers: `$fgetc` only, or every read routine (C `ungetc` semantics).
@@ -950,7 +950,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (78df5df4).
 
 ### VD-085: Which bit an mcd `$fopen` returns
-- **Source**: IMPLEMENTATION §1 row "1364 17.2.1, 27.25".
+- **Source**: Vague_Decisions.md §6 row "1364 17.2.1, 27.25".
 - **Rule**: IEEE 1364-2005 17.2.1: "The multichannel descriptor mcd is a 32-bit reg in which a single bit is set indicating which file is opened. The least significant bit (bit 0) of an mcd always refers to the standard output." 27.25: the mcds of `vpi_mcd_open()` and `$fopen` "may be shared". VAMS 12.24/12.27 predefine channel 2 (stderr) and channel 3 (the log file), i.e. mcd bits 1 and 2.
 - **Why vague**: 1364 reserves bits 0 and 31 only and says nothing about allocation order; the AMS VPI clauses reserve two more channels that 1364's `$fopen` does not know about.
 - **Options**: (a) lowest free bit from 1, always; (b) lowest free bit from 3, always (AMS channels kept free even without VPI); (c) (a) without a VPI application, (b) under one, with one table shared between `$fopen` and `vpi_mcd_open`.
@@ -959,7 +959,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-086: The stream of a seedless digital `$random`
-- **Source**: IMPLEMENTATION §1 row "1364 17.9.1".
+- **Source**: Vague_Decisions.md §6 row "1364 17.9.1".
 - **Rule**: IEEE 1364-2005 17.9.1, Syntax 17-17 `$random [ ( seed ) ]`: "The seed argument controls the numbers that $random returns so that different seeds generate different random streams."
 - **Why vague**: the seed is optional and the clause says nothing about where a seedless call's stream starts, or whether call sites share it.
 - **Options**: (a) one hidden seed per run starting at 0, shared by all seedless calls, advanced by the 17.9.3 listing; (b) one hidden seed per call site; (c) a time- or entropy-based seed.
@@ -968,7 +968,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-087: Time unit and precision with no `` `timescale ``
-- **Source**: IMPLEMENTATION §1 row "1364 19.8".
+- **Source**: Vague_Decisions.md §6 row "1364 19.8".
 - **Rule**: IEEE 1364-2005 19.8: "If there is no `timescale specified or it has been reset by a `resetall directive, the time unit and precision are simulator-specific. It shall be an error if some modules have a `timescale specified and others do not."
 - **Why vague**: explicitly simulator-specific.
 - **Options**: 1 s / 1 s; 1 ns / 1 ns; 1 ns / 1 ps; the finest precision in the design.
@@ -977,7 +977,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-088: A digital real array read with an out-of-range or x/z index
-- **Source**: IMPLEMENTATION §1 prose after "Host math".
+- **Source**: Vague_Decisions.md §6 prose after "Host math".
 - **Rule**: IEEE 1364-2005 5.2.2: "If the index is out of the address bounds or if any bit in the address is x or z, then the value of the reference shall be x." 4.8.2: "Individual bits that are x or z in the net or the variable shall be treated as zero upon conversion."
 - **Why vague**: 5.2.2 demands "x", but a real has no x encoding (4.8 gives reals no unknown value); the standard does not say what an x-valued real reads as.
 - **Options**: (a) +0.0, applying 4.8.2's x/z-to-zero at the real boundary; (b) NaN; (c) refuse such reads.
@@ -986,7 +986,7 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: none.
 
 ### VD-089: `$clog2` of a host-bound parameter that carries no width
-- **Source**: IMPLEMENTATION §1 row "none (host ABI)", `$clog2`.
+- **Source**: Vague_Decisions.md §6 row "none (host ABI)", `$clog2`.
 - **Rule**: IEEE 1364-2005 17.11.1 (VAMS 9.14 defers to it): "The argument shall be treated as an unsigned value." 4.10.1: "A parameter declaration with no type or range specification shall default to the type and range of the final value assigned to the parameter, after any value overrides have been applied."
 - **Why vague**: a host card value (a model-card number written into `Model` at run time) has no Verilog type or width, so 4.10.1's "range of the final value" has no answer for it, and `$clog2` of a value depends on the width it is viewed in only when that width truncates it.
 - **Options**: (a) keep the elaborated declaration's width (today: a 4-bit default truncates a host 255 to 15, `$clog2` = 4); (b) treat a host number as an unsized integer literal (3.5.1: at least 32 bits, signed), so the declaration's range applies only where 4.10.1 says overrides cannot change it (a declared range or `integer`).
@@ -996,7 +996,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (55e391ea): `lowerClog2` selects on `$param_given` between the declaration width and the card value's unsized width; `ch09_system_tasks/clog2_inferred_parameter_width.va` asserts 8 for `knob`, plus ranged (4), negative (32) and past-32-bit (33) card values, with an unset neighbour (4).
 
 ### VD-090: Top-level values of the hierarchical system parameters
-- **Source**: IMPLEMENTATION §1 row "none (host ABI)", geometric system parameters.
+- **Source**: Vague_Decisions.md §6 row "none (host ABI)", geometric system parameters.
 - **Rule**: VAMS 9.18: "The top-level value is the starting value at the top of the hierarchy." 6.3.6 lists the overrides (defparam, instance parameter assignment, paramset), all from inside the design.
 - **Why vague**: the LRM gives Table 9-29's top-level starting values but no way for a simulator (a SPICE instance line's `m=`, a placement tool's coordinates) to supply a different starting value for the top module the host instantiates.
 - **Options**: (a) the top is always Table 9-29's identities; (b) every top module gets six hidden host-written fields; (c) a top-level §3.4.7 `aliasparam` of the system parameter is a model-card slot the host writes, defaulting to the identity.
@@ -1012,4 +1012,405 @@ summary and has a **Status** line naming what landed.
 - **Decision**: `DECIDED:` (b). The claim that mainstream tools search the including file's directory first could not be checked against any text available here: 1364-2005 19.5 and VAMS 10.1 are silent, IEEE 1800 was not available, and no other simulator was installed to try. It is therefore not used as the reason. The reasons are these. A model split across files in one directory, like `psp103_nqs.va` and `psp103.va`, should compile wherever the directory is copied, without a build flag that names its own location. A nested include inside a library directory should find its siblings whatever the top file's directory is. (b) is also how C's `#include "..."` behaves, so it is what a model author most likely expects. Looking beside the includer first means a header shipped next to a model wins over a same-named file elsewhere on `-I`, which (c) would invert. (d) makes the result depend on where the tool was started, which no source text can see. "The including file's directory" is per file: an included file's own includes look beside it, not beside the top file. A unit that is not a file (in-memory source) has no such directory. Annex D's built-in headers stay last, so a model's own `disciplines.vams` overrides them as before.
 - **VerA today**: before this entry, `lib/frontend/pp/directive.zig` `readInclude` tried only `opts.include_dirs`, then the built-ins, while E0126's `--explain` text already claimed the including file's directory was searched. Implemented in `readInclude`/`includerDir`; E0126's note lists the directories in search order. Semver: minor (source that VerA refused now compiles).
 - **Measure impact**: A (+2 fixtures). C: 10.1 / 1364 19.5 gain a positive fixture and a refusal neighbour for the search rule.
-- **Status**: DONE (dfd7e836): `ch10_directives/include_searches_the_including_files_directory.va` (a nested include found only beside its includer, and the includer's copy chosen over a `-I` copy), `include_including_dir_is_per_file_rejected.va` (E0126: the directory is per file); IMPLEMENTATION §1 row added.
+- **Status**: DONE (dfd7e836): `ch10_directives/include_searches_the_including_files_directory.va` (a nested include found only beside its includer, and the includer's copy chosen over a `-I` copy), `include_including_dir_is_per_file_rejected.va` (E0126: the directory is per file); Vague_Decisions.md §6 row added.
+
+---
+
+# Part 2: implementation-defined choices and resource limits
+
+Sections 6 to 9 were `docs/Vague_Decisions.md` until 2026-10-04 (a citation of
+`Vague_Decisions.md §N` in history means §N+5 here). They are the list
+`CLAUSE-AUDIT.md` §5 defines: every choice the LRM leaves to the tool, what
+VerA picks and the fixture that pins it; every engine limit, the diagnostic
+that fires when a design crosses it and the fixture that crosses it; and the
+defects still open. Fixture paths are relative to `tests/fixtures/`. "AMS"
+clauses are the Verilog-AMS LRM; "1364" clauses are IEEE 1364-2005.
+
+## 6. Implementation-defined choices
+
+A fixture here tests VerA's choice, not the clause. A tool that chooses
+differently also conforms.
+
+| Clause | What the LRM leaves open | VerA's choice | Code | Fixture |
+|---|---|---|---|---|
+| AMS 2.7 | an error for an octal escape above `\377` is optional | refused, E0148 (`docs/Vague_Decisions.md` VD-053) | `lib/frontend/lexer.zig` `badEscape`, `lib/frontend/parser/source.zig` `checkEscapes` | `ch02_lexical/octal_escape_above_377_rejected.va`; legal neighbour `octal_escape_377_largest_byte.va` |
+| AMS 2.7, 1364 3.6.3 | a backslash before a character Table 2-2 does not list (`"\q"`) | the character is kept and the backslash dropped (`"\q"` is `"q"`), with warning W0149 (`docs/Vague_Decisions.md` VD-036) | `lib/frontend/lexer.zig` `stringContents`, `badEscape`; `lib/frontend/parser/source.zig` `checkEscapes` | `ch02_lexical/undefined_escape_keeps_character.va`; legal neighbour `08_string_escapes.va` (`//! nowarn`) |
+| AMS 2.7, A.8.8; 1364 3.6 | a string byte above 0x7F (A.8.8 says `Any_ASCII_Characters`, 3.6 stores "8-bit ASCII values") | accepted with no diagnostic; each byte is one opaque 8-bit character, so UTF-8 `"°C"` is three characters, 0xC2B043 (`docs/Vague_Decisions.md` VD-014) | `lib/frontend/lexer.zig` `lexString`, `stringContents` (bytes copied as they are) | `ch02_lexical/string_bytes_above_7f.va` |
+| AMS 10.1, 1364 19.5 | where a relative `` `include `` file name is looked for (19.5: "The filename can be a full or relative path name", and nothing more) | a full path is opened as written. A relative one is tried, first hit wins: (1) the directory of the file that holds the `` `include `` (the path it was opened by, `.` for a bare name; a unit that names no file, `<source>`, has none); (2) each `-I` directory in command-line order; (3) the built-in annex D `constants.vams` / `disciplines.vams` by basename. Not found: E0126, whose note lists the directories in that order (`docs/Vague_Decisions.md` VD-091) | `lib/frontend/pp/directive.zig` `readInclude`, `includerDir` | `ch10_directives/include_searches_the_including_files_directory.va` (nested include beside its includer; includer before `-I`), `include_including_dir_is_per_file_rejected.va` |
+| AMS 2.8 | the identifier length limit, at least 1024 | no limit; a long or escaped module name gets a hashed file stem for its build files | `lib/backend/orchestrator.zig` `fileStem` | `ch02_lexical/28_identifier_1024_chars.va`, `ch02_lexical/identifier_1024_char_module_name.va` |
+| AMS 2.9 | vendor attributes | `vera_lte`, `vera_interp`, `vera_nodiff`, `vera_timepoint`, `vera_scratch` (AGENTS.md §6) affect device behavior; `vera_interp = 2` (quadratic, `kernel_text.zig` `zAbsdelayQ`) departs from §4.5.7 when set, which requires linear interpolation (`ch04_expressions/absdelay_vera_interp_linear.va`); IEEE §26.6.42 VPI queries expose attribute names, constant values and parsed owners on modeled source objects | `lib/ir/lower/stmt.zig`, `src/vpi/attributes.zig` | `ch05_analog_behavior/charge_sites_lte_attribute.va`, `ch04_expressions/absdelay_vera_interp_quadratic.va`, `ch04_expressions/ddx_vera_nodiff_assignment.va`, `ch05_analog_behavior/vera_timepoint_cache.va`, their `reject_*` neighbours, and `ieee_pli/b_26_6_42_attributes.c` / `b_26_6_42_analog_attributes.c` |
+| AMS 2.9 | `(* vera_timepoint *)`: what a per-timepoint cache is keyed on, and what drops it | one cache per statement in `Instance`, keyed on `$abstime`, `analysis()` and the two §5.10.2 step flags; filled by `eval`/`evalQ` when the statement ran on a stale cache; dropped by `initState`, `setupInstance`, `updateState` and `stateCtl` commit and revert. A statement may assign scalars, scalarized arrays and memory-backed arrays (held or not); only what a later statement reads is cached. Refused: E0529 (value), E0530 (construct inside), E0531 (reads a value an iteration moves), E0532 (in a loop, analog function or `analog initial`). A device with one declares `mutable_eval` and drops `batch_ok` | `lib/ir/lower/stmt.zig` `lowerTimepoint`, `lib/backend/codegen/plan/setup.zig` `timepointVarying`, `lib/backend/codegen/instance.zig` `emitTpHelpers` | `ch05_analog_behavior/vera_timepoint_cache.va`, `reject_vera_timepoint_parameter.va`, `reject_vera_timepoint_probe.va`, `reject_vera_timepoint_contribution.va`, `reject_vera_timepoint_operator.va`, `reject_vera_timepoint_event.va`, `reject_vera_timepoint_reads_iterate.va`, `reject_vera_timepoint_in_loop.va` |
+| AMS 2.9 | `(* vera_scratch *)` on a variable declaration: what it starts each evaluation at, and where it is refused | never held (no `held_vars` row, no `Instance` field, no copy in `eval`/`stateCtl`): every evaluation, and every entry to a named block for that block's locals, starts it at its declaration's initializer, the §3.2 zero when there is none. On a string variable it drops the §5.10 hold too. Refused: E0534 (value does not fold without the card), E0535 (on a parameter, net, genvar or statement), E0536 (an `analog initial` or `@(...)` body assigns it and a read may see that value before the same evaluation assigns it again: §5.2.1/§5.10 values exist to be read on other evaluations), E0537 (an `initial` or `always` block or a task assigns it: §7.2.2 makes it digital-owned, and the digital kernel, not an analog evaluation, keeps its value). `= "uninit"`: a memory-backed (runtime-indexed) array starts each evaluation with NO store; the author promises every element is written before it is read in that evaluation, and **a read-before-write is the author's bug**: under runtime safety (Debug, ReleaseSafe) the array is filled with NaN in the value and every derivative lane (`minInt(i64)` for an integer array), so it reads NaN; in ReleaseFast/ReleaseSmall nothing is stored and the value is unspecified but stable, never illegal behaviour: after the `undefined` declaration an empty `asm volatile ("" : : [p] "r" (&a) : .{ .memory = true })` (no instructions; accepted by nvptx64 and amdgcn too) may have written the array, so LLVM must treat its contents as defined. It costs the array's SROA: 201 Ir/eval against 116 without it and 233 for the zero start (4-op tape, `st[0:63]`, 8 lanes). A scalar or scalarized array keeps the zero start. Any other string: E0538; an initializer with `"uninit"`: E0539 | `lib/ir/lower/var.zig` `scratchOn`, `scratchMode`, `checkScratchOwners`, `refuseDigitalScratch`, `markHeldVars` (`State.carried`); `lib/backend/codegen/render.zig` `emitArrayStmt` | `ch03_data_types/vera_scratch_starts_each_evaluation.va`, `vera_scratch_uninit_tape.va`, `vera_scratch_uninit_reads_nan_when_safe.va`, `reject_vera_scratch_unknown_string.va`, `reject_vera_scratch_uninit_initializer.va`, `reject_vera_scratch_parameter_value.va`, `reject_vera_scratch_on_parameter.va`, `reject_vera_scratch_on_net.va`, `reject_vera_scratch_on_genvar.va`, `reject_vera_scratch_event_value.va`, `reject_vera_scratch_analog_initial.va`, `ch07_mixed_signal/reject_vera_scratch_digital_variable.va` |
+| AMS 2.8.3 | `$vera_reject_step(t_retry)`, a VerA system task | in a transient, the accepted step whose solution called it with `t_retry < $abstime` is rejected through `contract.UpdateResult.request_reject_at`; several calls in one evaluation: the earliest wins; ignored in a static solve; no `acceptQ` is emitted, since it cannot carry the request; the analog testbench retries at `t_retry` with the forced unknowns held at the rejected time's values, and the mixed and VPI runners refuse a request; in `analog initial` or an analog function, E0533 | `lib/ir/lower/systask.zig` `lowerKernelCtl`, `lib/backend/codegen/state.zig` `emitStateMachine`, `lib/backend/tb/runner_text.zig` `retry` | `ch05_analog_behavior/vera_reject_step_retry.va`, `reject_vera_reject_step_analog_initial.va` |
+| AMS 4.3.1 (Table 4-14) | the accuracy of `exp`, `ln`, `pow` (the table gives each a C equivalent and a domain, no accuracy; 4.3.2's Table 4-15 functions are unchanged) | faithful: max error ≤ 0.52 ulp (exp, ln) and ≤ 0.55 ulp (pow) against the exactly rounded result over every finite input, IEEE 754 special values, identical bits on every target; the only implementation (the previous compiler_rt/`std.math.pow` path and the GPU musl ports are gone). See "Host math" below | `tools/contract.zig` `gm` (`armExp`, `armLog`, `armPow`, `hexp`, `hlog`, `powV`) | `tools/contract.zig` tests "exp/log/pow stay within the documented bound of an f128 oracle", "... fold at comptime to the bits they run to", "armExp/armPow: the contract's special cases ..." |
+| AMS 9.7.3 | what `$fatal`/`$error` do in a DEVICE (`--display=drop`), which cannot print or stop its host | the status channel: each call in the analog context (the analog block, `analog initial`, a `vera_timepoint` statement, an analog function) is a `contract.StatusSite` in `status_sites`, in source order. The first one an evaluation reaches, under its own guards, latches `Instance.vera_status__ = (severity << 24) \| (site + 1)` (severity 1 fatal, 2 error; `contract.statusCode`) and up to four numeric arguments after its format string in `vera_status_args__` (a string argument reads 0; `$fatal`'s finish_number is not one). The status is sticky: a later site changes nothing until `initState` or `setupInstance` clears it. While it is set, `eval`, `q` and `evalQ` return all-zero rows and charges (value and every derivative lane; checked before and after the core), and `updateState` returns `.ok` without touching the state; the device declares `mutable_eval`, drops `batch_ok` and emits no `acceptQ`. `contract.formatStatus` renders `<file>:<line>: fatal\|error: <message>`. `$warning`/`$info` stay dropped (W0850); the printing artifact prints all four and exits on `$fatal` as before. Additive: ABI 5 | `lib/ir/lower/systask.zig` `lowerStatus`, `lib/backend/codegen/instance.zig` `emitStatusHelpers`, `lib/backend/codegen/dispatch.zig`, `tools/contract.zig` `StatusSite`, `formatStatus` | `tests/status_host.zig` over `tests/fixtures/ch09_system_tasks/status_ops.va` (analog, `analog initial`, `vera_timepoint`, first-wins, the zero plane, `updateState`), `tests/status_gpu.zig` (NVPTX IR and AMDGCN object, under `zig build test`) |
+| AMS 3.6.3.2 | which initializer wins when several hierarchical declarations at the highest level name one node ("a race condition"), and when several local ones do | hierarchical beats local; among hierarchical, the shallowest declaring module, then the first in instance-walk order | `lib/ir/elaborate/resolve.zig` `applyOocInits` | `ch03_data_types/nodeset_hierarchical_declaration.va` |
+| AMS 4.2.4 | how a required integer-modulus zero-divisor error is reported | a provably evaluated zero is E0601 at compile time; a runtime zero reports E0601 and exits 1 in the executable, and traps in a solver device without host I/O, including GPU targets | `lib/ir/proof/prover.zig`, `lib/backend/codegen/render.zig` `imodFn` | `ch04_expressions/111_modulus_by_zero_rejected.va`, `modulo_integer_dynamic_zero.va`, `modulo_integer_unused_zero.va`; legal neighbours `modulo_integer_dynamic.va`, `modulo_integer_short_circuit.va`, `modulo_integer_parameter.va` |
+| AMS 4.5.4 | `idt(x)` with no `ic` starts at "c ... as determined by the simulator" | argument reads an unknown: the static solve forces it to zero (c from the loop); otherwise c = 0. (`idtmod`'s c = 0 is not listed: §4.5.5's prose requires it.) | `lib/ir/lower/analog_op.zig` `opIdt`, `readsUnknown` | `exhaustive/062_idt_integral.va`, `ch04_expressions/idt_no_ic_dc_feedback.va` |
+| AMS 4.5.5 | where `idtmod` integrates | inside the device, wrapping each accepted step | `lib/backend/codegen/kernel_text.zig` `zIdtmod` | `ch04_expressions/17_idtmod.va`, `ch04_expressions/a04_08_idtmod_offset_window_negative_integrand.va` |
+| AMS 4.5.11 | the DC value of a `laplace_*` filter whose H(s) has a pole at s = 0 (the clause gives H(s) and no DC rule) | 0, the integrator state starting at 0 as for `idt` above; a power of s common to both sides cancels first, so `s/(s + s²)` is 1; a transient starts from the static point with every past sample of each section equal to it | `lib/backend/kernels/filter_kernels.zig` `zH0`, `zLaplaceStep` | `ch04_expressions/laplace_nd_pole_at_origin.va` |
+| AMS 4.5.11, 4.5.12 | a `*_zp`/`*_zd`/`*_np` root vector whose parts the model card sets (a parameter array), where "its conjugate shall also be present" cannot be checked at compile time | a vector whose imaginary parts all fold without the card, and whose card-set real parts pair by their text, keeps the compile-time pairing (one section per real root, one quadratic per conjugate pair). Otherwise its section structure is fixed at `(M + 1) / 2` real sections of degree ≤ 2, filled on every `__sec` read by `zRootSecs`: a root with imaginary part exactly 0 is real and real roots combine two at a time in vector order (a leftover one is a degree-1 section, the runtime degree trim runs it as one); a zero root is §4.5.11's `s` / §4.5.12's z⁻¹; a complex root a + jb pairs with the first unused root within 1e-9·\|a + jb\| of a − jb (`zroot_tol`). A complex root with no such partner makes every coefficient of the cascade NaN, so the filter's output is NaN in every analysis: never a different filter reported as this one. An odd-length root vector is E0540 at compile time | `lib/backend/cg_filters.zig` `filterSide`, `runtimeRoots`; `lib/backend/kernels/filter_kernels.zig` `zRootSecs` | `ch04_expressions/laplace_zp_parameter_roots_step.va`, `laplace_zp_parameter_roots_ac.va`, `laplace_np_parameter_roots_unpaired_is_nan.va`, `zi_np_parameter_roots_dc_gain.va`, `reject_4_5_11_1_laplace_zp_parameter_roots.va` |
+| AMS 4.5.11 | how a `laplace_*` section is integrated in a transient (the clause gives H(s) only) | the trapezoidal rule (bilinear transform, s = (2/dt)(1 − z⁻¹)/(1 + z⁻¹)), realised for a proper section (numerator degree ≤ denominator degree, after common powers of s cancel) as the controllable canonical states of the monic denominator stepped in increment form, (I − (dt/2)A)Δx = (dt/2)(2(Ax + Bu_prev) + B(u − u_prev)), solved along the companion chain in O(degree). Mathematically the same discrete filter as direct form on the bilinear coefficients, which VerA used until 2026-10-01; numerically, a held input leaves a state with Ax + Bu = 0 where it is, so the steady output is H(0) to rounding. Direct form made the fixed point Σb/Σa, which is roundoff when a pole is slow against the step (Σa ~ (ω·dt)^degree of its terms): a degree-6 section with ω·dt = 1e-5 drifted 5.3e-7 off H(0) in 200 steps, and a fitted line with a 3 kHz pole settled 0.6% low at dt = 0.1 ns. The states are continuous-time, so a step size change needs no history rewrite. An improper section (s/1) keeps direct form I on its bilinear coefficients | `lib/backend/kernels/filter_kernels.zig` `zSsForm`, `zSsStep`, `zSsRest`, `zLaplace`, `zLaplaceStep` | `ch04_expressions/laplace_nd_slow_pole_holds_dc_gain.va`; the transient laplace fixtures (`a04_11_laplace_nd_ramp_response.va`, `23_laplace_filters.va`, ...) within their stated tolerances |
+| AMS 4.6.1 | analysis names beyond Table 4-21 | none: any other name is false | `lib/backend/codegen/call.zig` `analysisMatch` | `ch04_expressions/143_analysis_transient.va` |
+| AMS 4.6.3 | the small-signal analysis name | `"ac"` | `lib/ir/lower/contrib.zig` `acAnalysisName` | `ch04_expressions/a06_ac_stim_ac_analysis.va` |
+| AMS 4.5.12 | a `zi_*` filter's τ and t0: the shape of a non-zero transition, the output before the first transition at t0, how the corners are resolved, and an absent τ | samples fall on t0 + k·T. Each sample starts a linear transition, τ long, from the value the previous transition had reached at that instant. Before a positive t0 the output holds H(1) times the operating-point input. The corners are resolved by bounding the step at τ (and T); no breakpoint is published. AC small-signal ignores τ and t0. An absent τ is the abrupt τ = 0 form, not `` `default_transition ``. A τ that does not fold without the card is read from the card; a negative one is E0540 | `lib/backend/cg_filters.zig` `filterPlan`; `lib/backend/kernels/filter_kernels.zig` `zZiEvalRamp`, `zZiRamp`; `lib/backend/codegen/state.zig` | `ch04_expressions/zi_transition_time_and_first_transition.va`, `zi_negative_transition_time_rejected.va` |
+| AMS 5.10.3.1 | the `time_tol` of a `.v` contract device's A2D bridge (7.8 supplies no connect module) | card `ttol`, by default min(trise, tfall)/50; only a step where some process wakes is held to it | `src/sim/rt/device.zig` `ttol` | `tests/vdev_host.zig`, "v_edge and v_any" |
+| AMS 5.10.3.1, 5.10.3.3 | `cross`/`above` tolerances and `timer` time_tol when the tool sets them | the fixed-grid testbench (`--run`, `--emit-exe`, no discrete half) inserts no timepoint: the event fires at the first `//! time` point past its time (W0750); a `//! time` grid with no `//! analysis` line is `tran` | `lib/backend/tb/runner.zig` `warnGridEvents`, `lib/backend/tb/directive.zig` | `ch05_analog_behavior/event_cross_fires_on_a_time_grid.va` |
+| AMS 5.10.3.4 | absent or zero `absdelta` tolerances and interpolation within the event window | `time_tol` defaults to 1 ps and is at least the digital precision; `expr_tol` defaults to 1e-12 in expression units; delta events use the interpolated delta crossing when eligible, otherwise the first time outside the time-tolerance exclusion; significant reversals use the observed point | `src/sim/mixed.zig` `absdeltaArgs`, `nextAbsdelta` | `ch07_mixed_signal/absdelta_runtime_default_tolerances.va`, `absdelta_runtime_time_precision.va`, `absdelta_runtime_time_tol.va`, `absdelta_runtime_reversal.va` |
+| AMS 9.5.7, 1364 17.2.7 | `$ferror` codes | C errno values (2, 5, 9, 13, 21, 22, 24, 28); fixtures assert only nonzero | `lib/backend/kernels/file_kernels.zig` `zfErrno` | `ch09_system_tasks/053_ferror.va`, `write_mode_path_65_fails_open.va` |
+| AMS 9.7.2 | what `$stop` does in a batch run | prints and exits 0 | `lib/backend/cg_display.zig` `emitSimCtl` | `ch09_system_tasks/174_stop_terminates.va` |
+| AMS 9.13.1 | the seed of an omitted-seed analog `$random` or `$arandom` | one per omitted-seed site, `1 + 7919·k`; `k` counts all non-variable-seed sites in lowering order, including constant/parameter sites | `lib/ir/lower/random.zig` `lowerRandom` | `tests/revert_host.zig` (numbering/trajectory); `ch09_system_tasks/115_random_no_seed.va` (width) |
+| AMS 9.15 | which `$simparam` names exist ("There is no fixed list of simulation parameters") | Table 9-27's `gmin` (1e-12), `tnom`, `scale`, `shrink` and `sourceScaleFactor` (1), `iteration`, and `timeUnit`/`timePrecision` when a `` `timescale `` is given; beyond the table, SPICE's `reltol`, `abstol` and `vntol`, and `dt`: the host's `SimState.dt` unchanged (the step since the last accepted point, 0 in a static solve; no derivative, never hoisted into `setup`, readable inside `vera_timepoint`). `tnom`, the three tolerances, `gmin` and `sourceScaleFactor` are host-written `Model` fields (`nom_temp__`, `reltol__`, `abstol__`, `vntol__`, `gmin__`, `source_scale__`) defaulting to 27, 1e-3, 1e-12, 1e-6, 1e-12 and 1, since a host steps gmin and the source factor during a run (`docs/Vague_Decisions.md` VD-072); `scale` and `shrink` are 1, because geometry scaling is applied when the card is built; any other name without a fallback is E0811; `$simparam$str` knows Table 9-28's six names and refuses any other literal with E0811 (it has no fallback), and its `"cwd"` and `"analysis_name"` are host-written `Instance` fields (`cwd`, `analysis_name`), which the testbench fills from its working directory and `//! analysis <kind> [<name>]` | `lib/ir/lower/sysfunc.zig` `simparamValueIn`, `host_simparams`, `simparam_str_names` | `ch09_system_tasks/simparam_newton_tolerances_host_written.va`, `simparam_gmin_source_scale_host_written.va`, `simparam_spice_option_not_known_rejected.va`, `147_simparam_unknown_no_fallback_rejected.va`, `simparam_dt_is_the_host_step.va`, `exhaustive/120_environment.va`, `simparam_str_cwd_and_analysis_name.va`, `simparam_str_unknown_name_rejected.va` |
+| AMS 9.17.3 | the `$limit` built-ins | `pnjlim`, `pnjlimds`, `fetlim`, `fetlimds`, `limvds`, `steplim`; any other name, or a bare `$limit(x)`, returns the probe | `lib/backend/codegen/plan/limit.zig` `Alg` | `annex_e_spice/limit_pnj.va`, `limit_fet.va`, `limit_vds.va`, `limit_pnjlimds_bulk_rung.va`, `ch09_system_tasks/limit_steplim_internal_node_honoured.va`, `227_limit_unknown_algorithm_returns_probe.va` |
+| AMS 9.17.3 | arguments past the algorithm's own | an optional frame sign, then an optional seed; more declines the site (W0853) | `lib/backend/codegen/plan/limit.zig` `plan` | `ch09_system_tasks/231_limit_polarity_sign_argument_honoured.va`, `230_limit_too_few_arguments_returns_probe.va`, `limit_too_many_arguments_returns_probe.va` |
+| AMS 9.17.3 | the starting value of a limited branch (SPICE MODEINITJCT) | seeds solved into node values from a 0 V root (ground, else lowest port, else lowest net); an unseeded pnjlim leg starts at vcrit; fetlimds vgd and pnjlimds vbd legs are never seeded; a seed reading the solution is E0527, one the tree cannot take W0854 | `lib/backend/codegen/plan/limit.zig` `planSeed` | `annex_e_spice/limit_seed_mos1_initjct.va`, `limit_seed_bsim3_pmos_initjct.va`, `limit_seed_explicit_beats_default.va`, `reject_limit_seed_reads_solution.va` |
+| AMS 9.20 | a whole-vector analog_net_reference: the clause admits one, but its validity rules make the target "a scalar continuous node or a scalar element of a continuous vector node" and the alias "the same circuit matrix position" | every element is aliased to the one target node, status 1; a vector target string violates the scalar rule, status 0, and the vector stays local | `lib/ir/lower/hier_name.zig` `checkAliasCall`, `aliasVector` | `ch09_system_tasks/node_alias_whole_vector_reference.va`; bit select refused, `143_node_alias_bit_select_rejected.va` |
+| AMS 12.36 | the number of `vpiRejectTransientStep` | 730 | `src/vpi/vpi_user.h` `vpiRejectTransientStep` | `ch12_vpi_routines/p03_12_sim_control_reject_step.c` |
+| AMS 12.16, 1364 27.14 | `vpiIntVal` of an object wider than the `PLI_INT32` it fills | the low 32 bits, two's complement, no error (x and z bits read 0) (`Vague_Decisions.md` VD-049) | `src/vpi/value.zig` `formatInto` | `ch11_vpi/p02_01_get_value_formats.c` (`reg [63:0]` 64'h00000001FFFFFFFF reads -1) |
+| AMS E.3.3 | a warning when an HDL module or paramset shadows an always-available SPICE primitive is optional | no warning for primitive shadowing; W0951 for the required same-name model/subcircuit warning | `lib/ir/elaborate/names.zig` `warnSpiceShadows`, `findModule` | `annex_e_spice/spice_paramset_primitive_shadow.va`, `spice_module_shadow_warning.va`, `spice_paramset_shadow_warning.va`, `spice_shadow_case_neighbour.va`, `h04_10_verilog_module_wins_over_netlist_subckt.va` |
+| AMS 2.8.3 | `$` names VerA uses internally | `$held_int`, `$held_real`, `$idx`, `$limit$old`, `$str$cat`, the `$rng$` family and the others after `$held_int` in `Callee` are reserved (E1014) | `lib/ir/callee.zig` `synthetic` | `ch09_system_tasks/reserved_system_function_name_rejected.va` |
+| 1364 8.1.2 | the UDP input limit, at least 9 sequential and 10 combinational | 64 inputs for both (E1017) | `lib/frontend/parser/udp.zig` `max_udp_inputs` | `ieee1364/08_udp/b_8_1_2_input_minimums.v`, `b_8_1_2_sequential_64_inputs.v`, `b_8_1_2_udp_more_than_64_inputs_rejected.v` |
+| 1364 11.4.2 | the order of active events | processes start in source order from a FIFO queue; woken processes resume in the order they suspended; the interpreter and native code agree | `src/sim/scheduler.zig` `Scheduler.next`, `src/sim/digital/waiters.zig` `wake` | `ieee1364/11_scheduling/audit_sched_fork_arm_chain_order.v`, `audit_sched_fork_arm_wake_order.v`, `audit_sched_node_wake_order.v` (no clause cite) |
+| 1364 13.4.4 | which of several configs configures the design | the config no other config's `use` clause names; two such, or none, is E0243 (Vague_Decisions VD-083) | `src/sim/digital/bind.zig` `top` | `ieee1364/13_configuration/b_13_3_2_hierarchical_config.v`, `b_13_4_4_two_unreferenced_configs_rejected.v`, `b_13_4_4_every_config_referenced_rejected.v` |
+| 1364 17.2.4.1 | how many characters `$ungetc` can push back | 16 per descriptor; the 17th returns EOF | `lib/backend/kernels/file_kernels.zig` `ZFSlot.back` | `ieee1364/17_system_tasks/b_17_2_4_1_ungetc_pushback_limit.v` |
+| 1364 17.2.1, 27.25 | which bit an mcd `$fopen` returns | 1 << k for the lowest free slot k from 1; under a VPI application, the lowest free channel from 4, one table with `vpi_mcd_open` (channels 2 and 3 are AMS 12.26's stderr and log) | `lib/backend/kernels/file_kernels.zig` `zFOpen`, `src/vpi/print.zig` `share` | `ieee_pli/b_27_mcd.c` |
+| 1364 17.9.1 | the stream of a seedless `$random` | one hidden seed per run, starting at 0 | `src/sim/digital/root.zig` `Run.random_seed` | `ieee1364/17_system_tasks/b_17_9_1_seedless_random_starts_at_seed_0.v` |
+| 1364 19.8 | time unit and precision with no `` `timescale `` | 1 s / 1 s | `src/sim/digital/root.zig` `default_quantum` | `ieee1364/19_compiler_directives/b_19_8_no_timescale_is_1s_1s.v` |
+| none (CLI) | `--state=auto` | runs 4-state until a time step starts with no live x or z, then 2-state; an x or z stored later reruns the design 4-state | `src/sim/rt/root.zig` `auto` | `ieee1364/11_scheduling/auto_state_two.v`, `auto_state_rerun.v`, `auto_state_never_written.v` |
+| 1364 26.2.4 | what a routine called while `vlog_startup_routines` run does (the clause allows only `vpi_register_systf` and `vpi_register_cb`, the latter for six reasons, and names no failure) | refused: the routine's documented failure value and a `vpi_chk_error` error, code `STARTUP`, citing 26.2.4; `vpi_register_analog_systf` (VAMS 12.32) and `vpi_chk_error` are allowed; `vpi_register_cb` takes cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError and cbPLIError (cbUnresolvedSystf is never delivered) (`Vague_Decisions.md` VD-044) | `src/vpi/root.zig` `refused`, `src/vpi/callback.zig` `startupReason` | `ieee_pli/b_26_2_4_startup_phase.c`; every `.c` fixture defers its work to cbEndOfCompile (`p02_defer`, `p03_defer`) |
+| 1364 26.3.5, G | the number of `vpiIsProtected`, which Annex G does not define | Annex G's `vpiProtected` (10); every object answers it, FALSE, since `pragma protect` is refused (E0146) (`Vague_Decisions.md` VD-045) | `src/vpi/vpi_user.h` `vpiIsProtected`, `src/vpi/property.zig` `vpi_get` | `ieee_pli/b_26_3_5_protected.c` |
+| 1364 17.2.4.1 | how many characters `$ungetc` can push back, and which reads see them | 16 per descriptor; the 17th returns EOF, as does a push at file position 0 (C leaves the position after it indeterminate). `$fgetc`, `$fgets`, `$fscanf` and `$fread` all read the pushback before the file, and pushback a read leaves unread stays the next input (VD-084) | `lib/backend/kernels/file_kernels.zig` `ZFSlot.back`, `zFUngetc`, `zFGets`, `zFWindow`, `zFTake`; `src/sim/digital/system.zig` `fileScan`, `finishFileScan` | `ieee1364/17_system_tasks/b_17_2_4_1_ungetc_pushback_limit.v`, `b_17_2_4_1_ungetc_read_routines.v` |
+| 1364 17.6.5, 17.6.6 | a `$q_exam` `q_stat_code` outside Table 17-15's 1 to 6 | a constant one is refused (E1100); one known only at run time returns status 2 and leaves `q_stat_value` unchanged (VD-050) | `src/sim/digital/compile.zig` `.queue`, `src/sim/digital/system.zig` `queueStep` | `ieee1364/17_system_tasks/b_17_6_5_q_exam_code_rejected.v`, `b_17_6_5_q_exam_code_runtime.v` |
+| 1364 17.6.5 | whether `$q_exam` code 3, "Maximum queue length", is the configured `max_length` or the observed peak | the largest length the queue has reached (VD-051) | `src/sim/digital/system.zig` `queueStep` (`peak`) | `ieee1364/17_system_tasks/b_17_6_5_q_exam_peak_length.v` |
+| 1364 17.6.5, 3.5.3 | how `$q_exam`'s means (code 2, mean interarrival time; code 6, average wait) become the integer `q_stat_value` | the exact mean rounded to the nearest integer, ties away from zero, as §3.5.3 converts a real; 0 with no interarrival or no completed wait (VD-052) | `src/sim/digital/system.zig` `mean` | `ieee1364/17_system_tasks/b_17_6_5_q_exam_means_round.v` |
+| AMS E.1, E.1.2, E.2 | the SPICE flavour and primitive behaviour | SPICE3 card syntax for `.MODEL` (types npn, pnp, d, nmos, pmos, njf, pjf, nmf, pmf, r, c, l) and for flat `.SUBCKT` bodies of numeric-valued R/C/L/V/I/E/F/G/H cards. Not claimed: `PARAMS:`/`k=v` on a `.SUBCKT` header, `{expr}` values, nested `.SUBCKT`, `.INCLUDE`/`.LIB`, model-referenced or other device cards in a body, trailing fields; inside a `.SUBCKT` each is E0928, cards outside any definition are skipped (Vague_Decisions VD-012). A `.MODEL` whose type is no Table E.1 row (`sw`, `ltra`, ...) declares nothing, and an instance of it is E0952 (E.1.2's unsupported primitive). Primitives per each `primitive_*.va` header | `lib/frontend/spice_cards.zig`, `lib/frontend/preprocessor.zig` `process` | `annex_e_spice/spice_model.va`, `spice_subcircuit.va`, `h04_06_subckt_body_contributes_equations.va`, `primitive_*.va`; `reject_spice_subckt_params.va`, `reject_spice_expression_value.va`, `reject_spice_nested_subckt.va`, `reject_spice_model_referenced_card.va`, `reject_spice_unread_device_card.va` |
+| 1364 13.2.1.1, 4.11 | two modules with one name in one compilation (13.2.1.1 says the last is the cell with a warning; 4.11 forbids the reuse) | the last definition is the cell, W1152 at it, in both engines (Vague_Decisions VD-009) | `src/sim/digital/bind.zig` `libraries`; `lib/ir/elaborate/names.zig` `findModule`, `warnRedefinedModules`; `lib/ir/elaborate.zig` `pickTop` | `ieee1364/13_configuration/b_13_2_1_1_same_name_cell_last_wins.v`, `ch06_hierarchy/same_named_module_last_wins.va` |
+| AMS 7.4.4, F.2.2 | how the discipline resolution mode is selected ("vendor-specific"; F.2.2 "a simulator option") | `--discipline-resolution=basic\|detail` (fixtures: `//! discipline-resolution`), default basic. Detail mode compiles a signal both modes decide alike and refuses one they decide differently (E0930): F.2.2 step 5 is not implemented | `src/cli/args.zig`, `lib/ir/elaborate/resolve.zig` `refuseDetail` | `ch07_mixed_signal/discipline_resolution_detail_one_level.va`, `discipline_resolution_detail_figure_7_4_refused.va` |
+| none (CLI) | debug information in a native artifact | a ReleaseFast/ReleaseSmall `--emit-so` (analog or `.v` device) and `--emit-exe`/`--run` are built `-fstrip`; `--debug-info` keeps DWARF. Debug and ReleaseSafe always keep it (their safety panics print stack traces). Stripping leaves the analog devices' `.text` identical and halves psp103's and bsim4va's build (`docs/measurements/codegen-levers-2026-09-30.md` lever 1) | `lib/backend/orchestrator.zig` `strip` | `lib/backend/orchestrator.zig` test "an optimized build strips unless debug information is asked for" |
+| none (CLI) | how `--emit-so` builds a large device | an LLVM build of at least 768 KiB of device text runs one `zig build-obj` per `contract.DevicePart` (setup, state, eval) in parallel and links them; a `dyn` host with `exportDevicePart` exports each part's entry points from its own object, one without it gets `exportDevice` in the setup object. Smaller devices and the native backend build one object (below it, the split measured no gain for mos1 and a code-layout eval slowdown for txl) | `lib/backend/orchestrator.zig` `splits`, `split_min_bytes` | `lib/backend/orchestrator.zig` test "a split build links one object per part into a library that runs" |
+| none (CLI) | how a large `setup` is emitted and built | a `setup` of at least 256 KiB of emitted text is emitted as `zSetup<k>` chunks of about that size (`setup_chunks.n`), its top-level statements cut where the relooper's shape allows (a labelled block whose `break`s are all in tail position is opened; a two-armed `if` whose arms jump only inside themselves becomes a stored condition guarding each arm statement), values crossing a cut kept in a scratch struct `setup` passes along. Every statement runs once, in order, on the same values: the roots are bit-identical. A split build compiles each chunk in its own object when the `dyn` host declares `SetupValue(D)`, the value scalar it passes `setup`; otherwise `setup` calls the chunks directly. No balanced cut (more than 3/4 in one chunk) keeps one function | `lib/backend/codegen/setup_chunk.zig` `chunk_bytes`; `lib/backend/orchestrator.zig` `pieceNames` | `lib/backend/codegen/setup_chunk.zig` test |
+| none (CLI) | how `--emit-so` builds a `.v` device | an LLVM build links the digital engine's design-independent half (`src/sim/rt/engine.zig`: the event loop and the tick-boundary snapshot) as one object built once per engine sources, compiler, target, CPU and flags, in `vera-engine` under Zig's global cache directory (`ZIG_GLOBAL_CACHE_DIR`, `XDG_CACHE_HOME/zig`, `HOME/.cache/zig`; else the work directory's cache). The key is the compiler's own cache manifest; the object's symbols carry a hash of `State`'s layout and the root options, so a mismatched object fails to link. v_count 17.0 → 4.9 Gi, v_inv 22.2 → 5.1 Gi once the object exists (the first build also builds it, ≈16 Gi); the native backend compiles the whole engine (no gain measured) | `lib/backend/orchestrator.zig` `buildEngine`, `src/main.zig` `engineCache` | `lib/backend/orchestrator.zig` test "buildEngine reuses its object only while every key component is unchanged", `tests/vdev_so_host.zig` |
+| none (host ABI) | numeric parameter bindings carry a value without HDL type/width metadata | a card value is an unsized integer (1364 3.5.1, 4.10.1): `$clog2` of a non-local parameter with no type or range, when the card sets it (`$param_given`), reads it as a signed 32-bit integer, or 64-bit when some such card value in the operand does not fit 32 bits; unset, the final elaborated declaration's width and signedness apply as before. A declared range or `integer` keeps its width under a card value; HDL instance overrides supply their own width before code generation (`docs/Vague_Decisions.md` VD-089). Ceiling: one set/unset and one fits-32 decision covers all such parameters of one operand | `lib/ir/lower/sysfunc.zig` `lowerClog2`, `hostSized`; `lib/ir/lower/constfold.zig` `hostSizedParam`, `clog2Width`, `clog2Signed` | `ch09_system_tasks/clog2_inferred_parameter_width.va`, `clog2_nested_contexts.va` |
+| none (host ABI) | how a host supplies top-level geometric system parameters | a declared §3.4.7 alias supplies a real model-card slot, shared by additional aliases of the same system parameter; defaults are Table 9-29's identities and descendants retain the host dependency | `lib/ir/hier_param.zig`, `lib/ir/lower/param.zig` `aliasSystemParam` | `ch09_system_tasks/geometry_top_alias_host.va` |
+| none (host ABI) | what a batch of several operating points (a family whose `V` is a vector of W points) returns when the device decides on a per-point value (a real comparison, a real→integer conversion, a `$limit`/`ddx`-stripped value, a pow with a varying exponent) | exact per point: bit for bit what a scalar family returns for that point alone, divergent batches included. The batch key is the `Model` row (card, temperature, setup cache, port mask) and the `SimState`; nothing else is shared. Each point has its own `Instance`: a device whose `eval` reads per-instance state as a value (a §5.10 held variable, a `$prev` path latch, `$mfactor`) declares `batch_inst` and reads it per point through the batch family's `instLane(T, w)` (`zInst`; an integer field is a lead-protocol decision, `zInstI`); every value computed from such a field is per point too (`Analysis.pointDep`), never folded through `.val()`. Per-instance state no point can carry that way (operator history, a held array, `$limit`'s previous value, plusargs, a host system function) drops `batch_ok`. `updateState`, `stateCtl`, `setupInstance` and `initState` have no batched form: the host calls them per instance. Such a device declares `batch_ok` and `batch_lead`, and its `eval`, `q` and `evalQ` run the lead protocol (`contract.LeadState`). The leader point's outcome steers every decision. Points that disagree are re-run under the next leader, and each point's result comes from a run it never diverged in. A divergent batch costs one run per distinct path, never a wrong value. A vector family without the protocol is a compile error (`zLeads`). `contract.region(D, x, model, inst, sim)` returns a `u16` hash of a point's decision outcomes. Equal decisions give equal signatures, so a batch of equal signatures runs once (a collision costs a re-run, never a wrong value). A scalar family's results are unchanged. Measured in `docs/measurements/batched-lead-2026-10-02.md` | `lib/backend/codegen/float/lanes.zig` `leadLanes`, `lib/backend/codegen/dispatch.zig` `writeLead`, `lib/backend/codegen/kernel_text.zig` `zCmp`, `zRoundI`, `zStrip`, `zPowL`, `zLeads`, `zInst`, `zInstI`, `lib/backend/codegen/float/lanes.zig` `instLanes`, `instPin`, `tools/contract.zig` `LeadState`, `leadMergeInto`, `region` | `tools/contract.zig` test "LeadState: ..."; the testbench's batch family (`lib/backend/tb/runner_text.zig` `laneCheck`) runs every `batch_ok` fixture at points 1e-3 apart, and every `batch_lead` fixture also at points 0.37 apart, each point on its own instance (every real and integer field moved apart), against scalar, bit for bit; `ch05_analog_behavior/batch_per_instance_state.va` (held real and integer, `$prev`, a nonlinear-capacitance latch) failed this before `batch_inst`; codegen test "a batch reads each point's own Instance, or the device is not batch_ok" |
+
+### Host math: exp, ln, pow
+
+A device's `exp`, `ln`/`log`-based and `pow` values come from the host's
+scalar family (`contract.RefFamily`, the testbench's, a host's own), and
+its scalar paths (`$limit`, `limexp`'s clamp) from `contract.gm`. VerA's
+own families and `contract.gm` use, on every target (host, NVPTX, AMDGCN):
+
+* `exp`: ARM optimized-routines' design (musl `pow.c` `exp_inline`,
+  `exp_data.c`): 2^(k/128) table, degree-5 polynomial, exact scaling; plus
+  1 + (x + x²/2) below |x| = 2^-28 and direct +0/+inf past the rounding
+  thresholds. 
+* `ln`: ARM's `log.c` (as Zig's compiler_rt carries it; identical results
+  to the previous routine).
+* `pow`: ARM's `pow.c`, double-double log then exp; replaces
+  `std.math.pow`, whose error grew with |y| (20 ulp measured).
+
+**Correct** here means, and each is checked:
+
+1. Max error ≤ 0.52 ulp (exp, ln) and ≤ 0.55 ulp (pow) of the exactly
+   rounded result, over every finite input (faithful rounding; LRM Tables
+   4-14 sets no accuracy, so this is VerA's choice). Measured below
+   against an f128 oracle; `zig build test` checks a fixed sample.
+2. IEEE 754 / C99 Annex F special values: exp(±0) = 1, exp(+inf) = +inf,
+   exp(−inf) = +0, +inf above ln(DBL_MAX), gradual underflow and +0 below
+   −1075 ln 2; ln(±0) = −inf, ln(x < 0) = NaN, ln(+inf) = +inf, ln(1) = +0;
+   pow's F.10.4.4 rows (pow(x, ±0) = 1, pow(1, y) = 1, odd/even integer
+   exponents of negative and signed-zero bases, NaN for a negative base and
+   non-integer exponent); NaN propagates.
+3. Derivatives use the value returned: d exp = exp(x)·dx with the same
+   exp(x), d ln = dx/x, d pow = c·p/x with the same p (`RefFamily`).
+4. One implementation everywhere: no fma (a fused and an unfused build
+   round differently; `@mulAdd` is a libcall on baseline x86-64), so host,
+   NVPTX and AMDGCN give the same bits. NVPTX `sm_80` PTX of the three
+   routines has no `fma`; AMDGCN `gfx90a` has `v_fma` only inside f64
+   division's IEEE expansion (`docs/measurements/device-runtime-2026-10-01/gpu_probe.sh`). The comptime fold of the routines (target
+   independent) equals their run on the host (`zig build test`). Cost of
+   no-fma, measured: ln +2.4 and pow +4.3 ticks per call.
+5. The `@Vector(n, f64)` form (`hexp`, `hlog`; the testbench's batch
+   family) is the scalar's arithmetic lane for lane; a vector with a
+   special lane takes the scalar call for every lane.
+
+These are the only implementation: the previous host path (`@exp`/`@log`,
+i.e. compiler_rt or a linked libc, and `std.math.pow`) and the GPU's musl
+ports (`softExp`/`softLog`) were removed, so no flag reproduces the
+pre-2026-10 bits. The table below is the record of what changed.
+
+Measured 2026-10-01, i9-14900HX (AVX2, no AVX-512), f128 oracle,
+200 000 samples per row; ticks are TSC ticks per call (scalar, throughput)
+or per element of `@Vector(4, f64)`
+(`docs/measurements/device-runtime-2026-10-01/mathtable.zig`):
+
+| function, inputs | before (compiler_rt, std): max / mean ulp / ticks | glibc 2.42 (measurement only) | VerA now | VerA `@Vector(4)` ticks/elem |
+|---|---|---|---|---|
+| exp, x in [−745, 709] | 0.8811 / 0.2638 / 29.2 | 0.5034 / 0.2502 / 22.8 | 0.5054 / 0.2502 / 20.3 | 22.2 |
+| exp, x in [−80, 45] (the compact models) | 0.8480 / 0.2638 / 24.8 | 0.5044 / 0.2499 / 9.1 | 0.5064 / 0.2499 / 9.1 | 4.1 |
+| exp, \|x\| < 2^−28 (decay factors) | 0.5329 / 0.2194 / 5.1 | 0.5000 / 0.2194 / 13.1 | 0.5000 / 0.2194 / 8.9 | 7.4 |
+| ln, x random bits in (0, inf) | 0.5000 / 0.2500 / 9.5 | 0.5000 / 0.2500 / 9.2 | 0.5000 / 0.2500 / 9.5 | 5.2 |
+| ln, subnormal x | 0.5000 / 0.2506 / 116.6 | 0.5000 / 0.2506 / 115.7 | 0.5000 / 0.2506 / 120.2 | — |
+| ln, x in [0.9, 1.1] | 0.5175 / 0.2493 / 15.5 | 0.5175 / 0.2493 / 16.5 | 0.5175 / 0.2493 / 15.9 | 17.5 |
+| pow, x in [1e−3, 1e12], y in [−3, 18] | 20.34 / 1.7565 / 147.6 | 0.5054 / 0.2498 / 23.1 | 0.5058 / 0.2498 / 29.3 | — |
+| pow, psp103's own (x, y) pairs | 8.734 / 0.6904 / 55.1 | 0.4985 / 0.2143 / 22.2 | 0.5057 / 0.2144 / 27.5 | — |
+
+A vector row over a range with special lanes (|x| > 512 for exp, the band
+around 1 for ln) falls back to scalar calls, so it costs more than the
+scalar row.
+
+For a digital real/realtime array read with an out-of-range or x/z index,
+IEEE §5.2.2 specifies an x reference but gives no real unknown encoding.
+VerA applies §4.8.2's x/z-to-zero conversion at the real evaluation boundary,
+so the read yields +0.0. It does not reinterpret the integer unknown plane
+as an IEEE 754 NaN. Valid elements retain their real bit patterns, including
+NaNs explicitly supplied by `$bitstoreal`. `ieee1364/04_data_types/native_real_arrays.v`
+checks invalid indices beside valid elements in both the interpreter and
+native executable.
+
+For AMS §9.18, E0890 diagnoses specified values that fold over literals
+outside Table 9-29's domains. A value that depends on model-card parameters
+(an instance override over a parameter, or a top-level system alias the card
+writes) is checked when the card is written: the device's `checkCard(model)`,
+called after `derive`, returns the first such value's name (`path$mfactor`,
+or the alias) outside its domain, and null otherwise; it costs `eval`
+nothing. The testbench stops with E0890; another host decides what to do with
+the name (`docs/Vague_Decisions.md` VD-079). `geometry_parameter_sweep.va`
+exercises valid host-dependent values, `geometry_card_mfactor_outside_domain_is_fatal.va`
+an invalid card, and `geometry_*_rejected.va` isolates literal domain
+errors. The top-level `$mfactor` alias retains its existing ABI: a host using
+it must also keep `Instance.mfactor`, which controls automatic scaling,
+consistent with the alias's model-card value.
+
+For AMS §4.2.4 integer `%`, zero-divisor checks remain observable even when
+the remainder is discarded. Checks in a display-task argument run in that
+task's accepted-point phase; `modulo_integer_display_zero.va` exercises an
+inlined function that discards the value there. Solver devices that drop
+display tasks omit those checks too. A real `%` by a run-time zero is the
+same error (the §4.2.4 sentence names no operand type): the executable
+reports E0601 and exits 1, a solver device traps (`kernel_text.zig`
+`zFmod`, `zModZero`; `ch04_expressions/modulo_real_dynamic_zero.va`).
+
+The device/host contract's conformance checks are opt-in (no clause; a VerA
+choice). `tools/contract.zig`'s `validate`, `validateHost`'s host obligations,
+`checkFamily` and a Debug device's `su_ok` assert (`setup` ran before `eval`)
+run only in a program whose root module declares
+`pub const vera_validate_contract = true` (`contract.validating`). VerA turns
+them on in `zig build test` (`tools/zrunner.zig`), in every fixture-suite
+testbench, in `vera --emit-exe`/`--run` with `--validate-contract`, and always
+in `vera --check`. `validateHost`'s ABI check (`contract_abi == abi_version`)
+always runs: it is what refuses a stale device. A host that wants the
+obligation checks must opt in: the decl in its program's root module, or, for
+`vera --emit-so`/`orchestrator.compileRelease`, in its `dyn` module, which the
+generated shim (the build's root) forwards. Off, a device build spends
+0.4-1.8% fewer instructions (2026-10-01: mos1 2.454 -> 2.417 Gi, bsim4va
+eval 8.100 -> 7.958, psp103 eval 14.183 -> 14.125).
+
+### Device ABI 6: the setup cache and the temperature are per Model row
+
+§9.15 leaves where a simulator keeps a device's temperature to the
+implementation, and VerA chooses the `Model` row (`contract.abi_version` 6,
+2026-10-02; ABI 5 kept it per instance). Every value `setup` computes reads only
+the card, the temperature and card-time `$simparam`s, so with the temperature on
+the row the whole solve-invariant cache is a function of the row, and instances
+that share a row share it. Measured on the emitted devices (bytes, ReleaseFast):
+
+| Device | `Instance` ABI 5 -> 6 | `Model` ABI 5 -> 6 |
+|---|---|---|
+| mos1 | 744 -> 368 | 344 -> 720 |
+| bsim4va | 3,520 -> 200 | 7,408 -> 10,728 |
+| psp103 | 3,872 -> 104 | 6,816 -> 10,584 |
+
+Bench outputs (residual, charges, Jacobian at 64 points) are bit-identical on
+resistor, diode, mos1, bsim4va, psp103, coupled_ltra and txl, and `evalQ`
+cycles moved -0.5% to +0% (in noise).
+
+Host migration from ABI 5:
+
+- **Moved, `Instance` -> `Model`:** `su: Setup` (the solve-invariant cache)
+  and, in a Debug program that validates, `su_ok`. Same types, same element
+  order; they are the last fields of `Model`.
+- **Removed:** `Instance.temperature`. **New:** `Model.temperature__: f64 =
+  300.15`, kelvin, host-written, in every device (`contract.host_model_fields`).
+  `$temperature` and `$vt` read it, in `setup` and in `eval` alike. A host that
+  simulates an instance at its own temperature (`dtemp`, a per-instance `temp`)
+  gives that instance its own Model row. There is no per-instance fallback: one
+  would need the per-instance cache this removes, and a host still writing
+  `inst.temperature` fails to compile instead of running at a stale value.
+- **`setup(comptime V: type, model: *Model) void`** (was `(V, *const Model,
+  *Instance)`): once per Model row. Call order per row: write the card and
+  `temperature__` (and any `nom_temp__`-style host fields), `derive(S,
+  &model)`, `checkShape(&model)`, `setup(V, &model)`. Call `setup` again after
+  any card, `temperature__` or `setup_simparams` write; `derive` first when the
+  card changed.
+- **New, optional `setupInstance(model: *const Model, inst: *Instance) void`**,
+  emitted only when an instance caches something from the card (VerA's
+  `vera_timepoint` caches, a latched §9.7.3 status). Call it for every instance
+  of the row after each `setup`, and after an instance write.
+- `setup_chunks.exportChunk` chunks now take `(*Model, *anyopaque)`.
+- **New, only in a device that calls §9.19 `$port_connected` on one of its own
+  ports: `Model.port_connected__: u64`**, all ones by default (every port
+  connected, which is what ABI 5 answered), bit p = port p in the module's port
+  declaration order. `$port_connected(p)` reads bit p. The host writes it with
+  the card, BEFORE `derive`: `derive` and `checkShape` read it if a parameter
+  expression calls `$port_connected`, and `setup` and every eval entry read it
+  wherever the model does. An instance whose card connects a different set of
+  ports (a 4-terminal card on HiSIM_HV's 6-port module) gets its own Model row.
+- `contract.validateHost`'s `calls_setup` covers both entries.
+- `$mfactor` (still `Instance.mfactor`) is no longer a solve-invariant input:
+  instances of one row may differ in it, so a value that reads it is computed
+  in `eval`.
+- Instance parameters: VerA declares every §3.4 parameter, instance ones (L,
+  W, M, NF...) included, as a `Model` field, so there is no per-instance card
+  value to cache; a host binds per-instance parameters by giving the instance
+  its own row, as for the temperature.
+
+## 7. Resource limits
+
+Each limit is stated here and fails with a named diagnostic. A run-time
+limit ends the run with exit status 1; the LRM gives none of these a
+truncation rule, so a shorter answer would be a wrong one.
+
+| Limit | Value | Diagnostic | Code | Fixture |
+|---|---|---|---|---|
+| parser nesting, and binary operators in one chain | 1024 levels | E0241 | `lib/frontend/parser.zig` `max_depth` | `annex_a_syntax/nesting_past_the_parser_limit_rejected.va`, `sum_chain_past_the_parser_limit_rejected.va`, `long_sum_under_the_nesting_limit.va` |
+| macro expansion depth | 128 | E0119 | `lib/frontend/preprocessor.zig` `max_expansion_depth` | `ch10_directives/macro_expansion_past_128_rejected.va` |
+| `` `include `` depth | 32 | E0125 | `lib/frontend/preprocessor.zig` `max_include_depth` | `ch10_directives/include_cycle_rejected.va` |
+| real literal length | 512 bytes | E0134 | `lib/frontend/lexer.zig` `parseReal` | `ch02_lexical/real_literal_over_512_bytes_rejected.va` |
+| `` `include `` file, `$table_model` and `noise_table` data file | 16 MiB | E1013 | `lib/frontend/preprocessor.zig` `max_include_bytes`, `lib/ir/lower/table_model.zig` `max_table_bytes` | `ch10_directives/include_file_over_16mib_rejected.va`, `ch09_system_tasks/table_model_file_over_16mib_rejected.va` |
+| source file and `--spice` netlist | 64 MiB | E1013 | `src/main.zig` `max_source_bytes` | `build.zig`: `vera --lint /dev/zero`, and `/dev/zero` as the `--spice` netlist, under `zig build test` |
+| instance tree | 64 nested instances | E1018 | `lib/ir/elaborate.zig` `max_depth` | `ch06_hierarchy/instance_tree_64_levels.va`, `instance_tree_deeper_than_64_rejected.va` |
+| nets, ports, branch flows and operator states in one module; one vector range | 65535 | E1015 | `lib/ir/lower/node.zig` `max_nodes` | `ch03_data_types/vector_net_over_65535_elements_rejected.va`, `nets_over_65535_rows_rejected.va` |
+| analog-context array or assignment pattern | 2^20 elements | E1016 | `lib/ir/lower/shape.zig` `max_cells` | `ch03_data_types/array_over_2_20_elements_rejected.va` |
+| loop generate unrolling | 4096 iterations | E0420 | `lib/ir/lower/control.zig` `max_unroll` | `ch06_hierarchy/generate_nonterminating_rejected.va` |
+| solver unknowns | 256 | E1003 | `lib/backend/codegen/file.zig` `emitTopology` | `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` |
+| bits of a `reg` the analog context reads (§7.3.1 allows any 31-bit grouping) | bits 0 to 31: a `reg` is held there as its 32-bit §3.2 integer | E0329, "reaches above bit 31" | `lib/ir/lower/expr.zig` `lowerRegSelect` | `ch07_mixed_signal/discrete_bus_part_select_above_31_unsupported.va`; legal neighbour `discrete_bus_part_select_31.va` |
+| where a connect module can be inserted (§7.8.4) | at the level of the port's upper connection, when that connection declares a discipline or resolves continuous at that level; a matching statement whose net resolved further up is refused | E0929 | `lib/ir/elaborate/insert.zig` `plan`, `checkUnbridged` | `ch07_mixed_signal/connect_insertion_resolved_above_unsupported.va`; legal neighbour `lrm_7_4_4_1.va` |
+| `.v` contract device pins (one per top-module port bit) | 256 | E1103, "more than 256 pins" | `src/sim/digital/emit.zig` `deviceRoot` | `build.zig`: `vera --emit-zig tests/fixtures/ch07_mixed_signal/v_pins.v` (257 pins) under `zig build test`; `tests/vdev_host.zig` runs the wide counter (`v_wide`) across packed-plane word boundaries |
+| conversions in one display or format call | 32 | E1010 | `lib/backend/cg_display.zig` `max_format_args` | `ch09_system_tasks/sformat_32_conversions.va`, `sformat_33_conversions_rejected.va` |
+| text of one format call, string concatenation, field width or precision | 4096 bytes | E1011 | `lib/backend/kernels/str_kernels.zig` `zSOver`, `lib/backend/cg_display.zig` `Spec.max_field` | `ch09_system_tasks/string_concat_overrun_is_fatal.va`, `sformat_field_width_over_4096_rejected.va` |
+| number literal size | 2^24 bits | E1019 | `lib/frontend/integer.zig` `max_width` | `ieee1364/03_lexical_conventions/b_3_5_1_literal_size_65536.v`, `b_3_5_1_literal_size_over_2_24_rejected.v` |
+| analog number literal carrier | 64 bits; wider literals require an exact signed value in the i64 carrier | E0130 | `lib/frontend/integer.zig` `asExactInt` | `ch09_system_tasks/reject_clog2_wide_unsigned_carrier.va`; legal neighbour `clog2_unsigned_width.va` |
+| analog `$clog2` expression carrier | arithmetic, unary negation and shifts retain at most 32 bits per intermediate; bitwise/conditional/comparison contexts retain at most 64 bits; above 64 bits only exact wide literals and parameter aliases preserving their width retain proven high bits | E0893 | `lib/frontend/constfold.zig` `intPlan`, `lib/ir/lower/constfold.zig` `clog2WideCarrier` | `ch09_system_tasks/reject_clog2_wide_arithmetic.va`, `reject_clog2_wide_arithmetic_default.va`, `reject_clog2_wide_widening.va`; legal neighbours `clog2_nested_contexts.va`, `clog2_unsigned_width.va` |
+| a constant string replication | 4096 bytes | E1011 | `lib/ir/lower/expr.zig` `lowerConcat` | `ch03_data_types/string_replication_4096_bytes.va`, `string_replication_over_4096_bytes_rejected.va` |
+| one `$fgets` line, one `$fscanf` look-ahead | 4096 bytes | E1011 | `lib/backend/kernels/file_kernels.zig` `ZFSlot.line`, `zfOver` | `ch09_system_tasks/fgets_line_over_4096_is_fatal.va`, `fscanf_window_over_4096_is_fatal.va`, `s01_13_long_record_is_not_truncated.va` |
+| open file channels | 30 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/kernels/file_kernels.zig` `zf_max` | `ch09_system_tasks/222_mcd_channels_exhausted_at_bit_31.va`, `224_two_instances_hold_distinct_channels.va` |
+| distinct paths opened for writing in one run | 64 | `$fopen` returns 0, `$ferror` 24 (§9.5.1) | `lib/backend/kernels/file_kernels.zig` `zf_written` | `ch09_system_tasks/write_mode_path_65_fails_open.va` |
+| `absdelay` history, per site, in accepted samples | 1024; with a §4.5.7 `maxdelay` that folds (a parameter's declared default counts), `ceil(maxdelay / 1ps) + 2`, clamped to [1024, 16384]: a 1-5 ns line at a 1 ps step fits, 16 B of `Instance` per sample (256 KiB at the cap). A signal-valued `maxdelay` keeps 1024. A card that raises `maxdelay` past the compiled default can still underrun | E1012 at run time | `lib/backend/codegen/instance.zig` (`hist_len`, `hist_min_step`, `hist_max`, `histLen`) | `ch04_expressions/absdelay_history_underrun_is_fatal.va`, `a04_05_absdelay_history_beyond_capacity.va`, `absdelay_maxdelay_sizes_history.va` |
+| random distribution count | 1..2147483647, integral | the RNG diagnostics | `lib/backend/kernels/rng_kernels.zig` `zRngDf` | `ch09_system_tasks/189_rng_*_rejected.va` |
+| UDP inputs | 64 | E1017 | `lib/frontend/parser/udp.zig` `max_udp_inputs` | `ieee1364/08_udp/b_8_1_2_udp_more_than_64_inputs_rejected.v` |
+| digital: `$readmemb`/`$readmemh` file | 4 MiB | E1100, naming the bound | `src/sim/digital/display.zig` `side_file_limit` | `ieee1364/17_system_tasks/b_17_2_9_readmem_file_over_4mib_rejected.v` |
+| digital: field width or precision | 4096 | E1011 | `src/sim/digital/display.zig` `max_field` | `ieee1364/17_system_tasks/b_17_1_1_2_real_precision_100.v`, `b_17_1_1_2_field_width_over_4096_rejected.v` |
+| digital: `%d` of a known value | 64 bits | E1100 | `src/sim/digital/display.zig` `emitValue` | `ieee1364/17_system_tasks/b_17_1_1_4_decimal_over_64_bits_rejected.v` |
+| digital: expression and statement depth | 256 levels | E1100 | `src/sim/digital/compile.zig` `infer`, `compileStmt` | `ieee1364/05_expressions/b_5_expression_deeper_than_256_rejected.v` |
+| digital: hierarchy depth | 64 levels | E1100 | `src/sim/digital/elab.zig` `declare` | `ieee1364/12_hierarchy/b_12_hierarchy_deeper_than_64_rejected.v` |
+| digital: loop generate | 65536 iterations | E1100 | `src/sim/digital/elab.zig` `generate` | `ieee1364/12_hierarchy/b_12_generate_past_65536_iterations_rejected.v` |
+| digital: nested task and function activations | 1024, or 4 MiB of stack | E1100 | `src/sim/digital/exec.zig` `max_sync_stack` | `ieee1364/10_tasks_functions/b_10_4_recursion_past_the_stack_bound_rejected.v` |
+| digital: array dimensions | 16 | E1100 | `src/sim/digital/elab.zig` `declareArray` | `ieee1364/04_data_types/b_4_9_net_array_17_dimensions_rejected.v` |
+| `$simprobe` name (AMS 9.16) | resolved at compile time only: a literal or a string parameter; a name that does not fold (a string variable the analog block sets) is refused, fallback or not, since the fallback would answer a valid name wrongly (`docs/Vague_Decisions.md` VD-030) | E0823 | `lib/ir/lower/hier_name.zig` `lowerSimprobe` | `ch09_system_tasks/reject_simprobe_runtime_name.va`; legal neighbour `simprobe_string_parameter_name_resolves.va` |
+| analog device: named event arrays | not yet executed; scalar analog events and digital event arrays are supported | E0235, naming AMS §5.10.4 | `lib/ir/lower.zig` `lowerModule` | `ch05_analog_behavior/event_array_device_limit_rejected.va`; legal neighbors `ch05_analog_behavior/named_event_unsupported.va`, `ieee1364/09_behavioral_modeling/b_9_7_3_event_arrays.v` |
+| digital: events in one time step | 10,000,000, or `--event-budget=N` | E1100 | `src/sim/digital/root.zig` `max_events_per_tick` | `ieee1364/11_scheduling/b_11_zero_delay_loop_rejected.v` (at a budget of 1000: the default takes minutes to reach) |
+| testbench `//! sweep` product | 4096 points | a `//!` directive error | `lib/backend/tb.zig` `max_points` | none (harness input, not source) |
+| VPI derivative handles; analog value strings | 64; 64 bytes | `vpiNoMem`, `vpiBadFormat` | `src/vpi/analog.zig` `derivs`, `analog_buf` | none |
+| VPI: automatic named events and dynamic event references in automatic tasks | declaration metadata is available; triggering through VPI requires unimplemented §26.6.20 frame handles | `AUTOMATIC`, naming the activation frame | `src/vpi/value.zig` `vpi_put_value` | `ieee_pli/b_26_6_11_event_array.c`; static-task event references are the legal neighbor |
+
+### Host changes to paramset selection inputs
+
+AMS §§6.3 and 6.4.2 require overload selection to use the effective parameter
+values, including outer `defparam` bindings. VerA selects the module during
+elaboration, after applying compile-time card overrides. Parameters read to
+admit or exclude members of an overloaded paramset name are shape inputs:
+the emitted `checkShape` returns the name of a changed input and the host
+must recompile before evaluating that card. This includes numeric and string
+inputs, and conservatively includes changes that remain within the same bin.
+It is a host execution limit, not an AMS restriction on parameter values.
+
+Parameters used only to supply values through a single-member paramset remain
+live through `derive`. `lib/ir/elaborate/paramset.zig` records the selection
+dependencies; `tests/paramset_host.zig` executes both kinds of host changes
+against `ch06_hierarchy/paramset_outer_defparam_shape.va`.
+
+### Timer controls with effects
+
+AMS §5.10.3.3 requires the next event to use the final `start_time` and
+`period`. VerA recomputes arithmetic, array reads and analog functions proved
+free of effects. A function with output/inout arguments, random/file activity,
+or an unproved nested call keeps its original result. If one of that call's
+inputs changes afterwards, E0528 reports the unsupported combination instead
+of silently retaining an old schedule or repeating effects. This is a limit
+on legal AMS, not a prohibition in the LRM.
+
+Compute such a call into a variable before `timer()`, then use or update that
+variable as the control. An unchanged effectful leaf remains supported even
+when another operand changes; a constant return also needs no recomputation
+when an input changes. `lib/ir/lower/event.zig` owns this check;
+`ch05_analog_behavior/timer_changed_effectful_*_rejected.va` pins the refusals,
+`timer_effectful_file_leaf.va` checks one file write per accepted point, and
+`tests/timer_host.zig` with `tests/fixtures/ch05_analog_behavior/timer_body_precomputed_controls.va` checks
+final deadlines and output/inout effects through an emitted device, including
+a rejected trial followed by a retry.
+
+## 8. Unspecified behaviour
+
+`CLAUSE-AUDIT.md` §5.5: no test asserts one outcome where the LRM permits
+several. This covers every `unspecified` row of `ieee1364/CLAUSES.tsv`, and
+each row's last column names its fixture policy. 5.1.4, 11.4.2, 11.5,
+12.3.10.1 and 12.3.10.2 permit several outcomes: their fixtures assert
+membership in the permitted set
+(`ieee1364/11_scheduling/audit_sched_allowed_active_race.v`) or choose inputs
+where every permitted outcome agrees
+(`ieee1364/12_hierarchy/b_12_3_10_net_type_warning.v`). 20.2, 26.1, 26.2.4,
+26.6.16, 26.6.21, 27.20, 27.34 and 27.34.1 bind the application, name no
+failure value, or say no design must produce the object, so no fixture
+asserts a refusal or a required object for them. The three
+`audit_sched_*_order.v` fixtures pin VerA's documented order (§1 above) and
+cite no clause. The `$ferror` fixtures assert only a nonzero code.
+
+## 9. Open defects
+
+**Upward defparams bind in instance order on the analog path.** A defparam
+path whose first identifier names the declaring instance or a module above it
+(IEEE 1364-2005 §12.6, Syntax 12-7) is resolved from that scope
+(`lib/ir/elaborate/override.zig` `defparamKey`), but the flatten binds each
+instance's parameters as it inlines it. A target that is an ancestor, the
+declaring instance itself, or a sibling written before the declaring one is
+already bound, so the defparam is refused with E0907 naming that cause
+(`boundEarlier`) instead of being applied as §12.8.1's collect-first order
+would. The digital engine applies them (`src/sim/digital/root.zig`
+`bindDefparam`). Fixture: `ch06_hierarchy/defparam_upward_module_name_path.va`
+(a later sibling, applied).
+
+The earlier limit defects below are gone rather than named:
+a direct read of a host-written `integer` parameter is its low 32 bits
+(`derive` reduces the i64 carrier; `tests/integer_param_host.zig`);
+the `absdelay` history counts steps in a u64; unit names count collisions in
+a u32; digital `%b`/`%h`/`%s`/`%t`, `%m` and real conversions, `vpi_printf`'s
+reals and the testbench's noise, AC-stimulus, charge-site and mixed-signal
+name rows are written whole; a mixed-signal crossing the secant cannot close
+is bisected to its `time_tol` (`src/sim/mixed.zig` `max_secant`).
+
+The testbench's comptime loops over constant Jacobian entries and charge
+stamps were measured, not changed: a 40-node resistor mesh (1600 constant
+entries) and 200 charge sites build and run, and `tools/contract.zig` sets its
+own evaluation quota where it computes those tables.
+
+## 10. Open gaps no fixture pins yet
+
+Pinned gaps are `//! xfail` fixtures and one-way clauses, listed by name in
+`docs/known-gaps.txt` (CI gates on that list). These are the rest: found in
+the 2026-10-04 conformance pass, with no fixture yet, because a fixture cannot
+express them or the work was larger than the pass. Each names its clause.
+
+- **VAMS 7.4.4.2, F.2.2 step 5: detail discipline resolution.** `--discipline-resolution=detail` compiles a design both modes resolve alike and refuses one they resolve differently (E0930); the top-down pass is not implemented (VD-008, VD-013).
+- **VAMS 7.3.1: a select above bit 31 of a wide `reg`** in the analog context is refused (E0329): the analog side holds a `reg` as its 32-bit integer (§7 limit row).
+- **VAMS 6.6.2: generate-block instance names** (`g1.u`, `genblk1.u`) are reachable by a hierarchical reference from outside the block, which §6.6.2 forbids.
+- **IEEE 1364-2005 12.2.1/12.8.2: an upward `defparam`** whose target the one-pass flatten already bound is refused (E0907, §9 above).
+- **VAMS 2.9, 3.2.1, 3.4.3, 3.6.3.1: `desc`/`units` metadata** is not exported; VerA publishes no such table to a host.
+- **VAMS 4.5.14, 8.5.3.7: analysis restarts and evaluation counts**, and **8.4: `$monitor` against analog solves**: no runner can express them yet.
+- **VAMS 4.6.4.6: noise anti-correlation**: `//! noise` has no coefficient field.
+- **VAMS 9.21.1: table capture around a rejected step**: the clause is silent.
+- **VAMS 11, 12: the analog VPI backlog** beyond the `vpi_runs` fixtures.
+- **VAMS 9.17: no `.va` directive pins a run-time refusal**: `//! reject` matches compile-time diagnostics only.
+- **Windows and macOS `zig build test`** has never run natively; the `native` CI job is its first run. `lib/dynlib.zig`'s Windows loader compiles but has not loaded a `.dll`.
+- **SPICE decks** run on `sim.spice`'s dense, CPU-only copy of ARPice's solver (`src/sim/spice/`): plain Newton only (no gmin or source stepping), `.noise ... lin` only, no correlated noise terms.

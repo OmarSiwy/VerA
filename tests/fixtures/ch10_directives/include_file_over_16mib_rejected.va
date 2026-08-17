@@ -1,6 +1,6 @@
 // An engine limit, not a language rule: §10.3 `include names a file and bounds
 // nothing about its size. VerA reads an included file whole and stops at 16 MiB
-// (docs/IMPLEMENTATION.md), so a larger file is refused with E1013, which names
+// (docs/Vague_Decisions.md), so a larger file is refused with E1013, which names
 // the size, rather than reported as a file that cannot be found (E0126).
 //
 // /dev/zero is a file every POSIX host has and that never ends, so it stands in

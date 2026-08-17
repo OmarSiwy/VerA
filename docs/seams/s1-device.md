@@ -142,13 +142,13 @@ unchanged here.
 | `$table_model` `order` scratch | 8·NP → 4·NP | per lookup, stack | 4·NP | `usize` → `u32` |
 | `ZSs` (filter) | 16 | 1 per call, by value | 0 | two `usize` that fit `u8`; returned in registers, nothing stored |
 | `ZScan`/`ZCDec`/`ZCOut`/`zTabVD` | 48/816/24/16 | stack per call | 0 | already minimal for what they carry |
-| `zSBuf(site)` | 4096 per site | 0 on psp103 | 0 | the E1011 limit (`IMPLEMENTATION.md`) |
+| `zSBuf(site)` | 4096 per site | 0 on psp103 | 0 | the E1011 limit (`Vague_Decisions.md`) |
 | limit oracles + test, filter tests | text | 12 / 25 devices | ~10.6 KB of text per such device | out of device text |
 
 ## Seam proposals
 
 1. **Stale kernel paths in documents I don't own.** After the move,
-   `docs/CLAUSE-AUDIT.md`, `docs/IMPLEMENTATION.md` and `docs/UNITS.md`
+   `docs/CLAUSE-AUDIT.md`, `docs/Vague_Decisions.md` and `docs/UNITS.md`
    (regenerate with `zig build archmap`) cite `lib/backend/<x>_kernels.zig`. So do
    two fixture comments
    (`ch09_system_tasks/171_random_ieee1364_digits.va`,

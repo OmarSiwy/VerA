@@ -1,6 +1,6 @@
 // AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. §2.6.2 writes a real
 // number as digits with no length bound. VerA decodes a literal through a
-// 512-byte buffer (docs/IMPLEMENTATION.md) and refuses a longer one with
+// 512-byte buffer (docs/Vague_Decisions.md) and refuses a longer one with
 // E0134 rather than read it wrong. The literal below is "1." and 600 zeros,
 // 602 bytes.
 //

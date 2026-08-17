@@ -150,7 +150,7 @@ evalQ are flat apart from libm; no single emitted region dominates.
 The user's decision: lose bit-exactness against the old math where the
 result stays correct (faithful rounding); the old routines are removed,
 not kept behind a flag.
-"Correct" and the accuracy table are in docs/IMPLEMENTATION.md, "Host math"
+"Correct" and the accuracy table are in docs/Vague_Decisions.md, "Host math"
 (that table is `mathtable.zig`'s output).
 
 ### Where the cycles went before

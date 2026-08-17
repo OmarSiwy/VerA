@@ -1,6 +1,6 @@
 // AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. §3.2 declares an array by
 // its ranges and bounds nothing about the element count. VerA makes each
-// element its own scalar and stops at 2^20 = 1048576 (docs/IMPLEMENTATION.md),
+// element its own scalar and stops at 2^20 = 1048576 (docs/Vague_Decisions.md),
 // refusing a larger array with E1016. [0:1048576] has 1048577 elements. Wider
 // ranges overflowed the element count and aborted the compiler.
 //

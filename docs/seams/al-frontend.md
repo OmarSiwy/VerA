@@ -22,4 +22,4 @@ Seam changes that would move a C list to A or B:
   measured over the fixtures could presize them, but it is an estimate, not a
   bound, so it is not class B.
 - `Pp.conds` would be class A if `ifdef nesting got a declared limit and a
-  diagnostic (it has neither; IMPLEMENTATION.md lists none).
+  diagnostic (it has neither; Vague_Decisions.md lists none).

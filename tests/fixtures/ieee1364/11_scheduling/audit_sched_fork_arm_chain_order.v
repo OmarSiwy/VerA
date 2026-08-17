@@ -1,6 +1,6 @@
 // IEEE1364-2005 §11.4.2: "active events can be taken off the queue and
 // processed in any order", so the LRM would also accept an early end with
-// neither line printed. VerA documents one order (docs/IMPLEMENTATION.md) and
+// neither line printed. VerA documents one order (docs/Vague_Decisions.md) and
 // this pins it, so it cites no clause: a native executable's levelized logic
 // never updates a net some process waits on ahead of the order `vera --run`
 // updates it in.

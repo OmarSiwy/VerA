@@ -856,7 +856,7 @@ fn infoOf(c: Code) Info {
             \\    prohibition, not a VerA limit;
             \\  - a two-state literal wider than the 64-bit carrier the analog
             \\    backend stores integers in. That is an implementation limit
-            \\    (docs/IMPLEMENTATION.md §2), not a rule of the LRM.
+            \\    (docs/Vague_Decisions.md §7), not a rule of the LRM.
             ,
         },
         .E0131 => .{
@@ -5171,7 +5171,7 @@ fn infoOf(c: Code) Info {
             \\with or without the fallback expression: "cannot be resolved" is about
             \\whether the name exists, so returning the fallback for a name that
             \\exists would be a wrong value with no diagnostic. This is an
-            \\implementation limit (docs/IMPLEMENTATION.md §2), not a rule of the
+            \\implementation limit (docs/Vague_Decisions.md §7), not a rule of the
             \\LRM. Spell the name as a literal or a string parameter.
             ,
         },

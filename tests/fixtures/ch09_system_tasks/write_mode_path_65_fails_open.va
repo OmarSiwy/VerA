@@ -2,7 +2,7 @@
 // reopened in that write mode in following analysis, then content written from
 // the following analyses shall be appended to the content written during the
 // previous analyses." To keep that promise VerA remembers each path opened for
-// writing, 64 of them per run (docs/IMPLEMENTATION.md). Forgetting one would
+// writing, 64 of them per run (docs/Vague_Decisions.md). Forgetting one would
 // truncate it on a later analysis, silently. So the 65th distinct path opened
 // for writing fails the open the way §9.5.1 fails any open: "If a file cannot
 // be opened ... a zero is returned for the mcd or fd. Applications can call

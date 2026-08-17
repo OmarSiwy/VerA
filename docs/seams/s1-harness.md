@@ -89,12 +89,12 @@ nothing.
    - `tests/fixtures/ieee1364/08_udp/d08_reject_udp_*.v` and
      `tests/fixtures/digital/m04_2{0,1}_*.v` cite `torture.zig:<line>`
      (already stale at base); cite `verifyRejected` and `failureContains`.
-   - `docs/IMPLEMENTATION.md:20` names `src/main.zig` `fileStem`; it is
+   - `docs/Vague_Decisions.md:20` names `src/main.zig` `fileStem`; it is
      `lib/backend/orchestrator.zig` `fileStem` (stale at base).
    - `docs/UNITS.md` needs `zig build archmap` re-run: new files under
      `src/cli/` and `tests/harness/`.
    `engineCache`, `max_source_bytes` and `typeCheck` stayed in src/main.zig
-   because docs/IMPLEMENTATION.md and docs/measurements cite them there.
+   because docs/Vague_Decisions.md and docs/measurements cite them there.
 5. **Considered and declined: the `Compiler` plug's function pointers.**
    `harness.Compiler` is a runtime vtable over two implementations
    (torture.zig's full and accept/reject plugs). A comptime generic would make

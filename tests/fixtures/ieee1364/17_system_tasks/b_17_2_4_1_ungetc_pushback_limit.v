@@ -4,7 +4,7 @@
 // Otherwise, code is set to zero." Its NOTE: "The features of the underlying
 // implementation of file I/O on the host system limit the number of
 // characters that can be pushed back onto a stream." VerA's limit is 16
-// characters per descriptor (docs/IMPLEMENTATION.md); the 17th push is the
+// characters per descriptor (docs/Vague_Decisions.md); the 17th push is the
 // clause's error, EOF (-1), not a silently lost character.
 //
 // HAND DERIVATION. The file holds the 26 letters and a newline. 20 $fgetc

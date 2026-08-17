@@ -1,6 +1,6 @@
 // IEEE1364-2005 §11.4.2: "active events can be taken off the queue and
 // processed in any order", so the LRM would also accept "timeout" here. VerA
-// documents one order (docs/IMPLEMENTATION.md) and this pins it, so it cites
+// documents one order (docs/Vague_Decisions.md) and this pins it, so it cites
 // no clause: every engine wakes the event controls a change satisfies in the
 // order they suspended, as `vera --run` does, so a native executable never
 // misses an edge the interpreter sees.

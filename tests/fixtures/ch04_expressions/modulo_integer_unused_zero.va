@@ -2,7 +2,7 @@
 // optimizations only when simulation behaviour is preserved: discarding a
 // variable's unused value must not discard this evaluated runtime error.
 // d=3 is legal and prints one verdict; d=0 reports E0601 before another print.
-// The executable's exit-1 policy is documented in IMPLEMENTATION.md.
+// The executable's exit-1 policy is documented in Vague_Decisions.md.
 // The legal unused-but-guarded neighbour is modulo_integer_short_circuit.va.
 //! lrm 4.2.3
 //! lrm 4.2.4

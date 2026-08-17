@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §17.9.1: "The seed argument controls the numbers that
 // $random returns so that different seeds generate different random streams."
 // A call with no seed argument draws from a stream the clause leaves to the
-// tool. VerA's choice (docs/IMPLEMENTATION.md) is one hidden seed per run,
+// tool. VerA's choice (docs/Vague_Decisions.md) is one hidden seed per run,
 // starting at 0, advanced by the §17.9.3 listing like any other seed. This pins
 // that choice by an identity, so no digit of the stream is written here:
 //   a = the first seedless $random;
