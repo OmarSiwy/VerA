@@ -41,17 +41,27 @@
 // mechanism of this fixture.
 //
 // There is no value to CHECK: the only observable is the diagnostic. The reject
-// line is a CODE, not a message fragment, per the suite contract — VerA stops at
-// E0204 on the instantiations today, so the generic `DiagnosticsReported` would
-// match that unrelated diagnostic and XPASS. E0903 is the code RESERVED for the
+// line is a CODE, not a message fragment, per the suite contract — VerA stops
+// short of the rule today, so the generic `DiagnosticsReported` would match
+// whatever it stopped on and XPASS. E0903 is the code RESERVED for the
 // unresolvable-plus-mixed-port error, next to E0902 for the step-3 conflict, in
 // class 9 (hierarchy and elaboration, src/diag_code.zig; E0901 is the last one
 // implemented). Nothing emits it yet — that is what the `//! xfail` records.
 //
+// The `connectmodule` halves above now PARSE and are accepted (§7.6, A.1.2 —
+// see ch07_mixed_signal/connectmodule_accepted.va), so the keyword is no longer
+// what blocks this file. What is left is a resolution rule, not a design element:
+// `connectrules` is still E0201, and step 4.b's multi-candidate arm does not
+// exist — src/ir/elaborate.zig's `resolveDiscipline` takes the FIRST declared
+// discipline of a signal's segments and never builds the SET of child
+// disciplines, so "more than one candidate, no matching `resolveto`, therefore
+// unknown" has nothing to decide over and the mixed-port test that follows it
+// has nothing to fire on.
+//
 //! lrm F.2.1
 //! lrm F.2.2
 //! reject E0903
-//! xfail VerA has no `connectmodule` or `connectrules` design element (E0201), which §7.4/F.2 step 4 needs to have a mixed-port connection at all; E0903 is reserved for the rule and nothing emits it. The ordinary instances now elaborate
+//! xfail annex F.2 step 4.b's multi-candidate arm does not exist: `resolveDiscipline` (src/ir/elaborate.zig) keeps the FIRST declared discipline of a signal's segments instead of collecting the SET, so "more than one candidate whose domain matches, no `resolveto` for it, therefore UNKNOWN" is never decided and the mixed-port error over it never fires. `connectrules` is also still E0201. The `connectmodule`s parse and are accepted now, and E0903 is still reserved and unemitted
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 discipline annex_f_dig; domain discrete; enddiscipline

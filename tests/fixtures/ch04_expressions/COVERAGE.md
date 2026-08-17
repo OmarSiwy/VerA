@@ -1,8 +1,9 @@
 # Chapter 4 coverage
 
 Source: `docs/VAMS-LRM/ch4-expressions.html`, read in full through Section 4.7.3.
-149 `.va` fixtures, of which 52 are `//! reject` and 31 are `//! xfail`
-(19 files are both — a reject that does not reject).
+149 `.va` fixtures, of which 52 are `//! reject`, 97 run and assert, and NONE is
+`//! xfail` (grep-measured over the directory; the "31 xfail, 19 of them also rejects"
+this line used to give was measured before waves 1–6).
 
 HTML section-ID audit: `s4-1` `s4-2` `s4-2-1` `s4-2-1-1` `s4-2-1-2` `s4-2-1-3`
 `s4-2-2` `s4-2-3` `s4-2-4` `s4-2-5` `s4-2-6` `s4-2-7` `s4-2-8` `s4-2-9`
@@ -32,32 +33,32 @@ the prose, never silently promoted.
 | 4.2.1.3 Arithmetic conversion | — no fixture cites it. `02_numeric_conversions.va` runs this clause's printed examples (`1/2` integer, `1/2.0` real) but cites them to 4.2.4 |
 | 4.2.2 Operator precedence | `01_arithmetic_operators.va`, `03_precedence_associativity.va` (the full table, plus parenthesization) |
 | 4.2.3 Expression evaluation order | `123_short_circuit_side_effects.va` (`&&`, `\|\|` and Example 1's non-short-circuiting bitwise `&`, each operand a counter so evaluation is observable). `125_short_circuit_ternary.va` — the clause's third operator, green: `?:` lowers to a CFG diamond (`Lower.lowerTernary`), so the call in the unselected arm never runs its side effect |
-| 4.2.4 Arithmetic operators | `01_arithmetic_operators.va`, `02_numeric_conversions.va`, atomics `41_add.va` `42_subtract.va` `43_multiply.va` `44_divide.va` `45_modulo.va` `46_power_operator.va` `63_unary_plus.va` `64_unary_minus.va`; `111_modulus_by_zero_rejected.va` (E0601). `118_modulo_negative_divisor.va` **xfail** — VerA's range analysis does not fold unary minus on an integer literal, so the legal `11 % -3` raises a false E0601 with a full-i64 divisor range |
+| 4.2.4 Arithmetic operators | `01_arithmetic_operators.va`, `02_numeric_conversions.va`, atomics `41_add.va` `42_subtract.va` `43_multiply.va` `44_divide.va` `45_modulo.va` `46_power_operator.va` `63_unary_plus.va` `64_unary_minus.va`; `111_modulus_by_zero_rejected.va` (E0601). `118_modulo_negative_divisor.va` — green: the range analysis folds unary minus on an integer literal now, so the legal `11 % -3` is not raises a false E0601 with a full-i64 divisor range |
 | 4.2.5 Relational operators | `04_relational_logical.va`; atomics `47_less_than.va` `48_greater_than.va` `49_less_equal.va` `50_greater_equal.va` |
 | 4.2.6 Case equality operators | — **deliberately not cited.** `29_case_equality.va` runs `===`/`!==` and rejects them at E0323, but cites C.5 and 4.2.1: read whole, 4.2.6 grants these operators "limited support in the analog block" and 7.3.2 prints `if (dnet === 1'b1)` inside `analog begin` as legal. Citing 4.2.6 would demand a diagnostic the clause forbids. The header says so in full |
 | 4.2.7 Logical equality operators | `04_relational_logical.va`, `51_logical_equal.va`, `52_logical_unequal.va` |
 | 4.2.8 Logical operators | `04_relational_logical.va`, `53_logical_and.va`, `54_logical_or.va`, `55_logical_not.va` |
 | 4.2.9 Bitwise operators | `56_bitwise_and.va`, `57_bitwise_or.va`, `58_bitwise_xor.va`, `59_bitwise_xnor.va` (both `^~` and `~^`), `62_bitwise_not.va` |
-| 4.2.10 Reduction operators | both fixtures are **xfail**. `06_reduction_rejected.va` — VerA lowers unary `&`, `\|`, `~&`, `~\|` in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; `src/diag_code.zig` has E0319/E0320 but no code for the 4.2.10 analog-block ban itself. `07_reduction_xor_rejected.va` — the expression parser has no unary `^` at all, so `^bits` dies at E0215 before any subset check; E0320 exists and nothing raises it |
+| 4.2.10 Reduction operators | both fixtures are green (`06` on the substrings `reduction`/`analog block`, `07` on E0320). `06_reduction_rejected.va` — VerA lowers unary `&`, `\|`, `~&`, `~\|` in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; `src/diag_code.zig` has E0319/E0320 but no code for the 4.2.10 analog-block ban itself. `07_reduction_xor_rejected.va` — the expression parser has no unary `^` at all, so `^bits` dies at E0215 before any subset check; E0320 exists and nothing raises it |
 | 4.2.11 Shift operators | positive: `60_shift_left.va`, `61_shift_right.va`. Negative, both halves of the arithmetic-shift ban: `05_bitwise_shift.va` (`>>>`, E0324 — the filename is stale, it is a reject) and `117_arithmetic_shift_left_rejected.va` (`<<<`, E0324) |
 | 4.2.12 Conditional operator | `08_conditional_operator.va` (nesting, right association). `125_short_circuit_ternary.va`, as under 4.2.3 — "expression3 is evaluated and used as the result" names one arm, and only that arm is evaluated |
 | 4.2.13 Concatenations | `30_concatenation.va` (the joining form); `116_concatenation_unsized_rejected.va` (E0216, unsized constant); `31_replication.va` — three of the clause's four replication rules, `{4{2'b10}}`, the nested `{b, {3{a, b}}}` and the zero count, all unrolled in the parser where the operand widths still exist; `137_replication_lhs_rejected.va` (E0317, "expressions containing replications shall not appear on the left-hand side") |
 | 4.2.14 Assignment patterns | `09_assignment_pattern.va` (parameter initialization), `32_array_assignment.va` (post-declaration), `144_assignment_pattern_replication.va` (the clause's own `'{5{0.0}}` — A.8.1's second alternative, unrolled into five elements) |
 | 4.3 Built-in mathematical functions | — no fixture cites the parent. Its one rule is that both syntax styles are supported; `10_standard_math_traditional.va` and `11_standard_math_system.va` are the two styles and both cite 4.3.1 |
-| 4.3.1 Standard mathematical functions | `10_standard_math_traditional.va`, `11_standard_math_system.va` (`$sqrt`/`$ln`/`$exp`/`$pow`); atomics `65_sqrt.va` `66_exp.va` `67_ln.va` `68_log10.va` `69_floor.va` `70_ceil.va` `82_min.va` `83_max.va` `84_abs.va` `85_pow.va`; `114_standard_math_domain_rejected.va` (E0602, E0604). `33_ln1p_expm1.va` **xfail** — codegen emits the cancelling forms (`zLn1p` is `a.addC(1.0).log()`, `zExpm1` is `a.exp().addC(-1.0)`), so `ln1p(1e-12)` carries the 8.9e-5 relative error Table 4-14's C `log1p`/`expm1` exist to avoid; `ir/proof.zig` already folds the constants correctly, only the emitted device is wrong |
+| 4.3.1 Standard mathematical functions | `10_standard_math_traditional.va`, `11_standard_math_system.va` (`$sqrt`/`$ln`/`$exp`/`$pow`); atomics `65_sqrt.va` `66_exp.va` `67_ln.va` `68_log10.va` `69_floor.va` `70_ceil.va` `82_min.va` `83_max.va` `84_abs.va` `85_pow.va`; `114_standard_math_domain_rejected.va` (E0602, E0604). `33_ln1p_expm1.va` — green; codegen no longer emits the cancelling forms (it used to compute `zLn1p` as `a.addC(1.0).log()` and `zExpm1` as `a.exp().addC(-1.0)`), so `ln1p(1e-12)` carries the 8.9e-5 relative error Table 4-14's C `log1p`/`expm1` exist to avoid; `ir/proof.zig` already folds the constants correctly, only the emitted device is wrong |
 | 4.3.2 Transcendental functions | `12_transcendental_math.va`; atomics `71_sin.va` `72_cos.va` `73_tan.va` `74_asin.va` `75_acos.va` `76_atan.va` `77_sinh.va` `78_cosh.va` `79_tanh.va` `80_hypot.va` `81_atan2.va`; `113_transcendental_domain_rejected.va` (E0605/E0606/E0607), `114_standard_math_domain_rejected.va` |
-| 4.4 Signal access functions | positive: `13_signal_access.va` (one- and two-net, named branch), `34_port_access.va` (`I(<p>)` as a distinct quantity from `V(p)` and `I(p)`, both forced separately), `110_custom_discipline_access.va` (`CustomV`/`CustomI` from a renamed nature access). Negative: `115_port_access_lhs_rejected.va` (E0407, port access left of `<+`, with 5.4.3), `140_access_three_nets_rejected.va` (E0207), `141_port_access_not_a_port_rejected.va` (E0508), `87_wrong_discipline_access.va` (E0501). `13b_generic_access.va` adds §4.4's generic spelling — `potential(p,n)` against a written-down 1.0, and `potential`/`flow` against `V`/`I` as identities. One **xfail**: `86_same_flow_terminals.va` — `I(n,n)`/`V(n,n)` are accepted and the self-referential branch folded away, though E0315's own explain text already claims the rule |
+| 4.4 Signal access functions | positive: `13_signal_access.va` (one- and two-net, named branch), `34_port_access.va` (`I(<p>)` as a distinct quantity from `V(p)` and `I(p)`, both forced separately), `110_custom_discipline_access.va` (`CustomV`/`CustomI` from a renamed nature access). Negative: `115_port_access_lhs_rejected.va` (E0407, port access left of `<+`, with 5.4.3), `140_access_three_nets_rejected.va` (E0207), `141_port_access_not_a_port_rejected.va` (E0508), `87_wrong_discipline_access.va` (E0501). `13b_generic_access.va` adds §4.4's generic spelling — `potential(p,n)` against a written-down 1.0, and `potential`/`flow` against `V`/`I` as identities. One negative, now green: `86_same_flow_terminals.va` (`//! reject E0315`) — `I(n,n)`/`V(n,n)` are refused rather than accepted as a self-referential branch folded away, though E0315's own explain text already claims the rule |
 | 4.5 Analog operators | — no fixture cites the parent; it is the definition of "maintains internal state" and a pointer at its children |
 | 4.5.1 Vector or array arguments | `35_filter_parameter_arrays.va` (parameter-array coefficients into `laplace_nd`) |
 | 4.5.2 Analog operators and equations | — **no fixture.** The clause's rule is that each equation carries a tolerance and that some operators introduce new unknowns. `22_last_crossing.va` and `146_last_crossing_directions.va` lean on it in prose (the history may advance on an untested point) but neither cites it, and nothing asserts a tolerance or a new unknown |
 | 4.5.3 Time derivative operator | `14_ddt.va` (DC returns zero), `92_operator_in_genvar_for.va` (both unrolled `ddt` instances give zero at a nonzero argument). `145_ddt_idt_nature_tolerance.va` — the `ddt(expr, nature)` form of Table 4-17, green: the nature is resolved in the tolerance slot only and its `abstol` is taken |
 | 4.5.4 Time integral operator | `15_idt.va`, `16_idt_reset_rejected.va`. `145_ddt_idt_nature_tolerance.va`, the `idt(expr, ic, assert, nature)` form of Table 4-18, green |
-| 4.5.5 Circular integrator operator | `17_idtmod.va`. `126_idtmod_modulus_rejected.va` **xfail** — VerA validates none of Table 4-19's argument bounds: `idtmod(x, 0.0, -2.0, 0.0)` and the zero-modulus form both compile with only W0650, and no diag code covers a non-positive modulus |
-| 4.5.6 Derivative operator | `18_ddx.va` (potential unknown), `147_ddx_flow_unknown.va` (the flow half of the sentence, off a potential-source branch where `I(p,n)` is the solver unknown), `132_ddx_nonprobe_argument_rejected.va` (E0504). `131_ddx_two_node_probe_rejected.va` **xfail** — E0504 only asks whether the second argument is an access-function call, so `ddx(expr, V(p,n))` with two nets passes it and compiles with only W0650 |
-| 4.5.7 Absolute delay operator | `19_absdelay.va`. `127_absdelay_negative_delay_rejected.va` **xfail** — no argument-bound validation: `absdelay(x, -2n)` and the three-argument form both compile with only W0650, and no diag code covers a non-positive transport delay |
-| 4.5.8 Transition filter | `20_transition.va`. `128_transition_negative_time_rejected.va` **xfail** — no argument-bound validation: the negative `td`, `rise_time`, `fall_time` and `time_tol` variants all compile with only W0650 |
-| 4.5.9 Slew filter | `21_slew.va`. `129_slew_rate_sign_rejected.va` **xfail** — neither rate-sign bound is checked: `slew(x, -1e6, -2e6)` and `slew(x, 1e6, 2e6)` both compile with only W0650 |
-| 4.5.10 last_crossing function | `22_last_crossing.va` (rising edge over a five-point transient), `146_last_crossing_directions.va` (the −1 and 0 queries; the −1 one never leaves the negative sentinel because this input never falls). One **xfail**: `130_last_crossing_direction_rejected.va` — no check on the direction indicator, `last_crossing(x, 2)` and `last_crossing(x, -2)` compile with only W0650 |
+| 4.5.5 Circular integrator operator | `17_idtmod.va`. `126_idtmod_modulus_rejected.va` — green (`//! reject modulus`, `positive`); Table 4-19's argument bounds are validated, so `idtmod(x, 0.0, -2.0, 0.0)` and the zero-modulus form both compile with only W0650, and no diag code covers a non-positive modulus |
+| 4.5.6 Derivative operator | `18_ddx.va` (potential unknown), `147_ddx_flow_unknown.va` (the flow half of the sentence, off a potential-source branch where `I(p,n)` is the solver unknown), `132_ddx_nonprobe_argument_rejected.va` (E0504). `131_ddx_two_node_probe_rejected.va` — green: E0504 asks more than whether the second argument is an access-function call, so `ddx(expr, V(p,n))` with two nets passes it and compiles with only W0650 |
+| 4.5.7 Absolute delay operator | `19_absdelay.va`. `127_absdelay_negative_delay_rejected.va` — green (`//! reject td`, `positive`): `absdelay(x, -2n)` and the three-argument form are refused rather than compiled with only W0650, and no diag code covers a non-positive transport delay |
+| 4.5.8 Transition filter | `20_transition.va`. `128_transition_negative_time_rejected.va` — green; each of the negative `td`, `rise_time`, `fall_time` and `time_tol` variants all compile with only W0650 |
+| 4.5.9 Slew filter | `21_slew.va`. `129_slew_rate_sign_rejected.va` — green; both rate-sign bounds are checked, so `slew(x, -1e6, -2e6)` and `slew(x, 1e6, 2e6)` no longer compile with only W0650 |
+| 4.5.10 last_crossing function | `22_last_crossing.va` (rising edge over a five-point transient), `146_last_crossing_directions.va` (the −1 and 0 queries; the −1 one never leaves the negative sentinel because this input never falls). One negative, now green: `130_last_crossing_direction_rejected.va` — the direction indicator is checked, `last_crossing(x, 2)` and `last_crossing(x, -2)` compile with only W0650 |
 | 4.5.11 Laplace transform filters | `23_laplace_filters.va` (all four forms), `35_filter_parameter_arrays.va`, `94_operator_null_argument.va` (E0502), `136_filter_null_zeros_argument.va` (the null zeros vector, `,,`, as the empty product 1 — E0505 is now scoped to the slots 4.5.15's "except" does NOT carve out) |
 | 4.5.11.1 laplace_zp | `133_laplace_unpaired_complex_root_rejected.va` (a complex root with no conjugate partner) |
 | 4.5.11.2 laplace_zd | — no fixture cites it; `23_laplace_filters.va` runs the form under the 4.5.11 cite |
@@ -71,7 +72,7 @@ the prose, never silently promoted.
 | 4.5.12.4 zi_nd | — as 4.5.12.1 |
 | 4.5.13 Limited exponential | `25_limexp.va` |
 | 4.5.14 Constant versus dynamic arguments | — **no fixture.** Table 4-20 splits every operator's arguments into constant and dynamic; nothing in this directory asserts that a dynamic expression in a constant slot is refused, or that a constant one is held fixed for the analysis |
-| 4.5.15 Restrictions on analog operators | the legal side: `119_operator_under_constant_condition.va` (a `parameter`-selected filter under `if`/`case`/`?:`, plus an `analysis("dc")` guard — the only fixture that can catch over-rejection) and `92_operator_in_genvar_for.va` (the analog_for that must keep compiling). Rejects that reject: `36_operator_in_conditional.va`, `88_operator_in_event.va`, `89_operator_in_repeat.va`, `90_operator_in_while.va`, `91_operator_in_runtime_for.va` (all E0514), `121_operator_in_ternary_rejected.va` (E0514 — the arms of a `?:` raise the same two conditional counters an `if` body does, so the clause's third named form is checked by the same test as the first two), `92_operator_in_function.va` (E0422), `94_operator_null_argument.va` (E0502). Two **xfail**: `93_operator_in_initial.va` and `122_operator_in_always_rejected.va` — `initial` and `always` are refused wholesale at E0205 (unsupported module item), so the parse dies before 4.5.15 is reached and E0422 never fires |
+| 4.5.15 Restrictions on analog operators | the legal side: `119_operator_under_constant_condition.va` (a `parameter`-selected filter under `if`/`case`/`?:`, plus an `analysis("dc")` guard — the only fixture that can catch over-rejection) and `92_operator_in_genvar_for.va` (the analog_for that must keep compiling). Rejects that reject: `36_operator_in_conditional.va`, `88_operator_in_event.va`, `89_operator_in_repeat.va`, `90_operator_in_while.va`, `91_operator_in_runtime_for.va` (all E0514), `121_operator_in_ternary_rejected.va` (E0514 — the arms of a `?:` raise the same two conditional counters an `if` body does, so the clause's third named form is checked by the same test as the first two), `92_operator_in_function.va` (E0422), `94_operator_null_argument.va` (E0502), `93_operator_in_initial.va` and `122_operator_in_always_rejected.va` (both E0422 — the clause names `initial` and `always` explicitly, and both now reach it: the block is still refused as an item VerA cannot execute, but its body is parsed and judged, so 4.5.15 fires at the operator). Nothing in this row is xfail |
 | 4.6 Analysis dependent functions | `27_noise_sources.va` cites the parent alongside 4.6.4 |
 | 4.6.1 Analysis | `26_analysis.va` (multi-argument call as an OR; `"static"` is not a synonym for `"ic"`), `143_analysis_transient.va` (the three names that disagree between dc and tran, plus an unsupported name returning 0) |
 | 4.6.2 DC analysis | — **no fixture.** The clause's rules are that `analysis("dc")`/`("static")` are true at every point of a sweep and that `analysis("nodeset")` is true only during the nodeset phase. `26_analysis.va` and `143_analysis_transient.va` exercise `"dc"`/`"static"`/`"ic"` at a single point under the 4.6.1 cite; `"nodeset"` appears in no fixture in this directory |
@@ -90,69 +91,66 @@ the prose, never silently promoted.
 | 4.7.2.2 Analog function return statement | `40_function_return.va` is the legal side including the override rule; `139_function_bare_return_rejected.va` is E0227, "the function shall specify an expression" |
 | 4.7.2.3 Output arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the initialize-to-zero half of the output/inout difference), `106_function_output_nonvariable.va` (E0316), `108_function_array_output_pattern.va` (green: `output [0:1] out` is an array formal and `'{a,b}` its assignment-pattern actual, copied out element by element) |
 | 4.7.2.4 Inout arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the left-untouched half), `107_function_inout_nonvariable.va` (E0316), `109_function_array_inout_pattern.va` (green: §4.7.1's own `arrayadd` example, copy-in and copy-out both asserted) |
-| 4.7.3 Calling an analog user-defined function | `104_function_direct_recursion.va`, `105_function_indirect_recursion.va` (both E0510), `109_function_array_inout_pattern.va` (§4.7.3's own call of `arrayadd`). One **xfail**: `138_function_called_outside_analog_rejected.va` — `initial` is refused wholesale at E0205, so the parse dies before the calling-context rule is reached |
+| 4.7.3 Calling an analog user-defined function | `104_function_direct_recursion.va`, `105_function_indirect_recursion.va` (both E0510), `109_function_array_inout_pattern.va` (§4.7.3's own call of `arrayadd`), `138_function_called_outside_analog_rejected.va` (E0430 — the call from an `initial` block, i.e. from outside the analog context; the block is refused as an item but its body is still judged). Nothing in this row is xfail |
 
 ## The debt ledger
 
-Twenty-three fixtures carry `//! xfail`. Fourteen of them also carry
-`//! reject`, which is the interesting number: fourteen rules this chapter
-states that the compiler does not enforce.
+EMPTY — grep finds no `//! xfail` in this directory. It held twenty-three rows, fourteen of
+them also carrying `//! reject` (rules this chapter states that the compiler did not
+enforce). The grouping is kept because it is the record of what KIND of defect each was,
+and because three of the groups were wrong in an instructive way.
 
-**Five are missing checks that could be written today** — the construct is
-parsed, lowered and run, and nothing complains. All five analog-operator
-argument-bound families are here and they are the largest single block in the
+**Five were missing checks that could be written today, and were written.** All five
+analog-operator argument-bound families were here and were the largest single block in the
 chapter: `126_idtmod_modulus_rejected.va` (non-positive modulus),
 `127_absdelay_negative_delay_rejected.va` (negative transport delay),
-`128_transition_negative_time_rejected.va` (negative `td`/`rise_time`/
-`fall_time`/`time_tol`), `129_slew_rate_sign_rejected.va` (wrongly-signed
-rates) and `130_last_crossing_direction_rejected.va` (direction outside
-{+1, −1, 0}). Every one compiles with only W0650, and `src/diag_code.zig` has
-no code to give them. That is the whole group: the four 4.7.1/4.7.2.2 function
-rules that used to sit beside them — the named-block ban, the minimum of one
-formal, the formal's data type and the bare `return;` — are E0226, E0224,
-E0225 and E0227 and no longer xfail.
+`128_transition_negative_time_rejected.va` (negative `td`/`rise_time`/`fall_time`/
+`time_tol`), `129_slew_rate_sign_rejected.va` (wrongly-signed rates) and
+`130_last_crossing_direction_rejected.va` (direction outside {+1, −1, 0}). Every one used
+to compile with only W0650 and `src/diag_code.zig` had no code to give them; each now
+refuses, and each pins the message substrings of Table 4-19/4-20's own bound rather than a
+code, so the diagnostic can be renumbered without touching a fixture. The four 4.7.1/4.7.2.2
+function rules that sat beside them — the named-block ban, the minimum of one formal, the
+formal's data type and the bare `return;` — closed earlier as E0226, E0224, E0225 and E0227.
 
-**Two are checks that exist but are too weak.** `131_ddx_two_node_probe_rejected.va`
-— E0504 asks only "is the second argument an access-function call", so a
-two-net probe slips through. `86_same_flow_terminals.va` —
-E0315's own explain text already prints the rule ("LRM 4.4 also forbids
-V(n1, n1)") and nothing raises it. These are two edits, not two features.
-`121_operator_in_ternary_rejected.va` was the third and is not any more: E0514
-walked `if` and `case` statements only, and the arms of a `?:` now raise the same
-counters.
+**Two were checks that existed but were too weak, and both were one edit.**
+`131_ddx_two_node_probe_rejected.va` — E0504 asked only "is the second argument an
+access-function call", so a two-net probe slipped through. `86_same_flow_terminals.va` —
+E0315's own explain text already printed the rule ("LRM 4.4 also forbids V(n1, n1)") and
+nothing raised it. `121_operator_in_ternary_rejected.va` was the third: E0514 walked `if`
+and `case` statements only, and the arms of a `?:` raise the same counters now.
 
-**Five never reach the rule: something earlier refuses, or mis-lowers.**
+**Five never reached the rule: something earlier refused, or mis-lowered.** This group is
+the one worth reading, because the pattern in it recurred four times.
 `93_operator_in_initial.va`, `122_operator_in_always_rejected.va` and
-`138_function_called_outside_analog_rejected.va` all die at E0205 (unsupported
-module item) because VerA refuses `initial` and `always` wholesale, so 4.5.15
-and 4.7.3 are never consulted. `137_replication_lhs_rejected.va` dies at E0207
-because there is no replication form to put on a left-hand side.
-`07_reduction_xor_rejected.va` is the same shape — no unary `^` in the parser,
-so E0215 arrives before the analog-subset check — and
-`06_reduction_rejected.va` is its opposite: the four non-parity reductions do
-parse, and lower as IEEE 1364 32-bit reductions, which is worse than not
-parsing.
+`138_function_called_outside_analog_rejected.va` were masked by E0205: the block is still
+refused as an item VerA cannot execute, but the refusal RECOVERS now, so the body is parsed
+and judged and 4.5.15 fires as E0422 and 4.7.3 as E0430. `137_replication_lhs_rejected.va`
+died at E0207 for want of a replication form on a left-hand side and pins E0317 now.
+`07_reduction_xor_rejected.va` was the same shape — no unary `^` in the parser, so E0215
+arrived before the analog-subset check — and pins E0320. `06_reduction_rejected.va` was its
+opposite and the worst of the group: the four non-parity reductions DID parse, and lowered
+as IEEE 1364 32-bit reductions, which is a wrong answer rather than a missing one; it pins
+the substrings `reduction` and `analog block`.
 
-That is five plus three plus five, and the fourteenth is an over-rejection.
-
-**Three reject something legal.** `135_z_filter_zero_transition_branch_rejected.va`
-and `136_filter_null_zeros_argument.va` are over-rejections: the first because
-codegen refuses the entire optional `t`/`t0` tail of a `zi_*` filter and so
-cannot distinguish the legal non-zero transition from the illegal zero one;
-the second because E0505, which is 4.5.15's null-argument ban, fires on the
-4.5.11/4.5.12 null-zeros carve-out that ban's own "except" clause points at.
-`118_modulo_negative_divisor.va` is the third and the smallest — the range
-analysis does not fold unary minus on an integer literal, so `11 % -3` is
+**Three rejected something legal.** `135_z_filter_zero_transition_branch_rejected.va` and
+`136_filter_null_zeros_argument.va` were over-rejections: the first because codegen refused
+the entire optional `t`/`t0` tail of a `zi_*` filter and so could not distinguish the legal
+non-zero transition from the illegal zero one; the second because E0505, which is 4.5.15's
+null-argument ban, fired on the 4.5.11/4.5.12 null-zeros carve-out that ban's own "except"
+clause points at. `136` runs and asserts now, with no reject arm at all — which is the
+correct shape for an over-rejection closing. `118_modulo_negative_divisor.va` was the third
+and the smallest, and its stated reason was WRONG in a way worth recording: it was filed as
+a modulo bug and was really unary-minus folding in the range analysis, so `11 % -3` was
 reported as a possible division by zero.
 
-**Some get the wrong answer or cannot be reached, with no reject to carry.**
-No parser boundary is left here: `108_function_array_output_pattern.va` and
-`109_function_array_inout_pattern.va` were the two, and A.2.6's array formals now
-parse and pass element-wise in both directions. The rest are semantic:
-`33_ln1p_expm1.va` (`ln1p`/`expm1` emitted as the cancelling forms) and the two
-over-rejections already counted above. `146_last_crossing_directions.va`,
-`37_ac_stim.va` and `125_short_circuit_ternary.va` were on this list and are not
-any more.
+**Some got the wrong answer or could not be reached, with no reject to carry.**
+`108_function_array_output_pattern.va` and `109_function_array_inout_pattern.va` were the
+parser boundary and A.2.6's array formals pass element-wise in both directions now.
+`33_ln1p_expm1.va` was the semantic one: codegen emitted the cancelling forms, which is
+exactly the precision loss §4.3.1 has these two functions for.
+`146_last_crossing_directions.va`, `37_ac_stim.va` and `125_short_circuit_ternary.va` left
+this list earlier.
 
 ## Where a fixture is credited, and where it is not
 

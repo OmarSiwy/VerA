@@ -1,5 +1,5 @@
 // A switch primitive is INSIDE the Verilog-A subset, so this file is a run
-// fixture with a debt marker and not a `//! reject`.
+// fixture and not a `//! reject`.
 //
 // Annex A.4.1: `gate_instantiation ::= ... | pass_switchtype pass_switch_instance ;`
 // with `pass_switchtype ::= tran | rtran`, and A.1.4 makes gate_instantiation a
@@ -11,12 +11,20 @@
 // contain `tran` either, though absence from a negative list is only
 // corroboration; A.4.1 is the clause that admits the construct.
 //
-// So a conforming Verilog-A compiler accepts this source. VerA refuses it with
-// E0205 because it is a flat single-module compiler that implements no instance
-// or primitive instantiation at all. That is a gap in Clause 6 structure,
-// charged here as `//! xfail`. An earlier version of this file wrote the same
-// gap as `//! reject E0205`, which inverted it: a conforming compiler would
-// have failed the fixture and only VerA would have passed.
+// So a conforming Verilog-A compiler accepts this source, and VerA now does.
+// An earlier version of this file wrote the gap as `//! reject E0205`, which
+// inverted it: a conforming compiler would have failed the fixture and only
+// VerA would have passed. A later one carried `//! xfail` while `tran` was
+// E0205 "unsupported module item".
+//
+// ACCEPTANCE IS NOT MODELLING, AND VerA SAYS SO. The instance is parsed and
+// contributes nothing to the device, with a W0250 at the keyword saying that
+// out loud (`--deny=W0250` refuses the module instead). That is not a shortcut
+// this fixture is papering over: 8.5.3.5 gives a pass switch its meaning in the
+// DISCRETE cycle -- logic values and strengths across two terminals -- and no
+// continuous behavior anywhere, so a compiled analog device has nothing to
+// stamp for it and any equation VerA invented would be VerA's convention rather
+// than the standard's.
 //
 // It is NOT a gap in 8.5.3.5. Switch processing is part of the digital
 // simulation cycle, which Annex C.10 puts outside Verilog-A ("The mixed-signal
@@ -29,11 +37,13 @@
 // fixture pins is the part that is: the source is accepted, and the analog block
 // of a module that also carries a switch primitive is still elaborated and
 // evaluated at its operating point, reading 0.75 - 0.25 = 0.5 V across the pair.
-// The day primitive instantiation lands, this XPASSes and the marker comes off.
+// That is the whole of what A.4.1 plus C.8 require of this file, and it is why
+// the fixture can be green while the switch stamps nothing: nothing here claims
+// the switch conducts, because nothing in the LRM says what it would conduct in
+// a continuous domain.
 //
 //! lrm A.4.1
 //! lrm C.8
-//! xfail VerA's parser has no gate- or switch-level primitive instantiation: the first one here, `tran`, is E0205 "unsupported module item". §6.2.2 MODULE instantiation elaborates now; A.3 primitive_gate_instance is a SEPARATE production whose meaning is a discrete-time one, so this is not a hierarchy gap
 //! bias V(a) = 0.75, V(b) = 0.25
 `include "check.vh"
 module ch8_switch(a, b);

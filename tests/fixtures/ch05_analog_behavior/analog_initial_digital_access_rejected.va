@@ -11,16 +11,19 @@
 // analog_initial_contribution.va and analog_initial_event_rejected.va cover the
 // other three §5.2.1 restrictions, which need no digital constructs at all.
 //
-// The expectation is prose rather than a code because VerA has no code for a
-// rule it cannot reach: it is a Verilog-A compiler, it has no digital-owned
-// values, and it stops at `reg`. That is the xfail, and it is a real gap in
-// coverage of §5.2.1 rather than a fixture defect — the previous version of
-// this file demanded E0205 and so asserted VerA's refusal of legal AMS syntax.
+// The expectation stays prose rather than a code because it travels: no other
+// compiler prints E0431. VerA now reaches the rule — it parses `reg` and the
+// `initial` block, refuses the block as an item it cannot execute, and still
+// judges the body, so §5.2.1's read is diagnosed at the read. What made that
+// possible without a digital engine is §7.2.2's own first sentence, "the domain
+// of a variable is that of the context from which its value is assigned": the
+// set of assignment targets in the `initial` block IS the set of digital-owned
+// values, so no driver state and no scheduler is needed to know that
+// `digital_value` is one.
 //
 //! lrm 5.2.1
 //! reject analog initial
 //! reject digital
-//! xfail VerA has no digital-owned values: `reg` is refused at E0205 (unsupported module item) long before §5.2.1's analog-initial read is reached
 module ch5_initial_digital_access_rejected;
   reg digital_value;
   real initialized;

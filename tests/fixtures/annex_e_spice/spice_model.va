@@ -43,18 +43,39 @@
 // be invented, not derived.
 //
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
-// for the LRM's own worked example. E.1.1 does make SPICE-netlist reading
-// conditional — "IF a simulator which supports Verilog-AMS HDL is also able to
-// read SPICE netlists of a particular flavor" — but the conditional is about the
-// netlist input, not about this syntax: a tool that reads no SPICE at all still
-// has to parse `vertNPN q1(c1, b1, e1);` as an instantiation and resolve it, and
-// that is the step VerA never reaches.
+// for the LRM's own worked example.
+//
+// WHOM IT BINDS, WHICH IS NOT VERA, AND THE ARGUMENT THAT USED TO STAND HERE WAS
+// WRONG. That argument said E.1.1's conditional "is about the netlist input, not
+// about this syntax: a tool that reads no SPICE at all still has to parse
+// `vertNPN q1(c1, b1, e1);` as an instantiation and resolve it". Resolve it to
+// WHAT? E.1.1's sentence is one implication and the syntax is inside the
+// consequent, not beside it: "it states IF a simulator which supports
+// Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor,
+// THEN certain objects defined in that flavor of SPICE netlist can be referenced
+// from within a Verilog-AMS HDL structural description." The object referenced
+// here is `.MODEL VERTNPN`, an object defined in a netlist; with no netlist there
+// is no object, so the reference has no meaning to give and refusing it is not a
+// violation. E.1.2's first bullet closes it explicitly: "whether a particular
+// Verilog-AMS simulator is SPICE compatible, and with which particular variant of
+// SPICE it is compatible, is solely determined by the authors of the simulator."
+// That is the LRM delegating, not requiring.
+//
+// SO WHY IS IT STILL HERE, AND STILL `xfail`? Two things it does that deleting it
+// would not. It BINDS a Verilog-AMS tool that does read netlists, and `//! xfail`
+// is ignored for every compiler but VerA (tests/fixtures/README.md), so for those
+// tools this file is an ordinary requirement. And on VerA's side the XPASS rule
+// still guards the defect that IS VerA's: this file must not start passing by
+// resolving an instance of a module declared nowhere, which is E0904's whole job.
+// Read the reason on the `//! xfail` line rather than the XFAIL tally.
 //
 //! lrm E.2.2.1
 //! lrm E.2
 //! lrm 6.7.1
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
-//! xfail E.2's models "defined within SPICE netlists" need a SPICE netlist reader, which VerA is not: there is no `.MODEL` input to a Verilog-A compilation, so `vertNPN` is declared nowhere and the instance is E0904. E.1.1 makes exactly this conditional — "IF a simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor" — and Table E.1's primitives, which ARE shipped now, do not supply it: the model card is the part that names a primitive and fixes its parameters, and it is the part that lives in the netlist
+//! lrm E.1.1
+//! lrm E.1.2
+//! xfail NOT A DEBT — the clause is conditional and its condition is false for VerA. E.1.1 states one implication: "IF a simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor, THEN certain objects defined in that flavor of SPICE netlist can be referenced." VerA reads one language and no netlist, so `.MODEL VERTNPN` is not an object that exists, `vertNPN` is declared nowhere, and E0904 is the right answer rather than a failure to meet a requirement; E.1.2 adds that SPICE compatibility "is solely determined by the authors of the simulator". Table E.1's primitives ARE shipped and are not what is missing — the model card names a primitive and fixes its parameters, and the card lives in the netlist. The marker is kept, not removed, because it still binds a tool that DOES read netlists (xfail is ignored for anyone but VerA) and because XPASS still guards VerA against silently resolving an undeclared module. Do not close this by implementing a SPICE netlist reader
 `include "check.vh"
 module annex_e_spice_model(c1, b1, e1);
   inout c1, b1, e1; electrical c1, b1, e1;

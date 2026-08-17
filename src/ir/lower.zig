@@ -49,7 +49,20 @@ pub const ParamInfo = struct {
 pub const BranchInfo = struct {
     hi: u16, // node_order index
     lo: u16, // node_order index (`ground` if implicit, §1.3.1.1)
+    /// §5.4.1 "There can be any number of named branches between any two
+    /// signals" — so the node pair does NOT identify the branch, and everything
+    /// that retains a value per branch (§5.6.1.2/§5.6.1.3) has to key on this
+    /// instead. One id per DECLARED name, elements of a §3.12 branch array
+    /// included: they are separate branches over one terminal pair.
+    id: u32,
 };
+
+/// §5.4.1 Example 2: "There can only be one unnamed branch between any two nets
+/// or between a net and implicit ground (in addition to any number of named
+/// branches)." So every `V(a,b)`/`I(a,b)` reference shares ONE identity, which
+/// the node pair already determines — this is that identity, and it is
+/// deliberately distinct from every named branch over the same pair.
+pub const unnamed_branch: u32 = 0;
 
 /// §1.3.1.1 the global reference node. Not a solver unknown, so it is a
 /// sentinel rather than a node_order slot: probing it yields a literal 0.
@@ -61,16 +74,28 @@ pub const Access = enum(u8) { potential, flow };
 
 /// Class 4 — a contribution target + its accumulated value. LRM §5.6.
 ///
-/// ONE entry per (access, node pair), never one per `<+` statement: §5.6.1.3
+/// ONE entry per (access, BRANCH), never one per `<+` statement: §5.6.1.3
 /// makes `<+` an accumulation, and conditional contributions (§5.8) only make
 /// sense as "the accumulator's value at the end of the analog block". Both fall
 /// out of accumulating into an SSA place, so `resist_val`/`react_val` are the
 /// final reads of that place. This is also the naming.zig unit target
 /// (`I_drain_source`), so it is stable under source inserts.
 ///
+/// The branch and not the node pair, because §5.4.1 allows "any number of named
+/// branches between any two signals" and §5.4.3's own diode model uses two of
+/// them over one pair — `I(i_diode)` and `I(junc_cap)` between (a, c), with the
+/// first READ inside the second's right-hand side. One accumulator per pair
+/// answers that read with the sum and puts the junction capacitance into the
+/// conduction source; two accumulators keep them the two sources the figure
+/// draws. KCL is unaffected either way: codegen stamps every entry into the same
+/// two node rows, so the node still sees the total.
+///
 /// Split into resistive (DC) and reactive (ddt/q) parts, §5.6.1.2.
 pub const Contribution = struct {
     access: Access,
+    /// §5.4.1 which branch retains this value: a `BranchInfo.id`, or
+    /// `unnamed_branch` for the one implicit branch of the node pair.
+    br: u32 = unnamed_branch,
     /// Token of the `<+` this unit came from. proof.zig's W0650 reports
     /// per-unit, so it needs the STATEMENT, not the instruction that happened
     /// to break the finiteness proof.
@@ -153,6 +178,10 @@ params: std.ArrayList(ParamInfo) = .empty, // §3.4
 /// Deduped `param_ref` Value per params[i] — parallel to `params`.
 param_values: std.ArrayList(Mir.Value) = .empty,
 branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branches
+/// Last `BranchInfo.id` handed out. Starts at `unnamed_branch`, so the first
+/// declared branch is 1 and no named branch can ever be mistaken for §5.4.1
+/// Example 2's single implicit branch of a node pair.
+last_branch_id: u32 = unnamed_branch,
 /// §3.12.1 port branches: branch name → the port's `node_order` slot. A table
 /// of its own and not a flag on `BranchInfo`, because a port branch is not a
 /// node pair at all — it is the §5.4.3 port flow under a second name, and
@@ -1061,17 +1090,19 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                 try self.port_branches.put(self.arena, key, p);
             }
         } else if (arr) |r| {
-            // ponytail: the elements share one (hi, lo) and `contribIndex` keys
-            // an accumulator on the node pair, so contributing to two elements
-            // lands in ONE source — the same collapse `two_named_branches.va`
-            // records for two separately named branches over one pair. Telling
-            // them apart needs branch identity in the contribution key, which is
-            // that fixture's gap and not this one's.
+            // A.2.3's branch ARRAY: the elements share one (hi, lo) and are
+            // separate branches over it (§5.4.1 "any number of named branches
+            // between any two signals"), so each takes its own identity and its
+            // own accumulator — `br1[0]` and `br1[1]` are two sources.
             const hi = try self.nodeOf(b.hi);
             const lo = if (b.lo == .none) ground else try self.nodeOf(b.lo);
             try self.checkNetCompat(b.main_tok, hi, lo); // §3.12 → §3.11
             for (0..r.size()) |k|
-                try self.branches.put(self.arena, try self.vecElem(base, r.at(@intCast(k))), .{ .hi = hi, .lo = lo });
+                try self.branches.put(self.arena, try self.vecElem(base, r.at(@intCast(k))), .{
+                    .hi = hi,
+                    .lo = lo,
+                    .id = self.newBranchId(),
+                });
         } else if (self.vecTerminal(b.hi) != null or self.vecTerminal(b.lo) != null) {
             // §3.12 a branch with a vector terminal is a vector branch.
             try self.declareVectorBranch(&b);
@@ -1085,7 +1116,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             // ground, and §3.12 says the branch then "derives" its discipline
             // from the one net that is named.
             try self.checkNetCompat(b.main_tok, hi, lo);
-            try self.branches.put(self.arena, base, .{ .hi = hi, .lo = lo });
+            try self.branches.put(self.arena, base, .{ .hi = hi, .lo = lo, .id = self.newBranchId() });
         }
         // The BASE name is a vector, so `V(pair)` and `V(pair[9])` get the
         // vector diagnostics (E0351/E0352) rather than interning an implicit
@@ -1127,6 +1158,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // question about the scopes, and BEFORE the analog block, so an attribute is
     // reported at its own token rather than after a body that may not compile.
     try self.checkAttributes(module.attrs);
+
+    // §7.2.2 the DISCRETE context. Before the analog blocks because the rules
+    // below relate the two, and it is the discrete side that names the variables
+    // the continuous side is then judged against.
+    try self.checkDiscreteContext(module);
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
@@ -1228,6 +1264,273 @@ fn kernelCtlPlace(self: *Lower, slot: *?Ssa.Place) Oom!Ssa.Place {
 
 fn strOrEmpty(self: *const Lower, id: Ast.StrId) []const u8 {
     return if (id == .none) "" else self.file.str(id);
+}
+
+// ---- §7.2.2 the discrete context -------------------------------------------
+
+/// §7.2.2's two contexts, and the four rules the LRM states across them.
+///
+/// A `Ast.DiscreteBlock` is NEVER LOWERED — the parser already refused it
+/// (E0205), because executing one needs an event queue and delta cycles, which
+/// is a simulator and not a compiler pass. What is done here is the other half:
+/// the LRM states rules ABOUT a discrete context, and while the keyword was a
+/// hard syntax error not one of them could fire. All four are decidable from
+/// the AST alone, which is why this is a scan and not a lowering:
+///
+///   §4.5.15  an analog operator "can not be used inside an initial or always
+///            block"                                                  → E0422
+///   §4.7.3   an analog function "shall only be called within the analog
+///            context" (§7.3.7 states the mixed-signal half)           → E0430
+///   §5.2.1   "digital values cannot be accessed from the analog initial
+///            block"                                                   → E0431
+///   §7.2.2   "It shall be an error to assign to a given variable in both
+///            contexts"                                                → E0432
+///
+/// §7.2.2's first sentence is what makes the last two computable without a
+/// digital engine: "The domain of a variable is that of the context from which
+/// its value is assigned." So the set of ASSIGNMENT TARGETS in the discrete
+/// blocks IS the set of digital-owned variables, and no `reg`-ness, no driver
+/// state and no scheduler is needed to know it.
+const DiscreteCtx = struct {
+    /// Module-level variables assigned by a statement in an `initial` or
+    /// `always` block → the token of the block that assigns it. Insertion
+    /// ordered: two errors in one module must be reported in source order.
+    assigned: std.StringArrayHashMapUnmanaged(u32) = .empty,
+    /// This module's §4.7.1 analog function names.
+    funcs: std.StringArrayHashMapUnmanaged(void) = .empty,
+    /// Which block the scan is inside, for the E0422 wording (§4.5.15 names
+    /// both spellings).
+    where: []const u8 = "",
+};
+
+fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    if (module.discrete.len == 0) return;
+
+    var ctx: DiscreteCtx = .{};
+    for (module.functions) |f| try ctx.funcs.put(self.arena, self.file.str(f.name), {});
+
+    for (module.discrete) |blk| {
+        ctx.where = if (blk.is_always) "an always block" else "an initial block";
+        try self.scanDiscrete(blk.body, blk.main_tok, &ctx);
+    }
+    // The continuous side second: §7.2.2's conflict and §5.2.1's read are both
+    // "this analog statement, against what the discrete blocks own", so the
+    // discrete set has to be complete first. §7.2.2 is symmetric, and reporting
+    // it at the ANALOG statement is the choice the clause's own wording makes —
+    // "the domain of a variable is that of the context from which its value is
+    // assigned" gives the variable to whichever context is not the intruder, and
+    // a module with a discrete block in it has already been told about that.
+    for (module.analog) |blk| try self.scanContinuous(blk.body, blk.is_initial, &ctx);
+}
+
+/// One statement of an `initial`/`always` body. Collects the §7.2.2 assignment
+/// targets and checks every expression under it.
+///
+/// ponytail: a name declared in a NAMED BLOCK inside the discrete body shadows
+/// the module-level one, and this scan does not model that — the
+/// `self.vars.contains` filter is what keeps the false positive out, by only
+/// ever recording a name the module itself declared. A block-local `integer x`
+/// shadowing a module-level `real x` would still be recorded; give
+/// `Ast.SeqBlock` a scope walk here if a model ever does that.
+fn scanDiscrete(self: *Lower, id: Ast.StmtId, blk_tok: u32, ctx: *DiscreteCtx) Oom!void {
+    if (id == .none) return;
+    const ex = &self.file.exprs;
+    switch (self.file.stmt(id)) {
+        .assign => |a| {
+            // The target of `bus[3] = ...` is the array, so walk down to the
+            // base name — §7.2.2's domain is a property of the DECLARATION.
+            var t = a.target;
+            while (t != .none and (ex.tag(t) == .index or ex.tag(t) == .range)) t = ex.lhs(t);
+            if (t != .none and ex.tag(t) == .ident) {
+                const name = self.file.str(ex.strOf(t));
+                if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, blk_tok);
+            }
+            try self.scanDiscreteExpr(a.value, ctx);
+        },
+        .block => |b| for (b.body) |s| try self.scanDiscrete(s, blk_tok, ctx),
+        .if_stmt => |s| {
+            try self.scanDiscreteExpr(s.cond, ctx);
+            try self.scanDiscrete(s.then_s, blk_tok, ctx);
+            try self.scanDiscrete(s.else_s, blk_tok, ctx);
+        },
+        .case_stmt => |s| {
+            try self.scanDiscreteExpr(s.scrutinee, ctx);
+            for (s.arms) |arm| {
+                for (arm.labels) |l| try self.scanDiscreteExpr(l, ctx);
+                try self.scanDiscrete(arm.body, blk_tok, ctx);
+            }
+        },
+        .for_stmt => |s| {
+            try self.scanDiscrete(s.init, blk_tok, ctx);
+            try self.scanDiscreteExpr(s.cond, ctx);
+            try self.scanDiscrete(s.step, blk_tok, ctx);
+            try self.scanDiscrete(s.body, blk_tok, ctx);
+        },
+        .while_stmt => |s| {
+            try self.scanDiscreteExpr(s.cond, ctx);
+            try self.scanDiscrete(s.body, blk_tok, ctx);
+        },
+        .repeat_stmt => |s| {
+            try self.scanDiscreteExpr(s.count, ctx);
+            try self.scanDiscrete(s.body, blk_tok, ctx);
+        },
+        .event_control => |s| {
+            try self.scanDiscreteExpr(s.event, ctx);
+            try self.scanDiscrete(s.body, blk_tok, ctx);
+        },
+        .sys_task => |s| for (s.args) |a| try self.scanDiscreteExpr(a, ctx),
+        // A contribution or an indirect contribution in a discrete block is
+        // §5.6's own "the analog context" rule, not one of the four above, and
+        // the block has already been refused. Nothing to add.
+        .empty, .contribute, .indirect, .event_trigger, .disable, .jump => {},
+    }
+}
+
+/// Every expression reachable from a discrete statement. The child edges are the
+/// per-tag column usage documented on `Ast.ExprTag`; the `args` whitelist is the
+/// set of tags whose `extra` is an ExprId list offset — the others park a literal
+/// value or a StrId list there, and reading them as expressions would walk
+/// garbage.
+fn scanDiscreteExpr(self: *Lower, e: Ast.ExprId, ctx: *DiscreteCtx) Oom!void {
+    if (e == .none) return;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    switch (tag) {
+        // §4.5.15, verbatim: analog operators "can not be used inside an initial
+        // or always block". Same code as the analog-function-body and
+        // analog-initial cases, because it is the same sentence's family of
+        // contexts: an operator carries state from one accepted timepoint to the
+        // next, and none of these has a timepoint to advance.
+        .filter_call => try self.errAt(e, .E0422, "not allowed in {s}", .{ctx.where}),
+        .call => {
+            const name = self.file.str(ex.strOf(e));
+            if (ctx.funcs.contains(name)) {
+                var b = self.errAtWith(e, .E0430);
+                b.msg("`{s}`", .{name});
+                b.note(
+                    "an analog function shall only be called from an analog block " ++
+                        "or from another analog function",
+                    .{},
+                );
+                try b.emit();
+            }
+        },
+        else => {},
+    }
+    try self.scanDiscreteExpr(ex.lhs(e), ctx);
+    try self.scanDiscreteExpr(ex.rhs(e), ctx);
+    if (tag == .ternary) try self.scanDiscreteExpr(ex.ternaryElse(e), ctx);
+    switch (tag) {
+        .call,
+        .builtin_call,
+        .sys_call,
+        .filter_call,
+        .noise_call,
+        .event_function,
+        .concat,
+        .assign_pattern,
+        => for (ex.args(e)) |a| try self.scanDiscreteExpr(a, ctx),
+        else => {},
+    }
+}
+
+/// The continuous side of the same two sets: §7.2.2's both-contexts conflict on
+/// an assignment target, and §5.2.1's digital read inside an `analog initial`.
+/// Runs only in a module that HAS a discrete block, so the ordinary analog path
+/// pays nothing.
+fn scanContinuous(self: *Lower, id: Ast.StmtId, is_initial: bool, ctx: *DiscreteCtx) Oom!void {
+    if (id == .none or ctx.assigned.count() == 0) return;
+    const ex = &self.file.exprs;
+    switch (self.file.stmt(id)) {
+        .assign => |a| {
+            var t = a.target;
+            while (t != .none and (ex.tag(t) == .index or ex.tag(t) == .range)) t = ex.lhs(t);
+            if (t != .none and ex.tag(t) == .ident) {
+                const name = self.file.str(ex.strOf(t));
+                if (ctx.assigned.get(name)) |dtok| {
+                    var b = self.errAtWith(t, .E0432);
+                    b.msg("`{s}`", .{name});
+                    b.label(
+                        self.tokenSpan(dtok),
+                        "`{s}` is also assigned here, in the discrete context",
+                        .{name},
+                    );
+                    try b.emit();
+                }
+            }
+            try self.scanContinuousExpr(a.value, is_initial, ctx);
+        },
+        .block => |b| for (b.body) |s| try self.scanContinuous(s, is_initial, ctx),
+        .if_stmt => |s| {
+            try self.scanContinuousExpr(s.cond, is_initial, ctx);
+            try self.scanContinuous(s.then_s, is_initial, ctx);
+            try self.scanContinuous(s.else_s, is_initial, ctx);
+        },
+        .case_stmt => |s| {
+            try self.scanContinuousExpr(s.scrutinee, is_initial, ctx);
+            for (s.arms) |arm| {
+                for (arm.labels) |l| try self.scanContinuousExpr(l, is_initial, ctx);
+                try self.scanContinuous(arm.body, is_initial, ctx);
+            }
+        },
+        .for_stmt => |s| {
+            try self.scanContinuous(s.init, is_initial, ctx);
+            try self.scanContinuousExpr(s.cond, is_initial, ctx);
+            try self.scanContinuous(s.step, is_initial, ctx);
+            try self.scanContinuous(s.body, is_initial, ctx);
+        },
+        .while_stmt => |s| {
+            try self.scanContinuousExpr(s.cond, is_initial, ctx);
+            try self.scanContinuous(s.body, is_initial, ctx);
+        },
+        .repeat_stmt => |s| {
+            try self.scanContinuousExpr(s.count, is_initial, ctx);
+            try self.scanContinuous(s.body, is_initial, ctx);
+        },
+        .event_control => |s| {
+            try self.scanContinuousExpr(s.event, is_initial, ctx);
+            try self.scanContinuous(s.body, is_initial, ctx);
+        },
+        .contribute => |s| try self.scanContinuousExpr(s.rhs, is_initial, ctx),
+        .indirect => |s| try self.scanContinuousExpr(s.eqn, is_initial, ctx),
+        .sys_task => |s| for (s.args) |a| try self.scanContinuousExpr(a, is_initial, ctx),
+        .empty, .event_trigger, .disable, .jump => {},
+    }
+}
+
+/// §5.2.1: "digital values cannot be accessed from the analog initial block as
+/// they have not yet been assigned when the analog initial block is executed."
+/// Only the READ is diagnosed, and only inside an `analog initial` — the same
+/// read from the ordinary analog block is what §7.3.1 Table 7-1 is the
+/// conversion table for.
+fn scanContinuousExpr(self: *Lower, e: Ast.ExprId, is_initial: bool, ctx: *DiscreteCtx) Oom!void {
+    if (e == .none or !is_initial) return;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    if (tag == .ident) {
+        const name = self.file.str(ex.strOf(e));
+        if (ctx.assigned.get(name)) |dtok| {
+            var b = self.errAtWith(e, .E0431);
+            b.msg("`{s}`", .{name});
+            b.label(self.tokenSpan(dtok), "`{s}` is assigned here, in the discrete context", .{name});
+            try b.emit();
+        }
+    }
+    try self.scanContinuousExpr(ex.lhs(e), is_initial, ctx);
+    try self.scanContinuousExpr(ex.rhs(e), is_initial, ctx);
+    if (tag == .ternary) try self.scanContinuousExpr(ex.ternaryElse(e), is_initial, ctx);
+    switch (tag) {
+        .call,
+        .builtin_call,
+        .sys_call,
+        .filter_call,
+        .noise_call,
+        .event_function,
+        .concat,
+        .assign_pattern,
+        => for (ex.args(e)) |a| try self.scanContinuousExpr(a, is_initial, ctx),
+        else => {},
+    }
 }
 
 // ---- §3.6 disciplines & natures --------------------------------------------
@@ -1927,7 +2230,11 @@ fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
         // branch pairs the same two DISCIPLINES, so the verdict is the same on
         // all of them and only the first has anything new to say.
         if (k == 0) try self.checkNetCompat(b.main_tok, hi, lo);
-        try self.branches.put(self.arena, try self.vecElem(name, @intCast(k)), .{ .hi = hi, .lo = lo });
+        try self.branches.put(self.arena, try self.vecElem(name, @intCast(k)), .{
+            .hi = hi,
+            .lo = lo,
+            .id = self.newBranchId(),
+        });
     }
     try self.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
 }
@@ -1935,6 +2242,14 @@ fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
 /// The name codegen prints for a node_order index (naming.zig unit targets).
 pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
     return if (idx == ground) "gnd" else self.node_order.items[idx];
+}
+
+/// §5.4.1 a fresh branch identity, one per DECLARED branch name (array elements
+/// included). Ids are per-module and never reused; nothing outside lowering sees
+/// them, so they need no stable spelling.
+fn newBranchId(self: *Lower) u32 {
+    self.last_branch_id += 1;
+    return self.last_branch_id;
 }
 
 /// §4.4 potential probe of one node. Deduped so a node is one `block_param`
@@ -3133,7 +3448,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         return;
     }
     if (target.access == .flow) try self.checkMfactorDoubleScaling(lhs, rhs);
-    const idx = try self.contribIndex(target.access, target.hi, target.lo, self.file.exprs.mainTok(lhs));
+    const idx = try self.contribIndex(target, self.file.exprs.mainTok(lhs));
 
     const split = try self.splitContribution(rhs);
     if (split.resist) |v| try self.checkFiniteContribution(lhs, v); // §7.3.2.1
@@ -3142,7 +3457,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // §5.6.1.3 value retention, the half that is a REPLACEMENT and not a sum.
     // Before this statement's own value is added, anything retained for the
     // OTHER quantity of the same branch is thrown away.
-    try self.discardOpposite(target.access, target.hi, target.lo);
+    try self.discardOpposite(target);
     // §1.3.1.2: `I(n,p) <+ e` drives the same branch as `I(p,n) <+ -e`, so the
     // reversed spelling accumulates into the same source with the sign flipped.
     // Checked AFTER §7.3.2.1, which is about the value the source names and
@@ -3433,7 +3748,7 @@ fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, e
 
     // Its own entry, never `contribIndex`: §5.6.7.1 allows several indirect
     // contributions, each of which is a separate source and equation.
-    const idx = try self.newContrib(.indirect, target.access, target.hi, target.lo, self.file.exprs.mainTok(lhs));
+    const idx = try self.newContrib(.indirect, target, self.file.exprs.mainTok(lhs));
     try self.builder.writeVariable(self.accum.items[idx].resist, self.cur, row);
 }
 
@@ -3531,7 +3846,17 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
 /// `flow(a,b)` NAME from a contribution's `hi`/`lo` to find the slot lowering
 /// already allocated — only ever sees the one spelling, so nothing downstream
 /// needs to know the rule exists.
-const Target = struct { access: Access, hi: u16, lo: u16, neg: bool = false };
+const Target = struct {
+    access: Access,
+    hi: u16,
+    lo: u16,
+    neg: bool = false,
+    /// §5.4.1 the branch this reference names — a `BranchInfo.id` for a declared
+    /// name, `unnamed_branch` for the pair's one implicit branch. Carried beside
+    /// the pair rather than instead of it: the pair is what codegen stamps and
+    /// what §5.6.7.2's "or any of its parallel branches" is stated over.
+    br: u32 = unnamed_branch,
+};
 
 /// The key a branch reference has in `branches`: `br` for a scalar branch,
 /// `br[k]` for one element of a §3.12 vector branch. `null` when the
@@ -3561,11 +3886,11 @@ fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
     return self.port_branches.get(key);
 }
 
-fn canonical(access: Access, hi: u16, lo: u16) Target {
+fn canonical(access: Access, hi: u16, lo: u16, br: u32) Target {
     return if (hi <= lo)
-        .{ .access = access, .hi = hi, .lo = lo }
+        .{ .access = access, .hi = hi, .lo = lo, .br = br }
     else
-        .{ .access = access, .hi = lo, .lo = hi, .neg = true };
+        .{ .access = access, .hi = lo, .lo = hi, .neg = true, .br = br };
 }
 
 /// §4.4.1 resolve `V(a)`, `V(a,b)`, `I(br)` to (access, node pair).
@@ -3605,7 +3930,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         if (try self.branchKey(first)) |key| {
             if (self.branches.get(key)) |b| {
                 try self.checkAccessMatch(e, name, access, b.hi);
-                return canonical(access, b.hi, b.lo);
+                return canonical(access, b.hi, b.lo, b.id);
             }
         }
     }
@@ -3641,7 +3966,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         try b.emit();
         return null;
     }
-    return canonical(access, hi, lo);
+    return canonical(access, hi, lo, unnamed_branch);
 }
 
 /// §5.5.1 Syntax 5-3 `nature_access_function ::= nature_attribute_identifier |
@@ -3727,26 +4052,31 @@ fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Acces
 /// Find or create the accumulator pair for one contribution target. A pair
 /// that receives BOTH a potential and a flow contribution (in different arms)
 /// is the §5.6.5 switch branch — two entries, one per access.
-fn contribIndex(self: *Lower, access: Access, hi: u16, lo: u16, tok: u32) Oom!u32 {
+fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     for (self.contributions.items, 0..) |c, i| {
         // §5.6.7.2 an indirectly-assigned branch is never an accumulation
         // target, so its entry can never absorb a `<+` (which `lowerIndirect`
         // rejects outright anyway).
         if (c.kind != .direct) continue;
-        if (c.access == access and c.hi == hi and c.lo == lo) return @intCast(i);
+        // §5.4.1: the pair does not identify the branch, so `br` is part of the
+        // key. Two named branches over one pair get one accumulator each; every
+        // spelling of the pair's UNNAMED branch shares the one §5.4.1 Example 2
+        // allows it.
+        if (c.access == t.access and c.hi == t.hi and c.lo == t.lo and c.br == t.br) return @intCast(i);
     }
-    return self.newContrib(.direct, access, hi, lo, tok);
+    return self.newContrib(.direct, t, tok);
 }
 
 /// Append a fresh contribution + its accumulator pair. The two tables stay
 /// parallel; see the UNIT ORDERING note in proof.zig.
-fn newContrib(self: *Lower, kind: Kind, access: Access, hi: u16, lo: u16, tok: u32) Oom!u32 {
+fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
     const idx: u32 = @intCast(self.contributions.items.len);
     try self.contributions.append(self.arena, .{
-        .access = access,
+        .access = t.access,
+        .br = t.br,
         .tok = tok,
-        .hi = hi,
-        .lo = lo,
+        .hi = t.hi,
+        .lo = t.lo,
         .kind = kind,
     });
     const acc: Accum = .{ .resist = self.builder.newPlace(), .react = self.builder.newPlace() };
@@ -3779,10 +4109,14 @@ fn newContrib(self: *Lower, kind: Kind, access: Access, hi: u16, lo: u16, tok: u
 /// (a short) instead of no source. Fixing that means making the ROW itself
 /// switchable at run time, i.e. implementing §5.6.5's switch branch in codegen,
 /// which VerA does not do for the plain `if (c) V(p,n) <+ 0;` shape either.
-fn discardOpposite(self: *Lower, access: Access, hi: u16, lo: u16) Oom!void {
-    const other: Access = if (access == .potential) .flow else .potential;
+fn discardOpposite(self: *Lower, t: Target) Oom!void {
+    const other: Access = if (t.access == .potential) .flow else .potential;
     for (self.contributions.items, self.accum.items) |c, acc| {
-        if (c.kind != .direct or c.access != other or c.hi != hi or c.lo != lo) continue;
+        if (c.kind != .direct or c.access != other or c.hi != t.hi or c.lo != t.lo) continue;
+        // §5.6.1.3 is stated of "a branch", so only the OTHER quantity of THIS
+        // branch is discarded. A parallel named branch over the same pair is a
+        // different source and keeps what it retained.
+        if (c.br != t.br) continue;
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
     }
@@ -5230,6 +5564,48 @@ fn isDigitalOnlySysFunc(name: []const u8) bool {
     return false;
 }
 
+/// §9.22 paragraph 3, second sentence: "Driver access functions can only be
+/// called from connect modules." §9.23 repeats the fence for its four
+/// supplementary functions ("supported in the digital context of
+/// connectmodules"), and Table 9-19 gives every name below "Supported in analog
+/// context of connectmodule: No".
+///
+/// This is a rule about the CALL SITE, not about the value: an ordinary module
+/// is not a connect module, so the call is illegal on sight — no netlist, no
+/// elaboration, no driver needed. Which is why it lives here, beside the §9.2
+/// analog-context test above, and not in codegen: codegen used to answer these
+/// with the constant 0, and 0 is not merely unhelpful but wrong-looking-right,
+/// since §9.22.2/§9.22.3/§9.23.x index "between 0 and N-1" and N = 0 leaves no
+/// element 0 to have a state, a strength or a type at all.
+///
+/// The list is a name test, exactly as `isDigitalOnlySysFunc` is, and it stays
+/// one now that `connectmodule` PARSES (§7.6, A.1.2's third `module_keyword`):
+/// every call site LOWERING reaches is inside the elaborated device, and a
+/// connect module is never that. §7.6 makes it the bridge the insertion phase
+/// places on a mixed net, so `elaborate.pickTop` refuses to pick one and nothing
+/// lowers its body — a driver call written inside a connect module is therefore
+/// accepted and never reached, which is the right answer to the wrong half of the
+/// clause. The day insertion exists, the test narrows to "is the enclosing design
+/// element a connect module" and this list is the set it narrows over.
+///
+/// `$receiver_count` is on the list on the strength of the §9.22.1 paragraph
+/// that introduces it: it is explicitly "Non-normative", but it is printed
+/// INSIDE §9.22, takes the same `signal_name` argument, and Table 9-19 carries
+/// it with the rest — so if it exists at all it is a member of the family the
+/// paragraph above fences (tests/fixtures/annex_g_change_history/08).
+fn isConnectModuleOnlySysFunc(name: []const u8) bool {
+    const cm_only = [_][]const u8{
+        // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.
+        "$driver_count",      "$receiver_count",       "$driver_state",
+        "$driver_strength",
+        // §9.23.1–§9.23.4, the supplementary pending-event queries.
+        "$driver_delay",      "$driver_next_state",
+        "$driver_next_strength", "$driver_type",
+    };
+    for (cm_only) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Class 4/5 — expressions (LRM §4.2), math (§4.3), signal access (§4.4)
 // ---------------------------------------------------------------------------
@@ -5333,7 +5709,17 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try self.errAt(e, .E0329, "", .{});
             return poison;
         },
-        .event_or, .event_posedge, .event_negedge, .event_initial_step, .event_final_step, .event_function => {
+        .event_or,
+        .event_posedge,
+        .event_negedge,
+        .event_initial_step,
+        .event_final_step,
+        .event_function,
+        // A.6.5 `driver_update expression` — an event, so E0701 like the rest.
+        // Nothing lowers a connect module, so this is reachable only if someone
+        // writes the keyword where a value belongs.
+        .event_driver_update,
+        => {
             try self.errAt(e, .E0701, "", .{});
             return poison;
         },
@@ -5876,7 +6262,7 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // genuine unknown of the solve — and a POTENTIAL source's branch
             // current is pinned by the branch row codegen emits for it. Both of
             // those keep the unknown and read it.
-            if (self.flowAccum(t.hi, t.lo)) |acc| {
+            if (self.flowAccum(t)) |acc| {
                 // ponytail: the resistive half only. A reactive flow
                 // contribution retains a CHARGE (§5.6.1.2 strips the `ddt`), so
                 // reading the branch flow back would have to differentiate it
@@ -5895,9 +6281,10 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The §5.6.1.2 retained-flow accumulator of the branch (hi, lo), if a `<+` has
 /// already made it a flow source. Keyed exactly like `contribIndex` — on the
 /// canonicalised pair, so `I(n,p)` finds the one entry `I(p,n)` created.
-fn flowAccum(self: *const Lower, hi: u16, lo: u16) ?Accum {
+fn flowAccum(self: *const Lower, t: Target) ?Accum {
     for (self.contributions.items, self.accum.items) |c, acc| {
-        if (c.kind == .direct and c.access == .flow and c.hi == hi and c.lo == lo) return acc;
+        if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
+            return acc;
     }
     return null;
 }
@@ -6468,6 +6855,16 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const name = self.file.str(ex.strOf(e));
     if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.errAt(e, .E0806, "`{s}`", .{name});
+        return poison;
+    }
+    // §9.22/§9.23 — the driver access family, refused because this is not a
+    // connect module (see `isConnectModuleOnlySysFunc` for why the test is a
+    // name test today and what it narrows into later).
+    if (isConnectModuleOnlySysFunc(name)) {
+        var b = self.errAtWith(e, .E0818);
+        b.msg("`{s}` can only be called from a connect module", .{name});
+        b.note("§9.22: \"Driver access functions can only be called from connect modules.\" This is a `module`", .{});
+        try b.emit();
         return poison;
     }
     // §3.4.7/§9.18: this module wrote `aliasparam m = $mfactor;`, so the two
@@ -7193,13 +7590,11 @@ fn sysFuncTy(name: []const u8) Ty {
         // does not even compile — see tests/fixtures/exhaustive/122.
         "$rtoi",          "$clog2",
         "$realtobits",
-        "$driver_count",      "$receiver_count",       "$driver_state", "$driver_strength", // §9.22
-        // §9.23 — `$driver_delay` is deliberately NOT here: §9.23.1 says "the
-        // returned delay value is a real number ... The fractional part arises
-        // from the possibility of a driver being updated by an A2D event off
-        // the digital timeticks", so truncating it to an integer loses exactly
-        // the part the clause exists to describe.
-        "$driver_next_state", "$driver_next_strength", "$driver_type",
+        // The §9.22/§9.23 driver access family is NOT here, and neither is it in
+        // `analysis.callTy`: `isConnectModuleOnlySysFunc` refuses every one of
+        // those calls before it becomes a `call`, so no MIR node carries the name
+        // and there is nothing left to type. A row here would be a type for an
+        // expression that cannot exist.
         // §9.5.4.2 the scan count, and the item flavour whose destination is an
         // integer variable. Synthetic names `lowerScan` builds; the flavour name
         // IS the type, so this and `analysis.callTy` agree by construction.

@@ -1,6 +1,6 @@
 # The torture suite
 
-859 `.va` files. No sidecar files. One judge, `tests/harness.zig`, and two
+1152 `.va` files. No sidecar files. One judge, `tests/harness.zig`, and two
 runners that plug into it:
 
 | runner | compiler | step | depth |
@@ -39,7 +39,7 @@ diagnostic. A line is either a diagnostic CODE (`E0130`, `W0650`), a phase label
 (`ParseError`, `DiagnosticsReported`), or a message substring.
 
 Codes are the preferred form: they are stable, so the prose of a diagnostic can
-be improved without touching 312 fixtures, and they pin WHICH rule fired rather
+be improved without touching the 324 `//! reject` arms that name one, and they pin WHICH rule fired rather
 than how it happened to be worded.
 
 ## Citing the rule — `//! lrm`
@@ -102,6 +102,14 @@ enforces this mechanically:
 
 A reviewer checks the digits once, against the LRM, without running anything.
 After that a regression turns `ok=1` into `ok=0`.
+
+The lint reads **code**, so quote these macros freely in a header paragraph: a
+`` `CHECKX `` inside a `//` or `/* */` comment, or inside a CHECK's own name
+string, is prose and is not scanned. It also requires the `(` to follow the macro
+name with at most spaces or tabs between, which is what §10.3 says a macro usage
+with actual arguments looks like. Both of those were once wrong in the other
+direction — the scanner took the next `(` anywhere downstream, so a fixture's
+verdict could be flipped by lengthening an unrelated comment, and six were.
 
 ### Macros — `check.vh`
 
@@ -303,6 +311,33 @@ that something is wrong:
 A reason with a diagnostic code or a construct name is greppable, and tells the
 next person whether their change closed this gap. "Not supported yet" makes them
 rerun the suite to find out what was even being tested.
+
+### The one reason that is not a gap: a clause VerA is not inside
+
+A few clauses are **conditional on an implementation choice**, and a tool that
+does not make the choice is not failing them. Annex E is the whole of that set
+today: E.1.1 says "**if** a simulator which supports Verilog-AMS HDL is also able
+to read SPICE netlists of a particular flavor, **then** certain objects defined in
+that flavor of SPICE netlist can be referenced", and E.1.2 hands the antecedent
+straight to the implementer — SPICE compatibility "is solely determined by the
+authors of the simulator". VerA reads one language, so `spice_model.va`,
+`spice_subcircuit.va` and `spice_case_lookup.va` state a requirement that never
+bound it.
+
+Those keep `//! xfail`, and their reasons open with **NOT A DEBT** and the clause
+that says why. Two things make keeping the marker the right call rather than a
+dodge:
+
+- `//! xfail` is honoured only for VerA, so for a tool that *does* read netlists
+  the file is an ordinary requirement and stays one;
+- XPASS still guards the failure mode that IS VerA's — these must not go green by
+  resolving an instance of a module declared nowhere.
+
+Do not extend this to "VerA does not implement X, therefore X does not bind VerA".
+The test is textual and narrow: the clause has to be written as an implication
+whose antecedent is a property of the tool, and the reason has to quote it. An
+Annex C "not supported in Verilog-A" sentence is **not** one of these — VerA
+targets Verilog-AMS.
 
 ### XPASS is a hard FAIL
 

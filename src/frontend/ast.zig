@@ -202,6 +202,12 @@ pub const ExprTag = enum(u8) {
     /// analog_event_functions). `str` = name, `extra` = ExprId list offset
     /// (a `.none` element is an omitted `analog_expression_or_null` argument).
     event_function,
+    /// A.6.5 `driver_update expression` — `lhs` is the signal. §9.22.4: "causes
+    /// the statement to execute any time a driver of the signal clock is
+    /// updated." A DIGITAL event, and §9.22 paragraph 3 confines the driver
+    /// family to a connect module, so this node only ever appears under a
+    /// `DiscreteBlock` of a `connectmodule` and is never lowered.
+    event_driver_update,
 };
 
 /// One expression row. The `ExprStore` keeps these as MultiArrayList columns,
@@ -596,6 +602,24 @@ pub const AnalogBlock = struct {
     main_tok: u32 = 0,
 };
 
+/// One `initial` or `always` construct (A.6.2 initial_construct /
+/// always_construct) — §7.2.2's DISCRETE context.
+///
+/// Recorded, not executed. The construct is refused (E0205: VerA has no digital
+/// execution model), but the refusal is REPORTED AND THE BODY IS STILL PARSED,
+/// because five rules the LRM states about a discrete context are rules about
+/// the BODY and are unreachable while the keyword is a syntax error: §4.5.15's
+/// analog-operator ban, §4.7.3/§7.3.7's calling-context rule, §5.2.1's
+/// digital-value read and §7.2.2's both-contexts rule. See
+/// `Lower.checkDiscreteContext`.
+pub const DiscreteBlock = struct {
+    /// `always` rather than `initial`. Only the diagnostic wording reads it —
+    /// §7.2.2 puts both blocks in the same context.
+    is_always: bool = false,
+    body: StmtId,
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -689,6 +713,10 @@ pub const ModuleDecl = struct {
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
+    /// A.6.2 `initial`/`always` constructs in source order — §7.2.2's discrete
+    /// context. Read ONLY by `Lower.checkDiscreteContext`; nothing is lowered
+    /// from it, and the parser has already refused each one.
+    discrete: []const DiscreteBlock = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
@@ -700,6 +728,19 @@ pub const ModuleDecl = struct {
     /// nature_attribute_expression` are the same (name, value, token) triple —
     /// `skipAttributes` said so before this field existed.
     attrs: []const NatureAttr = &.{},
+    /// A.1.2 the `module_keyword` was `connectmodule` — §7.6's connect module.
+    /// `module` and `macromodule` are indistinguishable (§6.2 licenses that);
+    /// this third spelling is not, for exactly two reasons:
+    ///
+    ///  - §7.6 makes a connect module the thing the INSERTION PHASE puts on a
+    ///    mixed net, not a design root. VerA does no insertion, so a connect
+    ///    module is never instantiated, and `elaborate.pickTop` must not pick
+    ///    one as the device merely because nothing instantiates it.
+    ///  - §7.2.2 gives its body the discrete context legally: it is the one
+    ///    design element that exists to bridge a discrete signal, so an
+    ///    `always` inside one is not the E0205 "unsupported module item" that
+    ///    the same keyword is in an ordinary module.
+    is_connect: bool = false,
     main_tok: u32 = 0,
 };
 
@@ -1018,9 +1059,14 @@ pub const SourceFile = struct {
 //   · generic `(* attr = val *)` attribute_instances (§2.9) — the parser skips
 //     them. Add `attrs: []const NatureAttr` to ParamDecl/ModuleDecl when the
 //     host needs `units`/`desc` metadata; NatureAttr is already the right shape.
-//   · digital-only statements (initial/always, fork/join, blocking vs
-//     nonblocking, event_trigger `->`, wait, task/UDP/specify/config/
-//     connectrules declarations) — rejected in the lexer/parser, never AST.
+//   · digital-only statements (fork/join, blocking vs nonblocking,
+//     event_trigger `->`, wait, task/UDP/specify/config/connectrules
+//     declarations) — rejected in the lexer/parser, never AST.
+//     `initial`/`always` came OFF this list: they are `DiscreteBlock` now,
+//     because four rules the LRM states about a discrete context are rules
+//     about the body and were unreachable while the keyword was an error.
+//     `connectmodule` was never on it — A.1.2 makes it a `module_keyword`, so
+//     it is an ordinary `ModuleDecl` with `is_connect` set.
 
 // ---------------------------------------------------------------------------
 // Self-check: the store round-trips handles, lists and the §3.4.2 ranges that

@@ -10,18 +10,21 @@ HTML section-ID audit: `sD-1` `sD-2` `sD-3`. Three IDs, one per file; the annex 
 subsections, so the table below is cut on the annex files' own comment-delimited blocks
 and macro families instead.
 
+27 `.va` files: 6 carry a `//! reject` arm, 21 run and assert, and NONE is `//! xfail`
+(grep-measured over the directory, not carried forward from an earlier revision).
+
 | Annex D construct | Fixture or disposition |
 |---|---|
 | **D.1** `DISCIPLINES_VAMS` multiple-inclusion guard | `disciplines_vams_guard_idempotent.va` (double `include`, `electrical` and `P_CELSIUS0` still usable after) |
-| D.1 `discipline \logic` — escaped name, `domain discrete`, natureless | `literal_logic_discipline.va` — **xfail**: VerA accepts an analog access function on a natureless `\logic` net; the escaped name resolves to the prelude's discipline, which binds no natures, and nothing then constrains which access name is legal on it |
-| D.1 `discipline ddiscrete` — `domain discrete`, natureless | `discrete_disciplines.va` — **xfail**: VerA accepts an analog access function on a natureless `ddiscrete` net, same root cause |
+| D.1 `discipline \logic` — escaped name, `domain discrete`, natureless | `literal_logic_discipline.va` — green, `//! reject E0501`: the escaped name resolves to the prelude's discipline, which binds no natures, and `checkAccessMatch` (`src/ir/lower.zig`) now diagnoses the half that binds nothing instead of returning early |
+| D.1 `discipline ddiscrete` — `domain discrete`, natureless | `discrete_disciplines.va` — green, `//! reject E0501`, same check |
 | D.1 `_ABSTOL` override arms (16 `ifdef`/`else` pairs) | `abstol_override_branches.va` defines all sixteen before `include "disciplines.vams"` and re-declares the shape locally so the `ifdef` arm is provably taken even on a prepending compiler |
 | D.1 electrical natures `Current` `Charge` `Voltage` `Flux` (`I` `Q` `V` `Phi`) | `electrical_definitions.va` writes the block in the annex's own §3.6.1/§3.6.2 syntax under prefixed names; `literal_electrical_disciplines.va` reads the implementation's `V`/`I`; `Phi` is exercised as magnetic's flow in `literal_magnetic_discipline.va`; `Q` only through the reject in `unbound_nature_charge_rejected.va` |
 | D.1 `discipline electrical` (conservative) | `literal_electrical_disciplines.va`, plus every fixture in this directory that carries an `electrical` port |
 | D.1 `discipline voltage` / `discipline current` (signal-flow) | `literal_electrical_disciplines.va` (positive: `V` on a `voltage` net); `electrical_definitions.va` (`voltage_d`/`current_d`, user-written); rejects below |
-| D.1 signal-flow half-binding — no flow nature on `voltage` | `signal_flow_flow_access_rejected.va` — **xfail**: VerA accepts `I` on a `voltage` net; `checkAccessMatch` (`src/ir/lower.zig`) returns early when the discipline binds no nature for that half |
-| D.1 signal-flow half-binding — no potential nature on `current` | `signal_flow_potential_access_rejected.va` — **xfail**: same early return, so `V` on a `current` net resolves silently |
-| D.1 access name must match the *net's* discipline | `unbound_nature_access_rejected.va` (`Temp` on `electrical` — nature bound into another discipline) and `unbound_nature_charge_rejected.va` (`Q` — nature bound into none). Both reject E0501 today, no xfail |
+| D.1 signal-flow half-binding — no flow nature on `voltage` | `signal_flow_flow_access_rejected.va` — green, `//! reject E0501`: `I` on a `voltage` net is refused with "binds no flow nature, so `p` has no flow to access" |
+| D.1 signal-flow half-binding — no potential nature on `current` | `signal_flow_potential_access_rejected.va` — green, the mirror direction. Both are pinned separately because a lookup keyed on "all natures the discipline mentions" would pass one and fail the other |
+| D.1 access name must match the *net's* discipline | `unbound_nature_access_rejected.va` (`Temp` on `electrical` — nature bound into another discipline) and `unbound_nature_charge_rejected.va` (`Q` — nature bound into none). Both reject E0501 |
 | D.1 magnetic: `Magneto_Motive_Force` (`MMF`), `discipline magnetic` with `flow Flux` | `literal_magnetic_discipline.va` — pins that magnetic reuses the *electrical* `Flux`/`Phi`, there being no separate magnetic flux nature |
 | D.1 thermal: `Temperature` (`Temp`), `Power` (`Pwr`), `discipline thermal` | `literal_thermal_discipline.va` (implementation's copy) and `thermal_definitions.va` (user-written, prefixed, crosses into D.2 via `P_CELSIUS0`) |
 | D.1 kinematic `Position` (`Pos`), `Velocity` (`Vel`), `Force` (`F`) | `literal_kinematic_disciplines.va` |
@@ -44,9 +47,9 @@ and macro families instead.
 | D.2 selector chain, `PHYSICAL_CONSTANTS_NIST2010` arm | `physical_constants_nist2010.va` |
 | D.2 selector chain, innermost `else` (NIST1998 fallback) | `physical_constants_nist1998.va` — the one arm needing no `undef` plumbing |
 | D.2 the twenty `P_{Q,K,H,EPS0}_{SPICE,OLD,NIST1998,NIST2010,NIST2018}` base macros | *not read directly* — every fixture reads them through `P_Q`/`P_K`/`P_H`/`P_EPS0` after selection. A `constants.vams` that omitted a base name but inlined the right value in the chain would pass |
-| **D.3** the implementation must *supply* `driver_access.vams` | `driver_access_include.va` — **xfail**: VerA ships `constants.vams` and `disciplines.vams` as builtin includes but not D.3, so `` `include "driver_access.vams" `` is E0126 `cannot find include file` (`src/frontend/preprocessor.zig` `builtin_includes` has two entries, not three) |
+| **D.3** the implementation must *supply* `driver_access.vams` | `driver_access_include.va` — green: `src/frontend/preprocessor.zig`'s `builtin_includes` has three entries now, so the `` `include `` resolves and all twelve `DRIVER_*` masks come out of the shipped file rather than out of the fixture |
 | D.3 the twelve `DRIVER_*` bit positions | `driver_flags_low.va` (UNKNOWN…BEHAVIORAL) and `driver_flags_high.va` (SDF…WAND) pin each mask and the two disjointness sums 31 and 2016 — but they `define` the masks themselves, so what runs is the lexer's `32'b` conversion, not D.3. `driver_access_include.va` is the half that reads the annex file |
-| D.3 `DRIVER_ACCESS_VAMS` guard | *nothing* — `driver_flags_low.va`/`_high.va` deliberately do **not** wrap in it (with the guard, an implementation that does ship D.3 erases the whole module and the fixture asserts nothing), and `driver_access_include.va` cannot reach it while the include fails |
+| D.3 `DRIVER_ACCESS_VAMS` guard | *half* — `driver_access_include.va` takes the guard's defining arm (VerA preloads only D.1/D.2, so D.3 must be asked for and the twelve `define`s must run for the file to assert anything). The suppression direction — a second `` `include `` costing nothing, which `disciplines_vams_guard_idempotent.va` states for D.1/D.2 — has no fixture. `driver_flags_low.va`/`_high.va` deliberately do **not** wrap in the guard: with it, an implementation that ships D.3 erases the whole module and the fixture asserts nothing |
 
 Fixture-name audit, 27 files, all mapped above: `abstol_override_branches.va`,
 `celsius_constant.va`, `disciplines_vams_guard_idempotent.va`, `discrete_disciplines.va`,
@@ -69,29 +72,30 @@ never reaches an assertion.
 
 ## The xfail ledger
 
-Five fixtures state an Annex D rule the compiler under test does not yet meet. They are
-the honest debt of this chapter, and they fall into three groups.
+EMPTY — grep finds no `//! xfail` in this directory. The five rows this section used to
+hold are kept below as the record of what they were and how each closed, because the
+reasons name checks that must not silently regress:
 
-1. **Natureless disciplines are not enforced** — `literal_logic_discipline.va`,
-   `discrete_disciplines.va`. §3.6.3 says a net with a natureless discipline cannot appear
-   in an analog behavioral description at all. VerA lets any access name through.
-2. **Half-bound signal-flow disciplines are not enforced** —
-   `signal_flow_flow_access_rejected.va`, `signal_flow_potential_access_rejected.va`.
-   Same root cause, one level up: `checkAccessMatch` in `src/ir/lower.zig` returns early
-   when the discipline binds no nature for the half being accessed, so the mismatch is
-   never diagnosed. Both directions are pinned separately because a lookup keyed on "all
-   natures the discipline mentions" would pass one and fail the other. Fixing the early
-   return plausibly clears all four of groups 1 and 2 at once.
-3. **One thing simply absent** — `driver_access_include.va` (D.3's file is not shipped,
-   E0126). Independent of groups 1–2. `nature_as_ddt_abstol_argument.va` used to sit
-   here and no longer does: §5.5.3's "the abstol attribute of a nature may also be
-   accessed simply by using the nature's identifier" is implemented.
+1. **Natureless disciplines** — `literal_logic_discipline.va`, `discrete_disciplines.va`.
+   §3.6.3 says a net with a natureless discipline cannot appear in an analog behavioral
+   description at all. Closed together with group 2.
+2. **Half-bound signal-flow disciplines** — `signal_flow_flow_access_rejected.va`,
+   `signal_flow_potential_access_rejected.va`. The root cause of all four was one early
+   return in `checkAccessMatch` (`src/ir/lower.zig`) when the discipline bound no nature
+   for the half being accessed; the E0501 arm that replaced it fires for both halves, so
+   fixing it cleared groups 1 and 2 at once, exactly as this ledger predicted. §4.4's
+   generic `potential()`/`flow()` are exempt from the *name* match only and still go
+   through that arm — a natureless discipline has nothing for them to read either.
+3. **One thing simply absent** — `driver_access_include.va`. D.3's file is shipped now
+   (`builtin_includes`, three entries). `nature_as_ddt_abstol_argument.va` left this
+   ledger earlier: §5.5.3's "the abstol attribute of a nature may also be accessed simply
+   by using the nature's identifier" is implemented.
 
-The two reject fixtures that are *not* xfail — `unbound_nature_access_rejected.va` and
-`unbound_nature_charge_rejected.va` — are the cases where the nature exists somewhere,
-so the access name reaches the discipline-mismatch check and E0501 fires correctly. That
-is the boundary of what VerA currently gets right: it rejects a *wrong* nature, and
-accepts anything when there is *no* nature.
+`unbound_nature_access_rejected.va` and `unbound_nature_charge_rejected.va` were never
+xfail: they are the cases where the nature exists somewhere, so the access name always
+reached the discipline-mismatch check. What has changed is that the *absent*-nature cases
+now reach a check too, so this directory no longer distinguishes a wrong nature from no
+nature.
 
 ## What is not covered, and why
 
@@ -110,8 +114,9 @@ accepts anything when there is *no* nature.
   A compiler that discarded the links entirely passes this directory.
 - **The twenty `P_*_<VINTAGE>` base macro names.** Reachable only through the selector
   output. See the table row.
-- **`DRIVER_ACCESS_VAMS`.** Untestable while D.3 is not shipped, and deliberately not
-  wrapped around the two flag fixtures.
+- **`DRIVER_ACCESS_VAMS` suppression.** D.3 is shipped and its guard's defining arm runs
+  (see the table row), but no fixture includes the file twice, so the idempotence half is
+  untested for D.3. Deliberately not wrapped around the two flag fixtures.
 - **Guard suppression.** `disciplines_vams_guard_idempotent.va` covers only one direction
   — that a second include costs nothing. The other direction, `` `define DISCIPLINES_VAMS 1 ``
   ahead of the include so `electrical` is never declared, cannot be expressed: VerA's

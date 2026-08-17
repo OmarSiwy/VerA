@@ -3047,30 +3047,15 @@ pub const Gen = struct {
         // §9.12 command-line plusargs: absent.
         if (eq(u8, name, "$test$plusargs") or eq(u8, name, "$value$plusargs"))
             return self.b("@as(i64, 0)", .{});
-        // §9.22 Tables 9-19/9-20 connectmodule driver & receiver access. These
-        // are `connectmodule`-only in the LRM; VerA compiles a flat analog
-        // device, which HAS no digital drivers or receivers, so the count is
-        // exactly 0 and no driver index is in range. Zero is the true answer
-        // here, not a substitute — but the call site is nonconforming, hence
-        // the acceptance is a snapshot (tests/fixtures/ch09_system_tasks §9.22).
-        // $driver_delay is NOT in the list below, for two reasons that arrive
-        // together. §9.23.1 types it REAL — "The returned delay value is a real
-        // number … The fractional part arises from the possibility of a driver
-        // being updated by an A2D event off the digital timeticks" — so an i64
-        // literal lands in an S(Dual) slot and the device does not compile at
-        // all. And zero is not its no-driver answer: §9.23.1 gives it a
-        // sentinel, "If there is no pending value on a signal, it returns the
-        // value minus one (-1.0)", which is exactly the flat-analog case the
-        // comment above describes for the counts.
-        if (eq(u8, name, "$driver_delay")) return self.b("S.con(-1.0)", .{});
-        const driver_queries = [_][]const u8{
-            "$driver_count",    "$receiver_count",    "$driver_state",
-            "$driver_strength", "$driver_next_state", "$driver_next_strength",
-            "$driver_type",
-        };
-        for (driver_queries) |q| {
-            if (eq(u8, name, q)) return self.b("@as(i64, 0)", .{});
-        }
+        // §9.22/§9.23 driver & receiver access do NOT appear here. They used to,
+        // answering the constant 0 (and -1.0 for $driver_delay's no-pending-value
+        // sentinel) on the argument that a flat analog device has no digital
+        // drivers so zero is the true count. The argument is wrong at the first
+        // step: §9.22 paragraph 3 says "Driver access functions can only be
+        // called from connect modules", so the call itself is illegal in every
+        // module VerA can compile and there is no result to render. Refused at
+        // lowering now (E0818, `isConnectModuleOnlySysFunc`), which is where the
+        // call site is known — so this backend never sees one of these names.
         // §4.5.15 $limit: the limiting ALGORITHM is a convergence aid the host
         // owns (contract `limit`); the LRM lets a simulator that does not apply
         // it return the access function unchanged, which is what happens here.

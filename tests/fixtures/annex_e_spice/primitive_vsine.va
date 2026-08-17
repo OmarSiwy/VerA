@@ -1,8 +1,8 @@
-// Table E.1 row `isine`: ports p, n, parameters dc, mag, phase, offset, ampl,
+// Table E.1 row `vsine`: ports p, n, parameters dc, mag, phase, offset, ampl,
 // freq, td, damp, sinephase, ammodindex, ammodfreq, ammodphase, fmmodindex,
 // fmmodfreq, behaviour
 //
-//     I = offset + ampl * (1 - Fam*cos(2*pi*Fam_f*(t-td) - Pam))
+//     V = offset + ampl * (1 - Fam*cos(2*pi*Fam_f*(t-td) - Pam))
 //                       * (1 - damp*(t-td))
 //                       * cos(2*pi*freq*(1 - Ffm*cos(2*pi*Ffm_f*(t-td)))*(t-td)
 //                             - Psin)
@@ -13,7 +13,12 @@
 // and Annex E's source-fidelity note lists the duplicate label as a defect of the
 // printed table.
 //
-// E.2.2.3 prints this primitive: `isine #(.dc(1m)) Iee (e, gnd);`.
+// The isine row with V for I, which is the ONE line of it this file adds: E.2.2.3
+// prints `vsine #(.dc(5)) Vcc (vcc, gnd);` and Table E.1 gives the row a POTENTIAL,
+// so the branch flow is the unknown and the number below is one only a solve can
+// produce. Everything else here is primitive_isine.va's derivation unchanged — the
+// two rows are the same fourteen parameters and the same product — so a divergence
+// between the two files is a divergence between the two prelude modules.
 //
 // WHAT IS PINNED. E.3: "Table E.1 shows the REQUIRED names for primitives,
 // parameters, and ports which are otherwise unnamed in SPICE. For connection by
@@ -45,7 +50,7 @@
 //   FM factor    1 - 0.2*cos(2*pi*1*1)     = 1 - 0.2         = 0.8
 //   cosine       cos(2*pi*0.75*0.8*1) = cos(216 degrees) = -(1 + sqrt(5))/4
 //
-//     I = 1m + 2m * 1.5 * 0.75 * -(1+sqrt(5))/4 = -8.202882373436317e-4
+//     V = 1m + 2m * 1.5 * 0.75 * -(1+sqrt(5))/4 = -8.202882373436317e-4
 //
 // -(1+sqrt(5))/4 = -0.80901699437494742… is exact, so the want is a decimal a
 // reader can check with a square root and nothing else. Relative tolerance because
@@ -72,8 +77,8 @@
 //
 // HOW THE PRIMITIVE IS OBSERVED. §6.7.1: "Potential and flow access for named
 // and unnamed branches (including port branches) can be done hierarchically",
-// and "access of parameters can be done hierarchically". So `I(x1.p, x1.n)` is the
-// flow of the primitive's own port pair — the branch Table E.1's Behavior
+// and "access of parameters can be done hierarchically". So `V(x1.p, x1.n)` is the
+// potential of the primitive's own port pair — the branch Table E.1's Behavior
 // column is written about — reached by an out-of-module reference, and `x1.ampl` is
 // the parameter an override landed on. Nothing else could observe the row: the
 // Behavior column belongs to the primitive's branches, not to this module's.
@@ -92,19 +97,20 @@
 //! lrm 6.7.1
 //! analysis tran
 //! time 1.0
+//! bias V(n) = 0.0
+//! solve
 `include "check.vh"
-module annex_e_primitive_isine(p, n);
+module annex_e_primitive_vsine(p, n);
   inout p, n; electrical p, n;
   electrical a1, a2, a3;
-  isine #(.dc(0.0), .mag(1.0), .phase(0.0), .offset(1m), .ampl(2m), .freq(0.75), .td(0.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x1(.p(a1), .n(n));
-  isine #(.dc(9m), .mag(9.0), .phase(9.0), .offset(1m), .ampl(2m), .freq(0.75), .td(0.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x2(.p(a2), .n(n));
-  isine #(.dc(0.0), .mag(1.0), .phase(0.0), .offset(1m), .ampl(2m), .freq(0.75), .td(1.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x3(.p(a3), .n(n));
+  vsine #(.dc(0.0), .mag(1.0), .phase(0.0), .offset(1m), .ampl(2m), .freq(0.75), .td(0.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x1(.p(a1), .n(n));
+  vsine #(.dc(9m), .mag(9.0), .phase(9.0), .offset(1m), .ampl(2m), .freq(0.75), .td(0.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x2(.p(a2), .n(n));
+  vsine #(.dc(0.0), .mag(1.0), .phase(0.0), .offset(1m), .ampl(2m), .freq(0.75), .td(1.0), .damp(0.25), .sinephase(0.0), .ammodindex(0.5), .ammodfreq(0.5), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(1.0)) x3(.p(a3), .n(n));
   analog begin
-    `CHECKR("offset + ampl*AM*damp*cos, every factor away from 1", I(x1.p, x1.n), -8.202882373436317e-4, 1e-14);
-    `CHECKR("dc, mag and phase are AC values and change no waveform", I(x2.p, x2.n), -8.202882373436317e-4, 1e-14);
-    `CHECKR("at t = td the row is offset + ampl*(1 - ammodindex)", I(x3.p, x3.n), 2.0e-3, 1e-15);
+    `CHECKR("offset + ampl*AM*damp*cos, every factor away from 1", V(x1.p, x1.n), -8.202882373436317e-4, 1e-14);
+    `CHECKR("dc, mag and phase are AC values and change no waveform", V(x2.p, x2.n), -8.202882373436317e-4, 1e-14);
+    `CHECKR("at t = td the row is offset + ampl*(1 - ammodindex)", V(x3.p, x3.n), 2.0e-3, 1e-15);
     `CHECKX("the ampl override reaches Table E.1's ampl", x1.ampl, 2.0e-3);
     `CHECKX("and fmmodfreq, which the printed row mislabels f_AM", x1.fmmodfreq, 1.0);
-    I(p, n) <+ 0.0;
   end
 endmodule

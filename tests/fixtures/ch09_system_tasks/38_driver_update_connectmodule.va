@@ -30,20 +30,33 @@
 // about nothing but a branch potential (0.75 - 0.25 = 0.5, both operands exact
 // in binary): its whole job is to be a verdict that EXISTS, so that "this source
 // file, connectmodule and all, was accepted, elaborated and run" becomes a
-// green/red the runner can see. Today VerA stops at NoModule and the whole file
-// fails, which is the XFAIL below; the day connectmodule support lands, the run
-// goes green, the XPASS fires, and the marker has to go.
+// green/red the runner can see. That is the assertion, and it is green now.
+//
+// ONE LINE OF THIS FIXTURE WAS ITSELF WRONG, and it is corrected above rather
+// than implemented: it used to close the connect module with
+// `endconnectmodule`, WHICH IS NOT A KEYWORD OF THIS LANGUAGE. A.1.2 gives a
+// connect module no production of its own —
+//
+//     module_declaration ::= { attribute_instance } module_keyword
+//         module_identifier [ module_parameter_port_list ] list_of_ports ;
+//         { module_item } endmodule
+//     module_keyword ::= module | macromodule | connectmodule
+//
+// — so the terminator is `endmodule`, and annex B's reserved list confirms it
+// by containing `endconnectrules` and no `endconnectmodule` at all. §7.6's own
+// three examples ("connectmodule d2a (in, out); … endmodule") print it that
+// way. Making a compiler accept the invented spelling would have been the suite
+// teaching VerA a dialect; the fixture had to move.
 //
 //! lrm 9.22.4
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA has no `connectmodule` design element (E0201 on the keyword) and no digital driver state, which is what §9.22.4 defines @(driver_update) over — the one context in which the event is legal is the one thing VerA does not have. A discrete-time scheduler, not a hierarchy gap
 `include "check.vh"
 connectmodule ch09_driver_update_connectmodule(d, a);
   input d; output a;
   logic d;
   electrical a;
   always @(driver_update d) $strobe("driver updated");
-endconnectmodule
+endmodule
 
 module ch09_driver_update_host(p, n);
   inout p, n; electrical p, n;

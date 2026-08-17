@@ -582,13 +582,11 @@ pub fn callTy(name: []const u8) VTy {
         "$param_given",          "$port_connected",
         "$test$plusargs",        "$value$plusargs",
         "$rtoi",                 "$clog2",
-        "$realtobits",           "$driver_count",
-        "$receiver_count",       "$driver_state",
-        // §9.23.1: `$driver_delay` "is a real number ... The fractional part
-        // arises from the possibility of a driver being updated by an A2D event
-        // off the digital timeticks", so it is NOT in this list.
-        "$driver_strength",      "$driver_next_state",
-        "$driver_next_strength", "$driver_type",
+        "$realtobits",
+        // The §9.22/§9.23 driver access family is absent, matching
+        // `Lower.sysFuncTy`: §9.22 paragraph 3 confines those calls to connect
+        // modules, so lowering refuses every one (E0818) and no `call` with such
+        // a name reaches this analysis to be typed.
         // §9.5.4.2 `Lower.lowerScan`'s synthetic names: the item count, and the
         // item flavour chosen for an `integer` destination.
         "$sscanf",               "$sscanf$int",

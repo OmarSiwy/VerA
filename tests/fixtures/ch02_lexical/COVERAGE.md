@@ -6,9 +6,9 @@ syntax box and both tables.
 HTML section-ID audit: `s2-1` `s2-2` `s2-3` `s2-4` `s2-5` `s2-6` `s2-6-1` `s2-6-2`
 `s2-7` `s2-8` `s2-8-1` `s2-8-2` `s2-8-3` `s2-8-4` `s2-9` `s2-9-1` `s2-9-2`.
 
-Sixty `.va` files. Thirty-two carry a `//! reject` arm, twenty-eight run; seven of
-the sixty carry `//! xfail`, three of those on a reject arm and four on a run
-fixture. Fifteen of the seventeen sections have a fixture that exercises the rule.
+Sixty `.va` files. Thirty-two carry a `//! reject` arm, twenty-eight run; NONE
+carries `//! xfail` any more (grep-measured: `grep -lc '//! xfail' *.va` is empty).
+Fifteen of the seventeen sections have a fixture that exercises the rule.
 Two do not, and the table says so with a dash rather than a plausible name.
 
 Every row below was checked against the file's `//! lrm` cites *and* its source, not
@@ -25,7 +25,7 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 | `s2-4` | `//` to newline, `/*`…`*/`, no nesting, `//` inert inside a block comment | `01_whitespace_comments.va` (`2.0 /* // */ + 3.0`, and a `` `define `` inside each comment form that must not reach the preprocessor), `12_unclosed_comment.va` (`//! reject E0102`), `13_nested_comment_rejected.va` (`//! reject E0205`, the leftover `still_outer */`) |
 | `s2-5` | operators are one-, two- or three-character sequences; unary left, binary infix, conditional two characters over three operands | — no fixture in this directory, and `grep -rl 'lrm 2\.5' tests/fixtures/` finds none anywhere in the suite. `ch04_expressions` (149 files, `4.2.1`–`4.2.14`) owns operator semantics. `21` and `33` do contain `+`, `*` and `?:`, but only as carriers for an attribute, and neither cites 2.5 |
 | `s2-6` | Syntax 2-2, the number grammar | parent; every production is reached through 2.6.1 and 2.6.2 below. `51` cites the `size ::= non_zero_unsigned_number` box, `56`/`58` the `scale_factor` and `real_number1` boxes. No fixture cites a bare `2.6` |
-| `s2-6-1` | integer constants: bases, size, sign, underscores, truncation/padding, macro substitution | Positives: `04_integer_bases.va` (all four bases, underscores), `22_unsized_based_number.va` (`'h837ff`, `'o7460`, the 32-bit floor), `23_signed_based_number.va` (`4'shf`, `4'hf`, `-4'sd15`, `-8'd6`), `35_uppercase_bases_hex.va` (all eight base spellings, mixed-case hex digits), `40_size_truncation_and_padding.va` (five literals, three of them with the top bit set after truncation). Negatives: `25` (sign between base and digits), `41` (space between `'` and base letter), `49` (base letter outside the eight), `50` (`4af`, no apostrophe), `42` (multi-digit decimal x), `05`/`24` (x/z and `?`, withdrawn by Annex C.3). Debt: `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va`, `51_zero_size_rejected.va` — all three **`//! xfail`** |
+| `s2-6-1` | integer constants: bases, size, sign, underscores, truncation/padding, macro substitution | Positives: `04_integer_bases.va` (all four bases, underscores), `22_unsized_based_number.va` (`'h837ff`, `'o7460`, the 32-bit floor), `23_signed_based_number.va` (`4'shf`, `4'hf`, `-4'sd15`, `-8'd6`), `35_uppercase_bases_hex.va` (all eight base spellings, mixed-case hex digits), `40_size_truncation_and_padding.va` (five literals, three of them with the top bit set after truncation). Negatives: `25` (sign between base and digits), `41` (space between `'` and base letter), `49` (base letter outside the eight), `50` (`4af`, no apostrophe), `42` (multi-digit decimal x), `05`/`24` (x/z and `?`, withdrawn by Annex C.3). Debt: none. `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va` and `51_zero_size_rejected.va` were the three `//! xfail` rows and all three are green — the last of them (`37`, macro-substituted tokens) closed when `lexNumber` learned to join the size to the base format across white space |
 | `s2-6-2` | real constants: 754 conversion, three notations, Table 2-1, underscores, the six invalid dotted forms | Positives: `06_real_notation.va` (decimal vs scientific vs dot-less exponent, `CHECKX` throughout), `07_si_scale_factors.va` (all eleven Table 2-1 symbols plus `24.7K` and `1.3u`), `34_real_underscores.va`, `01_whitespace_comments.va` (`1_000.0`). Negatives: the six invalid forms one file each — `14` (`.12`), `15` (`9.`), `16` (`4.E3`), `43` (`.2e-7`), `44` (`.1p`), `45` (`34.M`) — plus `46` (space before the scale symbol), `56` (`1g`: the alphabet is closed and case-bearing), `57` (`1._5`), `58` (`1.0e3K`: exponent and scale factor are different arms of one choice) |
 | `s2-7` | a string literal is single-line; as an operand it is a base-256 unsigned integer; Table 2-2 escapes | `19_multiline_string_rejected.va` and `38_string_line_continuation_rejected.va` (both `//! reject E0138`; `38` is `bsim4va.va:3658` verbatim, so it pins that VerA does *not* adopt the SystemVerilog `\`-continuation). Everything else in 2.7 — the operand semantics and all five rows of Table 2-2 — is in `08_string_escapes.va` alone, and it is green: seven `CHECKI`s, one per escape plus the multi-character `"AB"` == 16706 that pins the base-256 ORDER |
 | `s2-8` | simple identifiers, first character, `$` and `_`, case sensitivity, 1024-character floor | `02_simple_identifiers.va` (`gain_factor` vs `Gain_Factor` differ by 1.0, and the ports are `_port0` and the LRM's own `n$657`), `28_identifier_1024_chars.va` (exactly 1024 characters, written and read back through the full spelling), `59_uppercase_keyword_is_identifier.va` (also `//! lrm 2.8.2`), `17_identifier_digit_rejected.va` (`2gain`), `47_identifier_dollar_first_rejected.va` (`$gain`) |
@@ -33,38 +33,36 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 | `s2-8-2` | keywords are lowercase-only predefined simple identifiers; an escaped keyword is not a keyword | `26_escaped_keyword.va` (`real \analog ;`), `59_uppercase_keyword_is_identifier.va` (`REAL`, `MODULE`, `BEGIN` as three distinct reals summing to 7.0). Annex B's inventory is `annex_b_keywords`, not here |
 | `s2-8-3` | `$` introduces a system name; the `$` may not be followed by white space and may not be escaped | `09_system_identifiers.va` (`//! temp 300`; `$temperature` exact, `$vt` against the NIST1998 pair in a 1e-4 band), `18_system_whitespace_rejected.va` (`$ vt`), `60_bare_dollar_rejected.va` (the character class after `$` is mandatory), `48_escaped_system_identifier_rejected.va` |
 | `s2-8-4` | the grave accent introduces a compiler directive; a directive takes effect when read and holds for the rest of the compilation | `10_compiler_directive_macro.va` (`` `define `` with an argument; the argument is a sum so a dropped parameter paren shows as 5.0 instead of 6.0). `01_whitespace_comments.va` proves the complement — a directive written inside either comment form is comment text — but cites 2.4 for it, which is where that sentence lives |
-| `s2-9` | Syntax 2-4; where an attribute may appear; default value 1; last duplicate wins; no nesting; value is a constant expression | `11_attributes.va` (module, port, discipline and parameter prefixes; the decorated parameter still holds `1m`), `20_duplicate_attributes.va` (repeated name is legal and inert), `29_attribute_default_and_multiple.va` (valueless, `=1`, `=0` in one instance), `31_analog_statement_attributes.va` (statement prefix), `21_operator_attribute.va` (Example 6, suffix on a binary operator), `33_conditional_attribute.va` (Example 8, both arms of `?:`), `30_nested_attribute_rejected.va` (E0357 — the nesting ban, now the rule rather than a desynchronized token skip), `53_attribute_value_not_constant_rejected.va` (E0357 — the same code, the same sentence pair, from the constant-expression side), `54_attribute_illegal_placement_rejected.va` (`parameter real (* q *) x` — the bound on the two parser widenings). Debt: `32_function_call_attribute.va` (Example 7), **`//! xfail`** |
+| `s2-9` | Syntax 2-4; where an attribute may appear; default value 1; last duplicate wins; no nesting; value is a constant expression | `11_attributes.va` (module, port, discipline and parameter prefixes; the decorated parameter still holds `1m`), `20_duplicate_attributes.va` (repeated name is legal and inert), `29_attribute_default_and_multiple.va` (valueless, `=1`, `=0` in one instance), `31_analog_statement_attributes.va` (statement prefix), `21_operator_attribute.va` (Example 6, suffix on a binary operator), `33_conditional_attribute.va` (Example 8, both arms of `?:`), `30_nested_attribute_rejected.va` (E0357 — the nesting ban, now the rule rather than a desynchronized token skip), `53_attribute_value_not_constant_rejected.va` (E0357 — the same code, the same sentence pair, from the constant-expression side), `54_attribute_illegal_placement_rejected.va` (`parameter real (* q *) x` — the bound on the two parser widenings). Debt: none — `32_function_call_attribute.va` (Example 7) was the `//! xfail` row and is green |
 | `s2-9-1` | Syntax 2-5 … 2-10, the exact `{ attribute_instance }` slots | `55_attribute_block_item_and_function_port.va` (Syntax 2-8 / A.2.8: attributed `real` and `parameter` inside a named analog block, attributed `real` inside an analog function body — two places nothing else in this chapter reaches), `30_nested_attribute_rejected.va` (Syntax 2-7's `{ attribute_instance } parameter_declaration ;` slot, which is what makes the nesting the only fault in the file). Syntax 2-9 and 2-10 have no fixture — see below |
 | `s2-9-2` | `desc`, `units`, `op`, `multiplicity` and their value domains | `11_attributes.va` supplies all four names with in-domain values on one parameter and proves the declaration is untouched (it cites 2.9, not 2.9.2). The domain rule itself is `52_standard_attribute_domain_rejected.va` (E0358), which covers all four names — a non-string `desc`, and an `op`/`multiplicity` outside the listed sets. The `$mfactor` reporting behaviour the four attributes control is a simulator output, not anything a generated device exposes |
 
 ## The xfail ledger
 
-Four of the sixty fixtures state a rule VerA does not meet. Each names a file, so
-the row disappears the day the defect does. Reasons verbatim from the headers.
+EMPTY, and measured rather than asserted: no `.va` in this folder carries a
+`//! xfail` line. The table used to hold four rows and every one of them is closed.
 
-| Fixture | Section | Reason |
-|---|---|---|
-| `32_function_call_attribute.va` | `s2-9` (Example 7, A.8.2) | VerA's parser has no `{ attribute_instance }` slot between a function name and its argument list, so Example 7's form dies at E0207 "unexpected token: found `(*`, expected `)`" (`src/frontend/parser.zig`) |
-| `36_based_number_digit_whitespace.va` | `s2-6-1` | VerA's lexer scans a based number as one token, so white space between the base format and the digits splits it and the digits are then an invalid token (E0209) (`src/frontend/lexer.zig`) |
-| `37_macro_based_number_tokens.va` | `s2-6-1` (with 10.3) | VerA lexes a based number before macro expansion can rejoin the three tokens, so ``8 `BASE `DIGITS`` stops at E0207 "expected `;`" on the expanded `'h` (`src/frontend/lexer.zig`) |
-| `51_zero_size_rejected.va` | `s2-6-1` | VerA accepts a zero size constant: width 0 is the lexer's unsized sentinel, so `0'b1` is read as an unsized `'b1` (`src/frontend/lexer.zig`) |
+The three based-number rows were one defect wearing three hats — `36`, `37` and
+`51` were all `src/frontend/lexer.zig` treating a based constant as a single
+indivisible scan, which is what 2.6.1 denies in the same sentence that describes
+it ("composed of up to three tokens … It shall be legal to macro substitute these
+three tokens"). `36` (white space before the digits) and `51` (a zero size
+constant is not the unsized sentinel) were closed by earlier waves; `37` closed
+when `lexNumber` learned to skip white space between the SIZE and the apostrophe,
+which is the one join a macro-substituted number cannot avoid — a macro body
+cannot be pasted onto its call site, so ``8 `BASE `DIGITS`` reaches the lexer as
+`8 'h A5`. The clause forbids white space in exactly one place, between the
+apostrophe and the base character, and that is still refused (`41`).
 
-The two attribute rows that used to close this table are gone: attribute values are
-parsed as expressions and collected into the AST, so §2.9's constant-expression rule
-is E0357 and §2.9.2's four value domains are E0358.
+`32` — A.8.2's `{ attribute_instance }` slot between a function name and its
+argument list — was closed by an earlier wave too.
 
-Three of the four are one defect wearing three hats: `36`, `37` and `51` are all
-`src/frontend/lexer.zig` scanning a based number as a single indivisible token. 2.6.1
-says the opposite in the same sentence — "composed of up to three tokens … It shall
-be legal to macro substitute these three tokens" — so a fix that splits the scan
-retires all three rows at once, and `51`'s zero-size acceptance falls out with it
-because width 0 stops being the unsized sentinel.
-
-The remaining row is `32`, a construct VerA fails to *accept*: A.8.2's
-`{ attribute_instance }` slot between a function name and its argument list.
-Every ENFORCEMENT row is gone — `52` and `53` were the two, and both pinned the
-phase label `DiagnosticsReported` rather than a code precisely so that they could
-be retargeted the day one existed; they now pin E0358 and E0357.
+The two attribute rows that used to close this table are gone for a different
+reason: attribute values are parsed as expressions and collected into the AST, so
+§2.9's constant-expression rule is E0357 and §2.9.2's four value domains are
+E0358. Every ENFORCEMENT row is gone — `52` and `53` were the two, and both
+pinned the phase label `DiagnosticsReported` rather than a code precisely so that
+they could be retargeted the day one existed; they now pin E0358 and E0357.
 
 ## What is not covered
 

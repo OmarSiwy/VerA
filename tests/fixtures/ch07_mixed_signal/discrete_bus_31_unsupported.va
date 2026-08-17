@@ -17,7 +17,13 @@
 // context merely READS it.
 //
 //! lrm 7.3.1
-//! xfail VerA implements no discrete context: `reg [30:0] r` is E0205 (unsupported module item) and so is the `initial` block; the §7.3.1 WIDTH is checked (E0222 fires only above 31) but there is no discrete net to read
+// Blocked for exactly the reason discrete_bus_narrow_unsupported.va is, and by
+// the same four fixtures — the §7.3.1 width test already works (E0222 fires only
+// above 31, so this 31-bit declaration is accepted as legal), and the `initial`
+// block now parses; what cannot happen is the file COMPILING, because four green
+// fixtures require a constant assignment in an `initial` block to be refused.
+//
+//! xfail blocked by a contradiction inside the suite, not by a missing capability: `reg [30:0] r` is accepted as a legal width and `initial r = 31'h7fffffff` parses, but annex_c_analog_subset/13_digital_initial_rejected.va, ch07_mixed_signal/digital_initial_unsupported.va, ch07_mixed_signal/discrete_real_from_analog_unsupported.va and ch08_scheduling/analog_digital_initial_order_unsupported.va are all green and all pin `reject E0205` on a constant assignment in an `initial` block, so no implementation satisfies this fixture and those four at once
 `include "check.vh"
 module ch7_discrete_bus_31(p);
   inout p; electrical p;

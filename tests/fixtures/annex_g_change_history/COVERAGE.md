@@ -7,9 +7,11 @@ and Annex G is **informative**.
 
 Twenty-three fixtures live in this folder. Twenty-two cite an Annex G clause; one
 (`23_transition_fall_time_binding.va`) cites only §4.5.8 and is counted at the bottom,
-not in the table. Eight of the twenty-three are `//! xfail`, and the ledger below is
-the most useful thing in this file: it is the list of retired-spelling and
-relaxed-rule sentences the suite states and the compiler under test does not yet meet.
+not in the table. **Measured by grep, none of the twenty-three carries a `//! xfail`
+line today** — this folder is fully green. The ledger below is kept as the history of
+what was open and why, but its rows are the ones earlier waves closed without
+re-stating them here; only `08`'s removal was verified against the compiler by the
+wave that removed it. The aggregate re-census owns the rest.
 
 What makes an informative annex testable at all is one sentence in §G.1's own preamble:
 *"The syntax and semantics of this document supersede any syntax, semantics, or
@@ -24,7 +26,7 @@ the row alone is not normative.
 | `sG-1` | §G.1, seven revision tables, 238 data rows (G.1: 29, G.2: 33, G.3: 27, G.4: 42, G.5: 20, G.6: 53, G.7: 34). Informative history plus the supersession sentence above | 16 fixtures, covering 21 of the 238 rows. Broken out row by row in the next table. Tables G.3, G.5 and G.6 have no fixture at all |
 | `sG-2` | "The following statements are not supported in the current version of Verilog-AMS HDL; they are only noted for backward compatibility." | No fixture cites `G.2` bare, and none should — this is a one-sentence frame with no construct of its own, and a bare `G.2` cite would be indistinguishable from a cite of Table G.2. Its four subclauses carry all the content and all four have fixtures |
 | `sG-2-1` | Forever: "This statement is no longer supported." Still a reserved word (B.1), so it is not reachable as an identifier either | `04_obsolete_forever.va` (`G.2.1`, `5.9`) — `//! reject E0209` "expected an expression", plus the fragment `forever`. Green. The header records that VerA also emits E0205 on the stray `end` during resynchronisation and deliberately does not pin it |
-| `sG-2-2` | NULL: no longer a statement; case, conditionals and the event statement do allow null statements *as defined by the syntax*. Four claims — three survivors and one prohibition | All four have a fixture, three green and one xfail. Conditional arm: `05_null_statement_scope.va`, which pins *binding* (the `else` after `if (c) ;` still belongs to that `if`) rather than mere acceptance. Case arm: `14_null_case_arm.va`, A.6.7's `analog_case_item`, arms carrying distinct values so a swallowed `;` shows up as the next arm's body. Event body: `15_null_event_body.va`, A.6.5, run in dc against a `("tran")` event list so the event does *not* fire and the mis-parse is observable. Prohibition: `09_null_statement_unconditional_rejected.va` — **`//! xfail`** |
+| `sG-2-2` | NULL: no longer a statement; case, conditionals and the event statement do allow null statements *as defined by the syntax*. Four claims — three survivors and one prohibition | All four have a fixture and all four are green. Conditional arm: `05_null_statement_scope.va`, which pins *binding* (the `else` after `if (c) ;` still belongs to that `if`) rather than mere acceptance. Case arm: `14_null_case_arm.va`, A.6.7's `analog_case_item`, arms carrying distinct values so a swallowed `;` shows up as the next arm's body. Event body: `15_null_event_body.va`, A.6.5, run in dc against a `("tran")` event list so the event does *not* fire and the mis-parse is observable. Prohibition: `09_null_statement_unconditional_rejected.va` — green, `//! reject DiagnosticsReported` |
 | `sG-2-3` | Generate: the v1.0 `generate index (start, end [, incr]) statement`, an analog statement unrolled at elaboration, Figure G-1 | `06_obsolete_generate.va` (`G.1`, `G.2.3`) — `//! reject E0209` plus the fragment `generate`. Green. The header is explicit that this is *not* §6.6.2's loop generate, which is current language owned by `ch06_hierarchy/generate_loop.va` — so a diagnostic containing the word `generate` proves nothing on its own, and the code pins *where* it dies. **Figure G-1's semantics are untested**: no fixture exercises the index-locality rule, the elaboration-time-only evaluation of the bounds, the sign-of-increment no-execute case, the lower==upper case, or the default increment. Nothing can — the construct is gone, and the only conforming answer to all six is the same rejection |
 | `sG-2-4` | `` `default_function_type_analog`` is no longer supported | `07_obsolete_default_function_type.va` (`G.2.4`) — `//! reject E0115` "undefined macro", plus the directive name. Green. §10 leaves the name undefined, so an unknown-macro diagnosis is the conforming one. Its Table G.1 twin is `12_default_nodetype_rejected.va` |
 
@@ -37,25 +39,25 @@ only claims the rows a fixture in *this* folder actually exercises.
 | Table | Row / item | Fixture | State |
 |---|---|---|---|
 | G.1 | Analog time: `$realtime` → `$abstime`, *new* | `01_abstime_replaced_realtime.va` reads `$abstime` under `` `timescale 1ns/1ns`` at t = 1 us and demands 1e-6, i.e. seconds and not timescale units — nine orders of magnitude between right and wrong | green |
-| G.1 | `$realtime :timescale = 1 sec` → `` `timescale`` def 1n, see `$abstime`, *definition* | `13_realtime_analog_context_rejected.va` — the refusal half. Table 9-7 gives `$realtime` "analog context: No" and §9.10 deprecates it, so the requirement is that the read be diagnosed, not that it return 1000 | **xfail** |
+| G.1 | `$realtime :timescale = 1 sec` → `` `timescale`` def 1n, see `$abstime`, *definition* | `13_realtime_analog_context_rejected.va` — the refusal half. Table 9-7 gives `$realtime` "analog context: No" and §9.10 deprecates it, so the requirement is that the read be diagnosed, not that it return 1000 | green, `DiagnosticsReported` |
 | G.1 | Implicit nodes `` `default_nodetype`` → `` `default_discipline``, and the `` `default_nodetype`` *Obsolete* row (two rows, one directive) | `12_default_nodetype_rejected.va` — `//! reject E0115` + `default_nodetype`. One keystroke from the legal IEEE 1364 `` `default_nettype``, which is why it is its own fixture | green |
-| G.1 | Array setting `{2.1 = (1), 4.5 = (2)}` → `{2.1, 4.5}` | `11_brace_array_initialiser_rejected.va` — but see G.4 item 2: the apostrophe was added *later*, and the live rule is §3.4's `'{ }` assignment pattern, not this row | **xfail** |
+| G.1 | Array setting `{2.1 = (1), 4.5 = (2)}` → `{2.1, 4.5}` | `11_brace_array_initialiser_rejected.va` — but see G.4 item 2: the apostrophe was added *later*, and the live rule is §3.4's `'{ }` assignment pattern, not this row | green, `DiagnosticsReported` |
 | G.1 | Discontinuity function `discontinuity(x)` → `$discontinuity(x)`, *syntax* | `18_discontinuity_v1_spelling_rejected.va` — `//! reject E0214` "expected `<+` or `=`". The header is honest that this is a statement-*shape* error, not a name lookup, so the cite is the portable half | green |
-| G.1 | Limiting exponential `$limexp(expr)` → `limexp(expr)`, *syntax* | `10_limexp_v1_spelling_rejected.va` | **xfail** |
+| G.1 | Limiting exponential `$limexp(expr)` → `limexp(expr)`, *syntax* | `10_limexp_v1_spelling_rejected.va` | green, `DiagnosticsReported` |
 | G.1 | Timestep control `bound_step(const_expr)` → `$bound_step(expr)`, *syntax* | `17_bound_step_v1_spelling_rejected.va` — `//! reject E0214`, same shape-not-lookup caveat as 18 | green |
 | G.1 | Continuous waveform delay `delay()` → `absdelay()`, *syntax* (restated as G.2 item 11) | `16_delay_v1_spelling_rejected.va` — `//! reject E0512` "unknown function", which *is* the conforming outcome, so this is a regression guard and not a bug report. Header records the cite discrepancy: G.2 item 11 says 4.5.14 in v2.1 numbering; the shipped clause is §4.5.7 | green |
 | G.1 | Time tolerance on `transition()`, *Extension* | `21_transition_time_tolerance.va` — transient, on a **falling** edge with `rise_time != fall_time`, so a front end that accepts five arguments by sliding `time_tol` into the `fall_time` slot is caught. Written as `CHECKEQ` identities because `time_tol` buys timestep placement and is not part of the waveform | green |
 | G.1 | Forever, *Obsolete* | `04_obsolete_forever.va` | green |
 | G.1 | Generate, *Obsolete* | `06_obsolete_generate.va` | green |
-| G.1 | Null statement `;` → limited to case, conditional and event statements, *Obsolete* | `05`, `09`, `14`, `15` — see `sG-2-2` above | 3 green, 1 xfail |
+| G.1 | Null statement `;` → limited to case, conditional and event statements, *Obsolete* | `05`, `09`, `14`, `15` — see `sG-2-2` above | all four green |
 | G.2 | item 2, "Not to use 'max' and use 'maxval' instead since `max` is a keyword" | `19_max_nature_attribute_rejected.va` — `//! reject E0208` "expected an identifier", which is exactly the right reason: B.1 makes `max` a reserved word, so it cannot stand where `nature_attribute` wants an `attribute_identifier` | green |
 | G.2 | item 11, `absdelay` instead of `delay` | `16_delay_v1_spelling_rejected.va` | green |
-| G.2 | item 13, `@(final_step)` without arguments should not have parenthesis | `20_final_step_empty_parens_rejected.va` — A.6.5 makes the analysis list non-empty and the whole parenthesised group optional, so `final_step()` has no derivation | **xfail** |
-| G.4 | item 2, apostrophe before opening `{` in a list of values | `11_brace_array_initialiser_rejected.va` — header refuses to copy the annex's stale "3.4.2" and cites §3.4, §3.4.4 and §4.2.14 instead | **xfail** |
+| G.2 | item 13, `@(final_step)` without arguments should not have parenthesis | `20_final_step_empty_parens_rejected.va` — A.6.5 makes the analysis list non-empty and the whole parenthesised group optional, so `final_step()` has no derivation | green, `DiagnosticsReported` |
+| G.4 | item 2, apostrophe before opening `{` in a list of values | `11_brace_array_initialiser_rejected.va` — header refuses to copy the annex's stale "3.4.2" and cites §3.4, §3.4.4 and §4.2.14 instead | green, `DiagnosticsReported` |
 | G.7 | 7780, math functions `expm1()` and `ln1p()` | `02_2023_math_additions.va` — the `$`-prefixed spellings the item added, wants taken from CPython's libm. `$ln1p(-0.5)` is the discriminator: finite, where a forgotten "1 +" gives NaN | green |
-| G.7 | 7793, `$receiver_count()` | `08_new_receiver_count.va` | **xfail** |
+| G.7 | 7793, `$receiver_count()` | `08_new_receiver_count.va` | green. What it pins is the CALL SITE, not the count: §9.22 paragraph 3 confines the family to connect modules, and this call is in an ordinary module, so it is refused at lowering (E0818) — the site decides, not the count. It asserts no value, because the count is a netlist property and the paragraph defers the function's very existence to the simulator |
 | G.7 | 7795, alternative Verilog style `$min()`, `$max()`, `$abs()` | `03_system_math_style.va` — selection by comparison, never by magnitude, so `$max(-2.0, -3.0)` is -2.0 and the classic magnitude bug returns -3.0. Every want is a dyadic rational, so `CHECKX` | green |
-| G.7 | 7922, contribution to a port declared `input` is now a warning, not an error | `22_input_port_contribution_honoured.va` | **xfail** (harness, not compiler — see the ledger) |
+| G.7 | 7922, contribution to a port declared `input` is now a warning, not an error | `22_input_port_contribution_honoured.va` | green, and the only digit in this folder that comes out of a SOLVE — see the ledger |
 
 Fixture-name audit, 23 files, all mapped above or below:
 `01_abstime_replaced_realtime.va`, `02_2023_math_additions.va`, `03_system_math_style.va`,
@@ -71,29 +73,36 @@ Fixture-name audit, 23 files, all mapped above or below:
 
 ## The xfail ledger
 
-Seven of twenty-three. Each names a concrete defect and the row disappears the day the
-defect does. `23_transition_fall_time_binding.va` was the eighth and is gone: §4.5.8's
+Empty, measured: 23 files, 14 with a `//! reject` arm, 9 that run and assert, 0 `//! xfail`.
+Seven rows stood here; `08_new_receiver_count.va` was the last removed, when §9.22's
+call-site rule landed as E0818 — the reason it carried ("VerA lowers every §9.22
+driver-access query to the constant 0") named a `codegen.zig` constant that is now deleted.
+The rows below are retained for the rules they record, and **all six are green**: each pins
+`DiagnosticsReported`, so each went green the moment its rule got a diagnostic of any code,
+which is exactly what the paragraph after the table said the phase label was for. Reasons
+are given in the past tense where the compiler has moved. `23_transition_fall_time_binding.va` was the eighth and is gone: §4.5.8's
 ramp landed with independent rise and fall times, so a falling edge is now traversed in
 `fall_time`, linearly, and `2a - b` is 1.0 at every sampled point.
-Six of the seven name no diagnostic code, and that is deliberate in every
+Six of the seven named no diagnostic code, and that was deliberate in every
 case: VerA emits *nothing* today, so there is no stable code to pin, and a guessed code
 leaves the marker stuck at XFAIL on the day the gap closes under a different one.
 `DiagnosticsReported` is the honest trigger — each of these modules has exactly one
 defect, so any diagnostic at all means someone diagnosed it. Three headers go further
 and name the code that would be *wrong*: a CAPABILITY CLASS fires on the name in any
-context, which is not the rule in question in either `08` or `10`. VerA had one such
+context, which is not the rule in question in either `08` or `10`. `08` is the proof —
+the rule it wanted was about the CONTEXT, and E0818 says "can only be called from a
+connect module", which stays true and stays correctly placed the day VerA has one. VerA had one such
 code, E0801 "unsupported system function"; it is retired, because every name on its
 list (§9.13's draws, §9.21 `$table_model`, §9.16 `$simprobe`) turned out to be
 implementable after all — which is itself the argument against pinning one.
 
 | Fixture | Row it serves | Reason |
 |---|---|---|
-| `08_new_receiver_count.va` | G.7 item 7793 | VerA lowers every §9.22 driver-access query to the constant 0 in any module (`codegen.zig` `driver_queries`) instead of diagnosing the call outside a connectmodule. §9.22's intro says driver access functions can only be called from connect modules, and Table 9-19 gives the whole family "analog context of connectmodule: No"; both are violated here. No value is asserted — `$receiver_count` returns a property of the elaborated netlist and its own paragraph defers its existence to the simulator |
-| `09_null_statement_unconditional_rejected.va` | G.1 Null row, `sG-2-2` prohibition | VerA's `analog_seq_block` parser skips a stray `;` instead of rejecting it. A.6.4 gives `analog_statement` no null alternative and A.6.3's `analog_seq_block` takes `{ analog_statement }`, so a free-standing `;` inside `analog begin ... end` is underivable |
-| `10_limexp_v1_spelling_rejected.va` | G.1 Limiting exponential | VerA aliases the retired v1.0 `$limexp()` beside `limexp()` in codegen. `$limexp` is absent from Table 9-11 and A.8.2, so the conforming diagnosis is an unknown function. Deleting the alias drops the call into codegen's abort path rather than into a diagnostic, which is the second reason no code is pinned |
-| `11_brace_array_initialiser_rejected.va` | G.4 item 2, G.1 Array setting | VerA accepts a brace-only array initialiser. §3.4 *shall* have the `'{ }` assignment pattern so a list of values is distinguishable from a concatenation. The parameter is deliberately not referenced in the analog block: with `DiagnosticsReported` as the trigger, any second defect would XPASS the fixture and read as the apostrophe rule landing |
-| `13_realtime_analog_context_rejected.va` | G.1 Analog time / `$realtime :timescale` | VerA aliases `$realtime` to `$abstime` in codegen — one branch returning `inst.abstime` — instead of refusing it in the analog context, and it marks `` `timescale`` `.ignored` in the preprocessor, so neither the analog-context rule nor the scaling exists. Two defects, one row |
-| `20_final_step_empty_parens_rejected.va` | G.2 item 13 | VerA tolerates an empty `analysis_list` in `@(final_step())` and parses it as the no-argument form. Both legal forms already pass elsewhere (`ch05_analog_behavior/final_step.va`, `ch05_analog_behavior/initial_final_analysis_lists.va`); only the error was open |
+| `09_null_statement_unconditional_rejected.va` | G.1 Null row, `sG-2-2` prohibition | Green. VerA's `analog_seq_block` parser used to skip a stray `;` instead of rejecting it. A.6.4 gives `analog_statement` no null alternative and A.6.3's `analog_seq_block` takes `{ analog_statement }`, so a free-standing `;` inside `analog begin ... end` is underivable |
+| `10_limexp_v1_spelling_rejected.va` | G.1 Limiting exponential | Green. VerA used to alias the retired v1.0 `$limexp()` beside `limexp()` in codegen. `$limexp` is absent from Table 9-11 and A.8.2, so the conforming diagnosis is an unknown function. Deleting the alias drops the call into codegen's abort path rather than into a diagnostic, which is the second reason no code is pinned |
+| `11_brace_array_initialiser_rejected.va` | G.4 item 2, G.1 Array setting | Green. VerA used to accept a brace-only array initialiser. §3.4 *shall* have the `'{ }` assignment pattern so a list of values is distinguishable from a concatenation. The parameter is deliberately not referenced in the analog block: with `DiagnosticsReported` as the trigger, any second defect would XPASS the fixture and read as the apostrophe rule landing |
+| `13_realtime_analog_context_rejected.va` | G.1 Analog time / `$realtime :timescale` | Green. VerA used to alias `$realtime` to `$abstime` in codegen — one branch returning `inst.abstime` — instead of refusing it in the analog context, and it marks `` `timescale`` `.ignored` in the preprocessor, so neither the analog-context rule nor the scaling exists. Two defects, one row |
+| `20_final_step_empty_parens_rejected.va` | G.2 item 13 | Green. VerA used to tolerate an empty `analysis_list` in `@(final_step())`, parsing it as the no-argument form. Both legal forms already pass elsewhere (`ch05_analog_behavior/final_step.va`, `ch05_analog_behavior/initial_final_analysis_lists.va`); only the error was open |
 | `22_input_port_contribution_honoured.va` | G.7 item 7922 | Green, and it is the only fixture here whose digit comes out of a SOLVE: no `//! bias` on `i`, so `//! solve` leaves it to the device, whose one KCL row (`res[i] = -1e-3`, `d res[i]/d x[i] = 1e-3` — a 1 mA source into a 1 kohm conductance) puts V(i) = 1. A compiler that parsed the contribution and dropped it, which the deleted pre-2023 error used to justify, reads 0 |
 
 ## What this annex needs that no fixture supplies
@@ -147,7 +156,7 @@ an owner elsewhere was made and what it found.
 Two rows that looked like gaps and are not, recorded so they are not re-opened:
 Table G.1's port branch access `I(a,a)` → `I(<a>)` is covered on both halves —
 `ch04_expressions/34_port_access.va` for the current form, and
-`ch04_expressions/86_same_flow_terminals.va` (itself xfail) for Table 4-16's rejection
+`ch04_expressions/86_same_flow_terminals.va` (green, E0315) for Table 4-16's rejection
 of the retired one, which is also Table G.4 item 6. Table G.1's `k` scalar row is an
 *Extension*, not a retirement — v1.0 supported only `K` and v2.0 added lowercase `k` —
 and `ch02_lexical/07_si_scale_factors.va` owns it. Table G.2 item 1, parameter range

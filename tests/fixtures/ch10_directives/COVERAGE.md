@@ -36,8 +36,8 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-2` | the positive effect: a default reaches an UNDECLARED net | `41_default_discipline_undeclared_net.va` — discriminating: delete the directive and the module dies at E0337 |
 | `s10-2` | two qualifiers in force at once; more specific wins | `42_default_discipline_two_qualifiers.va` (`wire` claims the ports, `reg` must not) — discriminating: swap the qualifiers and `V()` dies at E0501 on `ddiscrete` |
 | `s10-2` | the qualifier slot is a closed 15-way alternation | `45_default_discipline_qualifier_grammar.va` (E0127) |
-| `s10-2` | the bare form withdraws the default for later nets | `35_default_discipline_reset_leaves_no_default.va` — **`//! xfail`**: the rule fires, but VerA prints E0337 and the fixture guessed E0501 |
-| `s10-2` | `` `resetall `` withdraws it too ("In addition to `resetall") | `36_resetall_clears_default_discipline.va` — **`//! xfail`**, same code mismatch as `35` |
+| `s10-2` | the bare form withdraws the default for later nets | `35_default_discipline_reset_leaves_no_default.va` — green, `//! reject E0337`: the fixture used to guess E0501 |
+| `s10-2` | `` `resetall `` withdraws it too ("In addition to `resetall") | `36_resetall_clears_default_discipline.va` — green, `//! reject E0337`, same corrected code as `35` |
 | `s10-3` | the directive is accepted; §4.5.8 DC pass-through survives it | `03_default_transition.va` — the 1n itself is deliberately not pinned, and the header says why |
 | `s10-3` | the default IS the rise/fall time of an argument-free filter | `38_default_transition_ramp.va` |
 | `s10-3` | a later directive supersedes an earlier one | `39_default_transition_supersedes.va` |
@@ -51,8 +51,8 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-4` | use of an undefined macro is illegal (1364 §19.3.1) | `23_undefined_macro.va` (`//! reject E0115`) |
 | `s10-4` | Syntax 10-3: the NAME is `identifier`, so unrestricted by prefix | `15_define_vams_prefixed_name.va` — a hard must-compile on a **contested reading**, bet deliberately against `34`; no xfail to hide behind |
 | `s10-4` | Syntax 10-3: the FORMAL is `simple_identifier`, escapes barred | `46_macro_formal_must_be_simple_identifier.va` (`//! reject E0110`) |
-| `s10-4` | Syntax 10-3: the NAME may be escaped (`identifier` is wider) | `47_escaped_macro_name.va` — **`//! xfail`** |
-| `s10-4` | the macro TEXT shall not begin with `__VAMS_` | `34_define_vams_macro_text.va` — **`//! xfail`** |
+| `s10-4` | Syntax 10-3: the NAME may be escaped (`identifier` is wider) | `47_escaped_macro_name.va` — green, and it runs: the `` `define `` name takes an escaped identifier |
+| `s10-4` | the macro TEXT shall not begin with `__VAMS_` | `34_define_vams_macro_text.va` — green, `//! reject E0139` |
 | `s10-4` | `` `undef `` has no effect on a predefined macro | `28_undef_predefined_macro.va` (also cites 10.5; crosses `` `resetall `` and `` `undef `` against `__VAMS_ENABLE__`, which `13` and `08` never crossed) |
 | `s10-5` | `__VAMS_ENABLE__` is always defined | `13_predefined_vams_enable.va` (gain witness: 1.0 from the surviving arm, 2.0 from the dead one), `28_undef_predefined_macro.va` |
 | `s10-5` | `__VAMS_COMPACT_MODELING__`, and the `ddx` values §4.5.6 fixes for the arm it guards | `14_predefined_compact_modeling.va` — whether the macro is defined is an implementation fact and is not asserted in either direction; the `else` arm carries no §10.5 claim |
@@ -66,7 +66,7 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-6` | outside a design element only | `29_begin_keywords_inside_module.va` (`//! reject E0202`) — every other keyword fixture uses the legal placement, so nothing else catches a front end that ignores position |
 | `s10-6` | "until the MATCHING `end_keywords": the pairs nest and restore | `33_end_keywords_restores_previous_set.va` (`//! reject E0208` on the outer module; a no-op `` `end_keywords `` passes `16`/`25`/`26` and fails only this) |
 | `s10-6` | a stray `` `end_keywords `` has nothing to match | `30_end_keywords_unmatched.va` (`//! reject E0136`) — the header writes down that §10.6 states no diagnostic and that the explicit form is 1364 §19.11 |
-| `s10-6` | an UNTERMINATED `` `begin_keywords `` is not an error; the set carries on | `31_begin_keywords_unterminated.va` — **`//! xfail`** |
+| `s10-6` | an UNTERMINATED `` `begin_keywords `` is not an error; the set carries on | `31_begin_keywords_unterminated.va` — green, and it runs: E0137 is retired and the file no longer demands a rejection |
 | `s10-6` | the set is not over-broad: `logic` is not reserved in VAMS-2023 | `43_logic_is_an_identifier_vams_2023.va` — the only fixture testing the set from the permissive side, aimed at a Verilog-AMS front end grown on a SystemVerilog parser |
 | `s10-6` | with no directive, the set is "the implementation's default set" | — not testable: any verdict tests one implementation's choice of default. `33`'s header works through why, and names its outer `"VAMS-2023"` explicitly to avoid depending on it |
 | `s10-7` | `` `__FILE__ `` expands to a string literal | `21_file_macro.va` |
@@ -75,19 +75,22 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 
 ## The xfail ledger
 
-Each row names a concrete defect in a named file, so it disappears the day the
-defect does. Four rows used to sit here for `` `default_transition ``, blocked
-by one cause in two halves — the preprocessor marked the directive `.ignored`,
-and `codegen.zig` implemented `transition()` as a first-order lag rather than
-§4.5.8's ramp. Both halves landed together, so all four are gone.
+EMPTY — grep finds no `//! xfail` in this directory: 47 files, 14 with a `//! reject` arm,
+33 that run and assert. Each row named a concrete defect in a named file, so each
+disappeared the day its defect did. Four rows sat here for `` `default_transition ``,
+blocked by one cause in two halves — the preprocessor marked the directive `.ignored`, and
+`codegen.zig` implemented `transition()` as a first-order lag rather than §4.5.8's ramp —
+and both halves landed together, so all four went at once. The remaining five are below
+with what closed them; two of them closed by the FIXTURE being corrected, not the compiler,
+which is the part worth reading.
 
-| Fixture | Rule it states | Why it fails today |
+| Fixture | Rule it states | Disposition |
 |---|---|---|
-| `31_begin_keywords_unterminated.va` | 10.6 an unclosed `` `begin_keywords `` carries across file boundaries | VerA raises E0137 at end of parse. The fixture used to DEMAND that rejection, which inverted the clause: it failed every compiler implementing the sentence and passed only one that did not |
-| `34_define_vams_macro_text.va` | 10.4 macro text shall not begin with `__VAMS_` | `preprocessor.zig` protects only the two predefined NAMES; it never inspects macro text, so a `__VAMS_` body is defined silently |
-| `47_escaped_macro_name.va` | Syntax 10-3 `text_macro_identifier ::= identifier`, so escapes are legal | VerA's `` `define `` name lexer accepts only a simple identifier and raises E0109; the restriction belongs to the FORMAL, not the name |
-| `35_default_discipline_reset_leaves_no_default.va` | 10.2 the bare directive withdraws the default | Not a missing rule any more: the default IS withdrawn and the module IS rejected. The fixture's `//! reject E0501` was a stated guess at the code, and VerA prints E0337 "net has no declared discipline", which is the code wave 1 added for exactly this condition. Whether to retarget the fixture or to widen E0501 is a fixture decision |
-| `36_resetall_clears_default_discipline.va` | 10.2 `` `resetall `` withdraws it too | Same, via the other mechanism, and the same code mismatch |
+| `31_begin_keywords_unterminated.va` | 10.6 an unclosed `` `begin_keywords `` carries across file boundaries | Green, and it now RUNS: E0137 is retired and the fixture no longer demands a rejection. It used to, which inverted the clause — it failed every compiler implementing the sentence and passed only one that did not |
+| `34_define_vams_macro_text.va` | 10.4 macro text shall not begin with `__VAMS_` | Green, `//! reject E0139`: macro TEXT is inspected now. `preprocessor.zig` used to protect only the two predefined NAMES |
+| `47_escaped_macro_name.va` | Syntax 10-3 `text_macro_identifier ::= identifier`, so escapes are legal | Green, and it RUNS: the `` `define `` name lexer takes an escaped identifier, so E0109 no longer fires here. The restriction belongs to the FORMAL, not the name |
+| `35_default_discipline_reset_leaves_no_default.va` | 10.2 the bare directive withdraws the default | Green. The default IS withdrawn and the module IS rejected; the fixture's `//! reject` line was a stated GUESS at the code (E0501) and has been corrected to the code VerA actually prints, E0337 "net has no declared discipline", which is the code wave 1 added for exactly this condition. Whether to retarget the fixture or to widen E0501 is a fixture decision |
+| `36_resetall_clears_default_discipline.va` | 10.2 `` `resetall `` withdraws it too | Green, via the other mechanism, and the same corrected code (E0337) |
 
 
 ## Readings this chapter takes, and where they are argued
@@ -105,7 +108,7 @@ could fail a fixture. Each is argued in a fixture header rather than assumed:
 - **`__VAMS_`: name or text?** `15` accepts a prefixed NAME and `34` rejects a
   prefixed BODY. The bet is deliberately placed in both directions, so whichever
   way the ambiguity resolves exactly one of the two files moves and neither half
-  goes silently missing. `15` is a hard must-compile with no xfail.
+  goes silently missing. `15` is a hard must-compile, and both halves of the bet are green: `34` pins E0139 on the prefixed body.
 - **No "shall be an error" in §10.6.** `30` and `32` demand diagnostics for
   rules §10.6 states as enumerations. Both headers cite IEEE Std 1364 §19.11 as
   the explicit form, which §10.6 extends rather than replaces.
@@ -130,4 +133,4 @@ could fail a fixture. Each is argued in a fixture header rather than assumed:
   instead.
 - **Qualifier coverage is a sample, not the alternation.** Syntax 10-1 lists
   fifteen; `02` uses `real`, `42` uses `wire` and `reg`. `45` pins that the slot
-  is closed at all, which is the rule that matters, and is xfail.
+  is closed at all, which is the rule that matters, and is green (`//! reject qualifier`).
