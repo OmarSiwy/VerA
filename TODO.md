@@ -22,22 +22,76 @@ committed. If you delete this file, delete the pointer to it too.
 
 ## 1. Will not do — and the reason, so it is not re-litigated
 
-### SPICE netlist reader — 3 fixtures, permanently XFAIL
+### SPICE `.MODEL`/`.SUBCKT` cards — DECISION REVERSED, now planned
 
-`annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va`
+An earlier revision of this file recorded
+`annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` as permanent
+non-goals, on the grounds that Annex E.1.1 guards the family with a conditional
+("**if** a simulator … is also able to read SPICE netlists") whose antecedent is
+false for VerA, and that closing them meant writing a second input language.
 
-Annex E.1.1 guards the whole family with a conditional:
+**The clause reading was right; the cost estimate was wrong.** These fixtures do
+not need a netlist parser. They need three names to resolve to a module
+declaration with the right ports — and every piece of machinery that consumes such
+a declaration already shipped:
 
-> **if** a simulator … is also able to read SPICE netlists
+- `preprocessor.zig:244` already injects Table E.1 as prepended Verilog-AMS module
+  TEXT (`spice_primitives`), and its own docstring argues at length why a
+  primitive is a real module rather than a name in a table;
+- `elaborate.zig findModule` already implements E.3.3 precedence over that prelude;
+- `elaborate.zig checkConnectionShape` already permits a short connection list, so
+  `bjt`'s optional `s` port works;
+- `annex_e_spice/spice_network_primitives.va` already PASSES using the exact shape
+  all three need — a §6.7.1 hierarchical probe of an instance port on a
+  prelude-supplied module.
 
-VerA is not, and will not be. The antecedent is false, so these three fixtures do
-not state a requirement that binds VerA — they describe a **second input
-language**. Implementing a SPICE parser to move a conformance number would be the
-wrong trade: it is a new frontend, not a gap in the one that exists.
+So the plan is a **card reader**, not a netlist reader: read `.MODEL` and
+`.SUBCKT` declarations, synthesize prelude module text, and let the existing path
+do the rest. About 190 lines in a new `src/frontend/spice_cards.zig` plus ~30 lines
+of plumbing across `preprocessor.zig`, `root.zig`, `ast.zig` and `elaborate.zig`,
+and one `//! spice` directive in `tb.zig`.
 
-**Consequence, stated plainly: the suite's ceiling is 1147/1150, not 1150/1150.**
-Any future claim of "100% conformance" has to either carry these three as
-declared non-goals or explain what changed. Do not close them by weakening them.
+The directive must be a **transparent netlist channel**, not a resolved tuple — the
+fixture carries the annex's card verbatim, continuations and all:
+
+```
+//! spice .MODEL VERTNPN NPN BF=80 IS=1E-18 RB=100 VAF=50
+//! spice + CJE=3PF CJC=2PF CJS=2PF TF=0.3NS TR=6NS
+```
+
+That is what makes VerA the reader and lets the fixture cite E.2 honestly. Handing
+it a pre-digested `("ecposc", ["out","gnd"])` would close the fixtures while
+skipping E.1.1's premise, and would add a public interface type with one producer.
+
+**What this buys, precisely:** VerA reads SPICE *model and subcircuit statements*,
+which is E.2's literal noun phrase. It does NOT buy device cards, subcircuit
+bodies, `.param` expressions, `.INCLUDE`/`.LIB`, or dialect tokenizers. A
+synthesized `.SUBCKT` module contributes no equations, so under `//! solve` it is
+an open circuit — a ceiling to write at the site, not a bug.
+
+### Do not take ARPice's netlist parser
+
+ARPice (`../ARPice`, EGSpice) has a competent multi-dialect netlist frontend,
+generic over a tokenizer trait bundle, uncoupled from its `Circuit`/`RunCtx`
+types — and it is the wrong tool here, for a checkable reason:
+
+```zig
+// ARPice/src/frontend/types.zig:25
+pub const SubcktType = struct { name, n_ports: u16, n_internal_nodes, device_count };
+```
+
+A port **count**, not names. The struct holding subcircuit port names is private
+inside the `Parser` generic, because subcircuits are flattened at parse time —
+right for a simulator, useless for `spice_subcircuit.va`, which needs `osc1.out`
+resolved by name. Importing it closes ONE of the three fixtures, brings ~1845
+lines at 3 tests, and still requires changing ARPice's public IR.
+
+Also note the dependency direction: ARPice depends on VerA
+(`ARPice/build.zig.zon` → `.vera = .{ .path = "../VerA" }`), so VerA importing
+ARPice is a cycle. The boundary that works is two readers with two purposes:
+**ARPice parses netlists to simulate; VerA reads model/subckt cards to resolve
+names.** The overlap is ~60 lines of comment-stripping and `+` continuation
+joining — a shared shape, not shared behaviour, and stable since SPICE2g6.
 
 ### Digital execution — a discrete-time domain, not a conformance gap
 
