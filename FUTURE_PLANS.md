@@ -12,7 +12,7 @@ does not close the unmarked implementation gaps in that list.
 | B | No unclassified citation gaps in the fresh `tools/conformance.sh` report at `b033ac35`. This is a static inventory; VPI runtime obligations remain. |
 | C | No unclassified citation gaps in the same report. This does not close ROADMAP §5's implementation defects. |
 | D | All nine phases, read against `git show 297e97d^:ARCHITECTURE.md` §6/§8 on 2026-09-29. |
-| E | Closed: `docs/IMPLEMENTATION.md` §4 reads "None". |
+| E | Open: `docs/Vague_Decisions.md` §9 names one defect (upward `defparam` binding order on the analog path). |
 | F | All five targets cross-compile; the VPI runtime does not build on Windows (Zig 0.16 `@cVaStart`). |
 | G | Written at release time. |
 
@@ -65,7 +65,7 @@ at `c76b158f`.
   controls, including arrays and pure functions. `274a322d` preserves packed
   widths and `$clog2` dependencies when those controls change. Emitted-host
   checks cover deadlines, one body execution and rollback/retry. E0528 and
-  `docs/IMPLEMENTATION.md` document effectful calls whose changed inputs cannot be
+  `docs/Vague_Decisions.md` document effectful calls whose changed inputs cannot be
   recomputed safely; precomputing the call remains supported.
 - `8bf8b5ff` and `0ac482f7` correct diagnostic and fixture explanations;
   `0ed50b1a` checks null versus explicit-zero nodesets through an emitted host.
