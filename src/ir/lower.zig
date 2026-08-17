@@ -141,7 +141,7 @@ pub const Contribution = struct {
     lo: u16, // node_order index (or `ground`)
     resist_val: Mir.Value = .f_zero, // → eval()
     react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
-    noise_kind: ?NoiseKind = null, // §4.6.4
+    noise_kinds: NoiseKinds = .{}, // §4.6.4
     /// §5.6.7 `V(out) : V(in) == e` is the SAME topology as a direct potential
     /// contribution — a source in the branch, its current an unknown — with a
     /// different constitutive row. `.direct` carries `V(hi,lo) − resist_val`;
@@ -164,6 +164,15 @@ pub const PortProbe = struct { port: u16, u: u16 };
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 
 pub const NoiseKind = enum(u8) { thermal, flicker }; // §4.6.4.1/.2
+
+/// §4.6.4 the noise generators one contribution carries — a SET, not one kind.
+/// "Multiple noise contributions to a single branch are combined", and the
+/// clause's own examples declare a thermal source and a flicker source on the
+/// same branch (`combined/13_noise_temperature_analysis.va` is that shape). A
+/// single `?NoiseKind` made the second statement overwrite the first, which
+/// silently deleted a generator from the emitted `noise_gens` table — and with
+/// it the only one the documented Jacobian fallback can compute.
+pub const NoiseKinds = std.EnumSet(NoiseKind);
 
 /// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
 /// and for codegen's per-node abstol; nothing here consumes it.
@@ -3738,8 +3747,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         const old = try self.builder.readVariable(acc.react, self.cur);
         try self.builder.writeVariable(acc.react, self.cur, try self.emit(.fadd, &.{ old, v }));
     }
-    // §4.6.4 the noise kind belongs to the target, not to one statement.
-    if (self.noiseKindOf(rhs)) |k| self.contributions.items[idx].noise_kind = k;
+    // §4.6.4 the noise generators belong to the target, not to one statement,
+    // and they ACCUMULATE: two `<+` lines on one branch declare two sources.
+    self.contributions.items[idx].noise_kinds =
+        self.contributions.items[idx].noise_kinds.unionWith(self.noiseKindsOf(rhs));
 }
 
 /// §6.3.6 the double-scaling misuse, which the clause states about a specific
@@ -4529,9 +4540,13 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     return null;
 }
 
-/// §4.6.4 the small-signal noise source a contribution carries, if any.
-fn noiseKindOf(self: *const Lower, e: Ast.ExprId) ?NoiseKind {
-    if (e == .none) return null;
+/// §4.6.4 every small-signal noise source in one contributed expression.
+///
+/// A SET and a full walk, not the first hit: `I(a,b) <+ white_noise(k) +
+/// flicker_noise(kf, 1.0)` declares two generators on one branch, and so do two
+/// separate `<+` lines (see `NoiseKinds`).
+fn noiseKindsOf(self: *const Lower, e: Ast.ExprId) NoiseKinds {
+    if (e == .none) return .{};
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .noise_call => {
@@ -4539,18 +4554,18 @@ fn noiseKindOf(self: *const Lower, e: Ast.ExprId) ?NoiseKind {
             // §4.6.3 ac_stim shares the small-signal grammar but is a STIMULUS,
             // not a noise source; listing it in `noise_gens` would invent a
             // noise generator the model never declared.
-            if (std.mem.eql(u8, n, "ac_stim")) return null;
+            if (std.mem.eql(u8, n, "ac_stim")) return .{};
             // §4.6.4.2 flicker_noise; every other source is white (§4.6.4.1).
-            return if (std.mem.eql(u8, n, "flicker_noise")) .flicker else .thermal;
+            return NoiseKinds.initOne(
+                if (std.mem.eql(u8, n, "flicker_noise")) .flicker else .thermal,
+            );
         },
         .call, .builtin_call, .sys_call, .filter_call => {
-            for (ex.args(e)) |a| if (self.noiseKindOf(a)) |k| return k;
-            return null;
+            var out: NoiseKinds = .{};
+            for (ex.args(e)) |a| out = out.unionWith(self.noiseKindsOf(a));
+            return out;
         },
-        else => {
-            if (self.noiseKindOf(ex.lhs(e))) |k| return k;
-            return self.noiseKindOf(ex.rhs(e));
-        },
+        else => return self.noiseKindsOf(ex.lhs(e)).unionWith(self.noiseKindsOf(ex.rhs(e))),
     }
 }
 

@@ -42,11 +42,39 @@ over it never fires. `E0903` is reserved and unemitted for exactly this verdict 
 do not reuse the code.
 
 **Blast radius:** per-net discipline SETS in the elaboration core, plus a
-`connectrules` parser (`connectrules` is still `E0201`). Discipline resolution is
-consulted at port bindings today (§3.11, see §3 below); a set-valued resolution
-changes what every one of those bindings compares. The `connectmodule`s in the
-fixture parse and are accepted since wave 6, so the parse half is done and the
+`connectrules` parser (`connectrules` is still `E0201`). A set-valued resolution
+changes what every port binding compares. The `connectmodule`s in the fixture
+parse and are accepted since wave 6, so the parse half is done and the
 resolution half is the work.
+
+**RE-COSTED, wave 13**, after replacing `declaredDiscipline`'s linear scan with
+the `Flatten.disc_of` map — the change this was expected to ride on. It does not
+ride on it, and the three reasons are what the next attempt should budget for.
+
+1. **A second slot does not decide it.** The obvious widening is
+   `{first, other}`, filled in arrival order. Step 4.b's candidate list is not
+   arrival-ordered, it is DOMAIN-FILTERED — "more than one candidate whose
+   domain matches" — and the fourth bullet under it needs a segment from the
+   *other* domain to call the connection mixed. This fixture's signal has three
+   declared segments, `{annex_f_a: continuous, annex_f_b: continuous,
+   annex_f_dig: discrete}`; two arrival slots hold `{a, b}` and drop the
+   discrete witness the error is about. It reaches the right answer only
+   because the source happens to instantiate its two continuous leaves first,
+   which is an accident of the fixture, not an implementation. The shape that
+   decides it is domain-partitioned: two continuous candidates plus one
+   discrete witness, and a domain lookup per net insertion to fill them.
+2. **`connectrules` must be accepted and dropped**, past E0201 — the fixture's
+   own header argues why that is conformant here (§7.7.1 insertion, not §7.7.2
+   resolution, so the block cannot match either way and dropping it changes no
+   verdict). That is parser work, not elaboration work, and it is the item that
+   makes this a multi-file change.
+3. **The mixed-port predicate has no implementation at all.** Nothing in
+   `elaborate.zig` asks what DOMAIN a discipline is in; `Ast.DisciplineDecl`
+   carries it and `primitiveAccess` is the only site that looks a discipline up
+   by name today.
+
+None of the three is hard; together they are days, and none of them is the map.
+`E0903` stays reserved and unemitted — do not reuse the code.
 
 ### `ch05_analog_behavior/two_named_branches.va`
 
@@ -274,7 +302,31 @@ Grouped by area; the file is the authority, this is the index.
 
 ### Analog operators (`src/backend/codegen.zig`, `cg_filters.zig`)
 - `absdelay`: fixed 32-sample history with linear interpolation.
-- No `noisePsd` hook emitted; thermal-off-the-Jacobian fallback only.
+- No `noisePsd` hook emitted, so the host is left with the fallback that reads
+  4kT·g off the Jacobian it already has — which covers **`.thermal` only**.
+  Nothing in a Jacobian yields §4.6.4.2's `kf·I^af / f^ef`, so a `.flicker` row
+  in `noise_gens` is topology the host is told about and a PSD it must decline.
+  Three §4.6.4 shapes reach `noise_gens` as NOTHING, deliberately:
+  - §4.6.4.3/.4 `noise_table`/`noise_table_log` have no `NoiseGen.kind` tag.
+    Adding one is blocked from the other end: `tools/contract.zig`'s `PsdTerm`
+    is a parametric white/flicker form that "cannot express" a piecewise
+    PSD-vs-frequency table, and its own note says the tag and the replacement
+    hook "land together". Refusing the call instead is not available either —
+    `ch04_expressions/27_noise_sources.va` asserts all four are accepted and
+    read zero outside a small-signal analysis.
+  - A source assigned to a variable and then contributed
+    (`x = white_noise(k); I(a,b) <+ x;`) exports nothing: `noiseKindsOf` walks
+    the contributed EXPRESSION, and by then the source is an ident.
+    `ch04_expressions/27_noise_sources.va` and `38_correlated_noise.va` are
+    both that shape, and 38 is §4.6.4.6 CORRELATED noise, which is precisely
+    what the table's shared-`source` design exists to express — so this is the
+    one of the three worth paying for. It needs the noise source tracked as a
+    value through lowering, not a tag on the contribution.
+  - A generator on a branch both of whose ends are ground, since §1.3.1.1
+    leaves it no row or column to name.
+  What is FIXED as of wave 13: the generators are a SET per contribution
+  (`Lower.NoiseKinds`), so a branch carrying a thermal source and a flicker
+  source exports both. It used to export whichever `<+` came last.
 - §5.10.3.3 `enable` honoured only where it folds.
 - The residual is real, so a matching small-signal analysis contributes the
   phasor's real part.
@@ -296,8 +348,14 @@ Grouped by area; the file is the authority, this is the index.
 ### Elaboration (`src/ir/elaborate.zig`)
 - §6.4.2 paramset tie-breaking: first survivor wins.
 - A bound that cannot be folded counts as admissible.
-- §3.11 discipline compatibility consulted at **port bindings only**.
-- Two declarations of one identifier: first wins.
+- Two declarations of one identifier: **first wins**. `resolveDiscipline`
+  early-returns once a flat net has any declared discipline, so a second
+  declared segment of one signal is never compared against the first. §7.4.4's
+  duplicate-declaration half is caught downstream (E0902, in lowering); what is
+  missing is Annex F.2.1 step 4.b's multi-candidate arm, and that is XFAIL-1 in
+  §1 above, with its cost. Wave 13's `Flatten.disc_of` map replaced the linear
+  scan under this and deliberately did **not** widen the value: two
+  arrival-ordered slots do not decide 4.b either (see §1).
 - An undeclared net used only in a child body is **not renamed**, so two instances
   would share it.
 - §6.5.7.1 vector-net distribution across an instance array: absent.
@@ -347,7 +405,14 @@ Grouped by area; the file is the authority, this is the index.
   net name, and it buys one diagnostic on a program nobody writes.
 
 ### Proof / range analysis (`src/ir/proof.zig`)
-- Immediate widening loses loop-carried bounds.
+- Immediate widening loses loop-carried bounds. A phi operand arriving on a
+  §5.9 back edge is still ⊤ when `walk` reads it, so a `while` body's values
+  widen to ⊤ on sight. The missing input is no longer missing: proof consumes
+  `analysis.zig`'s CFG now instead of carrying its own dominator copy, so
+  `analysis.inLoop(b)` and `Analysis.loop_of` — which block is in a natural
+  loop, and which header owns it — are in hand. The upgrade is the fixpoint
+  (ascending-chain worklist over the loop body, widen after k rounds), not the
+  structure it needs. Genvar loops (§6.6.1) unroll, so this bites `while` only.
 
 ### Lexer (`src/frontend/lexer.zig`)
 - Left padding with `x`/`z` is unrepresentable.
