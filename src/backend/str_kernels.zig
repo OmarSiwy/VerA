@@ -224,9 +224,9 @@ pub fn zScanS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
 ///
 // ponytail: 512 bytes per site, file-scope. Two threads evaluating the SAME
 // call site on different instances would interleave; per-instance scratch is
-// the upgrade the day eval_batch runs units concurrently. An overrun formats to
-// the empty string rather than truncating, because §9.5.3 gives no truncation
-// rule to follow.
+// the upgrade the day a host runs a device's units concurrently. An overrun
+// formats to the empty string rather than truncating, because §9.5.3 gives no
+// truncation rule to follow.
 pub fn zSBuf(comptime site: usize) []u8 {
     const Buf = struct {
         const n = site;
