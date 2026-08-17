@@ -7,8 +7,8 @@ HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2
 `sE-4` `sE-4-1` `sE-4-2`, plus the two table anchors `table-e-1` and `table-e-2`.
 Nineteen sections. Annex E is normative.
 
-Forty-one fixtures live in this folder. `zig build torture -- annex_e_spice` reports
-**41/41 behaving as they say they do, 0 asserting nothing and 0 `//! xfail`** — nothing
+Forty-two fixtures live in this folder. `zig build torture -- annex_e_spice` reports
+**42/42 behaving as they say they do, 0 asserting nothing and 0 `//! xfail`** — nothing
 fails. (The 9/31 and the 21/40 this paragraph used to quote were written when nothing here
 could elaborate, and then when the row-map fixtures elaborated but asserted nothing. Every
 `primitive_*.va` now carries digits from Table E.1's own Behavior column or, for the rows
@@ -49,6 +49,14 @@ has an EMPTY body, because a subcircuit body is device cards in SPICE; it contri
 equations, so under `//! solve` an instance of one is an open circuit. E.1.2's first bullet
 is what makes all of this a choice rather than a shortfall: SPICE compatibility "is solely
 determined by the authors of the simulator", and the flavor chosen here is named at the site.
+
+SPICE has no reserved words, so a card is free to name a node `INPUT` or a model `WIRE`, and
+both are annex B keywords once they are written as Verilog-AMS. The reader spells such a name
+as a §2.8.1 escaped identifier (`spice_keyword_names.va`): §2.8.2 says an escaped identifier
+is never a keyword, and neither the `\` nor its terminating space is part of the name, so the
+module is still `wire` for E.2.1's match and the ports are still `input`/`output` for §6.7.1 —
+while E.3 connects them by order, so the escape never has to be typed to make a connection.
+The alternative was E0208 on a line of `spice_netlist.vams`, a file with no author.
 
 Ingest lower-cases every identifier (E.2.1 first sentence: SPICE is case-insensitive), which
 is what lets `elaborate.findModule` implement E.2.1's second sentence as one
