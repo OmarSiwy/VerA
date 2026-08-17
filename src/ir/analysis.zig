@@ -665,6 +665,12 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         .ceil => .{ .f = @ceil(a.f) },
                         .fi_cast => .{ .f = @round(a.f) },
                         .if_cast, .opt_barrier => .{ .f = a.f },
+                        // §4.2.8/§4.2.9 — the two integer-valued unary forms
+                        // `Lower.foldExpr`'s `.unary` arm already folds. Truth is
+                        // "not zero" (§4.2.8), and `~` is the 32-bit complement
+                        // §3.2's width defines.
+                        .lognot => .{ .f = @floatFromInt(@intFromBool(a.f == 0)) },
+                        .bitnot => .{ .f = @floatFromInt(Lower.wrap32(~asI64(a))) },
                         else => null,
                     };
                 },
@@ -694,12 +700,108 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
                         .fmin, .imin => .{ .f = @min(a.f, b2.f) },
                         .fmax, .imax => .{ .f = @max(a.f, b2.f) },
+                        // §4.2.4 remainder. No wrap: a remainder is never wider
+                        // than its operands. A zero divisor has no value to fold
+                        // to — proof.zig's E0601 is the diagnostic, this just
+                        // declines.
+                        .fmod => if (b2.f == 0) null else .{ .f = @rem(a.f, b2.f) },
+                        .imod => if (asI64(b2) == 0) null else .{ .f = @floatFromInt(@rem(asI64(a), asI64(b2))) },
+                        // §4.2.5/§4.2.7 relational and equality, §4.2.8 logical:
+                        // integer 0/1. Both operand flavours compare in the f64
+                        // carrier — a §3.2.1 integer is exact in it — so the `i`
+                        // and `f` opcodes share an arm.
+                        .flt, .ilt => .{ .f = @floatFromInt(@intFromBool(a.f < b2.f)) },
+                        .fgt, .igt => .{ .f = @floatFromInt(@intFromBool(a.f > b2.f)) },
+                        .fle, .ile => .{ .f = @floatFromInt(@intFromBool(a.f <= b2.f)) },
+                        .fge, .ige => .{ .f = @floatFromInt(@intFromBool(a.f >= b2.f)) },
+                        .feq, .ieq => .{ .f = @floatFromInt(@intFromBool(a.f == b2.f)) },
+                        .fne, .ine => .{ .f = @floatFromInt(@intFromBool(a.f != b2.f)) },
+                        .logand => .{ .f = @floatFromInt(@intFromBool(a.f != 0 and b2.f != 0)) },
+                        .logor => .{ .f = @floatFromInt(@intFromBool(a.f != 0 or b2.f != 0)) },
+                        // §4.2.9 bitwise, at §3.2's width.
+                        .bitand => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) & asI64(b2))) },
+                        .bitor => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) | asI64(b2))) },
+                        .bitxor => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) ^ asI64(b2))) },
+                        .bitxnor => .{ .f = @floatFromInt(Lower.wrap32(~(asI64(a) ^ asI64(b2)))) },
+                        // §4.2.11, and the rule is `Lower.foldBinary`'s verbatim:
+                        // `<<` is §3.2's 32-bit truncation of an i64 shift, `>>`
+                        // zero-fills over 32 bits (NOT an i64 arithmetic shift),
+                        // and a shift count outside the carrier declines rather
+                        // than answering.
+                        .shl, .shr => blk: {
+                            const sh = asI64(b2);
+                            if (sh < 0 or sh > 63) break :blk null;
+                            if (row.op == .shl) break :blk Folded{
+                                .f = @floatFromInt(Lower.wrap32(asI64(a) << @as(u6, @intCast(sh)))),
+                            };
+                            if (sh > 31) break :blk Folded{ .f = 0 };
+                            const lo: u32 = @bitCast(@as(i32, @truncate(asI64(a))));
+                            break :blk Folded{ .f = @floatFromInt(lo >> @as(u5, @intCast(sh))) };
+                        },
                         else => null,
                     };
+                },
+                // §4.2.12 `?:`. Lazy, as `Lower.foldExpr`'s ternary arm is: only
+                // the taken arm has to be foldable, so `w > 0 ? 1/w : 0` folds
+                // for w = 0 instead of declining on a division it never performs.
+                .ternary => {
+                    const d = self.mir.instData(inst).ternary;
+                    const c = self.foldConst(d.cond, depth + 1, resolve_params) orelse return null;
+                    const taken = if (c.f != 0) d.then_val else d.else_val;
+                    return self.foldConst(taken, depth + 1, resolve_params);
                 },
                 else => return null,
             }
         },
         else => return null,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Self-check
+// ---------------------------------------------------------------------------
+
+// `callTy` and `Lower.sysFuncTy` type the same ch9 call from opposite sides of
+// the MIR, and both say MUST AGREE in prose. Prose is not checkable, and the
+// two rows this test was written for — §9.20's `$analog_node_alias` and
+// `$analog_port_alias` — sat disagreeing long enough to cost a false E0322 on
+// `status << 1` and an `i64` slot fed by an `S`. So: one list, both sides.
+//
+// The list is the UNION of every name either table types as something other
+// than real, plus five reals as controls, because "both answer real" is the
+// answer a typo also produces. `$held_int` is deliberately absent: §5.10
+// `Lower.holdSlot` mints it, it is not a ch9 task, and `sysFuncTy` never sees
+// it — `callTy`'s comment says so at the site.
+test "callTy and Lower.sysFuncTy agree on every ch9 return type" {
+    const names = [_][]const u8{
+        // §9.19, §9.12, §9.11 Table 9-8
+        "$param_given",     "$port_connected", "$test$plusargs", "$value$plusargs",
+        "$rtoi",            "$clog2",          "$realtobits",
+        // §9.20 the two alias status functions
+        "$analog_node_alias",                  "$analog_port_alias",
+        // §9.5 the descriptor family and the synthetic scan/read item names
+        "$fopen",           "$fgets",          "$fscanf",        "$fscanf$int",
+        "$ftell",           "$fseek",          "$rewind",        "$ferror",
+        "$feof",            "$sscanf",         "$sscanf$int",
+        // The string-valued rows
+        "$simparam$str",    "$sformat",        "$sscanf$str",    "$fgets$str",
+        "$fscanf$str",      "$ferror$str",
+        // Controls: five that must stay real. `$bitstoreal` is the one with a
+        // history — it is §9.11's inverse of `$realtobits` and yields the real
+        // the pattern stands for, which both tables get right only because each
+        // says so out loud.
+        "$bitstoreal",      "$temperature",    "$abstime",       "$simparam",
+        "$random",
+    };
+    for (names) |n| {
+        const want: VTy = switch (Lower.sysFuncTy(n)) {
+            .real => .real,
+            .integer => .int,
+            .string => .str,
+        };
+        std.testing.expectEqual(want, callTy(n)) catch |e| {
+            std.debug.print("disagreement on {s}\n", .{n});
+            return e;
+        };
     }
 }
