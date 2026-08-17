@@ -5498,8 +5498,16 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
             // §4.5.8 now passes rise and fall SEPARATELY (the averaged lag
             // constant is gone), so the copy shows up as the same number twice
             // in the last two argument positions of the call.
+            //
+            // `0.0000000022` and not `0.0000000022000000000000003`: this is the
+            // tree's only pin on the §2.6.2 scale-factor decode, and the rule in
+            // force is that `2.2n` is ONE `parseFloat` of the joined text
+            // `2.2e-9`, not `2.2 * 1e-9`. The two differ by 1 ulp. Asserted as a
+            // rule, with its LRM argument, in lexer.zig's "§2.6.2 a scale factor
+            // rounds ONCE" test; re-blessed here when the parser stopped
+            // carrying a second decoder that double-rounded.
             .call = "transition(V(p, n), 0, 2.2n)",
-            .want = "0.0000000022000000000000003, 0.0000000022000000000000003)",
+            .want = "0.0000000022, 0.0000000022)",
         },
         .{
             .call = "slew(V(p, n), 2e8)",
