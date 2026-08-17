@@ -76,6 +76,35 @@ pub const unnamed_branch: u32 = 0;
 /// sentinel rather than a node_order slot: probing it yields a literal 0.
 pub const ground: u16 = std.math.maxInt(u16);
 
+/// What quantity a `node_order` slot carries. The spelling does NOT answer this
+/// and never could: §2.8.1 strips the backslash from an escaped identifier, so
+/// the net `\flow(p,n)` *is* the identifier `flow(p,n)` and collides byte-for-byte
+/// with what `flowUnknown` prints. Kind is recorded at the one place a slot is
+/// created (`appendNode`) and read back by index, so no consumer re-derives
+/// structure from the name.
+///
+/// The payload is the node whose discipline supplies the unknown's §3.6.1.2
+/// tolerance — the branch's HIGH node, or the probed port. It is carried here
+/// because `abstolOf` used to recover it by parsing `flow(a,b)` back apart.
+///
+/// §6.5.2 vector elements are deliberately NOT a fourth kind: §3.6.3 scalarises
+/// `electrical [1:0] b` into two ORDINARY nets called `b[1]`/`b[0]`, and every
+/// consumer downstream of that already treats them as nets. See TODO.md §3 for
+/// the collision that leaves standing (`\b[0]` and `b[0]`).
+pub const NodeKind = union(enum) {
+    /// §3.6 a net: a declared one, a §3.6.5 implicit one, or a §3.6.3 element.
+    net,
+    /// §5.4.2 the current of a branch, carrying the branch's high node.
+    branch_flow: u16,
+    /// §5.4.3 the current through a port, carrying the port.
+    port_flow: u16,
+};
+
+/// §5.4.2 the identity of a branch: its ordered node pair. `pub` because
+/// codegen asks `flow_unknowns` whether a §5.6 potential contribution's branch
+/// already has an unknown, and the pair is the only honest way to ask.
+pub const FlowKey = struct { hi: u16, lo: u16 };
+
 /// §4.4 access-function flavour. `V(a,b)` is a potential, `I(a,b)` a flow;
 /// user natures rename them (§3.6.1.4) but the two roles are closed.
 pub const Access = enum(u8) { potential, flow };
@@ -200,6 +229,10 @@ contributions: std.ArrayList(Contribution) = .empty, // §5.6
 /// The U-enum index space: ports (§6.5) first, then internal nodes (§3.6.3),
 /// then branch-flow unknowns (§5.4.2). Append-only ⇒ stable.
 node_order: std.ArrayList([]const u8) = .empty,
+/// What each node_order slot IS, as opposed to what it is SPELLED. One entry
+/// per slot, appended by `appendNode` — see `NodeKind` for why the two had to
+/// come apart.
+node_kind: std.ArrayList(NodeKind) = .empty,
 /// Discipline name per node_order slot (`""` when undeclared, §3.9).
 node_disciplines: std.ArrayList([]const u8) = .empty,
 /// §6.5.2.2 port direction per node_order slot (`.unspecified` for an internal
@@ -213,7 +246,24 @@ node_dir: std.ArrayList(Ast.Direction) = .empty,
 /// at `port`; codegen emits that row. Append-only ⇒ deterministic.
 port_probes: std.ArrayList(PortProbe) = .empty,
 num_ports: usize = 0, // §6.5
-node_voltages: std.StringHashMapUnmanaged(u16) = .empty, // §1.3.1 name → index
+/// §1.3.1 NET name → node_order index. Nets only: a §5.4.2/§5.4.3 flow unknown
+/// is not a net and is not reachable by name (`flow_unknowns` and `port_probes`
+/// are its identity), so the `contains`/`get`/`didYouMeanMap` callers below all
+/// mean "is this identifier a net of this module?" and now get that answer.
+node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
+/// §5.4.2 branch-flow identity: the node PAIR → its unknown's node_order slot.
+/// The pair is the identity the LRM gives the branch, and keying on it is what
+/// stopped `I(a)` and `I(a,gnd)` sharing an unknown when a plain net is spelled
+/// `gnd` — see `flowUnknown`. Bounded by the branch count of one module.
+flow_unknowns: std.AutoHashMapUnmanaged(FlowKey, u16) = .empty,
+/// Every spelling handed to `node_order`, so `appendNode` can keep them unique.
+/// This is NOT an identity table — two different unknowns may want one spelling
+/// (`uniqueSpelling` names both ways that happens); it exists because the
+/// emitted `U` enum has one member per slot and two members cannot share a name.
+/// Heap, and one entry per `node_order` slot: the only bound on that count is
+/// the source, since |U| ≤ 256 is enforced by `codegen.emitTopology` AFTER
+/// lowering has built the table.
+spellings: std.StringHashMapUnmanaged(void) = .empty,
 disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 /// §3.6.3 declared vector nets and §3.12 vector branches, by base name.
 ///
@@ -559,10 +609,13 @@ pub fn deinit(self: *Lower) void {
     self.port_branches.deinit(gpa);
     self.contributions.deinit(gpa);
     self.node_order.deinit(gpa);
+    self.node_kind.deinit(gpa);
     self.node_disciplines.deinit(gpa);
     self.node_dir.deinit(gpa);
     self.port_probes.deinit(gpa);
     self.node_voltages.deinit(gpa);
+    self.flow_unknowns.deinit(gpa);
+    self.spellings.deinit(gpa);
     self.vectors.deinit(gpa);
     self.disciplines.deinit(gpa);
     self.probe_cache.deinit(gpa);
@@ -2182,15 +2235,68 @@ fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
             self.node_disciplines.items[gop.value_ptr.*] = discipline;
         return gop.value_ptr.*;
     }
-    const idx: u16 = @intCast(self.node_order.items.len);
-    assert(idx != ground);
-    try self.node_order.append(self.arena, name);
-    try self.node_disciplines.append(self.arena, discipline);
-    try self.node_dir.append(self.arena, .unspecified);
-    try self.probe_cache.append(self.arena, .undef);
+    const idx = try self.appendNode(name, discipline, .net);
     gop.value_ptr.* = idx;
     return idx;
 }
+
+/// The one place a `node_order` slot is created: it fixes the slot's KIND and
+/// its SPELLING together, which is the split this table exists to keep. Every
+/// caller owns the IDENTITY question itself (`node_voltages` for a net,
+/// `flow_unknowns` for a branch, `port_probes` for a port) — this function does
+/// not dedupe and must not, since two distinct unknowns may ask for one name.
+fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
+    const idx: u16 = @intCast(self.node_order.items.len);
+    assert(idx != ground);
+    const spelling = try self.uniqueSpelling(name);
+    try self.spellings.put(self.arena, spelling, {});
+    try self.node_order.append(self.arena, spelling);
+    try self.node_kind.append(self.arena, kind);
+    try self.node_disciplines.append(self.arena, discipline);
+    try self.node_dir.append(self.arena, .unspecified);
+    try self.probe_cache.append(self.arena, .undef);
+    return idx;
+}
+
+/// `name`, or the first `name#k` nobody has taken. codegen prints one `U`
+/// member per slot, so two slots cannot share a spelling — and once identity
+/// stopped BEING the spelling, two slots genuinely can want one:
+///
+///   - §1.3.1.1's reference node prints `gnd` (`nodeName`) and §2.7 lets a plain
+///     net be called `gnd` too, so `I(a)` and `I(a,gnd)` both print `flow(a,gnd)`
+///     while naming two different branches;
+///   - §2.8.1 strips the backslash, so a net `\flow(p,n)` is the identifier
+///     `flow(p,n)`, which is what `flowUnknown` prints for the branch (p,n).
+///
+/// `#` is not a §2.7 identifier character and `naming.sanitize` escapes it, so a
+/// suffixed member cannot collide with an unsuffixed one either — the same
+/// convention, and the same reasoning, as `codegen.freshUName`, which uniquifies
+/// the branch-current unknowns codegen appends after `node_order`. The loop
+/// terminates in at most `node_order.len` steps (each `k` it rejects is held by
+/// a distinct earlier slot), and that is bounded by |U| ≤ 256.
+///
+/// The suffix falls on the LATER slot, so it is a function of source order and
+/// nothing else. A fixture that has to spell one of these writes the member as
+/// `emitTopology` prints it — the same rule as every other unknown.
+fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
+    if (!self.spellings.contains(name)) return name;
+    // The candidates that LOSE are hashed and thrown away, so they are built on
+    // the stack and only the winner reaches the arena — `elemKey`'s trick, with
+    // the same spill for a name too wide for the buffer.
+    var buf: [spelling_buf_len]u8 = undefined;
+    var k: u32 = 1;
+    while (true) : (k += 1) {
+        const cand = std.fmt.bufPrint(&buf, "{s}#{d}", .{ name, k }) catch
+            try std.fmt.allocPrint(self.arena, "{s}#{d}", .{ name, k });
+        if (!self.spellings.contains(cand)) return self.arena.dupe(u8, cand);
+    }
+}
+
+/// Widest spelling `uniqueSpelling` builds without spilling: `flow(<` plus two
+/// §2.7 identifiers — capped at 1024 characters, the same source bound
+/// `elem_key_len` and `naming.max_name_len` are sized from — plus the
+/// punctuation and a `#` with a `u32` after it.
+const spelling_buf_len = 2 * 1024 + 32;
 
 /// Resolve a net reference — `n` or `n[i]` — to a node_order index.
 ///
@@ -2396,23 +2502,43 @@ fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
 
 /// §5.4.2 reading a flow (`I(a,b)`) makes the branch current a solver unknown
 /// of its own. It gets a node_order slot so codegen indexes it like any other
-/// `x[i]`; the parenthesised name cannot collide with an identifier.
+/// `x[i]`.
+///
+/// Deduped on the PAIR, which is the identity §5.4.1 gives a branch, and not on
+/// the printed name. Two branches can print alike — §1.3.1.1's reference node
+/// and a net that §2.7 lets the author call `gnd` both spell `gnd` — and keying
+/// on the name aliased `I(a)` onto `I(a,gnd)`, one unknown for two currents and
+/// a Jacobian that is quietly wrong (`ch05_analog_behavior/
+/// net_named_gnd_is_not_ground.va` is that circuit).
+///
+/// It also means the name is formatted on the MISS path only, where the old
+/// spelling-keyed version paid an `allocPrint` per reference to discover the
+/// entry already existed.
 fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
+    const gop = try self.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
+    if (gop.found_existing) return gop.value_ptr.*;
     const name = try std.fmt.allocPrint(self.arena, "flow({s},{s})", .{ self.nodeName(hi), self.nodeName(lo) });
-    return self.internNode(name, "");
+    // The tolerance node is the HIGH one: a branch unknown carries no discipline
+    // of its own (§3.6.1.2's abstol has to come from somewhere).
+    const u = try self.appendNode(name, "", .{ .branch_flow = hi });
+    gop.value_ptr.* = u;
+    return u;
 }
 
-/// §5.4.3 the unknown carrying `I(<p>)`. Spelled `flow(<p>)` on purpose: it is
-/// parenthesised (so no §2.7/§2.8.1 identifier can collide with it), it keeps
-/// codegen's `flow(` prefix predicate — which classifies an unknown as a
-/// CURRENT — correct with no change, and it can never be mistaken for a
-/// `flow(a,b)` branch unknown (that form always has a comma).
+/// §5.4.3 the unknown carrying `I(<p>)`. Spelled `flow(<p>)` on purpose: it
+/// reads as the port access function it came from, and it can never be mistaken
+/// for a `flow(a,b)` branch unknown (that form always has a comma).
+///
+/// `port_probes` is the identity — one entry per port, and the scan is bounded
+/// by the module's port count, which is why it needs no map. Reading it FIRST
+/// is the fix: the old order interned the name and let the string dedupe,
+/// so a net spelled `flow(<p>)` took over the port's current.
 fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
-    const name = try std.fmt.allocPrint(self.arena, "flow(<{s}>)", .{self.nodeName(p)});
-    const u = try self.internNode(name, ""); // dedupes by name
     for (self.port_probes.items) |pp| {
-        if (pp.port == p) return u;
+        if (pp.port == p) return pp.u;
     }
+    const name = try std.fmt.allocPrint(self.arena, "flow(<{s}>)", .{self.nodeName(p)});
+    const u = try self.appendNode(name, "", .{ .port_flow = p });
     try self.port_probes.append(self.arena, .{ .port = p, .u = u });
     return u;
 }
@@ -8735,16 +8861,13 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     try std.testing.expectEqual(@as(u16, 1), h.low.port_probes.items[1].port);
     for (h.low.port_probes.items) |pp| {
         try std.testing.expect(pp.u >= h.low.num_ports);
-        // The name codegen's `flow(` predicate keys on, and which no §2.7/§2.8.1
-        // identifier and no `flow(a,b)` branch unknown can collide with.
-        //
-        // An assertion about the KEY, not about what the user sees. The spelling
-        // reaches the host as `flowZ28Z3cpZ3eZ29` and is pinned there, in
-        // codegen.zig's "the `U` block is the SPELLING contract" test. So a
-        // rewrite that keys the unknown on something other than its printed name
-        // may replace this predicate with the new key's own and lose nothing:
-        // the two claims no longer ride on one string.
-        try std.testing.expect(std.mem.startsWith(u8, h.low.nodeName(pp.u), "flow(<"));
+        // The KIND tag, which is what codegen's `isFlowUnknown` now reads. This
+        // used to assert the `"flow(<"` prefix, i.e. the spelling — and §2.8.1
+        // makes that predicate false for a net someone declared `\flow(<p>)`.
+        // The spelling still reaches the host as `flowZ28Z3cpZ3eZ29` and is
+        // pinned there, in codegen.zig's "the `U` block is the SPELLING
+        // contract" test; the two claims no longer ride on one string.
+        try std.testing.expectEqual(pp.port, h.low.node_kind.items[pp.u].port_flow);
     }
     try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.port_probes.items[0].u));
 }
@@ -8785,11 +8908,11 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     // retained value, so it mints no `flow(p,n)` unknown; before one — or on a
     // POTENTIAL source, whose branch current codegen does pin — it still does.
     //
-    // What this asserts is WHETHER an unknown exists, and it reads that off the
-    // string only because today the string is the key. Its counterpart on the
-    // spelling — that whatever the key becomes, the member still prints
-    // `flowZ28pZ2cnZ29` — is codegen.zig's "the `U` block is the SPELLING
-    // contract" test, so a key change is free to rewrite the search below.
+    // What this asserts is WHETHER an unknown exists, and it now reads that off
+    // the KIND TAG — the node pair keyed in `flow_unknowns` — rather than off
+    // the string. Its counterpart on the spelling, that the member still prints
+    // `flowZ28pZ2cnZ29`, is codegen.zig's "the `U` block is the SPELLING
+    // contract" test. Two claims, two tests, no shared string.
     const cases = [_]struct { src: []const u8, unknown: bool }{
         .{ .src = "I(p,n) <+ 1.0; x = I(p,n);", .unknown = false },
         .{ .src = "x = I(p,n); I(p,n) <+ 1.0;", .unknown = true },
@@ -8808,11 +8931,8 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         try Harness.run(std.testing.allocator, src, &g);
         defer g.deinit();
         try g.low.lowerFile();
-        var minted = false;
-        for (g.low.node_order.items) |name| {
-            if (std.mem.eql(u8, name, "flow(p,n)")) minted = true;
-        }
-        try std.testing.expectEqual(c.unknown, minted);
+        // `p` and `n` are node_order 0 and 1, so the branch is that pair.
+        try std.testing.expectEqual(c.unknown, g.low.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
     }
 }
 
