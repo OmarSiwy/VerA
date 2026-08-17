@@ -826,8 +826,8 @@ const Prover = struct {
     /// §4.2.3 makes `?:` short-circuiting, so `lowerTernary` now emits a real
     /// diamond and that idiom reaches the prover with dominance evidence
     /// instead — this pass is what still covers every OTHER `select`: the
-    /// masked element writes of a runtime array index, and any diamond
-    /// `ifconv` fuses back.
+    /// masked element writes of a runtime array index (`lowerAssign`) and the
+    /// §5.10.3.3 `enable` fold.
     ///
     /// CODEGEN OBLIGATION: `select` must be emitted as a lazy Zig `if`, not as
     /// "evaluate both arms then pick" — otherwise `ln(x)` really does run with

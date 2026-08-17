@@ -25,10 +25,9 @@
 //! reading it, is a sibling file rather than a rewrite: `ir/` never imports
 //! `backend/`, and the compiler enforces that because there is no such import.
 //!
-//! Two files are reachable by neither import graph:
+//! One file is reachable by neither import graph:
 //!   - `backend/filter_kernels.zig` is `@embedFile`d by codegen (§4.5.11/12
 //!     kernels emitted verbatim into a device), so it must stay ADJACENT to it.
-//!   - `ir/ifconv.zig` is a complete MIR→MIR pass that nothing calls yet.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.

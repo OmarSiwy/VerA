@@ -10,9 +10,9 @@
 //!     simulator stamps is one residual over terminals plus internal nodes.
 //!     There is no runtime hierarchy in the artifact, so a hierarchy in the IR
 //!     would be a concept with no consumer.
-//!   - Flattening therefore leaves mir.zig, ssa.zig, analysis.zig, ifconv.zig,
-//!     proof.zig, codegen.zig and tb.zig UNCHANGED. A hierarchical MIR makes
-//!     all seven learn a new concept for the same emitted device.
+//!   - Flattening therefore leaves mir.zig, ssa.zig, analysis.zig, proof.zig,
+//!     codegen.zig and tb.zig UNCHANGED. A hierarchical MIR makes all six learn
+//!     a new concept for the same emitted device.
 //!   - §6.7 out-of-module references in Verilog-A are STATIC — a parameter read
 //!     or a node reference resolvable at elaboration time — so flattening does
 //!     not foreclose them, PROVIDED the flatten records the hierarchical path of
