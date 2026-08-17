@@ -1392,6 +1392,10 @@ pub const Parser = struct {
     /// entity it names. Neither needs a path walk, and neither needs a second
     /// representation. A name with no dot in it interns exactly as it did
     /// before, so the ordinary declaration paths are untouched.
+    ///
+    /// The parts are `expectIdent`s, so each has been through `internTok` and no
+    /// longer carries a period of its own — which is what lets the join below be
+    /// the whole mechanism rather than an approximation of one.
     fn parseDottedName(self: *Parser) Error!Ast.StrId {
         const first = try self.expectIdent();
         if (self.peek() != .dot) return first;
@@ -3269,8 +3273,41 @@ pub const Parser = struct {
         return s;
     }
 
+    /// Intern a token's text as a NAME — and the one place §2.8.1 is normalized
+    /// away, which is why the period substitution belongs here and nowhere else.
+    ///
+    /// `tokenText` already drops the leading backslash because it is not part of
+    /// the name. The other thing an escaped identifier smuggles into a name is a
+    /// PERIOD: §2.8.1 ends the identifier at white space and admits every
+    /// printable character before it, so `\x.y ` is the identifier `x.y`. That
+    /// collides head-on with `Elaborate.sep`, which is a period, and four places
+    /// downstream read a period as a path separator without being able to check
+    /// — `Elaborate.isOoc` (a dot means an Annex F.2.1 out-of-context
+    /// declaration), `parseDottedName`'s join, `Flatten.join`, `Lower.flatName`.
+    /// Left raw, `\x.y` declared inside instance `u` flattens to `u.x.y`, the
+    /// same string as net `y` inside instance `x` inside `u`: two nets, one node,
+    /// silently.
+    ///
+    /// A SPACE is the substitute because §2.8.1's own terminator is white space:
+    /// it is the one byte that cannot already be inside an identifier, which
+    /// makes the substitution injective — no unescaped name can be mistaken for
+    /// an escaped one. `naming.sanitize` turns it into `Z20` before it reaches
+    /// the emitted `U`. What it costs is readability, in exactly the case that
+    /// was previously wrong and nowhere else: a name with no period is interned
+    /// byte-for-byte as before, with no allocation.
+    ///
+    /// After this point, a period in a name means "path separator", full stop.
     fn internTok(self: *Parser, i: u32) Error!Ast.StrId {
-        return self.file.intern(self.arena, self.tokenText(i));
+        // The two bytes are spelled out rather than imported from `ir/`, for the
+        // same reason `parseDottedName`'s `.` is: the frontend owns the source
+        // half of a two-sided convention and does not depend on the IR.
+        const text = self.tokenText(i);
+        if (self.tags[i] != .escaped_identifier) return self.file.intern(self.arena, text);
+        if (std.mem.indexOfScalar(u8, text, '.') == null)
+            return self.file.intern(self.arena, text);
+        const buf = try self.arena.dupe(u8, text);
+        std.mem.replaceScalar(u8, buf, '.', ' ');
+        return self.file.intern(self.arena, buf);
     }
 
     fn addExpr(self: *Parser, node: Ast.Node) Error!Ast.ExprId {

@@ -71,10 +71,16 @@ pub const Error = error{ OutOfMemory, NoModule, DiagnosticsReported };
 /// (`hierarchical_identifier ::= { identifier [ [ expr ] ] . } identifier`), so
 /// a flattened name reads the way the source would have referred to it — and
 /// these names land in diagnostics and in the emitted device's identifiers, so
-/// readable is a requirement, not a nicety. And it CANNOT COLLIDE: §2.8 simple
-/// identifiers are alphanumeric plus `_`/`$`, and an escaped identifier's name
-/// ends at whitespace, so no legal Verilog-A identifier contains a period.
-/// A period in a flat name can only have come from a join, which makes the
+/// readable is a requirement, not a nicety.
+///
+/// And it does not collide, though NOT for the reason this comment used to give.
+/// §2.8 simple identifiers are alphanumeric plus `_`/`$`, but §2.8.1 ends an
+/// escaped identifier at white space and admits every printable character before
+/// it, so `\x.y ` is the identifier `x.y` and a raw join of it under instance
+/// `u` gives `u.x.y` — the same string as net `y` inside instance `x` inside
+/// `u`. What buys the property is `parser.internTok`, which substitutes a space
+/// for a period in an escaped identifier as it interns it; read its comment for
+/// the argument. From here on a period in a name IS a join, which makes the
 /// unmangling a `split` and the mangling injective.
 pub const sep = '.';
 
