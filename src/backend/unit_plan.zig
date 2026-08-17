@@ -14,6 +14,17 @@
 //! clear them, and splitting storage from that reset would put an ordering
 //! dependency across a file boundary. One owner, no hazard.
 //!
+//! ## CORPUS — where every measured number in this file comes from
+//!
+//! `hisimhv_va` (HiSIM_HV) and `bsimsoi_va` (the public Berkeley BSIM-SOI) are
+//! two of the 38 foundry models in the ARPice host repo, at
+//! `../ARPice/src/devices/models` — `VERA_MODELS` overrode that path for the
+//! `baseline.sh` oracle these were taken with. NONE is vendored here, and no
+//! fixture is remotely their shape — the numbers below are per-unit line counts
+//! in the thousands, over ~105 units. So every ratio below is real and none of
+//! it is reproducible from this tree alone: check the models out before you
+//! re-measure, and do not re-derive a replacement from a fixture.
+//!
 //! ## RESET IS PARTIAL, AND THAT IS THE DESIGN
 //!
 //! `analyze` clears only the cells named by the PREVIOUS unit's `live` set, not
@@ -121,7 +132,8 @@ blk_phi: []bool = &.{},
 /// emitted — see `planDeadBranches`.
 dead_branch: []bool = &.{},
 /// Local slot of a needed value, or `none_u32`. UNIT-LOCAL — never a MIR
-/// index (03-codegen.html#canonicalization).
+/// index; naming.zig's ABSOLUTE RULE says why a MIR index in a name renumbers
+/// every downstream declaration.
 slot: []u32 = &.{},
 n_slots: u32 = 0,
 
@@ -194,7 +206,8 @@ pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
 /// The fix is per UNIT, not per model: a unit that runs a loop locally uses
 /// only local values of it, and every other unit keeps reading the core.
 /// Refusing to hoist loop values at all is sound too and costs 2-5x the
-/// generated output on the models that have loops (hisimhv_va: 17 MB → 78 MB).
+/// generated output on the models that have loops (hisimhv_va: 17 MB → 78 MB;
+/// CORPUS in the header — no fixture in this tree has that shape).
 ///
 /// Monotone — marking a loop only ADDS private values, which can only mark
 /// more loops — so the fixpoint converges; in practice after one extra round.
@@ -250,7 +263,8 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // leaves most units with a handful of private values scattered
         // through a CFG of hundreds of blocks, and reconstructing all of it
         // was, measured on `bsimsoi_va`, 754 of the 5 431 lines of every
-        // unit being `if (c) { break :B } else { break :B }`.
+        // unit being `if (c) { break :B } else { break :B }` (CORPUS: the
+        // public Berkeley BSIM-SOI release — see this file's CORPUS header).
         //
         // Marking is monotone — a newly live condition can only ADD work to
         // a block, which can only revive a branch — so this converges, and
@@ -457,8 +471,11 @@ fn reattribute(self: *UnitPlan, inst: Mir.Inst) void {
 ///
 /// Measured on the emitted text before writing this: 14,930 of 16,242 `const
 /// tN` temps (92%) have exactly one use, and 11,366 of those are consumed on
-/// the very next line. That adjacency is the whole safety argument and the
-/// reason this is not the same pass as the lazy-arm inlining above:
+/// the very next line. (CORPUS: emitted device.zig from the corpus in this
+/// file's header. WHICH model was not recorded — 22df456 introduced the count
+/// and does not say — so re-derive before quoting the ratio for one model.)
+/// That adjacency is the whole safety argument and the reason this is not the
+/// same pass as the lazy-arm inlining above:
 ///
 ///   - ONE use, so the expression is rendered once — no duplicated work.
 ///     `eager_use == 1 and arm_use == 0` is exactly that, since an arm use
@@ -561,7 +578,8 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         // arms disagree at this SSA join", which is a property of the CFG
         // and the value — not of whether this unit happens to read the
         // result out of the cache. Measured: with a `cached` skip here,
-        // `hisimhv_va` moved 4 000 of 128 000 residual entries.
+        // `hisimhv_va` moved 4 000 of 128 000 residual entries (CORPUS in
+        // the header: not in this tree).
         const def = self.mir.valueDef(lv);
         if (def == .inst_result and self.an.i_op[@intFromEnum(def.inst_result)] == .phi)
             self.blk_phi[db] = true;
@@ -599,7 +617,8 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // the unit reads from the cache leaves it clear, so the two arms are
         // NOT interchangeable. It is the same hazard `markRecomputedLoops`
         // re-materializes a loop for. Measured: without this clause,
-        // `hisimhv_va` moved 4 000 of 128 000 residual entries.
+        // `hisimhv_va` moved 4 000 of 128 000 residual entries (CORPUS in
+        // the header: not in this tree).
         if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
         if (self.an.mk_off[to + 1] != self.an.mk_off[to]) return null; // opens labels
         const t = self.an.term[to];

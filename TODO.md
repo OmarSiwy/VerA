@@ -58,9 +58,16 @@ is "accessible … anywhere in the module", which for a display operand means
 §9.4.1 converged reporting: the operand is evaluated after the analog block, not
 where it is written.
 
-**Blast radius:** every §9.4 task in the suite. 751 fixtures print through one,
-746 of them via `CHECK`, and each transcript is an assertion — so moving operand
-evaluation to the end of the block re-times what two thirds of the suite prints. This is the one gap where closing it correctly is
+**Blast radius, and it is an AT-RISK bound rather than a change bound.** 750
+fixtures print through a §9.4 task and 744 of those go through `CHECK`
+(MEASURED 2026-08-17 over the 1161 `.va` in `tests/fixtures`: files matching a
+`$display`/`$strobe`/`$write`/`$monitor`/`$f*` task or a `` `CHECK`` macro), and
+every transcript is an assertion — so the whole set is what a mis-timed operand
+could break. What re-timing can actually MOVE is the subset whose task line
+reads a branch flow, and that is **36 fixtures** (same grep, plus `I(` on the
+task or `CHECK` line): everything else prints values whose definition does not
+move. Quoting 750 as the change bound is what made this look unaffordable. This
+is the one gap where closing it correctly is
 cheaper than closing it safely, and that is why it is still open. Its sibling
 `two_named_branches_retain_separately.va` pins the part that IS fixed, so a
 regression in branch identity still fails loudly.
