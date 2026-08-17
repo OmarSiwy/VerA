@@ -1,6 +1,6 @@
 # Annex D coverage — standard definitions
 
-Source: `docs/VAMS-LRM/annex-d-stddefs.html`, read in full. Annex D is normative and
+Source: `docs/annex-d-stddefs.html`, read in full. Annex D is normative and
 publishes three files verbatim: `disciplines.vams`, `constants.vams` and
 `driver_access.vams`. There is no prose to conform to — the conformance question is
 whether the implementation supplies those files and whether their text compiles and

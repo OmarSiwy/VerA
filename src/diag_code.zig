@@ -342,6 +342,10 @@ pub const Code = enum(u16) {
     /// §7.2.2 a variable assigned in BOTH the continuous and the discrete
     /// context.
     E0432,
+    /// A.6.2 a statement in a digital `initial` block that is not an assignment
+    /// of a constant expression to a module variable — the one shape a compiler
+    /// with no event queue can lower.
+    E0433,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -1228,13 +1232,12 @@ pub fn info(c: Code) Info {
             \\nowhere left to land. 31 bits is the widest legal grouping, and it
             \\reads as at most +2147483647.
             \\
-            \\Why a class-2 (parser) number for a chapter-7 semantic rule: a
-            \\`reg` declaration is refused where it is read (E0205 — VerA
-            \\implements no discrete context), and a parse error stops the
-            \\pipeline before lowering, so the parser is the only stage that
-            \\ever sees the width. It follows that the bounds have to be
+            \\Why a class-2 (parser) number for a chapter-7 semantic rule: the
+            \\declared RANGE is the only evidence of a width, and nothing below
+            \\the parser keeps it — a `reg` becomes one integer variable, which
+            \\is Table 7-1's own mapping. It follows that the bounds have to be
             \\literals here; the check moves down to lowering, and gains the
-            \\constant folder, the day discrete nets are implemented.
+            \\constant folder, the day a `reg` keeps its bits.
             ,
         },
 
@@ -2766,6 +2769,33 @@ pub fn info(c: Code) Info {
             \\
             \\Pick one writer. Reading a variable from the other context stays
             \\legal, and is what LRM 7.3.1 Table 7-1 is the conversion table for.
+            ,
+        },
+        .E0433 => .{
+            .title = "statement in an initial block is not a constant assignment",
+            .lrm = "7.2.2",
+            .explain =
+            \\A.6.2's `initial_construct ::= initial statement` is legal
+            \\Verilog-AMS and VerA accepts it, in ONE shape: assignments of
+            \\constant expressions to module variables. That shape has a meaning
+            \\a compiler can honour on its own — LRM 7.2.2's "the domain of a
+            \\variable is that of the context from which its value is assigned"
+            \\gives the target to the discrete context, the block runs once
+            \\before the analysis, so the variable simply holds that constant for
+            \\the whole analysis and LRM 7.3.1 Table 7-1 says how the continuous
+            \\context reads it.
+            \\
+            \\Everything else in a digital process needs a digital process: a
+            \\delay or an event control needs a time queue to suspend on, a loop
+            \\or a conditional needs values that change during the run to be worth
+            \\writing, and a non-constant right-hand side needs whatever it reads
+            \\to have been computed by something. VerA implements no discrete
+            \\kernel (LRM 8.5 has no analog counterpart here), so it refuses those
+            \\rather than picking one of their several possible readings.
+            \\
+            \\If the value is genuinely fixed, write it as a constant — or as a
+            \\parameter (LRM 3.4), which is the language's own name for a value
+            \\determined before the analysis starts.
             ,
         },
 

@@ -45,29 +45,26 @@
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
 // for the LRM's own worked example.
 //
-// WHOM IT BINDS, WHICH IS NOT VERA, AND THE ARGUMENT THAT USED TO STAND HERE WAS
-// WRONG. That argument said E.1.1's conditional "is about the netlist input, not
-// about this syntax: a tool that reads no SPICE at all still has to parse
-// `vertNPN q1(c1, b1, e1);` as an instantiation and resolve it". Resolve it to
-// WHAT? E.1.1's sentence is one implication and the syntax is inside the
-// consequent, not beside it: "it states IF a simulator which supports
-// Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor,
-// THEN certain objects defined in that flavor of SPICE netlist can be referenced
-// from within a Verilog-AMS HDL structural description." The object referenced
-// here is `.MODEL VERTNPN`, an object defined in a netlist; with no netlist there
-// is no object, so the reference has no meaning to give and refusing it is not a
-// violation. E.1.2's first bullet closes it explicitly: "whether a particular
-// Verilog-AMS simulator is SPICE compatible, and with which particular variant of
-// SPICE it is compatible, is solely determined by the authors of the simulator."
-// That is the LRM delegating, not requiring.
+// WHERE THE NETLIST COMES FROM, AND WHY THAT IS THE WHOLE OF E.1.1. That clause
+// is one implication — "IF a simulator which supports Verilog-AMS HDL is also
+// able to read SPICE netlists of a particular flavor, THEN certain objects
+// defined in that flavor of SPICE netlist can be referenced from within a
+// Verilog-AMS HDL structural description" — and `vertNPN` here is a reference to
+// `.MODEL VERTNPN`, an object defined in a netlist. So a fixture for the clause
+// has to make its antecedent TRUE, and the `//! spice` lines below do exactly
+// that: they carry the annex's card verbatim, continuation line and all, and the
+// compiler under test does the reading. Nothing is pre-resolved for it — a
+// directive that handed over a ready-made ("vertnpn", ["c","b","e"]) would close
+// this file while skipping the premise it is about.
 //
-// SO WHY IS IT STILL HERE, AND STILL `xfail`? Two things it does that deleting it
-// would not. It BINDS a Verilog-AMS tool that does read netlists, and `//! xfail`
-// is ignored for every compiler but VerA (tests/fixtures/README.md), so for those
-// tools this file is an ordinary requirement. And on VerA's side the XPASS rule
-// still guards the defect that IS VerA's: this file must not start passing by
-// resolving an instance of a module declared nowhere, which is E0904's whole job.
-// Read the reason on the `//! xfail` line rather than the XFAIL tally.
+// E.1.2's first bullet leaves "with which particular variant of SPICE it is
+// compatible ... solely determined by the authors of the simulator", so the
+// FLAVOR read here is named rather than assumed: `.MODEL` and `.SUBCKT`
+// declarations, which is E.2's literal noun phrase ("the subcircuits and models
+// contained within the SPICE netlist are treated as module definitions"). Device
+// cards, .TRAN and .INCLUDE are not read, and this fixture asks for none of them.
+// A tool that takes its netlist on the command line instead reads these cards as
+// the comment they are (§2.4) and learns which netlist to supply.
 //
 //! lrm E.2.2.1
 //! lrm E.2
@@ -75,7 +72,8 @@
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
 //! lrm E.1.1
 //! lrm E.1.2
-//! xfail NOT A DEBT — the clause is conditional and its condition is false for VerA. E.1.1 states one implication: "IF a simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor, THEN certain objects defined in that flavor of SPICE netlist can be referenced." VerA reads one language and no netlist, so `.MODEL VERTNPN` is not an object that exists, `vertNPN` is declared nowhere, and E0904 is the right answer rather than a failure to meet a requirement; E.1.2 adds that SPICE compatibility "is solely determined by the authors of the simulator". Table E.1's primitives ARE shipped and are not what is missing — the model card names a primitive and fixes its parameters, and the card lives in the netlist. The marker is kept, not removed, because it still binds a tool that DOES read netlists (xfail is ignored for anyone but VerA) and because XPASS still guards VerA against silently resolving an undeclared module. Do not close this by implementing a SPICE netlist reader
+//! spice .MODEL VERTNPN NPN BF=80 IS=1E-18 RB=100 VAF=50
+//! spice + CJE=3PF CJC=2PF CJS=2PF TF=0.3NS TR=6NS
 `include "check.vh"
 module annex_e_spice_model(c1, b1, e1);
   inout c1, b1, e1; electrical c1, b1, e1;

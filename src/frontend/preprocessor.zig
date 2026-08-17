@@ -32,6 +32,8 @@ const diag = @import("../diag.zig");
 /// §2.6.2 number decoding, for §10.3's `transition_time` operand. The lexer
 /// does not depend on this file, so the edge only goes one way.
 const Lexer = @import("lexer.zig");
+/// Annex E.2 — the `.MODEL`/`.SUBCKT` reader whose output joins this prelude.
+const spice_cards = @import("spice_cards.zig");
 
 pub const Options = struct {
     /// Searched in order for `include, before the built-in annex D files.
@@ -40,6 +42,17 @@ pub const Options = struct {
     file_name: []const u8 = "<source>",
     /// Prepend annex D.2 constants.vams + annex D.1 disciplines.vams.
     std_defs: bool = true,
+    /// Annex E.2 — SPICE netlist text this compilation may read `.MODEL` and
+    /// `.SUBCKT` declarations out of, one card per line (`//! spice`). Read by
+    /// `spice_cards.synthesize`, which turns each into a module and appends it to
+    /// the Table E.1 prelude; empty means E.1.1's antecedent is false for this
+    /// compilation and nothing is appended. Only with `std_defs`, since a model
+    /// card's interface comes from a Table E.1 primitive that would not be there.
+    spice_netlist: []const u8 = "",
+    /// Out-param: how many modules `spice_netlist` contributed, so the caller can
+    /// tell the netlist-derived tail of the prelude from Table E.1's own rows —
+    /// E.2.1's case-insensitive fallback applies to the tail only.
+    spice_netlist_modules: ?*u32 = null,
     /// Out-param: byte length of the prepended std-def prelude, so a caller
     /// mapping an output offset back to a user source line can subtract it.
     prelude_len: ?*u32 = null,
@@ -242,6 +255,13 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
         // constants.vams defines. Before the user's source, so nothing the user
         // `defines can reach into a shipped standard file.
         try pp.runFile(spice_primitives, "spice_primitives.vams", null);
+        // Annex E.2 after Table E.1: a `.MODEL` wrapper instantiates the
+        // primitive its type names, so the primitive has to be declared first.
+        const cards = try spice_cards.synthesize(arena, opts.spice_netlist);
+        if (cards.modules != 0) {
+            try pp.runFile(cards.text, "spice_netlist.vams", null);
+            if (opts.spice_netlist_modules) |n| n.* = cards.modules;
+        }
     }
     const prelude = pp.out.items.len;
     if (opts.prelude_len) |p| p.* = @intCast(prelude);
@@ -324,10 +344,14 @@ const Pp = struct {
     /// §10.3 events, in text-stream order. Published via `Options.transitions`.
     transitions: std.ArrayList(DefaultTransition) = .empty,
     /// IEEE 1364 §19.9. Last one wins rather than a positional event list like
-    /// `defaults`: the directive scopes to the design elements that FOLLOW it,
-    /// and VerA elaborates exactly one module, so the last `timescale before
-    /// end of stream is the one in force for it.
-    // ponytail: make it an event list the day VerA compiles two modules at once.
+    /// `defaults`, and that IS a ceiling now: the directive scopes to the design
+    /// elements that FOLLOW it, and since elaboration walks a hierarchy every
+    /// module of one file shares this single value. Two modules with a
+    /// `timescale between them therefore both see the second one. No fixture
+    /// pins that (§9.6's tick has no analog kernel behind it — see E0908's
+    /// note), which is why it stays a ceiling and not a bug report.
+    // ponytail: make it a positional event list, exactly like `defaults`, the
+    // day a fixture puts a `timescale between two module definitions.
     timescale: ?Timescale = null,
     /// IEEE 1364 §19.7 `line remap, for §10.7 `__LINE__` / `__FILE__`. Null
     /// when the current file is numbered naturally. `from` is the PHYSICAL
@@ -1365,7 +1389,7 @@ fn isIdentChar(c: u8) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Annex D standard definitions (transcribed verbatim from docs/VAMS-LRM/annex-d-stddefs.html)
+// Annex D standard definitions (transcribed verbatim from docs/annex-d-stddefs.html)
 // ---------------------------------------------------------------------------
 
 /// annex D.2 — constants.vams. Mathematical and physical constants (§10.5).

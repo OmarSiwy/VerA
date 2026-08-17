@@ -1,6 +1,6 @@
 # Chapter 2 coverage
 
-Source: `docs/VAMS-LRM/ch2-lexical.html`, read section by section including every
+Source: `docs/ch2-lexical.html`, read section by section including every
 syntax box and both tables.
 
 HTML section-ID audit: `s2-1` `s2-2` `s2-3` `s2-4` `s2-5` `s2-6` `s2-6-1` `s2-6-2`

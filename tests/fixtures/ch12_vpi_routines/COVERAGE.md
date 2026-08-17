@@ -1,6 +1,6 @@
 # Chapter 12 coverage
 
-Source: `docs/VAMS-LRM/ch12-vpi-routines.html`, read section by section.
+Source: `docs/ch12-vpi-routines.html`, read section by section.
 
 HTML section-ID audit: `s12-1` `s12-2` `s12-3` `s12-4` `s12-5` `s12-6` `s12-7` `s12-8` `s12-9` `s12-10` `s12-11` `s12-12` `s12-13` `s12-14` `s12-15` `s12-16` `s12-17` `s12-18` `s12-19` `s12-20` `s12-21` `s12-22` `s12-22-1` `s12-22-2` `s12-23` `s12-24` `s12-25` `s12-26` `s12-27` `s12-28` `s12-29` `s12-30` `s12-31` `s12-31-1` `s12-31-2` `s12-31-3` `s12-31-4` `s12-32` `s12-32-1` `s12-32-2` `s12-32-3` `s12-33` `s12-33-1` `s12-33-2` `s12-34` `s12-35` `s12-36`. 47 ids; 38 have a fixture, 9 do not.
 

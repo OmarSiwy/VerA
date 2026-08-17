@@ -1,6 +1,6 @@
 # Annex H coverage
 
-Source: `docs/VAMS-LRM/annex-h-glossary.html`, read term by term.
+Source: `docs/annex-h-glossary.html`, read term by term.
 
 HTML section-ID audit: `glossary-a` `glossary-b` `glossary-c` `glossary-f`
 `glossary-i` `glossary-k` `glossary-l` `glossary-m` `glossary-n` `glossary-p`

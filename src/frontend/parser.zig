@@ -730,17 +730,20 @@ pub const Parser = struct {
                 try self.parseNetNames(b, disc, false);
             },
             // A.2.1.3 `reg [ range ] list_of_variable_identifiers ;` — §7.3.1's
-            // discrete net. Still E0205: VerA has no digital execution model, so
-            // nothing ever drives the grouping, and a dozen fixtures pin that
-            // code together with the word `reg`.
+            // discrete net. ACCEPTED: `reg` is a Verilog-AMS declaration
+            // (A.2.1.3), and VerA targets Verilog-AMS, so refusing it was
+            // encoding annex C's Verilog-A subset rather than the language. The
+            // names go into `b.vars` as INTEGERS, which is Table 7-1's own
+            // mapping for a bit grouping read from a continuous context — "the
+            // lowest bit of the bit grouping is mapped to the zeroth bit of the
+            // integer", zero-extended, sign bit always 0.
             //
-            // REPORTED, THEN DECLARED ANYWAY. The names go into `b.vars` as
-            // integers — Table 7-1's own mapping for a bit grouping read from a
-            // continuous context — so that the §5.2.1 and §7.2.2 rules stated
-            // about a discrete-owned VARIABLE can be reached at all. Bailing
-            // here instead left every later mention of the name to arrive as a
-            // second, meaningless "undeclared identifier". See `reportItem` for
-            // why the report does not set `failed`.
+            // What is NOT accepted is anything that would need a digital kernel
+            // to drive the grouping: see `Lower.collectInitialState` for the
+            // exact shape of `initial` block VerA lowers (constant assignments,
+            // nothing else) and E0433 for everything past it. A `reg` no
+            // `initial` block assigns simply starts at zero, like every other
+            // §3.2 variable.
             //
             // §7.3.1 Table 7-1's width rule is judged HERE, on the way past,
             // because the parser is the only stage that sees the declared range:
@@ -754,7 +757,6 @@ pub const Parser = struct {
                         if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
                     }
                 }
-                try self.reportItem(tok);
                 while (true) {
                     const name_tok = self.pos;
                     try b.vars.append(self.arena, .{
@@ -945,8 +947,9 @@ pub const Parser = struct {
     /// `parseSourceFile` does not raise `ParseError`, and stage 4 therefore still
     /// runs over the recorded AST.
     ///
-    /// That distinction is the whole of why `reg`/`initial`/`always` are parsed
-    /// at all. A construct VerA cannot execute is still a construct the LRM
+    /// That distinction is the whole of why `always` is parsed at all (`reg` and
+    /// `initial` are now accepted outright — see `parseDiscrete`). A construct
+    /// VerA cannot execute is still a construct the LRM
     /// states rules ABOUT — §4.5.15 bars an analog operator from an `initial`
     /// block, §4.7.3 bars an analog function call from outside the analog
     /// context, §5.2.1 bars a digital value from an `analog initial` block,
@@ -1006,12 +1009,26 @@ pub const Parser = struct {
     /// A.6.2 `initial_construct ::= initial statement` /
     /// `always_construct ::= always statement` — §7.2.2's DISCRETE context.
     ///
-    /// Refused (E0205) and then parsed anyway; see `reportItem`. The body goes
-    /// through `parseStmt`, the ANALOG statement production, which is exact for
-    /// the assignment forms §7.2.2 and §7.3.2 use and a syntax error for
-    /// everything a digital process adds — a delay, `<=`, `force`/`release`,
-    /// `fork`. That is the ceiling and it is the right one: those need an event
-    /// queue and delta cycles, which is a simulator, not a compiler pass.
+    /// The body goes through `parseStmt`, the ANALOG statement production, which
+    /// is exact for the assignment forms §7.2.2 and §7.3.2 use and a syntax error
+    /// (E0209) for everything a digital process adds — a delay, `<=`,
+    /// `force`/`release`, `fork`. That is the ceiling and it is the right one:
+    /// those need an event queue and delta cycles, which is a simulator, not a
+    /// compiler pass.
+    ///
+    /// `initial` IS ACCEPTED; `always` is still E0205. The asymmetry is not
+    /// dialect, it is what a compiler with no event queue can honestly promise.
+    /// An `initial` block of constant assignments has exactly one meaning — every
+    /// target holds that constant for the whole analysis — and §7.2.2's own first
+    /// sentence ("the domain of a variable is that of the context from which its
+    /// value is assigned") hands it to the discrete context without anything
+    /// having to execute. `Lower.collectInitialState` lowers that shape into the
+    /// variable's initial value and refuses the rest (E0433). An `always` block
+    /// has no such reading: it re-runs on an event, so its value is a function of
+    /// a schedule that does not exist here. Refusing it is the honest answer,
+    /// and it is annex A's `always_construct` VerA leaves out — not annex C's.
+    ///
+    /// Refused without setting `failed`; see `reportItem`.
     ///
     /// NOT refused inside a §7.6 `connectmodule`. That is the one design element
     /// whose whole purpose is the discrete side of a mixed net, and §9.22.4's
@@ -1025,7 +1042,7 @@ pub const Parser = struct {
         const main_tok = self.pos;
         const is_always = self.peek() == .kw_always;
         self.pos += 1;
-        if (!self.in_connect_module) try self.reportItem(main_tok);
+        if (is_always and !self.in_connect_module) try self.reportItem(main_tok);
         const body = try self.parseStmtNoNull();
         try b.discrete.append(self.arena, .{
             .is_always = is_always,
@@ -1364,8 +1381,8 @@ pub const Parser = struct {
     /// names — `electrical [3:0] p, q;` — so it is parsed here, once, and
     /// sticks to every name in the list.
     ///
-    /// ponytail: still no net_decl_assignment (`electrical n = 5.0;`), which
-    /// reports through the normal `;` expectation.
+    /// A `net_decl_assignment` (`electrical n = 5.0;`) parses here too — see the
+    /// §3.6.3.2 note at the `assign_eq` arm below for what happens to the value.
     /// §6.7 a hierarchical name in a DECLARATION position, interned as ONE
     /// string with the source's own `.` between the parts.
     ///

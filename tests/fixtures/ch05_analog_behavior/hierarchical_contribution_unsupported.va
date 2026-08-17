@@ -21,10 +21,13 @@
 // potential_source.va uses, because the runner forces unknowns rather than
 // solving and a probe therefore reads the declared bias, not the source value.
 //
-// The port `p` is here only because the runner refuses a device with zero
-// terminals (README, CANNOT RUN), and that verdict outranks every other, so the
-// fixture would prove nothing without it. source_driver itself has an empty port
-// list.
+// The port `p` is not in source_driver, whose port list is empty. It arrived here
+// because the device contract refused a device with zero terminals, and it stays
+// because it is now load-bearing for a different reason: it is what the child
+// instance `drv` is wired to, and the §5.6.8.1 contributions under test name nets
+// inside that instance. (The contract no longer refuses one — see
+// ch06_hierarchy/module_definition.va — so a portless variant would run today,
+// but it would have no child to contribute into.)
 //
 //! lrm 5.6.8.1
 //! bias V(m) = 0.25

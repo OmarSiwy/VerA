@@ -15,13 +15,19 @@
 // argument legal. The whole module item is legal Verilog-AMS HDL. Its two
 // genuine §7.3.7 violations are elsewhere:
 // digital_function_from_analog_unsupported.va and
-// analog_function_from_digital_unsupported.va, one per sentence.
+// analog_function_from_digital_rejected.va, one per sentence — and the second of
+// those reaches its own diagnostic now.
 //
-// C.7 is what refuses it here: "No digital behavior or events are supported in
-// Verilog-A", so both the `always` block and the non-analog `function` are
-// outside the subset and the module item dies at E0205 ("unsupported module
-// item"). Conformance for this dialect — and §7.3.6.3's interpolation rule,
-// like everything else behind the digital keyword, is never reached.
+// WHAT REFUSES IT IS VerA'S CEILING, twice, and not C.7's subset rule (which this
+// file used to cite for the verdict): the `always` block re-runs on an event, so
+// its value is a function of §8.5's simulation cycle and VerA has no discrete
+// kernel to be that function (digital_always_unsupported.va states it in full),
+// and a non-analog `function` is a digital subprogram with the same problem
+// (digital_function_from_analog_unsupported.va). Both die at E0205, "unsupported
+// module item" — so §7.3.6.3's interpolation rule is never reached. The `initial`
+// half of C.7's bullet has been re-verdicted (digital_initial_accepted.va); this
+// file's construct is not affected by that, because nothing here is a constant
+// assignment.
 //
 //! lrm 7.3.6.3
 //! lrm 7.3.7

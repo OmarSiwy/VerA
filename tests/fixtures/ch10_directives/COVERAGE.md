@@ -1,6 +1,6 @@
 # Chapter 10 coverage
 
-Source: `docs/VAMS-LRM/ch10-directives.html`, read section by section.
+Source: `docs/ch10-directives.html`, read section by section.
 
 HTML section-ID audit: `s10-1` `s10-2` `s10-3` `s10-4` `s10-5` `s10-6` `s10-7`.
 Seven ids, seven with at least one fixture. 47 files, numbered 01–48 with 20

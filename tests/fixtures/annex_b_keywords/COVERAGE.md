@@ -1,6 +1,6 @@
 # Annex B coverage
 
-Source: `docs/VAMS-LRM/annex-b-keywords.html`, read in full — both printed halves of
+Source: `docs/annex-b-keywords.html`, read in full — both printed halves of
 Table B.1.
 
 HTML section-ID audit: **none.** The file carries zero `id=` attributes: one `<h1>`, one

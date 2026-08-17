@@ -394,6 +394,12 @@ held_vars: std.ArrayList(HeldVar) = .empty,
 /// Source names `markHeldVars` found under an `@(...)`, collected BEFORE the
 /// module's variables are declared. Empty for a module with no event control.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
+/// A.6.2 the digital `initial` block's assignments, name -> the constant
+/// expression it leaves in that variable. Collected BEFORE the module's
+/// variables are declared, for the same reason `held_names` is: the value a
+/// variable starts every evaluation with is decided at its declaration.
+/// Empty for a module with no `initial` block. See `collectInitialState`.
+initial_state: std.StringArrayHashMapUnmanaged(struct { value: Ast.ExprId, tok: u32 }) = .empty,
 /// §5.10.4 named events, name -> the flag slot `-> ev` writes and `@(ev)` reads.
 /// Its own map and NOT `vars`, because §2.8 gives an event a name but no value:
 /// `x = tick;` has no derivation, and putting the flag in `vars` would give it
@@ -1130,7 +1136,33 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the assignment that reveals it — see `holdSlot`.
     try self.markHeldVars(module);
     try self.checkOneItemPerScope(module.vars);
-    for (module.vars) |*v| try self.declareVarDecl(v, .module);
+    // A.6.2 the digital `initial` block, for the same reason and at the same
+    // point as the §5.10 scan above: what a variable holds at the top of every
+    // evaluation is decided at its declaration. `initial x = 3;` and
+    // `integer x = 3;` therefore lower to one write, and the AST edit below is
+    // the whole of the difference.
+    try self.collectInitialState(module);
+    for (module.vars) |*v| {
+        var d = v.*;
+        if (self.initial_state.get(self.file.str(d.name))) |a| {
+            // §3.2.2 an array takes an assignment PATTERN, not a scalar, and
+            // which element is which is the question a discrete kernel would be
+            // answering. E0433 rather than §5.7's E0429 because the refusal is
+            // about the block, not about the shapes.
+            if (d.dims.len != 0)
+                try self.err(a.tok, .E0433, "`{s}` is an array", .{self.file.str(d.name)})
+            else
+                d.init = a.value;
+        }
+        try self.declareVarDecl(&d, .module);
+    }
+    // §6.8: an `initial` block that assigns a name this module never declared.
+    // Reported here because it is only knowable once every declaration is in —
+    // and it has to be reported by somebody, since nothing else lowers the block.
+    for (self.initial_state.keys(), self.initial_state.values()) |name, a| {
+        if (!self.vars.contains(name) and !self.arrays.contains(name))
+            try self.err(a.tok, .E0313, "`{s}`", .{name});
+    }
 
     // §5.10.4 named events. An event carries no value — only "triggered at this
     // timepoint or not" — so one integer flag per event, zero on entry to every
@@ -1270,12 +1302,13 @@ fn strOrEmpty(self: *const Lower, id: Ast.StrId) []const u8 {
 
 /// §7.2.2's two contexts, and the four rules the LRM states across them.
 ///
-/// A `Ast.DiscreteBlock` is NEVER LOWERED — the parser already refused it
-/// (E0205), because executing one needs an event queue and delta cycles, which
-/// is a simulator and not a compiler pass. What is done here is the other half:
-/// the LRM states rules ABOUT a discrete context, and while the keyword was a
-/// hard syntax error not one of them could fire. All four are decidable from
-/// the AST alone, which is why this is a scan and not a lowering:
+/// A `Ast.DiscreteBlock` is not lowered as CODE — an `always` block is refused
+/// outright (E0205) and an `initial` block contributes only its constant results
+/// (`collectInitialState`), because EXECUTING one needs an event queue and delta
+/// cycles, which is a simulator and not a compiler pass. What is done here is the
+/// other half: the LRM states rules ABOUT a discrete context, and while the
+/// keyword was a hard syntax error not one of them could fire. All four are
+/// decidable from the AST alone, which is why this is a scan and not a lowering:
 ///
 ///   §4.5.15  an analog operator "can not be used inside an initial or always
 ///            block"                                                  → E0422
@@ -1321,6 +1354,95 @@ fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // assigned" gives the variable to whichever context is not the intruder, and
     // a module with a discrete block in it has already been told about that.
     for (module.analog) |blk| try self.scanContinuous(blk.body, blk.is_initial, &ctx);
+}
+
+/// A.6.2 `initial_construct ::= initial statement`, lowered — as far as it can
+/// honestly be lowered by a compiler with no discrete kernel.
+///
+/// THE ONE SHAPE. A body of assignments of CONSTANT expressions to module
+/// variables. §7.2.2's first sentence is what makes that shape complete rather
+/// than a guess: "The domain of a variable is that of the context from which its
+/// value is assigned", so the target belongs to the discrete context, and §7.2.2
+/// then forbids the continuous context to assign it as well (E0432). The block
+/// runs once before the analysis, nothing else ever writes the variable, and the
+/// constant is therefore the value it holds for the whole analysis. §7.3.1
+/// Table 7-1 is the rest of the story — how the continuous context READS it —
+/// and for a `reg` the parser has already applied that table's `bit` row by
+/// declaring the grouping as one integer.
+///
+/// So this records the expression and `lowerModule` installs it as the
+/// variable's initial value, exactly where an A.2.2.1 declaration assignment
+/// lands. No block is emitted, because there is no second point in time at which
+/// it could run.
+///
+/// EVERYTHING ELSE IS E0433, and deliberately so rather than "unimplemented":
+/// a delay or an event control has nothing to suspend on, a loop or a
+/// conditional is only worth writing over values that change during the run, and
+/// a non-constant right-hand side reads something no discrete kernel computed.
+/// Each of those has several possible readings and the LRM picks between them
+/// with §8.5's simulation cycle, which VerA does not have. Refusing is the
+/// answer that cannot be silently wrong.
+///
+// ponytail: no event queue, no delta cycles, no drivers. The upgrade path is a
+// discrete half in the engine, not a bigger version of this function — and if
+// one ever lands, this stays as its constant-folding fast path.
+fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    for (module.discrete) |blk| {
+        // `always` is refused at the keyword (E0205, parser): it re-runs on an
+        // event, so it has no constant reading to collect. Reporting its body
+        // here as well would be a second diagnostic for one decision.
+        if (blk.is_always) continue;
+        try self.collectInitialStmt(blk.body);
+    }
+}
+
+fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
+    if (id == .none) return;
+    const ex = &self.file.exprs;
+    switch (self.file.stmt(id)) {
+        .empty => {},
+        // A.6.3 `seq_block` — transparent. Its own local declarations are not:
+        // a name declared inside the block is not the module variable the
+        // continuous context reads, so there is nothing to install.
+        .block => |b| {
+            if (b.vars.len != 0 or b.params.len != 0)
+                try self.err(self.file.stmtTok(id), .E0433, "a local declaration inside an initial block", .{});
+            for (b.body) |s| try self.collectInitialStmt(s);
+        },
+        .assign => |a| {
+            const tok = self.file.stmtTok(id);
+            if (a.target == .none or ex.tag(a.target) != .ident) {
+                // §3.2.2 `bus[i] = …`: the element is representable, but which
+                // element is a question about a value, and the arrays this ever
+                // applies to are the ones a digital kernel would drive.
+                try self.err(tok, .E0433, "the assignment target is not a plain variable name", .{});
+                return;
+            }
+            const name = self.file.str(ex.strOf(a.target));
+            if (self.constEval(a.value) == null) {
+                var b = self.errWith(tok, .E0433);
+                b.msg("`{s}` is assigned a value that is not constant", .{name});
+                b.note(
+                    "an initial block runs once, before the analysis, so a value it computes " ++
+                        "from anything the analysis produces does not exist yet",
+                    .{},
+                );
+                try b.emit();
+                return;
+            }
+            // Last assignment wins — the body is sequential, so a later one
+            // overwrites an earlier one, and both overwrite an A.2.2.1
+            // declaration assignment (which happens at elaboration, before this
+            // block runs).
+            try self.initial_state.put(self.arena, name, .{ .value = a.value, .tok = tok });
+        },
+        else => try self.err(
+            self.file.stmtTok(id),
+            .E0433,
+            "only assignments of constant expressions are supported here",
+            .{},
+        ),
+    }
 }
 
 /// One statement of an `initial`/`always` body. Collects the §7.2.2 assignment
@@ -1998,8 +2120,10 @@ fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 /// precedence sentence ("the more specific directives have higher precedence")
 /// makes a qualified default beat an unqualified one. Every net that reaches
 /// this point is a plain net, hence `wire` by IEEE Std 1364 §3.5's default
-/// nettype — VerA has no `reg`/`real`/`wreal` net declarations at all (E0205),
-/// so `wire` and the unqualified form are the only two keys that can match.
+/// nettype — VerA has no `real`/`wreal` net declarations at all (E0205) and a
+/// `reg` is one §3.2 integer VARIABLE rather than a net (§7.3.1 Table 7-1's own
+/// mapping), so `wire` and the unqualified form are the only two keys that can
+/// match.
 /// ponytail: widen the key to the net's declared data type when those land.
 /// The same, for a declaration that may be a §3.6.3 vector: the default is
 /// written onto each scalarised element, since the base name is not a node.
@@ -8156,14 +8280,16 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     };
 }
 
-// ponytail: deliberately deferred, each with its LRM section and upgrade path.
-//   · §4.4.2/§5.4.3 port probes `I(<p>)` — needs a per-port branch unknown.
-//   · §3.12 branch arrays and §6.5.2 vector ports/nets — the parser already
-//     rejects the declarations; the checks here are the backstop.
-//   · §6.2.2 module instantiation — rejected by the parser; a flat module is
-//     the whole scope, so nothing here resolves a hierarchical name (§6.8).
-//   · §3.2.2 runtime array indices — every index must fold (§4.2 constant
-//     expression). A select chain would be the upgrade.
+// ponytail: ONE deferral is listed here, because it is the only one with no home
+// at a declaration or a call site — every other ceiling in this file says so in
+// its own `ponytail:` comment, where it cannot drift out of agreement with the
+// code beside it. This list used to hold four more, and all four had shipped:
+// §4.4.2/§5.4.3 port probes (see `port_probes` and `lowerPortAccess`, with their
+// own solver unknown), §3.12 branch arrays and §6.5.2 vector ports (scalarised —
+// see the `vectors` map), §6.2.2 module instantiation (src/ir/elaborate.zig), and
+// §3.2.2 runtime array indices, which fold to a select chain for one dimension
+// and name their remaining ceiling at the fold itself. A block comment listing
+// what the file does not do is a register in the worst place for one.
 //   · §4.7.2 function-local `parameter` declarations fold into `consts` and
 //     are not restored on exit: a module parameter of the same name would be
 //     shadowed for the rest of the module. Give `consts` the same save/restore
@@ -9002,4 +9128,74 @@ test "lower: §5.8/§5.10.3.1 an event control statement is stricter than E0514"
             return e;
         };
     }
+}
+
+test "lower: A.6.2 an initial block of constant assignments lowers; anything else is E0433" {
+    // The accepting side is six fixtures (ch07/digital_initial_accepted,
+    // discrete_bus_narrow, discrete_bus_31, discrete_real_from_analog,
+    // annex_c/13, ch08/analog_digital_initial_order), which pin the VALUE end to
+    // end. What no fixture reaches is E0433's own arms: the two that would state
+    // them (ch08/blocking_timing_unsupported, procedural_*) die in the parser
+    // first, because `#`, `force` and `assign` have no statement production and a
+    // parse error stops the pipeline before lowering. So they are stated here,
+    // one per reading a discrete kernel would be needed to pick between.
+    const cases = [_]struct { stmt: []const u8, code: diag.Code }{
+        // A non-constant right-hand side: `v` is a runtime variable, so there is
+        // nothing to install and nothing computed it before the analysis.
+        .{ .stmt = "q = v;", .code = .E0433 },
+        // §5.10 event control — parses (it is an ordinary analog statement) and
+        // has nothing to suspend on.
+        .{ .stmt = "@(initial_step) q = 1;", .code = .E0433 },
+        // §5.9.2 a loop, and §5.8 a conditional over a runtime value: both are
+        // only worth writing over something that changes during the run.
+        .{ .stmt = "for (q = 0; q < 3; q = q + 1) q = 1;", .code = .E0433 },
+        // §3.2.2 an array element: which element is a question about a value.
+        .{ .stmt = "arr[0] = 1;", .code = .E0433 },
+        // §6.8 a name this module never declares. Nothing else lowers the block,
+        // so if this scan does not report it, nobody does.
+        .{ .stmt = "nope = 1;", .code = .E0313 },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p);
+            \\  inout p; electrical p;
+            \\  integer q; real v; integer arr[0:3];
+            \\  initial begin {s} end
+            \\  analog begin v = V(p); I(p) <+ v + q; end
+            \\endmodule
+        , .{c.stmt});
+        defer std.testing.allocator.free(src);
+
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
+        var seen = false;
+        for (0..h.bag.count()) |i| {
+            if (h.code(i) == c.code) seen = true;
+        }
+        std.testing.expect(seen) catch |e| {
+            std.debug.print("initial statement: {s}\n", .{c.stmt});
+            return e;
+        };
+    }
+
+    // The accepting shape, at the seam that matters: the constant reaches the
+    // variable's INITIAL VALUE, which is where an A.2.2.1 declaration assignment
+    // lands, and a parameter counts as a constant (§3.4).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter real k = 2.5;
+        \\  integer q; real r;
+        \\  initial begin q = 3; r = k; q = 4; end
+        \\  analog I(p) <+ V(p) + q + r;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try h.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 0), h.bag.count());
+    // Last assignment wins: the body is sequential.
+    try std.testing.expectEqual(@as(usize, 2), h.low.initial_state.count());
 }

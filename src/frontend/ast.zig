@@ -605,16 +605,24 @@ pub const AnalogBlock = struct {
 /// One `initial` or `always` construct (A.6.2 initial_construct /
 /// always_construct) — §7.2.2's DISCRETE context.
 ///
-/// Recorded, not executed. The construct is refused (E0205: VerA has no digital
-/// execution model), but the refusal is REPORTED AND THE BODY IS STILL PARSED,
-/// because five rules the LRM states about a discrete context are rules about
-/// the BODY and are unreachable while the keyword is a syntax error: §4.5.15's
-/// analog-operator ban, §4.7.3/§7.3.7's calling-context rule, §5.2.1's
-/// digital-value read and §7.2.2's both-contexts rule. See
-/// `Lower.checkDiscreteContext`.
+/// Recorded, not executed. `always` is refused (E0205: its value would be a
+/// function of §8.5's simulation cycle, which VerA has no kernel for), and the
+/// refusal is REPORTED AND THE BODY IS STILL PARSED, because rules the LRM states
+/// about a discrete context are rules about the BODY and are unreachable while the
+/// keyword is a syntax error: §4.5.15's analog-operator ban, §4.7.3/§7.3.7's
+/// calling-context rule, §5.2.1's digital-value read and §7.2.2's both-contexts
+/// rule. See `Lower.checkDiscreteContext`.
+///
+/// `initial` is ACCEPTED, in one shape: a body of constant assignments, which
+/// `Lower.collectInitialState` turns into the initial value of each target (E0433
+/// for anything else). §7.2.2's "the domain of a variable is that of the context
+/// from which its value is assigned" is what makes that reading exact without a
+/// discrete kernel.
 pub const DiscreteBlock = struct {
-    /// `always` rather than `initial`. Only the diagnostic wording reads it —
-    /// §7.2.2 puts both blocks in the same context.
+    /// `always` rather than `initial`. §7.2.2 puts both blocks in the same
+    /// context, so the §7.2.2/§4.5.15/§4.7.3/§5.2.1 scans do not read this at all
+    /// beyond the diagnostic wording. `Lower.collectInitialState` does: only the
+    /// `initial` form has a constant reading to collect.
     is_always: bool = false,
     body: StmtId,
     main_tok: u32 = 0,
@@ -956,10 +964,35 @@ pub const SourceFile = struct {
     /// text.
     builtin_modules: u32 = 0,
 
+    /// Annex E.2 — how many of the LAST `builtin_modules` entries were
+    /// synthesized from SPICE `.MODEL`/`.SUBCKT` cards (`spice_cards.synthesize`)
+    /// rather than transcribed from Table E.1.
+    ///
+    /// Two rules have to tell the two apart. E.2.1's second sentence — "if no
+    /// exact match is found, the mixed-case name shall match the same name
+    /// defined within SPICE regardless of the case" — is about names defined in
+    /// the NETLIST, so the case-insensitive fallback in `elaborate.findModule`
+    /// must not reach Table E.1's rows, which are ordinary case-sensitive
+    /// Verilog-AMS declarations (§2.7). And E.3.2's access-function substitution
+    /// is for "analog primitives", which a netlist-derived wrapper is not.
+    netlist_modules: u32 = 0,
+
     /// `modules` minus the Annex E prelude — the declarations that came from the
     /// source the user named. See `builtin_modules`.
     pub fn userModules(self: *const SourceFile) []const ModuleDecl {
         return self.modules[@min(self.builtin_modules, self.modules.len)..];
+    }
+
+    /// The Table E.1 rows: the prelude minus its netlist-derived tail.
+    pub fn tablePrimitives(self: *const SourceFile) []const ModuleDecl {
+        const end = @min(self.builtin_modules, self.modules.len);
+        return self.modules[0 .. end - @min(self.netlist_modules, end)];
+    }
+
+    /// The modules a SPICE netlist contributed. See `netlist_modules`.
+    pub fn netlistModules(self: *const SourceFile) []const ModuleDecl {
+        const end = @min(self.builtin_modules, self.modules.len);
+        return self.modules[end - @min(self.netlist_modules, end) .. end];
     }
 
     pub const empty: SourceFile = .{};

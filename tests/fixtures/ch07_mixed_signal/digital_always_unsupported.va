@@ -1,14 +1,23 @@
 // §7.2.2 contexts: "assignment statements within an initial or always block"
 // are in the discrete (digital) context. The `always` block below is that
-// context in its plainest form — one four-state reg, assigned from a digital
-// process and from nowhere else — and it is legal Verilog-AMS HDL.
+// context in its plainest form — one reg, assigned from a digital process and
+// from nowhere else — and it is legal Verilog-AMS HDL.
 //
-// C.7 deletes it from this dialect: "No digital behavior or events are
-// supported in Verilog-A". So the block is an unsupported module item (E0205)
-// and refusing it is conformance. It is also the mask behind which several
-// rules in this chapter sit unreachable — see
-// both_contexts_assignment_rejected.va and
-// analog_function_from_digital_unsupported.va.
+// THE REFUSAL IS VerA'S CEILING, and it is no longer C.7's. This file used to say
+// "C.7 deletes it from this dialect", which is a rule of the Verilog-A SUBSET;
+// the `initial` half of the same sentence has been re-verdicted for that reason
+// (digital_initial_accepted.va) and the `reg` declaration below is accepted now.
+// What separates the two keywords is not dialect: an `initial` block of constant
+// assignments has exactly one reading, while an `always` block RE-RUNS on an
+// event, so what `state` holds is a function of §8.5's simulation cycle. VerA
+// implements no discrete kernel, so there is nothing for it to be a function of,
+// and E0205 says so at the keyword rather than inventing one of the readings.
+//
+// It is also the mask behind which one rule in this chapter still sits
+// unreachable — see cross_domain_function_unsupported.va, whose §7.3.6.3 claim is
+// made from inside an `always` block. Two rules that used to be masked no longer
+// are: both_contexts_assignment_rejected.va and
+// analog_function_from_digital_rejected.va both reach their own diagnostic now.
 //
 //! lrm 7.2.2
 //! lrm C.7

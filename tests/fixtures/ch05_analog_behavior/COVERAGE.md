@@ -1,6 +1,6 @@
 # Chapter 5 coverage
 
-Source: `docs/VAMS-LRM/ch5-analog.html`, read in full through Section 5.11.
+Source: `docs/ch5-analog.html`, read in full through Section 5.11.
 112 `.va` fixtures, of which 31 are `//! reject`, 81 run and assert, and exactly ONE is
 `//! xfail` — `two_named_branches.va` (grep-measured over the directory).
 

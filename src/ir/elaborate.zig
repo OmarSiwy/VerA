@@ -1174,10 +1174,30 @@ const Flatten = struct {
     /// E.3.3's "may issue a warning stating that the Verilog-AMS module ... is
     /// used instead of the SPICE primitive" is declined: `may`, and a warning on
     /// every use of a common word like `resistor` is noise.
+    ///
+    /// THE THIRD ARM IS E.2.1's SECOND SENTENCE: "if no exact match is found, the
+    /// mixed-case name shall match the same name defined within SPICE regardless
+    /// of the case." Scoped to the netlist-derived tail of the prelude
+    /// (`Ast.SourceFile.netlistModules`) and reached only after both exact passes
+    /// fail, which is exactly what the clause says: the case-sensitive arm is
+    /// "from within Verilog-AMS HDL, a mixed-case name matches the same name with
+    /// an identical case", and E.3.3 adds that a differing-case match "does not
+    /// interfere" with the SPICE object. Names arrive from the netlist already
+    /// lower-cased (`spice_cards`), so one `eqlIgnoreCase` is the whole rule.
+    ///
+    /// A netlist `.MODEL resistor` and Table E.1's `resistor` are ordered
+    /// primitive-first here, by the exact-match pass. Annex E does not say which
+    /// wins — E.3.3 only orders a Verilog-AMS module against a SPICE object, not
+    /// two SPICE objects — and no fixture pins it; primitive-first is chosen
+    /// because Table E.1 is the part the LRM standardises.
     fn findModule(self: *Flatten, name: Ast.StrId) ?*const Ast.ModuleDecl {
         for (self.ctx.file.userModules()) |*m| if (m.name == name) return m;
         for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*m| {
             if (m.name == name) return m;
+        }
+        const want = self.str(name);
+        for (self.ctx.file.netlistModules()) |*m| {
+            if (std.ascii.eqlIgnoreCase(self.str(m.name), want)) return m;
         }
         return null;
     }
@@ -1188,8 +1208,12 @@ const Flatten = struct {
     /// port_discipline machinery "shall only apply to analog primitives ... for
     /// other modules as well as the ports of all other modules it shall be
     /// ignored".
+    ///
+    /// Table E.1's own rows only: a module synthesized from a netlist `.MODEL`
+    /// card is a wrapper AROUND a primitive, not a primitive, and its body is one
+    /// instantiation with no access function of its own to substitute.
     fn isPrimitive(self: *Flatten, m: *const Ast.ModuleDecl) bool {
-        for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*p| {
+        for (self.ctx.file.tablePrimitives()) |*p| {
             if (p == m) return true;
         }
         return false;

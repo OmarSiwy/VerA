@@ -154,6 +154,12 @@ pub const Options = struct {
     lint: diag.Levels = .empty,
     /// Class-6 knobs (solver compliance bound, overflow model). See proof.zig.
     proof: proof.Options = .{},
+    /// Annex E.2 — SPICE netlist text whose `.MODEL` and `.SUBCKT` cards this
+    /// compilation may resolve module names against (E.1.1's antecedent: "if a
+    /// simulator ... is also able to read SPICE netlists"). One card per line,
+    /// `+` continuations included; see `spice_cards.synthesize` for the subset
+    /// that is read. Empty is the default and reads nothing.
+    spice_netlist: []const u8 = "",
     /// §9.4 what to do with the model's display tasks. `.drop` (the default)
     /// makes the DEVICE: no text, no syscall in the Newton loop, GPU-clean, and
     /// a W0850 for every task that was dropped. `.emit` makes the EXECUTABLE:
@@ -295,8 +301,11 @@ fn pipeline(
     var defaults: []const Preprocessor.DefaultDiscipline = &.{};
     var transitions: []const Preprocessor.DefaultTransition = &.{};
     var timescale: ?Preprocessor.Timescale = null;
-    const text = try preprocess(gpa, arena_state, source, opts, bag, &prelude_len, &defaults, &transitions, &timescale);
-    return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, transitions, timescale);
+    // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
+    // prelude. Zero unless the caller supplied netlist text.
+    var netlist_modules: u32 = 0;
+    const text = try preprocess(gpa, arena_state, source, opts, bag, &prelude_len, &defaults, &transitions, &timescale, &netlist_modules);
+    return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, transitions, timescale, netlist_modules);
 }
 
 /// Hand the bag to the caller, detached from the compilation arena. Called on
@@ -359,6 +368,7 @@ fn preprocess(
     defaults: *[]const Preprocessor.DefaultDiscipline,
     transitions: *[]const Preprocessor.DefaultTransition,
     timescale: *?Preprocessor.Timescale,
+    netlist_modules: *u32,
 ) Error![]const u8 {
     _ = gpa;
     const arena = arena_state.allocator();
@@ -366,6 +376,8 @@ fn preprocess(
         .include_dirs = opts.include_dirs,
         .file_name = opts.file_name,
         .std_defs = opts.std_defs,
+        .spice_netlist = opts.spice_netlist,
+        .spice_netlist_modules = netlist_modules,
         .prelude_len = prelude_len,
         .defaults = defaults,
         .transitions = transitions,
@@ -396,6 +408,8 @@ fn compileInArena(
     defaults: []const Preprocessor.DefaultDiscipline,
     transitions: []const Preprocessor.DefaultTransition,
     timescale: ?Preprocessor.Timescale,
+    /// Annex E.2 — trailing prelude modules synthesized from SPICE cards.
+    netlist_modules: u32,
 ) Error!CompileResult {
     const arena = arena_state.allocator();
 
@@ -412,7 +426,9 @@ fn compileInArena(
     // `Ast.SourceFile.builtin_modules`: everything that has to distinguish a
     // shipped primitive from the user's own module reads that count, and this is
     // the one place that knows whether the prelude was prepended at all.
-    const builtins: u32 = if (opts.std_defs) Preprocessor.spice_module_count else 0;
+    // Annex E.2's netlist-derived modules sit after Table E.1's own rows and
+    // before the user's source, so they extend the same leading run.
+    const builtins: u32 = if (opts.std_defs) Preprocessor.spice_module_count + netlist_modules else 0;
     file.* = p.parseSourceFile() catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseError => {
@@ -435,6 +451,7 @@ fn compileInArena(
         },
     };
     file.builtin_modules = builtins;
+    file.netlist_modules = netlist_modules;
 
     // --- stage 4: lower (classes 3,4,5,7,9) ---------------------------------
     const mir = try arena.create(Mir);
@@ -680,7 +697,8 @@ pub const Compilation = struct {
         var defaults: []const Preprocessor.DefaultDiscipline = &.{};
         var transitions: []const Preprocessor.DefaultTransition = &.{};
         var timescale: ?Preprocessor.Timescale = null;
-        const text = preprocess(self.gpa, arena_state, source, o, &bag, &prelude_len, &defaults, &transitions, &timescale) catch |err| {
+        var netlist_modules: u32 = 0;
+        const text = preprocess(self.gpa, arena_state, source, o, &bag, &prelude_len, &defaults, &transitions, &timescale, &netlist_modules) catch |err| {
             try finish(self.gpa, o, &bag);
             freeArena(self.gpa, arena_state);
             return err;
@@ -717,7 +735,7 @@ pub const Compilation = struct {
         self.units.items(.result)[idx] = null;
         self.units.items(.generated)[idx] = "";
 
-        var res = compileInArena(self.gpa, arena_state, text, target, o, &bag, defaults, transitions, timescale) catch |err| {
+        var res = compileInArena(self.gpa, arena_state, text, target, o, &bag, defaults, transitions, timescale, netlist_modules) catch |err| {
             try finish(self.gpa, o, &bag);
             freeArena(self.gpa, arena_state);
             return err;

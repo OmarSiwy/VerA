@@ -23,9 +23,10 @@
 //
 // No `reg` net is declared, deliberately. The rule under test is that the
 // reg-qualified default does NOT reach the wire nets, which needs no reg net to
-// exist; adding one would only make the file depend on a separate gap (VerA
-// rejects a `reg` module item with E0205, LRM annex A.1.4) that has nothing to
-// do with chapter 10.
+// exist; adding one would only make the file depend on how VerA models a `reg`
+// (as one §3.2 integer variable, LRM 7.3.1 Table 7-1's own mapping, and not as a
+// net a discipline can be defaulted onto at all) — which has nothing to do with
+// chapter 10.
 //
 // Like 41, this file discriminates: swap the two qualifiers and VerA hands the
 // wire nets `ddiscrete`, whose §3.6.2.2 domain binds no nature, and `V(p, n)`

@@ -3,14 +3,14 @@
 // `digital_scale` is declared `function` (not `analog function`), so it is a
 // digital function, and its only caller is the analog block.
 //
-// The rule is MASKED here, not exercised. C.7 removes digital behavior from
-// Verilog-A entirely, so a non-analog `function` declaration is already outside
-// the subset and dies as an unsupported module item (E0205) before any caller
-// is analysed. That verdict is conformance for this dialect — a Verilog-A tool
-// cannot reach §7.3.7 because it cannot have a digital function in the first
-// place — but it does mean the domain-crossing check itself never fires. Same
-// masking in the other direction: analog_function_from_digital_unsupported.va
-// and cross_domain_function_unsupported.va.
+// The rule is MASKED here, not exercised, and the mask is VerA's ceiling rather
+// than C.7's subset rule: a non-analog `function` is a digital subprogram, its
+// body is digital procedural code, and VerA has no discrete kernel to run one, so
+// the declaration dies as an unsupported module item (E0205) before any caller is
+// analysed. The domain-crossing check therefore never fires. The other direction
+// is no longer masked — analog_function_from_digital_rejected.va reaches E0430
+// now — and cross_domain_function_unsupported.va is still masked, by the same
+// digital `function` plus an `always` block.
 //
 //! lrm 7.3.7
 //! lrm C.7

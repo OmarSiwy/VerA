@@ -1,10 +1,25 @@
-// Annex C.7: "No digital behavior or events are supported in Verilog-A." A
-// procedural continuous assignment lives in a digital `initial` block on `reg`
-// storage, and both of those are refused as module items first.
-//! lrm C.7
-//! reject E0205
-//! reject reg
-//! reject initial
+// A.6.2 `procedural_continuous_assignment ::= assign variable_assignment` — the
+// PROCEDURAL continuous assignment, which is not §6.3's continuous assignment to
+// a net: this one starts when the statement executes and lasts until a `deassign`
+// (deassign is procedural_deassign_unsupported.va). Both halves of that sentence
+// are about §8.5's simulation cycle, and about nothing a solver has.
+//
+// VerA'S CEILING, NAMED, and no longer annex C's. `reg` and the digital `initial`
+// block are legal Verilog-AMS (A.2.1.3, A.6.2) and VerA accepts both now, so the
+// C.7 subset argument this file used to make ("no digital behavior or events are
+// supported in Verilog-A") is not the reason — it is a rule of the SUBSET and VerA
+// targets Verilog-AMS. What is left belongs to this compiler: there is no
+// statement production for `assign`, so the keyword lands where an expression was
+// expected and the file is refused at E0209.
+//
+// The pin is the CODE plus the construct. `reject reg` and `reject initial` are
+// what this file used to carry, and both matched only the prose of E0205's
+// "found `reg`" message — a verdict resting on a diagnostic's wording rather than
+// on which rule fired.
+//
+//! lrm 8.5
+//! reject E0209
+//! reject assign
 module ch8_procedural_assign;
   reg source, target;
   initial begin

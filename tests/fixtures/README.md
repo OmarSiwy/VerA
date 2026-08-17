@@ -39,7 +39,7 @@ diagnostic. A line is either a diagnostic CODE (`E0130`, `W0650`), a phase label
 (`ParseError`, `DiagnosticsReported`), or a message substring.
 
 Codes are the preferred form: they are stable, so the prose of a diagnostic can
-be improved without touching the 324 `//! reject` arms that name one, and they pin WHICH rule fired rather
+be improved without touching the 320 `//! reject` arms that name one, and they pin WHICH rule fired rather
 than how it happened to be worded.
 
 ## Citing the rule — `//! lrm`
@@ -150,6 +150,8 @@ by any other tool.
 //! print none                     drop the residual dump; for §9.4 format tests
 //! solve                          §5.6 the unknowns nothing above names are the
 //!                                DEVICE's to determine, not the harness's
+//! spice .MODEL VERTNPN NPN BF=80  annex E.2 one SPICE netlist line, verbatim
+//! spice + CJE=3PF                 §E.1.1's "able to read SPICE netlists"
 ```
 
 Every field has a default, so a `.va` with no directives is still runnable: one
@@ -194,12 +196,29 @@ test. A testbench that genuinely fails to converge exits nonzero naming the
 unknown that would not settle, so the fixture FAILs loudly instead of asserting
 against a half-iterated number.
 
+### `//! spice` — the netlist an annex E fixture is compiled against
+
+Annex E.1.1 is an implication: *if* a tool also reads SPICE netlists, *then* the
+models and subcircuits in them can be referenced from Verilog-AMS. A fixture for
+E.2 therefore has to hand over a netlist, and each `//! spice` line is one netlist
+line, verbatim — `+` continuations included, because the compiler joins them
+itself. Nothing is pre-resolved into names and ports: that would close the fixture
+while skipping the premise it is about. VerA reads `.MODEL` and `.SUBCKT`
+declarations only (`src/frontend/spice_cards.zig`); device cards, `.TRAN` and
+`.INCLUDE` are skipped in silence, and a synthesized `.SUBCKT` module has an empty
+body, so under `//! solve` an instance of one is an open circuit.
+
+For another compiler the lines are a comment like every other directive, and they
+document which netlist to put on its command line. A runner that cannot supply one
+should expect these three files (`annex_e_spice/spice_{model,subcircuit,case_lookup}.va`)
+to be refused, and that is E.1.1's antecedent being false rather than a defect.
+
 ## Running
 
 ```
 zig build torture                 # every fixture
 zig build torture -- ch04         # only paths matching `ch04`
-zig build torture -- --strict     # unasserted, CANNOT RUN and XFAIL fixtures FAIL instead of warn
+zig build torture -- --strict     # unasserted and XFAIL fixtures FAIL instead of warn
 zig build torture -- --coverage   # every cited LRM section and who cites it
 zig build torture -- -j1          # one at a time, streaming; the debugging path
 zig build torture -- --fixture-opt=ReleaseFast
@@ -232,34 +251,31 @@ codegen bug traps loudly instead of returning a plausible wrong number.
 `--fixture-opt=<mode>` (or `-Dfixture-optimize=<mode>` at build time) is there to
 ask the separate question "does this still pass under optimization?".
 
-## Known blocker — the `CANNOT RUN` verdict
+## The retired `CANNOT RUN` verdict
 
-A module with **no port list** is legal per Annex A.1.2 and VerA compiles it, but
-the emitted device has zero terminals, and `contract.validate` refuses it with
-`num_ports must be in 1..|U|` — a device with nothing to stamp is a real design
-question, not a test problem. So those fixtures cannot be run at all.
+There used to be a third verdict here, for the fixture being right, VerA being
+right, and the *host* still refusing to run the device. It had exactly one
+producer: `contract.validate` demanded `num_ports` in `1..|U|`, so the legal
+portless module of §6.2 compiled and then had nowhere to run.
 
-They get their own verdict, `CANNOT RUN`, printed with its count and reason:
+That guard was stale, not right. The testbench has had a real Newton solve since
+wave 4, and a device with zero terminals and one internal node has a residual it
+can solve — see `ch06_hierarchy/module_definition.va`, which now asserts its
+internal node's solution. Relaxing the contract to `num_ports <= |U|` emptied the
+category, so the verdict, its counter and its `--strict` arm are gone with it.
 
-- it is **not** a pass — nothing was proved;
-- it is **not** a FAIL — the fixture is right and its author has no move to make,
-  and reporting it as FAIL buries the real conformance bugs in noise;
-- `--strict` fails on it, so a limitation carried for free is not one forgotten.
-
-The runner matches that one contract message and nothing else. Every other way
-the generated testbench can fail to compile is a genuine codegen bug and still
-FAILs loudly.
-
-Do not add ports to work around it — that changes what the fixture tests.
+The distinction it drew was worth drawing, so if a host limitation ever reappears
+— something the fixture's author has no move against, which is neither a pass nor
+a conformance failure — re-add it rather than reporting it as FAIL. Do not add
+ports to a fixture to work around one; that changes what the fixture tests.
 
 ## Known gap — the `XFAIL` verdict
 
-`CANNOT RUN` is the fixture being right and the *host* being unable. `XFAIL` is
-the fixture being right and **VerA** being wrong. It marks either expectation,
-because the gap comes in both directions.
+`XFAIL` is the fixture being right and **VerA** being wrong. It marks either
+expectation, because the gap comes in both directions.
 
 Deleting such a fixture loses the requirement. Leaving it FAILing buries the
-regressions. So it gets its own verdict, on exactly the terms `CANNOT RUN` gets:
+regressions. So it gets its own verdict:
 
 - it is **not** a pass — nothing was proved;
 - it is **not** a FAIL — the gap is known and written down, with its reason;
@@ -295,10 +311,6 @@ construct today — the fixture is **inverted**: it now demands a diagnostic the
 LRM never asked for, a conforming compiler fails it, and only VerA passes. The
 honest form is "this must run green" plus "we know it does not yet".
 
-`CANNOT RUN` keeps priority over `XFAIL`. A fixture with no port list is refused
-by the host whatever VerA does, and reporting that as a VerA gap loses which of
-the two it was.
-
 ### Write the reason so it can be triaged
 
 The reason is the only thing a reader gets — the failing output is not printed,
@@ -315,29 +327,27 @@ rerun the suite to find out what was even being tested.
 ### The one reason that is not a gap: a clause VerA is not inside
 
 A few clauses are **conditional on an implementation choice**, and a tool that
-does not make the choice is not failing them. Annex E is the whole of that set
-today: E.1.1 says "**if** a simulator which supports Verilog-AMS HDL is also able
-to read SPICE netlists of a particular flavor, **then** certain objects defined in
-that flavor of SPICE netlist can be referenced", and E.1.2 hands the antecedent
-straight to the implementer — SPICE compatibility "is solely determined by the
-authors of the simulator". VerA reads one language, so `spice_model.va`,
-`spice_subcircuit.va` and `spice_case_lookup.va` state a requirement that never
-bound it.
+does not make the choice is not failing them. E.1.1 is the pattern: "**if** a
+simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a
+particular flavor, **then** certain objects defined in that flavor of SPICE
+netlist can be referenced", with E.1.2 handing the antecedent straight to the
+implementer — SPICE compatibility "is solely determined by the authors of the
+simulator".
 
-Those keep `//! xfail`, and their reasons open with **NOT A DEBT** and the clause
-that says why. Two things make keeping the marker the right call rather than a
-dodge:
+**No fixture claims this today.** Annex E's `spice_model.va`,
+`spice_subcircuit.va` and `spice_case_lookup.va` used to, and the better answer
+turned out to be to make the antecedent TRUE: `//! spice` hands each fixture's
+netlist cards to the compiler and VerA reads `.MODEL`/`.SUBCKT` out of them, so
+all three are ordinary green fixtures. That is the lesson to take from the
+category — "the clause does not bind me" closes a fixture without teaching the
+compiler anything, and it is worth checking how big the antecedent really is
+before invoking it. Theirs was one 190-line file.
 
-- `//! xfail` is honoured only for VerA, so for a tool that *does* read netlists
-  the file is an ordinary requirement and stays one;
-- XPASS still guards the failure mode that IS VerA's — these must not go green by
-  resolving an instance of a module declared nowhere.
-
-Do not extend this to "VerA does not implement X, therefore X does not bind VerA".
-The test is textual and narrow: the clause has to be written as an implication
-whose antecedent is a property of the tool, and the reason has to quote it. An
-Annex C "not supported in Verilog-A" sentence is **not** one of these — VerA
-targets Verilog-AMS.
+If you do invoke it, the test is textual and narrow: the clause has to be written
+as an implication whose antecedent is a property of the tool, and the reason has to
+quote it and open with **NOT A DEBT**. Do not extend it to "VerA does not implement
+X, therefore X does not bind VerA". An Annex C "not supported in Verilog-A"
+sentence is **not** one of these — VerA targets Verilog-AMS.
 
 ### XPASS is a hard FAIL
 

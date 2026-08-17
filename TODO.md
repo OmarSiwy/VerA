@@ -1,191 +1,144 @@
 # TODO — what stands between VerA and 100% conformance
 
 Scored by `zig build torture` against `tests/fixtures`, which states what the
-**LRM** requires rather than what VerA does. As of `241f09a` (wave 5):
+**LRM** requires rather than what VerA does. Measured on this tree, at the end of
+wave 7:
 
 ```
-1108/1150 pass · 25 XFAIL · 1 CANNOT RUN · 0 FAIL
-16 fixtures compile and assert NOTHING (`--strict` fails on these)
+1150/1152 pass · 2 XFAIL · 0 FAIL · 0 CANNOT RUN
+0 fixtures compile and assert NOTHING
+zig build test: 207/207
 ```
 
-Wave 6 is the last conformance wave and targets 22 of the 25 plus all 16 hollow
-passes. This file is the register of what it does **not** close, and of the
-ceilings the waves shipped deliberately. `docs/conformance-plan.md` has the
-per-epic history.
+The waves are done. `docs/conformance-plan.md` has the per-wave history with the
+measured numbers beside the estimates. This file is the register of what is left
+and — mostly — of the ceilings the waves shipped **deliberately**, which no
+`//! xfail` line can state because no fixture fails on them.
 
-A note on why this file exists at all: `tools/contract.zig` has twice cited a
-gap register that did not exist — first a `VerA/TODO.md`, then a
-`tests/lrm-rules/*.tsv` with a `zig build ledger` step, neither of which was ever
-committed. If you delete this file, delete the pointer to it too.
+Two things to know about how to read it. Every number above is a measurement, not
+a carry-forward: re-run the suite rather than trusting this paragraph. And
+`tools/contract.zig` has three times cited a gap register by a path that did not
+resolve — `VerA/TODO.md` before this file existed, then `tests/lrm-rules/*.tsv`
+with a `zig build ledger` step that never existed, then "there is no such
+register" after this one was committed. If you delete this file, delete the
+pointer to it too.
 
 ---
 
-## 1. Will not do — and the reason, so it is not re-litigated
+## 1. The two remaining XFAILs — deliberately left, with their blast radius
 
-### SPICE `.MODEL`/`.SUBCKT` cards — DECISION REVERSED, now planned
+Both are real requirements VerA does not meet. Neither was missed; each was
+costed and the cost lands outside a chapter.
 
-An earlier revision of this file recorded
-`annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` as permanent
-non-goals, on the grounds that Annex E.1.1 guards the family with a conditional
-("**if** a simulator … is also able to read SPICE netlists") whose antecedent is
-false for VerA, and that closing them meant writing a second input language.
+### `annex_f_resolution/unknown_discipline_mixed_port.va`
 
-**The clause reading was right; the cost estimate was wrong.** These fixtures do
-not need a netlist parser. They need three names to resolve to a module
-declaration with the right ports — and every piece of machinery that consumes such
-a declaration already shipped:
+Annex F.2 step 4.b's **multi-candidate** arm. `resolveDiscipline`
+(`src/ir/elaborate.zig`) keeps the FIRST declared discipline of a signal's
+segments; F.2 needs the SET, so "more than one candidate whose domain matches, no
+`resolveto` for it, therefore UNKNOWN" is never decided and the mixed-port error
+over it never fires. `E0903` is reserved and unemitted for exactly this verdict —
+do not reuse the code.
 
-- `preprocessor.zig:244` already injects Table E.1 as prepended Verilog-AMS module
-  TEXT (`spice_primitives`), and its own docstring argues at length why a
-  primitive is a real module rather than a name in a table;
-- `elaborate.zig findModule` already implements E.3.3 precedence over that prelude;
-- `elaborate.zig checkConnectionShape` already permits a short connection list, so
-  `bjt`'s optional `s` port works;
-- `annex_e_spice/spice_network_primitives.va` already PASSES using the exact shape
-  all three need — a §6.7.1 hierarchical probe of an instance port on a
-  prelude-supplied module.
+**Blast radius:** per-net discipline SETS in the elaboration core, plus a
+`connectrules` parser (`connectrules` is still `E0201`). Discipline resolution is
+consulted at port bindings today (§3.11, see §3 below); a set-valued resolution
+changes what every one of those bindings compares. The `connectmodule`s in the
+fixture parse and are accepted since wave 6, so the parse half is done and the
+resolution half is the work.
 
-So the plan is a **card reader**, not a netlist reader: read `.MODEL` and
-`.SUBCKT` declarations, synthesize prelude module text, and let the existing path
-do the rest. About 190 lines in a new `src/frontend/spice_cards.zig` plus ~30 lines
-of plumbing across `preprocessor.zig`, `root.zig`, `ast.zig` and `elaborate.zig`,
-and one `//! spice` directive in `tb.zig`.
+### `ch05_analog_behavior/two_named_branches.va`
 
-The directive must be a **transparent netlist channel**, not a resolved tuple — the
-fixture carries the annex's card verbatim, continuations and all:
+Branch identity is fixed — each named branch retains its own value. What is left
+is that VerA lowers a branch-flow READ at its statement position, and this
+fixture's CHECKs precede its two `<+` lines, so §5.6.1.2's "previously retained
+value" is genuinely nothing there and `I(a)`/`I(b)` read 0. §5.4.2.2 says a branch
+is "accessible … anywhere in the module", which for a display operand means
+§9.4.1 converged reporting: the operand is evaluated after the analog block, not
+where it is written.
 
-```
-//! spice .MODEL VERTNPN NPN BF=80 IS=1E-18 RB=100 VAF=50
-//! spice + CJE=3PF CJC=2PF CJS=2PF TF=0.3NS TR=6NS
-```
+**Blast radius:** every §9.4 task in the suite. 751 fixtures print through one,
+746 of them via `CHECK`, and each transcript is an assertion — so moving operand
+evaluation to the end of the block re-times what two thirds of the suite prints. This is the one gap where closing it correctly is
+cheaper than closing it safely, and that is why it is still open. Its sibling
+`two_named_branches_retain_separately.va` pins the part that IS fixed, so a
+regression in branch identity still fails loudly.
 
-That is what makes VerA the reader and lets the fixture cite E.2 honestly. Handing
-it a pre-digested `("ecposc", ["out","gnd"])` would close the fixtures while
-skipping E.1.1's premise, and would add a public interface type with one producer.
+---
 
-**What this buys, precisely:** VerA reads SPICE *model and subcircuit statements*,
-which is E.2's literal noun phrase. It does NOT buy device cards, subcircuit
-bodies, `.param` expressions, `.INCLUDE`/`.LIB`, or dialect tokenizers. A
-synthesized `.SUBCKT` module contributes no equations, so under `//! solve` it is
-an open circuit — a ceiling to write at the site, not a bug.
+## 2. Will not do — and the reason, so it is not re-litigated
+
+### Digital execution — a discrete-time domain, not a conformance gap
+
+`connectmodule` bodies with `always` blocks, `#delay`, non-blocking assignment
+and delta cycles need a discrete event scheduler. VerA is a compiler; the host
+simulator runs the device, so **driver access does not need a scheduler inside
+VerA** — the §9.22 family is nine *reject* fixtures and E0818 is the conforming
+answer. What genuinely needs a scheduler is *executing* a digital process, and
+that only arises because `zig build torture` makes VerA its own host.
+
+Wave 7 went as far as this can honestly go without one: a digital `initial` block
+whose body is constant assignments lowers to initial state, through the same
+A.2.2.1 declaration-assignment seam `integer x = 3;` uses (`collectInitialState`
+in `src/ir/lower.zig`). A loop, a delay, an event control, a non-constant rhs, an
+array target or a block-local declaration is refused with **E0433**. `always` is
+still E0205, and for a non-dialect reason: an `always` block re-runs on an event,
+so its value is a function of §8.5's simulation cycle and there is no discrete
+kernel for it to be a function of.
+
+Not in scope beyond that. If it is ever wanted it is a second code generator, and
+the fixtures that would grade it do not exist yet (see the §9.22.6 note in
+`ch09_system_tasks/38_driver_update_connectmodule.va`).
 
 ### Do not take ARPice's netlist parser
 
-ARPice (`../ARPice`, EGSpice) has a competent multi-dialect netlist frontend,
-generic over a tokenizer trait bundle, uncoupled from its `Circuit`/`RunCtx`
-types — and it is the wrong tool here, for a checkable reason:
+Settled in wave 7, when VerA gained a SPICE **card** reader
+(`src/frontend/spice_cards.zig`) rather than a netlist frontend. ARPice
+(`../ARPice`) has a competent multi-dialect netlist frontend and it is still the
+wrong tool here, for two checkable reasons:
 
 ```zig
 // ARPice/src/frontend/types.zig:25
 pub const SubcktType = struct { name, n_ports: u16, n_internal_nodes, device_count };
 ```
 
-A port **count**, not names. The struct holding subcircuit port names is private
-inside the `Parser` generic, because subcircuits are flattened at parse time —
-right for a simulator, useless for `spice_subcircuit.va`, which needs `osc1.out`
-resolved by name. Importing it closes ONE of the three fixtures, brings ~1845
-lines at 3 tests, and still requires changing ARPice's public IR.
+A port **count**, not names — subcircuits are flattened at parse time, which is
+right for a simulator and useless for `spice_subcircuit.va`, which needs
+`osc1.out` resolved by name. And the dependency runs the other way: ARPice depends
+on VerA (`ARPice/build.zig.zon` → `.vera = .{ .path = "../VerA" }`), so VerA
+importing ARPice is a cycle. **ARPice parses netlists to simulate; VerA reads
+model/subckt cards to resolve names.** The overlap is comment-stripping and `+`
+continuation joining — a shared shape, not shared behaviour.
 
-Also note the dependency direction: ARPice depends on VerA
-(`ARPice/build.zig.zon` → `.vera = .{ .path = "../VerA" }`), so VerA importing
-ARPice is a cycle. The boundary that works is two readers with two purposes:
-**ARPice parses netlists to simulate; VerA reads model/subckt cards to resolve
-names.** The overlap is ~60 lines of comment-stripping and `+` continuation
-joining — a shared shape, not shared behaviour, and stable since SPICE2g6.
+### The mixed-signal driver template — a host-facing promise, no fixture forces it
 
-### Digital execution — a discrete-time domain, not a conformance gap
-
-`connectmodule` bodies with real `always` blocks, `#delay`, non-blocking
-assignment and delta cycles need a discrete event scheduler. VerA is a compiler;
-the host simulator runs the device, so **driver access does not need a scheduler
-inside VerA** — see §3 below. What genuinely needs one is *executing* a digital
-process, and that only arises because `zig build torture` makes VerA its own host.
-
-Not in scope. If it is ever wanted, it is a second code generator, and the
-fixtures that would grade it do not exist yet (see §9.22.6 note in
-`ch09_system_tasks/38_driver_update_connectmodule.va`).
-
----
-
-## 2. Open contract decisions — small, real, and blocking a verdict
-
-### `num_ports == 0` — the single CANNOT RUN
-
-`tools/contract.zig:214` refuses `num_ports must be in 1..|U|`, so a module with
-no port list cannot run even though VerA compiles it correctly.
-`ch06_hierarchy/module_definition.va` pins the word *optional* in §6.2, and Annex
-A.1.2 admits `module identifier ;`:
-
-```verilog
-module ch6_definition;
-  electrical p;          // an internal node, the only kind such a module can have
-  analog I(p) <+ V(p);
-endmodule
-```
-
-That guard is now **stale rather than wrong**. It predates two things: the
-testbench gained a real Newton solve (wave 4), so a device with zero terminals and
-one internal node has a residual something can actually solve; and elaboration
-(wave 5) makes such a module instantiable as a child contributing internal
-equations. Relaxing to `np > n` only is the change, and it closes the last
-CANNOT RUN.
-
-Do **not** add a port to the fixture. That deletes the only test of "optional".
-
-### The mixed-signal template — a host-facing promise, no fixture forces it
-
-`contract.zig:256-262` currently asserts as design that codegen hardwires the
-§9.22 `$driver_*` family to `0`. Wave 6 makes those calls a diagnostic, which is
-the conforming behaviour for a compiler with no connectmodule, and that comment
-must change with it.
-
-Beyond that, the contract *can* carry real driver access, and should if the goal
-is that a simulator embedding VerA inherits one template. The shape is already
-established three times over — an optional comptime table plus a hook filling
-position `k` (`noise_gens`/`noisePsd`, `ac_stamps`/`acStamp`,
-`op_vars`/`opValues`):
+The contract *can* carry real driver access, and should if the goal is that a
+simulator embedding VerA inherits one template. The shape is established three
+times over — an optional comptime table plus a hook filling position `k`
+(`noise_gens`/`noisePsd`, `ac_stamps`/`acStamp`, `op_vars`/`opValues`):
 
 - a positional `d_nets` table naming the digital nets a device observes;
 - a query hook indexed into it, covering §9.22.1–.3 and §9.23's `next_*`;
 - sensitivity metadata for §9.22.4 `@(driver_update)`.
 
 **Positional, not name-keyed.** A `[]const u8` signal name is a runtime lookup and
-cannot be comptime-validated, which every other table in that file can.
+cannot be comptime-validated, which every other table in that file can. Two
+invariants any such design must keep:
 
-Two invariants any such design must keep:
-
-1. **It stays out of `eval`/`q`.** A residual must be a pure function of `x` or
-   the host's Newton iteration cannot converge. This is why §9.5 file I/O and
+1. **It stays out of `eval`/`q`.** A residual must be a pure function of `x` or the
+   host's Newton iteration cannot converge. This is why §9.5 file I/O and
    `$random` both live in the per-accepted-point phase — see
-   `src/backend/rng_kernels.zig:31`, which latches a variate precisely because a
-   draw inside the residual destroys convergence.
+   `src/backend/rng_kernels.zig`, which latches a variate precisely because a draw
+   inside the residual destroys convergence.
 2. **4-state values do not go in `U`.** A logic value is not a number; putting it
-   there forces `eval` to branch on `S.val()`, which `contract.zig:34` forbids.
+   there forces `eval` to branch on `S.val()`, which the contract forbids.
 
-Do not add members ahead of a consumer. The contract's own header is the rule:
-*"a member with no LRM justification and no consumer is not a roadmap item — it is
+Do not add members ahead of a consumer. The contract's own header is the rule: *"a
+member with no LRM justification and no consumer is not a roadmap item — it is
 deleted."*
 
 ---
 
-## 3. Stale in-source documentation
-
-- **`src/ir/lower.zig:7809`** — a deferral list claiming "§6.2.2 module
-  instantiation — rejected by the parser" and "§3.12 branch arrays and §6.5.2
-  vector ports/nets — the parser already rejects the declarations". Waves 2 and 5
-  implemented all three. The remaining entries (§4.4.2 port probes, §3.2.2 runtime
-  array indices, §4.7.2 function-local `parameter` shadowing) are still accurate.
-- **`src/frontend/preprocessor.zig:330`** — "make it an event list the day VerA
-  compiles two modules at once." That day was wave 5.
-- **`tools/contract.zig:11-16`** — cites `tests/lrm-rules/*.tsv` and `zig build
-  ledger`. Neither exists in any commit and there is no `ledger` build step.
-- **`tests/fixtures/README.md`** opens with "859 `.va` files"; there are 1150.
-- The `COVERAGE.md` aggregates drifted across every wave and are re-censused in
-  wave 6's last batch. Until that lands, do not trust a total in them.
-
----
-
-## 4. Ceilings shipped deliberately
+## 3. Ceilings shipped deliberately
 
 Every one is marked `ponytail:` at its site with an upgrade path, and none has a
 fixture behind it — a fixture appearing over any of these turns it from a ceiling
@@ -195,8 +148,23 @@ into a bug. Grouped by area; the file is the authority, this is the index.
 - No gmin stepping, no source stepping, no continuation. Nothing needed it.
 - The Newton solve factors the **resistive** residual only; §5.6.1.2's reactive
   half needs `q(x)` plus the `q` of the last accepted step.
-- `//! solve` is opt-in, so ~1100 fixtures still run at a forced operating point
-  and the solver is exercised by a handful. Small evidence base.
+- `//! solve` is opt-in, so most fixtures still run at a forced operating point and
+  the solver is exercised by a few dozen. Small evidence base.
+
+### SPICE cards (`src/frontend/spice_cards.zig`)
+- `.MODEL` and `.SUBCKT` **statements** only, which is E.2's literal noun phrase.
+  No device cards, no subcircuit bodies, no `.param` expressions, no
+  `.INCLUDE`/`.LIB`, no dialect tokenizers — everything else on a card line is
+  skipped in silence rather than diagnosed.
+- A `.MODEL`'s parameters are read and dropped: Table E.1 declares no such
+  parameters, and E.2.2.1 says the ports and parameters come from the primitive
+  and "not by the model statement".
+- A synthesized `.SUBCKT` module has an EMPTY body, so under `//! solve` it is an
+  open circuit. Written at the site and in the fixture.
+- Whether a netlist `.MODEL` should shadow a same-named Table E.1 primitive is
+  UNSPECIFIED by the annex (E.3.3 orders user-module against SPICE object, not two
+  SPICE objects). The exact-match pass finds the primitive first. No fixture pins
+  it.
 
 ### Analog operators (`src/backend/codegen.zig`, `cg_filters.zig`)
 - `absdelay`: fixed 32-sample history with linear interpolation.
@@ -224,28 +192,37 @@ into a bug. Grouped by area; the file is the authority, this is the index.
 - A bound that cannot be folded counts as admissible.
 - §3.11 discipline compatibility consulted at **port bindings only**.
 - Two declarations of one identifier: first wins.
-- An undeclared net used only in a child body is **not renamed**, so two
-  instances would share it.
+- An undeclared net used only in a child body is **not renamed**, so two instances
+  would share it.
 - §6.5.7.1 vector-net distribution across an instance array: absent.
 - §6.3.6 automatic flow scaling of a flattened child's contributions: absent, and
   `E0912` misses a child whose ancestor specified `.$mfactor(...)`.
 
 ### Parser (`src/frontend/parser.zig`)
 - A concatenated port becomes N terminals, not one N-bit port.
-- No `net_decl_assignment` (`electrical n = 5.0;`) — this is xfail
-  `ch03_data_types/21_net_nodeset.va`, i.e. a real gap, not a ceiling.
+- A `net_decl_assignment`'s §3.6.3.2 nodeset value is parsed and **dropped**:
+  the solver is the host's and a nodeset is an input to it. Two rules of that
+  clause therefore have no consumer and are unchecked — "shall be a
+  constant_expression", and that a non-continuous discipline may not carry one.
+  The upgrade path is the optional-contract-decl shape (`display`, `u_abstol`):
+  one `nodeset` decl the host may read. `ch03_data_types/21_net_nodeset.va` is
+  green and pins the part that matters — the net is NOT clamped to the value.
 - Vector ranges fold literals only; `[W-1:0]` does not.
 - No `$root` prefix and no index inside a hierarchical path (`u[0].a`).
 - Instance-array unrolling capped at 32 bits — a guard, not a rule.
 
 ### Lowering (`src/ir/lower.zig`)
-- Branch-array elements share one `(hi, lo)` accumulator key.
+- A digital `initial` block is constant assignments only (E0433 above); no event
+  queue, no delta cycles, no drivers.
 - Runtime array index: one dimension only; N selects per assignment.
 - `$simprobe` cannot take a computed name (§9.16 arguments are strings).
 - A reactive flow contribution's branch current reads the resistive half only.
 - Voltage limiters are declined, not inlined.
 - Output variables are module-level only; a §5.3.2 named-block variable is not one.
 - A `discardOpposite` under a conditional survives as a phi.
+- §4.7.2 function-local `parameter` declarations fold into `consts` and are not
+  restored on exit, so a module parameter of the same name stays shadowed for the
+  rest of the module. This is the file's one deferral with no site of its own.
 
 ### Proof / range analysis (`src/ir/proof.zig`)
 - Immediate widening loses loop-carried bounds.
@@ -256,6 +233,14 @@ into a bug. Grouped by area; the file is the authority, this is the index.
 ### Preprocessor (`src/frontend/preprocessor.zig`)
 - A malformed `` `timescale `` operand leaves the timescale **unset** rather than
   diagnosing.
+- One `timescale` per compilation, last one wins, shared by every module in the
+  file. Two modules with a directive between them both see the second.
+
+### Device contract (`tools/contract.zig`)
+- `num_ports` is bounded above by `|U|` and no longer below by 1: §6.2 makes the
+  port list optional. `zig build test-contract` is where its tests run — they ran
+  nowhere until wave 7 wired the step, which is how the old guard survived two
+  waves of the engine growing past it.
 
 ### Orchestrator (`src/backend/orchestrator.zig`)
 - GPU emission list is always empty; emission lives in the host.
@@ -264,16 +249,18 @@ into a bug. Grouped by area; the file is the authority, this is the index.
 
 ---
 
-## 5. Suite machinery
+## 4. Suite machinery
 
-- **`tests/harness.zig checkAssertions`** scans for a `CHECK` macro and then the
-  next `(` **anywhere in the file**, so a fixture's lint verdict can depend on
-  unrelated prose downstream. Wave 5 flipped six fixtures' verdicts merely by
-  lengthening an `//! xfail` string. This is the component that enforces "the want
-  is a literal", so its fragility undermines every assertion claim in the suite.
-  Wave 6 fixes it; if you are reading this and it is still true, that batch failed.
-- 421 of 1150 fixtures are `reject` fixtures. Where a feature's only fixtures are
+- 415 of 1152 fixtures are `reject` fixtures. Where a feature's only fixtures are
   negative, VerA conforms by **refusing** it and never implements it — true of
   `$simprobe`, the `zi_*` non-zero-tau forms, Table 9-30/9-31's `D`/`2`/`3`/`I`/`E`
   schemes and the whole §9.22 family. A high score is not the same as a complete
   implementation, and the positive fixtures are what keep that honest.
+- The `CANNOT RUN` verdict is **retired**, with its counter and its `--strict`
+  arm: it had exactly one producer and that producer was a stale guard. See
+  `tests/fixtures/README.md`. If a genuine host limitation ever reappears, re-add
+  it rather than reporting it as FAIL.
+- `checkAssertions`'s old fragility — it scanned for a `CHECK` macro and then the
+  next `(` anywhere in the file, so a fixture's lint verdict could depend on
+  unrelated prose downstream — is fixed. It uses `MacroScan` + `matchParen` and is
+  bounded to the call site.

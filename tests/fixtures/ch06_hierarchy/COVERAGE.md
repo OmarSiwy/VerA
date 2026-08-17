@@ -1,6 +1,6 @@
 # Chapter 6 coverage
 
-Source: `docs/VAMS-LRM/ch6-hierarchy.html`, read section by section.
+Source: `docs/ch6-hierarchy.html`, read section by section.
 
 HTML section-ID audit: `s6.1` `s6.2` `s6.2.1` `s6.2.2` `s6.3` `s6.3.1` `s6.3.2` `s6.3.3` `s6.3.4` `s6.3.5` `s6.3.6` `s6.4` `s6.4.1` `s6.4.2` `s6.4.3` `s6.5` `s6.5.1` `s6.5.2` `s6.5.2.1` `s6.5.2.2` `s6.5.3` `s6.5.4` `s6.5.5` `s6.5.6` `s6.5.7` `s6.5.7.1` `s6.5.7.2` `s6.5.8` `s6.6` `s6.6.1` `s6.6.2` `s6.6.2.1` `s6.6.3` `s6.7` `s6.7.1` `s6.8` `s6.9` `s6.9.1` `s6.9.2` `s6.9.3` `s6.9.4`.
 
@@ -15,10 +15,11 @@ reached. That is dead: `ir/elaborate.zig` flattens the instance tree, E0204 is r
 this is now the largest single closure in the suite. Note also that the forty was never
 measured — 28 was the number in the tree when the claim was written.
 
-One fixture here is CANNOT RUN rather than pass: `module_definition.va`, which has no port
-list at all (A.1.2 permits it), so the device contract has nothing to stamp. That is a host
-limitation and not a conformance result; `--strict` fails on it so it cannot be carried
-quietly.
+`module_definition.va` was CANNOT RUN — the tree's last one — until the device contract
+stopped demanding `num_ports` in `1..|U|`. A module with no port list at all (A.1.2 permits
+it) emits a device with zero terminals, and the guard predated the testbench having a Newton
+solve to put its internal node through. It now asserts that solution, so §6.2's "optional"
+is checked end to end and the verdict has no producers left anywhere in the suite.
 
 A `//! reject` fixture here is one whose *rejection* is correct conformance, and several
 say in their own headers that they arrive at the right verdict by the wrong road (a parse

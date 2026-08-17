@@ -1,25 +1,32 @@
 # Chapter 8 coverage
 
-Source: `docs/VAMS-LRM/ch8-scheduling.html`, read section by section.
+Source: `docs/ch8-scheduling.html`, read section by section.
 
 HTML section-ID audit: `s8-1` `s8-2` `s8-3` `s8-3-1` `s8-3-2` `s8-3-3` `s8-4` `s8-4-1` `s8-4-2` `s8-4-3` `s8-4-3-1` `s8-4-3-2` `s8-4-3-3` `s8-4-4` `s8-4-5` `s8-4-6` `s8-4-7` `s8-5` `s8-5-1` `s8-5-2` `s8-5-3` `s8-5-3-1` `s8-5-3-2` `s8-5-3-3` `s8-5-3-4` `s8-5-3-5` `s8-5-3-6` `s8-5-3-7`.
 
 Eight of the twenty-eight sections carry a fixture that asserts something. The
 other twenty do not, and the table says so with an empty column rather than a
 plausible name. Two thirds of this chapter — 8.4's mixed-signal cycle and all of
-8.5's digital engine — is put outside Verilog-A by Annex C.10 ("The mixed-signal
-simulation cycle from 8.2 is only applicable to Verilog-AMS HDL") and C.7 ("No
-digital behavior or events are supported in Verilog-A"). Eleven `//! reject`
-fixtures inventory those source forms. They pin the diagnostic and nothing else:
-VerA still refuses the `always`/`initial`/`assign` module item (E0205), so the queue
-regions, delays and boundary rounding that are the actual content of those clauses are
-never reached. What HAS changed is that the refusal recovers instead of bailing — the body
-is parsed through the analog statement production and judged against §7.2.2, §4.5.15 and
-§4.7.3 — so some of these files now raise a second, real diagnostic beside the E0205 they
-pin. That does not make any of them coverage of the scheduling clause its construct belongs
-to, and none is credited as such below.
+8.5's digital engine — needs a discrete kernel, which VerA does not have. Ten `//! reject`
+fixtures inventory those source forms, and they pin the diagnostic and nothing else: the
+queue regions, delays and boundary rounding that are the actual content of those clauses
+are never reached.
 
-30 `.va` files: 11 carry a `//! reject` arm, 19 run and assert, and NONE is `//! xfail`
+WHAT THOSE TEN PIN HAS CHANGED, and the header of each says so. They used to rest on Annex
+C.7 ("No digital behavior or events are supported in Verilog-A") and C.10 ("The
+mixed-signal simulation cycle from 8.2 is only applicable to Verilog-AMS HDL"). Annex C
+states the Verilog-A SUBSET; VerA targets Verilog-AMS, so a verdict resting on it was
+demanding a diagnostic a conforming AMS compiler must not emit. `reg` and a constant
+`initial` block are accepted now, `analog_digital_initial_order.va` has been re-verdicted
+into a positive fixture, and the five procedural/timing files
+(`procedural_{assign,deassign,force,release}_unsupported.va`, `blocking_timing_unsupported.va`)
+pin E0209 — the parser has no production for `force`, `assign`, `deassign`, `release` or a
+`#` delay — instead of the substring `reg`, which came only from E0205's own message prose.
+An `always` block stays E0205 for a reason that is not dialect: it re-runs on an event, so
+its value is a function of §8.5's simulation cycle. None of the ten is credited below as
+coverage of the clause its construct belongs to.
+
+30 `.va` files: 10 carry a `//! reject` arm, 20 run and assert, and NONE is `//! xfail`
 (grep-measured over this directory).
 
 | HTML id | Rule | Fixtures |
@@ -31,7 +38,7 @@ to, and none is credited as such below.
 | `s8-3-2` | time derivative replaced by a finite difference over discrete points | `transient_derivative.va` (`//! analysis tran`, four points, constant history); `dynamic_nodal.va` pins only the dc corner where 4.5.3 zeroes `ddt` |
 | `s8-3-3` | models must behave under unreasonable iterate values | `nonlinear_safe.va` (`limexp` equals `exp` at the reported solution) |
 | `s8-4` | mixed-signal cycle | — AMS only (Annex C.10) |
-| `s8-4-1` | circuit initialization, analog and digital | — `analog_digital_initial_order_unsupported.va` is a `//! reject` source inventory; the digital `initial` item is refused, so no relative order is observed |
+| `s8-4-1` | circuit initialization, analog and digital | partly. `analog_digital_initial_order.va` (was `_unsupported`, was a `//! reject` inventory) is green and asserts COMPLETENESS: the §5.2.1 `analog initial` and the A.6.2 digital `initial` are both accepted in one module and the analog block reads 1.0 + 1. Their relative ORDER is still unobserved, and deliberately — the only direction the question is decidable in is a digital value read from the `analog initial` block, which §5.2.1 forbids (`ch05_analog_behavior/analog_initial_digital_access_rejected.va`, E0431) |
 | `s8-4-2` | iterated analog DC + time-0 digital to A/D steady state | — AMS only |
 | `s8-4-3` | mixed-signal transient | — AMS only |
 | `s8-4-3-1` | concurrency without shared-memory reordering | `multiple_analog_blocks.va` (`//! lrm 8.4.3.1`): the earlier block's write is visible to the later one |

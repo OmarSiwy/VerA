@@ -1,6 +1,6 @@
 # Annex A coverage
 
-Source: `docs/VAMS-LRM/annex-a-syntax.html`, read as the normative grammar, production by
+Source: `docs/annex-a-syntax.html`, read as the normative grammar, production by
 production. Annex A states no semantics: every row below is a claim that some fixture's
 source text is *derivable from* the named production, not that the construct means
 anything in particular. Meaning lives in the numbered clauses, and the fixtures cite

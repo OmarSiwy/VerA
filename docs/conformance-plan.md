@@ -8,22 +8,14 @@ below is `zig build torture` output or a grep over `tests/fixtures`:
 | | baseline (when this plan was written) | now |
 |---|---|---|
 | fixtures | 1150 | **1152** |
-| behave as they say they do | 812 | **1144** |
-| XFAIL | 337 | **7** |
-| CANNOT RUN | 1 | **1** |
+| behave as they say they do | 812 | **1150** |
+| XFAIL | 337 | **2** |
+| CANNOT RUN | 1 | **0** |
 | FAIL | 0 | **0** |
 | compile and assert nothing | 16 | **0** |
 
-The seven remaining XFAILs, by folder, with what each is:
+The two remaining XFAILs, by folder, with what each is:
 
-- `annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` — **not a debt.** E.1.1
-  guards the whole SPICE-netlist family with "IF a simulator … is also able to read SPICE
-  netlists", and E.1.2 hands the antecedent to the implementer ("solely determined by the
-  authors of the simulator"). VerA reads one language and no netlist, so the antecedent is
-  false and these state no requirement that binds it. The marker is kept because `//! xfail`
-  is honoured only for VerA — they are ordinary requirements for a tool that DOES read
-  netlists — and because XPASS guards against silently resolving an undeclared module.
-  **Do not close these by implementing a SPICE netlist reader.**
 - `annex_f_resolution/unknown_discipline_mixed_port.va` — F.2 step 4.b's multi-candidate arm:
   `resolveDiscipline` keeps the FIRST declared discipline of a signal's segments instead of
   collecting the SET. E0903 is reserved and unemitted for exactly this. `connectrules` is
@@ -33,12 +25,28 @@ The seven remaining XFAILs, by folder, with what each is:
   that VerA lowers a branch-flow READ at its statement position and this file's CHECKs
   precede its two `<+` lines. Closing it means evaluating a §9.4 task's operands after the
   block (§9.4.1 converged reporting) — a change to every display task, not to branches.
-- `ch07_mixed_signal/discrete_bus_{narrow,31}_unsupported.va` — blocked by a **contradiction
-  inside the suite**, not by a missing capability: `reg [7:0] r` and `initial r = 8'hff`
-  parse and are recorded, but four green fixtures pin `reject E0205` on a constant assignment
-  in an `initial` block, three of them arguing under C.7/C.9 that the refusal IS conformance.
-  No implementation satisfies these two and those four at once. Re-verdicting is an owner
-  decision, not work.
+Three families that were on this list are closed, and how they closed is the useful part:
+
+- `annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` were argued as **not a
+  debt**, because E.1.1 guards the SPICE family with "IF a simulator … is also able to read
+  SPICE netlists" and E.1.2 hands that antecedent to the implementer. The clause reading was
+  right and the conclusion was avoidable: the owner ruled VerA gains the capability, so the
+  antecedent became TRUE and the consequent had to hold. `src/frontend/spice_cards.zig` reads
+  `.MODEL` and `.SUBCKT` cards and synthesizes prelude module text — no netlist parser, no
+  second input language, ~150 lines of code. Making an antecedent true beat arguing about
+  whom it bound.
+- `ch07_mixed_signal/discrete_bus_{narrow,31}.va` were blocked by a **contradiction inside
+  the suite**, not by a missing capability, and the resolution was to fix the suite: nine
+  fixtures encoded Annex C's Verilog-A SUBSET rule (`reject E0205` on a constant assignment
+  in a digital `initial` block) against an owner ruling that VerA targets Verilog-AMS. Four
+  were re-verdicted into positive fixtures, five were retargeted off the `reg` PROSE
+  substring and onto real codes, and `initial` now lowers a body of constant assignments to
+  initial state (E0433 refuses a loop, a delay, an event control or a non-constant rhs). No
+  event queue was built.
+- `ch06_hierarchy/module_definition.va` was the last **CANNOT RUN**: `contract.validate`
+  demanded `num_ports` in `1..|U|`, so §6.2's optional port list compiled and had nowhere to
+  run. The guard was stale rather than wrong — it predated wave 4's Newton solve — and the
+  verdict category is retired with it.
 
 What the plan got wrong, recorded because the errors are more useful than the hits:
 
@@ -57,7 +65,13 @@ What the plan got wrong, recorded because the errors are more useful than the hi
 4. **`connectmodule` needed only to PARSE.** A.1.2's `module_keyword ::= module | macromodule
    | connectmodule` is one parser arm. No digital event routing, no driver state, no second
    codegen path.
-5. **Per-epic fixture counts were never accurate** and the Notes said so (+/-3). The drift was
+5. **The seventh wave was not the wave the plan described.** It predicted 4 fixtures of pure
+   reclassification. What it actually was: nine Annex C fixtures re-verdicted onto the AMS
+   ruling (closing two), a SPICE card reader (closing three), and the contract relaxation plus
+   this bookkeeping (closing the last CANNOT RUN). The reclassification instinct was right;
+   the estimate of what it unblocked was low by a factor of two, and the parts that closed
+   fixtures were implementation after all.
+6. **Per-epic fixture counts were never accurate** and the Notes said so (+/-3). The drift was
    larger than that in both directions; several chapters' COVERAGE.md aggregates were off by
    more than a factor of two (ch06 claimed 40 xfails against 28 measured, ch03 36 against 14,
    ch09 78 against 65). Every COVERAGE.md has since been re-censused by grep.
@@ -76,8 +90,30 @@ Counts are +/-3; see Notes.
 
 ## Waves
 
+The per-wave tables below are the plan's ESTIMATES, kept as what was predicted. The
+`fixtures` column is not a result and several columns do not add up — wave 2's epics sum to 59
+against a claimed 72. What actually happened, measured by counting `//! xfail` files at each
+wave's own commit:
 
-### Wave 1 — cumulative 96/337
+| wave | commit | pass | XFAIL | closed |
+|---|---|---|---:|---:|
+| baseline | (plan written) | 812/1150 | 337 | — |
+| 1 — the suite itself, plus the diagnostics that should already have existed | `bb2f60c` | 895/1150 | 254 | 83 |
+| 2 — parser and preprocessor surface | `0e9cd0a` | 952/1150 | 197 | 57 |
+| 2b — the three fixtures wave 2 left needing an owner ruling | `b26ac55` | 955/1150 | 194 | 3 |
+| 3 — behavioural correctness in the backend | `dc11802` | 1009/1150 | 140 | 54 |
+| 4 — the testbench solves; RNG and file I/O get a contract seam | `9960079` | 1059/1150 | 90 | 50 |
+| 5 — elaboration by flattening, Annex E as a shipped prelude | `241f09a` | 1108/1150 | 25 | 65 |
+| 6 — the long tail, and every hollow pass given an assertion | `21038be` | 1144/1152 | 7 | 18 |
+| 7 — the AMS re-verdict, the SPICE card reader, the contract | this tree | 1150/1152 | 2 | 5 |
+
+Wave 5 is the outlier and it is the plan's one big call that paid off exactly: one
+architectural change (inline-and-flatten elaboration) closed 65 fixtures across eleven
+chapters, more than waves 1 and 2 together, because everything cheap had already shipped and
+what was left was all downstream of hierarchy.
+
+
+### Wave 1 — predicted 96 cumulative; measured 83 closed, 254 left
 
 
 Every epic here is a diagnostic that should already exist, at a site the auditors located and I spot-checked. 96 fixtures for what is mostly `return` becoming `emit`. CONTENTION: twelve of these touch src/ir/lower.zig, but in disjoint functions — checkAccessMatch:1683, collectDisciplines:724, checkNatureTable:780, lowerSysTask:2331/lowerSysCall:2510, lowerParamDecl:950, internNode:876, lowerContribution:1500, lowerCase:2003, lowerUnary:2686, flowUnknown:923, freshBranch:1722, lowerBranchAccess:2520. Land the analog-context flag FIRST (it adds a field to struct Lower that two others read) and the rest are non-overlapping hunks. The lexer/preprocessor/token/cg_display epics touch nothing lower.zig owns and can run fully parallel.
@@ -104,7 +140,7 @@ Every epic here is a diagnostic that should already exist, at a site the auditor
 | Display formatting correctness (%c, argument pairing) | 2 | trivial |
 | Legacy-spelling and grammar-reject bundle | 11 | small |
 
-### Wave 2 — cumulative 168/337
+### Wave 2 — predicted 168 cumulative; measured 57 closed (+3 in `b26ac55`), 194 left
 
 
 Parser and AST surface work. 72 fixtures. CONTENTION IS REAL HERE: generate blocks (parser.zig:324), vector nets (parseNetDecl ~980, parsePortList:244, parseNetNames:486), replication (parser.zig:1323-1349), module header (parser.zig:201-267), branch decls (parser.zig:494-513), generic access (parser.zig:1351-1370) and port-list extensions all live in src/frontend/parser.zig and three of them edit parsePortList. Serialise the port-list group (vector ranges, named ports, concatenated ports, module header) into one changeset; the rest are far enough apart. Ast.Port and Ast.BranchDecl both gain fields, so land the AST shape changes before the parser hunks. Do NOT start default_discipline until the Verilog-A-vs-AMS scope question is answered.
@@ -127,7 +163,7 @@ Parser and AST surface work. 72 fixtures. CONTENTION IS REAL HERE: generate bloc
 | default_discipline directive — DISPUTED between two auditors | 4 | medium |
 | $simparam completeness and parameter derive coverage | 4 | small |
 
-### Wave 3 — cumulative 210/337
+### Wave 3 — predicted 210 cumulative; measured 54 closed, 140 left
 
 
 Behavioural correctness, mostly in the backend. 42 fixtures. CONTENTION: above(), transition() and the filter-completeness epic all edit src/backend/codegen.zig in the 2780-2850 band and share the filter/kernel emission framework — treat them as one owner, serialised. Contribution value retention rewrites accumulation in src/ir/lower.zig:1722-1750 and must not run alongside anything else touching contributions. Generate validation and case-generate depend on wave 2's parser restructuring. The short-circuit ternary changes CFG shape, so it must not overlap the value-retention work in the same file.
@@ -148,7 +184,7 @@ Behavioural correctness, mostly in the backend. 42 fixtures. CONTENTION: above()
 | Assorted single-site semantics (multidim arrays, $limit function limiter, paramset decl, nature attribute reference, whole-array assignment, macro-substituted based numbers, analog-initial re-execution, array formals, attribute validation) | 13 | medium |
 | $table_model isoline interpolation | 2 | large |
 
-### Wave 4 — cumulative 259/337
+### Wave 4 — predicted 259 cumulative; measured 50 closed, 90 left
 
 
 Contract- and harness-level work, 49 fixtures, each with an unresolved design question stated in its risk field. CONTENTION: the RNG and file-I/O epics both add state to the Instance struct in tools/contract.zig — that file is ABI-critical and must have one owner for the whole wave. The Newton solver is confined to src/backend/tb.zig and conflicts with nothing; start it first and independently. Signal-flow codegen touches codegen.zig:838-1129 and depends on wave 1's port-direction rules.
@@ -161,7 +197,7 @@ Contract- and harness-level work, 49 fixtures, each with an unresolved design qu
 | Probabilistic distributions ($random, $arandom, $dist_*, $rdist_*) | 19 | architectural |
 | File descriptor I/O subsystem (§9.5) | 19 | architectural |
 
-### Wave 5 — cumulative 306/337
+### Wave 5 — predicted 306 cumulative; measured 65 closed, 25 left — the one that beat its estimate
 
 
 Alone in its wave on purpose. 47 fixtures. It rewrites the assumption that src/ir/lower.zig, src/ir/mir.zig and src/backend/codegen.zig all rest on — one flat module, one set of unknowns. Nothing else can safely touch those three files while it is in flight. Everything cheap has already shipped by now, so the branch can run long without stalling the fixture count.
@@ -171,7 +207,7 @@ Alone in its wave on purpose. 47 fixtures. It rewrites the assumption that src/i
 |---|---:|---|
 | Module instantiation and hierarchy elaboration | 47 | architectural |
 
-### Wave 6 — cumulative 333/337
+### Wave 6 — predicted 333 cumulative; measured 18 closed, 7 left
 
 
 27 fixtures that were individually cheap all along and only ever blocked on elaboration. Once the hierarchy exists these fan out cleanly: defparam and paramset in the parser plus override resolution; hierarchical names in parsePrimary and parseNetNames; Annex F resolution as its own post-elaboration pass; driver access as a separate connectmodule codegen path. CONTENTION: Annex F resolution and $mfactor propagation both read the elaborated tree but write different tables. The driver-access family (9 of the 27) is a second codegen path and should be evaluated for scope before it is built. **[FALSE, corrected in wave 6: the driver-access family is nine REJECT fixtures. §9.22 paragraph 3 makes those functions legal only inside a connect module, so refusing every call site the compiler can reach is the conforming behaviour and needs no codegen path at all — the rule went into lowering as E0818 and the `driver_queries` constant 0 was deleted.]**
@@ -182,15 +218,19 @@ Alone in its wave on purpose. 47 fixtures. It rewrites the assumption that src/i
 | Hierarchy dependents (defparam, paramset instantiation, OOMR names, $mfactor propagation, Annex F resolution, gate primitives, driver access) | 27 | architectural |
 | $simprobe and unregistered VPI analog system functions | 2 | architectural |
 
-### Wave 7 — cumulative 337/337
+### Wave 7 — predicted 4 fixtures of reclassification; closed 5 by implementing three things
 
 
-Not work — a bookkeeping decision. These 4 fixtures document LRM rules that are masked by the C.7 subset rejection and cannot be reached without a digital scheduler. Reclassify them out of XFAIL rather than implementing them, and the real remaining gap drops to 333.
+**[WRONG, and interestingly so.]** The plan called this "not work — a bookkeeping decision": 4 fixtures documenting LRM rules masked by the C.7 subset rejection, to be reclassified out of XFAIL rather than implemented. The masking diagnosis was correct. Everything else was not.
+
+The C.7 argument cuts the other way once the owner ruled that VerA targets **Verilog-AMS** and not the Verilog-A subset. An Annex C "not supported in Verilog-A" line is then not grounds to reject a construct, so the nine fixtures encoding that rule were the defect and the two `discrete_bus` fixtures they contradicted were right. Re-verdicting them was bookkeeping; making `initial` lower a body of constant assignments to initial state was not, and neither was the SPICE card reader that closed the three Annex E fixtures this document had argued were unbindable. Reclassification alone would have closed nothing.
 
 
-| epic | fixtures | effort |
-|---|---:|---|
-| Out of Verilog-A scope (initial/always blocks, digital reg, both-contexts assignment) | 4 | architectural |
+| epic | outcome |
+|---|---|
+| Ruling I — re-verdict the nine Annex C `initial`/`reg` fixtures onto the AMS rule | 4 rewritten as positive fixtures, 5 retargeted off a prose substring onto real codes; `ch07_mixed_signal/discrete_bus_{narrow,31}.va` closed |
+| Ruling J — a SPICE **card** reader, not a netlist parser (`src/frontend/spice_cards.zig`) | `annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` closed |
+| Ruling K — relax `num_ports == 0`, then rewrite both registers from measured state | the last CANNOT RUN closed; `ch06_hierarchy/module_definition.va` now asserts its internal node's solve |
 
 ## Epics
 
