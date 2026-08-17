@@ -242,6 +242,32 @@ const Flatten = struct {
     /// §6.7 path → flat name. See `Design.names`.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
 
+    /// The discipline every flat net has been DECLARED with, keyed by the flat
+    /// name — §3.10's precedence orders 1 and 2 after they have been decided,
+    /// which is what `declaredDiscipline` answers. It used to answer by
+    /// scanning `self.nets`, which grows with every inlined instance port, so
+    /// resolving the N-th instance's bindings cost a walk over everything
+    /// already flattened. Four sites append a net and all four go through
+    /// `addNet`, which is what makes this table and `self.nets` agree by
+    /// construction rather than by care.
+    ///
+    /// The top's ports are seeded FIRST (`run`), because the scan this replaces
+    /// read them first: §6.5 the device's terminals are the top's, and a
+    /// discipline resolved up the hierarchy lands on one of them.
+    ///
+    /// ONE discipline per net, and Annex F.2.1 step 4.b is why that is written
+    /// down rather than merely implemented. 4.b needs the SET of candidates,
+    /// and adding a second arrival-ordered slot does NOT supply it: the
+    /// candidate list is the one filtered BY DOMAIN ("more than one candidate
+    /// whose domain matches"), and the mixed-port bullet under it needs a
+    /// segment from the OTHER domain — so
+    /// `annex_f_resolution/unknown_discipline_mixed_port.va`'s three segments
+    /// {continuous, continuous, discrete} come out right under two slots only
+    /// if the source happens to write its two continuous instances first. The
+    /// shape that decides it is domain-partitioned, and it has no consumer at
+    /// all until `connectrules` is past E0201. See TODO.md §1.
+    disc_of: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
+
     /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
     /// the parameter it overrides — the declaring module's own path joined with
     /// the path the source wrote, which is the same string the flattened
@@ -311,6 +337,7 @@ const Flatten = struct {
         try self.params.appendSlice(self.a(), top.params);
         try self.aliasparams.appendSlice(self.a(), top.aliasparams);
         try self.vars.appendSlice(self.a(), top.vars);
+        for (top.ports) |p| try self.noteDiscipline(p.name, p.discipline);
         try self.addNets(top.nets);
         try self.branches.appendSlice(self.a(), top.branches);
         try self.genvars.appendSlice(self.a(), top.genvars);
@@ -535,7 +562,7 @@ const Flatten = struct {
                 // of the device, carrying the port's own discipline.
                 const internal = try self.join(path, p.name);
                 try unit.rename.put(self.a(), p.name, internal);
-                try self.nets.append(self.a(), .{
+                try self.addNet(.{
                     .name = internal,
                     // §3.10 order 1 still beats the local declaration on a port
                     // nobody connected: the segment exists, it is just the only
@@ -604,7 +631,14 @@ const Flatten = struct {
             out.name = self.flat(n.name);
             out.range = try self.cloneDim(n.range);
             out.init = try self.cloneExpr(n.init);
-            try self.nets.append(self.a(), out);
+            // §3.10 precedence order 1, on an INTERNAL net of the child. This
+            // is the clause's own printed example read literally: "electrical
+            // top.middle.bottom.sig; overrides any discipline which may be
+            // DECLARED FOR sig IN THE MODULE WHERE sig WAS DECLARED" — so the
+            // thing it overrides is a local declaration, and a local
+            // declaration of a net that is not a port is this loop.
+            if (self.oocDiscipline(path, n.name)) |d| out.discipline = d;
+            try self.addNet(out);
         }
         for (child.vars) |v| try self.vars.append(self.a(), try self.cloneVar(v));
         for (child.branches) |b| {
@@ -1064,20 +1098,46 @@ const Flatten = struct {
     fn addNets(self: *Flatten, nets: []const Ast.NetDecl) Error!void {
         for (nets) |n| {
             if (isOoc(self.str(n.name))) continue;
-            try self.nets.append(self.a(), n);
+            try self.addNet(n);
         }
+    }
+
+    /// THE insertion point for a net of the flattened module. Nothing appends to
+    /// `self.nets` directly: `disc_of` is only as complete as this is exclusive.
+    fn addNet(self: *Flatten, n: Ast.NetDecl) Error!void {
+        try self.nets.append(self.a(), n);
+        try self.noteDiscipline(n.name, n.discipline);
+    }
+
+    /// Record a declared discipline for a flat net. FIRST wins, which is what
+    /// the scan this replaces did — see `disc_of` for why there is no second
+    /// slot, and `resolveDiscipline` for what first-wins still costs.
+    fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!void {
+        if (disc == .none) return;
+        const gop = try self.disc_of.getOrPut(self.a(), name);
+        if (!gop.found_existing) gop.value_ptr.* = disc;
     }
 
     /// §3.10 precedence order 1: the out-of-context discipline for one segment,
     /// if a declaration named it.
     ///
-    /// ponytail: consulted at PORT bindings only, which is where the LRM's own
-    /// example lands (`electrical top.middle.bottom.sig;` names a port segment).
-    /// A declaration naming a child's internal net is therefore read and ignored
-    /// rather than applied — and that is also why an unmatched one is NOT
-    /// diagnosed the way an unmatched `defparam` is: the two cases are
-    /// indistinguishable from here, and reporting both would report a legal form.
-    /// The upgrade is to consult it in the child-net loop too.
+    /// Consulted at all three places a segment gets its discipline: a bound port
+    /// (`resolveDiscipline`), an unconnected one, and — since wave 13 — the
+    /// child-net loop, which is a child's own INTERNAL net. The clause's printed
+    /// example decides that last one: "electrical top.middle.bottom.sig;
+    /// overrides any discipline which may be declared for sig IN THE MODULE
+    /// WHERE SIG WAS DECLARED", and the module where a name was declared is the
+    /// module holding its declaration, port or not.
+    /// `annex_f_resolution/out_of_context_internal_net.va` is the fixture; it
+    /// FAILs on the one-line removal of that call.
+    ///
+    /// ponytail: an out-of-context declaration that matched NOTHING is not
+    /// diagnosed, the way an unmatched `defparam` is (E0907). A `defparam` names
+    /// a parameter and nothing else can absorb it; a net declaration under a
+    /// dotted name is indistinguishable from here from a legal form this pass
+    /// simply does not reach, so reporting it would report correct programs. The
+    /// upgrade is a `used` flag on `ooc`, exactly like `Defparam.used`, once
+    /// every consumer of the table is in.
     fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
         var buf: [256]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{s}{s}", .{ path, self.str(local) }) catch return null;
@@ -1105,11 +1165,18 @@ const Flatten = struct {
     /// resolveto/connectrules arm, which needs the `connect` design element VerA
     /// has none of. `annex_f_resolution/unknown_discipline_mixed_port.va` is the
     /// fixture that stays red on it.
+    ///
+    /// Making `disc_of` a map did NOT move this, and that is worth stating
+    /// because it looks as though it should have. The early return below is not
+    /// a lookup cost, it is a POLICY: 4.b wants the candidates partitioned by
+    /// domain, and it wants a `connect ... resolveto` list to match them
+    /// against. Widening the table without both of the other two would be a
+    /// member with no consumer. TODO.md §1 carries the costed remainder.
     fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId) Error!void {
         const disc = self.oocDiscipline(path, p.name) orelse p.discipline;
         if (disc == .none) return;
         if (self.declaredDiscipline(bound) != .none) return;
-        try self.nets.append(self.a(), .{
+        try self.addNet(.{
             .name = bound,
             .discipline = disc,
             // The DECLARATION's token, not the connection's: if this discipline
@@ -1122,13 +1189,7 @@ const Flatten = struct {
     /// The discipline the flat net `name` already has, from the top's ports, the
     /// top's own declarations, or a segment resolved earlier in the walk.
     fn declaredDiscipline(self: *Flatten, name: Ast.StrId) Ast.StrId {
-        for (self.top.ports) |p| if (p.name == name) {
-            if (p.discipline != .none) return p.discipline;
-        };
-        for (self.nets.items) |n| if (n.name == name) {
-            if (n.discipline != .none) return n.discipline;
-        };
-        return .none;
+        return self.disc_of.get(name) orelse .none;
     }
 
     // ---- names ------------------------------------------------------------
