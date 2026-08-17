@@ -42,6 +42,45 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 10 — characterization, and the pins bite — `94bf67c`
+
+**Suite: 219/219 · torture 1158/1161 (3 XFAIL, 0 FAIL) · test-contract green.** +4 fixtures.
+
+The bar this wave was that every test arrive with a **named one-line mutation that makes it
+fail**, applied and shown. All did. Two of those mutations measure how blind the suite was:
+
+- Respelling a §6.5.2 vector element (`vecElem`'s `"{s}[{d}]"` → `"{s}__{d}"`) was noticed by
+  **exactly one of 216 tests** — the new one.
+- Dropping `cloneExpr`'s ternary else-arm clone left **every fixture green** before this wave.
+  Now it prints `got=5 want=2`.
+
+**XFAIL went 2 → 3, deliberately.** A net *named* `gnd` that is not *declared* `ground` aliases
+`I(a)` and `I(a,gnd)` onto one unknown — `flowUnknown` formats `nodeName` into the branch key and
+`internNode` dedupes by that string. Measured: KCL forces +1 mA and −1 mA on the two branches,
+and the emitted `U` carries one flow member for both. `//! xfail` is the only honest verdict:
+`//! reject` would invert the fixture (the LRM permits a net called `gnd`), and green-pinning
+today's numbers would freeze +1 mA where the LRM says −1 mA. Wave 11 closes it; the day it does,
+the fixture XPASSes and fails the run, which is the point.
+
+`cg_limit.zig`'s `helpers_txt` string literal became a real `limit_kernels.zig`, so all six
+kernel files are now `@embedFile`d **and** `@import`ed — the property that makes "the rows
+checked here are byte-for-byte the code that runs there" actually true. Nothing in the tree
+executes `D.limit` (`tb.zig` emits only `updateState`/`display`/`eval`/`q`), so those 15 rows
+test the kernel directly because nothing else can.
+
+**Agent corrections:**
+- My `%l` fix named the wrong file. `lower.zig`'s `checkFormatPairing` **already** handled `'l'`;
+  the arm needing the widening was `cg_display.translateFormat`'s.
+- I cited §9.4.2 for format specifications. It is **§9.4.3**; §9.4.2 is escape sequences.
+- My WAVE-PLAN line numbers for the two `lower.zig` spelling assertions were **26–31 low** — the
+  cited range is a §5.4.3 reject test containing no `"flow("` literal at all.
+- `//! bias I(a,b)` is `error.BadSyntax`: `parseBindings` splits on `,` before `unknownName` sees
+  it, so `tb.zig`'s comma arm is live for `sweep`/`wave` and dead for `bias`/`param`. My
+  "third site" framing was "one and a half sites". Pinned with an `expectError` for wave 11 to
+  decide deliberately.
+- A pre-existing §9.5.4.2 gap found but not fixed: `checkScanFormat` accepts `o h x b c` (not in
+  the clause's table) and refuses `r` and `m` (which are in it). Real conformance gap, logged.
+
 ### Wave 9 — the five host-visible bugs — `4d6207c`
 
 **Suite: 215/215 · torture 1155/1157 (2 XFAIL, 0 FAIL) · test-contract green.**
@@ -179,14 +218,16 @@ Kept because a plan whose errors are invisible is worse than one with none.
 
 ## In flight
 
-- **Wave 10** (`wx8hci0o9`) — characterization, bought BEFORE waves 11/13 spend the structure.
-  Three worktrees: node-identity pins (wave 11's grader), `cg_limit` → a real
-  `limit_kernels.zig` + the `zBilin` D>=2 test, and two one-token defects (`%l` operand
-  disagreement, `$sscanf` case-folding on one side only).
-  Acceptance this wave is unusually strict, deliberately: **every test must come with a named
-  one-line mutation that makes it FAIL, applied and shown.** A test that cannot be made to fail
-  on demand proves nothing. Agents are told to DROP such a test and report it as a finding about
-  the code rather than pad the count.
+- **Wave 11** (`w1zbpvmt1`) — node identity split from node spelling, graded by the pins wave 10
+  just bought. `lower.zig`'s `node_voltages` is one string key space holding user nets, §5.4.2
+  branch flows, §5.4.3 port flows, §6.5.2 vector elements and §6.7 flattened paths; three
+  comments claim collisions are impossible and §2.8.1 makes them possible.
+  Its acceptance is unusually literal: the `net_named_gnd` XFAIL must XPASS and then lose its
+  marker in the same commit, and **zero transcript diffs outside the fixtures under test**,
+  PROVEN by emitting every fixture with the old and new binaries and diffing — not asserted.
+  Running alongside it, in a disjoint file group: wave 12's documentation half (the dangling
+  `.html` citation sweep, the `// CORPUS:` dataset provenance, and two `test-contract` guards —
+  one of which is what makes a 702-line orphan like `eval_batch.zig` unrepeatable).
 
 **The two miscompiles that motivated wave 9** (reproduced by hand before the fix):
 
