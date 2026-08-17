@@ -15,9 +15,9 @@
 //!               child MUST stay resident to keep incremental state warm.
 //!   - Release → LLVM, cold build, per-unit float mode, + GPU kernels.
 //!
-//! DEVIATION FROM 05-build-artifact.html, verified on this toolchain
-//! (zig 0.16.0): the doc prescribes a resident `zig build --listen=-` child
-//! speaking the BUILD-RUNNER protocol. That flag no longer exists —
+//! NOT THE BUILD-RUNNER PROTOCOL, verified on this toolchain (zig 0.16.0).
+//! The obvious resident child is `zig build --listen=-` speaking to the build
+//! runner, and it is what the design this file replaced prescribed. Gone —
 //!
 //!     $ zig build --listen=-
 //!     unrecognized argument: '--listen=-'
@@ -59,7 +59,8 @@ pub const Options = struct {
     work_dir: []const u8,
     /// Device name. Artifact is `<work_dir>/lib<name>.<generation>.so`.
     name: []const u8,
-    /// Debug ⇒ `.self_hosted`; ReleaseFast ⇒ `.llvm` (see the table in ch.5).
+    /// Debug ⇒ `.self_hosted`; ReleaseFast ⇒ `.llvm` (the "Backend split" in
+    /// this file's header is what the two modes buy).
     optimize: std.builtin.OptimizeMode,
     backend: Backend,
     /// Support modules. MUST contain `contract` (device.zig imports it) and
@@ -146,7 +147,7 @@ pub fn layoutHash(o: Options) u64 {
 // Build tree
 // ===========================================================================
 
-/// The dyn-ABI export shim (ch.5): one line that re-exports the generated
+/// The dyn-ABI export shim: one line that re-exports the generated
 /// device under the host's C ABI. Depends only on the device name, so it is
 /// byte-identical across rebuilds and never dirties.
 fn shimSource(gpa: Allocator, name: []const u8) ![]u8 {
@@ -206,15 +207,17 @@ fn writeIfChanged(
 ///     bytes, and that property is what `tests/bench.zig` measures.
 ///   - the core was ALREADY one 60 000-line declaration before the merge, so
 ///     the granularity the per-unit split promised was mostly gone already: any
-///     shared value re-Sema'd all of it. See 02-incremental.html.
+///     shared value re-Sema'd all of it — naming.zig's header is where the
+///     per-declaration granularity this rests on is argued.
 ///
 /// `pruneUnits` is what makes the shrink safe: a tree written by an older
 /// VerA has ~105 `u/*.zig`, and leaving 104 stale ones behind would keep
 /// feeding `zig` declarations nothing imports.
 ///
 /// VerA builds no change-detection of its own here: `writeIfChanged` is a
-/// content compare, and everything past the write is `zig`'s job
-/// (02-incremental.html — "delegated, we do no hashing of our own").
+/// content compare, and everything past the write is `zig`'s job — naming.zig:
+/// "VerA's only job is stable names + stable order; `zig` does the actual
+/// incremental work". We do no hashing of our own.
 ///
 /// PUBLIC for the one caller that is not `compileRelease`/`ResidentChild`:
 /// `tests/bench.zig` times a no-op rewrite as its fourth phase, and asserts the
@@ -335,7 +338,7 @@ fn buildArgv(arena: Allocator, o: Options) ![]const []const u8 {
 
     switch (o.backend) {
         // ~10× faster than LLVM and the only backend that patches in place, so
-        // it is the only one `-fincremental` is worth anything on (ch.2).
+        // it is the only one `-fincremental` is worth anything on.
         .self_hosted => try a.appendSlice(arena, &.{ "-fno-llvm", "-fno-lld", "-fincremental" }),
         .llvm => try a.append(arena, "-fllvm"),
     }
