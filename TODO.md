@@ -5,9 +5,9 @@ Scored by `zig build torture` against `tests/fixtures`, which states what the
 wave 7:
 
 ```
-1158/1161 pass · 3 XFAIL · 0 FAIL · 0 CANNOT RUN
+1160/1162 pass · 2 XFAIL · 0 FAIL · 0 CANNOT RUN
 0 fixtures compile and assert NOTHING
-zig build test: 219/219
+zig build test: 221/221
 ```
 
 The waves are done; `git log` carries the per-wave history. This file is the
