@@ -1577,9 +1577,18 @@ pub const Parser = struct {
             return .{ .kind = kind, .lo = .none, .strings = off };
         }
 
-        // `exclude constant_expression`
+        // `exclude constant_expression` — A.2.5 gives the bare form to
+        // `exclude` ONLY; `from` is always bracketed. `from 5` is user source,
+        // not a parser invariant, so it is a diagnostic: as an assert it was
+        // `unreachable` in ReleaseFast, i.e. UB at the trust boundary.
         if (self.peek() != .lparen and self.peek() != .lbracket) {
-            std.debug.assert(kind == .exclude);
+            if (kind == .from) {
+                var d = self.failWith(self.pos, .E0207);
+                d.msg("found {s}", .{self.found(self.pos)});
+                d.point("expected `(` or `[` — only `exclude` takes a bare value", .{});
+                try d.emit();
+                return error.ParseError;
+            }
             return .{ .kind = kind, .lo = try self.parseValueRangeExpr() };
         }
 
@@ -3767,6 +3776,24 @@ test "a resistor parses into ports, ranged parameters and a contribution" {
     try std.testing.expectEqual(Ast.ExprTag.branch_access, res.file.exprs.tag(contrib.lhs));
     // §4.2.2: `a*b + f(x) - $t` parses as `(a*b + f(x)) - $t`.
     try std.testing.expectEqual(Ast.BinaryOp.sub, res.file.exprs.binOp(contrib.rhs));
+}
+
+test "A.2.5: `from` needs a bracket, and saying so is a diagnostic not an assert" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The bare-expression range belongs to `exclude` alone. This used to be
+    // `std.debug.assert(kind == .exclude)` — a panic on a checked build and
+    // `unreachable` under ReleaseFast, reached from a source file.
+    const bad = try parseForTest(arena, "module m; parameter real g = 1 from 5; endmodule");
+    try std.testing.expectEqual(@as(usize, 1), bad.count());
+    try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
+    try std.testing.expectEqualStrings("expected `(` or `[` — only `exclude` takes a bare value", bad.bag.at(0).point);
+
+    // The sibling that IS in the grammar still parses.
+    const ok = try parseForTest(arena, "module m; parameter real g = 1 exclude 5; endmodule");
+    try std.testing.expectEqual(@as(usize, 0), ok.count());
 }
 
 test "Table 4-3 precedence: ?: is the ONLY right-associative operator (§4.2.2)" {
