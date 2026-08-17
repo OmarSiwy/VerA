@@ -87,6 +87,8 @@ pub const Code = enum(u16) {
     E0127,
     /// IEEE 1364 §19.7: the operands of `line.
     E0128,
+    /// §10.3 Syntax 10-2: the operand of `default_transition.
+    E0129,
     // Lexical (LRM 2) — reported by parser.zig against a lexer `.invalid` token
     // or a `ValueError` from `Lexer.decode*`.
     E0130,
@@ -150,6 +152,18 @@ pub const Code = enum(u16) {
     E0226,
     /// §4.7.2.2: `return` with no expression inside an analog function.
     E0227,
+    /// §6.6 / A.4.2: a `generate` region below another `generate` — the region
+    /// is a `module_item` and `module_or_generate_item` does not list it.
+    E0228,
+    /// §6.6 / Syntax 6-8: a `parameter` declaration inside a generate region or
+    /// block, where `module_or_generate_item` admits only `localparam`.
+    E0229,
+    /// §6.6.1/§6.6.2/§6.8: a named generate block's name collides with another
+    /// declaration of the enclosing scope, or with a block of another generate
+    /// construct. A class-2 number for a scope rule on E0222's precedent: the
+    /// parser is the only stage that can tell a `generate_block`'s name from a
+    /// §5.3.2 statement label, so it is the only stage that can judge this.
+    E0230,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -252,6 +266,17 @@ pub const Code = enum(u16) {
     /// two arguments of an access function (§3.11) or as the two terminals of a
     /// branch declaration (§3.12).
     E0355,
+    /// §3.2 a reference that supplies fewer or more subscripts than the array's
+    /// declaration has dimensions.
+    E0356,
+    /// §2.9 Syntax 2-4 an attribute value that is not a constant expression.
+    E0357,
+    /// §2.9.2 a standard attribute (`desc`, `units`, `op`, `multiplicity`) with
+    /// a value outside the domain the clause fixes for it.
+    E0358,
+    /// §5.5.3 a nature attribute reference (`n.potential.abstol`) naming an
+    /// attribute whose value is not a constant expression.
+    E0359,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -287,6 +312,13 @@ pub const Code = enum(u16) {
     E0426,
     /// §5.8.3 more than one `default` arm in one case statement.
     E0427,
+    /// §6.6 a generate scheme — an if-generate condition or a case-generate
+    /// selector — that is not a constant expression.
+    E0428,
+    /// §5.7 a whole-array assignment between arrays that are not assignment
+    /// compatible: a different number of dimensions, a different number of
+    /// elements in one of them, or a different element type.
+    E0429,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -314,6 +346,10 @@ pub const Code = enum(u16) {
     /// §5.10.3.1/§5.10.3.2 a `cross`/`above` argument that is the wrong type,
     /// out of range, or a tolerance with no direction beside it.
     E0517,
+    /// §4.5.12 a Z-filter with a zero transition time contributed straight to a
+    /// branch — the abrupt discontinuity the clause allows in a VARIABLE, put
+    /// where the solver has to differentiate it.
+    E0518,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -362,6 +398,15 @@ pub const Code = enum(u16) {
     E0810,
     /// §9.15 `$simparam` on a name this engine does not know, with no fallback.
     E0811,
+    /// §9.20 misuse of `$analog_node_alias` / `$analog_port_alias`.
+    E0812,
+    /// §9.5.3/§9.5.4.2 `$swrite`/`$sformat`/`$sscanf` argument or conversion.
+    E0813,
+    /// §9.17.3 a `$limit` user-defined limiter with a formal that is not `input`.
+    E0814,
+    /// §9.21 a `$table_model` data source, control string or dimensionality that
+    /// VerA cannot compile into a lookup.
+    E0815,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -677,6 +722,28 @@ pub fn info(c: Code) Info {
             \\rather than a no-op.
             ,
         },
+        .E0129 => .{
+            .title = "malformed `default_transition directive",
+            .lrm = "10.3",
+            .explain =
+            \\LRM 10.3 Syntax 10-2 is
+            \\
+            \\    `default_transition transition_time
+            \\    transition_time ::= constant_expression
+            \\
+            \\with no brackets round the operand, so it is mandatory. A bare
+            \\`default_transition is NOT a request for the simulator default:
+            \\10.3 already states that case ("If a `default_transition
+            \\directive is not used in the description, transition_time is
+            \\controlled by the simulator"), so reading the operand-less form
+            \\as it would silently discard a line the author wrote.
+            \\
+            \\The directive is read in the text stage, before there is a
+            \\parser to fold a general constant_expression, so what it accepts
+            \\is one LRM 2.6 number — with a Table 2-1 scale factor if you
+            \\want one: `default_transition 4n.
+            ,
+        },
         .E0130 => .{
             .title = "x/z digit in a number literal",
             .lrm = "2.6.1",
@@ -819,14 +886,17 @@ pub fn info(c: Code) Info {
             ,
         },
         .E0203 => .{
-            .title = "named event declaration is not implemented",
-            .lrm = "5.10.4",
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\Named events (A.2.1.3 event_declaration, triggered with `->` and
-            \\awaited with `@`) are a discrete-event feature. The analog kernel
-            \\VerA targets schedules on the LRM 5.10 analog events —
-            \\initial_step, final_step, cross, above, timer — which are
-            \\supported.
+            \\"named event declaration is not implemented". Retired: A.2.1.3
+            \\`event_declaration` now parses and 5.10.4's trigger/detect pair
+            \\lowers, so the condition does not exist to report. A named event is
+            \\an ANALOG event — 5.10 lists it as one of three kinds — so refusing
+            \\the declaration was refusing part of the subset annex C.2 grants.
+            \\
+            \\What replaced it: E0705, for a `@(ev)` or `-> ev` naming something
+            \\no `event` declaration introduced. The number is not reused.
             ,
         },
         .E0204 => .{
@@ -1196,6 +1266,82 @@ pub fn info(c: Code) Info {
             \\
             \\Write `return <expr>;`, or assign to the function name and fall off
             \\the end.
+            ,
+        },
+        .E0228 => .{
+            .title = "a generate region inside another generate region",
+            .lrm = "6.6",
+            .explain =
+            \\LRM 6.6, verbatim: "Generate regions do not nest, and they may only
+            \\occur directly within a module."
+            \\
+            \\Annex A.4.2 says it a second way, by placement: `generate_region`
+            \\is a `module_item`, and `module_or_generate_item` — everything a
+            \\region or a generate block may contain — does not list it. So an
+            \\inner `generate` has no derivation, whether it sits in another
+            \\region or in the block of a for- or if-generate.
+            \\
+            \\The keywords buy nothing inside: 6.6 makes the region "optional"
+            \\with "no semantic difference in the module when a generate region is
+            \\used", so drop the inner pair. Generate CONSTRUCTS do nest — "all
+            \\other module items, including other generate constructs, are allowed
+            \\in a generate block" — it is only the region that may not.
+            ,
+        },
+        .E0229 => .{
+            .title = "a parameter declaration inside a generate region or block",
+            .lrm = "6.6",
+            .explain =
+            \\LRM 6.6, verbatim: "A generate block is a collection of one or more
+            \\module items. A generate block may not contain port declarations,
+            \\parameter declarations, specify blocks, or specparam declarations."
+            \\
+            \\Syntax 6-8 states it structurally: `module_or_generate_item`
+            \\admits `local_parameter_declaration ;` and no
+            \\`parameter_declaration`.
+            \\
+            \\The reason is elaboration order. A parameter is what a generate
+            \\scheme is allowed to READ — 6.6's own framing is "the ability for
+            \\parameter values to affect the structure of the model" — so a
+            \\parameter created BY a generate block is a value the elaborator
+            \\needs before it exists. 6.3's override would have nothing to attach
+            \\to either.
+            \\
+            \\Write `localparam` instead. It is the form the grammar keeps,
+            \\precisely because it carries no override.
+            ,
+        },
+        .E0230 => .{
+            .title = "a generate block name collides with another declaration",
+            .lrm = "6.6.1",
+            .explain =
+            \\A named generate block's name is a DECLARATION, not a label.
+            \\
+            \\LRM 6.6.1, for a loop generate: "If the generate block is named, it
+            \\is a declaration of an array of generate block instances ... It
+            \\shall be an error if the name of a generate block instance array
+            \\conflicts with any other declaration, including any other generate
+            \\block instance array."
+            \\
+            \\LRM 6.6.2, for a conditional one: "its name declares a generate
+            \\block instance and is the name for the scope it creates ... Named
+            \\generate blocks may not have the same name as any other declaration
+            \\in the same scope. Named generate blocks may not have the same name
+            \\as blocks in any other generate construct in the same scope, even
+            \\if not selected for instantiation."
+            \\
+            \\"Even if not selected" is why the scheme is never consulted: the
+            \\name is declared by the TEXT of the construct. 6.8 states the same
+            \\rule generally and repeats the point — "For generate blocks, this
+            \\rule applies regardless of whether the generate block is
+            \\instantiated".
+            \\
+            \\What IS permitted, and is not reported here: two blocks in
+            \\different arms of ONE conditional generate construct may share a
+            \\name, "since at most one is instantiated" (6.6.2), and that extends
+            \\through direct nesting — an `else if` chain.
+            \\
+            \\Rename the block, or rename the declaration it shadows.
             ,
         },
 
@@ -1937,6 +2083,90 @@ pub fn info(c: Code) Info {
             \\elaborator inserts a connect module between the two.
             ,
         },
+        .E0356 => .{
+            .title = "wrong number of array subscripts",
+            .lrm = "3.2",
+            .explain =
+            \\LRM 3.2 declares an array with one `dimension` per subscript:
+            \\
+            \\    integer flag_array[0:8][0:3];   // 9 rows of 4
+            \\
+            \\so `flag_array[3]` names a whole ROW and not a cell. Verilog-AMS
+            \\has no array-valued expression outside 3.4.8's assignment patterns
+            \\and 5.7's whole-array assignment, so a partial subscript list has
+            \\nowhere to be used and is reported here rather than read as the
+            \\first element.
+            ,
+        },
+        .E0357 => .{
+            .title = "illegal attribute value",
+            .lrm = "2.9",
+            .explain =
+            \\LRM 2.9, Syntax 2-4:
+            \\
+            \\    attr_spec ::= attr_name [ = constant_expression ]
+            \\
+            \\Both of the clause's rules about that value land here, because both
+            \\say it is not a legal constant_expression.
+            \\
+            \\1. IT MUST BE CONSTANT. An attribute carries "properties about
+            \\objects, statements and groups of statements in the HDL source that
+            \\can be used by various tools" — a tool that is not a simulator,
+            \\reading the source without solving it. A variable's value exists
+            \\only during a solve, so there is no value for such a tool to read.
+            \\A parameter IS a constant expression here (A.8.4 constant_primary),
+            \\so `(* q = gain *)` is accepted; `(* q = z *)` with `real z` is not.
+            \\
+            \\2. IT MAY NOT CONTAIN AN ATTRIBUTE INSTANCE. "Nesting of attribute
+            \\instances is disallowed. It shall be illegal to specify the value of
+            \\an attribute with a constant expression that contains an attribute
+            \\instance." A.8.3 gives operators their own attribute slot, so
+            \\`(* outer = (1 + (* inner *) 2) *)` is refused by this rule and not
+            \\by the grammar.
+            ,
+        },
+        .E0358 => .{
+            .title = "standard attribute value is outside its domain",
+            .lrm = "2.9.2",
+            .explain =
+            \\LRM 2.9.2 standardizes four attribute names and fixes the value of
+            \\each with a "must":
+            \\
+            \\    desc          must be assigned a string
+            \\    units         must be assigned a string
+            \\    op            "yes" or "no"
+            \\    multiplicity  "multiply", "divide" or "none"
+            \\
+            \\These are not free-form tool hints: `multiplicity` picks the
+            \\$mfactor scaling of an operating-point report, so a value outside
+            \\the listed set has no reading at all.
+            \\
+            \\Any OTHER attribute name is a tool convention and is not checked —
+            \\2.9 leaves its meaning to the tool that reads it.
+            ,
+        },
+        .E0359 => .{
+            .title = "nature attribute reference has no constant value",
+            .lrm = "5.5.3",
+            .explain =
+            \\LRM 5.5.3, Syntax 5-4:
+            \\
+            \\    nature_attribute_reference ::=
+            \\        net_identifier . potential_or_flow . nature_attribute_identifier
+            \\
+            \\and the sentence after it: "This syntax shall not be used for the
+            \\access, ddt_nature, or idt_nature attributes of a nature, nor any
+            \\other attribute whose value is not a constant expression."
+            \\
+            \\Those three attributes name an IDENTIFIER — `access` is the access
+            \\function itself (`V`), not a number — so there is no value for the
+            \\reference to stand for. The same goes for an attribute the nature
+            \\never declared.
+            \\
+            \\`n.potential.abstol` is the form the clause's own twocap example
+            \\uses, and it works.
+            ,
+        },
 
         // ------------------------------------------------------------ class 4
         .E0401 => .{
@@ -2264,6 +2494,55 @@ pub fn info(c: Code) Info {
             \\Merge them, or give one of them its own label list.
             ,
         },
+        .E0428 => .{
+            .title = "a generate scheme is not a constant expression",
+            .lrm = "6.6",
+            .explain =
+            \\LRM 6.6, verbatim: "All expressions in generate schemes shall be
+            \\constant expressions, deterministic at elaboration time."
+            \\
+            \\A generate scheme decides what the module CONTAINS, so it has to be
+            \\answerable before there is a solution to read: an if-generate
+            \\condition, a case-generate selector, and a loop generate's
+            \\initialization, condition and step (E0417-E0419). A module variable
+            \\or a probe is none of those — the LRM gives such a construct no
+            \\semantics at all, which is why this is an error and not a fallback
+            \\to a run-time branch.
+            \\
+            \\A `parameter` IS a constant expression here (A.8.4
+            \\constant_primary, and 6.6's whole purpose is "the ability for
+            \\parameter values to affect the structure of the model"), so a
+            \\parameterized scheme is accepted.
+            \\
+            \\For a choice that depends on a solver value, write an ordinary
+            \\`if` or `case` inside the analog block — but note 5.8.1's
+            \\restrictions on analog operators under a non-constant condition.
+            ,
+        },
+        .E0429 => .{
+            .title = "incompatible array assignment",
+            .lrm = "5.7",
+            .explain =
+            \\LRM 5.7: "Array assignments shall only be done with arrays that are
+            \\compatible. An array, or a slice of such an array, shall be
+            \\assignment compatible with any other such array or slice if all the
+            \\following conditions are satisfied:
+            \\
+            \\  - The element types of source and target shall be equivalent.
+            \\  - Every dimension of the source array shall have the same number
+            \\    of elements as the target array."
+            \\
+            \\The count is of ELEMENTS, not of indices, which is the clause's own
+            \\worked example:
+            \\
+            \\    int A[10:1];   int B[0:9];   int C[24:1];
+            \\    A = B;         // ok. Compatible type and same size
+            \\    A = C;         // type check error: different sizes
+            \\
+            \\Assign the elements one at a time if the shapes genuinely differ —
+            \\there is no truncating or padding form of this statement.
+            ,
+        },
 
         // ------------------------------------------------------------ class 5
         .E0501 => .{
@@ -2407,6 +2686,11 @@ pub fn info(c: Code) Info {
             \\contains an analog operator, the conditional expression shall be
             \\a analysis_or_constant_expression." LRM 5.9 states the same ban
             \\for `repeat`, `while` and non-genvar `for`, without the carve-out.
+            \\LRM 4.5.15 names the three conditional forms it covers — "inside
+            \\conditional (if, case, or ?:) statements" — so an operator in an
+            \\ARM of a `?:` is this rule too, and for the sharpest reason: 4.2.3
+            \\makes `?:` short-circuiting, so the arm that is not selected is
+            \\not evaluated at all.
             \\
             \\An analog operator is a STATE MACHINE, not a function: `ddt`,
             \\`idt`, `transition`, `slew`, `absdelay`, `laplace_*` and `zi_*`
@@ -2526,6 +2810,30 @@ pub fn info(c: Code) Info {
             \\Eliding a slot is not itself an error: Syntax 5-16 types them
             \\analog_expression_or_null and 5.10.3.1's own `sh` example writes
             \\`cross(V(smpl) - thresh, dir, , , en === 1'b1)`.
+            ,
+        },
+        .E0518 => .{
+            .title = "a zero-transition-time Z-filter cannot be contributed to a branch",
+            .lrm = "4.5.12",
+            .explain =
+            \\LRM 4.5.12, verbatim: "If the transition time is specified as zero
+            \\(0), then the output is abruptly discontinuous. A Z-filter with
+            \\zero (0) transition time shall not be directly assigned to a
+            \\branch."
+            \\
+            \\The zero transition time is not the error. The same clause makes
+            \\the argument optional and "nonnegative", and reading the
+            \\discontinuous output into a variable is legal:
+            \\
+            \\    real y;
+            \\    analog begin
+            \\      y = zi_zp(V(p, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u, 0.0);
+            \\      I(p, n) <+ y;
+            \\    end
+            \\
+            \\What the clause bans is the discontinuity landing directly in the
+            \\equation system, where a branch quantity that steps
+            \\instantaneously has no derivative for Newton-Raphson to work with.
             ,
         },
 
@@ -2766,9 +3074,19 @@ pub fn info(c: Code) Info {
             ,
         },
         .E0705 => .{
-            .title = "named events are not implemented",
+            .title = "not a declared named event",
             .lrm = "5.10.4",
-            .explain = "See E0203.",
+            .explain =
+            \\`@ <identifier>` (A.6.5) and `-> <identifier>` (5.10.4) both name a
+            \\hierarchical_event_identifier, and the only declaration that
+            \\introduces one is A.2.1.3
+            \\
+            \\    event tick;
+            \\
+            \\A variable, net or parameter of the same name is not an event: 2.8
+            \\gives an event a name but no value, so there is nothing for `@` to
+            \\test on one. A misspelling lands here too.
+            ,
         },
         .E0706 => .{
             .title = "unsupported event expression",
@@ -2825,9 +3143,12 @@ pub fn info(c: Code) Info {
             \\Deliberately rejected rather than stubbed: `$random`, `$arandom`
             \\and the `$dist_*`/`$rdist_*` family (LRM 9.13), because silently
             \\returning a constant would make a model that looks stochastic
-            \\behave deterministically. `$table_model` (LRM 9.21) is rejected
-            \\for the same reason — it would need a file-backed interpolator at
-            \\run time.
+            \\behave deterministically. `$simprobe` (LRM 9.16) needs a session
+            \\to ask.
+            \\
+            \\`$table_model` (LRM 9.21) used to be on this list and no longer is:
+            \\the isoline interpolator exists (see E0815 for the schemes it
+            \\implements).
             ,
         },
         .E0802 => .{
@@ -3005,6 +3326,133 @@ pub fn info(c: Code) Info {
             \\Only a literal name is checked. 9.15 also allows a string
             \\parameter or a string variable, whose value is not available
             \\here, and the fallback is the user's cover for that case.
+            ,
+        },
+        .E0812 => .{
+            .title = "invalid use of a node alias system function",
+            .lrm = "9.20",
+            .explain =
+            \\LRM 9.20 states $analog_node_alias() and $analog_port_alias() as
+            \\a validity list, and this code carries all of it. One number,
+            \\because the six sentences are one rule with one reason: an alias
+            \\makes the named node "refer to the same circuit matrix position"
+            \\as the hierarchical reference, so it is a TOPOLOGY edit, and
+            \\topology is fixed before a solve runs.
+            \\
+            \\    integer ok;
+            \\    electrical local;
+            \\    analog initial ok = $analog_node_alias(local, "$root.top.a");
+            \\
+            \\What the clause requires, in the order it is checked:
+            \\
+            \\  1. "It shall be an error for the ... system functions to be
+            \\     used outside the analog initial block." An ordinary analog
+            \\     block runs inside the Newton loop.
+            \\  2. They "shall not be used inside conditional (if, case, or
+            \\     ?:) statements unless the conditional expression ...
+            \\     consists of terms which can not change during the course of
+            \\     a simulation". A parameter guard is fine; $abstime is not.
+            \\  3. The analog_net_reference "shall be either a scalar or vector
+            \\     continuous node declared in the module containing the system
+            \\     function call".
+            \\  4. "It shall be an error for the analog_net_reference to be a
+            \\     port or to be involved in port connections" — a port is
+            \\     already bound by the instantiating netlist.
+            \\  5. A vector "shall reference the full vector node, it shall be
+            \\     an error for it to be a bit select or part select". The
+            \\     scalar element goes on the OTHER side of the call.
+            \\  6. The hierarchical_reference_string "shall be a constant
+            \\     string value (string literal or string parameter)", and it
+            \\     shall not name a node that is already the
+            \\     analog_net_reference of another alias call.
+            \\
+            \\An unresolvable reference is NOT an error: the same clause makes
+            \\that a return value, "one (1) if the hierarchical_reference_string
+            \\points to a valid continuous node and zero (0) otherwise".
+            ,
+        },
+        .E0813 => .{
+            .title = "invalid argument to a string formatting or scanning task",
+            .lrm = "9.5.3",
+            .explain =
+            \\LRM 9.5.3 puts the destination first — "the first argument to
+            \\$swrite shall be a string variable to which the resulting string
+            \\shall be written, instead of a variable specifying the file to
+            \\which to write" — and 9.5.4.2 gives $sscanf its output
+            \\arguments, one per non-suppressed conversion.
+            \\
+            \\    string text;  real x;  integer code;
+            \\    $sformat(text, "v=%10.4e", V(p,n));
+            \\    code = $sscanf(text, "v=%e", x);
+            \\
+            \\So this fires when a destination is not something that can be
+            \\assigned to: a $swrite/$sformat first argument that is not a
+            \\`string` variable, an output argument that is a literal or an
+            \\expression, or one of the two writers used in expression
+            \\position, where it has no destination at all.
+            \\
+            \\It also fires on a conversion code VerA does not scan. 9.5.4.2's
+            \\own list is %d %o %h %x %b %c %f %e %g %s, with the assignment
+            \\suppression * and a maximum field width; the strength, 4-state
+            \\and timeformat codes (%v, %z, %t) describe values an analog
+            \\device does not have. Refusing one is deliberate: a code that
+            \\scanned as garbage would still be COUNTED in the return value,
+            \\so the model would read a plausible number and never find out.
+            ,
+        },
+        .E0814 => .{
+            .title = "a $limit limiter argument is not `input`",
+            .lrm = "9.17.3",
+            .explain =
+            \\LRM 9.17.3, on Syntax 9-12's third form
+            \\`$limit(access_function_reference, analog_function_identifier,
+            \\arg_list)`: "The arguments of the user-defined function shall all be
+            \\declared input."
+            \\
+            \\The simulator supplies every one of them — "The first argument of
+            \\the user-defined function shall be the value of the access function
+            \\reference for the current iteration. The second argument shall be
+            \\the appropriate internal state; generally, this is the value that
+            \\was returned by the $limit() function on the previous iteration" —
+            \\so they are the solver's iteration history handed inward. An
+            \\`output` or `inout` formal would write back into that history
+            \\mid-Newton-step, and 9.17.3 gives that no meaning.
+            \\
+            \\Return the limited value as the function's own return variable
+            \\(4.7.1), which is what $limit() reads.
+            ,
+        },
+        .E0815 => .{
+            .title = "$table_model data source or control string",
+            .lrm = "9.21",
+            .explain =
+            \\    $table_model ( table_inputs , table_data_source
+            \\                   [, table_control_string] )
+            \\
+            \\One lookup expression per dimension, then either a file name or one
+            \\array per dimension followed by an output array (9.21.1), then an
+            \\optional control string (9.21.2).
+            \\
+            \\    real y[0:11], x[0:11], f_xy[0:11];
+            \\    f = $table_model(0.25, 3.5, y, x, f_xy);
+            \\    g = $table_model(0.25, V(a,b), "sample.dat", "1LL,1LL;1");
+            \\
+            \\This fires on a call whose shape does not add up — a file that
+            \\cannot be read or does not hold a rectangular block of numbers,
+            \\arrays of differing lengths (they are COLUMNS of one table), fewer
+            \\columns than the inputs need, fewer samples than 9.21's "at least
+            \\two points per dimension (2^N for N dimensions)", or a dependent
+            \\selector naming a column the data source does not have.
+            \\
+            \\It also fires on an interpolation scheme VerA does not implement.
+            \\Table 9-30's `1` (linear) is the one implemented; `D`, `2` and `3`
+            \\(closest point, quadratic and cubic splines) and `I` (ignore this
+            \\column) are refused rather than substituted, as is Table 9-31's `E`
+            \\— "an extrapolation error is reported if the $table_model function
+            \\is requested to evaluate a point beyond the interpolation region",
+            \\and a compiled residual has no channel to report one on. Extrapolating
+            \\anyway is precisely the wrong-number failure `E` exists to prevent.
+            \\Table 9-31's `C` and `L` both work.
             ,
         },
         .W0850 => .{

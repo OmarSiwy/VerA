@@ -38,7 +38,6 @@
 //
 //! lrm 9.17.3
 //! bias V(p) = 0.3
-//! xfail VerA does not implement Syntax 9-12's third form: an analog_function_identifier as the second argument of $limit is E0314 `unknown identifier`, because the name is looked up as a value rather than as the limiter
 `include "check.vh"
 module ch09_limit_user_function(p, n);
   inout p, n; electrical p, n;

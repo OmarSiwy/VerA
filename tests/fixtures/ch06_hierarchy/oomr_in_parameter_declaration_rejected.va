@@ -14,16 +14,17 @@
 // the hierarchy to already be resolved in order to resolve the hierarchy. So the
 // rejection is correct conformance and there is no `//! xfail`.
 //
-// The diagnostic is a parse boundary and not the rule. VerA has no
-// `hierarchical_identifier`, so the `.` in `other.gain` is E0207 ("unexpected
-// token: found `.`") — the same code the permitted half dies on, which is exactly
-// why the two files have to exist together: today one diagnostic covers both, and
-// the day hierarchical names resolve this one must keep failing while its sibling
-// starts passing.
+// The diagnostic is a scope boundary and not the rule. The `.` PARSES now
+// (§5.5.3's nature attribute reference needed a dotted name), so `other.gain` is
+// E0901 "hierarchical name in a flat module" — VerA has no instance tree to
+// resolve it in, which is the same code the permitted half dies on. That is
+// exactly why the two files have to exist together: today one diagnostic covers
+// both, and the day hierarchical names resolve this one must keep failing while
+// its sibling starts passing.
 //
 //! lrm 6.7.1
 //! lrm 6.9.4
-//! reject E0207
+//! reject E0901
 module ch6_oomr_in_parameter_declaration(p);
   inout p; electrical p;
   parameter real g = other.gain;

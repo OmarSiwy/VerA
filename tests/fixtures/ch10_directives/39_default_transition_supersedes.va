@@ -64,7 +64,6 @@
 //! time 0, 1n, 2n, 3n, 4n
 //! analysis tran
 //! print none
-//! xfail VerA discards `default_transition (preprocessor marks it .ignored), so neither directive is retained and there is nothing to supersede
 `default_transition 8n
 `default_transition 4n
 `include "check.vh"

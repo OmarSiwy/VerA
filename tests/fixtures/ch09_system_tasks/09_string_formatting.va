@@ -23,7 +23,6 @@
 //! lrm 9.4.3
 //! lrm 9.5.3
 //! lrm 9.5.4.2
-//! xfail VerA has no string-formatting surface: codegen.zig `void_tasks` lowers $swrite/$sformat/$sscanf to the constant `S.con(0.0)`, so neither writer touches `text` and the reader returns 0 without assigning `back` — exactly the "no-op $sformat leaves the text that is not the number at all" case above
 `include "check.vh"
 module ch09_string_formatting(p, n);
   inout p, n; electrical p, n;

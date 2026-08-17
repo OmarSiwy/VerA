@@ -14,7 +14,6 @@
 //
 //! lrm 4.5.15
 //! reject E0514
-//! xfail VerA's E0514 check walks `if` and `case` statements only; an analog operator in an arm of a `?:` whose condition is a probe compiles cleanly (it warns W0650 and nothing else)
 module ch04_operator_in_ternary_rejected(p, n);
     inout p, n;
     electrical p, n;

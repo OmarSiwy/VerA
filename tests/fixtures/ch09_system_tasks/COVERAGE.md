@@ -11,18 +11,22 @@ never a plausible file name.
 164 `.va` files and one data file (`ch09_table_model_2d.tbl`). **Seventy-eight
 of the 164 are `//! xfail`** — this is by a wide margin the most indebted
 chapter in the suite, and that ratio is the honest headline, not a footnote.
-Thirty-six fixtures carry `//! reject`; thirty-one of those thirty-six are
-*also* xfail, which is to say VerA currently accepts most of what this chapter
-forbids. The five rejects it does meet are `136`/`137` (`$bound_step`
-E0803/E0802), `138`/`139` (`$discontinuity` E0804/E0805) and `147`
-(§9.15 `$simparam` on an unknown name with no fallback, E0811).
+Thirty-six fixtures carry `//! reject`, and VerA still accepts most of what this
+chapter forbids. The rejects it does meet are `136`/`137` (`$bound_step`
+E0803/E0802), `138`/`139` (`$discontinuity` E0804/E0805), `147` (§9.15
+`$simparam` on an unknown name with no fallback, E0811), `161` (§9.4.3
+format/argument pairing, E0810) and all six §9.20 alias negatives `141`–`146`
+(E0812). The aggregate counts in this file predate those and are known stale; a
+single re-census is scheduled.
 
 Reading the table: **xfail** on a fixture means the file runs and fails, and the
 reason on that row is the defect. A row whose fixtures are *all* xfail is a
 section the suite states and the compiler does not meet — there is no passing
-evidence behind it. §9.4.2, §9.4.3, §9.5.1, §9.5.4.1, §9.5.4.2, §9.5.5, §9.5.6,
-§9.5.7, §9.5.8, §9.6, §9.8, §9.9, §9.13.1, §9.13.2, §9.16, §9.21, §9.21.1,
-§9.21.5, §9.22.x and §9.23.x are all in that state.
+evidence behind it. §9.5.1, §9.5.4.1, §9.5.5, §9.5.6, §9.5.7, §9.5.8, §9.6,
+§9.8, §9.9, §9.13.1, §9.13.2, §9.16, §9.22.x and
+§9.23.x are all in that state. §9.4.2, §9.4.3 and §9.5.4.2 left it when the
+string formatter and scanner landed; §9.21 and its five subclauses left it when
+the table interpolator did.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
@@ -31,8 +35,8 @@ evidence behind it. §9.4.2, §9.4.3, §9.5.1, §9.5.4.1, §9.5.4.2, §9.5.5, §
 | `s9.3` | how a task behaves across accepted vs. rejected solver iterations | — no fixture. Accept/reject is a kernel property the generated device cannot observe |
 | `s9.4` | display task family | — parent; carried by 9.4.1–9.4.3 below |
 | `s9.4.1` | `$strobe` `$display` `$write` `$monitor` `$debug` in the analog context | `01_display_strobe.va`, `02_display_display.va`, `03_display_write.va`, `04_display_monitor.va`, `05_display_debug.va` (each pins the argument *value*, since the transcript is not observable from inside the model); `06_display_formats.va` — **xfail**, *`%c` does not compile: `cg_display.zig` appendConv maps it to Zig verb `c` with `want=.int` and hands `std.fmt` an i64 where `{c}` takes a u8, so any `$display` carrying a Table 9-22 `%c` kills the generated testbench*; `152_display_radix_variants_analog_rejected.va` (`$displayb/h/o`, `$strobeb`, `$writeh`, `$monitorb`, `$monitoron/off`) — **xfail**, *no Table 9-1 analog-context restriction*; `161_display_argument_pairing_rejected.va` — **xfail**, *VerA does not check the `%` count in a format string against the argument list* |
-| `s9.4.2` | Table 9-21 escapes `\ddd` `\t` `\\` `\"` | `06_display_formats.va` — **xfail**, see above; nothing else carries a single-backslash escape outside a file-I/O path name |
-| `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va`, `161_…_rejected.va` — **all three xfail**. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and `void_tasks` lowers both halves to `S.con(0.0)` |
+| `s9.4.2` | Table 9-21 escapes `\ddd` `\t` `\\` `\"` | `06_display_formats.va` passes, but the escapes in it are a rendering a reader checks by eye — the two assertions it carries are the `%h`/`%o` round trips, not the escapes. Nothing else carries a single-backslash escape outside a file-I/O path name |
+| `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va` pass; `161_…_rejected.va` rejects at E0810. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and they are now real: the formatter writes into `zSBuf(<site>)` and `zScan` reads the digits back (`src/backend/str_kernels.zig`) |
 | `s9.4.4` | `%m` prints the hierarchical name and takes no argument | — no fixture cites it. `%m` appears in `06_display_formats.va`'s second `$display` and in `161`, both unasserted (a transcript is not a value), and `06` does not compile |
 | `s9.4.5` | `%s` prints ASCII codes as characters | — same: `%s` sits in `06`'s first `$display` and in `162`'s scan string, neither asserting the right-justification/leading-zero rule this subclause is actually about |
 | `s9.4.6` | no display output except `$debug` unless the iteration is accepted | — no fixture. `043_fdebug.va` quotes the rule in its header and does not test it; the harness runs one accepted solve |
@@ -42,10 +46,10 @@ evidence behind it. §9.4.2, §9.4.3, §9.5.1, §9.5.4.1, §9.5.4.2, §9.5.5, §
 | `s9.5.1.1` | reopening a write-mode file across analyses appends | — no fixture. Needs two analyses in one process, which the harness does not run |
 | `s9.5.1.2` | analog/digital descriptor sharing | — no fixture; mixed-signal runtime policy, no Verilog-A source form |
 | `s9.5.2` | `$fdisplay` `$fwrite` `$fstrobe` `$fmonitor` `$fdebug` | `040_fwrite.va`, `041_fstrobe.va`, `042_fmonitor.va`, `043_fdebug.va` pass — but each pins only the *argument value* handed to `%g`, never a byte in a file; `039_fdisplay.va` and `08_file_output.va` — **xfail**, *same `void_tasks` constant; `lower.zig:2365` excludes them from `isDisplayTask` so unlike `$display` they never reach `cg_display.zig` at all* |
-| `s9.5.3` | `$swrite` and `$sformat` | `044_swrite.va`, `045_sformat.va` pass on the argument value only; `06_display_formats.va` and `09_string_formatting.va` — **xfail**, *`$swrite`/`$sformat` lower to `S.con(0.0)`, so the destination string is never written* |
+| `s9.5.3` | `$swrite` and `$sformat` | `044_swrite.va`, `045_sformat.va` pass on the argument value only (their `text` is never read back); `06_display_formats.va` and `09_string_formatting.va` pass on the TEXT, by sending it back through `$sscanf` — lowering makes both writers an assignment to the named string variable, not a void call, so a formatter that wrote nothing would now fail them |
 | `s9.5.4` | files are readable only if opened `r`/`r+` | — no fixture; there is no descriptor to open in the wrong mode |
 | `s9.5.4.1` | `$fgets` | `046_fgets.va` — **xfail**, *`$fopen` answers 0 and `$fgets` reads nothing and returns 0* |
-| `s9.5.4.2` | `$fscanf` and `$sscanf` | `047_fscanf.va`, `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` — **all six xfail**. `048`/`162` isolate the formatter from the descriptor: they touch no filesystem, and *`$sscanf` still lowers to `S.con(0.0)`, returning 0 and never writing its output argument*. `047` notes that its missing-file half passes by accident |
+| `s9.5.4.2` | `$fscanf` and `$sscanf` | `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` pass — `$sscanf` is `zScan` (suppression `*`, maximum field width, early matching failure, EOF, and the ten conversion codes), and each output argument is its own assignment from a `$sscanf$<ty>` item call. `047_fscanf.va` remains **xfail**: it reads a DESCRIPTOR, which is the wall below, and its missing-file half passes by accident |
 | `s9.5.5` | `$ftell` `$fseek` `$rewind` | `049_ftell.va`, `050_fseek.va`, `051_rewind.va`, `11_file_position_status.va` — **all four xfail**, *every positioning answer is the same constant 0, so a moved and an unmoved pointer are indistinguishable* |
 | `s9.5.6` | `$fflush` | `052_fflush.va` — **xfail**, *no-op returning 0* |
 | `s9.5.7` | `$ferror` | `053_ferror.va` — **xfail**, *`$fopen` reports failure (fd 0) while `$ferror` simultaneously reports no error — a file that could not be opened raising none* |
@@ -71,17 +75,17 @@ evidence behind it. §9.4.2, §9.4.3, §9.5.1, §9.5.4.1, §9.5.4.2, §9.5.5, §
 | `s9.17` | analog kernel control family | — parent; carried by 9.17.1–9.17.3 |
 | `s9.17.1` | `$discontinuity`, degree `0` and `-1` | `24_discontinuity.va`; `138_discontinuity_arity_rejected.va` (E0804) and `139_discontinuity_nonconstant_rejected.va` (E0805) — **rejects VerA already meets** |
 | `s9.17.2` | `$bound_step` | `25_bound_step.va` (`//! analysis tran`); `136_bound_step_negative_rejected.va` (E0803) and `137_bound_step_arity_rejected.va` (E0802) — **rejects VerA already meets** |
-| `s9.17.3` | `$limit`, all three Syntax 9-12 forms | Forms one and two pass: `26_limit.va` (`$limit(V(p,n))`), `27_limit_named.va` (`$limit(V(p,n), "pnjlim", $vt, 0.7)`). Form three does not: `156_limit_user_function.va` — **xfail**, *an `analog_function_identifier` as the second argument is E0314 `unknown identifier`, because the name is looked up as a value rather than as the limiter* — and its negative `164_limit_user_function_output_arg_rejected.va` — **xfail**, *the same E0314 fires at the call site, so the "shall all be declared input" rule on the limiter's formals is never examined* |
+| `s9.17.3` | `$limit`, all three Syntax 9-12 forms | All three: `26_limit.va` (`$limit(V(p,n))`), `27_limit_named.va` (`$limit(V(p,n), "pnjlim", $vt, 0.7)`), `156_limit_user_function.va` (an `analog_function_identifier` is resolved as the limiter, not looked up as a value) and its negative `164_limit_user_function_output_arg_rejected.va` (E0814, "shall all be declared input"). The limiting REQUEST is declined for form three — §4.5.15 permits that, and the return is then the clause's converged answer, the probe itself; a non-identity limiter would be able to tell the difference |
 | `s9.18` | `$mfactor` `$xposition` `$yposition` `$angle` `$hflip` `$vflip` | `28_hierarchical_parameters.va` plus atomics `097`–`102`, one per name. `163_aliasparam_mfactor.va` — **xfail**, *`aliasparam m = $mfactor;` is E0208 `expected an identifier`, so §3.4.7's own printed example does not parse* |
 | `s9.19` | `$param_given` and `$port_connected` | `29_binding_detection.va`, `103_param_given.va` (overridden), `159_param_given_not_overridden.va` (the 0 direction, one deleted `//! param` line away), `165_param_given_override_equals_default.va` (override *equal to* the default is still an override — the input that separates a flag from a value comparison, and VerA now carries a real `__given` flag, `codegen.zig:867`), `104_port_connected.va` |
-| `s9.20` | `$analog_node_alias` / `$analog_port_alias` | `30_node_alias_calls.va`, `105_analog_node_alias.va`, `106_analog_port_alias.va` pass — see the note below on *why* they pass. Six negatives, **all xfail**: `141` (outside `analog initial`), `142` (first argument a port), `144` (non-constant string), `145` (duplicate target), `146` (inside a conditional) — *VerA lowers both functions to a constant 0 with no inspection of the call site, the arguments, the guard, or any other call* — and `143` (bit-select) — *`electrical [3:0] bus;` is E0208 at the declaration, so the §9.20 bit-select rule is never reached at all* |
-| `s9.21` | `$table_model` | `37_table_model.va` (file-backed, with `ch09_table_model_2d.tbl`), `131_table_model_array_control.va` (array-backed), `155_table_model_lrm_sample_set.va` — **all three xfail**, *E0801: VerA has no isoline interpolator; Table 9-18 marks `$table_model` analog-context Yes* |
-| `s9.21.1` | data source: file or real arrays | Both forms present and both **xfail**: `37` supplies `"ch09_table_model_2d.tbl"`, `131` supplies independent/dependent real arrays |
-| `s9.21.2` | control-string grammar | — the strings are in the source (`"1LL,1LL;1"` in `37`, `"1LL;1"` in `131`) but E0801 fires at the function name first, so no substring, dimension order or dependent selector is ever parsed |
-| `s9.21.3` | Table 9-32 example control strings | — same. `37`'s `"1LL,1LL;1"` is verbatim a Table 9-32 row; nothing reads it |
-| `s9.21.4` | closest-point, linear and cubic-spline interpolation | — no interpolation is performed anywhere in this folder. `155` is the fixture that *would* serve this row: it recomputes Figure 9-2's `f(3.5, 0.25) = 2.0` by hand from the printed twelve-row sample set under the default linear rule. It never runs |
+| `s9.20` | `$analog_node_alias` / `$analog_port_alias` | `30_node_alias_calls.va`, `105_analog_node_alias.va`, `106_analog_port_alias.va` pass — see the note below on *why* they pass. All six negatives now reject at E0812, one code for the clause's whole validity list: `141` (outside `analog initial`), `142` (first argument a port), `143` (bit select), `144` (non-constant string), `145` (target is another call's `analog_net_reference`), `146` (inside a conditional the simulation can move). All six are checked in `lower.zig` `checkAliasCall`, because every one of them is a property of the CALL — the block, the guard, the argument's shape — and none of a value. The topology edit itself is still not performed; see the note below |
+| `s9.21` | `$table_model` | `37_table_model.va` (file-backed, with `ch09_table_model_2d.tbl`), `131_table_model_array_control.va` (array-backed), `155_table_model_lrm_sample_set.va` — **all three green**. The isoline interpolator is `src/backend/table_kernels.zig`, emitted into the device like the §4.5.11 filter kernels; the call is rewritten into a self-describing one by `Lower.lowerTableModel`, which is also where a scheme VerA does not implement is refused (E0815) |
+| `s9.21.1` | data source: file or real arrays | Both forms present and both green: `37` supplies `"ch09_table_model_2d.tbl"` (read at COMPILE time and emitted as constants — "The state of the data source is captured on the first call ... Any change after this point is ignored" is what makes that exact, and a residual has no business re-reading a file per Newton iteration), `131` supplies independent/dependent real arrays. The clause's sort-into-isolines sentence is honoured (`zTabSort`), pinned by the reversed-row row of the codegen test |
+| `s9.21.2` | control-string grammar | `37`'s `"1LL,1LL;1"` and `131`'s `"1LL;1"` are parsed by `Lower.parseTableCtl`: per-dimension sub-strings outermost-first, the one-character and two-character extrapolation forms, the defaults for an absent character or an absent string, and the dependent selector. Table 9-30's `D`/`2`/`3`/`I` and Table 9-31's `E` are refused at E0815, not approximated. No fixture pins a refusal — the five malformed strings are in the CLI checks only |
+| `s9.21.3` | Table 9-32 example control strings | `37`'s `"1LL,1LL;1"` is verbatim the table's fourth row and is now read as such; `131`'s `"1LL;1"` is that row in one dimension. The `"D,1,3"`, `"I,..."` and `"3,D,I,1;3"` rows name schemes VerA refuses |
+| `s9.21.4` | closest-point, linear and cubic-spline interpolation | LINEAR only, and the other three are refused rather than substituted. `155` serves the linear half: it recomputes Figure 9-2's `f(3.5, 0.25) = 2.0` by hand from the printed twelve-row sample set under the default rule, and that is the number it now reads back. Both Table 9-31 extrapolations work, per end, which the codegen test pins with an asymmetric `"CL"` |
 | `fn9.21.4-1` | bibliography footnote for cubic splines | — informative; no language rule |
-| `s9.21.5` | the LRM's own worked example | `155_table_model_lrm_sample_set.va` — **xfail**, same E0801. This is the only place in the chapter where the LRM supplies its own oracle (data, query point *and* answer), and it is the only place the compiler cannot reach |
+| `s9.21.5` | the LRM's own worked example | `155_table_model_lrm_sample_set.va` — green. This is the only place in the chapter where the LRM supplies its own oracle (data, query point *and* answer), and the compiler now agrees with it |
 | `s9.22` | connectmodule driver access | `31_driver_access.va` (`$driver_count`, `$driver_state`, `$driver_strength` in an ordinary module) and atomics `107`, `109`–`114` — **all xfail**, *VerA compiles one flat analog device and lowers the whole §9.22/§9.23 family to a constant (`codegen.zig` `driver_queries`) instead of refusing the call site*. Note the numbering gap at `108`: the spec's own text says "$receiver_count is not a subclause of 9.22 in Verilog-AMS 2.4", so no fixture claims one |
 | `s9.22.1` | `$driver_count` | `107_driver_count_connectmodule_rejected.va` (+ `31`) — **xfail**, as above |
 | `s9.22.2` | `$driver_state` | `109_driver_state_connectmodule_rejected.va` (+ `31`) — **xfail** |
@@ -101,15 +105,19 @@ Eighty xfails is not eighty defects. It is four walls and a short tail —
 17 + 25 + 11 + 19 + 8 = 80 — and it is worth knowing which wall a row is behind
 before reading it as debt.
 
-**No descriptor table (17 fixtures).** `codegen.zig` `void_tasks` lowers every
-§9.5 name — `$fopen`, `$fclose`, the five output tasks, `$fgets`, `$fscanf`,
-`$sscanf`, `$swrite`, `$sformat`, `$ftell`, `$fseek`, `$rewind`, `$fflush`,
-`$ferror`, `$feof` — to the constant `S.con(0.0)`. `lower.zig:2362` writes the
-reason down: the family "needs a descriptor the compiled device has no way to
-own". One change closes §9.5.1 through §9.5.8 at once. Note that `048_sscanf.va`
-and `162_sscanf_conversion_rules.va` are *behind a different wall wearing the
-same coat*: they touch no filesystem, so what they need is a formatter, not a
-descriptor table, and they would still fail the day descriptors land.
+**No descriptor table.** `codegen.zig` `void_tasks` lowers every §9.5 name that
+needs a FILE — `$fopen`, `$fclose`, the five output tasks, `$fgets`, `$fscanf`,
+`$ftell`, `$fseek`, `$rewind`, `$fflush`, `$ferror`, `$feof` — to the constant
+`S.con(0.0)`. `lower.zig` writes the reason down: the family "needs a descriptor
+the compiled device has no way to own". One change closes §9.5.1 through §9.5.8
+at once.
+
+The three names that need no descriptor are OUT of this wall and have landed:
+`$swrite`, `$sformat` and `$sscanf` write into and read out of a string
+variable, so `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09` and
+`10_file_read_scan.va` are green — the note that used to sit here, that they
+were "behind a different wall wearing the same coat", was right, and the wall
+they were behind was the formatter.
 
 **No RNG (25 fixtures).** `$random`, `$arandom`, seven `$dist_*` and six
 `$rdist_*` are all E0801 at the function name. Because the refusal is at the
@@ -126,13 +134,15 @@ cheapest wall in the chapter: it is a lookup table and a diagnostic, not a
 runtime feature, and it retires eleven rows.
 
 **No hierarchy (19 fixtures).** VerA compiles one flat module. That takes out
-§9.22/§9.23 wholesale (`31`, `107`, `109`–`114`, `38`), `$simprobe` (`36`),
-`$table_model`'s three (`37`, `131`, `155`, which need an interpolator rather
-than hierarchy but are equally out of reach), and the six §9.20 negatives, whose
-alias functions return a constant 0 without looking at anything.
+§9.22/§9.23 wholesale (`31`, `107`, `109`–`114`, `38`) and `$simprobe` (`36`).
+`$table_model`'s three (`37`, `131`, `155`) used to be counted here, on the
+honest note that they needed an interpolator rather than hierarchy; they now
+have one. The six §9.20 negatives used to be
+counted here; they are not hierarchy at all — every one of their rules is about
+the CALL — and they now reject at E0812.
 
-The tail is eight single-cause fixtures: `06` (`%c` type error in
-`cg_display.zig`), `092`/`093` (naive `log1p`/`expm1`), `156`/`164`
+The tail is a handful of single-cause fixtures: `092`/`093` (naive
+`log1p`/`expm1`), `156`/`164`
 (`$limit` form three), `157` (`` `timescale `` not threaded into `$simparam`),
 `147` (no missing-fallback diagnostic) and `163` (`aliasparam` will not take a
 system function). Each is a single edit in a single file.
@@ -141,19 +151,24 @@ system function). Each is a single edit in a single file.
 
 **The file-output atomics.** `040_fwrite.va`, `041_fstrobe.va`,
 `042_fmonitor.va`, `043_fdebug.va`, `044_swrite.va` and `045_sformat.va` are not
-xfail, and they call `$fopen` on a descriptor that is a constant zero. They pass
-because what each one asserts is the *argument value* handed to the format —
-`V(p,n)` at the operating point — and never a byte reaching a file or a string.
-That is a deliberate, stated choice in each header, not an oversight, but it
-means §9.5.2 and §9.5.3 have six green fixtures and no evidence that either task
-produces output.
+xfail, and the four file ones call `$fopen` on a descriptor that is a constant
+zero. They pass because what each one asserts is the *argument value* handed to
+the format — `V(p,n)` at the operating point — and never a byte reaching a file.
+That is a deliberate, stated choice in each header, not an oversight, so §9.5.2
+still has four green fixtures and no evidence that the task produces output.
+§9.5.3 is no longer in that position: `044`/`045` still assert only the argument,
+but `06` and `09` read the formatted TEXT back through `$sscanf`.
 
-**The node-alias positives.** `30_node_alias_calls.va`, `105` and `106` pass
-while `141`–`146` fail on the same lowering. The reason is that all three
+**The node-alias positives.** `30_node_alias_calls.va`, `105` and `106` pass,
+and `141`–`146` now reject, but the positives still pass for a reason narrower
+than the rule. All three
 positives use hierarchical reference strings (`"$root.top.n"`) that cannot
 resolve in a single-module compilation, so §9.20's "shall be zero otherwise"
-answer *is* zero — which is also what VerA's unconditional constant-0 stub
-returns. The right answer for the wrong reason. `30`'s own header says so, and
+answer *is* zero — which is also what VerA's constant-0 return gives. The right
+answer for the wrong reason, and the reason the matrix-position merge itself is
+not implemented: a flat elaboration has no instance hierarchy for a
+`hierarchical_reference_string` to resolve INTO, so there is no second position
+to merge with and no fixture that can observe one. `30`'s own header says so, and
 explicitly disclaims the last-call-wins precedence rule that its two sequential
 assignments might be misread as testing.
 

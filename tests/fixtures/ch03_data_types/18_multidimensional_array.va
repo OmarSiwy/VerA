@@ -11,7 +11,6 @@
 //
 //! lrm 3.2
 //! bias V(p) = 1.0, V(n) = 0.0
-//! xfail VerA's parser takes only one dimension in an array declaration: the second `[` is E0207
 `include "check.vh"
 module ch03_multidimensional_array(p, n);
     inout p, n;

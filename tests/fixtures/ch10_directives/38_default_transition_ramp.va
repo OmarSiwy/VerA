@@ -53,7 +53,6 @@
 //! time 0, 1n, 2n, 3n, 4n
 //! analysis tran
 //! print none
-//! xfail VerA discards `default_transition (preprocessor marks it .ignored) and implements transition() as a first-order lag, not the §4.5.8 linear ramp
 `default_transition 4n
 `include "check.vh"
 module ch10_default_transition_ramp(in, n);

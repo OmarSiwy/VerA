@@ -20,12 +20,14 @@
 // — so a body guarded on `initial_step` runs once, at the first point, and
 // never again.
 //
-// KNOWN GAP — this fails today. `src/ir/lower.zig` lowers an `analog initial`
-// block as its body guarded on a synthetic `initial_step`, so `seeded` is
-// computed from `gain` as it stood at the first sweep point and then frozen.
+// THE GAP THIS FIXTURE OPENED. `src/ir/lower.zig` used to lower an `analog
+// initial` block as its body guarded on a synthetic `initial_step`, so `seeded`
+// was computed from `gain` as it stood at the first sweep point and then frozen.
 // `//! psweep` below changes `gain` at every sub-task, and `gain` IS referenced
 // from the analog initial block, which is exactly the condition §5.2.1 attaches
-// its "shall" to.
+// its "shall" to. The guard is now its own predicate (`analog_initial`, answered
+// from `Instance.is_analog_initial`), set by the harness on the first evaluation
+// of every sub-task rather than of the whole analysis.
 //
 // WHY THE SWEEP IS OVER A PARAMETER AND NOT A NODE. §5.2.1 forbids access
 // functions inside an analog initial block ("shall not contain ... statements
@@ -40,22 +42,23 @@
 //   gain = 4.0  ->  40.0
 // All three are exact in binary.
 //
-// WHAT VerA ACTUALLY ANSWERS, which is worse than a stale value: 10 at the
-// first sub-task, then 0 at both of the others. Not the seed frozen at its
+// WHAT VerA USED TO ANSWER, which is worse than a stale value: 10 at the first
+// sub-task, then 0 at both of the others. Not the seed frozen at its
 // first-sub-task value — the DECLARATION default of `seeded`. Two things
-// compound. The block is guarded on `initial_step`, so it does not re-run; and
+// compounded. The block was guarded on `initial_step`, so it did not re-run; and
 // a module variable is re-initialised from its declaration at the top of every
-// evaluation, so with nothing to re-seed it the value collapses to 0 rather
-// than persisting. A reader who assumed "stale but plausible" would be wrong in
-// a way that matters: a model doing `analog initial` setup on a sweep gets zero,
-// not a slightly outdated number, and zero is much likelier to divide.
+// evaluation, so with nothing to re-seed it the value collapsed to 0 rather than
+// persisting. A reader who assumed "stale but plausible" would have been wrong in
+// a way that matters: a model doing `analog initial` setup on a sweep got zero,
+// not a slightly outdated number, and zero is much likelier to divide. The second
+// half of that is still true and is what makes the re-execution load-bearing
+// rather than an optimization.
 //
 //! lrm 5.2.1
 //! lrm 8.2
 //! psweep gain = 1.0, 2.0, 4.0
 //! analysis dc
 //! print none
-//! xfail VerA lowers `analog initial` as its body guarded on a synthetic initial_step (src/ir/lower.zig), so it never re-executes per dc-sweep sub-task and `seeded` collapses to its declaration default 0.0
 `include "check.vh"
 module ch8_analog_initial_psweep(p);
   inout p;

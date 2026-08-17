@@ -12,11 +12,12 @@
 // 156_limit_user_function.va is the same function with all three formals
 // declared input, and is legal.
 //
-// A reject, so there is nothing to run and no `want` to write.
+// A reject, so there is nothing to run and no `want` to write. The pin is E0814,
+// the code the rule got when the third form landed; the sentence itself is in the
+// diagnostic's note.
 //
 //! lrm 9.17.3
-//! reject shall all be declared input
-//! xfail VerA does not implement Syntax 9-12's third form at all: the analog_function_identifier is E0314 `unknown identifier` at the call site, so the declaration of its formals is never examined
+//! reject E0814
 module ch09_limit_user_function_output_arg_rejected(p, n);
   inout p, n; electrical p, n;
   real limited;

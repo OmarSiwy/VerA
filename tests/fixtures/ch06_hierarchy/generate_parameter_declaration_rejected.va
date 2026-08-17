@@ -24,13 +24,14 @@
 // block does not reach the rule because the port list it would have to name is not
 // in scope. So one declaration is the whole fixture.
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to name.
-// `DiagnosticsReported` is the weakest form that still demands a rejection;
-// tighten it to the E-code the day one exists.
+// E0229 is that rule, and it is deliberately keyed on the `parameter` keyword
+// alone: `localparam` in the same position is the form the grammar KEEPS, so
+// gating both would refuse generate_implicit_localparam.va, which the LRM makes
+// legal. The gate also covers a generate REGION, which `module_or_generate_item`
+// leaves parameters out of on exactly the same terms.
 //
 //! lrm 6.6
-//! reject DiagnosticsReported
-//! xfail VerA accepts a parameter declaration inside a generate block; Syntax 6-8 has no `parameter_declaration` in `module_or_generate_item`
+//! reject E0229
 module ch6_generate_parameter_declaration(p);
   inout p; electrical p;
   generate

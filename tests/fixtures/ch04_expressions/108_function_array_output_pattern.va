@@ -25,7 +25,6 @@
 //
 //! lrm 4.7.2.3
 //! bias V(p) = 0.75
-//! xfail VerA's parser has no array formals in an analog function: `output [0:1] out` and the `'{a,b}` assignment-pattern actual are both ParseErrors
 `include "check.vh"
 module ch4_fn_array_out(p);
   inout p;

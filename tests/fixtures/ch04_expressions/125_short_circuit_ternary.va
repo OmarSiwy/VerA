@@ -19,7 +19,6 @@
 //
 //! lrm 4.2.3
 //! lrm 4.2.12
-//! xfail VerA evaluates both arms of `?:` and selects afterwards, so a call in the unselected arm still runs its side effect: `0 ? bump(e) : 0` leaves e at 1 instead of 0
 `include "check.vh"
 module ch04_short_circuit_ternary(p, n);
     inout p, n;

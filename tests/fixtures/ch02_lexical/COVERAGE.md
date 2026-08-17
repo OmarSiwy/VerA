@@ -33,13 +33,13 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 | `s2-8-2` | keywords are lowercase-only predefined simple identifiers; an escaped keyword is not a keyword | `26_escaped_keyword.va` (`real \analog ;`), `59_uppercase_keyword_is_identifier.va` (`REAL`, `MODULE`, `BEGIN` as three distinct reals summing to 7.0). Annex B's inventory is `annex_b_keywords`, not here |
 | `s2-8-3` | `$` introduces a system name; the `$` may not be followed by white space and may not be escaped | `09_system_identifiers.va` (`//! temp 300`; `$temperature` exact, `$vt` against the NIST1998 pair in a 1e-4 band), `18_system_whitespace_rejected.va` (`$ vt`), `60_bare_dollar_rejected.va` (the character class after `$` is mandatory), `48_escaped_system_identifier_rejected.va` |
 | `s2-8-4` | the grave accent introduces a compiler directive; a directive takes effect when read and holds for the rest of the compilation | `10_compiler_directive_macro.va` (`` `define `` with an argument; the argument is a sum so a dropped parameter paren shows as 5.0 instead of 6.0). `01_whitespace_comments.va` proves the complement — a directive written inside either comment form is comment text — but cites 2.4 for it, which is where that sentence lives |
-| `s2-9` | Syntax 2-4; where an attribute may appear; default value 1; last duplicate wins; no nesting; value is a constant expression | `11_attributes.va` (module, port, discipline and parameter prefixes; the decorated parameter still holds `1m`), `20_duplicate_attributes.va` (repeated name is legal and inert), `29_attribute_default_and_multiple.va` (valueless, `=1`, `=0` in one instance), `31_analog_statement_attributes.va` (statement prefix), `21_operator_attribute.va` (Example 6, suffix on a binary operator), `33_conditional_attribute.va` (Example 8, both arms of `?:`), `30_nested_attribute_rejected.va` (`//! reject E0205`), `54_attribute_illegal_placement_rejected.va` (`parameter real (* q *) x` — the bound on the two parser widenings). Debt: `32_function_call_attribute.va` (Example 7) and `53_attribute_value_not_constant_rejected.va`, both **`//! xfail`** |
+| `s2-9` | Syntax 2-4; where an attribute may appear; default value 1; last duplicate wins; no nesting; value is a constant expression | `11_attributes.va` (module, port, discipline and parameter prefixes; the decorated parameter still holds `1m`), `20_duplicate_attributes.va` (repeated name is legal and inert), `29_attribute_default_and_multiple.va` (valueless, `=1`, `=0` in one instance), `31_analog_statement_attributes.va` (statement prefix), `21_operator_attribute.va` (Example 6, suffix on a binary operator), `33_conditional_attribute.va` (Example 8, both arms of `?:`), `30_nested_attribute_rejected.va` (E0357 — the nesting ban, now the rule rather than a desynchronized token skip), `53_attribute_value_not_constant_rejected.va` (E0357 — the same code, the same sentence pair, from the constant-expression side), `54_attribute_illegal_placement_rejected.va` (`parameter real (* q *) x` — the bound on the two parser widenings). Debt: `32_function_call_attribute.va` (Example 7), **`//! xfail`** |
 | `s2-9-1` | Syntax 2-5 … 2-10, the exact `{ attribute_instance }` slots | `55_attribute_block_item_and_function_port.va` (Syntax 2-8 / A.2.8: attributed `real` and `parameter` inside a named analog block, attributed `real` inside an analog function body — two places nothing else in this chapter reaches), `30_nested_attribute_rejected.va` (Syntax 2-7's `{ attribute_instance } parameter_declaration ;` slot, which is what makes the nesting the only fault in the file). Syntax 2-9 and 2-10 have no fixture — see below |
-| `s2-9-2` | `desc`, `units`, `op`, `multiplicity` and their value domains | `11_attributes.va` supplies all four names with in-domain values on one parameter and proves the declaration is untouched (it cites 2.9, not 2.9.2). The domain rule itself is `52_standard_attribute_domain_rejected.va` — **`//! xfail`**. The `$mfactor` reporting behaviour the four attributes control is a simulator output, not anything a generated device exposes |
+| `s2-9-2` | `desc`, `units`, `op`, `multiplicity` and their value domains | `11_attributes.va` supplies all four names with in-domain values on one parameter and proves the declaration is untouched (it cites 2.9, not 2.9.2). The domain rule itself is `52_standard_attribute_domain_rejected.va` (E0358), which covers all four names — a non-string `desc`, and an `op`/`multiplicity` outside the listed sets. The `$mfactor` reporting behaviour the four attributes control is a simulator output, not anything a generated device exposes |
 
 ## The xfail ledger
 
-Six of the sixty fixtures state a rule VerA does not meet. Each names a file, so
+Four of the sixty fixtures state a rule VerA does not meet. Each names a file, so
 the row disappears the day the defect does. Reasons verbatim from the headers.
 
 | Fixture | Section | Reason |
@@ -48,23 +48,23 @@ the row disappears the day the defect does. Reasons verbatim from the headers.
 | `36_based_number_digit_whitespace.va` | `s2-6-1` | VerA's lexer scans a based number as one token, so white space between the base format and the digits splits it and the digits are then an invalid token (E0209) (`src/frontend/lexer.zig`) |
 | `37_macro_based_number_tokens.va` | `s2-6-1` (with 10.3) | VerA lexes a based number before macro expansion can rejoin the three tokens, so ``8 `BASE `DIGITS`` stops at E0207 "expected `;`" on the expanded `'h` (`src/frontend/lexer.zig`) |
 | `51_zero_size_rejected.va` | `s2-6-1` | VerA accepts a zero size constant: width 0 is the lexer's unsized sentinel, so `0'b1` is read as an unsized `'b1` (`src/frontend/lexer.zig`) |
-| `52_standard_attribute_domain_rejected.va` | `s2-9-2` | VerA does not check the value domain of the 2.9.2 standard attributes; `op="maybe"`, `multiplicity="sideways"` and `desc=7` all compile with no diagnostic |
-| `53_attribute_value_not_constant_rejected.va` | `s2-9` | VerA does not require an attribute value to be a constant expression; `(* q = z *)` with `real z` in scope compiles with no diagnostic |
 
-Three of the six are one defect wearing three hats: `36`, `37` and `51` are all
+The two attribute rows that used to close this table are gone: attribute values are
+parsed as expressions and collected into the AST, so §2.9's constant-expression rule
+is E0357 and §2.9.2's four value domains are E0358.
+
+Three of the four are one defect wearing three hats: `36`, `37` and `51` are all
 `src/frontend/lexer.zig` scanning a based number as a single indivisible token. 2.6.1
 says the opposite in the same sentence — "composed of up to three tokens … It shall
 be legal to macro substitute these three tokens" — so a fix that splits the scan
 retires all three rows at once, and `51`'s zero-size acceptance falls out with it
 because width 0 stops being the unsized sentinel.
 
-The other four split two-and-two by direction. `08` and `32` are constructs VerA
-fails to *accept*; `52` and `53` are rules VerA fails to *enforce*. The two
-enforcement rows deliberately pin the phase label `DiagnosticsReported` and not a
-code: both constructs parse perfectly, so no existing code can ever fire on them,
-and a code pinned on an impossible diagnostic would freeze the fixture at XFAIL
-forever. `DiagnosticsReported` matches anything, so the day either check lands the
-file XPASSes and fails loudly, demanding its xfail line be deleted.
+The remaining row is `32`, a construct VerA fails to *accept*: A.8.2's
+`{ attribute_instance }` slot between a function name and its argument list.
+Every ENFORCEMENT row is gone — `52` and `53` were the two, and both pinned the
+phase label `DiagnosticsReported` rather than a code precisely so that they could
+be retargeted the day one existed; they now pin E0358 and E0357.
 
 ## What is not covered
 

@@ -33,7 +33,6 @@
 //! lrm 5.4.2.2
 //! lrm 5.6.1
 //! sweep V(p) = 0.75, 0.0, -2.5
-//! xfail VerA reads I(p,n) on a flow-SOURCE branch as 0 instead of the retained contributed value (§5.4.2.2); the read is lowered as a branch-flow unknown that only a potential source frees, so it stays at its initial 0 at every sweep point
 `include "check.vh"
 module ch01_current_source(p, n);
     inout p, n;

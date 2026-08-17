@@ -55,7 +55,6 @@
 //! lrm C.2
 //! lrm C.7
 //! lrm 5.10.4
-//! xfail VerA does not implement named events: `event tick;` is E0203, `-> tick` is E0209, `@(tick)` is E0705
 `include "check.vh"
 module annex_c_named_event_in_subset(p);
     inout p;

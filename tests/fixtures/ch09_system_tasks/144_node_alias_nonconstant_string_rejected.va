@@ -18,7 +18,6 @@
 //
 //! lrm 9.20
 //! reject hierarchical_reference_string
-//! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) without checking that the second argument is a constant string
 module ch09_node_alias_nonconstant_string_rejected(p, n);
   inout p, n; electrical p, n;
   electrical local_node; integer status; string ref_str;

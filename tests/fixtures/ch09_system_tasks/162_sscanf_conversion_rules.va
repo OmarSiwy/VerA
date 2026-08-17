@@ -33,7 +33,6 @@
 // none of it depends on run order.
 //
 //! lrm 9.5.4.2
-//! xfail VerA has no string-scanning surface: codegen.zig `void_tasks` lowers $sscanf to the constant `S.con(0.0)`, so every call returns 0 and no output argument is ever written
 `include "check.vh"
 module ch09_sscanf_conversion_rules(p, n);
   inout p, n; electrical p, n;

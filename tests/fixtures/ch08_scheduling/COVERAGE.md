@@ -19,7 +19,7 @@ its construct belongs to, and it is not credited as such below.
 | HTML id | Rule | Fixtures |
 |---|---|---|
 | `s8-1` | analog macro-process = nodes solved together, read as one branch | `analog_macro_process.va` (`//! lrm 8.1`) |
-| `s8-2` | elaboration, declaration assignments, then `analog initial`, then the cycle | `declaration_assignment_order.va` (decl-assign before `analog initial`), `analog_initial_order.va` (`analog initial` before the ordinary block), `elaboration_parameter_sweep.va` (derived parameter re-elaborated per sweep sub-task), `analog_initial_parameter_sweep.va` — **`//! xfail`** |
+| `s8-2` | elaboration, declaration assignments, then `analog initial`, then the cycle | `declaration_assignment_order.va` (decl-assign before `analog initial`), `analog_initial_order.va` (`analog initial` before the ordinary block), `elaboration_parameter_sweep.va` (derived parameter re-elaborated per sweep sub-task), `analog_initial_parameter_sweep.va` (green: the block re-executes per sub-task, off its own `Instance.is_analog_initial` flag rather than `initial_step`) |
 | `s8-3` | iterative solve of the nodal equations | parent summary; carried entirely by 8.3.1–8.3.3 below |
 | `s8-3-1` | `f(v,t) = dq/dt + i(v,t) = 0`, KFL row per node | `static_nodal.va` (static half), `dynamic_nodal.va` (dynamic half), `multi_branch_kfl.va` (three branches, rows sum to zero), `multiple_analog_blocks.va` (two blocks summed into one row), `integrator_state.va` |
 | `s8-3-2` | time derivative replaced by a finite difference over discrete points | `transient_derivative.va` (`//! analysis tran`, four points, constant history); `dynamic_nodal.va` pins only the dc corner where 4.5.3 zeroes `ddt` |
@@ -49,13 +49,17 @@ its construct belongs to, and it is not credited as such below.
 
 ## The xfail ledger
 
-Three fixtures in this folder run and fail. Each names a concrete defect with a
-file, so the row disappears the day the defect does.
+One fixture in this folder runs and fails. It names a concrete defect with a
+file, so the row disappears the day the defect does. `above_initial_event.va`
+used to sit here for §5.10.3.2 and does not any more: `above()` is edge-
+triggered now, and the clause's initialisation case is the `__prev = 0.0` the
+history field starts at. `analog_initial_parameter_sweep.va` used to sit here for
+§5.2.1's "shall be re-executed" and does not any more: the `analog initial` guard
+is its own predicate, set on the first evaluation of every sub-task, where
+`initial_step` is Table 5-1's first point of the whole analysis.
 
 | Fixture | Section it would serve | Reason |
 |---|---|---|
-| `analog_initial_parameter_sweep.va` | `s8-2` (with 5.2.1) | `src/ir/lower.zig` lowers `analog initial` as its body guarded on a synthetic `initial_step`, so the block never re-executes per dc-sweep sub-task. 5.2.1 says it *shall* re-execute when a parameter it reads changes. VerA answers `seeded = 10` at the first sub-task and then **0** — the declaration default, not a stale value — because module variables are re-initialised from their declarations each evaluation and nothing re-seeds them. |
-| `above_initial_event.va` | none in this chapter (`//! lrm 5.10.3.2`) | `src/backend/codegen.zig` lowers `above()` as a stateless level test (`if (expr.val() > 0.0)`), so it re-fires at every solution instead of only on an upward zero crossing. The latch tracks `V(p)` down to 0.25 at t = 1 ns where a conformant tool holds 0.75. |
 | `switch_primitive_unsupported.va` | none (`//! lrm A.4.1`, `C.8`) | VerA rejects gate/switch primitive instantiation with E0205 — it is a flat single-module compiler with no instance or primitive instantiation at all. A.4.1 admits `tran`, so a conforming Verilog-A compiler accepts the source; the earlier `//! reject E0205` form of this file had the polarity inverted. |
 
 ## Fixtures in this folder that cite Chapter 5, not Chapter 8
@@ -68,7 +72,7 @@ above:
 - `analog_event.va` (`5.10.3.1`) — `cross()` is silent in dc.
 - `cross_wakeup.va` (`5.10.3.1`) — same, with explicit `time_tol`/`expr_tol`; the timestep control it names is a transient service and is not exercised at a dc operating point.
 - `event_state.va` (`5.10.2`, `5.10.1`) — `initial_step` carries an or-list at the dc point.
-- `above_initial_event.va` (`5.10.3.2`) — see the ledger.
+- `above_initial_event.va` (`5.10.3.2`) — `above()` fires at the initial condition preceding a transient and the latch then holds.
 
 `ch05_analog_behavior/` already holds `ch05_analog_behavior/event_cross.va`,
 `ch05_analog_behavior/event_timer.va`, `ch05_analog_behavior/event_above.va`,

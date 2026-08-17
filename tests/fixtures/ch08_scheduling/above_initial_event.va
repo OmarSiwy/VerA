@@ -43,7 +43,6 @@
 //! time 0, 1n
 //! bias V(c) = 0.9
 //! wave V(p) = 0.75, 0.25
-//! xfail VerA lowers above() as a stateless level test (`if (expr.val() > 0.0)`, src/backend/codegen.zig), so it re-fires at every solution instead of only on an upward zero crossing, and sample follows V(p) down to 0.25
 `include "check.vh"
 module ch8_above(p, c);
   inout p, c; electrical p, c; real sample;

@@ -15,7 +15,6 @@
 //
 //! lrm 9.20
 //! reject analog_net_reference to be a port
-//! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) without checking the first argument
 module ch09_node_alias_port_reference_rejected(p, n);
   inout p, n; electrical p, n;
   integer status;

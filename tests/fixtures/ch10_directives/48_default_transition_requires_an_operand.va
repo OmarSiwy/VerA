@@ -18,16 +18,16 @@
 // stops at the first bad directive will not do however correctly it
 // implements them both.
 //
-// A substring rather than a code because VerA has no code for this rule yet.
-// It is the directive's own spelling, which is weaker than the term-of-art 45
-// can use: any diagnostic quoting the offending line satisfies it. That is
-// tolerable only because the bare directive is the sole defect in the file, so
-// there is nothing else here for a diagnostic to be quoting it about. Replace
-// it with a code when the check lands.
+// This rejected on the directive's own spelling as a SUBSTRING while VerA had
+// no code for the rule — any diagnostic quoting the offending line satisfied
+// it, which is weaker than the term-of-art 45 can use, and was tolerable only
+// because the bare directive is the sole defect in the file. E0129 is that code
+// now ("malformed `default_transition directive", the §10.3 sibling of 45's
+// E0127), so the fixture pins WHICH rule fired instead of which words the
+// message happened to contain.
 //
 //! lrm 10.3
-//! reject default_transition
-//! xfail VerA consumes `default_transition to end of line without parsing its operand (preprocessor.zig marks it .ignored), so the operand-less form is accepted silently
+//! reject E0129
 `default_transition
 module ch10_default_transition_requires_an_operand(p, n);
   inout p, n; electrical p, n;

@@ -35,7 +35,6 @@
 //! lrm 5.6.1.2
 //! lrm 5.4.2.2
 //! bias V(p) = 1.0, V(n) = 0.2, V(control) = 0.5
-//! xfail VerA reads I(p,n) on a flow-SOURCE branch as 0 instead of the retained accumulated value (§5.4.2.2): the read is lowered as a branch-flow unknown that only a potential source frees, so it stays at its initial 0 — the same gap 07_current_source.va pins for a single contribution
 `include "check.vh"
 module ch01_kirchhoff_flow_sum(p, n, control);
     inout p, n, control;

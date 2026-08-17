@@ -291,9 +291,10 @@ fn pipeline(
 ) Error!CompileResult {
     var prelude_len: u32 = 0;
     var defaults: []const Preprocessor.DefaultDiscipline = &.{};
+    var transitions: []const Preprocessor.DefaultTransition = &.{};
     var timescale: ?Preprocessor.Timescale = null;
-    const text = try preprocess(gpa, arena_state, source, opts, bag, &prelude_len, &defaults, &timescale);
-    return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, timescale);
+    const text = try preprocess(gpa, arena_state, source, opts, bag, &prelude_len, &defaults, &transitions, &timescale);
+    return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, transitions, timescale);
 }
 
 /// Hand the bag to the caller, detached from the compilation arena. Called on
@@ -354,6 +355,7 @@ fn preprocess(
     bag: *diag.Bag,
     prelude_len: *u32,
     defaults: *[]const Preprocessor.DefaultDiscipline,
+    transitions: *[]const Preprocessor.DefaultTransition,
     timescale: *?Preprocessor.Timescale,
 ) Error![]const u8 {
     _ = gpa;
@@ -364,6 +366,7 @@ fn preprocess(
         .std_defs = opts.std_defs,
         .prelude_len = prelude_len,
         .defaults = defaults,
+        .transitions = transitions,
         .timescale = timescale,
         .bag = bag,
     }) catch |err| switch (err) {
@@ -389,6 +392,7 @@ fn compileInArena(
     opts: Options,
     bag: *diag.Bag,
     defaults: []const Preprocessor.DefaultDiscipline,
+    transitions: []const Preprocessor.DefaultTransition,
     timescale: ?Preprocessor.Timescale,
 ) Error!CompileResult {
     const arena = arena_state.allocator();
@@ -421,7 +425,9 @@ fn compileInArena(
     const lower = try arena.create(Lower);
     lower.* = Lower.init(arena, mir, file, text, starts, bag);
     lower.default_disciplines = defaults;
+    lower.default_transitions = transitions;
     lower.timescale = timescale;
+    lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
     lower.lowerFile() catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.NoModule => {
@@ -649,8 +655,9 @@ pub const Compilation = struct {
         bag.levels = o.lint;
         var prelude_len: u32 = 0;
         var defaults: []const Preprocessor.DefaultDiscipline = &.{};
+        var transitions: []const Preprocessor.DefaultTransition = &.{};
         var timescale: ?Preprocessor.Timescale = null;
-        const text = preprocess(self.gpa, arena_state, source, o, &bag, &prelude_len, &defaults, &timescale) catch |err| {
+        const text = preprocess(self.gpa, arena_state, source, o, &bag, &prelude_len, &defaults, &transitions, &timescale) catch |err| {
             try finish(self.gpa, o, &bag);
             freeArena(self.gpa, arena_state);
             return err;
@@ -687,7 +694,7 @@ pub const Compilation = struct {
         self.units.items(.result)[idx] = null;
         self.units.items(.generated)[idx] = "";
 
-        var res = compileInArena(self.gpa, arena_state, text, target, o, &bag, defaults, timescale) catch |err| {
+        var res = compileInArena(self.gpa, arena_state, text, target, o, &bag, defaults, transitions, timescale) catch |err| {
             try finish(self.gpa, o, &bag);
             freeArena(self.gpa, arena_state);
             return err;

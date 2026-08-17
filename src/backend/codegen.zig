@@ -654,7 +654,13 @@ pub const Gen = struct {
         const hist = self.usesOp(.absdelay);
         const filt = self.usesOp(.laplace) or self.usesOp(.zi);
         const timer = self.usesOp(.timer);
-        try self.buildPrelude(stateful, hist, filt, timer);
+        // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
+        // MIR is sliced into units the formatter's call may sit in any of them.
+        const strs = self.lower.uses_str_tasks;
+        // §9.21, set at the call for the same reason `strs` is: the lookup may
+        // land in any unit once the MIR is sliced.
+        const tbl = self.lower.uses_table_model;
+        try self.buildPrelude(stateful, hist, filt, timer, strs, tbl);
         try self.out.appendSlice(self.gpa, header_txt);
         try self.out.appendSlice(self.gpa, math_txt);
         try self.out.appendSlice(self.gpa, ops_txt);
@@ -668,7 +674,12 @@ pub const Gen = struct {
         // helper block is written private and made public by `publish`; this one
         // has to go the other way.
         if (filt) try depublish(self.gpa, &self.out, filt_txt);
-        if (self.display == .emit) try self.out.appendSlice(self.gpa, display_txt);
+        // §9.4.3's padding helper serves §9.5.3 too — `$sformat` is the same
+        // formatter — so a device that never prints still needs it if it formats
+        // into a string.
+        if (self.display == .emit or strs) try self.out.appendSlice(self.gpa, display_txt);
+        if (strs) try depublish(self.gpa, &self.out, str_txt);
+        if (tbl) try depublish(self.gpa, &self.out, table_txt);
         if (self.limits.len != 0) try self.out.appendSlice(self.gpa, cg_limit.helpers_txt);
         try self.out.appendSlice(self.gpa, "\n");
         // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
@@ -704,13 +715,16 @@ pub const Gen = struct {
     /// `n_u` is RECOMPUTED (`contract.nU(dev)`) rather than aliased: it is
     /// private in device.zig and `contract.rejectStrayPubDecls` will not let it
     /// become public. It is the same comptime value either way.
-    fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool) Error!void {
+    fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool) Error!void {
         var p: std.ArrayList(u8) = .empty;
         try p.appendSlice(self.arena, prelude_head_txt);
         try p.appendSlice(self.arena, prelude_math_txt);
         if (timer) try p.appendSlice(self.arena, prelude_timer_txt);
         if (hist) try p.appendSlice(self.arena, prelude_hist_txt);
         if (filt) try p.appendSlice(self.arena, prelude_filt_txt);
+        if (self.display == .emit or strs) try p.appendSlice(self.arena, prelude_display_txt);
+        if (strs) try p.appendSlice(self.arena, prelude_str_txt);
+        if (tbl) try p.appendSlice(self.arena, prelude_table_txt);
         if (stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
         // The shared core is a unit file like any other, and it sits beside the
         // unit that calls it — device.zig's own alias for it is private to
@@ -733,6 +747,9 @@ pub const Gen = struct {
         if (timer) try publish(self.arena, &hz, timer_txt);
         if (hist) try publish(self.arena, &hz, hist_txt);
         if (filt) try publish(self.arena, &hz, filt_txt);
+        if (self.display == .emit or strs) try publish(self.arena, &hz, display_txt);
+        if (strs) try publish(self.arena, &hz, str_txt);
+        if (tbl) try publish(self.arena, &hz, table_txt);
         if (stateful) try publish(self.arena, &hz, rscalar_txt);
         self.helpers = hz.items;
     }
@@ -968,7 +985,16 @@ pub const Gen = struct {
             const e = try self.f64Const(p.default, 0) orelse continue;
             switch (ty) {
                 .real => try self.w("    model.{s} = {s};\n", .{ self.p_names[i], e }),
-                .int => try self.w("    model.{s} = @intFromFloat(@round({s}));\n", .{ self.p_names[i], e }),
+                // §3.2's 32-bit result (`Lower.wrap32`) applied once, at the end.
+                // For +, - and * that is not an approximation: those three are
+                // the ring Z/2^32, so reducing after the whole expression is the
+                // same value as reducing at every step, which is what the fold
+                // and the device do. The ceiling is that `f64Const` renders the
+                // arithmetic in f64, so a chain whose INTERMEDIATE leaves 2^53,
+                // or one that wraps around a `/`, does not agree with them; a
+                // derived integer parameter needs its own int-typed renderer for
+                // that, and no model has asked.
+                .int => try self.w("    model.{s} = @as(i32, @truncate(@as(i64, @intFromFloat(@round({s})))));\n", .{ self.p_names[i], e }),
                 .str => unreachable,
             }
         }
@@ -1038,6 +1064,18 @@ pub const Gen = struct {
             \\    analysis_kind: AnalysisKind = .dc,
             \\    is_initial_step: bool = false,
             \\    is_final_step: bool = false,
+            \\    /// §5.2.1 is this evaluation an `analog initial` pass? The host
+            \\    /// sets it on the first evaluation of every SUB-TASK — each point
+            \\    /// of a parameter sweep — which is what that clause's "shall be
+            \\    /// re-executed" asks for, and clears it in between.
+            \\    ///
+            \\    /// Defaults to TRUE, unlike the two events above, because §5.2.1
+            \\    /// forbids access functions and analog operators inside the block:
+            \\    /// its body is a function of parameters and $temperature alone, so
+            \\    /// a host that does not know this field re-computes the same values
+            \\    /// a few times over instead of skipping the seed entirely and
+            \\    /// reading every one of them as its declaration default.
+            \\    is_analog_initial: bool = true,
             \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
             \\    /// NEXT timestep, in seconds. `inf` = unconstrained. Written by
             \\    /// `updateState`; the host reads it after every accepted step and
@@ -1053,7 +1091,18 @@ pub const Gen = struct {
             if (u.role != .analog_op) continue;
             const n = self.unit_names[i];
             switch (opKind(u.target)) {
-                .ddt, .transition, .slew => try self.w("    {s}__prev: f64 = 0.0, // §4.5\n", .{n}),
+                .ddt, .slew => try self.w("    {s}__prev: f64 = 0.0, // §4.5\n", .{n}),
+                // §4.5.8 the ORIGIN of the ramp in progress: the level the
+                // output left, and the time it left it. Not "the previous
+                // output" — that is the whole difference between a piecewise
+                // LINEAR traversal of the excursion and an exponential one.
+                // Re-armed by `zTransStep` only once the output has caught up
+                // with its input, so a ramp spanning several timesteps keeps
+                // counting from where it actually started.
+                .transition => try self.w(
+                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value, time)\n    {s}__t0: f64 = 0.0,\n",
+                    .{ n, n },
+                ),
                 .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
                 .absdelay => try self.w(
                     "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
@@ -1067,6 +1116,15 @@ pub const Gen = struct {
                 // flag written on the accepted step is a flag read one timepoint
                 // after the event (see `emitOperator`).
                 .cross => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3\n", .{n}),
+                // §5.10.3.2 the same history, and the 0.0 initialiser is not a
+                // placeholder — it IS the clause's initialisation rule. "If the
+                // expression is positive at the conclusion of the initial
+                // condition analysis that precedes a transient analysis, the
+                // above() function shall generate an event": with `__prev` at
+                // zero the ordinary "was ≤ 0, is now > 0" test fires on exactly
+                // that first positive evaluation, so the special case needs no
+                // code of its own.
+                .above => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3.2\n", .{n}),
                 .timer => try self.w("    {s}__next: f64 = 0.0, // §5.10.3\n", .{n}),
                 // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
                 // past inputs and past outputs per section, newest first. The
@@ -1087,7 +1145,7 @@ pub const Gen = struct {
                 },
                 // §9.17 writes the two unconditional fields above, not a
                 // per-unit one.
-                .none, .above, .bound_step, .discontinuity => {},
+                .none, .bound_step, .discontinuity => {},
             }
         }
         // §5.10 event-assigned variables. LAST, so a model that gains one does
@@ -2131,16 +2189,24 @@ pub const Gen = struct {
                 try self.b(").val())))", .{});
             },
             .opt_barrier => try self.renderVal(a, res_ty),
-            // §3.2 integer arithmetic (wrapping: an LRM integer is finite width)
-            .iadd => try self.intBin(a, "+%", b2),
-            .isub => try self.intBin(a, "-%", b2),
-            .imul => try self.intBin(a, "*%", b2),
-            .idiv => try self.intCall2("@divTrunc", a, b2),
+            // §3.2 integer arithmetic, at §3.2's 32-bit 2's complement width —
+            // see `Lower.wrap32`, which is the definition this and the two
+            // constant folds all implement. `%` (remainder) is never wider than
+            // its operands and needs no wrap; `/` overflows for exactly one pair,
+            // -2^31 / -1, whose 2's complement answer is -2^31 again.
+            .iadd => try self.intBin32(a, "+%", b2),
+            .isub => try self.intBin32(a, "-%", b2),
+            .imul => try self.intBin32(a, "*%", b2),
+            .idiv => {
+                try self.b("@as(i64, @as(i32, @truncate(", .{});
+                try self.intCall2("@divTrunc", a, b2);
+                try self.b(")))", .{});
+            },
             .imod => try self.intCall2("@rem", a, b2),
             .ineg => {
-                try self.b("-%(", .{});
+                try self.b("@as(i64, @as(i32, @truncate(-%(", .{});
                 try self.renderVal(a, .int);
-                try self.b(")", .{});
+                try self.b("))))", .{});
             },
             .iabs => try self.intCall1("zIabs", a),
             .imin => try self.intCall2("@min", a, b2),
@@ -2185,8 +2251,15 @@ pub const Gen = struct {
                 try self.renderVal(a, .int);
                 try self.b(")", .{});
             },
-            // §4.2.11 shifts
-            .shl => try self.intCall2Ty("std.math.shl", a, b2),
+            // §4.2.11 shifts. `<<` zero-fills from the right on its own; the
+            // truncation is §3.2's width, which is what makes `1 << 31` negative
+            // and `1 << 32` zero. `std.math.shl` is still what defines an
+            // over-wide shift as 0 rather than as UB.
+            .shl => {
+                try self.b("@as(i64, @as(i32, @truncate(", .{});
+                try self.intCall2Ty("std.math.shl", a, b2);
+                try self.b(")))", .{});
+            },
             // §4.2.11: "Both the << and >> shift operators fill the vacated bit
             // positions with zeroes (0)." A zero fill only means something
             // against a WIDTH, and §3.2.1 fixes the Verilog-A `integer` at 32
@@ -2232,10 +2305,86 @@ pub const Gen = struct {
         try self.b("))", .{});
     }
 
+    /// The same operation, at §3.2's width: `Lower.wrap32`, emitted. The `%`
+    /// wrapping ops below it are still needed — an i64 `+` that overflowed would
+    /// PANIC before this could truncate it — so the two together are "wrap at 64,
+    /// keep 32", which for in-range operands is the 32-bit answer. `intBin` is
+    /// left un-wrapped for the bitwise ops that cannot leave the range.
+    fn intBin32(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+        try self.b("@as(i64, @as(i32, @truncate(", .{});
+        try self.intBin(a, opx, b2);
+        try self.b(")))", .{});
+    }
+
     fn intCall1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
         try self.b("{s}(", .{name});
         try self.renderVal(a, .int);
         try self.b(")", .{});
+    }
+
+    /// §9.5.4.2 one `zScan*` call: `(src, fmt)` for the count, plus the item
+    /// index for the three item flavours. `want` is the type the RESULT lands in,
+    /// so only the real flavour needs the `S.con` wrapper the scalar interface
+    /// requires — the other two are already the plain Zig types their slots hold.
+    fn emitScan(self: *Gen, fn_name: []const u8, args: []const Mir.Value, want: VTy) Error!void {
+        if (want == .real) try self.b("S.con(", .{});
+        try self.b("{s}(", .{fn_name});
+        try self.renderVal(if (args.len > 0) args[0] else .undef, .str);
+        try self.b(", ", .{});
+        try self.renderVal(if (args.len > 1) args[1] else .undef, .str);
+        if (args.len > 2) {
+            try self.b(", ", .{});
+            try self.renderVal(args[2], .int);
+        }
+        try self.b(")", .{});
+        if (want == .real) try self.b(")", .{});
+    }
+
+    /// §9.21 `$table_model`, in the shape `Lower.lowerTableModel` rewrote it:
+    ///
+    ///     (ND, NP, NCOL, dep, "<extrap>", in₀…, row₀…)
+    ///
+    /// Every §9.21.1/§9.21.2 decision was made in lowering, where the control
+    /// string and the array declarations exist, so this is a transcription: the
+    /// four counts and the extrapolation characters become `zTable`'s comptime
+    /// arguments, the lookup point an `[ND]S` and the sample block one flat
+    /// `[NP*NCOL]f64`.
+    ///
+    /// The samples go in as f64 and the lookup point as `S`. That is not a
+    /// simplification: §9.21.1 fixes the data source at the first call ("Any
+    /// change after this point is ignored"), so a sample carries no derivative,
+    /// while the lookup point is routinely a probe and its derivative is the
+    /// Jacobian row the solver needs.
+    fn emitTable(self: *Gen, args: []const Mir.Value) Error!void {
+        const nd = self.intArg(args, 0) orelse 0;
+        const np = self.intArg(args, 1) orelse 0;
+        const ncol = self.intArg(args, 2) orelse 0;
+        const dep = self.intArg(args, 3) orelse 0;
+        const ext = self.strArg(args, 4) orelse "";
+        const head = 5 + nd;
+        if (nd == 0 or np * ncol == 0 or args.len != head + np * ncol)
+            return self.abort("malformed `$table_model` call reached codegen", .{});
+        try self.b("zTable(S, {d}, {d}, {d}, {d}, \"{s}\", [_]f64{{", .{ np, ncol, nd, dep, ext });
+        for (args[head..], 0..) |v, k| {
+            if (k != 0) try self.b(", ", .{});
+            try self.b("S.val(", .{});
+            try self.renderVal(v, .real);
+            try self.b(")", .{});
+        }
+        try self.b("}}, [_]S{{", .{});
+        for (args[5..head], 0..) |v, k| {
+            if (k != 0) try self.b(", ", .{});
+            try self.renderVal(v, .real);
+        }
+        try self.b("}})", .{});
+    }
+
+    /// A structural count lowering put in an argument list as a literal.
+    fn intArg(self: *const Gen, args: []const Mir.Value, i: usize) ?usize {
+        if (i >= args.len) return null;
+        const def = self.mir.valueDef(self.an.rv(args[i]));
+        if (def != .int_const or def.int_const < 0) return null;
+        return @intCast(def.int_const);
     }
 
     fn intCall2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
@@ -2257,11 +2406,9 @@ pub const Gen = struct {
     /// `std.math.shr` still does the shifting because it is what defines an
     /// over-wide shift as 0 rather than as UB.
     ///
-    /// `<<` is deliberately NOT changed here: it already zero-fills, and making
-    /// it wrap at 32 bits is the separate `integer`-width item (the device
-    /// codegens `integer` as `i64`, so `1 << 31` does not wrap negative the way
-    /// §3.2.1's range requires). Doing half of that here would only make the
-    /// constant fold and the runtime disagree.
+    /// `<<` is now narrowed at its own arm above, on §3.2's width rather than
+    /// §4.2.11's fill rule — the two are separate clauses that happen to want the
+    /// same 32 bits, and `Lower.wrap32` is where that width is written down.
     fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
         try self.b("@as(i64, std.math.shr(u32, @as(u32, @bitCast(@as(i32, @truncate(", .{});
         try self.renderVal(a, .int);
@@ -2518,6 +2665,16 @@ pub const Gen = struct {
             return;
         }
 
+        // §5.2.1 the `analog initial` guard. Its own flag and not
+        // `is_initial_step`: §5.2.1 re-executes the block for each SUB-TASK of a
+        // parameter sweep, and Table 5-1's initial_step is the first point of the
+        // whole analysis. See `Lower.lowerModule`.
+        if (std.mem.eql(u8, name, "analog_initial")) {
+            self.uses_inst = true;
+            try self.b("S.con(if (inst.is_analog_initial) 1.0 else 0.0)", .{});
+            return;
+        }
+
         // §5.10.2 global events.
         if (std.mem.eql(u8, name, "initial_step") or std.mem.eql(u8, name, "final_step")) {
             self.uses_inst = true;
@@ -2548,18 +2705,36 @@ pub const Gen = struct {
         for (noise) |n| {
             if (std.mem.eql(u8, name, n)) return self.b("S.con(0.0)", .{});
         }
-        // §4.6.3 ac_stim is NOT a noise source: it is a small-signal stimulus
-        // of a given magnitude and phase in AC analysis. Its residual is zero
-        // like a noise source's, but zero alone loses the whole source — and
-        // there is no `ac_gens` export to carry it, so a silent zero would
-        // hand the host a device that is simply missing its AC drive.
-        if (std.mem.eql(u8, name, "ac_stim")) return self.abort(
-            "VerA does not implement ac_stim() (LRM 4.6.3); the generated " ++
-                "device exports no AC stimulus table",
-            .{},
-        );
+        // §4.6.3 ac_stim(analysis_name, mag, phase) is NOT a noise source: it
+        // is a small-signal stimulus. "The AC stimulus function returns zero
+        // (0) during large-signal analyses (such as DC and transient) as well
+        // as on all small-signal analyses using names which do not match
+        // analysis_name" — so the whole function is one conditional on the
+        // analysis in force, with the §4.6.1 name comparison `analysis()`
+        // already spells. The name defaults to "ac", mag to 1.0, phase to 0.0.
+        //
+        // ponytail: the residual is REAL, so a matching analysis contributes
+        // the phasor's real part, mag·cos(phase). The quadrature component is
+        // dropped, which costs nothing for the phase = 0 form every model in
+        // the suite writes and is wrong by cos for the rest. Upgrade path is
+        // an `ac_gens` export beside `noise_gens`, carrying (mag, phase) for a
+        // host that solves a complex system — the same shape §4.6.4 uses, and
+        // the reason this is a conditional rather than an export today is that
+        // the contract has no complex side to hand it to.
+        if (std.mem.eql(u8, name, "ac_stim")) {
+            self.uses_inst = true;
+            const mag = try self.argF64(d.args, 1, "1.0");
+            const phase = try self.argF64(d.args, 2, "0.0");
+            try self.b("S.con(if (", .{});
+            if (d.args.len == 0)
+                try self.b("inst.analysis_kind == .ac", .{})
+            else
+                try self.analysisMatch(d.args[0..1]);
+            try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
+            return;
+        }
 
-        if (name.len != 0 and name[0] == '$') return self.emitSysCall(name, d.args);
+        if (name.len != 0 and name[0] == '$') return self.emitSysCall(name, d.args, inst);
 
         return self.abort("VerA: unhandled call `{s}`", .{name});
     }
@@ -2593,7 +2768,11 @@ pub const Gen = struct {
         if (first) try self.b("false", .{});
     }
 
-    fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+    /// `inst` is the call's own MIR instruction, and it is here for exactly one
+    /// reason: §9.5.3's formatter needs storage for the bytes it produces that
+    /// outlives the expression (a string slot is a `[]const u8`), and the
+    /// instruction id is the per-call-site name `zSBuf` keys that storage by.
+    fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: Mir.Inst) Error!void {
         const eq = std.mem.eql;
         // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
         // device they fall through to `void_tasks` below.
@@ -2692,10 +2871,18 @@ pub const Gen = struct {
             // unconnected one is the host's business (§6.5.6).
             return self.b("@as(i64, 1)", .{});
         }
-        // §9.20 node aliases: this engine elaborates one flat module, so no net
-        // is an alias of another. (Real-typed: that is how lowering types it.)
+        // §9.20 node aliases. Every §9.20 validity rule was decided at lowering
+        // (E0812), so what is left here is the RETURN: "one (1) if the
+        // hierarchical_reference_string points to a valid continuous node and
+        // zero (0) otherwise". This engine elaborates ONE FLAT MODULE, so there
+        // is no instance hierarchy for such a string to resolve into — no
+        // reference is valid, the answer is zero for every call, and there is no
+        // second matrix position to merge the named node with. That is why the
+        // topology edit itself is absent rather than stubbed: a wrong merge
+        // corrupts the solution silently, and a reference that cannot resolve is
+        // not an error but this value (tests/fixtures/ch09_system_tasks/105).
         if (eq(u8, name, "$analog_node_alias") or eq(u8, name, "$analog_port_alias"))
-            return self.b("S.con(0.0)", .{});
+            return self.b("@as(i64, 0)", .{});
         // §9.12 command-line plusargs: absent.
         if (eq(u8, name, "$test$plusargs") or eq(u8, name, "$value$plusargs"))
             return self.b("@as(i64, 0)", .{});
@@ -2754,20 +2941,40 @@ pub const Gen = struct {
             try self.renderVal(if (args.len > 0) args[0] else .zero, .int);
             return self.b(")))", .{});
         }
+        // §9.5.3 `$swrite`/`$sformat`, arriving as the synthetic `$sformat` whose
+        // operands are the format and its arguments — the destination is gone,
+        // because lowering made this call the right-hand side of an assignment to
+        // it. The text goes into this call site's own scratch row.
+        if (eq(u8, name, "$sformat"))
+            return cg_display.emitStringFormat(self, args, @intFromEnum(inst));
+        // §9.5.4.2 `$sscanf`: the count, and the three item flavours lowering
+        // picks from the destination's declared type. All four are pure functions
+        // of the same two strings, so nothing here has to sequence them.
+        //
+        // ponytail: an item the scan never reached reads as zero. C — and
+        // §9.5.4.2, which inherits C's formatter — leaves such a destination
+        // UNTOUCHED, which would need the assignment to become a select on a
+        // per-item `found` flag. Reading a destination past the returned count is
+        // the only way to observe the difference.
+        if (eq(u8, name, "$table_model")) return self.emitTable(args); // §9.21
+        if (eq(u8, name, "$sscanf")) return self.emitScan("zScanN", args, .int);
+        if (eq(u8, name, "$sscanf$int")) return self.emitScan("zScanI", args, .int);
+        if (eq(u8, name, "$sscanf$real")) return self.emitScan("zScanR", args, .real);
+        if (eq(u8, name, "$sscanf$str")) return self.emitScan("zScanS", args, .str);
         // §9.4/§9.5/§9.7 display, file and control tasks: void. Lowering keeps
         // them as calls; their result is never read, so this only fires if a
         // model assigns one.
         const void_tasks = [_][]const u8{
-            "$display",  "$displayb",  "$displayo",      "$displayh",
-            "$write",    "$writeb",    "$writeo",        "$writeh",
-            "$strobe",   "$strobeb",   "$strobeo",       "$strobeh",
-            "$monitor",  "$monitoron", "$monitoroff",    "$debug",
-            "$fdisplay", "$fwrite",    "$fstrobe",       "$fmonitor",
-            "$fopen",    "$fclose",    "$fflush",        "$fgets",
-            "$fscanf",   "$sscanf",    "$swrite",        "$rewind",
-            "$fseek",    "$ftell",     "$feof",          "$ferror",
-            "$finish",   "$stop",      "$fatal",         "$error",
-            "$warning",  "$info",      "$discontinuity", "$bound_step",
+            "$display",       "$displayb",   "$displayo",   "$displayh",
+            "$write",         "$writeb",     "$writeo",     "$writeh",
+            "$strobe",        "$strobeb",    "$strobeo",    "$strobeh",
+            "$monitor",       "$monitoron",  "$monitoroff", "$debug",
+            "$fdisplay",      "$fwrite",     "$fstrobe",    "$fmonitor",
+            "$fopen",         "$fclose",     "$fflush",     "$fgets",
+            "$fscanf",        "$rewind",     "$fseek",      "$ftell",
+            "$feof",          "$ferror",     "$finish",     "$stop",
+            "$fatal",         "$error",      "$warning",    "$info",
+            "$discontinuity", "$bound_step",
         };
         for (void_tasks) |t| {
             if (eq(u8, name, t)) return self.b("S.con(0.0)", .{});
@@ -2783,8 +2990,8 @@ pub const Gen = struct {
         if ((eq(u8, bare, "min") or eq(u8, bare, "max")) and args.len >= 2)
             return self.method2(args[0], if (bare[1] == 'i') "min" else "max", args[1]);
 
-        // §9.13 $random and the distributions, §9.21 $table_model, §9.16
-        // $simprobe: a silent zero would corrupt the physics, so say so loudly.
+        // §9.13 $random and the distributions, §9.16 $simprobe: a silent zero
+        // would corrupt the physics, so say so loudly.
         return self.abort("VerA does not implement `{s}` (ch9); " ++
             "a substitute value would corrupt the model", .{name});
     }
@@ -2820,10 +3027,7 @@ pub const Gen = struct {
             try self.renderToArena(if (args.len == 0) .f_zero else args[0], .real)
         else
             "";
-        // `above` is the one operator that now reads NOTHING out of `Instance`:
-        // it was `<unit>(S, x, model, inst).val() > 0` and is a bare comparison
-        // on the input value.
-        if (k != .above) self.uses_inst = true;
+        self.uses_inst = true;
         switch (k) {
             // §4.5.11 the cascade reads its sections from Model on every
             // evaluation and is LINEAR in the current input, so the Jacobian
@@ -2876,9 +3080,18 @@ pub const Gen = struct {
                 "S.con(zHistAt(&inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime - ({s})))",
                 .{ n, n, n, try self.argF64(args, 1, "0.0") },
             ),
-            .transition => try self.b("zTransition(S, {s}, inst.{s}__prev, inst.dt, {s})", .{
-                in, n, try self.transitionTau(args),
-            }),
+            // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
+            // output was when the current excursion began, and when that was —
+            // and takes its TARGET from the current input, so the companion
+            // model is linear in the unknowns with slope `(t-t0)/tt`. That is
+            // the derivative of the piecewise-linear function itself, not an
+            // approximation of it.
+            .transition => {
+                const t = try self.transitionTimes(args);
+                try self.b("zTransition(S, {s}, inst.{s}__from, inst.{s}__t0, inst.abstime, inst.dt, {s}, {s})", .{
+                    in, n, n, t[0], t[1],
+                });
+            },
             .slew => {
                 const r = try self.slewRates(args);
                 try self.b("zSlew(S, {s}, inst.{s}__prev, inst.dt, {s}, @abs({s}))", .{
@@ -2910,8 +3123,22 @@ pub const Gen = struct {
             .timer => try self.b("S.con(if (inst.abstime >= @max(inst.{s}__next, ({s}).val()) and ({s})) 1.0 else 0.0)", .{
                 n, in, try self.enableTest("timer", args),
             }),
-            .above => try self.b("S.con(if (({s}).val() > 0.0 and ({s})) 1.0 else 0.0)", .{
-                in, try self.enableTest("above", args),
+            // §5.10.3.2 "above() generates a monitored analog event to detect
+            // threshold crossings in analog signals when the expression crosses
+            // zero (0) from below". CROSSES, not "is above": the test is
+            // edge-triggered against the last accepted value, exactly like
+            // `cross`, and it was a bare `expr > 0.0` — which re-fires on every
+            // solution while the expression stays positive, so a `@(above(x))`
+            // latch tracked its probe instead of holding the value it sampled.
+            //
+            // No `.tran and dt > 0.0` guard, unlike `cross`: above() is the
+            // operator §5.10.3.2 explicitly exempts from both restrictions
+            // ("can generate an event during initialization", "during a dc
+            // sweep, the above() function shall also generate an event when the
+            // expression crosses zero from below"). The initialisation case is
+            // the `__prev = 0.0` initialiser — see `emitInstance`.
+            .above => try self.b("S.con(if (inst.{0s}__prev <= 0.0 and ({1s}).val() > 0.0 and ({2s})) 1.0 else 0.0)", .{
+                n, in, try self.enableTest("above", args),
             }),
             // §9.17 tasks return no value ("It does not return a value").
             // Unreachable in practice — lowering never leaves one in an eval
@@ -2922,17 +3149,69 @@ pub const Gen = struct {
         }
     }
 
-    /// §4.5.8 transition(expr, td, rise, fall): the lag constant that makes the
-    /// 10–90 % transit take `rise`/`fall`.
-    fn transitionTau(self: *Gen, args: []const Mir.Value) Error![]const u8 {
-        const rise = try self.argF64(args, 2, "0.0");
-        // §4.5.8: "If only a positive rise_time value is specified, the
-        // simulator uses it for both rise and fall times." Defaulting `fall` to
-        // 0.0 instead halved the mean, so the 3-argument form transitioned
-        // exactly TWICE as fast as the 4-argument form written with the same
-        // number — silently, and only for the shorter spelling.
-        const fall = try self.argF64(args, 3, rise);
-        return std.fmt.allocPrint(self.arena, "(({s}) + ({s})) * 0.5 / 2.2", .{ rise, fall });
+    /// §4.5.8 `transition(expr, td, rise_time, fall_time)`: the two times, as
+    /// emitted f64 expressions, in that order.
+    ///
+    /// TWO, not one. This used to return a single first-order lag constant
+    /// `(rise + fall)*0.5/2.2`, which made `transition(V, 0, 4n, 8n)` and
+    /// `transition(V, 0, 8n, 4n)` the same filter — while §4.5.8 says the
+    /// output "forces all positive transitions of expr to occur over rise_time
+    /// and all negative transitions to occur in fall_time". Averaging them is
+    /// not an approximation of that sentence, it is a different filter.
+    ///
+    /// §4.5.8's defaulting is a two-step fall-through and both steps are here:
+    ///
+    ///   "If only a positive rise_time value is specified, the simulator uses
+    ///    it for both rise and fall times."  → `fall` defaults to `rise`.
+    ///   "If neither rise_time nor fall_time are specified OR ARE EQUAL TO ZERO
+    ///    (0.0), the rise and fall time default to the value defined by
+    ///    `default_transition."  → and §10.3 scopes that to the directive
+    ///    "which immediately precedes the transition filter".
+    ///
+    /// Zero is spelled as absent by the clause itself, which is why the fold is
+    /// consulted and not just the argument count: `transition(x, 0, 0.0)` takes
+    /// the directive exactly as `transition(x)` does. A time that is not
+    /// foldable is left alone — it is a parameter expression, and the clause
+    /// conditions on the VALUE, which is a run-time fact there.
+    fn transitionTimes(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
+        const dflt = try self.defaultTransition();
+        const rise = try self.transitionTime(args, 2, dflt orelse "0.0");
+        const fall = try self.transitionTime(args, 3, dflt orelse rise);
+        return .{ rise, fall };
+    }
+
+    fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+        if (i >= args.len) return dflt;
+        if (self.an.foldConst(args[i], 0, true)) |c| {
+            if (c.f == 0.0) return dflt;
+        }
+        return self.f64Expr(args[i]);
+    }
+
+    /// §10.3 the `` `default_transition `` in force AT THE CALL BEING EMITTED,
+    /// as an emitted f64 literal, or null when no directive precedes it.
+    ///
+    /// Positional, because the clause is: "the default rise and fall times for
+    /// a transition filter are derived from the transition_time value of the
+    /// directive which IMMEDIATELY PRECEDES the transition filter." So the walk
+    /// is backwards from the call's own token offset and stops at the first
+    /// directive at or before it — which is what makes a second directive
+    /// supersede a first rather than being ignored by a latched value.
+    ///
+    /// `ctrl_tok` is the operator call's token, set by `emitOperator` and by
+    /// the `updateState` loop before either asks for the times, so both sides
+    /// of the operator resolve the same directive.
+    fn defaultTransition(self: *Gen) Error!?[]const u8 {
+        const list = self.lower.default_transitions;
+        if (list.len == 0) return null;
+        if (self.ctrl_tok == Mir.no_tok or self.ctrl_tok >= self.lower.tok_starts.len) return null;
+        const at = self.lower.tok_starts[self.ctrl_tok];
+        var i = list.len;
+        while (i > 0) {
+            i -= 1;
+            if (list[i].at <= at) return try self.fmtF64(list[i].time);
+        }
+        return null;
     }
 
     /// §4.5.9's two rate limits, for the two places that emit a `zSlew` call.
@@ -3241,9 +3520,13 @@ pub const Gen = struct {
                     try self.argF64(args, 3, "0.0"),
                 }),
                 .absdelay => try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n }),
-                .transition => try self.w("        inst.{s}__prev = zTransition(R, R.con(in), inst.{s}__prev, dt, {s}).v;\n", .{
-                    n, n, try self.transitionTau(args),
-                }),
+                .transition => {
+                    const t = try self.transitionTimes(args);
+                    try self.w(
+                        "        zTransStep(in, &inst.{s}__from, &inst.{s}__t0, inst.abstime, dt, {s}, {s});\n",
+                        .{ n, n, t[0], t[1] },
+                    );
+                },
                 .slew => {
                     const r = try self.slewRates(args);
                     try self.w("        inst.{s}__prev = zSlew(R, R.con(in), inst.{s}__prev, dt, {s}, @abs({s})).v;\n", .{
@@ -3255,8 +3538,18 @@ pub const Gen = struct {
                 // falling, 0 either — so it is decoded and honoured the same
                 // way; a bare sign change would report a falling edge to a
                 // `last_crossing(V(p), +1)`.
+                //
+                // `dt > 0.0` is not an optimisation, it is the SEEDING rule.
+                // `__prev` initialises to 0.0, which is a value the signal was
+                // never at, so on the very first accepted step the sign test
+                // compares against a sample that does not exist — a signal
+                // sitting at -1 V read as a falling crossing of zero, reported
+                // at `state.t_prev + f*dt` = 0.0, which is not the "negative
+                // value" §4.5.10's last sentence requires before the first real
+                // crossing. A crossing needs an INTERVAL, and the DC point
+                // (dt = 0) is not one: it only seeds the history.
                 .last_crossing => try self.w(
-                    \\        if ({1s}) {{
+                    \\        if (dt > 0.0 and ({1s})) {{
                     \\            const f = inst.{0s}__prev / (inst.{0s}__prev - in);
                     \\            inst.{0s}__t_last = state.t_prev + f * dt;
                     \\        }}
@@ -3269,7 +3562,10 @@ pub const Gen = struct {
                 // `enable` is not consulted: it gates the EVENT, not the record
                 // of where the signal was, and a disabled operator that later
                 // re-enables must not compare against a stale sample.
-                .cross => try self.w("        inst.{s}__prev = in;\n", .{n}),
+                // §5.10.3.2 same history, same reason: `eval` raises the event
+                // and this only records where the signal was on the ACCEPTED
+                // step, so a re-arm cannot be observed one timepoint late.
+                .cross, .above => try self.w("        inst.{s}__prev = in;\n", .{n}),
                 // §5.10.3.3 the schedule is absolute — "at start_time, and every
                 // period after that" — so it advances past the accepted time
                 // whether or not the enable let the event through.
@@ -3322,7 +3618,7 @@ pub const Gen = struct {
                         \\
                     , .{ n, p.period orelse "0.0", p.ns, p.deg });
                 },
-                .none, .above => {},
+                .none => {},
             }
             try self.w("    }}\n", .{});
         }
@@ -3553,9 +3849,13 @@ pub fn opKind(name: []const u8) OpKind {
 }
 
 /// Does this operator need `updateState` to advance anything?
+///
+/// `above` joined the set when §5.10.3.2's event became edge-triggered: it now
+/// owns a `__prev` like `cross` does, and a history nobody advances is a
+/// one-shot event.
 fn opHasState(k: OpKind) bool {
     return switch (k) {
-        .none, .above => false,
+        .none => false,
         else => true,
     };
 }
@@ -3667,8 +3967,8 @@ const math_txt =
     \\fn zPow(comptime S: type, a: S, b: S) S { // §4.3.1 with a non-constant exponent
     \\    return b.mul(a.log()).exp();
     \\}
-    \\fn zIabs(a: i64) i64 { // §4.3.1 integer abs
-    \\    return if (a < 0) -a else a;
+    \\fn zIabs(a: i64) i64 { // §4.3.1 integer abs, §3.2's 32-bit result
+    \\    return @as(i32, @truncate(if (a < 0) -%a else a));
     \\}
     \\fn zClog2(a: i64) i64 { // §9.11 $clog2
     \\    if (a <= 1) return 0;
@@ -3725,13 +4025,63 @@ const ops_txt =
     \\    if (dt <= 0.0) return v;
     \\    return v.minC(prev + rise * dt).maxC(prev - fall * dt);
     \\}
-    \\fn zTransition(comptime S: type, v: S, prev: f64, dt: f64, tau: f64) S { // §4.5.8
-    \\    // ponytail: first-order lag instead of the exact piecewise-linear ramp
-    \\    // (the exact form needs the ramp's start value AND target in state).
-    \\    // Same endpoints, same monotonicity, smooth Jacobian.
-    \\    if (dt <= 0.0 or tau <= 0.0) return v;
-    \\    const k = dt / (tau + dt);
-    \\    return v.addC(-prev).scale(k).addC(prev);
+    \\/// §4.5.8 the fraction of the current excursion the ramp has traversed.
+    \\/// "transition() forces all positive transitions of expr to occur over
+    \\/// rise_time and all negative transitions to occur in fall_time", and the
+    \\/// result "describes a piecewise linear function over time" — so the shape
+    \\/// is (t - t0)/tt clamped into [0, 1], with tt picked by the DIRECTION of
+    \\/// the excursion and t0 the time the excursion began.
+    \\///
+    \\/// A zero transition time is §4.5.8's own degenerate case ("If neither
+    \\/// rise_time nor fall_time are specified or are equal to zero (0.0) …"),
+    \\/// left to `default_transition and, with no directive, to the simulator:
+    \\/// here that is an instantaneous edge, fraction 1.
+    \\fn zTransFrac(target: f64, from: f64, t0: f64, t: f64, rise: f64, fall: f64) f64 {
+    \\    const tt = if (target >= from) rise else fall;
+    \\    if (!(tt > 0.0)) return 1.0;
+    \\    return @min(@max((t - t0) / tt, 0.0), 1.0);
+    \\}
+    \\fn zTransition(comptime S: type, v: S, from: f64, t0: f64, t: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.8
+    \\    // "In DC analysis, transition() passes the value of the expr directly
+    \\    // to its output." There is no elapsed time to ramp over.
+    \\    if (dt <= 0.0) return v;
+    \\    // LINEAR in the current input, so the Jacobian the solver gets is the
+    \\    // slope of the ramp itself.
+    \\    const f = zTransFrac(v.val(), from, t0, t, rise, fall);
+    \\    return v.addC(-from).scale(f).addC(from);
+    \\}
+    \\/// §4.5.8 accepted-step bookkeeping: move the ramp's origin, or leave it.
+    \\///
+    \\/// LEAVE IT is the important half. While the output is still climbing
+    \\/// towards its input the excursion is the one that started at `from`, and
+    \\/// re-arming the origin every step would shrink the remaining distance by
+    \\/// the same factor each time — an exponential decay wearing a ramp's
+    \\/// coefficients, which is the bug this operator used to have.
+    \\fn zTransStep(in: f64, from: *f64, t0: *f64, t: f64, dt: f64, rise: f64, fall: f64) void {
+    \\    if (dt <= 0.0) { // the DC point: the output IS the input, so arm here
+    \\        from.* = in;
+    \\        t0.* = t;
+    \\        return;
+    \\    }
+    \\    const f = zTransFrac(in, from.*, t0.*, t, rise, fall);
+    \\    const y = from.* + (in - from.*) * f;
+    \\    // Settled — the output has caught up — so the NEXT excursion starts
+    \\    // from here, and its rise/fall time is counted from this instant.
+    \\    if (f >= 1.0 or y == in) {
+    \\        from.* = in;
+    \\        t0.* = t;
+    \\        return;
+    \\    }
+    \\    // §4.5.8 says nothing about an input that REVERSES mid-ramp. The
+    \\    // reading taken here is the one that keeps the output continuous: the
+    \\    // new excursion starts where the output actually is (`y`), and is
+    \\    // traversed in the full rise/fall time of its own direction. Detected
+    \\    // as the output sitting on the opposite side of the origin from the
+    \\    // target, which cannot happen while a single excursion is in progress.
+    \\    if ((in - from.*) * (y - from.*) < 0.0) {
+    \\        from.* = y;
+    \\        t0.* = t;
+    \\    }
     \\}
     \\
 ;
@@ -3768,6 +4118,19 @@ const timer_txt =
     \\}
     \\
 ;
+
+/// §9.5.3/§9.5.4.2 the string formatter's scratch and the scanner, emitted
+/// VERBATIM from `str_kernels.zig` for the same reason `filt_txt` is: the rows
+/// codegen's tests scan are byte-for-byte the ones the device scans. Only
+/// devices that actually call `$sformat`/`$swrite`/`$sscanf` carry them.
+const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (src/backend/str_kernels.zig) ----\n\n" ++
+    @embedFile("str_kernels.zig");
+
+/// §9.21 the table-model interpolator, emitted VERBATIM from
+/// `table_kernels.zig` on the same terms. Only devices that call
+/// `$table_model` carry it.
+const table_txt = "// ---- §9.21 table model kernels (src/backend/table_kernels.zig) ----\n\n" ++
+    @embedFile("table_kernels.zig");
 
 /// §4.5.11/§4.5.12 the filter kernels, emitted VERBATIM from `filter_kernels.zig`
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
@@ -3901,7 +4264,9 @@ const prelude_math_txt =
     \\const zIdtmod = h.zIdtmod;
     \\const zWrap = h.zWrap;
     \\const zSlew = h.zSlew;
+    \\const zTransFrac = h.zTransFrac;
     \\const zTransition = h.zTransition;
+    \\const zTransStep = h.zTransStep;
     \\
 ;
 
@@ -3925,6 +4290,39 @@ const prelude_filt_txt =
     \\const zLaplaceStep = h.zLaplaceStep;
     \\const zZiStep = h.zZiStep;
     \\const zZiHold = h.zZiHold;
+    \\
+;
+
+/// §9.4.3 `%<width>d`. Aliased whenever `display_txt` is emitted, which is a
+/// printing artifact OR any device that formats into a string (§9.5.3 runs the
+/// same formatter, and its call site can be in any unit, not just the display
+/// one).
+const prelude_display_txt =
+    \\const zPadInt = h.zPadInt;
+    \\
+;
+
+/// §9.21. `zTabRes` is a type function, so it has to be aliased too — the
+/// recursion's return type names it.
+const prelude_table_txt =
+    \\const zTabRes = h.zTabRes;
+    \\const zTabEnd = h.zTabEnd;
+    \\const zTabLess = h.zTabLess;
+    \\const zTabSort = h.zTabSort;
+    \\const zTabAt = h.zTabAt;
+    \\const zTable = h.zTable;
+    \\
+;
+
+const prelude_str_txt =
+    \\const zScan = h.zScan;
+    \\const zScanN = h.zScanN;
+    \\const zScanI = h.zScanI;
+    \\const zScanR = h.zScanR;
+    \\const zScanS = h.zScanS;
+    \\const zSBuf = h.zSBuf;
+    \\const zSpace = h.zSpace;
+    \\const zDigit = h.zDigit;
     \\
 ;
 
@@ -4192,8 +4590,9 @@ test "codegen: every emitted helper is aliased into the unit prologue" {
     // the split tree stops compiling — but only for the models that happen to
     // use it, which is the worst possible failure mode. Catch it here instead.
     const prelude = prelude_head_txt ++ prelude_math_txt ++ prelude_timer_txt ++
-        prelude_hist_txt ++ prelude_filt_txt ++ "const R = h.R;\n";
-    inline for (.{ math_txt, ops_txt, timer_txt, hist_txt, filt_txt }) |src| {
+        prelude_hist_txt ++ prelude_filt_txt ++ prelude_display_txt ++ prelude_str_txt ++
+        prelude_table_txt ++ "const R = h.R;\n";
+    inline for (.{ math_txt, ops_txt, timer_txt, hist_txt, filt_txt, display_txt, str_txt, table_txt }) |src| {
         var it = std.mem.splitScalar(u8, src, '\n');
         while (it.next()) |line| {
             if (!std.mem.startsWith(u8, line, "fn z") and !std.mem.startsWith(u8, line, "pub fn z")) continue;
@@ -4273,13 +4672,17 @@ test "codegen: §5.6.1.2 reactive split emits q(), §4.2.12 select stays lazy" {
     // The reactive half is a SECOND field of the same core, reached by `q` —
     // the split survives the merge as two targets, not two declarations.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn cap__common__core(") != null);
-    // §4.2.12 laziness (proof.zig's CODEGEN OBLIGATION): the `ln` must sit
-    // INSIDE the if-arm, never in a preceding `const`.
+    // §4.2.3/§4.2.12 laziness (proof.zig's CODEGEN OBLIGATION): the `ln` must
+    // sit INSIDE the arm, never in a preceding `const`. Matching a bare `if (`
+    // is deliberate — `?:` lowers to a CFG diamond (`lowerTernary`), a `select`
+    // that `ifconv` fused back would render as the expression `(if (c) a else
+    // b)`, and BOTH satisfy the obligation. What must never happen is `.log()`
+    // ahead of the guard.
     const unit = src[std.mem.indexOf(u8, src, "fn cap__common__core(").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
-    const sel = std.mem.indexOf(u8, body, "(if (").?;
+    const guard = std.mem.indexOf(u8, body, "if (").?;
     const lg = std.mem.indexOf(u8, body, ".log()").?;
-    try std.testing.expect(lg > sel);
+    try std.testing.expect(lg > guard);
 }
 
 test "codegen: §5.8 control flow reconstructs into structured Zig" {
@@ -4442,7 +4845,8 @@ test "codegen: §4.5 operator state is keyed to the stable unit id" {
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__prev: f64 = 0.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__from: f64 = 0.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__t0: f64 = 0.0") != null);
     // The operator's INPUT is a core field now, not a declaration of its own —
     // but the state field, and therefore `naming.zig`'s key, is untouched.
     try std.testing.expect(std.mem.indexOf(u8, src, "zTransition(S, ") != null);
@@ -4683,6 +5087,39 @@ test "codegen: §2.6.1 an integer literal keeps all 64 bits" {
     try std.testing.expect(std.mem.indexOf(u8, src, "4607182418800017408") != null);
 }
 
+test "codegen: §3.2 the three sites that impose the 32-bit integer width agree" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module w(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer big = 2147483647 + 1;
+        \\  parameter integer chained = big + 1;
+        \\  localparam integer sh = 1 << 31;
+        \\  integer hi;
+        \\  analog begin
+        \\    hi = 2147483647;
+        \\    I(p, n) <+ V(p, n) * (hi + 1);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // Site 1, `Lower.foldBinary`: a §4.2 constant expression, folded before the
+    // Model field is written. 2^31 is one step past the top of §3.2's range.
+    try std.testing.expect(std.mem.indexOf(u8, src, "big: i64 = -2147483648") != null);
+    // §4.2.11 `<<` at the same width — `1 << 31` is the sign bit, not 2^31.
+    try std.testing.expect(std.mem.indexOf(u8, src, "sh: i64 = -2147483648") != null);
+    // Site 2, `analysis.foldConst`: a §6.3.4 default over another parameter,
+    // folded for the field initializer and re-emitted in `derive` for the
+    // overridden case. -2^31 + 1, so the two folds have to agree on -2^31 first.
+    try std.testing.expect(std.mem.indexOf(u8, src, "chained: i64 = -2147483647") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.chained = @as(i32, @truncate(") != null);
+    // Site 3, `codegen.intBin32`: the device. `+%` is the 64-bit wrap that keeps
+    // the add from panicking; the truncation is §3.2's width.
+    try std.testing.expect(std.mem.indexOf(u8, src, "@as(i32, @truncate(((@as(i64, 2147483647)) +% (@as(i64, 1)))))") != null);
+}
+
 test "codegen: a unit whose target is defined in one arm returns a VALUE, not undefined" {
     var h: Harness = undefined;
     // §4.5 the operator's input unit is sliced from the argument, which here is
@@ -4752,8 +5189,11 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
     // renders `@abs(2e8)` — the same limit, different text.
     const cases = [_]struct { call: []const u8, want: []const u8 }{
         .{
+            // §4.5.8 now passes rise and fall SEPARATELY (the averaged lag
+            // constant is gone), so the copy shows up as the same number twice
+            // in the last two argument positions of the call.
             .call = "transition(V(p, n), 0, 2.2n)",
-            .want = "((0.0000000022000000000000003) + (0.0000000022000000000000003))",
+            .want = "0.0000000022000000000000003, 0.0000000022000000000000003)",
         },
         .{
             .call = "slew(V(p, n), 2e8)",
@@ -4907,4 +5347,122 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     // "unreachable code" at a line of generated code).
     try std.testing.expect(std.mem.indexOf(u8, src, "\n    @compileError(\"LRM 4.5") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
+}
+
+test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
+    // The kernels are `@embedFile`d into every device, so the rows checked here
+    // are byte-for-byte the code that runs there — the same arrangement
+    // `filter_kernels.zig` has, and the reason both live in real Zig files.
+    //
+    // Every row below is a sentence of §9.5.4.2, and the numbers are the ones
+    // tests/fixtures/ch09_system_tasks/{048,162,09,06} hold VerA to.
+    const k = @import("str_kernels.zig");
+    // "the number of successfully matched and assigned input items is returned"
+    try std.testing.expectEqual(@as(i64, 1), k.zScanN("42", "%d"));
+    try std.testing.expectEqual(@as(i64, 42), k.zScanI("42", "%d", 0));
+    // A suppressed field is consumed, takes no argument and is not counted.
+    try std.testing.expectEqual(@as(i64, 1), k.zScanN("12 34", "%*d %d"));
+    try std.testing.expectEqual(@as(i64, 34), k.zScanI("12 34", "%*d %d", 0));
+    // "a decimal digit string that specifies an optional numerical maximum
+    // field width" — the field ends there, even mid-number.
+    try std.testing.expectEqual(@as(i64, 12), k.zScanI("12345", "%2d", 0));
+    // "0 in the event of an early matching failure", and EOF (-1) when the
+    // input ends before any conversion at all.
+    try std.testing.expectEqual(@as(i64, 0), k.zScanN("hello", "%d"));
+    try std.testing.expectEqual(@as(i64, -1), k.zScanN("", "%d"));
+    // "%s Matches a string" then "%f ... Matches a floating point number".
+    try std.testing.expectEqual(@as(i64, 2), k.zScanN("abc 5.5", "%s %f"));
+    try std.testing.expectEqualStrings("abc", k.zScanS("abc 5.5", "%s %f", 0));
+    try std.testing.expectEqual(@as(f64, 5.5), k.zScanR("abc 5.5", "%s %f", 1));
+    // Literal text in the control string must match, and %e reads back what
+    // §9.4.3's `%10.4e` wrote (09_string_formatting.va's round trip).
+    const txt = try std.fmt.bufPrint(k.zSBuf(0), "value={e:>10.4}", .{0.5});
+    try std.testing.expectEqual(@as(f64, 0.5), k.zScanR(txt, "value=%e", 0));
+    try std.testing.expectEqual(@as(i64, 0), k.zScanN(txt, "other=%e"));
+    // Two call sites, two scratch rows: §9.5.3 gives each writer its own string
+    // variable, so one must not overwrite the other's bytes.
+    const hex = try std.fmt.bufPrint(k.zSBuf(1), "{x}", .{@as(i64, 4096)});
+    try std.testing.expectEqual(@as(i64, 1000), k.zScanI(hex, "%d", 0));
+    try std.testing.expectEqualStrings("value= 5.0000e-1", txt);
+}
+
+test "codegen: §9.21 the emitted table interpolator is the one the fixtures assert" {
+    const k = @import("table_kernels.zig");
+    // A one-derivative stand-in for the device's scalar: enough of the interface
+    // `zTable` uses (`con`/`val`/`add`/`addC`/`scale`) to see the Jacobian, which
+    // is the half of the answer no fixture can read.
+    const S = struct {
+        v: f64,
+        d: f64 = 0.0,
+        const T = @This();
+        pub fn con(c: f64) T {
+            return .{ .v = c };
+        }
+        pub fn val(a: T) f64 {
+            return a.v;
+        }
+        pub fn add(a: T, b: T) T {
+            return .{ .v = a.v + b.v, .d = a.d + b.d };
+        }
+        pub fn addC(a: T, c: f64) T {
+            return .{ .v = a.v + c, .d = a.d };
+        }
+        pub fn scale(a: T, c: f64) T {
+            return .{ .v = a.v * c, .d = a.d * c };
+        }
+    };
+    // §9.21.1's printed sample set: f(x,y) = 0.5x + y on three isolines of y,
+    // laid out `y x f(x,y)` — 12 rows of 3 columns, outermost-first. The same
+    // twelve rows 155_table_model_lrm_sample_set.va and ch09_table_model_2d.tbl
+    // carry.
+    const rows = [_]f64{
+        0.0, 1.0, 0.5, 0.0, 2.0, 1.0, 0.0, 3.0, 1.5,
+        0.0, 4.0, 2.0, 0.0, 5.0, 2.5, 0.0, 6.0, 3.0,
+        0.5, 1.0, 1.0, 0.5, 3.0, 2.0, 0.5, 5.0, 3.0,
+        1.0, 1.0, 1.5, 1.0, 2.0, 2.0, 1.0, 4.0, 3.0,
+    };
+    // Figure 9-2's own lookup and its own answer: bracket y=0.25 by the 0.0/0.5
+    // isolines, interpolate each at x=3.5 (1.75 and 2.25), interpolate those in
+    // y. Every intermediate is dyadic, so this is exact.
+    const f = k.zTable(S, 12, 3, 2, 2, "LLLL", rows, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5, .d = 1.0 } });
+    try std.testing.expectEqual(@as(f64, 2.0), f.v);
+    // The scheme is piecewise linear and the samples lie on 0.5x + y, so ∂f/∂x
+    // is 0.5 — the Jacobian entry a probe in the lookup slot owes the solver.
+    try std.testing.expectEqual(@as(f64, 0.5), f.d);
+
+    // §9.21.1 "if the user provides the data in random order the system will
+    // sort the data into isolines in each dimension". Same table, rows reversed:
+    // without the sort the isolines are shredded and the answer is quietly wrong.
+    var back: [36]f64 = undefined;
+    for (0..12) |r| for (0..3) |c| {
+        back[r * 3 + c] = rows[(11 - r) * 3 + c];
+    };
+    const g = k.zTable(S, 12, 3, 2, 2, "LLLL", back, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5 } });
+    try std.testing.expectEqual(@as(f64, 2.0), g.v);
+
+    // 131_table_model_array_control.va: one dimension, two samples on f(x) = 2x,
+    // "1LL;1" — halfway between them.
+    const line = [_]f64{ 1.0, 2.0, 3.0, 6.0 };
+    const h1 = k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 2.0, .d = 1.0 }});
+    try std.testing.expectEqual(@as(f64, 4.0), h1.v);
+    try std.testing.expectEqual(@as(f64, 2.0), h1.d);
+    // Table 9-31: linear extrapolation "extends linearly to the requested point
+    // from the endpoint using a slope consistent with the selected interpolation
+    // method" — so f(0) = 0 and f(5) = 10 off both ends…
+    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 0.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 5.0 }}).v);
+    // …while constant extrapolation "returns the table endpoint value", and the
+    // two ends are independent: `"CL"` clamps below 1.0 and still extrapolates
+    // above 3.0. A swapped pair would pass every symmetric test there is.
+    const cl = k.zTable(S, 2, 2, 1, 1, "CL", line, [_]S{.{ .v = 0.0, .d = 1.0 }});
+    try std.testing.expectEqual(@as(f64, 2.0), cl.v);
+    try std.testing.expectEqual(@as(f64, 0.0), cl.d); // clamped ⇒ flat
+    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "CL", line, [_]S{.{ .v = 5.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 6.0), k.zTable(S, 2, 2, 1, 1, "LC", line, [_]S{.{ .v = 5.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "LC", line, [_]S{.{ .v = 0.0 }}).v);
+    // §9.21.2's dependent selector picks a COLUMN: two dependents over the same
+    // isolines, and `;2` reads the second.
+    const two = [_]f64{ 1.0, 2.0, 20.0, 3.0, 6.0, 60.0 };
+    try std.testing.expectEqual(@as(f64, 4.0), k.zTable(S, 2, 3, 1, 1, "LL", two, [_]S{.{ .v = 2.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 40.0), k.zTable(S, 2, 3, 1, 2, "LL", two, [_]S{.{ .v = 2.0 }}).v);
 }

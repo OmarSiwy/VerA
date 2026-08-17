@@ -64,7 +64,6 @@
 //! wave V(in) = 1, 0, 0
 //! bias V(n) = 0
 //! print none
-//! xfail VerA implements transition() as a first-order lag with ONE time constant for both directions — codegen's transitionTau returns (rise + fall) * 0.5 / 2.2, here 2.727n whichever way the edge goes — so the two filters below, which differ only in which argument is the fall time, return the SAME number and 2a - b collapses to a. Measured: a = 0.7317073170731707 at t = 1n and 0.4221388367729831 at t = 3n, where §4.5.8's ramp gives 1.0 and 0.75
 `include "check.vh"
 module annex_g_transition_fall_binding(in, n);
   inout in, n;

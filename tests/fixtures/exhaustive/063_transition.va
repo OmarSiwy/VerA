@@ -3,16 +3,35 @@
 // (dt = 0) puts its state straight onto that constant and every later step
 // agrees with it.
 //
-// FastVAF implements the smoothing as a first-order lag rather than §4.5.8's
-// piecewise-linear ramp (see `zTransition`: "same endpoints, same monotonicity,
-// smooth Jacobian"). The lag constant is tau = (tr + tf)/2 / 2.2, so tr = tf =
-// 2.2n gives tau = 1n; with dt = 1n the per-step factor is
+// THE SHAPE IS THE CLAUSE'S, and this file used to say otherwise. VerA
+// implemented the smoothing as a first-order lag with ONE time constant,
+// tau = (tr + tf)/2 / 2.2, and this fixture pinned that recurrence
+// (out(k) = 1 - 0.5^k for tr = tf = 2.2n and dt = 1n) as "the implemented
+// kernel — not the LRM's ramp, and the difference is the documented ceiling
+// rather than a hidden one". The ceiling is gone: §4.5.8 says the result
+// "describes a piecewise linear function over time", and that positive
+// transitions occur over rise_time while negative ones occur in fall_time — so
+// a lag was the wrong function and an average of the two times was the wrong
+// pair of parameters. What is pinned below is the ramp.
 //
-//   K = dt/(tau + dt) = 0.5      and      out(k) = 1 - (1-K)^k
+// THE GRID. `//! wave V(in) = 0, 1` on this `//! time` line is a level of 0 at
+// the DC point and 1 from t = 1n on (a short wave list holds its last value).
+// The excursion is armed at the DC point — the one instant where §4.5.8 fixes
+// the output exactly, "in DC analysis, transition() passes the value of the
+// expr directly to its output" — so the ramp counts from t0 = 0 and traverses
+// the unit excursion over rise_time = 2.2n:
 //
-// which is exact in binary: 0, 0.5, 0.75, 0.875, 0.9375. This fixture pins THAT
-// — the implemented kernel — not the LRM's ramp, and the difference is the
-// documented ceiling rather than a hidden one.
+//   out(t) = min(t / 2.2n, 1.0)      i.e. 0, 1/2.2, 2/2.2, 1, 1
+//
+// The clamp is §4.5.8's "forces all positive transitions of expr to occur OVER
+// rise_time": the output arrives and stops there.
+//
+// The one-sample ambiguity about when a step is detected, which
+// ch10_directives/38_default_transition_ramp.va and
+// annex_g_change_history/23_transition_fall_time_binding.va have to bracket,
+// does not arise here: the level at the DC point IS the level the ramp leaves,
+// so t0 is fixed by the clause and not by a sampling convention. That is why
+// this one can carry an exact relational want.
 //
 //! bias V(n) = 0
 //! wave V(in) = 0, 1
@@ -26,11 +45,12 @@ module ex063_transition(in, n);
   analog begin
     // RELATIONAL: the want is a different number at each of the five time
     // points, and one point would not exercise a stateful operator at all.
-    // 1 - 0.5^(t/1n) is the closed form of the recurrence in the header, so
-    // the shared machinery is `pow` and `$abstime` and nothing else. Tolerance
-    // 0.0: those five values are exact in binary, so anything else is a bug.
+    // min($abstime/2.2n, 1.0) is the closed form in the header, so the shared
+    // machinery is `min` and `$abstime` and nothing else. Tolerance 0.0: the
+    // ramp IS that division, so both sides are the same operation on the same
+    // doubles and anything else is a bug.
     `CHECKEQ("transition step response", transition(V(in, n), 0, 2.2n, 2.2n),
-             1.0 - pow(0.5, $abstime / 1n), 0.0);
+             min($abstime / 2.2n, 1.0), 0.0);
     // The endpoints the LRM DOES fix: it starts at the old value and ends at
     // the new one, and never overshoots either.
     `CHECKI("never exceeds the target", transition(V(in, n), 0, 2.2n, 2.2n) <= 1.0, 1);

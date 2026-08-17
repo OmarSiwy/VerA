@@ -589,9 +589,17 @@ pub fn callTy(name: []const u8) VTy {
         // off the digital timeticks", so it is NOT in this list.
         "$driver_strength",      "$driver_next_state",
         "$driver_next_strength", "$driver_type",
+        // §9.5.4.2 `Lower.lowerScan`'s synthetic names: the item count, and the
+        // item flavour chosen for an `integer` destination.
+        "$sscanf",               "$sscanf$int",
+        // §9.20 "The return value for both system functions shall be one (1) ...
+        // and zero (0) otherwise" — a status, not a measurement.
+        "$analog_node_alias",    "$analog_port_alias",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .int;
     if (std.mem.eql(u8, name, "$simparam$str")) return .str;
+    // §9.5.3 the formatted text, §9.5.4.2 the item whose destination is a string.
+    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .str;
     // §5.10 `Lower.holdSlot`'s synthetic seed. Not a ch9 task and not in
     // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
     // so the name IS the type and the two sides agree by construction.
@@ -606,6 +614,13 @@ pub fn callTy(name: []const u8) VTy {
 // ---------------------------------------------------------------------------
 
 pub const Folded = struct { f: f64 };
+
+/// A folded INTEGER back in its own type, so §3.2's width can be applied to it.
+/// Exact by construction: an integer only ever enters the f64 carrier from an
+/// `int_const` or from `@floatFromInt` of a wrapped result, so it is whole.
+fn asI64(x: Folded) i64 {
+    return @intFromFloat(@round(x.f));
+}
 
 /// §4.2 constant expression folding over MIR, used for parameter defaults
 /// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
@@ -628,8 +643,12 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                 .unary => {
                     const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
                     return switch (row.op) {
-                        .fneg, .ineg => .{ .f = -a.f },
-                        .fabs, .iabs => .{ .f = @abs(a.f) },
+                        .fneg => .{ .f = -a.f },
+                        .fabs => .{ .f = @abs(a.f) },
+                        // -(-2^31) and |-2^31| are the same §3.2 wrap: both
+                        // answer -2^31, which is `codegen`'s `.ineg`/`zIabs`.
+                        .ineg => .{ .f = @floatFromInt(Lower.wrap32(-%asI64(a))) },
+                        .iabs => .{ .f = @floatFromInt(Lower.wrap32(if (asI64(a) < 0) -%asI64(a) else asI64(a))) },
                         .sqrt => .{ .f = @sqrt(a.f) },
                         .exp => .{ .f = @exp(a.f) },
                         .ln => .{ .f = @log(a.f) },
@@ -645,11 +664,25 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                     const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
                     const b2 = self.foldConst(@enumFromInt(row.b), depth + 1, resolve_params) orelse return null;
                     return switch (row.op) {
-                        .fadd, .iadd => .{ .f = a.f + b2.f },
-                        .fsub, .isub => .{ .f = a.f - b2.f },
-                        .fmul, .imul => .{ .f = a.f * b2.f },
+                        // §3.2's 32-bit 2's complement result — `Lower.wrap32`
+                        // is the definition, and this fold has to agree with
+                        // `codegen.intBin32` or the same expression answers
+                        // differently in a parameter default than at runtime.
+                        // The i64 round trip is not decoration: the product of
+                        // two i32s reaches 2^62, which an f64 carrier cannot
+                        // hold exactly, so the wrap has to happen in the integer
+                        // type and only the wrapped result comes back to f64.
+                        .iadd => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) +% asI64(b2))) },
+                        .isub => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) -% asI64(b2))) },
+                        .imul => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) *% asI64(b2))) },
+                        .fadd => .{ .f = a.f + b2.f },
+                        .fsub => .{ .f = a.f - b2.f },
+                        .fmul => .{ .f = a.f * b2.f },
                         .fdiv => .{ .f = a.f / b2.f },
-                        .idiv => .{ .f = @trunc(a.f / b2.f) },
+                        .idiv => if (asI64(b2) == 0)
+                            null
+                        else
+                            .{ .f = @floatFromInt(Lower.wrap32(@divTrunc(asI64(a), asI64(b2)))) },
                         .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
                         .fmin, .imin => .{ .f = @min(a.f, b2.f) },
                         .fmax, .imax => .{ .f = @max(a.f, b2.f) },

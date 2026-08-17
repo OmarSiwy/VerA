@@ -19,14 +19,14 @@
 // the failing line would be satisfied by a compiler that refused whole-array
 // assignment outright, which is a different answer to a different question.
 //
-// The expectation is the word `array` rather than a code: no VerA diagnostic
-// says it. VerA today reports E0313 "unknown variable: `A`" for BOTH lines —
-// the same refusal for the legal assignment and the illegal one — so pinning
-// what it currently emits would launder the gap into a pass.
+// The expectation was the word `array` rather than a code for as long as no
+// VerA diagnostic said it: the compiler reported E0313 "unknown variable: `A`"
+// for BOTH lines — the same refusal for the legal assignment and the illegal
+// one — and pinning that would have laundered the gap into a pass. E0429 is
+// the clause's own verdict and now carries it, so the pin is the code.
 //
 //! lrm 5.7
-//! reject array
-//! xfail VerA does not implement whole-array assignment: `A = B` and `A = C` alike die at E0313 (unknown variable), so the compatible pair is refused with the incompatible one and no size check is ever reached
+//! reject E0429
 module ch5_assignment_array_mismatch(p);
   inout p; electrical p;
   integer A[10:1];             // 10 elements

@@ -13,16 +13,16 @@
 // any conforming tool. The two files differ in one identifier, which is the
 // whole point: the syntax is legal, the attribute chosen is not.
 //
-// VerA's E0207 is the right verdict reached by the shorter route — it cannot
-// parse a nature attribute reference at all, so the `.` stops the expression
-// before any attribute is looked up. It therefore refuses the legal abstol form
-// too, which is what nature_attribute_unsupported.va records as an xfail. The
-// day VerA parses Syntax 5-4, this fixture must start matching the §5.5.3 ban
-// on the attribute rather than a parse error, and it will say so by failing.
+// VerA used to reach the right verdict by the shorter route — E0207, because it
+// could not parse a nature attribute reference at all, so the `.` stopped the
+// expression before any attribute was looked up, and the legal abstol form was
+// refused with it. It now parses Syntax 5-4 and this fixture pins the §5.5.3 ban
+// itself: E0359 fires on the ATTRIBUTE, and only on it, which is why the legal
+// sibling compiles.
 //
 //! lrm 5.5.3
 //! lrm A.8.9
-//! reject E0207
+//! reject E0359
 module ch5_nature_attribute_nonconstant(a, b);
   inout a, b; electrical a, b;
   parameter real c = 1p;

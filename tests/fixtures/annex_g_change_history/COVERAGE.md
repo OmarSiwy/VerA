@@ -71,15 +71,18 @@ Fixture-name audit, 23 files, all mapped above or below:
 
 ## The xfail ledger
 
-Eight of twenty-three. Each names a concrete defect and the row disappears the day the
-defect does. Six of the eight name no diagnostic code, and that is deliberate in every
+Seven of twenty-three. Each names a concrete defect and the row disappears the day the
+defect does. `23_transition_fall_time_binding.va` was the eighth and is gone: §4.5.8's
+ramp landed with independent rise and fall times, so a falling edge is now traversed in
+`fall_time`, linearly, and `2a - b` is 1.0 at every sampled point.
+Six of the seven name no diagnostic code, and that is deliberate in every
 case: VerA emits *nothing* today, so there is no stable code to pin, and a guessed code
 leaves the marker stuck at XFAIL on the day the gap closes under a different one.
 `DiagnosticsReported` is the honest trigger — each of these modules has exactly one
 defect, so any diagnostic at all means someone diagnosed it. Three headers go further
 and name the code that would be *wrong*: E0801 "unsupported system function" is VerA's
-capability class for functions it declines to implement (§9.13 `$random`, §9.21
-`$table_model`), and it fires on the name in any context, which is not the rule in
+capability class for functions it declines to implement (§9.13 `$random`, §9.16
+`$simprobe`), and it fires on the name in any context, which is not the rule in
 question in either `08` or `10`.
 
 | Fixture | Row it serves | Reason |
@@ -91,7 +94,6 @@ question in either `08` or `10`.
 | `13_realtime_analog_context_rejected.va` | G.1 Analog time / `$realtime :timescale` | VerA aliases `$realtime` to `$abstime` in codegen — one branch returning `inst.abstime` — instead of refusing it in the analog context, and it marks `` `timescale`` `.ignored` in the preprocessor, so neither the analog-context rule nor the scaling exists. Two defects, one row |
 | `20_final_step_empty_parens_rejected.va` | G.2 item 13 | VerA tolerates an empty `analysis_list` in `@(final_step())` and parses it as the no-argument form. Both legal forms already pass elsewhere (`ch05_analog_behavior/final_step.va`, `ch05_analog_behavior/initial_final_analysis_lists.va`); only the error was open |
 | `22_input_port_contribution_honoured.va` | G.7 item 7922 | **The one gap here that is the harness, not the compiler.** VerA stamps the contribution correctly — with `//! residual` the same module prints `res[i] = -1.000000e-3`, `d res[i]/d x[i] = 1.000000e-3`, exactly the 1 mA source and 1 kohm conductance whose KCL row gives V(i) = 1. What is missing is the solve: `src/backend/tb.zig` is a residual-and-Jacobian harness (`renderRunner`) with no Newton loop, so an unbiased unknown stays at the 0.0 initial guess and no assertion inside the analog block can see the stamp |
-| `23_transition_fall_time_binding.va` | §4.5.8 only, no Annex G cite | VerA implements `transition()` as a first-order lag with ONE time constant for both directions — codegen's `transitionTau` returns `(rise + fall) * 0.5 / 2.2`, here 2.727n whichever way the edge goes — so two filters differing only in which argument is the fall time return the same number and `2a - b` collapses to `a`. Measured: a = 0.7317073170731707 at t = 1n and 0.4221388367729831 at t = 3n, where §4.5.8's ramp gives 1.0 and 0.75 |
 
 ## What this annex needs that no fixture supplies
 
@@ -126,8 +128,9 @@ an owner elsewhere was made and what it found.
   the tree. A syntax rejection with no owner anywhere.
 - **Table G.7 item 7811, `transition()` when interrupted.** The word does not appear in
   any `.va` in the tree. `23_transition_fall_time_binding.va` covers §4.5.8's ramp
-  shape and carries the honest xfail for it; the interrupted-transition behaviour the
-  2023 rework added is untested everywhere.
+  shape on an uninterrupted edge; the interrupted-transition behaviour the 2023 rework
+  added is untested everywhere. (VerA takes a reading — a reversal mid-ramp restarts
+  from where the output is, see `zTransStep` — and nothing pins it.)
 - **Table G.1's time tolerance on `timer()`, and G.7 item 7810.** The transition-filter
   twin of the G.1 row is `21_transition_time_tolerance.va`; the `timer()` half has no
   fixture here, though `ch05_analog_behavior/` does call `timer()` with three or more
@@ -174,10 +177,10 @@ the requirement. The Annex G cite says *why the fixture exists*; the chapter cit
 `21_transition_time_tolerance.va`'s sibling — same grid, same falling edge, same
 `` `timescale``-free transient — and the two were written together to separate one
 concern from another. `21` states only what the fifth argument fixes, VerA gets that
-right, and it runs green and keeps guarding the argument binding. `23` states where the
-ramp *sits*, VerA gets that wrong, and it carries the xfail. One gap, one marker: the
-ramp digit is not repeated in `21`, because two markers XPASSing on the same day is how
-a ledger stops being read.
+right, and it keeps guarding the argument binding. `23` states where the ramp *sits* —
+which argument a falling edge binds to, and that the traversal is linear — and both now
+hold. The ramp digit is still not repeated in `21`, for the reason it never was: one
+rule, one place it is stated.
 
 Analysis split: two fixtures are `//! analysis tran` (`21`, `23`, both on
 `time 0, 1n, 3n` with `wave V(in) = 1, 0, 0`), one is `//! time 1e-6` (`01`), one is an

@@ -21,7 +21,6 @@
 //! analysis dc
 //! bias V(p) = 0.5
 //! bias V(n) = 0.0
-//! xfail VerA codegen emits @compileError for ac_stim (GeneratedCompileError); the small-signal source functions of 4.6 have no lowering
 `include "check.vh"
 module ch04_ac_stim(p, n);
     inout p, n;

@@ -429,6 +429,14 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 k == 0 and (per_block or n == 0),
                 k + 1 == d.times.len and (per_block or n + 1 == points.len),
             });
+            // §5.2.1 `analog initial` is re-executed per SUB-TASK, which in this
+            // runner is one point of the sweep: the first time step of every
+            // block, whether or not that block is the first of the analysis.
+            // That is the one place it differs from `is_initial_step` above, and
+            // the difference is only visible under `//! psweep` — where the
+            // clause's "if a parameter ... is changed during a sub-task ... the
+            // analog initial block shall be re-executed" is exactly the case.
+            try w.print("        inst.is_analog_initial = {};\n", .{k == 0});
             try w.print("        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
@@ -955,14 +963,20 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try renderRunner(arena, "062_sweep", try parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        point(2,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        point(0,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        point(2,") != null);
+    // §5.2.1 the `analog initial` flag is NOT `is_initial_step`: a dc sweep is one
+    // analysis with three SUB-TASKS, so the block re-executes at all three points
+    // while the global event fires at one.
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "inst.is_analog_initial = true;"));
 
     // With `//! time` each sweep block is its own transient run, so each gets
     // its own first and last timepoint.
     const tran = try renderRunner(arena, "063_tran", try parse(arena, "//! sweep V(a) = 0, 1\n//! time 0, 1n, 2n\n"));
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_initial_step = true;"));
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_final_step = true;"));
+    // Two blocks, so two sub-tasks: one analog-initial pass each, at dt = 0.
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, tran, "inst.is_analog_initial = true;"));
 
     // The single-point default is the Table 5-1 DCOP column: both events fire.
     const op = try renderRunner(arena, "064_op", .{});

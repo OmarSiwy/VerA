@@ -37,7 +37,6 @@
 //
 //! lrm 4.7.2.4
 //! lrm 4.7.3
-//! xfail VerA's parser has no array formals in an analog function: `inout [0:1]a` and the `'{y,z}` assignment-pattern actual are both ParseErrors
 `include "check.vh"
 module ch4_fn_array_inout(p);
   inout p;

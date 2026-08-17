@@ -24,7 +24,6 @@
 //! lrm 9.21
 //! lrm 9.21.1
 //! bias V(p) = 2.0
-//! xfail VerA refuses $table_model with E0801 (no isoline interpolator); Table 9-18 marks it analog-context Yes
 `include "check.vh"
 module ch09_table_model_array_control(p, n);
   inout p, n; electrical p, n;
