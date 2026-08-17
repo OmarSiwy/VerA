@@ -364,6 +364,9 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
         "build-lib",
         "--listen=-",
         "-dynamic",
+        // No Zig root module brings start.zig's `_DllMainCRTStartup`, which
+        // a Windows DLL otherwise needs as its entry point.
+        "-fno-entry",
         try arena.print("-O{s}", .{@tagName(o.optimize)}),
         "--name",
         o.name,
