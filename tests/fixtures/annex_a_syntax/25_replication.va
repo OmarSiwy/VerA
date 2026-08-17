@@ -15,17 +15,17 @@
 // excludes exactly one thing from Clause 4 in Verilog-A, the case equality
 // operators === and !==. This file was part of 24_expression_composites.va as
 // a `//! reject`, which demanded a diagnostic for legal source and took four
-// working operators down with it. (An earlier version of this paragraph called
-// ch03_data_types/28_string_replication.va a green positive for the same form;
-// it is not — it carries its own `//! xfail` for the same missing parser rule.
-// The §4.2.13 + C.5 argument above is what makes this file legal, and it does
-// not need a sibling.)
+// working operators down with it. (Two earlier versions of this paragraph
+// disagreed about ch03_data_types/28_string_replication.va — first calling it a
+// green positive for the same form, then noting it carried its own `//! xfail`.
+// Both are now history: it is green, and it is the §3.3 STRING form, not this
+// one. The §4.2.13 + C.5 argument above is what makes this file legal and it
+// does not lean on a sibling either way.)
 //
 //! lrm A.8.1
 //! lrm 4.2.13
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA's concatenation parser has no replication form: `{2{...}}` is E0207 "unexpected token: found {  expected `}`"
 `include "check.vh"
 module annex_a_replication(p, n);
     inout p, n;

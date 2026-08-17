@@ -16,7 +16,6 @@
 //
 //! lrm 4.7.1
 //! reject named block
-//! xfail VerA enforces none of the 4.7.1 bullet-list restrictions on an analog function body; a labelled sequential block inside `analog function` parses and lowers. src/diag_code.zig has no code for the named-block ban
 module ch4_fn_named(p);
   inout p;
   electrical p;

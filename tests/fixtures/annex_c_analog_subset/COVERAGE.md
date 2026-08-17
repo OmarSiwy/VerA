@@ -18,7 +18,7 @@ its filename. Sections with no fixture in this directory say so.
 | C.1 Verilog-A overview | descriptive: conservative and signal-flow systems, KPL/KFL, nodes/branches/terminals | none — no fixture cites C.1, and the section states no rule a source can violate. `01`/`02` happen to be conservative electrical devices, which is illustration, not proof |
 | C.2 Verilog-A language features | the nine features the subset provides | `01_analog_only_device.va` (analog block, range limit, contribution), `02_named_branch.va` (named branch), `03_parameter_range.va` (inclusive range bound), `04_analog_operators.va` (`limexp`, `ddt`), `05_analog_event.va` (`initial_step`, `cross`), `19_named_event_in_subset.va` **xfail**. Three of the nine bullets have no fixture here — see below |
 | C.3 Lexical conventions | Clause 2 applies; x/z and `?` limited to the mixed-signal context | `06_xz_rejected.va` (`4'b0x1z` and `4'b01?1`, one `//! reject` arm each). Clause 2 proper is `ch02_lexical`, which cites C.3 from `05_xz_integer_rejected.va` and `24_question_digit_rejected.va` |
-| C.4 Data types | Clause 3 applies except: discrete domain binding, `wreal`, `` `default_discipline `` | `07_discrete_domain_binding_rejected.va` **xfail**, `08_wreal_rejected.va` (passes), `09_default_discipline_rejected.va` **xfail**, `18_no_discipline_rejected.va` **xfail** (the "each module shall have a discipline" half of bullet 3) |
+| C.4 Data types | Clause 3 applies except: discrete domain binding, `wreal`, `` `default_discipline `` | `08_wreal_rejected.va` (passes), `09_default_discipline_rejected.va` **xfail**, `18_no_discipline_rejected.va` **xfail** (the "each module shall have a discipline" half of bullet 3). Bullet 1 has **no fixture**: `07` used to demand it and was rewritten as `07_discrete_domain_binding_accepted.va`, the §7.2.1 rule, when the project settled that VerA targets Verilog-AMS and not the subset |
 | C.5 Expressions | Clause 4 applies except `===` and `!==` | `10_case_equality_rejected.va` (`===`), `17_case_inequality.va` (`!==`). Both operands integer on purpose, so §4.2.1's real-operand rule cannot satisfy the arm instead |
 | C.6 Analog signals | §5.4 applies, no exception | `01_analog_only_device.va` — an inclusion with no carve-out can only be stated as a §5.4.1 access that must work, so the two-argument probe `V(p, n)` is the fixture |
 | C.7 Analog behavior | Clause 5 applies except digital behavior/events and `casex`/`casez` | `11_casex_rejected.va` **xfail**, `12_casez_rejected.va` **xfail**, `13_digital_initial_rejected.va`, `14_digital_always_rejected.va`, `21_digital_event_control_rejected.va` (`posedge`, `negedge`), `22_nonblocking_assign_rejected.va` (`<=`), `23_continuous_assign_rejected.va` (`assign`), `25_digital_procedural_rejected.va` (`fork`, `join`, `wait`). Positive side: `05_analog_event.va` and `19_named_event_in_subset.va` **xfail** |
@@ -67,7 +67,6 @@ because each is a subset gate that does not exist. Reasons verbatim:
 
 | Fixture | Rule stated | Why it fails today |
 |---|---|---|
-| `07_discrete_domain_binding_rejected.va` | C.4 bullet 1 / §3.6.2.2 — binding a net to a discrete-domain discipline is an error | VerA has no subset gate on domain binding; `ddiscrete q;` inside a Verilog-A module compiles clean (rc=0), as does a net of any undefined discipline |
 | `09_default_discipline_rejected.va` | C.4 bullet 3 / §3.8 — `` `default_discipline `` is not supported | VerA implements `` `default_discipline `` as an ordinary Clause 10 directive and has no Verilog-A subset gate, so this module compiles clean (rc=0, no diagnostic) |
 | `11_casex_rejected.va` | C.7 bullet 2 — `casex` is not supported | VerA reaches `casex` only through parser recovery: `parseStmt` does not dispatch it, so the source dies on E0209 ("expected an expression: found `casex`") and E0416 — the C.7 code that exists for this rule — never fires |
 | `12_casez_rejected.va` | C.7 bullet 2 — `casez` is not supported | same shape as `casex`: E0209 out of parser recovery, and E0416 never fires |
@@ -115,8 +114,13 @@ supported subset", `.lrm C`), which already exists, rather than be deleted. `11`
 the same situation named honestly as xfail instead, because the C.7-specific code (E0416)
 does exist and is merely unreachable.
 
-**One stale cross-reference.** `07_discrete_domain_binding_rejected.va` says
-`annex_d_standard_definitions/discrete_disciplines.va` "pins that side of the boundary by
-compiling clean". It does not: that file is itself a `//! reject E0501` fixture carrying
-its own `//! xfail`. The C.17 "silently ignore" half of the boundary is therefore not
-pinned by a passing fixture anywhere.
+**C.4 bullet 1 has no fixture, on purpose.** `07` used to demand the rejection that C.4
+requires of a Verilog-A tool. VerA targets Verilog-AMS, where §7.2.1 makes a discrete
+domain binding legal and meaningful, so the fixture was demanding a diagnostic a
+conforming AMS compiler must not emit. It is now
+`07_discrete_domain_binding_accepted.va`, stating the §7.2.1 rule and asserting that the
+binding is accepted and leaves the electrical node beside it alone. The subset rule is
+recorded in that file's header and is not tested, because this compiler does not
+implement the subset. The C.17 "silently ignore" half is likewise unpinned: the file it
+used to point at, `annex_d_standard_definitions/discrete_disciplines.va`, is a
+`//! reject E0501` fixture and pins §3.6.3 instead.

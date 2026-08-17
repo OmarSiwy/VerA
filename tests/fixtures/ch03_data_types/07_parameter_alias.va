@@ -17,7 +17,6 @@
 //
 //! param trise = 25
 //! lrm 3.4.7
-//! xfail VerA lowers an aliasparam into its parameter table but codegen emits no Model field for the alias, so `//! param trise = 25` fails to build the testbench: "no field named 'trise' in struct Model"
 `include "check.vh"
 module ch03_parameter_alias(p, n);
     inout p, n;

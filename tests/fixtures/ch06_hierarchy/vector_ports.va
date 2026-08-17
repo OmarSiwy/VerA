@@ -17,19 +17,23 @@
 // rather than read out of this clause. Writing the LRM's own case costs nothing
 // and makes the fixture portable.
 //
-// It reaches the verdict by a different road, and that is worth writing down
-// rather than hiding. VerA's parser accepts no range on a port DIRECTION
-// declaration at all, so the `[` in `inout [3:0] p` is a parse boundary (E0208,
-// "expected an identifier: found `[`") and the two ranges are never compared. The
-// right diagnostic for the wrong reason: the day ranged port declarations parse,
-// this fixture must keep failing, and it will then be the §6.5.2.2 comparison that
-// fails it, with a different code.
+// It used to reach the verdict by a different road, and this paragraph used to
+// say so: VerA's parser took no range on a port DIRECTION declaration, so the
+// `[` in `inout [3:0] p` was a parse boundary (E0208, "expected an identifier")
+// and the two ranges were never compared. It also said what to do about that —
+// "the day ranged port declarations parse, this fixture must keep failing, and
+// it will then be the §6.5.2.2 comparison that fails it, with a different code".
+// That day arrived. Both declarations now parse, both ranges are FOLDED, and
+// E0350 is the comparison itself: `[3:0]` against `[0:3]`, reported as the rule
+// and not as a syntax limit.
 //
 // Its sibling vector_ports_range_equal.va is the other half of the same clause —
-// the pair the LRM calls VALID — and that one is genuinely blocked.
+// the pair the LRM calls VALID, `[0:3]` against `[0:4-1]` — and it now runs
+// green, which is what makes this file's rejection mean anything: the two
+// differ only in whether the folded bounds agree.
 //
 //! lrm 6.5.2.2
-//! reject E0208
+//! reject E0350
 module ch6_vector(p);
   inout [3:0] p; electrical [0:3] p;
   analog begin I(p[0]) <+ V(p[1]); I(p[2]) <+ V(p[3]); end

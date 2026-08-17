@@ -30,7 +30,7 @@ Every diagnostic quoted in this file was produced by running
 |---|---|---|
 | `s7-1` | overview of mixed-signal terminology and connect modules | — non-normative prose; no fixture cites it |
 | `s7-2` | parent: continuous and discrete together | — carried by 7.2.1–7.2.4 |
-| `s7-2-1` | domain of a value; potentials/flows continuous, regs discrete | `custom_disciplines.va` (`//! lrm 3.6.2`, `7.2.1`) — `domain continuous` on a user discipline makes `p` a conservative node and `access = V` reads it, asserted at 2.5 V. `discrete_discipline.va` is the `domain discrete` half and is **`//! xfail`** |
+| `s7-2-1` | domain of a value; potentials/flows continuous, regs discrete | `custom_disciplines.va` (`//! lrm 3.6.2`, `7.2.1`) — `domain continuous` on a user discipline makes `p` a conservative node and `access = V` reads it, asserted at 2.5 V. `discrete_discipline.va` is the `domain discrete` half: it defines one, binds a net to it, and asserts the binding is accepted and leaves the electrical node beside it at 0.75 V |
 | `s7-2-2` | assignment context fixes a variable's domain | `continuous_context.va` (`//! lrm 7.2.2`, `3.2`) — the analog-block assignment takes the probe value, 1.25, not the §3.2 initial 0. The discrete half is inventoried by `digital_initial_unsupported.va` and `digital_always_unsupported.va`, both E0205 on the block itself, which *is* the construct 7.2.2 names. `both_contexts_assignment_rejected.va` is **`//! xfail`** |
 | `s7-2-3` | nets, ports, signals; a port with two analog connections is an analog port | `analog_port.va` (`//! lrm 7.2.3`, `4.2`) — both ports read through `V()` regardless of direction, checked to the last bit (`-0.49999999999999994`). Only the analog-port row of the classification: digital and mixed ports need two connections, i.e. hierarchy, and `hierarchy_unsupported.va` is that shape refused at E0204 |
 | `s7-2-4` | node abstol = smallest abstol over the signal's continuous nets | — no fixture. `compatible_disciplines.va` and `custom_disciplines.va` declare `abstol` but never span two disciplines with *different* abstols on one node, and nothing reads back a resolved tolerance |
@@ -50,8 +50,8 @@ Every diagnostic quoted in this file was produced by running
 | `s7-3-7` | no digital function from analog, no analog function from digital | — `digital_function_from_analog_unsupported.va` (E0205 on the `function` declaration) and `analog_function_from_digital_unsupported.va` (E0205 on `initial`). One sentence each, both masked: the declaration that makes the call illegal is refused before any caller is analysed |
 | `s7-4` | parent: assign disciplines to undeclared nets | — needs elaborated hierarchy |
 | `s7-4-1` | `resolveto` over an undeclared interconnect's lower connections | — `compatible_disciplines.va` cites 7.4.1 and runs green, but what its `V(p, q)` asserts is the §3.11 Self Rule the clause is *built on*, inside one flat module. The resolution rule proper needs ports, undeclared interconnect and a `connect ... resolveto` statement, none of which are here |
-| `s7-4-2` | discrete-time port connections; 1364 rules plus §3.7 for `wreal` | — no fixture cites it. `discrete_discipline.va` was credited here and cites 7.2.1/C.4/C.17 instead |
-| `s7-4-3` | error to connect incompatible continuous disciplines | — `incompatible_disciplines_rejected.va` is **`//! xfail`** |
+| `s7-4-2` | discrete-time port connections; 1364 rules plus §3.7 for `wreal` | `discrete_discipline.va` cites it for the resolution of a discrete-domain net, but asserts only that the binding is accepted; port connections themselves have no fixture |
+| `s7-4-3` | error to connect incompatible continuous disciplines | `incompatible_disciplines_rejected.va` (E0355) against `compatible_disciplines.va`, the positive twin. The clause proper is about a port CONNECTION and needs hierarchy; what the pair states is the §3.11 rule it delegates to, inside one flat module — "ports of continuous-time disciplines … shall obey the rules imposed in 3.11" |
 | `s7-4-4` | conflicting discipline declarations for one segment are an error | — `conflicting_discipline_declaration_rejected.va` is **`//! xfail`** |
 | `s7-4-4-1` | basic mode: continuous and discrete propagate up, continuous wins | — no fixture here. `annex_f_resolution/hierarchy_resolution.va` is the closest thing in the tree |
 | `s7-4-4-2` | detail mode: continuous up then back down, `resolveto` ignored | — no fixture in this tree distinguishes the two modes |
@@ -79,9 +79,9 @@ Every diagnostic quoted in this file was produced by running
 
 ## The xfail ledger
 
-Ten fixtures in this folder state a rule the compiler does not meet. This is the
+Eight fixtures in this folder state a rule the compiler does not meet. This is the
 most useful thing in the file: each row is a rule the suite asserts and VerA
-answers wrongly, and the row disappears the day the defect does. Six are flat
+answers wrongly, and the row disappears the day the defect does. Four are flat
 single-module defects VerA could fix without growing a new feature; four need
 machinery it does not have.
 
@@ -90,13 +90,10 @@ machinery it does not have.
 | `inf_contribution.va` | `s7-3-2-1` | `I(p) <+ 1.0/0.0` is accepted. VerA emits only W0650, "unit is not provably finite", and stamps the value. 7.3.2.1 makes contributing an infinity illegal |
 | `neg_inf_contribution_rejected.va` | `s7-3-2-1` | Same for `-1.0/0.0`. A separate file because a compiler may well diagnose one sign and not the other |
 | `nan_contribution_rejected.va` | `s7-3-2-1` | Same for `0.0/0.0`. No run-side check is possible: every comparison against a NaN is false |
-| `incompatible_disciplines_rejected.va` | `s7-4-3` | No discipline-compatibility diagnostic. `V(p, q)` across `ch7_inc_a` and `ch7_inc_b` — different units, different abstols, different access functions, no shared nature — lowers without complaint. `compatible_disciplines.va` is the positive twin and passes, so the pair currently agrees on a verdict where it must not |
 | `conflicting_discipline_declaration_rejected.va` | `s7-4-4` | No redeclaration diagnostic: `ch7_conf_a w; ch7_conf_b w;` silently overwrites the first declaration. The clause says conflicting means "more than one discipline regardless of whether the disciplines are compatible", and here they *are* compatible, so a compatibility-only check would not catch it either |
-| `discrete_discipline.va` | `s7-2-1` (with C.4) | No subset gate on domain binding. `ir/lower.zig` records the discipline's `is_discrete` flag and a net bound to it compiles clean; C.4 makes the binding an error. C.17 requires the *definition* to be silently ignored, so the fixture binds a net — a definition-only file would have to compile green |
 | `both_contexts_assignment_rejected.va` | `s7-2-2` | Masked, not wrong: the `initial` block is refused at E0205 before `sampled` has two domains to conflict over. Unreachable until a digital context exists |
-| `discrete_bus_narrow_unsupported.va` | `s7-3-1` | No vector nets. `reg [7:0] r` dies at E0208 in the parser and the `initial` driver is E0205, so the zero-extension rule (8 ones read as +255, not -1) is never evaluated |
-| `discrete_bus_31_unsupported.va` | `s7-3-1` | Same parser wall at the legal boundary: 31 ones must read as +2147483647 with the integer's sign bit forced to zero |
-| `discrete_bus_over31_rejected.va` | `s7-3-1` | No width check at all. `reg [31:0] r` is refused, but at E0208 for the vector syntax — the same verdict the two *legal* widths get, so the >31-bit prohibition is untested in both directions |
+| `discrete_bus_narrow_unsupported.va` | `s7-3-1` | No discrete context. `reg [7:0] r` is E0205 and so is the `initial` driver, so the zero-extension rule (8 ones read as +255, not -1) has no net to be evaluated on |
+| `discrete_bus_31_unsupported.va` | `s7-3-1` | Same E0205 wall at the legal boundary: 31 ones must read as +2147483647 with the integer's sign bit forced to zero. The WIDTH half of the rule is now checked — E0222 stays silent at 31 and fires at 32 — so what is left here is the mapping, not the limit |
 
 ## The E0201 wall
 
@@ -130,6 +127,11 @@ is a diagnostic that names no rule.
 - `x_case_equality_unsupported.va` and `z_case_inequality_unsupported.va` want
   E0323 for the operator but get E0130 for the literal, because the lexer wins.
   That is why `case_equality.va` exists with no x/z literal in it.
+- `discrete_bus_over31_rejected.va` left this list. §7.3.1 Table 7-1's ">31 bits
+  is illegal" is now its own diagnostic, E0222, alongside the E0205 that refuses
+  the `reg`; the file pins the rule's wording rather than the code, because what
+  separates it from its two legal-width siblings is the presence of that second
+  diagnostic and not the fact of a rejection.
 
 ## Fixtures here that cite other chapters
 

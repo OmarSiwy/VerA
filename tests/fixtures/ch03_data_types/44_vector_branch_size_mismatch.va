@@ -8,12 +8,13 @@
 // 33_vector_branches.va is the legal side of the same rule: [3:5] against
 // [1:3], both size 3.
 //
-// The pinned substring is deliberately only the phase label. This rule has no
-// diagnostic code of its own in VerA — today the parser refuses the net range
-// itself, at E0208, long before anything compares two terminal sizes — so
-// pinning E0208 would pin the WRONG rule and would stop matching the day
-// vector nets land, which is exactly when this fixture starts being worth
-// something. Any conforming compiler must produce some diagnostic here.
+// The pinned substring is deliberately only the phase label, and it stays that
+// way now that the rule is genuinely checked (E0353). A code here would be
+// VerA's, and this file's claim is the LRM's: any conforming compiler must
+// produce SOME diagnostic. It used to carry the same line for the opposite
+// reason — the parser refused the net range itself, at E0208, long before
+// anything compared two terminal sizes — so what changed is only that the
+// weak pin is now weak on purpose rather than by necessity.
 //
 //! lrm 3.12
 //! reject DiagnosticsReported

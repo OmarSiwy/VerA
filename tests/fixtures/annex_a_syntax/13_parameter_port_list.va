@@ -18,7 +18,6 @@
 //! bias V(p) = 0.5
 //! param gain = 3.5
 //! print none
-//! xfail VerA has no module_parameter_port_list: the header parser expects `;` after the port list, so `#` is E0207 "unexpected token: found #" (src/frontend/parser.zig)
 `include "check.vh"
 module annex_a_parameter_header #(parameter real gain = 2.0, parameter integer mode = 3) (p, n);
     inout p, n;

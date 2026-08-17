@@ -8,13 +8,14 @@ Sixty-eight ids, forty-six of them carrying a fixture that exercises the
 construct. The other twenty-two get an empty cell and a sentence saying why,
 never a plausible file name.
 
-164 `.va` files and one data file (`ch09_table_model_2d.tbl`). **Eighty of the
-164 are `//! xfail`** — this is by a wide margin the most indebted chapter in
-the suite, and that ratio is the honest headline, not a footnote. Thirty-six
-fixtures carry `//! reject`; thirty-two of those thirty-six are *also* xfail,
-which is to say VerA currently accepts nine tenths of what this chapter forbids.
-The four rejects it does meet are `136`/`137` (`$bound_step` E0803/E0802) and
-`138`/`139` (`$discontinuity` E0804/E0805).
+164 `.va` files and one data file (`ch09_table_model_2d.tbl`). **Seventy-eight
+of the 164 are `//! xfail`** — this is by a wide margin the most indebted
+chapter in the suite, and that ratio is the honest headline, not a footnote.
+Thirty-six fixtures carry `//! reject`; thirty-one of those thirty-six are
+*also* xfail, which is to say VerA currently accepts most of what this chapter
+forbids. The five rejects it does meet are `136`/`137` (`$bound_step`
+E0803/E0802), `138`/`139` (`$discontinuity` E0804/E0805) and `147`
+(§9.15 `$simparam` on an unknown name with no fallback, E0811).
 
 Reading the table: **xfail** on a fixture means the file runs and fails, and the
 reason on that row is the defect. A row whose fixtures are *all* xfail is a
@@ -65,7 +66,7 @@ evidence behind it. §9.4.2, §9.4.3, §9.5.1, §9.5.4.1, §9.5.4.2, §9.5.5, §
 | `s9.13.2` | seven `$dist_*` and six `$rdist_*` names | `34_distribution.va`, `35_real_distribution.va`, `119`–`130` (one file per name) — **all xfail on the same E0801**. Argument-rule negatives `150_rdist_domain_rejected.va`, `151_rdist_uniform_start_end_rejected.va`, `166_rdist_real_seed_rejected.va`, `133_rdist_type_string_outside_paramset_rejected.va` — **xfail**, *E0801 fires at the function name, so no argument is ever examined and the domain, start/end and integer-seed rules are not reached* |
 | `s9.13.3` | Table 9-26 cross-listing to the 1364 C algorithms | — no fixture claims a distribution's shape. Nothing could: every call is refused at the name |
 | `s9.14` | math system functions | Twenty-seven atomics `067`–`093` plus `17_math_unary.va`, `18_math_trig.va`, `19_math_binary.va`, `20_math_2023.va`. Two of the atomics are **xfail**: `092_ln1p.va` — *`codegen.zig` `zLn1p` is `a.addC(1.0).log()`, so `$ln1p(5e-16)` returns 4.440892098500625e-16, 11% low — precisely the naive value Table 4-14's C `log1p` exists to replace* — and `093_expm1.va` — *`zExpm1` is `a.exp().addC(-1.0)`, same 11% error for the same reason* |
-| `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. Two **xfail**: `147_simparam_unknown_no_fallback_rejected.va` — *VerA answers every unknown `$simparam` with a default instead of diagnosing the missing-fallback case* — and `157_simparam_timescale.va` — *`` `timescale `` is not threaded into `$simparam`; `"timeUnit"`/`"timePrecision"` have no fallback here and both come back 0.0* |
+| `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. All three branches of the clause's `$simparam` sentence are now green: `147_simparam_unknown_no_fallback_rejected.va` is a **reject VerA meets** (E0811 — the unknown name with no fallback), and `157_simparam_timescale.va` pins Table 9-27's two source-derived rows, `"timeUnit"`/`"timePrecision"` in seconds, which the preprocessor now parses out of `` `timescale `` and publishes for `Lower.simparamValue` |
 | `s9.16` | `$simprobe(inst_name, param_name [, expr])` | `36_simprobe.va` — **xfail**, *E0801: no sibling-instance host to probe; Table 9-13 marks it analog-context Yes* |
 | `s9.17` | analog kernel control family | — parent; carried by 9.17.1–9.17.3 |
 | `s9.17.1` | `$discontinuity`, degree `0` and `-1` | `24_discontinuity.va`; `138_discontinuity_arity_rejected.va` (E0804) and `139_discontinuity_nonconstant_rejected.va` (E0805) — **rejects VerA already meets** |

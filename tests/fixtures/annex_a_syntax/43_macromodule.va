@@ -19,7 +19,6 @@
 //! bias V(p) = 0.75
 //! bias V(n) = 0.25
 //! print none
-//! xfail VerA refuses the keyword outright: E0201 "construct is not in the supported subset: `macromodule`"
 `include "check.vh"
 macromodule annex_a_macromodule(p, n);
     inout p, n;

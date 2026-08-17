@@ -16,6 +16,7 @@ const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
 const Lexer = @import("../frontend/lexer.zig");
+const Preprocessor = @import("../frontend/preprocessor.zig");
 const diag = @import("../diag.zig");
 const assert = std.debug.assert;
 
@@ -144,6 +145,12 @@ params: std.ArrayList(ParamInfo) = .empty, // §3.4
 /// Deduped `param_ref` Value per params[i] — parallel to `params`.
 param_values: std.ArrayList(Mir.Value) = .empty,
 branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branches
+/// §3.12.1 port branches: branch name → the port's `node_order` slot. A table
+/// of its own and not a flag on `BranchInfo`, because a port branch is not a
+/// node pair at all — it is the §5.4.3 port flow under a second name, and
+/// everything that consumes `branches` (contribution keying, `flowUnknown`,
+/// codegen's stamp reconstruction) is written on pairs.
+port_branches: std.StringHashMapUnmanaged(u16) = .empty,
 contributions: std.ArrayList(Contribution) = .empty, // §5.6
 /// The U-enum index space: ports (§6.5) first, then internal nodes (§3.6.3),
 /// then branch-flow unknowns (§5.4.2). Append-only ⇒ stable.
@@ -163,6 +170,16 @@ port_probes: std.ArrayList(PortProbe) = .empty,
 num_ports: usize = 0, // §6.5
 node_voltages: std.StringHashMapUnmanaged(u16) = .empty, // §1.3.1 name → index
 disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
+/// §3.6.3 declared vector nets and §3.12 vector branches, by base name.
+///
+/// SCALARISED, so this map is the only place a range survives elaboration:
+/// `electrical [3:0] p` interns four ordinary nodes called `p[3]`…`p[0]` and
+/// the node table never learns that ranges exist. Everything downstream —
+/// `internNode`, `probe`, the contribution index, codegen's `U` enum — sees
+/// four unrelated nets and needs no change at all. What is left over is the
+/// two questions a reference has to answer: is this name a vector, and is
+/// this index one of its elements (E0351, E0352).
+vectors: std.StringHashMapUnmanaged(VecRange) = .empty,
 
 // ---- internal lowering state (not part of the codegen contract) ----
 /// Deduped probe Value per node_order slot; `.undef` = not probed yet.
@@ -180,6 +197,18 @@ branch_reads: std.ArrayList(BranchRead) = .empty,
 /// reason class-6 diagnostics have a source location.
 src: []const u8 = "",
 tok_starts: []const u32 = &.{},
+/// §10.2 `default_discipline events, in text-stream order, as the preprocessor
+/// saw them. Set by the caller after `init` (root.zig): a text stage cannot
+/// apply the directive itself — §10.2 hands it to §7.4 discipline resolution,
+/// which needs the module's declarations — so all it can do is say WHERE each
+/// one took effect. Empty when the text never came through stage 1.
+default_disciplines: []const Preprocessor.DefaultDiscipline = &.{},
+/// IEEE 1364 §19.9 `timescale, set by the same caller and for the same reason:
+/// it is a text-stream fact with a §9.15 consumer. Null when the stream carried
+/// no `timescale, which is not the same as a default one — Table 9-27 defines
+/// "timeUnit" as "the time unit AS SPECIFIED IN `timescale", so with nothing
+/// specified the parameter is not known and §9.15's fallback rule applies.
+timescale: ?Preprocessor.Timescale = null,
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -196,6 +225,14 @@ scope_log: std.ArrayList(ScopeEntry) = .empty,
 consts: std.StringHashMapUnmanaged(Const) = .empty,
 /// name → index into `params` (aliasparam §3.4.7 maps two names to one index).
 param_index: std.StringHashMapUnmanaged(u32) = .empty,
+/// §3.4.7 the alias side of that map, in declaration order, for the ONE
+/// consumer that cannot read it out of `param_index`: the model card. An alias
+/// exists to carry an override — "nmos2 #(.trise(5))" and "nmos2 #(.dtemp(5))"
+/// have to mean the same thing — so the alias needs a field of its own on the
+/// card, which `params` (one entry per real parameter) has no slot for.
+/// `param_index` cannot answer this because it holds both names with nothing
+/// saying which is the alias.
+aliases: std.ArrayList(struct { name: []const u8, param: u32 }) = .empty,
 /// Scalarized array bounds (§3.2.2 variables, §3.4.4 parameters).
 arrays: std.StringHashMapUnmanaged(ArrayInfo) = .empty,
 /// §5.9 break/continue targets.
@@ -316,6 +353,28 @@ const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 const Accum = struct { resist: Ssa.Place, react: Ssa.Place };
 
+/// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
+/// either order is legal — §3.6.3's own examples run `[5:0]` and the LRM's
+/// vector-branch example runs `[3:5]` — so nothing here assumes msb ≥ lsb.
+const VecRange = struct {
+    msb: i64,
+    lsb: i64,
+
+    fn size(v: VecRange) u32 {
+        return @intCast(@abs(v.msb - v.lsb) + 1);
+    }
+    fn has(v: VecRange, i: i64) bool {
+        return i >= @min(v.msb, v.lsb) and i <= @max(v.msb, v.lsb);
+    }
+    /// The k-th element in DECLARATION order, msb first. That order is the
+    /// host's terminal order for a vector port, and it is what §3.12 pairs
+    /// "in a parallel one-to-one fashion" for a vector branch.
+    fn at(v: VecRange, k: u32) i64 {
+        const d: i64 = @intCast(k);
+        return if (v.msb <= v.lsb) v.msb + d else v.msb - d;
+    }
+};
+
 /// A folded constant (§4.2 constant_expression). Genvars (§3.5) and parameter
 /// defaults live here so `for (i=0;i<N;i=i+1)` can unroll (§6.6.1).
 pub const Const = union(enum) {
@@ -381,12 +440,14 @@ pub fn deinit(self: *Lower) void {
     self.params.deinit(gpa);
     self.param_values.deinit(gpa);
     self.branches.deinit(gpa);
+    self.port_branches.deinit(gpa);
     self.contributions.deinit(gpa);
     self.node_order.deinit(gpa);
     self.node_disciplines.deinit(gpa);
     self.node_dir.deinit(gpa);
     self.port_probes.deinit(gpa);
     self.node_voltages.deinit(gpa);
+    self.vectors.deinit(gpa);
     self.disciplines.deinit(gpa);
     self.probe_cache.deinit(gpa);
     self.accum.deinit(gpa);
@@ -488,7 +549,47 @@ fn startUnreachable(self: *Lower) Oom!void {
 // Type coercion — LRM §4.2.1.1 (real→integer), §4.2.1.2 (integer→real)
 // ---------------------------------------------------------------------------
 
-fn toReal(self: *Lower, tv: TypedValue) Oom!Mir.Value {
+/// §2.7 — "A string literal used as an operand in expressions and assignments
+/// shall be treated as unsigned integer constants represented by a sequence of
+/// 8-bit ASCII values, with one 8-bit ASCII value representing one character."
+/// A base-256 numeral, most significant character FIRST: "AB" is
+/// 'A'*256 + 'B' == 16706, and the one-character "\n" is 10.
+///
+/// `bits` is §3.3's width rule for the assignment case — "if their size
+/// differs, the literal is right justified and either truncated on the left or
+/// zero filled on the left, as necessary" — and both halves of it are already
+/// in this loop: the zero fill is the accumulator starting at 0, and the
+/// truncation is walking only the last `bits/8` bytes.
+///
+/// ponytail: the result is the unsigned value, so a 32-bit "\377\377\377\377"
+/// is 4294967295 and not the -1 that §3.2's signed `integer` would hold. VerA
+/// stores an `integer` in an i64 and has no 32-bit wrap anywhere else either;
+/// 72_integer_overflow_wrap.va owns that gap and closing it closes this too.
+pub fn strToInt(s: []const u8, bits: u8) i64 {
+    var acc: u64 = 0;
+    for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
+    return @bitCast(acc);
+}
+
+/// §2.7 at an OPERAND: a string about to be used as a number becomes one.
+/// Everything else is returned untouched, including a string with no compile-
+/// time bytes — there is no runtime string in the emitted device, so that is
+/// already broken and the caller's own diagnostic is the better one.
+///
+/// ponytail: 64 bits, the width of the slot the value lands in. §3.3's
+/// assignment case knows the DECLARED width and passes its own; an operand has
+/// only its storage, so a literal longer than eight characters keeps its low
+/// eight.
+fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
+    if (tv.ty != .string) return tv;
+    return switch (self.mir.valueDef(tv.v)) {
+        .str_const => |s| .{ .v = try self.iconst(strToInt(s, 64)), .ty = .integer },
+        else => tv,
+    };
+}
+
+fn toReal(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
     return switch (tv.ty) {
         .real => tv.v,
         .integer => self.emit(.if_cast, &.{tv.v}),
@@ -496,12 +597,89 @@ fn toReal(self: *Lower, tv: TypedValue) Oom!Mir.Value {
     };
 }
 
-fn toInt(self: *Lower, tv: TypedValue) Oom!Mir.Value {
+fn toInt(self: *Lower, tv0: TypedValue) Oom!Mir.Value {
+    const tv = try self.strNum(tv0); // §2.7
     return switch (tv.ty) {
         .integer => tv.v,
         .real => self.emit(.fi_cast, &.{tv.v}),
         .string => tv.v,
     };
+}
+
+/// §5.7 store `tv` into a slot of type `ty`. §4.2.1.1/§4.2.1.2 convert between
+/// integer and real; §3.3 draws the one line no conversion crosses, and it is
+/// drawn between a string LITERAL and a string VALUE, not between the types:
+///
+///   "A string literal can be assigned to a string or an integral type. ...
+///    A string cannot be assigned to an integral type."
+///
+/// So `integer code = "A";` is legal and `code = label;` (label a `string`) is
+/// not, and the test is the shape of the expression, not the type it lowered
+/// to. §3.3's own worked example is the same distinction one level up:
+/// `r = {i{"Hi"}}` is "invalid" because Table 3-3 makes a nonconstant
+/// replication a STRING, where `integer code = "A"` still has a literal in
+/// hand.
+///
+/// Every write to a declared variable goes through this: the assignment, the
+/// element-wise array assignment, and the declaration initializer.
+///
+/// ponytail: one ceiling left where §3.3 put it — the mirror direction, a
+/// numeric into a `string` slot, which §3.4.1 forbids too, is unchecked; the
+/// arm to add it to is `.string` below.
+fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
+    if (tv.ty == .string and ty != .string) {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.arena);
+        if (!try self.strLitBytes(e, &bytes)) {
+            try self.errAt(e, .E0354, "assigning a string to {s}", .{@tagName(ty)});
+            return zeroOf(ty);
+        }
+        // §3.3's "right justified and either truncated on the left or zero
+        // filled on the left" is measured against the DECLARED type, and §3.2
+        // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
+        // That width is the LRM's and not VerA's storage — see `strToInt`.
+        if (ty == .integer) return self.iconst(strToInt(bytes.items, 32));
+    }
+    return switch (ty) {
+        .real => self.toReal(tv),
+        .integer => self.toInt(tv),
+        .string => tv.v,
+    };
+}
+
+/// Is `e` a §3.3 string LITERAL, and what are its bytes? The literal itself, or
+/// a concatenation of literals — §4.2.13's replication with a literal count is
+/// unrolled by the parser, so `{5{"Hi"}}` arrives as five operands.
+///
+/// A `.multi_concat` is deliberately not one, and that exclusion is the whole
+/// rule: Table 3-3's multiplier "can be nonconstant", and a nonconstant one
+/// leaves a string with no width at elaboration, which is why §3.3's own
+/// example makes `r = {i{"Hi"}}` invalid where `b = {i{"Hi"}}` is fine.
+///
+/// The test cannot be made on the VALUE, and that is why it is made on the
+/// AST: the SSA builder answers a read of a once-written `string label = "hi"`
+/// with the very `str_const` the literal produced, so by the time lowering has
+/// a Value in hand `code = label` and `code = "hi"` are the same thing — and
+/// §3.3 says one is an error and the other is not.
+///
+/// Table 3-3's empty-string row is the one place these bytes differ from the
+/// string the same expression evaluates to: `""` "is converted to 8'b0", so
+/// `{"H", ""}` is "H" as a string and 'H' followed by one zero byte as an
+/// integral.
+fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .str_literal => {
+            const s = self.file.str(ex.strOf(e));
+            try out.appendSlice(self.arena, if (s.len == 0) &[_]u8{0} else s);
+            return true;
+        },
+        .concat => {
+            for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
+            return true;
+        },
+        else => return false,
+    }
 }
 
 /// §4.2.8 — a condition is "true" when non-zero. Normalized to integer 0/1 so
@@ -558,10 +736,25 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     try self.collectDisciplines(); // §3.6.1/§3.6.2 (annex D.1 is inlined here)
     try self.checkNatureTable(); // §3.6.1/§3.13 — the declaration table itself
 
+    // §3.4 parameters BEFORE the ports, because a range is a constant
+    // expression over them: §6.5.2.2's own example is `input [1:width] dt`
+    // with `width` a module parameter, and `foldDim` cannot answer that from
+    // an empty `consts`. Nothing in a parameter declaration can name a net —
+    // §3.4 defaults are constant expressions — so the two orders differ only
+    // in what is already known, never in what is reachable.
+    for (module.params) |*p| try self.lowerParamDecl(p);
+
     // §6.5 ports first: this order IS the host device's terminal order.
     for (module.ports) |p| {
-        if (p.range != null) {
-            try self.err(p.main_tok, .E0301, "", .{});
+        // §3.6.3/§6.5.2 a vector port is N terminals, in declaration order.
+        if (try self.portRange(&p)) |r| {
+            const name = self.file.str(p.name);
+            const disc = self.strOrEmpty(p.discipline);
+            for (0..r.size()) |k| {
+                const idx = try self.internNode(try self.vecElem(name, r.at(@intCast(k))), disc);
+                self.node_dir.items[idx] = p.direction;
+            }
+            try self.vectors.put(self.arena, name, r);
             continue;
         }
         const idx = try self.internNode(self.file.str(p.name), self.strOrEmpty(p.discipline));
@@ -587,8 +780,13 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
         const name = self.file.str(n.name);
-        if (n.range != null) {
-            try self.err(n.main_tok, .E0302, "", .{});
+        // §3.6.3 a vector net is N independent nets, scalarised here.
+        if (n.range) |d| {
+            if (try self.foldDim(d, n.main_tok)) |r| {
+                for (0..r.size()) |k|
+                    _ = try self.internNode(try self.vecElem(name, r.at(@intCast(k))), self.strOrEmpty(n.discipline));
+                try self.vectors.put(self.arena, name, r);
+            }
             continue;
         }
         if (n.is_ground) {
@@ -642,9 +840,23 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         _ = try self.internNode(name, self.strOrEmpty(n.discipline));
     }
 
-    // §3.4 parameters in source order — a later default may reference an
-    // earlier parameter (§6.3.4), which is why `consts` is filled as we go.
-    for (module.params) |*p| try self.lowerParamDecl(p);
+    // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's
+    // default. It runs HERE, after every declaration in the module has been
+    // interned, and not at the intern itself — a port and a body declaration
+    // of the same net are two entries (`module (p); inout p; electrical p;`),
+    // and a default written in at the first would make the second a §7.4.4
+    // "second discipline declaration" (E0902) on three fixtures that are
+    // legal and green.
+    //
+    // A vector is scalarised by now, so the default has to be applied to the
+    // ELEMENTS: `p` is not a node and `applyDefaultDiscipline` would find
+    // nothing under it, leaving four natureless nets and four E0337s where
+    // §10.2 supplied a discipline.
+    for (module.ports) |p| try self.applyDefaultToAll(self.file.str(p.name), p.main_tok);
+    for (module.nets) |n| try self.applyDefaultToAll(self.file.str(n.name), n.main_tok);
+
+    // §3.4 parameters were lowered above the port loop — in source order, so a
+    // later default may still reference an earlier parameter (§6.3.4).
     // §3.4.7 aliasparam: a second name for an existing parameter.
     for (module.aliasparams) |a| {
         const target = self.file.str(a.target);
@@ -664,6 +876,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         }
         if (self.param_index.get(target)) |idx| {
             try self.param_index.put(self.arena, alias, idx);
+            try self.aliases.append(self.arena, .{ .name = alias, .param = idx });
         } else {
             var b = self.errWith(module.main_tok, .E0303);
             b.msg("`{s}`", .{target});
@@ -675,17 +888,63 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §3.12 named branches.
     for (module.branches) |b| {
+        const base = self.file.str(b.name);
+        // A.2.3 `list_of_branch_identifiers ::= branch_identifier [ range ]
+        // { , branch_identifier [ range ] }` — a branch ARRAY, several branches
+        // over one declared terminal pair. Folded here and not in the parser
+        // because the bounds are constant EXPRESSIONS (same reason as §6.5.2.2's
+        // port ranges), and the elements are registered under their scalarised
+        // names so `V(pair[1])` resolves through the ordinary branch lookup.
+        const arr: ?VecRange = if (b.range) |d|
+            (try self.foldDim(d, b.main_tok) orelse continue)
+        else
+            null;
         if (b.is_port_branch) {
-            try self.err(b.main_tok, .E0304, "", .{});
+            // §3.12.1 "A port branch is a special type of branch used to access
+            // the flow into a port of a module (see 5.4.3). It is a branch
+            // between the upper and lower connections of the port." Recorded as
+            // the PORT and not as a node pair, because those two connections are
+            // one node here: a pair would give the branch a potential that is
+            // identically zero and a flow that is a second, unconstrained
+            // unknown, neither of which is the quantity §5.4.3 names. The one
+            // read that means anything is the flow, and it is the flow `I(<p>)`
+            // already has — see `lowerBranchAccess`.
+            const p = try self.nodeOf(b.hi);
+            for (0..(if (arr) |r| r.size() else 1)) |k| {
+                const key = if (arr) |r| try self.vecElem(base, r.at(@intCast(k))) else base;
+                try self.port_branches.put(self.arena, key, p);
+            }
+        } else if (arr) |r| {
+            // ponytail: the elements share one (hi, lo) and `contribIndex` keys
+            // an accumulator on the node pair, so contributing to two elements
+            // lands in ONE source — the same collapse `two_named_branches.va`
+            // records for two separately named branches over one pair. Telling
+            // them apart needs branch identity in the contribution key, which is
+            // that fixture's gap and not this one's.
+            const hi = try self.nodeOf(b.hi);
+            const lo = if (b.lo == .none) ground else try self.nodeOf(b.lo);
+            try self.checkNetCompat(b.main_tok, hi, lo); // §3.12 → §3.11
+            for (0..r.size()) |k|
+                try self.branches.put(self.arena, try self.vecElem(base, r.at(@intCast(k))), .{ .hi = hi, .lo = lo });
+        } else if (self.vecTerminal(b.hi) != null or self.vecTerminal(b.lo) != null) {
+            // §3.12 a branch with a vector terminal is a vector branch.
+            try self.declareVectorBranch(&b);
             continue;
+        } else {
+            const hi = try self.nodeOf(b.hi);
+            const lo = if (b.lo == .none) ground else try self.nodeOf(b.lo);
+            // §3.12: "The disciplines for the specified nets shall be
+            // compatible (see 3.11)." Only the two-terminal form has two
+            // disciplines to compare — the one-terminal form's second net is
+            // ground, and §3.12 says the branch then "derives" its discipline
+            // from the one net that is named.
+            try self.checkNetCompat(b.main_tok, hi, lo);
+            try self.branches.put(self.arena, base, .{ .hi = hi, .lo = lo });
         }
-        if (b.range != null) {
-            try self.err(b.main_tok, .E0305, "", .{});
-            continue;
-        }
-        const hi = try self.nodeOf(b.hi);
-        const lo = if (b.lo == .none) ground else try self.nodeOf(b.lo);
-        try self.branches.put(self.arena, self.file.str(b.name), .{ .hi = hi, .lo = lo });
+        // The BASE name is a vector, so `V(pair)` and `V(pair[9])` get the
+        // vector diagnostics (E0351/E0352) rather than interning an implicit
+        // net — exactly as `declareVectorBranch` arranges for a vector terminal.
+        if (arr) |r| try self.vectors.put(self.arena, base, r);
     }
 
     // §3.5 genvars exist only for unrolling; they carry no runtime storage.
@@ -797,6 +1056,15 @@ fn collectDisciplines(self: *Lower) Oom!void {
     // §4.4 the two standard access identifiers always resolve.
     try self.access_kind.put(self.arena, "V", .potential);
     try self.access_kind.put(self.arena, "I", .flow);
+    // §5.5.1 Syntax 5-3 / §4.4 the GENERIC access functions, which resolve on
+    // every discipline that binds the half they name. Registering them here
+    // rather than in a parallel table is what makes them "an alternative
+    // spelling": everything downstream — `branchOf`, `contribIndex`,
+    // `resolveLvalue`, the E0501/E0337 checks — sees an `Access` and cannot
+    // tell which word produced it. The single exemption is the §3.6.1.4 name
+    // match in `checkAccessMatch`; see `isGeneric` there.
+    try self.access_kind.put(self.arena, generic_potential, .potential);
+    try self.access_kind.put(self.arena, generic_flow, .flow);
 
     for (self.file.disciplines) |*d| {
         var info: DisciplineInfo = .{
@@ -1081,10 +1349,17 @@ fn fileOf(self: *const Lower, tok: u32) diag.FileId {
     return self.bag.locate(self.tokenSpan(tok), null).file;
 }
 
-const NatureAttrs = struct { abstol: ?f64 = null, access: ?[]const u8 = null };
+const NatureAttrs = struct {
+    abstol: ?f64 = null,
+    access: ?[]const u8 = null,
+    /// §3.6.1.2 `units`, read for §3.11.1's Units Value Rule — the one rule
+    /// that relates two natures with no derivation between them.
+    units: ?[]const u8 = null,
+};
 
-/// §3.6.1.1 walk a (possibly derived) nature for `abstol` (§3.6.1.2) and
-/// `access` (§3.6.1.4). Derived natures inherit what they do not override.
+/// §3.6.1.1 walk a (possibly derived) nature for `abstol` (§3.6.1.2),
+/// `access` (§3.6.1.4) and `units` (§3.6.1.2). Derived natures inherit what
+/// they do not override.
 fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     var out: NatureAttrs = .{};
     var want = name;
@@ -1100,6 +1375,9 @@ fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
             } else if (out.access == null and std.mem.eql(u8, an, "access")) {
                 if (self.file.exprs.tag(a.value) == .ident)
                     out.access = self.file.str(self.file.exprs.strOf(a.value));
+            } else if (out.units == null and std.mem.eql(u8, an, "units")) {
+                if (self.file.exprs.tag(a.value) == .str_literal)
+                    out.units = self.file.str(self.file.exprs.strOf(a.value));
             }
         }
         if (nat.parent == .none) return out;
@@ -1126,6 +1404,106 @@ fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     return out;
 }
 
+// ---- §3.11 net compatibility -----------------------------------------------
+
+/// §3.11.1's five NATURE rules, in the order that makes each one's job visible.
+///
+///   Non-Existent Binding Rule  "A nature is compatible with a non-existent
+///                              discipline binding."
+///   Self Rule (Nature)         "A nature is compatible with itself."
+///   Base Nature Rule           "A derived nature is compatible with its base."
+///   Derived Nature Rule        "Two natures are compatible if they are derived
+///                              from the same base nature."
+///   Units Value Rule           "Two natures are compatible if they have the
+///                              same value for the units attribute."
+///
+/// The Non-Existent Binding Rule is also what makes §3.11.1's Natureless
+/// Discipline Rule fall out with no arm of its own: a discipline that binds no
+/// nature is `.none` on both halves, so it conflicts with nobody.
+fn naturesCompatible(self: *Lower, a: Ast.StrId, b: Ast.StrId) bool {
+    if (a == .none or b == .none) return true;
+    if (a == b) return true;
+    // The Base and Derived Nature Rules are ONE comparison: `baseNatureOf`
+    // answers a base nature with itself, so "derived from its base" and
+    // "derived from a common base" are the same equality.
+    const base = self.baseNatureOf(a);
+    if (base != .none and base == self.baseNatureOf(b)) return true;
+    const ua = self.natureOf(a).units orelse return false;
+    const ub = self.natureOf(b).units orelse return false;
+    return std.mem.eql(u8, ua, ub);
+}
+
+/// §3.6.2.2 the domain a discipline is IN, or null when it is domainless.
+///
+/// `unspecified` is not the same answer as domainless. §3.11.1's own worked
+/// example says so: "electrical and continuous_elec are compatible disciplines
+/// because the DEFAULT domain for discipline electrical is continuous" —
+/// electrical declares no `domain` attribute and is still continuous, because
+/// it binds natures. Only a discipline that declares no domain AND binds
+/// nothing is the deprecated `domainless` of that same example.
+fn domainOf(d: *const Ast.DisciplineDecl) ?Ast.DisciplineDecl.Domain {
+    return switch (d.domain) {
+        .continuous, .discrete => d.domain,
+        .unspecified => if (d.potential != .none or d.flow != .none) .continuous else null,
+    };
+}
+
+fn disciplineDecl(self: *const Lower, name: []const u8) ?*const Ast.DisciplineDecl {
+    for (self.file.disciplines) |*d| {
+        if (std.mem.eql(u8, self.file.str(d.name), name)) return d;
+    }
+    return null;
+}
+
+/// §3.11.1's DISCIPLINE rules. Null when the two are compatible; otherwise the
+/// rule that refuses them, worded for the diagnostic's note.
+///
+///   Self Rule (Discipline)       "A discipline is compatible with itself."
+///   Domainless Discipline Rule   "compatible with all disciplines as there is
+///                                no nature or domain conflict."
+///   Domain Incompatibility Rule  "Disciplines with different domain attributes
+///                                are incompatible."
+///   Potential / Flow Incompatibility Rules — deferred to `naturesCompatible`.
+fn disciplineConflict(self: *Lower, an: []const u8, bn: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, an, bn)) return null;
+    const a = self.disciplineDecl(an) orelse return null;
+    const b = self.disciplineDecl(bn) orelse return null;
+    const da = domainOf(a) orelse return null;
+    const db = domainOf(b) orelse return null;
+    const unrelated = "neither the same nature, nor derived from a common base nature, nor agreed on `units`";
+    if (da != db)
+        return "3.11.1 Domain Incompatibility Rule: disciplines with different domain attributes are incompatible; 3.11 says such nets need a `connect` statement (7.4)";
+    if (!self.naturesCompatible(a.potential, b.potential))
+        return "3.11.1 Potential Incompatibility Rule: the two potential natures are " ++ unrelated;
+    if (!self.naturesCompatible(a.flow, b.flow))
+        return "3.11.1 Flow Incompatibility Rule: the two flow natures are " ++ unrelated;
+    return null;
+}
+
+/// §3.11: "Certain operations can be done on nets only if the two (or more)
+/// nets are compatible. For example, if an access function has two nets as
+/// arguments, they must be compatible." §3.12 states the same requirement for
+/// the two terminals of a branch declaration, and §7.4.3 for a continuous-time
+/// port connection — one rule (§3.11.1), so one helper and one code.
+fn checkNetCompat(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
+    // §1.3.1.1 collapses every ground onto one global reference node, which is
+    // not a second NET the rule can be about: `V(p)` is `V(p, gnd)` and spans
+    // one discipline.
+    if (hi == ground or lo == ground) return;
+    const an = self.node_disciplines.items[hi];
+    const bn = self.node_disciplines.items[lo];
+    // A net with no discipline at all is E0337's, not this rule's: §3.11
+    // compares two disciplines and here there is only one.
+    if (an.len == 0 or bn.len == 0) return;
+    const why = self.disciplineConflict(an, bn) orelse return;
+    var d = self.errWith(tok, .E0355);
+    d.msg("`{s}` is of discipline `{s}` and `{s}` is of discipline `{s}`", .{
+        self.nodeName(hi), an, self.nodeName(lo), bn,
+    });
+    d.note("{s}", .{why});
+    try d.emit();
+}
+
 // ---- §1.3.1 nodes ----------------------------------------------------------
 
 /// §1.3.4 — is `dname` a SIGNAL-FLOW discipline? Exactly one of the two natures
@@ -1142,6 +1520,60 @@ fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
     if (dname.len == 0) return false;
     const d = self.disciplines.get(dname) orelse return false;
     return d.has_potential != d.has_flow;
+}
+
+/// §10.2 + §7.4. "The default discipline is applied by discipline resolution
+/// (see 7.4 and Annex F) to all discrete signals without a discipline
+/// declaration that appear in the text stream following the use of the
+/// `default_discipline directive." So: only a net that still has none, and
+/// only a directive that precedes the net's own declaration.
+///
+/// The QUALIFIER selects which nets a default claims, which is why more than
+/// one can be in force "provided each differs in qualifier", and why §10.2's
+/// precedence sentence ("the more specific directives have higher precedence")
+/// makes a qualified default beat an unqualified one. Every net that reaches
+/// this point is a plain net, hence `wire` by IEEE Std 1364 §3.5's default
+/// nettype — VerA has no `reg`/`real`/`wreal` net declarations at all (E0205),
+/// so `wire` and the unqualified form are the only two keys that can match.
+/// ponytail: widen the key to the net's declared data type when those land.
+/// The same, for a declaration that may be a §3.6.3 vector: the default is
+/// written onto each scalarised element, since the base name is not a node.
+fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+    const r = self.vectors.get(name) orelse
+        return self.applyDefaultDiscipline(name, main_tok);
+    for (0..r.size()) |k|
+        try self.applyDefaultDiscipline(try self.vecElem(name, r.at(@intCast(k))), main_tok);
+}
+
+fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+    if (self.default_disciplines.len == 0) return;
+    const idx = self.node_voltages.get(name) orelse return;
+    if (idx == ground) return;
+    if (self.node_disciplines.items[idx].len != 0) return;
+    if (main_tok >= self.tok_starts.len) return;
+    const at = self.tok_starts[main_tok];
+
+    // Backwards from the declaration: the most recent directive wins, and a
+    // wire-qualified one wins over an unqualified one however old it is.
+    var fallback: ?[]const u8 = null;
+    var i = self.default_disciplines.len;
+    const chosen = while (i > 0) {
+        i -= 1;
+        const e = self.default_disciplines[i];
+        if (e.at > at) continue;
+        // §10.2: the bare form and `resetall withdraw the default outright,
+        // so nothing older than one of those is still in force.
+        if (e.discipline.len == 0) break fallback;
+        if (std.mem.eql(u8, e.qualifier, "wire")) break e.discipline;
+        if (e.qualifier.len == 0 and fallback == null) fallback = e.discipline;
+    } else fallback;
+
+    const dname = chosen orelse return;
+    // A default naming a discipline that was never declared supplies no
+    // nature, so leaving the net bare is the honest outcome: E0337 then says
+    // the net has no discipline, which is exactly what happened.
+    if (!self.disciplines.contains(dname)) return;
+    self.node_disciplines.items[idx] = dname;
 }
 
 /// Register (or find) a node. Undeclared names are implicit nets (§3.6.5), so
@@ -1163,14 +1595,160 @@ fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
     return idx;
 }
 
-/// Resolve a net reference expression (`.ident`) to a node_order index.
+/// Resolve a net reference — `n` or `n[i]` — to a node_order index.
+///
+/// The element case is a plain `internNode` of the scalarised name, so a
+/// vector element is a node like any other from here on. What this function
+/// owes on top is the two checks that only exist while the range is still
+/// known: §5.5.2 says an access function takes "scalars or individual elements
+/// of a vector", so a bare vector name is not a signal (E0351), and an index
+/// has to name an element that was declared (E0351/E0352). Without them
+/// `V(bus[9])` would quietly intern a §3.6.5 implicit net called `bus[9]` and
+/// read 0.
 fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
     if (e == .none) return ground;
-    if (self.file.exprs.tag(e) != .ident) {
-        try self.errAt(e, .E0306, "", .{});
-        return ground;
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .ident => {
+            const name = self.file.str(ex.strOf(e));
+            if (self.vectors.get(name)) |r| {
+                try self.errAt(e, .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
+                return ground;
+            }
+            return self.internNode(name, "");
+        },
+        .index => {
+            const base = ex.lhs(e);
+            if (ex.tag(base) != .ident) {
+                try self.errAt(e, .E0306, "", .{});
+                return ground;
+            }
+            const name = self.file.str(ex.strOf(base));
+            const r = self.vectors.get(name) orelse {
+                try self.errAt(e, .E0351, "`{s}` was not declared with a range", .{name});
+                return ground;
+            };
+            // §5.5.2 "The index must be a constant expression, though it may
+            // include genvar variables" — which `constEval` reads out of
+            // `consts`, where `tryUnrollFor` binds the genvar of the enclosing
+            // §5.9.3 `for` for the duration of each unrolled copy.
+            const i = self.constEval(ex.rhs(e)) orelse {
+                try self.errAt(e, .E0352, "index into `{s}` is not a constant expression", .{name});
+                return ground;
+            };
+            if (!r.has(i.asInt())) {
+                try self.errAt(e, .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
+                return ground;
+            }
+            return self.internNode(try self.vecElem(name, i.asInt()), "");
+        },
+        else => {
+            try self.errAt(e, .E0306, "", .{});
+            return ground;
+        },
     }
-    return self.internNode(self.file.str(self.file.exprs.strOf(e)), "");
+}
+
+/// The scalarised name of one vector element. `p[0]` and not `p__0`: it is the
+/// spelling the source uses, so a diagnostic, a `//!` operating-point binding
+/// and the emitted `U` enum all name the same thing, and naming.zig's escape
+/// makes it a legal Zig identifier without anybody choosing an encoding.
+fn vecElem(self: *Lower, base: []const u8, i: i64) Oom![]const u8 {
+    return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
+}
+
+/// Fold a declared `[msb:lsb]` (§3.6.3 Syntax 3-6). The bounds are constant
+/// expressions — §6.5.2.2 prints `electrical [0:4-1] in;` as valid — so this
+/// is lowering's job and not the parser's. `null` means it did not fold and
+/// the diagnostic has been emitted.
+fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
+    const msb = self.constEval(d.msb) orelse {
+        try self.err(tok, .E0352, "the msb of the range is not a constant expression", .{});
+        return null;
+    };
+    const lsb = self.constEval(d.lsb) orelse {
+        try self.err(tok, .E0352, "the lsb of the range is not a constant expression", .{});
+        return null;
+    };
+    return .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
+}
+
+/// §6.5.2.2 the range of a port, from whichever of its two declarations
+/// carries one — and, when both do, only after the clause's own check: "If a
+/// port is declared as a vector, the range specification between the two
+/// declarations of a port shall be identical."
+///
+/// Identical means EVALUATE-identical, which is why the comparison is here and
+/// on FOLDED bounds: the clause prints `input [0:3] in; electrical [0:4-1] in;`
+/// as valid and `input [3:0] in; electrical [0:3] in;` as an error, and those
+/// two differ only after folding. A range on ONE declaration is not this rule's
+/// business — its sentence is guarded by "if a port is declared as a vector",
+/// and `inout p; electrical [3:0] p;` declares it exactly once.
+fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
+    const dir_r = if (p.range) |d| try self.foldDim(d, p.main_tok) else null;
+    const ty_r = if (p.type_range) |d| try self.foldDim(d, p.main_tok) else null;
+    if (dir_r) |a| if (ty_r) |b| {
+        if (a.msb != b.msb or a.lsb != b.lsb)
+            try self.err(p.main_tok, .E0350, "`{s}` is [{d}:{d}] where it is given a direction and [{d}:{d}] where it is given a discipline", .{
+                self.file.str(p.name), a.msb, a.lsb, b.msb, b.lsb,
+            });
+    };
+    return dir_r orelse ty_r;
+}
+
+/// The vector a branch terminal names, or null when it is a scalar (or not a
+/// bare identifier at all — `branch (a[1], b)` is two scalars).
+fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
+    if (e == .none) return null;
+    if (self.file.exprs.tag(e) != .ident) return null;
+    return self.vectors.get(self.file.str(self.file.exprs.strOf(e)));
+}
+
+/// §3.12 a vector branch. The LRM's own example:
+///
+///     electrical [3:5]a;
+///     electrical [1:3]b;
+///     branch (a,b) br1;  // Branch br1 is of size 3 and can be indexed 0 to 2
+///
+/// Three rules, all of them here. The terminals pair "in a parallel one-to-one
+/// fashion", which is `VecRange.at(k)` against `at(k)` — declaration order on
+/// both sides, so neither terminal's own numbering leaks into the pairing. A
+/// scalar terminal fans in (Figure 3-2), so it repeats. And "if the range of
+/// the vector branch is not specified then the indexing of the vector branch
+/// shall start at 0" — hence `[0:size-1]` regardless of what either terminal
+/// is indexed from.
+///
+/// The elements are registered in `branches` under their scalarised names, so
+/// `V(br1[1])` resolves through the ordinary branch lookup; the base name goes
+/// into `vectors` so that `V(br1)` and `V(br1[9])` get the vector diagnostics
+/// rather than being read as a net.
+fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
+    const name = self.file.str(b.name);
+    const hv = self.vecTerminal(b.hi);
+    const lv = self.vecTerminal(b.lo);
+    if (hv) |h| if (lv) |l| {
+        if (h.size() != l.size()) {
+            try self.err(b.main_tok, .E0353, "`{s}` joins a size-{d} vector to a size-{d} one", .{ name, h.size(), l.size() });
+            return;
+        }
+    };
+    const size = if (hv) |h| h.size() else lv.?.size();
+    // A scalar terminal is resolved once, outside the loop: it is the SAME
+    // node on every element (Figure 3-2), not a fresh implicit net per index.
+    const h_scalar = if (hv == null) try self.nodeOf(b.hi) else ground;
+    const l_scalar = if (lv == null) try self.nodeOf(b.lo) else ground;
+    const h_name = if (hv != null) self.file.str(self.file.exprs.strOf(b.hi)) else "";
+    const l_name = if (lv != null) self.file.str(self.file.exprs.strOf(b.lo)) else "";
+    for (0..size) |k| {
+        const hi = if (hv) |h| try self.internNode(try self.vecElem(h_name, h.at(@intCast(k))), "") else h_scalar;
+        const lo = if (lv) |l| try self.internNode(try self.vecElem(l_name, l.at(@intCast(k))), "") else l_scalar;
+        // §3.12 → §3.11 once, not `size` times: every element of a vector
+        // branch pairs the same two DISCIPLINES, so the verdict is the same on
+        // all of them and only the first has anything new to say.
+        if (k == 0) try self.checkNetCompat(b.main_tok, hi, lo);
+        try self.branches.put(self.arena, try self.vecElem(name, @intCast(k)), .{ .hi = hi, .lo = lo });
+    }
+    try self.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
 }
 
 /// The name codegen prints for a node_order index (naming.zig unit targets).
@@ -1499,14 +2077,10 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
             const slot = try self.declareVar(en, ty);
             const k: usize = @intCast(i - dim.lo);
             // §3.2 an element the pattern does not reach keeps the zero start.
-            const init_val: Mir.Value = if (k < elems.len) blk: {
-                const tv = try self.lowerExpr(elems[k]);
-                break :blk switch (ty) {
-                    .real => try self.toReal(tv),
-                    .integer => try self.toInt(tv),
-                    .string => tv.v,
-                };
-            } else zeroOf(ty);
+            const init_val: Mir.Value = if (k < elems.len)
+                try self.coerceTo(elems[k], ty, try self.lowerExpr(elems[k]))
+            else
+                zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
                 try self.holdSlot(en, ty, init_val, slot.place)
             else
@@ -1518,10 +2092,8 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
     const slot = try self.declareVar(name, ty);
     const init_val: Mir.Value = if (decl.init == .none)
         zeroOf(ty)
-    else if (ty == .real)
-        try self.toReal(try self.lowerExpr(decl.init))
     else
-        (try self.lowerExpr(decl.init)).v;
+        try self.coerceTo(decl.init, ty, try self.lowerExpr(decl.init));
     try self.builder.writeVariable(slot.place, self.cur, if (hold)
         try self.holdSlot(name, ty, init_val, slot.place)
     else
@@ -1692,11 +2264,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
                 if (k >= elems.len) break;
                 const slot = self.vars.get(try self.elemKey(&key_buf, name, i)) orelse continue;
                 const tv = try self.lowerExpr(elems[k]);
-                const v: Mir.Value = switch (slot.ty) {
-                    .real => try self.toReal(tv),
-                    .integer => try self.toInt(tv),
-                    .string => tv.v,
-                };
+                const v = try self.coerceTo(elems[k], slot.ty, tv);
                 try self.builder.writeVariable(slot.place, self.cur, v);
             }
             return;
@@ -1707,11 +2275,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
         return;
     };
     const tv = try self.lowerExpr(value);
-    const v: Mir.Value = switch (slot.ty) {
-        .real => try self.toReal(tv),
-        .integer => try self.toInt(tv),
-        .string => tv.v,
-    };
+    const v = try self.coerceTo(value, slot.ty, tv);
     try self.builder.writeVariable(slot.place, self.cur, v);
 }
 
@@ -2158,6 +2722,34 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
 /// needs to know the rule exists.
 const Target = struct { access: Access, hi: u16, lo: u16, neg: bool = false };
 
+/// The key a branch reference has in `branches`: `br` for a scalar branch,
+/// `br[k]` for one element of a §3.12 vector branch. `null` when the
+/// expression cannot name a branch at all (a two-terminal access, a
+/// non-constant index), which is not an error here — `nodeOf` reads the same
+/// expression as a net reference and reports whatever is wrong with it.
+fn branchKey(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .ident => self.file.str(ex.strOf(e)),
+        .index => blk: {
+            const base = ex.lhs(e);
+            if (ex.tag(base) != .ident) break :blk null;
+            const i = self.constEval(ex.rhs(e)) orelse break :blk null;
+            break :blk try self.vecElem(self.file.str(ex.strOf(base)), i.asInt());
+        },
+        else => null,
+    };
+}
+
+/// The port a §3.12.1 port branch names, when the single argument of an access
+/// function is one. `null` for everything else, including a two-argument
+/// access — a port branch is a name, never a pair.
+fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
+    if (self.file.exprs.rhs(e) != .none) return null;
+    const key = try self.branchKey(self.file.exprs.lhs(e)) orelse return null;
+    return self.port_branches.get(key);
+}
+
 fn canonical(access: Access, hi: u16, lo: u16) Target {
     return if (hi <= lo)
         .{ .access = access, .hi = hi, .lo = lo }
@@ -2177,17 +2769,41 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         try b.emit();
         return null;
     };
+    // §5.4.3 "The port access function shall not be used on the left side of a
+    // contribution operator <+", and §3.12.1 makes a named port branch the same
+    // function under another name. `lowerBranchAccess` — the READ path, the one
+    // place a port branch means something — has already peeled it off above, so
+    // everything still arriving here is an lvalue or an indirect-assignment
+    // probe. ponytail: `ddx(f, I(pb))` also lands here and gets this message,
+    // which names the right clause and the wrong position; no fixture writes it,
+    // and the honest fix is §4.5.6 deciding whether a port flow is a valid
+    // derivative unknown at all.
+    if (try self.portBranchOf(e)) |_| {
+        var b = self.errAtWith(e, .E0407);
+        b.msg("`{s}` is a port branch (3.12.1)", .{self.file.str(ex.strOf(ex.lhs(e)))});
+        b.help("contribute to the branch instead: `I(p, gnd) <+ ...`", .{});
+        try b.emit();
+        return null;
+    }
     const first = ex.lhs(e);
-    // §3.12 a single argument naming a declared branch.
-    if (ex.rhs(e) == .none and ex.tag(first) == .ident) {
-        if (self.branches.get(self.file.str(ex.strOf(first)))) |b| {
-            try self.checkAccessMatch(e, name, access, b.hi);
-            return canonical(access, b.hi, b.lo);
+    // §3.12 a single argument naming a declared branch — `br`, or `br[k]` for
+    // an element of a vector branch, which `declareVectorBranch` registered
+    // under exactly that scalarised name. The miss falls through to `nodeOf`,
+    // which owns every diagnostic about a bad index.
+    if (ex.rhs(e) == .none) {
+        if (try self.branchKey(first)) |key| {
+            if (self.branches.get(key)) |b| {
+                try self.checkAccessMatch(e, name, access, b.hi);
+                return canonical(access, b.hi, b.lo);
+            }
         }
     }
     const hi = try self.nodeOf(first);
     const lo = if (ex.rhs(e) == .none) ground else try self.nodeOf(ex.rhs(e));
     try self.checkAccessMatch(e, name, access, hi);
+    // §3.11's own example of the rule: "if an access function has two nets as
+    // arguments, they must be compatible".
+    try self.checkNetCompat(ex.mainTok(e), hi, lo);
     // §4.4 Table 4-16 gives both `V(n1,n1)` and `I(n1,n1)` as `Error`, and the
     // prose under it is normative for the flow half: "If two net expressions
     // are given as arguments to a flow access function, they shall not evaluate
@@ -2215,6 +2831,16 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
         return null;
     }
     return canonical(access, hi, lo);
+}
+
+/// §5.5.1 Syntax 5-3 `nature_access_function ::= nature_attribute_identifier |
+/// potential | flow`. Spelled out as constants because they are the one pair of
+/// access names that is not read out of a §3.6.1.4 `access =` attribute.
+const generic_potential = "potential";
+const generic_flow = "flow";
+
+fn isGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, generic_potential) or std.mem.eql(u8, name, generic_flow);
 }
 
 /// §4.4: "The access function name shall match the discipline declaration for
@@ -2268,6 +2894,13 @@ fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Acces
         return;
     }
     if (std.mem.eql(u8, want, name)) return;
+    // §4.4: "As an alternative to using the access attribute specified in the
+    // discipline, the generic potential and flow access functions are also
+    // supported." So `potential`/`flow` are exempt from the name match, and
+    // ONLY from it — the two checks above still apply, and must: §5.5.1's
+    // generic spelling reaches a nature, not a bare node, so a natureless or
+    // half-bound discipline has nothing for it to read either.
+    if (isGeneric(name)) return;
     var b = self.errAtWith(e, .E0501);
     b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
     b.suggestHere(want);
@@ -3189,41 +3822,49 @@ fn isRejectedSysFunc(name: []const u8) bool {
 fn isDigitalOnlySysFunc(name: []const u8) bool {
     const digital_only = [_][]const u8{
         // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
-        "$displayb",  "$displayh",  "$displayo",
-        "$strobeb",   "$strobeh",   "$strobeo",
-        "$writeb",    "$writeh",    "$writeo",
-        "$monitorb",  "$monitorh",  "$monitoro",
-        "$monitoron", "$monitoroff",
+        "$displayb",         "$displayh",         "$displayo",
+        "$strobeb",          "$strobeh",          "$strobeo",
+        "$writeb",           "$writeh",           "$writeo",
+        "$monitorb",         "$monitorh",         "$monitoro",
+        "$monitoron",        "$monitoroff",
         // Table 9-2 (§9.5) — the same radix story against a descriptor, plus
         // the byte/vector reads and the two digital-netlist loaders.
-        "$fdisplayb", "$fdisplayh", "$fdisplayo",
-        "$fwriteb",   "$fwriteh",   "$fwriteo",
-        "$fstrobeb",  "$fstrobeh",  "$fstrobeo",
-        "$fmonitorb", "$fmonitorh", "$fmonitoro",
-        "$swriteb",   "$swriteh",   "$swriteo",
-        "$fgetc",     "$ungetc",    "$fread",
-        "$readmemb",  "$readmemh",  "$sdf_annotate",
+              "$fdisplayb",
+        "$fdisplayh",        "$fdisplayo",        "$fwriteb",
+        "$fwriteh",          "$fwriteo",          "$fstrobeb",
+        "$fstrobeh",         "$fstrobeo",         "$fmonitorb",
+        "$fmonitorh",        "$fmonitoro",        "$swriteb",
+        "$swriteh",          "$swriteo",          "$fgetc",
+        "$ungetc",           "$fread",            "$readmemb",
+        "$readmemh",         "$sdf_annotate",
         // Table 9-3 (§9.6) — the timescale tick, which the analog kernel has
         // no notion of.
-        "$printtimescale", "$timeformat",
+            "$printtimescale",
+        "$timeformat",
         // Table 9-5 (§9.8) — "Verilog AMS HDL does not extend the PLA modeling
         // tasks defined in IEEE Std 1364 Verilog." All sixteen spellings; the
         // `$` inside the name is an ordinary identifier character (§2.8.3), so
         // each of these is one token.
-        "$async$and$array",  "$async$and$plane",  "$async$nand$array", "$async$nand$plane",
-        "$async$or$array",   "$async$or$plane",   "$async$nor$array",  "$async$nor$plane",
-        "$sync$and$array",   "$sync$and$plane",   "$sync$nand$array",  "$sync$nand$plane",
-        "$sync$or$array",    "$sync$or$plane",    "$sync$nor$array",   "$sync$nor$plane",
+              "$async$and$array",  "$async$and$plane",
+        "$async$nand$array", "$async$nand$plane", "$async$or$array",
+        "$async$or$plane",   "$async$nor$array",  "$async$nor$plane",
+        "$sync$and$array",   "$sync$and$plane",   "$sync$nand$array",
+        "$sync$nand$plane",  "$sync$or$array",    "$sync$or$plane",
+        "$sync$nor$array",   "$sync$nor$plane",
         // Table 9-6 (§9.9) — "Verilog AMS HDL does not extend the stochastic
         // analysis tasks defined in IEEE Std 1364 Verilog."
-        "$q_initialize", "$q_remove", "$q_exam", "$q_add", "$q_full",
+          "$q_initialize",
+        "$q_remove",         "$q_exam",           "$q_add",
+        "$q_full",
         // Table 9-7 (§9.10) — tick counts. $abstime is the analog spelling and
         // is the one row of that table with Yes in both columns; §9.10's NOTE
         // additionally deprecates $realtime in the analog context.
-        "$time", "$stime", "$realtime",
+                  "$time",             "$stime",
+        "$realtime",
         // Table 9-8 (§9.11) — the extension is $bitstoreal and $realtobits and
         // nothing else.
-        "$itor", "$rtoi", "$signed", "$unsigned",
+                "$itor",             "$rtoi",
+        "$signed",           "$unsigned",
     };
     for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
     return false;
@@ -3289,8 +3930,12 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
         .index => return self.lowerIndex(e),
 
-        .concat => return self.lowerConcat(e), // §3.3 Table 3-3 / §4.2.13
-        .multi_concat, .assign_pattern => {
+        // §4.2.13 / §3.3 Table 3-3. A `.multi_concat` reaches lowering only
+        // when its multiplier is not a literal, which Table 3-3 allows for a
+        // string result; every other replication was unrolled in the parser,
+        // where the operand widths still exist.
+        .concat, .multi_concat => return self.lowerConcat(e),
+        .assign_pattern => {
             try self.errAt(e, .E0509, "", .{});
             return poison;
         },
@@ -3360,11 +4005,40 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// ponytail: constant operands only. A string Value is a `str_const` (there is
 /// no runtime string in the emitted device), so a non-constant operand has
 /// nothing to concatenate and is rejected rather than substituted.
+///
+/// A `.multi_concat` arrives here for one reason: §3.3 Table 3-3's Replication
+/// row says the "multiplier must be of integral type and can be nonconstant.
+/// If multiplier is nonconstant or Str is of type string, the result is a
+/// string containing N concatenated copies", and the parser unrolls only a
+/// literal count (see `replCount`). So every replication left standing is a
+/// string one, and N is whatever the folder can make of the multiplier.
 fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    const elems = self.file.exprs.args(e);
+    const ex = &self.file.exprs;
+    const repl = ex.tag(e) == .multi_concat;
+    const elems = ex.args(if (repl) ex.rhs(e) else e);
     if (elems.len == 0) {
         try self.errAt(e, .E0326, "", .{});
         return poison;
+    }
+    var copies: i64 = 1;
+    if (repl) {
+        const c = try self.lowerExpr(ex.lhs(e));
+        copies = switch (self.mir.valueDef(c.v)) {
+            .int_const => |n| n,
+            // A multiplier that survives to the residual has no width and no
+            // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
+            // knowable, not because the device could build a string at runtime.
+            else => {
+                try self.errAt(ex.lhs(e), .E0328, "", .{});
+                return poison;
+            },
+        };
+        // §4.2.13: the replication constant is "non-negative, non-x and
+        // non-z". Zero is legal and yields the empty string.
+        if (copies < 0) {
+            try self.errAt(ex.lhs(e), .E0327, "a replication constant shall be non-negative, got {d}", .{copies});
+            return poison;
+        }
     }
     var out: std.ArrayList(u8) = .empty;
     for (elems) |el| {
@@ -3380,6 +4054,11 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 return poison;
             },
         }
+    }
+    if (repl) {
+        const one = try self.arena.dupe(u8, out.items);
+        out.clearRetainingCapacity();
+        for (0..@intCast(copies)) |_| try out.appendSlice(self.arena, one);
     }
     // The interner borrows: the bytes live in the arena, which outlives the Mir.
     return .{ .v = try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)), .ty = .string };
@@ -3499,8 +4178,16 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // lhs already decides the result, so this needs real control flow.
     if (op == .logical_and or op == .logical_or) return self.lowerShortCircuit(e, op);
 
-    const a = try self.lowerExpr(ex.lhs(e));
-    const b = try self.lowerExpr(ex.rhs(e));
+    var a = try self.lowerExpr(ex.lhs(e));
+    var b = try self.lowerExpr(ex.rhs(e));
+    // §2.7 makes a string operand an unsigned integer, so a MIXED pair is
+    // arithmetic and not a string operation. Two strings stay strings: Table
+    // 3-3's relational row is a string comparison and `{a, " ", b}` is a
+    // concatenation, and both would be destroyed by converting either side.
+    if ((a.ty == .string) != (b.ty == .string)) {
+        a = try self.strNum(a);
+        b = try self.strNum(b);
+    }
 
     switch (op) {
         .add, .sub, .mul, .div, .mod => {
@@ -3618,6 +4305,11 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.errAt(e, .E0421, "not allowed in {s}", .{ctx});
         return poison;
     }
+    // §3.12.1: a port branch names the §5.4.3 port flow, so `I(pb)` and
+    // `I(<p>)` are one quantity and read the one unknown. Ahead of `branchOf`
+    // because the name is not in `branches` and would otherwise fall through to
+    // `nodeOf` and become an implicit net.
+    if (try self.portBranchOf(e)) |p| return self.portFlowRead(e, p);
     const t = try self.branchOf(e) orelse return poison;
     try self.branch_reads.append(self.arena, .{
         .access = t.access,
@@ -3663,6 +4355,15 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.errAt(e, .E0421, "not allowed in {s}", .{ctx});
         return poison;
     }
+    return self.portFlowRead(e, try self.nodeOf(self.file.exprs.lhs(e)));
+}
+
+/// The read half of §5.4.3, shared by `I(<p>)` and by a §3.12.1 port branch
+/// named over the same port: the two spellings are one quantity, so they must
+/// be one unknown and one set of rules. `p` is the port's `node_order` slot —
+/// resolved by the caller, because the two spellings name it differently (an
+/// argument expression here, a branch declaration there).
+fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const access = self.access_kind.get(name) orelse {
@@ -3679,7 +4380,6 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.errAt(e, .E0507, "`{s}` is a potential access function", .{name});
         return poison;
     }
-    const p = try self.nodeOf(ex.lhs(e));
     // §4.4.2 "For port access functions, the expression list is a single port
     // of the module"; §5.4.1 "it must be a declared port of the module in which
     // the port access function is used." An internal net has no outside, so its
@@ -3883,20 +4583,80 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
     try self.checkFilterArgBounds(name, args); // §4.5.5-§4.5.10
 
+    const abstol_slot = abstolSlot(name);
+
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
-    for (args) |a| {
+    for (args, 0..) |a, i| {
         // A.8.2 analog_filter_function_call has no `analog_expression_or_null`
         // form: every declared argument must be present (§4.5.14).
         if (a == .none) {
             try self.errAt(e, .E0505, "`{s}()`", .{name});
             return poison;
         }
+        // A.8.3 `abstol_expression ::= constant_expression | nature_identifier`.
+        // The second arm is the ONLY place a nature name is a value, so it is
+        // resolved here and not in `lookupIdent`: natures and disciplines share
+        // one global scope (§3.13.1), and letting that scope answer general
+        // identifier lookup would shadow every variable named after a nature.
+        if (abstol_slot == i) {
+            if (self.natureAbstol(a)) |t| {
+                try vals.append(self.arena, try self.fconst(t));
+                continue;
+            }
+        }
         if (try self.appendVectorArg(&vals, a)) continue;
         const tv = try self.lowerExpr(a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
     return .{ .v = try self.call(name, vals.items), .ty = .real };
+}
+
+/// Which argument of an analog operator is its TOLERANCE, or null for an
+/// operator that has none. §5.5.3, last sentence: "The abstol attribute of a
+/// nature may also be accessed simply by using the nature's identifier as the
+/// appropriate argument to the ddt(), idt(), or idtmod() operators described in
+/// 4.5." Those three, and the slot each of their signatures puts it in:
+///
+///     4.5.3  ddt(expr [, abstol|nature])
+///     4.5.4  idt(expr [, ic [, assert [, abstol|nature]]])
+///     4.5.5  idtmod(expr [, ic [, modulus [, offset [, abstol|nature]]]])
+///
+/// Every one is the LAST slot, but they are written out rather than computed
+/// from `args.len` because a call that has dropped a trailing argument would
+/// then read its `assert` or its `offset` as a tolerance.
+fn abstolSlot(name: []const u8) ?usize {
+    if (std.mem.eql(u8, name, "ddt")) return 1;
+    if (std.mem.eql(u8, name, "idt")) return 3;
+    if (std.mem.eql(u8, name, "idtmod")) return 4;
+    return null;
+}
+
+/// The abstol a bare `nature_identifier` in a tolerance slot stands for, or
+/// null when the expression is not one — in which case the caller lowers it as
+/// the `constant_expression` arm of A.8.3 and every ordinary diagnostic applies.
+///
+/// The ordinary scopes are consulted FIRST, so a variable or parameter that
+/// happens to share a nature's name still wins here exactly as it does
+/// everywhere else (§2.8). Only a name nothing else answers reaches the nature
+/// table.
+fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .ident) return null;
+    const id = ex.strOf(e);
+    const name = self.file.str(id);
+    if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name))
+        return null;
+    for (self.file.natures) |*n| {
+        if (n.name != id) continue;
+        // §3.6.1.2 makes `abstol` mandatory on a base nature and inherited by a
+        // derived one, and `checkNatureTable` has already refused a nature with
+        // neither, so the fallback is only ever reached on a compile that is
+        // failing anyway. It is here so that this returns "yes, a nature" and
+        // the name does not also collect an E0314.
+        return self.natureOf(id).abstol orelse 0;
+    }
+    return null;
 }
 
 /// §4.5.5-§4.5.10 control-argument bounds. Each operator states its bound in
@@ -4085,6 +4845,30 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             };
         }
     }
+    // §9.15: "If param_name is not known, and the optional expression is not
+    // supplied, then an error is generated." Answering a name this engine does
+    // not have with a silent 0.0 is indistinguishable from a simulator that
+    // really does carry that parameter and really does read zero, which is the
+    // corruption the clause exists to prevent.
+    //
+    // Only when the name is a literal: §9.15 also allows "a string parameter or
+    // a string variable", and a name that is not known until the solve cannot be
+    // judged here — the fallback rule is the user's cover for that case.
+    if (std.mem.eql(u8, name, "$simparam")) {
+        const args = ex.args(e);
+        if (args.len == 1) {
+            if (self.constEval(args[0])) |c| switch (c) {
+                .str => |s| if (self.simparamValue(s) == null) {
+                    var b = self.errAtWith(e, .E0811);
+                    b.msg("`\"{s}\"`", .{s});
+                    b.note("$simparam(\"{s}\", <expression>) supplies the value to use instead, and §9.15 makes that form legal for any name", .{s});
+                    try b.emit();
+                    return poison;
+                },
+                else => {},
+            };
+        }
+    }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     if (ex.extraOf(e) < ex.pool.items.len) {
@@ -4111,6 +4895,41 @@ fn lowerSysArg(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
         }
     }
     return (try self.lowerExpr(e)).v;
+}
+
+/// §9.15 Table 9-27 — the simulation parameters THIS engine knows, and their
+/// values. Null is the clause's "param_name is not known", which decides both
+/// halves of the rule: with a fallback the fallback is returned, without one it
+/// is an error (E0811, raised in `lowerSysCall`).
+///
+/// The table is here rather than in codegen — where the values are rendered —
+/// because §9.15 states the error as a property of the CALL, and the two answers
+/// have to come from one list or a name could be diagnosed as unknown and then
+/// answered anyway. codegen calls this.
+///
+/// The list is short on purpose. Table 9-27 is prefaced "simulators shall accept
+/// the strings in Table 9-27 ... IF THEY SUPPORT THE PARAMETER", so a row VerA
+/// cannot answer honestly is better left unknown than answered with an invented
+/// number: "iteration" and "gdev" are properties of a solver run this compiler
+/// does not host, and "simulatorVersion" is required to increase monotonically
+/// across releases, which a constant cannot do.
+pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
+    const eq = std.mem.eql;
+    // The two rows that come out of the SOURCE. Unknown when no `timescale was
+    // given, which is exactly what "as specified in `timescale" means.
+    if (eq(u8, name, "timeUnit")) return if (self.timescale) |t| t.unit else null;
+    if (eq(u8, name, "timePrecision")) return if (self.timescale) |t| t.precision else null;
+    if (eq(u8, name, "gmin")) return 1e-12;
+    // Table 9-27 gives `tnom` in DEGREES CELSIUS ("Default value of temperature
+    // at which model parameters were extracted"), so the conforming default is
+    // 27, not the 300.15 it once answered — the right temperature in the wrong
+    // unit, which a model forming `$vt($simparam("tnom") + 273.15)` then read as
+    // 300 K too hot.
+    if (eq(u8, name, "tnom")) return 27.0;
+    // Three unit-valued homotopy/geometry factors: a device compiled here is
+    // never being stepped or shrunk, so 1.0 is the true answer, not a stand-in.
+    if (eq(u8, name, "scale") or eq(u8, name, "shrink") or eq(u8, name, "sourceScaleFactor")) return 1.0;
+    return null;
 }
 
 /// ch9 return types. Everything not listed is real (§9.14/§9.15 dominate).
@@ -4553,7 +5372,6 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 // through an arena, so a leaked byte fails the test.
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("../frontend/preprocessor.zig");
 const Parser = @import("../frontend/parser.zig");
 
 const Harness = struct {
@@ -4596,6 +5414,21 @@ const Harness = struct {
         self.arena_state.deinit();
     }
 };
+
+test "lower: §2.7 a string literal is a base-256 numeral, §3.3 justified right" {
+    // §2.7's own sentence, at the natural width: most significant character
+    // first, and a plain space is a character like any other.
+    try std.testing.expectEqual(@as(i64, 10), strToInt("\n", 64));
+    try std.testing.expectEqual(@as(i64, 32), strToInt(" ", 64));
+    try std.testing.expectEqual(@as(i64, 16706), strToInt("AB", 64));
+    // §3.3 into a 32-bit `integer` (§3.2): "hello" is 40 bits and loses its
+    // leading 'h' on the LEFT, "A" is zero filled on the left, and Table 3-3's
+    // `""` -> 8'b0 is the caller's (`strLitBytes`), so `{"H", ""}` is "H\x00".
+    try std.testing.expectEqual(@as(i64, 1701604463), strToInt("hello", 32));
+    try std.testing.expectEqual(@as(i64, 65), strToInt("A", 32));
+    try std.testing.expectEqual(@as(i64, 18432), strToInt("H\x00", 32));
+    try std.testing.expectEqual(@as(i64, 0), strToInt("", 32));
+}
 
 test "lower: contribution splits into resistive and reactive parts" {
     var h: Harness = undefined;

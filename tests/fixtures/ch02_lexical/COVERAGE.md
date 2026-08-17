@@ -21,13 +21,13 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 |---|---|---|
 | `s2-1` | overview prose | — states no rule a source can violate, and no fixture cites 2.1 |
 | `s2-2` | source is a stream of lexical tokens; a comment is one of the seven token types, so it separates | `39_block_comment_separates_tokens.va` (`//! reject E0207`) — `1/*c*/2` must not weld into `12`; the header records the preprocessor regression it pins. Free format itself is carried implicitly: `27`, `28`, `29`, `31`, `33` each write a whole module on one physical line |
-| `s2-3` | white space is space, tab, newline, formfeed; ignored except as separators | `27_form_feed_whitespace.va` — every separator in the module header is a literal U+000C. The other half of the sentence, "spaces and tabs shall be considered significant characters in strings", is only in `08_string_escapes.va` — **`//! xfail`** |
+| `s2-3` | white space is space, tab, newline, formfeed; ignored except as separators | `27_form_feed_whitespace.va` — every separator in the module header is a literal U+000C. The other half of the sentence, "spaces and tabs shall be considered significant characters in strings", is `08_string_escapes.va`'s `" "` == 32 |
 | `s2-4` | `//` to newline, `/*`…`*/`, no nesting, `//` inert inside a block comment | `01_whitespace_comments.va` (`2.0 /* // */ + 3.0`, and a `` `define `` inside each comment form that must not reach the preprocessor), `12_unclosed_comment.va` (`//! reject E0102`), `13_nested_comment_rejected.va` (`//! reject E0205`, the leftover `still_outer */`) |
 | `s2-5` | operators are one-, two- or three-character sequences; unary left, binary infix, conditional two characters over three operands | — no fixture in this directory, and `grep -rl 'lrm 2\.5' tests/fixtures/` finds none anywhere in the suite. `ch04_expressions` (149 files, `4.2.1`–`4.2.14`) owns operator semantics. `21` and `33` do contain `+`, `*` and `?:`, but only as carriers for an attribute, and neither cites 2.5 |
 | `s2-6` | Syntax 2-2, the number grammar | parent; every production is reached through 2.6.1 and 2.6.2 below. `51` cites the `size ::= non_zero_unsigned_number` box, `56`/`58` the `scale_factor` and `real_number1` boxes. No fixture cites a bare `2.6` |
 | `s2-6-1` | integer constants: bases, size, sign, underscores, truncation/padding, macro substitution | Positives: `04_integer_bases.va` (all four bases, underscores), `22_unsized_based_number.va` (`'h837ff`, `'o7460`, the 32-bit floor), `23_signed_based_number.va` (`4'shf`, `4'hf`, `-4'sd15`, `-8'd6`), `35_uppercase_bases_hex.va` (all eight base spellings, mixed-case hex digits), `40_size_truncation_and_padding.va` (five literals, three of them with the top bit set after truncation). Negatives: `25` (sign between base and digits), `41` (space between `'` and base letter), `49` (base letter outside the eight), `50` (`4af`, no apostrophe), `42` (multi-digit decimal x), `05`/`24` (x/z and `?`, withdrawn by Annex C.3). Debt: `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va`, `51_zero_size_rejected.va` — all three **`//! xfail`** |
 | `s2-6-2` | real constants: 754 conversion, three notations, Table 2-1, underscores, the six invalid dotted forms | Positives: `06_real_notation.va` (decimal vs scientific vs dot-less exponent, `CHECKX` throughout), `07_si_scale_factors.va` (all eleven Table 2-1 symbols plus `24.7K` and `1.3u`), `34_real_underscores.va`, `01_whitespace_comments.va` (`1_000.0`). Negatives: the six invalid forms one file each — `14` (`.12`), `15` (`9.`), `16` (`4.E3`), `43` (`.2e-7`), `44` (`.1p`), `45` (`34.M`) — plus `46` (space before the scale symbol), `56` (`1g`: the alphabet is closed and case-bearing), `57` (`1._5`), `58` (`1.0e3K`: exponent and scale factor are different arms of one choice) |
-| `s2-7` | a string literal is single-line; as an operand it is a base-256 unsigned integer; Table 2-2 escapes | `19_multiline_string_rejected.va` and `38_string_line_continuation_rejected.va` (both `//! reject E0138`; `38` is `bsim4va.va:3658` verbatim, so it pins that VerA does *not* adopt the SystemVerilog `\`-continuation). Everything else in 2.7 — the operand semantics and all five rows of Table 2-2 — is in `08_string_escapes.va` alone, and that is **`//! xfail`**. As of today no passing fixture in this directory reads a single escape sequence |
+| `s2-7` | a string literal is single-line; as an operand it is a base-256 unsigned integer; Table 2-2 escapes | `19_multiline_string_rejected.va` and `38_string_line_continuation_rejected.va` (both `//! reject E0138`; `38` is `bsim4va.va:3658` verbatim, so it pins that VerA does *not* adopt the SystemVerilog `\`-continuation). Everything else in 2.7 — the operand semantics and all five rows of Table 2-2 — is in `08_string_escapes.va` alone, and it is green: seven `CHECKI`s, one per escape plus the multi-character `"AB"` == 16706 that pins the base-256 ORDER |
 | `s2-8` | simple identifiers, first character, `$` and `_`, case sensitivity, 1024-character floor | `02_simple_identifiers.va` (`gain_factor` vs `Gain_Factor` differ by 1.0, and the ports are `_port0` and the LRM's own `n$657`), `28_identifier_1024_chars.va` (exactly 1024 characters, written and read back through the full spelling), `59_uppercase_keyword_is_identifier.va` (also `//! lrm 2.8.2`), `17_identifier_digit_rejected.va` (`2gain`), `47_identifier_dollar_first_rejected.va` (`$gain`) |
 | `s2-8-1` | escaped identifiers: any printable ASCII 33–126, terminated by white space, neither delimiter part of the name | `03_escaped_identifiers.va` (`\gain+trim`, `\trim` read back as plain `trim`, a tab terminator, `\{a,b}`), `26_escaped_keyword.va` (`\cpu3` and `cpu3` are one object), `48_escaped_system_identifier_rejected.va` (`\$vt` names a plain object, so `//! reject E0314` is the *conforming* answer) |
 | `s2-8-2` | keywords are lowercase-only predefined simple identifiers; an escaped keyword is not a keyword | `26_escaped_keyword.va` (`real \analog ;`), `59_uppercase_keyword_is_identifier.va` (`REAL`, `MODULE`, `BEGIN` as three distinct reals summing to 7.0). Annex B's inventory is `annex_b_keywords`, not here |
@@ -39,12 +39,11 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 
 ## The xfail ledger
 
-Seven of the sixty fixtures state a rule VerA does not meet. Each names a file, so
+Six of the sixty fixtures state a rule VerA does not meet. Each names a file, so
 the row disappears the day the defect does. Reasons verbatim from the headers.
 
 | Fixture | Section | Reason |
 |---|---|---|
-| `08_string_escapes.va` | `s2-7`, `s2-3` | VerA types every string literal as `.string` and never coerces one to an integer operand, so codegen dies on `invalid format string 'd' for type '*const [N:0]u8'` (`src/ir/lower.zig`) |
 | `32_function_call_attribute.va` | `s2-9` (Example 7, A.8.2) | VerA's parser has no `{ attribute_instance }` slot between a function name and its argument list, so Example 7's form dies at E0207 "unexpected token: found `(*`, expected `)`" (`src/frontend/parser.zig`) |
 | `36_based_number_digit_whitespace.va` | `s2-6-1` | VerA's lexer scans a based number as one token, so white space between the base format and the digits splits it and the digits are then an invalid token (E0209) (`src/frontend/lexer.zig`) |
 | `37_macro_based_number_tokens.va` | `s2-6-1` (with 10.3) | VerA lexes a based number before macro expansion can rejoin the three tokens, so ``8 `BASE `DIGITS`` stops at E0207 "expected `;`" on the expanded `'h` (`src/frontend/lexer.zig`) |
@@ -52,7 +51,7 @@ the row disappears the day the defect does. Reasons verbatim from the headers.
 | `52_standard_attribute_domain_rejected.va` | `s2-9-2` | VerA does not check the value domain of the 2.9.2 standard attributes; `op="maybe"`, `multiplicity="sideways"` and `desc=7` all compile with no diagnostic |
 | `53_attribute_value_not_constant_rejected.va` | `s2-9` | VerA does not require an attribute value to be a constant expression; `(* q = z *)` with `real z` in scope compiles with no diagnostic |
 
-Three of the seven are one defect wearing three hats: `36`, `37` and `51` are all
+Three of the six are one defect wearing three hats: `36`, `37` and `51` are all
 `src/frontend/lexer.zig` scanning a based number as a single indivisible token. 2.6.1
 says the opposite in the same sentence — "composed of up to three tokens … It shall
 be legal to macro substitute these three tokens" — so a fix that splits the scan
@@ -77,9 +76,10 @@ operands) are asserted by nothing that names them.
 
 **2.1.** Descriptive; nothing to violate.
 
-**Table 2-2 and the string-as-integer rule.** Covered only by an xfail. `19` and `38`
-pin the single-line rule and nothing else, so today the suite proves no escape
-sequence and no character value.
+**Table 2-2 and the string-as-integer rule.** Held by `08_string_escapes.va` alone —
+every escape and every character value in this directory is that one file, so a
+regression in `Lower.strToInt` or in the lexer's escape decode shows up in exactly
+one place. `19` and `38` pin the single-line rule and nothing else.
 
 **The identifier length *limit*.** 2.8 has two halves: at least 1024 characters shall
 be accepted, and "if an identifier exceeds the implementation-specified length limit,

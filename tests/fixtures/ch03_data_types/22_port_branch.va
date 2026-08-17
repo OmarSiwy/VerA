@@ -15,9 +15,19 @@
 // literal round to the same double. A compiler that measured the flow out of
 // the port instead reads -0.002.
 //
+// WHAT IS LEFT, AND WHERE. The declaration parses now and `I(probe_p)` resolves
+// to the SAME unknown `I(<p>)` does — forcing that unknown from the operating
+// point makes this file green, which is how the identity was checked. What is
+// missing is the arithmetic: 0.002 is the value KCL gives the port flow, and
+// the harness forces every unknown to its declared operating point instead of
+// solving for it (see ch05_analog_behavior/indirect_contribution.va, the same
+// wall). So the read returns 0. Writing the 0.002 in as a `//! bias` would make
+// the file pass while deleting the only thing it asserts — that the port branch
+// MEASURES the current, rather than being told it.
+//
 //! lrm 3.12.1
 //! bias V(p) = 2.0
-//! xfail VerA's parser has no port_branch_declaration: the `<` of `branch (<p>)` is E0208, before E0304 can fire
+//! xfail VerA's testbench forces every solver unknown to its operating point instead of solving, so the port-flow unknown that `I(probe_p)` correctly resolves to reads 0 rather than the 0.002 KCL puts there
 `include "check.vh"
 module ch03_port_branch(p);
     inout p;

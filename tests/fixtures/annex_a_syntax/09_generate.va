@@ -30,7 +30,6 @@
 //! lrm 6.2
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA rejects the `analog` keyword inside a generate block with E0209 "expected an expression: found analog" — the only Annex A route to a contribution in a generated block
 `include "check.vh"
 module annex_a_generate(p, n);
     inout p, n;

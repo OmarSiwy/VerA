@@ -21,7 +21,6 @@
 //! bias V(b) = 0.3
 //! bias V(n) = 0.1
 //! print none
-//! xfail VerA's header parser has no concatenated-port form: `{a, b}` in a list of ports is E0208 "expected an identifier: found `{`"
 `include "check.vh"
 module annex_a_concatenated_port({a, b}, n);
     inout a, b, n;

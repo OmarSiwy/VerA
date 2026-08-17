@@ -18,7 +18,6 @@
 //! lrm 7.4.3
 //! lrm 3.11
 //! reject incompatible discipline
-//! xfail VerA has no discipline-compatibility diagnostic; it lowers `V(p, q)` across unrelated natures without complaint
 nature ch7_inc_potential;
   units = "V";
   access = V;

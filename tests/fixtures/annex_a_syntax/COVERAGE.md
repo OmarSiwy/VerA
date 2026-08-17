@@ -21,11 +21,11 @@ productions, **thirty-nine** have a fixture and **twenty-seven** do not. The
 twenty-seven are listed at the bottom by name; none of them is papered over with a
 plausible-looking file in the table.
 
-Forty-four `.va` files: **fifteen run green**, **fourteen carry a `//! reject` arm**, and
-**fifteen carry `//! xfail`**. No file here carries both — unlike `ch02_lexical`, every
+Forty-four `.va` files: **sixteen run green**, **fourteen carry a `//! reject` arm**, and
+**fourteen carry `//! xfail`**. No file here carries both — unlike `ch02_lexical`, every
 xfail in this directory is a *positive* construct VerA cannot accept, never a rule it
 fails to enforce. That is what makes this chapter's xfail set a clean debt ledger:
-fifteen rows, fifteen named parser or backend gaps, each retiring the day its gap closes.
+fourteen rows, fourteen named parser or backend gaps, each retiring the day its gap closes.
 
 Every row was checked against the file's source, not its filename or its `//! lrm`
 cites. Where a fixture contains a construct but cites a different section for it, the row
@@ -35,8 +35,8 @@ says so. Where a cite claims a section the source does not reach, the row says t
 |---|---|---|
 | `a-1` | heading | parent of A.1.1–A.1.9 |
 | `a-1-1` | `library_text`, `library_declaration`, `include_statement`, `config` binding | — no fixture. The `library` and `include` *keywords* of A.1.1 are a compilation-unit facility; the only `` `include `` in this directory is the preprocessor directive of 10.3, which is a different thing with the same word |
-| `a-1-2` | `source_text ::= { description }`; `description` seven ways; `module_keyword ::= module \| macromodule` | `01_source_text.va` — four descriptions in one file (two `nature`, one `discipline`, two `module`), which is the only place the `{ description }` repetition is proved at all; the trailing `module annex_a_first(); endmodule` is a second, port-free module declaration. `43_macromodule.va` takes the second arm of `module_keyword` — **`//! xfail`** |
-| `a-1-3` | `list_of_ports`, `list_of_port_declarations`, `port`, `port_expression`, `port_reference`, `module_parameter_port_list` | Non-ANSI `list_of_ports` plus separate `inout`: `01`, `03`, and most of the directory. ANSI `list_of_port_declarations` with all three directions and a discipline on each: `02_module_ports.va` (`input electrical sense, output electrical drive, inout electrical common`) — the only file in the directory that takes that arm. Debt: `13_parameter_port_list.va` (`module_parameter_port_list`), `41_named_port.va` (`port ::= [ . port_identifier ( [ port_expression ] ) ]`), `42_concatenated_port.va` (`port_expression ::= { port_reference { , port_reference } }`) — all three **`//! xfail`** |
+| `a-1-2` | `source_text ::= { description }`; `description` seven ways; `module_keyword ::= module \| macromodule` | `01_source_text.va` — four descriptions in one file (two `nature`, one `discipline`, two `module`), which is the only place the `{ description }` repetition is proved at all; the trailing `module annex_a_first(); endmodule` is a second, port-free module declaration. `43_macromodule.va` takes the second arm of `module_keyword`, and takes it as a RUN fixture: §6.2's "an implementation may choose to treat module definitions beginning with the macromodule keyword differently" is a licence to optimize, not to refuse, so the two spellings arrive at one arm of the top-level dispatch and nothing downstream can tell them apart |
+| `a-1-3` | `list_of_ports`, `list_of_port_declarations`, `port`, `port_expression`, `port_reference`, `module_parameter_port_list` | Non-ANSI `list_of_ports` plus separate `inout`: `01`, `03`, and most of the directory. ANSI `list_of_port_declarations` with all three directions and a discipline on each: `02_module_ports.va` (`input electrical sense, output electrical drive, inout electrical common`) — the only file in the directory that takes that arm. All three of the remaining arms are green: `13_parameter_port_list.va` (`module_parameter_port_list`, with one header parameter overridden and one left at its default), `41_named_port.va` (`port ::= . port_identifier ( [ port_expression ] )` — the body probes the INTERNAL name), `42_concatenated_port.va` (`port_expression ::= { port_reference { , port_reference } }`, two nets keeping their own identities). A concatenated port becomes N terminals rather than one N-bit terminal, which is the same scalarisation §6.5.2 vector ports get and which only an instantiation could tell apart |
 | `a-1-4` | `module_item`, `module_or_generate_item`, `non_port_module_item`, `parameter_override` | The reachable arms are spread across the directory: `analog_construct` and the declaration arms everywhere, `aliasparam_declaration` in `03_declarations.va`, `loop_generate_construct`/`conditional_generate_construct` in `09`/`14`/`15`, `module_instantiation` in `11`/`12`, the `{ attribute_instance }` prefix in `08_attributes_comments_identifiers.va`. `parameter_override ::= defparam list_of_defparam_assignments ;` is `12_defparam.va` alone, and cites A.1.4 for it — **`//! xfail`** |
 | `a-1-5` | `config_declaration`, `design_statement`, `cell_clause`, `liblist_clause` | — no fixture, no cite anywhere in the suite. Configurations select which library cell binds an instance; VerA has no instances |
 | `a-1-6` | `nature_declaration`, `nature_item`, `nature_attribute`, `nature_attribute_identifier` | `01_source_text.va` declares two full natures (`annex_a_voltage`, `annex_a_current`), each with `units`, `access` and `abstol`, and the module's nets bind to them rather than to the built-in `electrical` — so a parse-and-discard would fail the `CHECKX`. The file cites A.1.2/A.1.3 and 3.6.2.1/3.13.2, not A.1.6; the construct is unambiguously here |
@@ -52,7 +52,7 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | `a-2-2-1` | `net_type`, `output_variable_type`, `real_type`, `variable_type` | `real_type` and `variable_type` with a `dimension`: `07_expressions.va` (`coefficients[0:1] = '{1.0, 2.0}`) and `23_expression_primaries.va` (`real array[0:1]`). The `net_type` list (`supply0 … wor`) and `output_variable_type` have no fixture: they are the digital half, withdrawn from Verilog-A by Annex C |
 | `a-2-2-2` | `drive_strength`, `strength0`, `strength1`, `charge_strength` | — no fixture. Digital-only; `grep -l 'strong0\|pull1\|supply0' *.va` is empty |
 | `a-2-2-3` | `delay3`, `delay2`, `delay_value` | — no fixture. Net delays are digital. `34_delay_control_in_analog_rejected.va` looks adjacent but is not: `#5` there is A.6.5 `delay_control`, a statement prefix, not a declaration delay |
-| `a-2-3` | `list_of_branch_identifiers`, `list_of_param_assignments`, `list_of_port_identifiers`, `list_of_real_identifiers`, `list_of_variable_identifiers`, `list_of_net_identifiers` | `03_declarations.va` — `electrical p, n, internal;` is a three-element `list_of_net_identifiers`, `inout p, n;` a two-element `list_of_port_identifiers`. `39_branch_array.va` cites A.2.3 for the `branch_identifier [ range ]` arm (`pair[0:1]`) — **`//! xfail`**. The other seven list productions have no fixture; each belongs to a construct that has none either |
+| `a-2-3` | `list_of_branch_identifiers`, `list_of_param_assignments`, `list_of_port_identifiers`, `list_of_real_identifiers`, `list_of_variable_identifiers`, `list_of_net_identifiers` | `03_declarations.va` — `electrical p, n, internal;` is a three-element `list_of_net_identifiers`, `inout p, n;` a two-element `list_of_port_identifiers`. `39_branch_array.va` cites A.2.3 for the `branch_identifier [ range ]` arm (`pair[0:1]`) and is green: the range folds in lowering and the elements are registered under `pair[0]`/`pair[1]`, the same scalarised keying a §3.12 vector branch uses. The other seven list productions have no fixture; each belongs to a construct that has none either |
 | `a-2-4` | `param_assignment` (both arms), `net_decl_assignment`, `defparam_assignment`, `specparam_assignment` | Arm one of `param_assignment` with a trailing `{ value_range }`: `03_declarations.va`. Arm two, `parameter_identifier range = constant_assignment_pattern`: `07_expressions.va` (`parameter real coefficients[0:1] = '{1.0, 2.0}`) — the only file in the suite that takes it, and it runs green. `defparam_assignment ::= hierarchical_parameter_identifier = …`: `12_defparam.va` (`child.gain`), the directory's only hierarchical identifier — **`//! xfail`**. `net_decl_assignment` and `specparam_assignment`: nothing |
 | `a-2-5` | `dimension`, `range`, `value_range`, `value_range_type`, `value_range_expression` | `03_declarations.va` cites A.2.5 and takes three of the six `value_range` arms — `from (0:inf)` (open/open) and `from (-inf:0]` (open/closed), including both `inf` and `-inf` as `value_range_expression`, and it checks the negative default survives. `dimension`: `07`, `23`. `range`: `39` (**`//! xfail`**). The `'{ string { , string } }` arm and the `exclude` arm of `value_range_type` have no fixture here |
 | `a-2-6` | `analog_function_declaration`, `analog_function_type`, `analog_function_item_declaration` | `04_analog_function.va` (explicit `real` type, `input`/`real` item declarations, assignment to the function's own name), `37_analog_function_default_type.va` (the `[ analog_function_type ]` bracket *omitted* — the other half of the same production), `38_analog_function_integer_string.va` (the `integer` and `string` arms of `analog_function_type`, both of the two spellings nothing else reaches), `23_expression_primaries.va` (a function declared alongside a branch and called from a word select). The digital `function_declaration` and its `function_port_list` have no fixture and are not Verilog-A |
@@ -65,7 +65,7 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | `a-3-4` | `cmos_switchtype`, `gate_type`, `n_input_gatetype`, … | — no fixture |
 | `a-4` | heading | parent |
 | `a-4-1` | `module_instantiation`, `parameter_value_assignment`, `named_parameter_assignment`, `list_of_port_connections`, `named_port_connection` | `11_module_instantiation.va` — `annex_a_child #(.gain(2.0)) child_instance(p, n);` covers `parameter_value_assignment` with a `named_parameter_assignment` and an ordered `list_of_port_connections` in one line, against a second module in the same file that checks the override arrived. `12_defparam.va` and `10_paramset.va` each instantiate too, as the carrier for their own production. All three **`//! xfail`**, all three on the same defect |
-| `a-4-2` | `generate_region`, `genvar_declaration`, `analog_loop_generate_statement`, `if_generate_construct`, `case_generate_construct` | `09_generate.va` (`generate … endgenerate` with `genvar index;` and a `for` loop unrolled three times, checked by accumulation), `14_if_generate.va` (both arms, named `begin : on` / `begin : off`), `15_case_generate.va` (three items including a `1, 2:` multi-expression item and a `default:`). All three **`//! xfail`**; `09` and `14` on one defect, `15` on another |
+| `a-4-2` | `generate_region`, `genvar_declaration`, `analog_loop_generate_statement`, `if_generate_construct`, `case_generate_construct` | `09_generate.va` (`generate … endgenerate` with `genvar index;` and a `for` loop unrolled three times, checked by accumulation), `14_if_generate.va` (both arms, named `begin : on` / `begin : off`), `15_case_generate.va` (three items including a `1, 2:` multi-expression item and a `default:`). `09` and `14` are green — a generate block parses as a run of `module_or_generate_item`s, so `analog_construct` inside one is derivable; `15` is **`//! xfail`**, case_generate_construct is the one scheme with no parser at all |
 | `a-5` | heading | parent; nothing under it has a fixture |
 | `a-5-1` | `udp_declaration`, `udp_ansi_declaration` | — no fixture |
 | `a-5-2` | `udp_port_list`, `udp_output_declaration`, `udp_input_declaration` | — no fixture |
@@ -92,15 +92,15 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | `a-7-5-2` | `timing_check_limit`, `notifier`, `delayed_reference` | — no fixture |
 | `a-7-5-3` | `timing_check_event`, `controlled_reference_event` | — no fixture |
 | `a-8` | heading | parent; `07_expressions.va` cites the bare `A.8` |
-| `a-8-1` | `analog_concatenation`, `analog_multiple_concatenation`, `assignment_pattern`, `constant_assignment_pattern` | `24_expression_composites.va` (`{4'b1010, 4'b0101}` checked as 165, so the pack order is asserted and not assumed), `07_expressions.va` (`'{1.0, 2.0}` — the `constant_assignment_pattern`, which the file reads back element by element). `25_replication.va` is `analog_multiple_concatenation` (`{2{4'b0011}}`) — **`//! xfail`** |
-| `a-8-2` | `analog_function_call`, `analog_system_function_call`, `analog_built_in_function_call`, `analog_filter_function_call`, `branch_probe_function_call`, `port_probe_function_call`, `analog_small_signal_function_call`, `analysis_function_call` | `23_expression_primaries.va` cites A.8.2 and holds four of these: a user `analog_function_call`, a `$pow` `analog_system_function_call`, a `branch_probe_function_call` over a named branch, and `I(<p>)` — the `port_probe_function_call`, whose angle brackets appear nowhere else in the directory. `07_expressions.va` adds `sin`/`cos` from `analog_built_in_function_name`. `analog_filter_function_call` is only `ddt` in `40_abstol_nature_identifier.va` (**`//! xfail`**); `ddx`, `idt`, `idtmod`, `absdelay`, `transition`, `slew`, `last_crossing`, `limexp`, the four `laplace_*` and the four `zi_*` names have no fixture here, nor do the small-signal or `analysis()` calls. `ch05_analog_behavior` owns those |
-| `a-8-3` | `analog_expression`, `analog_conditional_expression`, `constant_expression`, `abstol_expression`, `indirect_expression` | `07_expressions.va` (binary, `**` precedence against `*` checked numerically, and `?:`), `24_expression_composites.va` (the `unary_operator analog_primary` arm via `~`, plus `?:`). `abstol_expression ::= … | nature_identifier` is `40_abstol_nature_identifier.va`, which cites A.8.3 and is the only file that writes a bare nature name in expression position — **`//! xfail`**. `indirect_expression` is `21` (also xfail). The `{ attribute_instance }` slot on operators is `ch02_lexical`'s, not here; `mintypmax` and the `module_path_*` family have nothing |
+| `a-8-1` | `analog_concatenation`, `analog_multiple_concatenation`, `assignment_pattern`, `constant_assignment_pattern` | `24_expression_composites.va` (`{4'b1010, 4'b0101}` checked as 165, so the pack order is asserted and not assumed), `07_expressions.va` (`'{1.0, 2.0}` — the `constant_assignment_pattern`, which the file reads back element by element). `25_replication.va` is `analog_multiple_concatenation` (`{2{4'b0011}}` checked as 51, so the repeat count and the pack order are both asserted) |
+| `a-8-2` | `analog_function_call`, `analog_system_function_call`, `analog_built_in_function_call`, `analog_filter_function_call`, `branch_probe_function_call`, `port_probe_function_call`, `analog_small_signal_function_call`, `analysis_function_call` | `23_expression_primaries.va` cites A.8.2 and holds four of these: a user `analog_function_call`, a `$pow` `analog_system_function_call`, a `branch_probe_function_call` over a named branch, and `I(<p>)` — the `port_probe_function_call`, whose angle brackets appear nowhere else in the directory. `07_expressions.va` adds `sin`/`cos` from `analog_built_in_function_name`. `analog_filter_function_call` is only `ddt` in `40_abstol_nature_identifier.va`, green; `ddx`, `idt`, `idtmod`, `absdelay`, `transition`, `slew`, `last_crossing`, `limexp`, the four `laplace_*` and the four `zi_*` names have no fixture here, nor do the small-signal or `analysis()` calls. `ch05_analog_behavior` owns those |
+| `a-8-3` | `analog_expression`, `analog_conditional_expression`, `constant_expression`, `abstol_expression`, `indirect_expression` | `07_expressions.va` (binary, `**` precedence against `*` checked numerically, and `?:`), `24_expression_composites.va` (the `unary_operator analog_primary` arm via `~`, plus `?:`). `abstol_expression ::= … | nature_identifier` is `40_abstol_nature_identifier.va`, which cites A.8.3 and is the only file that writes a bare nature name in expression position — green, and it asserts both arms give the same value. `indirect_expression` is `21` (also xfail). The `{ attribute_instance }` slot on operators is `ch02_lexical`'s, not here; `mintypmax` and the `module_path_*` family have nothing |
 | `a-8-4` | `analog_primary`, `constant_primary`, `primary` | `23_expression_primaries.va` cites A.8.4 and reaches `number`, `variable_reference` with a word select, `analog_function_call` and `analog_system_function_call` in adjacent statements. `24` adds `analog_concatenation` and parenthesized subexpressions; `07` adds `parameter_reference` with an index. `genvar_identifier` as a primary is `09` (xfail); `nature_attribute_reference` (`net.potential.abstol`) has no fixture anywhere in the directory |
 | `a-8-5` | `analog_variable_lvalue`, `branch_lvalue`, `variable_lvalue`, `net_lvalue`, `array_analog_variable_assignment` | `29_contribution_to_variable_rejected.va` cites A.8.5 and pins the boundary: `x <+ 1.0` where `x` is `real` is `//! reject E0408`, because `branch_lvalue ::= branch_probe_function_call` and nothing else. The indexed arm of `analog_variable_lvalue` is `23` (`array[0] = …`, `array[1] = …`). `net_lvalue`, the braced concatenation lvalue, and `array_analog_variable_assignment` from an `assignment_pattern` rvalue: no fixture |
 | `a-8-6` | `unary_operator`, `binary_operator`, `unary_module_path_operator` | `07_expressions.va` (`+`, `*`, `**`, `>`, `?:`) and `24_expression_composites.va` (`~`, `<<`, `&`, `>`), each with a numeric check rather than a parse. No fixture cites A.8.6, and none should: Clause 4 defines what the operators mean and `ch04_expressions` proves it production by production. What is asserted here is only that they parse in analog context |
 | `a-8-7` | `number`, `decimal_number`, `real_number`, `hex_number`, `sign`, `size`, `unsigned_number` | `24_expression_composites.va` (`4'b1010`, `4'b0101`, `8'h0f` — sized based numbers in three bases), `03`/`07` (real and integer decimals), `01` (`1u` and `1p` scale factors in the nature attributes). `36_real_embedded_space_rejected.va` cites A.8.7 and pins the negative: `1.5 e3` is `//! reject E0207`. The full number grammar is `ch02_lexical`'s `s2-6`, sixty files of it |
 | `a-8-8` | `string` | `03_declarations.va` (`string label = "declarations";`), `38_analog_function_integer_string.va` (a `string`-typed analog function returning `"hi"`, compared for equality), `20` (`$display("%g", x)`), `01` (`units = "V"`). No fixture cites A.8.8; see the prose on `string_declaration` below |
-| `a-8-9` | `branch_reference`, `analog_port_reference`, `analog_net_reference`, `variable_reference`, `parameter_reference`, `net_reference`, `nature_attribute_reference` | `23_expression_primaries.va` cites A.8.9: `V(path)` is `nature_access_function ( branch_reference )`, `I(<p>)` an `analog_port_reference`, `array[0]` an indexed `variable_reference`. `V(p, n)` — the two-`analog_net_reference` arm — is in nearly every file. `39_branch_array.va` takes `branch_reference ::= hierarchical_branch_identifier [ constant_expression ]` and is the only file that does — **`//! xfail`**. `hierarchical_unnamed_branch_reference` and `nature_attribute_reference` have no fixture: both need hierarchy |
+| `a-8-9` | `branch_reference`, `analog_port_reference`, `analog_net_reference`, `variable_reference`, `parameter_reference`, `net_reference`, `nature_attribute_reference` | `23_expression_primaries.va` cites A.8.9: `V(path)` is `nature_access_function ( branch_reference )`, `I(<p>)` an `analog_port_reference`, `array[0]` an indexed `variable_reference`. `V(p, n)` — the two-`analog_net_reference` arm — is in nearly every file. `39_branch_array.va` takes `branch_reference ::= hierarchical_branch_identifier [ constant_expression ]`, is the only file that does, and is green. `hierarchical_unnamed_branch_reference` and `nature_attribute_reference` have no fixture: both need hierarchy |
 | `a-9` | heading | parent |
 | `a-9-1` | `attribute_instance ::= (* attr_spec { , attr_spec } *)`, `attr_spec`, `attr_name` | `08_attributes_comments_identifiers.va` (`(* annex = "A.9" *)` prefixing a module declaration — the `attr_name = constant_expression` arm), `22_null_attributed_statements.va` (two valueless attributes, `(* conditional_null *)` on a null statement and `(* contribution_attr *)` on a contribution, which is the bare `attr_name` arm in statement position). The exhaustive attribute placement work is `ch02_lexical`'s `s2-9`, which has eight files to these two |
 | `a-9-2` | `comment`, `one_line_comment`, `block_comment`, `comment_text` | `08_attributes_comments_identifiers.va` — both forms, inside a module body, one after the other. Every other file uses `//` in its header, but `08` is the one that puts a comment where a statement could go and proves it vanishes |
@@ -110,7 +110,7 @@ says so. Where a cite claims a section the source does not reach, the row says t
 
 ## The xfail ledger
 
-Fifteen of the forty-four fixtures state a rule VerA does not meet. Reasons are verbatim
+Six of the forty-four fixtures state a rule VerA does not meet. Reasons are verbatim
 from the file headers; each names the construct and, where known, the file that must
 change. Every one is a *missing acceptance*: the source is legal Verilog-AMS in the
 analog subset, and VerA refuses or mis-evaluates it. None is a missing check, so no row
@@ -118,46 +118,46 @@ here is at risk of freezing on an impossible diagnostic.
 
 | Fixture | Section | Reason |
 |---|---|---|
-| `09_generate.va` | `a-4-2` | VerA rejects the `analog` keyword inside a generate block with E0209 "expected an expression: found analog" — the only Annex A route to a contribution in a generated block |
 | `10_paramset.va` | `a-1-9` | VerA rejects `paramset` outright with E0201, and applying one would also need module instantiation (E0204) |
 | `11_module_instantiation.va` | `a-4-1` | VerA does not implement module instantiation — an instance in a module body is rejected with E0204 |
 | `12_defparam.va` | `a-1-4`, `a-2-4` | VerA implements neither module instantiation (E0204, reported first) nor defparam (E0205) |
-| `13_parameter_port_list.va` | `a-1-3` | VerA has no `module_parameter_port_list`: the header parser expects `;` after the port list, so `#` is E0207 "unexpected token: found #" (`src/frontend/parser.zig`) |
-| `14_if_generate.va` | `a-4-2` | VerA rejects the `analog` keyword inside a generate block with E0209; the bare `if (e) I(p,n) <+ …;` form it does accept is not derivable from A.4.2 |
 | `15_case_generate.va` | `a-4-2` | VerA has no case generate at all: E0205 "unsupported module item: found case" |
 | `17_named_event_trigger.va` | `a-2-1-3`, `a-6-5` | VerA does not implement named events: `event tick;` is E0203 "named event declaration is not implemented", so nothing after it is ever reached |
 | `21_indirect_contribution.va` | `a-6-10` | VerA's testbench writes `//! bias` straight into `x[]` and never solves (`src/backend/tb.zig`), so `V(out)` stays 0 and no 5.6.7 constraint is ever enforced |
-| `25_replication.va` | `a-8-1` | VerA's concatenation parser has no replication form: `{2{…}}` is E0207 "unexpected token: found `{`  expected `}`" |
-| `39_branch_array.va` | `a-2-3`, `a-8-9` | VerA has no branch arrays: `branch (p, n) pair[0:1];` is E0207 "unexpected token: found `[`  expected `;`" in the branch declaration parser |
-| `40_abstol_nature_identifier.va` | `a-8-3` | VerA resolves a `ddt` tolerance argument as an ordinary expression outside contribution position: `r = ddt(V(p,n), Voltage);` is E0314 "unknown identifier: `Voltage`" (in contribution position the argument is instead dropped unresolved) |
-| `41_named_port.va` | `a-1-3` | VerA's header parser has no named-port form: `.ext(inner)` in a list of ports is E0208 "expected an identifier: found `.`" |
-| `42_concatenated_port.va` | `a-1-3` | VerA's header parser has no concatenated-port form: `{a, b}` in a list of ports is E0208 "expected an identifier: found `{`" |
-| `43_macromodule.va` | `a-1-2` | VerA refuses the keyword outright: E0201 "construct is not in the supported subset: `macromodule`" |
 
-Grouped by the defect rather than by the fixture, fifteen rows are **six** problems:
+Grouped by the defect rather than by the fixture, the six rows are **three** problems. Three
+more are kept below, struck as closed, because each was a prediction this document made
+about how the fixtures would fall and each turned out to be right:
 
 1. **No hierarchy.** `10`, `11`, `12` — all three instantiate, and E0204 is reported before
    anything else in the file can be judged. `12`'s `defparam` and `10`'s `paramset` are
    downstream of that same wall; each also carries its own second gap, so closing
    instantiation alone XPASSes none of them but makes all three fail for their real reason.
-2. **The generate body cannot hold `analog`.** `09` and `14` are one E0209. `15` is separate
-   and larger: case generate is not parsed at all.
-3. **The module header parser.** `13`, `41`, `42` are three arms of A.1.3 that
-   `src/frontend/parser.zig` does not have, each dying at the same point in the header
-   with a different token. One header rewrite retires all three.
-4. **Missing expression forms.** `25` (`{n{…}}`) and `39` (`branch id[range]`) are two
-   independent parser gaps that happen to produce the same E0207 shape.
-5. **Nature identifiers in argument position.** `40` alone. Note the header's second
-   sentence, which is the more alarming half: in *contribution* position the tolerance
-   argument is silently dropped rather than diagnosed.
+2. **No case generate.** `15` alone. The loop and conditional schemes parse their bodies as
+   `module_or_generate_item`s (which is what let `09` and `14` go green); the third scheme,
+   `case_generate_construct`, has no parser at all and is E0205 at the `case` keyword.
+3. **The module header parser.** Closed. `13`, `41` and `42` were three arms of A.1.3 that
+   `src/frontend/parser.zig` did not have, each dying at the same point in the header with a
+   different token, and one header rewrite retired all three — as this list predicted.
+4. **Missing expression forms.** Closed. `25` (`{n{…}}`) and `39` (`branch id[range]`) were
+   two independent parser gaps that happened to produce the same E0207 shape, and were
+   closed independently.
+5. **Nature identifiers in argument position.** Closed. `40` alone, and A.8.3's
+   `abstol_expression ::= constant_expression | nature_identifier` now has both arms:
+   `Lower.abstolSlot` names the tolerance slot of `ddt`/`idt`/`idtmod` and only that slot
+   consults the nature scope. The file's second observation still stands and is still the
+   more alarming half — in *contribution* position the tolerance argument is dropped
+   before name resolution runs, so `ddt(V(p,n), Zorkmid)` is accepted there. That is why
+   the fixture assigns to a variable instead of contributing; no fixture demands the
+   contribution path resolve it.
 6. **The testbench does not solve.** `21` alone, and it is not a frontend bug at all —
    `src/backend/tb.zig` writes `//! bias` values directly into `x[]`, so no indirect
    contribution's constraint is ever enforced. This is the one xfail here that a parser
    change cannot touch, and the one that silently weakens other files: any fixture whose
    check depends on the solver reaching a fixed point is checking the bias it was handed.
 
-`43` (macromodule) is deliberately left out of the six: it is a one-keyword alias for
-`module` and the fix is one token in the keyword table.
+`43` (macromodule) was deliberately left out of that list as a one-keyword alias for
+`module` whose fix was one token in the dispatch. It was.
 
 ## Reject is not debt
 
@@ -171,11 +171,10 @@ wrong. The remaining three are `29` (`<+` to a variable, which `branch_lvalue` f
 outright), `35` (`\$vt`, where 2.8.1 makes the escaped form an ordinary name), and `36`
 (`1.5 e3`, A.10's embedded-space sentence).
 
-Five of the eleven collapse to the same E0209 — `force`, `fork`, `wait`, `#5` and, in a
-different file, the generate-body `analog`. That is the parser's generic "expected an
-expression" and not a considered diagnosis of what the construct is. The fixtures pin the
-code that fires today; if VerA ever grows a "not in the analog subset" diagnosis for these,
-five expected codes change together.
+Four of the eleven collapse to the same E0209 — `force`, `fork`, `wait` and `#5`. That is
+the parser's generic "expected an expression" and not a considered diagnosis of what the
+construct is. The fixtures pin the code that fires today; if VerA ever grows a "not in the
+analog subset" diagnosis for these, four expected codes change together.
 
 ## What is not covered
 

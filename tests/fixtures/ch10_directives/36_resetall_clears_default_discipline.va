@@ -33,7 +33,7 @@
 //! lrm 7.4
 //! lrm 3.6.1
 //! reject E0501
-//! xfail VerA discards `default_discipline and `resetall in the preprocessor and never runs discipline resolution, so it has no default to clear — V() resolves on a bare port regardless
+//! xfail The RULE now fires — `resetall clears the default and VerA rejects this module — but with E0337 "net has no declared discipline" rather than the E0501 guessed above, so the substring does not match. Same open question as 35
 `default_discipline electrical
 `resetall
 module ch10_resetall_clears_default_discipline(p, n);

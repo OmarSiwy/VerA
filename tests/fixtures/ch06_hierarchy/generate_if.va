@@ -19,7 +19,6 @@
 //! lrm 6.6.2
 //! param enabled = 0
 //! bias V(p) = 0.5
-//! xfail VerA's parser reads a generate block body as an analog statement, so the `analog` keyword inside `generate` dies at E0209 "expected an expression: found `analog`"
 `include "check.vh"
 module ch6_generate_if(p);
   inout p; electrical p;

@@ -14,7 +14,7 @@
 //
 //! lrm 9.20
 //! reject bit select or part select
-//! xfail VerA has no vector continuous nets at all: `electrical [3:0] bus;` is E0208 at the declaration, so the §9.20 bit-select rule is never reached — and $analog_node_alias itself lowers to a constant 0 (codegen.zig) with no argument checking
+//! xfail VerA does not check $analog_node_alias arguments: the declaration and the bit select both elaborate now (§3.6.3 vector nets are scalarised), but codegen.zig lowers the whole call to a constant 0 without looking at either operand, so nothing reaches the §9.20 rule
 module ch09_node_alias_bit_select_rejected(p, n);
   inout p, n; electrical p, n;
   electrical [3:0] bus;

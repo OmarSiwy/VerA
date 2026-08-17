@@ -23,7 +23,6 @@
 //! lrm 3.12
 //! bias V(a[3]) = 3.0, V(a[4]) = 4.0, V(a[5]) = 5.0
 //! bias V(b[1]) = 1.0, V(b[2]) = 0.5, V(b[3]) = 0.25
-//! xfail VerA's parser has no net range: the `[` of `electrical [3:5] a` is E0208, before E0302 can fire
 `include "check.vh"
 module ch3_vector_branches(a, b);
     inout a, b;

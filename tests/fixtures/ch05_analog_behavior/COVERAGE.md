@@ -34,8 +34,8 @@ clause in its header but does not cite it is not credited here.
 | 5.4.3 Accessing flow through a port | `port_flow_probe.va` (legal `I(<p>)`); `port_potential_invalid.va` (E0507, `V(<p>)`); `port_flow_contribution_invalid.va` (E0407, `I(<p>)` on the left of `<+`) |
 | 5.4.4 Unassigned sources | `unassigned_switch_arm.va`, `retained_conditional_contribution.va`, `implicit_zero_contribution.va` — all three pin the observable half only: which arm ran and what the branch potential is. None reads the implied zero flow, and each says so in its own header |
 | 5.5 Accessing net and branch signals and attributes | — no fixture cites the parent; one sentence of introduction |
-| 5.5.1 Accessing net and branch signals | `generic_access.va` **xfail** — VerA has no generic `potential()`/`flow()` access functions; `potential(b)` dies at E0209 (expected an expression) |
-| 5.5.2 Signal access for vector branches | `vector_access.va` **xfail** — VerA has no vector nets: `input [0:7] in` dies at E0208 (expected an identifier: found `[`) |
+| 5.5.1 Accessing net and branch signals | `generic_access.va` — green: Syntax 5-3's `potential`/`flow` are parsed as the access functions they are and lowering maps them onto the same `Access` as `V`/`I`, so the file exercises the generic spelling on both sides of `<+`. The one exemption they get is §3.6.1.4's NAME match; a natureless or half-bound discipline still refuses them (E0501) |
+| 5.5.2 Signal access for vector branches | `vector_access.va` — the clause's own DAC8 example, eight literal bit selects weighted 1/2 … 1/256 |
 | 5.5.3 Accessing attributes | `nature_attribute_unsupported.va` **xfail** — VerA cannot parse a nature attribute reference: the `.` in `a.potential.abstol` dies at E0207 (expected `)`). `nature_attribute_nonconstant_invalid.va` is the negative half (`.access` is not a constant expression) and passes on E0207, the right verdict by the shorter route |
 | 5.5.4 Creating unnamed branches using hierarchical net references | `hierarchical_access_unsupported.va` **xfail** — VerA's parser has no hierarchical net reference: the `.` in `V(drv.a)` dies at E0207 (expected `)`), and the instantiation the path resolves through is refused at E0204 anyway |
 | 5.5.5 Accessing nets and branch signals hierarchically | — **no fixture.** The clause's own rules (a hierarchical read of a *named* branch; the two error conditions — branch absent in the instance, wrong access function for it; `V(top.drv.branch(a,b))` for an existing unnamed branch; the hierarchical port branch) are uncovered. §5.5.4's fixture borrows this clause's *shape* to stay resolvable in one file, but cites 5.5.4 and tests unnamed-branch creation, not these rules |
@@ -65,7 +65,7 @@ clause in its header but does not cite it is not credited here.
 | 5.9 Looping statements | the three blanket restrictions on runtime loops: `loop_filter_invalid.va` (E0514), `loop_event_control_invalid.va` (E0707), and `loop_contribution_invalid.va` **xfail** — VerA allows a contribution inside a runtime `for`/`while`/`repeat`; it unrolls nothing and stamps the branch once per iteration, warning only W0650 |
 | 5.9.1 Repeat and while statements | `repeat_loop.va`, `repeat_single.va`, `while_loop.va`, `while_false.va`, and `repeat_count_evaluated_once.va` — the count is a variable the body decrements, which is the only way "evaluated once" parts company with "re-evaluated each pass" |
 | 5.9.2 For statements | `for_loop.va`, `for_zero_iterations.va`; the loop host for `jump_break.va` and `jump_continue.va` |
-| 5.9.3 Analog For Statements | `jump_in_analog_for_invalid.va` (E0404). `analog_genvar_loop.va` **xfail** — VerA has no vector nets or genvar loops: `input [1:width] dt` dies at E0208 (expected an identifier: found `[`) |
+| 5.9.3 Analog For Statements | `jump_in_analog_for_invalid.va` (E0404). `analog_genvar_loop.va` — the clause's own genvarexp example: the genvar indexes `V(dt[k])` and the loop is unrolled at elaboration |
 | 5.10 Analog event control statements | the restrictions on statements inside an event control block: `event_contribution_rejected.va` and `event_block_contribution_invalid.va` (E0406, reached through a monitored and a global event respectively so neither can be masked), `nested_event_control_invalid.va` (E0703) |
 | 5.10.1 Event OR operator | `event_or.va` (timer or-ed with a cross that cannot fire, so the or-list is distinguishable from a conjunction), `event_initial_or_cross.va` |
 | 5.10.2 Global events | `initial_step.va`, `final_step.va` (with §8.4.7), `initial_final_analysis_lists.va`, `event_initial_or_cross.va`, and `initial_step_unknown_analysis.va` — four rows of Table 5-1 read off the Sweep column, the only column where "first point" and "last point" are distinct places |
@@ -95,13 +95,11 @@ fixtures that compile anyway, so each one is a missing diagnostic:
 wrong reason and too early). Of these, only the last is a *reachability*
 problem; the other seven are checks that could be written today.
 
-**Twelve get the wrong answer, or cannot be reached at all.** Seven are parser
-boundaries — `vector_access.va` and `analog_genvar_loop.va` die at the vector
-declaration, `hierarchical_access_unsupported.va` and
+**Nine get the wrong answer, or cannot be reached at all.** Four are parser
+boundaries — `hierarchical_access_unsupported.va` and
 `hierarchical_contribution_unsupported.va` at the `.` in a hierarchical net
 reference, `nature_attribute_unsupported.va` at the `.` in
-`a.potential.abstol`, `generic_access.va` at `potential(b)`, and
-`named_event_unsupported.va` at `event tick;`. The rest are semantic:
+`a.potential.abstol`, and `named_event_unsupported.va` at `event tick;`. The rest are semantic:
 `value_retention.va` (§5.6.1.3 is not implemented — 8.0 where the LRM prints
 7.0), `two_named_branches.va` (two named branches over one net pair are
 collapsed into one), `event_above.va` (`above()` is level-triggered), and

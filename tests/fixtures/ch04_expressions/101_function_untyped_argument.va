@@ -17,7 +17,6 @@
 //! lrm 4.7.1
 //! reject formal
 //! reject data type
-//! xfail VerA silently types an undeclared formal as real, so `input x;` with no `real x;` compiles. No diag code covers the 4.7.1 block-item-declaration requirement
 module ch4_fn_untyped(p);
   inout p;
   electrical p;

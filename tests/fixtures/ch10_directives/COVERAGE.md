@@ -10,11 +10,11 @@ asserted that `resetall` undefines a text macro and nothing in the LRM says so
 sentence). A conforming tool failed it. `36`'s header records the reasoning.
 
 Every section has a fixture, so the interesting number here is not the section
-count. It is 13: the fixtures that state a rule this compiler does not meet.
-Chapter 10 is where VerA's preprocessor is thinnest — it lexes
-`` `default_discipline `` and `` `default_transition `` and marks them
-`.ignored`, and it rejects `` `__FILE__ ``/`` `__LINE__ `` outright — so the
-xfail ledger below, not the table, is the real content of this folder.
+count. It is 7: the fixtures that state a rule this compiler does not meet.
+What is left is `` `default_transition ``, which the preprocessor still marks
+`.ignored` and which drags §4.5.8's ramp in behind it. §10.2 and §10.7 are
+implemented: `` `default_discipline `` is parsed and fed to §7.4 discipline
+resolution, and `` `__FILE__ ``/`` `__LINE__ ``/`` `line `` expand and remap.
 
 Table 10-1 in §10.1 lists 23 directives. All 23 appear in some fixture in this
 folder; that is checkable by grep and it is checked. The previous version of
@@ -30,11 +30,11 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-1` | the digital carry-over directives, and the scope sentence | `19_ignored_standard_directives.va`: `` `timescale ``, `` `default_nettype ``, `` `celldefine ``/`` `endcelldefine ``, `` `pragma ``, `` `line ``, `` `unconnected_drive ``/`` `nounconnected_drive ``. Pins that `` `timescale `` does not rescale `$abstime` (2.5e-9 s, not 2.5 ticks) and that none of them moves the branch potential. The `pull1` pair is written open-before/close-after the module, the way the scope sentence reads |
 | `s10-2` | the directive is accepted, base and qualified forms | `01_default_discipline.va`, `02_default_discipline_qualified.va` (`real` qualifier, deliberately inapplicable) |
 | `s10-2` | the bare form is legal (Syntax 10-1 brackets) and is not retroactive | `24_default_discipline_empty_reset.va` |
-| `s10-2` | the positive effect: a default reaches an UNDECLARED net | `41_default_discipline_undeclared_net.va` — passes today **without discriminating**, and its header says so: delete the directive and the file still compiles |
-| `s10-2` | two qualifiers in force at once; more specific wins | `42_default_discipline_two_qualifiers.va` (`wire` claims the ports, `reg` must not) — same honest limit as `41` |
-| `s10-2` | the qualifier slot is a closed 15-way alternation | `45_default_discipline_qualifier_grammar.va` — **`//! xfail`** |
-| `s10-2` | the bare form withdraws the default for later nets | `35_default_discipline_reset_leaves_no_default.va` — **`//! xfail`** |
-| `s10-2` | `` `resetall `` withdraws it too ("In addition to `resetall") | `36_resetall_clears_default_discipline.va` — **`//! xfail`** |
+| `s10-2` | the positive effect: a default reaches an UNDECLARED net | `41_default_discipline_undeclared_net.va` — discriminating: delete the directive and the module dies at E0337 |
+| `s10-2` | two qualifiers in force at once; more specific wins | `42_default_discipline_two_qualifiers.va` (`wire` claims the ports, `reg` must not) — discriminating: swap the qualifiers and `V()` dies at E0501 on `ddiscrete` |
+| `s10-2` | the qualifier slot is a closed 15-way alternation | `45_default_discipline_qualifier_grammar.va` (E0127) |
+| `s10-2` | the bare form withdraws the default for later nets | `35_default_discipline_reset_leaves_no_default.va` — **`//! xfail`**: the rule fires, but VerA prints E0337 and the fixture guessed E0501 |
+| `s10-2` | `` `resetall `` withdraws it too ("In addition to `resetall") | `36_resetall_clears_default_discipline.va` — **`//! xfail`**, same code mismatch as `35` |
 | `s10-3` | the directive is accepted; §4.5.8 DC pass-through survives it | `03_default_transition.va` — the 1n itself is deliberately not pinned, and the header says why |
 | `s10-3` | the default IS the rise/fall time of an argument-free filter | `38_default_transition_ramp.va` — **`//! xfail`** |
 | `s10-3` | a later directive supersedes an earlier one | `39_default_transition_supersedes.va` — **`//! xfail`** |
@@ -66,48 +66,30 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-6` | an UNTERMINATED `` `begin_keywords `` is not an error; the set carries on | `31_begin_keywords_unterminated.va` — **`//! xfail`** |
 | `s10-6` | the set is not over-broad: `logic` is not reserved in VAMS-2023 | `43_logic_is_an_identifier_vams_2023.va` — the only fixture testing the set from the permissive side, aimed at a Verilog-AMS front end grown on a SystemVerilog parser |
 | `s10-6` | with no directive, the set is "the implementation's default set" | — not testable: any verdict tests one implementation's choice of default. `33`'s header works through why, and names its outer `"VAMS-2023"` explicitly to avoid depending on it |
-| `s10-7` | `` `__FILE__ `` expands to a string literal | `21_file_macro.va` — **`//! xfail`** |
-| `s10-7` | `` `__LINE__ `` expands to the decimal line number | `22_line_macro.va` — **`//! xfail`** |
-| `s10-7` | `` `line `` remaps `` `__LINE__ ``; `` `include `` remaps it and reverts +1 | `44_line_macro_remapping.va` — **`//! xfail`** |
+| `s10-7` | `` `__FILE__ `` expands to a string literal | `21_file_macro.va` |
+| `s10-7` | `` `__LINE__ `` expands to the decimal line number | `22_line_macro.va` |
+| `s10-7` | `` `line `` remaps `` `__LINE__ ``; `` `include `` remaps it and reverts +1 | `44_line_macro_remapping.va` |
 
 ## The xfail ledger
 
-Thirteen of the 47 fixtures run and fail. Each names a concrete defect in a
-named file, so the row disappears the day the defect does. Five of the
-thirteen are `` `default_discipline ``/`` `default_transition `` fixtures
-blocked by the same one-line cause — the preprocessor marks both directives
-`.ignored` — which is why this chapter's debt looks larger than it is.
+Seven of the 47 fixtures run and fail. Each names a concrete defect in a
+named file, so the row disappears the day the defect does. Four of the seven
+are `` `default_transition `` fixtures blocked by the same one-line cause —
+the preprocessor still marks that directive `.ignored` — which is why this
+chapter's debt looks larger than it is.
 
 | Fixture | Rule it states | Why it fails today |
 |---|---|---|
-| `21_file_macro.va` | 10.7 `` `__FILE__ `` expands to a string literal | VerA rejects it with E0114 "unsupported compiler directive"; §10.7 is unimplemented in the preprocessor |
-| `22_line_macro.va` | 10.7 `` `__LINE__ `` expands to a decimal | Same E0114 |
-| `44_line_macro_remapping.va` | 10.7 `` `line `` and `` `include `` remap `` `__LINE__ `` | Same E0114, plus `` `line `` handling is a no-op that remaps nothing |
 | `31_begin_keywords_unterminated.va` | 10.6 an unclosed `` `begin_keywords `` carries across file boundaries | VerA raises E0137 at end of parse. The fixture used to DEMAND that rejection, which inverted the clause: it failed every compiler implementing the sentence and passed only one that did not |
 | `34_define_vams_macro_text.va` | 10.4 macro text shall not begin with `__VAMS_` | `preprocessor.zig` protects only the two predefined NAMES; it never inspects macro text, so a `__VAMS_` body is defined silently |
 | `47_escaped_macro_name.va` | Syntax 10-3 `text_macro_identifier ::= identifier`, so escapes are legal | VerA's `` `define `` name lexer accepts only a simple identifier and raises E0109; the restriction belongs to the FORMAL, not the name |
-| `35_default_discipline_reset_leaves_no_default.va` | 10.2 the bare directive withdraws the default | `` `default_discipline `` is `.ignored` and discipline resolution never runs, so there is no default to withhold — `V()` resolves on a bare port either way |
-| `36_resetall_clears_default_discipline.va` | 10.2 `` `resetall `` withdraws it too | Same, via the other mechanism: nothing to clear |
-| `45_default_discipline_qualifier_grammar.va` | Syntax 10-1's 15-way qualifier alternation | The directive is consumed to end of line without parsing operands, so any text after it is accepted |
+| `35_default_discipline_reset_leaves_no_default.va` | 10.2 the bare directive withdraws the default | Not a missing rule any more: the default IS withdrawn and the module IS rejected. The fixture's `//! reject E0501` was a stated guess at the code, and VerA prints E0337 "net has no declared discipline", which is the code wave 1 added for exactly this condition. Whether to retarget the fixture or to widen E0501 is a fixture decision |
+| `36_resetall_clears_default_discipline.va` | 10.2 `` `resetall `` withdraws it too | Same, via the other mechanism, and the same code mismatch |
 | `48_default_transition_requires_an_operand.va` | Syntax 10-2's operand is mandatory | Same shape: consumed to end of line, so the operand-less form is silently accepted |
 | `38_default_transition_ramp.va` | 10.3 the directive sets the filter's rise/fall time | Two gaps stacked. `` `default_transition `` is `.ignored` so the 4n is discarded; and `codegen.zig` implements `transition()` as a first-order lag (`zTransition`/`transitionTau`), not §4.5.8's linear ramp. Fixing the directive alone leaves the slope bound failing on the §4.5.8 residue |
 | `39_default_transition_supersedes.va` | 10.3 a later directive supersedes an earlier one | Both values discarded, so there is nothing to supersede; same §4.5.8 residue underneath |
 | `40_transition_arguments_override_default.va` | 10.3 explicit filter arguments beat the directive | The 8n is discarded, so the argument-free filter falls back to a simulator default; same §4.5.8 residue |
 
-## Fixtures that pass without discriminating
-
-Two files are green and prove nothing today. Both say so in their own headers,
-and neither is credited above as a live check:
-
-- `41_default_discipline_undeclared_net.va` — the positive half of §10.2.
-  VerA resolves an access function against a bare port regardless of any
-  discipline, so deleting the directive from the file changes no verdict.
-- `42_default_discipline_two_qualifiers.va` — the qualifier-precedence half.
-  Passes whichever qualifier rule a tool implements, including none.
-
-They are the spec record of rules whose discriminating (negative) halves are
-`35`, `36` and `45` in the ledger above. When discipline resolution lands, both
-start doing work with no edit.
 
 ## Readings this chapter takes, and where they are argued
 

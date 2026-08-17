@@ -17,14 +17,15 @@
 // string; the discriminating legal case for THIS rule is the second line above,
 // a nonconstant count into a string.
 //
-// The pinned substring is only the phase label. VerA rejects the line, but at
-// E0207 — its expression parser has no replication form at all, constant or
-// not — so pinning that code would pin the absence of the construct rather than
-// the non-constant multiplier, and it would stop matching the day replication
-// lands, which is exactly when this fixture starts being worth something.
+// The pin used to be the phase label alone, because VerA rejected the line at
+// E0207 — its expression parser had no replication form at all, constant or not
+// — and pinning that code would have pinned the absence of the construct rather
+// than the multiplier. Replication has landed, so the day this file was written
+// for has arrived: the code is E0354, §3.3's own "a string cannot be assigned to
+// an integral type", reached because Table 3-3 makes this replication a string.
 //
 //! lrm 3.3
-//! reject DiagnosticsReported
+//! reject E0354
 module ch3_nonconstant_replication_to_integral(p, n);
     inout p, n;
     electrical p, n;

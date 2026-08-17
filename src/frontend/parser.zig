@@ -53,6 +53,11 @@ pub const Parser = struct {
     /// directives it was pushed by. See `keywordsDirective` / `identLike`.
     kw_set: token.KeywordSet = token.default_keyword_set,
     kw_stack: std.ArrayList(struct { tok: u32, prev: token.KeywordSet }) = .empty,
+    /// Inside an `analog function` body (§4.7.1). Two of that clause's bullets
+    /// are restrictions on statements the ordinary statement parser also parses
+    /// for module scope, so the position is the only thing that tells them
+    /// apart. See `parseFuncDecl`, E0226 and E0227.
+    in_analog_fn: bool = false,
 
     pub fn init(
         arena: std.mem.Allocator,
@@ -95,7 +100,16 @@ pub const Parser = struct {
                     try self.rethrowOom(e);
                     self.recoverTopLevel(before);
                 },
-                .kw_module => {
+                // A.1.2 `module_keyword ::= module | macromodule`. §6.2: "The
+                // keyword macromodule can be used interchangeably with the
+                // keyword module TO DEFINE A MODULE. An implementation may
+                // choose to treat module definitions beginning with the
+                // macromodule keyword differently." The second sentence is a
+                // licence to optimize, not to refuse — the first has already
+                // made the keyword a way of defining a module. VerA takes the
+                // "no differently" option, so the two spellings are one arm and
+                // nothing downstream can tell them apart.
+                .kw_module, .kw_macromodule => {
                     const m = self.parseModule() catch |e| {
                         try self.rethrowOom(e);
                         self.recoverTopLevel(before);
@@ -120,8 +134,8 @@ pub const Parser = struct {
                     try natures.append(self.arena, n);
                 },
                 else => {
-                    // §6.4 paramsets, macromodules, UDPs, config/library files
-                    // and connectrules are all out of the annex C subset.
+                    // §6.4 paramsets, UDPs, config/library files and
+                    // connectrules are all out of the annex C subset.
                     _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
                     self.recoverTopLevel(before);
                 },
@@ -189,20 +203,40 @@ pub const Parser = struct {
     // A.1.2 module_declaration — LRM §6.2
     // -----------------------------------------------------------------------
 
-    /// LRM §6.2: header (name + ports §6.5), then module items.
-    ///
-    /// ponytail: no `module_parameter_port_list` (`#(...)`, A.1.3). The header
-    /// expects `;` after the port list, so `#` reports "expected semicolon" —
-    /// which is what the fixtures pin. Add it here if a model needs it.
+    /// LRM §6.2: header (name + optional parameter port list + ports §6.5),
+    /// then module items.
     pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         const main_tok = self.pos;
-        self.pos += 1; // 'module'
+        self.pos += 1; // 'module' | 'macromodule'
         const name = try self.expectIdent();
 
         var b: Body = .{};
+        // A.1.2 `module_identifier [ module_parameter_port_list ] list_of_ports`
+        // — A.1.3 `module_parameter_port_list ::= # ( parameter_declaration
+        // { , parameter_declaration } )`. §6.2: "The optional list of parameter
+        // definitions shall specify an ordered list of the parameters for the
+        // module." Ordered, and `b.params` is append-only, so declaration order
+        // IS that order and header parameters land in the same list as body
+        // ones — a header parameter is an ordinary §3.4 parameter with the same
+        // default and the same §9.19 status, which is the whole claim.
+        //
+        // `parseParamDecl` already loops over the commas INSIDE one declaration
+        // (`parameter real a = 1, b = 2`), and A.1.3's separator is the same
+        // comma, so the two levels are indistinguishable here and there is
+        // nothing to nest: keep eating declarations while a `parameter` or
+        // `localparam` keyword follows the comma the inner loop stopped at.
+        if (self.peek() == .hash) {
+            self.pos += 1;
+            _ = try self.expect(.lparen);
+            while (self.peek() == .kw_parameter or self.peek() == .kw_localparam) {
+                try self.parseParamDecl(&b.params);
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.rparen);
+        }
         if (self.peek() == .lparen) try self.parsePortList(&b);
         _ = try self.expect(.semicolon);
-        try self.parseModuleItems(&b, .kw_endmodule, false);
+        try self.parseModuleItems(&b, .kw_endmodule);
         _ = try self.expect(.kw_endmodule);
 
         return .{
@@ -242,24 +276,71 @@ pub const Parser = struct {
         if (self.eat(.rparen)) return;
         var dir: Ast.Direction = .unspecified;
         var disc: Ast.StrId = .none;
+        var range: ?Ast.Dim = null;
         while (true) {
             self.skipAttributes();
             if (token.isPortDirection(self.peek())) {
                 dir = self.portDirection(self.peek());
                 self.pos += 1;
                 disc = try self.optDiscipline();
+                // A.1.3 `inout [ range ] port_identifier {, port_identifier}` —
+                // the range belongs to the declaration, so it sticks to every
+                // name in the list exactly as the direction and the discipline
+                // do (§6.5.2 "electrical [3:0] a, b" declares two 4-bit ports).
+                range = if (self.peek() == .lbracket) try self.parseDim() else null;
             }
+            // A.1.3 `port ::= [ port_expression ] | . port_identifier (
+            // [ port_expression ] )`. The second alternative gives the port an
+            // EXTERNAL name distinct from the internal net(s) it connects to.
+            var external: Ast.StrId = .none;
+            var close_named = false;
+            if (self.eat(.dot)) {
+                external = try self.expectIdent();
+                _ = try self.expect(.lparen);
+                close_named = true;
+            }
+            try self.parsePortExpr(b, dir, disc, range, external);
+            if (close_named) _ = try self.expect(.rparen);
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.rparen);
+    }
+
+    /// A.1.3 `port_expression ::= port_reference | { port_reference
+    /// { , port_reference } }` (§6.5.1: a port may be "a simple net
+    /// identifier" or "a vector net formed as a result of the concatenation
+    /// operator"). Appends one `Ast.Port` per port_reference.
+    ///
+    /// ponytail: a concatenated port becomes N terminals, not one N-bit
+    /// terminal. That is the same model §3.6.3 vector ports already get here —
+    /// `electrical [1:0] p` scalarises to two nodes and two terminals — and
+    /// nothing can observe the difference until VerA has instantiation, which
+    /// is also the only thing that can observe `external` at all. When it does,
+    /// the external port's width and member order live in these consecutive
+    /// entries, in source order.
+    fn parsePortExpr(
+        self: *Parser,
+        b: *Body,
+        dir: Ast.Direction,
+        disc: Ast.StrId,
+        range: ?Ast.Dim,
+        external: Ast.StrId,
+    ) Error!void {
+        const concat = self.eat(.lbrace);
+        while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
             try b.ports.append(self.arena, .{
                 .name = name,
                 .direction = dir,
                 .discipline = disc,
+                .range = range,
+                .external_name = external,
                 .main_tok = tok,
             });
-            if (!self.eat(.comma)) break;
+            if (!concat or !self.eat(.comma)) break;
         }
-        _ = try self.expect(.rparen);
+        if (concat) _ = try self.expect(.rbrace);
     }
 
     fn portDirection(self: *Parser, tag: token.Tag) Ast.Direction {
@@ -289,13 +370,13 @@ pub const Parser = struct {
     // A.1.4 module_item — LRM §6.2, ch3
     // -----------------------------------------------------------------------
 
-    fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag, in_generate: bool) Error!void {
+    fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
         while (true) {
             self.skipAttributes();
             const t = self.peek();
             if (t == end or t == .eof or t == .kw_endmodule) return;
             const before = self.pos;
-            self.parseModuleItem(b, in_generate) catch |e| {
+            self.parseModuleItem(b) catch |e| {
                 try self.rethrowOom(e);
                 if (self.pos == before) self.pos += 1;
                 self.recoverStatement();
@@ -303,7 +384,7 @@ pub const Parser = struct {
         }
     }
 
-    fn parseModuleItem(self: *Parser, b: *Body, in_generate: bool) Error!void {
+    fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         switch (self.peek()) {
             // §10.6: "can only be specified outside of a design element".
             .dir_begin_keywords, .dir_end_keywords => return self.failAt(
@@ -312,17 +393,23 @@ pub const Parser = struct {
                 "{s} inside a module",
                 .{token.Tag.lexeme(self.peek()).?},
             ),
-            // A.4.2 loop / conditional generate and generate_block. Their
-            // bodies are analog statements, so they become analog constructs:
-            // `for` over a genvar is exactly the §5.9.2 form lowering already
-            // unrolls (see `Ast.Stmt.for_stmt`), and `if` over a constant is
-            // folded there too.
-            .kw_for, .kw_if, .kw_begin => {
-                if (!in_generate) return self.unsupportedItem();
-                const tok = self.pos;
-                const body = try self.parseStmt();
-                try b.analog.append(self.arena, .{ .body = body, .main_tok = tok });
-            },
+            // A.4.2 loop_generate_construct / conditional_generate_construct.
+            // §6.6: "Use of generate regions is optional. There is no semantic
+            // difference in the module when a generate region is used", and the
+            // clause's own rcline2 example writes a bare `for` at module scope —
+            // so these are NOT gated on having seen `generate`.
+            //
+            // Syntax 6-8 makes the body a `generate_block`, a run of MODULE
+            // items, which is why they cannot go through `parseStmt`: the only
+            // route A.1.4 offers from a module_or_generate_item to a
+            // contribution is `analog_construct ::= analog analog_statement`,
+            // and `analog` is not the start of any analog statement.
+            .kw_for => try self.parseLoopGenerate(b),
+            .kw_if => try self.parseIfGenerate(b),
+            // Not an item: a generate_block is only ever the body of the two
+            // above (E0221). Kept as its own arm so the diagnostic can cite
+            // Syntax 6-8 rather than blaming the analog subset.
+            .kw_begin => return self.failAt(self.pos, .E0221, "", .{}),
             // §3.4 parameter / localparam (A.2.1.1)
             .kw_parameter, .kw_localparam => {
                 try self.parseParamDecl(&b.params);
@@ -387,14 +474,35 @@ pub const Parser = struct {
                 const disc = try self.optDiscipline();
                 try self.parseNetNames(b, disc, false);
             },
+            // A.2.1.3 `reg [ range ] list_of_variable_identifiers ;` — §7.3.1's
+            // discrete net. Still E0205: VerA has no discrete context, and a
+            // dozen fixtures pin that code together with the word `reg`.
+            //
+            // §7.3.1 Table 7-1's width rule is judged HERE, on the way out,
+            // because there is no later place to judge it: a parse error stops
+            // the pipeline before lowering runs, so a `reg` declaration never
+            // reaches the constant folder. That is also the ceiling — see
+            // `literalWidth`.
+            .kw_reg => {
+                const tok = self.pos;
+                self.pos += 1;
+                if (self.peek() == .lbracket) {
+                    const d = try self.parseDim();
+                    if (self.literalWidth(d)) |w| {
+                        if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
+                    }
+                }
+                return self.failAt(tok, .E0205, "found {s}", .{self.found(tok)});
+            },
             // §5.2 analog construct / §4.7.1 analog function
             .kw_analog => try self.parseAnalog(b),
-            // A.4.2 generate_region — transparent: the items inside are plain
-            // module items. Loop/conditional generate is not implemented, so a
-            // `for`/`if`/`case` here lands on the unsupported-item diagnostic.
+            // A.4.2 generate_region — transparent, per §6.6's "there is no
+            // semantic difference": the items inside are plain module items and
+            // the region introduces no scope. `case` here is still
+            // case_generate, which is not implemented, and lands on E0205.
             .kw_generate => {
                 self.pos += 1;
-                try self.parseModuleItems(b, .kw_endgenerate, true);
+                try self.parseModuleItems(b, .kw_endgenerate);
                 _ = try self.expect(.kw_endgenerate);
             },
             // A.2.1.3 `discipline_identifier list_of_net_identifiers ;`
@@ -430,12 +538,148 @@ pub const Parser = struct {
         return self.failAt(self.pos, .E0205, "found {s}", .{self.found(self.pos)});
     }
 
+    // -----------------------------------------------------------------------
+    // A.4.2 generate constructs — LRM §6.6
+    //
+    // A generate construct is turned into ONE `Ast.AnalogBlock` whose body is
+    // the `for`/`if` statement, with the generated blocks spliced in as
+    // statements. That is not a shortcut around elaboration, it is where
+    // elaboration already lives: `Lower.tryUnrollFor` unrolls a genvar `for` at
+    // compile time with the genvar bound as a constant for the duration of each
+    // copy — §6.6.1's implicit localparam, "whose value is the genvar value at
+    // the time the instance was elaborated" — and a constant `if` is folded the
+    // same way. §6.9.1 is what makes the splice faithful rather than merely
+    // convenient: every analog block in a module is concatenated in source
+    // order anyway, and unrolling order is source order, so a generated block
+    // occupies exactly the slot it would have occupied written out by hand.
+    // -----------------------------------------------------------------------
+
+    /// Syntax 6-8 `loop_generate_construct ::= for ( genvar_initialization ;
+    /// genvar_expression ; genvar_iteration ) generate_block`.
+    ///
+    /// The three parts are the same shape as §5.9.2's `for`, and the same node
+    /// carries them: lowering tells the two apart by looking the loop variable
+    /// up in `ModuleDecl.genvars` (§3.5), not by which parser produced it. That
+    /// is also why the non-constant scheme diagnostics (E0417 init, E0418
+    /// condition, E0419 iteration, E0420 non-terminating) need nothing here.
+    fn parseLoopGenerate(self: *Parser, b: *Body) Error!void {
+        const tok = self.pos;
+        self.pos += 1; // 'for'
+        _ = try self.expect(.lparen);
+        const init_s = try self.parseAssignNoSemi();
+        _ = try self.expect(.semicolon);
+        const cond = try self.parseExpr();
+        _ = try self.expect(.semicolon);
+        const step = try self.parseAssignNoSemi();
+        _ = try self.expect(.rparen);
+        const body = try self.parseGenerateBlock(b);
+        const s = try self.addStmt(.{ .for_stmt = .{
+            .init = init_s,
+            .cond = cond,
+            .step = step,
+            .body = body,
+        } }, tok);
+        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
+    }
+
+    /// Syntax 6-8 `if_generate_construct ::= if ( constant_expression )
+    /// generate_block [ else generate_block ]`.
+    ///
+    /// `else if` needs no arm of its own: an if_generate_construct is itself a
+    /// module_or_generate_item, so the chain is a one-item generate_block in
+    /// the `else`, which `parseGenerateBlock` reaches through `parseModuleItem`.
+    fn parseIfGenerate(self: *Parser, b: *Body) Error!void {
+        const tok = self.pos;
+        self.pos += 1; // 'if'
+        _ = try self.expect(.lparen);
+        const cond = try self.parseExpr();
+        _ = try self.expect(.rparen);
+        const then_s = try self.parseGenerateBlock(b);
+        const else_s: Ast.StmtId = if (self.eat(.kw_else))
+            try self.parseGenerateBlock(b)
+        else
+            .none;
+        const s = try self.addStmt(
+            .{ .if_stmt = .{ .cond = cond, .then_s = then_s, .else_s = else_s } },
+            tok,
+        );
+        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
+    }
+
+    /// Syntax 6-8 `generate_block ::= module_or_generate_item | begin
+    /// [ : generate_block_identifier ] { module_or_generate_item } end`.
+    ///
+    /// The items are collected into a scratch `Body` and then split by what
+    /// scope they belong to. §6.6 gives the block its own scope, so its
+    /// parameters and variables become the `SeqBlock`'s — which is also what
+    /// the old statement-shaped parse produced, so nothing that already
+    /// depended on them moves. Everything else (nets, branches, genvars,
+    /// analog functions) is hoisted to the module.
+    ///
+    /// ponytail: hoisting is right for a conditional generate, which elaborates
+    /// at most once, and short of the LRM for a loop generate, which should get
+    /// one renamed copy of each declaration per iteration (§6.6.1 names them
+    /// `blk[0].n`). No fixture declares a net inside a loop; the day one does,
+    /// the copies have to be made in `Lower.tryUnrollFor` where the trip count
+    /// is known, not here where it is not.
+    fn parseGenerateBlock(self: *Parser, b: *Body) Error!Ast.StmtId {
+        const tok = self.pos;
+        // A.4.2 has no null generate_block, but `if (c) ;` is what a model
+        // writes for a deliberately empty arm and refusing it would only move
+        // the error off the rule the source actually breaks.
+        if (self.eat(.semicolon)) return self.addStmt(.empty, tok);
+
+        var blk: Ast.SeqBlock = .{};
+        var gb: Body = .{};
+        if (self.eat(.kw_begin)) {
+            if (self.eat(.colon)) blk.name = try self.expectIdent();
+            while (self.peek() != .kw_end and self.peek() != .eof) {
+                self.skipAttributes();
+                if (self.peek() == .kw_end) break;
+                const before = self.pos;
+                self.parseModuleItem(&gb) catch |e| {
+                    try self.rethrowOom(e);
+                    if (self.pos == before) self.pos += 1;
+                    self.recoverStatement();
+                };
+            }
+            _ = try self.expect(.kw_end);
+        } else {
+            self.skipAttributes();
+            try self.parseModuleItem(&gb);
+        }
+
+        var body: std.ArrayList(Ast.StmtId) = .empty;
+        // ponytail: `analog initial` (§5.2.1) inside a generate block is
+        // spliced onto the ordinary spine like any other analog construct, so
+        // it loses its initialization-only scheduling. Give `Ast.SeqBlock` an
+        // is_initial statement, or hand the block back to `b.analog`, when a
+        // model needs one — neither is free, and nothing asks yet.
+        for (gb.analog.items) |ab| try body.append(self.arena, ab.body);
+        blk.params = gb.params.items;
+        blk.vars = gb.vars.items;
+        blk.body = body.items;
+
+        try b.ports.appendSlice(self.arena, gb.ports.items);
+        try b.aliasparams.appendSlice(self.arena, gb.aliasparams.items);
+        try b.nets.appendSlice(self.arena, gb.nets.items);
+        try b.branches.appendSlice(self.arena, gb.branches.items);
+        try b.genvars.appendSlice(self.arena, gb.genvars.items);
+        try b.functions.appendSlice(self.arena, gb.functions.items);
+        return self.addStmt(.{ .block = blk }, tok);
+    }
+
     /// §6.5.2 body port declaration: it re-declares a header port's direction
     /// and discipline, it does not introduce a new terminal.
     fn parsePortDecl(self: *Parser, b: *Body) Error!void {
         const dir = self.portDirection(self.peek());
         self.pos += 1;
         const disc = try self.optDiscipline();
+        // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
+        // "port direction declaration", the half of the clause that carries
+        // the direction. Its range is compared against the port TYPE
+        // declaration's in lowering, so it lands in its own field.
+        const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
@@ -451,6 +695,7 @@ pub const Parser = struct {
                 } else {
                     p.direction = dir;
                     if (disc != .none) p.discipline = disc;
+                    if (range != null) p.range = range;
                 }
             } else {
                 _ = self.failAt(tok, .E0206, "`{s}`", .{self.file.str(name)}) catch {};
@@ -470,10 +715,14 @@ pub const Parser = struct {
     /// port binds the discipline to that port instead of declaring a new net,
     /// so lowering sees one object per terminal.
     ///
-    /// ponytail: no vector nets (`electrical [3:0] p;`) and no
-    /// net_decl_assignment (`electrical n = 5.0;`) — both report through the
-    /// normal identifier/`;` expectations, which is what the fixtures pin.
+    /// §3.6.3 Syntax 3-6 puts the vector range between the discipline and the
+    /// names — `electrical [3:0] p, q;` — so it is parsed here, once, and
+    /// sticks to every name in the list.
+    ///
+    /// ponytail: still no net_decl_assignment (`electrical n = 5.0;`), which
+    /// reports through the normal `;` expectation.
     fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, is_ground: bool) Error!void {
+        const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
@@ -485,11 +734,16 @@ pub const Parser = struct {
             const port = if (is_ground) null else self.findPort(b, name);
             if (port != null and port.?.discipline == .none) {
                 port.?.discipline = disc;
+                // §6.5.2.2: this IS the port type declaration. Recorded beside
+                // the direction declaration's range rather than over it — see
+                // Ast.Port.type_range.
+                port.?.type_range = range;
             } else {
                 try b.nets.append(self.arena, .{
                     .name = name,
                     .discipline = disc,
                     .is_ground = is_ground,
+                    .range = range,
                     .main_tok = tok,
                 });
             }
@@ -498,26 +752,43 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
     }
 
-    /// LRM §3.12 / A.2.1.3 `branch ( a [, b] ) name {, name} ;`
+    /// LRM §3.12 / A.2.1.3, both arms of `branch_declaration`:
     ///
-    /// ponytail: port branches `branch (<p>)` are rejected (the `<` is not a
-    /// net identifier). `Ast.BranchDecl.is_port_branch` is ready when one is
-    /// needed.
+    ///     branch ( a [, b] )  list_of_branch_identifiers ;
+    ///     branch ( < p > )    list_of_branch_identifiers ;   // Syntax 3-9
+    ///
+    /// The second is the §3.12.1 PORT BRANCH, "a branch between the upper and
+    /// lower connections of the port" — the same quantity `I(<p>)` reads, given
+    /// a name. It is told from the first by one token, and the `<` is also what
+    /// A.8.9's port_probe_function_call uses, so `parseAccess` spells it the
+    /// same way.
+    ///
+    /// A.2.3 puts an optional `[ range ]` on each branch_identifier: a branch
+    /// ARRAY, several branches over one terminal pair. The range rides on the
+    /// declaration and lowering expands it, because that is where a constant
+    /// expression can be folded.
     fn parseBranchDecl(self: *Parser, b: *Body) Error!void {
-        const main_tok = self.pos;
         self.pos += 1; // 'branch'
         _ = try self.expect(.lparen);
+        const is_port_branch = self.eat(.lt);
         const hi = try self.parseNetRef();
         var lo: Ast.ExprId = .none;
-        if (self.eat(.comma)) lo = try self.parseNetRef();
+        if (is_port_branch) {
+            _ = try self.expect(.gt);
+        } else if (self.eat(.comma)) {
+            lo = try self.parseNetRef();
+        }
         _ = try self.expect(.rparen);
         while (true) {
+            const name_tok = self.pos;
             const name = try self.expectIdent();
             try b.branches.append(self.arena, .{
                 .name = name,
                 .hi = hi,
                 .lo = lo,
-                .main_tok = main_tok,
+                .is_port_branch = is_port_branch,
+                .range = if (self.peek() == .lbracket) try self.parseDim() else null,
+                .main_tok = name_tok,
             });
             if (!self.eat(.comma)) break;
         }
@@ -570,7 +841,18 @@ pub const Parser = struct {
                 .ranges = ranges.items,
                 .main_tok = tok,
             });
-            if (!self.eat(.comma)) break;
+            // A.1.3 `parameter_declaration { , parameter_declaration }` and
+            // A.2.1.1 `list_of_param_assignments` are separated by the SAME
+            // comma, so a `parameter` keyword after one starts a new
+            // declaration and this list is over. Only a
+            // module_parameter_port_list can actually reach that — a body
+            // declaration ends at `;` — and there stopping turns the illegal
+            // `parameter real a = 1, parameter real b = 2;` from E0208 into
+            // E0207, the same verdict on the same token.
+            if (self.peek() != .comma) break;
+            if (self.tags[self.pos + 1] == .kw_parameter or
+                self.tags[self.pos + 1] == .kw_localparam) break;
+            self.pos += 1;
         }
     }
 
@@ -671,6 +953,19 @@ pub const Parser = struct {
         }
     }
 
+    /// The width of `[msb:lsb]` when both bounds are integer LITERALS.
+    ///
+    /// ponytail: literals only. Folding `[W-1:0]` needs the constant evaluator,
+    /// which lives in lowering — and the one caller is the `reg` arm, whose
+    /// declaration is refused before lowering ever runs. The day discrete nets
+    /// are implemented this check moves down there with them and gets the
+    /// folder for free.
+    fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
+        const ex = &self.file.exprs;
+        if (ex.tag(d.msb) != .int_literal or ex.tag(d.lsb) != .int_literal) return null;
+        return @abs(ex.intValue(d.msb) - ex.intValue(d.lsb)) + 1;
+    }
+
     /// A.2.5 `dimension ::= [ expr : expr ]` (§3.2.2, §3.4.4).
     fn parseDim(self: *Parser) Error!Ast.Dim {
         _ = try self.expect(.lbracket);
@@ -721,6 +1016,15 @@ pub const Parser = struct {
         var vars: std.ArrayList(Ast.VarDecl) = .empty;
         var body: std.ArrayList(Ast.StmtId) = .empty;
 
+        // §4.7.1's two body restrictions are checked at the syntax that
+        // violates them (`begin :` and `return ;`), not by a walk afterwards,
+        // so the diagnostic lands on the offending token. Analog functions do
+        // not nest — A.2.6 has no analog_function_declaration inside a function
+        // body — so a plain save/restore is the whole scope discipline.
+        const saved_in_fn = self.in_analog_fn;
+        self.in_analog_fn = true;
+        defer self.in_analog_fn = saved_in_fn;
+
         while (true) {
             self.skipAttributes();
             switch (self.peek()) {
@@ -737,10 +1041,12 @@ pub const Parser = struct {
                     };
                     if (ty != .unspecified) self.pos += 1 else _ = try self.optDiscipline();
                     while (true) {
+                        const at = self.pos;
                         try args.append(self.arena, .{
                             .name = try self.expectIdent(),
                             .ty = ty,
                             .direction = dir,
+                            .main_tok = at,
                         });
                         if (!self.eat(.comma)) break;
                     }
@@ -780,8 +1086,30 @@ pub const Parser = struct {
         }
         _ = try self.expect(.kw_endfunction);
 
+        // §4.7.1 bullet list: "shall have at least one input argument declared".
+        if (args.items.len == 0) {
+            var d = self.failWith(main_tok, .E0224);
+            d.msg("`{s}` has an empty formal list", .{self.file.str(name)});
+            try d.emit();
+        }
+        // §4.7.1 bullet list: "all formal arguments shall have an associated
+        // block item declaration specifying the data type of the argument".
+        // A formal still `.unspecified` here got neither `input real x;` nor a
+        // matching `real x;` above, so there is nothing left to type it —
+        // defaulting it to `.real` (which this used to do) is exactly the
+        // papering-over the bullet exists to forbid. The type is set anyway,
+        // after the diagnostic, so the rest of the pipeline stays well-typed
+        // while the compile is already doomed.
         for (args.items) |*a| if (a.ty == .unspecified) {
-            a.ty = .real; // §4.7.2 default
+            var d = self.failWith(a.main_tok, .E0225);
+            d.msg("formal `{s}` of `{s}` has no data type declaration", .{
+                self.file.str(a.name), self.file.str(name),
+            });
+            d.help("add `real {s};` to the function body, or write the type on the direction: `input real {s};`", .{
+                self.file.str(a.name), self.file.str(a.name),
+            });
+            try d.emit();
+            a.ty = .real;
         };
         const body_id: Ast.StmtId = if (body.items.len == 1)
             body.items[0]
@@ -1011,8 +1339,21 @@ pub const Parser = struct {
             },
             .kw_return => { // A.6.5 jump_statement (§4.7.1)
                 self.pos += 1;
+                // §4.7.2.2: "When the return statement is used, the function
+                // shall specify an expression with the return of the correct
+                // type for the function." A bare `return;` specifies none, and
+                // is NOT a third spelling of §4.7.2.1's default. Outside a
+                // function `return` has no return slot at all and lowering
+                // owns that verdict (E0403).
                 const value: Ast.ExprId = if (self.peek() == .semicolon)
-                    .none
+                    v: {
+                        if (self.in_analog_fn) {
+                            var d = self.failWith(tok, .E0227);
+                            d.help("write `return <expr>;`", .{});
+                            try d.emit();
+                        }
+                        break :v .none;
+                    }
                 else
                     try self.parseExpr();
                 _ = try self.expect(.semicolon);
@@ -1037,7 +1378,19 @@ pub const Parser = struct {
         const tok = self.pos;
         self.pos += 1; // 'begin'
         var blk: Ast.SeqBlock = .{};
-        if (self.eat(.colon)) blk.name = try self.expectIdent();
+        if (self.eat(.colon)) {
+            const at = self.pos;
+            blk.name = try self.expectIdent();
+            // §4.7.1 bullet list: an analog function "shall not use named
+            // blocks". Non-fatal, so the rest of the body is still parsed and
+            // whatever else is wrong with it is reported in the same run.
+            if (self.in_analog_fn) {
+                var d = self.failWith(at, .E0226);
+                d.msg("`{s}`", .{self.file.str(blk.name)});
+                d.help("remove the label", .{});
+                try d.emit();
+            }
+        }
 
         var params: std.ArrayList(Ast.ParamDecl) = .empty;
         var vars: std.ArrayList(Ast.VarDecl) = .empty;
@@ -1361,18 +1714,11 @@ pub const Parser = struct {
                 _ = try self.expect(.rparen);
                 return e;
             },
-            // §4.2.13 / A.8.1 analog_concatenation
+            // §4.2.13 / A.8.1 analog_concatenation, analog_multiple_concatenation
             .lbrace => {
-                self.pos += 1;
                 var items: std.ArrayList(Ast.ExprId) = .empty;
-                if (self.peek() != .rbrace) while (true) {
-                    try items.append(self.arena, try self.parseExpr());
-                    if (!self.eat(.comma)) break;
-                };
-                // ponytail: `{n{...}}` (analog_multiple_concatenation) is not
-                // in the analog subset — `Ast.ExprTag.multi_concat` is ready if
-                // that ever changes.
-                _ = try self.expect(.rbrace);
+                const count = try self.braceOperands(&items);
+                if (count) |n| return self.multiConcat(tok, n, items.items);
                 if (try self.foldBitConcat(tok, items.items)) |folded| return folded;
                 const off = try self.file.exprs.addExprList(self.arena, items.items);
                 return self.addExpr(.{ .tag = .concat, .main_tok = tok, .extra = off });
@@ -1382,10 +1728,33 @@ pub const Parser = struct {
             .apostrophe_lbrace => {
                 self.pos += 1;
                 var items: std.ArrayList(Ast.ExprId) = .empty;
-                if (self.peek() != .rbrace) while (true) {
-                    try items.append(self.arena, try self.parseExpr());
-                    if (!self.eat(.comma)) break;
-                };
+                if (self.peek() != .rbrace) {
+                    const first = try self.parseExpr();
+                    // A.8.1's second alternative:
+                    //
+                    //   assignment_pattern ::= '{ expression { , expression } }
+                    //                        | '{ constant_expression
+                    //                             { expression { , expression } } }
+                    //
+                    // one replication filling the WHOLE pattern — §4.2.14's own
+                    // `'{ 5{0.0} }`, "a replication operator to repeat 0.0 five
+                    // times so that every element of data2 is assigned to 0.0".
+                    // There is no production for two replication groups side by
+                    // side, so nothing but `}` may follow the inner group. The
+                    // inner braces are plain `{`; a `'{` there is a ROW of a
+                    // multi-dimensional pattern (§3.4.8) and stays one element.
+                    if (self.peek() == .lbrace) {
+                        var inner: std.ArrayList(Ast.ExprId) = .empty;
+                        try self.braceGroup(&inner);
+                        const n = self.replCount(first) orelse
+                            return self.failAt(self.file.exprs.mainTok(first), .E0223, "", .{});
+                        for (0..n) |_| try items.appendSlice(self.arena, inner.items);
+                    } else {
+                        try items.append(self.arena, first);
+                        while (self.eat(.comma))
+                            try items.append(self.arena, try self.parseExpr());
+                    }
+                }
                 _ = try self.expect(.rbrace);
                 const off = try self.file.exprs.addExprList(self.arena, items.items);
                 return self.addExpr(.{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
@@ -1423,6 +1792,24 @@ pub const Parser = struct {
                     });
                 }
                 return self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
+            },
+            // §5.5.1 Syntax 5-3 `nature_access_function ::=
+            // nature_attribute_identifier | potential | flow`, and §4.4: "as an
+            // alternative to using the access attribute specified in the
+            // discipline, the generic potential and flow access functions are
+            // also supported". Same production as `V(...)`/`I(...)`, so the
+            // same parse — lowering maps the two spellings onto the same
+            // `Access` and skips only the §3.6.1.4 NAME match (that is what
+            // "generic" means).
+            //
+            // The two words are annex B keywords, which is why they arrive as
+            // their own tags rather than through `access_names` above, and also
+            // why §3.13.2's shadowing rule cannot bite here: `real potential;`
+            // is a syntax error long before it could take the name away.
+            .kw_potential, .kw_flow => {
+                const name = try self.file.intern(self.arena, token.Tag.lexeme(t).?);
+                self.pos += 1;
+                return self.parseAccess(name, tok);
             },
             // §2.8.3 / A.8.2 analog_system_function_call (ch9). `$name` with no
             // argument list is the same tag with an empty list.
@@ -1506,16 +1893,27 @@ pub const Parser = struct {
         });
     }
 
-    /// A.8.9 / A.2.1.3 branch terminal: a plain net or branch identifier.
+    /// A.8.9 / A.2.1.3 branch terminal: a net or branch identifier, optionally
+    /// with a §5.5.2 bit select — "the access functions can only be applied to
+    /// scalars or individual elements of a vector. The scalar element of a
+    /// vector is selected with an index, e.g., V(in[1])".
     ///
-    /// ponytail: no hierarchical (`u.n`), `$root`, nature-attribute
-    /// (`p.potential.abstol`) or vector (`p[0]`) references — all of them need
-    /// an elaborated instance tree or vector nets, neither of which exists.
-    /// `Ast.ExprTag.hier_ident` is the shape to fill when they do.
+    /// The index is any expression: §5.5.2 requires a CONSTANT one, but
+    /// "constant" there admits a genvar, which is only constant part-way
+    /// through elaboration. Lowering folds it (E0352).
+    ///
+    /// ponytail: no hierarchical (`u.n`), `$root` or nature-attribute
+    /// (`p.potential.abstol`) references — those need an elaborated instance
+    /// tree. `Ast.ExprTag.hier_ident` is the shape to fill when they do.
     fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
         const name = try self.expectIdent();
-        return self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
+        const base = try self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
+        if (self.peek() != .lbracket) return base;
+        self.pos += 1;
+        const idx = try self.parseExpr();
+        _ = try self.expect(.rbracket);
+        return self.addExpr(.{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
     }
 
     /// A.8.2 / A.6.9 argument list. An omitted argument (`f(a, , c)`, and the
@@ -1653,6 +2051,110 @@ pub const Parser = struct {
         const v = std.fmt.parseFloat(f64, mantissa) catch
             return self.failAt(tok, .E0133, "`{s}`", .{text});
         return self.file.exprs.addReal(self.arena, tok, v * scale);
+    }
+
+    /// A.8.1, both brace forms at once:
+    ///
+    ///     analog_concatenation          ::= { analog_expression
+    ///                                         { , analog_expression } }
+    ///     analog_multiple_concatenation ::= { constant_expression
+    ///                                         analog_concatenation }
+    ///
+    /// Consumes `{ ... }` at `self.pos` and appends the group's OPERANDS to
+    /// `items`, flattened. Returns the replication count when it is not a
+    /// literal, in which case `items` holds one unreplicated copy.
+    ///
+    /// The two forms are told apart by one token of lookahead PAST the first
+    /// expression, not two past the `{`: a `{` there opens the inner
+    /// concatenation of a replication where a `,` or a `}` ends an ordinary
+    /// operand. Two tokens past the `{` is not enough — `{2+1{a}}` is a
+    /// replication and `{2+1}` is not. A first operand that is ITSELF a
+    /// braced group is never a count (a count is a constant_expression, and
+    /// A.8.4 has no brace primary in one), so that case skips the lookahead.
+    ///
+    /// Flattening here is what implements §4.2.13, because the widths a
+    /// concatenation joins live only in the token text (see `foldBitConcat`):
+    /// `{4{2'b10}}` has to reach the fold as four sized operands and
+    /// `{b, {3{a, b}}}` as seven, which is exactly what the clause says each
+    /// "yields the same value as". A zero count contributes no operands —
+    /// "a replication with a zero replication constant is considered to have a
+    /// size of zero and is ignored" — so `{{0{a}}, b}` arrives as `{b}`, legal
+    /// precisely because b has positive size.
+    ///
+    /// A count that is not a literal cannot be unrolled here, and must not be:
+    /// §3.3 Table 3-3 allows a nonconstant multiplier when the result is a
+    /// string (`{i{"Hi"}}`). That one keeps its `.multi_concat` node and
+    /// lowering repeats the string.
+    fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
+        _ = try self.expect(.lbrace);
+        if (self.eat(.rbrace)) return null;
+
+        if (self.peek() != .lbrace) {
+            const first = try self.parseExpr();
+            if (self.peek() == .lbrace) {
+                var inner: std.ArrayList(Ast.ExprId) = .empty;
+                try self.braceGroup(&inner);
+                _ = try self.expect(.rbrace);
+                const n = self.replCount(first) orelse {
+                    try items.appendSlice(self.arena, inner.items);
+                    return first;
+                };
+                for (0..n) |_| try items.appendSlice(self.arena, inner.items);
+                return null;
+            }
+            try items.append(self.arena, first);
+            if (!self.eat(.comma)) {
+                _ = try self.expect(.rbrace);
+                return null;
+            }
+        }
+        while (true) {
+            if (self.peek() == .lbrace) {
+                try self.braceGroup(items);
+            } else try items.append(self.arena, try self.parseExpr());
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.rbrace);
+        return null;
+    }
+
+    /// `braceOperands` for the positions that cannot pass a count upwards: a
+    /// nonconstant replication stays ONE operand instead of being returned.
+    fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
+        const at = self.pos;
+        var g: std.ArrayList(Ast.ExprId) = .empty;
+        if (try self.braceOperands(&g)) |c| {
+            try items.append(self.arena, try self.multiConcat(at, c, g.items));
+        } else try items.appendSlice(self.arena, g.items);
+    }
+
+    /// `{count{items}}` kept unexpanded for lowering (§3.3's nonconstant
+    /// multiplier). `rhs` is the inner `.concat`, exactly as `Ast.ExprTag`
+    /// documents the tag.
+    fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
+        const off = try self.file.exprs.addExprList(self.arena, items);
+        const inner = try self.addExpr(.{ .tag = .concat, .main_tok = tok, .extra = off });
+        return self.addExpr(.{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
+    }
+
+    /// §4.2.13's "non-negative, non-x and non-z constant expression" when it is
+    /// a literal — the only constant the parser can evaluate, since parameters
+    /// are not folded until lowering.
+    ///
+    /// A negative count is not reported here: it returns null, the group keeps
+    /// its `.multi_concat`, and `lowerConcat` names the rule with the folder in
+    /// hand so `{n-5{a}}` gets the same verdict as `{-5{a}}`.
+    ///
+    /// ponytail: the cap is an unrolling guard, not a rule. 32 bits is the
+    /// widest concatenation an `integer` can hold (E0217), so no legal integer
+    /// replication comes near it; a string replication past the cap falls to
+    /// the same lowering path as a nonconstant one.
+    fn replCount(self: *const Parser, e: Ast.ExprId) ?u32 {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .int_literal) return null;
+        const v = ex.intValue(e);
+        if (v < 0 or v > 4096) return null;
+        return @intCast(v);
     }
 
     /// §4.2.13 integer concatenation. "Unsized constant numbers shall not be
@@ -2394,6 +2896,54 @@ test "§4.2.13 a sized-constant concatenation joins BITS" {
     try std.testing.expectEqual(@as(usize, 0), coeffs.count());
 }
 
+test "§4.2.13 replication unrolls into the operand list" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const res = try lexParseForTest(arena,
+        \\module m;
+        \\  integer a, b, c;
+        \\  analog begin
+        \\    a = {4{2'b10}};
+        \\    b = {1'b0, {3{1'b1, 1'b0}}};
+        \\    c = {{0{1'b1}}, 4'b0101};
+        \\  end
+        \\endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+
+    const stmts = switch (res.file.stmt(res.file.modules[0].analog[0].body)) {
+        .block => |blk| blk.body,
+        else => return error.WrongTag,
+    };
+    // 4.2.13's own three worked cases: "{4{w}} yields the same value as
+    // {w, w, w, w}" (8 bits, 10101010); "{b, {3{a, b}}} yields the same value
+    // as {b, a, b, a, b, a, b}" (7 bits, 0101010); and a zero replication
+    // "considered to have a size of zero and ignored", leaving 4'b0101 alone.
+    const want = [_]i32{ 170, 42, 5 };
+    for (stmts, want) |s, expect| {
+        const rhs = switch (res.file.stmt(s)) {
+            .assign => |a| a.value,
+            else => return error.WrongTag,
+        };
+        try std.testing.expectEqual(expect, res.file.exprs.intValue(rhs));
+    }
+
+    // §3.3 Table 3-3: "multiplier ... can be nonconstant" for a string result,
+    // so a non-literal count is NOT a parse error — it keeps its node and
+    // lowering repeats the string.
+    const nonconst = try lexParseForTest(arena, "module m; integer i; string s; analog s = {i{\"Hi\"}}; endmodule");
+    try std.testing.expectEqual(@as(usize, 0), nonconst.count());
+
+    // A.8.1's assignment-pattern replication, §4.2.14's own `'{5{0.0}}`, is a
+    // different brace and a different meaning: five ELEMENTS, not five copies
+    // of a bit pattern.
+    const pat = try lexParseForTest(arena, "module m; parameter real d[0:4] = '{5{0.0}}; endmodule");
+    try std.testing.expectEqual(@as(usize, 0), pat.count());
+    try std.testing.expectEqual(@as(usize, 5), pat.file.exprs.args(pat.file.modules[0].params[0].default).len);
+}
+
 test "a resistor parses into ports, ranged parameters and a contribution" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -2529,14 +3079,23 @@ test "annex C rejections keep their pinned wording" {
         .{ .src = "module m; integer v; analog v = 4'b01xz; endmodule", .code = .E0130 },
         // §6.4 paramsets
         .{ .src = "paramset ps mod; endparamset", .code = .E0201 },
-        // A.1.3 module_parameter_port_list
-        .{ .src = "module m #(parameter real a = 1) (p); endmodule", .code = .E0207, .point = "expected `;`" },
-        // §3.6.3 vector nets / §6.5.2 vector ports
-        .{ .src = "module m(p); inout p; electrical [3:0] p; endmodule", .code = .E0208 },
+        // A.1.3 module_parameter_port_list. The header `#(parameter real a = 1)`
+        // USED to be this row, pinning that it was unimplemented; it parses now.
+        // What A.1.3 still refuses is the SystemVerilog shorthand that drops the
+        // `parameter` keyword after the first declaration — Verilog-AMS spells
+        // the production `# ( parameter_declaration { , parameter_declaration } )`
+        // with no such elision, so a bare type ends the list at the `(`.
+        .{ .src = "module m #(real a = 1) (p); endmodule", .code = .E0207, .point = "expected `)`" },
+        // A.2.4 net_decl_assignment. §3.6.3 vector nets USED to be this row;
+        // they parse now (`electrical [3:0] p;` is four nodes), so the nodeset
+        // spelling is what is left unimplemented in the same production.
+        .{ .src = "module m(p); inout p; electrical p = 5.0; endmodule", .code = .E0207, .point = "expected `;`" },
         // hierarchical net reference inside a probe (§6.8)
         .{ .src = "module m(p); inout p; electrical p; analog I(p) <+ V(u.n); endmodule", .code = .E0207, .point = "expected `)`" },
-        // A.8.1 multiple concatenation
-        .{ .src = "module m; integer b; analog b = {2{1}}; endmodule", .code = .E0207, .point = "expected `}`" },
+        // A.8.1 multiple concatenation USED to be a row here
+        // (`b = {2{1}}` → "expected `}`"). It parses now: the count and its
+        // inner concatenation unroll into the operand list, so the condition
+        // this row pinned no longer exists. See "§4.2.13 replication unrolls".
     };
     for (cases) |c| {
         const res = try parseForTest(arena, c.src);
@@ -2546,6 +3105,45 @@ test "annex C rejections keep their pinned wording" {
         // the caret, so that is what the fixtures pin.
         if (c.point.len != 0)
             try std.testing.expectEqualStrings(c.point, res.bag.at(0).point);
+    }
+}
+
+test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const head = "module m(p); inout p; electrical p; analog function real f; ";
+    const cases = [_]struct { body: []const u8, code: diag.Code }{
+        // "shall have at least one formal argument declared"
+        .{ .body = "f = 1.0; endfunction", .code = .E0224 },
+        // "all formal arguments shall have an associated block item
+        // declaration specifying the data type of the argument" — the
+        // direction alone is not one.
+        .{ .body = "input x; f = x; endfunction", .code = .E0225 },
+        // "shall not use named blocks"
+        .{ .body = "input x; real x; begin : b f = x; end endfunction", .code = .E0226 },
+        // 4.7.2.2 "shall specify an expression"
+        .{ .body = "input x; real x; begin return; end endfunction", .code = .E0227 },
+    };
+    for (cases) |c| {
+        const src = try std.mem.concat(arena, u8, &.{ head, c.body, " analog I(p) <+ f(1.0); endmodule" });
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(c.code, res.code(0));
+    }
+
+    // And the legal spellings still are: the type on the direction, the type in
+    // a separate block item declaration, an UNNAMED block, and a `return` with
+    // an expression. None of these may report anything.
+    for ([_][]const u8{
+        "input real x; f = x; endfunction",
+        "input x; real x; f = x; endfunction",
+        "input x; real x; begin f = x; end endfunction",
+        "input x; real x; begin return x; end endfunction",
+    }) |body| {
+        const src = try std.mem.concat(arena, u8, &.{ head, body, " analog I(p) <+ f(1.0); endmodule" });
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
     }
 }
 
@@ -2645,8 +3243,10 @@ test "a missing terminator suggests inserting it after the PREVIOUS token" {
     try std.testing.expectEqualStrings("V(p, n)", src[fix.span.start - 7 .. fix.span.start]);
 
     // A terminator is the only shape that earns an insertion: E0208 wants a
-    // NAME, and no fix can invent one.
-    const named = try lexParseForTest(arena, "module m(p); inout p; electrical [3:0] p; endmodule");
+    // NAME, and no fix can invent one. The port branch `branch (<p>) b` used to
+    // be this example and parses now (§3.12.1); a NUMBER where the
+    // list_of_branch_identifiers goes is the same production still wanting a name.
+    const named = try lexParseForTest(arena, "module m(p); inout p; electrical p; branch (p) 7; endmodule");
     try std.testing.expectEqual(diag.Code.E0208, named.code(0));
     try std.testing.expectEqual(@as(u32, 0), named.bag.at(0).n_notes);
 }

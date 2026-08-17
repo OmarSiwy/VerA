@@ -11,7 +11,6 @@
 //
 //! lrm 3.6.3
 //! bias V(p[0]) = 0.5, V(p[1]) = 1.0, V(p[2]) = 1.5, V(p[3]) = 2.0
-//! xfail VerA's parser has no net range: the `[` of `electrical [3:0] p` is E0208, before E0302 can fire
 `include "check.vh"
 module ch3_vector_nets(p);
     inout p;

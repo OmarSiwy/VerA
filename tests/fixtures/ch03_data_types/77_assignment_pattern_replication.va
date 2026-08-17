@@ -33,7 +33,7 @@
 //! lrm 3.4.8
 //! lrm 3.3
 //! lrm A.8.1
-//! xfail VerA's parser has no replication inside an assignment pattern: the `{` of `4{1.5}` is E0207
+//! xfail VerA has no two-dimensional arrays: the second `[` of `real fill[0:1][0:2]` is E0207 "expected `;`", and lowering's dimBounds refuses more than one dimension anyway (E0307). The replication itself parses and unrolls now — `steps`, the one-dimensional half of this file, is the shape that works
 `include "check.vh"
 module ch03_assignment_pattern_replication(p, n);
     inout p, n;

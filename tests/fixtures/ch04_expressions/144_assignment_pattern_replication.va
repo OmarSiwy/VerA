@@ -18,7 +18,6 @@
 // everything cannot pass on that alone.
 //
 //! lrm 4.2.14
-//! xfail VerA's parser has no replication inside an assignment pattern: `'{5{0.0}}` stops at E0207 "unexpected token: found `{`", the same gap 31_replication.va records for the concatenation form
 `include "check.vh"
 module ch04_assignment_pattern_replication(p, n);
     inout p, n;

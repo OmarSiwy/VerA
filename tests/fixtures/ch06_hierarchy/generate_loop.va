@@ -8,8 +8,9 @@
 // This file used to declare `electrical [0:2] p` and connect one bit per
 // iteration, and it passed for a reason that had nothing to do with generate: the
 // reject substring `identifier` was hit at the VECTOR PORT, several tokens before
-// the loop. The port is scalar now, so the only thing left to fail is the loop —
-// vector nets are a separate gap, held by vector_ports_range_equal.va.
+// the loop. The port is scalar now, so the only thing left to fail is the loop,
+// and it stays scalar now that vector nets do elaborate — §3.6.3 belongs to
+// 32_vector_nets.va, not here.
 //
 // The body accumulates i*i over an ASCENDING loop, which is the sum every
 // unrolled copy contributes exactly once:
@@ -29,7 +30,6 @@
 //! lrm 6.6.1
 //! lrm 6.6
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA's parser reads a generate block body as an analog statement, so the `analog` keyword inside `generate` dies at E0209 "expected an expression: found `analog`"
 `include "check.vh"
 module ch6_generate_loop(p, n);
   inout p, n; electrical p, n; genvar i;

@@ -19,7 +19,6 @@
 // generic that almost anything satisfies it — on source 4.4 declares supported.
 //
 //! lrm 4.4
-//! xfail VerA's parser does not know the generic access functions: `potential` and `flow` are not spellings it accepts as an operand, so both die at E0209
 //! bias V(p) = 1.5
 //! bias V(n) = 0.5
 `include "check.vh"

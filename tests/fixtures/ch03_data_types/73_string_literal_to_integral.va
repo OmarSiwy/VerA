@@ -19,7 +19,6 @@
 //
 //! lrm 3.3
 //! lrm 3.2
-//! xfail VerA keeps a string literal as a string when it initializes an `integer` (the generated testbench then fails to format it as %d); there is no string-literal-to-integral conversion in lower.zig
 `include "check.vh"
 module ch03_string_literal_to_integral(p, n);
     inout p, n;

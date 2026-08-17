@@ -66,7 +66,11 @@ pub const Code = enum(u16) {
     E0111,
     E0112,
     E0113,
-    E0114,
+    // E0114 was "unsupported compiler directive". Retired: it had exactly two
+    // subjects left, §10.7's `__FILE__ and `__LINE__, and both are now
+    // expanded (preprocessor.zig `expand`). Every other backtick word VerA
+    // does not know is an undefined MACRO, which is E0115. The number is not
+    // reused.
     E0115,
     E0116,
     E0117,
@@ -79,6 +83,10 @@ pub const Code = enum(u16) {
     E0124,
     E0125,
     E0126,
+    /// §10.2 Syntax 10-1: the operands of `default_discipline.
+    E0127,
+    /// IEEE 1364 §19.7: the operands of `line.
+    E0128,
     // Lexical (LRM 2) — reported by parser.zig against a lexer `.invalid` token
     // or a `ValueError` from `Lexer.decode*`.
     E0130,
@@ -123,9 +131,42 @@ pub const Code = enum(u16) {
     /// A.6.5, annex G Table G.2 item 13: `initial_step()`/`final_step()` with
     /// an empty analysis list.
     E0220,
+    /// Syntax 6-8 / A.4.2: a bare `begin ... end` where a module_or_generate_item
+    /// belongs — a generate_block is only ever the body of a for or an if.
+    E0221,
+    /// §7.3.1 Table 7-1: a discrete bit grouping wider than 31 bits. A class-2
+    /// number for a chapter-7 rule because the parser is the only stage that
+    /// ever sees a `reg` declaration — see its entry.
+    E0222,
+    /// A.8.1 / §4.2.14: the replication count of an assignment pattern is not
+    /// a literal.
+    E0223,
+    /// §4.7.1 bullet list: an analog function with no formal argument.
+    E0224,
+    /// §4.7.1 bullet list: a formal argument with no block item declaration
+    /// giving its data type.
+    E0225,
+    /// §4.7.1 bullet list: a named block inside an analog function body.
+    E0226,
+    /// §4.7.2.2: `return` with no expression inside an analog function.
+    E0227,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
+    // E0301 was "vector ports are not supported" and E0302 "vector nets are
+    // not supported". Retired together: §3.6.3 vector nets and §6.5.2 vector
+    // ports now elaborate, scalarised into one node per element, so neither
+    // condition exists to report. Their successors are E0350 (§6.5.2.2 the two
+    // declarations disagree), E0351 and E0352 (the element reference itself).
+    // The numbers are not reused.
+    //
+    // E0304 was "port branches are not supported" and E0305 "branch arrays are
+    // not supported". Retired on the same terms: §3.12.1 `branch (<p>) name;`
+    // now resolves to the §5.4.3 port-flow unknown `I(<p>)` already carries, and
+    // A.2.3 `branch (p,n) pair[0:1];` expands into one branch per element under
+    // the scalarised name `pair[k]`. Neither condition exists to report. Reading
+    // an element out of range is E0352 and reading the bare base name is E0351,
+    // both shared with vector nets. The numbers are not reused.
     E0301,
     E0302,
     E0303,
@@ -194,6 +235,23 @@ pub const Code = enum(u16) {
     E0348,
     /// §3.4/§4.2.14 an array parameter initialised without the `'{ }` pattern.
     E0349,
+    /// §6.5.2.2 a port whose direction and type declarations give ranges that
+    /// do not evaluate to the same value.
+    E0350,
+    /// §5.5.2 a bit select of something that is not a vector net, or a whole
+    /// vector net where a scalar signal is required.
+    E0351,
+    /// §3.6.3/§5.5.2 a vector index that is not constant, or is outside the
+    /// declared range.
+    E0352,
+    /// §3.12 a branch whose two terminals are vectors of different sizes.
+    E0353,
+    /// §3.3/§3.4.1 a string value assigned to a numeric variable.
+    E0354,
+    /// §3.11/§3.11.1 two nets whose disciplines are incompatible, used as the
+    /// two arguments of an access function (§3.11) or as the two terminals of a
+    /// branch declaration (§3.12).
+    E0355,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -302,6 +360,8 @@ pub const Code = enum(u16) {
     E0809,
     /// §9.4.3 fewer arguments than the format string has consuming specifiers.
     E0810,
+    /// §9.15 `$simparam` on a name this engine does not know, with no fallback.
+    E0811,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -462,22 +522,6 @@ pub fn info(c: Code) Info {
             \\this error is only about the missing name.
             ,
         },
-        .E0114 => .{
-            .title = "unsupported compiler directive",
-            .lrm = "10.7",
-            .explain =
-            \\VerA implements the directives that affect the text of a
-            \\compiled module: `define, `undef, `ifdef/`ifndef/`elsif/`else/
-            \\`endif, `include, `begin_keywords/`end_keywords, and the
-            \\predefined macros of LRM 10.
-            \\
-            \\The remaining LRM 10.7 directives (`resetall, `timescale,
-            \\`celldefine, `unconnected_drive, `default_transition, ...)
-            \\configure a full-simulator environment that a compiled device
-            \\artifact does not have. Delete the directive, or guard it with
-            \\`ifdef so the same source still feeds other tools.
-            ,
-        },
         .E0115 => .{
             .title = "undefined macro",
             .lrm = "10.4",
@@ -598,6 +642,39 @@ pub fn info(c: Code) Info {
             \\
             \\Note that annex D headers are built in: including them works
             \\with no search path configured at all.
+            ,
+        },
+        .E0127 => .{
+            .title = "malformed `default_discipline qualifier",
+            .lrm = "10.2",
+            .explain =
+            \\Syntax 10-1 spells the directive
+            \\
+            \\    `default_discipline [ discipline_identifier [ qualifier ] ]
+            \\
+            \\and the qualifier is a CLOSED alternation of fifteen data-type
+            \\names: integer, real, reg, wreal, wire, tri, wand, triand, wor,
+            \\trior, trireg, tri0, tri1, supply0, supply1.
+            \\
+            \\A discipline name in that slot is the common typo, because the
+            \\two operands are adjacent identifiers. The qualifier selects
+            \\WHICH nets the default claims, so more than one directive can be
+            \\in force at once "provided each differs in qualifier"; it is not
+            \\a second discipline and not free text.
+            ,
+        },
+        .E0128 => .{
+            .title = "malformed `line directive",
+            .lrm = "10.7",
+            .explain =
+            \\LRM 10.7 defers to IEEE Std 1364 for `line, whose 19.7 spells it
+            \\
+            \\    `line number ["filename" [level]]
+            \\
+            \\The number is mandatory and is the line number given to the line
+            \\FOLLOWING the directive; it is what `__LINE__ then counts from.
+            \\A directive with no number remaps nothing, so it is a typo
+            \\rather than a no-op.
             ,
         },
         .E0130 => .{
@@ -972,26 +1049,170 @@ pub fn info(c: Code) Info {
             \\Table 5-1: "ac", "dc", "tran", "noise", ...).
             ,
         },
-
-        // ------------------------------------------------------------ class 3
-        .E0301 => .{
-            .title = "vector ports are not supported",
-            .lrm = "6.5.2",
+        .E0221 => .{
+            .title = "a generate block is not a module item",
+            .lrm = "6.6",
             .explain =
-            \\Each port of a compiled device maps to one solver unknown, so a
-            \\vector port would need an elaboration step to expand into
-            \\scalars. Declare the bits individually:
+            \\Syntax 6-8:
             \\
-            \\    input a0, a1, a2;
+            \\    generate_region ::= generate { module_or_generate_item }
+            \\                        endgenerate
+            \\    generate_block  ::= module_or_generate_item
+            \\                      | begin [ : generate_block_identifier ]
+            \\                          { module_or_generate_item } end
+            \\
+            \\`generate_block` is reached from exactly two places — the body of
+            \\a loop_generate_construct and an arm of a
+            \\conditional_generate_construct. It is not itself a
+            \\module_or_generate_item, so a naked `begin ... end` has no
+            \\derivation either directly in a generate region or at module
+            \\scope. 6.6 says the same in prose: a generate region is "a textual
+            \\span in the module description where generate constructs may
+            \\appear", and a named block on its own is not a generate construct.
+            \\
+            \\Either give the block the `for` or `if` that generates it, or drop
+            \\the `begin`/`end` and write the items directly — 6.6 makes the
+            \\region itself optional and imposes no scope of its own.
             ,
         },
-        .E0302 => .{
-            .title = "vector nets are not supported",
-            .lrm = "3.6.3",
+        .E0222 => .{
+            .title = "discrete bit grouping wider than 31 bits",
+            .lrm = "7.3.1",
             .explain =
-            \\A net declared with a range would expand to several solver
-            \\unknowns during elaboration, which the flat single-module
-            \\pipeline does not run. Declare the nets individually.
+            \\LRM 7.3.1 Table 7-1, the `bit` row: a discrete bit grouping read
+            \\from a continuous context becomes an integer, "the lowest bit of
+            \\the bit grouping is mapped to the zeroth bit of the integer", and
+            \\"the sign bit (bit 31) of the integer is always set to zero (0)".
+            \\
+            \\That is why the row ends "access of discrete bit groupings with
+            \\greater than 31 bits is illegal": bit 31 of a 32-bit grouping has
+            \\nowhere left to land. 31 bits is the widest legal grouping, and it
+            \\reads as at most +2147483647.
+            \\
+            \\Why a class-2 (parser) number for a chapter-7 semantic rule: a
+            \\`reg` declaration is refused where it is read (E0205 — VerA
+            \\implements no discrete context), and a parse error stops the
+            \\pipeline before lowering, so the parser is the only stage that
+            \\ever sees the width. It follows that the bounds have to be
+            \\literals here; the check moves down to lowering, and gains the
+            \\constant folder, the day discrete nets are implemented.
+            ,
+        },
+
+        .E0223 => .{
+            .title = "replication count in an assignment pattern is not a literal",
+            .lrm = "4.2.14",
+            .explain =
+            \\A.8.1's second alternative for an assignment pattern is
+            \\
+            \\    '{ constant_expression { expression { , expression } } }
+            \\
+            \\and 4.2.14's own example is `'{ 5{0.0} }`. The count says how many
+            \\ELEMENTS the pattern has, so it is unrolled while the pattern is
+            \\parsed — which is before any parameter has a value.
+            \\
+            \\Write the digits, or write the elements out.
+            \\
+            \\A constant_expression naming a localparam is legal Verilog-AMS and
+            \\this is VerA's limit, not the LRM's: the unroll moves to lowering,
+            \\where the constant folder lives, the day one is needed. The
+            \\CONCATENATION form `{n{...}}` has no such limit — 3.3 Table 3-3
+            \\allows even a nonconstant multiplier there, and lowering handles
+            \\it, because a concatenation is one value and not a list of them.
+            ,
+        },
+        // 4.7.1's bullet list, and 4.7.2.2's one sentence about `return`, are
+        // four separate rules and four separate codes. They are class 2 and not
+        // class 5 for the reason class 2 is named after parser.zig: each is a
+        // property of the DECLARATION, and lowering only ever sees a function
+        // that is called (4.7.3 inlines at the call site), so a violating
+        // function nobody calls would go undiagnosed there.
+        .E0224 => .{
+            .title = "an analog function declares no formal argument",
+            .lrm = "4.7.1",
+            .explain =
+            \\4.7.1's bullet list, verbatim: an analog function "shall have at
+            \\least one input argument declared". A.8.2 says the same from the
+            \\call side — `analog_function_call ::= analog_function_identifier
+            \\( analog_expression { , analog_expression } )` requires at least
+            \\one actual.
+            \\
+            \\A function of no arguments is a constant. Write a localparam.
+            ,
+        },
+        .E0225 => .{
+            .title = "an analog function formal argument has no data type",
+            .lrm = "4.7.1",
+            .explain =
+            \\4.7.1's bullet list, verbatim: "all formal arguments shall have an
+            \\associated block item declaration specifying the data type of the
+            \\argument".
+            \\
+            \\    analog function real scale;
+            \\      input x;
+            \\      real x;        // <- this line
+            \\      scale = 2.0 * x;
+            \\    endfunction
+            \\
+            \\`input real x;` is the other legal spelling (A.2.7 task_port_type).
+            \\
+            \\4.7.1's "if unspecified, the default is real" does NOT apply here:
+            \\that sentence is about `analog_function_type`, the FUNCTION's
+            \\return type. The bullet list grants a formal no default, it
+            \\requires the declaration.
+            ,
+        },
+        .E0226 => .{
+            .title = "a named block is not allowed in an analog function",
+            .lrm = "4.7.1",
+            .explain =
+            \\4.7.1's bullet list, verbatim: an analog function "shall not use
+            \\named blocks".
+            \\
+            \\The hazard is concrete. 4.7.2.1 makes the function's own name an
+            \\implicitly declared variable holding the return value, and a named
+            \\block (5.3.2) may carry its own declarations — one spelled with the
+            \\function's name would shadow the return variable and the function
+            \\would hand back the initial 0. The LRM bans the construct rather
+            \\than specifying the shadowing.
+            \\
+            \\Drop the label: an unnamed `begin ... end` is unrestricted.
+            ,
+        },
+        .E0227 => .{
+            .title = "a return statement in an analog function specifies no expression",
+            .lrm = "4.7.2.2",
+            .explain =
+            \\4.7.2.2, verbatim: "When the return statement is used, the function
+            \\shall specify an expression with the return of the correct type for
+            \\the function."
+            \\
+            \\A bare `return;` specifies none. This is not the same rule as
+            \\4.7.2.1's default: that clause covers a function which never
+            \\returns explicitly at all and says the result is the identifier
+            \\variable's value. An explicit return of nothing is a third thing,
+            \\and 4.7.2.2 makes it an error rather than a spelling of the
+            \\default.
+            \\
+            \\Write `return <expr>;`, or assign to the function name and fall off
+            \\the end.
+            ,
+        },
+
+        // ------------------------------------------------------------ class 3
+        .E0301, .E0302 => .{
+            .title = "(retired)",
+            .lrm = "",
+            .explain =
+            \\"vector ports are not supported" (E0301) and "vector nets are not
+            \\supported" (E0302). Both retired: 3.6.3 vector nets and 6.5.2
+            \\vector ports now elaborate. Each element becomes its own solver
+            \\unknown, named `p[0]`, so the flat node list never learns about
+            \\ranges and nothing downstream changed.
+            \\
+            \\What replaced them: E0350 for 6.5.2.2 (the port's two declarations
+            \\give different ranges), E0351 and E0352 for the element reference
+            \\itself. The numbers are not reused.
             ,
         },
         .E0303 => .{
@@ -1007,21 +1228,20 @@ pub fn info(c: Code) Info {
             \\alias.
             ,
         },
-        .E0304 => .{
-            .title = "port branches are not supported",
-            .lrm = "3.12",
+        .E0304, .E0305 => .{
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\A port branch — `branch (<p>)` — names the flow into a port
-            \\rather than a node pair. Read it with the port access function
-            \\`I(<p>)` (LRM 5.4.3) instead, which is supported.
-            ,
-        },
-        .E0305 => .{
-            .title = "branch arrays are not supported",
-            .lrm = "3.12",
-            .explain =
-            \\A ranged branch declaration expands to several branches during
-            \\elaboration. Declare each branch separately.
+            \\"port branches are not supported" (E0304) and "branch arrays are
+            \\not supported" (E0305). Both retired: 3.12.1 `branch (<p>) name;`
+            \\resolves to the same 5.4.3 port-flow unknown `I(<p>)` reads, and
+            \\A.2.3 `branch (p, n) pair[0:1];` expands into one branch per
+            \\element registered under the scalarised name `pair[k]`.
+            \\
+            \\What replaced them: nothing for the declarations, which are legal.
+            \\A port branch left of `<+` is E0407 (5.4.3 forbids the position,
+            \\not the name); an out-of-range element is E0352 and the bare base
+            \\name is E0351, both shared with vector nets.
             ,
         },
         .E0306 => .{
@@ -1256,9 +1476,11 @@ pub fn info(c: Code) Info {
             .title = "part selects are not supported",
             .lrm = "4.2.13",
             .explain =
-            \\A part select `x[msb:lsb]` slices a vector. The analog subset has
-            \\no vector nets or vector ports (see E0301, E0302), so there is
-            \\nothing to slice.
+            \\A part select `x[msb:lsb]` slices a vector. 3.6.3 vector nets do
+            \\elaborate — one node per element — but only a single-element BIT
+            \\select names one of them, so there is nothing a slice could
+            \\evaluate to. Write the elements out, or index them from a 5.9.3
+            \\analog `for`.
             ,
         },
         .E0330 => .{
@@ -1582,6 +1804,137 @@ pub fn info(c: Code) Info {
             \\concatenation, a different production with a different meaning,
             \\and a front end that accepts it as an initialiser cannot tell the
             \\two apart.
+            ,
+        },
+        .E0350 => .{
+            .title = "the two declarations of a vector port give different ranges",
+            .lrm = "6.5.2.2",
+            .explain =
+            \\LRM 6.5.2.2: "A port can be declared in both a port type
+            \\declaration and a port direction declaration. If a port is
+            \\declared as a vector, the range specification between the two
+            \\declarations of a port shall be identical."
+            \\
+            \\The rule is EVALUATE-equal, not spell-equal — the clause prints
+            \\
+            \\    input [0:3] in;
+            \\    electrical [0:4-1] in;   // valid
+            \\
+            \\as legal, because `4-1` folds to `3`. Both bounds are folded here
+            \\before they are compared, so only a genuine difference in width
+            \\or in direction (`[3:0]` against `[0:3]`) is reported.
+            ,
+        },
+        .E0351 => .{
+            .title = "not an element of a vector net",
+            .lrm = "5.5.2",
+            .explain =
+            \\LRM 5.5.2: "the access functions can only be applied to scalars
+            \\or individual elements of a vector. The scalar element of a
+            \\vector is selected with an index, e.g., V(in[1]) accesses the
+            \\voltage in[1]."
+            \\
+            \\Two shapes break that, and both land here:
+            \\
+            \\  - an index on a net that was declared without a range, where
+            \\    there is no element to select;
+            \\  - a bare vector name where one signal is required — a vector
+            \\    net is a set of nodes, and 1.3.1 gives a potential to each
+            \\    one, not to the set.
+            \\
+            \\Write the index, or declare the net with a range.
+            ,
+        },
+        .E0352 => .{
+            .title = "vector index is not a constant inside the declared range",
+            .lrm = "3.6.3",
+            .explain =
+            \\A vector net is scalarised at elaboration — 3.6.3's `electrical
+            \\[3:0] p` is four independent nets — so every index must be
+            \\decidable then. 5.5.2 says so directly for the looping case: "The
+            \\index must be a constant expression, though it may include genvar
+            \\variables."
+            \\
+            \\So an index built from a run-time variable has no element to name,
+            \\and an index outside the declared range names a net that was never
+            \\declared. Use a literal, a parameter, or the genvar of an
+            \\enclosing 5.9.3 analog `for`.
+            ,
+        },
+        .E0353 => .{
+            .title = "branch terminals are vectors of different sizes",
+            .lrm = "3.12",
+            .explain =
+            \\LRM 3.12: "If one of the terminals of a branch is a vector net,
+            \\then the other terminal shall either be a scalar net or a vector
+            \\net of the same size."
+            \\
+            \\Two vectors of the same size pair one-to-one (Figure 3-1) and a
+            \\vector against a scalar fans in (Figure 3-2). Two vectors of
+            \\DIFFERENT sizes are neither: there is no pairing the declaration
+            \\could mean, so the branch has no size of its own and no element
+            \\can be indexed out of it.
+            ,
+        },
+
+        .E0354 => .{
+            .title = "a string value cannot be assigned to a numeric variable",
+            .lrm = "3.3",
+            .explain =
+            \\LRM 3.4.1 states the conversion rule and its one exception: "No
+            \\conversion shall be applied for strings; it shall be an error to
+            \\assign a numeric value to a parameter declared as string or to
+            \\assign a string value to a real parameter." E0345 is that sentence
+            \\on a parameter; this is the same rule on a variable, where 3.3
+            \\puts strings in their own type alongside integer and real.
+            \\
+            \\3.3's own worked example is where it bites hardest:
+            \\
+            \\    b = {5{"Hi"}};     // OK          (b is a string)
+            \\    a = {i{"Hi"}};     // OK          (a is a string)
+            \\    r = {i{"Hi"}};     // invalid     (r is integral)
+            \\
+            \\Table 3-3's Replication row says why the third line is the invalid
+            \\one: "if multiplier is nonconstant or Str is of type string, the
+            \\result is a string containing N concatenated copies". A string has
+            \\no width, and an integral target is nothing but a width.
+            \\
+            \\Declare the target `string`, or compare rather than assign — 3.3's
+            \\relational operators on strings yield an integer.
+            ,
+        },
+        .E0355 => .{
+            .title = "incompatible disciplines",
+            .lrm = "3.11.1",
+            .explain =
+            \\LRM 3.11: "Certain operations can be done on nets only if the two
+            \\(or more) nets are compatible. For example, if an access function
+            \\has two nets as arguments, they must be compatible." 3.12 states
+            \\the same requirement for the two terminals of a branch
+            \\declaration, and 7.4.3 for a continuous-time port connection.
+            \\
+            \\3.11.1 decides it. Two disciplines are compatible when:
+            \\
+            \\  - they are the same discipline                (Self Rule);
+            \\  - either is DOMAINLESS — declares no `domain` and binds no
+            \\    nature                                      (Domainless Rule);
+            \\  - otherwise: they agree on domain, and each half's natures are
+            \\    compatible. A discipline that binds no nature for a half is
+            \\    compatible with anything there    (Non-Existent Binding Rule),
+            \\    which is what makes a natureless discipline universal.
+            \\
+            \\Two natures are compatible when they are the same nature, when one
+            \\is derived from the other, when both derive from one base nature,
+            \\or when they declare the same `units` string (Units Value Rule).
+            \\
+            \\3.11.1's own worked case is the one that bites: "electrical and
+            \\rotational are incompatible disciplines because the natures for
+            \\both potential and flow are not derived from the same base
+            \\natures."
+            \\
+            \\Two nets of different DOMAINS are not joined by fixing a nature.
+            \\7.4 says what to write instead: a `connect` statement, so the
+            \\elaborator inserts a connect module between the two.
             ,
         },
 
@@ -2619,6 +2972,39 @@ pub fn info(c: Code) Info {
             \\
             \\Only a literal format string is counted. A format assembled at
             \\run time has no count to check against.
+            ,
+        },
+        .E0811 => .{
+            .title = "simulation parameter is not known",
+            .lrm = "9.15",
+            .explain =
+            \\LRM 9.15 states $simparam in three sentences, one per branch:
+            \\"If param_name is known, its value is returned. If param_name is
+            \\not known, and the optional expression is not supplied, then an
+            \\error is generated. If the optional expression is supplied, its
+            \\value is returned if param_name is not known and no error is
+            \\generated."
+            \\
+            \\This is the middle branch. The reason it is an error rather than
+            \\a default is that the two are indistinguishable at the call site:
+            \\a silent 0.0 reads exactly like a simulator that really does
+            \\carry the parameter and really does report zero for it, and a
+            \\model that divides by it or compares against it is then wrong
+            \\with nothing to point at.
+            \\
+            \\Two fixes, and the LRM prints both:
+            \\
+            \\    gmin = $simparam("gmin");                  // must be known
+            \\    sourcescale = $simparam("sourceScaleFactor", 1.0);
+            \\
+            \\The second form is legal for EVERY name, known or not — Table
+            \\9-27 is prefaced "simulators shall accept the strings ... if they
+            \\support the parameter" — so a model that wants to stay portable
+            \\across tools writes the fallback.
+            \\
+            \\Only a literal name is checked. 9.15 also allows a string
+            \\parameter or a string variable, whose value is not available
+            \\here, and the fallback is the user's cover for that case.
             ,
         },
         .W0850 => .{

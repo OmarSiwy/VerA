@@ -7,19 +7,27 @@
 // missing something, it is not a formal at all, and no compiler can tell the
 // two intentions apart from the source.
 //
-// So what the call site sees is an arity mismatch — one actual passed to a
-// function that declares no arguments — and E0511 "wrong number of arguments to
-// an analog function" (4.7.2) is the diagnostic. The header used to claim this
-// fixture pinned the direction rule directly; it does not, and cannot. It pins
-// the consequence, which is the only thing there is to pin.
+// A DECLARATION of zero formals is 4.7.1's other bullet — "shall have at least
+// one formal argument declared" — so that is the rule this module breaks and
+// E0224 is the diagnostic, raised where the function is declared and before any
+// call is looked at.
 //
-// 4.7.1's separate "shall have at least one formal argument declared" is
-// 100_function_no_arguments.va, where the call site's arity MATCHES the empty
-// formal list and so E0511 cannot fire.
+// This file used to pin E0511 "wrong number of arguments" instead, on the
+// reasoning that the only OBSERVABLE consequence was the arity mismatch at the
+// call site (one actual against an empty formal list). That reasoning was a
+// statement about what VerA checked, not about the LRM: the day the declaration
+// rule is checked, it fires first and the call is never reached. It is checked
+// now, so the pin moved to the rule rather than to its downstream symptom.
+//
+// 100_function_no_arguments.va is the same E0224 reached the other way, from a
+// function that declares no argument and is called with none. The two files
+// still differ in what a reader learns — this one records that a block item
+// declaration with no direction is not an under-specified formal, it is a local
+// variable — but they no longer differ in verdict, and 4.7.1 is the reason: the
+// clause gives a compiler no way to tell the two intentions apart.
 //
 //! lrm 4.7.1
-//! lrm 4.7.2
-//! reject E0511
+//! reject E0224
 module ch04_function_undirected_argument(p, n);
     inout p, n;
     electrical p, n;

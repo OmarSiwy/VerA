@@ -24,7 +24,6 @@
 //! lrm 6.6
 //! param enabled = 0
 //! bias V(p) = 0.5
-//! xfail VerA gates the for/if/begin module-item arm on being inside a generate region (frontend/parser.zig), so a bare `if` at module level is E0205 "unsupported module item: found `if`"
 `include "check.vh"
 module ch6_generate_implicit_region(p);
   inout p; electrical p;

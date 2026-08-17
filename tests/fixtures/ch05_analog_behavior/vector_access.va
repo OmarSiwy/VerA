@@ -19,7 +19,6 @@
 //
 //! lrm 5.5.2
 //! bias V(in[7]) = 3.0, V(in[5]) = 3.0, V(in[0]) = 3.0
-//! xfail VerA has no vector nets: `input [0:7] in` dies at E0208 (expected an identifier: found `[`)
 `include "check.vh"
 module ch5_vector_access(out, in);
   parameter real fullscale = 1.0, vth = 2.5;

@@ -8,8 +8,9 @@
 //
 // (The old version declared `electrical [0:1] p`; its reject substring
 // `identifier` fired on the VECTOR PORT and never reached either loop. Scalar
-// ports now — vector nets are a separate gap, held by
-// vector_ports_range_equal.va.)
+// ports now, so the loops are the only thing under test — which stays true now
+// that vector nets do elaborate: keeping the ports scalar keeps this file about
+// §6.6 and nothing else.)
 //
 // `code` appends one base-10 digit per unrolled copy, so a single integer records
 // how many copies each loop produced AND that the two loops did not interleave:
@@ -28,7 +29,6 @@
 //! lrm 6.6.1
 //! lrm 6.9.1
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA's parser reads a generate block body as an analog statement, so the `analog` keyword inside `generate` dies at E0209 "expected an expression: found `analog`"
 `include "check.vh"
 module ch6_two_loops(p, n);
   inout p, n; electrical p, n; genvar i, j;

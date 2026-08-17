@@ -32,7 +32,6 @@
 //! lrm 4.5.3
 //! bias V(p) = 0.75
 //! print none
-//! xfail VerA resolves a ddt tolerance argument as an ordinary expression outside contribution position: `r = ddt(V(p,n), Voltage);` is E0314 "unknown identifier: `Voltage`" (in contribution position the argument is instead dropped unresolved)
 `include "check.vh"
 module annex_a_abstol_nature(p, n);
     inout p, n;

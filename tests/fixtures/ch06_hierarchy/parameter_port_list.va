@@ -19,7 +19,6 @@
 //
 //! lrm 6.2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA's parser accepts no module_parameter_port_list; the `#` after the module identifier dies at E0207 "unexpected token: found `#`"
 `include "check.vh"
 module ch6_parameter_port_list #(
   parameter real gain = 2.0,

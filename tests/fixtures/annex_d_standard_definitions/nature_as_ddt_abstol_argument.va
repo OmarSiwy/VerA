@@ -22,7 +22,6 @@
 //! lrm 4.5.3
 //! analysis dc
 //! bias V(p) = 0.7
-//! xfail VerA rejects a nature identifier as the second argument of ddt (E0314 "unknown identifier: `Voltage`"): the argument is lowered as an ordinary expression, so no nature name is in scope there
 `include "check.vh"
 `include "disciplines.vams"
 module annex_d_nature_ddt_arg(p);
