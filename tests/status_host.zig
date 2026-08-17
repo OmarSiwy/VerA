@@ -51,7 +51,7 @@ fn start(m: *D.Model, inst: *D.Instance) D.State {
 /// `got` is `want` after the file's directory, which depends on how the
 /// build named the source.
 fn expectMessage(want: []const u8, got: []const u8) !void {
-    if (std.mem.endsWith(u8, got, want) and (got.len == want.len or got[got.len - want.len - 1] == '/')) return;
+    if (std.mem.endsWith(u8, got, want) and (got.len == want.len or std.fs.path.isSep(got[got.len - want.len - 1]))) return;
     std.debug.print("want …{s}\n got {s}\n", .{ want, got });
     return error.TestUnexpectedResult;
 }

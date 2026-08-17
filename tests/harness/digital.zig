@@ -240,7 +240,9 @@ test "digital negative routing is explicit and diagnostics are specific" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const args = try runnerArgs(arena.allocator(), "// digital-runner: reject\n// digital-runner: files a.v b.vg\n// digital-runner: --std=1364-2005\n// digital-runner: --libmap m/lib.map\n// digital-runner: -L gateLib\n", "d");
-    const want = [_][]const u8{ "--std=1364-2005", "--libmap", "d/m/lib.map", "-L", "gateLib", "d/a.v", "d/b.vg" };
+    // Joined to the fixture's directory with the host's separator.
+    const sep = std.fs.path.sep_str;
+    const want = [_][]const u8{ "--std=1364-2005", "--libmap", "d" ++ sep ++ "m/lib.map", "-L", "gateLib", "d" ++ sep ++ "a.v", "d" ++ sep ++ "b.vg" };
     try std.testing.expectEqual(want.len, args.len);
     for (want, args) |w, a| try std.testing.expectEqualStrings(w, a);
     try std.testing.expectEqual(0, (try runnerArgs(arena.allocator(), "// digital-runner: reject\n", "d")).len);
