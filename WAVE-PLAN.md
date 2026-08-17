@@ -404,6 +404,44 @@ All five were put as open questions with a recommended default; every default wa
 are decisions now, not suggestions: a wave that contradicts one is wrong, and re-opening one
 needs a reason written down here, in TODO.md §2's style.
 
+### 0. Standing rule — do not allocate when the size is known
+
+Added 2026-08-17, and it outranks the per-wave items: **an allocation whose size is known at
+compile time is a bug.** The heap costs a call, a lock, a cache miss and a failure path; a
+`[N]T` on the stack costs an offset. Where a bound is real, spend it statically.
+
+What that means concretely, in priority order:
+
+- A container whose capacity is already a comptime constant is a stack array. `diag.zig:1363`
+  heap-allocates an `ArrayList` for at most `max_children + 1 == 5` elements, and the sibling
+  code at `:678` already decodes into a `[max_children]Label` buffer for exactly this reason.
+- Reuse a buffer across a loop instead of allocating inside it. `eval_batch.zig:229` appends
+  under an allocator in the classify loop, and that one call is why the whole kernel signature
+  is `anyerror!`.
+- Never `allocPrint` to build a key you are about to hash and throw away. `lower.zig`'s
+  `flowUnknown`/`portFlowUnknown`/`vecElem` format a string PER REFERENCE to discover that the
+  entry already exists; `elemKey` (~:2878) already solved this with a stack buffer and its
+  comment explains why, so the pattern is in-tree and just was not applied.
+- Narrow before you widen: `diag.zig:1088`'s three `[65]usize` scratch rows are 1.5 KB for
+  values that never exceed 65, and the inner loop `memcpy`s 1 KB per input character to rotate
+  them. `[65]u8` plus three rotated pointers is 195 bytes and no copy.
+- Prefer one arena reset over N frees when the lifetime is a phase.
+
+**Two exceptions, both already correct in this tree — do not "fix" them:**
+
+1. **A genuinely unbounded buffer stays on the heap.** `root.zig:46-48` moved `device_zig` to
+   the gpa precisely because an arena cannot regrow in place, and codegen's output `ArrayList`
+   is sized from `mir.insts.len * 24` and grows. The rule is "no allocation for a KNOWN size",
+   not "no allocation".
+2. **A fixed buffer that can overflow is worse than the allocation it replaced.** The 512-byte
+   `$sformat` site is already a registered §3 ceiling with a stated collision hazard. A static
+   size is only an improvement when the bound is *proved*, not assumed — and when it is proved,
+   say where the proof is (`internNode`'s `u16` cap is the model: an `assert` names it).
+
+So the checkable question at every allocation site is: **what is the bound, and where is it
+written down?** No answer means the allocation is unjustified and the site is a finding. An
+answer that is a comptime constant means it should not be an allocation at all.
+
 1. **`2.2n` decodes ROUND-ONCE** — one `parseFloat` of the joined text, not mantissa×scale.
    `codegen.zig:5502` is re-blessed and gains an asserted case naming the rule, so the decision
    is visible to whoever hits it next. Unblocks T0.6, which is not a free deletion: it changes
