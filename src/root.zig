@@ -296,14 +296,13 @@ fn pipeline(
     opts: Options,
     bag: *diag.Bag,
 ) Error!CompileResult {
-    var prelude_len: u32 = 0;
     var defaults: []const Preprocessor.DefaultDiscipline = &.{};
     var transitions: []const Preprocessor.DefaultTransition = &.{};
     var timescale: ?Preprocessor.Timescale = null;
     // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
     // prelude. Zero unless the caller supplied netlist text.
     var netlist_modules: u32 = 0;
-    const text = try preprocess(gpa, arena_state, source, opts, bag, &prelude_len, &defaults, &transitions, &timescale, &netlist_modules);
+    const text = try preprocess(arena_state, source, opts, bag, &defaults, &transitions, &timescale, &netlist_modules);
     return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, transitions, timescale, netlist_modules);
 }
 
@@ -317,59 +316,20 @@ fn finish(gpa: Allocator, opts: Options, bag: *diag.Bag) Allocator.Error!void {
     try out.detach(gpa);
 }
 
-/// Same, for text that has already been through stage 1 (the `Compilation`
-/// cache path re-enters here). `text` is copied into the fresh arena because
-/// every interned AST string borrows it for the life of the result.
-pub fn compilePreprocessed(
-    gpa: Allocator,
-    text: []const u8,
-    target: Target,
-    opts: Options,
-) Error!CompileResult {
-    const arena_state = try newArena(gpa);
-    const owned = arena_state.allocator().dupe(u8, text) catch |err| {
-        freeArena(gpa, arena_state);
-        return err;
-    };
-    var bag = diag.Bag.init(arena_state.allocator());
-    bag.levels = opts.lint;
-    // Stage 1 did not run here, so no source map exists: the text IS the file.
-    bag.setSingleFile(opts.file_name, owned, 0) catch |err| {
-        freeArena(gpa, arena_state);
-        return err;
-    };
-    // No stage 1 here, so no §10.2 directive ever reached this text.
-    const result = compileInArena(gpa, arena_state, owned, target, opts, &bag, &.{});
-    const denied = bag.failed();
-    try finish(gpa, opts, &bag);
-    var ok = result catch |err| {
-        freeArena(gpa, arena_state);
-        return err;
-    };
-    if (denied) {
-        ok.deinit();
-        return error.CompileFailed;
-    }
-    return ok;
-}
-
 /// Stage 1. The returned bytes live in the compilation arena and everything
 /// downstream borrows them. TAKES OWNERSHIP of `arena_state`: it is freed here
 /// on failure, so no caller may add an errdefer of its own (each stage frees
 /// the arena exactly once, at the point ownership stops).
 fn preprocess(
-    gpa: Allocator,
     arena_state: *std.heap.ArenaAllocator,
     source: []const u8,
     opts: Options,
     bag: *diag.Bag,
-    prelude_len: *u32,
     defaults: *[]const Preprocessor.DefaultDiscipline,
     transitions: *[]const Preprocessor.DefaultTransition,
     timescale: *?Preprocessor.Timescale,
     netlist_modules: *u32,
 ) Error![]const u8 {
-    _ = gpa;
     const arena = arena_state.allocator();
     return Preprocessor.process(arena, source, .{
         .include_dirs = opts.include_dirs,
@@ -377,7 +337,6 @@ fn preprocess(
         .std_defs = opts.std_defs,
         .spice_netlist = opts.spice_netlist,
         .spice_netlist_modules = netlist_modules,
-        .prelude_len = prelude_len,
         .defaults = defaults,
         .transitions = transitions,
         .timescale = timescale,
@@ -548,15 +507,6 @@ pub fn buildArtifact(
     };
 }
 
-test "buildArtifact is analyzed" {
-    // This function was dead AND broken for a while: nothing referenced it, so
-    // Zig never analyzed its body, and it kept calling a two-argument
-    // `compileRelease` long after the orchestrator grew `io` and an `Options`.
-    // A pub fn with no caller is not type-checked — this reference is what
-    // keeps that from happening again.
-    _ = &buildArtifact;
-}
-
 // ---------------------------------------------------------------------------
 // Compilation — incremental frontend cache
 // ---------------------------------------------------------------------------
@@ -692,12 +642,11 @@ pub const Compilation = struct {
         const arena_state = try newArena(self.gpa);
         var bag = diag.Bag.init(arena_state.allocator());
         bag.levels = o.lint;
-        var prelude_len: u32 = 0;
         var defaults: []const Preprocessor.DefaultDiscipline = &.{};
         var transitions: []const Preprocessor.DefaultTransition = &.{};
         var timescale: ?Preprocessor.Timescale = null;
         var netlist_modules: u32 = 0;
-        const text = preprocess(self.gpa, arena_state, source, o, &bag, &prelude_len, &defaults, &transitions, &timescale, &netlist_modules) catch |err| {
+        const text = preprocess(arena_state, source, o, &bag, &defaults, &transitions, &timescale, &netlist_modules) catch |err| {
             try finish(self.gpa, o, &bag);
             freeArena(self.gpa, arena_state);
             return err;
@@ -1015,8 +964,15 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // integration guard: it forces semantic analysis of every top-level pub decl of
 // every stage, so `zig build` (which depends on compiling the test roots) means
 // "the whole engine type-checks", not just "the files parse".
+//
+// `@This()` is in the list, and is the reason there is no separate
+// "buildArtifact is analyzed" test: THIS file's pub decls need the guard as much
+// as any stage's. It went unguarded for two waves, and in that time
+// `compilePreprocessed` came to pass 7 arguments to a 10-parameter
+// `compileInArena` without anything noticing. A pub fn with no caller is not
+// type-checked; this is what keeps that from being discovered by an embedder.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
+    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }
