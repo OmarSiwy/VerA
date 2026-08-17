@@ -74,10 +74,22 @@ def log(logs, name):
     status is kept on the log's last line, as CI's `strict exit: N` is."""
     path = logs / f"{name}.txt"
     if not path.exists():
-        print(f"report.py: running {' '.join(SUITES[name])}", file=sys.stderr)
-        p = subprocess.run(SUITES[name], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        cmd = SUITES[name] if name != "strict" else suite_binary()
+        print(f"report.py: running {' '.join(cmd)}", file=sys.stderr)
+        p = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         path.write_bytes(p.stdout + f"\nstrict exit: {p.returncode}\n".encode())
     return path.read_text(errors="replace")
+
+
+def suite_binary():
+    """`benchmark --strict` as the suite binary itself: the build runner
+    truncates a failed step's output (AGENTS.md §0 rule 3), and --strict
+    fails while any XFAIL remains. A filter that matches nothing makes the
+    step fail fast and print the command it ran."""
+    p = subprocess.run(SUITES["strict"] + ["zzz-none"], cwd=ROOT, capture_output=True, text=True)
+    line = next(l for l in (p.stdout + p.stderr).split("\n") if l.startswith("failed command: "))
+    suite, vera = line.split()[2:4]
+    return [suite, vera, "--strict"]
 
 
 def tsv(text, header):
@@ -791,6 +803,107 @@ def selftest():
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Standalone SVGs for the README (`--svg DIR`): the page's own charts, each
+# wrapped with its title, an in-image legend and both palettes, so GitHub's
+# <img> renders it without the page's CSS.
+# ---------------------------------------------------------------------------
+
+SVG_CSS = (
+    "svg{--bg:#fcfcfb;--fg:#0b0b0b;--mut:#52514e;--line:#dcdbd6;"
+    "--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100}"
+    "@media (prefers-color-scheme:dark){svg{--bg:#1a1a19;--fg:#fff;--mut:#c3c2b7;--line:#3a3a37;"
+    "--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500}}"
+    ".bg{fill:var(--bg)}.t{fill:var(--fg);font-size:15px;font-weight:600}"
+    ".lab{fill:var(--mut);font-size:11px}.val{fill:var(--fg);font-size:11px}"
+    ".axis{stroke:var(--mut)}.grid{stroke:var(--line)}")
+VAR = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"]
+
+
+def standalone(chart, title, sub, legend_items=()):
+    m = re.match(r'<svg viewBox="0 0 ([\d.]+) ([\d.]+)"[^>]*>(.*?)</svg>', chart, re.S)
+    w, h, inner = float(m.group(1)), float(m.group(2)), m.group(3)
+    top = 52 + (20 if legend_items else 0)
+    leg, x = [], 16
+    for name, c in legend_items:
+        leg.append(f'<rect x="{x}" y="58" width="10" height="10" rx="2" fill="{c}"/>'
+                   f'<text x="{x + 14}" y="67" class="lab">{E(name)}</text>')
+        x += 24 + 6.2 * len(name)
+    W, H = w + 32, h + top + 12
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.0f} {H:.0f}" width="{W:.0f}" height="{H:.0f}" '
+            f'font-family="system-ui,-apple-system,Segoe UI,Helvetica,sans-serif" role="img" aria-label="{E(title)}">'
+            f'<title>{E(title)}</title><style>{SVG_CSS}</style><rect class="bg" width="100%" height="100%" rx="8"/>'
+            f'<text class="t" x="16" y="26">{E(title)}</text><text class="lab" x="16" y="44">{E(sub)}</text>'
+            + "".join(leg) + f'<g transform="translate(16,{top})">{inner}</g></svg>\n')
+
+
+def pct_rows(rows):
+    """One 100% bar per measure: rows of (label, [(name, count, color)])."""
+    bar_h, gap, lw, w = 18, 10, 150, 640
+    out = [f'<svg viewBox="0 0 {w} {len(rows) * (bar_h + gap)}" class="chart" role="img">']
+    for i, (label, segs) in enumerate(rows):
+        y, x, total = i * (bar_h + gap), lw, sum(c for _, c, _ in segs) or 1
+        out.append(f'<text x="{lw - 8}" y="{y + 13}" class="lab" text-anchor="end">{E(label)}</text>')
+        for name, c, col in segs:
+            bw = (w - lw - 10) * c / total
+            if c:
+                out.append(f'<rect x="{x:.1f}" y="{y}" width="{max(bw - 2, 1):.1f}" height="{bar_h}" rx="3" fill="{col}">'
+                           f'<title>{E(label)} · {E(name)}: {c}</title></rect>')
+            x += bw
+        main = segs[0][1]
+        out.append(f'<text x="{lw + 6}" y="{y + 13}" class="val" style="fill:#fff">{main} / {total}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def export_svgs(d, out):
+    out.mkdir(parents=True, exist_ok=True)
+    m, s, meta = d["measures"], d["speed"], d["meta"]
+    a = m["A"]
+    sub = f"VerA {meta['sha'][:8]} · {meta['date'][:10]} · measured by tools/report.py"
+    rows = [("A · fixtures", [("pass", int(a["pass"]), VAR[0]), ("known gap (XFAIL)", int(a["xfail"]), VAR[1]),
+                              ("FAIL", int(a["fail"]) + int(a["unasserted"]), VAR[3])])]
+    for key, name in (("C", "C · LRM clauses"), ("B", "B · IEEE 1364 clauses")):
+        x = m[key]
+        rows.append((name, [("tested both ways", int(x["both"]), VAR[0]),
+                            ("one-way or uncited", int(x["pos"]) + int(x["neg"]) + int(x["unc"]), VAR[1]),
+                            ("classified", int(x["classified"]), VAR[2])]))
+    files = {"conformance.svg": standalone(pct_rows(rows), "Conformance: measures A, B and C", sub,
+                                           [("pass / tested both ways", VAR[0]), ("known gap", VAR[1]),
+                                            ("classified (CLAUSE-AUDIT §5)", VAR[2])])}
+    keys = ["both", "classified", "one-way", "uncited"]
+    names = ["tested both ways", "classified", "one-way", "uncited"]
+    for std, fname, title in (("ams", "lrm-chapters.svg", "Verilog-AMS LRM clauses by chapter (C)"),
+                              ("ieee", "ieee-chapters.svg", "IEEE 1364-2005 clauses by chapter (B)")):
+        chs = d["chapters"][std]
+        files[fname] = standalone(hstack(chs, "chapter", keys, names, VAR), title, sub, list(zip(names, VAR)))
+    r = s["summary"][0] if s["summary"] else None
+    hsub = sub + (f" · median {fmt_ns(int(r['p50_ns']))}, p99 {fmt_ns(int(r['p99_ns']))}, n={r['n']}" if r else "")
+    files["compile-time.svg"] = standalone(histogram([f["ns"] for f in s["fixtures"]]),
+                                           "Compile time per fixture (source → device code)", hsub)
+    md = d["models"]
+    ok = [x for x in (md or {}).get("models", []) if x.get("so_s")]
+    if ok:
+        for x in ok:
+            x["vera"], x["zig"] = x["frontend_s"], max(x["so_s"] - x["frontend_s"], 0)
+        files["model-build.svg"] = standalone(
+            hstack_s(ok), "Building ARPice's compact models to a loadable .so (CPU)",
+            sub + f" · median of {md.get('reps', '?')} cold builds · {meta['load']}",
+            [("VerA front end", SERIES[0]), ("Zig compile of the device", SERIES[1])])
+    by_case = {}
+    for x in s["phases"]:
+        if x["phase"] == "codegen":
+            by_case.setdefault(x["case"], []).append((int(x["n"]), int(x["min_ns"])))
+    if by_case:
+        sw = lines(by_case, "n (generated size along each axis)", "", fmt_ns)
+        sw = sw[:sw.index("</svg>") + 6]
+        files["scaling.svg"] = standalone(sw, "Compile time vs design size (log–log)", sub,
+                                          list(zip(by_case, SERIES)))
+    for name, text in files.items():
+        (out / name).write_text(text)
+    print(f"report.py: wrote {', '.join(files)} to {out}", file=sys.stderr)
+
+
 def main(argv):
     if argv == ["--selftest"]:
         return selftest()
@@ -799,6 +912,7 @@ def main(argv):
     ap.add_argument("--out", type=Path, default=ROOT / "report")
     ap.add_argument("--models", type=Path, help="directory holding the ARPice .va models")
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--svg", type=Path, help="also write the README's standalone SVG charts here")
     args = ap.parse_args(argv)
     args.logs.mkdir(parents=True, exist_ok=True)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -865,6 +979,8 @@ def main(argv):
     }
     (args.out / "data.json").write_text(json.dumps(data, indent=1))
     (args.out / "index.html").write_text(render(data))
+    if args.svg:
+        export_svgs(data, args.svg)
     print(f"report.py: wrote {args.out / 'index.html'}", file=sys.stderr)
     return 0
 

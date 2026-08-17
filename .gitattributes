@@ -1,0 +1,3 @@
+# LF on every checkout, Windows included: zig fmt rejects CRLF, transcripts
+# compare bytes, and the codegen splices embedded sources on "\n\n".
+* text=auto eol=lf
