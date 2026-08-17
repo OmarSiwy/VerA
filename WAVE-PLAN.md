@@ -403,7 +403,32 @@ Spec, all seams existing, no new API:
 
 ---
 
-## Open questions for the repo owner
+## Decisions — settled by the repo owner, 2026-08-17
+
+All five were put as open questions with a recommended default; every default was adopted. They
+are decisions now, not suggestions: a wave that contradicts one is wrong, and re-opening one
+needs a reason written down here, in TODO.md §2's style.
+
+1. **`2.2n` decodes ROUND-ONCE** — one `parseFloat` of the joined text, not mantissa×scale.
+   `codegen.zig:5502` is re-blessed and gains an asserted case naming the rule, so the decision
+   is visible to whoever hits it next. Unblocks T0.6, which is not a free deletion: it changes
+   emitted device text.
+2. **`|U| ≤ 256` is a PERMANENT ceiling.** `emitTopology` refuses past it with a new diag code
+   and a reject fixture; `codegen.zig:861` gets a `ponytail:` and TODO.md §3 gets a row naming
+   `enum(u16)` as the upgrade path. Silent emission of an uncompilable artifact was the one
+   option wrong under every reading.
+3. **A 4096-instance flattened netlist is a BENCH INPUT, not a fixture.** Wave 8's curve decides
+   each performance item on evidence; no fixture stands over a §3 row.
+4. **No out-of-tree embedder is assumed beyond ARPice** (checked: it uses only `compileSource`,
+   `orchestrator.Module`, `buildArtifact`). Wave 12 privatizes; a loud compile error is the
+   desired signal and one grep reverts it.
+5. **`--check`'s COMMENT gets fixed, not the code.** `src/cli.zig:349` overstates what it does:
+   `eval` is generic over `comptime S`, so Zig never analyses the body. Routing `--check`
+   through the existing `renderRunner`/`buildExe` path is the honest upgrade if it is ever
+   wanted; a hand-written second instantiation probe is a second surface that must track what
+   the engine calls — the exact drift `tools/contract.zig`'s header records three revisions of.
+
+The original framing of each, with the evidence that produced the recommendation:
 
 1. **What is the correct decode of `2.2n`?** Mantissa×scale (`2.2 * 1e-9`) or one `parseFloat`
    of the joined text? They differ by 1 ULP, `codegen.zig:5502` is the only pin, and T0.6 changes
