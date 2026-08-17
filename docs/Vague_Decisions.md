@@ -1412,5 +1412,4 @@ express them or the work was larger than the pass. Each names its clause.
 - **VAMS 9.21.1: table capture around a rejected step**: the clause is silent.
 - **VAMS 11, 12: the analog VPI backlog** beyond the `vpi_runs` fixtures.
 - **VAMS 9.17: no `.va` directive pins a run-time refusal**: `//! reject` matches compile-time diagnostics only.
-- **Native Windows `zig build test`** fails (CI `native (windows-latest)`, reporting only): building an analog VPI device DLL fails writing its import library (`flushing implib ... BadPathName`), and the `backend` status tests, the split-build library test and several `suite` tests fail. Native macOS passes; all five cross builds pass.
 - **SPICE decks** run on `sim.spice`'s dense, CPU-only copy of ARPice's solver (`src/sim/spice/`): plain Newton only (no gmin or source stepping), `.noise ... lin` only, no correlated noise terms.
