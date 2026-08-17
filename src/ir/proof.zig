@@ -1566,6 +1566,11 @@ const Prover = struct {
         // Only worth saying when the user WROTE a range: a parameter with no
         // range at all is the ordinary case and W0650 already covers it.
         if (pinfo.ranges.len == 0) return;
+        // A §3.4.2 string value set (`from '{"NMOS", "PMOS"}`) is a range with
+        // no bounds to close: `paramInterval` returns `.top` for every string
+        // parameter, which is what reaches here as "admits infinity". Same test
+        // as that function's, for the same reason.
+        if (pinfo.ty == .string) return;
 
         var b = self.bag.build(.proof, .W0651, self.lower.tokenSpan(pinfo.tok));
         b.msg("`{s}`", .{pinfo.name});
@@ -2050,6 +2055,28 @@ test "W0651: a range closed on infinity is called out separately" {
     // ...and the closed bound really did cost the unit its proof.
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
     try std.testing.expect(h.has(.W0650));
+}
+
+test "W0651: a §3.4.2 string value set is not a bound, so it is not an open one" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter string kind = "NMOS" from '{"NMOS", "PMOS"};
+        \\  analog I(p, n) <+ (kind == "NMOS") * V(p, n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+
+    // `paramInterval` answers `.top` for every string parameter — there is no
+    // number in the range to close — and the fixture that pinned this
+    // (ch03_data_types/17_string_parameter_range.va) collected two W0651 it
+    // could do nothing about, since a green fixture does not fail on warnings.
+    try std.testing.expect(!h.has(.W0651));
 }
 
 test "§3.4.2: an `exclude` proves nonzero only where its bracket is square" {
