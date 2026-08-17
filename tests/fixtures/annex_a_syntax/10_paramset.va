@@ -22,20 +22,18 @@
 // A paramset that was parsed but never applied leaves 1.0; one that dropped its
 // own parameter default leaves 2.0.
 //
-// MODULE ORDER IS LOAD-BEARING. A device is elaborated from the FIRST module in
-// the file (01_source_text.va documents the same rule), so the instantiating
-// module has to come first and `annex_a_target` has to be reached THROUGH the
-// paramset instance. Written the other way round — target first — the target is
-// elaborated standalone, its `gain` is the declared 1.0, and the fixture stays
-// red at 1.0 != 3.0 on the day paramsets land: the XPASS would never fire and
-// the `//! xfail` below could never be deleted.
+// MODULE ORDER IS LOAD-BEARING. The device is elaborated from the module nothing
+// instantiates (01_source_text.va documents the rule), and an instance naming a
+// PARAMSET counts as an incoming edge on the module that paramset specializes —
+// so `annex_a_target` is reached THROUGH the paramset instance. Were it
+// elaborated standalone its `gain` would read the declared 1.0, and this file
+// would be red at 1.0 != 3.0 however well paramsets worked.
 //
 //! lrm A.1.9
 //! lrm 6.4
 //! lrm C.8
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA reads past a `paramset` declaration and drops it; applying one needs module instantiation, which is E0204
 `include "check.vh"
 module annex_a_paramset(p, n);
     inout p, n;

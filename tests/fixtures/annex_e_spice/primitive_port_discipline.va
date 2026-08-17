@@ -43,7 +43,6 @@
 //! lrm 2.9
 //! lrm 6.7.1
 //! bias node1 = 2.0, node2 = 0.0
-//! xfail VerA rejects module instantiation (E0204), so a primitive port carrying port_discipline cannot be reached
 `include "check.vh"
 module annex_e_primitive_port_discipline(node1, node2);
   inout node1, node2; rotational node1, node2;

@@ -10,15 +10,16 @@
 //
 // The rejection is still required of every compiler, for a different reason:
 // `digital_child` is defined nowhere, here or in any included file, so there is
-// no module to bind the port to. VerA reaches that verdict early and
-// wholesale — E0204 (LRM 6.2.2), "module instantiation is not supported",
-// because it elaborates a single flat module — and the code is pinned because
-// codes are stable, not because §7.2.3 forbids the construct.
+// no module to bind the port to. That is now exactly what VerA says — E0904,
+// "instance names no module" (LRM 6.2.2) — and the code is pinned because codes
+// are stable, not because §7.2.3 forbids the construct. It used to be E0204,
+// "module instantiation is not supported", which was the flat-module limit
+// answering a question about a missing definition; E0204 is retired.
 //
 //! lrm 7.2.3
 //! lrm 6.2.2
 //! lrm C.8
-//! reject E0204
+//! reject E0904
 module ch7_mixed_parent(p);
   inout p; electrical p;
   digital_child u(p);

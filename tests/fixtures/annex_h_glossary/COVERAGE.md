@@ -71,9 +71,9 @@ An empty cell above is a real gap, and these are the gaps:
   `glossary-s` structural definitions, `glossary-m` model.** Four terms, one
   cause: nothing in this folder instantiates a module. The entire vocabulary of
   hierarchy — instance, submodule, model card, structural definition — is
-  unexercised here. `annex_f_resolution/COVERAGE.md` records why VerA cannot
-  supply it (`module instantiation is not supported`, E0204), and the fixtures
-  themselves belong in `ch06_hierarchy/` regardless. The note here is only that
+  unexercised here. VerA elaborates a hierarchy now (`ir/elaborate.zig`), so this
+  is a fixture gap and no longer a compiler one, and the fixtures themselves
+  belong in `ch06_hierarchy/` regardless. The note here is only that
   Annex H's hierarchy vocabulary has no representative in its own folder.
 - **`glossary-f` flow, as a value read back.** Nine contributions, zero
   assertions. Reading `I()` in an expression is what makes a branch a *flow

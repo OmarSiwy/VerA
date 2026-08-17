@@ -22,13 +22,14 @@
 // both elements see the same scalar pair and run the same analog block. A missing
 // element shows up only as fewer `ok=1` lines, and the runner has no floor on those.
 // Observing the count needs either a width-2 vector net (blocked, see above) or a
-// probe in the PARENT of the total current the array stamps, which needs the
-// instantiation this file is already xfail'd on. Written down so the gap is not
-// mistaken for coverage the day E0204 goes away.
+// probe in the PARENT of the total current the array stamps. §6.2.2 elaboration now
+// works, so the second is no longer blocked on the instantiation — it is blocked on
+// there being no way to read back what a child stamped into a source branch. The
+// gap is this fixture's, not the compiler's; written down so it is not mistaken for
+// coverage.
 //
 //! lrm 6.2.2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"
 `include "check.vh"
 module ch6_instance_array_parent(p, n);
   inout p, n; electrical p, n;

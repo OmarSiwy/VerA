@@ -80,10 +80,11 @@ case: VerA emits *nothing* today, so there is no stable code to pin, and a guess
 leaves the marker stuck at XFAIL on the day the gap closes under a different one.
 `DiagnosticsReported` is the honest trigger — each of these modules has exactly one
 defect, so any diagnostic at all means someone diagnosed it. Three headers go further
-and name the code that would be *wrong*: E0801 "unsupported system function" is VerA's
-capability class for functions it declines to implement (§9.13 `$random`, §9.16
-`$simprobe`), and it fires on the name in any context, which is not the rule in
-question in either `08` or `10`.
+and name the code that would be *wrong*: a CAPABILITY CLASS fires on the name in any
+context, which is not the rule in question in either `08` or `10`. VerA had one such
+code, E0801 "unsupported system function"; it is retired, because every name on its
+list (§9.13's draws, §9.21 `$table_model`, §9.16 `$simprobe`) turned out to be
+implementable after all — which is itself the argument against pinning one.
 
 | Fixture | Row it serves | Reason |
 |---|---|---|

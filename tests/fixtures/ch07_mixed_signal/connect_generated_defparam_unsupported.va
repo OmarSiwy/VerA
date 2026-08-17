@@ -10,14 +10,26 @@
 // duplicate and was deleted; only the identifier differed.) What is testable is
 // the verdict, and it is the same for both spellings.
 //
-// C.9 settles it: "Clause 7 only applies to Verilog-AMS HDL". There is no
-// auto-insertion in Verilog-A, hence no generated instance to name, and
-// `defparam` is not an analog-subset module item in any case — E0205. Refusing
-// this is conformance, not debt.
+// What settles it is the INSTANCE, not the keyword. §7.8.5's generated name
+// exists only where a connect module was auto-inserted, which needs a
+// `connectrules` block and a mixed-domain net — neither is here, and VerA has no
+// auto-insertion at all (C.9: "Clause 7 only applies to Verilog-AMS HDL"). §6.3.1
+// puts a defparam's target "in any module instance throughout the design"; this
+// design has no instances, so the path names nothing.
+//
+// The reject line was E0205 "unsupported module item", on the ground that
+// `defparam` is not an analog-subset module item. That ground is gone: §6.3.1
+// defines the parameter_override, A.1.4 makes it a module_or_generate_item, and
+// annex_a_syntax/12_defparam.va requires a conforming compiler to ACCEPT one —
+// the two files cannot both be right about the KEYWORD. They can both be right
+// about this file, because a defparam onto an instance that does not exist is
+// refused whatever the subset. Same verdict, and now for the reason the clause
+// actually gives: E0907, the override names no parameter of the design.
 //
 //! lrm 7.8.5
+//! lrm 6.3.1
 //! lrm C.9
-//! reject E0205
+//! reject E0907
 module ch7_connect_generated_defparam;
   defparam signal__converter__ddiscrete.threshold = 0.6;
 endmodule

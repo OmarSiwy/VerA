@@ -47,7 +47,6 @@
 //! lrm 2.6.2
 //! lrm 6.7.1
 //! bias V(n1) = 0.145, V(gnd_e) = 0.0, shaft1 = 100.0, gnd_rot = 0.0
-//! xfail VerA rejects module instantiation (E0204), so the combined discipline override cannot be reached
 `include "check.vh"
 module annex_e_primitive_mixed_discipline(n1, gnd_e, shaft1, gnd_rot);
   inout n1, gnd_e, shaft1, gnd_rot;

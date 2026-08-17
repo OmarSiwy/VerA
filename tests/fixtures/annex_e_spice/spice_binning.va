@@ -48,7 +48,6 @@
 //! lrm E.3
 //! lrm 6.7.1
 //! bias V(d) = 1.0, V(g) = 0.75, V(s) = 0.25, V(b) = 0.125
-//! xfail VerA reads past a `paramset` declaration and drops it, and refuses module instantiation (E0204), so no bin is ever selected
 `include "check.vh"
 paramset annex_e_bin mosfet;
   parameter real l = 100n from [100n:250n);

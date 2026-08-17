@@ -13,7 +13,8 @@
 //!  frontend/  → preprocessor.zig  (class 1)  text → text
 //!             → lexer.zig/token.zig (class 1) text → tokens (SoA {tag,start})
 //!             → parser.zig/ast.zig  (class 2) tokens → AST (SoA, u32 handles)
-//!  ir/        → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR
+//!  ir/        → elaborate.zig      (class 9) AST → flat design (§6.2.2)
+//!             → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR
 //!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
 //!             → orchestrator.zig   (ch.2/5) device.zig → .so (+ GPU kernels)
@@ -61,6 +62,7 @@ pub const Parser = @import("frontend/parser.zig");
 pub const Mir = @import("ir/mir.zig");
 pub const Analysis = @import("ir/analysis.zig");
 pub const Ssa = @import("ir/ssa.zig");
+pub const Elaborate = @import("ir/elaborate.zig");
 pub const Lower = @import("ir/lower.zig");
 pub const proof = @import("ir/proof.zig");
 pub const diag = @import("diag.zig");
@@ -405,6 +407,12 @@ fn compileInArena(
     // --- stage 3: parse (class 2) -------------------------------------------
     var p = Parser.Parser.init(arena, text, tags, starts, bag);
     const file = try arena.create(Ast.SourceFile);
+    // Annex E — the shipped Table E.1 primitives are the first declarations in
+    // `text`, so they are the first entries of `file.modules`. See
+    // `Ast.SourceFile.builtin_modules`: everything that has to distinguish a
+    // shipped primitive from the user's own module reads that count, and this is
+    // the one place that knows whether the prelude was prepended at all.
+    const builtins: u32 = if (opts.std_defs) Preprocessor.spice_module_count else 0;
     file.* = p.parseSourceFile() catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseError => {
@@ -413,11 +421,13 @@ fn compileInArena(
             // not — the file held only constructs outside annex C
             // (`connectmodule`, `connectrules`, `macromodule`, `library`,
             // `primitive`, `paramset`) — NoModule is the outcome the caller
-            // acts on; the precise reason is already in the bag.
-            if (p.file.modules.len == 0) return error.NoModule;
+            // acts on; the precise reason is already in the bag. The prelude's
+            // own modules do not count: they are never what was asked for.
+            if (p.file.modules.len <= builtins) return error.NoModule;
             return error.CompileFailed;
         },
     };
+    file.builtin_modules = builtins;
 
     // --- stage 4: lower (classes 3,4,5,7,9) ---------------------------------
     const mir = try arena.create(Mir);
@@ -772,6 +782,7 @@ test {
     _ = Mir;
     _ = Analysis;
     _ = Ssa;
+    _ = Elaborate;
     _ = Lower;
     _ = proof;
     _ = naming;
@@ -981,7 +992,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // every stage, so `zig build` (which depends on compiling the test roots) means
 // "the whole engine type-checks", not just "the files parse".
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
+    inline for (.{ token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

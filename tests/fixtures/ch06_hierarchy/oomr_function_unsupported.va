@@ -17,7 +17,6 @@
 //! lrm 6.7.1
 //! lrm 6.7
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA's parser has no hierarchical_identifier: the `.` in `u.half(...)` dies at E0207 "unexpected token: found `.`", and the instantiation it refers to is refused at E0204 anyway
 `include "check.vh"
 module ch6_oomr_function(p, n);
   inout p, n; electrical p, n;

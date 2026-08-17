@@ -33,7 +33,7 @@
 //
 //! lrm A.4.1
 //! lrm C.8
-//! xfail VerA rejects gate/switch primitive instantiation with E0205 -- no instance or primitive instantiation is implemented
+//! xfail VerA's parser has no gate- or switch-level primitive instantiation: the first one here, `tran`, is E0205 "unsupported module item". §6.2.2 MODULE instantiation elaborates now; A.3 primitive_gate_instance is a SEPARATE production whose meaning is a discrete-time one, so this is not a hierarchy gap
 //! bias V(a) = 0.75, V(b) = 0.25
 `include "check.vh"
 module ch8_switch(a, b);

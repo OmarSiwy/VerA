@@ -35,7 +35,6 @@
 //! bias V(p) = 1.5
 //! bias V(n) = 0.5
 //! print none
-//! xfail VerA implements neither module instantiation (E0204, reported first) nor defparam (E0205)
 `include "check.vh"
 module annex_a_defparam(p, n);
     inout p, n;

@@ -247,10 +247,17 @@ pub const Gen = struct {
     uses_x: bool = false,
     uses_model: bool = false,
     uses_inst: bool = false,
-    /// Set when the unit needs something VerA deliberately does not
-    /// implement (§4.5.11 filters, §9.13 $random, …). The whole body collapses
-    /// to one `@compileError` — a substitute value would corrupt the physics,
-    /// and a per-statement error would bury the reason in a cascade.
+    /// Set when the unit asks for something whose value the LRM FIXES and this
+    /// backend cannot produce (§4.5's non-constant control argument, E0515; a
+    /// §3.6.2.2 signal-flow contribution). The whole body collapses to one
+    /// `@compileError` — a substitute would contradict a number the clause
+    /// writes down, and a per-statement error would bury the reason in a
+    /// cascade. §4.5.11's filters and §9.13's `$random` used to be on this list
+    /// and are implemented now.
+    ///
+    /// The one case that deliberately does NOT come here is an unregistered
+    /// system function (W0852): the language defines no value for it, so there
+    /// is nothing for 0.0 to contradict — only a host to name out loud.
     fatal: ?[]const u8 = null,
     /// Sticky: any unit collapsed to `@compileError`. Reported out so callers do
     /// not have to substring-search the generated file for it.
@@ -3158,10 +3165,44 @@ pub const Gen = struct {
         if ((eq(u8, bare, "min") or eq(u8, bare, "max")) and args.len >= 2)
             return self.method2(args[0], if (bare[1] == 'i') "min" else "max", args[1]);
 
-        // §9.13 $random and the distributions, §9.16 $simprobe: a silent zero
-        // would corrupt the physics, so say so loudly.
-        return self.abort("VerA does not implement `{s}` (ch9); " ++
-            "a substitute value would corrupt the model", .{name});
+        // Nothing above claimed the name, so it is not a Chapter 9 function, not
+        // an Annex D macro and not a §4.5 operator: it is an UNREGISTERED system
+        // function. §2.8.3 makes `$name` grammatical and lists "defined using the
+        // VPI as described in Clause 11 and Clause 12" as one of its definition
+        // sites; §12.32's vpi_register_analog_systf() hands the APPLICATION a
+        // compiletf routine, so what an unknown systf means is the host's
+        // decision and not this compiler's. §12.32.3's own sampnhold listing
+        // puts one in a contribution. No clause makes the source an error, so it
+        // may not be rejected — see W0852.
+        //
+        // THE SET THAT ARRIVES HERE IS ACTUALLY EMPTY OF LRM NAMES, which is
+        // what makes the answer below safe rather than a blanket amnesty: every
+        // Chapter 9 name is either implemented above or diagnosed by a RULE
+        // before codegen (E0806 for a digital-only row of the §9.2 tables, E0808
+        // for the retired v1.0 `$limexp`, E0812, E0813, E0815, E0816). Probing
+        // the whole of ch9 by hand, the only names that reach this line are ones
+        // Verilog-AMS defines nowhere — `$countdrivers`, `$rose`, `$fell`, and a
+        // typo. Add an unimplemented LRM function above, not here.
+        //
+        // WHY THIS IS NOT THE SILENT-ZERO THE REST OF THIS FILE REFUSES. Every
+        // `abort` here stands where the LRM fixes a number and a substitute
+        // would contradict it (E0515's control arguments, a filter VerA cannot
+        // build). This name has no such number: the language defines no value
+        // for an unregistered systf at all — §12.32.3 never initializes
+        // sampler->value before the first update callback and returns that field
+        // through vpi_put_value() — so there is nothing to be wrong about, only
+        // an absent host. The compromise is that it is LOUD: one warning per
+        // call site, `--deny=W0852` restores the refusal for anyone who wants a
+        // host-less build to fail instead.
+        if (self.diags) |bag| try bag.add(
+            .codegen,
+            .W0852,
+            self.lower.tokenSpan(self.mir.instTok(inst)),
+            "`{s}` is not a system function this compiler defines, and no VPI host is " ++
+                "linked into the emitted artifact, so it reads 0.0",
+            .{name},
+        );
+        return self.b("S.con(0.0)", .{});
     }
 
     /// A §9.5 call in a unit that is NOT the display unit: the descriptor answers
@@ -4693,6 +4734,9 @@ const Harness = struct {
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
         out.file = try p.parseSourceFile();
+        // The annex E prelude came with `Preprocessor.process` (std_defs is on by
+        // default), so its modules are the leading entries of `file.modules`.
+        out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
         try out.low.lowerFile();
     }
@@ -5625,6 +5669,37 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     // "unreachable code" at a line of generated code).
     try std.testing.expect(std.mem.indexOf(u8, src, "\n    @compileError(\"LRM 4.5") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
+}
+
+test "codegen: §12.32.3 an unregistered system function is W0852 and 0.0, not a refusal" {
+    // The other side of the test above, and the distinction the whole W0852
+    // ruling rests on: an unregistered `$name` has no value the LRM fixes, so
+    // the unit must still compile — but not silently. §12.32.3's own sampnhold
+    // listing, which is what puts one of these in a contribution.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module sampnhold(out, in);
+        \\  inout out, in;
+        \\  electrical out, in;
+        \\  parameter real period = 1e-3;
+        \\  analog V(out) <+ $sampler(V(in), period);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    var found = false;
+    for (h.bag.messages()) |mi| {
+        const e = h.bag.get(mi);
+        if (e.code != .W0852) continue;
+        found = true;
+        try std.testing.expectEqual(diag.Stage.codegen, e.stage);
+        try std.testing.expect(e.span.end > e.span.start); // the call, not the file
+    }
+    try std.testing.expect(found);
+    // Compiles. A refusal here would reject legal source (§2.8.3), which is the
+    // regression this line exists to catch.
+    try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
 }
 
 test "codegen: §9.13 the emitted draws satisfy the two rules every fixture asserts" {

@@ -22,7 +22,6 @@
 //! bias V(p) = 1.5
 //! lrm 3.6.2.4
 //! lrm C.8
-//! xfail VerA does not implement module instantiation: the instance in the parent is rejected with E0204, so an undeclared net bound only to an instance port is never reached
 `include "check.vh"
 module ch3_implicit_child(a, b);
     inout a, b;

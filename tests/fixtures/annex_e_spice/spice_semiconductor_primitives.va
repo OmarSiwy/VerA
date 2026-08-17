@@ -36,7 +36,6 @@
 //! lrm 6.5.5
 //! lrm 6.7.1
 //! bias V(drn) = 1.0, V(gate) = 0.75, V(src) = 0.25, V(bulk) = 0.125
-//! xfail VerA rejects module instantiation (E0204), so the Table E.1 mosfet row cannot be reached
 `include "check.vh"
 module annex_e_spice_semiconductor_primitives(drn, gate, src, bulk);
   inout drn, gate, src, bulk; electrical drn, gate, src, bulk;

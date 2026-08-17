@@ -15,18 +15,17 @@
 // 78_alias_double_override.va makes the same move for the same reason, and
 // Annex C.8 keeps Clause 6 hierarchy in the Verilog-A subset.
 //
-// The pinned substring is a message fragment rather than a code: VerA has no
-// range-checking diagnostic, so there is no code to pin, and
-// `DiagnosticsReported` would be satisfied by today's unrelated E0204 and
-// report a pass that proved nothing. Any diagnostic naming the range satisfies
-// it. Note also that §3.4.2 puts the error at SIMULATION time; a compiler that
-// aborted the run instead of diagnosing the elaborated instance would need the
-// runner taught about that verdict.
+// The pin used to be the message fragment `range`, because VerA had no
+// range-checking diagnostic and so no code to name. E0361 is that code now: the
+// value half of §3.4.2, raised on a parameter whose value came from a §6.3
+// instance override, which is the only way a value ever reaches a declared range.
+// Note also that §3.4.2 puts the error at SIMULATION time; a compiler that aborted
+// the run instead of diagnosing the elaborated instance would need the runner
+// taught about that verdict.
 //
 //! lrm 3.4.2
 //! lrm C.8
-//! reject range
-//! xfail VerA does not implement module instantiation: the instance is rejected with E0204 before any override is bound to a parameter, so 2000 is never compared against the declared `from [1:1000]`
+//! reject E0361
 module ch3_range_target_upper(p, n);
     inout p, n;
     electrical p, n;

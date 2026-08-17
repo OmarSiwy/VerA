@@ -35,7 +35,6 @@
 //! lrm F.2.2
 //! lrm 3.10
 //! reject E0902
-//! xfail VerA's parser stops at the `.` of a dotted net declaration with E0207 "expected `;`" and refuses the instances with E0204 "module instantiation is not supported", so no hierarchy is elaborated: the out-of-context declaration form and the step-3 conflict check are both missing
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 module annex_f_ooc_leaf(p);

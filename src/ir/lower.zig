@@ -15,6 +15,7 @@ const std = @import("std");
 const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
+const Elaborate = @import("elaborate.zig");
 const Lexer = @import("../frontend/lexer.zig");
 const Preprocessor = @import("../frontend/preprocessor.zig");
 const diag = @import("../diag.zig");
@@ -135,7 +136,14 @@ pub const TypedValue = struct { v: Mir.Value, ty: Ty };
 
 arena: std.mem.Allocator,
 mir: *Mir,
-file: *const Ast.SourceFile,
+/// §6.7 path → flat name, from elaboration. Read only by `flatName`.
+hier_names: std.StringHashMapUnmanaged([]const u8) = .empty,
+/// MUTABLE, and only for one reason: `Elaborate.elaborate` APPENDS to the
+/// stores (§6.7 flat names, cloned expression rows, cloned statements) when it
+/// flattens an instance tree. It runs as the first statement of `lowerFile`,
+/// before anything here has cached an index or a slice into them, and lowering
+/// itself only ever reads.
+file: *Ast.SourceFile,
 builder: Ssa.SsaBuilder,
 /// The block statements are currently being appended to.
 cur: Mir.Block = .entry,
@@ -238,6 +246,10 @@ param_index: std.StringHashMapUnmanaged(u32) = .empty,
 /// `param_index` cannot answer this because it holds both names with nothing
 /// saying which is the alias.
 aliases: std.ArrayList(struct { name: []const u8, param: u32 }) = .empty,
+/// §3.4.7's one printed example whose right-hand side is NOT a parameter:
+/// `aliasparam m = $mfactor;`. The index of the parameter the alias declared, or
+/// null when this module never aliased it — see `aliasSystemParam`.
+mfactor_param: ?u32 = null,
 /// Scalarized array bounds (§3.2.2 variables, §3.4.4 parameters).
 arrays: std.StringHashMapUnmanaged(ArrayInfo) = .empty,
 /// §5.9 break/continue targets.
@@ -476,7 +488,7 @@ pub const Const = union(enum) {
 pub fn init(
     arena: std.mem.Allocator,
     mir: *Mir,
-    file: *const Ast.SourceFile,
+    file: *Ast.SourceFile,
     src: []const u8,
     tok_starts: []const u32,
     bag: *diag.Bag,
@@ -801,14 +813,30 @@ fn astTy(t: Ast.Type) Ty {
 // Class 9 — elaboration (LRM ch6)
 // ---------------------------------------------------------------------------
 
-/// Entry point: lower the file's module. LRM §6.2.
+/// Entry point: elaborate the file (LRM §6.2.2), then lower what came out.
 ///
-/// One flat module is the whole scope today (§6.2.2 instantiation is rejected
-/// by the parser), so the FIRST module declaration is the device; later ones
-/// would only be reachable through instantiation.
+/// `elaborate.zig` owns "which module is the device, and what did the hierarchy
+/// above it do to the names in it"; this owns "turn one unit's declarations and
+/// analog blocks into MIR". The design is FLAT by construction — see that file's
+/// header for why the MIR gains no hierarchy concept — so a design of one unit
+/// (all any file can hold while §6.2.2 instantiation is refused in the parser)
+/// reaches `lowerModule` exactly as the module AST did before the pass existed.
+/// When a flattened instance list arrives it is walked HERE, and `lowerModule`
+/// stays the per-unit body it already is.
+///
+/// Elaboration is called from lowering rather than from the driver because its
+/// input is the AST and its only consumer is the next line: a `Lower` field set
+/// by root.zig would buy a second entry path and nothing else.
 pub fn lowerFile(self: *Lower) Error!void {
-    if (self.file.modules.len == 0) return error.NoModule;
-    try self.lowerModule(&self.file.modules[0]);
+    const design = try Elaborate.elaborate(.{
+        .arena = self.arena,
+        .file = self.file,
+        .src = self.src,
+        .tok_starts = self.tok_starts,
+        .bag = self.bag,
+    });
+    self.hier_names = design.names;
+    try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
 }
 
@@ -984,6 +1012,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // colliding name for the rest of the module: every equation that says
         // `alias` quietly reads `target` instead, and the model card's `alias`
         // field goes dead. Nothing else in the file looks wrong.
+        if (!self.param_index.contains(alias) and try self.aliasSystemParam(alias, target)) continue;
         if (self.param_index.contains(alias)) {
             var b = self.errWith(module.main_tok, .E0331);
             b.msg("`{s}`", .{alias});
@@ -1069,6 +1098,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // variable needs a persistent slot is decided at its declaration, not at
     // the assignment that reveals it — see `holdSlot`.
     try self.markHeldVars(module);
+    try self.checkOneItemPerScope(module.vars);
     for (module.vars) |*v| try self.declareVarDecl(v, .module);
 
     // §5.10.4 named events. An event carries no value — only "triggered at this
@@ -1527,46 +1557,12 @@ fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     return out;
 }
 
-/// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`, or
-/// null. "A derived nature ... can override the attributes of the base nature",
-/// so the FIRST hit walking up the chain wins.
-///
-/// The chain walk lives here rather than in `natureOf` because §5.5.3's
-/// attribute reference can name any attribute at all, including a §3.6.1.3 user
-/// one — `natureOf`'s three named fields are just the three attributes the rest
-/// of lowering happens to consume.
+/// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`.
+/// Lives on `Ast.SourceFile` because `ir/elaborate.zig` needs the same walk (see
+/// `Flatten.primitiveAccess`) and it is a pure query over the parsed natures and
+/// disciplines; this is the shorthand the rest of lowering was written against.
 fn natureAttrExpr(self: *Lower, name: Ast.StrId, attr: []const u8) ?Ast.ExprId {
-    var want = name;
-    var hops: u32 = 0;
-    while (hops < 16) : (hops += 1) {
-        const nat = for (self.file.natures) |*n| {
-            if (n.name == want) break n;
-        } else return null;
-        for (nat.attrs) |a| {
-            if (std.mem.eql(u8, self.file.str(a.name), attr)) return a.value;
-        }
-        if (nat.parent == .none) return null;
-        // A.1.6 `parent_nature ::= nature_identifier | discipline_identifier .
-        // potential_or_flow`. In the second form the parent names a DISCIPLINE,
-        // so the walk continues at whichever nature that discipline binds to
-        // the named half (§3.6.2.6). Resolving it off `file.disciplines` and
-        // not off `self.disciplines` keeps this callable from
-        // `collectDisciplines`, which is what fills that map.
-        if (nat.parent_access) |half| {
-            const d = for (self.file.disciplines) |*x| {
-                if (x.name == nat.parent) break x;
-            } else return null;
-            const bound = switch (half) {
-                .potential => d.potential,
-                .flow => d.flow,
-            };
-            if (bound == .none) return null;
-            want = bound;
-            continue;
-        }
-        want = nat.parent;
-    }
-    return null;
+    return self.file.natureAttrExpr(name, attr);
 }
 
 // ---- §3.11 net compatibility -----------------------------------------------
@@ -1783,6 +1779,25 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             }
             return self.internNode(name, "");
         },
+        // §6.7.1 a hierarchical terminal, `V(u.a)`. `flatName` is the whole
+        // resolution: elaboration named the child's net `u.a`, so the path IS the
+        // flat name and the lookup is the ordinary one.
+        //
+        // What it may NOT do is intern a new node the way the `.ident` arm does.
+        // §3.6.5's implicit net is a rule about an UNDECLARED SIMPLE name in this
+        // module; a path that resolves to nothing names no net anywhere in the
+        // design, and silently creating one turns a wrong path into a floating
+        // node and an E0337 about a name the author never declared.
+        .hier_ident => {
+            const name = try self.flatName(e);
+            if (!self.node_voltages.contains(name)) {
+                var b = self.errAtWith(e, .E0901);
+                b.msg("`{s}` names no net in the elaborated design", .{name});
+                try b.emit();
+                return ground;
+            }
+            return self.internNode(name, "");
+        },
         .index => {
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) {
@@ -1986,6 +2001,13 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
 
     const folded = self.constEval(decl.default);
     try self.checkParamType(decl, name, folded);
+    // §3.4.2's OTHER half: "the parameter value shall be within the range". It
+    // needs a value somebody supplied, and `is_override` is the only marker that
+    // one was — elaborate.zig sets it when a §6.3 instance parameter value
+    // assignment becomes this declaration's default. A module compiled on its own
+    // has no instance, so its declared default is judged for its BOUNDS (E0347,
+    // above) and not for itself.
+    if (decl.is_override) try self.checkParamRange(decl, name, folded);
     const ty: Ast.Type = if (decl.ty != .unspecified) decl.ty else switch (folded orelse Const{ .real = 0 }) {
         .int => .integer,
         .real => .real,
@@ -2022,6 +2044,66 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     try self.addParam(name, ty, default, decl.ranges, decl.is_local, decl.main_tok);
 }
 
+/// §3.4.2: "The parameter value shall be within the range from the smallest
+/// value specified to the largest value specified", minus everything an
+/// `exclude` removes. Several `from` clauses are a UNION — the clause's own
+/// example writes two — so the test is "inside at least one", not "inside all".
+///
+/// Only reached for a §6.3 override (see the call site). Nothing is reported
+/// when a bound or the value will not fold: §3.4.2 admits a constant expression
+/// over earlier parameters, and a bound that reads an overridable parameter has
+/// no single value at compile time.
+fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
+    const c = folded orelse return;
+    // A.2.5's string form is a SET, not an interval; §3.4.2 gives it its own
+    // sentence and it needs string equality, not ordering. Unimplemented, and
+    // silent rather than wrong.
+    if (c == .str) return;
+    const v = c.asReal();
+
+    var has_from = false;
+    var in_from = false;
+    for (decl.ranges) |r| {
+        if (r.strings != null) continue;
+        const lo = self.rangeBound(r.lo) orelse continue;
+        // A.2.5 `exclude constant_expression` — a single value, so hi is absent.
+        const hi = if (r.hi == .none) lo else self.rangeBound(r.hi) orelse continue;
+        const above_lo = if (r.lo_inclusive) v >= lo else v > lo;
+        const below_hi = if (r.hi_inclusive) v <= hi else v < hi;
+        switch (r.kind) {
+            .from => {
+                has_from = true;
+                if (above_lo and below_hi) in_from = true;
+            },
+            .exclude => if (above_lo and below_hi) {
+                var b = self.errWith(decl.main_tok, .E0361);
+                b.msg("`{s}` is {d}, which the declared range excludes", .{ name, v });
+                try b.emit();
+                return;
+            },
+        }
+    }
+    if (has_from and !in_from) {
+        var b = self.errWith(decl.main_tok, .E0361);
+        b.msg("`{s}` is {d}, outside the declared range", .{ name, v });
+        try b.emit();
+    }
+}
+
+/// One end of a §3.4.2 value_range. A.2.5 lets it be `inf` / `-inf`, which is
+/// not a constant_expression and so cannot go through `constEval`.
+fn rangeBound(self: *Lower, e: Ast.ExprId) ?f64 {
+    if (e == .none) return null;
+    return switch (self.file.exprs.tag(e)) {
+        .pos_inf => std.math.inf(f64),
+        .neg_inf => -std.math.inf(f64),
+        else => blk: {
+            const c = self.constEval(e) orelse break :blk null;
+            break :blk if (c == .str) null else c.asReal();
+        },
+    };
+}
+
 /// §3.4.1 the two type rules the general "convert the value to the parameter's
 /// type" sentence does NOT cover. Diagnose and carry on: inference still runs
 /// and the parameter still enters the table, so one bad declaration does not
@@ -2050,6 +2132,35 @@ fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, fo
         @tagName(decl.ty),
         if (is_str) "string" else "numeric",
     });
+}
+
+/// §3.4.7's other form: `aliasparam m = $mfactor;`, which the clause prints
+/// beside `aliasparam trise = dtemp;` and which Syntax 3-2 does not cover —
+/// `aliasparam_declaration ::= aliasparam parameter_identifier =
+/// parameter_identifier ;` has an identifier on the right, so the form only
+/// exists in the clause's prose. It exists because "m" is what a SPICE netlist
+/// calls the shunt multiplicity and `$mfactor` is what §9.18 calls it, and a
+/// model has to answer to both spellings.
+///
+/// THE ALIAS GETS THE STORAGE, which is the one design call here. §3.4.7 makes
+/// an alias a second name for one location, and §9.18's `$mfactor` has no
+/// location on VerA's model card at all — it is an `Instance` field the host
+/// writes, because §6.3.6 has the host scale the whole stamp by it. So the way
+/// to give the two names one location is the other direction: the alias becomes
+/// an ordinary real parameter (Table 9-29's top-level 1.0 as its default, which
+/// is exactly the value `$mfactor` had before anyone aliased it) and `$mfactor`
+/// reads it (`lowerSysCall`).
+///
+/// ponytail: the ceiling is that a host which writes `Instance.mfactor` AND
+/// overrides the alias has set the same physical quantity twice, and the
+/// equations then read the alias while the stamp is scaled by the field. The
+/// upgrade is for codegen to fold the model-card knob into `Instance.mfactor`
+/// at `derive` time, which needs the two structs to know about each other.
+fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
+    if (!std.mem.eql(u8, target, "$mfactor")) return false;
+    self.mfactor_param = @intCast(self.params.items.len);
+    try self.addParam(alias, .real, try self.fconst(1.0), &.{}, false, Mir.no_tok);
+    return true;
 }
 
 fn addParam(
@@ -2368,6 +2479,35 @@ fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
     return slot;
 }
 
+/// §6.8: "An identifier shall be used to declare only one item within a scope.
+/// This rule means it is ILLEGAL TO DECLARE TWO OR MORE VARIABLES WHICH HAVE THE
+/// SAME NAME, or to name a task the same as a variable within the same module, or
+/// to give an instance the same name as the name of the net connected to its
+/// output."
+///
+/// The first clause of that sentence, which is the one that has a second
+/// declaration to point at. Without it the second `put` in `declareVar` rebinds
+/// the name and the first declaration's initializer is silently unreachable —
+/// and the legal case looks identical from the map's side, which is why the test
+/// is over ONE DECLARATION LIST rather than over `self.vars`: a list is exactly
+/// the declarations of one scope (§6.8 lists what opens one; a second declaration
+/// is not on it), so shadowing an outer name cannot reach this.
+///
+/// ponytail: O(n²) over one scope's variables, which is a handful. A set would
+/// need an allocation per scope to save comparisons that cost nothing.
+fn checkOneItemPerScope(self: *Lower, vars: []const Ast.VarDecl) Oom!void {
+    for (vars, 0..) |v, i| {
+        for (vars[0..i]) |earlier| {
+            if (earlier.name != v.name) continue;
+            var b = self.errWith(v.main_tok, .E0362);
+            b.msg("`{s}`", .{self.file.str(v.name)});
+            b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
+            try b.emit();
+            break;
+        }
+    }
+}
+
 /// Where a `declareVarDecl` sits. Only a MODULE-level variable can take a
 /// persistent §5.10 slot — see `holdSlot`.
 const VarScope = enum { module, local };
@@ -2591,6 +2731,7 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.openScope();
     defer self.closeScope(mark);
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
+    try self.checkOneItemPerScope(b.vars);
     for (b.vars) |*v| try self.declareVarDecl(v, .local);
     try self.lowerStmts(b.body);
 }
@@ -2991,6 +3132,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         try b.emit();
         return;
     }
+    if (target.access == .flow) try self.checkMfactorDoubleScaling(lhs, rhs);
     const idx = try self.contribIndex(target.access, target.hi, target.lo, self.file.exprs.mainTok(lhs));
 
     const split = try self.splitContribution(rhs);
@@ -3017,6 +3159,95 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     }
     // §4.6.4 the noise kind belongs to the target, not to one statement.
     if (self.noiseKindOf(rhs)) |k| self.contributions.items[idx].noise_kind = k;
+}
+
+/// §6.3.6 the double-scaling misuse, which the clause states about a specific
+/// printed module and calls an ERROR there:
+///
+///   "The first example, badres, misuses the $mfactor such that the contributed
+///   current would be multiplied by $mfactor twice, once by the explicit
+///   multiplication and once by the automatic scaling rule. The simulator will
+///   generate an error for this module."
+///
+/// The automatic rule is the clause's first bullet — "all contributions to a
+/// branch flow quantity in the analog block shall be multiplied by $mfactor" —
+/// and the clause adds that "Verilog-AMS does not provide a method to disable"
+/// it. So an explicit factor of $mfactor in a FLOW contribution cannot be an
+/// opt-out; it can only be the second multiplication.
+///
+/// THE PREDICATE IS SCALING, NOT PRESENCE, and that is what keeps §6.3.6's own
+/// legal companion legal: `parares` reads $mfactor in the CONDITION of an `if`
+/// (`r/$mfactor < 1e-3`) and the clause says outright that "no error will be
+/// generated for this module". So the test is `$mfactor` as an operand of a `*`
+/// or a `/` inside the contributed value — division included, since dividing the
+/// contribution by $mfactor is the same misuse read as an attempt to cancel the
+/// automatic rule out.
+///
+/// Flow only: §6.3.6's automatic scaling is stated for flow contributions, so a
+/// potential contribution has nothing for an explicit factor to double.
+///
+/// ponytail: the ceiling is a FLATTENED child, where elaboration has already
+/// substituted `$mfactor` for the running product (elaborate.zig
+/// `rewriteSysCall`) and there is no `sys_call` left to find. It only bites when
+/// some ancestor actually specified a `.$mfactor(...)` — with none specified the
+/// read is left as-is and this check sees it. The upgrade is to run this scan in
+/// the clone, which needs the discipline table elaboration does not have.
+fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
+    if (!self.scalesByMfactor(rhs)) return;
+    var b = self.errAtWith(lhs, .E0912);
+    b.msg("this flow contribution multiplies by `$mfactor`", .{});
+    b.note("§6.3.6: every flow contribution is scaled by $mfactor automatically, and \"Verilog-AMS does not provide a method to disable\" it — so an explicit factor scales it twice", .{});
+    b.help("delete the `$mfactor` factor; read it in a guard if the equation needs to know the multiplicity", .{});
+    try b.emit();
+}
+
+/// Is the CONTRIBUTED VALUE a product in which `$mfactor` is a factor?
+///
+/// The walk follows the product SPINE of the right-hand side — mul, div and the
+/// sign operators — and no further. That is the clause's own sentence read
+/// literally: "the contributed current would be multiplied by $mfactor twice".
+/// A `$mfactor` that multiplies one addend of a sum does not multiply the
+/// contributed current; `mfactor.va` writes `I(p) <+ V(p) + 0.0 * $mfactor;` on
+/// purpose, to read the parameter from the residual path, and that contribution
+/// is `V(p)` — scaling it once is all that happens to it.
+///
+/// The precedent for stopping at the spine is `checkZeroTransitionZFilter` above:
+/// where the LRM states a rule about the value assigned to a branch, a scan of
+/// the whole subtree invents a rule about expressions the clause declines to
+/// state. The known hole is `I <+ V/r * $mfactor + off`, which is a misuse this
+/// does not catch; the LRM gives no rule for the mixed case and `badres` is not
+/// it.
+fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .binary => switch (ex.binOp(e)) {
+            .mul, .div => self.isMfactorRead(ex.lhs(e)) or self.isMfactorRead(ex.rhs(e)) or
+                self.scalesByMfactor(ex.lhs(e)) or self.scalesByMfactor(ex.rhs(e)),
+            else => false,
+        },
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus => self.scalesByMfactor(ex.lhs(e)),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+/// A read of §9.18's `$mfactor`, under either of its two spellings: the system
+/// function itself, or the §3.4.7 `aliasparam m = $mfactor;` name for it — the
+/// alias is a second name for one location, so it is the same read.
+fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .sys_call => std.mem.eql(u8, self.file.str(ex.strOf(e)), "$mfactor"),
+        .ident => if (self.mfactor_param) |pi|
+            self.param_index.get(self.file.str(ex.strOf(e))) == pi
+        else
+            false,
+        else => false,
+    };
 }
 
 /// §4.5.12, the two sentences that are one rule: "If the transition time is
@@ -4268,10 +4499,6 @@ fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
 /// §5.12/ch9 analog system task. Display/file tasks are void calls codegen may
 /// drop; the deliberately-unsupported set is rejected by exact name.
 fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
-    if (isRejectedSysFunc(name)) {
-        try self.err(tok, .E0801, "`{s}`", .{name});
-        return;
-    }
     if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.err(tok, .E0806, "`{s}`", .{name});
         return;
@@ -4921,22 +5148,23 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
     return false;
 }
 
-/// ch9 functions VerA deliberately does not implement. Rejecting by exact
-/// name (rather than silently returning 0) is what the fixtures pin.
-fn isRejectedSysFunc(name: []const u8) bool {
-    // §9.13's 17 probabilistic names USED to be here, refused wholesale because
-    // a draw changing between Newton iterations makes the residual
-    // non-deterministic. The premise was right and the conclusion was wrong: the
-    // seed is a source variable (§9.13.1 "a value is passed to the function and a
-    // different value is returned"), so a variate is a pure function of it and
-    // stays fixed across the iterations at one point by construction. They are
-    // lowered by `lowerRandom`; `rng_kernels.zig` carries the argument.
-    const rejected = [_][]const u8{
-        "$simprobe", // §9.16
-    };
-    for (rejected) |r| if (std.mem.eql(u8, name, r)) return true;
-    return false;
-}
+// THE "DELIBERATELY UNSUPPORTED" LIST IS GONE, and with it E0801 (retired).
+//
+// It held two families and both left for the same reason — the LRM defines them
+// for the analog context, so refusing them refused a conforming source. §9.13's
+// 17 probabilistic names went first: a draw that changes between Newton
+// iterations would make the residual non-deterministic, but §9.13.1's seed is an
+// inout argument ("a value is passed to the function and a different value is
+// returned"), so a variate is a pure function of the seed and is fixed across the
+// iterations at one point by construction (`lowerRandom`, `rng_kernels.zig`).
+// §9.16's `$simprobe` went second: Table 9-13 marks it analog-context Yes and the
+// clause fixes what an unresolvable probe returns, which is a value and not an
+// error whenever the fallback is supplied (`lowerSimprobe`).
+//
+// An empty list is a diagnostic that cannot fire, so the list and the code went
+// rather than sitting here as one. A function this compiler genuinely cannot host
+// gets a code that says which rule it broke — E0806 for a digital-only name,
+// E0817 for an unresolvable probe — not a capability class.
 
 /// §9.2. Every Chapter 9 table carries a "supported in analog context" column,
 /// and these are the names whose cell says No. Seven tables, one list, because
@@ -5049,7 +5277,31 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                     return poison;
                 },
             };
-            try self.errAt(e, .E0901, "", .{});
+            // §6.7 "access of parameters can be done hierarchically", and
+            // §6.7.1 extends it to variables. The path IS the flat name
+            // elaboration gave the child's entity, so once the join resolves
+            // there is nothing hierarchical left to do; E0901 is what is left
+            // when it does not.
+            const name = try self.flatName(e);
+            // §6.7.1's fifth bullet, and the ONLY one of the list that is a
+            // prohibition: "It shall be an error to access analog variables
+            // hierarchically." It has to be tested before the resolution below,
+            // because the resolution succeeds — a flattened child's variable is
+            // an ordinary variable of the flat design under its path name, so
+            // nothing else would stop the read.
+            if (self.vars.contains(name)) {
+                var vb = self.errAtWith(e, .E0910);
+                vb.msg("`{s}`", .{name});
+                vb.note("§6.7.1 permits a hierarchical parameter, branch probe or analog function; a variable is the one entry on that list it forbids", .{});
+                try vb.emit();
+                return poison;
+            }
+            if (self.param_index.contains(name) or
+                self.consts.contains(name) or self.node_voltages.contains(name))
+                return self.lookupName(e, name);
+            var b = self.errAtWith(e, .E0901);
+            b.msg("`{s}` names nothing in the elaborated design", .{name});
+            try b.emit();
             return poison;
         },
 
@@ -5227,11 +5479,63 @@ fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?TypedVa
     return null;
 }
 
+/// §6.7 the flat spelling of a `.hier_ident` path: its parts joined by
+/// `Elaborate.sep`.
+///
+/// That join is the whole out-of-module reference mechanism, and it is one line
+/// because of what elaboration already did: flattening renames a child's entity
+/// to `path.name` (Ruling E, `Elaborate.sep`), so the name §6.7 asks for and the
+/// name the flat design carries are the SAME STRING. Nothing here walks an
+/// instance tree, because there is no tree left to walk.
+///
+/// Arena-allocated per call. Cold: one path per source reference.
+fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
+    var parts = self.file.exprs.nameParts(e);
+    // §6.2.1 the `$root` prefix: "used to unambiguously refer to a top-level
+    // instance or to an instance path starting from the root of the instantiation
+    // tree", against a plain path, where "the ambiguity is resolved by giving
+    // priority to the local scope". Elaboration's flat namespace IS rooted — a
+    // name with no path prefix is a name of the top — so `$root.` means "do not
+    // apply the local scope", and dropping the prefix is how that is said. The
+    // segment after it names a TOP-LEVEL INSTANCE (§6.7's own `$root.mymodule.u1`
+    // is "absolute name"), and the one top-level instance a flattened design has
+    // is the device itself, so the top module's own name drops with it.
+    //
+    // Not done in `Elaborate`'s clone: a `$root` path in the TOP module's body is
+    // never cloned (the tree-of-one returns by pointer), so the rule would only
+    // have applied to children. Here it applies to every unit.
+    if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) {
+        parts = parts[1..];
+        if (parts.len > 1) {
+            if (self.module) |m| if (parts[0] == m.name) {
+                parts = parts[1..];
+            };
+        }
+    }
+    var out: std.ArrayList(u8) = .empty;
+    for (parts, 0..) |p, i| {
+        if (i != 0) try out.append(self.arena, Elaborate.sep);
+        try out.appendSlice(self.arena, self.file.str(p));
+    }
+    const path = try out.toOwnedSlice(self.arena);
+    // The one place the join is NOT the answer: a child port bound to a parent
+    // net is the same signal as that net, so `u.a` denotes `p` and there is no
+    // `u.a` to find. `Design.names` holds those aliases and nothing else.
+    return self.hier_names.get(path) orelse path;
+}
+
 /// §2.8 name resolution: variables (§3.2) shadow parameters (§3.4), which
 /// shadow genvars (§3.5). Nets are NOT values — they are only reachable
 /// through an access function (§4.4).
 fn lookupIdent(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    const name = self.file.str(self.file.exprs.strOf(e));
+    return self.lookupName(e, self.file.str(self.file.exprs.strOf(e)));
+}
+
+/// Same resolution, for a name that is not the node's own `str`: §6.7's dotted
+/// path, joined by `flatName`. Split out rather than parameterised in place so
+/// the hierarchical read gets the identical shadowing order and the identical
+/// diagnostics — E0315's "probe it" advice is as true of `u.a` as of `a`.
+fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (self.vars.get(name)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     if (self.param_index.get(name)) |idx|
@@ -6162,14 +6466,16 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
-    if (isRejectedSysFunc(name)) {
-        try self.errAt(e, .E0801, "`{s}`", .{name});
-        return poison;
-    }
     if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.errAt(e, .E0806, "`{s}`", .{name});
         return poison;
     }
+    // §3.4.7/§9.18: this module wrote `aliasparam m = $mfactor;`, so the two
+    // names denote one location and the location is the parameter the alias
+    // declared (`aliasSystemParam`). Both spellings read it — §3.4.7 rule 2 has
+    // the equations use the ORIGINAL name, which is this one.
+    if (self.mfactor_param) |pi| if (std.mem.eql(u8, name, "$mfactor"))
+        return .{ .v = self.param_values.items[pi], .ty = .real };
     // §9.13 Table 9-10. Before everything below, because the seed is an inout
     // argument and the write-back is not something a `call` result can express.
     if (try self.lowerRandom(ex.mainTok(e), name, ex.args(e))) |tv| return tv;
@@ -6225,6 +6531,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // Only when the name is a literal: §9.15 also allows "a string parameter or
     // a string variable", and a name that is not known until the solve cannot be
     // judged here — the fallback rule is the user's cover for that case.
+    if (std.mem.eql(u8, name, "$simprobe")) return self.lowerSimprobe(e);
     if (std.mem.eql(u8, name, "$simparam")) {
         const args = ex.args(e);
         if (args.len == 1) {
@@ -6761,6 +7068,68 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     return false;
 }
 
+/// §9.16 the dynamic simulation probe function, Syntax 9-11:
+///
+///     $simprobe ( inst_name , param_name [, expression] )
+///
+/// "$simprobe allows a module to probe the value of a parameter of another
+/// module instance", and the clause's one sentence with a value in it is the
+/// resolution rule: "If either the inst_name or param_name cannot be resolved,
+/// and the optional expression is not supplied, then an error shall be
+/// generated. If the optional expression is supplied, its value will be returned
+/// in lieu of raising an error."
+///
+/// So the answer is decided by whether `inst_name.param_name` resolves, and in a
+/// flattened design that is a NAME LOOKUP: the flat name of a child's parameter
+/// IS its hierarchical path (`Elaborate.sep`), the same identity §6.7 rides on.
+/// Nothing is dynamic about it, which is the point — the device has no runtime
+/// hierarchy to walk.
+///
+/// ponytail: the ceiling is a COMPUTED name. §9.16's arguments are strings, and a
+/// string that is not a literal here cannot be resolved at compile time; it takes
+/// the fallback, which is precisely what §9.16 says an unresolvable probe does,
+/// and with no fallback it is the error the clause asks for. A host with a real
+/// instance table would resolve more names than this does — that is the piece
+/// Ruling E deliberately gave up, and it is recorded here rather than hidden.
+fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    const args = ex.args(e);
+    if (args.len < 2) {
+        var b = self.errAtWith(e, .E0809);
+        b.msg("`$simprobe` takes an instance name and a parameter name", .{});
+        try b.emit();
+        return poison;
+    }
+    const inst = self.constStrArg(args[0]);
+    const param = self.constStrArg(args[1]);
+    if (inst != null and param != null) {
+        const path = try std.mem.concat(self.arena, u8, &.{ inst.?, &[_]u8{Elaborate.sep}, param.? });
+        if (self.param_index.get(path)) |pi|
+            return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
+    }
+    // Unresolved. §9.16's own two outcomes, in the clause's order.
+    if (args.len >= 3 and args[2] != .none) return self.lowerExpr(args[2]);
+    var b = self.errAtWith(e, .E0817);
+    b.msg("`$simprobe(\"{s}\", \"{s}\")` names no parameter of the elaborated design", .{
+        inst orelse "<expression>", param orelse "<expression>",
+    });
+    b.note("§9.16: with no third argument, an unresolvable probe \"shall generate an error\"", .{});
+    b.help("supply the fallback expression §9.16 defines for this case: `$simprobe(inst, param, <value>)`", .{});
+    try b.emit();
+    return poison;
+}
+
+/// A string literal argument, for the ch9 functions whose behaviour depends on
+/// one. Null when the argument is any other expression.
+fn constStrArg(self: *Lower, e: Ast.ExprId) ?[]const u8 {
+    if (e == .none) return null;
+    const c = self.constEval(e) orelse return null;
+    return switch (c) {
+        .str => |s| s,
+        else => null,
+    };
+}
+
 /// Several ch9 functions take a NET or PORT reference rather than a value —
 /// §9.19 `$port_connected`, §9.20 `$analog_node_alias`, §9.22/§9.23 driver
 /// access. A bare net name in argument position lowers to its node_order
@@ -7105,6 +7474,9 @@ pub fn inlineUserFunc(
         try self.builder.writeVariable(slot.place, self.cur, vals[0]);
         try arg_slots.append(self.arena, try self.arena.dupe(VarSlot, &.{slot}));
     }
+    // §6.8 an analog function is one of the six scopes; its locals are a list
+    // like a module's or a block's.
+    try self.checkOneItemPerScope(fd.vars);
     for (fd.vars) |*v| try self.declareVarDecl(v, .local);
 
     const exit = try self.newBlock();
@@ -7431,6 +7803,9 @@ const Harness = struct {
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
         out.file = try p.parseSourceFile();
+        // The annex E prelude came with `Preprocessor.process` (std_defs is on by
+        // default), so its modules are the leading entries of `file.modules`.
+        out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
     }
 

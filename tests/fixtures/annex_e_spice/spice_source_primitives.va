@@ -36,7 +36,6 @@
 //! lrm 6.5.5
 //! lrm 6.7.1
 //! bias V(hi) = 1.0, V(lo) = 0.25
-//! xfail VerA rejects module instantiation (E0204), so a Table E.1 source primitive cannot be reached
 `include "check.vh"
 module annex_e_spice_source_primitives(hi, lo);
   inout hi, lo; electrical hi, lo;

@@ -36,7 +36,6 @@
 //! lrm F.2.2
 //! lrm 3.10
 //! bias a = 0.75, b = 0.25
-//! xfail VerA's parser stops at the `.` of a dotted net declaration with E0207 "expected `;`" and refuses the instances with E0204 "module instantiation is not supported": the out-of-context declaration form of §3.10 order 1 is not implemented
 `include "check.vh"
 nature annex_f_x_pot;
   units = "V";

@@ -72,7 +72,7 @@ descriptor table did.
 | `s9.13.3` | Table 9-26 cross-listing to the 1364 C algorithms | — no fixture claims a distribution's VALUE, and none can: this clause defers the algorithms to IEEE 1364 §17.9.3 and no clause of *this* LRM requires a tool to reproduce that stream. What the family's fixtures pin instead is §9.13.1/§9.13.2's own two sentences — repeatability on a seed, and the inout seed coming back different |
 | `s9.14` | math system functions | Twenty-seven atomics `067`–`093` plus `17_math_unary.va`, `18_math_trig.va`, `19_math_binary.va`, `20_math_2023.va`. Two of the atomics are **xfail**: `092_ln1p.va` — *`codegen.zig` `zLn1p` is `a.addC(1.0).log()`, so `$ln1p(5e-16)` returns 4.440892098500625e-16, 11% low — precisely the naive value Table 4-14's C `log1p` exists to replace* — and `093_expm1.va` — *`zExpm1` is `a.exp().addC(-1.0)`, same 11% error for the same reason* |
 | `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. All three branches of the clause's `$simparam` sentence are now green: `147_simparam_unknown_no_fallback_rejected.va` is a **reject VerA meets** (E0811 — the unknown name with no fallback), and `157_simparam_timescale.va` pins Table 9-27's two source-derived rows, `"timeUnit"`/`"timePrecision"` in seconds, which the preprocessor now parses out of `` `timescale `` and publishes for `Lower.simparamValue` |
-| `s9.16` | `$simprobe(inst_name, param_name [, expr])` | `36_simprobe.va` — **xfail**, *E0801: no sibling-instance host to probe; Table 9-13 marks it analog-context Yes* |
+| `s9.16` | `$simprobe(inst_name, param_name [, expr])` | `36_simprobe.va` — green. The pair resolves as ONE flat name, `inst_name.param_name`, against the elaborated design, which is the identity every §6.7 reference rides on; a name that does not resolve takes the clause's fallback expression, and with no fallback it is E0817. A name built at run time cannot resolve here — that is the piece Ruling E gave up, and the fallback is the LRM's own cover for it |
 | `s9.17` | analog kernel control family | — parent; carried by 9.17.1–9.17.3 |
 | `s9.17.1` | `$discontinuity`, degree `0` and `-1` | `24_discontinuity.va`; `138_discontinuity_arity_rejected.va` (E0804) and `139_discontinuity_nonconstant_rejected.va` (E0805) — **rejects VerA already meets** |
 | `s9.17.2` | `$bound_step` | `25_bound_step.va` (`//! analysis tran`); `136_bound_step_negative_rejected.va` (E0803) and `137_bound_step_arity_rejected.va` (E0802) — **rejects VerA already meets** |
@@ -159,7 +159,7 @@ cheapest wall in the chapter: it is a lookup table and a diagnostic, not a
 runtime feature, and it retires eleven rows.
 
 **No hierarchy (19 fixtures).** VerA compiles one flat module. That takes out
-§9.22/§9.23 wholesale (`31`, `107`, `109`–`114`, `38`) and `$simprobe` (`36`).
+§9.22/§9.23 wholesale (`31`, `107`, `109`–`114`, `38`). `$simprobe` (`36`) used to be counted here and is green: §9.16's resolution is a name lookup in the flattened design, not a walk of a live netlist.
 `$table_model`'s three (`37`, `131`, `155`) used to be counted here, on the
 honest note that they needed an interpolator rather than hierarchy; they now
 have one. The six §9.20 negatives used to be

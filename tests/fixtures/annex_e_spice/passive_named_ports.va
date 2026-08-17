@@ -41,7 +41,6 @@
 //! lrm E.2.2.3
 //! lrm 6.7.1
 //! bias V(p) = 1.0, V(n) = 0.0
-//! xfail VerA rejects module instantiation (E0204), so a named primitive connection cannot be reached
 `include "check.vh"
 module annex_e_passive_named_ports(p, n);
   inout p, n; electrical p, n;

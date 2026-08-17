@@ -12,15 +12,18 @@
 // so the fixture rejected whether or not the cccs line was present at all. It is
 // gone, and the reject is now attributable to the line the fixture names.
 //
-// HONEST CEILING. VerA answers with E0204 "module instantiation is not
-// supported", whose own cite is §6.2.2 — the flat-module limit, not E.3.1. This
-// fixture therefore cannot tell a tool that refuses `cccs` per E.3.1 from one
-// that refuses all hierarchy. Full discrimination needs a diagnostic dedicated
-// to the E.3.1 primitives and is not this fixture's to buy; what it does buy is
-// that the source below never compiles.
+// HONEST CEILING. VerA answers with E0904, "instance names no module" (§6.2.2):
+// `cccs` is not a module VerA has, and once Annex E's supported primitives ship
+// as prelude modules it still will not be one, because E.3.1 excludes it. That is
+// a better-attributed refusal than the E0204 this fixture used to pin — E0204 was
+// "module instantiation is not supported", the flat-module limit, and it is now
+// retired — but it is still not E.3.1's own rule: the same code answers a
+// misspelled module name. Full discrimination needs a diagnostic dedicated to the
+// E.3.1 primitives and is not this fixture's to buy; what it does buy is that the
+// source below never compiles.
 //
 //! lrm E.3.1
-//! reject E0204
+//! reject E0904
 module annex_e_unsupported_cccs(p, n);
   inout p, n; electrical p, n;
   // Third argument is a controlling INSTANCE name, which E.3.1 has no way to pass.

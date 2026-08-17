@@ -461,6 +461,16 @@ pub const ParamDecl = struct {
     is_local: bool = false, // §3.4.5 localparam
     /// §3.4.4 array parameter dimensions; empty for a scalar.
     dims: []const Dim = &.{},
+    /// §6.3 this parameter's value came from an instance parameter value
+    /// assignment (or a paramset), not from its own declaration. Set only by
+    /// `ir/elaborate.zig`, when it turns a flattened child's parameter into a
+    /// `localparam` carrying the override as its default.
+    ///
+    /// It is the one thing that distinguishes the two halves of §3.4.2: a
+    /// declared default is judged only for well-formed BOUNDS (E0347), while
+    /// "the parameter value shall be within the range" is a rule about a value
+    /// somebody supplied — and until this pass existed, no value ever was.
+    is_override: bool = false,
     /// LRM §3.4.2 value ranges (from/exclude). CRITICAL: these are parsed here
     /// but historically DROPPED before codegen. Class 6 (proof.zig) needs them —
     /// carry them through to Lower.ParamInfo.
@@ -586,6 +596,67 @@ pub const AnalogBlock = struct {
     main_tok: u32 = 0,
 };
 
+/// One port connection of a module instance. LRM §6.2.2 (A.4.1
+/// ordered_port_connection / named_port_connection).
+///
+/// Both spellings are this one row. `name == .none` is the ORDERED form, where
+/// the row's position in the list picks the port; a name is the `.p(expr)` form,
+/// where it does. `expr == .none` is §6.2.2's UNCONNECTED port, and it is
+/// reachable from both — a blank in an ordered list (`u(a, , b)`, the expression
+/// is optional in A.4.1) and `.p()` with nothing in the parentheses. §9.19
+/// `$port_connected` is exactly this field being `.none` or not.
+pub const PortConn = struct {
+    name: StrId = .none,
+    expr: ExprId = .none,
+    main_tok: u32 = 0,
+};
+
+/// One `#(...)` entry of a module instance. LRM §6.3 (A.4.1
+/// list_of_parameter_assignments), both arms: `name == .none` is the ordered
+/// form ("in the order of their declaration"), a name is `.p(expr)`.
+pub const ParamOverride = struct {
+    name: StrId = .none,
+    value: ExprId = .none,
+    main_tok: u32 = 0,
+};
+
+/// One `defparam` assignment. LRM §6.3.1 (A.1.4 parameter_override, A.2.4
+/// defparam_assignment `hierarchical_parameter_identifier = constant_expression`).
+///
+/// `path` is the WHOLE dotted left-hand side interned as one string, joined by
+/// `Elaborate.sep` — which is the same '.' the source wrote, so the key of a
+/// defparam and the flat name elaboration gives the parameter it names are the
+/// same string and applying one is a map lookup. `value` is a constant
+/// expression over parameters "declared in the same module as the defparam
+/// statement" (§6.3.1), so it is cloned in the DECLARING module's namespace.
+pub const Defparam = struct {
+    path: StrId,
+    value: ExprId,
+    main_tok: u32 = 0,
+};
+
+/// A module instance. LRM §6.2.2 (A.4.1 module_instantiation).
+///
+/// One `Instance` per `module_instance`, so `child #(2.0) a(x), b(y);` is two
+/// rows sharing one `params` slice — which is the clause's "one or more module
+/// instances can be specified in a single module instantiation statement", and
+/// the reason the overrides are copied into both rather than owned by a
+/// statement node nothing else would read.
+pub const Instance = struct {
+    /// §6.2.2 module_or_paramset_identifier — resolved at elaboration, because
+    /// the definition may be declared after the use (A.1.2 puts no order on the
+    /// descriptions of a source_text).
+    module: StrId,
+    name: StrId,
+    /// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`
+    /// — an ARRAY of instances; `null` for a single one. Folded at elaboration,
+    /// where the constant expression can be reduced.
+    range: ?Dim = null,
+    params: []const ParamOverride = &.{}, // §6.3
+    ports: []const PortConn = &.{}, // §6.2.2
+    main_tok: u32 = 0,
+};
+
 /// A module. LRM §6.2 (A.1.2 module_declaration). Declarations are kept in
 /// typed, source-ordered slices rather than a mixed item list: lowering wants
 /// them by kind, and a declaration is not a statement.
@@ -602,6 +673,14 @@ pub const ModuleDecl = struct {
     vars: []const VarDecl = &.{}, // §3.2/§3.3
     nets: []const NetDecl = &.{}, // §3.6.3
     branches: []const BranchDecl = &.{}, // §3.12
+    /// §6.2.2 child instances, in source order. Consumed by `ir/elaborate.zig`,
+    /// which flattens them away — nothing after elaboration sees this field.
+    instances: []const Instance = &.{},
+    /// §6.3.1 `defparam`s written in this module, in source order. Also consumed
+    /// by `ir/elaborate.zig` and also invisible after it: a defparam is an
+    /// override applied to an instance, and after the flatten the instance is
+    /// gone and its parameter carries the value.
+    defparams: []const Defparam = &.{},
     genvars: []const StrId = &.{}, // §3.5 (unrolling evidence, §6.6.1)
     /// §5.10.4 named events (A.2.1.3 event_declaration). Names only: an event
     /// carries no value, only a per-timepoint triggered/not flag, which lowering
@@ -816,6 +895,32 @@ pub const SourceFile = struct {
     natures: []const NatureDecl = &.{}, // §3.6.1
     paramsets: []const ParamsetDecl = &.{}, // §6.4
 
+    /// Annex E — how many LEADING entries of `modules` are shipped Table E.1
+    /// SPICE primitives rather than the user's own declarations.
+    ///
+    /// The primitives are prepended as source (`Preprocessor.spice_primitives`),
+    /// so they parse into ordinary `ModuleDecl`s and every clause about a module
+    /// applies to them unchanged — which is the point of shipping them that way.
+    /// Two questions still have to tell them apart, and both are answered by this
+    /// count plus the fact that the prelude comes first:
+    ///
+    ///   - E.3.3: "a module or paramset defined in the Verilog-AMS will always be
+    ///     selected in favor of a SPICE primitive ... using exactly the same
+    ///     name". A lookup searches `userModules()` before the prefix.
+    ///   - §6.2.2's top is a module the user wrote. Nineteen uninstantiated
+    ///     primitives are otherwise nineteen roots of the instance graph.
+    ///
+    /// Zero when the prelude is off (`--no-std-defs`), which is also why the
+    /// parser does not set it: it is a property of the compilation, not of the
+    /// text.
+    builtin_modules: u32 = 0,
+
+    /// `modules` minus the Annex E prelude — the declarations that came from the
+    /// source the user named. See `builtin_modules`.
+    pub fn userModules(self: *const SourceFile) []const ModuleDecl {
+        return self.modules[@min(self.builtin_modules, self.modules.len)..];
+    }
+
     pub const empty: SourceFile = .{};
 
     /// Frees the append-only stores. A no-op in practice (arena), present so an
@@ -856,6 +961,45 @@ pub const SourceFile = struct {
 
     pub fn intern(self: *SourceFile, gpa: std.mem.Allocator, s: []const u8) !StrId {
         return self.strings.intern(gpa, s);
+    }
+
+    /// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`,
+    /// or null. "A derived nature ... can override the attributes of the base
+    /// nature", so the FIRST hit walking up the chain wins.
+    ///
+    /// Here rather than in a stage because two stages ask: lowering, for
+    /// `abstol`/`access`/`units` and for §5.5.3's arbitrary attribute reference,
+    /// and elaboration, for Annex E's nature-neutral access functions.
+    pub fn natureAttrExpr(self: *const SourceFile, name: StrId, attr: []const u8) ?ExprId {
+        var want = name;
+        var hops: u32 = 0;
+        while (hops < 16) : (hops += 1) {
+            const nat = for (self.natures) |*n| {
+                if (n.name == want) break n;
+            } else return null;
+            for (nat.attrs) |a| {
+                if (std.mem.eql(u8, self.str(a.name), attr)) return a.value;
+            }
+            if (nat.parent == .none) return null;
+            // A.1.6 `parent_nature ::= nature_identifier | discipline_identifier
+            // . potential_or_flow`. In the second form the parent names a
+            // DISCIPLINE, so the walk continues at whichever nature that
+            // discipline binds to the named half (§3.6.2.6).
+            if (nat.parent_access) |half| {
+                const d = for (self.disciplines) |*x| {
+                    if (x.name == nat.parent) break x;
+                } else return null;
+                const bound = switch (half) {
+                    .potential => d.potential,
+                    .flow => d.flow,
+                };
+                if (bound == .none) return null;
+                want = bound;
+                continue;
+            }
+            want = nat.parent;
+        }
+        return null;
     }
 
     /// Convenience: append an expression row.
