@@ -995,6 +995,7 @@ pub const Gen = struct {
                 .int => "i64",
                 .str => "[]const u8",
             };
+            try self.checkParamDefault(p);
             try self.w("    {s}: {s} = {s},\n", .{ self.p_names[i], ty, try self.paramDefault(p, Analysis.tyOfParam(p.ty)) });
             if (self.p_given[i]) {
                 try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.p_names[i]});
@@ -1109,8 +1110,61 @@ pub const Gen = struct {
         try self.w("}}\n\n", .{});
     }
 
+    /// W1050 — the one place a parameter whose default VerA never computes is
+    /// said out loud. Rendering `0` for such a field is what shipped four wrong
+    /// parameters in a real model, and the reason it was invisible is that
+    /// nothing complained.
+    ///
+    /// A `0` initializer is honest under exactly two conditions, and this is
+    /// the negation of both:
+    ///   - the two folds in `paramDefault` answered, so `0` is the real value;
+    ///   - `derive()` overwrites the field, which it does whenever `f64Const`
+    ///     can render the default over the model card (§6.3.4).
+    /// What is left is a default nothing in the pipeline evaluates. It is
+    /// reachable only through a ch9 call — §9.10 `$temperature`, §9.18
+    /// `$simparam` — which is not a §3.4.1 constant_expression and has no
+    /// compile-time value to fold to; the field is then the HOST's to write,
+    /// which is a promise better made in a warning than in silence.
+    ///
+    /// A warning, not a refusal: refusing would reject a model whose default
+    /// reads a simulator quantity, and no evidence in this tree says those do
+    /// not exist. `--deny=W1050` is there for a host that wants the stricter
+    /// reading of §3.4.1.
+    fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
+        const bag = self.diags orelse return;
+        if (!bag.enabled(.W1050)) return;
+        if (p.folded != null or self.an.foldConst(p.default, 0, true) != null) return;
+        if (try self.f64Const(p.default, 0) != null) return;
+        var d = bag.build(.codegen, .W1050, self.lower.tokenSpan(p.tok));
+        d.msg("`{s}`", .{p.name});
+        d.point("this default has no compile-time value, so the field is 0", .{});
+        d.help("write the model card field before the first solve, or give `{s}` a constant default", .{p.name});
+        try d.emit();
+    }
+
+    /// §3.4 the field initializer: the parameter's value under the DECLARED
+    /// defaults, which is what `Model{}` promises a host that overrides nothing.
+    ///
+    /// Two folds answer this, and the second is not a duplicate of the first.
+    /// `foldConst` walks the MIR, where §4.2.12's `?:` is not a value at all —
+    /// it is a CFG diamond and a phi (`Lower.lowerTernary`), which no
+    /// value-level fold can see through. `Lower.constEval` folded the same
+    /// default over the AST at declaration time, before the diamond existed,
+    /// and §3.4 defines the default as exactly that fold; `ParamInfo.folded`
+    /// carries its result here. The MIR fold runs first, so the two agree
+    /// wherever both can answer and only the residue reaches the second.
     fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
         const c = self.an.foldConst(p.default, 0, true);
+        if (c == null) if (p.folded) |k| return switch (want) {
+            .real => try self.fmtF64(k.asReal()),
+            // From the i64 side rather than through the f64 carrier: `folded`
+            // kept the integer, so nothing has to be rounded back out of it.
+            .int => try std.fmt.allocPrint(self.arena, "{d}", .{k.asInt()}),
+            .str => switch (k) {
+                .str => |s| try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
+                else => "\"\"",
+            },
+        };
         return switch (want) {
             .real => try self.fmtF64(if (c) |k| k.f else 0.0),
             .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| @as(i64, @intFromFloat(@round(k.f))) else 0}),
@@ -2624,6 +2678,17 @@ pub const Gen = struct {
     // value can carry: `select`, `phi` and `fmod` get a diagnostic, not silence.
     // Ceiling: unlike `foldConst` this never looks through a parameter's
     // DEFAULT, because the host overrides parameters at run time.
+    //
+    // ponytail: control flow is where the §6.3.4 half stops. `parameter real k
+    // = (w > 2) ? 1.5 : 2.5;` lowers to a diamond and a phi, so no `derive()`
+    // line is written for it and `k` keeps the value it has under `w`'s
+    // DECLARED default even if the host overrides `w`. The value is at least
+    // right (`ParamInfo.folded` carries `constEval`'s answer into
+    // `paramDefault`); what is missing is that it follows. The upgrade path is
+    // to render the diamond here as a Zig `if`, which is a statement and not an
+    // expression fragment — so it needs `emitDerive` to take a rendered
+    // STATEMENT, not the `[]const u8` expression this returns. No model in the
+    // tree asks; the day one does, that is the shape.
     pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
         if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
@@ -5692,6 +5757,45 @@ test "codegen: §12.32.3 an unregistered system function is W0852 and 0.0, not a
     // Compiles. A refusal here would reject legal source (§2.8.3), which is the
     // regression this line exists to catch.
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
+}
+
+test "codegen: §3.4 a default with no compile-time value is W1050, a derived one is silent" {
+    // The guard on the `0` field initializer, and the line it must NOT cross.
+    // `hot` reads §9.18's simulator table, which has no value until the host
+    // runs — nothing folds it and nothing derives it, so `Model{}.hot` ships as
+    // 0 and the host has to write the field. `warm` is 2*`base`, which §6.3.4
+    // makes a `derive()` line; the same `0` initializer is honest there because
+    // `derive` overwrites it, so warning about it would be noise on every
+    // dependent parameter in the suite.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module pd(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real base = 3.0;
+        \\  parameter real warm = 2.0 * base;
+        \\  parameter real hot  = $simparam("gmin", 1e-12);
+        \\  analog I(p, n) <+ V(p, n) * (warm + hot);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    var hits: usize = 0;
+    for (h.bag.messages()) |mi| {
+        const e = h.bag.get(mi);
+        if (e.code != .W1050) continue;
+        hits += 1;
+        try std.testing.expectEqual(diag.Stage.codegen, e.stage);
+        try std.testing.expect(e.span.end > e.span.start); // the declaration
+    }
+    try std.testing.expectEqual(@as(usize, 1), hits);
+    // A warning, never a refusal: the device still compiles, because §9.18 says
+    // nothing that makes this source illegal.
+    try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
+    // And `warm` is the derived half of the claim: initializer 0.0, `derive`
+    // writing the §6.3.4 value over it.
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.warm = (2.0) * (model.base);") != null);
 }
 
 test "codegen: §9.13 the emitted draws satisfy the two rules every fixture asserts" {
