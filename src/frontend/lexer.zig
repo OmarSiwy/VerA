@@ -375,7 +375,10 @@ fn isIdentChar(c: u8) bool {
 
 /// §2.6.1 binary/octal/hex/decimal digit for `radix`, plus `_`, plus the
 /// four-state digits x/X/z/Z/? (lexed here, rejected by `parseInt`).
-fn isBasedDigit(c: u8, radix: u8) bool {
+/// `pub` for radix 16, the widest alphabet: the parser asks "is this glued text
+/// spelled entirely in digits of SOME base" to tell §2.6.1 Example 1's `4af`
+/// (a based number missing its base format) from `1g` (a number, an identifier).
+pub fn isBasedDigit(c: u8, radix: u8) bool {
     return switch (c) {
         '_', 'x', 'X', 'z', 'Z', '?' => true,
         '0'...'9' => c - '0' < radix,
@@ -828,6 +831,32 @@ test "scale factors: M is 1e6, m is 1e-3 (§2.6.2 Table 2-1)" {
     try testing.expectEqual(@as(f64, 1.2e12), try parseReal("1.2E12"));
     try testing.expectEqual(@as(f64, 1234.567), try parseReal("1_234.5_67"));
     try testing.expectEqual(@as(f64, 236.123763e-12), try parseReal("236.123_763_e-12"));
+}
+
+test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.2 * 1e-9" {
+    // THE RULE IN FORCE, decided rather than inherited. §2.6.2 describes the
+    // scale factor arithmetically ("24.7K, which indicates 24.7 multiplied by
+    // 10 to the third power"), which reads as mantissa × scale — two IEEE-754
+    // roundings, one for the mantissa and one for the product. This engine
+    // rewrites the suffix into an exponent and hands the JOINED text to
+    // `parseFloat` instead, so the value is rounded once, from the decimal
+    // digits the user wrote. That is a strengthening §2.6.2 does not forbid:
+    // the exactly-representable cases (1.3k) are unchanged and the rest land
+    // on the nearest double to the literal rather than to a product.
+    //
+    // It matters because it is observable: 2376 of the 9990 two-significant-
+    // digit scaled literals differ between the two spellings by 1 ulp, and the
+    // difference reaches emitted device text — see the `transition(V(p,n), 0,
+    // 2.2n)` case in src/backend/codegen.zig, which pins `0.0000000022`.
+    // Parser and lexer used to disagree here, each with its own decoder.
+    try testing.expectEqual(@as(f64, 2.2e-9), try parseReal("2.2n"));
+    // Both operands must be runtime `f64`s: Zig folds a comptime_float product
+    // at arbitrary precision, which is exactly the double rounding under test.
+    const mantissa: f64 = 2.2;
+    const scale: f64 = 1e-9;
+    try testing.expect((try parseReal("2.2n")) != mantissa * scale);
+    // Deleting the second decoder is the point: nothing may re-spell Table 2-1.
+    try testing.expectEqual(@as(f64, 1.3e3), try parseReal("1.3k"));
 }
 
 test "parseInt decodes every base (§2.6.1)" {

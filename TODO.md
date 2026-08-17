@@ -7,7 +7,7 @@ wave 7:
 ```
 1150/1152 pass · 2 XFAIL · 0 FAIL · 0 CANNOT RUN
 0 fixtures compile and assert NOTHING
-zig build test: 205/205
+zig build test: 206/206
 ```
 
 The waves are done; `git log` carries the per-wave history. This file is the
