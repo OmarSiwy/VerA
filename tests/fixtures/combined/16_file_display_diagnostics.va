@@ -12,10 +12,13 @@
 //
 // The resistor is Ohm's law at 1.5 V into 1 kOhm: 1.5 mA.
 //
-// NOT asserted: the value of `fd`. IEEE 1364 has $fopen return a non-zero
-// descriptor on success, but this engine lowers the whole file-I/O family to a
-// no-op returning 0, so `fd != 0` would be an assertion about a stub rather
-// than about the LRM.
+// NOT asserted: the value of `fd`. §9.5.1 fixes it — bit 31 set, a channel
+// number above the three pre-opened streams — and that is a real descriptor
+// here, not a placeholder; it is simply not what this fixture is for.
+// 07_file_open_close.va pins both halves of the encoding and
+// 08_file_and_display_side_effects.va pins the non-zero, both on their own.
+// What this file combines is a §9.5 open with a §9.4 print and a §9.6 severity
+// task in one analog block, and the digits it asserts are §4.2.5's and §9.7.1's.
 //
 //! bias V(p) = 1.5
 `include "check.vh"

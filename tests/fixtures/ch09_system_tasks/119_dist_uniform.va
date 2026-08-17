@@ -28,7 +28,6 @@
 // perfectly; with it, a constant-returning implementation fails.
 //
 //! lrm 9.13.2
-//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
 `include "check.vh"
 module ch09_dist_uniform(p, n);
   inout p, n; electrical p, n;

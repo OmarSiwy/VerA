@@ -43,15 +43,15 @@ clause in its header but does not cite it is not credited here.
 | 5.6.1 Direct branch contribution statements | — no fixture cites the parent. Syntax 5-5's own restriction (a conditionally executed contribution may not contain an analog filter) is cited from §5.8.1 by `conditional_filter_invalid.va` |
 | 5.6.1.1 Relations | `potential_probe.va`, `single_terminal_branch.va` |
 | 5.6.1.2 Evaluation | `potential_source.va`, `rlc.va` |
-| 5.6.1.3 Value retention | `value_retention.va` **xfail** — the clause's own Example 2, answer 7.0, and the only fixture in the tree that carries the numeric rule. The retention ARITHMETIC is now implemented (`lower.zig discardOpposite`: a contribution of the opposite kind zeroes the other accumulator, and a zeroed accumulator emits no row, so the device carries one potential source of 0+3+4 and no flow source — 8.0 and the stray 2.0 are both gone). What is left is the READ: `V(p,n)` is the node difference (§5.4.1), which needs a converged solution, and `tb.zig` writes the operating point into `x[]` without a Newton loop |
+| 5.6.1.3 Value retention | `value_retention.va` — the clause's own Example 2, answer 7.0, and the only fixture in the tree that carries the numeric rule. Green on both halves: the ARITHMETIC (`lower.zig discardOpposite` — a contribution of the opposite kind zeroes the other accumulator, and a zeroed accumulator emits no row, so the device carries one potential source of 0+3+4 and no flow source, with 8.0 and the stray 2.0 both gone) and the READ (`V(p,n)` is the node difference, §5.4.1, so it needs the converged solution `//! solve` asks for) |
 | 5.6.2 Examples | `constant_current_source.va` |
 | 5.6.2.1 The four controlled sources | `voltage_controlled_current.va` cites the clause. The other three of the four are written against §5.4.1/§5.4.2 instead: `controlled_voltage_source.va`, `current_controlled_voltage.va`, `current_controlled_current.va`, and `controlled_sources.va` (all four off one sensed branch) |
 | 5.6.3 Resistor and conductor | `resistor.va`, `conductor.va` |
 | 5.6.4 RLC circuits | `rlc.va` (three contributions into one branch, read at the dc operating point where §4.5.3/§4.5.4 fix the reactive terms at zero) |
 | 5.6.5 Switch branches | `switch_branch.va`, `unassigned_switch_arm.va`, `retained_conditional_contribution.va`, `implicit_zero_contribution.va` |
 | 5.6.6 Implicit Contributions | `implicit_fixed_point.va` (`I(b)` on both sides; the operating point is placed on the fixed point so the right-hand side must return it) |
-| 5.6.7 Indirect branch contribution statements | `indirect_equation_lhs_invalid.va` (E0414, a variable left of `==`); `conditional_indirect_invalid.va` (E0412, indirect under a non-constant guard). `indirect_contribution.va` **xfail** — VerA's generated testbench forces every unknown to its declared operating point instead of solving, so an indirect contribution's target cannot move: `V(p,n)` reads 0 |
-| 5.6.7.1 Multiple indirect contributions | `multiple_indirect.va` **xfail** — same root cause: the testbench forces every unknown to its declared operating point instead of solving, so `V(x)`, `V(y)` and `V(z)` all read 0. The fixture is a nonsingular 3×3 system with the pairings rotated, which is what the clause is about |
+| 5.6.7 Indirect branch contribution statements | `indirect_equation_lhs_invalid.va` (E0414, a variable left of `==`); `conditional_indirect_invalid.va` (E0412, indirect under a non-constant guard). `indirect_contribution.va` — green: `//! bias` pins only the probe `V(ctrl)`, `//! solve` leaves the target free, and the constraint `V(ctrl) == 2*V(p,n)` puts the branch at 0.75 |
+| 5.6.7.1 Multiple indirect contributions | `multiple_indirect.va` — green: a nonsingular 3×3 system with the pairings rotated one place off the obvious one, which is what the clause is about, solved to `V(x)`, `V(y)`, `V(z)` = 0.5, 0.25, 0.125 |
 | 5.6.7.2 Indirect and direct contribution | `indirect_and_direct.va` (E0409) |
 | 5.6.8 Contributing hierarchically | — heading only in the LRM; no body text and no fixture |
 | 5.6.8.1 Contributions to branches between hierarchical nets | `hierarchical_contribution_unsupported.va` **xfail** — VerA's parser has no hierarchical net reference: the `.` in `V(drv.x) <+ 1.8` dies at E0207 (expected `)`), and the instantiation the path resolves through is refused at E0204 anyway |
@@ -101,14 +101,12 @@ reference (the dot PARSES now; what is missing is the instance tree it resolves
 in, E0901). `named_event_unsupported.va` was the third and is now green. The rest
 are semantic:
 `two_named_branches.va` (two named branches over one net pair are collapsed
-into one), and `value_retention.va` / `indirect_contribution.va` /
-`multiple_indirect.va`, which now share one root cause: the generated testbench
-forces every unknown to its declared operating point instead of solving, so no
-indirect target can move and no retained POTENTIAL reaches the nodes it is
-imposed on. (§5.6.1.3's arithmetic itself is implemented; a retained FLOW needs
-no solve, because a flow source's branch flow has no node-derived value and
-§5.6.1.2's accumulator IS the answer — which is what closed
-`ch01_intro/{04,07}`.)
+into one). `value_retention.va`, `indirect_contribution.va` and
+`multiple_indirect.va` shared one root cause and are all three green now: the
+generated testbench solves, so a §5.6.7 target moves to its constraint's solution
+and a retained POTENTIAL reaches the nodes it is imposed on. Each carries
+`//! solve`, which is the line that says the unknown under test is the device's to
+determine — see README.md.
 
 That last group is the one entry here that is a *harness* limitation rather than
 a compiler one, and it is worth keeping separate: all three files describe

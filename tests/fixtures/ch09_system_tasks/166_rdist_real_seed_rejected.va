@@ -23,8 +23,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.13.2
+//! reject E0816
 //! reject seed argument shall be an integer
-//! xfail VerA refuses the whole §9.13 family with E0801 at the function name, so no argument is ever examined and the seed's type is never checked
 module ch09_rdist_real_seed_rejected(p, n);
   inout p, n; electrical p, n;
   real c;

@@ -32,7 +32,7 @@
 //! lrm D.1
 //! bias V(p) = 0.75
 //! print none
-//! xfail VerA's testbench writes `//! bias` straight into x[] and never solves (src/backend/tb.zig), so V(out) stays 0 and no 5.6.7 constraint is ever enforced
+//! solve
 `include "check.vh"
 module annex_a_indirect(p, out);
     inout p, out;

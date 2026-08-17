@@ -15,7 +15,6 @@
 //! bias V(p) = 0.25
 //! lrm 9.5.1
 //! lrm 9.10
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers the 0 that §9.5.1 reserves for failure, and $fdisplay/$fclose are no-ops. The two §9.10/§1.3.1 checks below already pass — only the descriptor is missing
 `include "check.vh"
 module combined_file_and_display_side_effects(p, n);
   inout p, n; electrical p, n;

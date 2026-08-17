@@ -29,26 +29,23 @@
 // p is an inout carrying its own resistor so the module has a second terminal
 // and the input port is not the whole device; it plays no part in the digit.
 //
-// The `//! xfail` below is the ONE case in this suite where the gap is the
-// harness and not the compiler, so it is worth being precise about what was
-// measured. VerA does honour the contribution: with `//! residual` the same
-// module prints
+// WHY `//! solve` IS HERE AND NO BIAS IS. VerA has always stamped the
+// contribution correctly — with the residual printed the module shows
 //
 //   res[i] = -1.000000e-3        d res[i]/d x[i] = 1.000000e-3
 //
-// which is exactly the 1 mA source and the 1 kohm conductance derived above,
-// stamped at the x[i] = 0 evaluation point. Solving that one row gives V(i) = 1.
-// What is missing is the solve: src/backend/tb.zig is a residual-and-Jacobian
-// harness (see its `renderRunner`, and README.md "one operating point, every
-// unknown at zero"), it has no Newton loop, so V(i) stays at the initial guess
-// and no assertion inside the analog block can see the stamp. The assertion is
-// left stating the operating point, because that is the requirement; the day
-// the harness solves, this XPASSes and the marker comes off.
+// exactly the 1 mA source and the 1 kohm conductance derived above. But a
+// residual is not an answer: the number this fixture is about is the one that
+// makes that row zero, and reaching it takes a solve. `//! solve` is the line
+// that says so — it unties every unknown no other directive names, so V(i) is
+// the device's to determine and not the harness's to ground. Biasing i instead
+// would delete the whole test, which is the mistake ch06_hierarchy/input_port.va
+// makes and this file exists to correct.
 //
 //! lrm G.7
 //! lrm 5.6.1
 //! print none
-//! xfail the generated testbench never solves — src/backend/tb.zig evaluates the residual and Jacobian at each declared operating point and has no Newton loop, so an unbiased unknown stays at the 0.0 initial guess and V(i) reads 0, not the 1.0 its own KCL row gives. VerA itself stamps the contribution correctly: res[i] = -1e-3 with d res[i]/d x[i] = 1e-3
+//! solve
 `include "check.vh"
 module annex_g_input_port_contribution(i, p);
   input i;

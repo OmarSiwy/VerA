@@ -19,8 +19,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.13.2
+//! reject E0816
 //! reject smaller than the end value
-//! xfail VerA refuses the whole §9.13 family with E0801 at the function name, so the start/end pair is never compared
 module ch09_rdist_uniform_start_end_rejected(p, n);
   inout p, n; electrical p, n;
   integer seed;

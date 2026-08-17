@@ -14,7 +14,6 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.6
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers 0 (bit 31 clear) and $fflush is a no-op. lower.zig:2362 records the reason — the file family "needs a descriptor the compiled device has no way to own"
 `include "check.vh"
 module ch09_atomic_fflush(p, n);
   inout p, n; electrical p, n;

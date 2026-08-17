@@ -23,6 +23,13 @@
 // flow-only one) are pinned on the standard-named disciplines in
 // signal_flow_flow_access_rejected.va and its mirror.
 //
+// The BINDING fixes the port direction too, so the header is not free to write
+// `inout` on all three: §1.3.4.1/§1.3.4.2 restrict a single-nature net to an
+// `input` or an `output` port (E0360), the direction being the direction of the
+// one quantity. `vn` is read and so is an `input`; `cn` is driven and so is an
+// `output` — driving an `input` is E0425, the sibling rule. Only `p`, whose
+// electrical_d is conservative, keeps `inout`.
+//
 // No flow PROBE is asserted: `AnnexDI(p) <+ ...` makes (p, gnd) a flow source
 // (§5.4.2.2) and what a flow probe of one reads back is not a value Annex D
 // fixes. Nor are `units`, `abstol` or the idt_nature/ddt_nature links — they are
@@ -35,6 +42,8 @@
 //! lrm D.1
 //! lrm 3.6.1
 //! lrm 3.6.2
+//! lrm 1.3.4.1
+//! lrm 1.3.4.2
 //! bias p = 0.7
 //! bias vn = 0.4
 `include "check.vh"
@@ -81,7 +90,9 @@ discipline current_d;
 enddiscipline
 
 module annex_d_electrical(p, vn, cn);
-  inout p, vn, cn;
+  inout p;
+  input vn;
+  output cn;
   electrical_d p;
   voltage_d vn;
   current_d cn;

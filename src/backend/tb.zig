@@ -90,6 +90,24 @@ pub const Directives = struct {
     psweeps: []const Sweep = &.{},
     /// §4.6.1.
     analysis: Analysis = .dc,
+    /// `//! solve`: the unknowns no other directive names are the DEVICE's to
+    /// determine (§5.6 Newton on its own residual), not the harness's.
+    ///
+    /// Off by default, and that default is a NETLIST statement rather than
+    /// timidity. A .va compiled alone is not a circuit: nothing says what its
+    /// terminals connect to, so the harness supplies the only netlist it can —
+    /// every unknown no `//!` line names is tied to the reference. That is what
+    /// makes `//! bias V(p) = 0.5` on a two-terminal resistor mean "0.5 V
+    /// ACROSS it" and not "one lead driven, the other left open", which is what
+    /// a solve of the isolated device would answer instead: KCL through an open
+    /// lead is zero current, so the far node follows the near one and the branch
+    /// potential comes out 0. 100 fixtures state a rule that way.
+    ///
+    /// A fixture whose POINT is that the solver determines something says so
+    /// with this line. §5.6.7's indirect contribution is the case that cannot be
+    /// written any other way: its target IS a constraint's solution, so a
+    /// fixture that declared the target would be asserting its own input.
+    solve_free: bool = false,
     /// Print the residual and its Jacobian after each point's display output.
     /// `//! print none` leaves the transcript to the model's own `$strobe`s,
     /// which is what a fixture that tests §9.4 formatting wants.
@@ -173,6 +191,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         } else if (eq(kw, "time")) {
             d.times = try parseNumbers(arena, rest);
             saw_time = true;
+        } else if (eq(kw, "solve")) {
+            // A bare flag, and it composes with `bias`: `bias` still pins what
+            // it names, `solve` frees only the rest. So a fixture that needs one
+            // terminal grounded and another solved writes both lines, and no
+            // per-unknown list is needed to say it.
+            if (rest.len != 0) return error.BadSyntax;
+            d.solve_free = true;
         } else if (eq(kw, "analysis")) {
             d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
         } else if (eq(kw, "reject")) {
@@ -236,6 +261,15 @@ fn digits(s: []const u8) bool {
 /// how a Verilog-A author already writes it and how the runner indexes it; both
 /// are accepted so a fixture is not forced to learn a third spelling.
 ///
+/// `I(...)` is NOT the same unknown as `V(...)` and does not strip to the bare
+/// name. §5.4.2 makes a flow its OWN unknown — lower.zig `flowUnknown` interns
+/// it as `flow(hi,lo)`, `portFlowUnknown` as `flow(<p>)` — so `I(a)` is the
+/// branch (a, ground) flow, spelled `flow(a,gnd)` because §1.3.1.1 collapses
+/// every ground onto the one reference node named `gnd`, and `I(<a>)` is the
+/// §5.4.3 port flow. Stripping to `a` bound the node POTENTIAL instead, which is
+/// a different quantity that happens to have a name in scope: silently the wrong
+/// number rather than a miss `ix()` could report.
+///
 /// `ix()` looks the result up in the emitted `U` enum, whose members codegen
 /// built with `naming.sanitize`, so a name that is not a legal Zig identifier
 /// has to go through the same function — a §3.6.3 vector element is `p[0]` in
@@ -250,7 +284,15 @@ fn digits(s: []const u8) bool {
 fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     var s = raw;
     if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
-    if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
+    if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
+        const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
+        s = if (inner.len != 0 and inner[0] == '<')
+            try std.fmt.allocPrint(arena, "flow({s})", .{inner}) // §5.4.3 I(<p>)
+        else if (std.mem.indexOfScalar(u8, inner, ',') != null)
+            try std.fmt.allocPrint(arena, "flow({s})", .{inner})
+        else
+            try std.fmt.allocPrint(arena, "flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
+    }
     if (std.mem.startsWith(u8, s, "x[") and std.mem.endsWith(u8, s, "]")) s = s[2 .. s.len - 1];
     s = std.mem.trim(u8, s, " \t");
     if (s.len == 0 or std.zig.isValidId(s)) return s;
@@ -403,17 +445,25 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             }
             try w.raw("        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
         }
-        try w.print("        var x: [n_u]f64 = @splat(0.0);\n        var state = newState(&{s}, &inst);\n", .{mdl});
+        // `forced` is the other half of the operating point: which unknowns the
+        // HOST drives, as opposed to which ones the device's own equations
+        // determine. Newton needs the distinction; a bare evaluation did not.
+        // Its DEFAULT is the harness's netlist — every unknown tied to the
+        // reference — and `//! solve` is what unties the ones no line names.
+        try w.print(
+            "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n        var state = newState(&{s}, &inst);\n",
+            .{ if (d.solve_free) "null" else "0.0", mdl },
+        );
         for (d.bias) |b|
-            try w.print("        x[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+            try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try w.print("        x[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+            try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
                 // A short `wave` HOLDS its last value — that is how a step is
                 // written without repeating the level once per remaining time.
                 const v = wv.values[@min(k, wv.values.len - 1)];
-                try w.print("        x[ix(\"{f}\")] = {f};\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
+                try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
             }
             // §4.5.3 `ddt` divides by `dt`; the FIRST time is the DC point, so
             // it gets dt = 0 — which every operator kernel reads as "no history"
@@ -437,6 +487,11 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // clause's "if a parameter ... is changed during a sub-task ... the
             // analog initial block shall be re-executed" is exactly the case.
             try w.print("        inst.is_analog_initial = {};\n", .{k == 0});
+            // §5.6 the model is evaluated AT A SOLUTION: solve first, then let
+            // the model print. Every `//!` value is still exactly itself — it
+            // came in as a constraint row — and everything else is now the
+            // number the device's own equations put there.
+            try w.print("        solve(&x, &forced, &{s}, &inst);\n", .{mdl});
             try w.print("        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
@@ -693,6 +748,198 @@ const runner_body =
     \\    return true;
     \\}
     \\
+    \\/// Pin an unknown at the value a `//! bias`, `//! sweep` or `//! wave` line
+    \\/// gave it: the INITIAL GUESS Newton starts from, and the CONSTRAINT row it
+    \\/// keeps. Both, from one directive, because a directive that names a value
+    \\/// for an unknown is saying the host drives it.
+    \\fn set(x: *[n_u]f64, forced: *[n_u]?f64, comptime name: []const u8, v: f64) void {
+    \\    x[ix(name)] = v;
+    \\    forced[ix(name)] = v;
+    \\}
+    \\
+    \\/// §3.6.1.2 `abstol` — "the largest signal value that can be safely
+    \\/// ignored" — per unknown, which is the absolute half of Newton's stopping
+    \\/// test. The device declares it (codegen reads it off the net's discipline,
+    \\/// §3.6.2.3 override included); the fallback is annex D's own defaults for
+    \\/// `Voltage` and `Current`, for a hand-written device that declares neither
+    \\/// table.
+    \\const u_abstol: [n_u]f64 = if (@hasDecl(D, "u_abstol")) D.u_abstol else blk: {
+    \\    var a: [n_u]f64 = @splat(1e-6);
+    \\    if (@hasDecl(D, "u_kinds")) for (D.u_kinds, 0..) |k, i| {
+    \\        if (k != .voltage) a[i] = 1e-12;
+    \\    };
+    \\    break :blk a;
+    \\};
+    \\
+    \\/// The relative half. Tighter than a circuit simulator's default reltol
+    \\/// because a fixture asserts a digit derived from the LRM, not a waveform:
+    \\/// the systems here are small enough that the extra decades cost nothing.
+    \\const solve_reltol = 1e-12;
+    \\
+    \\/// A cap, not a budget. Every fixture system converges in one step (linear)
+    \\/// or a handful; reaching this means the iteration is not converging, and
+    \\/// that has to be LOUD — see the exit below.
+    \\const solve_max_iter = 100;
+    \\
+    \\/// §5.6 THE SOLVE, and it is a solve.
+    \\///
+    \\/// Verilog-A semantics are defined AT A SOLUTION of the nodal equations,
+    \\/// never at an arbitrary point. §5.6.7's indirect contribution is a
+    \\/// CONSTRAINT the simulator satisfies rather than an assignment — there is
+    \\/// no way to express it by evaluating anything — and §5.4.2.2's "the
+    \\/// potential of a source branch may be read" is a question about what the
+    \\/// solver settled on. A harness that wrote `//! bias` into x[] and stopped
+    \\/// could only ever hand a fixture back the number the harness itself just
+    \\/// wrote.
+    \\///
+    \\/// So: Newton-Raphson on the residual the device stamps, with the Jacobian
+    \\/// the forward-mode `Dual` above already carries. Dense LU with partial
+    \\/// pivoting — a fixture's system is under ~10 unknowns, so a sparse
+    \\/// factorisation or an ordering heuristic would be code with nothing to do.
+    \\///
+    \\/// ONE RULE BEYOND TEXTBOOK NEWTON, and it is what makes an isolated device
+    \\/// solvable at all. A .va compiled alone is NOT a circuit. `I(p,n) <+ 0.0`
+    \\/// stamps two identically-zero rows; a two-terminal module that never
+    \\/// references ground leaves its common mode undetermined however nonlinear
+    \\/// it is. Those are free directions of the device's own equations, not
+    \\/// solver failures — a host pins them by CONNECTING the device to
+    \\/// something. So a column with no usable pivot takes dx = 0 and its unknown
+    \\/// HOLDS the operating point the `//!` lines declared, which is exactly the
+    \\/// behaviour this harness had before it could solve at all. Convergence is
+    \\/// then judged on the unknowns the system does determine, and only those.
+    \\///
+    \\/// ponytail: no gmin stepping, no source stepping, no continuation. Every
+    \\/// system in the suite converges from the declared guess. Add the minimum
+    \\/// and name it here if one ever does not.
+    \\///
+    \\/// ponytail: the RESISTIVE residual only. §5.6.1.2's reactive half would
+    \\/// need `q(x)` plus the `q` of the last accepted step, and nothing asks for
+    \\/// it: a node whose only path is a capacitance stamps an all-zero `eval`
+    \\/// row, so it takes the no-pivot branch and holds its declared value the
+    \\/// way it always did. Fold q in when a fixture needs a transient solve.
+    \\fn solve(x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\    // Nothing to determine: every unknown is one a `//!` line named, or the
+    \\    // reference the harness ties the rest to without `//! solve`. x already
+    \\    // holds the answer. Returning here is not only the cheap path — it is
+    \\    // what keeps a `//! print none` fixture evaluated exactly as often as it
+    \\    // was before there was a solver, so no §9.4 transcript moves.
+    \\    for (forced) |f| {
+    \\        if (f == null) break;
+    \\    } else return;
+    \\    var worst: usize = 0;
+    \\    var worst_dx: f64 = 0.0;
+    \\    var iter: usize = 0;
+    \\    while (iter < solve_max_iter) : (iter += 1) {
+    \\        const r = D.eval(Dual, seed(x), model, inst, inst.abstime);
+    \\        var a: [n_u][n_u]f64 = undefined;
+    \\        var b: [n_u]f64 = undefined;
+    \\        var scale: f64 = 0.0;
+    \\        for (0..n_u) |i| {
+    \\            if (forced[i]) |v| {
+    \\                // The host drives this one, so its row is the constraint and
+    \\                // not the device's KCL. Written as a Newton row (1·dx =
+    \\                // v - x) rather than by assignment, so the value survives
+    \\                // elimination against every other row exactly.
+    \\                a[i] = @splat(0.0);
+    \\                a[i][i] = 1.0;
+    \\                b[i] = v - x[i];
+    \\            } else {
+    \\                a[i] = r[i].d;
+    \\                b[i] = -r[i].v;
+    \\            }
+    \\            for (a[i]) |e| scale = @max(scale, @abs(e));
+    \\        }
+    \\        var dx: [n_u]f64 = undefined;
+    \\        var solved: [n_u]bool = undefined;
+    \\        luSolve(&a, &b, &dx, &solved, scale);
+    \\        var settled = true;
+    \\        worst_dx = 0.0;
+    \\        for (0..n_u) |i| {
+    \\            if (!solved[i]) continue;
+    \\            const tol = u_abstol[i] + solve_reltol * @abs(x[i]);
+    \\            if (@abs(dx[i]) > tol and @abs(dx[i]) > worst_dx) {
+    \\                settled = false;
+    \\                worst_dx = @abs(dx[i]);
+    \\                worst = i;
+    \\            }
+    \\        }
+    \\        for (0..n_u) |i| x[i] += dx[i];
+    \\        if (settled) return;
+    \\    }
+    \\    // A testbench that does not converge must FAIL, loudly and by exit
+    \\    // status, naming the unknown that would not settle. Falling through and
+    \\    // letting the model assert against a half-iterated x would report a
+    \\    // conformance verdict on arithmetic nobody solved.
+    \\    std.debug.print(
+    \\        "{s}: did not converge after {d} Newton iterations: x[{s}] still moving {e:.6} per step, tolerance {e:.6}\n",
+    \\        .{ title, solve_max_iter, u_names[worst], worst_dx, u_abstol[worst] + solve_reltol * @abs(x[worst]) },
+    \\    );
+    \\    std.process.exit(1);
+    \\}
+    \\
+    \\/// Dense LU with partial pivoting, rank-revealing exactly as far as `solve`
+    \\/// needs: `solved[k]` is false for a column with no usable pivot, and
+    \\/// `dx[k]` is then 0. Row `k` of the echelon form lives at `perm[…]`, so
+    \\/// nothing is physically moved.
+    \\fn luSolve(
+    \\    a: *[n_u][n_u]f64,
+    \\    b: *[n_u]f64,
+    \\    dx: *[n_u]f64,
+    \\    solved: *[n_u]bool,
+    \\    scale: f64,
+    \\) void {
+    \\    // "Usable" is relative to the largest entry in the whole system: a
+    \\    // structurally absent coupling and one that cancelled to rounding are
+    \\    // both absence of information, and treating the second as a pivot is
+    \\    // how a solver invents a 1e17 node voltage.
+    \\    const eps = 1e-14 * scale;
+    \\    var pivot: [n_u]usize = @splat(0);
+    \\    var perm: [n_u]usize = undefined;
+    \\    for (0..n_u) |i| perm[i] = i;
+    \\    var rows: usize = 0; // rows consumed by a pivot so far
+    \\    for (0..n_u) |k| {
+    \\        var best = rows;
+    \\        var best_v: f64 = -1.0;
+    \\        for (rows..n_u) |i| {
+    \\            const v = @abs(a[perm[i]][k]);
+    \\            if (v > best_v) {
+    \\                best_v = v;
+    \\                best = i;
+    \\            }
+    \\        }
+    \\        if (best_v <= eps) {
+    \\            solved[k] = false;
+    \\            continue;
+    \\        }
+    \\        std.mem.swap(usize, &perm[rows], &perm[best]);
+    \\        const p = perm[rows];
+    \\        pivot[k] = p;
+    \\        solved[k] = true;
+    \\        for (rows + 1..n_u) |i| {
+    \\            const qr = perm[i];
+    \\            if (a[qr][k] == 0.0) continue;
+    \\            const f = a[qr][k] / a[p][k];
+    \\            for (k..n_u) |j| a[qr][j] -= f * a[p][j];
+    \\            b[qr] -= f * b[p];
+    \\        }
+    \\        rows += 1;
+    \\    }
+    \\    // Back-substitution over the pivoted columns, highest first. A free
+    \\    // column contributes nothing to any row above it, because its dx is 0.
+    \\    var k = n_u;
+    \\    while (k > 0) {
+    \\        k -= 1;
+    \\        if (!solved[k]) {
+    \\            dx[k] = 0.0;
+    \\            continue;
+    \\        }
+    \\        const p = pivot[k];
+    \\        var s = b[p];
+    \\        for (k + 1..n_u) |j| s -= a[p][j] * dx[j];
+    \\        dx[k] = s / a[p][k];
+    \\    }
+    \\}
+    \\
     \\
 ;
 
@@ -836,6 +1083,37 @@ test "directives: defaults when the source has none" {
     try testing.expectEqual(@as(f64, 300.15), d.temp);
     try testing.expectEqual(Analysis.dc, d.analysis);
     try testing.expect(d.print_residual);
+    try testing.expect(!d.solve_free);
+}
+
+test "§5.6 `//! solve` unties the unknowns nothing else names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The DEFAULT netlist: every unknown tied to the reference. 100 fixtures
+    // read a rule off `//! bias V(p) = …` on a two-terminal device, and mean the
+    // potential ACROSS it — which is only true because the far terminal is
+    // grounded and not left open.
+    const tied = try renderRunner(arena, "065_tied", try parse(arena, "//! bias V(p) = 0.5\n"));
+    try testing.expect(std.mem.indexOf(u8, tied, "var forced: [n_u]?f64 = @splat(0.0);") != null);
+    try testing.expect(std.mem.indexOf(u8, tied, "set(&x, &forced, \"p\", 0.5);") != null);
+
+    // With the line, only what a directive names stays pinned — so `bias` and
+    // `solve` compose, and a fixture can ground one terminal and solve another.
+    const d = try parse(arena, "//! bias V(ctrl) = 1.5\n//! solve\n");
+    try testing.expect(d.solve_free);
+    const free = try renderRunner(arena, "066_free", d);
+    try testing.expect(std.mem.indexOf(u8, free, "var forced: [n_u]?f64 = @splat(null);") != null);
+    try testing.expect(std.mem.indexOf(u8, free, "set(&x, &forced, \"ctrl\", 1.5);") != null);
+    // And the solve runs BEFORE the model prints: §5.6 semantics are defined at
+    // a solution, so a `$strobe` must not see a half-iterated x.
+    const solve_at = std.mem.indexOf(u8, free, "solve(&x, &forced").?;
+    try testing.expect(solve_at < std.mem.indexOf(u8, free, "point(0, &x").?);
+
+    // It takes no operand: `//! solve V(p)` would suggest a per-unknown list
+    // that `bias` already covers from the other side.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! solve V(p)\n"));
 }
 
 test "directives: every form, including the §2.6 suffixes" {
@@ -862,6 +1140,22 @@ test "directives: every form, including the §2.6 suffixes" {
     try testing.expectEqual(@as(f64, 1e-9), d.times[1]);
     try testing.expectEqual(Analysis.tran, d.analysis);
     try testing.expect(!d.print_residual);
+}
+
+test "§5.4.2 `I(...)` names the flow unknown, not the node potential" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const d = try parse(arena_state.allocator(),
+        \\//! bias V(a) = 1.0
+        \\//! bias I(b) = 0.125
+        \\//! sweep I(<c>) = 0, 1
+        \\module m(a, b, c); endmodule
+    );
+    // `V(a)` is the node; the two `I` forms are the unknowns lower.zig's
+    // `flowUnknown`/`portFlowUnknown` intern, sanitized as codegen spells them.
+    try testing.expectEqualStrings("a", d.bias[0].name);
+    try testing.expectEqualStrings("flowZ28bZ2cgndZ29", d.bias[1].name);
+    try testing.expectEqualStrings("flowZ28Z3ccZ3eZ29", d.sweeps[0].name);
 }
 
 test "directives: a typo is an error, not a silently skipped test" {
@@ -934,7 +1228,7 @@ test "a wave is per-timepoint and holds its last value" {
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        point("));
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        step(&model"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= newState("));
-    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "x[ix(\"in\")] = 1;"));
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "set(&x, &forced, \"in\", 1);"));
 }
 
 test "each sweep point starts its transient from a fresh State" {
@@ -963,8 +1257,8 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try renderRunner(arena, "062_sweep", try parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        point(2,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        point(0,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        point(2,") != null);
     // §5.2.1 the `analog initial` flag is NOT `is_initial_step`: a dc sweep is one
     // analysis with three SUB-TASKS, so the block re-executes at all three points
     // while the global event fires at one.

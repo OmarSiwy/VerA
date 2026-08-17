@@ -19,7 +19,6 @@
 // -1 unconditionally. Every §9.5 fixture now owns its filename.
 //
 //! lrm 9.5.5
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fseek is a no-op returning 0 and the $ftell after it also answers 0
 `include "check.vh"
 module ch09_atomic_fseek(p, n);
   inout p, n; electrical p, n;

@@ -11,16 +11,21 @@
 // V(out) IS the assertion. The previous version asserted `5.0 + V(in)` — the
 // right-hand side of the contribution retyped one line above it — which claims
 // only that V(in) is 1.25 and that a double can be added, and says nothing about
-// `shiftPlus5`. The day codegen learns signalFlowNet that would have XPASSed on
-// an assertion that never touched §1.3.4.1. §5.4.2.2 makes the potential of a
-// source branch readable anywhere in the module, and on a potential-only
-// signal-flow net there is no conservation law competing for the value: the
-// source is what defines V(out), so a conforming compiler reads 6.25.
+// `shiftPlus5`. §5.4.2.2 makes the potential of a source branch readable
+// anywhere in the module, and on a potential-only signal-flow net there is no
+// conservation law competing for the value: the source is what defines V(out),
+// so a conforming compiler reads 6.25.
+//
+// `//! bias` pins `in`, which is what an `input` port means — the netlist
+// supplies it — and `//! solve` leaves `out` to the device, which is what an
+// `output` port means. §1.3.4.1's whole point is that the direction says who
+// determines the value, so the two directives are the clause restated for the
+// harness.
 //
 //! lrm 1.3.4.1
 //! lrm 5.4.2.2
 //! bias V(in) = 1.25
-//! xfail two gaps, both needed for the XPASS: codegen refuses a contribution to a single-nature directional port (codegen.zig signalFlowNet, `vera --emit-zig` reports "codegen refused a construct" while `--lint` is silent), and VerA's testbench forces every node unknown to its bias rather than solving, so V(out) would read its default 0 rather than the contributed 6.25 (the same forcing ch05_analog_behavior/value_retention.va records)
+//! solve
 `include "check.vh"
 module ch01_potential_signal_flow(in, out);
     input in;

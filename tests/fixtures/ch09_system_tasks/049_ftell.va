@@ -20,7 +20,6 @@
 // not arise, and pinning it would need a descriptor the LRM does not fix.
 //
 //! lrm 9.5.5
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers 0 and $ftell answers 0 whatever has been read
 `include "check.vh"
 module ch09_atomic_ftell(p, n);
   inout p, n; electrical p, n;

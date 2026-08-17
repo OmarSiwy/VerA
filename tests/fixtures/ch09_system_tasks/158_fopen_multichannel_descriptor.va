@@ -39,7 +39,6 @@
 // shift differently. `& 2147483648` is bit 31 whatever the width.
 //
 //! lrm 9.5.1
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so the one-argument $fopen answers 0 — bit 31 is clear by accident but no bit is set at all
 `include "check.vh"
 module ch09_fopen_multichannel_descriptor(p, n);
   inout p, n; electrical p, n;

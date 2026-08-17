@@ -392,7 +392,7 @@ fn runAndCheck(
         .ok => |p| p,
     };
 
-    const got = capture(gpa, io, bin) catch |err| {
+    const got = capture(gpa, io, bin, work) catch |err| {
         try w.print("FAIL {s}: running the testbench: {t}\n", .{ f.path, err });
         return .unmet;
     };
@@ -446,9 +446,23 @@ fn countVerdicts(text: []const u8) Tally {
 /// Run the testbench and return everything it said. stderr, because that is
 /// where `std.debug.print` writes — both the model's `$strobe` output and the
 /// harness's residual dump, so the interleaving is the program's, not the OS's.
-fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8) ![]const u8 {
+///
+/// The child runs IN its own work directory, which is what makes §9.5 testable.
+/// A fixture that opens a file opens it relative to the process cwd, so with an
+/// inherited cwd every §9.5 fixture wrote into the repository root and shared one
+/// namespace with the other 1149 — and the rules those fixtures pin are about
+/// exactly that namespace: `ch09_047_missing.dat` "is a name no fixture in this
+/// directory ever creates", and 052's Table 9-24 type "a" append would otherwise
+/// grow the same file on every run forever. One directory per fixture makes both
+/// claims hold by construction rather than by everyone remembering to.
+///
+/// `bin` is `<work>/<name>`, so from inside `work` it is `./<name>`.
+fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8) ![]const u8 {
+    var argv0_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const argv0 = try std.fmt.bufPrint(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
     var child = try std.process.spawn(io, .{
-        .argv = &.{bin},
+        .argv = &.{argv0},
+        .cwd = .{ .path = work },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .pipe,

@@ -14,11 +14,14 @@
 // deliberate: this file used to declare V(p) = 0.75 as well, which made 0.75 an
 // input rather than an answer — delete the `:` statement and both assertions
 // still passed. A want an indirect contribution is under test for has to be one
-// the harness does not supply.
+// the harness does not supply. `//! solve` is what says so: without it the
+// harness ties every undeclared unknown to the reference, which is the netlist a
+// module compiled alone has no other way to get (see README.md), and a target
+// tied to the reference is a target that cannot be driven to anything.
 //
 //! lrm 5.6.7
 //! bias V(ctrl) = 1.5
-//! xfail VerA's generated testbench forces every unknown to its declared operating point instead of solving, so an indirect contribution's target cannot move: V(p,n) reads 0
+//! solve
 `include "check.vh"
 module ch5_indirect(p, n, ctrl);
   inout p, n, ctrl; electrical p, n, ctrl;

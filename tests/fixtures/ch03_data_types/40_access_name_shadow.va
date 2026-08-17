@@ -11,7 +11,14 @@
 // out of `ShadowV`; one that bound the name to the net both ways reads 1.0
 // out of `potential(p)`.
 //
+// `p` is an `output`: ch3_shadow_d binds a potential nature only, so §1.3.4.1
+// confines it to an `input` or an `output` port (E0360), and `output` is the half
+// that may be contributed to (E0425 is the other). Nothing about the shadowing
+// rule depends on the direction — the `//! bias` still says what the terminal is
+// tied to, which is all the two assertions need.
+//
 //! lrm 3.13.2
+//! lrm 1.3.4.1
 //! bias p = 2.0
 `include "check.vh"
 nature ch3_shadow_n;
@@ -23,7 +30,7 @@ discipline ch3_shadow_d;
     potential ch3_shadow_n;
 enddiscipline
 module ch3_shadow(p);
-    inout p;
+    output p;
     ch3_shadow_d p;
     real ShadowV;
 

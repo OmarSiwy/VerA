@@ -10,9 +10,12 @@ Eight of the fourteen carry a normative rule this suite executes. Three (`s1-1`,
 `s1-5`) state no rule. Three (`s1-2`, `s1-3`, `s1-3-3`) state rules this chapter's fixtures do
 not reach; they are listed with their disposition and nothing is credited to them.
 
-Fourteen of the 25 fixtures are `//! xfail`. Every clause of §1.3.4, §1.3.4.1, §1.3.4.2 and
-§1.3.5 — the entire signal-flow half of the chapter — is xfail. The suite states those rules;
-VerA does not yet meet them. That ledger is below the table and is the most useful thing here.
+No fixture in this directory is `//! xfail` any more (`grep -l '^//! xfail' *.va` is empty).
+The signal-flow half of the chapter — every clause of §1.3.4, §1.3.4.1, §1.3.4.2 and §1.3.5 —
+was xfail in its entirety, and the ledger below the table now records what closed those and
+where. Rows and ledger lines still reading **xfail** are stale in the other direction: the
+fixture passes and the row has not caught up. Only the four signal-flow defects were this
+change's to close, so only those are struck through; the rest wait on the scheduled re-census.
 
 | LRM section/rule | Fixture or disposition |
 |---|---|
@@ -33,15 +36,15 @@ VerA does not yet meet them. That ledger is below the table and is the most usef
 | 1.3.3 natures, disciplines, nets; access-function names; compatibility rules | **no fixture here.** No file in this directory declares a `nature` or a `discipline`; all four disciplines used (`electrical`, `voltage`, `current`, `thermal`) are Annex D's. Declaration syntax and compatibility are `ch03_data_types` |
 | 1.3.4 flow contribution to a potential-only node is illegal | `14_signal_flow_illegal_quantity.va` **xfail** — `checkAccessMatch` returns early on `want.len == 0`, so a discipline binding no flow nature accepts every flow access silently |
 | 1.3.4 potential contribution to a flow-only node is illegal (the "conversely" half) | `19_potential_contribution_to_flow_only.va` **xfail** — same `want.len == 0` early return, mirrored; module lints *and* emits clean |
-| 1.3.4.1 `shiftPlus5`, the clause's own worked example | `11_potential_signal_flow.va` **xfail** — two gaps: `codegen.zig signalFlowNet` refuses a contribution to a single-nature directional port, and `tb.zig` forces every node unknown to its bias rather than solving, so V(out) would read 0 not 6.25 |
-| 1.3.4.1 potential signal-flow nets may not bind to `inout` ports | `15_sf_potential_on_inout.va` **xfail** — port direction is recorded only so codegen can refuse a contribution; nothing rejects the *declaration*, and this module lints and emits clean |
+| 1.3.4.1 `shiftPlus5`, the clause's own worked example | `11_potential_signal_flow.va` (V(out) reads the 6.25 the source imposes: `//! bias V(in)` is what the `input` means and `//! solve` is what the `output` means) |
+| 1.3.4.1 potential signal-flow nets may not bind to `inout` ports | `15_sf_potential_on_inout.va` (E0360, `lower.zig` below the net loop — the first point at which both the direction and the discipline are known) |
 | 1.3.4.1 potential contributions may not be made to `input` ports | `17_sf_potential_contribution_to_input.va` **xfail** — no front-end diagnostic distinguishes an input from an output contribution target; `--lint` is silent and only codegen refuses, generically |
 | 1.3.4.1 a potential signal-flow net bound to a conservative node behaves as a voltage source to ground | **no fixture.** Needs instantiation across a discipline boundary; `ch07_mixed_signal`/`annex_f_resolution` territory |
-| 1.3.4.2 `currmir`, the clause's own worked example | `12_flow_signal_flow.va` **xfail** — two gaps: the same `signalFlowNet` refusal, and the precondition is inexpressible — `tb.zig unknownName` (`src/backend/tb.zig:237`) strips `I(`…`)` and binds the *node* unknown `in`, so `//! bias I(in) = 0.125` holds no port flow |
-| 1.3.4.2 flow signal-flow nets may not bind to `inout` ports | `16_sf_flow_on_inout.va` **xfail** — nothing rejects the declaration; lints and emits clean |
+| 1.3.4.2 `currmir`, the clause's own worked example | `12_flow_signal_flow.va` (I(out) reads the mirrored -0.125; `//! bias I(in)` now binds the §5.4.2 flow unknown and not the node) |
+| 1.3.4.2 flow signal-flow nets may not bind to `inout` ports | `16_sf_flow_on_inout.va` (E0360, the flow-only half of the same rule) |
 | 1.3.4.2 flow contributions may not be made to `input` ports | `18_sf_flow_contribution_to_input.va` **xfail** — same missing front-end direction check as 17 |
 | 1.3.4.2 a flow signal-flow net bound to a conservative node behaves as a current source | **no fixture.** Same instantiation requirement as the 1.3.4.1 row above |
-| 1.3.5 conservative and signal-flow components can be freely mixed | `13_mixed_conservative_signal_flow.va` **xfail** — two gaps: the `signalFlowNet` refusal means the module the clause *guarantees* does not lower at all, and I(a,b) on a flow-source branch reads 0 |
+| 1.3.5 conservative and signal-flow components can be freely mixed | `13_mixed_conservative_signal_flow.va` (conservative `a`/`b` stated by the host, signal-flow `out` solved for: V(out) = 20.0 and the retained I(a,b) = 2.0e-3 in one module) |
 | 1.3.5 only signal types declared on the ports are accessible in the body | `22_undeclared_quantity_read.va` **xfail** — the read side of the rule; `checkAccessMatch`'s `want.len == 0` early return makes `I(vonly)` silent |
 | 1.3.5 nets used only structurally need no natures | **no fixture.** Requires instances; nothing here instantiates |
 | 1.4 BNF notation conventions | documentation convention, no rule to execute; the productions themselves are `annex_a_syntax` |
@@ -54,14 +57,14 @@ closes every fixture on it:
 
 | Defect | Fixtures | Where |
 |---|---|---|
-| codegen refuses any contribution to a single-nature directional port | `11`, `12`, `13` | `codegen.zig signalFlowNet`; `--emit-zig` reports "codegen refused a construct" while `--lint` is silent |
+| ~~codegen refuses any contribution to a single-nature directional port~~ CLOSED | `11`, `12`, `13` | the `signalFlowNet` refusal is gone. §1.3.4.1's potential-only net needed no special case — the ordinary branch relation reduces to it, the KCL row at the net being `ib = 0` — and §1.3.4.2's flow-only net gets `codegen.zig flowOnlySignalFlowNet`: the node's one unknown IS its flow, so the row is `x[n] − c` and not a KCL injection |
 | a discipline binding no nature for a quantity accepts every access to it, read or write | `14`, `19`, `22` | `lower.zig checkAccessMatch`, `if (want.len == 0 …) return;` |
-| nothing rejects declaring a single-nature discipline on an `inout` port | `15`, `16` | port `.direction` is recorded only for codegen's refusal; both modules lint *and* emit clean |
+| ~~nothing rejects declaring a single-nature discipline on an `inout` port~~ CLOSED | `15`, `16` | E0360, in `lower.zig` after the net loop and the §10.2 defaults — `inout p; voltage p;` splits the direction and the discipline across two declarations, so the port loop cannot ask the question |
 | no front-end diagnostic distinguishes an `input` from an `output` contribution target | `17`, `18` | only codegen refuses, and generically — which is why neither pins `GeneratedCompileError` |
 | the two quantities of one probe branch are never correlated | `20` | `V(prb)` and `I(prb)` lowered independently; lint and emit both exit 0 |
 | reversed terminal order mints a second branch-flow unknown instead of negating | `23` | `flowZ28nZ2cpZ29` alongside `flowZ28pZ2cnZ29` |
-| the testbench forces every node unknown to its bias rather than solving | `11`, `13` | second half of both xfails; also recorded by `ch05_analog_behavior/value_retention.va`. A POTENTIAL read is the node difference (§5.4.1), so unlike the flow-source read it has no retained value to substitute — it needs a Newton loop |
-| a port flow is not expressible as a precondition | `12` | `tb.zig unknownName` (`src/backend/tb.zig:237`) strips `I(`…`)` and binds the node |
+| ~~the testbench forces every node unknown to its bias rather than solving~~ CLOSED | `11`, `13` | `tb.zig` runs a real Newton-Raphson; `//! solve` says which unknowns are the device's to determine. A POTENTIAL read is the node difference (§5.4.1) and has no retained value to substitute, which is why this one needed the solver and the flow-source read did not |
+| ~~a port flow is not expressible as a precondition~~ CLOSED | `12` | `tb.zig unknownName` maps `I(a)` to `flow(a,gnd)`, `I(a,b)` to `flow(a,b)` and `I(<a>)` to `flow(<a>)` — §5.4.2/§5.4.3's own unknowns — instead of stripping to the node's potential |
 
 Eight of the fourteen are `//! reject DiagnosticsReported` (`14`–`20`, `22`). None pins a
 numeric code, deliberately: the codes previously written here — E0337, E0423, E0424 — are

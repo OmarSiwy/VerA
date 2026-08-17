@@ -23,7 +23,6 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.4.2
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fscanf matches nothing, returns 0 and never assigns `value` — the missing-file half passes by accident and the "42" half does not
 `include "check.vh"
 module ch09_atomic_fscanf(p, n);
   inout p, n; electrical p, n;

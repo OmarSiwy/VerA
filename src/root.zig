@@ -446,13 +446,19 @@ fn compileInArena(
     // §4.3.2: a domain violation is a compile error on every target.
     if (!verdict.ok()) return error.CompileFailed;
 
-    // §9.4. Reported HERE and not in lower.zig, because "was the print kept?"
-    // is a property of what the caller asked to build, and lowering does not
-    // know that. Both are warnings: the model is legal either way.
+    // §9.4/§9.5. Reported HERE and not in lower.zig, because "was the side
+    // effect kept?" is a property of what the caller asked to build, and lowering
+    // does not know that. Both are warnings: the model is legal either way.
     for (lower.displays.items) |d| {
         const span = lower.tokenSpan(d.tok);
         if (opts.display == .drop) {
-            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
+            // §9.5 the file family is on this list for SEQUENCING, not for text,
+            // so the sentence it fell foul of is a different one — and the answer
+            // it gets is one the LRM writes down rather than a dropped print.
+            if (Lower.isFileCall(d.name))
+                try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
+            else
+                try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
         } else if (d.conditional) {
             try bag.add(.lower, .W0851, span, "`{s}`", .{d.name});
         }

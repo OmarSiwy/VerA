@@ -260,10 +260,29 @@ alias_refs: std.ArrayList([]const u8) = .empty,
 /// flag rather than a site list because the SITE that needs a name (the format
 /// scratch) is identified by its MIR instruction, which codegen already has.
 uses_str_tasks: bool = false,
+/// §9.5.1–§9.5.8 — does the module call the file-descriptor family? Gates
+/// `file_kernels.zig` exactly as `uses_str_tasks` gates the string kernels, and
+/// only in the `display == .emit` artifact: a descriptor table is a HOST facility
+/// (§9.5.1's own "if a file cannot be opened … a zero is returned" is the answer
+/// a device with no such host must give), so a device compiled for a solver does
+/// not carry one.
+uses_file_tasks: bool = false,
 /// §9.21 — does the module call `$table_model`? Set at the call, read by codegen
 /// to decide whether `table_kernels.zig` is emitted, exactly as
 /// `uses_str_tasks` gates the string kernels.
 uses_table_model: bool = false,
+/// §9.13 — does the module call one of Table 9-10's 17 probabilistic
+/// distributions? Gates `rng_kernels.zig` exactly as `uses_str_tasks` gates the
+/// string kernels.
+uses_rng: bool = false,
+/// §9.13.1 — how many call sites took the SEEDLESS form (`$random` with no
+/// argument, or a constant/parameter seed, whose "internal seed ... is not
+/// visible from the source"). One `Instance` latch slot each: codegen emits the
+/// array, `updateState` advances it on the accepted step, and the residual only
+/// reads it. Per SITE and not one shared counter because §9.13.1 says the
+/// internal seed "gets updated every time the call to $arandom is made", so two
+/// call sites are two streams, not two reads of one.
+rng_auto_sites: u32 = 0,
 /// Where a §9.21.1 `$table_model` data FILE is looked for, in order. The same
 /// list `include` searches, set by the caller (root.zig) for the same reason the
 /// directives above are: only the driver knows the search path. Empty means "the
@@ -833,19 +852,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
         self.node_dir.items[idx] = p.direction;
-        // NOT checked here, deliberately: §1.3.4.1/§1.3.4.2 "Nets of potential
-        // signal flow disciplines in modules may only be bound to `input` or
-        // `output` ports of the module, not to `inout` ports". The rule is real
-        // and belongs on this line — `p.direction == .inout and
-        // self.isSignalFlow(...)` is the whole test — but VerA cannot yet
-        // COMPILE the legal spelling: codegen.zig signalFlowNet refuses every
-        // contribution to a directional single-nature port (the nodal device
-        // has no conserved pair to stamp), so rewriting a violating `inout` to
-        // the `input`/`output` the clause demands trades one diagnostic for a
-        // refusal. Three fixtures that today run and prove numbers would become
-        // xfails. Land this with the codegen half, not before; the fixtures
-        // waiting on it are ch01_intro/15_sf_potential_on_inout.va and
-        // 16_sf_flow_on_inout.va.
+        // §1.3.4.1/§1.3.4.2's "not to `inout` ports" is NOT checked here, even
+        // though the direction is: this line does not yet know the discipline.
+        // See E0360, below the net loop, for where the rule lands and why it
+        // cannot land any earlier.
     }
     self.num_ports = self.node_order.items.len;
 
@@ -926,6 +936,41 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §10.2 supplied a discipline.
     for (module.ports) |p| try self.applyDefaultToAll(self.file.str(p.name), p.main_tok);
     for (module.nets) |n| try self.applyDefaultToAll(self.file.str(n.name), n.main_tok);
+
+    // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
+    // be bound to `input` or `output` ports of the module, not to `inout`
+    // ports"; §1.3.4.2 says the same of flow signal-flow disciplines. The
+    // sibling of E0425, which rules on the contribution TARGET rather than the
+    // declaration.
+    //
+    // HERE and not in the port loop above, for two reasons that are the same
+    // reason: the discipline is not known there. `inout p; voltage p;` splits
+    // the direction and the discipline across two declarations — the port loop
+    // interns `p` with `""` and the net loop supplies `voltage` — and §10.2's
+    // default arrives later still, in the two `applyDefaultToAll` loops on the
+    // lines above. This is the first point at which both halves of the rule's
+    // one question are answered.
+    //
+    // `.unspecified` is deliberately not caught: §6.5.2 leaves a port with no
+    // direction declaration to §3.9, and the clause names `inout` only.
+    for (module.ports) |p| {
+        if (p.direction != .inout) continue;
+        const base = self.file.str(p.name);
+        // A vector port is N nets sharing one declaration and therefore one
+        // discipline (§6.5.2), so the first element answers for all of them and
+        // the violation is reported once, at the declaration that commits it.
+        const probe_name = if (self.vectors.get(base)) |r| try self.vecElem(base, r.at(0)) else base;
+        const idx = self.node_voltages.get(probe_name) orelse continue;
+        if (idx == ground) continue;
+        const dname = self.node_disciplines.items[idx];
+        if (!self.isSignalFlow(dname)) continue;
+        var b = self.errWith(p.main_tok, .E0360);
+        b.msg("`{s}` is an `inout` port of discipline `{s}`, which binds a {s} nature only", .{
+            base, dname, if (self.disciplines.get(dname).?.has_potential) "potential" else "flow",
+        });
+        b.help("declare `{s}` as `input` or `output`", .{base});
+        try b.emit();
+    }
 
     // §3.4 parameters were lowered above the port loop — in source order, so a
     // later default may still reference an earlier parameter (§6.3.4).
@@ -1630,9 +1675,10 @@ fn checkNetCompat(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
 /// is bound, so the net carries one quantity and no conservation law relates it
 /// to anything (§3.6.2.1 makes the both-natures case conservative instead).
 ///
-/// The exclusive-or matters. codegen.zig signalFlowNet asks the weaker `not
-/// both`, which is right for the question IT asks — "is there a conserved pair
-/// to stamp?" — but a natureless `domain continuous` discipline (§3.11.1) and a
+/// The exclusive-or matters. codegen.zig flowOnlySignalFlowNet asks the
+/// narrower `flow and no potential`, which is right for the question IT asks —
+/// "is this node's one unknown a flow?" — but a natureless `domain continuous`
+/// discipline (§3.11.1) and a
 /// `domain discrete` one bind NEITHER nature, and neither is a signal-flow
 /// discipline. §1.3.4.1/§1.3.4.2 say "potential signal flow" and "flow
 /// signal-flow" disciplines, which is one nature, present.
@@ -2935,9 +2981,8 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // `input` ports"; §1.3.4.2 says the same of flow contributions. The port's
     // direction IS the direction of its one quantity, so an `input` is supplied
     // from outside and driving it has no meaning. Only `input` — contributing
-    // to an `output` is the whole point of a signal-flow port, and the `inout`
-    // case is the sibling declaration rule (see the note in lowerModule's port
-    // loop for why that half is not landed yet).
+    // to an `output` is the whole point of a signal-flow port, and an `inout`
+    // signal-flow port never gets this far: E0360 refuses the declaration.
     for ([_]u16{ target.hi, target.lo }) |n| {
         if (n >= self.node_dir.items.len or self.node_dir.items[n] != .input) continue;
         if (!self.isSignalFlow(self.node_disciplines.items[n])) continue;
@@ -4239,7 +4284,15 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         try self.err(tok, .E0807, "", .{});
         return;
     }
-    if (isDisplayTask(name)) try self.checkFormatPairing(tok, args);
+    // §9.13 Table 9-10 in statement position. They are FUNCTIONS, so a bare
+    // `$random(s);` is only ever written for the seed's inout side effect — which
+    // is exactly what `lowerRandom` performs; the variate is dropped.
+    if (try self.lowerRandom(tok, name, args)) |_| return;
+    // §9.4.3's pairing rule is stated for the display tasks and §9.5.2 defines
+    // the file ones as "the same as their counterparts", so it covers both — and
+    // `checkFormatPairing` picks the format as "the first argument that folds to a
+    // string", which steps over the descriptor without being told about it.
+    if (isDisplayTask(name) or isFileOutTask(name)) try self.checkFormatPairing(tok, args);
     // §9.5.3/§9.5.4.2: all three of these write through an argument, which is
     // not something a `call` result can do — see `lowerStringWrite`/`lowerScan`.
     if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat"))
@@ -4248,6 +4301,9 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         _ = try self.lowerScan(tok, args); // the count is the value; a statement drops it
         return;
     }
+    // §9.5.4: the same shape as `$sscanf` for the same reason — a destination
+    // argument. In statement position the count is dropped, the write is not.
+    if (try self.lowerFileRead(tok, name, args)) |_| return;
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
@@ -4256,7 +4312,13 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         try vals.append(self.arena, try self.lowerSysArg(a));
     }
     const v = try self.call(name, vals.items);
-    if (isDisplayTask(name)) try self.displays.append(self.arena, .{
+    if (isFileOutTask(name)) {
+        self.uses_file_tasks = true;
+        // The §9.4.3 formatter renders into a scratch row before the write, so a
+        // module with a §9.5.2 output task needs the string kernels too.
+        self.uses_str_tasks = true;
+    }
+    if (isDisplayTask(name) or isFileOutTask(name)) try self.displays.append(self.arena, .{
         .val = v,
         .name = name,
         .tok = tok,
@@ -4264,9 +4326,166 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     });
 }
 
+/// §9.5 Sequence one file-family call into the per-point I/O phase.
+///
+/// Every §9.5 call has a side effect on a descriptor — an open, a position, a
+/// byte written — and §9.5.9 puts those at the ACCEPTED point, not inside the
+/// iteration ("the file write operations shall not be performed unless the
+/// iteration is accepted"). The display chain IS that phase: it is the one job
+/// `planCommon` keeps out of the shared core, precisely so its side effects
+/// cannot run per Newton iteration.
+///
+/// So a file call joins the chain whether or not its value is read. That is the
+/// difference between this and `isDisplayTask`'s append, whose calls are void by
+/// nature: `$fgets` returns a count `049_ftell.va` throws away, and the READ it
+/// performed is what the `$ftell` two lines later measures.
+///
+/// The chain carries reals (`fadd`), and every §9.5 function is integer-valued,
+/// so the carrier is `$itor` — a call codegen already renders, rather than a new
+/// synthetic name for a conversion that already has one.
+fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) Oom!void {
+    self.uses_file_tasks = true;
+    try self.displays.append(self.arena, .{
+        .val = try self.call("$itor", &.{v}),
+        .name = name,
+        .tok = tok,
+        .conditional = self.cond_depth != 0,
+    });
+}
+
+/// §9.5.4.1 `code = $fgets( str, fd )`, §9.5.4.2 `code = $fscanf( fd, format,
+/// args )` and §9.7.3-adjacent §9.5.7 `errno = $ferror( fd, str )` — the three
+/// §9.5 calls that write through an argument as well as returning a value.
+///
+/// Same rewrite as `lowerScan`, for the same reason: an out-parameter has no
+/// spelling in an SSA expression tree. One source call becomes the count (or the
+/// errno) plus one reader per destination, and every reader takes that count as
+/// its first operand — which both sequences the pair (a data dependency the
+/// emitter cannot reorder) and carries the clause's own "nothing was assigned"
+/// rule into the reader.
+///
+/// Null when `name` is not one of the three.
+fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?Mir.Value {
+    const eq = std.mem.eql;
+    const gets = eq(u8, name, "$fgets");
+    const scan = eq(u8, name, "$fscanf");
+    const ferr = eq(u8, name, "$ferror");
+    if (!gets and !scan and !ferr) return null;
+    self.uses_file_tasks = true;
+    // §9.5.4.2's conversions are §9.5.3's conversions, so the scanner is the
+    // string one and the string kernels have to be there.
+    if (scan) self.uses_str_tasks = true;
+
+    // Syntax 9-6/9-7/9-9: `$fgets` and `$ferror` take the destination FIRST and
+    // second respectively; `$fscanf` takes the descriptor, the format, then the
+    // destinations. One shape, described rather than branched on three times.
+    const fd_at: usize = if (gets) 1 else 0;
+    if (args.len <= fd_at or args[fd_at] == .none) {
+        try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
+        return try self.iconst(0);
+    }
+    const fd = try self.lowerSysArg(args[fd_at]);
+    // §9.5.4.2 alone has a control string, and it is an operand of every reader
+    // as well as of the count.
+    const fmt: ?Mir.Value = if (scan) blk: {
+        if (args.len < 2 or args[1] == .none) {
+            try self.err(tok, .E0813, "`$fscanf` needs a format string", .{});
+            break :blk null;
+        }
+        // Only a literal format can be checked — `lowerScan`'s reasoning, and
+        // its diagnostic, apply verbatim to the file source of the same scan.
+        if (self.constEval(args[1])) |c| switch (c) {
+            .str => |s| if (try self.checkScanFormat(tok, s)) break :blk null,
+            else => {},
+        };
+        break :blk (try self.lowerExpr(args[1])).v;
+    } else null;
+    if (scan and fmt == null) return try self.iconst(0);
+
+    const n = if (gets)
+        try self.call("$fgets", &.{fd})
+    else if (ferr)
+        try self.call("$ferror", &.{fd})
+    else
+        try self.call("$fscanf", &.{ fd, fmt.? });
+    try self.sequenceFileCall(tok, name, n);
+
+    const dests = if (gets) args[0..1] else if (ferr) args[1..] else args[2..];
+    var item: i64 = 0;
+    for (dests) |a| {
+        if (a == .none) continue;
+        const slot = try self.resolveLvalue(a) orelse continue;
+        // §9.5.4.1/§9.5.7 write a STRING; only §9.5.4.2 has typed items, and
+        // there the destination's declared type picks the callee exactly as
+        // `lowerScan` does — the name IS the type, so `sysFuncTy` and
+        // `analysis.callTy` cannot disagree about it.
+        if (gets or ferr) {
+            if (slot.ty != .string) {
+                try self.errAt(a, .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
+                continue;
+            }
+            const v = try self.call(if (gets) "$fgets$str" else "$ferror$str", &.{ n, fd });
+            try self.builder.writeVariable(slot.place, self.cur, v);
+            continue;
+        }
+        const callee: []const u8 = switch (slot.ty) {
+            .integer => "$fscanf$int",
+            .string => "$fscanf$str",
+            .real => "$fscanf$real",
+        };
+        const v = try self.call(callee, &.{ n, fd, fmt.?, try self.iconst(item) });
+        try self.builder.writeVariable(slot.place, self.cur, v);
+        item += 1;
+    }
+    return n;
+}
+
+/// §9.5.2's five output tasks: `$display`/`$write`/`$strobe`/`$monitor`/`$debug`
+/// "with one additional argument, which is either a multichannel descriptor or a
+/// file descriptor", plus the two §9.5.1/§9.5.6 tasks that take a descriptor and
+/// return nothing. Every one of them is a STATEMENT, so its value is dead and it
+/// only survives into the emitted device by joining the display chain.
+pub fn isFileOutTask(name: []const u8) bool {
+    const tasks = [_][]const u8{
+        "$fdisplay", "$fwrite", "$fstrobe", "$fmonitor",
+        "$fdebug",   "$fclose", "$fflush",
+    };
+    for (tasks) |t| if (std.mem.eql(u8, name, t)) return true;
+    return false;
+}
+
+/// The §9.5 names that RETURN something: §9.5.1 `$fopen`, §9.5.4 `$fgets` and
+/// `$fscanf`, §9.5.5 `$ftell`/`$fseek`/`$rewind`, §9.5.7 `$ferror`, §9.5.8
+/// `$feof`. Every one is integer-valued (`sysFuncTy`), and every one has a SIDE
+/// EFFECT on the descriptor — so each joins the display chain too, whether or not
+/// anything reads its value: `049_ftell.va` drops the `$fgets` count on the floor
+/// and then asserts the position that read moved to.
+pub fn isFileFunc(name: []const u8) bool {
+    const fns = [_][]const u8{
+        "$fopen", "$fgets", "$fscanf", "$ftell",
+        "$fseek", "$rewind", "$ferror", "$feof",
+    };
+    for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
+    return false;
+}
+
+/// Every §9.5 spelling that reaches the emitter: the two classifications above,
+/// plus the synthetic readers `lowerFileRead` splits out of the three calls that
+/// write through an argument. One predicate, because three consumers ask the same
+/// question — the emitter's dispatch, its live-operand rule, and `proof`.
+pub fn isFileCall(name: []const u8) bool {
+    if (isFileOutTask(name) or isFileFunc(name)) return true;
+    const synth = [_][]const u8{
+        "$fgets$str", "$ferror$str", "$fscanf$int", "$fscanf$real", "$fscanf$str",
+    };
+    for (synth) |s| if (std.mem.eql(u8, name, s)) return true;
+    return false;
+}
+
 /// §9.4.1 display family + §9.7.3 severity family: the tasks whose whole content
-/// is text on the simulator's output. The file family (§9.5) is NOT here — it
-/// needs a descriptor the compiled device has no way to own — and neither is
+/// is text on the simulator's output. The §9.5 file family is NOT here — it is
+/// `isFileOutTask`/`isFileFunc`, because a descriptor operation is sequenced with
+/// the prints but rendered by different kernels — and neither is
 /// `$monitoron`/`$monitoroff`, which toggle a mode rather than print.
 pub fn isDisplayTask(name: []const u8) bool {
     const printing = [_][]const u8{
@@ -4403,6 +4622,213 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
     return self.call("$sscanf", &.{ src, fmt });
 }
 
+// ---------------------------------------------------------------------------
+// §9.13 probabilistic distributions
+// ---------------------------------------------------------------------------
+
+/// One row of Table 9-10's probabilistic family: the source spelling, the
+/// synthetic kernel `rng_kernels.zig` implements, and the argument rules
+/// §9.13.1/§9.13.2 state for it.
+const Dist = struct {
+    /// Source spelling, `$` included.
+    name: []const u8,
+    /// `rng_kernels.zig` entry point, or "" for the two whose only argument is
+    /// the seed (`$random`/`$arandom`, handled by `$rng$rand`).
+    kernel: []const u8,
+    /// Arguments AFTER the seed. §9.13.1's two take none and their seed is
+    /// itself optional; every §9.13.2 distribution requires its seed.
+    nparam: u8,
+    /// §9.13.2: "$dist_ ... return integer values", "$rdist_ ... All functions
+    /// return a real value."
+    ty: Ty,
+    /// Bit i set = parameter i "shall be greater than zero (0). Otherwise an
+    /// error shall be reported." (§9.13.2 for the $rdist_ family; IEEE 1364
+    /// §17.9.2 states the same domain for the integer twins.)
+    positive: u8 = 0,
+    /// §9.13.2 "The start value shall be smaller than the end value." Only the
+    /// uniform pair, and it is a relation between two arguments rather than a
+    /// domain on one, which is why it is a separate flag.
+    ordered: bool = false,
+};
+
+/// Table 9-10, all 17 names. `$simprobe` is §9.16 and stays out.
+const dists = [_]Dist{
+    // §9.13.1. `kernel` is the same for both: "$arandom is upwardly compatible
+    // with $random ... and has the same behavior."
+    .{ .name = "$random", .kernel = "$rng$rand", .nparam = 0, .ty = .integer },
+    .{ .name = "$arandom", .kernel = "$rng$rand", .nparam = 0, .ty = .integer },
+    // §9.13.2, the integer family (IEEE 1364 §17.9.2).
+    .{ .name = "$dist_uniform", .kernel = "$rng$i_uniform", .nparam = 2, .ty = .integer, .ordered = true },
+    .{ .name = "$dist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .integer },
+    .{ .name = "$dist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .integer, .positive = 0b01 },
+    .{ .name = "$dist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .integer, .positive = 0b01 },
+    .{ .name = "$dist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .integer, .positive = 0b01 },
+    .{ .name = "$dist_t", .kernel = "$rng$t", .nparam = 1, .ty = .integer, .positive = 0b01 },
+    .{ .name = "$dist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .integer, .positive = 0b11 },
+    // §9.13.2, the real family.
+    .{ .name = "$rdist_uniform", .kernel = "$rng$uniform", .nparam = 2, .ty = .real, .ordered = true },
+    .{ .name = "$rdist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .real },
+    .{ .name = "$rdist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .real, .positive = 0b01 },
+    .{ .name = "$rdist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .real, .positive = 0b01 },
+    .{ .name = "$rdist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .real, .positive = 0b01 },
+    .{ .name = "$rdist_t", .kernel = "$rng$t", .nparam = 1, .ty = .real, .positive = 0b01 },
+    .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11 },
+};
+
+fn distOf(name: []const u8) ?*const Dist {
+    for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
+    return null;
+}
+
+/// The name §9.13.2 gives parameter `i` of `d`, for the diagnostics.
+fn distParamName(d: *const Dist, i: usize) []const u8 {
+    if (d.ordered) return if (i == 0) "start" else "end";
+    if (std.mem.endsWith(u8, d.name, "chi_square") or std.mem.endsWith(u8, d.name, "_t"))
+        return "degree_of_freedom";
+    if (std.mem.endsWith(u8, d.name, "erlang")) return if (i == 0) "k_stage" else "mean";
+    if (std.mem.endsWith(u8, d.name, "normal")) return if (i == 0) "mean" else "standard_deviation";
+    return "mean";
+}
+
+/// §9.13 Table 9-10, whose "supported in analog context" column reads Yes for
+/// every one of the 17 names. One source call becomes TWO pure calls over the
+/// seed's incoming value — the variate, and the updated seed §9.13.1/§9.13.2
+/// require to be written back through the inout argument — for the reason
+/// `lowerScan` splits `$sscanf`: a unit body is an SSA expression tree and an
+/// out-parameter has no spelling in one.
+///
+/// That split is also what makes a draw legal inside a residual at all. Both
+/// halves are functions of the SAME input, so re-evaluating the analog block at
+/// one operating point re-derives the same pair — which is simultaneously
+/// §9.13.2's "shall always return the same value given the same seed" and the
+/// determinism Newton needs. `rng_kernels.zig`'s header argues this at length.
+///
+/// Returns null when `name` is not one of the 17.
+fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?TypedValue {
+    const d = distOf(name) orelse return null;
+    const ex = &self.file.exprs;
+    self.uses_rng = true;
+
+    // Drop A.6.9 empty slots first, so the arity below counts what was written.
+    var given: std.ArrayList(Ast.ExprId) = .empty;
+    defer given.deinit(self.arena);
+    for (args) |a| if (a != .none) try given.append(self.arena, a);
+
+    // §9.13.1 Syntax 9-8 / §9.13.2 Syntax 9-9: the optional trailing
+    // `type_string` ("instance" or "global") selects which paramset override the
+    // stream belongs to, and there is no paramset here — §6.4 paramsets are a
+    // separate compilation unit and VerA compiles a module. So a string in the
+    // last slot is a scope error, not an unsupported argument.
+    if (given.items.len > 0) {
+        const last = given.items[given.items.len - 1];
+        if (ex.tag(last) == .str_literal) {
+            try self.errAt(last, .E0816, "`{s}`'s `type_string` argument is only meaningful within a paramset (§6.4)", .{name});
+            return poison;
+        }
+    }
+
+    const want: usize = @as(usize, d.nparam) + 1;
+    // §9.13.1's two are the only ones whose seed "may be omitted, in which case
+    // the simulator picks a seed"; Syntax 9-9 makes it mandatory everywhere else.
+    const min: usize = if (d.nparam == 0) 0 else want;
+    if (given.items.len < min or given.items.len > want) {
+        try self.err(tok, .E0816, "`{s}` takes {s}{d} argument{s}, got {d}", .{
+            name,
+            if (min < want) "at most " else "",
+            want,
+            if (want == 1) "" else "s",
+            given.items.len,
+        });
+        return poison;
+    }
+
+    // ---- the seed -----------------------------------------------------------
+    var seed: Mir.Value = undefined;
+    // Set only for §9.13.2's "If it is an integer VARIABLE, then it is an inout
+    // argument"; a parameter, a constant and an omitted seed all leave it null,
+    // which is §9.13.1's "the system function does not update the parameter
+    // value".
+    var write_back: ?VarSlot = null;
+    if (given.items.len > 0) {
+        const sa = given.items[0];
+        const tv = try self.lowerExpr(sa);
+        // §9.13.2: "For each system function, the seed argument shall be an
+        // integer", and Syntax 9-9 says the same as grammar —
+        // `seed ::= integer_variable_identifier | integer_parameter_identifier
+        // | [ sign ] decimal_number`. A real is none of the three, and the
+        // inout half of the rule needs somewhere to put an updated INTEGER.
+        if (tv.ty != .integer) {
+            try self.errAt(sa, .E0816, "the seed argument shall be an integer, and this one is {s}", .{@tagName(tv.ty)});
+            return poison;
+        }
+        seed = tv.v;
+        if (ex.tag(sa) == .ident) if (self.vars.get(self.file.str(ex.strOf(sa)))) |s| {
+            if (s.ty == .integer) write_back = s;
+        };
+    }
+    if (write_back == null) {
+        // The seedless and constant-seed forms. §9.13.1: "an internal seed is
+        // created which is assigned the initial value of the parameter or
+        // constant ... this internal seed gets updated every time the call ... is
+        // made", and with no source variable there is nowhere in the model to put
+        // it. So it is a latch in `Instance`, advanced by `updateState` on the
+        // ACCEPTED step and only read here — the residual stays a pure function
+        // of x, which a draw advancing per Newton iteration would destroy.
+        const site = self.rng_auto_sites;
+        self.rng_auto_sites += 1;
+        const latch = try self.call("$rng$auto", &.{try self.iconst(site)});
+        seed = if (given.items.len > 0)
+            // The declared constant/parameter still SEEDS the stream, so it is
+            // mixed in rather than dropped: two call sites with the same literal
+            // seed are two streams (the "every time the call is made" sentence),
+            // and two sites with different literals differ from the first draw.
+            try self.emit(.iadd, &.{ seed, try self.toInt(.{ .v = latch, .ty = .real }) })
+        else
+            try self.toInt(.{ .v = latch, .ty = .real });
+    }
+
+    // ---- the parameters, and the rules §9.13.2 states about them ------------
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    defer vals.deinit(self.arena);
+    try vals.append(self.arena, seed);
+    for (given.items[@min(1, given.items.len)..], 0..) |a, i| {
+        const tv = try self.lowerExpr(a);
+        try vals.append(self.arena, try self.toReal(tv));
+        // Only a folded argument can be judged; a runtime one is the host's
+        // problem, and §9.13.2 gives the kernels a defined answer either way.
+        const c = self.constEval(a) orelse continue;
+        if (c == .str) continue;
+        if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and c.asReal() <= 0)
+            try self.errAt(a, .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{
+                name, distParamName(d, i), c.asReal(),
+            });
+    }
+    if (d.ordered and vals.items.len == 3) {
+        const lo = self.constEval(given.items[1]);
+        const hi = self.constEval(given.items[2]);
+        if (lo != null and hi != null and lo.? != .str and hi.? != .str and
+            lo.?.asReal() >= hi.?.asReal())
+        {
+            var b = self.errAtWith(given.items[1], .E0816);
+            b.msg("the start value shall be smaller than the end value, got {d} and {d}", .{ lo.?.asReal(), hi.?.asReal() });
+            b.note("§9.13.2: start and end \"bound the values returned\", and an interval with start above end is empty", .{});
+            try b.emit();
+        }
+    }
+
+    // ---- the two calls ------------------------------------------------------
+    const v = try self.call(d.kernel, vals.items);
+    // §9.13.1/§9.13.2: "a value is passed to the function and A DIFFERENT VALUE
+    // IS RETURNED. The variable is initialized by the user and only updated by
+    // the system function." Written AFTER the variate is computed, so both read
+    // the same incoming seed however the two calls end up ordered in the MIR.
+    if (write_back) |s| {
+        const next = try self.call("$rng$next", &.{seed});
+        try self.builder.writeVariable(s.place, self.cur, try self.toInt(.{ .v = next, .ty = .real }));
+    }
+    return .{ .v = if (d.ty == .integer) try self.toInt(.{ .v = v, .ty = .real }) else v, .ty = d.ty };
+}
+
 /// §9.5.4.2's conversion codes, and nothing else. True when the format was
 /// refused. The suppression `*` and the maximum field width are part of the
 /// specification and are read past here; `str_kernels.zScan` implements them.
@@ -4498,19 +4924,14 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
 /// ch9 functions VerA deliberately does not implement. Rejecting by exact
 /// name (rather than silently returning 0) is what the fixtures pin.
 fn isRejectedSysFunc(name: []const u8) bool {
+    // §9.13's 17 probabilistic names USED to be here, refused wholesale because
+    // a draw changing between Newton iterations makes the residual
+    // non-deterministic. The premise was right and the conclusion was wrong: the
+    // seed is a source variable (§9.13.1 "a value is passed to the function and a
+    // different value is returned"), so a variate is a pure function of it and
+    // stays fixed across the iterations at one point by construction. They are
+    // lowered by `lowerRandom`; `rng_kernels.zig` carries the argument.
     const rejected = [_][]const u8{
-        "$random", "$arandom", // §9.13.1
-        "$dist_uniform",      "$dist_normal",     "$dist_exponential", // §9.13.2
-        "$dist_poisson",      "$dist_chi_square", "$dist_t",
-        "$dist_erlang",       "$rdist_uniform",   "$rdist_normal",
-        // The rest of §9.13.2. A random variate cannot exist in a device
-        // residual at all: the Newton loop re-evaluates one operating point
-        // many times, and a draw that changes between iterations makes the
-        // residual non-deterministic, so it never converges. Rejecting the
-        // WHOLE family is the only self-consistent rule — a zero substitute
-        // would silently change the device the user wrote.
-        "$rdist_exponential", "$rdist_poisson",   "$rdist_chi_square",
-        "$rdist_t",           "$rdist_erlang",
         "$simprobe", // §9.16
     };
     for (rejected) |r| if (std.mem.eql(u8, name, r)) return true;
@@ -5749,6 +6170,9 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.errAt(e, .E0806, "`{s}`", .{name});
         return poison;
     }
+    // §9.13 Table 9-10. Before everything below, because the seed is an inout
+    // argument and the write-back is not something a `call` result can express.
+    if (try self.lowerRandom(ex.mainTok(e), name, ex.args(e))) |tv| return tv;
     // Annex G Table G.1: the OVI Verilog-A v1.0 spelling `$limexp` was replaced
     // in v2.0 by the bare `limexp` (§4.5.13). Not an alias — a `$` name is a
     // system function and `$limexp` is in neither Table 9-11 nor A.8.2, so the
@@ -5875,6 +6299,11 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // — `lowerScan` turns the one source call into the assignments it means.
     if (std.mem.eql(u8, name, "$sscanf"))
         return .{ .v = try self.lowerScan(ex.mainTok(e), sys_args), .ty = .integer };
+    // §9.5.4/§9.5.7 the same, for the three §9.5 calls with a destination
+    // argument. Both halves are integer-valued (§9.5.4.1's character count,
+    // §9.5.4.2's item count, §9.5.7's errno).
+    if (try self.lowerFileRead(ex.mainTok(e), name, sys_args)) |v|
+        return .{ .v = v, .ty = .integer };
     // §9.5.3 the two writers are TASKS: their whole content is the assignment to
     // the string variable, and in expression position there is nothing to assign.
     if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat")) {
@@ -5887,7 +6316,12 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         if (a == .none) continue;
         try vals.append(self.arena, try self.lowerSysArg(a));
     }
-    return .{ .v = try self.call(name, vals.items), .ty = sysFuncTy(name) };
+    const v = try self.call(name, vals.items);
+    // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
+    // $feof): ordinary values, but each one moves or creates state the NEXT call
+    // observes, so it is sequenced into the I/O phase like the tasks.
+    if (isFileFunc(name)) try self.sequenceFileCall(ex.mainTok(e), name, v);
+    return .{ .v = v, .ty = sysFuncTy(name) };
 }
 
 // ---- §9.21 $table_model -----------------------------------------------------
@@ -6402,11 +6836,24 @@ fn sysFuncTy(name: []const u8) Ty {
         // IS the type, so this and `analysis.callTy` agree by construction.
          "$sscanf",
         "$sscanf$int",
+        // §9.5.1/§9.5.4/§9.5.5/§9.5.7/§9.5.8 — every descriptor function is
+        // integer-valued, and each digit is one the LRM writes down: a 32-bit
+        // mcd or fd, a character count, an item count, a byte offset, a -1/0
+        // status, an errno, a nonzero-or-zero EOF flag. They read `.real` until
+        // this list existed, so `integer fd = $fopen(…)` rounded a float 0.0.
+        "$fopen",         "$fgets",
+        "$fscanf",        "$fscanf$int",
+        "$ftell",         "$fseek",
+        "$rewind",        "$ferror",
+        "$feof",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .integer;
     if (std.mem.eql(u8, name, "$simparam$str")) return .string; // §9.15
     // §9.5.3 the formatted text itself, and §9.5.4.2's string-valued item.
     if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .string;
+    // §9.5.4.1's string, §9.5.4.2's string-valued item and §9.5.7's description.
+    if (std.mem.eql(u8, name, "$fgets$str") or std.mem.eql(u8, name, "$fscanf$str") or
+        std.mem.eql(u8, name, "$ferror$str")) return .string;
     return .real;
 }
 
