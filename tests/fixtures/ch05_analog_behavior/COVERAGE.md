@@ -1,8 +1,10 @@
 # Chapter 5 coverage
 
 Source: `docs/ch5-analog.html`, read in full through Section 5.11.
-112 `.va` fixtures, of which 31 are `//! reject`, 81 run and assert, and exactly ONE is
-`//! xfail` — `two_named_branches.va` (grep-measured over the directory).
+113 `.va` fixtures, of which 31 are `//! reject`, 82 run and assert, and TWO are
+`//! xfail` — `two_named_branches.va` and `net_named_gnd_is_not_ground.va`
+(grep-measured over the directory: `ls *.va`, `grep -l '^//! reject'`,
+`grep -l '^//! xfail'`).
 
 HTML section-ID audit: `s5.2` `s5-2-1` `s5-4-3`. Three IDs for fifty-seven
 printed sections — this chapter is a layout-preserving extraction and its
@@ -29,7 +31,7 @@ clause in its header but does not cite it is not credited here.
 | 5.3.2 Block names | `named_block_locals.va` (block-local parameter); `named_block_scope_rejected.va` (E0314 — the bare name, not the lifetime; §6.8 searches upward only) |
 | 5.4 Analog signals | — no fixture cites the parent; it is an introduction pointing at Clause 6 |
 | 5.4.1 Access functions | `access_one_node.va`, `access_two_nodes.va`, `named_branch_probe.va`, `single_terminal_branch.va`, `direct_flow.va`, `direct_potential.va`, `flow_source.va`, `potential_probe.va`, `conductor.va`, `derivative_contribution.va`, `controlled_sources.va`, `controlled_voltage_source.va`, `implicit_zero_contribution.va`, `unassigned_switch_arm.va`. `two_named_branches_retain_separately.va` — the clause's "any number of named branches between any two signals", in §5.4.3 Example 1's own `branch (a, c) i_diode, junc_cap;` spelling: each of the two retains its own contributed flow (1.0 and 0.25, two different digits one shared accumulator cannot produce) and `I(<a>)` still reads their sum, 1.25, so identity does not cost the node its total. `two_named_branches.va` **xfail** — the collapse it was written for is fixed; what is left is that its four CHECKs sit ABOVE the two `<+` lines and VerA answers a branch-flow read at the statement position (§5.6.1.2's sequential retention) instead of §5.4.2.2's "anywhere in the module" |
-| 5.4.2 Probes and sources | `flow_probe.va`, `controlled_sources.va`, `current_controlled_current.va`, `current_controlled_voltage.va` |
+| 5.4.2 Probes and sources | `flow_probe.va`, `controlled_sources.va`, `current_controlled_current.va`, `current_controlled_voltage.va`. `net_named_gnd_is_not_ground.va` **xfail** — the clause's branch is a pair of NODES, and §1.3.1.1's reference node is a node and not a spelling, so `I(a)` and `I(a,gnd)` over a net whose own name is `gnd` are two branches. VerA interns a branch-flow unknown under the string `flow(<hi>,<lo>)` and `nodeName` prints the reference as `gnd`, so the two collapse onto one unknown and the second read returns the first branch's current. Its three other CHECKs (the topology, the solve, V of the reference) pass |
 | 5.4.2.1 Probes | `probe_both_quantities_invalid.va` — green (`//! reject DiagnosticsReported`): an unnamed branch is classified as a probe, so reading both quantities of one is diagnosed |
 | 5.4.2.2 Sources | `source_probe_both.va`, `constant_current_source.va`, `two_named_branches_retain_separately.va` (a source branch's flow read back, per branch), `two_named_branches.va` (**xfail**, above: the clause's "accessible in expressions anywhere in the module" is the half VerA does not meet — a read placed before the `<+` sees nothing retained) |
 | 5.4.3 Accessing flow through a port | `port_flow_probe.va` (legal `I(<p>)`); `port_potential_invalid.va` (E0507, `V(<p>)`); `port_flow_contribution_invalid.va` (E0407, `I(<p>)` on the left of `<+`) |
@@ -81,8 +83,14 @@ clause in its header but does not cite it is not credited here.
 
 ## The debt ledger
 
-ONE fixture carries `//! xfail`, grep-measured: `two_named_branches.va`. The prose below
-is kept as the record of what the twenty rows were and how they closed.
+TWO fixtures carry `//! xfail`, grep-measured: `two_named_branches.va` and
+`net_named_gnd_is_not_ground.va`. The second is not a leftover from the twenty —
+it was written deliberately, in wave 10, to pin a defect ahead of the rewrite
+that will fix it, and its header argues why an xfail is the only honest verdict
+for it (a `//! reject` would invert the fixture, and a green fixture recording
++1 mA where the LRM says -1 mA is the frozen wrong answer the suite exists to
+kill). The prose below is kept as the record of what the twenty rows were and
+how they closed.
 
 **Eight stated a rule the compiler did not enforce** — `//! reject` fixtures that
 compiled anyway, so each was a missing diagnostic, and all eight are green:

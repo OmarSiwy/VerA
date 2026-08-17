@@ -8728,6 +8728,13 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
         try std.testing.expect(pp.u >= h.low.num_ports);
         // The name codegen's `flow(` predicate keys on, and which no §2.7/§2.8.1
         // identifier and no `flow(a,b)` branch unknown can collide with.
+        //
+        // An assertion about the KEY, not about what the user sees. The spelling
+        // reaches the host as `flowZ28Z3cpZ3eZ29` and is pinned there, in
+        // codegen.zig's "the `U` block is the SPELLING contract" test. So a
+        // rewrite that keys the unknown on something other than its printed name
+        // may replace this predicate with the new key's own and lose nothing:
+        // the two claims no longer ride on one string.
         try std.testing.expect(std.mem.startsWith(u8, h.low.nodeName(pp.u), "flow(<"));
     }
     try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.port_probes.items[0].u));
@@ -8768,6 +8775,12 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     // §5.4.2.2 the read side: a flow read AFTER a flow contribution is the
     // retained value, so it mints no `flow(p,n)` unknown; before one — or on a
     // POTENTIAL source, whose branch current codegen does pin — it still does.
+    //
+    // What this asserts is WHETHER an unknown exists, and it reads that off the
+    // string only because today the string is the key. Its counterpart on the
+    // spelling — that whatever the key becomes, the member still prints
+    // `flowZ28pZ2cnZ29` — is codegen.zig's "the `U` block is the SPELLING
+    // contract" test, so a key change is free to rewrite the search below.
     const cases = [_]struct { src: []const u8, unknown: bool }{
         .{ .src = "I(p,n) <+ 1.0; x = I(p,n);", .unknown = false },
         .{ .src = "x = I(p,n); I(p,n) <+ 1.0;", .unknown = true },

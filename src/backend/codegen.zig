@@ -5371,6 +5371,51 @@ test "codegen: a port whose only branch goes to ground still gets its unknown" {
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(") == null);
 }
 
+test "codegen: the `U` block is the SPELLING contract — all four name kinds, verbatim" {
+    var h: Harness = undefined;
+    // `node_voltages` is one string key space over four different kinds of name,
+    // and only one of them has a source spelling. The KEY is lowering's private
+    // business, but the spelling is not: it reaches the user three times over —
+    // as an emitted `U` member (here), as the identifier a `//! bias`/`//! sweep`
+    // line has to write (tb.zig's `unknownName`, pinned in its own test), and as
+    // the name every diagnostic over an unknown prints. So it is pinned as the
+    // whole block, byte for byte, and not one `indexOf` per kind: an insertion,
+    // a reorder or a re-escape is a change to the host's ABI and to every
+    // fixture that biases an unknown, and each of those is invisible to a
+    // substring search.
+    //
+    // Ports first, then §3.6.3 internal nets, then §5.4.2/§5.4.3 flows — the
+    // order `emitTopology` documents, which is also `num_ports`' meaning.
+    // `naming.sanitize` is what makes `b[0]` and `flow(p,n)` legal Zig, and
+    // `isValidId` leaves `p` and `n` alone.
+    try Harness.run(std.testing.allocator,
+        \\module m(p, b);
+        \\  inout p;
+        \\  inout [0:1] b;
+        \\  electrical p, n;
+        \\  electrical [0:1] b;
+        \\  real x;
+        \\  analog begin
+        \\    x = I(p, n);
+        \\    I(p, n) <+ x + I(<p>);
+        \\    I(b[0], b[1]) <+ V(b[0], b[1]);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src,
+        \\pub const U = enum(u8) {
+        \\    p, // port
+        \\    bZ5b0Z5d, // port
+        \\    bZ5b1Z5d, // port
+        \\    n, // internal
+        \\    flowZ28pZ2cnZ29, // branch flow
+        \\    flowZ28Z3cpZ3eZ29, // branch flow
+        \\};
+    ) != null);
+}
+
 test "codegen: §5.9 a loop the unit re-runs is not read out of the shared core" {
     var h: Harness = undefined;
     // Two units both slice the loop, so `planCommon` wants to hoist it — but

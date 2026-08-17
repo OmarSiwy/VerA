@@ -25,10 +25,10 @@ pointer to it too.
 
 ---
 
-## 1. The two remaining XFAILs — deliberately left, with their blast radius
+## 1. The remaining XFAILs — deliberately left, with their blast radius
 
-Both are real requirements VerA does not meet. Neither was missed; each was
-costed and the cost lands outside a chapter.
+All are real requirements VerA does not meet. None was missed; each was costed
+and the cost lands outside a chapter.
 
 ### `annex_f_resolution/unknown_discipline_mixed_port.va`
 
@@ -62,6 +62,27 @@ evaluation to the end of the block re-times what two thirds of the suite prints.
 cheaper than closing it safely, and that is why it is still open. Its sibling
 `two_named_branches_retain_separately.va` pins the part that IS fixed, so a
 regression in branch identity still fails loudly.
+
+### `ch05_analog_behavior/net_named_gnd_is_not_ground.va`
+
+Added deliberately, ahead of the fix rather than after the discovery: a net
+*named* `gnd` that is not *declared* `ground` aliases two different branches onto
+one solver unknown. `flowUnknown` (`src/ir/lower.zig`) builds the key by
+formatting `nodeName(hi)` and `nodeName(lo)` into `flow(<hi>,<lo>)`, `nodeName`
+spells the §1.3.1.1 reference node `gnd`, and `internNode` dedupes by that
+string — so `I(a)` and `I(a,gnd)` intern to one `u16` and the second read
+returns the first branch's current. Wrong Jacobian, exit 0, no diagnostic.
+
+**Blast radius:** `node_voltages` is one string key space holding four kinds of
+name (user nets, §5.4.2 branch flows, §5.4.3 port flows, §6.5.2 vector elements,
+plus §6.7 flattened paths), and the fix is to key it on `{kind, name}` rather
+than on `name`. The narrow repair — spelling ground `"0"` instead of `"gnd"` —
+is a one-line change that passes this fixture and is still wrong: it respells
+every emitted `U` member, `nodeName` has ~20 callers that are user-facing
+diagnostic text, and it churns `tb.zig`'s directive parser and the two fixtures
+that already write `flowZ28pZ2cgndZ29` by hand. The spellings a key split must
+leave byte-identical are pinned in codegen.zig's "the `U` block is the SPELLING
+contract" test and in tb.zig's `//! bias`/`//! sweep` test.
 
 ---
 
