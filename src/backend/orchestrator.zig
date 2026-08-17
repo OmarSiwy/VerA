@@ -84,9 +84,10 @@ pub const Artifact = struct {
     cache_hit: bool = false,
     /// Present only for ReleaseFast (SPIR-V/PTX/AMDGCN). Host loads/launches.
     /// ponytail: always empty. GPU emission already lives in the host's own
-    /// build (gompute), and eval_batch.zig has no kernel
-    /// entry point yet — wiring a second `build-lib` per GPU target here would
-    /// be dead code. Upgrade path: one extra `runCompiler` call per GPU target
+    /// build (gompute), and there is no GPU entry point on this side to compile:
+    /// codegen emits `eval`/`q` for ONE instance and nothing in the tree
+    /// launches them, so a second `build-lib` per GPU target would produce a
+    /// .spv nothing calls. Upgrade path: one extra `runCompiler` call per target
     /// with `-target spirv64-vulkan`/`nvptx64-cuda`/`amdgcn-amdhsa`, appended
     /// here; the rest of this file needs no change.
     gpu_kernel_paths: []const []const u8 = &.{},

@@ -174,6 +174,36 @@ Do not add members ahead of a consumer. The contract's own header is the rule: *
 member with no LRM justification and no consumer is not a roadmap item — it is
 deleted."*
 
+### A batch/SIMD evaluator inside VerA — and the measurement that outlived it
+
+`src/backend/eval_batch.zig` was 702 lines of classify→bucket→evaluate→stamp
+SIMD driver, deleted in wave 12. It was not slow or wrong; it was
+**uninstantiable**. It duck-typed a device `D` on `n_terminals`, `n_regions` and
+`region(comptime N, ...)` — a SECOND device ABI, none of whose members
+`tools/contract.zig` declares or `codegen.zig` emits — so `Batch(D)` could only
+ever be built from the `TestDiode` defined in the same file. VerA's job ends at
+the artifact; §8.3's simulation cycle is the host's, and a batch driver here can
+only race the host's own. `tools/source_guards.zig`'s reachability test is what
+makes a 702-line orphan unrepeatable.
+
+**What must not be re-derived, because the file measured it and the file is
+gone.** On a 100 k-instance random netlist, replacing the scalar stamp loop
+(scatter-accumulate into CSR) with a gather/add/scatter over N lanes:
+
+- **14 real CSR cells silently wrong**, up to **14 % relative error** in a
+  Jacobian entry — two lanes hitting one slot drop every update but the last;
+- **not faster: 3.05 ms vs 3.04 ms scalar.** The loop is bound by random-access
+  memory latency, not by ALU width.
+- **Prefetching the target cell also measured slower.**
+
+The aliasing is by design and does not go away with a better index: every
+terminal on ground maps to ONE shared sink cell (~44 % of entries for a
+4-terminal device with a quarter of its terminals grounded), two instances
+bridging the same node pair share a CSR slot, and the residual index IS the node
+index, so a node with k devices takes k contributions. That shared summation is
+the whole reason the stamp is `+=`. Scalar is the answer; if a host ever asks,
+this paragraph is the starting point, not a blank page.
+
 ---
 
 ## 3. Ceilings shipped deliberately
