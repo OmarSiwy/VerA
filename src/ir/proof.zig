@@ -100,6 +100,7 @@ const std = @import("std");
 const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
+const Analysis = @import("analysis.zig");
 const diag = @import("../diag.zig");
 const assert = std.debug.assert;
 const math = std.math;
@@ -341,10 +342,24 @@ pub fn proveOpts(
         .bag = bag,
     };
 
+    // The CFG, the dominator tree and the natural loops, from the ONE builder
+    // that owns them. This file used to carry a second Cooper/Harvey/Kennedy
+    // copy computing `idom`/`rpo_num` and nothing else; `Analysis` computes
+    // those PLUS `is_loop`/`loop_of`, which is the missing input for the
+    // loop-carried widening ceiling `walk` records.
+    //
+    // Two differences between the two builders were real, and both were
+    // MEASURED to be empty on this tree (all 1162 fixtures, instrumented
+    // `buildCfg`): (a) the old copy collected successors from EVERY
+    // branch/jump in a block, `Analysis` from the last one — **0** blocks
+    // carry two terminators; (b) the old copy's predecessor lists included
+    // unreachable blocks, `Analysis`'s do not — **0** blocks are unreachable
+    // from entry. Both are properties of what lowering emits (a block is
+    // closed at its terminator), so this is a re-derivation, not a relaxation.
+    p.an = try Analysis.buildStructure(p.arena, mir, lower);
+
     try p.seedValues(); // §3.4.2 param ranges, §4.2 constants, §4.4 probes
     try p.buildClasses(); // structural congruence, so guards reach every copy
-    try p.buildCfg(); // succ/pred CSR from the terminators
-    try p.computeDominators(); // guard evidence needs dominance
     try p.markSelectArms(); // §4.2.12 `?:` guards its own arms
     try p.walk(); // the one linear pass: intervals + domain checks
     return p.verdict(); // per-unit join over the backward slices
@@ -394,16 +409,9 @@ const Prover = struct {
     /// Save stack for guard application (dominator-tree DFS + select arms).
     saved: std.ArrayList(Fact) = .empty,
 
-    // --- CFG, CSR-encoded, indexed by @intFromEnum(Mir.Block) ---
-    succ: []u32 = &.{},
-    succ_start: []u32 = &.{},
-    pred: []u32 = &.{},
-    pred_start: []u32 = &.{},
-    idom: []u32 = &.{},
-    dom_child: []u32 = &.{},
-    dom_child_start: []u32 = &.{},
-    /// Reverse postorder position, `none_u32` for a block unreachable from entry.
-    rpo_num: []u32 = &.{},
+    /// The CFG, dominator tree and natural loops — built by `analysis.zig`,
+    /// which is the file that owns them. Read-only here.
+    an: Analysis = undefined,
     visited_block: []bool = &.{},
 
     /// Where every class-6 diagnostic goes. Shared with the other stages.
@@ -457,130 +465,6 @@ const Prover = struct {
 
     fn isFinite(self: *const Prover, v: Mir.Value) bool {
         return self.finite[self.idxOf(v)];
-    }
-
-    // ------------------------------------------------------------------ CFG --
-
-    /// Successors from every `branch`/`jump` in a block (not just the last
-    /// instruction — a malformed block only makes dominance more conservative).
-    fn buildCfg(self: *Prover) !void {
-        const nb = self.nBlocks();
-        var succ: std.ArrayList(u32) = .empty;
-        self.succ_start = try self.arena.alloc(u32, nb + 1);
-
-        for (0..nb) |b| {
-            self.succ_start[b] = @intCast(succ.items.len);
-            var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(b))));
-            while (it.next()) |inst| switch (self.mir.instData(inst)) {
-                .branch => |br| {
-                    try succ.append(self.arena, @intFromEnum(br.then_block));
-                    try succ.append(self.arena, @intFromEnum(br.else_block));
-                },
-                .jump => |j| try succ.append(self.arena, @intFromEnum(j.target)),
-                else => {},
-            };
-        }
-        self.succ_start[nb] = @intCast(succ.items.len);
-        self.succ = succ.items;
-
-        // Transpose into predecessors (counting sort, no nested lists).
-        self.pred_start = try self.arena.alloc(u32, nb + 1);
-        @memset(self.pred_start, 0);
-        for (self.succ) |s| self.pred_start[s + 1] += 1;
-        for (1..nb + 1) |i| self.pred_start[i] += self.pred_start[i - 1];
-        self.pred = try self.arena.alloc(u32, self.succ.len);
-        const fill = try self.arena.alloc(u32, nb);
-        @memcpy(fill, self.pred_start[0..nb]);
-        for (0..nb) |b| {
-            for (self.succ[self.succ_start[b]..self.succ_start[b + 1]]) |s| {
-                self.pred[fill[s]] = @intCast(b);
-                fill[s] += 1;
-            }
-        }
-    }
-
-    fn preds(self: *const Prover, b: u32) []const u32 {
-        return self.pred[self.pred_start[b]..self.pred_start[b + 1]];
-    }
-
-    /// Cooper/Harvey/Kennedy iterative dominators over reverse postorder.
-    /// Blocks unreachable from entry keep `rpo_num == none_u32` and are walked
-    /// separately (with no guard evidence) so their domains are still checked.
-    fn computeDominators(self: *Prover) !void {
-        const nb = self.nBlocks();
-        self.idom = try self.arena.alloc(u32, nb);
-        self.rpo_num = try self.arena.alloc(u32, nb);
-        @memset(self.idom, none_u32);
-        @memset(self.rpo_num, none_u32);
-        if (nb == 0) return;
-
-        // Iterative DFS → postorder.
-        const post = try self.arena.alloc(u32, nb);
-        var n_post: u32 = 0;
-        const seen = try self.arena.alloc(bool, nb);
-        @memset(seen, false);
-        const next_succ = try self.arena.alloc(u32, nb);
-        var stack: std.ArrayList(u32) = .empty;
-        try stack.append(self.arena, 0);
-        seen[0] = true;
-        next_succ[0] = self.succ_start[0];
-        while (stack.items.len > 0) {
-            const b = stack.items[stack.items.len - 1];
-            if (next_succ[b] < self.succ_start[b + 1]) {
-                const s = self.succ[next_succ[b]];
-                next_succ[b] += 1;
-                if (!seen[s]) {
-                    seen[s] = true;
-                    next_succ[s] = self.succ_start[s];
-                    try stack.append(self.arena, s);
-                }
-            } else {
-                _ = stack.pop();
-                post[n_post] = b;
-                n_post += 1;
-            }
-        }
-        for (post[0..n_post], 0..) |b, i| self.rpo_num[b] = n_post - 1 - @as(u32, @intCast(i));
-
-        self.idom[0] = 0;
-        var changed = true;
-        while (changed) {
-            changed = false;
-            var i: u32 = n_post - 1; // reverse postorder = postorder backwards
-            while (true) : (i -= 1) {
-                const b = post[i];
-                if (b != 0) {
-                    var new: u32 = none_u32;
-                    for (self.preds(b)) |p| {
-                        if (self.idom[p] == none_u32) continue;
-                        new = if (new == none_u32) p else self.intersect(p, new);
-                    }
-                    if (new != none_u32 and self.idom[b] != new) {
-                        self.idom[b] = new;
-                        changed = true;
-                    }
-                }
-                if (i == 0) break;
-            }
-        }
-
-        // Dominator-tree children, CSR, in block-index order (determinism).
-        self.dom_child_start = try self.arena.alloc(u32, nb + 1);
-        @memset(self.dom_child_start, 0);
-        for (0..nb) |b| {
-            if (b == 0 or self.idom[b] == none_u32) continue;
-            self.dom_child_start[self.idom[b] + 1] += 1;
-        }
-        for (1..nb + 1) |i| self.dom_child_start[i] += self.dom_child_start[i - 1];
-        self.dom_child = try self.arena.alloc(u32, self.dom_child_start[nb]);
-        const fill = try self.arena.alloc(u32, nb);
-        @memcpy(fill, self.dom_child_start[0..nb]);
-        for (0..nb) |b| {
-            if (b == 0 or self.idom[b] == none_u32) continue;
-            const parent = self.idom[b];
-            self.dom_child[fill[parent]] = @intCast(b);
-            fill[parent] += 1;
-        }
     }
 
     // -------------------------------------------------------------- seeding --
@@ -724,16 +608,6 @@ const Prover = struct {
             },
             else => null,
         };
-    }
-
-    fn intersect(self: *const Prover, a_in: u32, b_in: u32) u32 {
-        var a = a_in;
-        var b = b_in;
-        while (a != b) {
-            while (self.rpo_num[a] > self.rpo_num[b]) a = self.idom[a];
-            while (self.rpo_num[b] > self.rpo_num[a]) b = self.idom[b];
-        }
-        return a;
     }
 
     // ------------------------------------------------------- guard evidence --
@@ -1046,9 +920,12 @@ const Prover = struct {
     /// is already computed. A phi operand coming from an unprocessed
     /// predecessor (a loop back edge, §5.9) is still ⊤/non-finite — i.e. the
     /// loop is widened to ⊤ immediately. That is sound and terminating.
-    /// ponytail: immediate widening loses loop-carried bounds. Upgrade path if a
-    /// real model needs them: ascending-chain worklist from ⊥ with a widening
-    /// after k rounds. Genvar loops (§6.6.1) unroll, so this bites `while` only.
+    /// ponytail: immediate widening loses loop-carried bounds. Upgrade path if
+    /// a real model needs them: ascending-chain worklist from ⊥ with a widening
+    /// after k rounds — and the input that decides WHERE to widen is now in
+    /// hand, `analysis.inLoop(b)`, so the worklist can iterate the natural loop
+    /// body (`Analysis.loop_of`) instead of the whole CFG. Genvar loops
+    /// (§6.6.1) unroll, so this bites `while` only.
     fn walk(self: *Prover) !void {
         const nb = self.nBlocks();
         if (nb == 0) return;
@@ -1070,8 +947,8 @@ const Prover = struct {
         // be the branching block is what makes "dominated by b" imply "the
         // branch went this way".
         if (b != 0) {
-            const parent = self.idom[b];
-            if (parent != none_u32 and self.preds(b).len == 1) {
+            const parent = self.an.idom[b];
+            if (parent != none_u32 and self.an.preds[b].len == 1) {
                 var it = self.mir.blockInsts(@enumFromInt(parent));
                 while (it.next()) |inst| {
                     const d = self.mir.instData(inst);
@@ -1085,8 +962,7 @@ const Prover = struct {
         }
 
         try self.walkBlock(b);
-        for (self.dom_child[self.dom_child_start[b]..self.dom_child_start[b + 1]]) |c|
-            try self.walkDom(c);
+        for (self.an.dom_kids[b]) |c| try self.walkDom(c);
     }
 
     fn walkBlock(self: *Prover, b: u32) !void {
@@ -1657,12 +1533,18 @@ const Prover = struct {
         const modes = try self.gpa.alloc(FloatMode, n);
         errdefer self.gpa.free(modes);
 
-        const seen = try self.arena.alloc(bool, self.nVals());
+        // GENERATION-STAMPED, not re-cleared. `u` is already the unique index
+        // of the slice being walked, so "already on this slice" is
+        // `seen[i] == u` and the array is cleared exactly once instead of once
+        // per contribution. `none_u32` is the pre-first stamp, because `u == 0`
+        // is a real generation.
+        const seen = try self.arena.alloc(u32, self.nVals());
+        @memset(seen, none_u32);
         var stack: std.ArrayList(Mir.Value) = .empty;
         defer stack.deinit(self.arena);
 
         for (self.lower.contributions.items, 0..) |c, u| {
-            @memset(seen, false);
+            const gen: u32 = @intCast(u);
             stack.clearRetainingCapacity();
             try stack.append(self.arena, c.resist_val);
             try stack.append(self.arena, c.react_val);
@@ -1672,8 +1554,8 @@ const Prover = struct {
             var culprit: Mir.Value = .undef;
             while (stack.pop()) |v| {
                 const i = self.idxOf(v);
-                if (seen[i]) continue;
-                seen[i] = true;
+                if (seen[i] == gen) continue;
+                seen[i] = gen;
                 if (!self.finite[i]) {
                     fin = false;
                     culprit = v;

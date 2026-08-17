@@ -283,7 +283,14 @@ Grouped by area; the file is the authority, this is the index.
   net name, and it buys one diagnostic on a program nobody writes.
 
 ### Proof / range analysis (`src/ir/proof.zig`)
-- Immediate widening loses loop-carried bounds.
+- Immediate widening loses loop-carried bounds. A phi operand arriving on a
+  §5.9 back edge is still ⊤ when `walk` reads it, so a `while` body's values
+  widen to ⊤ on sight. The missing input is no longer missing: proof consumes
+  `analysis.zig`'s CFG now instead of carrying its own dominator copy, so
+  `analysis.inLoop(b)` and `Analysis.loop_of` — which block is in a natural
+  loop, and which header owns it — are in hand. The upgrade is the fixpoint
+  (ascending-chain worklist over the loop body, widen after k rounds), not the
+  structure it needs. Genvar loops (§6.6.1) unroll, so this bites `while` only.
 
 ### Lexer (`src/frontend/lexer.zig`)
 - Left padding with `x`/`z` is unrepresentable.
