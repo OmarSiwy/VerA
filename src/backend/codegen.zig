@@ -711,7 +711,7 @@ pub const Gen = struct {
         if (files) try depublish(self.gpa, &self.out, file_txt);
         if (tbl) try depublish(self.gpa, &self.out, table_txt);
         if (rng) try depublish(self.gpa, &self.out, rng_txt);
-        if (self.limits.len != 0) try self.out.appendSlice(self.gpa, cg_limit.helpers_txt);
+        if (self.limits.len != 0) try depublish(self.gpa, &self.out, limit_txt);
         try self.out.appendSlice(self.gpa, "\n");
         // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
         // they need `R` for the same reason `updateState` does. It stays out of
@@ -4505,6 +4505,13 @@ const table_txt = "// ---- §9.21 table model kernels (src/backend/table_kernels
 const file_txt = "// ---- §9.5 file descriptor I/O kernels (src/backend/file_kernels.zig) ----\n\n" ++
     @embedFile("file_kernels.zig");
 
+/// §4.5.15 the SPICE limiters, emitted VERBATIM from `limit_kernels.zig` on the
+/// same terms. Carried only by a device with an honoured `$limit` call — no unit
+/// body can reach them, because `$limit` renders as the identity of its probe
+/// there (`cg_limit.zig`'s header says why).
+const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (src/backend/limit_kernels.zig) ----\n\n" ++
+    @embedFile("limit_kernels.zig");
+
 /// §4.5.11/§4.5.12 the filter kernels, emitted VERBATIM from `filter_kernels.zig`
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
 /// device runs. Only devices that actually use a filter carry them.
@@ -6118,4 +6125,143 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
     const two = [_]f64{ 1.0, 2.0, 20.0, 3.0, 6.0, 60.0 };
     try std.testing.expectEqual(@as(f64, 4.0), k.zTable(S, 2, 3, 1, 1, "LL", two, [_]S{.{ .v = 2.0 }}).v);
     try std.testing.expectEqual(@as(f64, 40.0), k.zTable(S, 2, 3, 1, 2, "LL", two, [_]S{.{ .v = 2.0 }}).v);
+}
+
+test "codegen: §4.5.11 the bilinear transform is the one the emitted filter runs" {
+    // `filter_kernels.zig` is `@embedFile`d, so — like the four kernels above —
+    // what is exercised here is byte-for-byte what a device runs. It was the
+    // tree's one file reachable by neither import graph AND by no test, which is
+    // why this is characterization: a reviewer hand-checked D=2 and D=3 and found
+    // the kernel correct, and these rows are that check made runnable.
+    const k = @import("filter_kernels.zig");
+    // §4.5.11's trapezoidal substitution `s = k(1−z⁻¹)/(1+z⁻¹)`, cleared by
+    // `(1+z⁻¹)ᴰ`. Multiplied out for D = 2 that is
+    //   q₀ = p₀ + p₁k + p₂k², q₁ = 2p₀ − 2p₂k², q₂ = p₀ − p₁k + p₂k²,
+    // and with p = [1,2,3], k = 2 every term is dyadic, so this is exact.
+    const q2 = k.zBilin(2, .{ 1.0, 2.0, 3.0 }, 2.0);
+    try std.testing.expectEqual([3]f64{ 17.0, -22.0, 9.0 }, q2);
+
+    // The two evaluations of the transform that hold at EVERY degree, and the
+    // reason a wrong sign in either inner loop cannot hide:
+    //   z = 1  (z⁻¹ = 1)  ⇒ (1−z⁻¹) = 0, so only the i = 0 term lives: Σqⱼ = p₀·2ᴰ.
+    //     That is DC gain, and it is what `zLaplace`'s `dt <= 0` arm computes the
+    //     other way (`H(0) = num[0]/den[0]`); the two must agree or a filter's
+    //     operating point disagrees with its first transient step.
+    //   z = −1 (z⁻¹ = −1) ⇒ (1+z⁻¹) = 0, so only i = D lives: Σ(−1)ʲqⱼ = p_D·kᴰ·2ᴰ.
+    const p3 = [4]f64{ 1.5, -2.0, 0.25, 4.0 };
+    inline for (.{ 1.0, 2.0, 8.0 }) |kk| {
+        const q3 = k.zBilin(3, p3, kk);
+        var dc: f64 = 0.0;
+        var ny: f64 = 0.0;
+        for (q3, 0..) |c, j| {
+            dc += c;
+            ny += if (j % 2 == 0) c else -c;
+        }
+        try std.testing.expectApproxEqRel(p3[0] * 8.0, dc, 1e-12);
+        try std.testing.expectApproxEqRel(p3[3] * kk * kk * kk * 8.0, ny, 1e-12);
+    }
+    // D = 0 is a bare gain: no substitution to make, nothing to clear.
+    try std.testing.expectEqual([1]f64{7.0}, k.zBilin(0, .{7.0}, 3.0));
+}
+
+test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures assert" {
+    // `limit_kernels.zig` is `@embedFile`d into every device with an honoured
+    // `$limit`, so the shapes pinned here are the shapes that run there. They
+    // need pinning HERE and nowhere else: `tb.zig` generates calls to
+    // `updateState`/`display`/`eval`/`q` only, so no fixture ever executes
+    // `D.limit`, and until this file existed the limiters were a string literal
+    // that nothing in the tree could call.
+    //
+    // §4.5.15 leaves the algorithm implementation-defined; what the LRM does fix
+    // is §9.17.3's "when the simulator has converged, the return value of the
+    // $limit() function is the value of the access function reference". Every
+    // TRANSPARENCY row below is that sentence, and it is also what makes
+    // `cg_limit.emitClamp`'s `if (vl != vn) ok = false;` a truthful convergence
+    // flag rather than a permanent `false`. The rest are ngspice `devsup.c`.
+    const k = @import("limit_kernels.zig");
+    const vt = 0.025852; // kT/q at 300 K, the `$vt` every junction model passes
+    const vcrit = 0.6;
+
+    // TRANSPARENCY. A bias below `vcrit` is returned BIT-identically — this is
+    // the row `annex_e_spice/limit_pnj.va` asserts through the device.
+    try std.testing.expectEqual(@as(f64, 0.3), k.zPnjlim(0.3, 0.3, vt, vcrit));
+    // `DEVpnjlim` damps only past `vcrit` AND past a two-`vt` step; the damped
+    // answer lands strictly between the two iterates, so the clamp pulls the
+    // step back without reversing it. (0.6255 V here, but the bracket is the
+    // claim: a sign slip in `vold ± vt*(2+log(…))` leaves it.)
+    const damped = k.zPnjlim(1.0, 0.5, vt, vcrit);
+    try std.testing.expect(damped > 0.5 and damped < 1.0);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.6254615), damped, 1e-7);
+    // Cold start: `vold <= 0` has no exponential to step back along, so the
+    // answer is the logarithmic one, `vt*ln(vnew/vt)` — far below `vnew`.
+    try std.testing.expectApproxEqAbs(@as(f64, 0.094499), k.zPnjlim(1.0, 0.0, vt, vcrit), 1e-6);
+    // Reverse bias is FLOORED, and the two floors are different formulas:
+    // `-vold-1` from a forward-biased previous iterate, `2*vold-1` from a
+    // reverse-biased one. A swap passes at vold = -1 and nowhere else.
+    try std.testing.expectEqual(@as(f64, -1.5), k.zPnjlim(-5.0, 0.5, vt, vcrit));
+    try std.testing.expectEqual(@as(f64, -1.4), k.zPnjlim(-5.0, -0.2, vt, vcrit));
+    try std.testing.expectEqual(@as(f64, -1.0), k.zPnjlim(-1.0, 0.5, vt, vcrit)); // above the floor: transparent
+
+    // TRANSPARENCY, `limit_fet.va`'s digits exactly: vnew = vold = 0.3, vth = 0.7.
+    try std.testing.expectEqual(@as(f64, 0.3), k.zFetlim(0.3, 0.3, 0.7));
+    // `DEVfetlim` off-region (`vold < vto`): turning on stops at `vto+0.5`,
+    // turning off steps by at most `vtsthi = |2(vold-vto)|+2` = 3.4 V here.
+    try std.testing.expectEqual(@as(f64, 1.2), k.zFetlim(5.0, 0.0, 0.7));
+    try std.testing.expectEqual(@as(f64, -3.4), k.zFetlim(-5.0, 0.0, 0.7));
+    // Middle region (`vto <= vold < vto+3.5`): a window of `vto-0.5 … vto+4`.
+    // (`vto ± c` is computed, not written, so these two are the only rows here
+    // that cannot be spelled as an exact literal.)
+    try std.testing.expectApproxEqAbs(@as(f64, 4.7), k.zFetlim(10.0, 1.0, 0.7), 1e-15);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.2), k.zFetlim(-10.0, 1.0, 0.7), 1e-15);
+
+    // TRANSPARENCY, `limit_vds.va`'s digits: 0.4 V from a cold 0 V is inside
+    // both of `DEVlimvds`'s low-`vold` bounds (+4 rising, −0.5 falling).
+    try std.testing.expectEqual(@as(f64, 0.4), k.zLimvds(0.4, 0.0));
+    try std.testing.expectEqual(@as(f64, 4.0), k.zLimvds(10.0, 0.0));
+    try std.testing.expectEqual(@as(f64, -0.5), k.zLimvds(-3.0, 0.0));
+    // Past 3.5 V the bound becomes multiplicative going up (`3*vold+2`) and a
+    // floor of 2 V coming down — the fixture header's "only a previous iterate
+    // at or above 3.5 V would answer max(0.4, 2) = 2".
+    try std.testing.expectEqual(@as(f64, 14.0), k.zLimvds(100.0, 4.0));
+    try std.testing.expectEqual(@as(f64, 2.0), k.zLimvds(1.0, 4.0));
+}
+
+test "codegen: §4.5.15 only pnjlim reports non-convergence" {
+    // The kernels above are pure functions; this pins the one line of
+    // `cg_limit.emitClamp` that turns `zPnjlim`'s transparency into the
+    // contract's `converged` verdict. ngspice sets `icheck` from `DEVpnjlim`
+    // alone, and exactly on the paths where it moved `vnew` — so "the value
+    // changed" IS the flag. Nothing executes `D.limit` (see the test above), so
+    // the emitted text is the only place this claim is visible.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module lim(p);
+        \\  inout p; electrical p; electrical mid;
+        \\  parameter real vt = 0.025852;
+        \\  parameter real vc = 0.6;
+        \\  analog I(mid, p) <+ ($limit(V(mid), "pnjlim", vt, vc) - V(p)) / 1.0;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const pnj = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, pnj, "if (vl != vn) ok = false;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pnj, ".converged = ok }") != null);
+
+    // fetlim clamps too, but its clamp is trajectory shaping and not a statement
+    // about the residual — so the device reports converged and carries no `ok`
+    // at all. An unconditional `var ok` would be an unused-variable compile
+    // error in the emitted device, which no fixture would ever reach.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module lim(p);
+        \\  inout p; electrical p; electrical mid;
+        \\  analog I(mid, p) <+ ($limit(V(mid), "fetlim", 0.7) - V(p)) / 1.0;
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const fet = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, fet, "zFetlim(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fet, "var ok = true;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, fet, "vl != vn") == null);
+    try std.testing.expect(std.mem.indexOf(u8, fet, ".converged = true }") != null);
 }
