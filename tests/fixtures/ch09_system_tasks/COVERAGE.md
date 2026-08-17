@@ -8,21 +8,22 @@ Sixty-eight ids, forty-six of them carrying a fixture that exercises the
 construct. The other twenty-two get an empty cell and a sentence saying why,
 never a plausible file name.
 
-164 `.va` files and one data file (`ch09_table_model_2d.tbl`): 36 carry a `//! reject` arm,
-128 run and assert, and **NONE is `//! xfail`** (grep-measured over this directory). This
+167 `.va` files and one data file (`ch09_table_model_2d.tbl`): 37 carry a `//! reject` arm,
+130 run and assert, and **NONE is `//! xfail`** (grep-measured over this directory). This
 paragraph used to say seventy-eight of the 164 were xfail and called that "by a wide margin
 the most indebted chapter in the suite"; 65 was the number actually in the tree when the
 claim was written, and it is 0 now. This chapter went from the largest debt in the suite to
 none of it, and the "four walls" section below is why: the rows were never independent
 defects.
 
-Every one of the 36 rejects passes. `136`/`137` (`$bound_step` E0803/E0802), `138`/`139`
+Every one of the 37 rejects passes. `136`/`137` (`$bound_step` E0803/E0802), `138`/`139`
 (`$discontinuity` E0804/E0805), `147` (§9.15 `$simparam` on an unknown name with no
 fallback), `161` (§9.4.3 format/argument pairing), the six §9.20 alias negatives `141`–`146`
 (E0812), the nine analog-context negatives `061`/`062`/`134`/`135`/`148`/`149`/`152`/`153`/
 `154` (each pinning the substring `analog context`), `140` (`$stop` by block kind), the four
 `$random` argument rules (E0816), `164` (E0814) and the eight §9.22/§9.23 driver-access
-call-site refusals (E0818).
+call-site refusals (E0818), and `169` (E0813 — §9.5.4.2's scan codes are lower case, so
+`%D` is refused rather than silently scanning nothing).
 
 Reading the table: a row that says **green** names the code or substring the fixture pins.
 No section in this chapter is now in the state "the suite states it and the compiler does not
@@ -42,7 +43,7 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.4` | display task family | — parent; carried by 9.4.1–9.4.3 below |
 | `s9.4.1` | `$strobe` `$display` `$write` `$monitor` `$debug` in the analog context | `01_display_strobe.va`, `02_display_display.va`, `03_display_write.va`, `04_display_monitor.va`, `05_display_debug.va` (each pins the argument *value*, since the transcript is not observable from inside the model); `06_display_formats.va` — green; Table 9-22's `%c` compiles (it used to be mapped to Zig verb `c` with `want=.int`, handing `std.fmt` an i64 where `{c}` takes a u8, which killed the generated testbench); `152_display_radix_variants_analog_rejected.va` (`$displayb/h/o`, `$strobeb`, `$writeh`, `$monitorb`, `$monitoron/off`) — green, `analog context`; `161_display_argument_pairing_rejected.va` — green, `format specifier`: the `%` count in a format string is checked against the argument list |
 | `s9.4.2` | Table 9-21 escapes `\ddd` `\t` `\\` `\"` | `06_display_formats.va` passes, but the escapes in it are a rendering a reader checks by eye — the two assertions it carries are the `%h`/`%o` round trips, not the escapes. Nothing else carries a single-backslash escape outside a file-I/O path name |
-| `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va` pass; `161_…_rejected.va` rejects at E0810. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and they are now real: the formatter writes into `zSBuf(<site>)` and `zScan` reads the digits back (`src/backend/str_kernels.zig`) |
+| `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va` pass; `161_…_rejected.va` rejects at E0810. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and they are now real: the formatter writes into `zSBuf(<site>)` and `zScan` reads the digits back (`src/backend/str_kernels.zig`). `168_display_library_binding.va` uses that same round trip to pin the third member of the no-argument set, `%l`: an operand eaten for it shifts every later conversion left by one, which the two integers either side of it now catch |
 | `s9.4.4` | `%m` prints the hierarchical name and takes no argument | — no fixture cites it. `%m` appears in `06_display_formats.va`'s second `$display` and in `161`, both unasserted (a transcript is not a value), and `06` does not compile |
 | `s9.4.5` | `%s` prints ASCII codes as characters | — same: `%s` sits in `06`'s first `$display` and in `162`'s scan string, neither asserting the right-justification/leading-zero rule this subclause is actually about |
 | `s9.4.6` | no display output except `$debug` unless the iteration is accepted | — no fixture. `043_fdebug.va` quotes the rule in its header and does not test it; the harness runs one accepted solve |
@@ -55,7 +56,7 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.5.3` | `$swrite` and `$sformat` | `044_swrite.va`, `045_sformat.va` pass on the argument value only (their `text` is never read back); `06_display_formats.va` and `09_string_formatting.va` pass on the TEXT, by sending it back through `$sscanf` — lowering makes both writers an assignment to the named string variable, not a void call, so a formatter that wrote nothing would now fail them |
 | `s9.5.4` | files are readable only if opened `r`/`r+` | — no fixture; there is no descriptor to open in the wrong mode |
 | `s9.5.4.1` | `$fgets` | `046_fgets.va` passes on the sentence that distinguishes it from C: the newline is "read AND transferred to str", so a four-byte line returns 4 and not 3. `049`/`051`/`054`/`11` read the same line for its side effect on the position |
-| `s9.5.4.2` | `$fscanf` and `$sscanf` | `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` pass — `$sscanf` is `zScan` (suppression `*`, maximum field width, early matching failure, EOF, and the ten conversion codes), and each output argument is its own assignment from a `$sscanf$<ty>` item call. `047_fscanf.va` passes too, on both halves it was written to separate: 0 for the missing file, and `code == 1` with `value == 42` for a file it writes itself. `$fscanf` is the SAME scanner — `zScan` over one line the file kernels read — because §9.5.4.2 states one set of conversion rules for both spellings |
+| `s9.5.4.2` | `$fscanf` and `$sscanf` | `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` pass — `$sscanf` is `zScan` (suppression `*`, maximum field width, early matching failure, EOF, and the ten conversion codes), and each output argument is its own assignment from a `$sscanf$<ty>` item call. `047_fscanf.va` passes too, on both halves it was written to separate: 0 for the missing file, and `code == 1` with `value == 42` for a file it writes itself. `$fscanf` is the SAME scanner — `zScan` over one line the file kernels read — because §9.5.4.2 states one set of conversion rules for both spellings. `169_sscanf_uppercase_conversion_rejected.va` pins the CASE of those codes: Table 9-22 spells the display conversions twice (`%h or %H`), §9.5.4.2's code table spells the scan codes once, and `zScan` compares the raw byte |
 | `s9.5.5` | `$ftell` `$fseek` `$rewind` | `049_ftell.va`, `050_fseek.va`, `051_rewind.va`, `11_file_position_status.va` — **all four pass**, and each asserts a MOVED and an unmoved pointer so the two cannot be confused: 0 then 4 across a `$fgets`, 4 after `$fseek(fd,0,2)` on a four-byte file, 0 after `$rewind`, and the status half separately (0, not the new position). The position is the kernels' own quantity and every read is positional, which is what makes `$ftell` exact after a read that stopped at a newline |
 | `s9.5.6` | `$fflush` | `052_fflush.va` passes on what §9.5.6 leaves observable — the descriptor it is handed. The task itself is genuinely a no-op and says so: every write goes positionally straight to the descriptor, so there is never buffered output to flush |
 | `s9.5.7` | `$ferror` | `053_ferror.va` passes in both directions, which is the point of it: zero errno and an EMPTY description after a successful open, a nonzero errno after one that failed. The errno's numeric value is deliberately unasserted — §9.5.7 says only "an error code is returned" |
