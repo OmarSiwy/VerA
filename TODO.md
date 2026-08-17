@@ -174,6 +174,40 @@ Do not add members ahead of a consumer. The contract's own header is the rule: *
 member with no LRM justification and no consumer is not a roadmap item — it is
 deleted."*
 
+### The incremental frontend cache — removed for having no consumer, not for being wrong
+
+`root.Compilation` was a session-scoped whole-unit cache: `update(name, source,
+target, opts)` ran stage 1, BLAKE3'd the preprocessed bytes plus the target byte,
+and skipped stages 2–6 on a match, replaying the unit's stored diagnostics so a
+cached success could not lose its W0650. ~214 lines plus `Unit`/`Update`/
+`UpdateStatus`, deleted in wave 12. Nothing in the tree ever called it — not
+`src/cli.zig`, which compiles one file and exits, not the suites, and its
+`rebuilds` counter (`// Benchmarks read it.`) had no reader anywhere, including
+the benchmark wave 8 actually built.
+
+**This is the seam an incremental frontend would be rebuilt on, so record what
+it was.** A compiler cannot beat O(N) on a fresh compile — it must read every
+byte — so the only route to sub-linear *edit* latency is a cache like this one,
+and the design questions it had already answered are the expensive part:
+
+- **Dirtiness is decided on the PREPROCESSED bytes**, so a macro or an
+  `` `include`` change invalidates even when the `.va` file is untouched.
+- **A cached unit must replay its diagnostics.** Stages 2–6 do not run on a hit,
+  so without a replay a warning would blink out whenever an unrelated file was
+  edited. A cached ERROR cannot happen — a failed update drops the result — but a
+  cached SUCCESS carrying warnings is the normal case.
+- **Whole-unit, not per-declaration**, deliberately: fine-grained change
+  detection is delegated to `zig` through stable naming, and `naming.zig`'s
+  ABSOLUTE RULE header is that argument.
+
+Its own docstring is why it went: *"All this layer buys is skipping a frontend
+that already runs in microseconds — its real job is proving the no-op-edit
+determinism invariant."* That invariant is not the cache's, and it stayed: the
+`determinism: a no-op recompile reproduces identical device.zig` test in
+`src/root.zig` compiles the same source twice through the ordinary path and
+requires byte-identical output. Rebuild the cache the day an edit-latency number
+exists to beat; that is a deliberate wave, not a rediscovery.
+
 ### A batch/SIMD evaluator inside VerA — and the measurement that outlived it
 
 `src/backend/eval_batch.zig` was 702 lines of classify→bucket→evaluate→stamp
