@@ -33,7 +33,6 @@
 //
 //! lrm 9.4.1
 //! reject analog context
-//! xfail VerA implements no Table 9-1 analog-context restriction; grep across src/ finds no analog-context check for any ch9 system task
 module ch09_display_radix_variants_analog_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

@@ -6,26 +6,41 @@
 // §9.5.4.2 then fixes the scan: "The number of successfully matched and
 // assigned input items is returned in code; this number can be 0 in the event
 // of an early matching failure... If the input ends before the first matching
-// failure or conversion, EOF is returned." There is no input at all, so code is
-// 0 or EOF — never the 1 that a satisfied %d would report. The check is written
-// as `code <= 0` because the LRM leaves the numeric value of EOF to IEEE 1364
-// rather than stating it here.
+// failure or conversion, EOF is returned."
 //
-// The filename is unique to this fixture on purpose: nine §9.5 fixtures used to
-// share "fixture.dat" and one of them created it, which silently retired the
+// Both halves of that are here, and the SECOND one is what makes the fixture
+// bite. On the missing file there is no input at all, so code is 0 or EOF —
+// never the 1 a satisfied %d would report — and that half is written `code <= 0`
+// because the LRM leaves EOF's numeric value to IEEE 1364. That check alone is
+// satisfied by an implementation that answers 0 to everything, which is why the
+// fixture also writes a file containing "42\n" and scans it: one item matched
+// and assigned, so code is 1 and value is 42. Those two digits separate a real
+// $fscanf from a constant, and `code <= 0` on its own cannot.
+//
+// The filenames are unique to this fixture on purpose: nine §9.5 fixtures used
+// to share "fixture.dat" and one of them created it, which silently retired the
 // missing-file rule from the second run onward.
 //
 //! lrm 9.5.1
 //! lrm 9.5.4.2
+//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fscanf matches nothing, returns 0 and never assigns `value` — the missing-file half passes by accident and the "42" half does not
 `include "check.vh"
 module ch09_atomic_fscanf(p, n);
   inout p, n; electrical p, n;
-  integer fd, code, value;
+  integer fd, code, value, good_fd, good_code, good_value;
   analog begin
     fd = $fopen("ch09_047_missing.dat", "r");
     code = $fscanf(fd, "%d", value);
+    good_fd = $fopen("ch09_047_fscanf.dat", "w");
+    $fwrite(good_fd, "42\n");
+    $fclose(good_fd);
+    good_fd = $fopen("ch09_047_fscanf.dat", "r");
+    good_code = $fscanf(good_fd, "%d", good_value);
+    $fclose(good_fd);
     `CHECKI("open r of a missing file returns 0", fd, 0);
     `CHECKI("nothing to read, so no item is matched", (code <= 0), 1);
-    I(p,n) <+ V(p,n) + code + value;
+    `CHECKI("§9.5.4.2 one %d matched and assigned, so code is 1", good_code, 1);
+    `CHECKI("§9.5.4.2 and the assigned item is the 42 in the file", good_value, 42);
+    I(p,n) <+ V(p,n) + code + value + good_code + good_value;
   end
 endmodule

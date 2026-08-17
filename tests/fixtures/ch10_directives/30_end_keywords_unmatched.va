@@ -10,6 +10,19 @@
 // Nothing else in the file is unusual, so the only thing under test is the
 // unpaired directive; the module below is the same one-resistor body as 16.
 //
+// WHAT THIS FIXTURE ASSUMES, since §10.6 nowhere writes "shall be an error".
+// The explicit form is IEEE Std 1364 §19.11, which §10.6 extends rather than
+// replaces — its first sentence is "Verilog-AMS HDL extends the
+// `begin_keywords and `end_keywords compiler directives from IEEE Std 1364
+// Verilog". The cross-file sentence quoted above also cuts the other way for a
+// tool handed SEVERAL files in one invocation: there an `end_keywords in file
+// N may legitimately match a `begin_keywords in file N-1, and refusing it
+// would be wrong. This suite compiles one file per invocation, so in the
+// compilation unit as the runner presents it there is nothing for the
+// directive below to match. That is also why 31 — whose only defect appears
+// across a file boundary, and which §10.6 therefore describes rather than
+// forbids — is a run fixture and this one is not.
+//
 //! lrm 10.6
 //! reject E0136
 `end_keywords

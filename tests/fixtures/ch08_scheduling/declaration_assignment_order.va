@@ -14,7 +14,7 @@
 // analog initial block READS it, so the order is observable in a single number:
 //
 //   correct order  seed = 2.5 evaluated first, then scaled = 2.5 * 2.0 = 5.0
-//   reversed       analog initial runs first and reads the 3.2.1 default 0.0,
+//   reversed       analog initial runs first and reads the 3.2 default 0.0,
 //                  so scaled = 0.0
 //
 // Both are exact in binary and 5.0 is nowhere near 0.0, so the discriminator is

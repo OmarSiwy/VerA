@@ -34,6 +34,7 @@
 //
 //! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA discards `default_discipline in the preprocessor (marked .ignored) and never reads its qualifier, so `p` and `n` reach lowering with no discipline at all and `V(p, n)` is now E0337 "net has no declared discipline"; the wire-qualified directive is the only thing that could supply one
 `default_discipline electrical wire
 `default_discipline ddiscrete reg
 `include "check.vh"

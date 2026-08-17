@@ -15,6 +15,19 @@
 // the cube on 0.12499999999999996 (4.2e-17 low). Both are one or two ulp, far
 // inside 1e-15 and far outside any tolerance that would hide a real error.
 //
+// `I(path)` IS GONE, and must not come back. §5.4.2.1: "If no value is
+// specified for either the potential or the flow, the branch is a probe. If the
+// flow of the branch appears in an expression anywhere in the module, the branch
+// is a flow probe... Using both the potential and the flow of a probe branch is
+// illegal." The named branch `path` is never contributed to — the contribution
+// below is `I(p, n)`, the UNNAMED branch over the same pair, which §5.4.1 makes
+// a different branch ("There can only be one unnamed branch between any two
+// nets ... in addition to any number of named branches"). So `path` is a probe,
+// and reading both V(path) and I(path) made the module illegal. Worse, under
+// the conforming reading the I(path) read turned `path` into a flow probe,
+// whose "branch potential ... is zero (0)" — which falsifies the 0.5 asserted
+// below and the two values derived from it.
+//
 // THE PORT PROBE `I(<p>)` IS PRESENT AND UNASSERTED, deliberately. A.8.2
 // `port_probe_function_call` is exercised — it lexes, lowers, and feeds the
 // contribution — but §5.4.3 defines the flow through a port as the current the
@@ -31,6 +44,7 @@
 //! lrm A.8.4
 //! lrm A.8.9
 //! lrm 5.5.1
+//! lrm 5.4.2.1
 //! lrm 4.7.2.1
 //! lrm 3.2
 //! bias V(p) = 0.7
@@ -51,11 +65,11 @@ module annex_a_primaries(p, n);
 
   analog begin
     array[0] = V(path);
-    array[1] = I(path);
+    array[1] = I(<p>);
     `CHECK("named branch probe", V(path), 0.5, 1e-15);
     `CHECK("word select through an analog function call", identity(array[0]), 0.5, 1e-15);
     `CHECK("system function call on a word select", $pow(array[0], 3.0), 0.125, 1e-15);
-    result = identity(array[0]) + $pow(array[1], 2.0) + I(<p>);
+    result = identity(array[0]) + $pow(array[1], 2.0);
     I(p, n) <+ result;
   end
 endmodule

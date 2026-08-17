@@ -6,6 +6,8 @@
 // A backend that let `real_parameter` stay an integer gets 2 for the first line;
 // one that promoted `integer_parameter` gets 3.2 for the second. Neither can
 // pass both.
+//! lrm 3.4.1
+//! lrm 4.2.1
 `include "check.vh"
 module ch03_parameter_types(p, n);
     inout p, n;

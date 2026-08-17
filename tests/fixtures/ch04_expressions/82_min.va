@@ -2,6 +2,7 @@
 // all x, all y. 4.3.1 also fixes the result type: both operands integer gives
 // an integer, otherwise both are converted to real, as is the result.
 `include "check.vh"
+//! lrm 4.3.1
 //! bias V(p) = 2.5
 module ch04_min(p, n);
   inout p, n; electrical p, n;

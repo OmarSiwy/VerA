@@ -1,17 +1,26 @@
 // Annex D.2 constants.vams: `P_CELSIUS0 is zero Celsius in kelvin, 273.15.
-// §9.10 `$temperature` is in kelvin, so `$temperature - `P_CELSIUS0` is that
+// §9.15 "$temperature ... returns the circuit's ambient temperature in Kelvin
+// units" (ch9-system.html:871), so `$temperature - `P_CELSIUS0` is that
 // same operating point in Celsius: 350 K - 273.15 = 76.85 C.
 //
-// The macro comes from the implementation's constants.vams, which the engine
-// prepends; nothing here `defines it, so a compiler that ships no annex D file
-// fails at the first `P_CELSIUS0. 273.15 is exact in binary64, hence CHECKX on
-// the constant itself; the subtraction is not — 350.0 - 273.15 evaluates to
+// The macro comes from the implementation's constants.vams, `included above the
+// way the LRM's own examples include it; nothing here `defines it, so the value
+// read back is the annex file's and not a copy the fixture handed itself.
+//
+// 273.15 is NOT exact in binary64 — it is
+// 273.1499999999999772626324556767940521240234375 — but CHECKX is still right on
+// the constant: both sides parse the same decimal string to the same double, so
+// the equality is exact for a structural reason, not an arithmetic one. The
+// SUBTRACTION genuinely loses that: 350.0 - 273.15 evaluates to
 // 76.85000000000002, which is 2.8e-14 from the decimal 76.85 and so inside the
 // 1e-12 absolute tolerance.
 //
 //! lrm D.2
+//! lrm 9.15
 //! temp 350
 `include "check.vh"
+`include "constants.vams"
+`include "disciplines.vams"
 module annex_d_celsius(p);
   inout p; electrical p;
   analog begin

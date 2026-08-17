@@ -6,6 +6,7 @@
 // atan(1/2) = 0.4636476090008061 rad. (A degrees-returning implementation would
 // give 26.565; tanh(0.5) = 0.46211715726, a table mix-up, is 1.5e-3 away.)
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_atan(p, n);

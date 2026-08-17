@@ -11,11 +11,12 @@
 //
 // annex_c_analog_subset/07_discrete_discipline_current_behavior.va declares a
 // discrete discipline with NO nature bindings and therefore never reaches this
-// rule.
+// rule. Note that in a `.va` file annex C.4 also bears on `domain discrete`; the
+// phase label below cannot tell the two rules apart, and no net is bound here so
+// the §3.6.2.2 combination is the only thing the declaration itself states.
 //
 //! lrm 3.6.2.2
 //! reject DiagnosticsReported
-//! xfail VerA accepts `domain discrete` alongside a nature binding; there is no domain-versus-nature-binding check in lower.zig
 nature ch3_discrete_n; units="V"; access=DiscreteV; abstol=1u; endnature
 discipline ch3_discrete_natured;
     domain discrete;

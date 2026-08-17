@@ -5,6 +5,7 @@
 // ROUNDED, so a conforming implementation returns that double bit for bit; the
 // 1e-16 tolerance is below one ulp (2.2e-16) and therefore admits nothing else.
 //
+//! lrm 4.3.1
 //! bias V(p) = -2.0
 `include "check.vh"
 module ch04_sqrt(p, n);

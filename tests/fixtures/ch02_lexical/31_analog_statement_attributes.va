@@ -8,5 +8,7 @@ module ch2_stmt_attr(p); inout p; electrical p; real x; analog begin (* assign_a
   // not at 0 (statement dropped) and not at 1 (the attr_spec's value leaking).
   `CHECKX("attributed_assign_still_runs", x, 0.625);
 end endmodule
-// Attribute instances may precede any statement (LRM 2.9.1); they are parsed
-// and skipped, so this must COMPILE.
+// An attribute_instance "can appear in the Verilog-AMS description as a prefix
+// attached to a declaration, a module item, a STATEMENT, or a port connection"
+// — LRM 2.9 prose, not 2.9.1: Syntax 2-5 through 2-10 there carry no statement
+// production. They are parsed and skipped, so this must COMPILE.

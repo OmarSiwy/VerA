@@ -8,7 +8,7 @@
 //
 // This operating point is dc, and V(p) - 0.5 = +0.5 is already on the far side
 // of the threshold, so there is nothing to cross even in principle. `state`
-// therefore keeps the 0.0 LRM 3.5 gives a real variable, and the contributed
+// therefore keeps the 0.0 LRM 3.2 gives a real variable, and the contributed
 // flow is 0 A rather than the 1 A the guarded body would assign.
 //
 //! lrm 5.10.3.1

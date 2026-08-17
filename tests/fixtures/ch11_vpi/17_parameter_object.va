@@ -4,6 +4,8 @@
 // At V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V and the transconductance
 // current is 2.0 * 1.25 = 2.5 exactly.
 //
+//! lrm 11.6.12
+//! lrm 3.4
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch11_parameter_object(p, n);

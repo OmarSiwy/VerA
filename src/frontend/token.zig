@@ -593,11 +593,16 @@ const KV = struct { []const u8, Tag };
 /// Keeping them in the map is what makes them unusable as identifiers (annex B).
 const reserved_keywords = [_][]const u8{
     // annex C.16 — not used by Verilog-A
-    "connect",            "connectmodule", "connectrules", "driver_update",
-    "endconnectrules",    "merged",        "resolveto",    "split",
-    "wreal",
+    "connect",            "connectmodule", "connectrules",   "driver_update",
+    "endconnectrules",    "merged",        "net_resolution", "resolveto",
+    "split",              "wreal",
     // digital behavior / structural §IEEE1364
-                 "always",        "and",          "assign",
+    //
+    // `assert` earns its place the way `net_resolution` above it does: Table
+    // B.1 reserves the spelling and Verilog-AMS 2.4 then spends it on nothing
+    // — no statement, no system function, no production in annex A. Being
+    // unavailable as an identifier is the whole of what the word does.
+    "always",             "and",           "assert",         "assign",
     "automatic",          "buf",           "bufif0",       "bufif1",
     "cmos",               "deassign",      "defparam",     "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",

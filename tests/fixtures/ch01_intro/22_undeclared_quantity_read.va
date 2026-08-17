@@ -19,14 +19,19 @@
 // 15-18 already pin separately. The rule under test here is about the declared
 // nature, not about the port direction.
 //
-// Same pinned code as the write-side pair, E0501 "unknown access function":
-// lower.zig routes every access expression through checkAccessMatch, reads
-// included, so a read is the same rule in the same place — not a new one.
+// Same expectation as the write-side pair, and for the same reason: the phase
+// label, not E0501. lower.zig routes every access expression through
+// checkAccessMatch, reads included, so a read is the same rule in the same place
+// — including the `want.len == 0` early return that makes E0501 the wrong code.
+//
+// §4.4 is cited alongside §1.3.5 because §1.3.5's sentence is about PORTS, and
+// `vonly` is deliberately an internal net; §4.4's access-function rules are what
+// make `I(vonly)` an error on a net.
 //
 //! lrm 1.3.5
 //! lrm 1.3.4
-//! reject E0501
-//! xfail lower.zig checkAccessMatch returns early on `want.len == 0`, so reading `I(vonly)` on a discipline that binds no flow nature is silent; this module lints AND emits clean
+//! lrm 4.4
+//! reject DiagnosticsReported
 module ch01_undeclared_quantity_read(p, n);
     inout p, n;
     electrical p, n;

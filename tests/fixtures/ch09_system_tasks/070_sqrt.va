@@ -2,6 +2,7 @@
 // 4 is a perfect square, so sqrt(4) is 2 with no rounding at all — the one
 // class of argument for which an exact comparison is legitimate.
 //
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_sqrt(p, n);
   inout p, n; electrical p, n;

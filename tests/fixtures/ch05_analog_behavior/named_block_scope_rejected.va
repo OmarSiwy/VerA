@@ -1,13 +1,20 @@
-// §6.8: a named block "defines a new scope", and §5.3.2 says naming a block is
-// exactly what "allows local variables to be declared for that block". The
-// restrictive half of that is the part nothing in the suite pinned: a block item
-// declaration is INVISIBLE outside its begin-end. named_block_locals.va tests
-// that a block-local is usable inside its block, and ch06_hierarchy/
-// local_scope_shadow.va tests that the enclosing scope stays visible from
-// inside — both permissive directions.
+// What is NOT wrong with this file: a block local does not die with its
+// `end`. §5.3.2 is explicit the other way — "all identifiers declared within a
+// named sequential block can be accessed outside the scope in which they are
+// declared" — and it prints `moduleVar = myscope.localVar;` as legal. So
+// `inner.hidden` on line 26 would compile. The declaration outlives the block;
+// only the SPELLING used below cannot reach it.
 //
-// `hidden` is declared in :inner and read after the matching `end`, so the
-// reference has no declaration in scope.
+// What is wrong is the bare name. §6.8: "if an identifier is referenced
+// directly (without a hierarchical path) ... the search continues upward until
+// ... a module boundary" — upward only, never down into a nested named block.
+// `hidden` unqualified therefore resolves against nothing. The rejection is
+// about the missing qualifier, not about the lifetime of the declaration, and
+// §5.3.2's positive form is the fixture this one does not replace.
+//
+// named_block_locals.va tests that a block-local is usable inside its block,
+// and ch06_hierarchy/local_scope_shadow.va tests that the enclosing scope stays
+// visible from inside; both are permissive directions.
 //
 // (VerA answers with E0314 "unknown identifier", not E0313 "unknown variable",
 // even though E0313's explain text advertises this exact case. Pinned against
@@ -23,7 +30,7 @@ module ch5_named_block_scope(p);
       real hidden;
       hidden = V(p);
     end
-    out = hidden;            // illegal: `hidden` died with :inner
+    out = hidden;            // illegal: unqualified; §5.3.2 spells it inner.hidden
     I(p) <+ out;
   end
 endmodule

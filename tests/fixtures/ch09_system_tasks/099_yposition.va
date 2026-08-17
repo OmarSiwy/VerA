@@ -6,6 +6,8 @@
 // This module is elaborated on its own, so it IS the top of the hierarchy and
 // there is no enclosing instance to add an offset from: the resolved value is
 // the top-level value, 0.0 m, exactly.
+//
+//! lrm 9.18
 `include "check.vh"
 module ch09_atomic_yposition(p, n);
   inout p, n; electrical p, n;

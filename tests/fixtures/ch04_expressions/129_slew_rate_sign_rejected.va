@@ -15,9 +15,14 @@
 // pair reversed, so each line names one bound and violates only that one. Both
 // rates are constants. 21_slew.va is the legal side with (1e6, -2e6).
 //
+// The two expectations are the LRM's own two argument names, and BOTH must
+// appear in the diagnostics. A single `slew rate` fragment would be satisfied
+// by whichever of the two violations a half-written guard happened to catch,
+// which is exactly the failure mode a two-violation file exists to rule out.
+//
 //! lrm 4.5.9
-//! reject slew rate
-//! xfail VerA validates neither of 4.5.9's rate-sign bounds: slew(x, -1e6, -2e6) and slew(x, 1e6, 2e6) both compile with only W0650, and src/diag_code.zig has no code for a wrongly-signed slew rate
+//! reject max_pos_slew_rate
+//! reject max_neg_slew_rate
 module ch04_slew_rate_sign_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -19,10 +19,16 @@
 // variable's default initial value." `untouched` assigns nothing and returns
 // nothing, so it is 0.0 — not the argument it was handed, and not garbage.
 //
-// (5.9 permits `return` exactly here, inside an analog user-defined function.
-// This file used to be named `_rejected` and apologise for it in its header;
-// the source is legal and always was. 139_function_bare_return_rejected.va is
-// the return statement being used illegally.)
+// (4.7.2 lists "using a return statement" as one of the four ways to return a
+// value from an analog user-defined function, and 4.7.2.2 prints the statement
+// itself — `return (n1 > n2) ? n1 : n2;`. This file used to be named
+// `_rejected` and apologise for it in its header; the source is legal and
+// always was. 139_function_bare_return_rejected.va is the return statement
+// being used illegally.)
+//
+// Formals carry a direction and a separate type declaration: A.2.1.2's
+// `input_declaration` has no `real` slot, so `input real first;` is not
+// Verilog-AMS.
 //
 //! lrm 4.7.2.1
 //! lrm 4.7.2.2
@@ -33,7 +39,8 @@ module ch04_function_return(p, n);
     electrical p, n;
 
     analog function real choose;
-        input real first, second;
+        input first, second;
+        real first, second;
         begin
             choose = -99.0;
             return first > second ? first : second;
@@ -41,7 +48,8 @@ module ch04_function_return(p, n);
     endfunction
 
     analog function real untouched;
-        input real ignored;
+        input ignored;
+        real ignored;
         begin
         end
     endfunction

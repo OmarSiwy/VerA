@@ -15,18 +15,41 @@
 // This is true whether or not there is a change in the resolved value of the
 // signal."
 //
-// Nothing is asserted. There is no value to write down: the clause defines a
-// TRIGGER, and how often it fires depends on how many drivers the elaborated
-// netlist puts on `d` — a property of the instantiating design, not of this
-// source. Counting the firings here would pin the harness, not the LRM. The
-// positive semantics of §9.22.6 (a real connectmodule, $driver_count == N, the
-// 0..N-1 loop) needs a driven connectmodule instance and has no fixture yet.
+// WHAT IS ASSERTED, AND WHY IT IS NOT THE TRIGGER. The clause defines a TRIGGER,
+// and how often it fires depends on how many drivers the elaborated netlist puts
+// on `d` — a property of the instantiating design, not of this source. Counting
+// firings here would pin the harness, not the LRM. The positive semantics of
+// §9.22.6 (a real connectmodule instance, $driver_count == N, the 0..N-1 loop)
+// need a driven connectmodule and still have no fixture.
+//
+// What IS assertable is ACCEPTANCE, and this file used to duck it. It carried
+// `//! xfail` with no `//! reject` and no `CHECK` at all — which routes to
+// `unasserted`, never to XPASS, so the marker could not fire on the day the gap
+// closed. That is a TODO wearing an xfail. So the file now also carries an
+// ordinary module with a real assertion in it. The assertion is deliberately
+// about nothing but a branch potential (0.75 - 0.25 = 0.5, both operands exact
+// in binary): its whole job is to be a verdict that EXISTS, so that "this source
+// file, connectmodule and all, was accepted, elaborated and run" becomes a
+// green/red the runner can see. Today VerA stops at NoModule and the whole file
+// fails, which is the XFAIL below; the day connectmodule support lands, the run
+// goes green, the XPASS fires, and the marker has to go.
 //
 //! lrm 9.22.4
-//! xfail VerA has no connectmodule support at all (the file has no ordinary module, so it stops at NoModule) and so refuses the one context in which @(driver_update) is legal
+//! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA has no connectmodule support at all (the file stops at NoModule before it ever reaches the ordinary module below) and so refuses the one context in which @(driver_update) is legal
+`include "check.vh"
 connectmodule ch09_driver_update_connectmodule(d, a);
   input d; output a;
   logic d;
   electrical a;
   always @(driver_update d) $strobe("driver updated");
 endconnectmodule
+
+module ch09_driver_update_host(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECK("the file carrying the §9.22.4 connectmodule compiles and runs",
+           V(p,n), 0.5, 1e-15);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

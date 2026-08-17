@@ -1,4 +1,4 @@
-// LRM 2.2: "White space shall contain the characters for blanks, tabs,
+// LRM 2.3: "White space shall contain the characters for spaces, tabs,
 // newlines, and formfeeds." Every separator in the module header below is a
 // FORM FEED (U+000C), so the file only lexes if a formfeed is ordinary white
 // space. The bias holds V(p) at 0.75 (exact in binary), so V(p)*4 is exactly 3.

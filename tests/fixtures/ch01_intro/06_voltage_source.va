@@ -1,7 +1,14 @@
 // §1.3.1.2 associated reference directions: the branch potential is positive
 // when the + node (p) is above the - node (n). A potential source's equation is
-// V(p,n) - 5.0 = 0, so probing it away from its solution measures the mismatch:
-// at V(p)=2.0, V(n)=-1.0 the branch potential is 3.0 and the residual is -2.0.
+// V(p,n) - 5.0 = 0, and probing it away from its solution reads the node
+// difference: at V(p)=2.0, V(n)=-1.0 that is 3.0, and naming the terminals the
+// other way round reads -3.0.
+//
+// The second line was `V(p,n) - 5.0`, want -2.0 — arithmetic on the value read
+// one line above it, which cannot fail independently of it. What replaces it is
+// the clause's own content: a second access expression the compiler evaluates
+// separately, which a compiler that swapped + and - gets wrong on its own. Both
+// biases are dyadic so both differences are exact in binary64, hence CHECKX.
 //
 //! lrm 1.3.1.2
 //! bias V(p) = 2.0, V(n) = -1.0
@@ -10,8 +17,8 @@ module ch01_voltage_source(p, n);
     inout p, n;
     electrical p, n;
     analog begin
-        `CHECK("branch potential, + at p", V(p, n), 3.0, 1e-15);
-        `CHECK("source residual V(p,n) - 5", V(p, n) - 5.0, -2.0, 1e-15);
+        `CHECKX("branch potential, + at p", V(p, n), 3.0);
+        `CHECKX("+ at n instead: the same branch with the opposite sign", V(n, p), -3.0);
         V(p, n) <+ 5.0;
     end
 endmodule

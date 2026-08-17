@@ -3,7 +3,7 @@
 // resistive branches share the three nodes, so each node's row is the SUM of the
 // branch flows leaving it, with sign taken from the branch orientation.
 //
-// At V(p) = 1.0, V(n) = 0.2, V(c) = 0.5, and with LRM 2.5.1 making 1k = 1000:
+// At V(p) = 1.0, V(n) = 0.2, V(c) = 0.5, and with LRM 2.6.2 Table 2-1 making 1k = 1000:
 //   I(p,n) = (1.0 - 0.2)/1000 =  800 uA
 //   I(p,c) = (1.0 - 0.5)/2000 =  250 uA
 //   I(n,c) = (0.2 - 0.5)/3000 = -100 uA   (flow runs c -> n)
@@ -12,7 +12,7 @@
 // network with no external source.
 //
 //! lrm 8.3.1
-//! lrm 2.5.1
+//! lrm 2.6.2
 //! bias V(p) = 1.0, V(n) = 0.2, V(c) = 0.5
 `include "check.vh"
 module ch8_kfl(p, n, c);

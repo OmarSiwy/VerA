@@ -9,6 +9,8 @@
 // This is only the permissive half. 15_uppercase_keyword_rejected.va tests the
 // other: an upper-case spelling must not be able to ACT as its keyword.
 `include "check.vh"
+//! lrm B
+//! lrm 2.8
 module Module(p, n);
     inout p, n;
     electrical p, n;

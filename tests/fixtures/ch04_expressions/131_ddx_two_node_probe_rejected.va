@@ -15,9 +15,12 @@
 // respect to. 18_ddx.va is that legal side; 132 is the second argument being
 // no probe at all.
 //
+// The expectation is E0504, the same code 132 pins for the same sentence. A
+// bare `ddx` fragment is matched by any diagnostic that merely names the
+// operator, including one about the wrong argument.
+//
 //! lrm 4.5.6
-//! reject ddx
-//! xfail VerA's E0504 check only asks whether the second argument is an access function call; `ddx(expr, V(p,n))` with two nets passes it and compiles with only W0650
+//! reject E0504
 module ch04_ddx_two_node_probe_rejected(p, n);
     inout p, n;
     electrical p, n;

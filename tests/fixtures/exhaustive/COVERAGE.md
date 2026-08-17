@@ -75,7 +75,7 @@ than about a device.
 | `022_comparison_logic` | §4.2.5–4.2.7 | relational/equality/logical, all yielding integer 0/1 |
 | `023_bitwise_shift` | §4.2.8–4.2.9 | and/or/xor/xnor/not, `<<`/`>>` incl. a negative operand |
 | `024_conditional_operator` | §4.2.10 | both arms, nesting, a real condition |
-| `025_type_conversions` | §4.2.1, §9.11 | real→int ROUNDS (both signs), `$rtoi` TRUNCATES, promotion |
+| `025_type_conversions` | §4.2.1 | real→int ROUNDS (both signs), int→real is exact, promotion. NOT `$rtoi`/`$itor`: Table 9-8 marks both analog-context No, so `ch09_system_tasks/061`+`062` own them |
 | `040_exp_log_pow` | §4.3.1 | exp/ln/`log` is base 10/sqrt/pow/hypot |
 | `041_rounding_selection` | §4.3.1 | floor/ceil/abs/min/max, exactly |
 | `042_trigonometric` | §4.3.2 | sin/cos/tan/asin/acos/atan/atan2 across quadrants |
@@ -107,7 +107,7 @@ than about a device.
 | `103_case_statement` | §5.7 | matching arm, `default`, multi-label arms |
 | `120_environment` | §9.10, §9.15 | `$temperature`, `$vt` (both forms), `$abstime`, `$simparam` defaults |
 | `121_analysis_kind` | §4.6.1 | which spellings answer true; `"static"` covers dc |
-| `122_bit_conversions` | §9.11 | `$rtoi`/`$itor`, the exact `$realtobits`/`$bitstoreal` round trip, `$clog2` |
+| `122_bit_conversions` | §9.11 | the exact `$realtobits`/`$bitstoreal` round trip — the only two rows §9.11 carries into the analog context — and `$clog2` |
 | `123_math_system_names` | §9.14 | `$ln` … are the SAME functions as the bare spellings |
 
 ## Bugs this suite found

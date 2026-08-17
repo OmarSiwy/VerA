@@ -88,8 +88,13 @@ pub const Code = enum(u16) {
     E0134,
     E0135,
     E0136,
-    E0137,
+    // E0137 was "unterminated `begin_keywords". Retired: §10.6 gives the
+    // directive scope "even across source code file boundaries", so an open
+    // pair at end of file is the clause working, not an error. The number is
+    // not reused.
     E0138,
+    /// §10.4: the macro TEXT may not begin with __VAMS_.
+    E0139,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -110,6 +115,14 @@ pub const Code = enum(u16) {
     E0215,
     E0216,
     E0217,
+    /// §6.2 a port declared in the header's list of port declarations, declared
+    /// a second time in the module body.
+    E0218,
+    /// A.6.2/A.6.3, annex G.2.2: a null statement where the grammar has none.
+    E0219,
+    /// A.6.5, annex G Table G.2 item 13: `initial_step()`/`final_step()` with
+    /// an empty analysis list.
+    E0220,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -154,6 +167,33 @@ pub const Code = enum(u16) {
     E0335,
     /// §3.13.1 a nature and a discipline sharing one global-scope identifier.
     E0336,
+    /// §3.6.3/§6.5.2.1 a net with no declared discipline used behaviorally.
+    E0337,
+    /// §3.6.2.1 a conservative discipline binding one nature to both halves.
+    E0338,
+    /// §3.6.2.2 `domain discrete` on a discipline that binds natures.
+    E0339,
+    /// §3.6.1.2/§3.6.1.3 a nature attribute value of the wrong form.
+    E0340,
+    /// §3.6.1.2 `idt_nature` naming no nature, or an unrelated one.
+    E0341,
+    /// §3.6.1/§3.6.2 a nature or a discipline declared twice.
+    E0342,
+    /// §3.6.1.3 the same user attribute declared twice in one nature.
+    E0343,
+    /// §3.6.4 `ground` on a net whose discipline is not continuous.
+    E0344,
+    /// §3.4.1 a string value on a numeric parameter, or a numeric value on a
+    /// `string` parameter — the one type pairing that gets no conversion.
+    E0345,
+    /// §3.4.1/§3.4.4/§3.4.6 an array or string parameter left untyped.
+    E0346,
+    /// §3.4.2 a value range whose first bound is not smaller than its second.
+    E0347,
+    /// §4.2.10 a reduction operator inside the analog block.
+    E0348,
+    /// §3.4/§4.2.14 an array parameter initialised without the `'{ }` pattern.
+    E0349,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -179,6 +219,16 @@ pub const Code = enum(u16) {
     E0420,
     E0421,
     E0422,
+    /// §1.3.1/§5.4.2.1 both quantities of a probe branch read in one module.
+    E0423,
+    /// §7.3.2.1 a contribution whose value folds to an infinity or a NaN.
+    E0424,
+    /// §1.3.4.1/§1.3.4.2 a contribution to an `input` signal-flow port.
+    E0425,
+    /// §5.9 a contribution inside a `repeat`/`while`/non-genvar `for`.
+    E0426,
+    /// §5.8.3 more than one `default` arm in one case statement.
+    E0427,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -200,6 +250,12 @@ pub const Code = enum(u16) {
     /// §4.5 an operator CONTROL argument (delay, rate, initial condition) that
     /// is neither constant nor an expression over parameters — codegen.zig.
     E0515,
+    /// §4.5.5-§4.5.10 an analog operator control argument outside the bound the
+    /// LRM states for it (modulus, td, rise/fall time, slew rate, direction).
+    E0516,
+    /// §5.10.3.1/§5.10.3.2 a `cross`/`above` argument that is the wrong type,
+    /// out of range, or a tolerance with no direction beside it.
+    E0517,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -236,6 +292,16 @@ pub const Code = enum(u16) {
     E0803,
     E0804,
     E0805,
+    /// §9.2 Tables 9-1/9-2/9-3/9-5/9-6/9-7/9-8 "supported in analog context: No".
+    E0806,
+    /// §9.7.2 `$stop` inside an `analog initial` block.
+    E0807,
+    /// Annex G Table G.1 the retired OVI Verilog-A v1.0 spelling `$limexp`.
+    E0808,
+    /// §9.17.3 a `$limit` call missing the arguments its named algorithm needs.
+    E0809,
+    /// §9.4.3 fewer arguments than the format string has consuming specifiers.
+    E0810,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -244,6 +310,8 @@ pub const Code = enum(u16) {
     // ---------------------------------------------------------------- class 9
     // Hierarchy and elaboration — lower.zig.
     E0901,
+    /// §7.4.4/F.2.1 step 3 more than one discipline declaration for one net.
+    E0902,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
@@ -612,15 +680,6 @@ pub fn info(c: Code) Info {
             \\This one has nothing to pop.
             ,
         },
-        .E0137 => .{
-            .title = "unterminated `begin_keywords",
-            .lrm = "10.2",
-            .explain =
-            \\A `begin_keywords directive was never closed by `end_keywords.
-            \\The pair must nest properly and must not straddle a design
-            \\element boundary.
-            ,
-        },
         .E0138 => .{
             .title = "a string literal may not span lines",
             .lrm = "2.7",
@@ -640,6 +699,24 @@ pub fn info(c: Code) Info {
             \\\n is for:
             \\
             \\    $strobe("first line\nsecond line");
+            ,
+        },
+        .E0139 => .{
+            .title = "macro text may not begin with __VAMS_",
+            .lrm = "10.4",
+            .explain =
+            \\LRM 10.4: "To avoid conflicts with predefined Verilog-AMS macros
+            \\(10.5), the `define compiler directive's macro text shall not
+            \\begin with __VAMS_."
+            \\
+            \\Syntax 10-3 is what fixes the target of that sentence:
+            \\
+            \\    text_macro_definition ::= `define text_macro_name macro_text
+            \\
+            \\macro_text is the SECOND operand, so the prohibition is on the
+            \\body. The NAME is unrestricted -- `define __VAMS_MY_FLAG 1 is
+            \\legal -- and the rationale agrees: only a body can expand INTO a
+            \\10.5 predefined macro and shadow it.
             ,
         },
 
@@ -825,6 +902,74 @@ pub fn info(c: Code) Info {
             \\LRM 3.2.1 fixes the Verilog-A `integer` at 32 bits, and a
             \\concatenation evaluates to an integer. A wider result has nowhere
             \\to live.
+            ,
+        },
+        .E0218 => .{
+            .title = "port redeclared in the module body",
+            .lrm = "6.2",
+            .explain =
+            \\LRM 6.2: "Ports declared in the list of port declarations shall
+            \\not be redeclared within the body of the module."
+            \\
+            \\Syntax 6-1 gives a module header EITHER a `list_of_ports` (bare
+            \\identifiers, whose direction and discipline then arrive in the
+            \\body, 6.5.2) OR a `list_of_port_declarations` (direction and
+            \\discipline in the header). The two are exclusive:
+            \\
+            \\    module m(p);                  // body MUST declare p
+            \\      inout electrical p;
+            \\
+            \\    module m(inout electrical p); // body must NOT
+            \\
+            \\Delete the body line, or strip the header down to the bare name.
+            \\
+            \\The mirror-image mistake — a direction declaration naming an
+            \\identifier that is not a port at all — is E0206.
+            ,
+        },
+        .E0219 => .{
+            .title = "a null statement is not an analog statement",
+            .lrm = "A.6.4",
+            .explain =
+            \\Annex G.2.2 NULL: "This statement is no longer supported. Certain
+            \\functions such as case, conditionals and the event statement do
+            \\allow null statements as defined by the syntax."
+            \\
+            \\The syntax is where that is normative. A.6.4 lists every
+            \\`analog_statement` alternative and none of them is `;`; the null
+            \\lives only in
+            \\
+            \\    analog_statement_or_null ::= analog_statement
+            \\                               | { attribute_instance } ;
+            \\
+            \\which is reached from a conditional arm, a case item and an event
+            \\statement — and nowhere else. `analog_seq_block` (A.6.3) takes
+            \\`{ analog_statement }` and `analog_construct` (A.6.2) takes one,
+            \\so a free-standing `;` in either is underivable.
+            \\
+            \\Delete it. A deliberately empty conditional arm keeps its `;`.
+            ,
+        },
+        .E0220 => .{
+            .title = "empty analysis list on a step event",
+            .lrm = "A.6.5",
+            .explain =
+            \\A.6.5:
+            \\
+            \\    analog_event_expression ::= ...
+            \\      | initial_step [ ( " analysis_identifier "
+            \\                         { , " analysis_identifier " } ) ]
+            \\      | final_step   [ ( " analysis_identifier "
+            \\                         { , " analysis_identifier " } ) ]
+            \\
+            \\The list inside the parentheses is non-empty and the whole
+            \\parenthesised group is what is optional, so `final_step()` has no
+            \\derivation. Annex G Table G.2 item 13 states the same conclusion
+            \\directly: "@(final_step) without arguments should not have
+            \\parenthesis".
+            \\
+            \\Drop the parentheses, or name at least one analysis (5.10.2,
+            \\Table 5-1: "ac", "dc", "tran", "noise", ...).
             ,
         },
 
@@ -1226,6 +1371,219 @@ pub fn info(c: Code) Info {
             \\both kinds leaves those productions with no unique reading.
             ,
         },
+        .E0337 => .{
+            .title = "net has no declared discipline",
+            .lrm = "3.6.3",
+            .explain =
+            \\LRM 3.6.3: "Nets declared with a natureless discipline or declared
+            \\without a discipline do not have declared natures, so such nets
+            \\can not be used in analog behavioral descriptions (because the
+            \\access functions are not known)." LRM 6.5.2.1 says the same of a
+            \\port: an undeclared type leaves it usable "only in a structural
+            \\description".
+            \\
+            \\This fires on the ACCESS, not on the declaration — LRM 3.6.5
+            \\implicit nets are legal right up to the point where behavioral
+            \\code asks for a potential or a flow they do not have.
+            \\
+            \\Declare a discipline for the net: `electrical n;`.
+            ,
+        },
+        .E0338 => .{
+            .title = "conservative discipline binds one nature to both halves",
+            .lrm = "3.6.2.1",
+            .explain =
+            \\LRM 3.6.2.1: "Conservative disciplines shall not have the same
+            \\nature specified for both the potential and the flow."
+            \\
+            \\The same clause makes the potential nature's `access` the
+            \\potential access function and the flow nature's the flow access
+            \\function, so one nature on both bindings gives one name two
+            \\meanings and no way to tell them apart at a call site.
+            ,
+        },
+        .E0339 => .{
+            .title = "`domain discrete` on a discipline that binds a nature",
+            .lrm = "3.6.2.2",
+            .explain =
+            \\LRM 3.6.2.2: "It is an error for a discipline to have a domain
+            \\binding of discrete if it has nature bindings."
+            \\
+            \\A discrete-domain net is solved by the digital kernel, which has
+            \\no continuous quantity for a nature to describe. Drop the nature
+            \\binding, or make the domain continuous (which is the default for
+            \\a discipline that binds natures).
+            ,
+        },
+        .E0340 => .{
+            .title = "nature attribute value of the wrong form",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1.2 fixes the form of each attribute's value:
+            \\
+            \\  - `access` — "shall be an identifier (by name, not as a
+            \\    string)", because it introduces a callable name;
+            \\  - `units` — "shall be a string", because LRM 3.11.1's Units
+            \\    Value Rule compares two natures on it;
+            \\  - `idt_nature`/`ddt_nature` — "the name (not a string) of a
+            \\    nature".
+            \\
+            \\LRM 3.6.1.3 adds of a user-defined attribute that "the value being
+            \\assigned to the attribute shall be constant": a nature lives
+            \\outside every module (LRM 3.13.1), so no runtime name is in scope
+            \\to assign from.
+            ,
+        },
+        .E0341 => .{
+            .title = "`idt_nature` does not name a related nature",
+            .lrm = "3.6.1.2",
+            .explain =
+            \\LRM 3.6.1.2: "If specified, the constant expression assigned to
+            \\idt_nature shall be the name (not a string) of a nature which is
+            \\defined elsewhere." A derived nature may override the parent's
+            \\value, but "the nature thus specified shall be related (share the
+            \\same base nature) to the nature the parent uses for its
+            \\idt_nature".
+            \\
+            \\`idt(access(...))` takes its tolerance from that nature, so a
+            \\dangling or unrelated name leaves the integral with no tolerance
+            \\the solver can use.
+            ,
+        },
+        .E0342 => .{
+            .title = "nature or discipline is already declared",
+            .lrm = "3.13.1",
+            .explain =
+            \\LRM 3.6.1: "Each nature definition shall have a unique identifier
+            \\as the name of the nature." LRM 3.6.2 says the same of a
+            \\discipline, and LRM 3.13.1 puts both in one global scope, so the
+            \\second declaration has nowhere to live.
+            \\
+            \\Two declarations of one name give a net of it two different sets
+            \\of access functions. A nature that means to reuse another's
+            \\attributes derives from it (LRM 3.6.1.1): `nature b : a;
+            \\endnature`.
+            ,
+        },
+        .E0343 => .{
+            .title = "duplicate user-defined nature attribute",
+            .lrm = "3.6.1.3",
+            .explain =
+            \\LRM 3.6.1.3: "The name of the attribute shall be unique in the
+            \\nature being defined and the value being assigned to the
+            \\attribute shall be constant."
+            \\
+            \\Two assignments to one attribute name leave `<nature>.<attr>`
+            \\with no single reading.
+            ,
+        },
+        .E0344 => .{
+            .title = "`ground` net is not of a continuous discipline",
+            .lrm = "3.6.4",
+            .explain =
+            \\LRM 3.6.4: "Each ground declaration is associated with an already
+            \\declared net of continuous discipline. ... The net must be
+            \\assigned a continuous discipline to be declared ground."
+            \\
+            \\The global reference node is the zero of a potential. A discrete
+            \\discipline binds no nature (LRM 3.6.2.2), so there is no potential
+            \\for it to be the reference of.
+            ,
+        },
+
+        .E0345 => .{
+            .title = "parameter initializer type conflicts with the parameter's type",
+            .lrm = "3.4.1",
+            .explain =
+            \\LRM 3.4.1: "No conversion shall be applied for strings; it shall
+            \\be an error to assign a numeric value to a parameter declared as
+            \\string or to assign a string value to a real parameter, whether
+            \\that parameter was declared as real or had its type derived from
+            \\the type of the value of the constant expression."
+            \\
+            \\The sentence BEFORE it is the general rule and it is why this one
+            \\has to be written down: "If the type of the parameter is specified
+            \\as integer or real, and the value assigned to the parameter
+            \\conflicts with the type of the parameter, the value is converted
+            \\to the type of the parameter." `parameter real size = 10;` is
+            \\legal by that rule. String is the one type the conversion does not
+            \\reach, in either direction.
+            ,
+        },
+        .E0346 => .{
+            .title = "array or string parameter needs an explicit type",
+            .lrm = "3.4.1",
+            .explain =
+            \\LRM 3.4.1: "If the type of a parameter is not specified, it is
+            \\derived from the type of the final value assigned to the
+            \\parameter, after any value overrides have been applied ... Note
+            \\that the type of a string parameter (see 3.4.6) and any of the
+            \\array parameters (see 3.4.4) is mandatory." LRM 3.4.4 states the
+            \\array half again inside the restriction list it closes with
+            \\"Failure to follow these restrictions shall result in an error".
+            \\
+            \\Inference is defined over the value AFTER overrides, so an untyped
+            \\parameter has no type until elaboration — and the two rules that
+            \\have to hold before then, 3.4.1's ban on string conversion and
+            \\3.4.4's element type, would have nothing to test. An array's
+            \\initializer is an assignment pattern, which is not a scalar value
+            \\and has no type to derive in the first place.
+            \\
+            \\    parameter real c[0:3] = '{1.0, 2.0, 3.0, 4.0};
+            \\    parameter string kind = "npn";
+            ,
+        },
+        .E0347 => .{
+            .title = "value range bounds are in the wrong order",
+            .lrm = "3.4.2",
+            .explain =
+            \\LRM 3.4.2: "The first expression in the range shall be numerically
+            \\smaller than the second expression in the range."
+            \\
+            \\`from [10:1]` describes the empty set — no value is both >= 10 and
+            \\<= 1 — so the parameter can never take a legal value, including
+            \\its own default. This is decidable from the declaration alone; it
+            \\is not the separate question of whether a given override falls
+            \\inside a well-formed range.
+            ,
+        },
+        .E0348 => .{
+            .title = "reduction operators cannot be used inside the analog block",
+            .lrm = "4.2.10",
+            .explain =
+            \\LRM 4.2.10, the whole clause: "The reduction operators can not be
+            \\used inside the analog block and only have meaning when used in
+            \\the digital context."
+            \\
+            \\There is no carve-out and no analog form: `&`, `|`, `~&` and `~|`
+            \\are banned exactly as `^`, `~^` and `^~` are (those get E0320,
+            \\which also carries annex C.5's separate removal of the four-state
+            \\operators from Verilog-A).
+            \\
+            \\A reduction folds a BIT VECTOR, and an analog value is a real
+            \\number on a continuous net. Write the test you mean: `x != 0`
+            \\for `|x`, `x == -1` for `&x` on a two's-complement integer.
+            ,
+        },
+        .E0349 => .{
+            .title = "array parameter initialiser is not an assignment pattern",
+            .lrm = "3.4",
+            .explain =
+            \\LRM 3.4: "For parameters defined as arrays, the initializer shall
+            \\be a constant_assignment_pattern expression ... using an
+            \\assignment pattern (see 4.2.14), i.e. within '{ and } delimiters."
+            \\3.4.4 prints the form:
+            \\
+            \\    parameter real poles[0:3] = '{ 1.0, 3.198, 4.554, 1.0 };
+            \\
+            \\The apostrophe is not decoration. Annex G Table G.4 item 2 records
+            \\why v2.3 added it: "to distinguish a list of values from the
+            \\concatenation operator". Without it `{2.1, 4.5}` is the 4.2.13
+            \\concatenation, a different production with a different meaning,
+            \\and a front end that accepts it as an initialiser cannot tell the
+            \\two apart.
+            ,
+        },
 
         // ------------------------------------------------------------ class 4
         .E0401 => .{
@@ -1458,6 +1816,101 @@ pub fn info(c: Code) Info {
             \\not sit inside a conditionally executed contribution.
             ,
         },
+        .E0423 => .{
+            .title = "both quantities of a probe branch are read",
+            .lrm = "5.4.2.1",
+            .explain =
+            \\LRM 1.3.1: "The potential and flow of a probe branch may not both
+            \\appear in expressions in a given module." LRM 5.4.2.1 repeats it
+            \\with the word: "Using both the potential and the flow of a probe
+            \\branch is illegal."
+            \\
+            \\A branch is a probe when nothing is contributed to it (LRM
+            \\1.3.1). LRM 5.4.2.1 then pins ONE of its quantities at zero — the
+            \\potential of a flow probe, the flow of a potential probe — and
+            \\which one is decided by which the module reads. Reading both asks
+            \\for two zeros at once and no branch satisfies that.
+            \\
+            \\Contribute to the branch to make it a source (LRM 5.4.2.2 then
+            \\makes both quantities accessible), or read only one.
+            ,
+        },
+
+        .E0424 => .{
+            .title = "a special floating point value reaches a branch",
+            .lrm = "7.3.2.1",
+            .explain =
+            \\LRM 7.3.2.1: "Floating point arithmetic can produce special values
+            \\representing plus and minus infinity and Not-a-Number (NaN) to
+            \\represent a bad value. While use of these special numbers in
+            \\digital expressions is not an error, it is illegal to assign these
+            \\values to a branch through contribution in the analog context."
+            \\
+            \\A branch value is a row of the residual the solver factors. An
+            \\infinity or a NaN in that row destroys the whole matrix, not just
+            \\the one entry, so the clause bans it at the contribution rather
+            \\than leaving it to be discovered at the first Newton step.
+            \\
+            \\Only the case that FOLDS is caught here: 1.0/0.0, -1.0/0.0 and
+            \\0.0/0.0 are IEEE 754 results of the source's own arithmetic and
+            \\are known at compile time. A value that only becomes infinite at
+            \\runtime is the finiteness proof's business (see W0650), which is a
+            \\warning about what cannot be ruled out and not this rule.
+            ,
+        },
+        .E0425 => .{
+            .title = "contribution to an `input` signal-flow port",
+            .lrm = "1.3.4.1",
+            .explain =
+            \\LRM 1.3.4.1: "In that case, potential contributions may not be
+            \\made to `input` ports." 1.3.4.2: "Flow contributions may not be
+            \\made to input ports in this case."
+            \\
+            \\A signal-flow port carries one quantity, so its direction IS the
+            \\direction of that quantity: an `input` is a value the enclosing
+            \\netlist supplies and the module reads. A contribution drives it,
+            \\which would make the module and its driver two sources of one
+            \\value with nothing to reconcile them — the conservation law that
+            \\settles that argument on a conservative net (1.3.1) does not exist
+            \\here.
+            \\
+            \\Contribute to an `output` port instead, and read the input.
+            \\
+            \\The DECLARATION is legal: a signal-flow discipline on a directional
+            \\port is exactly the intended shape. Only the contribution target
+            \\is wrong.
+            ,
+        },
+        .E0426 => .{
+            .title = "contribution inside a runtime loop",
+            .lrm = "5.9",
+            .explain =
+            \\LRM 5.9, the third of three blanket restrictions on `repeat`,
+            \\`while` and the non-genvar `for`: "Contribution statements are
+            \\not allowed."
+            \\
+            \\A device's set of branches is fixed before the solve begins, and
+            \\a runtime trip count is not — the number of equations may not
+            \\depend on data. The 5.9.3 genvar `for` is exempt because its trip
+            \\count is known at elaboration and the loop is unrolled, so the
+            \\branches it stamps are all there before the first iteration.
+            \\
+            \\Accumulate into a variable in the loop and contribute once after
+            \\it, or make the loop a genvar loop.
+            ,
+        },
+        .E0427 => .{
+            .title = "more than one `default` arm in a case statement",
+            .lrm = "5.8.3",
+            .explain =
+            \\LRM 5.8.3: "The default statement is optional. Use of multiple
+            \\default statements in one case statement is illegal."
+            \\
+            \\Nothing in the clause orders the arms, so a second `default`
+            \\leaves the fall-through undefined rather than merely redundant.
+            \\Merge them, or give one of them its own label list.
+            ,
+        },
 
         // ------------------------------------------------------------ class 5
         .E0501 => .{
@@ -1662,6 +2115,64 @@ pub fn info(c: Code) Info {
             \\LRM when a `maxdelay` argument is given. VerA does not
             \\implement it; without `maxdelay` the LRM freezes td at its first
             \\evaluation, which is exactly the constant this code requires.
+            ,
+        },
+        .E0516 => .{
+            .title = "analog operator argument is outside the range the LRM allows",
+            .lrm = "4.5",
+            .explain =
+            \\Each §4.5 operator states the bound on its control arguments in
+            \\one sentence, and each bound is what makes the operator's contract
+            \\satisfiable at all:
+            \\
+            \\  4.5.5  idtmod        "The modulus shall be an expression which
+            \\                       evaluates to a positive value." The output
+            \\                       range is offset <= idtmod < offset+modulus,
+            \\                       which is empty unless modulus > 0.
+            \\  4.5.7  absdelay      "In all cases td shall be a positive
+            \\                       number." A negative delay asks a history
+            \\                       buffer for the future.
+            \\  4.5.8  transition    "td, rise_time, fall_time, and time_tol are
+            \\                       optional, but if specified shall be
+            \\                       non-negative." Zero is allowed and 4.5.8
+            \\                       says what each zero means; negative would
+            \\                       end a ramp before it starts.
+            \\  4.5.9  slew          "max_pos_slew_rate shall be greater than
+            \\                       zero (0) and max_neg_slew_rate shall be
+            \\                       less than zero (0)." The signs are what say
+            \\                       which limit is which.
+            \\  4.5.10 last_crossing "The optional direction indicator shall
+            \\                       evaluate to an integer expression +1, -1,
+            \\                       or 0." An enumeration, not a range.
+            \\
+            \\Only arguments that FOLD are checked. These slots are typed
+            \\analog_expression, so a rise time written over a parameter is
+            \\legal and its sign is not knowable here; VerA stays silent rather
+            \\than reject what it cannot prove.
+            ,
+        },
+        .E0517 => .{
+            .title = "cross()/above() argument is the wrong type or out of range",
+            .lrm = "5.10.3.1",
+            .explain =
+            \\LRM 5.10.3.1 types cross()'s optional arguments in three
+            \\sentences:
+            \\
+            \\  "The dir and enable arguments, if specified, shall evaluate to
+            \\   integers." 0 or absent is both edges, +1 rising, -1 falling.
+            \\  "The tolerances (time_tol and expr_tol) ... shall be
+            \\   non-negative." A tolerance is the window the crossing time is
+            \\   narrowed into; a negative one names an empty window.
+            \\  "If either or both tolerances are defined, then the direction
+            \\   shall also be defined." A tolerance selects how precisely a
+            \\   crossing is resolved, and which crossings count is the
+            \\   direction's job — a tolerance without one narrows nothing.
+            \\
+            \\LRM 5.10.3.2 gives above() the same tolerances and no direction.
+            \\
+            \\Eliding a slot is not itself an error: Syntax 5-16 types them
+            \\analog_expression_or_null and 5.10.3.1's own `sh` example writes
+            \\`cross(V(smpl) - thresh, dir, , , en === 1'b1)`.
             ,
         },
 
@@ -1996,6 +2507,120 @@ pub fn info(c: Code) Info {
             \\current operating point, so it must be known at compile time.
             ,
         },
+        .E0806 => .{
+            .title = "system task is not supported in the analog context",
+            .lrm = "9.2",
+            .explain =
+            \\Every Chapter 9 table has a "supported in analog context" column,
+            \\and this name's cell says No. The prose subclauses are worded as
+            \\PERMISSIONS — §9.5 "extends many of the file operation tasks so
+            \\that they can be used in the analog context", §9.11 "extends the
+            \\conversion functions ... so that $bitstoreal and $realtobits can
+            \\be used in the analog context" — so the tables under §9.2 are
+            \\where the prohibition actually lives.
+            \\
+            \\The families, and why each stops at the digital context:
+            \\
+            \\  Table 9-1 / 9-2 — the b/h/o radix variants of the display and
+            \\  file-output tasks. The suffix only picks a DEFAULT radix for
+            \\  arguments written without a format specification, which is a
+            \\  statement about bit vectors; §9.4.3's per-argument `%b`/`%o`/
+            \\  `%h` works fine in an analog block. $monitoron/$monitoroff
+            \\  toggle the digital $monitor mechanism.
+            \\
+            \\  Table 9-2 also — $fgetc, $ungetc and $fread read bytes and bit
+            \\  patterns; $readmemb/$readmemh load a memory array and
+            \\  $sdf_annotate loads timing onto a digital netlist. Neither
+            \\  object exists in the analog context.
+            \\
+            \\  Table 9-3 / 9-7 — $printtimescale, $timeformat, $time and
+            \\  $stime are all about the timescale TICK. The analog kernel has
+            \\  no tick: it advances by a continuously variable step. §9.10
+            \\  adds $abstime, in seconds, for the analog context, and
+            \\  deprecates $realtime there.
+            \\
+            \\  Table 9-5 / 9-6 — §9.8 and §9.9 are one sentence each: Verilog
+            \\  AMS HDL "does not extend" the PLA modeling tasks, and "does not
+            \\  extend" the stochastic analysis tasks.
+            \\
+            \\  Table 9-8 — $itor, $rtoi, $signed and $unsigned. §4.2.1.3
+            \\  already promotes a mixed expression's integer operand, and
+            \\  signedness reinterpretation presupposes a sized vector.
+            ,
+        },
+        .E0807 => .{
+            .title = "$stop shall not be used within an analog initial block",
+            .lrm = "9.7.2",
+            .explain =
+            \\§9.7.2: "$stop causes simulation to be suspended at a converged
+            \\time point", and an analog initial block runs before there is
+            \\one — §5.2.1 executes it once per analysis, ahead of the first
+            \\matrix solution.
+            \\
+            \\$finish is deliberately the opposite: §9.7.1 defines what it
+            \\means there ("the simulator shall exit without performing the
+            \\simulation"), so it stays legal in an analog initial block.
+            \\$stop in an ordinary `analog` block is legal too.
+            ,
+        },
+        .E0808 => .{
+            .title = "retired Verilog-A v1.0 spelling",
+            .lrm = "G.1",
+            .explain =
+            \\Annex G Table G.1, "Limiting exponential function": the OVI
+            \\Verilog-A v1.0 spelling `$limexp( expression )` was replaced in
+            \\v2.0 by `limexp( expression )`.
+            \\
+            \\It is not an alias. A `$` name is a system function (Clause 9),
+            \\and `$limexp` appears in neither Table 9-11 nor A.8.2 — the name
+            \\does not exist. 4.5.13 defines the analog operator under the bare
+            \\name only.
+            \\
+            \\Drop the `$`.
+            ,
+        },
+        .E0809 => .{
+            .title = "$limit is missing an argument its algorithm requires",
+            .lrm = "9.17.3",
+            .explain =
+            \\LRM 9.17.3 fixes the arity of the two algorithms it names:
+            \\
+            \\  "fetlim" — "One additional argument to the $limit() function is
+            \\    required ...: the third argument to $limit() is generally the
+            \\    threshold voltage of the MOS transistor."
+            \\  "pnjlim" — "Two additional arguments ... are required ...: the
+            \\    third argument ... indicates a step size vte and the fourth
+            \\    argument is a critical voltage vcrit."
+            \\
+            \\This is not the unknown-string case. The same clause lets a
+            \\simulator ignore a string it does not recognise ("just as if no
+            \\string had been supplied"), and `$limit(V(a,b))` with no string
+            \\at all is legal (Syntax 9-12). Naming one of these two is what
+            \\imposes the arity.
+            ,
+        },
+        .E0810 => .{
+            .title = "not enough arguments for the format specifiers",
+            .lrm = "9.4.3",
+            .explain =
+            \\LRM 9.4.3, stated again in 9.4.1: "for each % character (except
+            \\%m, %% and %l) that appears in a string, a corresponding
+            \\expression argument shall be supplied after the string."
+            \\
+            \\The parenthesis is what makes this checkable rather than a
+            \\formatting preference: three specifiers consume no operand and
+            \\every other one consumes exactly one, so the format string alone
+            \\fixes how many arguments are required.
+            \\
+            \\The reverse is NOT an error. 9.4.3 gives extra arguments a
+            \\meaning — "any expression argument with no corresponding format
+            \\specification is displayed using the default decimal format" —
+            \\so only a shortfall is diagnosed.
+            \\
+            \\Only a literal format string is counted. A format assembled at
+            \\run time has no count to check against.
+            ,
+        },
         .W0850 => .{
             .title = "display task dropped: a device does not print",
             .lrm = "9.4",
@@ -2057,6 +2682,29 @@ pub fn info(c: Code) Info {
             \\A dotted name reaches into another scope in the instance tree.
             \\VerA compiles one flat module with no children (see E0204), so
             \\there is no tree to walk.
+            ,
+        },
+        .E0902 => .{
+            .title = "more than one discipline declaration for one net",
+            .lrm = "7.4.4",
+            .explain =
+            \\LRM 7.4.4, repeated verbatim as step 3 of the discipline
+            \\resolution algorithm in F.2.1 and F.2.2: "More than one
+            \\conflicting discipline declaration from the same context (in or
+            \\out of context) for the same hierarchical segment of a signal is
+            \\an error. In this case, conflicting simply means an attempt to
+            \\declare more than one discipline regardless of whether the
+            \\disciplines are compatible or not."
+            \\
+            \\So COMPATIBILITY IS NOT THE TEST. Two declarations naming the same
+            \\natures, or two natureless `domain continuous` disciplines that
+            \\3.11.1's Natureless Discipline Rule makes compatible, are still an
+            \\error — the second declaration is the error, not the mismatch.
+            \\3.10 says it from the other side: two disciplines at the same level
+            \\of precedence for one net is not legal.
+            \\
+            \\Delete one of the declarations. If the two were meant to describe
+            \\different segments, they need different nets.
             ,
         },
 

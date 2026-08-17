@@ -10,6 +10,7 @@
 // contribution then carries. Both ports are bound to nets by the instantiation,
 // so $port_connected(p) is 1.
 //
+//! lrm 9.19
 //! param gain = 2.0
 //! bias V(p) = 0.5
 `include "check.vh"

@@ -14,24 +14,22 @@
 //           child's declared default, so `gain` inside the child is 2.0 and not
 //           the 1.0 it declares.
 //
+// MODULE ORDER IS LOAD-BEARING. A device is elaborated from the FIRST module in
+// the file (01_source_text.va documents the rule), so the PARENT is written
+// first and `annex_a_child` is reached only through the instance. Written the
+// other way round the child is elaborated standalone: `gain` is the declared
+// 1.0, the assertion is 1.0 != 2.0 no matter how well instantiation is
+// implemented, and the parent's own probe never executes at all — a permanent
+// XFAIL whose marker could never be deleted.
+//
 //! bias V(p) = 1.5
 //! bias V(n) = 0.5
 //! lrm A.4.1
 //! lrm C.8
 //! lrm 6.3.2
+//! print none
 //! xfail VerA does not implement module instantiation — an instance in a module body is rejected with E0204
 `include "check.vh"
-module annex_a_child(p, n);
-    inout p, n;
-    electrical p, n;
-    parameter real gain = 1.0;
-
-    analog begin
-        `CHECKX("the instance's named override reaches the child", gain, 2.0);
-        I(p, n) <+ gain * V(p, n);
-    end
-endmodule
-
 module annex_a_module_instantiation(p, n);
     inout p, n;
     electrical p, n;
@@ -40,5 +38,16 @@ module annex_a_module_instantiation(p, n);
 
     analog begin
         `CHECKX("the parent probes the potential across its own ports", V(p, n), 1.0);
+    end
+endmodule
+
+module annex_a_child(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = 1.0;
+
+    analog begin
+        `CHECKX("the instance's named override reaches the child", gain, 2.0);
+        I(p, n) <+ gain * V(p, n);
     end
 endmodule

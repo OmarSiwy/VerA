@@ -4,14 +4,27 @@
 //   $ln1p(0.25) = ln(1 + 0.25) = ln(5/4) = ln5 - 2*ln2
 //               = 1.6094379124341003 - 1.3862943611198906
 //               = 0.22314355131420976
-//   $expm1(0.25) = e^(1/4) - 1 = 1.2840254166877415 - 1
-//               = 0.2840254166877415
+//   $expm1(0.25) = e^(1/4) - 1 = 0.2840254166877415
+//
+// (e^0.25 in double is 1.2840254166877414 and exp(0.25) - 1.0 evaluates to
+// 0.2840254166877414 — one ulp BELOW the want. That is not a typo either way:
+// expm1 computes the difference without the cancelling subtraction and lands on
+// ...415, which is the correctly-rounded answer.)
 //
 // The distinguishing claim is that these are ln(1+x) and e^x-1 and NOT ln(x) and
 // e^x: at 0.25 the naive spellings give -1.3862943611198906 and
-// 1.2840254166877415, both a whole unit away, so a wrong lowering cannot squeak
+// 1.2840254166877414, both a whole unit away, so a wrong lowering cannot squeak
 // through the tolerance.
 //
+// WHAT THIS FIXTURE DOES NOT PIN. The finer claim — expm1(x) rather than
+// exp(x)-1.0, and ln1p(x) rather than ln(1.0+x) — is NOT tested here. The gap
+// between the two spellings at 0.25 is that single ulp, 5.6e-17, some 18x
+// smaller than the 1e-15 band, so a naive lowering passes this file. That claim
+// belongs to 092_ln1p.va and 093_expm1.va, which evaluate at 5e-16 where the
+// naive forms lose every significant digit; this file is the closed-form
+// identity at an ordinary argument.
+//
+//! lrm 9.14
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch09_math_2023(p, n);

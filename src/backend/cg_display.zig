@@ -42,6 +42,11 @@ pub const PrintArg = struct {
     /// Render through `zPadInt` into a per-call stack buffer instead of
     /// directly. See `emitDisplayTask` for the one reason this exists.
     pad: bool = false,
+    /// §9.4.3 `%c`. Zig's `{c}` verb takes a `u8`, so the i64 the operand
+    /// arrives as has to be narrowed at the call site or the generated
+    /// device does not compile. Table 9-22 says "display as an ASCII
+    /// character", which is the low byte — truncation, not a range error.
+    chr: bool = false,
 };
 
 /// Emit one §9.4.1/§9.7.3 task as `std.debug.print`.
@@ -240,7 +245,7 @@ pub fn appendConv(
         if (default_prec) try fmt.appendSlice(a, ".6");
     }
     try fmt.append(a, '}');
-    try ops.append(a, .{ .v = v, .want = if (as_int) .int else ty, .pad = pad });
+    try ops.append(a, .{ .v = v, .want = if (as_int) .int else ty, .pad = pad, .chr = conv == 'c' and ty != .str });
 }
 
 /// Render one operand of a `std.debug.print`. The `S` scalar is opaque, so a
@@ -258,7 +263,11 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             try g.renderVal(p.v, .real);
             try g.b(").val()", .{});
         },
-        .int => try g.renderVal(p.v, .int),
+        .int => if (p.chr) {
+            try g.b("@as(u8, @truncate(@as(u64, @bitCast(@as(i64, ", .{});
+            try g.renderVal(p.v, .int);
+            try g.b(")))))", .{});
+        } else try g.renderVal(p.v, .int),
         .str => try g.renderVal(p.v, .str),
     }
 }

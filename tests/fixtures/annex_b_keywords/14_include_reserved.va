@@ -3,20 +3,34 @@
 // is a syntax error in any conforming compiler.
 //
 // `include` is in Table B.1 in both this repo's Annex B and the 2.4.0 printing
-// (page 395, between `incdir` and `inf`), and it is the one spelling in the
-// table that the language never uses bare: it appears only as the compiler
-// directive `` `include ``, behind a backtick, which the lexer sees before the
-// identifier rule is ever reached. Table B.1 reserves the bare word anyway.
+// (page 395, between `incdir` and `inf`). Nearly everywhere a Verilog-AMS source
+// file can reach it, it appears as the compiler directive `` `include ``, behind
+// a backtick that the lexer resolves before the identifier rule is ever reached.
+// It is used bare in exactly one place, and not in a .va file: A.1.1's
+// `include_statement ::= include file_path_spec ;`, a library map file. (The
+// spelling that is genuinely never spent is `assert` — no statement, no system
+// function, zero occurrences in Annex A. That is 13_assert_reserved.va.)
 //
-// That is the trap, and why this gets its own file rather than a line in one of
-// the family censuses: an implementation that reserves directive names only in
-// the post-backtick position — the natural way to write a preprocessor — accepts
-// `real include;` and passes every other fixture in this chapter. `include`
-// belongs to no keyword family, so no census would have caught it either.
+// That is the trap, and why this gets its own file: an implementation that
+// reserves directive names only in the post-backtick position — the natural way
+// to write a preprocessor — accepts `real include;` and passes every other
+// fixture in this chapter. `include` is an IEEE 1364-2001 addition in the
+// config/library group, so its family census is 05_config_library_keywords.va,
+// which spells its other nine members; the post-backtick trap is what earns it a
+// file instead of a tenth line there.
 //
-// With this file the chapter's reject lines cover all 217 Table B.1 spellings.
+// With this file the chapter's reject lines cover 207 of the 217 Table B.1
+// spellings. The other ten are the words Annex C.16 marks "not used by
+// Verilog-A"; they are censused where that clause lives —
+// annex_c_analog_subset/16_unused_ams_words_rejected.va for seven of them,
+// .../30_connect_reserved.va and .../31_connectrules_reserved.va for the two
+// that 16 cannot prove without shadowing them, and .../20_net_resolution_
+// reserved.va for `net_resolution`, which VerA does not reserve and which
+// therefore carries an `//! xfail` of its own. All of them cite `//! lrm B`, so
+// every Table B.1 spelling is pinned somewhere.
 //! lrm B
 //! lrm 2.8
+//! lrm 2.8.2
 //! reject E0208
 //! reject include
 module annex_b_include_reserved;

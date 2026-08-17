@@ -1,6 +1,9 @@
-// §5.10, third bullet of the list of event characteristics as constrained by
-// A.6.4: an analog_event_statement's body is a plain analog_statement, so it
-// cannot itself be another event control statement. The LRM's remedy is the
+// §5.10, third bullet of the list of restrictions on statements inside an event
+// control block: "Nested event control statements are not allowed." (Not the
+// list of event CHARACTERISTICS higher up the clause, which says nothing about
+// nesting.) A.6.4 makes the same point structurally: an analog_event_statement's
+// body is a plain analog_statement, so it cannot itself be another event
+// control statement. The LRM's remedy is the
 // `or` combinator — `@(initial_step or final_step)` — which event_or.va and
 // event_initial_or_cross.va cover on the positive side.
 //

@@ -3,6 +3,7 @@
 // is 2.0, so the value is 2.5*2.5 = 6.25 — exact in IEEE 754 binary, and
 // distinct from every plausible mis-lowering (2.5*2.0 = 5.0, 2.5+2.0 = 4.5).
 //
+//! lrm 4.2.4
 //! bias V(p) = 1.5
 `include "check.vh"
 module ch04_power_operator(p, n);

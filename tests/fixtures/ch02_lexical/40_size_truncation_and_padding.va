@@ -14,8 +14,15 @@
 //   8'h1ff  1_1111_1111 -> keep the low 8 bits  ff = 255
 //   4'b1    1         -> pad left with zeros  0001 =   1
 //   16'h5   101       -> pad left with zeros        =   5
-// Every size here has a clear top bit after truncation, so the values are the
-// same whether the constant is read signed or unsigned.
+//
+// Three of the five have their top bit SET after truncation (2'd7 -> 11,
+// 3'b1101 -> 101, 8'h1ff -> ff), so signedness is not moot here — read as two's
+// complement those would be -1, -3 and -1, not 3, 5 and 255. What makes the
+// unsigned reading the only one is the other sentence of §2.6.1: "the numbers
+// specified with the base format shall be treated as signed integers if the s
+// designator is included or as unsigned integers if the base format only is
+// used". No literal below carries the `s` designator, so all five are unsigned.
+// 23_signed_based_number.va is the positive for the `s` arm of that sentence.
 //! lrm 2.6.1
 `include "check.vh"
 module ch02_size_truncation_and_padding(p, n);

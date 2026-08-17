@@ -12,13 +12,13 @@
 // The conservative contribution on (p, n) is there only so the module is a
 // well-formed device; the sole defect is the potential contribution to `ionly`.
 //
-// Same pinned code as its mirror, E0501 "unknown access function": `V` is not
-// an access function of `ionly`, which is exactly what lower.zig
-// checkAccessMatch decides.
+// Same expectation as its mirror, and for the reason spelled out there: the
+// phase label, not E0501. E0501 is the access-function NAME MISMATCH of §3.6.1.4;
+// here the discipline binds no potential nature at all, and checkAccessMatch
+// returns before E0501 on exactly that case.
 //
 //! lrm 1.3.4
-//! reject E0501
-//! xfail lower.zig checkAccessMatch returns early on `want.len == 0`, so a discipline that binds no potential nature accepts every potential access on its nets silently; this module lints AND emits clean
+//! reject DiagnosticsReported
 module ch01_potential_contribution_to_flow_only(p, n);
     inout p, n;
     electrical p, n;

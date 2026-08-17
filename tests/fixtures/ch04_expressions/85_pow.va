@@ -2,6 +2,7 @@
 // "if x > 0, all y; if x = 0, y > 0; if x < 0, all integer y", so the base is
 // kept positive here by abs() + 1.
 `include "check.vh"
+//! lrm 4.3.1
 //! bias V(p) = -1.5
 module ch04_pow(p, n);
   inout p, n; electrical p, n;

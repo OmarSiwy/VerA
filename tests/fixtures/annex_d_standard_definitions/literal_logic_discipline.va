@@ -16,7 +16,7 @@
 //! lrm D.1
 //! lrm 3.6.3
 //! reject E0501
-//! xfail VerA accepts an analog access function on a natureless `\logic` net: the escaped name resolves to the prelude's discipline, which binds no natures, and nothing then constrains which access name is legal on it
+`include "disciplines.vams"
 module annex_d_literal_logic(n);
   inout n;
   \logic n ;

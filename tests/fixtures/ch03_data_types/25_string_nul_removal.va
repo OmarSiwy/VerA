@@ -5,6 +5,7 @@
 //
 // The `== "hello"` check is the discriminating one: a backend that treated the
 // NUL as a C terminator would stop there and pass the other two.
+//! lrm 3.3
 `include "check.vh"
 module ch3_string_nul(p);
   inout p;

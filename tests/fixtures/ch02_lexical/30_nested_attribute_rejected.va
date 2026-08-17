@@ -4,16 +4,29 @@
 // expression `1 + (* inner *) 2`, which contains an attribute instance -- the
 // second sentence, exactly.
 //
-// The diagnostic arrives as E0209 because the inner `(*` shows up where the
-// constant expression wants an operand; that is where the rule bites, and the
-// code is the stable pin. The legal cases it bounds -- a value-less attribute
+// The outer attribute sits in a slot the grammar really has, so the nesting is
+// the ONLY thing wrong with the file: Syntax 2-7 spells `non_port_module_item
+// ::= ... | { attribute_instance } parameter_declaration ;`. That placement is
+// load-bearing. Written with the outer attribute at a PRIMARY position instead
+// -- `analog I(p) <+ ((* outer = ... *) x) * V(p);` -- the parser dies on the
+// OUTER `(*`, because no grammar slot exists there; that is illegal placement,
+// already owned by 54_attribute_illegal_placement_rejected.va, and deleting the
+// inner attribute leaves such a file rejected byte-identically, so it pins
+// nothing about nesting at all. Delete `(* inner *)` from THIS file and it
+// compiles clean, which is what makes the nesting the cause of the diagnostic.
+//
+// It arrives as E0205 because the nested `(*` desynchronizes the attribute
+// skip, so the module item ends where the parser did not expect one; the code
+// is the stable pin. The legal cases this bounds -- a value-less attribute
 // defaulting to 1, and several attribute instances in a row -- are in
-// 29_attribute_default_and_multiple.va.
+// 29_attribute_default_and_multiple.va, and 53_attribute_value_not_constant.va
+// is the other half of the same sentence pair.
 //! lrm 2.9
-//! reject E0209
+//! lrm 2.9.1
+//! reject E0205
 module ch2_nested_attr(p);
     inout p;
     electrical p;
-    parameter real x = 1.0;
-    analog I(p) <+ ((* outer = (1 + (* inner *) 2) *) x) * V(p);
+    (* outer = (1 + (* inner *) 2) *) parameter real x = 1.0;
+    analog I(p) <+ x * V(p);
 endmodule

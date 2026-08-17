@@ -17,12 +17,18 @@
 // constant-expression side, with a runtime `integer` on the right-hand side
 // instead of the index.
 //
+// The block body is an EMPTY `begin end`: Syntax 6-8's `generate_block ::=
+// module_or_generate_item | begin [ : id ] { module_or_generate_item } end` admits no
+// bare statement — a contribution is reachable only through `analog_construct ::=
+// analog analog_statement` — so the `I(p) <+ V(p);` this file used to write there was
+// a VerA parser extension, and a conforming compiler would have rejected the body
+// and never evaluated the loop scheme the directive below pins.
 //! lrm 6.6.1
 //! reject E0417
 module ch6_genvar_init_self_reference(p);
   inout p; electrical p;
   genvar i;
   generate
-    for (i = i + 1; i < 3; i = i + 1) I(p) <+ V(p);
+    for (i = i + 1; i < 3; i = i + 1) begin end
   endgenerate
 endmodule

@@ -105,13 +105,20 @@ const predefined_macros = [_][]const u8{
 };
 
 /// Built-in annex D files, resolvable by `include even with no include_dirs.
-/// Both are self-guarded (`ifdef CONSTANTS_VAMS / DISCIPLINES_VAMS), so an
-/// explicit `include after the prelude expands to nothing.
-/// ponytail: annex D.3 driver_access.vams is omitted — it is digital driver
-/// access, outside annex C. Add it here as a third entry if a model needs it.
+/// All three are self-guarded (`ifdef CONSTANTS_VAMS / DISCIPLINES_VAMS /
+/// DRIVER_ACCESS_VAMS), so an explicit `include after the prelude expands to
+/// nothing.
+///
+/// D.3 driver_access.vams is here even though driver access itself is a §7
+/// digital feature VerA does not implement: annex D is normative and its
+/// requirement is that the implementation SUPPLY the file. The file is twelve
+/// `defines and nothing else, so shipping it costs nothing and a model that
+/// `includes it is no longer refused for a file the standard says exists.
+/// Only D.1/D.2 are preloaded (see `process`); D.3 must be asked for.
 pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "constants.vams", constants_vams },
     .{ "disciplines.vams", disciplines_vams },
+    .{ "driver_access.vams", driver_access_vams },
 });
 
 /// Main entry. LRM ch10.
@@ -435,6 +442,24 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
 fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     const name_start = at + 1;
     var j = name_start;
+
+    // §2.8.1 escaped identifier: `\` then printable ASCII, ended by white
+    // space, with neither the backslash nor the terminator part of the name.
+    // Syntax 10-3 makes text_macro_identifier an `identifier` (A.9.3: simple
+    // OR escaped), so a use may be spelled `` `\MY-GAIN ``. No compiler
+    // directive is spelled with a backslash, so this can only be a macro use
+    // and goes straight to `expand`.
+    if (j < text.len and text[j] == '\\') {
+        j += 1;
+        const body = j;
+        while (j < text.len and !isSpace(text[j]) and text[j] >= 33 and text[j] <= 126) j += 1;
+        if (j == body) {
+            if (!pp.emitting()) return at + 1;
+            return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
+        }
+        return expand(pp, text, at, j, text[body..j]);
+    }
+
     while (j < text.len and isIdentChar(text[j])) j += 1;
     if (j == name_start) {
         if (!pp.emitting()) return at + 1;
@@ -542,7 +567,14 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
 /// the '`' and `off` the offset `rest` starts at.
 fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
-    const name = r.ident() orelse return pp.fail(pp.spanAt(at, off), .E0109, "", .{});
+    // Syntax 10-3 writes two different nonterminals into adjacent lines:
+    //   formal_argument_identifier ::= simple_identifier
+    //   text_macro_identifier      ::= identifier
+    // and A.9.3 makes `identifier` simple OR escaped. So the NAME may be
+    // escaped and the formals may not — `escapedIdent` is used here and
+    // `ident` stays in the formal loop below.
+    const name = r.escapedIdent() orelse r.ident() orelse
+        return pp.fail(pp.spanAt(at, off), .E0109, "", .{});
 
     var m: Macro = .{ .body = "" };
     // The '(' of a formal argument list must touch the macro name (§10.4).
@@ -576,6 +608,13 @@ fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     }
     r.skipSpace();
     m.body = try joinContinuations(pp, std.mem.trimEnd(u8, r.s[r.i..], " \t\r"));
+
+    // §10.4: "To avoid conflicts with predefined Verilog-AMS macros (10.5), the
+    // `define compiler directive's macro text shall not begin with __VAMS_."
+    // The target is the TEXT (Syntax 10-3's second operand), not the name — a
+    // body is what can expand into a §10.5 predefined macro and shadow it.
+    if (std.mem.startsWith(u8, m.body, "__VAMS_"))
+        return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0139, "`{s}` begins with __VAMS_", .{m.body});
 
     // §10.4: a redefinition silently replaces. Predefined macros keep their flag
     // so `resetall does not drop them.
@@ -878,6 +917,20 @@ const Rest = struct {
     }
     fn skipSpace(r: *Rest) void {
         while (r.i < r.s.len and isSpace(r.s[r.i])) r.i += 1;
+    }
+    /// Next §2.8.1 escaped identifier, skipping leading whitespace. Null (and
+    /// the cursor untouched) if the next character is not a backslash. Neither
+    /// the backslash nor the terminating white space is part of the name, so
+    /// the macro is keyed on the same bytes a `` `\name `` use produces.
+    fn escapedIdent(r: *Rest) ?[]const u8 {
+        r.skipSpace();
+        if (r.i >= r.s.len or r.s[r.i] != '\\') return null;
+        const start = r.i + 1;
+        var k = start;
+        while (k < r.s.len and !isSpace(r.s[k]) and r.s[k] >= 33 and r.s[k] <= 126) k += 1;
+        if (k == start) return null;
+        r.i = k;
+        return r.s[start..k];
     }
     /// Next identifier (§2.8), skipping leading whitespace.
     fn ident(r: *Rest) ?[]const u8 {
@@ -1299,6 +1352,31 @@ pub const disciplines_vams =
     \\`endif
 ;
 
+/// annex D.3 — driver_access.vams, verbatim. Twelve masks naming the bit each
+/// §7 driver flag occupies. Self-guarded, and NOT preloaded: nothing in the
+/// analog subset reads a driver, so a design has to `include it.
+pub const driver_access_vams =
+    \\// Copyright(c) 2009-2014 Accellera Systems Initiative Inc.
+    \\// Verbatim copies of the material in annex D may be used and distributed
+    \\// without restriction. VAMS-2023.
+    \\`ifdef DRIVER_ACCESS_VAMS
+    \\`else
+    \\`define DRIVER_ACCESS_VAMS  1
+    \\`define DRIVER_UNKNOWN      32'b00000000000    // No information
+    \\`define DRIVER_DELAYED      32'b00000000001    // driver has fixed delay
+    \\`define DRIVER_GATE         32'b00000000010    // driver is a primitive
+    \\`define DRIVER_UDP          32'b00000000100    // driver is a user defined primitive
+    \\`define DRIVER_ASSIGN       32'b00000001000    // driver is a continuous assignment
+    \\`define DRIVER_BEHAVIORAL   32'b00000010000    // driver is a reg
+    \\`define DRIVER_SDF          32'b00000100000    // driver is from backannotated code
+    \\`define DRIVER_NODELETE     32'b00001000000    // events won't be deleted
+    \\`define DRIVER_NOPREEMPT    32'b00010000000    // events won't be preempted
+    \\`define DRIVER_KERNEL       32'b00100000000    // added by kernel (wor/wand)
+    \\`define DRIVER_WOR          32'b01000000000    // driver is on a wor net
+    \\`define DRIVER_WAND         32'b10000000000    // driver is on a wand net
+    \\`endif
+;
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1456,6 +1534,27 @@ test "`include resolves the built-in annex D files" {
     try testing.expect(std.mem.indexOf(u8, got, "1.3806503e-23") != null);
     try expectFail("`include \"no_such_file.vams\"\n", .E0126);
     try expectFail("`include nonsense\n", .E0122);
+
+    // annex D.3 is shipped too, and is NOT preloaded: it has to be asked for.
+    const d3 = try runTest("`include \"driver_access.vams\"\n`DRIVER_WAND\n");
+    defer testing.allocator.free(d3);
+    try testing.expect(std.mem.indexOf(u8, d3, "32'b10000000000") != null);
+}
+
+test "§10.4 the NAME may be escaped and the TEXT may not begin with __VAMS_" {
+    // Syntax 10-3: text_macro_identifier ::= identifier, and A.9.3 makes that
+    // simple OR escaped. §2.8.1 drops the `\` and the terminating white space,
+    // so the definition and the use key on the same bytes.
+    try expectPp("\n3.0 *v", "`define \\MY-GAIN 3.0\n`\\MY-GAIN *v");
+    // An escaped name can only be object-like, and that falls out of the two
+    // rules rather than being a restriction of its own: §2.8.1 ends the name at
+    // the first white space, while §10.4 requires the formal list's `(` to
+    // TOUCH the name — so `\SQ!(x)` is one nine-character name, not a call.
+    try expectPp("\n1", "`define \\SQ!(x) 1\n`\\SQ!(x)");
+    // §10.4: the macro TEXT shall not begin with __VAMS_ ...
+    try expectFail("`define MY_ENABLE __VAMS_ENABLE__\n", .E0139);
+    // ... and the NAME is unrestricted, which is the other half of the pair.
+    try expectPp("\n7.0", "`define __VAMS_USER 7.0\n`__VAMS_USER");
 }
 
 test "annex D prelude is deterministic and self-guarded" {

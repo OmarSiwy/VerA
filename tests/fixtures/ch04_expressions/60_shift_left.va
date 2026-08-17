@@ -8,6 +8,7 @@
 // they pin the shift COUNT against an off-by-one and against `**`, which would
 // read 1 ** 3 = 1.
 //
+//! lrm 4.2.11
 `include "check.vh"
 module ch04_shift_left(p, n);
     inout p, n;

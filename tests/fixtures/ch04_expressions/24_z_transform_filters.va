@@ -32,15 +32,30 @@
 //
 // 2. The four forms of 4.5.12.1-.4 are four SPELLINGS of one transfer function,
 //    so they shall produce the same output from the same input. The four
-//    coefficient sets below are all H(z) = 1/(1 - 0.5 z^-1):
+//    coefficient sets below are all
 //
-//      zi_zp(x, '{0,0}, '{0.5,0}, 1u)        §4.5.12.1  zero at the origin,
-//        which 4.5.12.1 implements "as z", over one real pole at 0.5
-//      zi_zd(x, '{0,0}, '{1,-0.5}, 1u)       §4.5.12.2  same zero, denominator
-//        written out as d0 + d1 z^-1 = 1 - 0.5 z^-1
-//      zi_np(x, '{1,0}, '{0.5,0}, 1u)        §4.5.12.3  numerator written out
-//        as n0 + n1 z^-1 = 1, same pole
-//      zi_nd(x, '{1,0}, '{1,-0.5}, 1u)       §4.5.12.4  both written out
+//      H(z) = (1 - 0.5 z^-1) / (1 - 0.25 z^-1)
+//
+//      zi_zp(x, '{0.5,0}, '{0.25,0}, 1u)     §4.5.12.1  root form both sides:
+//        one real zero at 0.5 giving (1 - 0.5 z^-1), one real pole at 0.25
+//      zi_zd(x, '{0.5,0}, '{1,-0.25}, 1u)    §4.5.12.2  same zero, denominator
+//        written out as d0 + d1 z^-1 = 1 - 0.25 z^-1
+//      zi_np(x, '{1,-0.5}, '{0.25,0}, 1u)    §4.5.12.3  numerator written out
+//        as n0 + n1 z^-1 = 1 - 0.5 z^-1, same pole
+//      zi_nd(x, '{1,-0.5}, '{1,-0.25}, 1u)   §4.5.12.4  both written out
+//
+//    NO ROOT IS ZERO, and that is deliberate. 4.5.12.1-.3 each close with "If a
+//    root is zero (0), then the term associated with it is implemented as z,
+//    rather than (1 - z/r)" — so a root at the origin contributes a factor of z
+//    to the zero-pole spellings, while the coefficient spellings have no way to
+//    express one: '{1,0} as a numerator vector IS 1, not z. The earlier version
+//    of this file gave zi_zp and zi_zd a zero at the origin and asserted them
+//    equal to a unit numerator, which is exactly the factor of z the clause
+//    inserts. It went green only because `//! analysis dc` evaluates at z = 1,
+//    where z and 1 coincide — a conforming implementation of the zero-root rule
+//    fails it the moment it runs in transient. With every root away from the
+//    origin the four spellings are the same H(z) under any reading of that
+//    sentence, which is the identity being pinned.
 //
 //    Whatever value the implementation picks at the DC point, it shall pick the
 //    SAME one for all four — that claim IS in 4.5.12 and there are no digits to
@@ -61,10 +76,10 @@ module ch04_z_transform_filters(p, n);
     analog begin
         gain = zi_nd(V(p, n), '{2.0, 0.0}, '{1.0, 0.0}, 1u);
 
-        y_zp = zi_zp(V(p, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u);
-        y_zd = zi_zd(V(p, n), '{0.0, 0.0}, '{1.0, -0.5}, 1u);
-        y_np = zi_np(V(p, n), '{1.0, 0.0}, '{0.5, 0.0}, 1u);
-        y_nd = zi_nd(V(p, n), '{1.0, 0.0}, '{1.0, -0.5}, 1u);
+        y_zp = zi_zp(V(p, n), '{0.5, 0.0}, '{0.25, 0.0}, 1u);
+        y_zd = zi_zd(V(p, n), '{0.5, 0.0}, '{1.0, -0.25}, 1u);
+        y_np = zi_np(V(p, n), '{1.0, -0.5}, '{0.25, 0.0}, 1u);
+        y_nd = zi_nd(V(p, n), '{1.0, -0.5}, '{1.0, -0.25}, 1u);
 
         // The only digits 4.5.12 fixes here: a delay-free filter is its gain.
         `CHECKX("a Z-filter with no z^-1 term is the pure gain n0/d0", gain, 2.0);

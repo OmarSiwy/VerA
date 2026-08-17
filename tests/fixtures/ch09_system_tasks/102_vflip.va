@@ -1,6 +1,8 @@
 // §9.18 Table 9-29: the top-level value of $vflip is +1, and this module IS the
 // top of the hierarchy — nothing instantiates it, so there is no $vflip_hier to
 // multiply by. Allowed values are exactly +1 or -1, so the answer is exact.
+//
+//! lrm 9.18
 `include "check.vh"
 
 module ch09_atomic_vflip(p, n);

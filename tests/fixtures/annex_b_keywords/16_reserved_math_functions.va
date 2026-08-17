@@ -14,59 +14,46 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// Eleven of these functions are not declared here, because each is a substring
+// of a longer function name in the same family: `acos`, `asin`, `atan`, `cosh`,
+// `ln`, `sinh` and `tanh` are censused in 22_shadowed_spellings.va, and `cos`,
+// `sin` and `tan` — which sit inside those in turn — in
+// 23_shadowed_spellings_inner.va. `exp` needs a file of its own,
+// 24_reserved_exp.va: it is a substring of `expm1` AND of E0208's catalogue
+// title "expected an identifier", which a `//! reject` pattern is also matched
+// against. 22 explains the mechanism.
 //! lrm B
 //! reject E0208
 //! reject abs
-//! reject acos
 //! reject acosh
-//! reject asin
 //! reject asinh
-//! reject atan
 //! reject atan2
 //! reject atanh
 //! reject ceil
-//! reject cos
-//! reject cosh
-//! reject exp
 //! reject expm1
 //! reject floor
 //! reject hypot
-//! reject ln
 //! reject ln1p
 //! reject log
 //! reject max
 //! reject min
 //! reject pow
-//! reject sin
-//! reject sinh
 //! reject sqrt
-//! reject tan
-//! reject tanh
 module annex_b_reserved_math_functions;
     real abs;
-    real acos;
     real acosh;
-    real asin;
     real asinh;
-    real atan;
     real atan2;
     real atanh;
     real ceil;
-    real cos;
-    real cosh;
-    real exp;
     real expm1;
     real floor;
     real hypot;
-    real ln;
     real ln1p;
     real log;
     real max;
     real min;
     real pow;
-    real sin;
-    real sinh;
     real sqrt;
-    real tan;
-    real tanh;
 endmodule

@@ -1,15 +1,18 @@
-// §9.7 $swrite/$sformat are the display tasks writing into a string variable
-// instead of the transcript, so §9.4.3 governs the text they produce: Table
-// 9-23 gives %e "Display 'real' in an exponential format" with "the full
-// formatting capabilities available in the C language", and its own example
-// reads "the format specification %10.3g sets a minimum field width of 10 with
-// three (3) fractional digits".
+// §9.5.3 $swrite/$sformat are the display tasks writing into a string variable
+// instead of the transcript — "the first argument to $swrite shall be a string
+// variable to which the resulting string shall be written, instead of a variable
+// specifying the file to which to write" — so §9.4.3 governs the text they
+// produce: Table 9-23 gives %e "Display 'real' in an exponential format" with
+// "the full formatting capabilities available in the C language", and its own
+// example reads "the format specification %10.3g sets a minimum field width of
+// 10 with three (3) fractional digits".
 //
 // The formatted text is not a number, so the only way to pin it with a value is
-// to send it back the way it came, through §9.7 $sscanf. The bias makes
-// V(p,n) = 0.5, so "%10.4e" of it is the ten-column field " 5.0000e-01" and
-// scanning that back with %e must recover 0.5 exactly — 5.0000e-01 is 1/2 with
-// no digits lost. $sscanf also "returns the number of items read", one here.
+// to send it back the way it came, through §9.5.4.2 $sscanf. The bias makes
+// V(p,n) = 0.5, so "%10.4e" of it is "5.0000e-01" — exactly ten characters, so
+// the width-10 MINIMUM is already met and no padding is added — and scanning
+// that back with %e must recover 0.5 exactly, since 5.0000e-01 is 1/2 with no
+// digits lost. $sscanf also "returns the number of items read", one here.
 //
 // A formatter that dropped the field width, the four fractional digits or the
 // exponent would still round-trip; what this catches is text that is not the
@@ -17,8 +20,9 @@
 //
 //! bias V(p) = 0.5
 //! print none
-//! lrm 9.7
 //! lrm 9.4.3
+//! lrm 9.5.3
+//! lrm 9.5.4.2
 //! xfail VerA has no string-formatting surface: codegen.zig `void_tasks` lowers $swrite/$sformat/$sscanf to the constant `S.con(0.0)`, so neither writer touches `text` and the reader returns 0 without assigning `back` — exactly the "no-op $sformat leaves the text that is not the number at all" case above
 `include "check.vh"
 module ch09_string_formatting(p, n);

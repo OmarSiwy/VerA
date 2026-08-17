@@ -27,6 +27,7 @@
 //
 //! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA discards `default_discipline in the preprocessor (marked .ignored) and runs no discipline resolution, so `p` and `n` reach lowering with no discipline at all and `V(p, n)` is now E0337 "net has no declared discipline"; the directive is the only thing that could supply one
 `default_discipline electrical
 `include "check.vh"
 module ch10_default_discipline_undeclared_net(p, n);

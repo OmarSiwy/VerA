@@ -4,11 +4,21 @@
 // it to the `timescale directive, default 1 ns), while §9.10 $abstime is the
 // absolute analog time IN SECONDS, whatever the timescale says.
 //
-// So with a 1 ns timescale in force and the solver at t = 1 us, a $realtime
-// answer reads 1000 and an $abstime answer reads 1e-6. One literal tells them
-// apart; the relative tolerance is ~1 ulp because both sides are the same
-// decimal text parsed to a double.
+// So with a 1 ns timescale in force and the solver at t = 1 us, an $abstime
+// answer reads 1e-6 whatever the timescale, and anything answering in timescale
+// units misses that by nine orders of magnitude. One literal tells them apart.
 //
+// The tolerance is slack, not tight: 1e-15 relative is 4.5-9 ulp of a double
+// (relative ulp runs 2^-53 to 2^-52, i.e. 1.11e-16 to 2.22e-16). It can afford
+// to be slack because both sides are the same decimal text parsed to a double,
+// so a conforming compiler hits the want exactly.
+//
+// Table 9-7 rules $realtime out of the analog context entirely ("Supported in
+// analog context: No"), which is the other half of the same Annex G row and is
+// pinned by 13_realtime_analog_context_rejected.va.
+//
+//! lrm G.1
+//! lrm 9.10
 //! time 1e-6
 //! print none
 `timescale 1ns/1ns

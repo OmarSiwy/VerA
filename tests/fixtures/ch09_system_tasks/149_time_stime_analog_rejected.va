@@ -18,9 +18,14 @@
 // A reject, so there is nothing to run and no `want` to write. Both names are
 // in one file because they are one rule; the first diagnostic ends the compile.
 //
+// WHERE THE RULE ACTUALLY LIVES. §9.10's prose says nothing about $time or
+// $stime — it only adds $abstime. The prohibition is Table 9-7's analog-context
+// "No" cells, and every Table 9-1..9-20 sits under §9.2 "Categories of System
+// Tasks and Functions". Both are cited; 9.2 is the one with teeth.
+//
+//! lrm 9.2
 //! lrm 9.10
 //! reject analog context
-//! xfail VerA implements no Table 9-7 analog-context restriction; it answers $time/$stime in an analog block like any time query
 module ch09_time_stime_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer a, b;

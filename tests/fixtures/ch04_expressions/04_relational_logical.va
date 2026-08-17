@@ -1,4 +1,4 @@
-// LRM 4.2.4/4.2.5/4.2.6: a relational, equality or logical operator yields the
+// LRM 4.2.5 relational, 4.2.7 logical equality, 4.2.8 logical: each yields the
 // INTEGER 1 when the relation holds and 0 when it does not -- never -1 and never
 // a distinct boolean type, which is what lets the nine results be summed.
 //
@@ -8,6 +8,9 @@
 //   ((a>0)&&(b>0)) = 1      ((a<0)||(b>0)) = 1
 // value = 1+1+0+0+0+1+1+1+1 = 6.
 //
+//! lrm 4.2.5
+//! lrm 4.2.7
+//! lrm 4.2.8
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_relational_logical(p, n);

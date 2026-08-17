@@ -21,6 +21,14 @@
 // gain * 1.0 — the parent's own probe is checked too, so a defparam that
 // silently rewired the instance would not pass on the gain alone.
 //
+// MODULE ORDER IS LOAD-BEARING. A device is elaborated from the FIRST module in
+// the file (01_source_text.va documents the rule), so the parent carrying the
+// defparam is written first and the child is reached only through the instance.
+// Child first, the child elaborates standalone: `gain` reads its declared 1.0,
+// the assertion fails at 1.0 != 2.0 however well defparam is implemented, and
+// the parent's probe never runs at all — a permanent XFAIL whose marker could
+// never be deleted.
+//
 //! lrm A.1.4
 //! lrm 6.3.1
 //! lrm C.8
@@ -29,17 +37,6 @@
 //! print none
 //! xfail VerA implements neither module instantiation (E0204, reported first) nor defparam (E0205)
 `include "check.vh"
-module annex_a_defparam_child(p, n);
-    inout p, n;
-    electrical p, n;
-    parameter real gain = 1.0;
-
-    analog begin
-        `CHECKX("the parent's defparam overrode the child's declared default", gain, 2.0);
-        I(p, n) <+ gain * V(p, n);
-    end
-endmodule
-
 module annex_a_defparam(p, n);
     inout p, n;
     electrical p, n;
@@ -49,5 +46,16 @@ module annex_a_defparam(p, n);
 
     analog begin
         `CHECKX("the parent probes the potential across its own ports", V(p, n), 1.0);
+    end
+endmodule
+
+module annex_a_defparam_child(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = 1.0;
+
+    analog begin
+        `CHECKX("the parent's defparam overrode the child's declared default", gain, 2.0);
+        I(p, n) <+ gain * V(p, n);
     end
 endmodule

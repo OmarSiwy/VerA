@@ -12,6 +12,7 @@
 // A 4-bit or unsigned reading would give +9; only the 32-bit signed one gives
 // -7. The second line checks the alternate spelling is the same operator.
 //
+//! lrm 4.2.9
 `include "check.vh"
 module ch04_bitwise_xnor(p, n);
     inout p, n;

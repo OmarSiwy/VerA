@@ -8,6 +8,7 @@
 // min(-0.5 + 1, 0) = min(0.5, 0) = 0 picks the second. A $max mix-up flips both.
 // All values are exactly representable, so the comparison is exact.
 //
+//! lrm 9.14
 //! bias V(p) = -0.5
 `include "check.vh"
 module ch09_atomic_min(p, n);

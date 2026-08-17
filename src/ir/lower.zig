@@ -96,6 +96,9 @@ pub const Kind = enum(u8) { direct, indirect };
 /// node_order slot of the flow unknown that carries `I(<port>)`.
 pub const PortProbe = struct { port: u16, u: u16 };
 
+/// §5.4.2.1 one access function READ, kept for the end-of-module probe sweep.
+pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
+
 pub const NoiseKind = enum(u8) { thermal, flicker }; // §4.6.4.1/.2
 
 /// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
@@ -147,11 +150,12 @@ contributions: std.ArrayList(Contribution) = .empty, // §5.6
 node_order: std.ArrayList([]const u8) = .empty,
 /// Discipline name per node_order slot (`""` when undeclared, §3.9).
 node_disciplines: std.ArrayList([]const u8) = .empty,
-/// §6.5.2.2 port direction per node_order slot. Only `input`/`output` are
-/// recorded (`false` for `inout`, an internal net, or an undeclared direction):
-/// a DIRECTIONAL port is the one place the LRM's signal-flow port model
-/// (§1.3.4) is unambiguous, and codegen has to refuse those.
-node_directional: std.ArrayList(bool) = .empty,
+/// §6.5.2.2 port direction per node_order slot (`.unspecified` for an internal
+/// net or a port whose direction is never declared). A DIRECTIONAL port —
+/// `input` or `output` — is the one place the LRM's signal-flow port model
+/// (§1.3.4) is unambiguous, and codegen has to refuse those; which of the two
+/// it is decides §1.3.4.1's contribution-target rule (see E0425).
+node_dir: std.ArrayList(Ast.Direction) = .empty,
 /// §5.4.3 ports read with `I(<p>)`, in first-probe order, deduped. Each needs
 /// its own solver unknown (`u`) and a row pinning it to the module's KCL sum
 /// at `port`; codegen emits that row. Append-only ⇒ deterministic.
@@ -165,6 +169,11 @@ disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 probe_cache: std.ArrayList(Mir.Value) = .empty,
 /// Accumulator places, parallel to `contributions`.
 accum: std.ArrayList(Accum) = .empty,
+/// §1.3.1/§5.4.2.1 every access function READ, in source order. A branch is a
+/// probe only once the whole module has been lowered — a contribution to it may
+/// come after the read — so the rule is a sweep over this at the end, not a
+/// test at the read. Reads only: the left of a `<+` is a contribution.
+branch_reads: std.ArrayList(BranchRead) = .empty,
 /// Preprocessed source and the lexer's `.start` column, kept ONLY so a token
 /// index can become a `diag.Span`. proof.zig reaches them through
 /// `tokenSpan` too — it holds a `*const Lower` already, so this is the whole
@@ -198,6 +207,12 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
+/// True inside an `analog initial` block (§5.2.1), and ONLY that — `restrict`
+/// conflates it with an analog function, and §9.7.2's `$stop` rule keys on the
+/// narrower one. Deliberately not cleared when an analog function is inlined:
+/// the call site is still "within an analog initial block", which is what the
+/// sentence constrains.
+in_analog_initial: bool = false,
 /// True while lowering the body of an `@(...)` — i.e. while the statement
 /// position is A.6.4 `analog_event_statement` rather than `analog_statement`.
 /// The two productions differ in BOTH directions, so this flag gates two
@@ -369,12 +384,13 @@ pub fn deinit(self: *Lower) void {
     self.contributions.deinit(gpa);
     self.node_order.deinit(gpa);
     self.node_disciplines.deinit(gpa);
-    self.node_directional.deinit(gpa);
+    self.node_dir.deinit(gpa);
     self.port_probes.deinit(gpa);
     self.node_voltages.deinit(gpa);
     self.disciplines.deinit(gpa);
     self.probe_cache.deinit(gpa);
     self.accum.deinit(gpa);
+    self.branch_reads.deinit(gpa);
     self.access_kind.deinit(gpa);
     self.vars.deinit(gpa);
     self.scope_log.deinit(gpa);
@@ -551,7 +567,20 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         const idx = try self.internNode(self.file.str(p.name), self.strOrEmpty(p.discipline));
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
-        self.node_directional.items[idx] = p.direction == .input or p.direction == .output;
+        self.node_dir.items[idx] = p.direction;
+        // NOT checked here, deliberately: §1.3.4.1/§1.3.4.2 "Nets of potential
+        // signal flow disciplines in modules may only be bound to `input` or
+        // `output` ports of the module, not to `inout` ports". The rule is real
+        // and belongs on this line — `p.direction == .inout and
+        // self.isSignalFlow(...)` is the whole test — but VerA cannot yet
+        // COMPILE the legal spelling: codegen.zig signalFlowNet refuses every
+        // contribution to a directional single-nature port (the nodal device
+        // has no conserved pair to stamp), so rewriting a violating `inout` to
+        // the `input`/`output` the clause demands trades one diagnostic for a
+        // refusal. Three fixtures that today run and prove numbers would become
+        // xfails. Land this with the codegen half, not before; the fixtures
+        // waiting on it are ch01_intro/15_sf_potential_on_inout.va and
+        // 16_sf_flow_on_inout.va.
     }
     self.num_ports = self.node_order.items.len;
 
@@ -563,9 +592,53 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             continue;
         }
         if (n.is_ground) {
+            // §3.6.4 "Each ground declaration is associated with an already
+            // declared net of continuous discipline. ... The net must be
+            // assigned a continuous discipline to be declared ground." The
+            // global reference node is the zero of a POTENTIAL, and §3.6.2.2
+            // leaves a discrete discipline with no nature to have one.
+            //
+            // The discipline can come from either spelling — `ground <disc> g;`
+            // carries it here, `<disc> g; ground g;` left it on the node the
+            // earlier declaration interned.
+            const dname = if (n.discipline != .none)
+                self.file.str(n.discipline)
+            else if (self.node_voltages.get(name)) |idx|
+                (if (idx == ground) "" else self.node_disciplines.items[idx])
+            else
+                "";
+            if (self.disciplines.get(dname)) |info| {
+                if (info.is_discrete)
+                    try self.err(n.main_tok, .E0344, "`{s}` is of discipline `{s}`, whose domain is discrete", .{ name, dname });
+            }
             try self.node_voltages.put(self.arena, name, ground);
             continue;
         }
+        // §7.4.4, printed again as step 3 of F.2.1/F.2.2: "More than one
+        // conflicting discipline declaration from the same context ... is an
+        // error. In this case, conflicting simply means an attempt to declare
+        // more than one discipline regardless of whether the disciplines are
+        // compatible or not." So the test is a SECOND declaration, not a
+        // mismatch: two spellings of the same natures are equally illegal.
+        //
+        // This is the only site that can see a second one. A port is interned
+        // once by the loop above, and parser.zig parseNetNames now leaves a net
+        // entry behind when a body declaration re-disciplines a header port
+        // instead of silently overwriting it, so both shapes arrive here.
+        //
+        // Both sides must be non-empty: §3.6.5 implicit nets and §3.9 undeclared
+        // ports carry `""`, and a later declaration of one of those is the
+        // FIRST declaration, not a conflict.
+        if (n.discipline != .none) if (self.node_voltages.get(name)) |idx| {
+            const had = if (idx == ground) "" else self.node_disciplines.items[idx];
+            if (had.len != 0) {
+                var b = self.errWith(n.main_tok, .E0902);
+                b.msg("`{s}` is already of discipline `{s}`", .{ name, had });
+                b.note("`{s}` would be its second, and §7.4.4 forbids a second declaration whether or not the two are compatible", .{self.file.str(n.discipline)});
+                try b.emit();
+                continue; // keep the FIRST declaration; do not silently overwrite it
+            }
+        };
         _ = try self.internNode(name, self.strOrEmpty(n.discipline));
     }
 
@@ -635,12 +708,16 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const flag = try self.call("initial_step", &.{});
             const prev = self.restrict;
             self.restrict = "an analog initial block";
+            self.in_analog_initial = true;
             try self.lowerGuarded(flag, blk.body);
+            self.in_analog_initial = false;
             self.restrict = prev;
         } else {
             try self.lowerStmt(blk.body);
         }
     }
+
+    try self.checkProbeBranches();
 
     // §5.6.1.3 the contribution accumulators' final values.
     for (self.contributions.items, self.accum.items) |*c, acc| {
@@ -727,6 +804,23 @@ fn collectDisciplines(self: *Lower) Oom!void {
             .has_potential = d.potential != .none,
             .has_flow = d.flow != .none,
         };
+        // §3.6.2.1 "Conservative disciplines shall not have the same nature
+        // specified for both the potential and the flow." The same clause makes
+        // each nature's `access` the access function of its half, so one nature
+        // on both bindings gives one NAME two meanings — and `access_kind`
+        // below would keep whichever of the two it saw last.
+        if (info.has_potential and d.potential == d.flow)
+            try self.err(d.main_tok, .E0338, "`{s}` binds `{s}` to both its potential and its flow", .{
+                self.file.str(d.name), self.file.str(d.potential),
+            });
+        // §3.6.2.2 "It is an error for a discipline to have a domain binding of
+        // discrete if it has nature bindings." Either half is enough; a
+        // discrete net is solved by the digital kernel, which has no continuous
+        // quantity for the nature to describe.
+        if (info.is_discrete and (info.has_potential or info.has_flow))
+            try self.err(d.main_tok, .E0339, "`{s}` declares `domain discrete` and binds a nature", .{
+                self.file.str(d.name),
+            });
         if (d.potential != .none) {
             const n = self.natureOf(d.potential);
             if (n.abstol) |a| info.potential_abstol = a;
@@ -777,8 +871,21 @@ fn checkNatureTable(self: *Lower) Oom!void {
         var units: u32 = Mir.no_tok;
         acc.* = .none;
         var acc_tok: u32 = Mir.no_tok;
-        for (n.attrs) |a| {
+        for (n.attrs, 0..) |a, ai| {
             const an = self.file.str(a.name);
+            // §3.6.1.3 "The name of the attribute shall be unique in the nature
+            // being defined". Two values for one name leave `<nature>.<attr>`
+            // with no single reading — and the LAST one silently winning is
+            // exactly the failure mode that has no symptom.
+            // ponytail: O(n²) over the handful of attributes one nature has.
+            for (n.attrs[0..ai]) |prev| {
+                if (prev.name != a.name) continue;
+                try self.err(a.main_tok, .E0343, "`{s}` is already an attribute of `{s}`", .{
+                    an, self.file.str(n.name),
+                });
+                break;
+            }
+            try self.checkNatureAttrValue(n, a, an);
             if (std.mem.eql(u8, an, "abstol")) {
                 abstol = true;
             } else if (std.mem.eql(u8, an, "units")) {
@@ -814,6 +921,35 @@ fn checkNatureTable(self: *Lower) Oom!void {
         }
     }
 
+    // §3.6.1.2 idt_nature "shall be the name (not a string) of a nature which
+    // is defined elsewhere", and a derived nature that overrides it "shall be
+    // related (share the same base nature) to the nature the parent uses".
+    // Both halves are one code: the integral's tolerance comes from that
+    // nature, and a name that resolves to nothing and a name that resolves to
+    // an unrelated quantity leave it equally undefined.
+    for (natures) |*n| {
+        const own = for (n.attrs) |a| {
+            if (std.mem.eql(u8, self.file.str(a.name), "idt_nature")) break a;
+        } else continue;
+        // A non-identifier value is E0340's report, not a second one here.
+        if (self.file.exprs.tag(own.value) != .ident) continue;
+        const target = self.file.exprs.strOf(own.value);
+        const target_base = self.baseNatureOf(target);
+        if (target_base == .none) {
+            try self.err(own.main_tok, .E0341, "`{s}` is not a declared nature", .{self.file.str(target)});
+            continue;
+        }
+        if (n.parent == .none) continue;
+        const inherited = self.idtNatureOf(n.parent);
+        if (inherited == .none or self.baseNatureOf(inherited) == target_base) continue;
+        var b = self.errWith(own.main_tok, .E0341);
+        b.msg("`{s}` is not related to `{s}`", .{ self.file.str(target), self.file.str(inherited) });
+        b.note("`{s}` derives from `{s}`, whose `idt_nature` is `{s}`; an override shares its base nature", .{
+            self.file.str(n.name), self.file.str(n.parent), self.file.str(inherited),
+        });
+        try b.emit();
+    }
+
     // §3.13.2 "the access function of each base nature shall be unique". Keyed
     // on the nature NAME, so one nature declared twice (annex D's own headers
     // arrive that way when a fixture restates them) is one claim, not two.
@@ -835,6 +971,107 @@ fn checkNatureTable(self: *Lower) Oom!void {
             try self.err(d.main_tok, .E0336, "`{s}` is already a nature", .{self.file.str(d.name)});
         }
     }
+
+    // §3.6.1/§3.6.2 same-KIND duplicates. E0336 above is the cross-kind case
+    // only, and a name declared twice as the same kind is the one that has no
+    // symptom: `disciplines`/the nature walk keep the last, so every net of the
+    // name silently gets the second declaration's access functions.
+    // Same per-file scoping as E0335, and for the same reason (see the header).
+    for (natures, 0..) |*a, i| {
+        for (natures[i + 1 ..]) |*b| {
+            if (b.name != a.name or self.fileOf(a.main_tok) != self.fileOf(b.main_tok)) continue;
+            try self.err(b.main_tok, .E0342, "nature `{s}` is already declared", .{self.file.str(b.name)});
+        }
+    }
+    for (self.file.disciplines, 0..) |*a, i| {
+        for (self.file.disciplines[i + 1 ..]) |*b| {
+            if (b.name != a.name or self.fileOf(a.main_tok) != self.fileOf(b.main_tok)) continue;
+            try self.err(b.main_tok, .E0342, "discipline `{s}` is already declared", .{self.file.str(b.name)});
+        }
+    }
+}
+
+/// §3.6.1.2/§3.6.1.3 — the FORM each attribute's value has to take. The LRM
+/// spells three of them out and then makes one blanket statement about the
+/// rest, so this is four arms and not a table.
+///
+/// The identifier/string distinction is one character wide and means two
+/// different things: `access = V` introduces a callable name into every module
+/// that uses the discipline, `access = "V"` is a value nothing can call.
+fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.NatureAttr, an: []const u8) Oom!void {
+    const tag = self.file.exprs.tag(a.value);
+    // §3.6.1.2: `access` "shall be an identifier (by name, not as a string)";
+    // idt_nature/ddt_nature take "the name (not a string) of a nature".
+    const wants_ident = std.mem.eql(u8, an, "access") or
+        std.mem.eql(u8, an, "idt_nature") or
+        std.mem.eql(u8, an, "ddt_nature");
+    if (wants_ident) {
+        if (tag != .ident) try self.err(a.main_tok, .E0340, "`{s}` of `{s}` must be an identifier, not a value", .{
+            an, self.file.str(n.name),
+        });
+        return;
+    }
+    // §3.6.1.2: `units` "shall be a string" — §3.11.1's Units Value Rule
+    // compares two natures on it, which needs one comparable spelling.
+    if (std.mem.eql(u8, an, "units")) {
+        if (tag != .str_literal) try self.err(a.main_tok, .E0340, "`units` of `{s}` must be a string", .{
+            self.file.str(n.name),
+        });
+        return;
+    }
+    // §3.6.1.3 everything else — abstol included — "shall be constant". A
+    // nature is declared at source-text level (§3.13.1), outside every module,
+    // so there is no scope here in which a runtime name could resolve.
+    if (self.constEval(a.value) == null)
+        try self.err(a.main_tok, .E0340, "`{s}` of `{s}` is not a constant expression", .{
+            an, self.file.str(n.name),
+        });
+}
+
+/// §3.11.1 Derived Nature Rule — the base a (possibly derived) nature bottoms
+/// out at. Two natures are RELATED when this answers the same name for both.
+/// `.none` when the name resolves to no nature at all.
+fn baseNatureOf(self: *const Lower, name: Ast.StrId) Ast.StrId {
+    var want = name;
+    var hops: u32 = 0;
+    while (hops < 16) : (hops += 1) {
+        const nat = for (self.file.natures) |*n| {
+            if (n.name == want) break n;
+        } else return if (hops == 0) .none else want;
+        if (nat.parent == .none) return want;
+        if (nat.parent_access) |half| {
+            const d = for (self.file.disciplines) |*x| {
+                if (x.name == nat.parent) break x;
+            } else return want;
+            const bound = switch (half) {
+                .potential => d.potential,
+                .flow => d.flow,
+            };
+            if (bound == .none) return want;
+            want = bound;
+        } else want = nat.parent;
+    }
+    return want;
+}
+
+/// The `idt_nature` a nature ends up with, its own or an inherited one.
+fn idtNatureOf(self: *const Lower, name: Ast.StrId) Ast.StrId {
+    var want = name;
+    var hops: u32 = 0;
+    while (hops < 16) : (hops += 1) {
+        const nat = for (self.file.natures) |*n| {
+            if (n.name == want) break n;
+        } else return .none;
+        for (nat.attrs) |a| {
+            if (std.mem.eql(u8, self.file.str(a.name), "idt_nature") and
+                self.file.exprs.tag(a.value) == .ident)
+                return self.file.exprs.strOf(a.value);
+        }
+        if (nat.parent == .none) return .none;
+        if (nat.parent_access != null) return .none;
+        want = nat.parent;
+    }
+    return .none;
 }
 
 /// Which source file a token came from (§3.13.1 scope comparisons). The
@@ -866,12 +1103,46 @@ fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
             }
         }
         if (nat.parent == .none) return out;
+        // A.1.6 `parent_nature ::= nature_identifier | discipline_identifier .
+        // potential_or_flow`. In the second form the parent names a DISCIPLINE,
+        // so the walk continues at whichever nature that discipline binds to
+        // the named half (§3.6.2.6). Resolving it off `file.disciplines` and
+        // not off `self.disciplines` keeps this callable from
+        // `collectDisciplines`, which is what fills that map.
+        if (nat.parent_access) |half| {
+            const d = for (self.file.disciplines) |*x| {
+                if (x.name == nat.parent) break x;
+            } else return out;
+            const bound = switch (half) {
+                .potential => d.potential,
+                .flow => d.flow,
+            };
+            if (bound == .none) return out;
+            want = bound;
+            continue;
+        }
         want = nat.parent;
     }
     return out;
 }
 
 // ---- §1.3.1 nodes ----------------------------------------------------------
+
+/// §1.3.4 — is `dname` a SIGNAL-FLOW discipline? Exactly one of the two natures
+/// is bound, so the net carries one quantity and no conservation law relates it
+/// to anything (§3.6.2.1 makes the both-natures case conservative instead).
+///
+/// The exclusive-or matters. codegen.zig signalFlowNet asks the weaker `not
+/// both`, which is right for the question IT asks — "is there a conserved pair
+/// to stamp?" — but a natureless `domain continuous` discipline (§3.11.1) and a
+/// `domain discrete` one bind NEITHER nature, and neither is a signal-flow
+/// discipline. §1.3.4.1/§1.3.4.2 say "potential signal flow" and "flow
+/// signal-flow" disciplines, which is one nature, present.
+fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
+    if (dname.len == 0) return false;
+    const d = self.disciplines.get(dname) orelse return false;
+    return d.has_potential != d.has_flow;
+}
 
 /// Register (or find) a node. Undeclared names are implicit nets (§3.6.5), so
 /// this never fails; registration order is source order ⇒ deterministic.
@@ -886,7 +1157,7 @@ fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
     assert(idx != ground);
     try self.node_order.append(self.arena, name);
     try self.node_disciplines.append(self.arena, discipline);
-    try self.node_directional.append(self.arena, false);
+    try self.node_dir.append(self.arena, .unspecified);
     try self.probe_cache.append(self.arena, .undef);
     gop.value_ptr.* = idx;
     return idx;
@@ -949,10 +1220,28 @@ fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
 pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     const name = self.file.str(decl.name);
 
+    // §3.4.2: "The first expression in the range shall be numerically smaller
+    // than the second expression in the range." Decidable from the declaration
+    // alone — separate from checking an OVERRIDE against a well-formed range,
+    // which needs an instance value. Folded bounds only; §3.4.2 admits a
+    // constant_expression over earlier parameters. Here, above the array
+    // dispatch, so an array's ranges are judged once and not once per element.
+    for (decl.ranges) |r| {
+        if (r.strings != null or r.hi == .none) continue; // string set / single value
+        const lo = self.constEval(r.lo) orelse continue;
+        const hi = self.constEval(r.hi) orelse continue;
+        if (lo == .str or hi == .str) continue;
+        if (lo.asReal() < hi.asReal()) continue;
+        try self.err(decl.main_tok, .E0347, "`{s}` {s} bounds {d} and {d} are not in increasing order", .{
+            name, @tagName(r.kind), lo.asReal(), hi.asReal(),
+        });
+    }
+
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return self.lowerParamArray(decl, name);
 
     const folded = self.constEval(decl.default);
+    try self.checkParamType(decl, name, folded);
     const ty: Ast.Type = if (decl.ty != .unspecified) decl.ty else switch (folded orelse Const{ .real = 0 }) {
         .int => .integer,
         .real => .real,
@@ -989,6 +1278,36 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     try self.addParam(name, ty, default, decl.ranges, decl.is_local, decl.main_tok);
 }
 
+/// §3.4.1 the two type rules the general "convert the value to the parameter's
+/// type" sentence does NOT cover. Diagnose and carry on: inference still runs
+/// and the parameter still enters the table, so one bad declaration does not
+/// turn every use of it into a second diagnostic.
+///
+/// Scalars only — the array path has its own arm, since §3.4.4's requirement is
+/// about the DECLARATION and holds whatever the pattern contains.
+fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
+    const c = folded orelse return; // not constant here: nothing to compare
+    const is_str = c == .str;
+    // §3.4.1: "the type of a string parameter (see 3.4.6) ... is mandatory."
+    // Inference is defined over the value "after any value overrides have been
+    // applied", so an untyped parameter has no type until elaboration — and
+    // the no-string-conversion rule below has to be decidable before then.
+    if (decl.ty == .unspecified) {
+        if (is_str) try self.err(decl.main_tok, .E0346, "`{s}` is initialized with a string; write `parameter string`", .{name});
+        return;
+    }
+    // §3.4.1: "No conversion shall be applied for strings; it shall be an error
+    // to assign a numeric value to a parameter declared as string or to assign
+    // a string value to a real parameter." Both directions, one code — it is
+    // one sentence and one fix.
+    if ((decl.ty == .string) == is_str) return;
+    try self.err(decl.main_tok, .E0345, "`{s}` is declared {s} and initialized with a {s} value", .{
+        name,
+        @tagName(decl.ty),
+        if (is_str) "string" else "numeric",
+    });
+}
+
 fn addParam(
     self: *Lower,
     name: []const u8,
@@ -1015,7 +1334,30 @@ fn addParam(
 /// `c[0]`, `c[1]`, `c[2]`. Codegen emits one Model field each.
 fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
     const dim = try self.dimBounds(decl.dims, decl.main_tok, name) orelse return;
+    // §3.4.4, in the restriction list closed by "Failure to follow these
+    // restrictions shall result in an error": "A type of a parameter array
+    // shall be given in the declaration." §3.4.1 says it again from the other
+    // side. The reason is that §3.4.1's fallback derives the type from the
+    // assigned VALUE, and an array's initializer is an assignment pattern —
+    // there is no scalar there to derive from. `.real` below is a recovery
+    // guess, not an inference.
+    if (decl.ty == .unspecified)
+        try self.err(decl.main_tok, .E0346, "array parameter `{s}` has no declared type", .{name});
     const ty: Ast.Type = if (decl.ty == .unspecified) .real else decl.ty;
+    // §3.4: "For parameters defined as arrays, the initializer shall be a
+    // constant_assignment_pattern expression ... using an assignment pattern
+    // (see 4.2.14), i.e. within '{ and } delimiters." Annex G Table G.4 item 2
+    // records why the apostrophe was added at all — without it `{2.1, 4.5}` is
+    // the §4.2.13 concatenation operator and a front end cannot tell a list of
+    // values from a concatenation. Diagnosed and carried on with no elements,
+    // so every element keeps its §3.4 zero default and one bad declaration does
+    // not turn every USE of the parameter into a second diagnostic.
+    if (decl.default != .none and self.file.exprs.tag(decl.default) != .assign_pattern) {
+        var b = self.errAtWith(decl.default, .E0349);
+        b.msg("initialising array parameter `{s}`", .{name});
+        b.help("write the list as an assignment pattern: `'{{ ... }}`", .{});
+        try b.emit();
+    }
     const elems: []const Ast.ExprId = if (decl.default != .none and
         self.file.exprs.tag(decl.default) == .assign_pattern)
         self.file.exprs.args(decl.default)
@@ -1487,6 +1829,18 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         try self.errAt(lhs, .E0406, "", .{});
         return;
     }
+    // §5.9, the third blanket restriction on `repeat`/`while`/non-genvar `for`:
+    // "Contribution statements are not allowed". The set of branches a device
+    // stamps is fixed before the solve, and a runtime trip count is not.
+    //
+    // `self.loops` is exactly the right question: only the three CFG loops push
+    // onto it, and §5.9.3's genvar `for` is unrolled by `tryUnrollFor` before
+    // `lowerFor` ever gets there — so an `analog for (i = 0; i < 4; ...)` over a
+    // genvar contributes four times and never reaches here.
+    if (self.loops.items.len != 0) {
+        try self.errAt(lhs, .E0426, "", .{});
+        return;
+    }
     const ex = &self.file.exprs;
     // §5.4.3 "The port access function shall not be used on the left side of a
     // contribution operator <+." (§4.4 says the same of branch assignment.)
@@ -1516,20 +1870,125 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         try b.emit();
         return;
     }
+    // §1.3.4.1 "In that case, potential contributions may not be made to
+    // `input` ports"; §1.3.4.2 says the same of flow contributions. The port's
+    // direction IS the direction of its one quantity, so an `input` is supplied
+    // from outside and driving it has no meaning. Only `input` — contributing
+    // to an `output` is the whole point of a signal-flow port, and the `inout`
+    // case is the sibling declaration rule (see the note in lowerModule's port
+    // loop for why that half is not landed yet).
+    for ([_]u16{ target.hi, target.lo }) |n| {
+        if (n >= self.node_dir.items.len or self.node_dir.items[n] != .input) continue;
+        if (!self.isSignalFlow(self.node_disciplines.items[n])) continue;
+        var b = self.errAtWith(lhs, .E0425);
+        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.node_order.items[n], self.node_disciplines.items[n] });
+        try b.emit();
+        return;
+    }
     const idx = try self.contribIndex(target.access, target.hi, target.lo, self.file.exprs.mainTok(lhs));
 
     const split = try self.splitContribution(rhs);
+    if (split.resist) |v| try self.checkFiniteContribution(lhs, v); // §7.3.2.1
+    if (split.react) |v| try self.checkFiniteContribution(lhs, v);
     const acc = self.accum.items[idx];
-    if (split.resist) |v| {
+    // §1.3.1.2: `I(n,p) <+ e` drives the same branch as `I(p,n) <+ -e`, so the
+    // reversed spelling accumulates into the same source with the sign flipped.
+    // Checked AFTER §7.3.2.1, which is about the value the source names and
+    // does not care which way the branch was written.
+    if (split.resist) |v0| {
+        const v = if (target.neg) try self.emit(.fneg, &.{v0}) else v0;
         const old = try self.builder.readVariable(acc.resist, self.cur);
         try self.builder.writeVariable(acc.resist, self.cur, try self.emit(.fadd, &.{ old, v }));
     }
-    if (split.react) |v| {
+    if (split.react) |v0| {
+        const v = if (target.neg) try self.emit(.fneg, &.{v0}) else v0;
         const old = try self.builder.readVariable(acc.react, self.cur);
         try self.builder.writeVariable(acc.react, self.cur, try self.emit(.fadd, &.{ old, v }));
     }
     // §4.6.4 the noise kind belongs to the target, not to one statement.
     if (self.noiseKindOf(rhs)) |k| self.contributions.items[idx].noise_kind = k;
+}
+
+/// §7.3.2.1: "While use of these special numbers in digital expressions is not
+/// an error, it is illegal to assign these values to a branch through
+/// contribution in the analog context."
+///
+/// Compile time only, and that boundary is the clause's own scope rather than a
+/// limitation to apologise for: §7.3.2.1 is about a value the SOURCE names, and
+/// with `inf` confined by annex A to a value_range_expression the only way to
+/// write one is the IEEE arithmetic the clause itself describes — 1.0/0.0,
+/// -1.0/0.0, 0.0/0.0. A value that goes infinite only at some operating point
+/// is W0650's business, and W0650 is a different claim: "not provably finite",
+/// not "provably not finite".
+///
+/// SUBEXPRESSIONS, not the whole contribution. A branch value almost always
+/// contains a probe, so `bad + 0.0*V(p)` folds to nothing as a unit; the scan
+/// folds every subtree it can and accuses the first one that is not finite.
+fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void {
+    var bad: ?f64 = null;
+    _ = self.scanFinite(v, 0, &bad);
+    const x = bad orelse return;
+    try self.errAt(lhs, .E0424, "{s}", .{
+        if (std.math.isNan(x)) "contribution of a NaN" else "contribution of an infinite value",
+    });
+}
+
+/// Fold `v0` where it is constant, recording the first non-finite result in
+/// `bad`. Returns null for anything not constant — a probe, a parameter (the
+/// host overrides it, so its declared default proves nothing), a call — but
+/// keeps walking into it, because the offending constant is normally one
+/// operand of a sum that is not constant.
+///
+/// Not `analysis.foldConst`: that wants a built `Analysis`, which does not
+/// exist until lowering has finished, and this rule has to be reported on the
+/// `<+` that broke it.
+///
+/// ponytail: arithmetic and sign only. `exp(1000)` overflows to +inf as well,
+/// but §7.3.2.1's examples are IEEE division and every operator added here
+/// widens the surface for a false accusation. Add the transcendentals the day a
+/// model writes one.
+fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?f64 {
+    if (depth > 32) return null;
+    const v = self.mir.resolveAlias(v0);
+    const r: ?f64 = switch (self.mir.valueDef(v)) {
+        .float_const => |x| x,
+        .int_const => |x| @as(f64, @floatFromInt(x)),
+        .inst_result => |inst| blk: {
+            const row = self.mir.instRow(inst);
+            switch (Mir.opClass(row.op)) {
+                .unary => {
+                    const a = self.scanFinite(@enumFromInt(row.a), depth + 1, bad) orelse break :blk null;
+                    break :blk switch (row.op) {
+                        .fneg, .ineg => -a,
+                        .fabs, .iabs => @abs(a),
+                        .if_cast, .opt_barrier => a,
+                        else => null,
+                    };
+                },
+                .binary => {
+                    // Both sides walked before either is tested: the scan is
+                    // the point, the fold is only how it gets there.
+                    const a = self.scanFinite(@enumFromInt(row.a), depth + 1, bad);
+                    const b = self.scanFinite(@enumFromInt(row.b), depth + 1, bad);
+                    const x = a orelse break :blk null;
+                    const y = b orelse break :blk null;
+                    break :blk switch (row.op) {
+                        .fadd => x + y,
+                        .fsub => x - y,
+                        .fmul => x * y,
+                        .fdiv => x / y,
+                        else => null,
+                    };
+                },
+                else => break :blk null,
+            }
+        },
+        else => null,
+    };
+    if (r) |x| {
+        if (!std.math.isFinite(x) and bad.* == null) bad.* = x;
+    }
+    return r;
 }
 
 /// LRM §5.6.7 indirect branch contribution — `V(out) : V(in) == e;`, read
@@ -1603,6 +2062,45 @@ fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, e
     try self.builder.writeVariable(self.accum.items[idx].resist, self.cur, row);
 }
 
+/// §1.3.1: "The potential and flow of a probe branch may not both appear in
+/// expressions in a given module." §5.4.2.1 states it as the ban — "using both
+/// the potential and the flow of a probe branch is illegal" — and gives the
+/// reason: it pins ONE of a probe's quantities at zero, the potential of a flow
+/// probe or the flow of a potential probe, and which one is decided by which
+/// the module reads. Reading both asks for two zeros at once.
+///
+/// A SWEEP and not a test at the read, because the classification depends on
+/// contributions that may be lowered later: §1.3.1 makes a branch a probe by
+/// nothing ever appearing on the left of its `<+`, which is only knowable once
+/// the whole module is lowered. A source branch is exempt — §5.4.2.2 makes both
+/// of its quantities accessible.
+fn checkProbeBranches(self: *Lower) Oom!void {
+    // ponytail: O(reads²) over one module's access functions. A pair map keyed
+    // on the unordered node pair if a model ever makes this measurable.
+    for (self.branch_reads.items, 0..) |a, i| {
+        for (self.branch_reads.items[i + 1 ..]) |b| {
+            if (a.access == b.access or !samePair(a.hi, a.lo, b.hi, b.lo)) continue;
+            if (self.contributedOn(a.hi, a.lo)) continue;
+            var d = self.errWith(b.tok, .E0423);
+            d.msg("both quantities of the probe branch (`{s}`, `{s}`) are read", .{
+                self.nodeName(a.hi), self.nodeName(a.lo),
+            });
+            d.note("nothing is contributed to that branch, so §1.3.1 makes it a probe; contribute to it to make it a source, or read only one quantity", .{});
+            try d.emit();
+            return; // one report per module: the second pair is the same defect
+        }
+    }
+}
+
+/// Is anything contributed to this node pair — directly (§5.6.1) or indirectly
+/// (§5.6.7)? That is exactly §1.3.1's test for "not a probe".
+fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
+    for (self.contributions.items) |c| {
+        if (samePair(c.hi, c.lo, hi, lo)) return true;
+    }
+    return false;
+}
+
 /// §5.6.7.2 "the same pair of analog nets (or any of its parallel branches)" —
 /// unordered, since (a,b) and (b,a) are the same pair with opposite reference
 /// directions (§1.3.1.2).
@@ -1641,7 +2139,31 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
     };
 }
 
-const Target = struct { access: Access, hi: u16, lo: u16 };
+/// A resolved access. `hi`/`lo` are in CANONICAL order (`hi < lo` as node_order
+/// indices, which puts `ground` — `maxInt(u16)` — last, so `V(n)` is untouched);
+/// `neg` says the source wrote the terminals the other way round.
+///
+/// §1.3.1.2 associated reference directions: "A positive flow enters a branch
+/// through the port marked with the plus sign and exits the branch through the
+/// port marked with the minus sign." So `a,b` and `b,a` are ONE branch named
+/// twice, and its two spellings differ by a sign — for the flow and for the
+/// potential alike.
+///
+/// Canonicalising here rather than at each use is what makes that true
+/// everywhere at once: `flowUnknown` mints one unknown per branch instead of an
+/// independent second one for the reversed pair, `contribIndex` accumulates
+/// both spellings into one source, and codegen — which reconstructs the
+/// `flow(a,b)` NAME from a contribution's `hi`/`lo` to find the slot lowering
+/// already allocated — only ever sees the one spelling, so nothing downstream
+/// needs to know the rule exists.
+const Target = struct { access: Access, hi: u16, lo: u16, neg: bool = false };
+
+fn canonical(access: Access, hi: u16, lo: u16) Target {
+    return if (hi <= lo)
+        .{ .access = access, .hi = hi, .lo = lo }
+    else
+        .{ .access = access, .hi = lo, .lo = hi, .neg = true };
+}
 
 /// §4.4.1 resolve `V(a)`, `V(a,b)`, `I(br)` to (access, node pair).
 fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
@@ -1660,13 +2182,39 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     if (ex.rhs(e) == .none and ex.tag(first) == .ident) {
         if (self.branches.get(self.file.str(ex.strOf(first)))) |b| {
             try self.checkAccessMatch(e, name, access, b.hi);
-            return .{ .access = access, .hi = b.hi, .lo = b.lo };
+            return canonical(access, b.hi, b.lo);
         }
     }
     const hi = try self.nodeOf(first);
     const lo = if (ex.rhs(e) == .none) ground else try self.nodeOf(ex.rhs(e));
     try self.checkAccessMatch(e, name, access, hi);
-    return .{ .access = access, .hi = hi, .lo = lo };
+    // §4.4 Table 4-16 gives both `V(n1,n1)` and `I(n1,n1)` as `Error`, and the
+    // prose under it is normative for the flow half: "If two net expressions
+    // are given as arguments to a flow access function, they shall not evaluate
+    // to the same signal." A branch from p to p is not a zero-potential branch;
+    // it is not a branch. Annex G Table G.1 records why the spelling exists at
+    // all — `I(a,a)` was the OVI v1.0 port flow, replaced by `I(<a>)`.
+    //
+    // Only the TWO-argument form: `V(n)` is `V(n, gnd)` by §1.3.1.1 and is not
+    // written with a repeated signal, so `V(gnd)` stays legal.
+    //
+    // Ground is exempt as a PAIR, not as an oversight. §1.3.1.1 collapses every
+    // `ground` net onto the one global reference node, so `V(g1, g2)` over two
+    // separately declared grounds lands on hi == lo == ground while naming two
+    // different signals — which Table 4-16 does not forbid, and which
+    // ch01_intro/24 and annex_h_glossary/08 both assert reads 0.
+    // ponytail: that also lets the literal `V(g1, g1)` through. Catching it
+    // needs a name comparison the interned index has already thrown away, and
+    // no fixture writes it.
+    if (ex.rhs(e) != .none and hi == lo and hi != ground) {
+        var b = self.errAtWith(e, .E0315);
+        b.msg("`{s}({s}, {s})` names one signal twice", .{ name, self.nodeName(hi), self.nodeName(lo) });
+        if (access == .flow)
+            b.help("the flow into a port is `{s}(<{s}>)` (5.4.3)", .{ name, self.nodeName(hi) });
+        try b.emit();
+        return null;
+    }
+    return canonical(access, hi, lo);
 }
 
 /// §4.4: "The access function name shall match the discipline declaration for
@@ -1677,26 +2225,56 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
 /// and `V(n)` quietly read a net whose discipline names its potential something
 /// else. The discipline of the node is what decides.
 ///
-/// Silent when the node has no declared discipline (§3.6.5 implicit nets) or
-/// when the discipline binds no nature for that half: neither has a spelling to
-/// match against, and the missing binding is its own diagnostic.
+/// Three separate failures live here, and they are three because a net can be
+/// wrong in three different ways:
+///
+///  - E0337, no discipline at all. §3.6.5 makes the implicit net legal AS A
+///    DECLARATION, so this cannot fire where the net is created — only here, on
+///    the access, which is what §3.6.3 ("such nets can not be used in analog
+///    behavioral descriptions") and §6.5.2.1 ("can only be used in a structural
+///    description") actually forbid.
+///  - E0501 with no `want`, the discipline binds no nature for this half:
+///    natureless (`ddiscrete`, `\logic`, a bare `discipline x; enddiscipline`)
+///    or the wrong half of a signal-flow pair (`I` on annex D's `voltage`).
+///    §1.3.4 puts it plainest — "flow for such a node is not defined".
+///  - E0501 with a `want`, the §3.6.1.4 name mismatch.
+///
+/// The last two share a code because they are one sentence of §4.4: the name
+/// does not match the discipline. They differ only in whether there is a
+/// spelling to suggest, which is a note, not a rule.
 fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
     if (node == ground) return;
     const dname = self.node_disciplines.items[node];
-    if (dname.len == 0) return;
+    if (dname.len == 0) {
+        var b = self.errAtWith(e, .E0337);
+        b.msg("`{s}` has no discipline, so `{s}` names nothing on it", .{ self.nodeName(node), name });
+        b.note("§3.6.2.4 treats a net with no discipline that is referenced in behavioral code as discrete; declare one, e.g. `electrical {s};`", .{self.nodeName(node)});
+        try b.emit();
+        return;
+    }
     const info = self.disciplines.get(dname) orelse return;
     const want = switch (access) {
         .potential => info.potential_access,
         .flow => info.flow_access,
     };
-    if (want.len == 0 or std.mem.eql(u8, want, name)) return;
+    const half = if (access == .potential) "potential" else "flow";
+    if (want.len == 0) {
+        var b = self.errAtWith(e, .E0501);
+        b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
+        b.note("`{s}` is of discipline `{s}`, which binds no {s} nature, so `{s}` has no {s} to access", .{
+            self.nodeName(node), dname, half, self.nodeName(node), half,
+        });
+        try b.emit();
+        return;
+    }
+    if (std.mem.eql(u8, want, name)) return;
     var b = self.errAtWith(e, .E0501);
     b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
     b.suggestHere(want);
     b.note("`{s}` is of discipline `{s}`, whose {s} nature declares `access = {s}`", .{
         self.nodeName(node),
         dname,
-        if (access == .potential) "potential" else "flow",
+        half,
         want,
     });
     try b.emit();
@@ -2015,8 +2593,22 @@ fn lowerCase(
     }
     const sv = try self.lowerExpr(scrutinee);
     var default_arm: Ast.StmtId = .none;
+    var defaults: usize = 0;
     for (arms) |a| {
-        if (a.labels.len == 0) default_arm = a.body;
+        if (a.labels.len != 0) continue;
+        defaults += 1;
+        default_arm = a.body;
+    }
+    // §5.8.3: "The default statement is optional. Use of multiple default
+    // statements in one case statement is illegal." Nothing in the clause
+    // orders them, so a second one leaves the fall-through arm ambiguous —
+    // which is why this is a well-formedness rule and not a preference.
+    // Reported once for the statement, and lowering carries on with the last
+    // one so a second, unrelated mistake in the same case is still reported.
+    if (defaults > 1) {
+        var b = self.errWith(tok, .E0427);
+        b.msg("{d} `default` arms", .{defaults});
+        try b.emit();
     }
     // §5.8.1 applies to `case` word for word: the arm LABELS are constants by
     // A.6.7, so whether an arm is decided before the solve turns entirely on
@@ -2298,6 +2890,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 try self.errAt(e, .E0513, "", .{});
                 return null;
             }
+            try self.checkEventArgBounds(e, name); // §5.10.3.1/§5.10.3.2
             var args: std.ArrayList(Mir.Value) = .empty;
             defer args.deinit(self.arena);
             for (ex.args(e)) |a| {
@@ -2331,6 +2924,66 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     }
 }
 
+/// §5.10.3.1/§5.10.3.2 argument rules for the monitored events, quoted in full
+/// under E0517. Three rules, and they are three because they fail apart: a
+/// non-integer direction, a negative tolerance, and a tolerance with no
+/// direction beside it.
+///
+/// `timer` is deliberately absent. §5.10.3.3 gives it start_time/period/
+/// time_tol with no direction slot at all, and its own sentences about them are
+/// about scheduling, not sign — so it gets no rule here rather than a borrowed
+/// one.
+///
+/// Same restraint as `checkFilterArgBounds`: Syntax 5-16 types every one of
+/// these `analog_expression`, so only what folds is judged.
+fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
+    const is_cross = std.mem.eql(u8, name, "cross");
+    if (!is_cross and !std.mem.eql(u8, name, "above")) return;
+    const args = self.file.exprs.args(e);
+    // §5.10.3.2 above() has no direction: its tolerances start one slot earlier.
+    const dir: ?usize = if (is_cross) 1 else null;
+    const tol_first: usize = if (is_cross) 2 else 1;
+
+    if (dir) |d| if (d < args.len and args[d] != .none) {
+        if (self.constEval(args[d])) |c| {
+            const v = c.asReal();
+            // "shall evaluate to integers". Only a folded NON-integral value is
+            // refused: 0.5 selects no direction, while a real spelled 1.0 does
+            // evaluate to one and the clause's complaint would be typographic.
+            if (c != .str and v != @round(v))
+                try self.errAt(args[d], .E0517, "`cross()` direction shall evaluate to an integer, got {d}", .{v});
+        }
+    };
+
+    var tol_given = false;
+    for (tol_first..@min(tol_first + 2, args.len)) |i| {
+        if (args[i] == .none) continue;
+        tol_given = true;
+        const c = self.constEval(args[i]) orelse continue;
+        if (c == .str) continue;
+        const v = c.asReal();
+        if (v >= 0) continue;
+        try self.errAt(args[i], .E0517, "`{s}()` {s} shall be non-negative, got {d}", .{
+            name,
+            if (i == tol_first) "time_tol" else "expr_tol",
+            v,
+        });
+    }
+
+    // "If either or both tolerances are defined, then the direction shall also
+    // be defined." Elision as such is legal — §5.10.3.1's own `sh` example
+    // writes `cross(V(smpl) - thresh, dir, , , en === 1'b1)` — so the accusation
+    // is the missing DIRECTION and not the comma.
+    if (tol_given) if (dir) |d| {
+        if (d >= args.len or args[d] == .none) {
+            var b = self.errAtWith(e, .E0517);
+            b.msg("a tolerance is given but the direction slot is empty", .{});
+            b.help("write the direction explicitly; `0` is \"either edge\"", .{});
+            try b.emit();
+        }
+    };
+}
+
 // ---------------------------------------------------------------------------
 // ch9 — system tasks (statement position)
 // ---------------------------------------------------------------------------
@@ -2342,6 +2995,19 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         try self.err(tok, .E0801, "`{s}`", .{name});
         return;
     }
+    if (isDigitalOnlySysFunc(name)) { // §9.2
+        try self.err(tok, .E0806, "`{s}`", .{name});
+        return;
+    }
+    // §9.7.2, final sentence: "The $stop task shall not be used within an
+    // analog initial block." Positional, not a support question — $stop in an
+    // ordinary analog block is legal, and §9.7.1 goes out of its way to define
+    // what its sibling $finish means in an analog initial block.
+    if (self.in_analog_initial and std.mem.eql(u8, name, "$stop")) {
+        try self.err(tok, .E0807, "", .{});
+        return;
+    }
+    if (isDisplayTask(name)) try self.checkFormatPairing(tok, args);
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
@@ -2372,6 +3038,51 @@ pub fn isDisplayTask(name: []const u8) bool {
     };
     for (printing) |p| if (std.mem.eql(u8, name, p)) return true;
     return false;
+}
+
+/// §9.4.3: "for each % character (except %m, %% and %l) that appears in a
+/// string, a corresponding expression argument shall be supplied after the
+/// string."
+///
+/// Only a shortfall is diagnosed. The same clause gives a surplus a meaning
+/// ("displayed using the default decimal format"), and §9.7.3 puts a
+/// non-string first in `$fatal(n, "…")` — so the format is "the first
+/// argument that folds to a string", exactly the rule `cg_display.emitDisplayTask`
+/// uses to pick one, and a task with no string at all has nothing to count.
+///
+/// A format built at run time folds to null and nothing is said.
+fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void {
+    const at, const fmt = for (args, 0..) |a, i| {
+        if (self.constEval(a)) |c| switch (c) {
+            .str => |s| break .{ i, s },
+            else => {},
+        };
+    } else return;
+
+    var need: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        i = p + 1;
+        if (i >= fmt.len) break;
+        // §9.4.3 `%[flags][width][.precision]conv`; the conversion letter is
+        // what decides, so everything before it is skipped unread.
+        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+            (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
+        {}
+        if (i >= fmt.len) break;
+        const conv = std.ascii.toLower(fmt[i]);
+        i += 1;
+        if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
+        need += 1;
+    }
+
+    // A null argument (`,,`) is still an argument — §9.4.1 gives it a
+    // rendering — so the supply is the slot count, not the non-empty one.
+    const have = args.len - (at + 1);
+    if (have >= need) return;
+    var b = self.errWith(tok, .E0810);
+    b.msg("the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
+    try b.emit();
 }
 
 /// §9.17 analog kernel control. Handled here rather than as an ordinary void
@@ -2459,6 +3170,62 @@ fn isRejectedSysFunc(name: []const u8) bool {
         "$simprobe", // §9.16
     };
     for (rejected) |r| if (std.mem.eql(u8, name, r)) return true;
+    return false;
+}
+
+/// §9.2. Every Chapter 9 table carries a "supported in analog context" column,
+/// and these are the names whose cell says No. Seven tables, one list, because
+/// the tables differ only in which subclause they sit under — the verdict and
+/// the call site are the same for all of them (E0806 spells out the reason per
+/// family).
+///
+/// There is no analog/digital context FLAG to consult, and deliberately so:
+/// `parseAnalog` is the only producer of statements VerA lowers (A.6.2
+/// `analog_construct`), and an analog function body (§4.7.2) is inlined into
+/// one. VerA compiles a continuous-time device — every statement it ever sees
+/// is in the analog context, so the column collapses to a name test. A flag
+/// would be a field that is `true` on every read.
+/// ponytail: add the flag the day a §7 digital block is lowered, not before.
+fn isDigitalOnlySysFunc(name: []const u8) bool {
+    const digital_only = [_][]const u8{
+        // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
+        "$displayb",  "$displayh",  "$displayo",
+        "$strobeb",   "$strobeh",   "$strobeo",
+        "$writeb",    "$writeh",    "$writeo",
+        "$monitorb",  "$monitorh",  "$monitoro",
+        "$monitoron", "$monitoroff",
+        // Table 9-2 (§9.5) — the same radix story against a descriptor, plus
+        // the byte/vector reads and the two digital-netlist loaders.
+        "$fdisplayb", "$fdisplayh", "$fdisplayo",
+        "$fwriteb",   "$fwriteh",   "$fwriteo",
+        "$fstrobeb",  "$fstrobeh",  "$fstrobeo",
+        "$fmonitorb", "$fmonitorh", "$fmonitoro",
+        "$swriteb",   "$swriteh",   "$swriteo",
+        "$fgetc",     "$ungetc",    "$fread",
+        "$readmemb",  "$readmemh",  "$sdf_annotate",
+        // Table 9-3 (§9.6) — the timescale tick, which the analog kernel has
+        // no notion of.
+        "$printtimescale", "$timeformat",
+        // Table 9-5 (§9.8) — "Verilog AMS HDL does not extend the PLA modeling
+        // tasks defined in IEEE Std 1364 Verilog." All sixteen spellings; the
+        // `$` inside the name is an ordinary identifier character (§2.8.3), so
+        // each of these is one token.
+        "$async$and$array",  "$async$and$plane",  "$async$nand$array", "$async$nand$plane",
+        "$async$or$array",   "$async$or$plane",   "$async$nor$array",  "$async$nor$plane",
+        "$sync$and$array",   "$sync$and$plane",   "$sync$nand$array",  "$sync$nand$plane",
+        "$sync$or$array",    "$sync$or$plane",    "$sync$nor$array",   "$sync$nor$plane",
+        // Table 9-6 (§9.9) — "Verilog AMS HDL does not extend the stochastic
+        // analysis tasks defined in IEEE Std 1364 Verilog."
+        "$q_initialize", "$q_remove", "$q_exam", "$q_add", "$q_full",
+        // Table 9-7 (§9.10) — tick counts. $abstime is the analog spelling and
+        // is the one row of that table with Yes in both columns; §9.10's NOTE
+        // additionally deprecates $realtime in the analog context.
+        "$time", "$stime", "$realtime",
+        // Table 9-8 (§9.11) — the extension is $bitstoreal and $realtobits and
+        // nothing else.
+        "$itor", "$rtoi", "$signed", "$unsigned",
+    };
+    for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
     return false;
 }
 
@@ -2668,9 +3435,24 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const a = try self.lowerExpr(ex.lhs(e));
     switch (ex.unOp(e)) {
         .plus => return a,
-        .minus => return .{
-            .v = try self.emit(if (a.ty == .real) .fneg else .ineg, &.{a.v}),
-            .ty = a.ty,
+        .minus => {
+            // §4.2.3. Fold a LITERAL here instead of emitting `ineg(3)`. The
+            // §4.2.8 divisor proof reads an operand's interval, and proof.zig's
+            // `integerIv` gives every integer instruction the full i64 clamp —
+            // it has no transfer function for `ineg` — so `11 % -3` could not
+            // prove its divisor non-zero and died on E0601. A negative literal
+            // is a constant however the grammar spells it, so the fix belongs
+            // where the constant is built, not in a second range rule.
+            switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
+                .int_const => |x| if (x != std.math.minInt(i64))
+                    return .{ .v = try self.iconst(-x), .ty = a.ty },
+                .float_const => |x| return .{ .v = try self.fconst(-x), .ty = a.ty },
+                else => {},
+            }
+            return .{
+                .v = try self.emit(if (a.ty == .real) .fneg else .ineg, &.{a.v}),
+                .ty = a.ty,
+            };
         },
         .logical_not => return .{ .v = try self.emit(.lognot, &.{try self.toBool(a)}), .ty = .integer },
         .bit_not => {
@@ -2680,24 +3462,23 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             }
             return .{ .v = try self.emit(.bitnot, &.{a.v}), .ty = .integer };
         },
-        // §4.2.10 reduction on a two's-complement integer: `|x` is `x != 0`
-        // and `&x` is "every bit set", i.e. `x == -1`. Both are expressible
-        // with existing opcodes, so no bit-vector op is needed.
-        .reduce_and, .reduce_nand, .reduce_or, .reduce_nor => |uop| {
+        // §4.2.10, the whole clause: "The reduction operators can not be used
+        // inside the analog block and only have meaning when used in the
+        // digital context." There is no carve-out and no analog form.
+        //
+        // Unconditional, for the reason `isDigitalOnlySysFunc` gives at length:
+        // `parseAnalog` is the only producer of statements VerA lowers, so
+        // every expression that reaches here IS in the analog block and a
+        // context flag would read `true` at every call site.
+        .reduce_and, .reduce_nand, .reduce_or, .reduce_nor => {
+            // §4.2.1 first: a real operand has no bits to fold at all, and
+            // E0319 names the operand rather than the context.
             if (a.ty != .integer) {
                 try self.errAt(e, .E0319, "got a {s}", .{@tagName(a.ty)});
                 return poison;
             }
-            const is_and = uop == .reduce_and or uop == .reduce_nand;
-            const base = try self.emit(
-                if (is_and) .ieq else .ine,
-                &.{ a.v, if (is_and) Mir.Value.neg_one else Mir.Value.zero },
-            );
-            const negated = uop == .reduce_nand or uop == .reduce_nor;
-            return .{
-                .v = if (negated) try self.emit(.lognot, &.{base}) else base,
-                .ty = .integer,
-            };
+            try self.errAt(e, .E0348, "", .{});
+            return poison;
         },
         // §4.2.10 xor reduction is a parity, which has no analog equivalent
         // and no MIR opcode (annex C).
@@ -2838,16 +3619,30 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     }
     const t = try self.branchOf(e) orelse return poison;
+    try self.branch_reads.append(self.arena, .{
+        .access = t.access,
+        .hi = t.hi,
+        .lo = t.lo,
+        .tok = self.file.exprs.mainTok(e),
+    });
+    // §1.3.1.2: the reversed spelling of a branch is the same quantity with the
+    // opposite sign. For the potential that is just which way the subtraction
+    // runs; for the flow it is the whole point — `t` has already been
+    // canonicalised, so `I(n,p)` reads the ONE `flow(p,n)` unknown negated
+    // instead of minting a second, independent one that nothing constrains.
     switch (t.access) {
         .potential => {
             const hi = try self.probe(t.hi);
-            if (t.lo == ground) return .{ .v = hi, .ty = .real };
+            if (t.lo == ground)
+                return .{ .v = if (t.neg) try self.emit(.fneg, &.{hi}) else hi, .ty = .real };
             const lo = try self.probe(t.lo);
-            return .{ .v = try self.emit(.fsub, &.{ hi, lo }), .ty = .real };
+            const d = if (t.neg) [2]Mir.Value{ lo, hi } else [2]Mir.Value{ hi, lo };
+            return .{ .v = try self.emit(.fsub, &d), .ty = .real };
         },
         .flow => {
             const u = try self.flowUnknown(t.hi, t.lo);
-            return .{ .v = try self.probe(u), .ty = .real };
+            const v = try self.probe(u);
+            return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
         },
     }
 }
@@ -3059,12 +3854,34 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         const t = try self.branchOf(args[1]) orelse return poison;
+        // §4.5.6: "The second argument shall be the potential of a scalar net
+        // or port or the flow through a branch, because these are the unknown
+        // variables in the system of equations for the analog solver."
+        //
+        // `V(p, n)` is neither. It is the DIFFERENCE of two unknowns, and the
+        // operator is defined as the partial derivative "holding all other
+        // unknowns fixed" — which V(p)-V(n) makes unanswerable, since d/dV(p)
+        // and -d/dV(n) are both defensible readings and they differ. §4.5.6's
+        // own vccs example puts the two-node probe in the EXPRESSION and a
+        // single-node probe in the second slot. A FLOW is exempt: a branch
+        // current is one unknown however many nets the branch spans.
+        if (t.access == .potential and t.lo != ground) {
+            try self.errAt(args[1], .E0504, "a potential across two nets is not one unknown", .{});
+            return poison;
+        }
         const u: u16 = switch (t.access) {
             .potential => t.hi,
             .flow => try self.flowUnknown(t.hi, t.lo),
         };
-        return .{ .v = try self.call("ddx", &.{ f, try self.iconst(u) }), .ty = .real };
+        const d = try self.call("ddx", &.{ f, try self.iconst(u) });
+        // §1.3.1.2 again: `ddx(f, I(n,p))` differentiates with respect to the
+        // negation of the one canonical unknown, so the derivative negates too.
+        // A potential probe reaches here only in the single-net form, which the
+        // check above enforces and which is never reversed.
+        return .{ .v = if (t.neg) try self.emit(.fneg, &.{d}) else d, .ty = .real };
     }
+
+    try self.checkFilterArgBounds(name, args); // §4.5.5-§4.5.10
 
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
@@ -3080,6 +3897,88 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
     return .{ .v = try self.call(name, vals.items), .ty = .real };
+}
+
+/// §4.5.5-§4.5.10 control-argument bounds. Each operator states its bound in
+/// one sentence and each bound is what makes the operator's own contract
+/// satisfiable — see E0516 for the five sentences.
+///
+/// FOLDED OPERANDS ONLY, and that restraint is the rule and not a shortcut:
+/// A.8.2 types these slots `analog_expression`, not `constant_expression`, so
+/// `transition(x, 0, tr, tf)` over parameters is a legal model whose signs are
+/// unknowable here. `constEval` returning null is silence. Rejecting what
+/// cannot be proven would break every parameterised rise time in the wild.
+///
+/// Here and not in codegen because this is a claim about the ARGUMENT: by the
+/// time a filter is a `call` its arguments are positional values and the LRM's
+/// own names for them — the words the diagnostic has to say — are gone.
+fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    const Bound = enum {
+        positive,
+        non_negative,
+        negative,
+
+        fn holds(b: @This(), v: f64) bool {
+            return switch (b) {
+                .positive => v > 0,
+                .non_negative => v >= 0,
+                .negative => v < 0,
+            };
+        }
+        /// The LRM's own word for the bound; it goes in the message.
+        fn word(b: @This()) []const u8 {
+            return switch (b) {
+                .positive => "positive",
+                .non_negative => "non-negative",
+                .negative => "negative",
+            };
+        }
+    };
+    const Rule = struct { i: usize, arg: []const u8, want: Bound };
+    const rules: []const Rule = if (std.mem.eql(u8, name, "idtmod"))
+        &.{.{ .i = 2, .arg = "modulus", .want = .positive }}
+    else if (std.mem.eql(u8, name, "absdelay"))
+        // "In all cases" covers the optional-maxdelay form too, so the index is
+        // the same for both spellings.
+        &.{.{ .i = 1, .arg = "td", .want = .positive }}
+    else if (std.mem.eql(u8, name, "transition"))
+        &.{
+            .{ .i = 1, .arg = "td", .want = .non_negative },
+            .{ .i = 2, .arg = "rise_time", .want = .non_negative },
+            .{ .i = 3, .arg = "fall_time", .want = .non_negative },
+            .{ .i = 4, .arg = "time_tol", .want = .non_negative },
+        }
+    else if (std.mem.eql(u8, name, "slew"))
+        // Checked on the WRITTEN arguments, before §4.5.9's "if the
+        // max_neg_slew_rate is not specified, it defaults to the opposite of
+        // the max_pos_slew_rate" can manufacture a well-signed second rate out
+        // of a badly-signed first one.
+        &.{
+            .{ .i = 1, .arg = "max_pos_slew_rate", .want = .positive },
+            .{ .i = 2, .arg = "max_neg_slew_rate", .want = .negative },
+        }
+    else
+        &.{};
+
+    for (rules) |r| {
+        if (r.i >= args.len or args[r.i] == .none) continue;
+        const c = self.constEval(args[r.i]) orelse continue;
+        if (c == .str) continue; // a type error, not a range one
+        const v = c.asReal();
+        if (r.want.holds(v)) continue;
+        try self.errAt(args[r.i], .E0516, "`{s}()` argument `{s}` shall be {s}, got {d}", .{ name, r.arg, r.want.word(), v });
+    }
+
+    // §4.5.10: "The optional direction indicator shall evaluate to an integer
+    // expression +1, -1, or 0." An enumeration of three, not a range — +2 does
+    // not select anything and there is nothing to clamp it onto.
+    if (std.mem.eql(u8, name, "last_crossing") and args.len > 1 and args[1] != .none) {
+        if (self.constEval(args[1])) |c| {
+            const v = c.asReal();
+            if (c != .str and (v != @round(v) or @abs(v) > 1))
+                try self.errAt(args[1], .E0516, "`last_crossing()` direction indicator shall be +1, -1 or 0, got {d}", .{v});
+        }
+    }
 }
 
 /// §4.5.11/§4.5.12 filter coefficient vectors and §9.21/§4.6.4 noise data
@@ -3138,6 +4037,53 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (isRejectedSysFunc(name)) {
         try self.errAt(e, .E0801, "`{s}`", .{name});
         return poison;
+    }
+    if (isDigitalOnlySysFunc(name)) { // §9.2
+        try self.errAt(e, .E0806, "`{s}`", .{name});
+        return poison;
+    }
+    // Annex G Table G.1: the OVI Verilog-A v1.0 spelling `$limexp` was replaced
+    // in v2.0 by the bare `limexp` (§4.5.13). Not an alias — a `$` name is a
+    // system function and `$limexp` is in neither Table 9-11 nor A.8.2, so the
+    // name does not exist. One entry, not a table: it is the only retired v1.0
+    // `$` spelling in G.1 that VerA ever accepted.
+    if (std.mem.eql(u8, name, "$limexp")) {
+        var b = self.errAtWith(e, .E0808);
+        b.msg("`$limexp`", .{});
+        b.suggestHere("limexp");
+        try b.emit();
+        return poison;
+    }
+    // §9.17.3 fixes the arity of the two algorithms it names outright: fetlim
+    // takes a third argument (the threshold voltage) and pnjlim a third and a
+    // fourth (vte and vcrit). Checked HERE and not in cg_limit.zig, where the
+    // count was already known: cg_limit's job is to decide whether the backend
+    // can honour a well-formed call, and §4.5.15 lets it decline any of them
+    // silently — a call that is not legal in the first place is a source error
+    // and has to be reported whether or not codegen would have taken it.
+    //
+    // Only these two names, and only when the string is written literally: the
+    // same clause says a simulator may treat an unknown or unsupported string
+    // "just as if no string had been supplied", so nothing else here is an
+    // error, and `$limit(V(a))` with no string at all is Syntax 9-12 line 1.
+    if (std.mem.eql(u8, name, "$limit")) {
+        const args = ex.args(e);
+        if (args.len >= 2) {
+            if (self.constEval(args[1])) |c| switch (c) {
+                .str => |s| {
+                    const need: usize = if (std.mem.eql(u8, s, "pnjlim"))
+                        4
+                    else if (std.mem.eql(u8, s, "fetlim")) 3 else 0;
+                    if (need != 0 and args.len < need) {
+                        var b = self.errAtWith(e, .E0809);
+                        b.msg("`\"{s}\"` needs {d} arguments to `$limit`, got {d}", .{ s, need, args.len });
+                        try b.emit();
+                        return poison;
+                    }
+                },
+                else => {},
+            };
+        }
     }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);

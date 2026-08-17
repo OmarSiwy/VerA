@@ -8,6 +8,8 @@
 // $temperature is pinned too (§9.10, kelvin), because the thermal-noise power
 // 4kT/R is written in terms of it one line below.
 //
+//! lrm 4.6
+//! lrm 4.6.4
 //! analysis dc
 //! temp 300.15
 //! bias V(p) = 1.0

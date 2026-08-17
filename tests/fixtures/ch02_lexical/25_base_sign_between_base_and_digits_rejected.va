@@ -13,8 +13,13 @@
 // space Example 3 puts there is optional per 2.6.1 and is a separate rule
 // (36_based_number_digit_whitespace.va owns it, and VerA does not meet it yet),
 // so leaving it out keeps this fixture failing for the sign and nothing else.
+//
+// The pinned code is the generic E0209 "expected an expression" because that is
+// what VerA emits. E0132 "expected a numeric digit after the base" already
+// quotes this exact 2.6.1 sentence in its explanation but is never reached for
+// `8'd -6` — the lexer ends the literal at the space and the sign then arrives
+// where a primary was expected. Retarget this line at E0132 if that is fixed.
 //! lrm 2.6.1
-//! reject ParseError
 //! reject E0209
 module ch02_base_sign_between_base_and_digits_rejected(p, n);
     inout p, n;

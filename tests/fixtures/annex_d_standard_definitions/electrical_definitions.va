@@ -1,4 +1,4 @@
-// Annex D.1's electrical block (annex-d-stddefs.html:85-135) is four natures
+// Annex D.1's electrical block (annex-d-stddefs.html:72-135) is four natures
 // with their units/abstol attributes and their idt_nature/ddt_nature
 // cross-links, one conservative discipline, and the two SIGNAL-FLOW disciplines
 // the annex derives from the same natures. literal_electrical_disciplines.va

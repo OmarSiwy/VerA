@@ -14,7 +14,7 @@
 // arms and then selects leaves both at 1.
 //
 // This is 123_short_circuit_side_effects.va's missing third operator, split out
-// only so that VerA failing it does not take the eleven `&&`/`||`/`&`
+// only so that VerA failing it does not take the ten `&&`/`||`/`&`
 // assertions there down with it.
 //
 //! lrm 4.2.3
@@ -27,7 +27,8 @@ module ch04_short_circuit_ternary(p, n);
     integer skipped, taken, result;
 
     analog function integer bump;
-        inout integer counter;
+        inout counter;
+        integer counter;
         begin
             counter = counter + 1;
             bump = 1;

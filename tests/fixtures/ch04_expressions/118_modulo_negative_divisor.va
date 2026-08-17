@@ -11,7 +11,6 @@
 // other four Table 4-6 rows to this one line.
 //
 //! lrm 4.2.4
-//! xfail VerA's range analysis does not fold unary minus on an integer literal, so `11 % -3` raises E0601 "divisor cannot be proven non-zero: `%` divisor is a computed expression with known range [-9223372036854776000:9223372036854776000]"
 `include "check.vh"
 module ch04_modulo_negative_divisor(p, n);
     inout p, n;

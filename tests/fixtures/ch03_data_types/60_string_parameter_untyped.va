@@ -16,7 +16,6 @@
 //! lrm 3.4.1
 //! lrm 3.4.6
 //! reject DiagnosticsReported
-//! xfail VerA derives `string` for an untyped parameter with a string initializer; there is no mandatory-type check on string parameters in lower.zig
 module ch3_string_parameter_untyped(p, n);
     inout p, n;
     electrical p, n;

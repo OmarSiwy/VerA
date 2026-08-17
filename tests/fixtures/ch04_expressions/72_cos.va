@@ -4,6 +4,7 @@
 // The second check is the Pythagorean identity sin^2 + cos^2 = 1, which fails
 // if cos is confused with sin or shifted by a quadrant.
 //
+//! lrm 4.3.2
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_cos(p, n);

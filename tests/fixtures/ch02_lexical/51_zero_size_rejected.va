@@ -22,7 +22,6 @@
 // if the fix adds one, retarget this line at it.
 //! lrm 2.6.1
 //! reject E0133
-//! xfail VerA accepts a zero size constant: width 0 is the lexer's unsized sentinel, so `0'b1` is read as an unsized `'b1` (src/frontend/lexer.zig)
 module ch02_zero_size_rejected;
     integer value;
     analog value = 0'b1;

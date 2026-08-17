@@ -12,6 +12,7 @@
 // and §4.5.6's last sentence on the matter — "If the expression does not depend
 // explicitly on the unknown, then ddx() returns zero (0)" — is the fourth check.
 //
+//! lrm 4.5.6
 //! bias V(p) = 0.5
 //! bias V(n) = 0
 //! print none

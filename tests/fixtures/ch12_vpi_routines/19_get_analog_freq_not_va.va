@@ -1,5 +1,5 @@
 //! lrm 4.7
-//! lrm A.8.2
+//! lrm 12.8
 //! reject E0512
 //! reject `vpi_get_analog_freq`
 module ch12_atomic_get_analog_freq(p, n);

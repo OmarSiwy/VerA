@@ -17,6 +17,5 @@
 //
 //! lrm 3.6.1.2
 //! reject DiagnosticsReported
-//! xfail VerA accepts a string literal as the `access` attribute of a nature; lower.zig does not type-check nature attribute values
 nature ch3_access_string; units="V"; access="AccessStr"; abstol=1u; endnature
 module ch3_nature_access_as_string; endmodule

@@ -1,19 +1,23 @@
 // §5.10.3.1 on cross(): "The tolerances (time_tol and expr_tol) are specified
-// as a constant_expression and shall be non-negative."
+// as analog_expression and shall be non-negative. If a value of zero (0.0) is
+// specified, the simulator shall apply a suitable value."
 //
 // A tolerance is a window the kernel narrows the crossing time into; a negative
 // one names an empty window, so the argument is not merely unhelpful but
-// unsatisfiable. -1n is written as a literal so the constant_expression half of
-// the sentence is met and the sign is the only defect — event_cross.va and
+// unsatisfiable, and the clause's own fallback is written for zero and not for
+// a sign error. Note the operand type: an analog_expression, not the
+// constant_expression the 2014 text required, so "shall be non-negative" is not
+// in general statically decidable. -1n is a literal precisely so that it is
+// decidable here and the sign is the only defect — event_cross.va and
 // event_cross_falling.va pass +1n through the same argument position and must
-// keep compiling.
+// keep compiling. A tolerance whose sign is only known at runtime is a
+// different fixture and does not belong in a `//! reject`.
 //
 // No VerA code exists for this, so the expectation is the phase label: the file
 // must not compile at all.
 //
 //! lrm 5.10.3.1
 //! reject DiagnosticsReported
-//! xfail VerA does not range-check cross()'s time_tol/expr_tol arguments; a negative tolerance compiles
 module ch5_cross_tolerance_negative(p);
   inout p; electrical p; real x;
   analog begin

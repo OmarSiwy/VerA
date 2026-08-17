@@ -8,6 +8,7 @@
 // both sides of the same selection rule at one operating point. Both are exact:
 // max returns one of its operands unmodified, never a blend of them.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_max(p, n);

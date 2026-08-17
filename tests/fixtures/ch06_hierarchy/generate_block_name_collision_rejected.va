@@ -1,0 +1,38 @@
+// §6.6.2, verbatim: "Named generate blocks may not have the same name as blocks
+// in ANY OTHER GENERATE CONSTRUCT IN THE SAME SCOPE, EVEN IF NOT SELECTED FOR
+// INSTANTIATION."
+//
+// The clause's preceding bullet licenses the opposite case — "it is permissible
+// for more than one block within a SINGLE conditional generate construct to have
+// the same name (since at most one is instantiated)" — and that half is
+// generate_direct_nesting.va, which is the reading a broken elaborator also
+// passes. This file is the prohibition. There are two if-generate constructs
+// here, not one, so the permission does not reach them, and direct nesting does
+// not either: that exception applies only when the inner construct is the sole
+// item of an outer construct's block with no begin/end, which is not this shape.
+//
+// `if (0)` on the second construct is the point of the fixture, not an accident.
+// A compiler that registered a block name only when its construct was selected
+// would elaborate exactly one `b`, see no clash and accept — which is precisely
+// what "even if not selected for instantiation" forbids. The name is declared by
+// the TEXT of the construct, before any condition is evaluated.
+//
+// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to
+// name. `DiagnosticsReported` is the weakest form that still demands a
+// rejection; tighten it to the E-code the day one exists.
+//
+//! lrm 6.6.2
+//! reject DiagnosticsReported
+//! xfail VerA does not register a conditional generate block's name in the enclosing scope, so two `begin : b` blocks in two separate if-generate constructs coexist silently
+module ch6_generate_block_name_collision(p);
+  inout p; electrical p;
+  generate
+    if (1) begin : b
+      localparam integer k = 1;
+    end
+    if (0) begin : b
+      localparam integer k = 2;
+    end
+  endgenerate
+  analog I(p) <+ V(p);
+endmodule

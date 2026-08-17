@@ -6,9 +6,14 @@
 // as the disjointness claim: it equals the sum 0+1+2+4+8+16 = 31 only if no two
 // masks share a bit.
 //
-// The masks are `defined here rather than read from the annex file: VerA ships
-// constants.vams and disciplines.vams as builtin includes but not the digital
-// driver-access file, so `include "driver_access.vams" is E0126 (verified).
+// WHAT THIS FILE DOES NOT TEST. The masks are `defined here rather than read
+// from the annex file, so both the got and the want are the fixture's own text:
+// what is actually under test is the lexer's 32'b -> integer conversion, and a
+// compiler that ships no driver_access.vams — or a wrong one, which this file
+// would shadow — passes anyway. D.3's real requirement, that the implementation
+// SUPPLY the file, is stated in driver_access_include.va, which `includes it.
+// Read the two together; this one is only the bit-position transcription.
+//
 // The module is deliberately NOT wrapped in the `ifdef DRIVER_ACCESS_VAMS
 // guard the annex file carries — with it, an implementation that does ship D.3
 // erases the whole module, the file still compiles, and the fixture asserts
@@ -16,6 +21,7 @@
 //
 //! lrm D.3
 `include "check.vh"
+`include "disciplines.vams"
 `define DRIVER_UNKNOWN 32'b00000000000
 `define DRIVER_DELAYED 32'b00000000001
 `define DRIVER_GATE 32'b00000000010

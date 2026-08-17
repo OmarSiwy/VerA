@@ -2,15 +2,26 @@
 //                      | paramset_declaration | nature_declaration
 //                      | discipline_declaration | connectrules_declaration`
 //
-// Three of those alternatives appear here, and the nature and the discipline are
-// not decoration: the nets of the second module are bound to the DECLARED
+// Three of those alternatives appear here, and the natures and the discipline
+// are not decoration: the nets of the module below are bound to the DECLARED
 // `annex_a_electrical`, not to the built-in `electrical`, so a compiler that
-// parsed the two declarations and discarded them cannot resolve `V(p, n)` at
+// parsed the declarations and discarded them cannot resolve `V(p, n)` at
 // all. §3.6.2.1 binds `annex_a_voltage` as the discipline's potential nature and
 // §3.13.2 makes that nature's `access = V` the function that reads it, so the
 // probe below runs through the user's own declarations end to end. Before this
 // the module bound its nets with the BUILT-IN `electrical` and asserted nothing,
-// so both declarations were dead text.
+// so all of the declarations were dead text.
+//
+// THE FLOW NATURE IS LOAD-BEARING TOO. With only `potential annex_a_voltage;`
+// the discipline has a single nature, which §3.6.2.1 calls a signal-flow
+// discipline, and §3.12 says such a branch "defines either a branch potential
+// or a branch flow, but not both". §5.4.1: "The name of the access function is
+// taken from the discipline of the net." So `I(p, n)` named an access function
+// the declared discipline did not define — source a conforming compiler must
+// diagnose, green here only because VerA resolves the built-in `I` globally,
+// which also refuted this header's own claim that the probe runs through the
+// user's declarations end to end. `annex_a_current` and the `flow` binding fix
+// that and cover the second half of §3.6.2.1 the header claims.
 //
 // V(p) - V(n) = 0.6 - 0.1. Neither operand is representable in binary, but
 // their difference is: the nearest doubles to 0.6 and 0.1 subtract to exactly
@@ -37,9 +48,16 @@ nature annex_a_voltage;
     abstol = 1u;
 endnature
 
+nature annex_a_current;
+    units = "A";
+    access = I;
+    abstol = 1p;
+endnature
+
 discipline annex_a_electrical;
     domain continuous;
     potential annex_a_voltage;
+    flow annex_a_current;
 enddiscipline
 
 module annex_a_source_text(p, n);

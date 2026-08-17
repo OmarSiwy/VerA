@@ -6,8 +6,16 @@
 // V(p) = 0.75, V(n) = 0.25 give V(p,n) = 0.5 exactly. The for loop runs for
 // k = 0,1,2 and exits with k = 3, so result = 3*0.5 = 1.5; 1.5 > 0 takes the
 // true arm to 2.5; case(3) matches the `3:` item, not `default`, giving 5.5.
-// One trip too few is 5.0, the else arm is 3.5, and `default` is 0.0.
 //
+// The three mutations are separately distinguishable. A trip count off by one
+// leaves k at 2 or 4, which the `k` check catches directly and which then falls
+// through to `default` for a result of 0.0 either way. Taking the else arm at
+// the same three trips gives 1.5 - 1.0 + 3.0 = 3.5. Matching `default` at
+// k = 3 gives 0.0. So 5.5 is reachable only by the intended path.
+//
+//! lrm 11.6.21
+//! lrm 11.6.23
+//! lrm 5.3.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch11_process_statement_objects(p, n);

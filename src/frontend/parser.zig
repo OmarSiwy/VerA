@@ -129,17 +129,13 @@ pub const Parser = struct {
         }
 
         // §10.6: `begin_keywords "affects all source code that follows the
-        // directive, even across source code file boundaries, until the
-        // matching `end_keywords directive is encountered" — so a missing one
-        // is an error, exactly like the preprocessor's unterminated `ifdef.
-        if (self.kw_stack.items.len != 0) {
-            _ = self.failAt(
-                self.kw_stack.items[self.kw_stack.items.len - 1].tok,
-                .E0137,
-                "missing `end_keywords",
-                .{},
-            ) catch {};
-        }
+        // directive, EVEN ACROSS SOURCE CODE FILE BOUNDARIES, until the
+        // matching `end_keywords directive is encountered" — so an open stack
+        // at end of file is the case that sentence exists to describe, not an
+        // error. Chapter 10 states no diagnostic for it, and this used to raise
+        // E0137, which inverted the clause. `end_keywords with nothing open
+        // stays E0136: that one has no reading in which it means anything.
+        // Pinned by tests/fixtures/ch10_directives/31_begin_keywords_unterminated.va.
 
         self.file.modules = modules.items;
         self.file.disciplines = disciplines.items;
@@ -444,8 +440,18 @@ pub const Parser = struct {
             const tok = self.pos;
             const name = try self.expectIdent();
             if (self.findPort(b, name)) |p| {
-                p.direction = dir;
-                if (disc != .none) p.discipline = disc;
+                // §6.2 "Ports declared in the list of port declarations shall
+                // not be redeclared within the body of the module." A direction
+                // is what a `list_of_port_declarations` header carries and a
+                // bare `list_of_ports` header cannot (Syntax 6-1), so a port
+                // that already has one was declared already — in the ANSI
+                // header, or by an earlier body declaration (§6.8's duplicate).
+                if (p.direction != .unspecified) {
+                    _ = self.failAt(tok, .E0218, "`{s}`", .{self.file.str(name)}) catch {};
+                } else {
+                    p.direction = dir;
+                    if (disc != .none) p.discipline = disc;
+                }
             } else {
                 _ = self.failAt(tok, .E0206, "`{s}`", .{self.file.str(name)}) catch {};
             }
@@ -471,8 +477,14 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
-            if (!is_ground and self.findPort(b, name) != null) {
-                self.findPort(b, name).?.discipline = disc;
+            // Only the FIRST declaration binds. A port that already carries a
+            // discipline gets a net entry instead, so lowering sees BOTH
+            // declarations and can apply §7.4.4 (E0902) — overwriting here is
+            // what used to make the second one invisible. The entry adds no
+            // node: internNode finds the port's existing slot by name.
+            const port = if (is_ground) null else self.findPort(b, name);
+            if (port != null and port.?.discipline == .none) {
+                port.?.discipline = disc;
             } else {
                 try b.nets.append(self.arena, .{
                     .name = name,
@@ -679,7 +691,7 @@ pub const Parser = struct {
         if (self.peek() == .kw_function) return self.parseFuncDecl(b, main_tok);
         // §5.2.1 `analog initial analog_function_statement`
         const is_initial = self.eat(.kw_initial);
-        const body = try self.parseStmt();
+        const body = try self.parseStmtNoNull(); // A.6.2 takes one analog_statement
         try b.analog.append(self.arena, .{
             .is_initial = is_initial,
             .body = body,
@@ -905,11 +917,29 @@ pub const Parser = struct {
     // A.6.4 analog_statement — LRM ch5
     // -----------------------------------------------------------------------
 
-    /// One analog statement (A.6.4). `casex`/`casez` (annex C.7), digital
-    /// `initial`/`always`, `fork`/`join`, `->`, `wait` and the procedural
-    /// continuous assignments are NOT dispatched here: they fall through to the
-    /// expression statement and report "expected expression", which is the
-    /// annex C answer — they are not analog statements.
+    /// A.6.4 gives `analog_statement` NO null alternative. A bare `;` is only
+    /// derivable through `analog_statement_or_null`, which is reached from a
+    /// conditional arm, a case item and an event statement — exactly the three
+    /// survivors annex G.2.2 names in prose. `analog_seq_block` (A.6.3) takes
+    /// `{ analog_statement }` and `analog_construct` (A.6.2) takes one, so a
+    /// stray `;` in either is underivable.
+    ///
+    /// The three legal sites call `parseStmt`; everywhere else calls this. It
+    /// reports and CARRIES ON — the `;` is consumed and `.empty` returned — so
+    /// the rest of the block is still parsed, a second mistake is still
+    /// reported, and `recoverStatement` is never involved.
+    fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
+        if (self.peek() == .semicolon)
+            _ = self.failAt(self.pos, .E0219, "", .{}) catch {};
+        return self.parseStmt();
+    }
+
+    /// One analog statement (A.6.4). Digital `initial`/`always`, `fork`/`join`,
+    /// `->`, `wait` and the procedural continuous assignments are NOT dispatched
+    /// here: they fall through to the expression statement and report "expected
+    /// expression", which is the annex C answer — they are not analog
+    /// statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
+    /// C.7's own diagnostic (E0416) is what the source dies on.
     pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         self.skipAttributes();
         const tok = self.pos;
@@ -934,7 +964,11 @@ pub const Parser = struct {
                     tok,
                 );
             },
-            .kw_case => return self.parseCase(), // §5.8.3 / A.6.7
+            // §5.8.3 / A.6.7. `casex`/`casez` share the production and are
+            // refused in lowering by E0416, the code annex C.7 owns.
+            .kw_case => return self.parseCase(.normal),
+            .kw_casex => return self.parseCase(.casex),
+            .kw_casez => return self.parseCase(.casez),
             .kw_for => { // §5.9.2 / A.6.8 (also A.4.2 loop generate)
                 self.pos += 1;
                 _ = try self.expect(.lparen);
@@ -1025,7 +1059,9 @@ pub const Parser = struct {
         var body: std.ArrayList(Ast.StmtId) = .empty;
         while (self.peek() != .kw_end and self.peek() != .eof) {
             const before = self.pos;
-            const s = self.parseStmt() catch |e| {
+            // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
+            // — no null alternative, so a stray `;` here is E0219.
+            const s = self.parseStmtNoNull() catch |e| {
                 try self.rethrowOom(e);
                 if (self.pos == before) self.pos += 1;
                 self.recoverStatement();
@@ -1042,10 +1078,11 @@ pub const Parser = struct {
     }
 
     /// §5.8.3 / A.6.7 analog_case_statement. `casex`/`casez` are out of the
-    /// analog subset (annex C.7) and never reach here.
-    fn parseCase(self: *Parser) Error!Ast.StmtId {
+    /// analog subset (annex C.7); they parse here and `lowerCase` refuses the
+    /// kind, so the diagnostic names the rule instead of the grammar.
+    fn parseCase(self: *Parser, kind: Ast.CaseKind) Error!Ast.StmtId {
         const tok = self.pos;
-        self.pos += 1; // 'case'
+        self.pos += 1; // 'case' / 'casex' / 'casez'
         _ = try self.expect(.lparen);
         const scrutinee = try self.parseExpr();
         _ = try self.expect(.rparen);
@@ -1068,7 +1105,7 @@ pub const Parser = struct {
         }
         _ = try self.expect(.kw_endcase);
         return self.addStmt(
-            .{ .case_stmt = .{ .scrutinee = scrutinee, .arms = arms.items } },
+            .{ .case_stmt = .{ .kind = kind, .scrutinee = scrutinee, .arms = arms.items } },
             tok,
         );
     }
@@ -1123,6 +1160,12 @@ pub const Parser = struct {
         self.pos += 1;
         var names: std.ArrayList(Ast.StrId) = .empty;
         if (self.eat(.lparen)) {
+            // A.6.5 makes the analysis list NON-EMPTY and the whole
+            // parenthesised group optional, so `final_step()` has no
+            // derivation — annex G Table G.2 item 13 says it in prose
+            // ("without arguments should not have parenthesis").
+            if (self.peek() == .rparen)
+                _ = self.failAt(self.pos, .E0220, "after `{s}`", .{@tagName(tag)[6..]}) catch {};
             if (self.peek() != .rparen) while (true) {
                 const s = try self.expect(.string_literal);
                 try names.append(self.arena, try self.internString(s));
@@ -1256,14 +1299,13 @@ pub const Parser = struct {
             .tilde_amp => .reduce_nand,
             .pipe => .reduce_or,
             .tilde_pipe => .reduce_nor,
-            // §4.2.10 reduction xor has no analog meaning and `^` is also the
-            // binary xor lexeme; reject it where it is written.
-            .caret, .tilde_caret, .caret_tilde => return self.failAt(
-                self.pos,
-                .E0215,
-                "found {s}",
-                .{self.found(self.pos)},
-            ),
+            // §4.2.10 reduction xor. Parsed like its four siblings and refused
+            // in LOWERING (E0320, "xor reduction is not in the analog subset"),
+            // not here: dying on E0215 "expected an operand" is a recovery
+            // artifact that names no rule and would fire for any token that
+            // cannot start an operand, so the subset check was never reached.
+            .caret => .reduce_xor,
+            .tilde_caret, .caret_tilde => .reduce_xnor,
             else => return self.parsePostfix(),
         };
         self.pos += 1;
@@ -1352,6 +1394,19 @@ pub const Parser = struct {
                 const text = self.tokenText(tok);
                 const name = try self.file.intern(self.arena, text);
                 self.pos += 1;
+                // §2.9: an attribute_instance "can appear as a suffix to an
+                // operator or a Verilog-AMS function name in an expression"
+                // (Example 7: `add (* mode = "cla" *) (b, c)`), and A.8.2 puts
+                // the slot in the grammar — `analog_function_call ::=
+                // analog_function_identifier { attribute_instance } ( ... )`.
+                // Only a CALL has that slot, so the skip is rolled back when no
+                // `(` follows: a bare name must not swallow an attribute that
+                // is a prefix on whatever comes next.
+                if (self.peek() == .attr_open) {
+                    const before_attrs = self.pos;
+                    self.skipAttributes();
+                    if (self.peek() != .lparen) self.pos = before_attrs;
+                }
                 if (self.peek() == .lparen) {
                     // §4.4 branch probe vs §4.7 user function: only a declared
                     // nature access name (§3.6.1.4) probes a branch.
@@ -1974,6 +2029,14 @@ fn scanIdentEnd(src: []const u8, start: u32) u32 {
 
 /// §2.6.1 / §2.6.2 number lexeme end: `[size] ' [s] base digits`, or decimal
 /// with an optional fraction and an optional exponent OR SI scale factor.
+/// Any byte that could be a based digit in SOME base, plus the four-state ones.
+/// Deliberately base-blind: the token has to carry `4'b012` whole so
+/// `lexer.parseInt` can name the out-of-range digit instead of the parser
+/// silently ending the number one byte early.
+fn isBasedDigitByte(c: u8) bool {
+    return std.ascii.isHex(c) or c == 'x' or c == 'X' or c == 'z' or c == 'Z' or c == '?';
+}
+
 fn scanNumberEnd(src: []const u8, start: u32) u32 {
     var i = start;
     while (i < src.len and (std.ascii.isDigit(src[i]) or src[i] == '_')) i += 1;
@@ -1981,11 +2044,14 @@ fn scanNumberEnd(src: []const u8, start: u32) u32 {
         i += 1;
         if (i < src.len and (src[i] == 's' or src[i] == 'S')) i += 1;
         if (i < src.len) i += 1; // base character
-        while (i < src.len and (std.ascii.isHex(src[i]) or src[i] == '_' or
-            src[i] == 'x' or src[i] == 'X' or src[i] == 'z' or src[i] == 'Z' or src[i] == '?'))
-        {
-            i += 1;
-        }
+        // §2.6.1: "the unsigned number token shall immediately follow the base
+        // format, optionally preceded by white space". `lexer.lexBasedTail`
+        // skips it the same way and for the same reason; the skip is rolled
+        // back when no digit follows, so `8'h +` still ends at the base format.
+        var after_ws = i;
+        while (after_ws < src.len and std.ascii.isWhitespace(src[after_ws])) after_ws += 1;
+        if (after_ws < src.len and isBasedDigitByte(src[after_ws])) i = after_ws;
+        while (i < src.len and (isBasedDigitByte(src[i]) or src[i] == '_')) i += 1;
         return i;
     }
     if (i + 1 < src.len and src[i] == '.' and std.ascii.isDigit(src[i + 1])) {
@@ -2227,9 +2293,12 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
     try std.testing.expectEqual(diag.Code.E0135, d.code(0));
     try std.testing.expectEqualStrings("`1800-2017`", d.msg(0));
 
-    // Unbalanced, both ways.
+    // Unbalanced. An open `begin_keywords at end of file is NOT an error:
+    // §10.6 scopes the directive "even across source code file boundaries",
+    // so the set simply carries on into whatever is compiled next.
     const e = try lexParseForTest(arena, "`begin_keywords \"VAMS-2.3\"\nmodule m; endmodule\n");
-    try std.testing.expectEqual(diag.Code.E0137, e.code(0));
+    try std.testing.expectEqual(@as(usize, 0), e.count());
+    // The other way round has no such reading.
     const f = try lexParseForTest(arena, "`end_keywords\n");
     try std.testing.expectEqual(diag.Code.E0136, f.code(0));
 
@@ -2456,10 +2525,6 @@ test "annex C rejections keep their pinned wording" {
     const arena = arena_state.allocator();
 
     const cases = [_]struct { src: []const u8, code: diag.Code, point: []const u8 = "" }{
-        // annex C.7 casex is not an analog statement
-        .{ .src = "module m; integer s; analog casex (s) 0: s = 1; endcase endmodule", .code = .E0209 },
-        // §4.2.10 reduction xor
-        .{ .src = "module m; integer b, q; analog q = ^b; endmodule", .code = .E0215 },
         // §2.6.1 x/z digits are not in the analog subset
         .{ .src = "module m; integer v; analog v = 4'b01xz; endmodule", .code = .E0130 },
         // §6.4 paramsets
@@ -2481,6 +2546,71 @@ test "annex C rejections keep their pinned wording" {
         // the caret, so that is what the fixtures pin.
         if (c.point.len != 0)
             try std.testing.expectEqualStrings(c.point, res.bag.at(0).point);
+    }
+}
+
+test "casex/casez and reduction xor PARSE, so lowering owns the annex C rule" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both used to die here — casex on E0209 "expected an expression" and `^b`
+    // on E0215 "expected an operand". Those are recovery artifacts: they name
+    // no rule, they fire for any token that cannot start an expression, and
+    // they made annex C.7's E0416 and §4.2.10's E0320 unreachable. The grammar
+    // is now accepted and the subset check happens where the meaning is known.
+    for ([_][]const u8{
+        "module m; integer s; analog casex (s) 0: s = 1; endcase endmodule",
+        "module m; integer s; analog casez (s) 0: s = 1; endcase endmodule",
+        "module m; integer b, q; analog q = ^b; endmodule",
+        "module m; integer b, q; analog q = ~^b; endmodule",
+    }) |src| {
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
+    }
+}
+
+test "A.6.4 has no null statement outside a conditional, case or event body" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // annex G.2.2: the three survivors stay legal, the free-standing `;` does
+    // not. `analog ;` is the A.6.2 form of the same mistake.
+    for ([_][]const u8{
+        "module m(p); inout p; electrical p; analog begin ; I(p) <+ 1.0; end endmodule",
+        "module m(p); inout p; electrical p; analog ; endmodule",
+    }) |bad| {
+        const res = try parseForTest(arena, bad);
+        try std.testing.expect(res.count() > 0);
+        try std.testing.expectEqual(diag.Code.E0219, res.code(0));
+    }
+    for ([_][]const u8{
+        "module m(p); inout p; electrical p; integer c; analog begin if (c) ; else I(p) <+ 1.0; end endmodule",
+        "module m(p); inout p; electrical p; integer c; analog begin case (c) 0: ; default: I(p) <+ 1.0; endcase end endmodule",
+        "module m(p); inout p; electrical p; analog begin @(initial_step) ; I(p) <+ 1.0; end endmodule",
+    }) |good| {
+        const res = try parseForTest(arena, good);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
+    }
+}
+
+test "A.6.5 gives a step event no empty analysis list" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const bad = try parseForTest(arena, "module m(p); inout p; electrical p; real x; analog begin @(final_step()) x = 0.0; I(p) <+ x; end endmodule");
+    try std.testing.expect(bad.count() > 0);
+    try std.testing.expectEqual(diag.Code.E0220, bad.code(0));
+
+    // Both legal forms: the bare keyword, and a non-empty list.
+    for ([_][]const u8{
+        "module m(p); inout p; electrical p; real x; analog begin @(final_step) x = 0.0; I(p) <+ x; end endmodule",
+        "module m(p); inout p; electrical p; real x; analog begin @(final_step(\"tran\")) x = 0.0; I(p) <+ x; end endmodule",
+    }) |good| {
+        const res = try parseForTest(arena, good);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
     }
 }
 

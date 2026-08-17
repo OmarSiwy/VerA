@@ -1,11 +1,16 @@
 // §11.6.4/11.6.5 port and node objects: a port has a direction, and each port
-// reaches one node. §3.5 makes direction on an analog port informational — the
-// node behind an `input` port still carries a potential a probe can read.
+// reaches one node. §6.5.2.2 is the clause that declares that direction (an
+// earlier revision cited §3.5, which is Genvars), and the direction does not
+// hide the node: the node behind an `input` port still carries a potential a
+// probe can read.
 //
 // Three biases, all exact in binary: V(p) = 0.875, V(n) = 0.125, V(sense) =
 // 0.625. So V(sense,n) = 0.5 while V(p,n) = 0.75. Two distinct numbers, so
 // binding `sense` to the wrong node fails one of them.
 //
+//! lrm 11.6.4
+//! lrm 11.6.5
+//! lrm 6.5.2.2
 //! bias V(p) = 0.875, V(n) = 0.125, V(sense) = 0.625
 `include "check.vh"
 module ch11_port_node_objects(p, n, sense);

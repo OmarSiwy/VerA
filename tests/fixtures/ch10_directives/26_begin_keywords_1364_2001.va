@@ -15,6 +15,13 @@
 // their difference is exactly 0.5, and CHECKX needs no `abs` — which is itself
 // a Verilog-AMS-only identifier and so out of the reserved set in force here.
 //
+// This file writes `analog` and `<+` inside a 1364-set region, which §10.6
+// permits only under the reading spelled out in 16's header: the directives
+// "only specify the set of identifiers that are reserved as keywords" and "do
+// not affect the semantics, tokens, and other aspects of the Verilog-AMS
+// language". A compiler that instead removes Verilog-AMS constructs along with
+// their reserved words cannot parse this body. See 16.
+//
 //! lrm 10.6
 //! bias V(sin) = 0.75, V(n) = 0.25
 `begin_keywords "1364-2001"

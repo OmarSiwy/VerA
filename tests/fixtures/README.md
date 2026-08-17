@@ -1,6 +1,28 @@
 # The torture suite
 
-859 `.va` files. One runner, `tests/torture.zig`. No sidecar files.
+859 `.va` files. No sidecar files. One judge, `tests/harness.zig`, and two
+runners that plug into it:
+
+| runner | compiler | step | depth |
+|---|---|---|---|
+| `tests/torture.zig` | VerA, in-process | `zig build torture` | compiles, builds a testbench, RUNS it, checks every `ok=` |
+| `tests/external.zig` | any compiler taking a `.va` path | `zig build conformance` | accept / reject only |
+
+The fixtures state what the **LRM** requires, not what VerA does, so they are a
+conformance suite for any Verilog-AMS compiler. `zig build conformance` defaults
+to OpenVAF (`nix develop .#conformance` puts it on `PATH`); `--cc="…"` names any
+other. Comparing the two runs is `diff` — same walk, same order, same verdict
+vocabulary — and that comparison only means anything because both scores come
+from the same judge.
+
+Two things do **not** cross to a foreign compiler, and the harness knows it:
+
+- the `//! reject` substrings are VerA's diagnostic codes, which nobody else
+  prints, so `conformance` only requires that the compiler refused the file at
+  all — the LRM claim ("§5.8 says this must not compile"), minus the wording;
+- `//! xfail` is a statement about **VerA**, so it is ignored for anyone else.
+  Honouring it would excuse another compiler for VerA's gaps *and* fail it for
+  closing them.
 
 A fixture states its own expected behavior, in the file, in one of exactly two
 forms. Nothing else is needed to read it, and there is no second file to drift
@@ -133,7 +155,17 @@ zig build torture -- --strict     # unasserted, CANNOT RUN and XFAIL fixtures FA
 zig build torture -- --coverage   # every cited LRM section and who cites it
 zig build torture -- -j1          # one at a time, streaming; the debugging path
 zig build torture -- --fixture-opt=ReleaseFast
+
+zig build conformance             # the same fixtures against OpenVAF
+zig build conformance -- ch04     # every flag above works here too, except
+                                  # --fixture-opt, which is VerA's
+zig build -Dconformance-cc="timeout 30 openvaf-r --dry-run" conformance
 ```
+
+`-Dconformance-cc` is a whole command line, which is also where a timeout goes:
+a foreign compiler that hangs is not the harness's problem to solve twice. It is
+a build option and not a run-time flag because it names the compiler in the
+report header, which is built before the arguments are walked.
 
 A fixture is a `zig build-exe`, so the suite runs one per core by default (`-jN`
 / `--jobs=N` to change it). Workers finish in any order; the OUTPUT does not —

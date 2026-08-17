@@ -4,7 +4,7 @@
 //
 // This is a dc operating point, so the +1 crossing is NOT detected even though
 // V(c) sits above zero. The guarded assignment never runs and `sample` keeps the
-// value LRM 3.5 gives a real variable at the start of a simulation: 0.0.
+// value LRM 3.2 gives a real variable at the start of a simulation: 0.0.
 //
 // V(p) = 0.75 is the discriminator — an implementation that fires cross() during
 // dc prints 0.75 for sample. The first check pins that the probe really is

@@ -32,6 +32,7 @@
 //! lrm 3.6.2
 //! bias p = 400
 `include "check.vh"
+`include "constants.vams"
 
 nature annex_d_temperature;
   units = "K";

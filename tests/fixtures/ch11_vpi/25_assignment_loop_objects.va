@@ -4,6 +4,8 @@
 // accumulator, so at V(p)=1.5, V(n)=0.25 (1.25 V) the total is 3 * 1.25 = 3.75
 // exactly. An off-by-one would give 2.5 or 5.0.
 //
+//! lrm 11.6.22
+//! lrm 5.9.2
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch11_assignment_loop_objects(p, n);

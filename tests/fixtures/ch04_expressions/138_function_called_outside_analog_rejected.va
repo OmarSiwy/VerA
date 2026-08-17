@@ -12,8 +12,13 @@
 // 105_function_indirect_recursion.va is the other legal context — a call from
 // inside another analog function — being used illegally.
 //
+// The expected diagnostic names the CONSTRUCT, `scale`, and not an LRM section
+// number: no compiler but VerA prints section numbers in messages, and the
+// suite has to be readable by any of them.
+//
 //! lrm 4.7.3
-//! reject 4.7.3
+//! reject scale
+//! reject analog
 //! xfail VerA refuses `initial` wholesale at E0205 "unsupported module item" (annex A.1.4), so the parse dies before the 4.7.3 calling-context rule is reached
 module ch04_function_called_outside_analog_rejected(p, n);
     inout p, n;
@@ -21,7 +26,8 @@ module ch04_function_called_outside_analog_rejected(p, n);
     real r;
 
     analog function real scale;
-        input real x;
+        input x;
+        real x;
         scale = x * 2.0;
     endfunction
 

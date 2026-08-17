@@ -9,6 +9,10 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `showcancelled` and `specify` are not declared here: they are substrings of
+// `noshowcancelled` and `endspecify`. They are censused in
+// 22_shadowed_spellings.va, which explains the mechanism.
 //! lrm B
 //! reject E0208
 //! reject edge
@@ -17,8 +21,6 @@
 //! reject noshowcancelled
 //! reject pulsestyle_ondetect
 //! reject pulsestyle_onevent
-//! reject showcancelled
-//! reject specify
 //! reject specparam
 module annex_b_reserved_specify_keywords;
     real edge;
@@ -27,7 +29,5 @@ module annex_b_reserved_specify_keywords;
     real noshowcancelled;
     real pulsestyle_ondetect;
     real pulsestyle_onevent;
-    real showcancelled;
-    real specify;
     real specparam;
 endmodule

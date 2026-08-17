@@ -18,7 +18,6 @@
 //
 //! lrm 9.7.2
 //! reject analog initial
-//! xfail VerA does not restrict $stop by block kind; it lowers $stop the same way in `analog initial` as in `analog`
 module ch09_stop_in_analog_initial_rejected(p, n);
   inout p, n; electrical p, n;
   analog initial begin

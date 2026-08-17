@@ -4,7 +4,6 @@
 // Verilog-AMS derives from IEEE 1364-2005 (1.1), whose 3.6 has the same
 // single-line rule. Verbatim from bsim4va.va:3658 -- a vendor extension, not
 // a lexer gap, so the rejection is the correct answer and is pinned here.
-//! reject ParseError
 //! reject E0138
 //! reject a string literal may not span lines
 //! lrm 2.7

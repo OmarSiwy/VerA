@@ -15,11 +15,37 @@
 // same reading from Clause 5; the two now agree.
 //
 // §5.10.4: "Named events can be triggered from always and initial blocks, or
-// from an analog event statement", and the clause's own example triggers its
-// event from an analog event statement and detects it with `@(ana_event)` in the
-// same analog block. That is the shape here, with initial_step (§5.10.2, Table
-// 5-1: 1 at the DC operating point) as the triggering event so the fixture needs
-// only the one dc timepoint.
+// from an analog event statement", and the clause closes with an example that
+// does exactly what this fixture does — triggers from an analog event statement
+// and detects in the same analog block:
+//
+//     event ana_event;
+//     ...
+//     analog begin
+//        @(timer(1n)) -> ana_event;
+//        @(ana_event) $display("Event: ana_event detected in analog");
+//        @(dig_event) $display("Event: dig_event detected in analog");
+//     end
+//
+// introduced as "how an event (ana_event) can be generated from an analog event
+// statement, not only to trigger an event-controlled statement in the analog
+// block, but also in an always statement". So the clause itself states the
+// analog-block detection fires; the 1.0 below is that, not an inference from
+// statement order alone. This fixture swaps `timer(1n)` for initial_step
+// (§5.10.2, Table 5-1: 1 at the DC operating point) so it needs only the one dc
+// timepoint.
+//
+// §5.10.5, "Digital events in analog behavior", lists named events among the
+// digital events analog behavior "can be made sensitive to" — and 5.10.5 is
+// what 21_digital_event_control_rejected.va cites to reject `posedge`. The two
+// readings do not conflict: 5.10.5's next sentence points back at the SAME
+// example, at the `dig_event` line, whose trigger is `initial #10 -> dig_event;`
+// in a digital process. What 5.10.5 describes is an event crossing FROM the
+// digital side, which is the mixed-signal feature C.7 drops. `ana_event` —
+// declared, triggered and detected entirely inside the analog block, the shape
+// used here — is the §5.10.4 case and never touches a digital process. Trigger
+// this `tick` from an `initial` block instead and the fixture would be a 5.10.5
+// case and would belong with 21.
 //
 // Statements in an analog block run in order, so the trigger has happened by the
 // time the detection statement is reached and `seen` is 1.0. §3.2.1 starts a real

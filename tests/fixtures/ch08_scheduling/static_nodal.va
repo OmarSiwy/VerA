@@ -4,13 +4,13 @@
 // identically zero and the whole equation is the constitutive relation
 // evaluated at v.
 //
-// The constitutive relation is a 2 mS conductance (2m = 2e-3 by the LRM 2.5.1
-// scale factor). At V(p) = 1.5 and V(n) = 0.25 the branch potential is 1.25 V,
+// The constitutive relation is a 2 mS conductance (2m = 2e-3 by the LRM 2.6.2
+// Table 2-1 scale factor). At V(p) = 1.5 and V(n) = 0.25 the branch potential is 1.25 V,
 // so i = 2e-3 * 1.25 = 2.5e-3 A. KFL makes that same flow leave p and enter n,
 // so the relation read across the reversed branch is its negation.
 //
 //! lrm 8.3.1
-//! lrm 2.5.1
+//! lrm 2.6.2
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch8_static(p, n);

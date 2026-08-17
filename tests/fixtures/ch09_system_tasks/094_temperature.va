@@ -8,6 +8,7 @@
 // `P_CELSIUS0 = 273.15, so a reading in Kelvin is 350 - 273.15 = 76.85 degrees
 // Celsius. A $temperature that answered in Celsius would land on 350 there.
 //
+//! lrm 9.15
 //! temp 350
 `include "check.vh"
 module ch09_atomic_temperature(p, n);

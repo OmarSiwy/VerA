@@ -2,35 +2,45 @@
 // gives fetlim exactly one extra argument, vth, and it limits a gate-to-source
 // voltage.
 //
-// WHAT IS PINNED. §9.17.3: "On any iteration where the output value is not the
-// same as the value of the access function (within appropriate tolerances), the
-// simulator is prevented from terminating the iteration." So at a solved
-// operating point $limit() is TRANSPARENT — it returns its access function, and
-// the stamped current is V(mid), not some damped fraction of it. A limiter that
-// leaked its damping into the answer would change the circuit the netlist
-// describes, which is the one thing it may never do.
+// WHAT IS PINNED. §9.17.3: "When the simulator has converged, the return value
+// of the $limit() function is the value of the access function reference, within
+// appropriate tolerances." A limiter is a convergence aid, never a change to the
+// circuit the netlist describes, so at the answer $limit() is TRANSPARENT: it
+// returns its access function, and the stamped current is the one V(mid) implies
+// rather than a damped fraction of it.
+//
+// WHAT THE HARNESS SUPPLIES, and why the digit still holds. §9.17.3 also says
+// "in all cases, the simulator is responsible for determining if limiting should
+// be applied and what the return value is on a given iteration" — and this
+// harness does not iterate: `//! bias` imposes x and the device is evaluated
+// ONCE, so the sentence above is not handed to the fixture for free. The digit
+// therefore has to survive the worst single iteration a SPICE-family fetlim can
+// produce here, and for this bias it does. DEVfetlim(vnew, vold, vth) with
+// vnew = 0.3 and vth = 0.7 returns 0.3 unchanged for every stored vold below
+// vth + 3.5 = 4.2 V: below vth both step clamps — vtsthi = |2*(vold-vth)|+2
+// >= 2 V going off, the ceiling vth + 0.5 = 1.2 V going on — are slack by more
+// than a volt at 0.3 V, and between vth and 4.2 V the falling branch is
+// max(0.3, vth - 0.5) = 0.3. Only a tool whose previous iterate was already
+// above 4.2 V would answer max(0.3, vth + 2) = 2.7, and there is no previous
+// iterate here: a cold start is 0 V, which is where a channel is
+// well-conditioned and is what SPICE's MODEINITJCT leaves fetlim at.
 //
 // WHY THE PROBE IS AN INTERNAL NET. A limiter corrects an unknown the device
 // owns. Probing the module PORT instead makes the correction a write to a node
 // the host imposes, and a simulator is entitled to decline it — VerA does,
-// silently — so a port-probing form of this fixture asserts the transparency of
-// the identity function and cannot fail. `mid` is private to the device, so the
-// clamp really is installed. The bias directive holds `mid` at 0.3 V, and the
-// branch to `p` is written in terms of the LIMITED value, so a clamp that fired
-// would move the stamped current as well as the assertion.
+// silently — so a port-probing form of this fixture would put the transparency
+// question to a call the tool had already refused to limit. `mid` is private to
+// the device, so a tool that installs the clamp at all installs it here. The
+// bias directive holds `mid` at 0.3 V, and the branch to `p` is written in terms
+// of the LIMITED value, so a clamp that fired would move the stamped current and
+// not only the assertion.
 //
-// The bias is chosen so the claim holds even for a simulator that really does
-// run SPICE's DEVfetlim on this evaluation: 0.3 V is below vth = 0.7 V, so the
-// "off" branch applies for any previous-iteration value in [0, vth], and both of
-// its clamps — a step of vtsthi = |2*(vold-vth)|+2 >= 2 V going off, a ceiling
-// of vth+0.5 = 1.2 V going on — are slack by more than a volt at 0.3 V.
-//
-// TOLERANCE. §9.17.3 fixes only "within appropriate tolerances", and adds that
-// "the simulator is responsible for determining ... what the return value is on
-// a given iteration". The only number the LRM supplies for a Voltage-natured
-// quantity is Annex D disciplines.vams `nature Voltage ... abstol = 1e-6`, so
-// that is the tolerance used. 1e-12 is the CURRENT abstol — six orders too tight
-// for a volt, and a simulator converging to its own vntol would fail on it.
+// TOLERANCE. §9.17.3 fixes only "within appropriate tolerances". The only number
+// the LRM supplies for a Voltage-natured quantity is Annex D disciplines.vams
+// `nature Voltage ... abstol = 1e-6`, so that is the tolerance used. 1e-12 is the
+// CURRENT abstol — six orders too tight for a volt, and a simulator converging to
+// its own vntol would fail on it. It still discriminates: every clamp fetlim can
+// reach from this bias moves the answer by more than 2 V.
 //
 //! lrm E.3.4
 //! lrm 9.17.3
@@ -42,6 +52,6 @@ module annex_e_fetlim(p);
     limited = $limit(V(mid), "fetlim", 0.7);
     I(mid, p) <+ (limited - V(p)) / 1.0;
     // 1e-6 is the Annex D `nature Voltage` abstol.
-    `CHECK("fetlim is transparent at the solution", limited, 0.3, 1e-6);
+    `CHECK("fetlim returns the value of its access function", limited, 0.3, 1e-6);
   end
 endmodule

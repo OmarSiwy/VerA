@@ -1,31 +1,158 @@
 # Annex B coverage
 
-Source: `docs/VAMS-LRM/annex-b-keywords.html`, including both halves of Table B.1.
+Source: `docs/VAMS-LRM/annex-b-keywords.html`, read in full — both printed halves of
+Table B.1.
 
-The normative rules are directly covered: keywords are lowercase, predefined, nonescaped identifiers (`03_reserved_module_rejected.va`, `04_reserved_if_rejected.va`); an escaped spelling is an identifier (`01_escaped_keyword.va`); and differently-cased spellings are ordinary identifiers (`02_keyword_case.va`).
+HTML section-ID audit: **none.** The file carries zero `id=` attributes: one `<h1>`, one
+paragraph, and Table B.1 split across two `<table>` elements for printing. There is
+nothing to key a section table on, so the table below is keyed on the annex's three
+normative sentences and on the table itself. All four rows have fixtures in this folder.
 
-Keyword inventory by executable family:
+Annex B is one rule wearing three sentences: a keyword is a *spelling*, reserved
+everywhere the grammar wants an identifier. It states no behaviour, so nothing here can
+be proved by running a module — twenty-four of the twenty-seven fixtures are `//! reject`
+fixtures and the three that compile exist to hold down the permissive side of the escape
+and case rules. Table B.1 has **217 spellings**, counted from the HTML; 207 of them carry
+a `//! reject` arm in this folder and the other ten are censused in
+`annex_c_analog_subset/` (below). Every fixture cites `//! lrm B`.
 
-| Inventory group | Keywords and fixture disposition |
-|---|---|
-| Analog declarations | `analog branch discipline enddiscipline nature endnature electrical ground potential flow domain continuous abstol access idt_nature ddt_nature units` — Chapters 1/3 and Annex A fixtures |
-| Data/parameters | `integer real realtime string genvar parameter localparam aliasparam from exclude inf paramset endparamset` — Chapter 3 fixtures, with paramset rejection explicit |
-| Analog control | `begin end if else for while repeat case default endcase disable initial_step final_step generate endgenerate` — Annex A and Chapters 5/8 fixtures |
-| Math | `abs acos acosh asin asinh atan atan2 atanh ceil cos cosh exp expm1 floor hypot ln ln1p log max min pow sin sinh sqrt tan tanh` — Chapter 4 math fixtures; `ln1p`/`expm1` are known dedicated-op gaps |
-| Analog operators | `absdelay absdelta ddt ddx idt idtmod laplace_nd laplace_np laplace_zd laplace_zp last_crossing limexp slew transition zi_nd zi_np zi_zd zi_zp` — Chapter 4 operator fixtures; obsolete `absdelta` is inventoried but not valid current syntax |
-| Events/noise/analysis | `above analysis cross flicker_noise noise_table noise_table_log timer white_noise ac_stim` — Chapters 4/5/8; `ac_stim` runtime support is a documented gap |
-| Module interface/function | `module endmodule input output inout function endfunction return defparam` — Annex A/Chapter 4; `return` parser support is a documented gap and `defparam` has an explicit Annex A rejection fixture |
-| Compiler directive token | `include` — Chapter 10 owns executable directive fixtures |
-| Verilog/mixed-only | `always and assign automatic break buf bufif0 bufif1 casex casez cell cmos config connect connectmodule connectrules continue deassign design discrete driver_update edge endconfig endconnectrules endprimitive endspecify endtable endtask event force forever fork highz0 highz1 ifnone incdir initial instance join large liblist library macromodule medium merged nand negedge nmos nor noshowcancelled not notif0 notif1 or pmos posedge primitive pull0 pull1 pulldown pullup pulsestyle_ondetect pulsestyle_onevent rcmos reg release resolveto rnmos rpmos rtran rtranif0 rtranif1 scalared showcancelled signed small specify specparam split strong0 strong1 supply0 supply1 table task time tran tranif0 tranif1 tri tri0 tri1 triand trior trireg unsigned use uwire vectored wait wand weak0 weak1 wire wor wreal xnor xor` — direct family sources are `05_config_library_keywords.va` through `11_macromodule_keyword.va` plus Annex C/Chapters 5–8; current rejection classes pin VerA's reservedness/grammar boundary |
+| Claim | Rule | Fixtures in this directory |
+|---|---|---|
+| Sentence 1 | "Keywords are predefined nonescaped identifiers that define Verilog-AMS language constructs." | The *reserved* half is the whole census, 24 files. The *nonescaped* half is sentence 2's row. **"Define language constructs" has no fixture here and should not**: that each keyword does its job is the chapter folders' business, and this folder never calls one |
+| Sentence 2 | "An escaped identifier shall not be treated as a keyword." Two-sided: the escaped spelling *may* be an identifier, and it *shall not* act as the keyword | Permissive side: `01_escaped_keyword.va` (`\if ` as a real variable, read back as `total` per §2.8.1, `CHECKX` 6.0) and `21_escaped_keyword_port.va` (`\sin ` as a port, `//! bias V(sin) = 0.75, V(n) = 0.25`, `CHECKX` 0.5 — a compiler that resolved it to the sine function never gets a branch probe). Prohibitive side: `12_escaped_keyword_is_not_the_keyword.va`, `\analog begin ... end` → `//! reject E0205` |
+| Sentence 3 | "Verilog-AMS reserves the keywords listed in Table B.1." | `03_reserved_module_rejected.va` (declaration-name position, `module module;`), `04_reserved_if_rejected.va` (variable-name position). Plus §2.8.2's "all keywords are defined in lowercase only", both sides: `02_keyword_case.va` (`Analog` and `ANALOG` are two distinct variables) and `15_uppercase_keyword_rejected.va` (`ANALOG begin ... end` → `//! reject E0205`) |
+| Table B.1 | The 217 spellings themselves | The census: `05`–`11`, `13`, `14`, `16`–`20`, `22`–`25`. 207 arms here, 10 in `annex_c_analog_subset/`. Broken down below |
 
-## Reserved keyword family probes
+## The census, and what a `//! reject` arm actually proves
 
-- `05_config_library_keywords.va`: `cell`, `config`, `design`, `endconfig`, `incdir`, `liblist`, `library`, and `use` in library/configuration grammar.
-- `06_udp_keywords.va`: `primitive`, `table`, `endtable`, and `endprimitive` in a UDP declaration.
-- `07_gate_primitive_keywords.va`, `07b_switch_primitive_keywords.va`, and `07c_pass_logic_primitive_keywords.va`: `buf`, `bufif0`, `bufif1`, `cmos`, `nand`, `nmos`, `nor`, `notif0`, `notif1`, `pmos`, `pulldown`, `pullup`, `rcmos`, `rnmos`, `rpmos`, `rtran`, `rtranif0`, `rtranif1`, `tranif0`, `tranif1`, `xnor`, and `xor` as primitive tokens.
-- `08_net_strength_keywords.va`: `highz0`, `highz1`, `large`, `medium`, `pull0`, `pull1`, `scalared`, `signed`, `small`, `strong0`, `strong1`, `supply0`, `supply1`, `tri`, `tri0`, `tri1`, `triand`, `trior`, `trireg`, `unsigned`, `uwire`, `vectored`, `wand`, `weak0`, `weak1`, and `wor` in net/strength declarations.
-- `09_specify_keywords.va`: `edge`, `ifnone`, `noshowcancelled`, `pulsestyle_ondetect`, `pulsestyle_onevent`, `showcancelled`, `specify`, `specparam`, and `endspecify` in a specify block.
-- `10_task_control_keywords.va`: `automatic`, `deassign`, `disable`, `endtask`, `fork`, `join`, `negedge`, `realtime`, `release`, `task`, `time`, and `wait` in task/process grammar.
-- `11_macromodule_keyword.va`: `macromodule` as a compilation-unit declaration keyword.
+Every census file is the same shape: `real <keyword>;` one per line so the parser
+resynchronises at each `;` and reports each spelling separately, and one `//! reject
+<spelling>` arm per declaration so a spelling is proved individually instead of the file
+passing on whichever token the parser tripped over first.
 
-Together with the four earlier reservedness fixtures and the chapter corpus, these family probes make every Annex B keyword occur as source syntax rather than only as prose inventory.
+| File | Family | Arms |
+|---|---|---|
+| `05_config_library_keywords.va` | IEEE 1364-2005 A.1.1 config/library | 8 |
+| `06_udp_keywords.va` | A.5.1 UDP | 2 |
+| `07_gate_primitive_keywords.va` | A.3.1 gate primitives | 4 |
+| `07b_switch_primitive_keywords.va` | A.3.1 MOS/CMOS switches, pull gates, `nor`/`notif*` | 8 |
+| `07c_pass_logic_primitive_keywords.va` | A.3.1 pass transistors and XOR gates | 4 |
+| `08_net_strength_keywords.va` | A.2.1.3 / A.2.2.2 net types and strengths | 24 |
+| `09_specify_keywords.va` | A.7.1 specify blocks | 7 |
+| `10_task_control_keywords.va` | A.2.7 / A.6 task, process, procedural control | 12 |
+| `11_macromodule_keyword.va` | `macromodule` alone | 1 |
+| `13_assert_reserved.va` | `assert` alone — **`//! xfail`** | 1 |
+| `14_include_reserved.va` | `include` alone, bare rather than post-backtick | 1 |
+| `16_reserved_math_functions.va` | §4.3.1 / §4.3.2 math | 15 |
+| `17_reserved_analog_operators.va` | §4.5 operators, §5.10 events, §4.4/§4.6 noise and analysis | 26 |
+| `18_reserved_discipline_nature.va` | §3.4 / §3.5 discipline and nature, §3.4.3/§3.4.4 range words | 18 |
+| `19_reserved_core_keywords.va` | core structural, declarative and control | 31 |
+| `20_reserved_2023_additions.va` | the five spellings this HTML table carries that the 2.4.0 printing does not (`break`, `continue`, `expm1`, `ln1p`, `return`) | 5 |
+| `22_shadowed_spellings.va` | the spellings that are substrings of a sibling in 05–10 and 16–19 | 34 |
+| `23_shadowed_spellings_inner.va` | `cos`, `sin`, `tan`, `tran`, `table` — substrings of spellings in 22 | 5 |
+| `24_reserved_exp.va` | `exp` alone | 1 |
+| `25_reserved_or.va` | `or` alone | 1 |
+
+`22`–`25` exist because of the matcher, not because of the LRM. `failureContains`
+(`tests/torture.zig:634`) tests a `//! reject` pattern as a substring of *every*
+diagnostic of the file, plus the catalogue title, the notes and the failure's error name.
+So where keyword A is a substring of keyword B declared in the same file, A's arm is
+satisfied by B's diagnostic and proves nothing — `//! reject tri` beside `real trireg;`
+passes whether or not `tri` is reserved. Splitting the containment graph into
+non-containing layers is what `22` and `23` are; `24` and `25` go further because `exp`
+is a substring of E0208's own title ("**exp**ected an identifier") and `or` of every
+phase label the suite can report (`ParseErr**or**`, `DiagnosticsRep**or**ted`,
+`GeneratedCompileErr**or**`).
+
+Replayed against the real compiler, that split holds: for every arm in this folder except
+three, the spelling occurs in exactly one diagnostic — the E0208 naming that declaration.
+The three exceptions are `if` (04), `exp` (24) and `or` (25), each in a file that declares
+exactly one thing, so `//! reject E0208` is the proof and the name arm is bookkeeping.
+Their headers say so.
+
+Two mechanical notes a reader will otherwise trip on:
+
+- The `end*` spellings cost an extra diagnostic. `real enddiscipline;` and `real
+  endnature;` (18), `real end;` (22) and `real endcase;`/`endfunction;`/`endgenerate;`
+  (19) each also raise E0205 "unsupported module item" when the parser resynchronises
+  onto the token, and 19 additionally raises E0201 on the trailing stray `;` its
+  deliberately-last `real endmodule;` leaves behind. The name arms still match; the
+  fixtures do not pin the extra codes.
+- `05`'s header spells the C.16 word `resolvedto`. Table B.1 and
+  `annex_c_analog_subset/16_unused_ams_words_rejected.va` both spell it `resolveto`. The
+  fixture tests nothing with that name, so this is a comment typo, not a coverage hole.
+
+## Where the other ten spellings are
+
+Set difference between Table B.1 and the `//! reject` arms in this folder is exactly the
+ten words Annex C.16 marks "not used by Verilog-A": `connect`, `connectmodule`,
+`connectrules`, `driver_update`, `endconnectrules`, `merged`, `net_resolution`,
+`resolveto`, `split`, `wreal`. They are censused where that clause lives —
+`annex_c_analog_subset/16_unused_ams_words_rejected.va` (seven),
+`.../30_connect_reserved.va` and `.../31_connectrules_reserved.va` (the two `16` cannot
+prove without shadowing), and `.../20_net_resolution_reserved.va`. All four cite
+`//! lrm B`, so every Table B.1 spelling is pinned somewhere in the suite.
+
+## The xfail ledger
+
+**One fixture in this folder.** Compiling `real <keyword>;` for all 217 spellings against
+the current build, exactly two compile clean, and both carry a marker:
+
+| Fixture | Spelling | Reason |
+|---|---|---|
+| `13_assert_reserved.va` | `assert` | Absent from `reserved_keywords` in `src/frontend/token.zig`, so it lexes as an ordinary identifier and `real assert;` compiles clean. The spelling Verilog-AMS 2.4 reserves and never spends — no statement, no system function, no Annex A production — which is exactly why an implementation forgets it. Reservedness is the only thing about `assert` that *can* be tested |
+| (`annex_c_analog_subset/20_net_resolution_reserved.va`) | `net_resolution` | Same defect, same table, different folder: VerA reserves the other nine C.16 words and not this one. Listed here because the Annex B ledger is incomplete without it |
+
+The other 26 fixtures in this folder run green (`zig build torture -- annex_b_keywords`:
+26/27, 1 XFAIL). A green census row is worth what it costs — near zero for `endmodule`,
+rather more for `abstol`, `access`, `units`, `from`, `exclude` and `inf`, which read
+perfectly well as ordinary identifiers and which an implementation is tempted to look up
+ad hoc inside a `nature` body instead of reserving in the lexer.
+
+## What no fixture here supplies
+
+Every one of these is a real gap, not a cross-reference:
+
+- **Reservedness is tested in three grammar positions only**: module name (`03`),
+  variable-declaration name (`04` and all 22 census files), and — escaped — port name
+  (`21`). Untested positions where a compiler could plausibly leak a keyword through:
+  parameter name, `localparam` name, block label (`begin : name`), analog-function name
+  and its argument names, discipline and nature names, named branch, genvar, and
+  instance name. A front end that routes only `real`/`integer` declarations through the
+  keyword check passes this entire folder.
+- **The escape rule is tested on three spellings** — `\if `, `\analog `, `\sin ` — and
+  the prohibitive half on one, `\analog `. Nothing tests an escaped keyword as a module
+  name, a parameter name, or a hierarchical reference, and nothing tests the interaction
+  the other way: that `` `include `` still works while `real include;` does not (`14`
+  pins only the bare-position half; ch10 owns the directive).
+- **The case rule is tested on one keyword.** `02` and `15` both use `analog`. A
+  case-folding lexer that special-cased only the words it lowers would still be caught,
+  but a partial fold would not.
+- **No fixture asserts the E0205/E0201 resynchronisation noise** described above, so the
+  census files' diagnostic *counts* are unpinned — a compiler that emitted one diagnostic
+  for a 24-declaration file and named every spelling in it would pass `08`.
+- **Nothing here proves a keyword works.** By design, and worth writing down: this folder
+  proves 206 of its 207 spellings are unavailable as identifiers and proves nothing about
+  whether any of them is implemented. `absdelta`, `ac_stim`, `noise_table_log`, the four
+  `laplace_*` and the four `zi_*` are reserved here and their *semantics* live or die in
+  ch04/ch05.
+
+## Fixture-name audit
+
+Twenty-seven files, all mapped above:
+`01_escaped_keyword.va`, `02_keyword_case.va`, `03_reserved_module_rejected.va`,
+`04_reserved_if_rejected.va`, `05_config_library_keywords.va`, `06_udp_keywords.va`,
+`07_gate_primitive_keywords.va`, `07b_switch_primitive_keywords.va`,
+`07c_pass_logic_primitive_keywords.va`, `08_net_strength_keywords.va`,
+`09_specify_keywords.va`, `10_task_control_keywords.va`, `11_macromodule_keyword.va`,
+`12_escaped_keyword_is_not_the_keyword.va`, `13_assert_reserved.va`,
+`14_include_reserved.va`, `15_uppercase_keyword_rejected.va`,
+`16_reserved_math_functions.va`, `17_reserved_analog_operators.va`,
+`18_reserved_discipline_nature.va`, `19_reserved_core_keywords.va`,
+`20_reserved_2023_additions.va`, `21_escaped_keyword_port.va`,
+`22_shadowed_spellings.va`, `23_shadowed_spellings_inner.va`, `24_reserved_exp.va`,
+`25_reserved_or.va`.
+
+Analysis split: three fixtures compile and assert — `01` and `02` at the default
+operating point, `21` under `//! bias`, one `CHECKX` each. The other twenty-four never
+reach a solve.

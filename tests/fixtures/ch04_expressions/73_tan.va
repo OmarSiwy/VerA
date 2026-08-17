@@ -8,6 +8,7 @@
 // Both checks are OUTSIDE the guard: §9.4.6 display tasks must be
 // unconditional or VerA drops them with W0851.
 //
+//! lrm 4.3.2
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_tan(p, n);

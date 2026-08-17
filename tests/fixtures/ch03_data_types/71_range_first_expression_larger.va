@@ -17,7 +17,6 @@
 //
 //! lrm 3.4.2
 //! reject DiagnosticsReported
-//! xfail VerA parses a `from [hi:lo]` range and stores the bounds unordered; there is no bound-ordering check on a value range in lower.zig
 module ch3_range_first_expression_larger(p, n);
     inout p, n;
     electrical p, n;

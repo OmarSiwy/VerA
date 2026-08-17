@@ -13,10 +13,16 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `config` is not declared here: it is a substring of `endconfig`, so a bare
+// `//! reject config` in this file would be satisfied by `endconfig`'s
+// diagnostic. It is censused in 22_shadowed_spellings.va, which explains the
+// mechanism. `include` is the tenth member of this A.1.1 family and has its own
+// file, 14_include_reserved.va, for the preprocessor-position reason given
+// there.
 //! lrm B
 //! reject E0208
 //! reject cell
-//! reject config
 //! reject design
 //! reject endconfig
 //! reject incdir
@@ -26,7 +32,6 @@
 //! reject use
 module annex_b_reserved_config_library_keywords;
     real cell;
-    real config;
     real design;
     real endconfig;
     real incdir;

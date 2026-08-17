@@ -23,8 +23,10 @@
 //!
 //! The engine instantiates S — a plain-f64 value form for residuals, a
 //! derivative-carrying dual for the Jacobian. The S primitive set devices may
-//! use: con addC scale · add sub neg mul div · exp log sqrt pow(a,c) · sin cos
-//! tanh sinh cosh atan · abs minC maxC min max · val.
+//! use: con addC scale · add sub neg mul div · exp log expm1 log1p sqrt
+//! pow(a,c) · sin cos tanh sinh cosh atan · abs minC maxC min max · val.
+//! expm1/log1p are primitives and not exp(x)-1 / log(1+x): §4.3.1 Table 4-14
+//! names the C library forms precisely because those two compositions cancel.
 //!
 //! RULES for physics code:
 //!   - Everything not depending on x (param prep, temperature, geometry)

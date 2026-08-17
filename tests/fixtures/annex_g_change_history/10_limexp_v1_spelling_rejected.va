@@ -7,11 +7,22 @@
 //
 // The current spelling is covered by ch04_expressions/25_limexp.va.
 //
+// NO CODE IS PINNED, and that is deliberate. The LRM's position is that the NAME
+// does not exist: `$limexp` is absent from Table 9-11 and from A.8.2, so the
+// conforming diagnosis is an unknown function, not "unsupported". E0801
+// "unsupported system function" would be the wrong rule — it is VerA's
+// capability class for ch9 functions it declines to implement (§9.13 $random,
+// §9.21 $table_model) — and it is also not the code this gap would close under:
+// VerA aliases the spelling in codegen (`$limexp` beside `limexp`), and deleting
+// that alias drops the call into codegen's abort path, not into a diagnostic at
+// all. Naming a code VerA will never emit here is how an xfail outlives its gap:
+// the XPASS trip-wire waits for a code that never comes. This module's only
+// defect is the retired spelling, so `DiagnosticsReported` is exactly the claim
+// "somebody diagnosed it".
+//
 //! lrm G.1
 //! lrm 4.5.13
-//! reject E0801
-//! reject $limexp
-//! xfail VerA accepts the retired v1.0 spelling $limexp() as an alias for limexp(); Table G.1 replaced it in v2.0
+//! reject DiagnosticsReported
 module annex_g_limexp_v1(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ $limexp(V(p,n));

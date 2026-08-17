@@ -4,9 +4,13 @@
 //   §5.10.2  "initial_step and final_step generate global events on the first
 //            and the last point in an analysis" — a DC operating point is one
 //            point, so initial_step fires. `started` must end at 1.
-//   §5.10.3.1 "The cross() function will not generate events for non-transient
+//   §5.10.3.2 "The cross() function will not generate events for non-transient
 //            analyses, such as ac, dc, or noise analyses" — so `crossed` must
-//            still be 0, even though V(p,n) = 2 sits above the threshold.
+//            still be 0, even though V(p,n) = 2 sits above the threshold. The
+//            sentence sits in the above() clause, not in §5.10.3.1 cross(),
+//            because it is drawing the contrast with above(); it is normative
+//            about cross() all the same, and §5.10.3.1 says nothing about
+//            non-transient analyses at all.
 //
 // The pair is what makes either half worth anything: a compiler that never
 // fires any event fails the first check, and one that treats cross() as a plain
@@ -26,7 +30,7 @@
 //
 //! lrm A.6.5
 //! lrm 5.10.2
-//! lrm 5.10.3.1
+//! lrm 5.10.3.2
 //! bias V(p) = 2.0
 //! print none
 `include "check.vh"

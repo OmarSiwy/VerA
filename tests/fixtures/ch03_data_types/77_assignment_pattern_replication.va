@@ -1,16 +1,30 @@
-// §3.4.8 assignment patterns, the replication form. The LRM's own §3.3 example
-// writes it nested —
+// §3.4.8 assignment patterns, the replication form, exactly as A.8.1 spells it:
 //
+//     assignment_pattern ::= '{ expression { , expression } }
+//                          | '{ constant_expression { expression { , expression } } }
+//
+// The second alternative is ONE replication filling the whole pattern — a count,
+// then a braced element list, then the closing `}`. There is no production for
+// two comma-separated replication groups, so `'{2{1.5}, 2{2.5}}` is not a
+// Verilog-AMS assignment pattern at all and a conforming compiler must reject
+// it; this file used to write exactly that and book the rejection as a VerA gap.
+//
+// The LRM's own §3.4.8 examples are the nested two-dimensional form on a
+// VARIABLE:
+//
+//     real distort[0:2][0:2] = '{ 3{ '{3{0.0}}}};
 //     string above_0p5[0:2][0:2] = '{ 3{ '{3{" "}}}};
 //
-// — and the one-dimensional inner form `'{3{" "}}` is what this fixture takes:
-// a replication INSIDE an assignment pattern, which fills N consecutive elements
-// with one value.
+// `fill` is that shape with the two dimensions made DIFFERENT sizes, so the
+// outer count 2 and the inner count 3 cannot be swapped without changing the
+// answer, and with a nonzero element so an unfilled slot reads as §3.2's default
+// 0.0 rather than as the value under test. The last element is checked because
+// that is the one a compiler which applied the count once instead of N times
+// leaves at 0.0.
 //
-// `'{2{1.5}, 2{2.5}}` is four elements, 1.5 1.5 2.5 2.5. The two halves have
-// different values so the fixture fails if a compiler replicated the first
-// group over the whole array, and the elements are read individually so it
-// fails differently if the count were applied once instead of twice.
+// `steps` is the one-dimensional constant form: `constant_assignment_pattern ::=
+// '{ constant_expression { constant_expression { , constant_expression } } }`
+// carries a replication too, so a parameter array may be filled this way.
 //
 // 08_parameter_array.va is the plain `'{a, b, c, d}` form and
 // 77_assignment_pattern_variable.va is the non-constant form; this is the third
@@ -18,18 +32,22 @@
 //
 //! lrm 3.4.8
 //! lrm 3.3
-//! xfail VerA's parser has no replication inside an assignment pattern: the `{` of `2{1.5}` is E0207
+//! lrm A.8.1
+//! xfail VerA's parser has no replication inside an assignment pattern: the `{` of `4{1.5}` is E0207
 `include "check.vh"
 module ch03_assignment_pattern_replication(p, n);
     inout p, n;
     electrical p, n;
-    parameter real steps[0:3] = '{2{1.5}, 2{2.5}};
+    parameter real steps[0:3] = '{4{1.5}};
+    real fill[0:1][0:2] = '{ 2{ '{3{2.5}}}};
 
     analog begin
-        `CHECKX("the first replication group fills element 0", steps[0], 1.5);
-        `CHECKX("the first replication group fills element 1 too", steps[1], 1.5);
-        `CHECKX("the second replication group starts at element 2", steps[2], 2.5);
-        `CHECKX("the second replication group fills element 3", steps[3], 2.5);
+        `CHECKX("a one-dimensional constant replication fills element 0", steps[0], 1.5);
+        `CHECKX("and the last element of the parameter array", steps[3], 1.5);
+        `CHECKX("the nested replication fills the first row", fill[0][0], 2.5);
+        `CHECKX("the inner count 3 reaches the end of a row", fill[0][2], 2.5);
+        `CHECKX("the outer count 2 reaches the second row", fill[1][0], 2.5);
+        `CHECKX("and the last element of the last row", fill[1][2], 2.5);
         I(p, n) <+ steps[0] * V(p, n);
     end
 endmodule

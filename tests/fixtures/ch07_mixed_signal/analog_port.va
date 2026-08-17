@@ -20,13 +20,19 @@
 // only because CHECK's 1e-15 tolerance was 18x the 5.551115123125783e-17 error
 // — the digits, not the tolerance, were the defect.
 //
+// The first check is CHECKX for the same reason. A `//! bias` value is written
+// into the unknown vector verbatim and no arithmetic stands between it and the
+// probe, so the readback is bit-identical to the literal. A 1e-15 window there
+// was nine ulp of slack (ulp(0.7) = 1.1102230246251565e-16) on a value nothing
+// is permitted to perturb.
+//
 //! lrm 7.2.3
 //! lrm 4.2
 //! bias V(sense) = 0.7, V(driven) = 0.2
 `include "check.vh"
 module ch7_analog_port(input electrical sense, output electrical driven);
   analog begin
-    `CHECK("the input analog port is readable", V(sense), 0.7, 1e-15);
+    `CHECKX("the input analog port is readable", V(sense), 0.7);
     `CHECKX("both analog ports read back, V(driven) - V(sense)", V(driven) - V(sense), -0.49999999999999994);
     V(driven) <+ V(sense);
   end

@@ -18,7 +18,6 @@
 //! bias V(p) = 0.5
 //! lrm 9.14
 //! lrm 4.3.1
-//! xfail VerA rounds through 1: codegen.zig `zExpm1` is `a.exp().addC(-1.0)`, so $expm1(5e-16) returns 4.440892098500626e-16 — 11% low, precisely the exp(x)-1 value Table 4-14's C expm1 exists to replace
 `include "check.vh"
 module ch09_atomic_expm1(p, n);
   inout p, n; electrical p, n;

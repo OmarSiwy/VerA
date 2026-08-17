@@ -4,24 +4,36 @@
 // error, it is illegal to assign these values to a branch through contribution
 // in the analog context."
 //
-// The contribution below is that illegal form and nothing else: `inf` reaches a
+// The contribution below is that illegal form and nothing else: +inf reaches a
 // branch through `<+`. VerA accepts it — it emits only W0650 ("unit is not
 // provably finite") and stamps the value — so the rule is unmet, not unstated,
 // and the fixture is marked accordingly rather than softened.
 //
-// There is deliberately no run-side assertion left here. `inf` is a reserved
-// word with exactly one grammar position: annex A gives
+// The value is formed by the arithmetic the clause itself names — 1.0/0.0 is
+// the IEEE 754 division of a finite positive by zero, whose result is +inf —
+// and NOT with the `inf` keyword. `inf` is a reserved word with exactly one
+// grammar position: annex A gives
 // `value_range_expression ::= constant_expression | -inf | inf`, and it is
 // absent from the A.8.4 `primary` list this very chapter reprints as Syntax
-// 7-1. So `inf` cannot legally appear in an expression at all, and a guard like
-// `inf > 1.7976931348623157e308` would put a second non-conformance in the file
-// to stand in for the first. If a DBL_MAX bound is ever wanted here, write the
-// literal, not the keyword.
+// 7-1. Writing `I(p) <+ inf` would put a syntax error in the file in place of
+// the §7.3.2.1 violation, and a conforming compiler would then diagnose the
+// grammar and never reach the rule this fixture demands. (VerA does accept
+// `inf` as a primary — src/frontend/parser.zig maps the keyword to `.pos_inf`
+// — which is precisely why the fixture must not lean on it.) Same construction
+// as the two siblings: neg_inf_contribution_rejected.va uses -1.0/0.0 and
+// nan_contribution_rejected.va uses 0.0/0.0.
+//
+// There is deliberately no run-side assertion. The LRM fixes no value for a
+// branch an infinity reached, and a comparison guard would assert a property of
+// IEEE arithmetic rather than the contribution rule.
 //
 //! lrm 7.3.2.1
 //! reject contribution of an infinite value
-//! xfail VerA does not diagnose an infinite contribution; `I(p) <+ inf` yields only W0650
 module ch7_infinity_contribution(p);
   inout p; electrical p;
-  analog I(p) <+ inf + 0.0*V(p);
+  real bad;
+  analog begin
+    bad = 1.0/0.0;
+    I(p) <+ bad + 0.0*V(p);
+  end
 endmodule

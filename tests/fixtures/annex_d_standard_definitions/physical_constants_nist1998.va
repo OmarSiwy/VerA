@@ -5,14 +5,20 @@
 // J*s, eps0 = 8.854187817e-12 F/m); `P_U0 comes from the `else` arm that assigns
 // it before the SPICE/OLD/NIST2010 tests, so it is the pre-2019 4e-7*pi.
 //
-// This is the one arm that needs no plumbing at all: the engine prepends the
-// implementation's constants.vams before this file with no selector defined, so
-// the macros read here are the implementation's, not a copy. Nothing is
-// `defined and nothing is `included but check.vh — a compiler that ships no
-// constants.vams cannot pass this.
+// This is the one arm that needs no `undef plumbing: constants.vams is included
+// plainly, with no selector `defined either before or after, so its innermost
+// `else` is the arm taken. The four selector siblings must first `undef
+// CONSTANTS_VAMS to reopen the guard, because under an implementation that
+// PREPENDS the annex files (VerA does) the chain has already run; here the
+// already-run chain is the one this fixture wants, so the include is either the
+// first pass (non-prepending compiler) or a no-op (prepending one) and both
+// reach the same values. Either way the macros read here are the
+// implementation's constants.vams, not a copy the fixture handed itself.
 //
 //! lrm D.2
 `include "check.vh"
+`include "constants.vams"
+`include "disciplines.vams"
 module annex_d_nist1998(p);
   inout p; electrical p;
   analog begin

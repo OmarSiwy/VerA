@@ -1,5 +1,6 @@
 // cosh() (LRM 4.3.2 Table 4-15): hyperbolic cosine, (e^x + e^-x) / 2, all x.
 `include "check.vh"
+//! lrm 4.3.2
 //! bias V(p) = 1.0
 module ch04_cosh(p, n);
   inout p, n; electrical p, n;

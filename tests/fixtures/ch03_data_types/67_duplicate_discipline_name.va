@@ -16,7 +16,6 @@
 //! lrm 3.6.2
 //! lrm 3.13.1
 //! reject DiagnosticsReported
-//! xfail VerA keeps the last of two disciplines declared with the same name and reports nothing; the E0336 collision check in lower.zig only fires across natures and disciplines
 nature ch3_twice_d_p; units="V"; access=TwiceDV; abstol=1u; endnature
 nature ch3_twice_d_f; units="A"; access=TwiceDI; abstol=1p; endnature
 discipline ch3_twice_d; potential ch3_twice_d_p; enddiscipline

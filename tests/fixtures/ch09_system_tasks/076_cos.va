@@ -3,6 +3,7 @@
 // of 1 - 0.5^2/2 + 0.5^4/24 - 0.5^6/720 + ...  A degree reading would give
 // 0.99996, which is why the check is tight rather than to two places.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_cos(p, n);

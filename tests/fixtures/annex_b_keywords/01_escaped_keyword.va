@@ -8,6 +8,8 @@
 // the storage declared as `\total ` is read back below by the plain name
 // `total`, and 2.0 * 3.0 = 6.0 must come out of it.
 `include "check.vh"
+//! lrm B
+//! lrm 2.8.1
 module annex_b_escaped_keyword(p, n);
     inout p, n;
     electrical p, n;

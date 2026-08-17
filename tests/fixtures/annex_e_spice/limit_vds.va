@@ -2,39 +2,48 @@
 // lists as taking NO arguments beyond the access function — which is why this
 // call has two arguments where limit_pnj.va has four.
 //
-// THE NAME. Table E.2's preferred spelling is `vdslim`. VerA's built-in is
-// spelled `limvds` (SPICE3's DEVlimvds), and an unrecognised string is not a
-// conformance failure: §9.17.3 says "if the string refers to an unknown or
+// THE NAME. The string below is Table E.2's, `vdslim`, because this fixture
+// cites Table E.2 and a suite whose premise is portability may not write a
+// tool's private spelling. SPICE3 and VerA both call the function `limvds`
+// (DEVlimvds), so on VerA the string reaches no built-in — which costs the
+// fixture nothing, because §9.17.3 says "if the string refers to an unknown or
 // unsupported function, the simulator is responsible for determining the
-// appropriate limiting algorithm", and E.3.4 itself only offers "preferred names
-// for three functions that MAY be available in a simulator". So there is no
-// diagnostic to demand and no xfail to write. `limvds` is used here because it
-// is the string that actually installs a clamp in the tool under test; that
-// E.3.4's preferred `vdslim` reaches no built-in is a COVERAGE gap, not a bug.
-// The transparency claim below is name-independent: it holds for a tool that
-// recognises the string, and for one that substitutes its own limiter under the
-// §9.17.3 escape clause.
+// appropriate limiting algorithm, just as if no string had been supplied". Both
+// spellings are conforming and neither is diagnosable, so there is no reject to
+// demand and no xfail to write. The claim below is name-independent: it holds
+// for a tool that recognises `vdslim`, for one that recognises only `limvds`,
+// and for one that substitutes its own limiter under the escape clause.
 //
-// WHAT IS PINNED. §9.17.3: while $limit()'s output differs from the value of its
-// access function the simulator may not terminate the iteration, so at a solved
-// point the limiter is transparent and the stamped drain current is the one
-// V(mid) implies.
+// WHAT IS PINNED. §9.17.3: "When the simulator has converged, the return value
+// of the $limit() function is the value of the access function reference, within
+// appropriate tolerances." At the answer the limiter is transparent and the
+// stamped drain current is the one V(mid) implies.
+//
+// WHAT THE HARNESS SUPPLIES, and why the digit still holds. §9.17.3 also says
+// "in all cases, the simulator is responsible for determining if limiting should
+// be applied and what the return value is on a given iteration", and this
+// harness does not iterate: `//! bias` imposes x and the device is evaluated
+// ONCE, so the convergence sentence is not handed to the fixture for free. The
+// digit has to survive the worst single iteration instead, and 0.4 V does for
+// every cold start a SPICE-family tool uses. DEVlimvds(vnew, vold) with any
+// stored vold below 3.5 V clamps only at +4 V rising and -0.5 V falling, and
+// 0.4 V is inside both; only a previous iterate at or above 3.5 V would answer
+// max(0.4, 2) = 2, and there is no previous iterate here — a channel is
+// well-conditioned at 0 V, which is where this limiter is left cold.
 //
 // WHY THE PROBE IS AN INTERNAL NET. A limiter corrects an unknown the device
 // owns. Probing the module PORT instead makes the correction a write to a node
 // the host imposes, and a simulator is entitled to decline it — VerA does,
-// silently — so a port-probing form of this fixture asserts the transparency of
-// the identity function and cannot fail. The bias directive holds `mid` at
-// 0.4 V, and the branch to `p` is written in terms of the LIMITED value, so a
-// clamp that fired would move the stamped current as well as the assertion.
-//
-// 0.4 V keeps the claim true even for a simulator running SPICE's DEVlimvds: for
-// any previous value below 3.5 V that function clamps only at +4 V (rising) and
-// -0.5 V (falling), and 0.4 V is inside both.
+// silently — so a port-probing form of this fixture would put the transparency
+// question to a call the tool had already refused to limit. The bias directive
+// holds `mid` at 0.4 V, and the branch to `p` is written in terms of the LIMITED
+// value, so a clamp that fired would move the stamped current and not only the
+// assertion.
 //
 // TOLERANCE. §9.17.3 fixes only "within appropriate tolerances". The only number
 // the LRM supplies for a Voltage-natured quantity is Annex D disciplines.vams
-// `nature Voltage ... abstol = 1e-6`. 1e-12 is the CURRENT abstol.
+// `nature Voltage ... abstol = 1e-6`. 1e-12 is the CURRENT abstol. 1e-6 still
+// discriminates: the only clamp reachable here moves the answer by 1.6 V.
 //
 //! lrm E.3.4
 //! lrm 9.17.3
@@ -43,9 +52,9 @@
 module annex_e_vdslim(p);
   inout p; electrical p; electrical mid; real limited;
   analog begin
-    limited = $limit(V(mid), "limvds");
+    limited = $limit(V(mid), "vdslim");
     I(mid, p) <+ (limited - V(p)) / 1.0;
     // 1e-6 is the Annex D `nature Voltage` abstol.
-    `CHECK("the drain-source limiter is transparent at the solution", limited, 0.4, 1e-6);
+    `CHECK("vdslim returns the value of its access function", limited, 0.4, 1e-6);
   end
 endmodule

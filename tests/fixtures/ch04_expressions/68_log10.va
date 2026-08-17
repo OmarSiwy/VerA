@@ -4,6 +4,7 @@
 // and log(2) = 0.30102999566398119521..., nearest double 0.3010299956639812,
 // where a natural log would answer 0.69315.
 //
+//! lrm 4.3.1
 //! bias V(p) = 9.0
 `include "check.vh"
 module ch04_log10(p, n);

@@ -11,17 +11,25 @@
 // analyses... but the above() function can", and so demanded of every compiler
 // something the LRM only permits.
 //
-// So: a dc sweep, and V(c) - 0.5 walked from -1.5 to +0.75, one crossing of zero
-// from below and no crossing back. The firing samples V(p) = 0.3, and §3.2
-// leaves an untouched real at 0.0, so the two sweep points must read different
-// values — which is also why the oracle is relational: no single literal is
-// right at both. `n` pins the "an event", singular: a detector that re-fired
-// while the expression merely stayed positive reads 2.
+// So: a dc sweep, and V(c) - 0.5 walked from -1.5 through +0.75 to +1.5 — one
+// crossing of zero from below, no crossing back, and one further point on which
+// the expression is merely still positive. The firing samples V(p) = 0.3, and
+// §3.2 leaves an untouched real at 0.0, so the sweep points do not all read the
+// same value — which is why the oracle is relational: no single literal is
+// right at all three.
+//
+// The third point is what makes `n` mean anything. "Generate an event when the
+// expression CROSSES zero from below" is a claim about the transition, not
+// about the sign, and a two-point sweep cannot tell the two readings apart: a
+// detector that fires on every point where the expression happens to be
+// positive also reads n = 1 there. On the third point the level-triggered
+// reading reads 2 and the crossing reading still reads 1.
 //
 //! lrm 5.10.3.2
 //! analysis dc
 //! bias V(p) = 0.3
-//! sweep V(c) = -1.0, 1.25
+//! sweep V(c) = -1.0, 1.25, 2.0
+//! xfail VerA's above() is level-triggered, not edge-triggered: codegen emits `expr > 0.0` with nothing compared against the previous point, so it re-fires on every sweep point where the expression is positive and n counts points instead of crossings
 `include "check.vh"
 module ch5_above(p, c);
   inout p, c; electrical p, c; real held; integer n;

@@ -4,19 +4,35 @@
 //
 // This is the one and only Clause 6 carve-out, so refusing a real value port is
 // conformance and not a VerA limitation: hierarchy itself stays in the subset.
-// §6.5.3 declares one with `input real`, `output real` or `inout real`; the
-// direction is part of the declaration, so each gets its own fixture — the
-// diagnostic reads "found `real`" and cannot distinguish them, so one file
-// carrying all three would be satisfied by a compiler that refused only one.
-// The other two directions are 28 and 29.
 //
-// The pinned code is E0208 rather than the old bare word "identifier": VerA
-// reaches the rule lexically ("expected an identifier: found `real`", note
-// LRM 2.8), which is how it happens to be worded, not which rule fired.
+// A real value port is spelled `wreal`, NOT `real`. §6.5.3: "Ports may be
+// declared as real-valued with a discrete-time discipline using the net type
+// wreal (defined in 3.7)", and A.2.1.2 gives
+//
+//   input_declaration ::= input [discipline_identifier] [net_type | wreal]
+//                               [signed] [range] list_of_port_identifiers
+//
+// where `real` is neither a net_type nor an output_variable_type. The earlier
+// version of this file wrote `input real p;`, which is a plain Annex A syntax
+// error that full Verilog-AMS rejects identically — it proved nothing about the
+// carve-out. `input wreal p;` is legal Verilog-AMS and an error in Verilog-A,
+// which is exactly the C.8 line.
+//
+// The direction is part of the declaration, so each gets its own fixture: the
+// diagnostic reads "found wreal" and cannot distinguish them, so one file
+// carrying all three would be satisfied by a compiler that refused only one.
+// The other two directions are 28 and 29. 08_wreal_rejected.va is a different
+// rule — a wreal NET, C.4 bullet 2 / §3.7, not a wreal PORT.
+//
+// The pinned code is E0208 rather than a bare word: VerA reaches the rule
+// lexically ("expected an identifier: found wreal", note LRM 2.8), which is how
+// it happens to be worded, not which rule fired; `wreal` is pinned alongside so
+// the arm is about the port's type and not about the port's name.
 //
 //! lrm C.8
 //! lrm 6.5.3
 //! reject E0208
+//! reject wreal
 module annex_c_real_value_port_rejected(p);
-    input real p;
+    input wreal p;
 endmodule

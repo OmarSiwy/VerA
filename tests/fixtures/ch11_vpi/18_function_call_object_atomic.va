@@ -5,6 +5,8 @@
 // At V(p)=1.5, V(n)=0.25 the argument is 1.25 and 1.25^2 = 1.5625 exactly
 // (1.25 = 5/4, so the square is 25/16, a dyadic rational).
 //
+//! lrm 11.6.16
+//! lrm 4.7.2.1
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch11_function_call_object_atomic(p, n);

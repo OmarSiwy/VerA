@@ -2,7 +2,7 @@
 // assignments are evaluated followed by the execution of analog initial
 // blocks", and only then does the simulation cycle of 8.3 begin. So by the time
 // the ordinary analog block is evaluated, `initialized` already holds 3.0 —
-// not the 0.0 LRM 3.5 gives an unassigned real.
+// not the 0.0 LRM 3.2 gives an unassigned real.
 //
 // The ordering is what is under test, so the operating point is chosen to make
 // the two readings differ: at V(p) = 0.4 the contribution is 3.0 * 0.4 = 1.2 A,

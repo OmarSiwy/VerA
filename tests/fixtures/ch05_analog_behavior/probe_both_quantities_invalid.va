@@ -19,7 +19,6 @@
 //
 //! lrm 5.4.2.1
 //! reject DiagnosticsReported
-//! xfail VerA does not classify an unnamed branch as a probe, so it never notices that both quantities of one were read; the module compiles
 module ch5_probe_both_quantities(a, b);
   inout a, b; electrical a, b;
   analog I(a) <+ V(a, b) + I(a, b);

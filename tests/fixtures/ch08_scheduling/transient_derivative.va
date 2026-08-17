@@ -21,7 +21,7 @@
 //
 // So 0.0 is implementation-independent here, and the wrong answer is neither
 // small nor subtle: a naive v/dt at t = 1 ns gives 0.75 / 1e-9 = 7.5e8, and a
-// stale-history bug that treated x[k-1] as the 3.2.1 default gives the same.
+// stale-history bug that treated x[k-1] as the 3.2 default gives the same.
 //
 // The bias check is what keeps the zero from being a dead branch -- the branch
 // really is at 0.75 V on every row -- and the 1p scaling is the contribution as

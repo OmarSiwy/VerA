@@ -17,13 +17,14 @@
 //
 //! lrm 4.7.2.2
 //! reject return
+//! reject expression
 //! xfail VerA accepts a bare `return;` inside an analog function and falls back on the 4.7.2.1 default; src/diag_code.zig has no code for a return statement with no expression
 module ch04_function_bare_return_rejected(p, n);
     inout p, n;
     electrical p, n;
 
     analog function real early;
-        input real x;
+        input x;
         real x;
         begin
             return;

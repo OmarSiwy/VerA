@@ -7,6 +7,8 @@
 // V(p) = 0.375 V and V(n) = 0.25 V it is 0.125 V — a dyadic rational, hence
 // exact in IEEE-754 and printable by %g without rounding.
 //
+//! lrm 9.2
+//! lrm 9.4.1
 //! bias V(p) = 0.375, V(n) = 0.25
 `include "check.vh"
 module ch09_display_debug(p, n);

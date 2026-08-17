@@ -4,16 +4,24 @@
 // 1.5 V, V(p, local_reference) is 1.5, not 1.5 minus some separately solved
 // value of local_reference.
 //
+// The device is a resistor, not a source: `I(p, local_reference) <+ V(p,
+// local_reference)/1000.0` is satisfied at every bias, so the assertion is a
+// claim about where the reference node sits and not a claim contradicted by the
+// device's own equation. A potential source of some other value across the same
+// branch would read 1.5 here only because this harness imposes the bias instead
+// of solving; 21_net_nodeset.va uses the same resistive form for the same
+// reason.
+//
 //! lrm 3.6.4
 //! bias V(p) = 1.5
 `include "check.vh"
 module ch03_ground_declaration(p);
-    input p;
+    inout p;
     electrical p, local_reference;
     ground local_reference;
 
     analog begin
         `CHECKX("a ground net is the 0 V global reference", V(p, local_reference), 1.5);
-        V(p, local_reference) <+ 5.0;
+        I(p, local_reference) <+ V(p, local_reference) / 1000.0;
     end
 endmodule

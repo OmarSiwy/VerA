@@ -17,6 +17,5 @@
 //! lrm 3.6.1.3
 //! lrm 3.6.1.2
 //! reject DiagnosticsReported
-//! xfail VerA stores a bare identifier as a user-defined nature attribute value and reports nothing; lower.zig does not require nature attribute values to be constant expressions
 nature ch3_nonconst_attr; units="V"; access=NonConstV; abstol=1u; maxval=runtime_limit; endnature
 module ch3_nonconstant_user_attribute; endmodule

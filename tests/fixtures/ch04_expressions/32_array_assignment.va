@@ -9,6 +9,7 @@
 // The bias is 0.75 rather than 0.7 so the signal element is exact in binary and
 // the check can be an equality.
 //
+//! lrm 4.2.14
 //! bias V(p) = 0.75
 //! bias V(n) = 0.0
 `include "check.vh"

@@ -7,6 +7,8 @@
 // there is no enclosing instance to add an offset from: the resolved value is
 // the top-level value, 0.0 m, exactly — a sum of no terms, not a computation
 // that could round, so the check is for exact equality.
+//
+//! lrm 9.18
 `include "check.vh"
 module ch09_atomic_xposition(p, n);
   inout p, n; electrical p, n;

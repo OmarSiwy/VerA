@@ -1,0 +1,49 @@
+// E.2.1 Case sensitivity, in full: "Some SPICE netlists are case insensitive,
+// whereas Verilog-AMS HDL descriptions are case-sensitive. From within
+// Verilog-AMS HDL, a mixed-case name matches the same name with an identical
+// case (if one is defined in a Verilog-AMS HDL description). However, if no
+// exact match is found, the mixed-case name shall match the same name defined
+// within SPICE regardless of the case."
+//
+// WHAT IS PINNED. The FALLBACK arm. `VeRtNpN` below is defined nowhere in this
+// file, so there is no exact Verilog-AMS match and the rule sends the lookup to
+// SPICE case-insensitively, where `.MODEL VERTNPN` of E.2.2.1 answers it. The
+// spelling is deliberately mangled: an implementation that lower-cased or
+// exact-matched only would resolve `vertNPN` (spice_model.va) and still fail
+// this one. E.3.3 states the priority the first arm implies — "in case of a name
+// match with differences in case, the module or paramset does not interfere with
+// the SPICE primitive, model, or subcircuit, but the resolution method described
+// in E.2.1 shall apply".
+//
+// WHAT THE ASSERTIONS REACH. If the fallback resolved, it resolved to the NPN of
+// E.2.2.1, whose ports come from the `bjt` primitive of Table E.1 in the order
+// c, b, e — so the object the name found has an observable shape, and the two
+// checks read the collector-emitter and base-emitter potentials back out of the
+// instance (§6.7.1, potential access to a branch of an instance may be
+// hierarchical). Three nets held at three different potentials mean any other
+// ordering, and any resolution to an object with different ports, moves at least
+// one number. That is as far as a digit can honestly go: Table E.1's `bjt` row
+// has an EMPTY Behavior column, E.2 says "all aspects of SPICE primitives are
+// implementation dependent", and the model card's BF/IS/VAF have no equations in
+// this annex, so no current is derivable. The rule under test is a NAME LOOKUP,
+// and what a successful lookup exposes is the resolved object's ports.
+//
+// THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
+// for a lookup E.2.1 requires to succeed.
+//
+//! lrm E.2.1
+//! lrm E.3.3
+//! lrm E.2.2.1
+//! lrm 6.7.1
+//! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
+//! xfail VerA rejects module instantiation (E0204), so the case-insensitive SPICE fallback is never attempted
+`include "check.vh"
+module annex_e_spice_case_lookup(c1, b1, e1);
+  inout c1, b1, e1; electrical c1, b1, e1;
+  VeRtNpN mixed_case(c1, b1, e1);
+  analog begin
+    `CHECKX("the case-insensitive match found VERTNPN, whose port 1 is c",
+            V(mixed_case.c, mixed_case.e), 0.75);
+    `CHECKX("and whose port 2 is b", V(mixed_case.b, mixed_case.e), 0.5);
+  end
+endmodule

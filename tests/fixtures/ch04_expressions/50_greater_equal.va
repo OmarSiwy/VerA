@@ -3,6 +3,7 @@
 // ON the boundary, which is the only place `>=` differs from `>`: 1.0 >= 1.0 is
 // TRUE, so the value is the integer 1. Below the boundary it is 0.
 //
+//! lrm 4.2.5
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_greater_equal(p, n);

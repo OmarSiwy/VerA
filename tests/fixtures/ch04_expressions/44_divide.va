@@ -3,6 +3,7 @@
 // INTEGER division; V(p,n) is real, so 3.0 / 2.0 is 1.5 and not the truncated
 // 1.0. 1.5 is exact in IEEE 754 binary.
 //
+//! lrm 4.2.4
 //! bias V(p) = 3.0
 `include "check.vh"
 module ch04_divide(p, n);

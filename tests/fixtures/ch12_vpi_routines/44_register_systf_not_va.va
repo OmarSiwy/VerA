@@ -1,5 +1,5 @@
 //! lrm 4.7
-//! lrm A.8.2
+//! lrm 12.33
 //! reject E0512
 //! reject `vpi_register_systf`
 module ch12_atomic_register_systf(p, n);

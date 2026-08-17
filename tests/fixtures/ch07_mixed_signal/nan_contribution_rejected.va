@@ -19,7 +19,6 @@
 //
 //! lrm 7.3.2.1
 //! reject contribution of a NaN
-//! xfail VerA does not diagnose a NaN contribution; `I(p) <+ 0.0/0.0` yields only W0650
 module ch7_nan_contribution(p);
   inout p; electrical p;
   real bad;

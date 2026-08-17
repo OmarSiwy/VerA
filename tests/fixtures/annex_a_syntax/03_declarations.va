@@ -3,7 +3,10 @@
 //
 //   `branch (p, n) path;`      §3.12 — a named branch between p and n, so
 //                              V(path) is the potential across that node pair.
-//                              Biased at 0.8 and 0.3, that is 0.5 V.
+//                              Biased at 0.8 and 0.3, that is 0.5 V — neither
+//                              operand is representable in binary but their
+//                              difference is exactly 0.5 (verified), so this
+//                              is `CHECKX` and not a tolerance.
 //   `aliasparam amplification = gain;`
 //                              §3.4.7 — an alternate name for the SAME
 //                              parameter. Overriding `gain` to 3.5 must be
@@ -45,7 +48,7 @@ module annex_a_declarations(p, n);
     string label = "declarations";
 
     analog begin
-        `CHECK("named branch probes the declared node pair", V(path), 0.5, 1e-15);
+        `CHECKX("named branch probes the declared node pair", V(path), 0.5);
         `CHECKX("aliasparam reads the overridden parameter", amplification, 3.5);
         `CHECKX("a parameter bounded below by -inf keeps its negative default", bipolar, -0.5);
         I(path) <+ gain * V(path) + offset + bipolar;

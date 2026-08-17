@@ -12,7 +12,6 @@
 //
 //! lrm 5.9
 //! reject DiagnosticsReported
-//! xfail VerA allows a contribution inside a runtime `for`/`while`/`repeat`; it unrolls nothing and stamps the branch once per iteration, warning only W0650
 module ch5_loop_contribution(p);
   inout p; electrical p; integer i;
   analog begin

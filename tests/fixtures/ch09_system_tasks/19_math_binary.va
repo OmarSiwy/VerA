@@ -16,6 +16,7 @@
 //                          2 as well — hence the FIRST total is what carries the
 //                          weight, and the second confirms only the sum.
 //
+//! lrm 9.14
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch09_math_binary(p, n);

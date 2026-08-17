@@ -1,9 +1,17 @@
-// §5.9 "The following restrictions are applied to looping statements (repeat,
-// while and for) except for analog_for statements: - Analog filter functions are
-// not allowed". No analysis_or_constant carve-out here, unlike §5.8.1 — and an
-// event body is conditionally executed by definition.
+// §4.5.15, third bullet, verbatim: "Analog operators are not allowed in the
+// repeat, while and non-genvar for looping statements." §5.9 states the same
+// restriction from the statement side: "The following restrictions are applied
+// to looping statements (repeat, while and for) except for analog_for
+// statements: - Analog filter functions are not allowed".
+//
+// "non-genvar" is the whole of the exception: §5.9.3's analog_for unrolls onto
+// the spine, so an operator inside one is evaluated every iteration. There is
+// no analysis_or_constant carve-out here — §4.5.15 grants one to
+// `if`/`case`/`?:` in its FIRST bullet only. (The event-body ban is a third,
+// separate bullet — 88_operator_in_event.va.)
 //
 // This fixture used to assert the opposite — that the illegal form COMPILES.
+//! lrm 4.5.15
 //! reject E0514
 // §5.9: "Analog filter functions are not allowed" in repeat/while/non-genvar
 // for — `integer i` makes this a procedural for, not a §5.9.3 analog_for.

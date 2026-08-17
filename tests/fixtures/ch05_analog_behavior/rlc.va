@@ -1,4 +1,4 @@
-// §5.6.1.2 three contributions summing into one branch, exercising the §4.5
+// §5.6.4 RLC circuits: three contributions summing into one branch (§5.6.1.2), exercising the §4.5
 // analog operators at their DC operating point, where the LRM pins both:
 //
 //   §4.5.3 "In DC analysis, ddt() returns zero (0)."
@@ -10,6 +10,7 @@
 // nothing. The parameter defaults also pin §2.6.2 Table 2-1: `1p` is 1e-12 and
 // `1n` is 1e-9.
 //
+//! lrm 5.6.4
 //! lrm 5.6.1.2
 //! lrm 4.5.3
 //! lrm 4.5.4

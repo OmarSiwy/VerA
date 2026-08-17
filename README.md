@@ -89,6 +89,7 @@ zig build test           # unit tests
 zig build torture        # every fixture: compile, run, check its own assertions
 zig build torture -- ch04       # only paths matching `ch04`
 zig build torture -- --strict   # fixtures that assert nothing FAIL instead of warn
+zig build conformance    # the same fixtures against OpenVAF (nix develop .#conformance)
 ```
 
 `docs/VAMS-LRM/` is the Verilog-AMS LRM, chapter and annex, which the fixture
@@ -96,12 +97,17 @@ tree in `tests/fixtures/` is organized to mirror.
 
 ## What is actually verified
 
-One suite, `tests/torture.zig`, over 857 `.va` fixtures. Each states its own
-expected behavior in the file — `//! reject <substring>` to demand a diagnostic,
-or a `CHECK` from `check.vh` whose `ok=1` column is the assertion. There are no
-sidecar files.
+1150 `.va` fixtures. Each states its own expected behavior in the file — `//!
+reject <substring>` to demand a diagnostic, or a `CHECK` from `check.vh` whose
+`ok=1` column is the assertion. There are no sidecar files.
 
-It replaced four runners (`conformance`, `exhaustive`, `sema`, `ledger`) that
+They state what the **LRM** requires rather than what VerA does, so they are a
+conformance suite for any Verilog-AMS compiler. One judge, `tests/harness.zig`,
+and two runners plug into it: `tests/torture.zig` (VerA, in-process, builds and
+RUNS each fixture) and `tests/external.zig` (any compiler that takes a `.va` path
+and exits nonzero when it refuses one).
+
+The suite replaced four runners (`conformance`, `exhaustive`, `sema`, `ledger`) that
 disagreed about what a fixture is and needed three sidecar formats between them.
 Three of the four could not answer the only question that matters — does the
 generated device compute the right number? — because they never ran it.
@@ -122,3 +128,50 @@ to notice change, and a permanently-red fixture notices nothing.
 Known blocker: a module with no port list is legal per Annex A.1.2 and compiles,
 but `contract.validate` refuses the emitted device with `num_ports must be in
 1..|U|`, so ~29 fixtures cannot be run at all until that is fixed in the engine.
+
+## VerA vs OpenVAF on the same 1150 fixtures
+
+`openvaf-r` 2e06643 (OpenVAF-reloaded), `zig build conformance`, against `zig
+build torture` on the same tree. Both scored by the same judge, which is the only
+reason the two columns can be put side by side at all.
+
+| | VerA | OpenVAF |
+|---|---|---|
+| behaves as the fixture states | **812** / 1150 | **778** / 1150 |
+| outright FAIL | 0 | 372 |
+| known unmet, `//! xfail` | 337 | — |
+| cannot run (host limitation) | 1 | — |
+
+**The two columns are not the same test, and VerA's is the harder one.** VerA is
+compiled in-process, its device is built and executed, and every `ok=` column the
+fixture computes is checked. OpenVAF is a subprocess that can only accept or
+refuse a file, so its 778 means "compiled what must compile, refused what must be
+refused" and no computed value was ever checked. The `//! reject` substrings are
+VerA's diagnostic codes, which nobody else prints, so a rejection fixture only
+requires that OpenVAF refused the file at all — and `//! xfail`, which is a
+statement about VerA, is ignored for it.
+
+Where the two disagree, per fixture:
+
+| | count |
+|---|---|
+| both conform | 649 |
+| only VerA conforms | 163 |
+| only OpenVAF conforms | 129 |
+| neither conforms | 209 |
+
+OpenVAF's 372 split 61 / 311: **61** fixtures it accepts that the LRM says must
+not compile, **311** it refuses that the LRM prints as legal (one of those by
+running until a 30 s timeout, on `ch10_directives/46_macro_formal_must_be_simple_identifier.va`).
+The 129 it conforms to and VerA does not are concentrated in `ch09_system_tasks`
+(32), `ch03_data_types` (21), `ch04_expressions` (17) and `ch06_hierarchy` (11) —
+that list is VerA's work queue. 128 of them are already carried as an `//! xfail`
+with its reason; the last is `ch06_hierarchy/module_definition.va`, the no-port-list
+blocker above.
+
+Neither number is a quality score for the other compiler: OpenVAF is a compact
+model compiler for a simulator, and a large share of its 311 refusals are
+constructs it deliberately does not implement (module instantiation, most of
+chapter 9's file and display tasks, the mixed-signal chapter) rather than bugs.
+What the table is for is that the same 1150 files now measure both, so "VerA
+conforms here" is a claim with an outside check on it.

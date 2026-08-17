@@ -6,8 +6,12 @@
 // `integer code = "A";` is a string LITERAL into an integral type and is legal
 // (73_string_literal_to_integral.va asserts what it produces); `code = label;`
 // is a string VARIABLE into the same integral type and is the error. Both lines
-// are in this file, so a compiler that rejected string-to-integer wholesale
-// fails on the legal one instead of passing for the wrong reason.
+// are in this file so the pair is on the page together, but the pin below cannot
+// tell them apart: a compiler that rejected string-to-integral wholesale would
+// diagnose the legal line and satisfy this fixture just the same.
+// 73_string_literal_to_integral.va is where the discrimination lives — it
+// asserts the VALUES the legal direction produces, so a compiler that refused it
+// fails there.
 //
 // The pinned substring is only the phase label: VerA has no diagnostic for this
 // rule at all today, so a code would pin the wrong one.

@@ -1,12 +1,17 @@
 // §5.7, on analog procedural assignments: "Concatenation expressions cannot be
-// used as part of the analog_expression (assigning to list of variables is not
-// allowed)."
+// used as part of the analog_expression (assigning to list of values in the
+// analog context is not allowed)."
 //
-// A concatenation names an ordered bundle of bits, not a storage location, so
-// there is nothing on the left of the `=` to assign to. procedural_assignments.va
-// is the positive §5.7 fixture and keeps compiling.
+// Read where that sentence points: the analog_expression is the RIGHT of the
+// `=`. The concatenation here is on the LEFT, and what forbids it is Syntax 5-7
+// itself — analog_variable_lvalue is a variable_identifier or an indexed
+// element of one, with no concatenation alternative. Either way the reason is
+// the parenthetical's: a concatenation names an ordered bundle of values, not a
+// storage location, so there is nothing to assign to.
+// procedural_assignments.va is the positive §5.7 fixture and keeps compiling.
 //
 //! lrm 5.7
+//! lrm A.8.5
 //! reject E0317
 module ch5_assignment_concatenation(p);
   inout p; electrical p; real x, y;

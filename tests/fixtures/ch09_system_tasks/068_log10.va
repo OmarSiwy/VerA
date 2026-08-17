@@ -6,6 +6,8 @@
 // spelling, which Table 4-14 gives as `log()` — NOT the natural logarithm, a
 // trap for anyone carrying C or Verilog habits over. Both are exact integers in
 // IEEE-754, so the tolerance only absorbs a last-ulp library difference.
+//
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_log10(p, n);
   inout p, n; electrical p, n;

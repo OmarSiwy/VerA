@@ -12,6 +12,11 @@
 // The specifier itself is a legal one ("1364-2005", §10.6), so the only thing
 // wrong with the file is the placement.
 //
+// The `analog` that follows the misplaced directive rests on the same reading
+// of §10.6 as 16 does — see the note there. It is only there so the module is
+// a complete design element; the diagnostic demanded is on the directive, one
+// line earlier.
+//
 //! lrm 10.6
 //! reject E0202
 module ch10_begin_keywords_inside_module(p, n);

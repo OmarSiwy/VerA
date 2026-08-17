@@ -4,6 +4,7 @@
 // toward zero also gives 2; only ceil goes up to 3. Exact small integer, so
 // equality is exact.
 //
+//! lrm 4.3.1
 //! bias V(p) = 2.3
 `include "check.vh"
 module ch04_ceil(p, n);

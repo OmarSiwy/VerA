@@ -3,6 +3,8 @@
 // V(p,n) = 0.75 - 0.25 = 0.5; both operands and their difference are exact
 // powers of two, so the identity is checkable to the last bit.
 //
+//! lrm 4.2.1
+//! lrm 4.2.4
 //! bias V(p) = 0.75
 //! bias V(n) = 0.25
 `include "check.vh"

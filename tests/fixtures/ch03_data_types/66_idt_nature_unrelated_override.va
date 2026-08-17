@@ -19,7 +19,6 @@
 //
 //! lrm 3.6.1.2
 //! reject DiagnosticsReported
-//! xfail VerA accepts a derived nature overriding `idt_nature` with an unrelated base nature; lower.zig does not relate nature attribute overrides to the parent's
 nature ch3_idt_target; units="Wb"; access=TargetPhi; abstol=1u; endnature
 nature ch3_idt_stranger; units="A"; access=StrangerI; abstol=1p; endnature
 nature ch3_idt_parent; units="V"; access=ParentIdtV; abstol=1u; idt_nature=ch3_idt_target; endnature

@@ -20,7 +20,6 @@
 //! bias V(p) = 0.5
 //! bias V(n) = 0.0
 //! lrm 4.3.1
-//! xfail VerA emits the cancelling forms: codegen.zig `zLn1p` is `a.addC(1.0).log()` and `zExpm1` is `a.exp().addC(-1.0)`, so ln1p(1e-12) returns 1.000088900581841e-12 and expm1(1e-12) returns 1.000088900582341e-12 — the 8.9e-5 error Table 4-14's C log1p/expm1 exist to avoid. ir/proof.zig:1791 already folds constants with std.math.expm1/log1p, so only the emitted device is wrong
 `include "check.vh"
 module ch04_ln1p_expm1(p, n);
   inout p, n; electrical p, n;

@@ -7,6 +7,9 @@
 // begins with "feature" and the answer is 0 — a fact about the run, not about
 // the compiler. A build that answered 1 here would silently enable every
 // `+define`-style feature switch in every model.
+//
+//! lrm 9.2
+//! lrm 9.12
 `include "check.vh"
 module ch09_atomic_test_plusargs(p, n);
   inout p, n; electrical p, n;

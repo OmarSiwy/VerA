@@ -19,6 +19,20 @@
 // both operands are. A preprocessor that swallowed the __VAMS_-prefixed
 // definition, or substituted a predefined macro in its place, cannot land there.
 //
+// THE READING IS CONTESTED, and this file has no `//! xfail to hide behind —
+// it is a hard must-compile, so if the other reading is right a conforming
+// compiler FAILs it. The other reading is the sentence's own rationale: "To
+// avoid conflicts with predefined Verilog-AMS macros (10.5)" describes a NAME
+// collision, and a body that merely begins with __VAMS_ collides with nothing.
+// What settles it is that "macro text" is not loose prose here. Syntax 10-3
+// defines macro_text as the second operand of `define, and the sentence says
+// "the `define compiler directive's MACRO TEXT", naming that operand; a
+// defined term of the grammar beats an inference drawn from the rationale.
+// The pair is deliberately bet in both directions — 34 rejects a __VAMS_ BODY,
+// this file accepts a __VAMS_ NAME — so whichever way the ambiguity is
+// eventually resolved exactly one of the two files moves, and neither half of
+// the question is silently missing from the chapter in the meantime.
+//
 //! lrm 10.4
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

@@ -8,6 +8,7 @@
 // The second line is what keeps `|` from being read as `||`: 4 | 2 is
 // 0100 | 0010 = 6, while the logical 4 || 2 would be 1.
 //
+//! lrm 4.2.9
 `include "check.vh"
 module ch04_bitwise_or(p, n);
     inout p, n;

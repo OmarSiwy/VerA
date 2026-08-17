@@ -13,6 +13,7 @@
 //! lrm D.1
 //! lrm 4.4
 //! reject E0501
+`include "disciplines.vams"
 module annex_d_unbound_nature_charge(p);
   inout p;
   electrical p;

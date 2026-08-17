@@ -9,10 +9,23 @@
 // LRM adds that "the simulator may simply choose to have $limit() return the
 // value of its first argument"; either way the converged answer is V(p,n).
 //
+// THE BAND IS THE CLAUSE'S OWN. §9.17.3 guarantees the converged return only
+// "within appropriate tolerances", and adds "in all cases, the simulator is
+// responsible for determining if limiting should be applied and what the return
+// value is on a given iteration". So the answer is V(p,n) to the solver's own
+// convergence tolerance, not to the last bit: an engine converged to the SPICE
+// default reltol of 1e-3 returns 0.25 +/- 2.5e-4 and is conforming. The checks
+// are therefore relative at 1e-3, which is the LRM's guarantee written down. An
+// absolute 1e-15 band would be a claim about this testbench's forced bias, not
+// about §9.17.3, and every real solver would fail it.
+//
 // The contribution is then exp(0.25) - 1 = 0.2840254166877414 (§4.3.1 exp),
 // which pins the same value once more through the constitutive relation rather
-// than through the local variable.
+// than through the local variable. d/dx (exp(x)-1) at 0.25 is 1.284, so a
+// +/-2.5e-4 window on `limited` becomes +/-3.2e-4 there — 1.13e-3 relative —
+// and that check is written at 2e-3.
 //
+//! lrm 9.17.3
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch09_limit(p, n);
@@ -20,10 +33,10 @@ module ch09_limit(p, n);
   real limited;
   analog begin
     limited = $limit(V(p,n));
-    `CHECK("at an accepted solution $limit returns the access function itself",
-           limited, 0.25, 1e-15);
-    `CHECK("so the diode-like current is exp(0.25) - 1",
-           exp(limited) - 1.0, 0.2840254166877414, 1e-15);
+    `CHECKR("at an accepted solution $limit returns the access function itself",
+            limited, 0.25, 1e-3);
+    `CHECKR("so the diode-like current is exp(0.25) - 1",
+            exp(limited) - 1.0, 0.2840254166877414, 2e-3);
     I(p,n) <+ exp(limited) - 1.0;
   end
 endmodule

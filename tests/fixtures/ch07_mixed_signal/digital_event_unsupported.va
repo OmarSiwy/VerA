@@ -5,8 +5,9 @@
 // C.7 removes it from this dialect — "No digital behavior or events are
 // supported in Verilog-A" — so refusing `posedge` inside `@()` is conformance,
 // not debt. (E0704, "posedge/negedge is digital-only", is the code that names
-// the rule; the parser gets there first and reports the malformed event
-// expression, which is why E0209 is pinned as well.)
+// the rule, but it never fires here: the parser gets there first and reports
+// the malformed event expression. E0209 is therefore what the fixture pins —
+// the code the compiler actually reaches — and E0704 is pinned nowhere.)
 //
 //! lrm 7.3.6.2
 //! lrm C.7

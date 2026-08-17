@@ -3,7 +3,11 @@
 //
 //     var1 = 1'bx;          // error
 //
-// and the rule above it says why: "it is an error if these operands return x or
+// `var1` is declared `integer` there, and is so declared below; the example's
+// other annotated line, `var2 = 1'bz`, assigns to a `real` and is
+// z_literal_unsupported.va.
+//
+// The rule above it says why: "it is an error if these operands return x or
 // z bit values when solved". An x has no real or integer value to assign, so
 // the assignment below is an error in Verilog-AMS HDL as well as in Verilog-A —
 // this rejection is conformance in both dialects, not a subset limitation.
@@ -14,6 +18,6 @@
 //! lrm C.3
 //! reject E0130
 module ch7_x_literal(p);
-  inout p; electrical p; integer state;
-  analog begin state = 1'bx; I(p) <+ state; end
+  inout p; electrical p; integer var1;
+  analog begin var1 = 1'bx; I(p) <+ var1; end
 endmodule

@@ -9,12 +9,11 @@
 // only thing about `assert` that can be tested at all, which is exactly why it
 // is the spelling an implementation forgets.
 //
-// Of the 217 Table B.1 spellings, this and `net_resolution` are the only two
-// VerA does not reserve.
+// Of the 217 Table B.1 spellings, this and `net_resolution` were the last two
+// VerA did not reserve. Both are in `reserved_keywords` now.
 //! lrm B
 //! reject E0208
 //! reject assert
-//! xfail `assert` is absent from `reserved_keywords` in src/frontend/token.zig, so it lexes as an ordinary identifier and `real assert;` compiles clean
 module annex_b_assert_reserved;
     real assert;
 endmodule

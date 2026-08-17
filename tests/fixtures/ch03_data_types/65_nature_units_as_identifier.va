@@ -19,6 +19,5 @@
 //! lrm 3.6.1.2
 //! lrm 3.11.1
 //! reject DiagnosticsReported
-//! xfail VerA accepts a bare identifier as the `units` attribute of a nature; lower.zig does not type-check nature attribute values
 nature ch3_units_ident; units=Volt; access=UnitsIdentV; abstol=1u; endnature
 module ch3_nature_units_as_identifier; endmodule

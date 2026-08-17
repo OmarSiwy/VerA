@@ -12,6 +12,12 @@
 // zero", not by equality with one. With V(p) biased to 0.7 the two arms are
 // 0.7 and 0.0, so picking the wrong one is visible.
 //
+// Both checks are CHECKX. The selected arm is a `//! bias` value the runner
+// wrote into the unknown vector verbatim, and a ternary selects an operand
+// rather than computing one, so the result is bit-identical to the literal in
+// either arm. A 1e-15 window on 0.7 would have been nine ulp of slack
+// (ulp(0.7) = 1.1102230246251565e-16) where the answer is exact.
+//
 //! lrm 7.3.1
 //! lrm 4.2.12
 //! bias V(p) = 0.7
@@ -20,7 +26,7 @@ module ch7_read_integer(p);
   inout p; electrical p; integer digital_value;
   analog begin
     digital_value = 2;
-    `CHECK("a nonzero integer condition selects the true arm", digital_value ? V(p) : 0.0, 0.7, 1e-15);
+    `CHECKX("a nonzero integer condition selects the true arm", digital_value ? V(p) : 0.0, 0.7);
     `CHECKX("a zero integer condition selects the false arm", (digital_value - 2) ? V(p) : 0.0, 0.0);
     I(p) <+ digital_value ? V(p) : 0.0;
   end

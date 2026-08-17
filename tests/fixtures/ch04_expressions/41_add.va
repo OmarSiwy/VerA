@@ -2,6 +2,7 @@
 // real literal 2.0 is 5.0 — every value here is exact in IEEE 754 binary, so
 // the comparison is exact.
 //
+//! lrm 4.2.4
 //! bias V(p) = 3.0
 `include "check.vh"
 module ch04_add(p, n);

@@ -34,7 +34,6 @@
 //! lrm 9.8
 //! lrm 9.9
 //! reject analog context
-//! xfail VerA implements no Table 9-3/9-5/9-6 analog-context restriction; grep across src/ finds no analog-context check for any ch9 system task
 module ch09_timescale_pla_queue_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer in_array, out_array, status;

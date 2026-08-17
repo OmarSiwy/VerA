@@ -13,6 +13,17 @@
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
 //
+// Eight spellings are not declared here. `case`, `end`, `for`, `function`,
+// `generate` and `paramset` are substrings of `endcase`/`casex`/`casez`,
+// `endcase`/`endfunction`/`endgenerate`/`endmodule`/`endparamset`, `forever`,
+// `endfunction`, `endgenerate` and `endparamset` respectively; `not` is a
+// substring of the E0201 title "construct is NOT in the supported subset", which
+// this file raises for the trailing `;`. All seven of those are censused in
+// 22_shadowed_spellings.va. `or` is a substring of the phase labels
+// `ParseError` and `DiagnosticsReported`, which `failureContains` tests before
+// it looks at a diagnostic at all, so no census can prove it; it has its own
+// single-declaration file, 25_reserved_or.va.
+//
 // `real endmodule;` is LAST on purpose. It is the one spelling that does not
 // resynchronise: the diagnostic fires, but the token also ends the module, so
 // every declaration after it would be parsed at file scope and never reported.
@@ -24,33 +35,25 @@
 //! reject and
 //! reject assign
 //! reject begin
-//! reject case
 //! reject casex
 //! reject casez
 //! reject default
 //! reject defparam
 //! reject else
-//! reject end
 //! reject endcase
 //! reject endfunction
 //! reject endgenerate
 //! reject endparamset
 //! reject event
-//! reject for
 //! reject forever
-//! reject function
-//! reject generate
 //! reject genvar
 //! reject initial
 //! reject inout
 //! reject input
 //! reject integer
 //! reject localparam
-//! reject not
-//! reject or
 //! reject output
 //! reject parameter
-//! reject paramset
 //! reject real
 //! reject reg
 //! reject repeat
@@ -64,33 +67,25 @@ module annex_b_reserved_core_keywords;
     real and;
     real assign;
     real begin;
-    real case;
     real casex;
     real casez;
     real default;
     real defparam;
     real else;
-    real end;
     real endcase;
     real endfunction;
     real endgenerate;
     real endparamset;
     real event;
-    real for;
     real forever;
-    real function;
-    real generate;
     real genvar;
     real initial;
     real inout;
     real input;
     real integer;
     real localparam;
-    real not;
-    real or;
     real output;
     real parameter;
-    real paramset;
     real real;
     real reg;
     real repeat;

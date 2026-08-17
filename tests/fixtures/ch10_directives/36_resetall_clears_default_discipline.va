@@ -18,11 +18,21 @@
 //
 // As in 35: with the `default_discipline electrical below still in force this
 // module compiles and V(p,n) resolves (01); with `resetall between them it must
-// not. The expectation is a message substring because VerA has no code for an
-// undisciplined net yet — any diagnostic about this rule will say "discipline".
+// not.
+//
+// Cites and expectation follow 35 for the same reasons: §10.2 only withdraws
+// the default, so §7.4 (discipline resolution) and §3.6.1 (an access function
+// comes from a nature, reached through the net's discipline) are the clauses
+// that make V(p,n) an error, and E0501 "unknown access function" is the code
+// that says so. The bare word "discipline" is not usable as the expectation —
+// it occurs inside `default_discipline, which this file contains, so any
+// diagnostic quoting the directive would XPASS this xfail without the rule
+// being implemented at all.
 //
 //! lrm 10.2
-//! reject discipline
+//! lrm 7.4
+//! lrm 3.6.1
+//! reject E0501
 //! xfail VerA discards `default_discipline and `resetall in the preprocessor and never runs discipline resolution, so it has no default to clear — V() resolves on a bare port regardless
 `default_discipline electrical
 `resetall

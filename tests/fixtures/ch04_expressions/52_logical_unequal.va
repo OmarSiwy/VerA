@@ -4,6 +4,7 @@
 // Biased at V(p)=1.0, V(n)=0 the branch potential is exactly 1.0, so `!= 1.0`
 // must be 0 and `!= 2.0` must be 1: the exact mirror of 51_logical_equal.
 //
+//! lrm 4.2.7
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_logical_unequal(p, n);

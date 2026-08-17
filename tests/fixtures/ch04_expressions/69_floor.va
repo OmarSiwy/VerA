@@ -4,6 +4,7 @@
 // truncation goes toward zero (-2), and only floor goes toward -infinity (-3).
 // The result is an exact small integer, so equality is exact.
 //
+//! lrm 4.3.1
 //! bias V(p) = -2.3
 `include "check.vh"
 module ch04_floor(p, n);

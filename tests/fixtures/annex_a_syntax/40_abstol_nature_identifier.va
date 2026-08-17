@@ -15,7 +15,10 @@
 // list, produces something else. What this CANNOT see is a compiler that parses
 // the nature and then throws it away: abstol changes only convergence
 // behaviour, which no value inside the model reflects. Both calls are here so
-// the equality of the two forms is what is checked, not one number twice.
+// that the equality of the two forms is checked as well as the value, and the
+// third assertion is the `CHECKEQ` that actually states it. The header used to
+// claim that equality was under test while the code held the literal 0.0 twice
+// and no comparison at all.
 //
 // WHY THIS IS NOT WRITTEN AS `analog I(p, n) <+ ddt(V(p, n), Voltage);`. VerA
 // accepts that shape — and accepts `ddt(V(p, n), Zorkmid)` in the same position
@@ -40,8 +43,9 @@ module annex_a_abstol_nature(p, n);
     analog begin
         bare = ddt(V(p, n));
         toleranced = ddt(V(p, n), Voltage);
-        `CHECK("ddt returns zero in a dc analysis", bare, 0.0, 1e-15);
-        `CHECK("a nature_identifier tolerance does not change the value", toleranced, 0.0, 1e-15);
+        `CHECKX("ddt returns zero in a dc analysis", bare, 0.0);
+        `CHECKX("a nature_identifier tolerance does not change the value", toleranced, 0.0);
+        `CHECKEQ("the two-argument form equals the one-argument form", toleranced, bare, 0.0);
         I(p, n) <+ toleranced + V(p, n);
     end
 endmodule

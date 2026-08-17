@@ -17,6 +17,13 @@
 // nonzero branch potential. abstol's own value comes from disciplines.vams and
 // not from the LRM, so it is not asserted.
 //
+// The bias pair is 0.75/0.25 and not the 0.7/0.2 that reads more naturally,
+// because 0.7 - 0.2 in IEEE-754 double is 0.49999999999999994 — one ulp below
+// 0.5 — and the first check is a bit-exact CHECKX. Both operands here are
+// negative powers of two, so the difference is 0.5 exactly (see
+// controlled_sources.va, which hits the same rounding from the other side and
+// pays for it with a relative tolerance).
+//
 // This is also the only Verilog-A spelling that reads what §11.6.2 models as
 // nature's one-to-many relationship to param assign, so ch11's s11-6-2 row
 // points here.
@@ -24,7 +31,7 @@
 //! lrm A.8.9
 //! lrm 5.5.3
 //! lrm 11.6.2
-//! bias V(a) = 0.7, V(b) = 0.2, V(n1) = 0.4, V(n2) = 0.1
+//! bias V(a) = 0.75, V(b) = 0.25, V(n1) = 0.5, V(n2) = 0.125
 //! xfail VerA cannot parse a nature attribute reference: the `.` in `a.potential.abstol` dies at E0207 (expected `)`)
 `include "check.vh"
 module ch5_nature_attribute(a, b, n1, n2);

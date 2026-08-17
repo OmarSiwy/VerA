@@ -7,16 +7,18 @@
 // `outp` is legal and is there to show the rule is about direction, not about
 // the discipline.
 //
-// E0423 is not yet allocated in src/diag_code.zig: this is a behavioral rule,
-// class 4 (behavioral semantics). It must NOT be pinned as
-// `GeneratedCompileError` — codegen refuses every single-nature directional
-// contribution for its own generic reason (11_potential_signal_flow.va is the
-// xfail for that), so the fixture would pass for the wrong reason today and go
-// on passing after codegen learns to lower signal-flow nets.
+// The expectation is the phase label. It WAS `//! reject E0423`, a code that
+// does not exist — src/diag_code.zig allocates class 4 up to E0422 (line 181) —
+// so no diagnostic VerA can emit would ever match it and the XPASS could never
+// fire. It must equally NOT be pinned as `GeneratedCompileError`: codegen refuses
+// every single-nature directional contribution for its own generic reason
+// (11_potential_signal_flow.va is the xfail for that), so the fixture would pass
+// for the wrong reason today and go on passing after codegen learns to lower
+// signal-flow nets. `DiagnosticsReported` requires a FRONT-END diagnostic, which
+// is what this rule needs, and is satisfied by whichever code it gets.
 //
 //! lrm 1.3.4.1
-//! reject E0423
-//! xfail no front-end diagnostic distinguishes an input from an output contribution target; `vera --lint` is silent and only codegen refuses, generically
+//! reject DiagnosticsReported
 module ch01_sf_potential_contribution_to_input(inp, outp);
     input inp;
     output outp;

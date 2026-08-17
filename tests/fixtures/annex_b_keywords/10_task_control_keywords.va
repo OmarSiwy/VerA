@@ -2,15 +2,23 @@
 // spelling is therefore not available as an identifier, and `real <keyword>;`
 // is a syntax error in any conforming compiler.
 //
-// The task, process and procedural-control family of IEEE 1364-2005 A.2.7 /
-// A.6.  Annex C.7 separately excludes digital behaviour from Verilog-A, but that
-// is a C.7 claim about statements; the Annex B claim is only that the spellings
-// are reserved, which is what is tested here.
+// The task, process and procedural-control words of IEEE 1364-2005 A.2.7 / A.6
+// (`endtask`, `fork`, `join`, `disable`, `wait`, `force`, `release`, `deassign`,
+// `negedge`, `posedge`), plus two spellings that ride along because they are
+// declared with them and belong to no census of their own: `realtime` is a data
+// type (A.2.2.1) and `automatic` is a lifetime qualifier (A.2.6).  Annex C.7
+// separately excludes digital behaviour from Verilog-A, but that is a C.7 claim
+// about statements; the Annex B claim is only that the spellings are reserved,
+// which is what is tested here.
 //
 // This is a reservedness census, not a feature test: one declaration per line so
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `task` and `time` are not declared here: they are substrings of `endtask` and
+// `realtime`. They are censused in 22_shadowed_spellings.va, which explains the
+// mechanism.
 //! lrm B
 //! reject E0208
 //! reject automatic
@@ -24,8 +32,6 @@
 //! reject posedge
 //! reject realtime
 //! reject release
-//! reject task
-//! reject time
 //! reject wait
 module annex_b_reserved_task_control_keywords;
     real automatic;
@@ -39,7 +45,5 @@ module annex_b_reserved_task_control_keywords;
     real posedge;
     real realtime;
     real release;
-    real task;
-    real time;
     real wait;
 endmodule

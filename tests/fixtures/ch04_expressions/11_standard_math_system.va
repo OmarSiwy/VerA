@@ -1,10 +1,16 @@
 // §4.3.1 Table 4-14 — the `$`-prefixed spelling of the standard math functions.
 // The table gives each row an equivalent C function, so every want below is
-// that C function evaluated at x = 1.5 (IEEE-754 double), and the five rows the
-// LRM defines exactly — min/max/pow/floor/ceil — are pinned bit for bit.
+// that C function evaluated at x = 1.5 (IEEE-754 double). Five of them are
+// pinned bit for bit: §4.3.1 spells min and max out as `(x < y) ? x : y` and
+// `(x > y) ? x : y` (the same prose covers abs, which 10_standard_math_
+// traditional.va pins), and pow/floor/ceil happen to be exact at these
+// arguments — 1.5*1.5 = 2.25 is exact in binary and the two rounding functions
+// return integers. Exactness for those three is a property of the inputs, not
+// a guarantee §4.3.1 makes for all of them.
 //
 // The bias is NEGATIVE so `$abs` has something to do: x = |-0.5| + 1 = 1.5.
 //
+//! lrm 4.3.1
 //! bias V(p) = -0.5
 //! bias V(n) = 0
 //! print none
@@ -39,8 +45,11 @@ module ch04_standard_math_system(p, n);
         `CHECKX("$floor(1.5)", $floor(x), 1.0);
         `CHECKX("$ceil(1.5)", $ceil(x), 2.0);
 
-        // The sum of all nine, added left to right in source order.
-        `CHECKR("the whole table summed", value, 15.0379903088935, 1e-14);
+        // The sum of the nine rows `value` is built from, added left to right
+        // in source order. Not the whole of Table 4-14: $abs, $ln1p and $expm1
+        // are the other three rows and are not in this sum ($abs is pinned on
+        // its own above; ln1p/expm1 are 33_ln1p_expm1.va).
+        `CHECKR("the nine summed rows", value, 15.0379903088935, 1e-14);
 
         // Table 4-14 gives every row TWO spellings — `$ln(x)` and `ln(x)` are
         // the same function, not two implementations. No value to write down,

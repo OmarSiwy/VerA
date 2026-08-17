@@ -1,4 +1,8 @@
-// §10.5 / annex D.2. `include "constants.vams" brings in the standard physical
+// §10.1 / annex D.2, matching the cites below. (This header opened "§10.5"
+// until a review caught it; §10.5 is predefined macros, while `include is the
+// §10.1 table row that defers to IEEE Std 1364 and the numbers are D.2's.)
+//
+// `include "constants.vams" brings in the standard physical
 // constants. The header is self-guarded (`ifdef CONSTANTS_VAMS), so including it
 // after the implicit prelude must not redefine anything.
 //

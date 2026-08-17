@@ -15,10 +15,29 @@
 // Below, `first` is the analog_net_reference of call one, and call two names it
 // as its target.
 //
+// THE TARGET STRING HAS TO RESOLVE, OR THE RULE DOES NOT BITE. §9.20 makes the
+// unresolvable case a VALUE, not an error — "the return value for both system
+// functions shall be one (1) if the hierarchical_reference_string points to a
+// valid continuous node and ZERO (0) OTHERWISE" — so the sibling fixtures'
+// deliberately dangling "$root.top.a" would let a conforming tool answer 0 here
+// instead of diagnosing. That is why call two's string is the bare `"first"`:
+// §6.7's resolution rules, which §9.20 defers to, say "the first name in a path
+// name can also be the top of a hierarchy which starts at the level where the
+// path is being used", and `first` is declared at exactly that level. It
+// resolves to the local node, the node is call one's analog_net_reference, and
+// the error rule applies.
+//
+// THE REJECT SUBSTRING is `another $analog_node_alias`, from the rule's own
+// sentence. It used to be the bare word `alias`, which is a substring of
+// `$analog_node_alias` itself — so a blanket "unsupported system function
+// `$analog_node_alias`" would have satisfied it and the XPASS would have fired
+// on a diagnostic that knows nothing about duplicate targets.
+//
 // A reject, so there is nothing to run and no `want` to write.
 //
+//! lrm 6.7
 //! lrm 9.20
-//! reject alias
+//! reject another $analog_node_alias
 //! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) and never relates two calls to each other
 module ch09_node_alias_duplicate_target_rejected(p, n);
   inout p, n; electrical p, n;

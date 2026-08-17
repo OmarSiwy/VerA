@@ -1,5 +1,5 @@
-// Annex G item 7780 ("Added support for math functions expm1() and ln1p()",
-// Table 4-14 / Table 9-11). §4.3.1 defines them exactly:
+// Annex G Table G.7 item 7780 ("Added support for math functions expm1() and
+// ln1p()", clause column "4-14, 9-11, A.8.2, B.1"). §4.3.1 defines them exactly:
 //
 //     ln1p(x)  = ln(1 + x)        (x > -1)
 //     expm1(x) = e^x - 1          (all x)
@@ -13,6 +13,14 @@
 // The negative argument is the real discriminator: ln1p(-0.5) = ln(0.5) is
 // finite, while anything that forgot the "1 +" would be ln(-0.5) = NaN.
 //
+// The $-prefixed spellings are the ones the item added and are the ones written
+// here: Table 4-14's first column gives `$ln1p(x)` and `$expm1(x)`, and Table
+// 9-11 lists both as supported in the analog context. §9.14 makes them aliases
+// of the §4.3.1 operators, so a compiler may implement either kernel.
+//
+//! lrm G.7
+//! lrm 4.3.1
+//! lrm 9.14
 //! bias V(p) = 0.5, V(n) = 0
 //! print none
 `include "check.vh"

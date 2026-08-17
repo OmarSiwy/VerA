@@ -11,6 +11,8 @@
 // lowered as a pass-through returns, and what one that never read `numerator`
 // or `denominator` at all would return. 0.4 separates them.
 //
+//! lrm 4.5.1
+//! lrm 4.5.11
 //! bias V(p) = 0.8
 //! bias V(n) = 0.0
 `include "check.vh"

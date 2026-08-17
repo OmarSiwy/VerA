@@ -2,6 +2,8 @@
 // makes V(p,n) = 0.75 - 0.25 = 0.5 exactly (powers of two), so the negation is
 // checkable to the last bit: -0.5, not 0.5 and not the probe left unchanged.
 //
+//! lrm 4.2.1
+//! lrm 4.2.4
 //! bias V(p) = 0.75
 //! bias V(n) = 0.25
 `include "check.vh"

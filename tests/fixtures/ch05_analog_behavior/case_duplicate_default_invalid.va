@@ -12,7 +12,6 @@
 //
 //! lrm 5.8.3
 //! reject DiagnosticsReported
-//! xfail VerA does not check for a duplicate `default` arm; the case statement compiles and the second default is silently unreachable
 module ch5_case_duplicate_default(p);
   inout p; electrical p; integer s; real x;
   analog begin
