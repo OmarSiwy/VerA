@@ -25,9 +25,13 @@
 //! reading it, is a sibling file rather than a rewrite: `ir/` never imports
 //! `backend/`, and the compiler enforces that because there is no such import.
 //!
-//! One file is reachable by neither import graph:
-//!   - `backend/filter_kernels.zig` is `@embedFile`d by codegen (§4.5.11/12
-//!     kernels emitted verbatim into a device), so it must stay ADJACENT to it.
+//! No file is reachable by neither import graph. The six kernel files
+//! (`backend/{filter,str,rng,table,file,limit}_kernels.zig`) reach a device by
+//! `@embedFile` rather than by import, so they must stay ADJACENT to codegen —
+//! but each is also `@import`ed by a codegen test, which is the whole point of
+//! their being real files: what the tests check is byte-for-byte what runs in
+//! the device. `filter_kernels.zig` was registered here as the one exception
+//! until wave 10 gave `zBilin` its test.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
