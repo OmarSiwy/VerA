@@ -3,15 +3,34 @@
 //! Transformation: preprocessed text → token stream (SoA {tag,start}).
 //!
 //! DOD: emit into a `std.MultiArrayList(token.Stored)` (SoA columns). Store only
-//! tag + start offset; recompute token end on demand (`tokenEnd`). Stay scalar —
-//! .va files are small (KBs), so a vector scan spends more on setup and on its
-//! scalar tail than it saves. The vector width that matters to a Verilog-A user
-//! is the DEVICE's evaluation loop, and that loop is the host's code, compiled
-//! from what codegen emits; nothing in this repo runs it.
+//! tag + start offset; recompute token end on demand (`tokenEnd`).
+//!
+//! THE BYTE SCANS IN THIS FILE STAY SCALAR, and this is the number that makes
+//! that right rather than the "files are small (KBs)" it used to say. Every loop
+//! here advances over ONE TOKEN, not over the file. MEASURED (`zig build bench
+//! -Doptimize=ReleaseFast -- fixtures`, `pp` row): a compilation's preprocessed
+//! text averages 11,960 bytes over the 1164 fixtures, and 11,512 of those are
+//! the annex D/E prelude, whose tokens `tokenizeSeeded` copies in from
+//! `Preprocessor.preludeTokens` — so in a warm process this scanner sees ~450
+//! bytes per compilation, as tokens averaging ~4 bytes, with comments already
+//! removed by §10 (MEASURED, callgrind: 51 Ir on the `//` test in a whole run).
+//! A 32-lane load does not pay against a 4-byte identifier, and a `.va` big
+//! enough to change that would still be scanned four bytes at a time.
+//!
+//! Where a vector DID pay is `token.lookupKeyword`, and the difference is what
+//! N is: there it is the KEYWORD TABLE — 217 entries, up to 39 of them sharing a
+//! length — walked once per identifier, not the source text. Its comment carries
+//! the measurement. The vector width that matters to a Verilog-A *user* is still
+//! the DEVICE's evaluation loop, and that loop is the host's code, compiled from
+//! what codegen emits; nothing in this repo runs it.
 //!
 //! `next()` is a PURE function of (src, pos): it reads no lexer state beyond the
 //! cursor and mutates nothing else. That is what makes `tokenEnd` exact — it just
-//! re-runs the scanner from the token's start and reports where it stopped.
+//! re-runs the scanner from the token's start and reports where it stopped. It
+//! also means a token is scanned more than once: `parser.zig` reaches for
+//! `tokenText`/`tokenEnd` at 19 sites, each of which re-runs `next` over that
+//! token. So a per-identifier cost is paid more often than the token count
+//! suggests, which is why the keyword lookup was worth 5.8% of `lint`.
 //!
 //! Diagnostics: the lexer never fails (except OOM in `tokenize`). Malformed input
 //! becomes exactly one `.invalid` token whose extent `tokenEnd` recovers; the
@@ -270,7 +289,10 @@ pub const Lexer = struct {
     fn lexIdentOrKeyword(self: *Lexer) token.Tag {
         const start = self.pos;
         while (isIdentChar(self.peek(0))) self.pos += 1;
-        return token.keyword_map.get(self.src[start..self.pos]) orelse .identifier;
+        // `lookupKeyword`, not `keyword_map.get`: the vast majority of these are
+        // user names, and the map is a linear scan of every keyword of the same
+        // length. See its comment for the measurement.
+        return token.lookupKeyword(self.src[start..self.pos]) orelse .identifier;
     }
 
     /// LRM §10.6 `begin_keywords / `end_keywords. The preprocessor consumes
