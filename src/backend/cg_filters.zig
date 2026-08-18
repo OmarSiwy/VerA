@@ -275,7 +275,7 @@ pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []
         // `f64Const`, not `f64Expr`: this is a SPECULATIVE render used only
         // to pair roots, so a root that does not resolve is "not the
         // conjugate", not a diagnostic. The real render reports it.
-        const jre = (g.f64Const(elems[2 * j], 0) catch continue) orelse continue;
+        const jre = (g.f64Const(elems[2 * j], 0, false) catch continue) orelse continue;
         if (std.mem.eql(u8, jre, re)) return j;
     }
     return null;

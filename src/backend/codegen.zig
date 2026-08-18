@@ -1166,7 +1166,7 @@ pub const Gen = struct {
             // Not renderable in the host's f64 domain (a default over an op
             // `f64Const` does not carry): leave the folded field initializer, as
             // before. Widening the op set there is the fix if a model asks.
-            const e = try self.f64Const(p.default, 0) orelse continue;
+            const e = try self.f64Const(p.default, 0, false) orelse continue;
             switch (ty) {
                 .real => try self.w("    model.{s} = {s};\n", .{ self.p_names[i], e }),
                 // §3.2's 32-bit result (`Lower.wrap32`) applied once, at the end.
@@ -1210,7 +1210,7 @@ pub const Gen = struct {
         const bag = self.diags orelse return;
         if (!bag.enabled(.W1050)) return;
         if (p.folded != null or self.an.foldConst(p.default, 0, true) != null) return;
-        if (try self.f64Const(p.default, 0) != null) return;
+        if (try self.f64Const(p.default, 0, false) != null) return;
         var d = bag.build(.codegen, .W1050, self.lower.tokenSpan(p.tok));
         d.msg("`{s}`", .{p.name});
         d.point("this default has no compile-time value, so the field is 0", .{});
@@ -1789,14 +1789,31 @@ pub const Gen = struct {
         };
     }
 
-    /// Write the name a value's slot is read and written under: its own `tN`,
-    /// or an element of its type's hoist array. The ONE place that knows the
+    /// The name a value's slot is read and written under: its own `tN`, or an
+    /// element of its type's hoist array. The ONE place that knows the
     /// difference, so declaration and use can never drift apart.
-    fn writeSlotRef(self: *Gen, i: usize) Error!void {
+    ///
+    /// `writeSlotRef` is the hot form — every slotted use goes through it, and
+    /// it writes straight into the output buffer. `slotRefStr` is for the one
+    /// caller that needs the name as a value (`f64Const`).
+    fn slotArr(self: *Gen, i: usize) ?[]const u8 {
         const s = self.plan.slot[i];
-        const h = if (s < self.hoist_idx.items.len) self.hoist_idx.items[s] else none_u32;
-        if (h == none_u32) return self.b("t{d}", .{s});
-        return self.b("{s}[{d}]", .{ hoistArray(self.an.vty[i]), h });
+        if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return hoistArray(self.an.vty[i]);
+        return null;
+    }
+    fn slotNum(self: *Gen, i: usize) u32 {
+        const s = self.plan.slot[i];
+        if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return self.hoist_idx.items[s];
+        return s;
+    }
+    fn writeSlotRef(self: *Gen, i: usize) Error!void {
+        if (self.slotArr(i)) |arr| return self.b("{s}[{d}]", .{ arr, self.slotNum(i) });
+        return self.b("t{d}", .{self.slotNum(i)});
+    }
+    fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
+        if (self.slotArr(i)) |arr|
+            return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, self.slotNum(i) });
+        return std.fmt.allocPrint(self.arena, "t{d}", .{self.slotNum(i)});
     }
 
     fn zeroOf(t: VTy) []const u8 {
@@ -2334,6 +2351,17 @@ pub const Gen = struct {
         if (op == .call) return self.emitCall(inst);
         if (op == .phi) return self.b("S.con(0.0)", .{}); // materialised as a var
 
+        // A whole derivative-free subtree comes out as ONE `S.con` over plain
+        // f64 arithmetic, which is contract.zig's rule for physics code:
+        // "everything not depending on x stays plain f64". Every S op it
+        // replaces was carrying an n_u-wide zero the host cannot fold away
+        // under `@setFloatMode(.strict)`. `f64Const` is the whole test — it
+        // succeeds only on literals, parameters and arithmetic over them.
+        const res = self.mir.instResult(inst);
+        if (res != .undef and self.an.vty[@intFromEnum(res)] == .real and self.an.dFree(res)) {
+            if (try self.f64Const(res, 0, true)) |s| return self.b("S.con({s})", .{s});
+        }
+
         const a: Mir.Value = @enumFromInt(row.a);
         const b2: Mir.Value = @enumFromInt(row.b);
         const c: Mir.Value = @enumFromInt(row.c);
@@ -2382,10 +2410,43 @@ pub const Gen = struct {
             }
         }
         switch (op) {
-            // §4.2.4 real arithmetic
-            .fadd => try self.method2(a, "add", b2),
-            .fsub => try self.method2(a, "sub", b2),
-            .fmul => try self.method2(a, "mul", b2),
+            // §4.2.4 real arithmetic. The mixed case — ONE operand
+            // derivative-free — reaches the scalar half of the contract
+            // (`scale`, `addC`) instead of the dual half, which is where the
+            // saving is: `x.mul(S.con(k))` costs n_u multiplies against
+            // `splat(0)` plus an n_u-wide add that `.strict` will not fold,
+            // where `x.scale(k)` costs n_u multiplies and nothing else.
+            //
+            // Every rewrite here is value-preserving under IEEE 754: `a - k` is
+            // defined as `a + (-k)`, and `k - a` as `(-a) + k`. `fdiv` has no
+            // scalar form in the primitive set and `a * (1/k)` is NOT `a / k`,
+            // so it keeps the dual op — see `renderOp`'s callers in the header.
+            .fadd, .fsub, .fmul => {
+                if (self.an.dFree(b2)) {
+                    try self.b("(", .{});
+                    try self.renderVal(a, .real);
+                    try self.b(").{s}(", .{if (op == .fmul) "scale" else "addC"});
+                    if (op == .fsub) try self.writeNegConst(b2) else try self.writeConst(b2);
+                    return self.b(")", .{});
+                }
+                if (self.an.dFree(a)) {
+                    try self.b("(", .{});
+                    try self.renderVal(b2, .real);
+                    // k - b: negate first, so the constant still arrives through
+                    // `addC` and the derivative costs one negation.
+                    try self.b("){s}.{s}(", .{
+                        if (op == .fsub) ".neg()" else "",
+                        if (op == .fmul) "scale" else "addC",
+                    });
+                    try self.writeConst(a);
+                    return self.b(")", .{});
+                }
+                try self.method2(a, switch (op) {
+                    .fadd => "add",
+                    .fsub => "sub",
+                    else => "mul",
+                }, b2);
+            },
             .fdiv => try self.method2(a, "div", b2),
             .fneg => try self.method1(a, "neg"),
             .fmod => try self.helper2("zFmod", a, b2),
@@ -2519,6 +2580,65 @@ pub const Gen = struct {
             .shr => try self.shrLogical(a, b2),
             .phi, .select, .call, .branch, .jump => unreachable,
         }
+    }
+
+    /// Would folding `v` to a single number leave a materialised temporary with
+    /// no reader? `foldConst` collapses a subtree in one step and knows nothing
+    /// about slots, and `unit_plan` already emitted a declaration for every one
+    /// of them — an unread `const` is a Zig compile error, not a missed
+    /// optimisation.
+    ///
+    /// Only the shapes `foldConst` itself walks: anything else it declines
+    /// anyway, so answering `true` there costs nothing.
+    fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 32) return true;
+        const v = self.an.rv(v0);
+        const i = @intFromEnum(v);
+        if (depth > 0 and i < self.an.nv and
+            (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return true;
+        const def = self.mir.valueDef(v);
+        if (def != .inst_result) return false;
+        const row = self.mir.instRow(def.inst_result);
+        return switch (Mir.opClass(row.op)) {
+            .unary => self.foldHidesSlot(@enumFromInt(row.a), depth + 1),
+            .binary => self.foldHidesSlot(@enumFromInt(row.a), depth + 1) or
+                self.foldHidesSlot(@enumFromInt(row.b), depth + 1),
+            else => true,
+        };
+    }
+
+    /// The f64 value of a DERIVATIVE-FREE operand, written in place. Callers
+    /// check `dFree` first; this only decides how to spell it.
+    ///
+    /// Preferred spelling is the arithmetic itself (`model.is`, `(model.n) *
+    /// (t0.val())`). The fallback reads the value out of the S the generator
+    /// would have built anyway, which is what `$temperature` and every
+    /// transcendental of a parameter need — neither has a plain-f64 spelling
+    /// that a GPU can execute (`devSafe`), but both are still constants as far
+    /// as the derivative is concerned.
+    ///
+    /// Depth 1, not 0: `v` is an OPERAND, so naming its own slot is exactly
+    /// what is wanted. Depth 0 is reserved for `renderInst` asking about the
+    /// value it is declaring, where naming that slot is a self-reference.
+    fn writeConst(self: *Gen, v: Mir.Value) Error!void {
+        if (try self.f64Const(v, 1, true)) |s| return self.b("{s}", .{s});
+        try self.b("(", .{});
+        try self.renderVal(v, .real);
+        try self.b(").val()", .{});
+    }
+
+    /// `writeConst` negated, for `a - k` rendered as `a.addC(-k)`. A literal
+    /// negates in the formatter rather than picking up a `-(...)` wrapper,
+    /// because `addC(-1.0)` is the spelling a reader expects.
+    fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
+        // Same guard as `f64Const`: negating the folded number is only legal
+        // where the fold itself is.
+        if (!self.foldHidesSlot(v, 0)) {
+            if (self.an.foldConst(v, 0, false)) |k| return self.b("{s}", .{try self.fmtF64(-k.f)});
+        }
+        try self.b("-(", .{});
+        try self.writeConst(v);
+        try self.b(")", .{});
     }
 
     fn method1(self: *Gen, a: Mir.Value, name: []const u8) Error!void {
@@ -2769,10 +2889,53 @@ pub const Gen = struct {
     // expression fragment — so it needs `emitDerive` to take a rendered
     // STATEMENT, not the `[]const u8` expression this returns. No model in the
     // tree asks; the day one does, that is the shape.
-    pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
+    ///
+    /// `in_unit` says the expression lands in a UNIT BODY rather than in a
+    /// host-side `derive` line or `updateState`, and that changes two things.
+    ///
+    /// It may name a unit-local temporary — it must, in fact: without that a
+    /// shared chain of parameter arithmetic re-renders its whole prefix at
+    /// every link, which is quadratic in the chain length and BSIM4's
+    /// temperature prep is hundreds of links long.
+    ///
+    /// And it is restricted to `devSafe` opcodes, because a unit body also
+    /// compiles for nvptx, where there is no libm: `@exp`/`@log` on an f64
+    /// become "no libcall available for fexp" at PTX assembly time. Those stay
+    /// S operations, whose implementation is the host's problem and not this
+    /// generator's — which is the same division of labour the whole S protocol
+    /// rests on.
+    pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]const u8 {
         if (depth > 32) return null;
-        if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
         const v = self.an.rv(v0);
+        if (in_unit) {
+            // Already materialised: NAME it, and never fold past it.
+            //
+            // `unit_plan` decided this slot was live by walking the MIR, and no
+            // rendering choice here can revise that — fold past it and the
+            // declaration it already emitted has no reader, which Zig rejects
+            // outright ("unused local constant"). Naming it is also the cheaper
+            // answer: the temporary holds a dual whose derivative half is a
+            // structural zero, so reading the value out beats recomputing the
+            // subtree. `depth > 0` because at depth 0 the caller IS this slot's
+            // own declaration.
+            if (depth > 0 and self.an.dFree(v)) {
+                const i = @intFromEnum(v);
+                if (i < self.an.nv and self.plan.cached(v))
+                    return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.lo_idx[i]});
+                if (i < self.an.nv and self.plan.slot[i] != none_u32) {
+                    self.probeUse(self.plan.slot[i]);
+                    return try std.fmt.allocPrint(self.arena, "{s}.val()", .{try self.slotRefStr(i)});
+                }
+            }
+            // Folding a whole literal chain to one number is still the right
+            // answer where it is available — `foldConst` works in f64, so the
+            // number it lands on is the one the hardware would have — but it
+            // takes the subtree in ONE step and cannot see the check above.
+            // So ask first whether it would swallow a slot.
+            if (!self.foldHidesSlot(v, 0)) {
+                if (self.an.foldConst(v, 0, false)) |k| return try self.fmtF64(k.f);
+            }
+        } else if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
         switch (self.mir.valueDef(v)) {
             .param_ref => |p| {
                 self.uses_model = true;
@@ -2784,13 +2947,14 @@ pub const Gen = struct {
             },
             .inst_result => |inst| {
                 const row = self.mir.instRow(inst);
+                if (in_unit and !devSafe(row.op)) return null;
                 switch (Mir.opClass(row.op)) {
                     // Rendered as open/close (and separator) fragments rather
                     // than as a format string per opcode: `allocPrint` wants a
                     // comptime format, and a `{s}`-per-case switch would be the
                     // same table written twice as long.
                     .unary => {
-                        const a = try self.f64Const(@enumFromInt(row.a), depth + 1) orelse return null;
+                        const a = try self.f64Const(@enumFromInt(row.a), depth + 1, in_unit) orelse return null;
                         const fix: [2][]const u8 = switch (row.op) {
                             .fneg, .ineg => .{ "-(", ")" },
                             .fabs, .iabs => .{ "@abs(", ")" },
@@ -2843,8 +3007,8 @@ pub const Gen = struct {
                             .atan2 => .{ "std.math.atan2(", ", ", ")" },
                             else => return null,
                         };
-                        const a = try self.f64Const(@enumFromInt(row.a), depth + 1) orelse return null;
-                        const b2 = try self.f64Const(@enumFromInt(row.b), depth + 1) orelse return null;
+                        const a = try self.f64Const(@enumFromInt(row.a), depth + 1, in_unit) orelse return null;
+                        const b2 = try self.f64Const(@enumFromInt(row.b), depth + 1, in_unit) orelse return null;
                         return try std.fmt.allocPrint(self.arena, "{s}{s}{s}{s}{s}", .{
                             fix[0], a, fix[1], b2, fix[2],
                         });
@@ -2862,7 +3026,7 @@ pub const Gen = struct {
     /// which surfaces as "unreachable code" at a line of generated code with
     /// nothing pointing back at the `.va`.
     pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
-        if (try self.f64Const(v0, 0)) |s| return s;
+        if (try self.f64Const(v0, 0, false)) |s| return s;
         // The argument's own defining expression is the thing to point at; the
         // operator call is the fallback for a leaf with no instruction of its
         // own (a node probe, a phi), which is the common case here.
@@ -4259,8 +4423,8 @@ pub const Gen = struct {
             // No diagnostic: `f64Expr` already fired one for the period if it is
             // unrenderable, and a start_time that is a solved quantity is legal
             // Verilog-A that this hook simply cannot describe.
-            const start = try self.f64Const(if (args.len > 0) args[0] else .zero, 0) orelse return;
-            const period = try self.f64Const(if (args.len > 1) args[1] else .zero, 0) orelse return;
+            const start = try self.f64Const(if (args.len > 0) args[0] else .zero, 0, false) orelse return;
+            const period = try self.f64Const(if (args.len > 1) args[1] else .zero, 0, false) orelse return;
             try timers.append(self.arena, .{ start, period });
         }
         if (timers.items.len == 0) return;
@@ -4356,6 +4520,34 @@ fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
 // ===========================================================================
 
 /// Stateful analog operators (§4.5) and monitored events (§5.10.3). MUST agree
+/// Does this opcode have a plain-f64 spelling a GPU can execute?
+///
+/// A unit body compiles for nvptx as well as for the host, and that target has
+/// no libm — `@exp`, `@log` and every `std.math` call on an f64 fail PTX
+/// assembly with "no libcall available for fexp". What is left is the
+/// arithmetic LLVM lowers to a single PTX instruction. Everything else keeps
+/// its S form, where the host's own math answers for it.
+///
+/// Only `f64Const`'s `in_unit` path consults this; a host-side `derive` line
+/// still gets the whole of Table 4-14 and Table 4-15.
+/// It is also REAL-ONLY, and that half is a correctness rule rather than a
+/// target one. `f64Const` renders the integer opcodes in the f64 domain the way
+/// `foldConst` folds them there, which drops §3.2's 32-bit wraparound —
+/// `2147483647 + 1` is -2147483648 in a device and 2147483648.0 in an f64 — and
+/// takes the low bits of a §2.6.1 64-bit literal with it. A control argument can
+/// afford that (it is a constant expression the host evaluates once); a residual
+/// cannot, and `intBin32` is the code that gets it right.
+fn devSafe(op: Mir.Opcode) bool {
+    return switch (op) {
+        .fadd, .fsub, .fmul, .fdiv, .fneg => true,
+        .fabs, .fmin, .fmax => true,
+        // sqrt/floor/ceil are sqrt.rn.f64 and cvt.rmi/rpi.f64.f64 — instructions.
+        .sqrt, .floor, .ceil => true,
+        .opt_barrier => true,
+        else => false,
+    };
+}
+
 /// with `naming.isStatefulAnalogOp`: that predicate decides which calls get a
 /// unit, and this one decides which get Instance state — they are the same set.
 pub const OpKind = enum {
@@ -5368,7 +5560,9 @@ test "codegen: §5.6.7 indirect contribution is a nullor row, ASYMMETRIC-safe" {
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
     // probe − equation, in that order.
     const probe_at = std.mem.indexOf(u8, body, "U.pin").?;
-    const eqn_at = std.mem.indexOf(u8, body, "S.con(2.0)").?;
+    // `2.0 * V(out)` reaches the constant through `scale`, not through a
+    // second dual — the derivative-free side of a product never becomes an S.
+    const eqn_at = std.mem.indexOf(u8, body, "scale(2.0)").?;
     try std.testing.expect(std.mem.indexOf(u8, body, ".sub(") != null);
     try std.testing.expect(probe_at < eqn_at);
 }
@@ -5778,13 +5972,24 @@ test "codegen: §2.6.1 an integer literal keeps all 64 bits" {
         \\  integer k;
         \\  analog begin
         \\    k = 4607182418800017408;
-        \\    I(p, n) <+ 0.0 * k;
+        \\    I(p, n) <+ V(p, n) * k;
         \\  end
         \\endmodule
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "4607182418800017408") != null);
+    // The integer side of the product carries no derivative, so it folds and
+    // arrives as the f64 the multiply needs. `fmtF64` is `{d}`, which is the
+    // shortest representation that ROUND-TRIPS — 4607182418800017400.0 parses
+    // back to exactly 4607182418800017408, and every literal in every emitted
+    // device already rests on that. What must not happen is the value changing.
+    try std.testing.expect(std.mem.indexOf(u8, src, "scale(4607182418800017400.0)") != null);
+    try std.testing.expectEqual(
+        @as(f64, 4607182418800017408),
+        try std.fmt.parseFloat(f64, "4607182418800017400.0"),
+    );
+    // `0.0 * k` would fold the contribution away entirely, which is why the
+    // multiplicand here is a probe: the literal has to reach the device.
 }
 
 test "codegen: §3.2 the three sites that impose the 32-bit integer width agree" {
@@ -5796,10 +6001,8 @@ test "codegen: §3.2 the three sites that impose the 32-bit integer width agree"
         \\  parameter integer big = 2147483647 + 1;
         \\  parameter integer chained = big + 1;
         \\  localparam integer sh = 1 << 31;
-        \\  integer hi;
         \\  analog begin
-        \\    hi = 2147483647;
-        \\    I(p, n) <+ V(p, n) * (hi + 1);
+        \\    I(p, n) <+ V(p, n) * (big + 1);
         \\  end
         \\endmodule
     , &h);
@@ -5816,8 +6019,10 @@ test "codegen: §3.2 the three sites that impose the 32-bit integer width agree"
     try std.testing.expect(std.mem.indexOf(u8, src, "chained: i64 = -2147483647") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "model.chained = @as(i32, @truncate(") != null);
     // Site 3, `codegen.intBin32`: the device. `+%` is the 64-bit wrap that keeps
-    // the add from panicking; the truncation is §3.2's width.
-    try std.testing.expect(std.mem.indexOf(u8, src, "@as(i32, @truncate(((@as(i64, 2147483647)) +% (@as(i64, 1)))))") != null);
+    // the add from panicking; the truncation is §3.2's width. The left operand
+    // is a PARAMETER, so neither fold can reach it and the wrap has to survive
+    // as emitted code — which is the site this half of the test is about.
+    try std.testing.expect(std.mem.indexOf(u8, src, "@as(i32, @truncate(((model.big) +% (@as(i64, 1)))))") != null);
 }
 
 test "codegen: a unit whose target is defined in one arm returns a VALUE, not undefined" {
