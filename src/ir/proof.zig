@@ -183,6 +183,28 @@ pub fn unitCount(lower: *const Lower) usize {
 /// bound-producing arithmetic below folds a NaN endpoint to the matching
 /// infinity. Empty (`lo > hi`) means unreachable and vacuously satisfies every
 /// domain, which is exactly right for a contradictory guard.
+///
+/// STAYS AoS. `@sizeOf` is 24 with 5 bytes of padding, and both proposed
+/// shrinks were MEASURED and do not pay:
+///   - `packed struct(u8)` for the three flags gives `8 + 8 + 1` aligned to 8 =
+///     **24 bytes, exactly what it replaces**. It moves the padding, it does not
+///     remove it.
+///   - A true SoA split (`iv_lo`/`iv_hi`/`iv_flags`) is 17 B/value, but at the
+///     MEASURED corpus size — median `mir.defs.len` 26, p99 198, max 917 — that
+///     is 266 bytes saved on the median compile, and every consumer here
+///     (`ivOf`, `meet`, `join`, the transfer functions) reads a WHOLE interval,
+///     so the split makes the hot accesses worse, not better. Nothing in this
+///     file tests a column of intervals; a vector-comparable predicate would be
+///     the reason to split, and it has no caller.
+/// `seedValues`' fill, ReleaseFast on this machine (`suggestVectorLength(f64)`
+/// = 4), ns per fill, min of 25:
+///     n:            38      210      929    24578
+///     AoS @memset   14.5     76.7    349.7  17174.6   <- what ships
+///     SoA 3x@memset 14.1     70.6    320.5  10745.2
+///     SoA @Vector   11.9     57.3    253.6  15615.8   <- LOSES to @memset at 24578
+/// The explicit vector store is 45% SLOWER than `@memset` at the only length
+/// where SIMD would have paid, and at the median it wins 2.6 ns on a ~1 ms
+/// compile. Both readings say the same thing: keep the memset.
 pub const Interval = struct {
     lo: f64 = -math.inf(f64),
     hi: f64 = math.inf(f64),
