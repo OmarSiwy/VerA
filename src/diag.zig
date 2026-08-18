@@ -1078,6 +1078,13 @@ pub const Builder = struct {
 ///
 /// Bounded stack, no allocation: names longer than this are not the ones a
 /// typo suggestion helps with.
+///
+/// The rows are `u8` because the `cap` guard three lines down is the proof: an
+/// edit distance never exceeds the longer input, so no cell can exceed 64, and
+/// the widest intermediate any `@min` sees is `cell + 1 == 65`. Three `usize`
+/// rows were 1.5 KB of frame for a value that fits in a byte — and the rotation
+/// was two 520-byte struct copies per input character. Rotating three pointers
+/// over one `[3][cap + 1]u8` is 195 bytes and no copy at all.
 pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     const cap = 64;
     if (a.len > cap or b.len > cap) return limit + 1;
@@ -1085,17 +1092,18 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
     if (b.len == 0) return a.len;
     if (a.len > b.len + limit or b.len > a.len + limit) return limit + 1;
 
-    var prev2: [cap + 1]usize = undefined;
-    var prev: [cap + 1]usize = undefined;
-    var cur: [cap + 1]usize = undefined;
+    var rows: [3][cap + 1]u8 = undefined;
+    var prev2: *[cap + 1]u8 = &rows[0];
+    var prev: *[cap + 1]u8 = &rows[1];
+    var cur: *[cap + 1]u8 = &rows[2];
 
-    for (0..b.len + 1) |j| prev[j] = j;
+    for (0..b.len + 1) |j| prev[j] = @intCast(j);
 
     for (a, 0..) |ca, i| {
-        cur[0] = i + 1;
+        cur[0] = @intCast(i + 1);
         var row_min = cur[0];
         for (b, 0..) |cb, j| {
-            const cost: usize = if (ca == cb) 0 else 1;
+            const cost: u8 = if (ca == cb) 0 else 1;
             var v = @min(
                 @min(cur[j] + 1, prev[j + 1] + 1),
                 prev[j] + cost,
@@ -1106,8 +1114,11 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
             row_min = @min(row_min, v);
         }
         if (row_min > limit) return limit + 1;
+        // `cur` takes over the row nobody reads again, so the three never alias.
+        const spent = prev2;
         prev2 = prev;
         prev = cur;
+        cur = spent;
     }
     return prev[b.len];
 }
@@ -1119,32 +1130,56 @@ pub fn editDistance(a: []const u8, b: []const u8, limit: usize) usize {
 /// on "whichever the iterator yielded first", which would make the same source
 /// produce different suggestions across runs and the fixture suite flaky.
 pub fn didYouMean(name: []const u8, candidates: []const []const u8) ?[]const u8 {
-    // One edit per three characters, and always at least one, so `vd` still
-    // suggests `vds` but `a` suggests nothing.
-    const limit = @max(@as(usize, 1), name.len / 3);
-    var best: ?[]const u8 = null;
-    var best_d: usize = limit + 1;
-    for (candidates) |c| {
-        if (std.mem.eql(u8, c, name)) continue;
-        const d = editDistance(name, c, limit);
-        if (d > limit) continue;
-        if (best == null or d < best_d or (d == best_d and std.mem.lessThan(u8, c, best.?))) {
-            best = c;
-            best_d = d;
-        }
-    }
-    return best;
+    var n: Nearest = .init(name);
+    for (candidates) |c| n.offer(c);
+    return n.best;
 }
 
 /// `didYouMean` over the keys of any `StringHashMapUnmanaged`, which is the
-/// shape every symbol table in lower.zig has. Collects into the arena first so
-/// the deterministic tie-break above actually sees every candidate.
-pub fn didYouMeanMap(arena: Allocator, name: []const u8, map: anytype) ?[]const u8 {
-    var names: std.ArrayList([]const u8) = .empty;
+/// shape every symbol table in lower.zig has.
+///
+/// It streams the iterator. The version before this one collected the keys into
+/// the arena first, and its comment said that was needed "so the deterministic
+/// tie-break sees every candidate" — but `Nearest` is a running minimum of the
+/// pair `(distance, name)`, which is a total order, so it sees every candidate
+/// either way and the answer cannot depend on arrival order. The test below
+/// ("ties break lexicographically, not by input order") is that claim, asserted.
+/// The collect was one arena allocation per emitted suggestion for nothing.
+pub fn didYouMeanMap(name: []const u8, map: anytype) ?[]const u8 {
+    var n: Nearest = .init(name);
     var it = map.keyIterator();
-    while (it.next()) |k| names.append(arena, k.*) catch return null;
-    return didYouMean(name, names.items);
+    while (it.next()) |k| n.offer(k.*);
+    return n.best;
 }
+
+/// The running minimum of `(editDistance(name, c), c)` under the lexicographic
+/// order on that pair. Order-independent by construction, which is what lets the
+/// map form above avoid materialising the candidate set.
+const Nearest = struct {
+    name: []const u8,
+    limit: usize,
+    best: ?[]const u8 = null,
+    best_d: usize,
+
+    fn init(name: []const u8) Nearest {
+        // One edit per three characters, and always at least one, so `vd` still
+        // suggests `vds` but `a` suggests nothing.
+        const limit = @max(@as(usize, 1), name.len / 3);
+        return .{ .name = name, .limit = limit, .best_d = limit + 1 };
+    }
+
+    fn offer(self: *Nearest, c: []const u8) void {
+        if (std.mem.eql(u8, c, self.name)) return;
+        const d = editDistance(self.name, c, self.limit);
+        if (d > self.limit) return;
+        if (self.best == null or d < self.best_d or
+            (d == self.best_d and std.mem.lessThan(u8, c, self.best.?)))
+        {
+            self.best = c;
+            self.best_d = d;
+        }
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -1360,15 +1395,25 @@ fn renderOne(
     }
 
     if (opts.snippets and primary != null) {
-        var placed: std.ArrayList(Placed) = .empty;
-        try placed.append(scratch, primary.?);
+        // One primary plus at most `max_children` labels — the same comptime cap
+        // `Bag.labels` decodes into a caller array for, enforced by `Builder`'s
+        // inline `[max_children]LabelRec`. A bound that is a constant is a stack
+        // array, not an `ArrayList`: this used to be one arena allocation per
+        // rendered diagnostic for at most five elements.
+        var pbuf: [max_children + 1]Placed = undefined;
+        pbuf[0] = primary.?;
+        var n: usize = 1;
         var lbuf: [max_children]Label = undefined;
         for (bag.labels(e, &lbuf)) |l| {
-            if (try place(bag, scratch, indices, l.span, e.file, l.text, false)) |q| try placed.append(scratch, q);
+            if (try place(bag, scratch, indices, l.span, e.file, l.text, false)) |q| {
+                pbuf[n] = q;
+                n += 1;
+            }
         }
+        const placed = pbuf[0..n];
         // Widen the gutter to the largest line number that will be printed.
-        for (placed.items) |q| width = @max(width, digits(userLine(bag, q.file, q.line)));
-        try renderSnippet(bag, scratch, w, opts, indices, placed.items, e.severity, width);
+        for (placed) |q| width = @max(width, digits(userLine(bag, q.file, q.line)));
+        try renderSnippet(bag, scratch, w, opts, indices, placed, e.severity, width);
     }
 
     // --- the rule this diagnostic enforces ----------------------------------
@@ -1645,6 +1690,15 @@ test "edit distance and suggestion" {
     // Transposition is one edit, not two.
     try std.testing.expectEqual(@as(usize, 1), editDistance("abc", "acb", 4));
     try std.testing.expect(editDistance("abc", "zzzzzz", 2) > 2);
+
+    // The `u8` rows, at the widest input `cap` admits: 64 characters against 64
+    // different ones is distance 64, the saturating case, and the whole proof a
+    // byte holds every cell. One character more and the guard fires first.
+    const wide_a = "a" ** 64;
+    const wide_b = "b" ** 64;
+    try std.testing.expectEqual(@as(usize, 64), editDistance(wide_a, wide_b, 64));
+    try std.testing.expectEqual(@as(usize, 0), editDistance(wide_a, wide_a, 64));
+    try std.testing.expect(editDistance("a" ** 65, wide_b, 64) > 64);
 
     const cands = [_][]const u8{ "vds", "vgs", "temp" };
     try std.testing.expectEqualStrings("vds", didYouMean("vdss", &cands).?);

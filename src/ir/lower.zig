@@ -1092,7 +1092,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // A vector port is N nets sharing one declaration and therefore one
         // discipline (§6.5.2), so the first element answers for all of them and
         // the violation is reported once, at the declaration that commits it.
-        const probe_name = if (self.vectors.get(base)) |r| try self.vecElem(base, r.at(0)) else base;
+        var key_buf: [elem_key_len]u8 = undefined;
+        const probe_name = if (self.vectors.get(base)) |r| try self.elemKey1(&key_buf, base, r.at(0)) else base;
         const idx = self.node_voltages.get(probe_name) orelse continue;
         if (idx == ground) continue;
         const dname = self.node_disciplines.items[idx];
@@ -1131,7 +1132,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         } else {
             var b = self.errWith(module.main_tok, .E0303);
             b.msg("`{s}`", .{target});
-            if (diag.didYouMeanMap(self.arena, target, self.param_index)) |s|
+            if (diag.didYouMeanMap(target, self.param_index)) |s|
                 b.help("did you mean `{s}`?", .{s});
             try b.emit();
         }
@@ -2200,8 +2201,9 @@ fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.vectors.get(name) orelse
         return self.applyDefaultDiscipline(name, main_tok);
+    var key_buf: [elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
-        try self.applyDefaultDiscipline(try self.vecElem(name, r.at(@intCast(k))), main_tok);
+        try self.applyDefaultDiscipline(try self.elemKey1(&key_buf, name, r.at(@intCast(k))), main_tok);
 }
 
 fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
@@ -2371,7 +2373,7 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 try self.errAt(e, .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
                 return ground;
             }
-            return self.internNode(try self.vecElem(name, i.asInt()), "");
+            return self.internNodeElem(name, i.asInt(), "");
         },
         else => {
             try self.errAt(e, .E0306, "", .{});
@@ -2386,6 +2388,21 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
 /// makes it a legal Zig identifier without anybody choosing an encoding.
 fn vecElem(self: *Lower, base: []const u8, i: i64) Oom![]const u8 {
     return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
+}
+
+/// `internNode` for a vector element, `bus[3]`.
+///
+/// The spelling goes into a stack buffer for the LOOKUP and only reaches the
+/// arena when the element is genuinely new. `elemKey`'s reasoning exactly, and
+/// for the same reason: §5.5.2 lets `V(bus[3])` sit in an unrolled §5.9.3 loop
+/// body, and `vecElem` was formatting the name afresh on every reference just to
+/// rediscover the slot the first one interned. `getKey` hands back the arena copy
+/// already in the map, so `internNode` does its whole job unchanged.
+fn internNodeElem(self: *Lower, base: []const u8, i: i64, discipline: []const u8) Oom!u16 {
+    var buf: [elem_key_len]u8 = undefined;
+    const key = try self.elemKey1(&buf, base, i);
+    const name = self.node_voltages.getKey(key) orelse try self.vecElem(base, i);
+    return self.internNode(name, discipline);
 }
 
 /// Fold a declared `[msb:lsb]` (§3.6.3 Syntax 3-6). The bounds are constant
@@ -2800,9 +2817,9 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
     const elems = try self.flattenPattern(decl.default, dims);
 
     try self.arrays.put(self.arena, name, .{ .dims = dims, .ty = astTy(ty) });
-    var sub: [8]i64 = undefined;
+    var sub: [max_stack_dims]i64 = undefined;
+    const idx = try self.subscriptBuf(&sub, dims.len);
     for (elems, 0..) |elem, k| {
-        const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
         shapeSubscripts(dims, k, idx);
         const default: Mir.Value = if (elem == .none)
             (if (astTy(ty) == .real) Mir.Value.f_zero else Mir.Value.zero)
@@ -2992,6 +3009,22 @@ fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
     }
 }
 
+/// How many subscripts fit on the stack. NOT a proved bound — §3.2 puts no limit
+/// on a declaration's dimension count, though its own examples go two deep — so
+/// this is the spill shape and not a fixed buffer: eight covers everything real
+/// and anything wider allocates. `indexChain` shares the constant, which is what
+/// makes ITS spill unreachable (see `resolveLvalue`).
+const max_stack_dims = 8;
+
+/// Scratch for ONE cell's subscripts, sized once for a whole `shapeSubscripts`
+/// walk. Eight copies of this line were written out inline across seven loops
+/// (`copyWholeArray` has both halves of a copy), each re-deciding the threshold
+/// — and each INSIDE its loop, so a nine-dimensional array paid an arena
+/// allocation per cell rather than one for the walk.
+fn subscriptBuf(self: *Lower, buf: *[max_stack_dims]i64, n: usize) Oom![]i64 {
+    return if (n <= buf.len) buf[0..n] else try self.arena.alloc(i64, n);
+}
+
 /// The scalarized key for one array element, `name[i]` / `name[i][j]`
 /// (§3.2, §3.2.2, §3.4.4).
 ///
@@ -3124,9 +3157,9 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
         // `dims[0].lo + k` — a 1:3 range puts "first" at index 1, not 0 — and
         // one list per dimension for a multidimensional array (§3.3, §3.4.8).
         const elems = try self.flattenPattern(decl.init, dims);
-        var sub: [8]i64 = undefined;
+        var sub: [max_stack_dims]i64 = undefined;
+        const idx = try self.subscriptBuf(&sub, dims.len);
         for (elems, 0..) |elem, k| {
-            const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
             shapeSubscripts(dims, k, idx);
             // §3.2.2 arrays are scalarized, so a held array is just one held
             // slot per element — `markHeldVars` records the base name and every
@@ -3338,10 +3371,10 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
         if (self.arrays.get(name)) |info| {
             const elems = try self.flattenPattern(value, info.dims);
             var key_buf: [elem_key_len]u8 = undefined;
-            var sub: [8]i64 = undefined;
+            var sub: [max_stack_dims]i64 = undefined;
+            const idx = try self.subscriptBuf(&sub, info.dims.len);
             for (elems, 0..) |elem, k| {
                 if (elem == .none) continue;
-                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
                 shapeSubscripts(info.dims, k, idx);
                 const slot = self.vars.get(try self.elemKey(&key_buf, name, idx)) orelse continue;
                 const tv = try self.lowerExpr(elem);
@@ -3392,7 +3425,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
 /// own examples are 2 and 4 elements) and the alternative is real memory in the
 /// emitted device, which is the whole thing scalarization exists to avoid.
 fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
-    var subs: [8]Ast.ExprId = undefined;
+    var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = self.indexChain(target, &subs) orelse return false;
     if (chain.subs.len != 1) return false;
     if (self.constEval(chain.subs[0]) != null) return false;
@@ -3472,12 +3505,12 @@ fn copyWholeArray(
     }
 
     var key_buf: [elem_key_len]u8 = undefined;
-    var d_sub: [8]i64 = undefined;
-    var s_sub: [8]i64 = undefined;
+    var d_sub: [max_stack_dims]i64 = undefined;
+    var s_sub: [max_stack_dims]i64 = undefined;
+    const di = try self.subscriptBuf(&d_sub, dst.dims.len);
+    const si = try self.subscriptBuf(&s_sub, src.dims.len);
     const n = shapeCells(dst.dims);
     for (0..n) |k| {
-        const di = if (dst.dims.len <= d_sub.len) d_sub[0..dst.dims.len] else try self.arena.alloc(i64, dst.dims.len);
-        const si = if (src.dims.len <= s_sub.len) s_sub[0..src.dims.len] else try self.arena.alloc(i64, src.dims.len);
         shapeSubscripts(dst.dims, k, di);
         shapeSubscripts(src.dims, k, si);
         const v = (try self.arrayElemValue(src_name, si)) orelse continue;
@@ -3506,21 +3539,24 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
             }
             var b = self.errAtWith(e, .E0313);
             b.msg("`{s}`", .{name});
-            const near = diag.didYouMeanMap(self.arena, name, self.vars) orelse
-                diag.didYouMeanMap(self.arena, name, self.param_index);
+            const near = diag.didYouMeanMap(name, self.vars) orelse
+                diag.didYouMeanMap(name, self.param_index);
             if (near) |s| b.suggestHere(s);
             try b.emit();
             return null;
         },
         .index => {
-            var subs: [8]Ast.ExprId = undefined;
+            var subs: [max_stack_dims]Ast.ExprId = undefined;
             const chain = self.indexChain(e, &subs) orelse {
                 try self.errAt(e, .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
                 return null;
             };
             const name = self.file.str(chain.name);
-            var idx: [8]i64 = undefined;
-            const at = if (chain.subs.len <= idx.len) idx[0..chain.subs.len] else try self.arena.alloc(i64, chain.subs.len);
+            // No spill: `indexChain` refuses a chain deeper than the buffer it
+            // was handed, and that buffer is `max_stack_dims` wide too, so
+            // `chain.subs.len <= idx.len` holds by construction.
+            var idx: [max_stack_dims]i64 = undefined;
+            const at = idx[0..chain.subs.len];
             for (chain.subs, at) |s, *o| {
                 const c = self.constEval(s) orelse {
                     // ponytail: a runtime array index would need a select chain or
@@ -4140,15 +4176,19 @@ const Target = struct {
 /// expression cannot name a branch at all (a two-terminal access, a
 /// non-constant index), which is not an error here — `nodeOf` reads the same
 /// expression as a net reference and reports whatever is wrong with it.
-fn branchKey(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
+fn branchKey(self: *Lower, buf: *[elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u8 {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .ident => self.file.str(ex.strOf(e)),
+        // Into the caller's buffer, not the arena: both consumers do nothing
+        // with the result but `branches.get`/`port_branches.get`, which never
+        // retain a key — and this runs once per §4.4.1 ACCESS, so `br[0]` in an
+        // unrolled loop body was minting a fresh string per iteration. `elemKey`.
         .index => blk: {
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) break :blk null;
             const i = self.constEval(ex.rhs(e)) orelse break :blk null;
-            break :blk try self.vecElem(self.file.str(ex.strOf(base)), i.asInt());
+            break :blk try self.elemKey1(buf, self.file.str(ex.strOf(base)), i.asInt());
         },
         else => null,
     };
@@ -4159,7 +4199,8 @@ fn branchKey(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
 /// access — a port branch is a name, never a pair.
 fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
     if (self.file.exprs.rhs(e) != .none) return null;
-    const key = try self.branchKey(self.file.exprs.lhs(e)) orelse return null;
+    var key_buf: [elem_key_len]u8 = undefined;
+    const key = try self.branchKey(&key_buf, self.file.exprs.lhs(e)) orelse return null;
     return self.port_branches.get(key);
 }
 
@@ -4177,7 +4218,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     const access = self.access_kind.get(name) orelse {
         var b = self.errAtWith(e, .E0501);
         b.msg("`{s}`", .{name});
-        if (diag.didYouMeanMap(self.arena, name, self.access_kind)) |s|
+        if (diag.didYouMeanMap(name, self.access_kind)) |s|
             b.suggestHere(s);
         try b.emit();
         return null;
@@ -4204,7 +4245,8 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     // under exactly that scalarised name. The miss falls through to `nodeOf`,
     // which owns every diagnostic about a bad index.
     if (ex.rhs(e) == .none) {
-        if (try self.branchKey(first)) |key| {
+        var key_buf: [elem_key_len]u8 = undefined;
+        if (try self.branchKey(&key_buf, first)) |key| {
             if (self.branches.get(key)) |b| {
                 try self.checkAccessMatch(e, name, access, b.hi);
                 return canonical(access, b.hi, b.lo, b.id);
@@ -6020,7 +6062,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// element; a runtime index becomes a `select` chain over them (the array is
 /// scalarized, so there is no memory to index).
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    var subs: [8]Ast.ExprId = undefined;
+    var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = self.indexChain(e, &subs) orelse {
         try self.errAt(e, .E0330, "only `name[<index>]` is supported", .{});
         return poison;
@@ -6031,8 +6073,10 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     };
 
-    var idx: [8]i64 = undefined;
-    const at = if (chain.subs.len <= idx.len) idx[0..chain.subs.len] else try self.arena.alloc(i64, chain.subs.len);
+    // Bounded by `indexChain`, as in `resolveLvalue`: both buffers are
+    // `max_stack_dims` wide and a deeper chain never gets past it.
+    var idx: [max_stack_dims]i64 = undefined;
+    const at = idx[0..chain.subs.len];
     var all_const = true;
     for (chain.subs, at) |s, *o| {
         if (self.constEval(s)) |c| o.* = c.asInt() else all_const = false;
@@ -6230,10 +6274,10 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     }
     var b = self.errAtWith(e, .E0314);
     b.msg("`{s}`", .{name});
-    const near = diag.didYouMeanMap(self.arena, name, self.vars) orelse
-        diag.didYouMeanMap(self.arena, name, self.param_index) orelse
-        diag.didYouMeanMap(self.arena, name, self.node_voltages) orelse
-        diag.didYouMeanMap(self.arena, name, self.branches);
+    const near = diag.didYouMeanMap(name, self.vars) orelse
+        diag.didYouMeanMap(name, self.param_index) orelse
+        diag.didYouMeanMap(name, self.node_voltages) orelse
+        diag.didYouMeanMap(name, self.branches);
     if (near) |s| b.suggestHere(s);
     try b.emit();
     return poison;
@@ -6609,7 +6653,7 @@ fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     const access = self.access_kind.get(name) orelse {
         var b = self.errAtWith(e, .E0501);
         b.msg("`{s}`", .{name});
-        if (diag.didYouMeanMap(self.arena, name, self.access_kind)) |s|
+        if (diag.didYouMeanMap(name, self.access_kind)) |s|
             b.suggestHere(s);
         try b.emit();
         return poison;
@@ -6627,7 +6671,7 @@ fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     if (p == ground or p >= self.num_ports) {
         var b = self.errAtWith(e, .E0508);
         b.msg("`{s}(<{s}>)`", .{ name, self.nodeName(p) });
-        if (diag.didYouMeanMap(self.arena, self.nodeName(p), self.node_voltages)) |s|
+        if (diag.didYouMeanMap(self.nodeName(p), self.node_voltages)) |s|
             b.help("did you mean `{s}`?", .{s});
         try b.emit();
         return poison;
@@ -8156,9 +8200,9 @@ pub fn inlineUserFunc(
             const dims = try self.dimsBounds(formal.dims, formal.main_tok, fname) orelse continue;
             try self.arrays.put(self.arena, fname, .{ .dims = dims, .ty = ty });
             const slots = try self.arena.alloc(VarSlot, vals.len);
-            var sub: [8]i64 = undefined;
+            var sub: [max_stack_dims]i64 = undefined;
+            const idx = try self.subscriptBuf(&sub, dims.len);
             for (vals, slots, 0..) |v, *slot, k| {
-                const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
                 shapeSubscripts(dims, k, idx);
                 slot.* = try self.declareVar(try self.elemName(fname, idx), ty);
                 try self.builder.writeVariable(slot.place, self.cur, v);
@@ -8252,9 +8296,9 @@ fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!b
             const aname = self.file.str(ex.strOf(actual));
             const info = self.arrays.get(aname) orelse return false;
             if (shapeCells(info.dims) != out.len) return false;
-            var sub: [8]i64 = undefined;
+            var sub: [max_stack_dims]i64 = undefined;
+            const idx = try self.subscriptBuf(&sub, info.dims.len);
             for (out, 0..) |*v, k| {
-                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
                 shapeSubscripts(info.dims, k, idx);
                 const el = (try self.arrayElemValue(aname, idx)) orelse return false;
                 v.* = if (ty == .real) try self.toReal(el) else el.v;
@@ -8285,9 +8329,9 @@ fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!v
             const aname = self.file.str(ex.strOf(actual));
             const info = self.arrays.get(aname) orelse return;
             var key_buf: [elem_key_len]u8 = undefined;
-            var sub: [8]i64 = undefined;
+            var sub: [max_stack_dims]i64 = undefined;
+            const idx = try self.subscriptBuf(&sub, info.dims.len);
             for (vals, 0..) |v, k| {
-                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
                 shapeSubscripts(info.dims, k, idx);
                 const slot = self.vars.get(try self.elemKey(&key_buf, aname, idx)) orelse continue;
                 try self.builder.writeVariable(slot.place, self.cur, v);
