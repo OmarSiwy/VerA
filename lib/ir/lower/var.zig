@@ -51,6 +51,10 @@ pub const State = struct {
     /// The `held_names` keys an event body writes, true while every such body
     /// waits on explicit D2A terms only (`Lower.HeldVar.d2a`).
     d2a_only: std.StringHashMapUnmanaged(bool) = .empty,
+    /// §7.3.6.1 the event-assigned module variables a discrete context reads,
+    /// each with the hidden held counter its every assignment increments
+    /// (`Lower.HeldVar.assign_count_prefix`).
+    assign_counts: std.AutoHashMapUnmanaged(Ssa.Place, Lower.VarSlot) = .empty,
     /// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
     /// nearest declaration of it — a module variable assigned from inside a block
     /// still keys bare, because the block does not declare it.
@@ -734,7 +738,19 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         try holdSlot(self, held_key, ty, init_val, slot.place, why.?, d2a)
     else
         init_val);
+    // §7.3.6.1 "An event occurs whenever a value is assigned to the variable,
+    // regardless of whether the variable changes value or not": the host
+    // tells an assignment from no assignment by this count.
+    if (hold and why.? == .event and prefix.len == 0 and self.out.discrete_reads.contains(name))
+        try self.var_state.assign_counts.put(self.arena, slot.place, try hiddenHeldInt(self, try self.arena.print("{s}{s}", .{ Lower.HeldVar.assign_count_prefix, name })));
     try lower_contrib.noteVarNoise(self, name, decl.init);
+}
+
+/// §7.3.6.1 counts one assignment of `place`, when it has a count.
+pub fn countAssign(self: *Lower, place: Ssa.Place) Oom!void {
+    const c = self.var_state.assign_counts.get(place) orelse return;
+    const n = try self.builder.readVariable(c.place, self.cur);
+    try self.builder.writeVariable(c.place, self.cur, try self.emit(.iadd, &.{ n, try self.mir.addIntConst(self.arena, 1) }));
 }
 
 /// VerA's `vera_scratch` (§2.9) on the variable declared at token `tok`: the

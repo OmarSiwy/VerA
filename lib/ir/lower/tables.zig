@@ -359,6 +359,11 @@ pub const HeldVar = struct {
     /// cycle's commits it alone (the mixed runner's `latch`).
     d2a: bool = false,
 
+    /// The name of a variable's §7.3.6.1 assignment count is this followed
+    /// by the variable's (`lower_var.countAssign`): no identifier starts
+    /// with `$`.
+    pub const assign_count_prefix = "$assigned.";
+
     /// Why a variable needs a persistent slot.
     pub const Why = enum {
         /// §5.10 assigned under an `@(...)`: latch state `stateCtl` may
