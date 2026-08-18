@@ -69,6 +69,67 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 18 — `StaticStringMap` is not a hash map, and the brief said it was
+
+**Suite: 220/220 green** (219 + the new differential test). Corpus emit-and-diff over all 1,164
+fixtures: **byte-identical** — 741 `device.zig`, every diagnostic stream, every exit code.
+
+The wave was briefed as "the lexer hashes every identifier to ask *are you a keyword?*", with a
+first-byte + length prefilter as the cheap fix and "read the stdlib before assuming it does not
+already prefilter" as the check. Reading it settles both at once: **`std.StaticStringMap`
+computes no hash at all.** `std/static_string_map.zig:198-217` buckets keys by LENGTH, applies a
+`min_len`/`max_len` prefilter, and then LINEARLY SCANS the bucket with a byte-at-a-time compare.
+So the briefed candidate (b) — "a `StaticStringMap` per length" — is what it already does, the
+length half of candidate (a) is already there, and the second site ("one hash can serve both the
+keyword test and the interner") has nothing to merge: the keyword test has no hash to give away.
+
+What was actually slow is the part nobody named: with 217 keywords the five-byte bucket holds
+**39** of them, and the walk is paid by hits as well as misses. The annex D/E prelude — the bulk
+of what a one-shot `vera` process lexes — is nearly all keywords, so a filter helps it least.
+MEASURED, four implementations over identical work (callgrind, total Ir, a `--lint` that stops
+at a missing include and therefore lexes the prelude and nothing else):
+
+| implementation | Ir | |
+|---|---|---|
+| `keyword_map.get` (before) | 2,240,522 | |
+| a (first byte, length) bitmask in front of it | 2,191,152 | −2.2% |
+| `std.mem.indexOfScalarPos` over the bucket | 2,163,929 | −3.4% |
+| one masked `@Vector(32, u8)` block (shipped) | 2,092,721 | **−6.6%** |
+
+- **The briefed fix is the one that failed.** The bitmask rejects ~80% of *random* (first byte,
+  length) pairs and ~20% of real ones. Reported rather than buried, because "cheapest first" put
+  it first and the measurement is the only thing that could have known.
+- **Stdlib was tried before hand-rolling** (rung 3). `std.mem.indexOfScalarPos` is the SIMD scan
+  in `std.mem`, but it cannot reach its vector path here: `findScalarPos` needs
+  `2*block_len < len`, i.e. >64 bytes on AVX2, and the biggest bucket is 39. Worth knowing for
+  the next wave: it also skips its vectors entirely under valgrind (`std.debug.inValgrind()`),
+  so callgrind under-reports stdlib scans and over-reports anything that replaces one.
+- **Shipped:** `token.lookupKeyword` — a 217-byte array of each keyword's first byte in
+  `keyword_map.keys()` order, one lane of zero padding, and one masked block compare per length
+  bucket. `keyword_map` stays the reference and the definition; the scalar loop stays as the
+  no-vector fallback; lanes come from `std.simd.suggestVectorLength(u8)`. Two comptime
+  `@compileError`s pin the stdlib behaviour the index depends on (keys sorted by length) and the
+  table's own bounds — so a stdlib change breaks the build instead of the compiler.
+- **MEASURED, whole compilation** (callgrind, ReleaseFast `-Dcpu=x86_64_v3`, `--emit-zig` of
+  `annex_e_spice/primitive_vpulse.va`): 7,911,240 → 7,618,237 Ir, **−3.7%**; the lookup itself
+  501,720 → 208,663 Ir, **−58%**. It was the largest single entry in the profile at 6.34%.
+- **MEASURED end to end** (`zig build bench -Doptimize=ReleaseFast -- fixtures`, min of 25, best
+  of 3): `lint` 181.2 → **170.6 ms**, `codegen` 199.4 → **188.0 ms**, both −5.8%. `pp` unchanged
+  at 19.5 ms, as it must be — it never lexes.
+- **Why 5.8% of `lint` from a scanner that sees ~450 bytes per compilation:** a token is lexed
+  more than once. `next()` is pure in (src, pos), so `tokenEnd`/`tokenText` re-run it, and
+  `parser.zig` does that at 19 sites. Recorded in TODO.md §3.
+- **`lexer.zig`'s "stay scalar" header was re-derived rather than inherited.** It is still
+  right, and now says why with the number: MEASURED, a compilation's preprocessed text averages
+  11,960 bytes over the 1,164 fixtures and 11,512 of those are the prelude, whose tokens wave 16
+  seeds in — so the scanner sees ~450 bytes per compilation in a warm process, as ~4-byte
+  tokens, with comments already stripped by §10 (51 Ir on the `//` test in a whole run). The one
+  place a vector paid is `lookupKeyword`, and the difference is that its N is the keyword table,
+  not the source.
+- **Not taken, with the cost:** merging the lexer's scan with `StringInterner`'s wyhash. All of
+  `Wyhash.hash` is 1.6% of a whole compile and part of that is the preprocessor's macro map; the
+  only saving available would make `lexer.zig` know about `ast.zig`. TODO.md §3 carries it.
+
 ### Wave 16 — the instrument now says which mode it measured in
 
 **Suite: 217/217 green.**
