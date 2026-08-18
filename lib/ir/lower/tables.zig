@@ -372,6 +372,10 @@ pub const HeldVar = struct {
         /// observable. The backend's `pruneHeld` drops it when every merge
         /// of the held value is solve-invariant.
         unless_invariant,
+        /// §7.3.3 a discrete context reads it (`Lowered.discrete_reads`): the
+        /// mixed-signal coordinator copies its value off a solution, so it
+        /// needs a slot even when every evaluation assigns it first.
+        a2d,
     };
 };
 

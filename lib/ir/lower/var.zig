@@ -119,6 +119,10 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     while (it.next()) |e| if (e.value_ptr.read and
         (e.value_ptr.initial or self.var_state.held_names.get(e.key_ptr.*) == .event))
         try self.var_state.carried.put(self.arena, e.key_ptr.*, {});
+    for (self.out.discrete_reads.keys()) |name| {
+        const gop = try self.var_state.held_names.getOrPut(self.arena, name);
+        if (!gop.found_existing or gop.value_ptr.* == .unless_invariant) gop.value_ptr.* = .a2d;
+    }
 }
 
 /// §3.2: "Real variables are initialized to zero (0) at the start of a

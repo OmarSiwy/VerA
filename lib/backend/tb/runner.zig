@@ -382,10 +382,29 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\    /// steps from the last finished one.
         \\    pub fn latch(a: *Analog) !void {
         \\        if (comptime State != void and d2a_held.len != 0) {
-        \\            var inst = a.inst.*;
-        \\            var state = a.state.*;
-        \\            _ = D.updateState(Val, a.model, &inst, a.x.*, &state, sim_state);
+        \\            const inst = a.accepted();
         \\            inline for (d2a_held) |f| @field(a.inst, f) = @field(inst, f);
+        \\        }
+        \\    }
+        \\
+        \\    /// The `Instance` the tentative solution would leave if accepted.
+        \\    fn accepted(a: *const Analog) D.Instance {
+        \\        var inst = a.inst.*;
+        \\        var state = a.state.*;
+        \\        _ = D.updateState(Val, a.model, &inst, a.x.*, &state, sim_state);
+        \\        return inst;
+        \\    }
+        \\
+        \\    /// VAMS §7.3.3 / §7.3.6.3 a continuous variable no event statement
+        \\    /// assigns, read by a digital expression: its value on the tentative
+        \\    /// solution, which `sim.mixed.run` steps to every digital event
+        \\    /// time (`has_probes`) before the digital engine runs it.
+        \\    // ponytail: the solution's value, not one interpolated to the
+        \\    // tick: they differ only where an A2D crossing rounds to a tick.
+        \\    fn publish(a: *Analog) !void {
+        \\        if (comptime State != void and has_free_reads) {
+        \\            const inst = a.accepted();
+        \\            inline for (a2d_ports, 0..) |p, i| if (p.free) try a2dPut(a.dig, a.a2d_slots[i], @field(inst, p.field));
         \\        }
         \\    }
         \\
@@ -402,6 +421,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        sim_state.analog_initial = first;
         \\        a.solved = solve(a.x, a.forced, a.model, a.inst);
         \\        a.t = t;
+        \\        try a.publish();
         \\    }
         \\
         \\    pub fn finish(a: *Analog) !void {
@@ -409,10 +429,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        point(a.n.*, a.x, a.model, a.inst);
         \\        if (stepPost(a.model, a.inst, a.x, a.state, a.solved)) |r| retryUnsupported(r);
         \\        // §7.3.6.4: what the accepted solution left in each held variable.
-        \\        inline for (a2d_ports, 0..) |p, i| {
-        \\            const v = @field(a.inst, p.field);
-        \\            try a.dig.a2dWrite(a.a2d_slots[i], if (@TypeOf(v) == f64) v else @as(f64, @floatFromInt(v)));
-        \\        }
+        \\        inline for (a2d_ports, 0..) |p, i| try a2dPut(a.dig, a.a2d_slots[i], @field(a.inst, p.field));
         \\        a.n.* += 1;
         \\        a.x_prev = a.x.*;
         \\        a.t_prev = a.t;
@@ -479,7 +496,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
         const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
-        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\", .free = {} }},", .{ std.zig.fmtString(name), mod, leaf, h.why != .event });
         break;
     };
     // VAMS §6.3 the card's root parameters, so the digital half reads the
