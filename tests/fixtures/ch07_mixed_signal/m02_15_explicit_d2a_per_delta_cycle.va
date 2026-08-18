@@ -27,7 +27,9 @@
 // tick, where the solve sees only 3, is
 // m02_14_zero_delay_settles_before_the_macro_process.va.
 //
-//! xfail explicit D2A events across a #0 delta are coalesced: the @(d) body runs once at tick 10 and reads d after region 2 (k = 1, c1 = 3)
+// No refusal: the clause orders the processing of a legal event; it has no
+// invalid form to reject.
+//
 //! lrm 8.5.3.6
 //! lrm 8.5.1
 //! analysis tran

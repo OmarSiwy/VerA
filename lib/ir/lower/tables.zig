@@ -354,6 +354,10 @@ pub const HeldVar = struct {
     inits: []const Mir.Value = &.{},
     /// Why the variable is held; see `Why`.
     why: Why = .event,
+    /// §8.5.3.6 every event body that assigns it waits on explicit D2A terms
+    /// only, so a host evaluating one region-1b event before the next delta
+    /// cycle's commits it alone (the mixed runner's `latch`).
+    d2a: bool = false,
 
     /// Why a variable needs a persistent slot.
     pub const Why = enum {

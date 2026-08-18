@@ -376,6 +376,19 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        inline for (snap_ports, 0..) |p, i| a.snaps[i] = mixedInput(dig, a.snap_slots[i], p.name);
         \\    }
         \\
+        \\    /// §8.5.3.6 one region-1b evaluation: what the tentative solution's
+        \\    /// explicit D2A event statements assigned (`d2a_held`) is committed,
+        \\    /// and no other history moves, so the tick's own solution still
+        \\    /// steps from the last finished one.
+        \\    pub fn latch(a: *Analog) !void {
+        \\        if (comptime State != void and d2a_held.len != 0) {
+        \\            var inst = a.inst.*;
+        \\            var state = a.state.*;
+        \\            _ = D.updateState(Val, a.model, &inst, a.x.*, &state, sim_state);
+        \\            inline for (d2a_held) |f| @field(a.inst, f) = @field(inst, f);
+        \\        }
+        \\    }
+        \\
         \\    pub fn solveAt(a: *Analog, t: f64, dt: f64, first: bool, last: bool) !void {
         \\
     );
@@ -471,6 +484,12 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     };
     // VAMS §6.3 the card's root parameters, so the digital half reads the
     // values `Model` gets (`sim.digital.Mixed.params`).
+    // §8.5.3.6 the held fields only explicit D2A event statements assign.
+    try out.appendSlice(arena, " };\nconst d2a_held = [_][]const u8{");
+    for (mx.held) |h| if (h.d2a) {
+        const leaf = naming.sanitize(&buf, h.name) catch return error.OutOfMemory;
+        try out.print(arena, " \"{s}__held__{s}\",", .{ mod, leaf });
+    };
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
     for (d.params) |p| try out.print(arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
     // The host has already derived these values, including defaults that the
