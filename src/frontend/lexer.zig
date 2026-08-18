@@ -29,17 +29,56 @@ pub const Lexer = struct {
     src: []const u8,
     pos: u32 = 0,
 
+    /// Already-lexed tokens for a PREFIX of `src`, handed to `tokenizeSeeded`
+    /// instead of being re-scanned. `len` is that prefix's byte length; the two
+    /// columns are its tokens, `.eof` excluded, and every `start` is an absolute
+    /// offset into `src` — which is what makes them replayable at all.
+    ///
+    /// The only producer is `Preprocessor.preludeTokens`: the annex D.2/D.1/E.1
+    /// prelude is a fixed byte prefix of every preprocessed text compiled with
+    /// `std_defs`, so its tokens are a fixed prefix of that text's tokens.
+    pub const Seed = struct {
+        tags: []const token.Tag,
+        starts: []const u32,
+        len: u32,
+    };
+
     /// Lex the whole buffer into a TokenList (arena-owned). Ends with `.eof`.
     /// Caller owns the list: `list.deinit(arena)` (a no-op under an arena).
     pub fn tokenize(arena: std.mem.Allocator, src: []const u8) !TokenList {
+        return tokenizeSeeded(arena, src, null);
+    }
+
+    /// `tokenize`, resuming after a prefix whose tokens are already known.
+    ///
+    /// SAFE BECAUSE `next()` is a pure function of (src, pos) — the file header
+    /// says so, and `tokenEnd` already depends on it — so there is no lexer
+    /// state at the seam to restore. The one thing that could still differ is a
+    /// token that STRADDLES `seed.len`, and none can: the prelude is a whole
+    /// preprocessed file ending in a newline, so the boundary is between tokens.
+    /// The equivalence test in preprocessor.zig checks that against the long way
+    /// round rather than trusting this paragraph.
+    pub fn tokenizeSeeded(arena: std.mem.Allocator, src: []const u8, seed: ?Seed) !TokenList {
         std.debug.assert(src.len <= std.math.maxInt(u32));
 
         var list: TokenList = .empty;
         errdefer list.deinit(arena);
-        // ~4 source bytes per token including separators: one allocation in practice.
-        try list.ensureTotalCapacity(arena, src.len / 4 + 8);
+        var start: u32 = 0;
+        if (seed) |s| {
+            std.debug.assert(s.tags.len == s.starts.len);
+            std.debug.assert(s.len <= src.len);
+            // ~4 source bytes per token, over the part still to be scanned.
+            try list.ensureTotalCapacity(arena, s.tags.len + (src.len - s.len) / 4 + 8);
+            list.len = s.tags.len;
+            @memcpy(list.items(.tag), s.tags);
+            @memcpy(list.items(.start), s.starts);
+            start = s.len;
+        } else {
+            // ~4 source bytes per token including separators: one allocation in practice.
+            try list.ensureTotalCapacity(arena, src.len / 4 + 8);
+        }
 
-        var lx: Lexer = .{ .src = src };
+        var lx: Lexer = .{ .src = src, .pos = start };
         while (true) {
             const t = lx.next();
             try list.append(arena, t);

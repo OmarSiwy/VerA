@@ -32,9 +32,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const diag = @import("../diag.zig");
-/// §2.6.2 number decoding, for §10.3's `transition_time` operand. The lexer
-/// does not depend on this file, so the edge only goes one way.
+/// §2.6.2 number decoding, for §10.3's `transition_time` operand, and the
+/// prelude's own token snapshot. The lexer does not depend on this file, so the
+/// edge only goes one way.
 const Lexer = @import("lexer.zig");
+const token = @import("token.zig");
 /// Annex E.2 — the `.MODEL`/`.SUBCKT` reader whose output joins this prelude.
 const spice_cards = @import("spice_cards.zig");
 
@@ -333,6 +335,12 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
 /// deliberately the only spelling of the three-file sequence so there is one
 /// thing to compare against.
 ///
+/// It also holds the STAGE 2 result for the same bytes — `tags`/`starts`, see
+/// `preludeTokens`. That is not a preprocessor output, but it is a function of
+/// the same three literals and of nothing else, so it is keyed on nothing for
+/// the same reason and there is no second place to put it that does not need a
+/// second copy of this argument. Its own equivalence test is at the bottom too.
+///
 /// LIFETIME: process-lifetime and never freed. Every compilation `@memcpy`s the
 /// text into its own arena, so the borrowed-text rule in root.zig's OWNERSHIP
 /// section is untouched; what the `Bag` borrows (the stripped file texts, macro
@@ -346,6 +354,11 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
 /// threads and byte-identical to the winner's either way.
 const Prelude = struct {
     text: []const u8,
+    /// `text`'s tokens, `.eof` excluded — see `preludeTokens`. Two columns
+    /// rather than a `TokenList` because that is the shape `Lexer.Seed` wants
+    /// and a `MultiArrayList`'s own slice is not stable across a resize.
+    tags: []const token.Tag,
+    starts: []const u32,
     segs: []const diag.Segment,
     macros: []const Def,
     /// In registration order, which is what makes `segs`' `FileId`s — indices
@@ -357,6 +370,32 @@ const Prelude = struct {
 };
 
 var prelude_snapshot: std.atomic.Value(?*const Prelude) = .init(null);
+
+/// Stage 2's half of the snapshot: the prelude's tokens, ready to be handed to
+/// `Lexer.tokenizeSeeded` so a compilation lexes only the bytes AFTER the
+/// prelude. `null` when `std_defs` is off — there is then no prefix to skip.
+///
+/// WHY THIS IS SOUND. `process` writes `replayStdDefs`' bytes first and nothing
+/// else can precede them, so `Prelude.text` is a byte-for-byte prefix of every
+/// preprocessed text compiled with `std_defs`, at offset 0, every time. Annex
+/// E.2's netlist tail and the user's source both land AFTER it and are lexed
+/// normally. `Lexer.next` reads no state but the cursor, so resuming at
+/// `text.len` is the same scan the whole-buffer call would have done from there.
+///
+/// MEASURED, ReleaseFast, min of 500, the 6-line resistor in root.zig's tests:
+/// lexing 11,512 bytes of prelude was **47.6 µs of the 155 µs** that a whole
+/// `.lint` compilation cost, against 8.9 µs for the same model with
+/// `--no-std-defs`. Parsing the same bytes is a further 91.9 µs and is NOT
+/// cached here — see TODO.md §3.
+///
+/// LIFETIME and THREAD SAFETY: `Prelude`'s, unchanged. The two columns live in
+/// the process-lifetime arena, are immutable after publication, and the
+/// compilation `@memcpy`s them into its own arena exactly as it does the text.
+pub fn preludeTokens(std_defs: bool) Allocator.Error!?Lexer.Lexer.Seed {
+    if (!std_defs) return null;
+    const p = try preludeSnapshot();
+    return .{ .tags = p.tags, .starts = p.starts, .len = @intCast(p.text.len) };
+}
 
 fn preludeSnapshot() Allocator.Error!*const Prelude {
     if (prelude_snapshot.load(.acquire)) |p| return p;
@@ -409,9 +448,18 @@ fn buildPrelude() Allocator.Error!*const Prelude {
         try macros.append(arena, .{ .name = e.key_ptr.*, .macro = e.value_ptr.* });
     }
 
+    // Stage 2 for the same three files, also once per process. The `.eof` is
+    // dropped: it is a property of the buffer being lexed, and the buffer the
+    // compilation lexes ends past the user's source, not here.
+    var toks = try Lexer.Lexer.tokenize(arena, pp.out.items);
+    std.debug.assert(toks.len > 0 and toks.items(.tag)[toks.len - 1] == .eof);
+    toks.len -= 1;
+
     const p = try arena.create(Prelude);
     p.* = .{
         .text = pp.out.items,
+        .tags = toks.items(.tag),
+        .starts = toks.items(.start),
         .segs = pp.segs.items,
         .macros = macros.items,
         .files = .{
@@ -2761,6 +2809,64 @@ test "the prelude snapshot replays exactly what running annex D.2/D.1/E.1 produc
         try testing.expectEqualStrings(f.name, bag.fileName(@enumFromInt(id)));
         try testing.expectEqualStrings(f.stripped, bag.fileText(@enumFromInt(id)));
     }
+}
+
+// The token snapshot's correctness condition, and it needs its OWN long way
+// round: `tokenizeSeeded` and `tokenize` are two code paths over one buffer, so
+// this lexes the whole preprocessed text from offset 0 — touching no snapshot —
+// and compares every token of it against the seeded result. A snapshot that
+// dropped a token, kept the `.eof`, or recorded a relative offset diverges here.
+//
+// Two inputs, because the seam moves: with an annex E.2 netlist the prelude is
+// followed by synthesized modules and only THEN the user's source, and the seed
+// length must still be the std-defs prefix alone.
+test "the prelude token snapshot lexes exactly what lexing the whole text produces" {
+    const cases = [_][]const u8{ "", ".MODEL nn npn\n.SUBCKT amp in out\nR1 in out 1k\n.ENDS\n" };
+    for (cases) |netlist| {
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        var bag: diag.Bag = .init(arena);
+        const text = try process(arena,
+            \\module res(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  parameter real r = 1000.0 from (0.0:inf);
+            \\  analog I(p, n) <+ V(p, n) / r;
+            \\endmodule
+        , .{ .bag = &bag, .spice_netlist = netlist });
+
+        // THE LONG WAY: no seed, one scan of the whole buffer.
+        const long = try Lexer.Lexer.tokenize(arena, text);
+        const seeded = try Lexer.Lexer.tokenizeSeeded(arena, text, try preludeTokens(true));
+
+        try testing.expectEqual(long.len, seeded.len);
+        try testing.expectEqualSlices(token.Tag, long.items(.tag), seeded.items(.tag));
+        try testing.expectEqualSlices(u32, long.items(.start), seeded.items(.start));
+
+        // The premise the seam rests on, checked rather than asserted in prose:
+        // the snapshot's bytes ARE a prefix of the text, at offset 0.
+        const p = try preludeSnapshot();
+        try testing.expect(std.mem.startsWith(u8, text, p.text));
+        // ...and the snapshot stops one token short of `.eof`, which belongs to
+        // whatever buffer is actually being lexed.
+        try testing.expect(p.tags.len != 0 and p.tags[p.tags.len - 1] != .eof);
+    }
+}
+
+test "`--no-std-defs` gets no seed, and lexes the same either way" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const text = try process(arena, "module m; endmodule\n", .{ .std_defs = false, .bag = &bag });
+
+    try testing.expectEqual(@as(?Lexer.Lexer.Seed, null), try preludeTokens(false));
+    const long = try Lexer.Lexer.tokenize(arena, text);
+    const seeded = try Lexer.Lexer.tokenizeSeeded(arena, text, try preludeTokens(false));
+    try testing.expectEqualSlices(token.Tag, long.items(.tag), seeded.items(.tag));
+    try testing.expectEqualSlices(u32, long.items(.start), seeded.items(.start));
 }
 
 test "an ABSTOL override reaches annex D.1" {

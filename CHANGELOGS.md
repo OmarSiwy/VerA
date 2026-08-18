@@ -109,6 +109,11 @@ cached the prelude's *preprocessing*; every compilation still **lexes, parses an
 same ~11.8 KB of expanded Annex D/E. `vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs
 with `--no-std-defs`. **That is ~30%, not 1%.**
 
+> **Wave 16 correction.** The headline held; two of the numbers did not. The `vera --lint` pair is
+> a process wall time, not a compiler measurement, and is withdrawn — see wave 16 below. The
+> cacheable constant is **146.4 µs = 69%** of the batch, measured in-process; 87% counts the n=1
+> model's own cost, which is constant but not cacheable.
+
 ### Wave 14 — the prelude runs once, and a near-miss miscompile — `35a60f2`
 
 **Suite: 217/217 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
@@ -440,17 +445,83 @@ Both are fixed and pinned as of `4d6207c`.
 
 ---
 
+## Wave 16 — the prelude's TOKENS, and a correction to wave 15's headroom
+
+Wave 15 said the prelude's per-compilation cost was ~30% and cited two numbers. One of them was
+wrong, and it was wrong in exactly the way `zig build bench` was built to catch.
+
+**`vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs with `--no-std-defs` — REFUTED as a
+compiler measurement.** Those are CLI wall times, so they are `fork` + `execve` + `ld.so` plus the
+compile. Re-measured on this tree with `hyperfine -N`: `/bin/true` spawns in **2.0 ms** and
+`vera --lint` runs in **1.6 ms** — the "measurement" is dominated by a cost the compiler does not
+pay, and the compiler came out *faster* than the empty program. Never quote a process spawn as a
+compiler number; `bench` exists precisely because it does not spawn one.
+
+**The real figure, in-process, ReleaseFast, min of 500, on `root.zig`'s 6-line resistor:** `.lint`
+cost **155.3 µs** with the prelude and **8.9 µs** with `--no-std-defs`. So the cacheable constant
+was **146.4 µs**, and it is **69%** of the 212.2 µs/fixture batch lint, not 87%. (87% is not a
+typo of 69: it counts the n=1 model's own cost as constant too, which it is — but nothing can
+cache it.) Still the largest known win in the tree; the headline was right and the arithmetic
+under it was not.
+
+**The split, which is what decided the shape.** Wave 15 offered three candidates and said to pick
+by measurement; that measurement had never been taken. Over the same 11,512 prelude bytes:
+
+| stage | µs | share of the constant |
+|---|---|---|
+| preprocess (cached by wave 14) | 2.7 | 2% |
+| **lex** | **47.6** | **33%** |
+| parse | 91.9 | 63% |
+| lower + prove | ~4 | 3% |
+
+Lowering is 3%, so candidate (c) — caching the lowered prelude declarations — is worth nothing and
+is not even written down as a ceiling: only the top module is lowered, and the prelude never is.
+
+**Landed: candidate (a), the token stream.** `Preprocessor.preludeTokens` extends wave 14's
+snapshot with the `{tag, start}` columns of the same three files, and `Lexer.tokenizeSeeded`
+`@memcpy`s them in and resumes the scan at `prelude.text.len`. It is sound because `Lexer.next` is
+a pure function of `(src, pos)` — the file header already said so, for `tokenEnd`'s sake — so
+there is no lexer state at the seam; and because `process` writes the prelude first and
+unconditionally, so it is a byte prefix at offset 0 every time. Annex E.2's netlist tail and the
+user's source land after it and are lexed normally.
+
+MEASURED, `zig build bench -- fixtures`, 1164 fixtures, every byte column and the whole MIR
+footprint table identical before and after:
+
+| phase | Debug before | Debug after | ReleaseFast before | ReleaseFast after |
+|---|---|---|---|---|
+| pp | 181.9 ms | 184.0 ms | 19.79 ms | 20.03 ms |
+| **lint** | 1969.0 ms | **1537.7 ms** (−21.9%) | 246.97 ms | **183.15 ms** (−25.8%) |
+| codegen | 2202.5 ms | 1741.2 ms | 267.93 ms | 201.90 ms |
+| rewrite | not in the stated baseline | 2090.4 ms | 329.50 ms | 260.95 ms |
+
+Per fixture, ReleaseFast: **212.2 µs → 157.3 µs**.
+
+**The test is the point.** Wave 14 learned that a determinism test cannot grade a cache: after the
+change both runs take the cached path, so a snapshot that dropped data is byte-identical in both.
+So `test "the prelude token snapshot lexes exactly what lexing the whole text produces"` lexes the
+whole preprocessed buffer from offset 0 with no seed at all — the long way round — and compares
+every tag and every start against the seeded list, on two inputs: with and without an Annex E.2
+netlist, because the netlist is what moves the bytes that follow the seam. Demonstrated FAILing on
+two planted mutations, each reverted: dropping one token from the snapshot, and shifting one
+`start` by one byte.
+
+Filtered torture green: `annex_d` 27/27, `annex_e` 42/42, `ch02_lexical` 60/60,
+`ch10_directives` 47/47, `annex_b_keywords` 27/27. `zig build test` 217 → **219**.
+
+---
+
 ## What is left
 
-The queued sequence (waves 8–15) is **complete**. Every item is landed or measured-and-refused.
+The queued sequence (waves 8–16) is **complete**. Every item is landed or measured-and-refused.
 
-**The one thing I would do next, and it is measured, not guessed:** cache the prelude's
-*parsing*, not just its preprocessing. Wave 15 measured that 87% of fixture-batch lint is a
-per-compilation constant — 211.7 µs spent producing 237 bytes of MIR — because every compilation
-re-lexes, re-parses and re-lowers the same ~11.8 KB of expanded Annex D/E. Measured headroom:
-`vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs with `--no-std-defs`. **~30%.**
-It is strictly harder than wave 14 (an AST and a MIR borrow the arena and the interner, where the
-prelude snapshot borrowed nothing), which is why it is a wave and not a patch.
+**The one thing I would do next, and the number is now the honest one:** cache the prelude's
+*parsing*. After wave 16 the per-compilation constant is **103.6 µs** (a whole `.lint` of the
+6-line resistor is 112.6 µs), and **91.9 µs of it — 89% — is stage 3**. Over the fixture batch
+that is ~107 ms of the 183 ms `lint` phase. It is strictly harder than the token seed, and
+TODO.md §3 (Parser) says exactly why: a `StrId` is an index into `SourceFile.strings`, so the
+prelude's ids have to become a genuine prefix of the compilation's, and a `ModuleDecl` borrowed
+out of a process-lifetime arena has to be provably never written. That is a wave, not a patch.
 
 **Refused, with numbers, so nobody re-derives them** (all now in TODO.md §2): the Air-shaped MIR
 row (below the noise floor); a batch/SIMD evaluator inside VerA (14 wrong CSR cells, 3.05 vs
