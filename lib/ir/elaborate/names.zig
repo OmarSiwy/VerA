@@ -399,17 +399,24 @@ pub fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.S
 /// makes for Table E.1's V and I. `net` is the terminal as the child wrote it,
 /// `flat_net` the same terminal cloned.
 ///
+/// When the joined net's discipline binds no nature for that half (§3.11.1's
+/// natureless or domainless parent, compatible with the child's), there is no
+/// spelling to respell to: the access keeps the child's name and is recorded
+/// `local_only`, so lowering does not judge it again against the net
+/// (`Design.local_accesses`).
+///
 /// ponytail: the respelling uses the net's discipline as known at the join;
 /// a §7.7.2 `resolveto` re-decided after the walk (`resolveMultiCandidates`)
 /// is not seen, the same ceiling `primitiveAccess` and `mfactorScale` have.
-pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net: Ast.ExprId, tok: u32) Error!Ast.StrId {
+pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net: Ast.ExprId, tok: u32) Error!LocalAccess {
     const file = self.ctx.file;
-    const local = self.unit.port_disc.get(netRefName(self, net) orelse return access) orelse return access;
-    const disc = self.disc_of.get(netRefName(self, flat_net) orelse return access) orelse return access;
-    if (disc == local) return access;
+    const keep: LocalAccess = .{ .name = access };
+    const local = self.unit.port_disc.get(netRefName(self, net) orelse return keep) orelse return keep;
+    const disc = self.disc_of.get(netRefName(self, flat_net) orelse return keep) orelse return keep;
+    if (disc == local) return keep;
     // §5.5.1 the generic spellings name a half on every discipline.
     const a = file.str(access);
-    if (std.mem.eql(u8, a, "potential") or std.mem.eql(u8, a, "flow")) return access;
+    if (std.mem.eql(u8, a, "potential") or std.mem.eql(u8, a, "flow")) return keep;
     const half: Ast.PotentialOrFlow = if (discipline.accessOf(file, local, .potential) == access)
         .potential
     else if (discipline.accessOf(file, local, .flow) == access)
@@ -418,10 +425,15 @@ pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net:
         try self.err(tok, .E0501, "`{s}` is not an access function of `{s}`, which this module declares `{s}`", .{
             a, file.str(file.exprs.strOf(net)), file.str(local),
         });
-        return access;
+        return keep;
     };
-    return discipline.accessOf(file, disc, half) orelse access;
+    const name = discipline.accessOf(file, disc, half) orelse return .{ .name = access, .local_only = true };
+    return .{ .name = name };
 }
+
+/// `localAccess`'s answer: the spelling, and whether only the child's
+/// declaration can judge it.
+pub const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
 
 /// Returns `value` multiplied or divided (`op`) by the unit's running
 /// `$mfactor` product when `access` is the flow access of `net`'s discipline,

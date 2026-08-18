@@ -7,8 +7,8 @@
 // vendor-specific, so a fixture that pins basic mode with no selection tests
 // the normative default (lrm_7_4_4_1.va), and detail mode is testable once
 // selected (Vague_Decisions VD-008; VerA's selector is
-// `--discipline-resolution=detail`, whose distinguishing top-down pass is not
-// implemented: discipline_resolution_detail_figure_7_4_refused.va). §7.4.5 is
+// `--discipline-resolution=detail`, whose top-down pass decides Figure 7-4
+// differently: discipline_resolution_detail_figure_7_4.va). §7.4.5 is
 // the case where the modes cannot disagree, because there is nothing discrete
 // in the design for them to propagate differently. Every net below is
 // continuous, so both algorithms must land on the same discipline.
