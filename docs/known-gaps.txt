@@ -1,4 +1,3 @@
-ONEWAY-LRM §7.4.4.2
 XFAIL annex_f_resolution/digital_behavioral_net_is_digital.va
 XFAIL ch04_expressions/audit_laplace_dynamic_coefficient_sampled.va
 XFAIL ch07_mixed_signal/m01_12_continuous_variable_read_from_digital.va

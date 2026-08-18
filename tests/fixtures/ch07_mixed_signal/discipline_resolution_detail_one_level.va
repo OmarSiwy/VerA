@@ -13,8 +13,9 @@
 // V(shared) reads the harness's 0.5 back through a continuous access function:
 // the access exists only if `shared` resolved continuous.
 //
-// Invalid neighbour: discipline_resolution_detail_figure_7_4_refused.va, the
-// Figure 7-4 signal the modes disagree on (E0930).
+// Where the modes disagree: discipline_resolution_detail_figure_7_4.va
+// (detail) against discipline_resolution_basic_figure_7_3.va (basic). §7.4.4.2
+// states no prohibition, so it has no invalid neighbour (CLAUSES.tsv).
 //
 //! lrm 7.4.4.2
 //! lrm F.2.2

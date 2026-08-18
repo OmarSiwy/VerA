@@ -101,8 +101,7 @@ pub const usage_text =
     \\  --unknown-bound=X       solver compliance limit (see --explain W0650)
     \\  --discipline-resolution=basic|detail
     \\                          LRM 7.4.4's mode for undeclared interconnect
-    \\                          (default: basic). Detail mode is refused where it
-    \\                          would decide differently (see --explain E0930)
+    \\                          (default: basic; detail is Annex F.2.2)
     \\
 ;
 
