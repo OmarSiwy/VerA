@@ -57,14 +57,62 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
    itself), but recording it here because rebuilding it later against the new bench would be a
    deliberate wave, not an accident.
 
-5. **DONE — the prelude win landed in wave 14.** Measured 902.5 ms → 181.9 ms on the `pp` phase
-   (4.96×), −27% to MIR, output byte-identical. The estimate here said 909 ms; the honest figure
-   is 716 ms, because 186 ms of stage 1 is genuinely user text and macro re-puts. Left in this
-   list only so the trail from "found, unscheduled" to "measured, landed" is visible.
+5. **DONE — the prelude win landed in wave 14.** Measured **(Debug)** 902.5 ms → 181.9 ms on the
+   `pp` phase (4.96×), −27% to MIR, output byte-identical. The estimate here said 909 ms; the
+   honest figure is 716 ms, because 186 ms of stage 1 is genuinely user text and macro re-puts.
+   **(Debug)**: wave 16 found `bench` had been run without `-Doptimize`, so every wave-8/14
+   figure is a Debug figure; the shipping `pp` is **19.5 ms** (ReleaseFast, `bench -- fixtures`,
+   this tree). The ratio is what the item was about and it survives. Left in this list only so
+   the trail from "found, unscheduled" to "measured, landed" is visible.
 
 ---
 
 ## Landed
+
+### Wave 16 — the instrument now says which mode it measured in
+
+**Suite: 217/217 green.**
+
+`tests/bench.zig` printed `case n phase min_ns bytes` and `build.zig` gave `bench_mod` the
+tree's default `-Doptimize`, i.e. **Debug**. So `fixtures 1164 lint 247334891` and `fixtures
+1164 lint 1969020854` were the same measurement of the same tree and nothing in the output told
+them apart — the fifth instance of the defect `tools/contract.zig`'s header keeps a register of,
+a number nobody can reproduce. Every wave-8 and wave-14 timing was quoted as if it were the
+shipping figure and none of them was.
+
+- **The timing table gained column 1: the mode**, from `@import("builtin").mode`. The footprint
+  table did NOT — those are pure functions of the source and identical in every mode, so a
+  column there would make `diff` of two runs report a difference that is not one, and `diff` is
+  the comparison the file's header promises. A non-ReleaseFast run also prints one `#` line
+  saying so.
+- **`zig build bench` does NOT force ReleaseFast on itself**, and this was the live question.
+  `-O` is a *per-module* flag — `std.Build.Module` appends one per module — and the code being
+  timed is in `vera_mod`, not `bench_mod`. Overriding `bench_mod` alone times a ReleaseFast
+  harness driving a Debug engine, which is a third number nobody wants, and it makes
+  `builtin.mode` inside `bench.zig` describe the harness rather than the engine — breaking the
+  label this wave installs. Doing it honestly means a second `vera` module at a mode nothing
+  else in the build uses. Printing the mode costs one column and closes the same hole, so the
+  step description and the file header carry the recommendation instead:
+  **`-Doptimize=ReleaseFast` is the number that means anything.**
+- **MEASURED, both modes, same tree, `-- fixtures`, 1164 fixtures, min of 25:**
+
+| phase | Debug | ReleaseFast | ratio |
+|---|---|---|---|
+| pp | 187.1 ms | **19.5 ms** | 9.6× |
+| lint | 1959.5 ms | **247.0 ms** | 7.9× |
+| codegen | 2161.8 ms | **266.2 ms** | 8.1× |
+| rewrite | 2514.0 ms | **329.4 ms** | 7.6× |
+
+- **Re-labelled or re-measured every Debug figure in the tree**: the wave-14 table and the
+  wave-8 curve in this file, `preprocessor.zig`'s snapshot docstring, `analysis.zig`'s
+  `buildStructure` docstring, and TODO.md §2's noise-floor and `pp` figures. The `before`
+  columns cannot be re-measured — that code is gone — so those are labelled `(Debug)` and the
+  ReleaseFast `after` is stated next to them. TODO.md's 211.7 µs/fixture was already ReleaseFast
+  and is now labelled as such.
+- **One figure moved in the claim's favour.** `vera --lint` on a 6-line model, 3,189 µs vs
+  2,235 µs with `--no-std-defs`, is ReleaseFast (Debug is 16.1 ms) — but it is a shell loop, and
+  1.32 ms of both terms is `fork`+`exec`, measured by looping `vera --version`. Net: **0.76 vs
+  0.18 ms**. The prelude's *parsing* is most of a one-shot compile, not the "~30%" recorded.
 
 ### Wave 15 — derive the aliases; MEASURE the MIR row and refuse to rewrite it — `b533573`
 
@@ -104,10 +152,20 @@ longer exists: `analysis.zig` already hoists `i_op`/`i_res` as raw column slices
 saying why.
 
 **What the measurement found instead — the next real win.** 87% of fixture-batch lint is a
-*per-compilation constant*: 211.7 µs per fixture, spent producing **237 bytes** of MIR. Wave 14
-cached the prelude's *preprocessing*; every compilation still **lexes, parses and lowers** the
-same ~11.8 KB of expanded Annex D/E. `vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs
-with `--no-std-defs`. **That is ~30%, not 1%.**
+*per-compilation constant*: 211.7 µs per fixture **(ReleaseFast**, lint 246.4 ms / 1,164;
+re-measured in wave 16 at 247.0 ms / 1,164 = 212.2 µs**)**, spent producing **237 bytes** of MIR.
+Wave 14 cached the prelude's *preprocessing*; every compilation still **lexes, parses and
+lowers** the same ~11.8 KB of expanded Annex D/E. `vera --lint` on a 6-line model is 3,189 µs,
+and 2,235 µs with `--no-std-defs`. **That is ~30%, not 1%.**
+
+**Wave 16 correction, and it is in the CLAIM's favour.** Those two CLI figures are ReleaseFast
+(the Debug binary is 16.1 ms/run, nowhere near 3,189 µs), so they are not part of the Debug
+re-labelling — but they are a *shell loop*, and a shell loop measures `fork`+`exec` too.
+Re-measured, min of two 500-run loops, ReleaseFast: **2.08 ms/run**, **1.50 ms/run** with
+`--no-std-defs`, and `vera --version` in the same loop is **1.32 ms/run**, which is the process
+floor and is inside both. Net of it the prelude is **0.76 ms vs 0.18 ms of a fresh process** —
+the headroom is bigger than "~30%", not smaller. The in-process figure the bench prints for the
+same shape (`contrib n=1`, `lint`, 186 µs) is the post-snapshot cost and agrees with the 0.18 ms.
 
 > **Wave 16 correction.** The headline held; two of the numbers did not. The `vera --lint` pair is
 > a process wall time, not a compiler measurement, and is withdrawn — see wave 16 below. The
@@ -118,13 +176,23 @@ with `--no-std-defs`. **That is ~30%, not 1%.**
 
 **Suite: 217/217 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
 
-Measured on the merge with `zig build bench -- fixtures`, **output bytes byte-identical**:
+Measured on the merge with `zig build bench -- fixtures`, **output bytes byte-identical**.
+**Every number in this table is DEBUG** — that invocation takes the default `-Doptimize`, and
+wave 16 made the bench print its mode precisely because this was not visible here. The `before`
+column cannot be re-measured (the code is gone); the `after` column re-measured in the mode that
+ships is in the second table:
 
-| phase | before | after | delta |
+| phase | before (Debug) | after (Debug) | delta |
 |---|---|---|---|
 | pp | 902.5 ms | **181.9 ms** | −720.6 ms (**4.96×**) |
 | lint | 2699.5 ms | **1969.0 ms** | −730.5 ms (−27%) |
 | codegen | 2905.9 ms | 2202.5 ms | −703.4 ms |
+
+| phase | after, ReleaseFast (wave 16, `bench -Doptimize=ReleaseFast -- fixtures`, 1164) |
+|---|---|
+| pp | **19.5 ms** |
+| lint | **247.0 ms** |
+| codegen | **266.2 ms** |
 
 Annex D.2 + D.1 + Table E.1 were re-expanded from scratch on every compilation. They depend on
 `std_defs` alone, so they now run once per process into a snapshot and are replayed. **The honest
@@ -342,7 +410,9 @@ against the other; the union count is 209, which is why neither agent's own numb
   `siScale`, three duplicate scanners, and `TestLex` — a 104-line second lexer that the parser
   tests were running against instead of the real one. Net −247 lines.
 
-**The measured curve — nothing in this compiler is quadratic:**
+**The measured curve — nothing in this compiler is quadratic. ALL DEBUG** (wave 16: this run
+predates the bench printing its mode, and `zig build bench` with no `-Doptimize` is Debug; the
+same curve in ReleaseFast is TODO.md §2's table, ~8–12× smaller and the same shape):
 
 | axis | n=1 | 512 | 4096 | 512→4096 |
 |---|---|---|---|---|
@@ -351,8 +421,10 @@ against the other; the union count is 209, which is why neither agent's own numb
 | inst | 1.33M ns | 25.3M | 206M | 8.1× |
 
 8× input → 7.4–8.1× time out to 4096, including elaboration-by-flattening (4096 instances =
-206 ms, ~50 µs each). **This retroactively killed several O(n²) findings from the original
-audit.** Evidence beat argument, which is what the bench was for.
+206 ms Debug, ~50 µs each; 23.8 ms ReleaseFast, ~5.8 µs each). **This retroactively killed
+several O(n²) findings from the original audit** — and the ratio, which is the whole argument,
+is a ratio within one mode and does not move. Evidence beat argument, which is what the bench
+was for.
 
 ### Tier 0 cleanup — `783259c`, `25286ba`, `6bb63ba`
 

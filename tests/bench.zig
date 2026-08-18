@@ -27,8 +27,28 @@
 //! A slope is what settles a scope argument: "this scan is O(n²) and n is a
 //! netlist" and "this scan is flat to 4096" are the same wall-clock number at
 //! n = 8 and opposite conclusions, and only the sweep tells them apart. The
-//! 1152 fixtures run as a fourth case because they are the only workload the
+//! 1164 fixtures run as a fourth case because they are the only workload the
 //! project's scope actually guarantees exists.
+//!
+//! **RELEASEFAST IS THE NUMBER THAT MEANS ANYTHING**, because it is what ships.
+//! `zig build bench` takes the tree's default `-Doptimize`, which is **Debug**,
+//! and Debug is ~8× slower (MEASURED on one tree, same commit, `-- fixtures`:
+//! `lint` 1959.5 ms Debug vs 247.0 ms ReleaseFast). A whole night of wave-8/14
+//! figures was quoted as if it were the shipping number because the TSV did not
+//! say which it was. So the mode is now COLUMN 1 of the timing table, from
+//! `@import("builtin").mode` — the compiled-in truth, not a flag the runner can
+//! be lied to about — and a run that is not ReleaseFast says so again in a `#`
+//! line. Column 1 is constant within a run and does not disturb the sort.
+//!
+//! That label is honest only because `build.zig` gives `bench_mod` and the
+//! `vera` module it imports the SAME `optimize`: `-O` is a per-module flag
+//! (std.Build.Module emits one per module), so a bench built ReleaseFast against
+//! a Debug engine would print `ReleaseFast` over a Debug measurement. Which is
+//! also why this step does not silently force ReleaseFast on itself — see the
+//! comment on the `bench` step in build.zig.
+//!
+//!   zig build bench -Doptimize=ReleaseFast    # the number that ships
+//!   zig build bench                           # Debug: ~8× slower, a lower bound
 //!
 //! IT CAN FAIL, which is the difference between an instrument and a decoration.
 //! A step that asserts nothing prevents nothing, and a wall-clock number cannot
@@ -46,21 +66,24 @@
 //!
 //! NO MACHINE-READABLE SIDE CHANNEL, for the reason harness.zig:31-34 gives:
 //! a second output format is a second thing to keep true. The output is one TSV
-//! line per (case, n, phase) on stdout — preceded by one line per (case, n) of
-//! MIR FOOTPRINT, which is a different quantity and so gets its own heading
-//! rather than a second meaning for `bytes` — sorted by construction, so
-//! comparing two runs is `diff` and nothing else. There is no committed
-//! artifact and no `--bless`: the timings are the machine's and belong to
-//! whoever ran it.
+//! line per (mode, case, n, phase) on stdout — preceded by one line per (case,
+//! n) of MIR FOOTPRINT, which is a different quantity and so gets its own
+//! heading rather than a second meaning for `bytes` — sorted by construction, so
+//! comparing two runs is `diff` and nothing else. The footprint table carries NO
+//! mode column on purpose: those numbers are pure functions of the source and
+//! identical in every mode, so a column there would make `diff` report a
+//! difference where there is none. There is no committed artifact and no
+//! `--bless`: the timings are the machine's and belong to whoever ran it.
 //!
-//! N = 25 is what makes the fixture batch the expensive half: 1152 compilations
-//! times 25 is four of the five minutes a full run costs, and the sweep on its
-//! own is under one. So the batch has a filter, and it is the reason for it —
-//! `-- gen` is the one to run while iterating on a slope.
+//! N = 25 is what makes the fixture batch the expensive half: 1164 compilations
+//! times 25 is four of the five minutes a full ReleaseFast run costs (Debug is
+//! several times that), and the sweep on its own is under one. So the batch has
+//! a filter, and it is the reason for it — `-- gen` is the one to run while
+//! iterating on a slope.
 //!
-//!   zig build bench                   # both; ~5 min, of which ~4 is `fixtures`
-//!   zig build bench -- gen            # the generated sweep only; ~50 s
-//!   zig build bench -- fixtures       # the 1152 fixtures as one batch
+//!   zig build bench -Doptimize=ReleaseFast              # both; ~5 min
+//!   zig build bench -Doptimize=ReleaseFast -- gen       # the sweep only; ~50 s
+//!   zig build bench -Doptimize=ReleaseFast -- fixtures  # the 1164 as one batch
 
 const std = @import("std");
 const vera = @import("vera");
@@ -293,7 +316,7 @@ const Input = struct {
 /// have capacity for `inputs.len`, because a reallocation inside the timed
 /// region would be the very thing it exists to keep out.
 ///
-/// The batch case passes `null` and eats the teardown, deliberately: 1152
+/// The batch case passes `null` and eats the teardown, deliberately: 1164
 /// simultaneously live compilation arenas cost more in page faults and RSS than
 /// the teardown they would remove, which is a bigger measurement error than the
 /// one being avoided. The sweep — where the headline slopes come from — is one
@@ -303,7 +326,7 @@ const Input = struct {
 /// unused (`result.mir`, the device length) is what stops it from deleting the
 /// work being timed.
 ///
-/// Errors are SWALLOWED, not propagated: 415 of the 1152 fixtures conform by
+/// Errors are SWALLOWED, not propagated: 418 of the 1164 fixtures conform by
 /// being refused, and a refusal costs real time in exactly the phases this
 /// measures. Skipping them would bias the batch towards the code that compiles.
 fn runPhase(
@@ -399,8 +422,13 @@ fn measure(
     return .{ .min_ns = min, .bytes = bytes };
 }
 
+/// The mode the ENGINE was compiled in, and therefore the only thing that makes
+/// a `min_ns` mean something. `builtin.mode` is this module's own `-O`, which
+/// `build.zig` keeps equal to the `vera` module's; see the header.
+const mode = @tagName(@import("builtin").mode);
+
 fn emit(w: *Io.Writer, case: []const u8, n: u32, phase: Phase, s: Sample) !void {
-    try w.print("{s}\t{d}\t{t}\t{d}\t{d}\n", .{ case, n, phase, s.min_ns, s.bytes });
+    try w.print("{s}\t{s}\t{d}\t{t}\t{d}\t{d}\n", .{ mode, case, n, phase, s.min_ns, s.bytes });
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +474,7 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     // Read every fixture ONCE, outside every timer: the batch case measures the
-    // compiler on 1152 small files, not the page cache.
+    // compiler on 1164 small files, not the page cache.
     var fixture_inputs: []Input = &.{};
     if (do_fixtures) {
         const fixtures = try harness.collect(arena, io, options.fixture_root, null);
@@ -470,7 +498,11 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try w.flush();
 
-    try w.writeAll("\ncase\tn\tphase\tmin_ns\tbytes\n");
+    try w.writeAll("\nmode\tcase\tn\tphase\tmin_ns\tbytes\n");
+    if (@import("builtin").mode != .ReleaseFast) try w.print(
+        "# {s}: NOT the shipping number (~8x slow). Re-run with -Doptimize=ReleaseFast.\n",
+        .{mode},
+    );
 
     if (do_gen) {
         for (std.enums.values(Axis)) |axis| {
