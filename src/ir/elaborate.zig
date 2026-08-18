@@ -268,6 +268,12 @@ const Flatten = struct {
     /// all until `connectrules` is past E0201. See TODO.md §1.
     disc_of: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
 
+    /// The flat nets whose discipline came from a BOUND PORT rather than from a
+    /// declaration — §3.6.5's implicit nets, which is exactly the set §7.4.4.1's
+    /// continuous-wins rule is about. Without it that rule cannot be applied
+    /// without also being able to overrule a real declaration.
+    port_resolved: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
+
     /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
     /// the parameter it overrides — the declaring module's own path joined with
     /// the path the source wrote, which is the same string the flattened
@@ -1118,6 +1124,26 @@ const Flatten = struct {
         if (!gop.found_existing) gop.value_ptr.* = disc;
     }
 
+    /// §3.6.2.2: is this discipline continuous?
+    ///
+    /// `domain` is `.unspecified` unless the source wrote one, and the clause
+    /// makes binding a nature the deciding property — a discipline with a
+    /// potential or a flow is continuous whether or not it says so. Nothing in
+    /// this file asked what domain a discipline was in before §7.4.4.1 needed
+    /// it; `primitiveAccess` is the other site that resolves a name to a
+    /// `DisciplineDecl`, and it scans the same way.
+    fn isContinuous(self: *Flatten, disc: Ast.StrId) bool {
+        if (disc == .none) return false;
+        const d = for (self.ctx.file.disciplines) |*x| {
+            if (x.name == disc) break x;
+        } else return false;
+        return switch (d.domain) {
+            .continuous => true,
+            .discrete => false,
+            .unspecified => d.potential != .none or d.flow != .none,
+        };
+    }
+
     /// §3.10 precedence order 1: the out-of-context discipline for one segment,
     /// if a declaration named it.
     ///
@@ -1175,7 +1201,29 @@ const Flatten = struct {
     fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId) Error!void {
         const disc = self.oocDiscipline(path, p.name) orelse p.discipline;
         if (disc == .none) return;
-        if (self.declaredDiscipline(bound) != .none) return;
+        if (self.declaredDiscipline(bound) != .none) {
+            // §7.4.4.1, and it is the whole of the basic mode's rule: "At each
+            // level of the hierarchy where continuous and discrete meet for an
+            // undeclared net that net segment is declared continuous." The
+            // clause's own worked example says it twice — "NetC resolves to
+            // electrical based on continuous (electrical) winning over discrete
+            // (cmos2)".
+            //
+            // Only for a net THIS function resolved. A net the source declared
+            // is not an undeclared interconnect, and §3.10's precedence already
+            // decided it; upgrading one here would silently overrule a
+            // declaration. `port_resolved` is what draws that line — first-wins
+            // still holds everywhere else, which is what `noteDiscipline` says.
+            if (!self.port_resolved.contains(bound)) return;
+            if (self.isContinuous(self.declaredDiscipline(bound))) return;
+            if (!self.isContinuous(disc)) return;
+            self.disc_of.putAssumeCapacity(bound, disc);
+            for (self.nets.items) |*n| {
+                if (n.name == bound) n.discipline = disc;
+            }
+            return;
+        }
+        try self.port_resolved.put(self.a(), bound, {});
         try self.addNet(.{
             .name = bound,
             .discipline = disc,

@@ -51,7 +51,7 @@
 //!   zig build torture                     # every fixture
 //!   zig build torture -- ch04             # only paths matching `ch04`
 //!   zig build torture -- --strict         # unasserted, refused and xfail FAIL instead of warn
-//!   zig build torture -- --coverage       # every cited LRM section and who cites it
+//!   zig build torture -- --coverage       # LRM clauses cited, one-sided and uncited
 //!   zig build torture -- -j1              # one at a time, streaming; the debugging path
 //!   zig build torture -- --fixture-opt=ReleaseFast
 
@@ -59,6 +59,9 @@ const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
 const options = @import("torture_options");
+/// The two directories the SUITE owns, shared with `harness.zig` and the other
+/// runner: which fixtures to walk, and which LRM their `//! lrm` lines cite.
+const suite = @import("suite_options");
 
 const Io = std.Io;
 const Fixture = harness.Fixture;
@@ -68,7 +71,7 @@ pub fn main(init: std.process.Init) !u8 {
     var vera_runner: Vera = .{
         .fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, options.fixture_optimize).?,
     };
-    return harness.run(init, options.fixture_root, .{
+    return harness.run(init, .{
         .name = "vera",
         .runs = true,
         .owns_xfail = true,
@@ -174,7 +177,7 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
     // codegen emitting `@compileError`, which `.lint` would never see.
     var result = vera.compileSourceOpts(gpa, source, .debug, .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, options.fixture_root },
+        .include_dirs = &.{ f.dir, suite.fixture_root },
         .diags = &diags,
         // Annex E.2: the fixture's `//! spice` cards, read as a netlist.
         .spice_netlist = d.spice,
@@ -322,7 +325,7 @@ fn runAndCheck(
 
     var result = vera.compileSourceOpts(gpa, source, .release_fast, .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, options.fixture_root },
+        .include_dirs = &.{ f.dir, suite.fixture_root },
         .diags = &diags,
         .lint = levels,
         .display = .emit,

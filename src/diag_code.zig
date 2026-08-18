@@ -3907,7 +3907,7 @@ fn infoOf(c: Code) Info {
             ,
         },
         .W0852 => .{
-            .title = "unregistered system function reads 0.0",
+            .title = "unregistered system function is left to a VPI host",
             .lrm = "12.32.3",
             .explain =
             \\This `$name` is not a Chapter 9 system function and not an Annex D
@@ -3923,21 +3923,30 @@ fn infoOf(c: Code) Info {
             \\
             \\    V(out) <+ $sampler(V(in), period);
             \\
-            \\VerA emits a self-contained artifact and links no VPI host, so
-            \\there is nothing to ask. It reads 0.0.
+            \\VerA has nothing to ask, so it does not answer: the name is
+            \\exported in the device's `systf_calls` table and the call site
+            \\reads its value — and its derivatives — from the application the
+            \\HOST binds into `Instance.systf`. `contract.validateHost` refuses
+            \\to build a host that binds none, so an unregistered systf cannot
+            \\reach a simulation with no value behind it.
             \\
-            \\WHY 0.0 IS ALLOWED HERE AND NOWHERE ELSE. Everywhere else a
-            \\substitute value would contradict a number the LRM fixes, so the
-            \\unit is refused outright (E0515, the filter families) rather than
-            \\quietly made wrong. An unregistered systf has no such number: the
-            \\language defines no value for it at all — §12.32.3's listing never
-            \\even initializes sampler->value before the first update callback,
-            \\and hands that field straight back through vpi_put_value(). There
-            \\is no correct result to be wrong about, only an absent host.
+            \\WHY A HOST CALL AND NOT A SUBSTITUTE. Everywhere else a substitute
+            \\value would contradict a number the LRM fixes, so the unit is
+            \\refused outright (E0515, the filter families) rather than quietly
+            \\made wrong. An unregistered systf has no such number: the language
+            \\defines no value for it at all — §12.32.3's listing never even
+            \\initializes sampler->value before the first update callback, and
+            \\hands that field straight back through vpi_put_value(). So there
+            \\is nothing to be wrong about, only somebody else to ask, and the
+            \\artifact carries the question instead of inventing an answer.
+            \\
+            \\`vera --run` is itself a host and answers zero with zero partials,
+            \\which is why a fixture over one of these asserts what does not
+            \\depend on the value (§5.3.1: the block runs straight through).
             \\
             \\That is not a licence to be silent, which is what this warning is
-            \\for: a misspelled `$abstmie` would otherwise read 0.0 with nothing
-            \\said. One warning per call site, naming the name.
+            \\for: a misspelled `$abstmie` would otherwise become a binding the
+            \\host is asked for. One warning per call site, naming the name.
             \\
             \\  --deny=W0852    refuse the unit instead (the old behaviour)
             \\  --allow=W0852   silence it for a model you know needs a host

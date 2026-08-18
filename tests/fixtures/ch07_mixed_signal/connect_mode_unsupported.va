@@ -13,6 +13,7 @@
 //! lrm 7.8.3
 //! lrm C.9
 //! lrm C.16
+//! lrm 7.8.3.1
 //! reject E0201
 //! reject connectrules
 module ch7_host(p);

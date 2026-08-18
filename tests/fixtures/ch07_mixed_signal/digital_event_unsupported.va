@@ -11,6 +11,7 @@
 //
 //! lrm 7.3.6.2
 //! lrm C.7
+//! lrm 7.3.4
 //! reject E0209
 module ch7_digital_event(p);
   inout p; electrical p; integer d; real held;

@@ -128,6 +128,22 @@ pub const Display = enum { drop, emit };
 /// struct so the next one does not churn `generate`'s signature again.
 pub const Options = struct {
     display: Display = .drop,
+    /// Emit `pub const jac_f32 = true`: this device permits a host to carry the
+    /// DERIVATIVE half of its scalar S in single precision.
+    ///
+    /// It changes no emitted arithmetic, and there is nothing here it could
+    /// change. `eval` is generic over S and reaches it only through the
+    /// contract's primitive set, every member of which takes and returns `f64`
+    /// at the boundary (`con`, `scale`, `addC`, `val`), so which float S carries
+    /// INSIDE is already the host's to choose. This decl is how a device says
+    /// which choice it tolerates.
+    ///
+    /// Why the device says it and not the host: the RESIDUAL is unaffected —
+    /// inexact Newton converges to the accuracy of the residual, and an
+    /// approximate Jacobian costs iterations, not the answer — but a model whose
+    /// unknowns span more than f32's ~7 digits can lose a Newton direction
+    /// outright. That is a fact about the physics, so it belongs at the physics.
+    jac_f32: bool = false,
     /// Where a codegen-stage diagnostic goes (E0515). Optional: the unit tests
     /// and any caller that only wants text pass none, and codegen then reports
     /// a refusal through `fatal_out` alone.
@@ -180,6 +196,7 @@ pub fn generate(
         .lower = lower,
         .verdict = verdict,
         .display = opts.display,
+        .jac_f32 = opts.jac_f32,
         .diags = opts.diags,
     };
     errdefer g.out.deinit(gpa);
@@ -251,6 +268,18 @@ pub const Gen = struct {
     uses_x: bool = false,
     uses_model: bool = false,
     uses_inst: bool = false,
+    /// §2.8.3/§12.32: the `$name`s nothing in this backend resolved, in first-
+    /// call order, which becomes `systf_calls` and therefore the host's binding
+    /// indices. Deduplicated by NAME because that is what
+    /// `vpi_register_analog_systf()` registers — "the task or function name
+    /// shall be unique in the domain in which it is registered" — so two calls
+    /// to one `$name` are one entry and one binding. Linear scan: the list is
+    /// empty for every device in the tree and single-digit for one that has any.
+    systf_names: std.ArrayList([]const u8) = .empty,
+    /// Distinguishes one emitted systf block's `break` label from another's.
+    /// Blocks nest, so the label has to be unique within a unit and a counter
+    /// is the cheapest thing that is.
+    systf_sites: u32 = 0,
     /// Set when the unit asks for something whose value the LRM FIXES and this
     /// backend cannot produce (§4.5's non-constant control argument, E0515; a
     /// §3.6.2.2 signal-flow contribution). The whole body collapses to one
@@ -323,6 +352,8 @@ pub const Gen = struct {
     common_mode: proof.FloatMode = .optimized,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
+    /// `Options.jac_f32` — emit the single-precision-Jacobian permission decl.
+    jac_f32: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
     /// `<module>__display__tasks`, or empty when the model prints nothing (or
@@ -740,6 +771,7 @@ pub const Gen = struct {
         try self.emitUnits();
         try self.emitDispatchers();
         try self.emitNoiseTable();
+        try self.emitSystfTable();
         // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
         // advance, which is the ONLY place a stream may move: a per-iteration draw
         // makes the residual non-deterministic and Newton never converges.
@@ -901,6 +933,14 @@ pub const Gen = struct {
             try self.w("    {s}, // {s}\n", .{ n, kindc });
         }
         try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lower.num_ports});
+
+        if (self.jac_f32) try self.w(
+            \\/// This device permits a single-precision DERIVATIVE half in the
+            \\/// host's scalar S. The residual stays f64 — see `--jac-f32`.
+            \\pub const jac_f32 = true;
+            \\
+            \\
+        , .{});
 
         var any_current = false;
         for (0..self.n_u) |i| {
@@ -1282,6 +1322,10 @@ pub const Gen = struct {
             \\    /// discontinuity (0 = the equation itself, 1 = its slope, …), or
             \\    /// -1 for "none announced this step". Written by `updateState`.
             \\    discontinuity_order: i32 = -1,
+            \\    /// §2.8.3/§12.32 the VPI application. Read only by a `$name`
+            \\    /// this compiler could not resolve; `contract.validateHost`
+            \\    /// is what keeps it non-null when `systf_calls` is not empty.
+            \\    systf: ?*const contract.SystfHost = null,
             \\
         , .{});
         // §9.13.1's "internal seed", one slot per seedless call site. The
@@ -3292,11 +3336,86 @@ pub const Gen = struct {
             .codegen,
             .W0852,
             self.lower.tokenSpan(self.mir.instTok(inst)),
-            "`{s}` is not a system function this compiler defines, and no VPI host is " ++
-                "linked into the emitted artifact, so it reads 0.0",
+            "`{s}` is not a system function this compiler defines, so it is exported in " ++
+                "`systf_calls` for a VPI application to supply; a host that binds none " ++
+                "will not build",
             .{name},
         );
-        return self.b("S.con(0.0)", .{});
+        return self.emitSystfCall(name, args);
+    }
+
+    /// §2.8.3/§12.32: hand one unresolved `$name` to the host's VPI application.
+    ///
+    /// WHY THIS IS NOT A CALL THROUGH A `fn (args: []S) S` POINTER, which is what
+    /// every other hook in the contract would look like. `eval` is generic over
+    /// S and is instantiated at least twice — a plain f64 for the residual, a
+    /// derivative-carrying dual for the Jacobian — and a function POINTER cannot
+    /// be generic over S. So the boundary is concrete: the host returns the
+    /// value and writes the partials, and this rebuilds the dual.
+    ///
+    /// The reassembly is the whole trick. `arg.addC(-arg.val())` has VALUE zero
+    /// and DERIVATIVE d(arg), so `.scale(p)` makes a term that contributes p·d(arg)
+    /// to the derivative and nothing at all to the value. Summed onto `S.con(v)`
+    /// the result carries the host's value with the host's partials grafted on —
+    /// and on the plain-f64 instantiation every one of those terms is exactly
+    /// zero, so the residual reads `v` and nothing else. That is §12.22.1's
+    /// `derivtf` arrived at from the other side, and it is what keeps `eval` a
+    /// pure function of x, which the host's own Newton iteration depends on.
+    ///
+    /// The arguments are bound to `const`s first rather than rendered twice:
+    /// each is needed once for its value and once for its derivative, and an
+    /// argument expression can be an arbitrary subtree.
+    fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+        const k = for (self.systf_names.items, 0..) |n, i| {
+            if (std.mem.eql(u8, n, name)) break i;
+        } else blk: {
+            try self.systf_names.append(self.arena, name);
+            break :blk self.systf_names.items.len - 1;
+        };
+        // `inst` is the generated device's own parameter, and `emitUnit` patches
+        // it to `_` when nothing read it. This reads it.
+        self.uses_inst = true;
+
+        const label = self.systf_sites;
+        self.systf_sites += 1;
+        try self.b("zs{d}: {{\n", .{label});
+        for (args, 0..) |a, j| {
+            try self.b("        const zs{d}a{d} = ", .{ label, j });
+            try self.renderVal(a, .real);
+            try self.b(";\n", .{});
+        }
+        // `validateHost` is what makes this unwrap safe, and it is the reason
+        // the check exists: with no application bound there is no value here,
+        // not a wrong one — §12.32.3 never initializes its sampler's value
+        // before the first callback, so the language fixes no default to fall
+        // back to. Refusing the HOST's build is the only outcome that cannot be
+        // mistaken for a working device.
+        try self.b("        const zsh = inst.systf.?;\n", .{});
+        try self.b("        const zsv = [_]f64{{", .{});
+        for (args, 0..) |_, j| try self.b("{s} zs{d}a{d}.val()", .{ if (j == 0) "" else ",", label, j });
+        try self.b(" }};\n", .{});
+        try self.b("        var zsp: [{d}]f64 = undefined;\n", .{args.len});
+        try self.b("        var zsr = S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp));\n", .{k});
+        for (args, 0..) |_, j|
+            try self.b("        zsr = zsr.add(zs{d}a{d}.addC(-zsv[{d}]).scale(zsp[{d}]));\n", .{ label, j, j, j });
+        try self.b("        break :zs{d} zsr;\n    }}", .{label});
+    }
+
+    /// The `$name`s this device leaves to a VPI application. Emitted after the
+    /// units because that is when the set is known — nothing before `renderCall`
+    /// can say which names it will fail to resolve without repeating all of it.
+    fn emitSystfTable(self: *Gen) Error!void {
+        if (self.systf_names.items.len == 0) return;
+        try self.w(
+            \\/// §2.8.3 `$name`s this device leaves to a VPI application
+            \\/// (§12.32 `vpi_register_analog_systf`). Position k is the `k` the
+            \\/// device passes to `Instance.systf.?.call`. A host linking this
+            \\/// device shall bind them — see `contract.validateHost`.
+            \\pub const systf_calls = [_]contract.Systf{{
+            \\
+        , .{});
+        for (self.systf_names.items) |n| try self.w("    .{{ .name = \"{s}\" }},\n", .{n});
+        try self.w("}};\n\n", .{});
     }
 
     /// A §9.5 call in a unit that is NOT the display unit: the descriptor answers
@@ -4020,11 +4139,31 @@ pub const Gen = struct {
                     const p = try cg_filters.filterPlan(self, inst, args);
                     if (p.err == null) try self.w(
                         \\        const period = {1s};
-                        \\        if (inst.abstime >= inst.{0s}__next) {{
-                        \\            inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
-                        \\            // ponytail: re-armed from the ACCEPTED time, not `+= T`, so a
-                        \\            // step that overshoots cannot leave the clock permanently behind.
-                        \\            inst.{0s}__next = inst.abstime + period;
+                        \\        if (period > 0.0 and inst.abstime >= inst.{0s}__next) {{
+                        \\            // §4.5.12: "T specifies the sampling period of the filter".
+                        \\            // The recurrence runs once per T of SIMULATED TIME, so a step
+                        \\            // that crosses k sample instants runs it k times. Stepping it
+                        \\            // ONCE per evaluation — which is what this did — makes the
+                        \\            // output a function of how densely the host happened to place
+                        \\            // its timepoints, and the same filter at the same T returned
+                        \\            // bit-identical values for 20 us and 200 us of elapsed time.
+                        \\            var zn = @floor((inst.abstime - inst.{0s}__next) / period) + 1.0;
+                        \\            // ponytail: a ceiling, and `bound_step` below is the reason it
+                        \\            // is almost never reached — the filter ASKS the host to keep
+                        \\            // the step at or under T, so the honouring host always has
+                        \\            // zn == 1. A host that ignores it far enough to need more than
+                        \\            // this has already aliased the filter beyond what replaying
+                        \\            // the held input could recover.
+                        \\            if (zn > 4096.0) zn = 4096.0;
+                        \\            var zi_k: u32 = @intFromFloat(zn);
+                        \\            while (zi_k > 0) : (zi_k -= 1)
+                        \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
+                        \\            // Re-armed on the sample GRID, not from the accepted time.
+                        \\            // `abstime + period` lost the phase: it made every sample land
+                        \\            // wherever the host last stopped, so the instants drifted with
+                        \\            // the timestep. Advancing by zn*T cannot leave the clock
+                        \\            // behind either, since zn is chosen to pass abstime.
+                        \\            inst.{0s}__next += zn * period;
                         \\            inst.discontinuity_order = 0; // §9.17.1 the held output steps
                         \\        }}
                         \\        inst.bound_step = @min(inst.bound_step, period);
@@ -4878,6 +5017,34 @@ const resistor_va =
     \\  analog I(p, n) <+ V(p, n) / r;
     \\endmodule
 ;
+
+test "codegen: --jac-f32 adds a permission decl and changes not one other byte" {
+    // The whole claim of the mixed-precision work, pinned. `eval` is generic
+    // over S and reaches it only through primitives that take and return f64
+    // (`con`, `scale`, `addC`, `val`), so the WIDTH of the derivative a host
+    // carries inside S is the host's choice and no arithmetic here depends on
+    // it. If this flag ever starts moving other bytes, that genericity has been
+    // broken somewhere and this test is where it shows up.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator, resistor_va, &h);
+    defer h.deinit();
+
+    const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
+    defer v.deinit(std.testing.allocator);
+    var fatal = false;
+    const a = h.arena_state.allocator();
+    const off = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{})).text;
+    const on = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .jac_f32 = true })).text;
+
+    try std.testing.expect(std.mem.indexOf(u8, off, "jac_f32") == null);
+    const decl = "pub const jac_f32 = true;\n\n";
+    const at = std.mem.indexOf(u8, on, decl) orelse return error.NoPermissionDecl;
+    // Excise the block the flag added — comment header included — and what is
+    // left has to be the default output byte for byte.
+    const hdr = std.mem.lastIndexOf(u8, on[0..at], "/// This device permits").?;
+    const stripped = try std.mem.concat(a, u8, &.{ on[0..hdr], on[at + decl.len ..] });
+    try std.testing.expectEqualStrings(off, stripped);
+}
 
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
@@ -5890,7 +6057,7 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
 }
 
-test "codegen: §12.32.3 an unregistered system function is W0852 and 0.0, not a refusal" {
+test "codegen: §12.32.3 an unregistered system function is W0852 and a host call, not a refusal" {
     // The other side of the test above, and the distinction the whole W0852
     // ruling rests on: an unregistered `$name` has no value the LRM fixes, so
     // the unit must still compile — but not silently. §12.32.3's own sampnhold
@@ -5919,6 +6086,47 @@ test "codegen: §12.32.3 an unregistered system function is W0852 and 0.0, not a
     // Compiles. A refusal here would reject legal source (§2.8.3), which is the
     // regression this line exists to catch.
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
+
+    // §2.8.3/§12.32: the name is EXPORTED for a host to bind, not answered here.
+    // The `0.0` this test used to require is gone deliberately — a substitute
+    // value is what the seam replaced.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const systf_calls") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .name = \"$sampler\" }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst.systf.?") != null);
+}
+
+test "codegen: a systf call reassembles the host's value and partials into one S" {
+    // The shape §12.22.1 forces, and the reason it is forced: `eval` is generic
+    // over S and a function POINTER cannot be, so the host returns a value and
+    // writes partials and the call site rebuilds the dual. Each graft term is
+    // `arg.addC(-arg.val()).scale(p)` — VALUE zero, DERIVATIVE p·d(arg) — so on
+    // the plain-f64 instantiation the residual reads the host's value exactly
+    // and on the dual one it also carries the host's slope.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module twice(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p,n) <+ $foo(V(p,n)) + $foo(V(p,n)) + $bar(V(p,n));
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // Deduplicated by NAME, because that is what §12.32 registers: two calls to
+    // `$foo` are one table entry and one binding, and `$bar` is the second.
+    const tbl = src[std.mem.indexOf(u8, src, "pub const systf_calls").?..];
+    try std.testing.expect(std.mem.indexOf(u8, tbl, ".{ .name = \"$foo\" }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tbl, ".{ .name = \"$bar\" }") != null);
+    try std.testing.expect(std.mem.count(u8, tbl[0..std.mem.indexOf(u8, tbl, "};").?], ".name =") == 2);
+    // …and the indices the call sites pass follow the table, not the call order.
+    try std.testing.expect(std.mem.count(u8, src, "zsh.call(zsh.ctx, 0,") == 2);
+    try std.testing.expect(std.mem.count(u8, src, "zsh.call(zsh.ctx, 1,") == 1);
+
+    // The graft, spelled out. `.val()` feeds the host, `.addC(-...).scale(...)`
+    // brings the partial back; dropping either half is the failure this pins.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".val() }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".addC(-zsv[0]).scale(zsp[0])") != null);
 }
 
 test "codegen: §3.4 a default with no compile-time value is W1050, a derived one is silent" {

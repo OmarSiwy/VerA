@@ -23,6 +23,26 @@
 `ifndef VERA_CHECK_VH
 `define VERA_CHECK_VH
 
+// GOT AND WANT ARE EXPANDED TWICE — once for the transcript column, once inside
+// the verdict. §10.3 makes a macro textual substitution, and Verilog-A gives a
+// macro no way to bind a temporary, so there is no spelling of these that
+// evaluates its operand once.
+//
+// For a pure expression that is invisible. For one with a SIDE EFFECT it is
+// not, and the failure is silent in the worst way: the value printed is not the
+// value compared. §4.7.2's output/inout function arguments are the case that
+// found this — `CHECKX("...", via_inout(d), 5.0)` calls the function twice, so
+// the transcript read `got=5 want=5 ok=0`, and `d` came out 25 instead of 5.
+//
+// So: a GOT with a side effect must be bound to a variable first.
+//
+//     t = via_inout(d);
+//     `CHECKX("return via inout argument", t, 5.0);
+//
+// The same applies to $random and to any analog function with an output or
+// inout formal. Everything else in this suite is a pure function of the
+// operating point and is unaffected.
+
 // Absolute tolerance. Use for values near or at zero.
 `define CHECK(NAME, GOT, WANT, TOL) \
   $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, (abs((GOT) - (WANT)) <= (TOL)))

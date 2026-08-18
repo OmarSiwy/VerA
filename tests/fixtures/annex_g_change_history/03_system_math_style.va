@@ -17,7 +17,7 @@
 // dyadic rational, so exact equality is the right claim. $min of two integers
 // is the integer-result rule of Table 4-14, hence CHECKI.
 //
-//! lrm G.7
+//! lrm G.1
 //! lrm 4.3.1
 //! lrm 9.14
 //! bias V(p) = -3.5, V(n) = 0

@@ -42,7 +42,7 @@
 // would delete the whole test, which is the mistake ch06_hierarchy/input_port.va
 // makes and this file exists to correct.
 //
-//! lrm G.7
+//! lrm G.1
 //! lrm 5.6.1
 //! print none
 //! solve

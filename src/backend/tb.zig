@@ -27,6 +27,7 @@
 
 const std = @import("std");
 const naming = @import("naming.zig");
+const Lexer = @import("../frontend/lexer.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -47,6 +48,11 @@ pub const Error = Allocator.Error || error{
     TooManyPoints,
     /// A `//! lrm` cite is not a section number: see `validSection`.
     BadLrmSection,
+    /// A `bias`/`sweep`/`wave` line named something that is not a solver
+    /// unknown — `V(a,c)`, a branch POTENTIAL, being the case that reaches
+    /// here. Its own error rather than `BadSyntax` because the report prints
+    /// the error name and "BadSyntax" says nothing about which half was wrong.
+    BadUnknownName,
 };
 
 /// One `name = value` binding: a model parameter, or a fixed unknown.
@@ -129,6 +135,32 @@ pub const Directives = struct {
     /// such a tool reads the netlist off its own command line and the cards here
     /// document which netlist that must be.
     spice: []const u8 = "",
+    /// `//! noise <kind>(<row>,<col>)`, one per expected `noise_gens` entry, in
+    /// table order. `//! noise none` asserts the table is empty.
+    ///
+    /// §4.6.4's generators are the one part of a model that is NOT observable
+    /// from the model's own text: `white_noise` reads 0 outside a small-signal
+    /// analysis (§4.6.2), so a `CHECK` over it can only ever pin the zero, and
+    /// what the clause is actually about — WHICH generator was declared, on
+    /// WHICH branch — leaves through the device's `noise_gens` table to a host.
+    /// Until this directive the suite had no host reading it, so five clauses
+    /// (§4.6.4.1 white_noise, .2 flicker_noise, .3/.4 the tables, .6 correlated
+    /// sources) had nothing a fixture could assert about them beyond acceptance.
+    ///
+    /// The verdict stays the `ok=` column, so no harness change and no second
+    /// judge: the runner prints one `got=/want= ok=` line per entry plus one for
+    /// the count, and `countVerdicts` reads them like any other assertion.
+    ///
+    /// A fixture writes what the LRM REQUIRES the table to be. Where VerA
+    /// exports something else it gets `//! xfail`, in the ordinary way — writing
+    /// the gap into the `want` instead would invert the fixture and fail a
+    /// conforming compiler.
+    noise: []const []const u8 = &.{},
+    /// Whether any `//! noise` line was written at all. Separate from
+    /// `noise.len`, because `//! noise none` is an ASSERTION that the table is
+    /// empty and an absent directive is not — without this the runner could not
+    /// tell "expect nothing" from "does not ask".
+    asserts_noise: bool = false,
     /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
     /// fixture: it must NOT compile, and every substring here must appear
     /// somewhere in the resulting diagnostic. A fixture that cannot run states
@@ -173,7 +205,9 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var reject: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
+    var noise: std.ArrayList([]const u8) = .empty;
     var saw_time = false;
+    var saw_noise = false;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -225,6 +259,17 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
+        } else if (eq(kw, "noise")) {
+            // `none` is the empty table, spelled rather than left as an absent
+            // directive: "this model declares no generator" is a claim, and a
+            // missing line is not one.
+            if (eq(rest, "none")) {
+                saw_noise = true;
+            } else {
+                if (!validNoiseEntry(rest)) return error.BadSyntax;
+                saw_noise = true;
+                try noise.append(arena, try arena.dupe(u8, rest));
+            }
         } else if (eq(kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
@@ -257,6 +302,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.psweeps = psweeps.items;
     d.reject = reject.items;
     d.lrm = lrm.items;
+    d.noise = noise.items;
+    d.asserts_noise = saw_noise;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
@@ -281,6 +328,25 @@ fn digits(s: []const u8) bool {
     if (s.len == 0) return false;
     for (s) |c| if (c < '0' or c > '9') return false;
     return true;
+}
+
+/// Is this a `//! noise` entry — `thermal(p,n)`, `flicker(d,s)`?
+///
+/// The KIND is checked and the node names are not. A misspelled kind is a
+/// fixture that can never pass and whose failure would say nothing about the
+/// model, so it is worth catching at parse time; a misspelled node is a fixture
+/// whose `want` genuinely differs from the table, which is the assertion doing
+/// its job. Nothing here could check a node anyway — directives are read out of
+/// raw source, before the compiler has been told what unknowns exist.
+fn validNoiseEntry(s: []const u8) bool {
+    const open = std.mem.indexOfScalar(u8, s, '(') orelse return false;
+    if (s[s.len - 1] != ')') return false;
+    const kind = std.mem.trim(u8, s[0..open], " \t");
+    if (!eq(kind, "thermal") and !eq(kind, "shot") and !eq(kind, "flicker")) return false;
+    const inner = s[open + 1 .. s.len - 1];
+    const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
+    return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
+        std.mem.trim(u8, inner[comma + 1 ..], " \t").len != 0;
 }
 
 /// `V(a)`, `x[a]` and a bare `a` all name the unknown `a`. The first two are
@@ -326,8 +392,23 @@ fn digits(s: []const u8) bool {
 /// net_named_gnd_is_not_ground.va`, which reads both currents in the model
 /// instead and needs no binding at all.
 fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
-    var s = raw;
-    if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
+    var s = std.mem.trim(u8, raw, " \t");
+    if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) {
+        s = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
+        // §5.4.2's branch POTENTIAL is not a solver unknown. `node_voltages`
+        // holds nets; a branch potential is V(a) - V(b), derived from two of
+        // them, so there is no row to pin and `//! bias V(a,c) = 0.6` is asking
+        // for something that does not exist.
+        //
+        // Diagnosed HERE, at directive-parse time, because of what used to
+        // happen instead: the name fell through to `naming.sanitize`, `a, c`
+        // became the identifier `aZ2cZ20c`, and the generated testbench failed
+        // to build with `//! names unknown aZ2cZ20c` — which `torture.zig`
+        // reports as "an ENGINE bug", since a testbench that will not compile
+        // normally is one. A fixture's typo was indistinguishable from a
+        // compiler defect.
+        if (std.mem.indexOfScalar(u8, s, ',') != null) return error.BadUnknownName;
+    }
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
         const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
         s = if (inner.len != 0 and inner[0] == '<')
@@ -403,22 +484,24 @@ fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
 fn number(raw: []const u8) Error!f64 {
     const t = std.mem.trim(u8, raw, " \t");
     if (t.len == 0) return error.BadNumber;
-    const suffix: f64 = switch (t[t.len - 1]) {
-        'T' => 1e12,
-        'G' => 1e9,
-        'M' => 1e6,
-        'K', 'k' => 1e3,
-        'm' => 1e-3,
-        'u' => 1e-6,
-        'n' => 1e-9,
-        'p' => 1e-12,
-        'f' => 1e-15,
-        'a' => 1e-18,
-        else => 0,
-    };
-    if (suffix == 0) return std.fmt.parseFloat(f64, t) catch error.BadNumber;
+    const exp = Lexer.scaleExp(t[t.len - 1]) orelse
+        return std.fmt.parseFloat(f64, t) catch error.BadNumber;
+
+    // The suffix is folded into the EXPONENT and parsed once, which is what
+    // `Lexer.scaleExp` exists to make possible and what the model's own lexer
+    // does with the same spelling. This used to multiply by 1e-6 instead, and
+    // `200 * 1e-6` is 1.9999999999999998e-4 where `200e-6` is 2.0e-4 — so a
+    // `//! time 200u` point compared LESS THAN a `200u` written in the model,
+    // and every `($abstime < 200u) || <claim>` guard was true at 200u. The
+    // fixtures that use that idiom to fire an assertion at their last timepoint
+    // were asserting nothing there.
     const head = std.mem.trim(u8, t[0 .. t.len - 1], " \t");
-    return suffix * (std.fmt.parseFloat(f64, head) catch return error.BadNumber);
+    if (head.len == 0) return error.BadNumber;
+    var buf: [64]u8 = undefined;
+    if (head.len + exp.len > buf.len) return error.BadNumber;
+    @memcpy(buf[0..head.len], head);
+    @memcpy(buf[head.len..][0..exp.len], exp);
+    return std.fmt.parseFloat(f64, buf[0 .. head.len + exp.len]) catch error.BadNumber;
 }
 
 fn eq(a: []const u8, b: []const u8) bool {
@@ -472,11 +555,73 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     );
     try w.print("    inst.temperature = {f};\n", .{fmtF64(d.temp)});
     try w.print("    inst.analysis_kind = .{t};\n", .{d.analysis});
+    // §2.8.3/§12.32: this testbench IS a host, so it answers for the device's
+    // unresolved `$name`s like any other. It binds `no_vpi_app` rather than
+    // being exempt from `validateHost` — an exemption for the tool's own host is
+    // how a seam stops being tested, and it is the one host that certainly
+    // exercises every device VerA emits.
+    try w.raw(
+        \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
+        \\
+    );
     try w.raw(
         \\
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\
     );
+
+    // --- §4.6.4 the exported noise topology ---------------------------------
+    //
+    // Before the operating points, and once: `noise_gens` is a COMPTIME table,
+    // a property of the model and not of a bias. Printing it per point would
+    // repeat one fact N times and make a sweep's transcript say N times as much
+    // as it knows.
+    if (d.asserts_noise) {
+        try w.raw(
+            \\
+            \\    // §4.6.4: what this device tells a host about its noise
+            \\    // generators. Nothing in the model's own text can see this —
+            \\    // §4.6.2 makes every source read 0 outside a small-signal
+            \\    // analysis — so the table is the only place the clause is
+            \\    // observable, and a `//! noise` line is how a fixture reaches it.
+            \\    {
+            \\        const want = [_][]const u8{
+            \\
+        );
+        for (d.noise) |e| try w.print("            \"{f}\",\n", .{std.zig.fmtString(e)});
+        try w.raw(
+            \\        };
+            \\        if (comptime @hasDecl(D, "noise_gens")) {
+            \\            std.debug.print("noise count got={d} want={d} ok={d}\n", .{
+            \\                D.noise_gens.len, want.len, @intFromBool(D.noise_gens.len == want.len),
+            \\            });
+            \\            inline for (D.noise_gens, 0..) |g, i| {
+            \\                var buf: [192]u8 = undefined;
+            \\                // `U`'s tag names ARE the spelling contract — the same
+            \\                // names a `//! bias` line uses and the same ones a
+            \\                // diagnostic prints — so a fixture writes what it reads
+            \\                // in the source.
+            \\                const got = std.fmt.bufPrint(&buf, "{s}({s},{s})", .{
+            \\                    @tagName(g.kind),
+            \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
+            \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+            \\                }) catch "<too long>";
+            \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
+            \\                std.debug.print("noise[{d}] got={s} want={s} ok={d}\n", .{
+            \\                    i, got, w_i, @intFromBool(std.mem.eql(u8, got, w_i)),
+            \\                });
+            \\            }
+            \\        } else {
+            \\            // No table at all is the empty table: a device that
+            \\            // declares no generator does not declare an empty one.
+            \\            std.debug.print("noise count got=0 want={d} ok={d}\n", .{
+            \\                want.len, @intFromBool(want.len == 0),
+            \\            });
+            \\        }
+            \\    }
+            \\
+        );
+    }
 
     // --- one straight-line block per operating point ------------------------
     //
@@ -659,6 +804,7 @@ const runner_head =
     \\
     \\const std = @import("std");
     \\const D = @import("device");
+    \\const contract = @import("contract");
     \\
     \\const n_u = @typeInfo(D.U).@"enum".fields.len;
     \\
@@ -666,6 +812,41 @@ const runner_head =
 ;
 
 const runner_body =
+    \\/// §2.8.3/§12.32: this testbench is a HOST, and a host answers for every
+    \\/// `$name` the compiler left to a VPI application. There is no application
+    \\/// in a `vera --run` build, so this one answers zero — and that answer is
+    \\/// the testbench's, written here where a reader can see it, not a value the
+    \\/// compiler substituted behind everyone's back.
+    \\///
+    \\/// ZERO IS NOT A CLAIM ABOUT THE FUNCTION. §12.32.3's own sampnhold listing
+    \\/// never initializes `sampler->value` before its first update callback, so
+    \\/// the language fixes no value for an unregistered systf and there is
+    \\/// nothing here to be wrong about. What a fixture over one of these may
+    \\/// assert is what does NOT depend on the value: that the analog block runs
+    \\/// straight through the call (§5.3.1), that the residual is still built.
+    \\/// Asserting the 0.0 itself would pin this file's choice as if it were the
+    \\/// LRM's, and a host-linked conforming tool would then fail the fixture.
+    \\///
+    \\/// The partials are zero for the same reason and one more: a systf whose
+    \\/// derivative were left undefined would put a number nothing computed into
+    \\/// the Jacobian, and Newton would chase it.
+    \\fn noVpiApp(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
+    \\    @memset(partials, 0);
+    \\    return 0;
+    \\}
+    \\var no_vpi_app: contract.SystfHost = .{ .ctx = undefined, .call = noVpiApp };
+    \\
+    \\/// What `contract.validateHost` checks this host by. The testbench is not
+    \\/// exempt from it: an exemption for the tool's own host is how a seam stops
+    \\/// being tested, and this is the host that runs against every device the
+    \\/// torture suite compiles.
+    \\pub fn systf(_: *const D.Model) ?*const contract.SystfHost {
+    \\    return &no_vpi_app;
+    \\}
+    \\comptime {
+    \\    contract.validateHost(@This(), D);
+    \\}
+    \\
     \\/// Index of the unknown a directive named. A miss is a compile error that
     \\/// names the directive, not a runtime surprise.
     \\fn ix(comptime name: []const u8) usize {
@@ -1281,6 +1462,100 @@ test "directives: an lrm cite is a section, and an xfail points either way" {
     try testing.expectEqualStrings("no array formals in analog functions", run.xfail.?);
     // A reason is still required — a bare marker names no gap.
     try testing.expectError(error.BadSyntax, parse(arena, "//! xfail\n"));
+}
+
+test "§2.6 a scale factor is an exponent, not a multiplier" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The claim is BIT equality with the same spelling written in the model,
+    // which is what `Lexer.scaleExp` produces. `200 * 1e-6` rounds twice and is
+    // a different double from `200e-6`; a directive that used the first spelled
+    // a time no `$abstime < 200u` in a model could ever reach.
+    const d = try parse(arena, "//! time 0, 200u, 1n, 2.5m, 1K\n");
+    try testing.expectEqual(@as(f64, 0.0), d.times[0]);
+    try testing.expectEqual(@as(f64, 200e-6), d.times[1]);
+    try testing.expectEqual(@as(f64, 1e-9), d.times[2]);
+    try testing.expectEqual(@as(f64, 2.5e-3), d.times[3]);
+    try testing.expectEqual(@as(f64, 1e3), d.times[4]);
+    // The one that actually regressed: not merely close, EQUAL. The old
+    // spelling has to be built at RUNTIME to reproduce it — Zig's comptime
+    // float arithmetic is arbitrary-precision, so `200.0 * 1e-6` written as a
+    // literal is already the correctly rounded answer and would prove nothing.
+    var two_hundred: f64 = 200;
+    _ = &two_hundred;
+    const multiplied = two_hundred * 1e-6;
+    try testing.expect(d.times[1] == 200e-6);
+    try testing.expect(multiplied != 200e-6);
+    try testing.expect(d.times[1] != multiplied);
+
+    // A bare suffix is not a number, and neither is a suffix on nothing.
+    try testing.expectError(error.BadNumber, parse(arena, "//! temp u\n"));
+    // A plain float still goes straight through.
+    const plain = try parse(arena, "//! temp 300.15\n");
+    try testing.expectEqual(@as(f64, 300.15), plain.temp);
+}
+
+test "§5.4.2 a branch potential is not a solver unknown" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `V(a)` names the net `a`; `V(a,c)` names a POTENTIAL DIFFERENCE, which is
+    // derived from two unknowns and is not one. Diagnosed at parse time rather
+    // than sanitized into an identifier: `a, c` used to become `aZ2cZ20c` and
+    // surface as a testbench that would not build, which the runner reports as
+    // an engine bug rather than as the fixture's typo it is.
+    try testing.expectError(error.BadUnknownName, parse(arena, "//! bias V(a,c) = 0.6\n"));
+    try testing.expectError(error.BadUnknownName, parse(arena, "//! bias V(a, c) = 0.6\n"));
+    try testing.expectError(error.BadUnknownName, parse(arena, "//! sweep V(a,c) = 0, 1\n"));
+
+    // A branch FLOW is an unknown and keeps working — §5.4.2 gives it a row.
+    // Its name is sanitized because `flow(a,c)` is not a Zig identifier and the
+    // `U` member codegen emits for it is not either; the two go through the
+    // same `naming.sanitize`, which is what makes the directive and the emitted
+    // enum agree on one spelling.
+    const flow = try parse(arena, "//! bias I(a,c) = 0.25\n");
+    try testing.expectEqualStrings("flowZ28aZ2ccZ29", flow.bias[0].name);
+
+    // Whitespace inside the access function is not part of the name.
+    const spaced = try parse(arena, "//! bias V( a ) = 0.5\n");
+    try testing.expectEqualStrings("a", spaced.bias[0].name);
+}
+
+test "§4.6.4 `//! noise` states the exported generator table" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try parse(arena, "//! noise thermal(a,b)\n//! noise flicker(d,s)\n");
+    try testing.expect(d.asserts_noise);
+    try testing.expectEqual(@as(usize, 2), d.noise.len);
+    try testing.expectEqualStrings("thermal(a,b)", d.noise[0]);
+    try testing.expectEqualStrings("flicker(d,s)", d.noise[1]);
+
+    // `none` is a CLAIM that the table is empty. It has to be distinguishable
+    // from an absent directive, or a fixture could not say "this model declares
+    // no generator" — which is the assertion that catches a source leaking into
+    // a device that should have none.
+    const none = try parse(arena, "//! noise none\n");
+    try testing.expect(none.asserts_noise);
+    try testing.expectEqual(@as(usize, 0), none.noise.len);
+
+    const silent = try parse(arena, "//! analysis dc\n");
+    try testing.expect(!silent.asserts_noise);
+
+    // A misspelled KIND can never match, and its failure would say nothing
+    // about the model, so it is caught here instead.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise pink(a,b)\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal a,b\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a)\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(,b)\n"));
+    // A node name is NOT checked: nothing here has been told what unknowns the
+    // module has, and a wrong one is the assertion working rather than a typo.
+    const odd = try parse(arena, "//! noise shot(nosuchnode,b)\n");
+    try testing.expectEqual(@as(usize, 1), odd.noise.len);
 }
 
 test "sweep expansion is the cartesian product, last fastest" {

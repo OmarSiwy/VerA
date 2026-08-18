@@ -1,0 +1,47 @@
+// "A mixed signal can have a number of compatible continuous nets, with
+// different continuous disciplines and different abstols. In this case, the
+// abstol of the associated node shall be the smallest of the abstols specified
+// in the disciplines associated with all the continuous nets of the signal."
+// §7.2.4
+//
+// Two compatible disciplines derive from the same natures but override them
+// with different abstols. Both nets on the same signal; the effective abstol
+// becomes the minimum. The observable is that multiple compatible nets with
+// different abstols can both be driven without error.
+//
+//! lrm 7.2.4
+//! bias V(p) = 1.5
+`include "check.vh"
+nature voltage_base;
+  units = "V";
+  access = V;
+  abstol = 1u;
+endnature
+nature voltage_loose : voltage_base;
+  abstol = 10u;
+endnature
+nature voltage_tight : voltage_base;
+  abstol = 100n;
+endnature
+nature current_base;
+  units = "A";
+  access = I;
+  abstol = 1p;
+endnature
+discipline disc_loose_tol;
+  potential voltage_loose;
+  flow current_base;
+enddiscipline
+discipline disc_tight_tol;
+  potential voltage_tight;
+  flow current_base;
+enddiscipline
+module lrm_7_2_4_mixed_signal(p);
+  inout p; disc_loose_tol p;
+  disc_tight_tol q;
+  analog begin
+    `CHECKX("compatible nets with different abstols both drive the same node", V(p), 1.5);
+    I(p) <+ V(p) * 0.001;
+    I(p, q) <+ V(p, q) * 0.0001;
+  end
+endmodule

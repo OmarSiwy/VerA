@@ -23,6 +23,7 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.4.2
+//! lrm 9.5.4
 `include "check.vh"
 module ch09_atomic_fscanf(p, n);
   inout p, n; electrical p, n;

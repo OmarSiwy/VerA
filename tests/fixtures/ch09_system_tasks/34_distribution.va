@@ -24,6 +24,7 @@
 // perfectly; with it, a constant-returning implementation fails.
 //
 //! lrm 9.13.2
+//! lrm 9.13
 `include "check.vh"
 module ch09_distribution(p, n);
   inout p, n; electrical p, n;
