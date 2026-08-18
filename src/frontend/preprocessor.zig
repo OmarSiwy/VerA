@@ -37,6 +37,10 @@ const diag = @import("../diag.zig");
 /// edge only goes one way.
 const Lexer = @import("lexer.zig");
 const token = @import("token.zig");
+/// Stage 3, imported by stage 1 for ONE reason: the prelude snapshot below
+/// carries the PARSE of the same three files, for the same "keyed on nothing"
+/// argument as the text and the tokens. Nothing else in this file parses.
+const Parser = @import("parser.zig");
 /// Annex E.2 — the `.MODEL`/`.SUBCKT` reader whose output joins this prelude.
 const spice_cards = @import("spice_cards.zig");
 
@@ -343,10 +347,11 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
 /// thing to compare against.
 ///
 /// It also holds the STAGE 2 result for the same bytes — `tags`/`starts`, see
-/// `preludeTokens`. That is not a preprocessor output, but it is a function of
-/// the same three literals and of nothing else, so it is keyed on nothing for
-/// the same reason and there is no second place to put it that does not need a
-/// second copy of this argument. Its own equivalence test is at the bottom too.
+/// `preludeTokens` — and the STAGE 3 result, `ast`, see `preludeAst`. Neither is
+/// a preprocessor output, but both are functions of the same three literals and
+/// of nothing else, so both are keyed on nothing for the same reason, and there
+/// is no second place to put either that does not need a second copy of this
+/// argument. Each has its own equivalence test at the bottom too.
 ///
 /// LIFETIME: process-lifetime and never freed. Every compilation `@memcpy`s the
 /// text into its own arena, so the borrowed-text rule in root.zig's OWNERSHIP
@@ -366,6 +371,8 @@ const Prelude = struct {
     /// and a `MultiArrayList`'s own slice is not stable across a resize.
     tags: []const token.Tag,
     starts: []const u32,
+    /// STAGE 3 for the same tokens — see `preludeAst`.
+    ast: Parser.Parser.Seed,
     segs: []const diag.Segment,
     macros: []const Def,
     /// In registration order, which is what makes `segs`' `FileId`s — indices
@@ -402,6 +409,47 @@ pub fn preludeTokens(std_defs: bool) Allocator.Error!?Lexer.Lexer.Seed {
     if (!std_defs) return null;
     const p = try preludeSnapshot();
     return .{ .tags = p.tags, .starts = p.starts, .len = @intCast(p.text.len) };
+}
+
+/// Stage 3's half of the snapshot: what parsing the prelude's tokens leaves in
+/// the parser, ready to be handed to `Parser.initSeeded` so a compilation parses
+/// only the tokens AFTER the prelude. `null` when `std_defs` is off.
+///
+/// WHY THIS IS SOUND, on top of `preludeTokens`' argument (which already
+/// establishes that the prelude is the same leading run of tokens every time):
+///
+///   - **The ids are already a prefix.** `StrId`, `ExprId`, `StmtId` and the
+///     `exprs.pool` offsets are all "index into an append-only column", assigned
+///     as `id = column.len` at insert. The parser walks tokens in order and the
+///     prelude's tokens come first, so the prelude's ids are 0..N-1 in the same
+///     order in every compilation, seeded or not. Nothing interns ahead of
+///     `parseSourceFile` — `access_names`' "V"/"I" go into a separate `void`
+///     set, not the interner. So the prefix property is a consequence of
+///     insertion order, not something this seed has to engineer.
+///   - **Nothing below the parser writes the prelude's declarations**, so the
+///     `ModuleDecl`/`NatureDecl`/`DisciplineDecl` arrays are SHARED out of the
+///     process-lifetime arena rather than copied. See `Ast.SourceFile.seedFrom`,
+///     which carries the evidence.
+///   - **The stores ARE appended to** (§6.7 flattening clones expressions and
+///     interns flat names into them), so those are copied per compilation. That
+///     copy is the entire cost of this cache.
+///
+/// MEASURED, ReleaseFast, min of 500, the 6-line resistor in root.zig's tests:
+/// parsing the prelude's 2,574 tokens was **82.7 µs of the 109.7 µs** a whole
+/// `.lint` compilation cost. Cloning what it produces instead — 777 expression
+/// rows, 63 statements, 154 interned names and their map, 19+16+11 decls — is
+/// ~13 µs on a cold arena, of which 3.4 µs is the interner map.
+///
+/// LIFETIME and THREAD SAFETY: `Prelude`'s, unchanged. One wrinkle worth naming:
+/// the seed's interned names borrow `Prelude.text`, while the compilation's own
+/// names borrow its private copy of the same bytes. Both are content-identical
+/// and the interner hashes and compares by content, so the mixed provenance is
+/// invisible — and the prelude's half now outlives every arena instead of dying
+/// with one.
+pub fn preludeAst(std_defs: bool) Allocator.Error!?*const Parser.Parser.Seed {
+    if (!std_defs) return null;
+    const p = try preludeSnapshot();
+    return &p.ast;
 }
 
 fn preludeSnapshot() Allocator.Error!*const Prelude {
@@ -455,11 +503,42 @@ fn buildPrelude() Allocator.Error!*const Prelude {
         try macros.append(arena, .{ .name = e.key_ptr.*, .macro = e.value_ptr.* });
     }
 
-    // Stage 2 for the same three files, also once per process. The `.eof` is
-    // dropped: it is a property of the buffer being lexed, and the buffer the
-    // compilation lexes ends past the user's source, not here.
+    // Stage 2 for the same three files, also once per process.
     var toks = try Lexer.Lexer.tokenize(arena, pp.out.items);
     std.debug.assert(toks.len > 0 and toks.items(.tag)[toks.len - 1] == .eof);
+
+    // Stage 3, on the WHOLE token list including its `.eof` — `Parser.init`
+    // requires one, and the parse stops ON it, which is what makes `pos` the
+    // prelude's token count and therefore the first index a resumed parse reads.
+    var parser = Parser.Parser.init(arena, pp.out.items, toks.items(.tag), toks.items(.start), &bag);
+    const file = parser.parseSourceFile() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Same argument as `runStdDefs`' above: a diagnostic out of three
+        // compile-time constants is a broken build, not a user error, and there
+        // is no user bag to report it into.
+        error.ParseError => unreachable,
+    };
+    // Nothing the prelude parse leaves behind may be lost: these are the rest of
+    // `Parser`'s state surface, and each is back at its `init` value because the
+    // shipped files open no `begin_keywords, no generate region, no analog
+    // function and no connect module that outlives its own `end*`. A prelude
+    // file that breaks one of these must extend `Parser.Seed` rather than lose
+    // the event — which is exactly the shape of `Pp`'s four asserts above.
+    std.debug.assert(!parser.failed and bag.list.items.len == 0);
+    std.debug.assert(parser.pos == toks.len - 1);
+    std.debug.assert(parser.kw_set == token.default_keyword_set);
+    std.debug.assert(parser.kw_stack.items.len == 0);
+    std.debug.assert(parser.attrs.items.len == 0 and parser.attr_depth == 0);
+    std.debug.assert(!parser.in_analog_fn and !parser.in_connect_module);
+    std.debug.assert(parser.gen_depth == 0 and parser.gen_construct_depth == 0);
+
+    var access: std.ArrayList([]const u8) = .empty;
+    var ait = parser.access_names.keyIterator();
+    while (ait.next()) |k| try access.append(arena, k.*);
+
+    // The `.eof` is dropped from the SEED columns: it is a property of the
+    // buffer being lexed, and the buffer the compilation lexes ends past the
+    // user's source, not here. After the parse, which needed it.
     toks.len -= 1;
 
     const p = try arena.create(Prelude);
@@ -467,6 +546,12 @@ fn buildPrelude() Allocator.Error!*const Prelude {
         .text = pp.out.items,
         .tags = toks.items(.tag),
         .starts = toks.items(.start),
+        .ast = .{
+            .file = file,
+            .access_names = access.items,
+            .pos = parser.pos,
+            .gen_construct = parser.gen_construct,
+        },
         .segs = pp.segs.items,
         .macros = macros.items,
         .files = .{
@@ -3014,10 +3099,149 @@ test "`--no-std-defs` gets no seed, and lexes the same either way" {
     const text = try process(arena, "module m; endmodule\n", .{ .std_defs = false, .bag = &bag });
 
     try testing.expectEqual(@as(?Lexer.Lexer.Seed, null), try preludeTokens(false));
+    try testing.expectEqual(@as(?*const Parser.Parser.Seed, null), try preludeAst(false));
     const long = try Lexer.Lexer.tokenize(arena, text);
     const seeded = try Lexer.Lexer.tokenizeSeeded(arena, text, try preludeTokens(false));
     try testing.expectEqualSlices(token.Tag, long.items(.tag), seeded.items(.tag));
     try testing.expectEqualSlices(u32, long.items(.start), seeded.items(.start));
+}
+
+/// Structural equality by REFLECTION, not by a hand-written field list: the AST
+/// declaration types are ~20 structs of slices, and a hand-written comparator is
+/// a second surface that goes stale the day someone adds a field — the exact
+/// failure the test below exists to prevent. Slices of `u8` compare by CONTENT,
+/// deliberately: the snapshot's names borrow the process-lifetime prelude text
+/// and a fresh parse's borrow the compilation's copy of the same bytes, so
+/// identical pointers are not the claim and identical bytes are.
+fn expectDeepEqual(comptime T: type, a: T, b: T) !void {
+    switch (@typeInfo(T)) {
+        .pointer => |p| {
+            comptime std.debug.assert(p.size == .slice);
+            if (p.child == u8) return testing.expectEqualStrings(a, b);
+            try testing.expectEqual(a.len, b.len);
+            for (a, b) |x, y| try expectDeepEqual(p.child, x, y);
+        },
+        .@"struct" => |s| inline for (s.fields) |f| {
+            try expectDeepEqual(f.type, @field(a, f.name), @field(b, f.name));
+        },
+        .@"union" => |u| {
+            const Tag = u.tag_type.?;
+            try testing.expectEqual(@as(Tag, a), @as(Tag, b));
+            inline for (u.fields) |f| {
+                if (@as(Tag, a) == @field(Tag, f.name))
+                    try expectDeepEqual(f.type, @field(a, f.name), @field(b, f.name));
+            }
+        },
+        .optional => |o| {
+            try testing.expectEqual(a == null, b == null);
+            if (a) |x| try expectDeepEqual(o.child, x, b.?);
+        },
+        else => try testing.expectEqual(a, b),
+    }
+}
+
+// The AST snapshot's correctness condition, and like the token one it needs its
+// OWN long way round. The determinism test at the top of this file CANNOT grade
+// a cache: after this change both of its runs take the cached path, so a
+// snapshot that dropped a declaration is byte-identical in both and passes.
+//
+// So this parses the whole preprocessed text from token 0 with NO seed and
+// compares the result against the seeded parse in FULL — the interner's contents
+// AND its ids AND its map, every column of every `ExprStore` row, the statement
+// pool, all four declaration arrays to their leaves, and the parser state that
+// is not in the `SourceFile` at all (`access_names`, `pos`, `gen_construct`).
+//
+// Two inputs, for the same reason the token test has two: with an annex E.2
+// netlist the prelude is followed by synthesized modules, so the declarations
+// landing immediately after the seam are not the user's.
+test "the prelude AST snapshot parses exactly what parsing the whole text produces" {
+    const cases = [_][]const u8{ "", ".MODEL nn npn\n.SUBCKT amp in out\nR1 in out 1k\n.ENDS\n" };
+    for (cases) |netlist| {
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        var bag: diag.Bag = .init(arena);
+        const text = try process(arena,
+            \\nature Pressure;
+            \\  units = "Pa"; access = Pr; abstol = 1e-6;
+            \\endnature
+            \\discipline fluid; potential Pressure; enddiscipline
+            \\module res(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  parameter real r = 1000.0 from (0.0:inf);
+            \\  real acc[0:2];
+            \\  analog begin : body
+            \\    integer k;
+            \\    for (k = 0; k < 3; k = k + 1) acc[k] = k * 2.0;
+            \\    I(p, n) <+ V(p, n) / r + acc[1];
+            \\  end
+            \\endmodule
+        , .{ .bag = &bag, .spice_netlist = netlist });
+
+        var toks = try Lexer.Lexer.tokenize(arena, text);
+        const tags = toks.items(.tag);
+        const starts = toks.items(.start);
+
+        // THE LONG WAY: no seed, one parse of every token from 0.
+        var lbag: diag.Bag = .init(arena);
+        var lp = Parser.Parser.init(arena, text, tags, starts, &lbag);
+        const long = try lp.parseSourceFile();
+
+        var sbag: diag.Bag = .init(arena);
+        const seed = (try preludeAst(true)).?;
+        var sp = try Parser.Parser.initSeeded(arena, text, tags, starts, &sbag, seed);
+        // The seed is doing something: the resumed parse starts deep in the file.
+        try testing.expect(sp.pos > 2000 and sp.pos < tags.len - 1);
+        const seeded = try sp.parseSourceFile();
+
+        // --- the interner: same strings, at the same ids, and the same map ---
+        try testing.expectEqual(long.strings.strings.items.len, seeded.strings.strings.items.len);
+        try testing.expectEqual(long.strings.map.size, seeded.strings.map.size);
+        for (long.strings.strings.items, seeded.strings.strings.items, 0..) |x, y, i| {
+            try testing.expectEqualStrings(x, y);
+            // The id is the claim, not just the membership: everything below the
+            // parser addresses a name by its `StrId`.
+            const id = seeded.strings.find(y) orelse return error.NameNotInMap;
+            try testing.expectEqual(i, @intFromEnum(id));
+        }
+
+        // --- the expression store: every column of every row, and the three
+        // side tables the rows index ---
+        try testing.expectEqual(long.exprs.nodes.len, seeded.exprs.nodes.len);
+        for (0..long.exprs.nodes.len) |i| {
+            try expectDeepEqual(
+                @TypeOf(long.exprs.nodes.get(0)),
+                long.exprs.nodes.get(i),
+                seeded.exprs.nodes.get(i),
+            );
+        }
+        try testing.expectEqualSlices(u32, long.exprs.pool.items, seeded.exprs.pool.items);
+        try testing.expectEqualSlices(f64, long.exprs.reals.items, seeded.exprs.reals.items);
+        try testing.expectEqualSlices(i64, long.exprs.ints.items, seeded.exprs.ints.items);
+
+        // --- statements ---
+        try testing.expectEqualSlices(u32, long.stmt_toks.items, seeded.stmt_toks.items);
+        try expectDeepEqual(@TypeOf(long.stmts.items), long.stmts.items, seeded.stmts.items);
+
+        // --- all four declaration arrays, to their leaves ---
+        try expectDeepEqual(@TypeOf(long.modules), long.modules, seeded.modules);
+        try expectDeepEqual(@TypeOf(long.disciplines), long.disciplines, seeded.disciplines);
+        try expectDeepEqual(@TypeOf(long.natures), long.natures, seeded.natures);
+        try expectDeepEqual(@TypeOf(long.paramsets), long.paramsets, seeded.paramsets);
+
+        // --- the parser state that is not in the SourceFile ---
+        // A dropped access name turns a §4.4.1 branch probe into a §4.7 function
+        // call silently, so the set is compared both ways.
+        try testing.expectEqual(lp.access_names.size, sp.access_names.size);
+        var it = lp.access_names.keyIterator();
+        while (it.next()) |k| try testing.expect(sp.access_names.contains(k.*));
+        try testing.expectEqual(lp.pos, sp.pos);
+        try testing.expectEqual(lp.gen_construct, sp.gen_construct);
+        try testing.expectEqual(lp.failed, sp.failed);
+        try testing.expectEqual(@as(usize, 0), lbag.list.items.len + sbag.list.items.len);
+    }
 }
 
 test "an ABSTOL override reaches annex D.1" {

@@ -216,3 +216,72 @@ test "every src/backend/*.zig is reachable from src/root.zig or registered" {
     }
     try std.testing.expectEqual(@as(usize, 0), bad);
 }
+
+// ---------------------------------------------------------------------------
+// (c) no mutable pointer to a top-level AST declaration outside the parser
+// ---------------------------------------------------------------------------
+
+/// The element types of `Ast.SourceFile`'s four declaration arrays. Guarding
+/// these four is enough for everything under them: Zig propagates `const`
+/// through field access, so a `*const ModuleDecl` cannot yield a `*ParamDecl`.
+const decl_types = [_][]const u8{ "ModuleDecl", "NatureDecl", "DisciplineDecl", "ParamsetDecl" };
+
+/// The two files allowed to hold one: the parser BUILDS them (`findPort` takes
+/// a `*Ast.Port` while a module header is still being assembled), and ast.zig
+/// declares them.
+const decl_writers = [_][]const u8{ "src/frontend/parser.zig", "src/frontend/ast.zig" };
+
+fn identChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '.';
+}
+
+// WHY THIS GUARD EXISTS, and why it is not a style rule.
+//
+// `Preprocessor.preludeAst` hands every compilation the annex D/E prelude's
+// declarations out of a PROCESS-LIFETIME arena, shared rather than copied
+// (`Ast.SourceFile.seedFrom`). That is sound only while nothing below the parser
+// writes one — today nothing does, and the type system is what says so: every
+// reader takes `*const`. A single `*Ast.ModuleDecl` added in `elaborate.zig`
+// would let one compilation edit the AST that every LATER compilation in the
+// same process starts from, and NO test in this tree can see it: the equivalence
+// test compares two parses, the determinism test compares two runs that both
+// take the cached path, and a fixture sweep runs one compilation per process.
+//
+// So the premise is checked here, where a violation is a red `zig build test`
+// rather than a miscompile in the artifact a host builds.
+test "no mutable pointer to a top-level AST declaration outside the parser" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+
+    var bad: usize = 0;
+    for (try srcFiles(arena, io)) |rel| {
+        if (for (decl_writers) |w| {
+            if (std.mem.eql(u8, w, rel)) break true;
+        } else false) continue;
+        const text = try read(arena, io, rel);
+        for (decl_types) |name| {
+            var i: usize = 0;
+            while (std.mem.indexOfPos(u8, text, i, name)) |at| {
+                i = at + name.len;
+                // A longer identifier that merely ends in the name is not it.
+                if (i < text.len and identChar(text[i])) continue;
+                // Walk left over the qualified name (`Ast.ModuleDecl`).
+                var start = at;
+                while (start > 0 and identChar(text[start - 1])) start -= 1;
+                if (start == 0 or text[start - 1] != '*') continue;
+                std.debug.print(
+                    "{s}: `*{s}` — a MUTABLE pointer to a shared AST declaration." ++
+                        " The annex D/E prelude's decls are borrowed out of a" ++
+                        " process-lifetime arena (Preprocessor.preludeAst), so writing" ++
+                        " one edits every later compilation's starting AST. Take" ++
+                        " `*const`, or copy the decl first.\n",
+                    .{ rel, text[start..i] },
+                );
+                bad += 1;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), bad);
+}
