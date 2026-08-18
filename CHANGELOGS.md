@@ -48,6 +48,49 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 15 — derive the aliases; MEASURE the MIR row and refuse to rewrite it — `b533573`
+
+**Suite: 217/217 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
+
+**T0.4** — the nine `prelude_*_txt` alias blocks are derived at comptime from the helper text.
+The "KEEP IN SYNC" comment and the test policing it are gone; **−66 lines**, emitted bytes
+unchanged (proved with a temporary test holding the old text verbatim, then removed once it could
+only compare the derivation with itself).
+
+My brief was wrong twice. Deriving from "the exact predicate `publish` applies" **would have
+shipped a broken prelude**: the five `@embedFile` blocks arrive *already* `pub`, so `publish`
+leaves them untouched, and that predicate drops every `zScan`/`zFOpen`/`zRng*`/`zTab*`/`zBilin`
+alias — the majority. And the sync rule never caught anything: the deleted test's block list
+omitted `file_txt`, so the twelve `zF*` aliases were **unpoliced hand-maintenance the whole
+time**, while the comment claimed a narrower scope than the ten blocks it governed.
+
+**THE MIR ROW: measured, and refused.** Recorded in TODO.md §2 with the numbers.
+
+The audit's sizes were right (25 B/inst SoA, 9 B `ValueRow` + 4 B alias). The *inference* was
+not. All 1,164 fixtures' MIR together is **992 KB**; the largest single fixture is **44 KB**;
+this box's L2 is 32 MB. The whole corpus is 3% of L2 and one fixture is L1-resident. The most
+generous accounting of the layout is ~7 ns/inst against a marginal **670–1,241 ns/inst** — 1% of
+lint, of which the Air shape removes at most half. Bench noise on the batch is 1.3%. **The entire
+theoretical win is below the instrument's noise floor.**
+
+Air's 9 B is worth it because Zig compiles functions with millions of instructions. VerA's
+largest real MIR is 44 KB. Copying the shape without the scale is cargo cult — and this is
+exactly the outcome the measurement gate existed to produce.
+
+Two more spec errors worth keeping: **`Ref` folding is not local to `mir.zig`** — the Value space
+indexes nine side arrays outside it (`analysis`, `unit_plan`, `codegen`) at 27 B per value,
+*twice* the 13 B the fold deletes, and codegen's slot lookup is
+`if (i < an.nv and plan.slot[i] != none)`, so an off-by-one in renumbering **does not trap — it
+names a different cached slot in the emitted device.** And the `tok` split aims at a walk that no
+longer exists: `analysis.zig` already hoists `i_op`/`i_res` as raw column slices, with a comment
+saying why.
+
+**What the measurement found instead — the next real win.** 87% of fixture-batch lint is a
+*per-compilation constant*: 211.7 µs per fixture, spent producing **237 bytes** of MIR. Wave 14
+cached the prelude's *preprocessing*; every compilation still **lexes, parses and lowers** the
+same ~11.8 KB of expanded Annex D/E. `vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs
+with `--no-std-defs`. **That is ~30%, not 1%.**
+
 ### Wave 14 — the prelude runs once, and a near-miss miscompile — `35a60f2`
 
 **Suite: 217/217 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
@@ -379,10 +422,25 @@ Both are fixed and pinned as of `4d6207c`.
 
 ---
 
-## Queue
+## What is left
 
-11 node identity → 12 surface deletion (~975 lines) → 13 device physics → 14 allocation sweep →
-MIR row 25 B → 9 B (Air-style `tags`+`data`+`Ref`).
+The queued sequence (waves 8–15) is **complete**. Every item is landed or measured-and-refused.
 
-Plus the unscheduled prelude-caching wave from §4 above, which is the largest measured win
-currently known.
+**The one thing I would do next, and it is measured, not guessed:** cache the prelude's
+*parsing*, not just its preprocessing. Wave 15 measured that 87% of fixture-batch lint is a
+per-compilation constant — 211.7 µs spent producing 237 bytes of MIR — because every compilation
+re-lexes, re-parses and re-lowers the same ~11.8 KB of expanded Annex D/E. Measured headroom:
+`vera --lint` on a 6-line model is 3,189 µs, and 2,235 µs with `--no-std-defs`. **~30%.**
+It is strictly harder than wave 14 (an AST and a MIR borrow the arena and the interner, where the
+prelude snapshot borrowed nothing), which is why it is a wave and not a patch.
+
+**Refused, with numbers, so nobody re-derives them** (all now in TODO.md §2): the Air-shaped MIR
+row (below the noise floor); a batch/SIMD evaluator inside VerA (14 wrong CSR cells, 3.05 vs
+3.04 ms, prefetch slower); the `contributions` full-table scans (max `<+` count across all
+fixtures is 8); `RVec(N)` (the shipped `eval` takes scalar `*const Model`, so N lanes are N bias
+points of one instance, never N instances).
+
+**Still open, and honestly costed in TODO.md §1:** the two XFAILs. XFAIL-1 (Annex F.2 step 4.b)
+needs domain-partitioned discipline slots, `connectrules` past E0201, and a mixed-port predicate
+that does not exist — wave 13 proved the "two-slot" shortcut I proposed would not have worked.
+XFAIL-2 (§9.4 display operand re-timing) re-times what two-thirds of the suite prints.
