@@ -406,6 +406,13 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // consumed at codegen time; a solve-computed one is a core live-out,
         // so outside the core it is a cache read. Argument 0 is the analysis
         // name and is never rendered.
+        // §4.5.14 likewise a filter coefficient the solve moves, which
+        // `emitOperator` reads live at the static point (`sampledCoefs`).
+        if (d == .call and (Mir.callee.opKind(d.call.callee) == .laplace or Mir.callee.opKind(d.call.callee) == .zi)) {
+            for (d.call.args[@min(1, d.call.args.len)..]) |a| {
+                if (self.cached(self.an.rv(a))) self.uses_cache = true;
+            }
+        }
         if (d == .call and d.call.callee == .ac_stim) {
             for (d.call.args, 0..) |a, ai| {
                 if (ai != 0 and self.cached(self.an.rv(a))) self.uses_cache = true;

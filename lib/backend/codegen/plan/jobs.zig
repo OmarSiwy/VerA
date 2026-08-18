@@ -164,8 +164,8 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         if (u.role != .analog_op) continue;
         const inst = from.names.opInstOf(@intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
-        for (dynCtrlArgs(u.op)) |ai| {
-            if (ai >= args.len) continue;
+        for (0..args.len) |ai| {
+            if (!isDynCtrlArg(u.op, ai)) continue;
             const v = self.an.rv(args[ai]);
             if (v == .f_zero) continue;
             if (!try dyn.isDynamic(args[ai])) continue;
@@ -419,19 +419,25 @@ fn readSet(self: Input, queued: []const Job) ![]bool {
     return read;
 }
 
-/// §4.5 Table 4-20 "Analog operator arguments": which argument positions the
-/// clause marks DYNAMIC (the input at position 0 is already a unit of its own,
-/// so it is not listed here). Everything absent from this table stays a
-/// `constant_expression` and is still E0515 when it is a solve result.
-fn dynCtrlArgs(k: OpKind) []const usize {
+/// §4.5 Table 4-20 "Analog operator arguments": whether argument position `ai`
+/// is one `updateState` reads off the core: the clause marks it DYNAMIC, or
+/// §4.5.14 samples it (the input at position 0 is already a unit of its own,
+/// so it is not one). Everything else stays a `constant_expression` and is
+/// still E0515 when it is a solve result.
+fn isDynCtrlArg(k: OpKind, ai: usize) bool {
     return switch (k) {
         // td ("dynamic: expr, td"), and maxdelay: the constant one, but §4.5.14
         // samples a dynamic value there "at the start of the analysis", which
         // `updateState` latches off this field (`absdelayMaxdSampled`).
-        .absdelay => &.{ 1, 2 },
-        .idt_hold => &.{ 1, 2 }, // ic, assert
-        .idtmod => &.{ 1, 2, 3 }, // ic, modulus, offset
-        .none, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer, .bound_step, .discontinuity => &.{},
+        .absdelay => ai == 1 or ai == 2,
+        .idt_hold => ai == 1 or ai == 2, // ic, assert
+        .idtmod => ai >= 1 and ai <= 3, // ic, modulus, offset
+        // §4.5.14 every filter coefficient, latched the same way
+        // (`cg_filters.FilterPlan.sampled`). The flattened vector counts fold
+        // and a moving ε is E0515 in lowering, so neither is queued; a moving
+        // zi_* period, τ or t0 is queued and then refused by the plan.
+        .laplace, .zi => ai >= 1,
+        .none, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => false,
     };
 }
 

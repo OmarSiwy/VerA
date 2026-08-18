@@ -17,7 +17,6 @@
 //
 //! lrm 4.5.14
 //! lrm 4.5.11.4
-//! xfail a dynamic filter coefficient is refused (E0515) instead of sampled at the analysis start
 //! checks 4
 //! bias V(n) = 0
 //! wave V(k) = 2, 2, 5, 5

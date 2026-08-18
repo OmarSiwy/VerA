@@ -92,13 +92,31 @@ fn absdelayTdAc(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     return self.arena.print("@min({s}, {s})", .{ td, try ctrlEval(self, args, 2, "0.0") });
 }
 
+/// Returns `__sec`'s §4.5.14 `k` argument in the residual's frame, with its
+/// leading comma, or "" for a filter that samples nothing. At a static point
+/// (the `dt` test of `zLaplace` and `zZiEval`) the coefficients are read
+/// live: that solve IS the start of the analysis. After it they are
+/// `updateState`'s latch (`gen_state.secStep`).
+fn sampledCoefs(self: *Gen, n: []const u8, p: cg_filters.FilterPlan) Error![]const u8 {
+    if (p.sampled.len == 0) return "";
+    var t: std.ArrayList(u8) = .empty;
+    try t.print(self.arena, ", if (sim.dt > 0.0) inst.{s}__k else .{{ ", .{n});
+    for (p.sampled, 0..) |v, j| {
+        if (j != 0) try t.appendSlice(self.arena, ", ");
+        try t.appendSlice(self.arena, try ctrlEval(self, &.{v}, 0, "0.0"));
+    }
+    try t.appendSlice(self.arena, " }");
+    return t.items;
+}
+
 /// Returns whether a signal-valued `maxdelay` is latched into `Instance` at
 /// the start of the analysis instead of refused (§4.5.14: "the value of the
 /// dynamic expression at the start of the analysis defaults to the constant
 /// value of the argument").
 pub fn absdelayMaxdSampled(self: *Gen, args: []const Mir.Value) Error!bool {
-    // ponytail: `absdelay`'s maxdelay only. Every other constant slot still
-    // answers a solve result with E0515; the same latch is the upgrade path.
+    // ponytail: `absdelay`'s maxdelay and the filter coefficients
+    // (`sampledCoefs`) only. Every other constant slot still answers a solve
+    // result with E0515; the same latch is the upgrade path.
     if (args.len != 3) return false;
     return gen_host.ctrlIsDynamic(self, args[2]);
 }
@@ -1055,10 +1073,11 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // `__sec` always takes `model`, so keep the parameter named.
             self.uses.model = true;
+            const sec = try self.arena.print("{s}__sec(model{s})", .{ n, try sampledCoefs(self, n, p) });
             try opOpen(self, fm);
-            try acOpen(self, kS, try self.arena.print("zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}__sec(model), zLaplaceH0({1d}, {2d}, {4s}__sec(model)))", .{ kS, p.ns, p.deg, in, n }));
-            try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
-                kS, p.ns, p.deg, in, n, n, n,
+            try acOpen(self, kS, try self.arena.print("zAcLaplace({0s}, {1d}, {2d}, {3s}, {4s}, zLaplaceH0({1d}, {2d}, {4s}))", .{ kS, p.ns, p.deg, in, sec }));
+            try self.b("zLaplace({s}, {d}, {d}, {s}, {s}, sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
+                kS, p.ns, p.deg, in, sec, n, n,
             });
             try opClose(self);
             try opClose(self);
@@ -1072,18 +1091,19 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             if (p.err) |m| return abort(self, .E0540, "{s}", .{m});
             // As for `.laplace`.
             self.uses.model = true;
+            const sec = try self.arena.print("{s}__sec(model{s})", .{ n, try sampledCoefs(self, n, p) });
             try opOpen(self, fm);
-            try acOpen(self, kS, try self.arena.print("zAcZi({s}, {d}, {d}, {s}, {s}__sec(model), {s})", .{
-                kS, p.ns, p.deg, in, n, p.period orelse "0.0",
+            try acOpen(self, kS, try self.arena.print("zAcZi({s}, {d}, {d}, {s}, {s}, {s})", .{
+                kS, p.ns, p.deg, in, sec, p.period orelse "0.0",
             }));
             if (p.tau) |tau| try self.b(
-                "zZiEvalRamp({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
+                "zZiEvalRamp({5s}, {0d}, {1d}, {2s}, {8s}, sim.dt, inst.{3s}__out, " ++
                     "inst.{3s}__from, inst.{3s}__ts, sim.t, inst.{3s}__nk, {4s}, {6s}, {7s}, &inst.{3s}__u, &inst.{3s}__y)",
-                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS, p.t0.?, tau },
+                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS, p.t0.?, tau, sec },
             ) else try self.b(
-                "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
+                "zZiEval({5s}, {0d}, {1d}, {2s}, {6s}, sim.dt, inst.{3s}__out, " ++
                     "sim.t, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
-                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
+                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS, sec },
             );
             try opClose(self);
             try opClose(self);
