@@ -2248,7 +2248,7 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] a; integer i; initial $display(\"%b\",a[i:0]); endmodule", "constant expression is required");
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"%b\", mem[0]); endmodule", "requires an element index");
-    try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
+    try expectRun("module m; reg [3:0] mem [0:1]; initial begin mem[65'h1] = 15; $display(\"%h\", mem[65'h1]); end endmodule", "f\n");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
     // A.2.4's `net_decl_assignment` on an undisciplined net runs.
     try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined and ground");
