@@ -492,7 +492,7 @@ pub fn build(b: *std.Build) void {
         pinned.addCheck(.{ .expect_stdout_match = f.supplies });
         test_step.dependOn(&pinned.step);
         for ([_][]const []const u8{ &.{}, &.{"-DUSE_POWER_PINS"} }) |def| {
-            const lint = b.addSystemCommand(&.{ "verilator", "--lint-only", "-Wall" });
+            const lint = b.addSystemCommand(&.{ "verilator", "--lint-only", "-Wall", "--timing" });
             lint.addArgs(def);
             lint.addFileArg(v);
             lint.expectExitCode(0);
