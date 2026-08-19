@@ -6403,6 +6403,14 @@ fn infoOf(c: Code) Info {
             \\
             \\Write the threshold as an event: `@(cross(V(a) - 1, 1))` or
             \\`@(above(V(a) - 1))`.
+            \\
+            \\LRM 7.3.6.1 adds one more A2D event: "one can also use analog
+            \\variables that are only assigned values in analog event statements
+            \\in a digital event control statement." A variable the analog block
+            \\assigns outside every event statement (`x = V(a);`) moves with the
+            \\solution like the probe it copies, so `@(x)` is refused the same
+            \\way. Assign it under an event (`@(timer(0, 1n)) x = V(a);`) or
+            \\wait on a monitored event of the value.
             ,
         },
 

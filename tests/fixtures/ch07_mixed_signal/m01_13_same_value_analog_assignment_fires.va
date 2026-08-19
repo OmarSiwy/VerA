@@ -16,14 +16,15 @@
 // value CHANGES (IEEE 1364 §9.7.2's rule for an ordinary variable) counts only
 // the 0.0 -> 1.0 at 5n and reads n = 1. The legal neighbour that assigns a new
 // value each time, and so passes either reading, is
-// m01_14_changed_analog_assignment_fires.va.
+// m01_14_changed_analog_assignment_fires.va. The refusal, `@(smpl)` over a
+// variable the analog block assigns outside any event statement, is
+// free_variable_in_digital_event_control_rejected.va (E0484).
 //
 // The declared points sit off the fire times (a fixed-grid point exactly on
 // 15n is where a timer's start + k*period can round past it), so each fire runs
 // at the first point after it. n is pinned at 22n and later, one point clear
 // of the last fire; earlier points assert the literal against itself.
 //
-//! xfail an analog event variable assigned its current value raises no digital event (only a changed value wakes `always @(smpl)`)
 //! lrm 7.3.5
 //! lrm 7.3.6.1
 //! analysis tran

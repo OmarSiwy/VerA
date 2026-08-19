@@ -14,6 +14,7 @@ const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
 const naming = @import("../naming.zig");
 const Lowered = @import("ir").Lowered;
+const HeldVar = @import("ir").Lower.HeldVar;
 const Mir = @import("ir").Mir;
 const diag = @import("diag");
 const Io = std.Io;
@@ -341,6 +342,8 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\    a2d_slots: [a2d_ports.len]u32,
         \\    /// §8.5.3.6 the region-1b values of the last explicit D2A event.
         \\    snaps: [snap_ports.len]f64 = @splat(0),
+        \\    /// §7.3.6.1 each `a2d_ports` count as the last finished solution left it.
+        \\    counts: [a2d_ports.len]i64 = @splat(0),
         \\    t: f64 = 0.0,
         \\    solved: bool = false,
         \\    /// The last finished solution, for §7.3.6.3's interpolation.
@@ -376,6 +379,38 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        inline for (snap_ports, 0..) |p, i| a.snaps[i] = mixedInput(dig, a.snap_slots[i], p.name);
         \\    }
         \\
+        \\    /// §8.5.3.6 one region-1b evaluation: what the tentative solution's
+        \\    /// explicit D2A event statements assigned (`d2a_held`) is committed,
+        \\    /// and no other history moves, so the tick's own solution still
+        \\    /// steps from the last finished one.
+        \\    pub fn latch(a: *Analog) !void {
+        \\        if (comptime State != void and d2a_held.len != 0) {
+        \\            const inst = a.accepted();
+        \\            inline for (d2a_held) |f| @field(a.inst, f) = @field(inst, f);
+        \\        }
+        \\    }
+        \\
+        \\    /// The `Instance` the tentative solution would leave if accepted.
+        \\    fn accepted(a: *const Analog) D.Instance {
+        \\        var inst = a.inst.*;
+        \\        var state = a.state.*;
+        \\        _ = D.updateState(Val, a.model, &inst, a.x.*, &state, sim_state);
+        \\        return inst;
+        \\    }
+        \\
+        \\    /// VAMS §7.3.3 / §7.3.6.3 a continuous variable no event statement
+        \\    /// assigns, read by a digital expression: its value on the tentative
+        \\    /// solution, which `sim.mixed.run` steps to every digital event
+        \\    /// time (`has_probes`) before the digital engine runs it.
+        \\    // ponytail: the solution's value, not one interpolated to the
+        \\    // tick: they differ only where an A2D crossing rounds to a tick.
+        \\    fn publish(a: *Analog) !void {
+        \\        if (comptime State != void and has_free_reads) {
+        \\            const inst = a.accepted();
+        \\            inline for (a2d_ports, 0..) |p, i| if (p.free) try a2dPut(a.dig, a.a2d_slots[i], @field(inst, p.field), false);
+        \\        }
+        \\    }
+        \\
         \\    pub fn solveAt(a: *Analog, t: f64, dt: f64, first: bool, last: bool) !void {
         \\
     );
@@ -389,6 +424,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        sim_state.analog_initial = first;
         \\        a.solved = solve(a.x, a.forced, a.model, a.inst);
         \\        a.t = t;
+        \\        try a.publish();
         \\    }
         \\
         \\    pub fn finish(a: *Analog) !void {
@@ -397,8 +433,12 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\        if (stepPost(a.model, a.inst, a.x, a.state, a.solved)) |r| retryUnsupported(r);
         \\        // §7.3.6.4: what the accepted solution left in each held variable.
         \\        inline for (a2d_ports, 0..) |p, i| {
-        \\            const v = @field(a.inst, p.field);
-        \\            try a.dig.a2dWrite(a.a2d_slots[i], if (@TypeOf(v) == f64) v else @as(f64, @floatFromInt(v)));
+        \\            const assigned = if (p.count) |c| blk: {
+        \\                const n: i64 = @field(a.inst, c);
+        \\                defer a.counts[i] = n;
+        \\                break :blk n != a.counts[i];
+        \\            } else false;
+        \\            try a2dPut(a.dig, a.a2d_slots[i], @field(a.inst, p.field), assigned);
         \\        }
         \\        a.n.* += 1;
         \\        a.x_prev = a.x.*;
@@ -466,11 +506,22 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
     const mod = naming.sanitize(&mod_buf, mx.top) catch return error.OutOfMemory;
     for (mx.reads) |name| for (mx.held) |h| if (std.mem.eql(u8, h.name, name)) {
         const leaf = naming.sanitize(&buf, name) catch return error.OutOfMemory;
-        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\" }},", .{ std.zig.fmtString(name), mod, leaf });
+        try out.print(arena, " .{{ .name = \"{f}\", .field = \"{s}__held__{s}\", .free = {}", .{ std.zig.fmtString(name), mod, leaf, h.why != .event });
+        // §7.3.6.1 its assignment count, when it has one.
+        for (mx.held) |c| if (std.mem.startsWith(u8, c.name, HeldVar.assign_count_prefix) and std.mem.eql(u8, c.name[HeldVar.assign_count_prefix.len..], name)) {
+            try out.print(arena, ", .count = \"{s}__held__{s}\"", .{ mod, naming.sanitize(&buf, c.name) catch return error.OutOfMemory });
+        };
+        try out.appendSlice(arena, " },");
         break;
     };
     // VAMS §6.3 the card's root parameters, so the digital half reads the
     // values `Model` gets (`sim.digital.Mixed.params`).
+    // §8.5.3.6 the held fields only explicit D2A event statements assign.
+    try out.appendSlice(arena, " };\nconst d2a_held = [_][]const u8{");
+    for (mx.held) |h| if (h.d2a) {
+        const leaf = naming.sanitize(&buf, h.name) catch return error.OutOfMemory;
+        try out.print(arena, " \"{s}__held__{s}\",", .{ mod, leaf });
+    };
     try out.appendSlice(arena, " };\nconst mixed_params = [_]sim.digital.Param{");
     for (d.params) |p| try out.print(arena, " .{{ .name = \"{f}\", .value = {f} }},", .{ std.zig.fmtString(p.name), fmtF64(p.value) });
     // The host has already derived these values, including defaults that the

@@ -1123,8 +1123,22 @@ pub const mixed_body =
     \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
     \\}
     \\
-    \\/// A digital name the device reads, and the `Model` field it arrives in.
-    \\const Port = struct { name: []const u8, field: []const u8, xz: ?[]const u8 = null };
+    \\/// A digital name the device reads, and the `Model` field it arrives in;
+    \\/// or an analog variable a digital expression reads, its `Instance` field,
+    \\/// whether no event statement assigns it (`free`), and its §7.3.6.1
+    \\/// assignment count's field (`count`).
+    \\const Port = struct { name: []const u8, field: []const u8, xz: ?[]const u8 = null, free: bool = false, count: ?[]const u8 = null };
+    \\
+    \\/// Some digital expression reads a free continuous variable.
+    \\const has_free_reads = for (a2d_ports) |p| {
+    \\    if (p.free) break true;
+    \\} else false;
+    \\
+    \\/// VAMS §7.3.6.4 / Table 7-1 in reverse: a held value into its digital
+    \\/// slot; `assigned`: an event statement assigned it (§7.3.6.1).
+    \\fn a2dPut(dig: *sim.digital.Run, slot: u32, v: anytype, assigned: bool) !void {
+    \\    try dig.a2dWrite(slot, if (@TypeOf(v) == f64) v else @as(f64, @floatFromInt(v)), assigned);
+    \\}
     \\/// §8.5 an explicit D2A term: the event it waits on, and its `Model` flag.
     \\const EventPort = struct { name: []const u8, edge: @FieldType(sim.digital.D2aSite, "edge"), field: []const u8 };
     \\
@@ -1164,6 +1178,9 @@ pub const mixed_body =
     \\    if (comptime contract.fileIo(D)) |f| dig.file_io = f;
     \\    var a: Analog = .{ .model = model, .inst = inst, .x = x, .forced = forced, .state = state, .dout = &dout, .n = n, .slots = undefined, .snap_slots = undefined, .dig = &dig, .a2d_slots = undefined };
     \\    inline for (a2d_ports, 0..) |p, i| a.a2d_slots[i] = mixedSlot(&dig, p.name);
+    \\    // §7.3.6.3 a free variable is an analog primary like a probe: read at
+    \\    // the promoted digital time, so the analog steps to each digital event.
+    \\    if (has_free_reads) dig.has_probes = true;
     \\    // §8.4.3.2: an unguarded read makes the block implicitly sensitive.
     \\    inline for (input_ports, 0..) |p, i| {
     \\        a.slots[i] = mixedSlot(&dig, p.name);
