@@ -56,6 +56,8 @@
             commonInputs
             ++ [
               pkgs.llvmPackages_21.llvm # needed for nvptx compilation
+              pkgs.iverilog # zig build test-beh-verilog
+              pkgs.verilator
             ]
             ++ cudaPkgs
             ++ rocmPkgs;

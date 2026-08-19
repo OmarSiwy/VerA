@@ -359,6 +359,9 @@ several calls wins; a static solve ignores it). Such a device emits no
 `t_retry`, then solves the rejected time again (`runner_text.retry`); the
 mixed and VPI runners refuse a request. In `analog initial` or an analog
 function it is E0533.
+`--emit-verilog` alone reads two more on declarations: `vera_pin`
+(`"digital"`, `"analog"`, `"power"`, `"ground"`) and `vera_delay` (seconds);
+`lib/backend/beh_verilog.zig`'s header has the rules.
 Every other attribute is parsed and ignored, and every attribute value is a
 §2.9 constant_expression (E0357).
 

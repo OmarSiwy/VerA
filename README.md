@@ -44,7 +44,20 @@ vera model.va --run --display=emit
 
 # what does that error code mean
 vera --explain W0650
+
+# a behavioural Verilog stand-in for digital simulation (iverilog, verilator)
+vera model.va --emit-verilog -o model_beh.v --digital-pins clk,outp,outn --power-pins
 ```
+
+`--emit-verilog` keeps the module name and port order. Digital pins become
+logic; each net the model drives switches at VDD/2 (`--vdd=X`, default 1.8)
+after its own RC time constant (τ·ln2) plus any `transition`/`absdelay` delay;
+analog pins stay undriven `inout wire`s, and `--power-pins` moves the supplies
+under `` `ifdef USE_POWER_PINS ``. Pins and delays can also be declared in the
+model: `(* vera_pin = "digital"|"analog"|"power"|"ground" *)` and
+`(* vera_delay = 2n *)` on the port's direction declaration or a net's
+declaration. Event-driven models (`@(cross)`, held variables) are refused; the
+header of `lib/backend/beh_verilog.zig` has the full rules.
 
 Exit 0 on success, 1 on a diagnosed error, 2 on bad flags. `vera --help` has the
 rest.
