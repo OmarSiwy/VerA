@@ -463,6 +463,53 @@ pub fn build(b: *std.Build) void {
         }
         grid_events.dependOn(&run.step);
     };
+    // --emit-verilog over AnalogIOC's golden models (tests/beh_verilog/). `test`
+    // pins each module's delays and its USE_POWER_PINS port list;
+    // `test-beh-verilog` also compiles every module clean in iverilog and
+    // `verilator --lint-only -Wall`, with and without the supply pins, and
+    // runs its testbench in iverilog (both need to be on PATH).
+    const beh_step = b.step("test-beh-verilog", "Simulate --emit-verilog modules in iverilog and lint them in verilator");
+    const vdd_vss = "`ifdef USE_POWER_PINS\n    , vdd\n    , vss\n`endif\n);";
+    for ([_]struct { va: []const u8, args: []const []const u8, says: []const u8, supplies: []const u8 = vdd_vss }{
+        .{ .va = "strongarm", .args = &.{ "--digital-pins", "clk,outp,outn" }, .says = "parameter real vera_fall_fp = 0.500000; // ns" },
+        .{ .va = "async_ctrl", .args = &.{ "--digital-pins", "go adc_done xbar_rst adc_go latch_out done" }, .says = "parameter real vera_rise_s = 48.000000; // ns" },
+        .{ .va = "tq_chain", .args = &.{ "--digital-pins", "in,tap1,tap2,tap3,tap4" }, .says = "parameter real vera_rise_m1 = 7.100000; // ns" },
+        .{ .va = "attrs", .args = &.{}, .says = "parameter real vera_rise_z = 3.000000; // ns", .supplies = "`ifdef USE_POWER_PINS\n    , pwr\n    , gnd0\n`endif\n);" },
+    }) |f| {
+        const gen = b.addRunArtifact(exe);
+        gen.addArgs(&.{ "--emit-verilog", "--power-pins", "--allow=W0650" });
+        gen.addArgs(f.args);
+        gen.addFileArg(b.path(b.fmt("tests/beh_verilog/{s}.va", .{f.va})));
+        gen.addArg("-o");
+        const v = gen.addOutputFileArg(b.fmt("{s}.v", .{f.va}));
+        gen.expectExitCode(0);
+        test_step.dependOn(&gen.step);
+        const pinned = b.addRunArtifact(exe);
+        pinned.addArgs(&.{ "--emit-verilog", "--power-pins", "--allow=W0650" });
+        pinned.addArgs(f.args);
+        pinned.addFileArg(b.path(b.fmt("tests/beh_verilog/{s}.va", .{f.va})));
+        pinned.addCheck(.{ .expect_stdout_match = f.says });
+        pinned.addCheck(.{ .expect_stdout_match = f.supplies });
+        test_step.dependOn(&pinned.step);
+        for ([_][]const []const u8{ &.{}, &.{"-DUSE_POWER_PINS"} }) |def| {
+            const lint = b.addSystemCommand(&.{ "verilator", "--lint-only", "-Wall" });
+            lint.addArgs(def);
+            lint.addFileArg(v);
+            lint.expectExitCode(0);
+            beh_step.dependOn(&lint.step);
+            const comp = b.addSystemCommand(&.{ "iverilog", "-Wall" });
+            comp.addArgs(def);
+            comp.addArg("-o");
+            const vvp = comp.addOutputFileArg(b.fmt("tb_{s}.vvp", .{f.va}));
+            comp.addFileArg(v);
+            comp.addFileArg(b.path(b.fmt("tests/beh_verilog/tb_{s}.v", .{f.va})));
+            comp.expectExitCode(0);
+            const sim = b.addSystemCommand(&.{ "vvp", "-n" });
+            sim.addFileArg(vvp);
+            sim.addCheck(.{ .expect_stdout_match = b.fmt("PASS tb_{s}", .{f.va}) });
+            beh_step.dependOn(&sim.step);
+        }
+    }
     // --emit-so skips the preflight type check and runs it only after a failed
     // build, so a device that does not compile is still reported against its
     // .va. A contract that refuses to compile stands in for an engine bug.

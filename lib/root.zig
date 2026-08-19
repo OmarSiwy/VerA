@@ -31,6 +31,8 @@ pub const KeywordSet = token.KeywordSet;
 pub const diag = @import("diag");
 /// MIR to device.zig (`CompileResult.generateOutput`).
 pub const codegen = @import("backend").codegen;
+/// MIR to a behavioural Verilog module for digital simulation (`--emit-verilog`).
+pub const beh_verilog = @import("backend").beh_verilog;
 /// device.zig to a versioned `.so` (`buildArtifact`).
 pub const orchestrator = @import("backend").orchestrator;
 /// The fixture testbench: `//!` directives, runner text and its build.

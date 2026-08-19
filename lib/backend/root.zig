@@ -11,6 +11,8 @@
 pub const naming = @import("naming.zig");
 /// MIR to device.zig source.
 pub const codegen = @import("codegen.zig");
+/// MIR to a behavioural Verilog module (`--emit-verilog`).
+pub const beh_verilog = @import("beh_verilog.zig");
 /// §9.4 display and §9.7.3 severity tasks to `std.debug.print`.
 pub const cg_display = @import("cg_display.zig");
 /// §4.5.11 `laplace_*` and §4.5.12 `zi_*` filter planning and emission.
