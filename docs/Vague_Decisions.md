@@ -134,6 +134,7 @@ summary and has a **Status** line naming what landed.
 | VD-089 | IEEE 1364-2005 17.11.1, 4.10.1; VAMS 9.14 | Host number is an unsized integer for `$clog2` unless a range/type fixes width | DONE (55e391ea) |
 | VD-090 | VAMS 9.18, 6.3.6, 3.4.7 | Top-level system parameter values via a top `aliasparam` card slot | no |
 | VD-091 | VAMS 10.1; IEEE 1364-2005 19.5 | A relative `` `include `` name is looked for beside the including file, then on `-I`, then among the annex D built-ins | DONE (dfd7e836) |
+| VD-092 | VAMS 7.8.1 Figure 7-6, 7.8.4 | Case 2 detail-merged: the §7.8.4 merge rule (two connect modules) governs over the figure's "three" | yes (fixture) |
 
 ## 1. Open decisions (ROADMAP §5.1, CLAUSE-AUDIT §7.5)
 
@@ -1014,6 +1015,15 @@ summary and has a **Status** line naming what landed.
 - **Measure impact**: A (+2 fixtures). C: 10.1 / 1364 19.5 gain a positive fixture and a refusal neighbour for the search rule.
 - **Status**: DONE (dfd7e836): `ch10_directives/include_searches_the_including_files_directory.va` (a nested include found only beside its includer, and the includer's copy chosen over a `-I` copy), `include_including_dir_is_per_file_rejected.va` (E0126: the directory is per file); Vague_Decisions.md §6 row added.
 
+
+### VD-092: Figure 7-6 Case 2, detail-merged connect module count
+- **Source**: g-resolve's detail-mode work (2026-10-04), building the §7.8.1 Figure 7-6 fixtures.
+- **Rule**: VAMS 7.8.1 lists, for Figure 7-6 Case 2 under detail resolution with merged connect modules, three connect modules; 7.8.4's rules for merging connect modules, applied to the same design, give two (derivation by g-resolve, 2026-10-04; not yet checked by a second reading).
+- **Why vague**: the worked example and the rule it illustrates disagree. Case 1's three counts (basic merged 2, detail merged 3, detail split 5) agree with 7.8.4 and are pinned by fixtures.
+- **Options**: (a) follow the figure's count; (b) follow 7.8.4's rule.
+- **Decision**: `DECIDED:` (b). The rule is normative text that every design is held to; the figure's count is one worked instance of it, and the other Case 1 counts confirm the rule as written. A tool that matched the figure would have to break 7.8.4 for every design shaped like Case 2.
+- **VerA today**: detail resolution follows 7.8.4 (`lib/ir/elaborate/segment.zig`, `insert.zig`). Case 2's count has not been measured: no fixture builds it. `CHANGE NEEDED:` a Case 2 fixture asserting two connect modules under detail-merged, with this derivation in its header.
+- **Measure impact**: A (+1 fixture). C: none (7.8.1 is already cited both ways).
 ---
 
 # Part 2: implementation-defined choices and resource limits
@@ -1403,6 +1413,8 @@ Pinned gaps are `//! xfail` fixtures and one-way clauses, listed by name in
 the 2026-10-04 conformance pass, with no fixture yet, because a fixture cannot
 express them or the work was larger than the pass. Each names its clause.
 
+- **VAMS 7.8.4: a connect module whose port's upper connection the segment pass cannot read** is refused by name (E0929): a generate-block, array or deep paramset instance, or an out-of-context declaration below the planned level, supplies it (§7 limit row).
+- **VAMS 7.8.1 Figure 7-6 Case 2** has no fixture yet (VD-092).
 - **VAMS 7.3.1: a select above bit 31 of a wide `reg`** in the analog context is refused (E0329): the analog side holds a `reg` as its 32-bit integer (§7 limit row).
 - **VAMS 6.6.2: generate-block instance names** (`g1.u`, `genblk1.u`) are reachable by a hierarchical reference from outside the block, which §6.6.2 forbids.
 - **IEEE 1364-2005 12.2.1/12.8.2: an upward `defparam`** whose target the one-pass flatten already bound is refused (E0907, §9 above).
