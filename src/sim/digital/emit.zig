@@ -1487,10 +1487,12 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         }
         return self.print("            }}\n", .{});
     }
-    if (ex.tag(target) == .index and val == .expr) {
+    if (ex.tag(target) == .index and (val == .expr or val == .stored)) {
         // §9.2 evaluates the RHS even when §5.2's index names no storage.
         // Capture once before any address/unknown guard. This also keeps
-        // function effects from being duplicated across a packed write.
+        // function effects from being duplicated across a packed write. A
+        // stored system-function result also needs this copy: an index's
+        // nested call can reuse that function's temporary slot.
         const lb = self.label();
         const ty = try targetType(self, target);
         try self.print("            {{\n            const v{d} = ", .{lb});

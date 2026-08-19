@@ -1652,19 +1652,16 @@ pub const State = struct {
         _ = system.own.close((d orelse return) & 0xffff_ffff);
     }
 
-    /// §17.2.4.3 `$sscanf` over the characters of `input` and `format`;
-    /// the scan's slices live until the next call.
-    pub fn scan(self: *State, input: anytype, comptime iw: u32, format: anytype, comptime fw: u32, outs: usize) Error!system.Scan {
-        _ = self.scratch.reset(.retain_capacity);
-        const a = self.scratch.allocator();
+    /// §17.2.4.3 `$sscanf` over the characters of `input` and `format`.
+    /// The caller owns the scan's arena: an output index can call another
+    /// scanner without invalidating this conversion stream.
+    pub fn scan(_: *const State, a: std.mem.Allocator, input: anytype, comptime iw: u32, format: anytype, comptime fw: u32, outs: usize) Error!system.Scan {
         return .init(try chars(a, input, iw), try chars(a, format, fw), outs);
     }
 
     /// §17.2.4.3 `$fscanf`: the same conversion stream as `$sscanf`, together
     /// with the file position which `finishFileScan` advances by consumed input.
-    pub fn scanFile(self: *State, descriptor: ?i64, format: anytype, comptime fw: u32, outs: usize) Error!system.FileScan {
-        _ = self.scratch.reset(.retain_capacity);
-        const a = self.scratch.allocator();
+    pub fn scanFile(self: *const State, a: std.mem.Allocator, descriptor: ?i64, format: anytype, comptime fw: u32, outs: usize) Error!system.FileScan {
         return system.fileScan(a, system.own, if (self.quiet) null else descriptor, try chars(a, format, fw), outs);
     }
 
