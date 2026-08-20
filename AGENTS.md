@@ -196,6 +196,16 @@ refusal.
 
 ---
 
+**Two dev shells.** `nix develop` is the build shell (Zig 0.17.0, the GPU
+toolchains, iverilog and verilator for `test-beh-verilog`).
+`nix develop .#benchmarking` adds profiling (perf, flamegraph, inferno) and
+the **reference tools** VerA's accuracy is checked against: iverilog,
+verilator and yosys (IEEE 1364), ngspice (an OSDI host: VerA's `.osdi` and
+OpenVAF's run in the same deck), Xyce, gnucap, and OpenVAF-Reloaded
+(`openvaf-r`, wrapped from its release binary in `flake.nix`, x86_64-linux
+only). The external suites under `tests/fixtures/external/` run in this
+shell; each folder's manifest pins the suite's URL, commit and license.
+
 ## 5. SIMD: read this before you optimise anything
 
 **The compiler is not a SIMD target and you are not to make it one.**
