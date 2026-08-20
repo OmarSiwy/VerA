@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Commits carry no Co-Authored-By trailers (AGENTS.md §8).
 - One changelog: `CHANGELOG.md`, starting after v1.0.0.
 - `nix develop .#benchmarking` carries the reference tools for accuracy checks: iverilog, verilator, yosys, ngspice, Xyce, gnucap and OpenVAF-Reloaded.
 - License: Apache 2.0 (was MIT). Third-party notices are in `NOTICE`.
