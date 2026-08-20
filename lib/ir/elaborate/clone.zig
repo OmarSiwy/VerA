@@ -163,10 +163,10 @@ pub fn cloneVar(self: *Flatten, v: Ast.VarDecl) Error!Ast.VarDecl {
 pub fn cloneFunc(self: *Flatten, fd: Ast.FuncDecl) Error!Ast.FuncDecl {
     var out = fd;
     out.name = elab_names.flat(self, fd.name);
-    var hidden: std.ArrayList(HiddenName) = .empty;
-    for (fd.args) |arg| try hide(self, &hidden, arg.name);
-    for (fd.params) |p| try hide(self, &hidden, p.name);
-    for (fd.vars) |v| try hide(self, &hidden, v.name);
+    var hidden: std.ArrayList(HiddenName) = try .initCapacity(self.ctx.arena, fd.args.len + fd.params.len + fd.vars.len);
+    for (fd.args) |arg| hide(self, &hidden, arg.name);
+    for (fd.params) |p| hide(self, &hidden, p.name);
+    for (fd.vars) |v| hide(self, &hidden, v.name);
     out.params = try cloneLocalParams(self, fd.params);
     out.vars = try cloneLocalVars(self, fd.vars);
     out.body = try cloneStmt(self, fd.body);
@@ -183,10 +183,10 @@ comptime {
 }
 
 /// Removes `name` from the unit's rename map for a local scope and records
-/// the old binding in `list`. The caller restores the whole list with
-/// `unhide`, in reverse order.
-pub fn hide(self: *Flatten, list: *std.ArrayList(HiddenName), name: Ast.StrId) Error!void {
-    try list.append(self.ctx.arena, .{ .name = name, .was = self.unit.rename.get(name) });
+/// the old binding in `list`, which the caller sized for every local it hides.
+/// The caller restores the whole list with `unhide`, in reverse order.
+pub fn hide(self: *Flatten, list: *std.ArrayList(HiddenName), name: Ast.StrId) void {
+    list.appendAssumeCapacity(.{ .name = name, .was = self.unit.rename.get(name) });
     _ = self.unit.rename.remove(name);
 }
 
@@ -546,9 +546,9 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
         .block => |b| blk: {
             // §5.3.2 a named block's declarations are locals, hidden for the
             // body like a function's formals.
-            var hidden: std.ArrayList(HiddenName) = .empty;
-            for (b.params) |p| try hide(self, &hidden, p.name);
-            for (b.vars) |v| try hide(self, &hidden, v.name);
+            var hidden: std.ArrayList(HiddenName) = try .initCapacity(self.ctx.arena, b.params.len + b.vars.len);
+            for (b.params) |p| hide(self, &hidden, p.name);
+            for (b.vars) |v| hide(self, &hidden, v.name);
             const params = try cloneLocalParams(self, b.params);
             const vars = try cloneLocalVars(self, b.vars);
             const body = try self.ctx.arena.alloc(Ast.StmtId, b.body.len);

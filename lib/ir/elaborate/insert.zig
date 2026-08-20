@@ -78,13 +78,15 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     // its module is walked (`resolve.collectOoc`), so an answer cached for
     // the level above may predate it.
     self.seg_up.clearRetainingCapacity();
-    var rules: std.ArrayList(Rule) = .empty;
+    var n_ins: usize = 0;
+    for (self.ctx.file.connectrules) |cr| n_ins += cr.insertions.len;
+    var rules: std.ArrayList(Rule) = try .initCapacity(self.ctx.arena, n_ins);
     for (self.ctx.file.connectrules) |cr| for (cr.insertions) |*ins| {
         // `checkConnectRules` has reported what is wrong with a statement;
         // here a refused one simply bridges nothing.
         const r = try ruleOf(self, ins, false) orelse continue;
         if (!try paramsDeclared(self, ins, r.module, false)) continue;
-        try rules.append(self.ctx.arena, r);
+        rules.appendAssumeCapacity(r);
     };
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
@@ -135,8 +137,9 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     if (hits.items.len == 0) return module.instances;
 
     // Copies of the originals, whose connection lists the segments rewrite.
-    var out: std.ArrayList(Ast.Instance) = .empty;
-    try out.appendSlice(self.ctx.arena, module.instances);
+    // The originals, then at most one bridge per hit.
+    var out: std.ArrayList(Ast.Instance) = try .initCapacity(self.ctx.arena, module.instances.len + hits.items.len);
+    out.appendSliceAssumeCapacity(module.instances);
     const conns = try self.ctx.arena.alloc([]Ast.PortConn, out.items.len);
     for (out.items, conns) |*inst, *c| {
         c.* = try self.ctx.arena.dupe(Ast.PortConn, inst.ports);
@@ -179,7 +182,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         const ports = try self.ctx.arena.alloc(Ast.PortConn, 2);
         ports[0] = .{ .name = upper_port, .expr = up_expr, .main_tok = conn.main_tok };
         ports[1] = .{ .name = lower_port, .expr = try ident(self, name.segment, conn.main_tok), .main_tok = conn.main_tok };
-        try out.append(self.ctx.arena, .{
+        out.appendAssumeCapacity(.{
             .module = r.module.name,
             .name = name.instance,
             // §7.7.3 "An attribute method can be used with the connect

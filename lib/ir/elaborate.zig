@@ -695,8 +695,8 @@ pub const Flatten = struct {
             .decl = top,
         });
 
-        var stack: std.ArrayList(Ast.StrId) = .empty;
-        try stack.append(self.ctx.arena, top.name);
+        var stack: [max_depth + 1]Ast.StrId = undefined;
+        stack[0] = top.name;
         try elab_instance.walkInstances(self, top, "", &stack, 0);
 
         // E.3.2.2 "If there are no continuous disciplines defined on the net

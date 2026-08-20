@@ -75,9 +75,10 @@ pub fn matchingParamsets(self: *Flatten, inst: *const Ast.Instance, path: []cons
     };
     const reads = if (count > 1) try self.ctx.arena.alloc(bool, self.params.items.len) else null;
     if (reads) |r| @memset(r, false);
+    try live.ensureUnusedCapacity(self.ctx.arena, count);
     for (self.ctx.file.paramsets) |*ps| {
         if (ps.name == inst.module and try paramsetAdmits(self, inst, ps, path, reads))
-            try live.append(self.ctx.arena, ps);
+            live.appendAssumeCapacity(ps);
     }
     if (reads) |r| for (r, self.params.items) |read, p| {
         if (read) try self.selection_params.append(self.ctx.arena, p.name);
