@@ -669,14 +669,15 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
             else => unreachable, // else: the real-valued functions left through the real path above
         },
         .concat => {
-            var parts: std.ArrayList(Int.Literal) = .empty;
+            // One part per operand at most (a zero replication adds none).
+            var parts: std.ArrayList(Int.Literal) = try .initCapacity(a, ex.args(e).len);
             for (ex.args(e)) |arg| {
                 if (compile.typeOf(self, arg).width == 0) {
                     // §5.1.14 evaluates the repeated operand once even for
                     // count zero. No zero-width Literal enters value helpers.
                     std.debug.assert(ex.tag(arg) == .multi_concat);
                     _ = try eval(self, a, ex.rhs(arg), 0);
-                } else try parts.append(a, try eval(self, a, arg, 0));
+                } else parts.appendAssumeCapacity(try eval(self, a, arg, 0));
             }
             const value = Int.Literal.concatenate(a, parts.items) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,

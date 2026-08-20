@@ -323,13 +323,13 @@ fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
 pub fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: *bool) Error!Int.Literal {
     // Scratch, which `execute` resets each instruction, so `gateBit` stays a
     // pure function of the input bits, read straight off §7.8.5's tables.
-    var bits: std.ArrayList(Int.Bit) = .empty;
-    for (g.ins) |in| {
+    const bits = try scratch.alloc(Int.Bit, g.ins.len);
+    for (g.ins, bits) |in, *b| {
         const v = try evaluate.eval(self, scratch, in, 1);
-        try bits.append(scratch, v.bit(if (v.width > 1) g.lane.? else 0));
+        b.* = v.bit(if (v.width > 1) g.lane.? else 0);
     }
     const out = try filled(scratch, width, false, .z);
-    const o = gateBit(g.kind, bits.items);
+    const o = gateBit(g.kind, bits);
     setBit(out, g.out_bit orelse 0, o.bit);
     or_z.* = o.or_z;
     return out;

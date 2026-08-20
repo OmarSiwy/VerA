@@ -512,8 +512,8 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         .concat => {
             // §5.1.14: self-determined operands, leftmost most significant;
             // a zero replication contributes no bits.
-            var parts: std.ArrayList(Ast.ExprId) = .empty;
-            for (ex.args(e)) |arg| if (compile.typeOf(r, arg).width != 0) try parts.append(self.arena, arg);
+            var parts: std.ArrayList(Ast.ExprId) = try .initCapacity(self.arena, ex.args(e).len);
+            for (ex.args(e)) |arg| if (compile.typeOf(r, arg).width != 0) parts.appendAssumeCapacity(arg);
             const n = try natural(self, e);
             try self.print("L.rs(", .{});
             for (parts.items[1..]) |_| try self.print("L.join(", .{});
@@ -713,11 +713,17 @@ pub fn address(self: *Emitter, e: Ast.ExprId, label: u32) Error!void {
     const arr = r.arrays.get(base).?;
     try self.print("b{d}: {{", .{label});
     // §4.9 row-major: the innermost select is the last dimension.
-    var selects: std.ArrayList(Ast.ExprId) = .empty;
+    var depth: usize = 0;
     var x = e;
-    while (ex.tag(x) == .index) : (x = ex.lhs(x)) try selects.insert(self.arena, 0, ex.rhs(x));
+    while (ex.tag(x) == .index) : (x = ex.lhs(x)) depth += 1;
+    const selects = try self.arena.alloc(Ast.ExprId, depth);
+    x = e;
+    while (depth != 0) : (x = ex.lhs(x)) {
+        depth -= 1;
+        selects[depth] = ex.rhs(x);
+    }
     try self.print(" var o{d}: u64 = 0;", .{label});
-    for (selects.items, 0..) |sel, d| {
+    for (selects, 0..) |sel, d| {
         const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
         try self.print(" const i{d}_{d} = L.asIndex(", .{ label, d });
         const t = try selfDetermined(self, sel);
