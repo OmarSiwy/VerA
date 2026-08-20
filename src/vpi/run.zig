@@ -314,7 +314,8 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
     }
     try callback.pendingTimes(&times, a, clock);
     std.mem.sort(u64, times.items, {}, std.sort.asc(u64));
-    var out: std.ArrayList(root.vpiHandle) = .empty;
+    // At most one queue per pending time.
+    var out: std.ArrayList(root.vpiHandle) = try .initCapacity(a, times.items.len);
     errdefer out.deinit(a);
     var last: ?u64 = null;
     for (times.items) |t| {
@@ -330,7 +331,7 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
             entry.value_ptr.* = q;
             try queue_live.put(gpa, @intFromPtr(q), q);
         }
-        try out.append(a, @ptrCast(entry.value_ptr.*));
+        out.appendAssumeCapacity(@ptrCast(entry.value_ptr.*));
     }
     return out.toOwnedSlice(a);
 }
