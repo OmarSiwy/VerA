@@ -1,0 +1,14 @@
+VerA
+Copyright 2026 Omar Elsawy
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+It includes the following third-party material:
+
+- tools/contract.zig: the log, exp and pow kernels are ported from musl's
+  src/math/log.c, log_data.c, exp_data.c and pow_data.c (via Zig's
+  compiler_rt). Copyright (c) 2018, Arm Limited. Licensed under the MIT
+  License.
+
+- src/vpi/vpi_user.h: follows the vpi_user.h listing in Annex G of
+  IEEE Std 1364-2005 and the VPI definitions of the Verilog-AMS LRM 2.4/2023.
