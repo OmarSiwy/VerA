@@ -108,7 +108,7 @@ numbers, run the suites yourself:
 | VPI `.c` fixtures | `zig build test-vpi-fixtures` |
 | SPICE decks, run on `sim.spice` against their oracles | `zig build test-spice` |
 
-Each release's `CHANGELOG.md` entry records the measured numbers.
+Each release's entry in `CHANGELOG.md` records the measured numbers; v1.0.0's are on its [GitHub release](https://github.com/OmarSiwy/VerA/releases/tag/v1.0.0).
 
 ### Measured
 
@@ -166,4 +166,4 @@ classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Changes are listed in [CHANGELOGS.md](CHANGELOGS.md).
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Changes since v1.0.0 are in [CHANGELOG.md](CHANGELOG.md).
