@@ -7,11 +7,10 @@ and `psd`, which your simulator compiles into its own Newton loop as a shared
 library, a standalone testbench, or a GPU kernel. Same emitted source for CPU,
 NVPTX and AMDGCN.
 
-**Pre v1.0.0. Not yet a conforming Verilog-AMS implementation.**
-
-[AGENTS.md](AGENTS.md) §2 says what v1.0.0 requires, and
 [docs/Vague_Decisions.md](docs/Vague_Decisions.md) lists what is still open. Passing the current fixture suite does not establish conformance,
 and `--coverage` counts clause citations, not verified rules.
+
+Developer Docs: https://deepwiki.com/OmarSiwy/VerA/
 
 ## Install
 

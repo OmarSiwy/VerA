@@ -746,6 +746,36 @@ test "A.6.2/A.6.5: discrete statement forms are grammar in a discrete body of an
     try std.testing.expectEqual(diag.Code.E0254, delay.code(0));
 }
 
+test "A.6.9 a task enable keeps its arguments while the rest of the file grows the expression pool" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // The enable's arguments once aliased the pool: the later module's
+    // expressions moved it, and they read freed memory (an E1100 design
+    // panicked in `digital.compile.infer`, 0xAAAAAAAA in Debug).
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena,
+        \\module m;
+        \\  reg [7:0] a, b;
+        \\  task t(input [7:0] x, input [7:0] y); a = x + y; endtask
+        \\  initial t(a[3:0], b);
+        \\endmodule
+        \\module n;
+        \\  reg [31:0] s;
+        \\  initial begin
+        \\
+    );
+    for (0..4096) |_| try src.appendSlice(arena, "    s = s + {2{s[3:0]}} - $signed(s[7:0]);\n");
+    try src.appendSlice(arena, "  end\nendmodule\n");
+    const r = try parseForTest(arena, src.items);
+    try std.testing.expectEqual(@as(usize, 0), r.count());
+    const enable = r.file.stmt(r.file.modules[0].discrete[0].body).sys_task;
+    try std.testing.expectEqualStrings("t", r.file.str(enable.name));
+    try std.testing.expectEqual(@as(usize, 2), enable.args.len);
+    try std.testing.expectEqual(Ast.ExprTag.index, r.file.exprs.tag(enable.args[0]));
+    try std.testing.expectEqual(Ast.ExprTag.ident, r.file.exprs.tag(enable.args[1]));
+}
+
 test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statement (G.2.1)" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
