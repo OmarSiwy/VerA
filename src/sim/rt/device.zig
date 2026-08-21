@@ -157,14 +157,23 @@ pub fn Device(comptime spec: Spec) type {
 
         /// Two tick boundaries (`snapshot.save`), the accepted one `bufs[cur]`
         /// and, while `work` is set, the one this step's `updateState` made,
-        /// and the accepted `Instance`.
+        /// and the accepted `Instance`. `say[0..say_len]` is what this
+        /// step's run printed: `commit` writes it to stderr, `revert` drops
+        /// it, so a rejected step prints nothing and its retry prints once.
         pub const State = struct {
             bufs: [2][cap]u8 = undefined,
             lens: [2]u32 = .{ 0, 0 },
             cur: u1 = 0,
             work: bool = false,
             inst: Instance = .{},
+            say: [say_cap]u8 = undefined,
+            say_len: u32 = 0,
         };
+
+        /// A step's transcript past this many bytes keeps its head and ends
+        /// in `say_cut`.
+        pub const say_cap = 4096;
+        const say_cut = "...[device transcript cut at 4096 bytes]\n";
 
         /// The digital engine keeps history across accepted steps.
         pub const state_class: contract.StateClass = .history;
@@ -216,6 +225,8 @@ pub fn Device(comptime spec: Spec) type {
             try keep(inst, st, s);
             st.cur ^= 1;
             st.work = false;
+            // Time 0 is never rejected.
+            flush(st);
         }
 
         /// At a static solve (any analysis but a transient) the inputs are
@@ -227,6 +238,7 @@ pub fn Device(comptime spec: Spec) type {
         /// changed, so the step never needs repeating (`.ok` always).
         pub fn updateState(comptime S: type, m: *const Model, inst: *Instance, x: [n_u]f64, st: *State, sim: contract.SimState) contract.UpdateResult {
             _ = S;
+            st.say_len = 0;
             if (inst.stopped) return .ok;
             var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
             defer arena.deinit();
@@ -314,14 +326,15 @@ pub fn Device(comptime spec: Spec) type {
         }
 
         /// The engine at the boundary `saved`, or at time 0 for null, with
-        /// no transcript, file or dump (`root.State.quiet`).
+        /// no file or dump (`root.State.quiet`) and its transcript in memory
+        /// until `keep` holds it in `State.say`.
         fn open(a: std.mem.Allocator, saved: ?[]const u8) !*root.State {
             const s = try a.create(root.State);
             try s.initIn(a, std.Io.failing, spec.design, spec.units);
-            const drop = try a.create(std.Io.Writer.Discarding);
-            drop.* = .init(&.{});
+            const text = try a.create(std.Io.Writer.Allocating);
+            text.* = .init(a);
             s.quiet = true;
-            s.sink = &drop.writer;
+            s.sink = &text.writer;
             s.out = s.sink;
             if (saved) |b| try s.restore(b);
             return s;
@@ -374,6 +387,15 @@ pub fn Device(comptime spec: Spec) type {
         /// wake it, and its boundary as this step's work; a boundary longer
         /// than `cap` fails.
         fn keep(inst: *Instance, st: *State, s: *root.State) !void {
+            const said = s.sink.buffered();
+            if (said.len <= say_cap) {
+                @memcpy(st.say[0..said.len], said);
+                st.say_len = @intCast(said.len);
+            } else {
+                @memcpy(st.say[0 .. say_cap - say_cut.len], said[0 .. say_cap - say_cut.len]);
+                @memcpy(st.say[say_cap - say_cut.len ..], say_cut);
+                st.say_len = say_cap;
+            }
             inst.stopped = s.sched.phase == .stopped;
             inst.next_ev = if (s.sched.peekTime()) |k| seconds(k) else inf;
             for (ins, 0..) |u, i| {
@@ -399,6 +421,7 @@ pub fn Device(comptime spec: Spec) type {
             switch (op) {
                 .query => return inst.late_cross,
                 .commit => {
+                    flush(st);
                     if (st.work) st.cur ^= 1;
                     st.work = false;
                     inst.late_cross = false;
@@ -411,9 +434,18 @@ pub fn Device(comptime spec: Spec) type {
                     inst.dc_lvl = lvl;
                     inst.dc_g = g;
                     st.work = false;
+                    st.say_len = 0;
                 },
             }
             return false;
+        }
+
+        /// The held transcript of an accepted step, to stderr: a host's
+        /// stdout may carry its own results.
+        fn flush(st: *State) void {
+            if (st.say_len == 0) return;
+            std.debug.print("{s}", .{st.say[0..st.say_len]});
+            st.say_len = 0;
         }
 
         /// The next digital event or end of an output ramp after `t`.

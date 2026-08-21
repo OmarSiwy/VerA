@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: a hosted `.v` device prints its `$display` output (to stderr) for each step the host accepts; a rejected step prints nothing, and a step past 4096 bytes is cut (#8).
 - Fix: a `.v` device holds up to 65535 pins (was 256), and past 64 its `deriv_reads`/`ddx_reads`/`jac_pattern` are declared in `contract.MaskOf(|U|)`: one derivative lane per output row instead of a dense Jacobian. The contract accepts any unsigned `U` tag of 8 bits or more; `contract.Mask(D)` is a device's mask type (u64 for every device that declares no wide mask) (#5).
 - Fix: an `output reg` port connected to a bit-select, part-select or concatenation drives exactly those bits (IEEE 1364-2005 §12.3.9.2), no longer E1100 (#6).
 - Fix: a digital task enable with arguments no longer reads freed memory once later source grows the parser's expression pool (a panic in `digital.compile.infer`) (#7).

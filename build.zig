@@ -391,7 +391,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{ .{ .name = "vdev_dyn", .module = vdev_dyn }, .{ .name = "vdev_so_options", .module = so_opts.createModule() }, .{ .name = "dynlib", .module = byName(mods, "dynlib") } },
     });
-    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide", "v_huge" }) |name| {
+    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d", "v_edge", "v_any", "v_wide", "v_huge", "v_say" }) |name| {
         const gen = b.addRunArtifact(gen_exe);
         gen.addArg("--emit-zig");
         gen.addFileArg(b.path(b.fmt("tests/fixtures/ch07_mixed_signal/{s}.v", .{name})));
