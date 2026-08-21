@@ -10,6 +10,8 @@ NVPTX and AMDGCN.
 [docs/Vague_Decisions.md](docs/Vague_Decisions.md) lists what is still open. Passing the current fixture suite does not establish conformance,
 and `--coverage` counts clause citations, not verified rules.
 
+Developer Docs: https://deepwiki.com/OmarSiwy/VerA/
+
 ## Install
 
 Needs Zig 0.17.0.
