@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: a digital task enable with arguments no longer reads freed memory once later source grows the parser's expression pool (a panic in `digital.compile.infer`) (#7).
 - Fix: digital selects with an index wider than 64 bits now work under `--run` and `--emit-exe` (#2).
 - Fix: native digital keeps a formatted scan's state across nested output calls (#3).
 - Digital engine, runtime, VPI and IR lists are sized before they fill (no behaviour change).
