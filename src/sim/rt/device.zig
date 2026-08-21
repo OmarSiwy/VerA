@@ -24,9 +24,8 @@ const logic = @import("logic.zig");
 const time = @import("../time.zig");
 
 /// One pin: bit `bit` of the top module's port slot `slot`, whose first word
-/// is word `off` of the planes. A device has at most 256 pins, so no port is
-/// wider.
-pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u8 };
+/// is word `off` of the planes.
+pub const Pin = struct { out: bool, slot: u32, off: u32, bit: u32 };
 
 /// What `digital/emit.zig`'s device root passes `Device`, all comptime.
 pub const Spec = struct {
@@ -42,38 +41,47 @@ pub const Spec = struct {
 };
 
 /// The contract device (`contract.validate`'s decls) of the native design in
-/// `spec`. A compile error above 256 pins. Every instance of the device
-/// shares `spec.design`'s tables; an `Instance` holds only its bridges.
+/// `spec`. Every instance of the device shares `spec.design`'s tables; an
+/// `Instance` holds only its bridges.
+///
+/// Its cost grows with the pins, never with their square: output row u reads
+/// unknown u alone, so `jac_pattern` (in `contract.MaskOf(|U|)`, past 64 pins
+/// too) gives a sparse family one lane per row; a step's A2D work is one
+/// compare per input, and the engine runs only when an input crossed or an
+/// event is due, so a bus that holds still costs no engine run.
 pub fn Device(comptime spec: Spec) type {
     const n_u = spec.pins.len;
-    comptime std.debug.assert(n_u <= 256);
-    const n_out = blk: {
-        var n: usize = 0;
-        for (spec.pins) |p| n += @intFromBool(p.out);
-        break :blk n;
+    @setEvalBranchQuota(100 * n_u + 1000);
+    const M = contract.MaskOf(n_u);
+    // The pins of each direction, in `U` order.
+    const ins, const outs = comptime blk: {
+        var i: [n_u]u32 = undefined;
+        var o: [n_u]u32 = undefined;
+        var ni: usize = 0;
+        var no: usize = 0;
+        for (spec.pins, 0..) |p, u| if (p.out) {
+            o[no] = u;
+            no += 1;
+        } else {
+            i[ni] = u;
+            ni += 1;
+        };
+        const ii = i[0..ni].*;
+        const oo = o[0..no].*;
+        break :blk .{ ii, oo };
     };
-    const n_in = n_u - n_out;
+    const n_out = outs.len;
+    const n_in = ins.len;
     // Per pin, its index among the outputs or among the inputs.
     const index = comptime blk: {
         var ix: [n_u]usize = undefined;
-        var o: usize = 0;
-        var i: usize = 0;
-        for (spec.pins, &ix) |p, *k| if (p.out) {
-            k.* = o;
-            o += 1;
-        } else {
-            k.* = i;
-            i += 1;
-        };
+        for (ins, 0..) |u, i| ix[u] = i;
+        for (outs, 0..) |u, k| ix[u] = k;
         break :blk ix;
     };
-    // Above 64 pins no u64 mask can name a pin, and every mask is all ones
-    // (the contract's dense default; the root omits the mask decls).
-    const out_mask: u64 = if (n_u > 64) ~@as(u64, 0) else comptime blk: {
-        var m: u64 = 0;
-        for (spec.pins, 0..) |p, u| if (p.out) {
-            m |= @as(u64, 1) << u;
-        };
+    const out_mask: M = comptime blk: {
+        var m: M = 0;
+        for (outs) |u| m |= @as(M, 1) << u;
         break :blk m;
     };
     const tick: f64 = comptime std.fmt.parseFloat(f64, std.fmt.comptimePrint("1e{d}", .{spec.units})) catch unreachable;
@@ -161,15 +169,13 @@ pub fn Device(comptime spec: Spec) type {
         /// The digital engine keeps history across accepted steps.
         pub const state_class: contract.StateClass = .history;
         /// Only an output pin's own voltage enters `eval` (`g · (V - level)`).
-        pub const deriv_reads: u64 = out_mask;
-        pub const ddx_reads: u64 = 0;
-        /// Output row u depends on unknown u alone; an input row on nothing
-        /// (all ones past 64 pins, the contract's dense default).
-        pub const jac_pattern: [n_u]u64 = blk: {
-            var p: [n_u]u64 = @splat(out_mask);
-            if (n_u <= 64) for (0..n_u) |u| {
-                p[u] = out_mask & (@as(u64, 1) << u);
-            };
+        pub const deriv_reads: M = out_mask;
+        pub const ddx_reads: M = 0;
+        /// Output row u depends on unknown u alone; an input row on nothing.
+        pub const jac_pattern: [n_u]M = blk: {
+            @setEvalBranchQuota(100 * n_u + 1000);
+            var p: [n_u]M = @splat(0);
+            for (outs) |u| p[u] = @as(M, 1) << u;
             break :blk p;
         };
 
@@ -204,7 +210,7 @@ pub fn Device(comptime spec: Spec) type {
 
         fn birth(a: std.mem.Allocator, m: *const Model, inst: *Instance, st: *State) !void {
             const s = try open(a, null);
-            inline for (spec.pins) |p| if (!p.out) try drive(s, p, .x);
+            for (ins) |u| try drive(s, spec.pins[u], .x);
             try run(s, 0);
             outputs(m, inst, s, 0, true);
             try keep(inst, st, s);
@@ -237,10 +243,10 @@ pub fn Device(comptime spec: Spec) type {
 
         fn static(a: std.mem.Allocator, m: *const Model, inst: *Instance, x: [n_u]f64, st: *State, t: f64) !bool {
             const s = try open(a, st.bufs[st.cur][0..st.lens[st.cur]]);
-            inline for (spec.pins, 0..) |p, u| if (!p.out) {
-                try drive(s, p, threshold(m, x[u]));
-                inst.a2d_v[index[u]] = x[u];
-            };
+            for (ins, 0..) |u, i| {
+                try drive(s, spec.pins[u], threshold(m, x[u]));
+                inst.a2d_v[i] = x[u];
+            }
             inst.a2d_t = t;
             try run(s, s.sched.now);
             const before = inst.dc_lvl ++ inst.dc_g;
@@ -261,8 +267,7 @@ pub fn Device(comptime spec: Spec) type {
             // that wakes nothing runs at its secant tick, unlocated.
             var late = false;
             var woke = false;
-            inline for (spec.pins, 0..) |p, u| if (!p.out) {
-                const i = index[u];
+            for (ins, 0..) |u, i| {
                 const v0 = inst.a2d_v[i];
                 const v1 = x[u];
                 if (std.math.isNan(v0)) {
@@ -282,7 +287,7 @@ pub fn Device(comptime spec: Spec) type {
                     n += 1;
                 }
                 inst.a2d_v[i] = v1;
-            };
+            }
             inst.a2d_t = t;
             const due = inst.next_ev != inf and time.tickAtOrBefore(inst.next_ev, tick) <= horizon;
             if (late and (woke or due)) inst.late_cross = true;
@@ -301,7 +306,7 @@ pub fn Device(comptime spec: Spec) type {
                     // Nothing is left before `e.tick`, so the clock may move there.
                     if (s.sched.phase != .stopped) s.sched.now = e.tick;
                 }
-                inline for (spec.pins, 0..) |p, u| if (!p.out and u == e.pin) try drive(s, p, e.bit);
+                try drive(s, spec.pins[e.pin], e.bit);
             }
             try run(s, @max(horizon, s.sched.now));
             outputs(m, inst, s, t, false);
@@ -328,7 +333,7 @@ pub fn Device(comptime spec: Spec) type {
         }
 
         /// The A2D store of `bit` into pin `p`, with every wake it causes.
-        fn drive(s: *root.State, comptime p: Pin, bit: logic.Bit) !void {
+        fn drive(s: *root.State, p: Pin, bit: logic.Bit) !void {
             const one = @as(u64, 1) << @intCast(p.bit % 64);
             const b: u2 = @backingInt(bit);
             // (v, x) planes: 0 = 00, 1 = 10, z = 01, x = 11.
@@ -340,10 +345,10 @@ pub fn Device(comptime spec: Spec) type {
         /// Each output's level and conductance from the engine: the static
         /// ones when `static`, else a ramp from its value at `t`.
         fn outputs(m: *const Model, inst: *Instance, s: *const root.State, t: f64, static_: bool) void {
-            inline for (spec.pins, 0..) |p, u| if (p.out) {
-                const k = index[u];
+            for (outs, 0..) |u, k| {
+                const p = spec.pins[u];
                 const w = s.get(p.off + p.bit / 64);
-                const at: u6 = p.bit % 64;
+                const at: u6 = @intCast(p.bit % 64);
                 const b: u2 = @intCast(((w.v >> at) & 1) | (((w.x >> at) & 1) << 1));
                 const lvl = switch (b) {
                     0 => m.vss,
@@ -362,7 +367,7 @@ pub fn Device(comptime spec: Spec) type {
                     arm(m, &inst.lvl_from[k], &inst.lvl_to[k], &inst.lvl_t0[k], &inst.lvl_t1[k], t, lvl);
                     arm(m, &inst.g_from[k], &inst.g_to[k], &inst.g_t0[k], &inst.g_t1[k], t, g);
                 }
-            };
+            }
         }
 
         /// The engine's next event, whether it stopped, which input edges
@@ -371,14 +376,15 @@ pub fn Device(comptime spec: Spec) type {
         fn keep(inst: *Instance, st: *State, s: *root.State) !void {
             inst.stopped = s.sched.phase == .stopped;
             inst.next_ev = if (s.sched.peekTime()) |k| seconds(k) else inf;
-            inline for (spec.pins, 0..) |p, u| if (!p.out) {
+            for (ins, 0..) |u, i| {
+                const p = spec.pins[u];
                 const e = s.wakes(p.slot);
                 // An edge term sees only the slot's least significant bit.
                 const lsb = p.bit == 0;
                 const up = e.contains(.any) or lsb and e.contains(.posedge);
                 const down = e.contains(.any) or lsb and e.contains(.negedge);
-                inst.wakes[index[u]] = @as(u2, @intFromBool(up)) | @as(u2, @intFromBool(down)) << 1;
-            };
+                inst.wakes[i] = @as(u2, @intFromBool(up)) | @as(u2, @intFromBool(down)) << 1;
+            }
             // A stopped engine is never run again, so its state is not kept.
             if (inst.stopped) return;
             const into = st.cur ^ 1;

@@ -92,8 +92,8 @@ pub fn device(arena: std.mem.Allocator, r: *Run, file_name: []const u8, schedule
 
 /// The contract decls of a device root (`rt.Device`), after the design: its
 /// top module's ports in declaration order, each bit a pin, a vector's from
-/// its left index to its right. A device is at most 256 pins (`U` is an
-/// `enum(u8)`); above 64 the mask decls are omitted (`contract.derivReads`).
+/// its left index to its right. `U` is an `enum(u8)` up to 256 pins and as
+/// wide as the pin count needs past them; the masks are `contract.MaskOf`.
 fn deviceRoot(self: *Emitter) Error!void {
     const r = self.r;
     const m = &r.file.modules[r.scope_info.items[0].def];
@@ -114,7 +114,9 @@ fn deviceRoot(self: *Emitter) Error!void {
         const scalar = w == 1 and !r.vec_ranges.contains(at);
         var i = vr.msb;
         while (true) : (i = if (vr.msb >= vr.lsb) i - 1 else i + 1) {
-            if (n == 256) return self.refuse("more than 256 pins");
+            // Not a VerA cap: a contract mask is one integer with a bit per
+            // pin (`contract.MaskOf`), and Zig's widest integer is u65535.
+            if (n == std.math.maxInt(u16)) return self.refuse("more than 65535 pins (a contract mask is one u65535)");
             const name = if (scalar) r.file.str(p.name) else try self.arena.print("{s}[{d}]", .{ r.file.str(p.name), i });
             names.writer.print(" {f},", .{std.zig.fmtId(name)}) catch return error.OutOfMemory;
             pins.writer.print("\n        .{{ .out = {}, .slot = {d}, .off = {d}, .bit = {d} }},", .{ out, at, self.off[at], @abs(i - vr.lsb) }) catch return error.OutOfMemory;
@@ -124,16 +126,11 @@ fn deviceRoot(self: *Emitter) Error!void {
     }
     // No pins: Zig 0.17 refuses an empty exhaustive `enum(u8)`.
     const members = if (n == 0) " _," else names.written();
-    const masks = if (n > 64) "" else
-        \\pub const deriv_reads = Dev.deriv_reads;
-        \\pub const ddx_reads = Dev.ddx_reads;
-        \\pub const jac_pattern = Dev.jac_pattern;
-        \\
-    ;
+    const tag_bits = @max(8, std.math.log2_int_ceil(u32, @max(n, 1)));
     try self.print(
         \\/// The contract ABI this device was generated for (`contract.abi_version`).
         \\pub const contract_abi: u32 = {d};
-        \\pub const U = enum(u8) {{{s} }};
+        \\pub const U = enum(u{d}) {{{s} }};
         \\pub const num_ports: usize = {d};
         \\const Dev = rt.Device(.{{ .U = U, .design = &design, .dispatch = Code(false).dispatch, .units = {d}, .pins = &.{{{s}
         \\}} }});
@@ -141,7 +138,10 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\pub const Instance = Dev.Instance;
         \\pub const State = Dev.State;
         \\pub const state_class = Dev.state_class;
-        \\{s}pub const eval = Dev.eval;
+        \\pub const deriv_reads = Dev.deriv_reads;
+        \\pub const ddx_reads = Dev.ddx_reads;
+        \\pub const jac_pattern = Dev.jac_pattern;
+        \\pub const eval = Dev.eval;
         \\pub const initState = Dev.initState;
         \\pub const updateState = Dev.updateState;
         \\pub const stateCtl = Dev.stateCtl;
@@ -151,7 +151,7 @@ fn deviceRoot(self: *Emitter) Error!void {
         \\    @import("contract").validate(@This());
         \\}}
         \\
-    , .{ @import("contract").abi_version, members, n, r.finest, pins.written(), masks });
+    , .{ @import("contract").abi_version, tag_bits, members, n, r.finest, pins.written() });
 }
 
 fn interpreted(arena: std.mem.Allocator, embed: Embed, why: []const u8) std.mem.Allocator.Error![]const u8 {
