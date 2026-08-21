@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: an `output reg` port connected to a bit-select, part-select or concatenation drives exactly those bits (IEEE 1364-2005 §12.3.9.2), no longer E1100 (#6).
 - Fix: a digital task enable with arguments no longer reads freed memory once later source grows the parser's expression pool (a panic in `digital.compile.infer`) (#7).
 - Fix: digital selects with an index wider than 64 bits now work under `--run` and `--emit-exe` (#2).
 - Fix: native digital keeps a formatted scan's state across nested output calls (#3).
