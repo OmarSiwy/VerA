@@ -3,6 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # x86_64-darwin only: nixpkgs 26.11 dropped it, and 26.05 still builds
+    # and caches it (security fixes until the end of 2026). Fetched only when
+    # an x86_64-darwin output is evaluated.
+    nixpkgs-x86_64-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
     flake-utils.url = "github:numtide/flake-utils";
 
     zig-overlay.url = "github:mitchellh/zig-overlay";
@@ -13,6 +17,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-x86_64-darwin,
       flake-utils,
       zig-overlay,
     }:
@@ -118,18 +123,23 @@
           };
         };
 
+      # zig-overlay's packages, built from `pkgs` rather than its own nixpkgs,
+      # so the overlay works on whatever nixpkgs the consumer has.
+      zigsFor =
+        pkgs:
+        import "${zig-overlay}/default.nix" {
+          inherit pkgs;
+          system = pkgs.stdenv.hostPlatform.system;
+          nixpkgs = pkgs.path;
+        };
+
       # pkgs -> { vera; veraPackages.<version> and .latest }, for the
       # overlay and for `packages`.
       veraFor =
         pkgs:
         let
           system = pkgs.stdenv.hostPlatform.system;
-          # zig-overlay's packages, built from `pkgs` rather than its own
-          # nixpkgs, so the overlay works on whatever nixpkgs the consumer has.
-          zigs = import "${zig-overlay}/default.nix" {
-            inherit pkgs system;
-            nixpkgs = pkgs.path;
-          };
+          zigs = zigsFor pkgs;
           releases = lib.mapAttrs (
             version: s:
             pkgs.callPackage fromRelease {
@@ -169,38 +179,45 @@
     {
       overlays.default = final: _prev: veraFor final;
     }
-    # nixpkgs-unstable dropped x86_64-darwin (26.11), so this flake's own
-    # outputs cannot import it there. An Intel Mac takes VerA through
-    # `overlays.default` on nixpkgs 26.05, whose `veraPackages` still carry
-    # the x86_64-macos release binary.
-    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = import nixpkgs {
+        pkgs = import (if system == "x86_64-darwin" then nixpkgs-x86_64-darwin else nixpkgs) {
           inherit system;
           config.allowUnfree = true;
         };
 
         built = veraFor pkgs;
 
-        zig = zig-overlay.packages.${system}."0.17.0";
+        zig = (zigsFor pkgs)."0.17.0";
         commonInputs = [
           zig
         ];
 
-        # GPU Toolchains
-        cudaPkgs = with pkgs.cudaPackages; [
-          cudatoolkit # nvcc, headers, libs, nvidia-smi
-          cuda_cudart # runtime (libcudart)
-          cuda_nvcc # compiler driver
-        ];
-        rocmPkgs = with pkgs.rocmPackages; [
-          clr # HIP runtime (libamdhip64)
-          hipcc # HIP compiler
-          rocminfo # device query
-          rocm-smi # GPU monitoring
-          hip-common # headers
-        ];
+        # A shell carries what nixpkgs builds for this system (Xyce and perf
+        # are not on Darwin, iverilog not on 26.05's x86_64-darwin).
+        available = lib.filter (lib.meta.availableOn pkgs.stdenv.hostPlatform);
+
+        # GPU Toolchains: CUDA on Linux, ROCm on x86_64-linux. Gated by hand,
+        # since `available` sees only the top package, not its dependencies.
+        cudaPkgs = lib.optionals pkgs.stdenv.isLinux (
+          with pkgs.cudaPackages;
+          [
+            cudatoolkit # nvcc, headers, libs, nvidia-smi
+            cuda_cudart # runtime (libcudart)
+            cuda_nvcc # compiler driver
+          ]
+        );
+        rocmPkgs = lib.optionals (system == "x86_64-linux") (
+          with pkgs.rocmPackages;
+          [
+            clr # HIP runtime (libamdhip64)
+            hipcc # HIP compiler
+            rocminfo # device query
+            rocm-smi # GPU monitoring
+            hip-common # headers
+          ]
+        );
         # OpenVAF-Reloaded is not in nixpkgs: its release binary, linked against
         # the LLVM 18 it was built with. The reference Verilog-A compiler the
         # external accuracy suites compare VerA against (tests/fixtures/external/).
@@ -223,7 +240,7 @@
         };
 
         # The tools VerA's results are checked against, by name.
-        referenceTools = [
+        referenceTools = available [
           pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
           pkgs.verilator # lint / parse reference
           pkgs.yosys # parse / elaborate reference
@@ -246,7 +263,7 @@
         devShells.default = pkgs.mkShell ({
           packages =
             commonInputs
-            ++ [
+            ++ available [
               pkgs.llvmPackages_21.llvm # needed for nvptx compilation
               pkgs.iverilog # zig build test-beh-verilog
               pkgs.verilator
@@ -259,7 +276,7 @@
         devShells.benchmarking = pkgs.mkShell ({
           packages =
             commonInputs
-            ++ [
+            ++ available [
               pkgs.llvmPackages_21.llvm
 
               # Visualize performance
