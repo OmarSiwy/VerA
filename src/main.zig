@@ -81,6 +81,14 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
+    if (cli.emit_osdi) {
+        if (cli.dyn_path != null or cli.emit_zig_typed or cli.exe_flag != null) {
+            try err.writeAll("error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
+            return 2;
+        }
+        cli.emit_zig = false; // `-o` names the .osdi
+    }
+
     if (cli.paths.items.len == 0) {
         try err.writeAll(args.usage_text);
         return 2;
@@ -131,12 +139,16 @@ pub fn main(init: std.process.Init) !u8 {
         if (cli.contract_path) |p| Io.Dir.cwd().access(io, p, .{}) catch |e| {
             try err.print("error: --contract {s}: {t}\n", .{ p, e });
             return 2;
-        } else {
+        };
+        if (cli.contract_path == null or cli.emit_osdi) {
             const wd = cli.work_dir orelse ".zig-cache/vera-tb";
-            cli.contract_path = simTree(io, contract_arena.allocator(), wd) catch |e| {
+            const c = simTree(io, contract_arena.allocator(), wd) catch |e| {
                 try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
                 return 1;
             };
+            if (cli.contract_path == null) cli.contract_path = c;
+            // --emit-osdi: the OSDI dyn shipped in the same tree.
+            if (cli.emit_osdi) cli.dyn_path = try std.fs.path.join(contract_arena.allocator(), &.{ std.fs.path.dirname(c).?, "osdi_dyn.zig" });
         }
     }
     if (!digital_source) {
@@ -153,6 +165,10 @@ pub fn main(init: std.process.Init) !u8 {
         try err.print("error: {s} builds a .v design's executable; it takes --emit-exe and a .v file\n", .{f});
         return 2;
     };
+    if (digital_source and cli.emit_osdi) {
+        try err.print("error: {s}: --emit-osdi takes a Verilog-A model (.va)\n", .{in_path});
+        return 2;
+    }
     if (digital_source and cli.emit_verilog) {
         try err.print("error: {s}: --emit-verilog takes a Verilog-A model (.va)\n", .{in_path});
         return 2;
@@ -369,7 +385,7 @@ fn compileAnalog(
     }
 
     if (cli.emit_so) {
-        const wd = cli.work_dir orelse {
+        const wd = cli.work_dir orelse if (cli.emit_osdi) ".zig-cache/vera-tb" else {
             try err.writeAll("error: --emit-so needs --work-dir DIR\n");
             return 2;
         };
@@ -395,7 +411,14 @@ fn compileAnalog(
         };
         defer r.deinit(gpa);
         switch (r) {
-            .ok => |a| try out.print("{s}\n", .{a.so_path}),
+            .ok => |a| if (cli.emit_osdi) {
+                const dest = cli.out_path orelse try std.fmt.allocPrint(tb_arena.allocator(), "{s}.osdi", .{result.mir.name});
+                Io.Dir.cwd().copyFile(a.so_path, Io.Dir.cwd(), dest, io, .{}) catch |e| {
+                    try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
+                    return 1;
+                };
+                try out.print("{s}\n", .{dest});
+            } else try out.print("{s}\n", .{a.so_path}),
             .failed => |bundle| {
                 // An error typeCheck can see is the device's own (an engine
                 // bug), reported against the .va as a check would have.
