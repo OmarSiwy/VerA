@@ -216,16 +216,13 @@ fn uses(d: *Design, o: *const Obj) vpiHandle {
     }
     const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
     const rel = relationsOf(d) orelse return null;
-    var out: std.ArrayList(vpiHandle) = .empty;
+    // At most one handle per user row.
+    var out = std.ArrayList(vpiHandle).initCapacity(d.gpa, rel.users.of(target).len) catch return oomIter();
     var last: u32 = no_obj;
     for (rel.users.of(target)) |u| {
         if (u == last) continue;
         last = u;
-        out.append(d.gpa, handleOf(&d.objects[u])) catch {
-            out.deinit(d.gpa);
-            fail("NOMEM", "vpi_iterate: out of memory", .{});
-            return null;
-        };
+        out.appendAssumeCapacity(handleOf(&d.objects[u]));
     }
     if (out.items.len == 0) {
         out.deinit(d.gpa);
@@ -264,13 +261,17 @@ fn useFail(o: *const Obj) vpiHandle {
 fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle {
     const rel = relationsOf(d) orelse return null;
     const target: u32 = @intCast((@intFromPtr(o) - @intFromPtr(d.objects.ptr)) / @sizeOf(Obj));
-    var candidates: std.ArrayList(u32) = .empty;
+    const by_obj = rel.by_obj.of(target);
+    const by_slot: []const u32 = if (o.slot.get()) |slot| rel.by_slot.of(slot) else &.{};
+    const ports: []const u32 = if (o.kind == .net) if (o.owner.get()) |owner| rel.ports.of(owner) else &.{} else &.{};
+    var candidates = std.ArrayList(u32).initCapacity(d.gpa, by_obj.len + by_slot.len + ports.len) catch return oomIter();
     defer candidates.deinit(d.gpa);
-    candidates.appendSlice(d.gpa, rel.by_obj.of(target)) catch return oomIter();
-    if (o.slot.get()) |slot| candidates.appendSlice(d.gpa, rel.by_slot.of(slot)) catch return oomIter();
-    if (o.kind == .net) if (o.owner.get()) |owner| candidates.appendSlice(d.gpa, rel.ports.of(owner)) catch return oomIter();
+    candidates.appendSliceAssumeCapacity(by_obj);
+    candidates.appendSliceAssumeCapacity(by_slot);
+    candidates.appendSliceAssumeCapacity(ports);
     std.mem.sortUnstable(u32, candidates.items, {}, std.sort.asc(u32));
-    var out: std.ArrayList(vpiHandle) = .empty;
+    // At most one handle per candidate.
+    var out = std.ArrayList(vpiHandle).initCapacity(d.gpa, candidates.items.len) catch return oomIter();
     var last: u32 = no_obj;
     for (candidates.items) |i| {
         if (i == last) continue;
@@ -296,13 +297,12 @@ fn driversLoads(d: *Design, o: *const Obj, drivers: bool, local: bool) vpiHandle
             },
             else => false, // else: no other class drives or loads a net or reg
         };
-        if (hit) out.append(d.gpa, handleOf(&d.objects[i])) catch {
-            out.deinit(d.gpa);
-            fail("NOMEM", "vpi_iterate: out of memory", .{});
-            return null;
-        };
+        if (hit) out.appendAssumeCapacity(handleOf(&d.objects[i]));
     }
-    if (out.items.len == 0) return null;
+    if (out.items.len == 0) {
+        out.deinit(d.gpa);
+        return null;
+    }
     const handles = out.toOwnedSlice(d.gpa) catch {
         out.deinit(d.gpa);
         fail("NOMEM", "vpi_iterate: out of memory", .{});

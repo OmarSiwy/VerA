@@ -964,7 +964,7 @@ pub const Run = struct {
         self.scope = scope;
         if (!compile.constantExpression(self, e)) return null;
         return switch (try self.vpiEval(a, scope, e)) {
-            .bits => |v| v.asInt(),
+            .bits => |v| evaluate.indexInt(v),
             .real => null,
         };
     }

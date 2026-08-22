@@ -49,6 +49,18 @@
 //! rising crossings at 5.5 and 15.5 ns q = 2^64 + 2: q[64] and q[1] are 5 V,
 //! every other q bit 0 V. The operating point reads d[64] as 1, so y is 5 V
 //! through rout into 10 kΩ.
+//!
+//! v_huge, 1202 pins: past 255 no dense lane table fits, so the host runs a
+//! sparse family, one lane per output row, and solves the diagonal system
+//! pin by pin. d[k] is 5 V for k mod 3 = 2 and 0 V otherwise, a bus that
+//! never crosses; clk is the same PULSE. q starts 0; after the rising
+//! crossing at 5.5 ns q = d. d[599] is 1 (599 mod 3 = 2), so y is 5 V
+//! through rout into 10 kΩ from the operating point on.
+//!
+//! v_say prints "born" at time 0 and "edge" at each rising clk. The device
+//! holds a step's text until the host commits it: the step that runs the
+//! 5.5 ns edge holds "edge\n", a revert drops it, and the retried step that
+//! is committed prints it (to stderr) and holds nothing after.
 const std = @import("std");
 const contract = @import("contract");
 const expect = std.testing.expect;
@@ -58,8 +70,11 @@ const Link = struct { a: usize, b: usize, g: f64 };
 
 fn Circuit(comptime D: type) type {
     const n = @typeInfo(D.U).@"enum".field_names.len;
-    const lanes: [n]u8 = std.simd.iota(u8, n);
-    const S = contract.RefFamily(f64, &lanes, .{ .dense = true });
+    // A dense lane is a u8 below `no_lane`: past 255 pins the family is
+    // sparse, each row carrying the lanes of its pattern.
+    const sparse = n > 255;
+    const lanes: [n]u8 = if (sparse) @splat(0) else std.simd.iota(u8, n);
+    const S = contract.RefFamily(f64, &lanes, .{ .dense = !sparse });
     return struct {
         const Self = @This();
         const Dev = D;
@@ -91,6 +106,7 @@ fn Circuit(comptime D: type) type {
 
         /// Newton at `sim` until no unknown moves more than 1e-12 V.
         fn solve(c: *Self, sim: contract.SimState) !void {
+            if (sparse) return c.solveDiag(sim);
             for (0..50) |_| {
                 for (c.src, &c.x) |f, *x| if (f) |v| {
                     x.* = v(sim.t);
@@ -124,6 +140,26 @@ fn Circuit(comptime D: type) type {
                 const V = @Vector(n, f64);
                 c.x = @as(V, c.x) + @as(V, d);
                 if (@reduce(.Max, @abs(@as(V, d))) <= 1e-12) return;
+            }
+            return error.NoConvergence;
+        }
+
+        /// `solve` for a circuit with no links, whose Jacobian is diagonal:
+        /// each pin's row alone, its partial from the row's own lane.
+        fn solveDiag(c: *Self, sim: contract.SimState) !void {
+            std.debug.assert(c.links.len == 0);
+            for (0..50) |_| {
+                for (c.src, &c.x) |f, *x| if (f) |v| {
+                    x.* = v(sim.t);
+                };
+                const r = D.eval(S, &c.x, &c.m, &c.inst, sim);
+                var moved: f64 = 0;
+                inline for (0..n) |u| if (c.src[u] == null) {
+                    const dx = -(r[u].v + c.g_gnd[u] * c.x[u]) / (r[u].ddxAt(u) + c.g_gnd[u]);
+                    c.x[u] += dx;
+                    moved = @max(moved, @abs(dx));
+                };
+                if (moved <= 1e-12) return;
             }
             return error.NoConvergence;
         }
@@ -390,10 +426,61 @@ test "v_wide: 132 pins, and ports past one plane word" {
     }
 }
 
+test "v_huge: 1202 pins, one lane per output row" {
+    @setEvalBranchQuota(1_000_000);
+    const D = @import("v_huge");
+    try std.testing.expect(@typeInfo(D.U).@"enum".tag_type == u11);
+    // Each row carries at most its own pin's lane: eval is linear in pins.
+    inline for (0..1202) |u| try expect(@popCount(contract.rowMask(D, u)) == @intFromBool(u >= 601));
+    const C = Circuit(D);
+    var c: C = .{};
+    c.src[C.pin("clk")] = pulse;
+    inline for (0..600) |b| {
+        const i = std.fmt.comptimePrint("[{d}]", .{b});
+        c.src[C.pin("d" ++ i)] = if (b % 3 == 2) volts(5) else volts(0);
+        c.g_gnd[C.pin("q" ++ i)] = 1e-4;
+    }
+    c.g_gnd[C.pin("y")] = 1e-4;
+    c.birth();
+    _ = try c.op();
+    try std.testing.expectApproxEqAbs(5.0 * 1e4 / (1e4 + 1), c.x[C.pin("y")], 1e-9);
+    // Output k is q[599 - k] (pin order), then y.
+    for (0..600) |b| try expectEqual(@as(f64, 0), c.inst.lvl_to[599 - b]);
+    while (c.t < 8e-9) try c.step(1e-9, 5e-14);
+    for (0..600) |b| try expectEqual(@as(f64, if (b % 3 == 2) 5 else 0), c.inst.lvl_to[599 - b]);
+    try std.testing.expectApproxEqAbs(5.0 * 1e4 / (1e4 + 1), c.x[C.pin("q[2]")], 1e-9);
+}
+
+test "v_say: a step's transcript is printed when it is accepted, never when rejected" {
+    const C = Circuit(@import("v_say"));
+    var c: C = .{};
+    c.src[C.pin("clk")] = pulse;
+    c.g_gnd[C.pin("q")] = 1e-4;
+    c.birth();
+    // "born" went out at birth, which is never rejected.
+    try expectEqual(@as(u32, 0), c.st.say_len);
+    _ = try c.op();
+    while (true) {
+        var sim = C.at(c.t + 1e-9);
+        sim.dt = 1e-9;
+        try c.solve(sim);
+        _ = C.Dev.updateState(C.Fam, &c.m, &c.inst, c.x, &c.st, sim);
+        if (c.st.say_len != 0) break;
+        _ = C.Dev.stateCtl(&c.m, &c.inst, &c.st, .commit);
+        c.t += 1e-9;
+    }
+    try std.testing.expectEqualStrings("edge\n", c.st.say[0..c.st.say_len]);
+    _ = C.Dev.stateCtl(&c.m, &c.inst, &c.st, .revert);
+    try expectEqual(@as(u32, 0), c.st.say_len);
+    try c.step(1e-9, 5e-14);
+    while (c.inst.lvl_to[0] != 5) try c.step(1e-9, 5e-14);
+    try expectEqual(@as(u32, 0), c.st.say_len);
+}
+
 test "every .v device is stamped with the contract's abi_version" {
     // `src/sim/digital/emit.zig` once wrote a literal 5 after the contract
     // moved to 6, so every `.v` device failed a host's ABI check (ESPice,
     // 2026-10-02). The stamp now reads `contract.abi_version`.
-    inline for (.{ @import("v_inv"), @import("v_buf"), @import("v_count"), @import("v_a2d"), @import("v_edge"), @import("v_any") }) |D|
+    inline for (.{ @import("v_inv"), @import("v_buf"), @import("v_count"), @import("v_a2d"), @import("v_edge"), @import("v_any"), @import("v_huge") }) |D|
         try std.testing.expectEqual(contract.abi_version, D.contract_abi);
 }

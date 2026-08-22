@@ -231,12 +231,18 @@ def measures(mode, version):
         sys.stderr.writelines(difflib.unified_diff(
             [l + "\n" for l in want], [l + "\n" for l in got], "CHANGELOG.md", "this tree"))
         return 1
-    # --changelog: prepend. The preamble is preserved by splitting on the first
-    # `## ` line, so a re-run never duplicates it.
+    # --changelog: the `## Unreleased` section becomes `## <version> — date`,
+    # the measured block goes under that heading above its bullets, and a new
+    # empty `## Unreleased` opens above it. With no `## Unreleased`, the entry
+    # is prepended after the preamble (everything before the first `## `).
     lines = text.splitlines(keepends=True)
     cut = next((i for i, l in enumerate(lines) if l.startswith("## ")), len(lines))
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    changelog.write_text("".join(lines[:cut]) + f"## {version} — {date}\n\n{block}\n\n" + "".join(lines[cut:]))
+    entry = f"## {version} — {date}\n\n{block}\n\n"
+    if cut < len(lines) and lines[cut].strip() == "## Unreleased":
+        changelog.write_text("".join(lines[:cut]) + "## Unreleased\n\n" + entry + "".join(lines[cut + 1:]).lstrip("\n"))
+    else:
+        changelog.write_text("".join(lines[:cut]) + entry + "".join(lines[cut:]))
     print(f"CHANGELOG.md: {version} written — {summary}", file=sys.stderr)
     return 0
 
