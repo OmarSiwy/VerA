@@ -5,17 +5,21 @@ packages install (`nix build '.#"1.0.0"'`), from the GitHub releases.
 Shape, after mitchellh/zig-overlay's sources.json:
 
     { "<version>": { "date": "YYYY-MM-DD", "zig": "<the Zig it drives>",
+                     "contract": { "url": ..., "sha256": <hex> },
                      "<nix system>": { "url": ..., "sha256": <hex> }, ... } }
 
 The hashes are the release's own SHA256SUMS, so a tarball that does not match
 what publish.yaml uploaded fails the Nix fetch. `zig` is the tag's
 build.zig.zon `minimum_zig_version`: the Zig that `vera` spawns to build a
-device must be the one its generated code was written for.
+device must be the one its generated code was written for. `contract` is the
+tag's tools/contract.zig, which the tarball (the binary alone) does not carry:
+the package installs it as share/vera/contract.zig, as `zig build install` does.
 
 Usage: tools/update-sources.py [OUT]   (default: sources.json beside tools/)
 GITHUB_TOKEN, when set, lifts the API's anonymous rate limit.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -43,6 +47,10 @@ def get(url):
         return r.read().decode()
 
 
+def raw(tag, path):
+    return f"https://raw.githubusercontent.com/{REPO}/{tag}/{path}"
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "sources.json")
     sources = {}
@@ -55,10 +63,12 @@ def main():
         if "SHA256SUMS" not in assets:
             continue
         sums = dict(reversed(line.split()) for line in get(assets["SHA256SUMS"]).splitlines() if line.strip())
-        zon = get(f"https://raw.githubusercontent.com/{REPO}/{tag}/build.zig.zon")
+        zon = get(raw(tag, "build.zig.zon"))
+        contract = raw(tag, "tools/contract.zig")
         entry = {
             "date": rel["published_at"][:10],
             "zig": re.search(r'minimum_zig_version\s*=\s*"([^"]+)"', zon).group(1),
+            "contract": {"url": contract, "sha256": hashlib.sha256(get(contract).encode()).hexdigest()},
         }
         for system, target in SYSTEMS.items():
             name = f"vera-{tag}-{target}.tar.gz"

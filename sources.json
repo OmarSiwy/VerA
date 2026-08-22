@@ -8,6 +8,10 @@
       "sha256": "aca17e40618b786d7cb1c2591d62bbdb7e32758d55d768076d4c63fca38dec41",
       "url": "https://github.com/OmarSiwy/VerA/releases/download/v0.9.0/vera-v0.9.0-aarch64-linux-gnu.tar.gz"
     },
+    "contract": {
+      "sha256": "3aae594636dc8ad47acd63a68e0fcf702deb38199f147e4bb012ab158fcef7b6",
+      "url": "https://raw.githubusercontent.com/OmarSiwy/VerA/v0.9.0/tools/contract.zig"
+    },
     "date": "2026-09-27",
     "x86_64-darwin": {
       "sha256": "6dfc97ee389795f57b2cf9727c5c65a0f6d2d5a20a134cb6c7a7012a46c9e985",
@@ -27,6 +31,10 @@
     "aarch64-linux": {
       "sha256": "1807446f7a44d032b6f2202e2155ea76c01615612859b949e564a5bfc552e9df",
       "url": "https://github.com/OmarSiwy/VerA/releases/download/v1.0.0/vera-v1.0.0-aarch64-linux-gnu.tar.gz"
+    },
+    "contract": {
+      "sha256": "48910d5c23878d1c222a95181812e014d43904d6223ec91fb3a746746bff5681",
+      "url": "https://raw.githubusercontent.com/OmarSiwy/VerA/v1.0.0/tools/contract.zig"
     },
     "date": "2026-10-05",
     "x86_64-darwin": {

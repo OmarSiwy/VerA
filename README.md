@@ -37,7 +37,8 @@ nix profile install 'github:OmarSiwy/VerA#"1.0.0"'    # a release binary, pinned
 ```
 
 `packages.<system>."<version>"` (and `latest`) install the binary attached to
-that GitHub release, listed in `sources.json`. As a flake input:
+that GitHub release, listed in `sources.json`. Every package also installs
+`share/vera/contract.zig`, the ABI of its own version. As a flake input:
 
 ```nix
 {
@@ -55,11 +56,17 @@ that GitHub release, listed in `sources.json`. As a flake input:
 }
 ```
 
-Systems: x86_64-linux, aarch64-linux, aarch64-darwin. An Intel Mac uses the
-overlay on nixpkgs 26.05 (nixpkgs-unstable dropped x86_64-darwin).
+Systems: x86_64-linux, aarch64-linux, aarch64-darwin, and x86_64-darwin (built
+on nixpkgs 26.05, since unstable dropped it).
 
-If you took VerA through the EDA-Packaged flake, `github:OmarSiwy/VerA` is now
-the same package without the aggregator; its `vera` output follows this one.
+`vera` writes its scratch tree under `.zig-cache/` in the working directory and
+uses Zig's global cache, so in a derivation's sandbox (no `$HOME`) run it in a
+writable directory with `export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache`.
+
+Coming from the EDA-Packaged flake: its `packages.<system>.vera` is this
+flake's `packages.<system>.default`, at whatever revision its lock pinned. Take
+`github:OmarSiwy/VerA` as an input and use `vera.packages.${system}.default`
+(or the overlay's `pkgs.vera`) in place of `eda.packages.${system}.vera`.
 
 ## Use
 
