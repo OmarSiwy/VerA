@@ -301,10 +301,14 @@ pub const predefined_macros = [_][]const u8{
 /// Built-in annex D files, resolvable by `include even with no include_dirs.
 /// All three are self-guarded, so an explicit `include after the prelude
 /// expands to nothing. Only D.1 and D.2 are preloaded (see `process`); D.3
-/// driver_access.vams must be included.
+/// driver_access.vams must be included. `discipline.h` and `constants.h`
+/// are the OVI Verilog-A 1.0 names of D.1 and D.2, which CMC models of that
+/// era include (docs/Vague_Decisions.md VD-093).
 pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "constants.vams", pp_annex_d.constants_vams },
     .{ "disciplines.vams", pp_annex_d.disciplines_vams },
+    .{ "constants.h", pp_annex_d.constants_vams },
+    .{ "discipline.h", pp_annex_d.disciplines_vams },
     .{ "driver_access.vams", pp_annex_e.driver_access_vams },
 });
 
