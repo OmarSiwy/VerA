@@ -31,9 +31,9 @@ The flake builds `vera` from source and wraps it with the Zig 0.17.0 it
 spawns to build devices, so it runs from any directory with no checkout:
 
 ```sh
-nix run github:OmarSiwy/VerA -- --emit-so model.va    # from source
-nix profile install github:OmarSiwy/VerA
-nix profile install 'github:OmarSiwy/VerA#"1.0.0"'    # a release binary, pinned
+nix run github:OmarSiwy/VerA -- model.va --emit-zig -o device.zig  # from source
+nix profile add github:OmarSiwy/VerA                 # `nix profile install` on older Nix
+nix profile add 'github:OmarSiwy/VerA#"1.0.0"'       # a release binary, pinned
 ```
 
 `packages.<system>."<version>"` (and `latest`) install the binary attached to
