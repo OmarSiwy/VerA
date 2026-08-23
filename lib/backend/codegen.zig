@@ -10,6 +10,7 @@ const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("codegen/plan/unit.zig");
 const cg_filters = @import("cg_filters.zig");
+const cg_display = @import("cg_display.zig");
 const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
@@ -96,7 +97,9 @@ pub const Display = plan_args.Display;
 
 /// Settings that change what is generated.
 pub const Options = struct {
-    /// §9.4: `.emit` builds the testbench's `display` unit; `.drop` a solver device.
+    /// §9.4: `.emit` builds the testbench's `display` unit; `.record` a solver
+    /// device whose `say` records its display tasks for the host; `.drop` a
+    /// solver device without one.
     display: Display = .drop,
     /// Emits `pub const jac_f32 = true`: the host may carry the derivative half
     /// of S in single precision. Changes no emitted arithmetic, since every
@@ -320,6 +323,9 @@ pub const Gen = struct {
     /// file is being written to during an iterative solve, then the file write
     /// operations shall not be performed unless the iteration is accepted."
     emitting_display: bool = false,
+    /// §9.4 the display tasks a `.record` device's `say` records
+    /// (`cg_display.planSay`), in `say_sites` order. Empty otherwise.
+    say: []const cg_display.SaySite = &.{},
     /// Set while the caller owns the `core` call (`zResidual`'s `m`, `acceptQ`'s
     /// hoisted line), so `emitStamps` must not open its own.
     core_hoisted: bool = false,
@@ -463,12 +469,14 @@ pub const Gen = struct {
         // time-constant charges out of `q`, and the jobs queue what it keeps.
         self.sinv = try plan_setup.plan(self.input());
         self.qs = try plan_qsite.plan(self.input(), self.names.branch_u, self.topo, self.sinv.val);
+        if (self.display == .record) self.say = try cg_display.planSay(self);
         self.jobs = try plan_jobs.plan(self.input(), .{
             .names = &self.names,
             .unit_modes = self.verdict.unit_modes,
             .limits = self.limits.calls,
             .noise = &self.noise,
             .emit_display = self.display == .emit,
+            .record_display = self.say.len != 0,
             .q_sites = self.qs.sites,
         }, DynCtrl{ .g = self });
         self.core = try plan_core.plan(self.input(), self.jobs.list);
@@ -478,7 +486,7 @@ pub const Gen = struct {
         // the lanes such a load would carry are never observed. Except by a
         // §4.5.14 `ddx` in a display task: the display unit is a consumer
         // `eval_need` does not see, and it reads lanes.
-        const display_ddx = self.display == .emit and for (self.an.i_op, 0..) |op, ii| {
+        const display_ddx = (self.display == .emit or self.say.len != 0) and for (self.an.i_op, 0..) |op, ii| {
             if (op == .call and self.mir.instData(@fromBackingInt(@intCast(ii))).call.callee == .ddx) break true;
         } else false;
         if (self.core.eval_need.len != 0 and !display_ddx) for (self.arr_s, 0..) |*s, id| {

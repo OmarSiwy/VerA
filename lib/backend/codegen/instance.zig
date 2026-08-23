@@ -297,7 +297,7 @@ pub const status_drop = "    inst.vera_status__ = 0;\n    inst.vera_status_args_
 /// Whether the device reports §9.7.3 `$fatal`/`$error` as a status
 /// (`Lowered.status`): a printing artifact runs them in its display chain.
 pub fn hasStatus(self: *const Gen) bool {
-    return self.display == .drop and self.lowered.status != .undef;
+    return self.display != .emit and self.lowered.status != .undef;
 }
 
 /// The core result's spelling of status value `v`: its field, its folded
@@ -359,7 +359,7 @@ fn emitStatusHelpers(self: *Gen) Error!void {
 /// The source file and 1-based line of token `tok`, through the diagnostic
 /// bag's source map (an `include`d file names itself). Empty and 0 when
 /// codegen runs without a bag.
-fn srcLine(self: *const Gen, tok: u32) struct { file: []const u8, line: u32 } {
+pub fn srcLine(self: *const Gen, tok: u32) struct { file: []const u8, line: u32 } {
     const bag = self.diags orelse return .{ .file = "", .line = 0 };
     if (tok >= self.lowered.tok_starts.len) return .{ .file = "", .line = 0 };
     const start = self.lowered.tok_starts[tok];

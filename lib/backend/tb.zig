@@ -109,6 +109,10 @@ pub const Directives = struct {
     /// `//! discipline-resolution basic|detail`: the §7.4.4 mode the fixture
     /// is compiled in (`vera --discipline-resolution=`).
     discipline_resolution: @import("ir").Elaborate.DisciplineResolution = .basic,
+    /// `//! display record`: the testbench is built over a device that
+    /// records its §9.4 display tasks (`contract.SaySite`) and prints what
+    /// `say` records (`vera --emit-exe --display=record`), not one that prints.
+    display_record: bool = false,
     /// `//! noise <kind>(<row>,<col>)#<source>`, one per expected `noise_gens`
     /// entry, in table order; `//! noise none` asserts an empty table. Equal
     /// `#k` on two lines assert one shared generator (§4.6.4.6), distinct `#k`

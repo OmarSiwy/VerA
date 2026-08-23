@@ -38,6 +38,9 @@ pub const From = struct {
     noise: *const plan_noise.Noise,
     /// `Options.display == .emit`: the §9.4 tasks become a unit of their own.
     emit_display: bool,
+    /// A `.record` device has tasks its `say` records (`cg_display.planSay`):
+    /// the display unit is that entry point's body.
+    record_display: bool = false,
     /// `plan/qsite.zig` `QSites.sites`: the `Lowered.charge_sites` that get a
     /// `q` slot, in slot order. Each one's charge is a core live-out.
     q_sites: []const u32 = &.{},
@@ -365,7 +368,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // `$strobe`. `.strict` unconditionally: a print is not on the residual
     // path, and proof.zig rates contributions only.
     const root = self.an.rv(self.lowered.display_root);
-    if (from.emit_display and root != .f_zero) {
+    if ((from.emit_display or from.record_display) and root != .f_zero) {
         var buf: [naming.max_name_len]u8 = undefined;
         const n = naming.unitName(&buf, self.mir.name, .{
             .role = .display,

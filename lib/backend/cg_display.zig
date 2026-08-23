@@ -252,6 +252,161 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     try g.b("break :zd S.con(0.0); }}", .{});
 }
 
+// ------------------------------------------- §9.4 a device's display records ----
+//
+// A `.record` device cannot print, so its `say` (`dispatch.emitDisplay`)
+// runs the display chain at an accepted point and appends one record per
+// task to the host's `contract.Say`: the site's index and its numeric
+// values. The site's text is fixed here, once, as one C-style format
+// (`contract.SaySite.fmt`) the host renders with `contract.formatSay`.
+
+/// One display task a device's `say` records (`contract.SaySite`).
+pub const SaySite = struct {
+    /// The task's `call`, as `Analysis.rv` names it.
+    call: Mir.Value,
+    /// The C-style format its arguments make (`sayFormat`).
+    fmt: []const u8,
+    tok: u32,
+    /// The arguments a record carries, in format order.
+    vals: []const Mir.Value,
+};
+
+/// The display tasks a `.record` device records, in source order
+/// (`Lowered.displays`): the §9.4.1 printing tasks and `$warning`/`$info`.
+/// Not `$monitor` (its §9.4.1 change detection is state a device does not
+/// keep) nor `$fatal`/`$error` (the status channel, `contract.StatusSite`);
+/// root.zig reports those, and the §9.5/§9.7 tasks, as W0850. A task whose
+/// value has no numeric record (a string that is not a constant, a number
+/// under `%s`) is W0850 here.
+pub fn planSay(g: *Gen) Error![]const SaySite {
+    var out: std.ArrayList(SaySite) = .empty;
+    for (g.lowered.displays.items) |d| {
+        const c: Mir.Callee = .fromName(d.name);
+        if (!sayRecords(c)) continue;
+        const call = g.an.rv(d.val);
+        const def = g.mir.valueDef(call);
+        if (def != .inst_result) continue;
+        var fmt: std.ArrayList(u8) = .empty;
+        var vals: std.ArrayList(Mir.Value) = .empty;
+        // §9.7.3: the severity is the message's reason for existing.
+        if (severityWord(c)) |word| {
+            try fmt.appendSlice(g.arena, word);
+            try fmt.appendSlice(g.arena, ": ");
+        }
+        if (!try sayFormat(g, g.mir.instData(def.inst_result).call.args, &fmt, &vals)) {
+            if (g.diags) |bag| try bag.add(.codegen, .W0850, g.lowered.tokenSpan(d.tok), "`{s}` — a device records numbers, and a string here is not a constant", .{d.name});
+            continue;
+        }
+        // §9.4.1: `$write` is the family member that does NOT end the line.
+        if (endsLine(c)) try fmt.append(g.arena, '\n');
+        try out.append(g.arena, .{ .call = call, .fmt = fmt.items, .tok = d.tok, .vals = vals.items });
+    }
+    return out.items;
+}
+
+/// Whether a `.record` device records task `c` (`planSay`).
+pub fn sayRecords(c: Mir.Callee) bool {
+    return Mir.callee.family(c) == .display and switch (c) {
+        .@"$monitor", .@"$fatal", .@"$error" => false,
+        else => true, // else: every other §9.4.1/§9.7.3 printing task is a plain text record
+    };
+}
+
+/// §9.4.1's argument-list model (`buildArgs`) as one C-style format over
+/// recorded numbers: each string argument is a format whose conversions take
+/// the arguments after it, a constant string under `%s` spliced in as text
+/// and `%l` as the module name (what the printing artifact writes); an
+/// argument no format took is `%d` (integer) or `%g`. Appends the recorded
+/// arguments to `vals`. False when one has no numeric record: a string that
+/// is not a constant, or a number under `%s` (§9.4.5's bytes).
+fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *std.ArrayList(Mir.Value)) Error!bool {
+    var i: usize = 0;
+    while (i < args.len) {
+        const s = g.strArg(args, i) orelse {
+            if (g.an.tyOf(args[i]) == .str) return false;
+            try fmt.appendSlice(g.arena, if (g.an.tyOf(args[i]) == .int) "%d" else "%g");
+            try vals.append(g.arena, args[i]);
+            i += 1;
+            continue;
+        };
+        i += 1;
+        var j: usize = 0;
+        while (j < s.len) : (j += 1) {
+            if (s[j] != '%' or j + 1 == s.len) {
+                try fmt.append(g.arena, s[j]);
+                continue;
+            }
+            const start = j;
+            j += 1;
+            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.indexOfScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
+            if (j == s.len) {
+                try fmt.appendSlice(g.arena, s[start..]);
+                break;
+            }
+            const conv = std.ascii.toLower(s[j]);
+            if (conv == '%' or conv == 'm') {
+                try fmt.appendSlice(g.arena, s[start .. j + 1]);
+                continue;
+            }
+            if (conv == 'l') {
+                try appendLiteral(g, fmt, g.mir.name);
+                continue;
+            }
+            // A conversion with no operand renders 0, the printing
+            // artifact's answer (§9.4.3 pairing is E0810 at lowering).
+            if (i == args.len) {
+                try fmt.appendSlice(g.arena, s[start .. j + 1]);
+                continue;
+            }
+            const a = args[i];
+            i += 1;
+            if (conv == 's') {
+                const text = g.strArg(args, i - 1) orelse return false;
+                try appendLiteral(g, fmt, text);
+                continue;
+            }
+            // A number, or §2.7 a string literal's integer.
+            if (g.an.tyOf(a) == .str and g.strArg(args, i - 1) == null) return false;
+            try fmt.appendSlice(g.arena, s[start .. j + 1]);
+            try vals.append(g.arena, a);
+        }
+    }
+    return true;
+}
+
+/// `text` into a format as itself: each `%` doubled.
+fn appendLiteral(g: *Gen, fmt: *std.ArrayList(u8), text: []const u8) Error!void {
+    for (text) |ch| {
+        if (ch == '%') try fmt.append(g.arena, '%');
+        try fmt.append(g.arena, ch);
+    }
+}
+
+/// Emits a `.record` display unit's task (`planSay`) as a labeled block that
+/// appends its record to the host's `out`, each value as an f64. A task
+/// `planSay` did not keep renders void.
+pub fn emitSay(g: *Gen, inst: Mir.Inst) Error!void {
+    const call = g.an.rv(g.mir.instResult(inst));
+    const k = for (g.say, 0..) |site, j| {
+        if (site.call == call) break j;
+    } else return g.b("S.con(0.0)", .{});
+    g.uses.out = true;
+    try g.b("zd: {{ out.put({d}, &.{{", .{k});
+    for (g.say[k].vals, 0..) |v, i| {
+        try g.b("{s}", .{if (i == 0) " " else ", "});
+        if (g.an.tyOf(v) == .real) {
+            try g.b("(", .{});
+            try g.renderVal(v, .real);
+            try g.b(").val()", .{});
+        } else {
+            try g.b("@as(f64, @floatFromInt(", .{});
+            try g.renderVal(v, .int);
+            try g.b("))", .{});
+        }
+    }
+    try g.b(" }}); break :zd S.con(0.0); }}", .{});
+}
+
 /// §9.7.1's diagnostic argument, folded. Syntax 9-5/9-7 make it the literal
 /// 0 | 1 | 2; anything that does not fold takes the default 1.
 fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {

@@ -6,15 +6,19 @@
 //! for, which is recorded so an instance of it is refused by name (E0952,
 //! E.1.2). The text is prepended to the source like
 //! `Preprocessor.spice_primitives`, so §6 instantiation, overrides and their
-//! diagnostics apply unchanged. Input is lower-cased at ingest (E.2.1).
+//! diagnostics apply unchanged. Input is lower-cased at ingest (E.2.1), file
+//! names excepted.
 //!
 //! E.1.2: "with which particular variant of SPICE it is compatible, is solely
 //! determined by the authors of the simulator". VerA claims SPICE3 card
-//! syntax for `.MODEL` (the `model_types` rows) and for flat `.SUBCKT` bodies
-//! of numeric-valued R/C/L/V/I/E/F/G/H cards. Inside a `.SUBCKT`, anything
-//! else (`PARAMS:`, a `{expr}` value, a nested `.SUBCKT`, a model-referenced
-//! or unlisted device card) is a `Refusal` (E0928): skipping it would change
-//! the circuit, a dropped R being an open.
+//! syntax for `.MODEL` (the `model_types` rows), for `.SUBCKT` bodies of
+//! numeric-valued R/C/L/V/I/E/F/G/H cards and of M/Q/J/D cards whose model is
+//! a Verilog-A module or paramset (`model_cards`), and for `.INCLUDE`, `.LIB`
+//! and HSPICE's `.HDL` anywhere (`Reader`). Inside a `.SUBCKT`, anything else
+//! (`PARAMS:`, a `{expr}` value, a nested `.SUBCKT`, a model-referenced R or
+//! unlisted device card, a binned model) is a `Refusal` (E0928), and a card
+//! whose model is a Table E.1 semiconductor with no behaviour is E0953:
+//! skipping either would change the circuit, a dropped R being an open.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -26,25 +30,39 @@ pub const Synthesized = struct {
     text: []const u8 = "",
     modules: u32 = 0,
     /// Cards inside a definition this reader does not claim; the caller
-    /// reports each as E0928 and stops.
+    /// reports each (`Refusal.code`) and stops.
     refused: []const Refusal = &.{},
     /// `.MODEL` cards whose type is a primitive VerA does not support (E.1.2
     /// bullet 2), as `name type`, lower-cased: an instance naming one is
     /// refused with E0952 rather than as an unknown module.
     unsupported: []const []const u8 = &.{},
+    /// The files a `Refusal` points into: the netlist itself first, then
+    /// each file a `.INCLUDE` or `.LIB` card read.
+    files: []const File = &.{},
+    /// HSPICE `.HDL "file"`: Verilog-A sources the netlist names, as opened
+    /// (relative to the naming file's directory), each once, in card order.
+    /// They belong to the design like files given together on a command line.
+    hdl: []const []const u8 = &.{},
 };
 
-/// One card `synthesize` cannot read, located in the netlist text it was given
+/// One netlist file: the name it was opened by, and its text.
+pub const File = struct { name: []const u8, text: []const u8 };
+
+/// One card `synthesize` cannot read, located in `Synthesized.files[file]`
 /// (the first physical line of the card).
 pub const Refusal = struct {
+    file: u32 = 0,
     at: u32,
     len: u32,
     why: []const u8,
+    /// E0928 unless the card is readable and its model is not (E0953).
+    code: enum { E0928, E0953 } = .E0928,
 };
 
 /// A logical card (continuations joined) and where its first line starts.
 const Card = struct {
     text: []const u8,
+    file: u32 = 0,
     at: u32,
     len: u32,
 };
@@ -55,7 +73,7 @@ const Refusals = struct {
     list: std.ArrayList(Refusal) = .empty,
 
     fn add(r: *Refusals, card: Card, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
-        try r.list.append(r.arena, .{ .at = card.at, .len = card.len, .why = try r.arena.print(fmt, args) });
+        try r.list.append(r.arena, .{ .file = card.file, .at = card.at, .len = card.len, .why = try r.arena.print(fmt, args) });
     }
 };
 
@@ -87,22 +105,33 @@ const model_types = [_]struct { type_: []const u8, prim: []const u8, ports: []co
     .{ .type_ = "l", .prim = "inductor", .ports = "p, n" },
 };
 
+/// One `.MODEL` card of the netlist, wherever it sits: what a body card's
+/// model name resolves to (`emitModelCard`).
+const ModelCard = struct {
+    name: []const u8,
+    type_: []const u8,
+    card: Card,
+};
+
 /// Returns Verilog-AMS module text for every `.MODEL` and `.SUBCKT` card in
-/// `netlist`. The text and the refusals are allocated from `arena`; the working
-/// copies (the lowered netlist, the joined cards, per-card strings) live on a
-/// scratch arena freed on return. Never fails on malformed input: a line
-/// outside a definition this does not understand contributes nothing, and one
-/// inside a definition is a `Refusal`.
-pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthesized {
+/// `netlist`, the text of the file `path` names ("" when it names none:
+/// relative `.INCLUDE`/`.LIB`/`.HDL` names then resolve against the working
+/// directory). The text, the refusals and the files are allocated from
+/// `arena`; the working copies (the lowered lines, the joined cards, per-card
+/// strings) live on a scratch arena freed on return. Never fails on malformed
+/// input: a line outside a definition this does not understand contributes
+/// nothing, and one inside a definition is a `Refusal`.
+pub fn synthesize(arena: Allocator, netlist: []const u8, path: []const u8) Allocator.Error!Synthesized {
     if (netlist.len == 0) return .{};
     var scratch_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer scratch_state.deinit();
     const scratch = scratch_state.allocator();
+    var refusals: Refusals = .{ .arena = arena };
 
-    // One lowered copy up front (E.2.1: SPICE is case-insensitive), so every
-    // slice below is already canonical and nothing has to remember to fold.
-    // ponytail: ASCII folding is the ceiling; use a different fold only for a new dialect.
-    const lower = try std.ascii.allocLowerString(scratch, netlist);
+    // Every line of every file, `.INCLUDE`/`.LIB` expanded in place.
+    var r: Reader = .{ .arena = arena, .scratch = scratch, .refusals = &refusals };
+    try r.files.append(arena, .{ .name = if (path.len == 0) "<spice netlist>" else path, .text = netlist });
+    try r.read(0, null, 0);
 
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(scratch,
@@ -123,26 +152,34 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     var cards: std.ArrayList(Card) = .empty;
     var logical: std.ArrayList(u8) = .empty;
     var first: Card = undefined;
-    var lines = std.mem.splitScalar(u8, lower, '\n');
-    while (lines.next()) |raw| {
-        const line = strip(raw);
-        if (line.len == 0) continue;
-        if (line[0] == '+') {
+    for (r.lines.items) |line| {
+        if (line.text[0] == '+') {
             // Joins the card under construction. A `+` with nothing above it has
             // nothing to continue and is dropped.
             if (logical.items.len != 0) {
                 try logical.append(scratch, ' ');
-                try logical.appendSlice(scratch, std.mem.trim(u8, line[1..], " \t"));
+                try logical.appendSlice(scratch, std.mem.trim(u8, line.text[1..], " \t"));
             }
             continue;
         }
-        if (logical.items.len != 0) try cards.append(scratch, .{ .text = try scratch.dupe(u8, logical.items), .at = first.at, .len = first.len });
+        if (logical.items.len != 0) try cards.append(scratch, .{ .text = try tightEquals(scratch, logical.items), .file = first.file, .at = first.at, .len = first.len });
         logical.clearRetainingCapacity();
-        try logical.appendSlice(scratch, line);
-        first = .{ .text = "", .at = @intCast(line.ptr - lower.ptr), .len = @intCast(line.len) };
+        try logical.appendSlice(scratch, line.text);
+        first = .{ .text = "", .file = line.file, .at = line.at, .len = line.len };
     }
-    if (logical.items.len != 0) try cards.append(scratch, .{ .text = logical.items, .at = first.at, .len = first.len });
-    var refusals: Refusals = .{ .arena = arena };
+    if (logical.items.len != 0) try cards.append(scratch, .{ .text = try tightEquals(scratch, logical.items), .file = first.file, .at = first.at, .len = first.len });
+
+    // A body card may name a model declared after it, or in another file.
+    var models: std.ArrayList(ModelCard) = .empty;
+    for (cards.items) |card| {
+        var it = std.mem.tokenizeAny(u8, card.text, " \t(),");
+        if (!std.mem.eql(u8, it.next() orelse continue, ".model")) continue;
+        const name = it.next() orelse continue;
+        const type_ = it.next() orelse continue;
+        for (models.items) |m| {
+            if (std.mem.eql(u8, m.name, name)) break;
+        } else try models.append(scratch, .{ .name = name, .type_ = type_, .card = card });
+    }
 
     // Index-based, because a `.SUBCKT` header is not the whole card it reads:
     // E.2 makes it a module definition, which runs to its `.ENDS`.
@@ -151,14 +188,172 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
     var i: usize = 0;
     while (i < cards.items.len) {
         const body = subcktBody(cards.items[i..]);
-        if (try emitCard(scratch, &out, cards.items[i], body, &seen, &refusals, &unsupported)) count += 1;
+        if (try emitCard(scratch, &out, cards.items[i], body, models.items, &seen, &refusals, &unsupported)) count += 1;
         i += 1 + body.len;
     }
 
     const kept = try arena.alloc([]const u8, unsupported.items.len);
     for (unsupported.items, kept) |u, *k| k.* = try arena.dupe(u8, u);
-    if (count == 0) return .{ .refused = refusals.list.items, .unsupported = kept };
-    return .{ .text = try arena.dupe(u8, out.items), .modules = count, .refused = refusals.list.items, .unsupported = kept };
+    var done: Synthesized = .{ .refused = refusals.list.items, .unsupported = kept, .files = r.files.items, .hdl = r.hdl.items };
+    if (count == 0) return done;
+    done.text = try arena.dupe(u8, out.items);
+    done.modules = count;
+    return done;
+}
+
+/// One physical line of a netlist file, comments stripped and lower-cased,
+/// and where it is in `Reader.files[file]`.
+const Line = struct { text: []const u8, file: u32, at: u32, len: u32 };
+
+/// Reads netlist files into `lines`, the way SPICE reads them: a `.INCLUDE
+/// file` card is replaced by the file's lines, a `.LIB file entry` card by
+/// the lines between `.LIB entry` and `.ENDL` in that file, and a `.LIB
+/// entry` ... `.ENDL` block met any other way is a library entry, read only
+/// when called. A relative file name is looked for beside the file whose
+/// card names it, as VD-091 does for `` `include ``. `.HDL file` names a
+/// Verilog-A source (`Synthesized.hdl`). A file that cannot be read, an entry
+/// it does not have, or nesting past `max_depth` is a `Refusal` at the card.
+const Reader = struct {
+    arena: Allocator,
+    scratch: Allocator,
+    refusals: *Refusals,
+    lines: std.ArrayList(Line) = .empty,
+    files: std.ArrayList(File) = .empty,
+    hdl: std.ArrayList([]const u8) = .empty,
+
+    /// SPICE netlists do not nest library files deeply; past this a
+    /// `.INCLUDE` cycle is the likelier reading.
+    const max_depth = 16;
+    /// The `--spice` netlist's own bound (E1013).
+    const max_bytes = 64 * 1024 * 1024;
+
+    /// Appends file `fi`'s lines, or with `entry` only those of its `.LIB
+    /// entry` block.
+    fn read(r: *Reader, fi: u32, entry: ?[]const u8, depth: u32) Allocator.Error!void {
+        const text = r.files.items[fi].text;
+        // Inside a `.LIB name` block: true when it is the entry asked for.
+        var in_lib: ?bool = null;
+        // The open block's header, so one `.ENDL` never closes is not a
+        // silent end of the file.
+        var header: Card = undefined;
+        defer if (in_lib != null) r.refusals.add(header, "`.lib` entry has no `.endl`; the cards after it are not read", .{}) catch {};
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |raw| {
+            const line = strip(raw);
+            if (line.len == 0) continue;
+            const at: u32 = @intCast(line.ptr - text.ptr);
+            const card: Card = .{ .text = line, .file = fi, .at = at, .len = @intCast(line.len) };
+            var it = std.mem.tokenizeAny(u8, line, " \t");
+            const kw = try std.ascii.allocLowerString(r.scratch, it.next().?);
+            const arg = unquote(it.next() orelse "");
+            const arg2 = unquote(it.next() orelse "");
+            if (std.mem.eql(u8, kw, ".lib") and arg2.len == 0) {
+                // A library entry's header, not a call.
+                if (in_lib == null) {
+                    in_lib = if (entry) |e| std.ascii.eqlIgnoreCase(e, arg) else false;
+                    header = card;
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, kw, ".endl")) {
+                const done = in_lib orelse false;
+                in_lib = null;
+                if (done) return;
+                continue;
+            }
+            if (entry != null and !(in_lib orelse false)) continue;
+            if (in_lib == false) continue;
+            const include = std.mem.eql(u8, kw, ".include") or std.mem.eql(u8, kw, ".inc");
+            if (include or std.mem.eql(u8, kw, ".lib")) {
+                if (arg.len == 0) {
+                    try r.refusals.add(card, "`{s}` names no file", .{kw});
+                    continue;
+                }
+                if (depth == max_depth) {
+                    try r.refusals.add(card, "`{s}` is nested more than {d} files deep", .{ kw, max_depth });
+                    continue;
+                }
+                const sub = try r.open(card, kw, arg) orelse continue;
+                const before = r.lines.items.len;
+                try r.read(sub, if (include) null else arg2, depth + 1);
+                if (!include and r.lines.items.len == before and !hasEntry(r.files.items[sub].text, arg2))
+                    try r.refusals.add(card, "`{s}` has no `.lib {s}` entry", .{ r.files.items[sub].name, arg2 });
+                continue;
+            }
+            if (std.mem.eql(u8, kw, ".hdl")) {
+                if (arg.len == 0) {
+                    try r.refusals.add(card, "`.hdl` names no file", .{});
+                    continue;
+                }
+                const full = try r.resolve(fi, arg);
+                for (r.hdl.items) |h| {
+                    if (std.mem.eql(u8, h, full)) break;
+                } else try r.hdl.append(r.arena, full);
+                continue;
+            }
+            try r.lines.append(r.scratch, .{ .text = try std.ascii.allocLowerString(r.scratch, line), .file = fi, .at = at, .len = card.len });
+        }
+    }
+
+    /// `name` beside the file `fi` was opened by, or as written when absolute.
+    fn resolve(r: *Reader, fi: u32, name: []const u8) Allocator.Error![]const u8 {
+        if (std.fs.path.isAbsolute(name)) return r.arena.dupe(u8, name);
+        const dir = std.fs.path.dirname(r.files.items[fi].name) orelse ".";
+        const base = if (fi == 0 and r.files.items[0].name[0] == '<') "." else dir;
+        return std.fs.path.join(r.arena, &.{ base, name });
+    }
+
+    /// Reads the file `card` names (`.include` or `.lib`) into `files`, or
+    /// records why not and returns null.
+    fn open(r: *Reader, card: Card, kw: []const u8, name: []const u8) Allocator.Error!?u32 {
+        const full = try r.resolve(card.file, name);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const text = std.Io.Dir.cwd().readFileAlloc(io, full, r.arena, .limited(max_bytes)) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                try r.refusals.add(card, "`{s}`: cannot read \"{s}\" ({t})", .{ kw, full, e });
+                return null;
+            },
+        };
+        try r.files.append(r.arena, .{ .name = full, .text = text });
+        return @intCast(r.files.items.len - 1);
+    }
+};
+
+/// Whether `text` has a `.LIB entry` header, so an empty entry is not
+/// reported as a missing one.
+fn hasEntry(text: []const u8, entry: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        var it = std.mem.tokenizeAny(u8, strip(raw), " \t");
+        if (!std.ascii.eqlIgnoreCase(it.next() orelse continue, ".lib")) continue;
+        if (std.ascii.eqlIgnoreCase(unquote(it.next() orelse continue), entry) and it.next() == null) return true;
+    }
+    return false;
+}
+
+/// A file name or entry without the `"`/`'` SPICE dialects put around it.
+fn unquote(t: []const u8) []const u8 {
+    if (t.len >= 2 and (t[0] == '"' or t[0] == '\'') and t[t.len - 1] == t[0]) return t[1 .. t.len - 1];
+    return t;
+}
+
+/// `card` with the white space around each `=` removed: HSPICE writes
+/// `level = 72`, and every reader below splits a parameter on its `=` within
+/// one token.
+fn tightEquals(arena: Allocator, card: []const u8) Allocator.Error![]const u8 {
+    if (std.mem.indexOfScalar(u8, card, '=') == null) return arena.dupe(u8, card);
+    var out: std.ArrayList(u8) = try .initCapacity(arena, card.len);
+    for (card, 0..) |c, i| {
+        const blank = c == ' ' or c == '\t';
+        if (blank) {
+            const next = std.mem.trimStart(u8, card[i..], " \t");
+            if (next.len != 0 and next[0] == '=') continue;
+            if (out.items.len != 0 and out.items[out.items.len - 1] == '=') continue;
+        }
+        out.appendAssumeCapacity(c);
+    }
+    return out.items;
 }
 
 /// One physical line with its comments removed: `*` is a full-line comment, `;`
@@ -191,6 +386,7 @@ fn emitCard(
     out: *std.ArrayList(u8),
     card: Card,
     body: []const Card,
+    models: []const ModelCard,
     seen: *std.ArrayList([]const u8),
     refusals: *Refusals,
     unsupported: *std.ArrayList([]const u8),
@@ -266,7 +462,7 @@ fn emitCard(
                 \\
             , .{ decl, list, list, list });
         }
-        try emitBody(arena, out, body, refusals);
+        try emitBody(arena, out, body, models, refusals);
         try out.appendSlice(arena, "endmodule\n\n");
     }
     try seen.append(arena, name);
@@ -280,7 +476,8 @@ fn emitCard(
 /// `isine #(.dc(1m)) Iee (e, gnd);`: the leading letter picks the primitive and
 /// the one positional value lands on `param`. `c` and `l` are the other
 /// two-terminal rows whose Behavior column Table E.1 fills in; letters with an
-/// empty one (`Q`, `M`, `J`, `D`) have no equation and are not listed.
+/// empty one (`Q`, `M`, `J`, `D`) have no equation here, and are read only
+/// with a model (`model_cards`).
 const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8 }{
     .{ .letter = 'r', .prim = "resistor", .param = "r" },
     .{ .letter = 'c', .prim = "capacitor", .param = "c" },
@@ -333,6 +530,7 @@ fn emitBody(
     arena: Allocator,
     out: *std.ArrayList(u8),
     body: []const Card,
+    models: []const ModelCard,
     refusals: *Refusals,
 ) Allocator.Error!void {
     // The V cards an F or H card reads the current of, by name.
@@ -390,13 +588,19 @@ fn emitBody(
                 }),
             });
             const gain = try cardValue(it.next(), &it, inst, card, refusals) orelse continue;
-            try analog.print(arena, "      {s}({s}, {s}) <+ {d} * {s}({s});\n", .{ c.lhs, p, n, gain, c.rhs, ctl });
+            try analog.print(arena, "      {s}({s}, {s}) <+ {f} * {s}({s});\n", .{ c.lhs, p, n, num(gain), c.rhs, ctl });
+            continue;
+        }
+        if (for (model_cards) |m| {
+            if (inst[0] == m.letter) break m;
+        } else null) |m| {
+            try emitModelCard(arena, out, card, inst, &it, m, models, refusals);
             continue;
         }
         const row = for (device_cards) |d| {
             if (inst[0] == d.letter) break d;
         } else {
-            try refusals.add(card, "`{s}`: a `{c}` device card is not one VerA reads in a subcircuit (R, C, L, V, I, E, F, G, H)", .{ inst, inst[0] });
+            try refusals.add(card, "`{s}`: a `{c}` device card is not one VerA reads in a subcircuit (R, C, L, V, I, E, F, G, H, M, Q, J, D)", .{ inst, inst[0] });
             continue;
         };
         const p = it.next() orelse {
@@ -413,13 +617,13 @@ fn emitBody(
         } else false) {
             const name = try spell(arena, inst);
             try out.print(arena, "   branch ({s}, {s}) {s};\n", .{ try spell(arena, p), try spell(arena, n), name });
-            try analog.print(arena, "      V({s}) <+ {d};\n", .{ name, value });
+            try analog.print(arena, "      V({s}) <+ {f};\n", .{ name, num(value) });
             continue;
         }
-        try out.print(arena, "   {s} #(.{s}({d})) {s}({s}, {s});\n", .{
+        try out.print(arena, "   {s} #(.{s}({f})) {s}({s}, {s});\n", .{
             row.prim,
             row.param,
-            value,
+            num(value),
             try spell(arena, inst),
             try spell(arena, p),
             try spell(arena, n),
@@ -427,6 +631,169 @@ fn emitBody(
     }
     if (analog.items.len != 0) try out.print(arena, "   analog begin\n{s}   end\n", .{analog.items});
 }
+
+/// SPICE3's semiconductor device cards: the letter, its node count before
+/// the model name, and the Table E.1 primitive a `.MODEL` of a Table E.1
+/// type would make it (`emitModelCard`):
+///
+///     M d g s b model [k=v ...]
+///     Q c b e [s] model [area] [k=v ...]
+///     J d g s model [area] [k=v ...]
+///     D a c model [area] [k=v ...]
+const model_cards = [_]struct { letter: u8, nodes: u8, prim: []const u8 }{
+    .{ .letter = 'm', .nodes = 4, .prim = "mosfet" },
+    .{ .letter = 'q', .nodes = 3, .prim = "bjt" },
+    .{ .letter = 'j', .nodes = 3, .prim = "jfet" },
+    .{ .letter = 'd', .nodes = 2, .prim = "diode" },
+};
+
+/// One `.name(value)` a model card's instance carries.
+const Override = struct { name: []const u8, value: f64 };
+
+/// Emits the instance an M/Q/J/D card is (`model_cards`). E.2: "models
+/// contained within the SPICE netlist are treated as module definitions",
+/// and E.1.1 lets "anything that can be instantiated in the particular flavor
+/// of SPICE" be instantiated from Verilog-AMS. The card's model name
+/// resolves, in order, to
+///
+///   - a `.MODEL name type ...` card whose type is no Table E.1 row: an
+///     instance of `type`, a Verilog-A module or paramset of the design (the
+///     HSPICE/Spectre `.model nch bsim4 ...` naming a compiled model), the
+///     card's parameters as overrides;
+///   - a `.MODEL` of a Table E.1 type (nmos, npn, d, ...): the rows Table E.1
+///     leaves without a Behavior, which E.2 makes "implementation dependent",
+///     and VerA has no equations for. Refused (E0953): an instance with no
+///     behaviour would be an open where the netlist has a transistor;
+///   - no `.MODEL` of that name: the name itself, as a module or paramset of
+///     the design; one naming nothing is E0904 at elaboration.
+///
+/// A binned model (`.MODEL name.1 ...`, E.4.2) is not read. The card's own
+/// parameters (`W=`, `L=`, `NFIN=`, a positional area) override the model
+/// card's of the same name, and `M=` is E.4.1's multiplicity factor, the
+/// §6.3.6 `$mfactor`. Names keep the netlist's lower case: elaboration
+/// matches them to the module's regardless of case (E.2.1, `spiceCase`).
+fn emitModelCard(
+    arena: Allocator,
+    out: *std.ArrayList(u8),
+    card: Card,
+    inst: []const u8,
+    it: *std.mem.TokenIterator(u8, .any),
+    row: @TypeOf(model_cards[0]),
+    models: []const ModelCard,
+    refusals: *Refusals,
+) Allocator.Error!void {
+    var plain: std.ArrayList([]const u8) = .empty;
+    var over: std.ArrayList(Override) = .empty;
+    while (it.next()) |t| {
+        const eq = std.mem.indexOfScalar(u8, t, '=') orelse {
+            if (over.items.len != 0)
+                return refusals.add(card, "`{s}`: the field `{s}` after its parameters is not read", .{ inst, t });
+            try plain.append(arena, t);
+            continue;
+        };
+        try setOverride(arena, &over, t[0..eq], try paramValue(t, eq, inst, card, refusals) orelse return);
+    }
+    // Q's substrate is optional: a fifth name that is not a number is the
+    // model after it, as SPICE3 reads the card.
+    var nodes: usize = row.nodes;
+    if (row.letter == 'q' and plain.items.len >= 5 and spiceNumber(plain.items[4]) == null) nodes = 4;
+    if (plain.items.len <= nodes) return refusals.add(card, "`{s}` has too few fields", .{inst});
+    const model = plain.items[nodes];
+    var extra = plain.items[nodes + 1 ..];
+    // A positional area (Q, J, D) is Table E.1's `area`; `area=` wins.
+    if (row.letter != 'm' and extra.len == 1) if (spiceNumber(extra[0])) |a| {
+        for (over.items) |o| {
+            if (std.mem.eql(u8, o.name, "area")) break;
+        } else try over.append(arena, .{ .name = "area", .value = a });
+        extra = extra[1..];
+    };
+    if (extra.len != 0) return refusals.add(card, "`{s}`: the field `{s}` after the model is not read", .{ inst, extra[0] });
+
+    var module = model;
+    var params: std.ArrayList(Override) = .empty;
+    if (for (models) |m| {
+        if (std.mem.eql(u8, m.name, model)) break m;
+    } else null) |m| {
+        if (for (model_types) |t| {
+            if (std.mem.eql(u8, t.type_, m.type_)) break t;
+        } else null) |t| {
+            try refusals.list.append(refusals.arena, .{
+                .file = card.file,
+                .at = card.at,
+                .len = card.len,
+                .code = .E0953,
+                .why = try refusals.arena.print("`{s}`: its model `{s}` is `.model {s} {s}`, Table E.1's `{s}`, which has no behaviour in VerA; name a Verilog-A module as the model's type (`.model {s} <module> ...`)", .{ inst, model, model, m.type_, t.prim, model }),
+            });
+            return;
+        }
+        module = m.type_;
+        var mit = std.mem.tokenizeAny(u8, m.card.text, " \t(),");
+        for (0..3) |_| _ = mit.next(); // `.model name type`
+        while (mit.next()) |t| {
+            const eq = std.mem.indexOfScalar(u8, t, '=') orelse
+                return refusals.add(card, "`{s}`: the field `{s}` of `.model {s}` is not read", .{ inst, t, model });
+            try setOverride(arena, &params, t[0..eq], try paramValue(t, eq, inst, card, refusals) orelse return);
+        }
+    } else for (models) |m| {
+        const bin = std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.';
+        if (bin) return refusals.add(card, "`{s}`: `{s}` is a binned model (`.model {s}`), which is not read", .{ inst, model, m.name });
+    }
+    for (over.items) |o| try setOverride(arena, &params, o.name, o.value);
+
+    try out.print(arena, "   {s} ", .{try spell(arena, module)});
+    if (params.items.len != 0) {
+        try out.appendSlice(arena, "#(");
+        for (params.items, 0..) |p, i| {
+            if (i != 0) try out.appendSlice(arena, ", ");
+            const name = if (std.mem.eql(u8, p.name, "m")) "$mfactor" else try spell(arena, p.name);
+            try out.print(arena, ".{s}({f})", .{ name, num(p.value) });
+        }
+        try out.appendSlice(arena, ") ");
+    }
+    try out.print(arena, "{s}(", .{try spell(arena, inst)});
+    for (plain.items[0..nodes], 0..) |n, i| try out.print(arena, "{s}{s}", .{ if (i == 0) "" else ", ", try spell(arena, n) });
+    try out.appendSlice(arena, ");\n");
+}
+
+/// Sets `name` in `list`, replacing an earlier value: a later assignment of
+/// one parameter wins, as an instance's does over its model card's.
+fn setOverride(arena: Allocator, list: *std.ArrayList(Override), name: []const u8, value: f64) Allocator.Error!void {
+    for (list.items) |*o| if (std.mem.eql(u8, o.name, name)) {
+        o.value = value;
+        return;
+    };
+    try list.append(arena, .{ .name = name, .value = value });
+}
+
+/// The number `t[eq + 1 ..]` of the parameter assignment `t`, or null after
+/// recording why it is not one (a `{expr}`, a name).
+fn paramValue(t: []const u8, eq: usize, inst: []const u8, card: Card, refusals: *Refusals) Allocator.Error!?f64 {
+    const v = t[eq + 1 ..];
+    if (eq == 0 or v.len == 0) {
+        try refusals.add(card, "`{s}`: `{s}` is not a parameter assignment", .{ inst, t });
+        return null;
+    }
+    if (spiceNumber(v)) |n| return n;
+    if (v[0] == '{' or v[0] == '\'')
+        try refusals.add(card, "`{s}`: the expression value `{s}` is not read; write a number", .{ inst, v })
+    else
+        try refusals.add(card, "`{s}`: the value `{s}` of `{s}` is not a number", .{ inst, v, t[0..eq] });
+    return null;
+}
+
+/// A card value as Verilog-AMS source: `{d}`'s plain decimal, except an
+/// integral value of 2^31 or more, which `{d}` would spell as an integer
+/// literal too wide for §3.2's 32-bit integer; `{e}` keeps it real.
+fn num(v: f64) Num {
+    return .{ .v = v };
+}
+const Num = struct {
+    v: f64,
+    pub fn format(n: Num, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (@abs(n.v) >= 0x1p31 and @trunc(n.v) == n.v) return w.print("{e}", .{n.v});
+        return w.print("{d}", .{n.v});
+    }
+};
 
 /// A device card's one positional value, with nothing after it, or null after
 /// recording why not: a model name (`R1 A B RMOD`), a `{expr}`, a missing
@@ -498,8 +865,7 @@ fn modelParams(
     prim: []const u8,
     it: *std.mem.TokenIterator(u8, .any),
 ) Allocator.Error!ModelParams {
-    // The card's `k=v` tail. ponytail: `k = v` with spaces around the `=` is not
-    // a shape SPICE writes; split on the token if a dialect turns up that does.
+    // The card's `k=v` tail; `tightEquals` has joined HSPICE's `k = v`.
     var keys: std.ArrayList([]const u8) = .empty;
     var vals: std.ArrayList(f64) = .empty;
     while (it.next()) |t| {
@@ -535,7 +901,7 @@ fn modelParams(
             // of the declaration, not of the default it replaces.
             const rest = line[eq + 1 ..];
             const tail = if (std.mem.indexOf(u8, rest, " from ")) |f| rest[f..] else ";";
-            try decls.print(arena, "   {s} = {d}{s}\n", .{ head, v, tail });
+            try decls.print(arena, "   {s} = {f}{s}\n", .{ head, num(v), tail });
         } else {
             try decls.print(arena, "   {s}\n", .{line});
         }
@@ -675,7 +1041,7 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
         \\R1 B1 GND 10K
         \\.ENDS ECPOSC
         \\.TRAN 1N 100N $ skipped, not diagnosed
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     try std.testing.expectEqual(@as(usize, 0), s.refused.len);
     // E.2.2.1: ports AND parameters from the bjt primitive, in Table E.1's
@@ -706,17 +1072,18 @@ test "a .SUBCKT's device cards are its body, and an unreadable one is refused" {
         \\.SUBCKT RDIV IN OUT GND
         \\R1 IN OUT 1K
         \\R2 OUT GND 3K
-        \\Q1 OUT IN GND VERTNPN
+        \\S1 OUT IN GND 0 SWMOD
         \\R3 A B RMOD
         \\.ENDS RDIV
         \\R9 X Y 1K
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 1), s.modules);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(1000)) r1(in, out);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "resistor #(.r(3000)) r2(out, gnd);") != null);
-    // No Table E.1 equation for a bjt and no number on a model-referenced card:
-    // neither becomes an instance, and each is a refusal located at its line.
-    try std.testing.expect(std.mem.indexOf(u8, s.text, "q1") == null);
+    // A letter VerA has no row for (`S`, a switch) and no number on a
+    // model-referenced R: neither becomes an instance, and each is a refusal
+    // located at its line.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "s1") == null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "r3") == null);
     try std.testing.expectEqual(@as(usize, 2), s.refused.len);
     try std.testing.expectEqual(@as(u32, 51), s.refused[0].at);
@@ -733,7 +1100,7 @@ test "a .SUBCKT's device cards are its body, and an unreadable one is refused" {
         \\.SUBCKT PAD A B
         \\R1 A B 9K
         \\.ENDS
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 1), dup.modules);
     try std.testing.expect(std.mem.indexOf(u8, dup.text, "9000") == null);
 }
@@ -746,7 +1113,7 @@ test "a .MODEL card's value reaches the Table E.1 parameter of the same name" {
     const s = try synthesize(arena,
         \\.MODEL RMOD R R=10K TC1=1E-3
         \\.MODEL CM C C=1P IC=2.5
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // §2.6.2 Table 2-1 by way of E.2.2.3's `resistor #(.r(10k))`: `10K` is 10000.
     // §3.4.2's `from` range survives the substitution: it belongs to the
@@ -793,7 +1160,7 @@ test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
         \\.SUBCKT AMP (INPUT OUTPUT)
         \\.ENDS AMP
         \\.MODEL WIRE NPN BF=80
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // The terminator is the point: `\input,` would scan the comma into the
     // name (§2.8.1 ends at white space, and `,` is printable ASCII).
@@ -801,7 +1168,7 @@ test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
     try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical \\input , \\output ;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\wire (c, b, e, s);") != null);
     // A name that is not a keyword is not escaped.
-    const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n");
+    const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n", "");
     try std.testing.expect(std.mem.indexOf(u8, plain.text, "module pad(in, out);") != null);
 }
 
@@ -814,7 +1181,7 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
         \\.MODEL 2N2222 NPN BF=200
         \\.SUBCKT FLT A 1 B
         \\.ENDS FLT
-    );
+    , "");
     try std.testing.expectEqual(@as(u32, 2), s.modules);
     // E.2 treats the model as a module definition even though `2N2222` fails
     // §2.7's identifier shape.
@@ -824,7 +1191,7 @@ test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" 
     try std.testing.expect(std.mem.indexOf(u8, s.text, "module flt(a, \\1 , b);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical a, \\1 , b;") != null);
     // A parameter assignment is outside the claimed subset (E.1.2).
-    const p = try synthesize(arena, ".SUBCKT X N1 N2 PARAMS: W=2\n.ENDS\n");
+    const p = try synthesize(arena, ".SUBCKT X N1 N2 PARAMS: W=2\n.ENDS\n", "");
     try std.testing.expectEqual(@as(u32, 0), p.modules);
     try std.testing.expectEqual(@as(usize, 1), p.refused.len);
     try std.testing.expect(std.mem.indexOf(u8, p.refused[0].why, "`params:`") != null);
@@ -835,17 +1202,17 @@ test "an unrecognised model type, a repeat and an empty netlist all contribute n
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "")).modules);
-    const sw = try synthesize(arena, ".MODEL SW1 SW RON=1\n");
+    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "", "")).modules);
+    const sw = try synthesize(arena, ".MODEL SW1 SW RON=1\n", "");
     try std.testing.expectEqual(@as(u32, 0), sw.modules);
     // E.1.2: kept by name and type, so its instance is refused as such.
     try std.testing.expectEqual(@as(usize, 1), sw.unsupported.len);
     try std.testing.expectEqualStrings("sw1 sw", sw.unsupported[0]);
-    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "R1 a b 1k\n.TRAN 1n 1u\n")).modules);
-    const dup = try synthesize(arena, ".MODEL M1 NPN\n.MODEL M1 PNP\n");
+    try std.testing.expectEqual(@as(u32, 0), (try synthesize(arena, "R1 a b 1k\n.TRAN 1n 1u\n", "")).modules);
+    const dup = try synthesize(arena, ".MODEL M1 NPN\n.MODEL M1 PNP\n", "");
     try std.testing.expectEqual(@as(u32, 1), dup.modules);
     // A portless .SUBCKT is A.1.2's `module identifier ;`, not `electrical ;`.
-    const bare = try synthesize(arena, ".SUBCKT PAD\n.ENDS\n");
+    const bare = try synthesize(arena, ".SUBCKT PAD\n.ENDS\n", "");
     try std.testing.expectEqual(@as(u32, 1), bare.modules);
     try std.testing.expect(std.mem.indexOf(u8, bare.text, "electrical") == null);
 }
@@ -864,7 +1231,7 @@ test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or
         \\H1 B C VS 5
         \\F2 D 0 VNONE 6
         \\.ENDS
-    );
+    , "");
     for ([_][]const u8{
         "branch (a, x) vs;",
         "V(vs) <+ 0;",
@@ -893,9 +1260,80 @@ test "E.1.2 nested .SUBCKT, {expr} values and trailing fields in a body are refu
         \\.ENDS
         \\R9 X Y RMOD
         \\.TRAN 1N 1U
-    );
+    , "");
     try std.testing.expectEqual(@as(usize, 3), s.refused.len);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "nested") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "{rval}") != null);
     try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "tc=0.01") != null);
+}
+
+test "E.2 an M/Q/J/D card instantiates its model's module, card parameters under the instance's" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.SUBCKT AMP D G S B
+        \\M1 D G S B NCH W=2U L = 50N M=3
+        \\Q1 D G S QMOD 2
+        \\Q2 D G S B QMOD
+        \\D1 G S DIO 4 AREA=5
+        \\J1 D G S MYJFET
+        \\.ENDS
+        \\.MODEL NCH BSIMCMG TYPE=1 L=20N NSD=2E+26
+        \\.MODEL QMOD MYBJT BF=80
+        \\.MODEL DIO DIODE_VA IS=1E-14
+    , "");
+    try std.testing.expectEqual(@as(usize, 0), s.refused.len);
+    for ([_][]const u8{
+        // The model card first (its `l` replaced by the instance's 50n, in
+        // the card's place), then what only the instance sets; `M` is
+        // E.4.1's multiplicity, `$mfactor`. 2e26 is real, not an integer.
+        "   bsimcmg #(.type(1), .l(0.00000005), .nsd(2e26), .w(0.000002), .$mfactor(3)) m1(d, g, s, b);",
+        // Q: a fifth name that is a number is the area, not a substrate.
+        "   mybjt #(.bf(80), .area(2)) q1(d, g, s);",
+        // ...and a fifth that is not is the model after a substrate.
+        "   mybjt #(.bf(80)) q2(d, g, s, b);",
+        // An explicit `area=` wins over the positional one.
+        "   diode_va #(.is(0.00000000000001), .area(5)) d1(g, s);",
+        // No `.MODEL`: the name is a module or paramset of the design.
+        "   myjfet j1(d, g, s);",
+    }) |want| {
+        if (std.mem.indexOf(u8, s.text, want) == null) {
+            std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, s.text });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "E.2 a card whose model is a Table E.1 semiconductor is E0953; a binned model and a bad value are E0928" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.MODEL NMOS_LVT NMOS LEVEL = 72
+        \\.MODEL PCH.1 BSIM4 LMIN=1U
+        \\.SUBCKT INV A Y VDD VSS
+        \\MN Y A VSS VSS NMOS_LVT L=21N
+        \\MP Y A VDD VDD PCH L=21N
+        \\MX Y A VDD VDD BSIM4 L={LEN}
+        \\MY Y A VDD VDD BSIM4 OFF
+        \\.ENDS
+    , "");
+    try std.testing.expectEqual(@as(usize, 4), s.refused.len);
+    try std.testing.expect(s.refused[0].code == .E0953);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[0].why, "Table E.1's `mosfet`") != null);
+    try std.testing.expect(s.refused[1].code == .E0928);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[1].why, "binned") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[2].why, "{len}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.refused[3].why, "`off`") != null);
+}
+
+test "a card value at or past 2^31 that is integral is spelled real" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("10000", try std.fmt.bufPrint(&buf, "{f}", .{num(1e4)}));
+    try std.testing.expectEqualStrings("2147483647", try std.fmt.bufPrint(&buf, "{f}", .{num(2147483647)}));
+    try std.testing.expectEqualStrings("2.147483648e9", try std.fmt.bufPrint(&buf, "{f}", .{num(2147483648)}));
+    try std.testing.expectEqualStrings("0.5", try std.fmt.bufPrint(&buf, "{f}", .{num(0.5)}));
 }

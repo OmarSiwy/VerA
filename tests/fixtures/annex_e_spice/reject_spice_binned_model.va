@@ -1,0 +1,35 @@
+// E.4.2: "Some SPICE netlists provide mechanisms for mapping an instance to a
+// group of models, with the final determination of which model to use being
+// based on rules encapsulated in the SPICE netlist. Examples include model
+// binning ... Support of SPICE model cards is implementation specific
+// (including those using these mechanisms)." VerA does not read SPICE's bin
+// rules (`.MODEL NFET.1 ... LMIN= LMAX=`); Verilog-AMS's own binning is the
+// paramset (E.4.2's second paragraph, spice_binning.va). A card naming the
+// group, `M1 ... NFET`, matches no `.MODEL NFET`, and resolving it as the module
+// `nfet` would silently drop the bins' parameters, so it is refused at the
+// card by name (E0928, "binned").
+//
+// Legal neighbour: spice_fet_card_instantiates_model_module.va, the same card
+// with an unbinned `.MODEL NFET LINFET`, which compiles.
+//
+//! lrm E.4.2
+//! lrm E.1.2
+//! bias V(d) = 1.0, V(g) = 0.75, V(s) = 0.25, V(b) = 0.0
+//! reject E0928
+//! reject binned model
+//! spice .MODEL NFET.1 LINFET KP=2E-3 LMIN=0 LMAX=1
+//! spice .SUBCKT CELL D G S B
+//! spice M1 D G S B NFET W=2 L=0.25
+//! spice .ENDS CELL
+module LinFet(d, g, s, b);
+  inout d, g, s, b; electrical d, g, s, b;
+  parameter real KP = 1e-3;
+  parameter real W = 1.0;
+  parameter real L = 1.0;
+  analog I(d, s) <+ KP * (W / L) * V(g, s) * V(d, s);
+endmodule
+
+module annex_e_reject_binned_model(d, g, s, b);
+  inout d, g, s, b; electrical d, g, s, b;
+  cell x1(d, g, s, b);
+endmodule

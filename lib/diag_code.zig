@@ -434,6 +434,7 @@ pub const Code = enum(u16) {
     W0950,
     W0951,
     E0952,
+    E0953,
     E0820,
     E0821,
     E0822,
@@ -5671,12 +5672,23 @@ fn infoOf(c: Code) Info {
             \\
             \\A print there is not a debugging aid, it is a per-iteration
             \\syscall on a hot loop that also happens not to compile for
-            \\SPIR-V or PTX. So the display family (LRM 9.4.1) and
-            \\$warning/$info lower to void — this warning only says so out
-            \\loud, once per call site. $fatal and $error are not dropped: the
-            \\first one an evaluation reaches latches the device's status
-            \\(`contract.StatusSite`, `Instance.vera_status__`), which stops
-            \\its rows until the host clears it.
+            \\SPIR-V or PTX. So a device prints nothing. What it does instead,
+            \\by default (`--display=record`), is RECORD: its `say` entry point,
+            \\which a host calls once per accepted point (9.4.6: "All the display
+            \\tasks, except $debug, shall not display output unless an iteration
+            \\has been accepted"), appends each $strobe, $display, $write,
+            \\$debug, $warning and $info it runs to a buffer the host lends, as
+            \\a site index and its numbers, and the host prints them
+            \\(`contract.SaySite`, `contract.formatSay`). $fatal and $error
+            \\latch the device's status (`contract.StatusSite`), which stops its
+            \\rows until the host clears it.
+            \\
+            \\This warning names what is still dropped, once per call site:
+            \\$monitor (9.4.1's change detection is state across accepted steps
+            \\a device does not keep), $finish and $stop (eval has no channel to
+            \\stop a host's solve), a printing task with a string argument that
+            \\is not a constant (a record carries numbers), and, under
+            \\`--display=drop`, every display task.
             \\
             \\The model is CONFORMANT; nothing is wrong with it. If the text
             \\is what you wanted, build the other artifact:
@@ -6191,13 +6203,16 @@ fn infoOf(c: Code) Info {
             \\compatible, is solely determined by the authors of the simulator."
             \\
             \\VerA claims SPICE3 card syntax for `.MODEL` (types npn, pnp, d, nmos,
-            \\pmos, njf, pjf, nmf, pmf, r, c, l) and for flat `.SUBCKT` bodies made
-            \\of numeric-valued R, C, L, V, I, E, F, G and H cards. In a `.SUBCKT`,
-            \\`PARAMS:` and `k=v` on the header, a `{expr}` value, a nested
-            \\`.SUBCKT`, a model-referenced or other device card (`R1 A B RMOD`,
-            \\`Q1 ...`, `X1 ...`) and a trailing field are not read. Skipping such
-            \\a card would change the circuit (a dropped R is an open), so the
-            \\netlist is refused.
+            \\pmos, njf, pjf, nmf, pmf, r, c, l, or a Verilog-A module), for
+            \\`.SUBCKT` bodies made of numeric-valued R, C, L, V, I, E, F, G and H
+            \\cards and of M, Q, J and D cards naming a model, and for `.INCLUDE`,
+            \\`.LIB file entry` and `.HDL file` anywhere. In a `.SUBCKT`, `PARAMS:`
+            \\and `k=v` on the header, a `{expr}` value, a nested `.SUBCKT`, a
+            \\model-referenced R/C/L (`R1 A B RMOD`), an `X`, `S` or other device
+            \\card, a binned model (`.MODEL NCH.1 ...`) and a trailing field are
+            \\not read; nor is a file an `.INCLUDE` or `.LIB` card names that
+            \\cannot be read. Skipping such a card would change the circuit (a
+            \\dropped R is an open), so the netlist is refused.
             \\
             \\Cards outside any definition (`.TRAN`, top-level devices) are not
             \\module definitions and are still skipped. Rewrite the card with a
@@ -6440,6 +6455,31 @@ fn infoOf(c: Code) Info {
             \\
             \\As the clause says, write the primitive's equations as a
             \\Verilog-AMS module of the same name: E.3.3 then selects the module.
+            ,
+        },
+        .E0953 => .{
+            .title = "a SPICE device card's model is a primitive with no behaviour",
+            .lrm = "E.2",
+            .explain =
+            \\An M, Q, J or D card inside a `.SUBCKT` names a model, and the model
+            \\is a `.MODEL` card of a Table E.1 type: nmos, pmos, npn, pnp, d,
+            \\njf, pjf, nmf or pmf. Table E.1 leaves the Behavior column of those
+            \\rows (mosfet, bjt, diode, jfet, mesfet) empty, and E.2 says "all
+            \\aspects of SPICE primitives are implementation dependent". VerA has
+            \\no equations for them, so the card would be a device that conducts
+            \\nothing: an open where the netlist has a transistor. It is refused
+            \\at the card instead.
+            \\
+            \\E.1.2 gives the remedy: "if the model equations are known, the
+            \\primitive can be rewritten as a module". Give the model as a
+            \\Verilog-A module and name the module as the `.MODEL`'s type:
+            \\
+            \\    .MODEL NCH BSIMCMG TYPE=1 ...     (with BSIMCMG compiled in,
+            \\                                       e.g. `.HDL "bsimcmg.va"`)
+            \\
+            \\or name the module (or a paramset) on the card itself. HSPICE's
+            \\`.MODEL NCH NMOS LEVEL=72` is this error: LEVEL selects an HSPICE
+            \\built-in, which a Verilog-AMS compiler does not have.
             ,
         },
         .W0951 => .{

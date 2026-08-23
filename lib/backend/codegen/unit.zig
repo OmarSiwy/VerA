@@ -38,6 +38,9 @@ pub const Uses = struct {
     /// store was emitted. Patched to `_` otherwise, like the flags above.
     /// Read only by `emitCoreDecl`.
     held: bool = false,
+    /// A `.record` display unit wrote a record into its `out`
+    /// (`contract.Say`, `cg_display.emitSay`).
+    out: bool = false,
 };
 
 /// The dry run `probeBody` makes of a body, and what it learned (`Gen.probe`).
@@ -331,8 +334,9 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     return at_fn;
 }
 
-/// Offsets of a unit signature's four uniform parameter names.
-const Slots = struct { x: usize, model: usize, inst: usize, sim: usize };
+/// Offsets of a unit signature's four uniform parameter names, and of a
+/// `.record` display unit's `out` (0 for any other unit).
+const Slots = struct { x: usize, model: usize, inst: usize, sim: usize, out: usize = 0 };
 
 /// Writes `fn <name>(comptime S: type, x, model, inst, sim` up to the closing
 /// parenthesis, reserving each parameter's slot for `closeSig`.
@@ -357,7 +361,12 @@ fn openSig(self: *Gen, name: []const u8) Error!Slots {
     try self.w("inst: {s}, ", .{if (self.core.in_place.len != 0) "*Instance" else if (self.lowered.table_samples.items.len == 0 and eval_writes) "*const Instance" else "InstancePtr"});
     const sim = self.out.items.len;
     try self.w("sim: contract.SimState", .{});
-    return .{ .x = x, .model = model, .inst = inst, .sim = sim };
+    // §9.4 a device's display unit records into the host's buffer (`say`).
+    if (!self.emitting_display or self.display != .record) return .{ .x = x, .model = model, .inst = inst, .sim = sim };
+    try self.w(", ", .{});
+    const out = self.out.items.len;
+    try self.w("out: *contract.Say", .{});
+    return .{ .x = x, .model = model, .inst = inst, .sim = sim, .out = out };
 }
 
 /// Replaces a refused body (from `body_start`) with its `@compileError`, then
@@ -373,6 +382,7 @@ fn closeSig(self: *Gen, s: Slots, body_start: usize) Error!void {
     if (!self.uses.model) patchParam(self, s.model, "model".len);
     if (!self.uses.inst) patchParam(self, s.inst, "inst".len);
     if (!self.uses.sim) patchParam(self, s.sim, "sim".len);
+    if (s.out != 0 and !self.uses.out) patchParam(self, s.out, "out".len);
 }
 
 /// Overwrites a reserved parameter-name slot with `_`, space-padded to the

@@ -50,6 +50,8 @@ const elab_segment = @import("elaborate/segment.zig");
 /// path resolution and the §3.4.7 alias check share it. See
 /// `elaborate/names.zig`.
 pub const flatReference = elab_names.flatReference;
+/// E.2.1 for a netlist card's names: see `elaborate/names.zig`.
+pub const spiceCase = elab_names.spiceCase;
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");

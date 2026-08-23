@@ -298,6 +298,7 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
         trial = stale;
         t += dt;
         steps += 1;
+        ckt.say(cur);
         _ = ckt.stateCtl(.commit);
 
         // Landed on a breakpoint: drop to BE and resume at

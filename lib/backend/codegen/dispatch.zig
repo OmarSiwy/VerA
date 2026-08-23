@@ -346,11 +346,40 @@ fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
 }
 
 /// Emits `display`, the §9.4 entry point a host calls to run the module's
-/// display tasks. Separate from `eval` so the host decides when text happens
-/// rather than getting it once per Newton iteration. Not emitted under
-/// `display == .drop`. The unit's `S` result is discarded.
+/// display tasks, or under `.record` the site table and `say`, the entry
+/// point that records them (`contract.SaySite`). Separate from `eval` so the
+/// host decides when text happens rather than getting it once per Newton
+/// iteration. Not emitted under `display == .drop`. The unit's `S` result is
+/// discarded.
 pub fn emitDisplay(self: *Gen) Error!void {
     if (self.jobs.display_name.len == 0) return;
+    if (self.display == .record) {
+        try self.w(
+            \\/// §9.4 every display task `say` records, in source order: a device
+            \\/// cannot print, so a host calls `say` at an accepted point and renders
+            \\/// the records with `contract.formatSay`.
+            \\pub const say_sites = [_]contract.SaySite{{
+            \\
+        , .{});
+        for (self.say) |site| {
+            const at = gen_instance.srcLine(self, site.tok);
+            try self.w("    .{{ .fmt = \"{f}\", .file = \"{f}\", .line = {d}, .nargs = {d} }},\n", .{
+                std.zig.fmtString(site.fmt), std.zig.fmtString(at.file), at.line, site.vals.len,
+            });
+        }
+        try self.w(
+            \\}};
+            \\
+            \\/// §9.4/§9.4.6 run this module's display tasks at the accepted point `x`
+            \\/// and append each one that runs to `out` (`contract.Say`).
+            \\pub fn say(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState, out: *contract.Say) void {{
+            \\    _ = {s}(S, zProbe(S, x), model, inst, sim, out);
+            \\}}
+            \\
+            \\
+        , .{self.jobs.display_name});
+        return;
+    }
     try self.w(
         \\/// §9.4 run this module's display tasks once, in source order.
         \\pub fn display(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
