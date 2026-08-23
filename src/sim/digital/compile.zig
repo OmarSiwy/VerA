@@ -1438,6 +1438,7 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
     self.in_function = sub.decl.is_function;
     defer self.in_function = false;
     sub.entry = position(self);
+    sub.compiled = true;
     try compileStmt(self, sub.decl.body, 0);
     _ = try append(self, .stop);
 }

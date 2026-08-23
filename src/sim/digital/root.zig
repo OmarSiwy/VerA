@@ -412,8 +412,11 @@ pub const Run = struct {
     /// One counter per lexical `repeat`: no process re-enters its own.
     repeats: std.ArrayList(u64) = .empty,
     /// §9.8.2 one counter per lexical `fork`: the arms still running. One per
-    /// site is enough, since the parent waits at the site.
+    /// site is enough, since the parent waits at the site, except inside a
+    /// recursive timed task's out-of-line body, which every activation runs
+    /// (§10.2.3): there the counter is the activation's (`act_joins`).
     joins: std.ArrayList(u32) = .empty,
+    act_joins: std.AutoHashMapUnmanaged(struct { join: u32, ctx: u32 }, u32) = .empty,
     /// §9.3 the procedural continuous assignments in effect, by slot: the
     /// process range of an `assign` and of a `force`. While one is, ordinary
     /// writes to the slot do not land (`store`); a force outranks an assign.
@@ -1172,6 +1175,8 @@ pub const Sub = struct {
     /// `frame` is minted: every sub is once its instance is declared.
     framed: bool = false,
     entry: u32 = 0,
+    /// `entry` is set: `compile.compileSub` has run.
+    compiled: bool = false,
     timed: ?bool = null,
     /// A §10.4.5 constant function, once asked (`compile.constantFunction`).
     constant: ?bool = null,
