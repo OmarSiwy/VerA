@@ -346,7 +346,9 @@ def svtests_select(sv):
         # rule 2, so it is handed over as the `.v` it is.
         v = CACHE / "sv-tests-v" / (rel[:-len(p.suffix)] + ".v")
         v.parent.mkdir(parents=True, exist_ok=True)
-        v.write_text(text)
+        # A preprocessing test declares no module, and `vera --run` (like
+        # iverilog) refuses a design with none: it gets an empty top.
+        v.write_text(text if re.search(r"\bmodule\b", code) else text + "\nmodule sv_tests_top; endmodule\n")
         cases.append(dict(name=rel, src=str(v), cwd=p.parent,
                           should_fail="should_fail_because" in meta or meta.get("should_fail") == "1",
                           simulate="simulation" in meta.get("type", "parsing elaboration")))

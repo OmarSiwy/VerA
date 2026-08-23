@@ -282,6 +282,13 @@ const max_sync_stack = 4 << 20;
 // ponytail: `repeat` counters are per site, so a recursive body that loops
 // with `repeat` across its own recursion shares one.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
+    // §10.4.5: a constant function call folded before pass two compiles the
+    // bodies (a generate condition calling a function already framed).
+    if (!self.subs.items[idx].compiled) {
+        const saved = self.scope;
+        defer self.scope = saved;
+        try compile.compileSub(self, idx);
+    }
     const sub = &self.subs.items[idx];
     const decl = sub.decl;
     const f = sub.frame;
@@ -791,13 +798,17 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     pc = f.end;
                     continue;
                 }
-                self.joins.items[f.join] = @intCast(f.arms.len);
+                if (self.ctx == 0)
+                    self.joins.items[f.join] = @intCast(f.arms.len)
+                else
+                    try self.act_joins.put(self.arena, .{ .join = f.join, .ctx = self.ctx }, @intCast(f.arms.len));
                 for (f.arms) |arm| _ = try enqueue(self, resumption(arm, self.ctx), null, false);
                 return;
             },
             .join_arm => |j| {
-                self.joins.items[j.join] -= 1;
-                if (self.joins.items[j.join] == 0) _ = try enqueue(self, resumption(j.end, self.ctx), null, false);
+                const left = if (self.ctx == 0) &self.joins.items[j.join] else self.act_joins.getPtr(.{ .join = j.join, .ctx = self.ctx }).?;
+                left.* -= 1;
+                if (left.* == 0) _ = try enqueue(self, resumption(j.end, self.ctx), null, false);
                 return;
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
