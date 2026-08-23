@@ -141,10 +141,12 @@ pub fn freeze(d: *Design, rows: *Rows, scopes: []const Building) Error!void {
         .time_precision = s.time_precision,
         .children = try arena.dupe(u32, s.children.items),
         .internal = blk: {
-            var all: std.ArrayList(u32) = .empty;
-            try all.appendSlice(arena, s.children.items);
-            for (s.code.gen_arrays.items) |g| try all.appendSlice(arena, objects[g].lists[0].items);
-            try all.appendSlice(arena, s.code.internal.items);
+            var n = s.children.items.len + s.code.internal.items.len;
+            for (s.code.gen_arrays.items) |g| n += objects[g].lists[0].items.len;
+            var all: std.ArrayList(u32) = try .initCapacity(arena, n);
+            all.appendSliceAssumeCapacity(s.children.items);
+            for (s.code.gen_arrays.items) |g| all.appendSliceAssumeCapacity(objects[g].lists[0].items);
+            all.appendSliceAssumeCapacity(s.code.internal.items);
             break :blk all.items;
         },
         .ports = try arena.dupe(u32, s.ports.items),
@@ -211,7 +213,7 @@ pub fn addArray(
         .net_array => .net,
         else => .var_select, // else: the one other array class addArray is given
     };
-    var suffix: std.ArrayList(u8) = .empty;
+    var suffix: std.ArrayList(u8) = try .initCapacity(arena, (rest.len + 1) * index_text_max);
     for (0..count) |k| {
         // Peel the indices off `k`, innermost (fastest) dimension first.
         suffix.clearRetainingCapacity();
@@ -225,8 +227,8 @@ pub fn addArray(
             const i = sp.low + @mod(q, n);
             q = @divTrunc(q, n);
             if (d == rest.len) inner = i;
-            var buf: [24]u8 = undefined;
-            try suffix.insertSlice(arena, 0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
+            var buf: [index_text_max]u8 = undefined;
+            suffix.insertSliceAssumeCapacity(0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
         }
         const c: u32 = @intCast(objects.hot.items.len);
         try objects.append(.{ .kind = .constant, .owner = .of(owner), .name = "", .full = "", .size = 32, .value = .{ .int = inner } });
@@ -246,6 +248,9 @@ pub fn addArray(
     }
     return at;
 }
+
+/// The longest `[i]` an element name gets per dimension: an `i64` index.
+pub const index_text_max = "[-9223372036854775808]".len;
 
 /// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
 /// bounds decimal constants, its vpiSize the element count.
@@ -274,13 +279,15 @@ pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects
             const name = arrayBase(lastComponent(scopes[first].path)) orelse continue;
             // Already grouped under an earlier sibling?
             if (objects.hot.items[first].parent != .none) continue;
-            var members: std.ArrayList(u32) = .empty;
-            defer members.deinit(gpa);
-            for (parent.children.items[i..]) |c| {
-                const other = arrayBase(lastComponent(scopes[c].path)) orelse continue;
-                if (std.mem.eql(u8, other, name)) try members.append(gpa, c);
-            }
-            std.mem.sort(u32, members.items, scopes, struct {
+            var n: u32 = 0;
+            for (parent.children.items[i..]) |c| n += @intFromBool(sameArray(scopes, c, name));
+            const members = try arena.alloc(u32, n);
+            n = 0;
+            for (parent.children.items[i..]) |c| if (sameArray(scopes, c, name)) {
+                members[n] = c;
+                n += 1;
+            };
+            std.mem.sort(u32, members, scopes, struct {
                 fn lt(s: []Building, a: u32, b: u32) bool {
                     return scopeIndex(s, a) < scopeIndex(s, b);
                 }
@@ -292,10 +299,10 @@ pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects
                 .owner = .of(@intCast(p)),
                 .name = name,
                 .full = try joinPath(arena, top_name, path),
-                .size = @intCast(members.items.len),
-            }, .{ .members = try arena.dupe(u32, members.items) });
+                .size = @intCast(members.len),
+            }, .{ .members = members });
             try parent.module_arrays.append(gpa, at);
-            for (members.items) |m| {
+            for (members) |m| {
                 const c: u32 = @intCast(objects.hot.items.len);
                 try objects.append(.{ .kind = .constant, .owner = .of(@intCast(p)), .name = "", .full = "", .size = 32, .value = .{ .int = scopeIndex(scopes, m) } });
                 objects.hot.items[m].parent = .of(at);
@@ -303,6 +310,12 @@ pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects
             }
         }
     }
+}
+
+/// Is child scope `c` an element of the instance array `name`?
+fn sameArray(scopes: []const Building, c: u32, name: []const u8) bool {
+    const other = arrayBase(lastComponent(scopes[c].path)) orelse return false;
+    return std.mem.eql(u8, other, name);
 }
 
 fn scopeIndex(scopes: []Building, m: u32) i64 {

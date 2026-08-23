@@ -478,22 +478,25 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         try line.writer.writeAll(" $end\n");
         sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = sub != null or !(info.lexical and info.index == null) };
         var_start[s] = @intCast(vars.items.len);
-        var decls: std.ArrayList(Ast.VarDecl) = .empty;
-        var names: std.ArrayList(Ast.StrId) = .empty;
+        if (sub == null and info.lexical) continue;
+        const m = &r.file.modules[info.def];
+        // Exact: a subroutine's ports and variables, or a module's ports,
+        // nets, variables and events.
+        var decls: std.ArrayList(Ast.VarDecl) = try .initCapacity(a, if (sub) |t| t.ports.len + t.vars.len else m.vars.len);
+        var names: std.ArrayList(Ast.StrId) = try .initCapacity(a, if (sub) |t| t.ports.len + t.vars.len else m.ports.len + m.nets.len + m.vars.len + m.events.len);
         var events: []const Ast.EventDecl = &.{};
         if (sub) |t| {
-            for (t.ports) |p| try decls.append(a, p.v);
-            try decls.appendSlice(a, t.vars);
+            for (t.ports) |p| decls.appendAssumeCapacity(p.v);
+            decls.appendSliceAssumeCapacity(t.vars);
         } else {
-            if (info.lexical) continue;
-            const m = &r.file.modules[info.def];
-            for (m.ports) |p| try names.append(a, p.name);
-            for (m.nets) |n| try names.append(a, n.name);
-            try decls.appendSlice(a, m.vars);
+            for (m.ports) |p| names.appendAssumeCapacity(p.name);
+            for (m.nets) |n| names.appendAssumeCapacity(n.name);
+            decls.appendSliceAssumeCapacity(m.vars);
             events = m.events;
         }
-        for (decls.items) |d| try names.append(a, d.name);
-        for (events) |event| try names.append(a, event.name);
+        for (decls.items) |d| names.appendAssumeCapacity(d.name);
+        for (events) |event| names.appendAssumeCapacity(event.name);
+        std.debug.assert(names.items.len == names.capacity);
         for (names.items, 0..) |name, i| {
             if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;
@@ -564,15 +567,15 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
             v.setFile(r.arena, name, callText(r.text, r.starts[tok])) catch |e| return failed(r, e);
         },
         .vars => {
-            var targets: std.ArrayList(Target) = .empty;
             var levels: u32 = 0;
+            const targets = try a.alloc(Target, if (args.len == 0) r.roots.len else args.len - 1);
             if (args.len == 0) {
-                for (r.roots) |s| try targets.append(a, .{ .scope = s });
+                for (r.roots, targets) |s, *t| t.* = .{ .scope = s };
             } else {
                 levels = std.math.lossyCast(u32, (try evaluate.eval(r, a, args[0], 0)).asInt() orelse 0);
-                for (args[1..]) |e| try targets.append(a, try target(r, e));
+                for (args[1..], targets) |e, *t| t.* = try target(r, e);
             }
-            v.select(r.arena, r.scheduler.now, tok, levels, targets.items) catch |e| {
+            v.select(r.arena, r.scheduler.now, tok, levels, targets) catch |e| {
                 if (e == error.DumpvarsTime) return r.fail(tok, message(error.DumpvarsTime), .{});
                 return failed(r, e);
             };

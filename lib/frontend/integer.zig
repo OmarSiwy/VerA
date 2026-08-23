@@ -74,6 +74,27 @@ pub const Literal = struct {
         }
         return low;
     }
+    /// A self-determined address (§5.2.1/§5.2.2), null on any x/z bit.
+    /// Retain values beyond i64 so a part-select based just outside a
+    /// declaration can still overlap it. Saturate only beyond i128: those
+    /// values cannot overlap an i64 declaration with a u32 select width.
+    pub fn asIndex(self: Literal) ?i128 {
+        if (self.hasUnknown()) return null;
+        const negative = self.signed and self.bit(self.width - 1) == .one;
+        const fill: u64 = if (negative) std.math.maxInt(u64) else 0;
+        const outside: i128 = if (negative) std.math.minInt(i128) else std.math.maxInt(i128);
+        const v = self.values();
+        var bits: u128 = v[0];
+        if (self.width > 64) bits |= @as(u128, v[1]) << 64;
+        if (self.width < 128 and negative) bits |= @as(u128, std.math.maxInt(u128)) << @intCast(self.width);
+        if (self.width > 128) {
+            for (v[2..], 2..) |word, i| {
+                if (word != if (i == v.len - 1) fill & mask(self.width) else fill) return outside;
+            }
+        }
+        const result: i128 = @bitCast(bits);
+        return if ((result < 0) == negative) result else outside;
+    }
     /// Returns bit `index`, bit zero least significant. Asserts
     /// `index < width`.
     pub fn bit(self: Literal, index: u32) Bit {

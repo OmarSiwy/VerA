@@ -175,29 +175,42 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     // Candidates for a node, with the slots they read and write.
     // `bits` is null when a node re-runs on any change of an input.
     const Cand = struct { proc: u32, inputs: []const u32, outputs: []const u32, bits: ?Bits = null };
-    var cands: std.ArrayList(Cand) = .empty;
+    var cands: std.ArrayList(Cand) = try .initCapacity(a, procs.len); // one per process at most
     const proc_of = try a.alloc(u32, r.code.items.len);
     for (procs, 0..) |p, i| for (p.pcs) |pc| {
         proc_of[pc] = @intCast(i);
     };
-    const reads = try a.alloc(std.ArrayList(u32), procs.len);
-    @memset(reads, .empty);
-    for (0..r.fan_start.len -| 1) |s| for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc|
-        try reads[proc_of[pc]].append(a, @intCast(s));
+    // Per process, the slots it is in the fan-out of, ascending: a counting
+    // sort of `r.fan` by process.
+    const reads = try a.alloc([]u32, procs.len);
+    {
+        const fill_at = try a.alloc(u32, procs.len + 1);
+        @memset(fill_at, 0);
+        for (0..r.fan_start.len -| 1) |s| for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc| {
+            fill_at[proc_of[pc] + 1] += 1;
+        };
+        for (fill_at[1..], 0..) |*c, k| c.* += fill_at[k];
+        const flat = try a.alloc(u32, fill_at[procs.len]);
+        for (reads, fill_at[0..procs.len], fill_at[1..]) |*l, lo, hi| l.* = flat[lo..hi];
+        for (0..r.fan_start.len -| 1) |s| for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc| {
+            flat[fill_at[proc_of[pc]]] = @intCast(s);
+            fill_at[proc_of[pc]] += 1;
+        };
+    }
     var triggered: u32 = 0;
     const ranges = try disableRanges(self);
     for (procs, 0..) |*p, i| switch (r.code.items[p.entry]) {
         // A resolved net's driver is queued: `rt.net` delays or folds it.
-        .continuous => |d| if (emit.plainDriver(r, d)) try cands.append(a, .{
+        .continuous => |d| if (emit.plainDriver(r, d)) cands.appendAssumeCapacity(.{
             .proc = @intCast(i),
-            .inputs = reads[i].items,
+            .inputs = reads[i],
             .outputs = try a.dupe(u32, &.{r.nets[r.drivers[d].net].slot}),
             .bits = try driverBits(self, d),
         }),
         .wait_event, .wait_slots => if (!disabled(ranges, p.*) and try fixedWait(self, p.*)) {
             p.role = .{ .triggered = triggered };
             triggered += 1;
-            if (try combinational(self, p.*)) |io| try cands.append(a, .{
+            if (try combinational(self, p.*)) |io| cands.appendAssumeCapacity(.{
                 .proc = @intCast(i),
                 .inputs = io.inputs,
                 .outputs = io.outputs,
@@ -239,13 +252,14 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     for (cands.items) |c| for (c.outputs) |s| if (readers.get(s)) |rs| for (rs.items) |ci| {
         indeg[ci] += 1;
     };
-    var queue: std.ArrayList(u32) = .empty;
-    for (indeg, 0..) |d, ci| if (d == 0) try queue.append(a, @intCast(ci));
+    // Each candidate enters once, when its in-degree reaches 0.
+    var queue: std.ArrayList(u32) = try .initCapacity(a, cands.items.len);
+    for (indeg, 0..) |d, ci| if (d == 0) queue.appendAssumeCapacity(@intCast(ci));
     var head: usize = 0;
     while (head < queue.items.len) : (head += 1) {
         for (cands.items[queue.items[head]].outputs) |s| if (readers.get(s)) |rs| for (rs.items) |ci| {
             indeg[ci] -= 1;
-            if (indeg[ci] == 0) try queue.append(a, ci);
+            if (indeg[ci] == 0) queue.appendAssumeCapacity(ci);
         };
     }
     const order = try coneOrder(a, cands.items, queue.items);
@@ -264,13 +278,15 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     const per = struct {
         fn table(comptime E: type, al: std.mem.Allocator, lists: []const std.ArrayList(E)) !struct { start: []u32, items: []E } {
             const start = try al.alloc(u32, lists.len + 1);
-            var items: std.ArrayList(E) = .empty;
-            for (lists, 0..) |l, s| {
-                start[s] = @intCast(items.items.len);
-                try items.appendSlice(al, l.items);
+            var n: u32 = 0;
+            for (lists, start[0..lists.len]) |l, *at| {
+                at.* = n;
+                n += @intCast(l.items.len);
             }
-            start[lists.len] = @intCast(items.items.len);
-            return .{ .start = start, .items = items.items };
+            start[lists.len] = n;
+            const items = try al.alloc(E, n);
+            for (lists, start[0..lists.len]) |l, at| @memcpy(items[at..][0..l.items.len], l.items);
+            return .{ .start = start, .items = items };
         }
     };
     const n_slots = r.values.len;
@@ -291,10 +307,18 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     }.lt);
     const comb = try per.table(Sense, a, comb_lists);
 
-    const fan_lists = try a.alloc(std.ArrayList(u32), r.fan_start.len -| 1);
-    @memset(fan_lists, .empty);
-    for (fan_lists, 0..) |*l, s| for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc| if (node_of[proc_of[pc]] == null) try l.append(a, pc);
-    const fan = try per.table(u32, a, fan_lists);
+    // A subset of `r.fan`, in its order: at most `r.fan.len` rows.
+    const fan = fan: {
+        const n_fan = r.fan_start.len -| 1;
+        const start = try a.alloc(u32, n_fan + 1);
+        var items: std.ArrayList(u32) = try .initCapacity(a, r.fan.len);
+        for (start[0..n_fan], 0..) |*at, s| {
+            at.* = @intCast(items.items.len);
+            for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc| if (node_of[proc_of[pc]] == null) items.appendAssumeCapacity(pc);
+        }
+        start[n_fan] = @intCast(items.items.len);
+        break :fan .{ .start = start, .items = items.items };
+    };
 
     const watch_lists = try a.alloc(std.ArrayList(Watcher), n_slots);
     @memset(watch_lists, .empty);
@@ -399,10 +423,14 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
     const level = try a.alloc(u32, cands.len);
     const preds = try a.alloc([]u32, cands.len);
     for (acyclic) |ci| {
-        var ps: std.ArrayList(u32) = .empty;
+        var n: usize = 0;
+        for (cands[ci].inputs) |s| if (writers.get(s)) |l| {
+            n += l.items.len;
+        };
+        var ps: std.ArrayList(u32) = try .initCapacity(a, n);
         level[ci] = 0;
         for (cands[ci].inputs) |s| if (writers.get(s)) |l| for (l.items) |w| {
-            try ps.append(a, w);
+            ps.appendAssumeCapacity(w);
             level[ci] = @max(level[ci], level[w] + 1);
         };
         preds[ci] = ps.items;
@@ -415,18 +443,19 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
     const done = try a.alloc(bool, cands.len);
     @memset(done, false);
     const Frame = struct { ci: u32, next: u32 = 0 };
-    var stack: std.ArrayList(Frame) = .empty;
-    var order: std.ArrayList(u32) = .empty;
+    // Every node is pushed once (`done`) and popped into `order` once.
+    var stack: std.ArrayList(Frame) = try .initCapacity(a, acyclic.len);
+    var order: std.ArrayList(u32) = try .initCapacity(a, acyclic.len);
     var i = acyclic.len;
     while (i > 0) {
         i -= 1;
         if (done[acyclic[i]]) continue;
         done[acyclic[i]] = true;
-        try stack.append(a, .{ .ci = acyclic[i] });
+        stack.appendAssumeCapacity(.{ .ci = acyclic[i] });
         while (stack.items.len != 0) {
             const f = &stack.items[stack.items.len - 1];
             if (f.next == preds[f.ci].len) {
-                try order.append(a, f.ci);
+                order.appendAssumeCapacity(f.ci);
                 _ = stack.pop();
                 continue;
             }
@@ -434,9 +463,10 @@ fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![
             f.next += 1;
             if (done[w]) continue;
             done[w] = true;
-            try stack.append(a, .{ .ci = w });
+            stack.appendAssumeCapacity(.{ .ci = w });
         }
     }
+    std.debug.assert(order.items.len == acyclic.len);
     return order.items;
 }
 
@@ -494,25 +524,28 @@ fn disabled(ranges: []const Range, p: Proc) bool {
 fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, outputs: []const u32 } {
     const r = self.r;
     const ex = &r.file.exprs;
-    var inputs: std.ArrayList(u32) = .empty;
     r.scope = r.code_scope.items[p.entry];
-    switch (r.code.items[p.entry]) {
-        .wait_event => |e| {
+    const inputs: []const u32 = switch (r.code.items[p.entry]) {
+        .wait_event => |e| inputs: {
             var ts: std.ArrayList(Term) = .empty;
             try terms(self, e, &ts);
-            for (ts.items) |t| {
+            // One input per term.
+            const in = try self.arena.alloc(u32, ts.items.len);
+            for (ts.items, in) |t, *i| {
                 // §9.7.3 a named event holds no value, so no change of one
                 // would ever dirty a node.
                 if (t.edge != .any or r.events.contains(t.slot)) return null;
-                try inputs.append(self.arena, t.slot);
+                i.* = t.slot;
             }
+            break :inputs in;
         },
         // §9.7.5 an `@*` over a body that reads nothing never wakes; a
         // settle node would run it once.
-        .wait_slots => |slots| if (slots.len == 0) return null else try inputs.appendSlice(self.arena, slots),
+        .wait_slots => |slots| if (slots.len == 0) return null else try self.arena.dupe(u32, slots),
         else => return null,
-    }
-    var outputs: std.ArrayList(u32) = .empty;
+    };
+    // At most one output per instruction.
+    var outputs: std.ArrayList(u32) = try .initCapacity(self.arena, p.pcs.len);
     for (p.pcs) |pc| {
         r.scope = r.code_scope.items[pc];
         switch (r.code.items[pc]) {
@@ -521,7 +554,7 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
                 const t = if (ex.tag(x.target) == .index) ex.lhs(x.target) else x.target;
                 if (ex.tag(t) != .ident and ex.tag(t) != .hier_ident) return null;
                 if (try self.element(x.target)) return null;
-                try outputs.append(self.arena, r.slot(t) catch return null);
+                outputs.appendAssumeCapacity(r.slot(t) catch return null);
             },
             .task, .trigger, .init_var, .call => return null,
             .branch => |b| if (expr.effects(self, b.condition)) return null,
@@ -530,7 +563,7 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
             else => {}, // else: `fixedWait` already refused every suspension
         }
     }
-    return .{ .inputs = inputs.items, .outputs = outputs.items };
+    return .{ .inputs = inputs, .outputs = outputs.items };
 }
 
 /// Per slot, the bits an expression reads, one mask per plane word; null
@@ -648,7 +681,8 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
     // The candidates: slots some instruction writes whole, as bit indices.
     const bit = try a.alloc(?u32, r.values.len);
     @memset(bit, null);
-    var cands: std.ArrayList(u32) = .empty;
+    // Each slot once (`bit`), from at most one write per pc.
+    var cands: std.ArrayList(u32) = try .initCapacity(a, @min(n, r.values.len));
     const writes = try a.alloc(?u32, n);
     for (writes, 0..) |*w, pc| {
         w.* = null;
@@ -656,7 +690,7 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
         if (self.watched[at] or r.reals.contains(at)) continue;
         if (bit[at] == null) {
             bit[at] = @intCast(cands.items.len);
-            try cands.append(a, at);
+            cands.appendAssumeCapacity(at);
         }
         w.* = bit[at];
     }
@@ -732,8 +766,8 @@ pub fn stepLocal(self: *Emitter, procs: []const Proc) Error![]const u32 {
             if (in[pc * nw + b / 64] >> @intCast(b % 64) & 1 == 0) live[b] = true;
         };
     };
-    var dead: std.ArrayList(u32) = .empty;
-    for (cands.items, live) |at, l| if (!l) try dead.append(a, at);
+    var dead: std.ArrayList(u32) = try .initCapacity(a, cands.items.len);
+    for (cands.items, live) |at, l| if (!l) dead.appendAssumeCapacity(at);
     return dead.items;
 }
 

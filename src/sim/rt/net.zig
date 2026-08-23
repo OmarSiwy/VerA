@@ -152,11 +152,24 @@ pub const Nets = struct {
         }
         t.tpending = try gpa.alloc(?Handle, trans.len);
         @memset(t.tpending, null);
+        // Per net, its switches ascending: a counting sort into one array.
         const on_net = try gpa.alloc([]const u32, nets.len);
-        for (on_net, 0..) |*l, k| {
-            var list: std.ArrayList(u32) = .empty;
-            for (trans, 0..) |tr, i| if (tr.a == k or tr.b == k) try list.append(gpa, @intCast(i));
-            l.* = list.items;
+        const fill_at = try gpa.alloc(u32, nets.len + 1);
+        defer gpa.free(fill_at);
+        @memset(fill_at, 0);
+        for (trans) |tr| {
+            fill_at[tr.a + 1] += 1;
+            if (tr.b != tr.a) fill_at[tr.b + 1] += 1;
+        }
+        for (fill_at[1..], 0..) |*c, k| c.* += fill_at[k];
+        const flat = try gpa.alloc(u32, fill_at[nets.len]);
+        for (on_net, fill_at[0..nets.len], fill_at[1..]) |*l, lo, hi| l.* = flat[lo..hi];
+        for (trans, 0..) |tr, i| {
+            flat[fill_at[tr.a]] = @intCast(i);
+            fill_at[tr.a] += 1;
+            if (tr.b == tr.a) continue;
+            flat[fill_at[tr.b]] = @intCast(i);
+            fill_at[tr.b] += 1;
         }
         t.on_net = on_net;
         var widest: u32 = 1;

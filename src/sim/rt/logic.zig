@@ -625,16 +625,17 @@ pub inline fn asInt(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
     return @bitCast(if (signed) sext(a.v, w) else a.v);
 }
 
-/// An address into the engine's signed-index range. An unsigned 64-bit
-/// value above maxInt(i64) is outside that range, never a negative index.
-pub inline fn asIndex(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
-    if (w == 64 and !signed and a.v > std.math.maxInt(i64)) return null;
-    return asInt(a, w, signed);
+/// The full numeric index, retaining bases just outside an i64 declaration
+/// for partially overlapping indexed selects. Shared with the interpreter.
+pub inline fn asIndex(a: anytype, comptime w: u32, comptime signed: bool) ?i128 {
+    var planes = planesOf(a);
+    const literal: Int.Literal = .{ .width = w, .signed = signed, .sized = true, .planes = &planes };
+    return literal.asIndex();
 }
 
 /// `exec.position` then `readSelect` of one bit: bit `index` of a vector
 /// declared `[msb:lsb]`, x when the index is x/z or outside it (§5.2.1).
-pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
+pub inline fn bitAt(a: anytype, index: ?i128, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
     const p = pos(index, msb, lsb, w) orelse return allX(1);
     const s = wide(a);
     const n: u6 = @intCast(p % 64);
@@ -644,10 +645,10 @@ pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i6
 /// The least-significant storage position of an indexed part-select.
 /// `+:` ascends declared indices and `-:` descends them (§5.2.1); the
 /// declaration determines which selected end is least significant.
-pub inline fn selectShift(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime count: u32, comptime ascending: bool) ?i64 {
+pub inline fn selectShift(index: ?i128, comptime msb: i64, comptime lsb: i64, comptime count: u32, comptime ascending: bool) ?i64 {
     const i = index orelse return null;
     const p = if (msb >= lsb) i -| lsb else lsb -| i;
-    return if ((msb >= lsb) == ascending) p else p -| (count - 1);
+    return std.math.lossyCast(i64, if ((msb >= lsb) == ascending) p else p -| (count - 1));
 }
 
 /// A runtime part-select, all x for an x/z base (§5.2.1).
@@ -733,7 +734,7 @@ pub inline fn bit(p: u32, comptime sw: u32) M(sw) {
 }
 
 /// The bit position a runtime bit-select names, or null (`exec.position`).
-pub inline fn pos(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) ?u32 {
+pub inline fn pos(index: ?i128, comptime msb: i64, comptime lsb: i64, comptime w: u32) ?u32 {
     const i = index orelse return null;
     const p = if (msb >= lsb) i -| lsb else lsb -| i;
     return if (p < 0 or p >= w) null else @intCast(p);

@@ -7,11 +7,10 @@ and `psd`, which your simulator compiles into its own Newton loop as a shared
 library, a standalone testbench, or a GPU kernel. Same emitted source for CPU,
 NVPTX and AMDGCN.
 
-**Pre v1.0.0. Not yet a conforming Verilog-AMS implementation.**
-
-[AGENTS.md](AGENTS.md) §2 says what v1.0.0 requires, and
 [docs/Vague_Decisions.md](docs/Vague_Decisions.md) lists what is still open. Passing the current fixture suite does not establish conformance,
 and `--coverage` counts clause citations, not verified rules.
+
+Developer Docs: https://deepwiki.com/OmarSiwy/VerA/
 
 ## Install
 
@@ -108,7 +107,7 @@ numbers, run the suites yourself:
 | VPI `.c` fixtures | `zig build test-vpi-fixtures` |
 | SPICE decks, run on `sim.spice` against their oracles | `zig build test-spice` |
 
-Each release's `CHANGELOG.md` entry records the measured numbers.
+Each release's entry in `CHANGELOG.md` records the measured numbers; v1.0.0's are on its [GitHub release](https://github.com/OmarSiwy/VerA/releases/tag/v1.0.0).
 
 ### Measured
 
@@ -166,4 +165,4 @@ classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Changes are listed in [CHANGELOGS.md](CHANGELOGS.md).
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Changes since v1.0.0 are in [CHANGELOG.md](CHANGELOG.md).

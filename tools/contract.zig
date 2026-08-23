@@ -1902,16 +1902,32 @@ pub fn limitWrites(comptime D: type) u64 {
 /// correction is lane-indexed; (c) `jac_const` is sorted by (row, col), has no
 /// duplicate, no all-zero entry and no column inside the mask, and a guard's
 /// `when.flag` names a `Model` field; (d) `ddxReads ⊆ derivReads`.
-pub fn derivReads(comptime D: type) u64 {
+pub fn derivReads(comptime D: type) Mask(D) {
     return if (@hasDecl(D, "deriv_reads")) D.deriv_reads else ~@as(u64, 0);
+}
+
+/// The mask type over `n` unknowns, one bit per unknown: `u64` up to 64
+/// unknowns, `u<n>` past them.
+pub fn MaskOf(comptime n: usize) type {
+    return @Int(.unsigned, @max(64, n));
+}
+
+/// `D`'s mask type: the type of its `deriv_reads` (`MaskOf(|U|)`, which
+/// `validate` checks), or `u64` when it declares none. A device past 64
+/// unknowns that declares no masks keeps the dense `u64` default, so a host
+/// that only handles `u64` masks still gets every device it got before; one
+/// that declares `deriv_reads` names its other masks (`ddx_reads`,
+/// `jac_pattern`, `rowMask`) in the same type.
+pub fn Mask(comptime D: type) type {
+    return if (@hasDecl(D, "deriv_reads")) @TypeOf(D.deriv_reads) else u64;
 }
 
 /// Returns the unknowns whose partial §4.5.14 `ddx` reads, as a bit mask over
 /// `U`: `D.ddx_reads`, or all ones when undeclared. The device calls
 /// `S.ddxAt(u)` with `u` an unknown index and uses the result as a value, so a
 /// family must map `u` to its own lane; a wrong map is a wrong residual.
-pub fn ddxReads(comptime D: type) u64 {
-    return if (@hasDecl(D, "ddx_reads")) D.ddx_reads else ~@as(u64, 0);
+pub fn ddxReads(comptime D: type) Mask(D) {
+    return if (@hasDecl(D, "ddx_reads")) D.ddx_reads else ~@as(Mask(D), 0);
 }
 
 /// One constant entry of the local Jacobian, for a column outside
@@ -2385,8 +2401,10 @@ pub const RefOptions = struct {
 /// (`f64`, or `f32` under `jac_f32`) beside an `f64` value. `lane[u]` is the
 /// lane unknown `u` occupies in the dense layout, or `no_lane`; a sparse
 /// `Of(m)` refuses at compile time a mask naming an unknown `lane` does not
-/// carry. Transcendentals go through `gm`, so the family compiles for NVPTX
-/// and AMDGCN too.
+/// carry. Its masks are `MaskOf(lane.len)`. A sparse family reads `lane`
+/// only as which unknowns it carries, so it serves any number of them; a
+/// dense one has at most 255 lanes (`no_lane` is the 256th). Transcendentals
+/// go through `gm`, so the family compiles for NVPTX and AMDGCN too.
 pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: RefOptions) type {
     return if (opts.dense) RefDense(L, lane, opts.collapse_applied) else RefSparse(L, lane, opts.collapse_applied);
 }
@@ -2445,7 +2463,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
             return .{ .v = v, .d = lv(a) * k(c) };
         }
 
-        pub fn Of(comptime _: u64) type {
+        pub fn Of(comptime _: MaskOf(lane.len)) type {
             return T;
         }
         pub fn con(c: f64) T {
@@ -2456,7 +2474,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
             if (lane[u] != no_lane) d[lane[u]] = 1.0;
             return .{ .v = v, .d = d };
         }
-        pub fn to(a: T, comptime _: u64) T {
+        pub fn to(a: T, comptime _: MaskOf(lane.len)) T {
             return a;
         }
         pub fn val(a: T) f64 {
@@ -2549,6 +2567,7 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
 /// operand's lanes spread into the joined layout (`spread`). The methods are
 /// `family_primitives`, computing the numerics table.
 fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bool) type {
+    const M = MaskOf(lane.len);
     return struct {
         pub const collapse_applied = collapsed;
         pub const V = f64;
@@ -2556,7 +2575,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
         pub fn con(c: f64) Of(0) {
             return .{ .v = c, .d = .{} };
         }
-        pub fn probe(comptime u: usize, v: f64) Of(@as(u64, 1) << u) {
+        pub fn probe(comptime u: usize, v: f64) Of(@as(M, 1) << u) {
             return .{ .v = v, .d = @splat(1.0) };
         }
         pub fn sel(c: anytype, a: anytype, b: anytype) Of(@TypeOf(a).mask | @TypeOf(b).mask) {
@@ -2565,10 +2584,11 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
         }
 
         /// The unknowns `lane` carries, one bit each: computed once per family.
-        const carried: u64 = blk: {
-            var c: u64 = 0;
-            for (lane, 0..) |l, u| if (u < 64 and l != no_lane) {
-                c |= @as(u64, 1) << @intCast(u);
+        const carried: M = blk: {
+            @setEvalBranchQuota(10 * lane.len + 1000);
+            var c: M = 0;
+            for (lane, 0..) |l, u| if (l != no_lane) {
+                c |= @as(M, 1) << @intCast(u);
             };
             break :blk c;
         };
@@ -2578,7 +2598,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
         /// every family operation in a device), not once per mask: the
         /// 64-step check loop it replaced was 39% of psp103's `eval`
         /// object build (23.4 -> 14.3 Gi).
-        pub fn Of(comptime m: u64) type {
+        pub fn Of(comptime m: M) type {
             if (m & ~carried != 0)
                 @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} names unknown {d}, which `lane` does not carry", .{ m, @ctz(m & ~carried) }));
             return struct {
@@ -2601,7 +2621,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                 }
 
                 /// This value's lanes in `to_m`'s layout; new lanes are exactly +0.
-                inline fn spread(a: T, comptime to_m: u64) @Vector(@popCount(to_m), L) {
+                inline fn spread(a: T, comptime to_m: M) @Vector(@popCount(to_m), L) {
                     if (m & ~to_m != 0) @compileError(std.fmt.comptimePrint("RefFamily: mask 0x{x} does not widen to 0x{x}", .{ m, to_m }));
                     if (m == to_m) return a.d;
                     if (m == 0) return @splat(0.0);
@@ -2609,8 +2629,8 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                         @setEvalBranchQuota(100_000);
                         var idx: [@popCount(to_m)]i32 = undefined;
                         var j: usize = 0;
-                        for (0..64) |u| if ((to_m >> u) & 1 != 0) {
-                            idx[j] = if ((m >> u) & 1 != 0) @popCount(m & ((@as(u64, 1) << u) - 1)) else -1;
+                        for (0..@bitSizeOf(M)) |u| if ((to_m >> u) & 1 != 0) {
+                            idx[j] = if ((m >> u) & 1 != 0) @popCount(m & ((@as(M, 1) << u) - 1)) else -1;
                             j += 1;
                         };
                         break :blk idx;
@@ -2619,7 +2639,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                     return @shuffle(L, a.d, z, idx);
                 }
 
-                pub fn to(a: T, comptime to_m: u64) Of(to_m) {
+                pub fn to(a: T, comptime to_m: M) Of(to_m) {
                     return .{ .v = a.v, .d = a.spread(to_m) };
                 }
                 pub fn val(a: T) f64 {
@@ -2627,7 +2647,7 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
                 }
                 pub fn ddxAt(a: T, comptime u: usize) f64 {
                     if ((m >> u) & 1 == 0) return 0.0;
-                    return a.d[@popCount(m & ((@as(u64, 1) << u) - 1))];
+                    return a.d[@popCount(m & ((@as(M, 1) << u) - 1))];
                 }
 
                 pub fn add(a: T, b: anytype) Join(@TypeOf(b)) {
@@ -2728,20 +2748,21 @@ pub fn laneMasks(comptime D: type) []const LaneUse {
 }
 
 /// Every unknown of `D` as a mask.
-fn unknownsMask(comptime D: type) u64 {
-    return if (nU(D) >= 64) ~@as(u64, 0) else (@as(u64, 1) << nU(D)) - 1;
+fn unknownsMask(comptime D: type) Mask(D) {
+    const M = Mask(D);
+    return if (nU(D) >= @bitSizeOf(M)) ~@as(M, 0) else (@as(M, 1) << nU(D)) - 1;
 }
 
 /// The lanes residual row `r` carries: `jac_pattern[r]` inside
 /// `derivReads`, every read lane when the device declares no pattern.
-pub fn rowMask(comptime D: type, comptime r: usize) u64 {
-    const p = if (@hasDecl(D, "jac_pattern")) D.jac_pattern[r] else ~@as(u64, 0);
+pub fn rowMask(comptime D: type, comptime r: usize) Mask(D) {
+    const p: Mask(D) = if (@hasDecl(D, "jac_pattern")) D.jac_pattern[r] else ~@as(Mask(D), 0);
     return p & derivReads(D) & unknownsMask(D);
 }
 
 /// The lanes charge site `k` carries: `q_site_pattern[k]` inside `derivReads`.
-pub fn siteMask(comptime D: type, comptime k: usize) u64 {
-    const p = if (@hasDecl(D, "q_site_pattern")) D.q_site_pattern[k] else ~@as(u64, 0);
+pub fn siteMask(comptime D: type, comptime k: usize) Mask(D) {
+    const p: Mask(D) = if (@hasDecl(D, "q_site_pattern")) D.q_site_pattern[k] else ~@as(Mask(D), 0);
     return p & derivReads(D) & unknownsMask(D);
 }
 
@@ -2764,7 +2785,7 @@ pub fn Sites(comptime D: type, comptime S: type) type {
 
 /// Every unknown `D` reads a lane of, as the one mask a hand-written device
 /// computes at: `S.Of(denseMask(D))` is a whole dense value.
-pub fn denseMask(comptime D: type) u64 {
+pub fn denseMask(comptime D: type) Mask(D) {
     return derivReads(D) & unknownsMask(D);
 }
 
@@ -2944,7 +2965,8 @@ pub fn InstancePtr(comptime D: type) type {
 // ============================================================================
 
 /// Checks device `D` against the contract at comptime; a violation is a compile
-/// error naming the decl. Required: `U` (a dense `enum(u8)`, ports first),
+/// error naming the decl. Required: `U` (a dense enum, ports first; VerA
+/// emits `enum(u8)` up to 256 unknowns, a wider unsigned tag past them),
 /// `num_ports` (<= |U|; 0 is legal, §6.2), `Model` and `Instance` (structs
 /// whose fields all have defaults and are value types), and
 /// `eval(S, x, model, inst, sim) Rows(D, S)`. Every other decl is optional
@@ -3008,7 +3030,7 @@ pub fn validate(comptime D: type) void {
     }
 
     if (@typeInfo(D.U) != .@"enum" or !isDenseEnum(D.U))
-        @compileError(name ++ ".U must be a dense enum(u8) with values 0..n-1");
+        @compileError(name ++ ".U must be a dense enum with an unsigned tag and values 0..n-1");
     const n = nU(D);
 
     // Ports are a prefix of `U`. Zero is legal: §6.2 makes the port list
@@ -3199,8 +3221,8 @@ pub fn validate(comptime D: type) void {
     // `jac_pattern[ru]` is set when ∂eval[ru]/∂x[cu] can be nonzero, and
     // `q_pattern` says the same for `q`. Absent means dense; omitted above 64
     // unknowns.
-    if (@hasDecl(D, "jac_pattern") and @TypeOf(D.jac_pattern) != [n]u64)
-        @compileError(name ++ ".jac_pattern must be [|U|]u64");
+    if (@hasDecl(D, "jac_pattern") and @TypeOf(D.jac_pattern) != [n]Mask(D))
+        @compileError(name ++ ".jac_pattern must be [|U|]" ++ @typeName(Mask(D)) ++ " (contract.Mask)");
     if (@hasDecl(D, "q_pattern")) {
         if (@TypeOf(D.q_pattern) != [n]u64)
             @compileError(name ++ ".q_pattern must be [|U|]u64");
@@ -3602,12 +3624,11 @@ fn rowMaskError(
 fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
     const name = @typeName(D);
     if (@hasDecl(D, "deriv_reads")) {
-        if (@TypeOf(D.deriv_reads) != u64) return name ++ ".deriv_reads must be a u64 mask over U";
-        if (n > 64) return name ++ ".deriv_reads with |U| > 64 — omit it, the all-lanes default is correct";
+        if (@TypeOf(D.deriv_reads) != MaskOf(n)) return name ++ ".deriv_reads must be a " ++ @typeName(MaskOf(n)) ++ " mask over U (contract.MaskOf(|U|))";
     }
     if (@hasDecl(D, "limit") and (limitWrites(D) & ~derivReads(D)) != 0)
         return name ++ ".limit_writes has a bit deriv_reads does not: the limiting correction needs that lane";
-    if (@hasDecl(D, "ddx_reads") and @TypeOf(D.ddx_reads) != u64) return name ++ ".ddx_reads must be a u64 mask over U";
+    if (@hasDecl(D, "ddx_reads") and @TypeOf(D.ddx_reads) != Mask(D)) return name ++ ".ddx_reads must be a " ++ @typeName(Mask(D)) ++ " mask over U, deriv_reads' type";
     if ((ddxReads(D) & ~derivReads(D)) != 0)
         return name ++ ".ddx_reads has a bit deriv_reads does not: ddx() reads that lane";
     if (!@hasDecl(D, "jac_const")) return null;
@@ -3616,7 +3637,7 @@ fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
     for (t, 0..) |e, k| {
         const r: usize = @backingInt(e.row);
         const c: usize = @backingInt(e.col);
-        if (c < 64 and (mask >> @intCast(c)) & 1 != 0)
+        if (c < @bitSizeOf(@TypeOf(mask)) and (mask >> @intCast(c)) & 1 != 0)
             return name ++ ".jac_const: column `" ++ @tagName(e.col) ++ "` is in deriv_reads, so its partials are not constant";
         if (e.g == 0 and e.c == 0)
             return name ++ ".jac_const: an all-zero entry — an absent entry already means exactly 0";
@@ -3697,7 +3718,8 @@ fn isValueType(comptime T: type) bool {
 
 fn isDenseEnum(comptime E: type) bool {
     const info = @typeInfo(E).@"enum";
-    if (info.tag_type != u8) return false;
+    const tag = @typeInfo(info.tag_type).int;
+    if (tag.signedness != .unsigned or tag.bits < 8) return false;
     for (info.field_values, 0..) |value, idx| {
         if (value != idx) return false;
     }
@@ -4215,7 +4237,7 @@ test "ac_dyn_slots: each rule refuses its own mistake" {
 test "deriv_reads: the four rules each refuse their own mistake" {
     // (a) the mask is one u64.
     try testing.expect(comptime (derivReadsError(MockVsrc, 3) == null));
-    try testing.expect(comptime (derivReadsError(MockVsrc, 65) != null));
+    try testing.expect(comptime (derivReadsError(MockVsrc, 65) != null)); // a u64 past 64 unknowns
     // (b) a limited unknown needs a live lane.
     const Lim = struct {
         pub const U = enum(u8) { a, b };
@@ -4493,6 +4515,62 @@ test "a family's rows carry the pattern's lanes" {
     try testing.expect(@TypeOf(qs[1]) == S.Of(0b10));
     const qr = qRows(MockAll, S, qs);
     try testing.expectEqual(@as(f64, -1e-12), qr[1].ddxAt(1));
+}
+
+/// 300 unknowns, a `u16` tag: row u is `g · x[u]` on the even unknowns, 0
+/// on the odd ones, in `MaskOf(300)` masks.
+const MockWide = struct {
+    pub const U = @Enum(u16, .exhaustive, &names, &std.simd.iota(u16, n_u));
+    const n_u = 300;
+    const names = blk: {
+        @setEvalBranchQuota(1_000_000);
+        var a: [n_u][]const u8 = undefined;
+        for (&a, 0..) |*s, u| s.* = std.fmt.comptimePrint("u{d}", .{u});
+        break :blk a;
+    };
+    pub const num_ports: usize = n_u;
+    pub const Model = struct { g: f64 = 2 };
+    pub const Instance = struct {};
+    const even: MaskOf(n_u) = blk: {
+        @setEvalBranchQuota(10_000);
+        var m: MaskOf(n_u) = 0;
+        for (0..n_u / 2) |k| m |= @as(MaskOf(n_u), 1) << (2 * k);
+        break :blk m;
+    };
+    pub const deriv_reads: MaskOf(n_u) = even;
+    pub const ddx_reads: MaskOf(n_u) = 0;
+    pub const jac_pattern: [n_u]MaskOf(n_u) = blk: {
+        var p: [n_u]MaskOf(n_u) = @splat(0);
+        for (0..n_u / 2) |k| p[2 * k] = @as(MaskOf(n_u), 1) << (2 * k);
+        break :blk p;
+    };
+    pub fn eval(comptime S: type, x: *const [n_u]S.V, m: *const Model, _: *const Instance, _: SimState) Rows(@This(), S) {
+        @setEvalBranchQuota(1_000_000);
+        var r: Rows(@This(), S) = undefined;
+        inline for (0..n_u) |u| r[u] = if (u % 2 == 0) S.probe(u, x[u]).scale(m.g).to(rowMask(@This(), u)) else S.con(0).to(rowMask(@This(), u));
+        return r;
+    }
+};
+
+test "past 64 unknowns a device names every pin in MaskOf(|U|) masks, one lane per diagonal row" {
+    comptime validate(MockWide);
+    try testing.expect(Mask(MockWide) == u300);
+    try testing.expect(MaskOf(3) == u64);
+    try testing.expectEqual(@as(u300, 1) << 298, comptime rowMask(MockWide, 298));
+    try testing.expectEqual(@as(u300, 0), comptime rowMask(MockWide, 299));
+    // A sparse family carries one lane per even row: the cost is per pin.
+    const S = RefFamily(f64, &@as([300]u8, @splat(0)), .{ .dense = false });
+    var x: [300]f64 = undefined;
+    for (&x, 0..) |*v, u| v.* = @floatFromInt(u);
+    const r = MockWide.eval(S, &x, &.{}, &.{}, .{});
+    try testing.expectEqual(1, @popCount(@TypeOf(r[298]).mask));
+    try testing.expectEqual(@as(f64, 596), r[298].val());
+    try testing.expectEqual(@as(f64, 2), r[298].ddxAt(298));
+    try testing.expectEqual(0, @popCount(@TypeOf(r[299]).mask));
+    // A u64 `deriv_reads` past 64 unknowns cannot name them all.
+    try testing.expect(comptime (derivReadsError(struct {
+        pub const deriv_reads: u64 = 1;
+    }, 300) != null));
 }
 
 test "RefFamily dense: one type, lanes where `lane` puts them" {

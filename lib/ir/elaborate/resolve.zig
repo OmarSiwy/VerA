@@ -288,13 +288,13 @@ fn levelOf(paths: []const []const u8, i: usize) ?usize {
 /// children.
 fn resolveLevel(self: *Flatten, net: Ast.StrId, s: anytype, group: ?usize) Error!?Ast.StrId {
     if (group) |g| if (s.resolved.get(@intCast(g))) |cached| return cached;
-    var discs: std.ArrayList(Ast.StrId) = .empty;
+    var discs: std.ArrayList(Ast.StrId) = try .initCapacity(self.ctx.arena, s.discs.items.len);
     for (s.discs.items, 0..) |d, i| {
         const lvl = levelOf(s.paths.items, i);
         if ((lvl == null) != (group == null)) continue;
         if (lvl != null and lvl.? != group.?) continue;
         const v = if (d != .none) d else (try resolveLevel(self, net, s, i)) orelse continue;
-        try discs.append(self.ctx.arena, v);
+        discs.appendAssumeCapacity(v);
     }
     const answer = try levelAnswer(self, net, s.tok, discs.items);
     if (group) |g| try s.resolved.put(self.ctx.arena, @intCast(g), answer);
@@ -321,7 +321,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
     for (discs) |d| {
         if (discipline.isContinuous(self.ctx.file, d)) net_continuous = true;
     }
-    var cands: std.ArrayList(Ast.StrId) = .empty;
+    var cands: std.ArrayList(Ast.StrId) = try .initCapacity(self.ctx.arena, discs.len);
     var mixed_port = false;
     for (discs) |d| {
         if (discipline.isContinuous(self.ctx.file, d) != net_continuous) {
@@ -330,7 +330,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
         }
         // ponytail: linear membership for short lists; use a set if this scan dominates.
         if (std.mem.indexOfScalar(Ast.StrId, cands.items, d) == null)
-            try cands.append(self.ctx.arena, d);
+            cands.appendAssumeCapacity(d);
     }
     if (cands.items.len <= 1) return if (cands.items.len == 1) cands.items[0] else null;
 

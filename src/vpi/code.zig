@@ -467,9 +467,15 @@ pub const Builder = struct {
     }
 
     fn many(b: *Builder, items: []const u32) Error![]const u32 {
-        var out: std.ArrayList(u32) = .empty;
-        for (items) |i| if (i != none) try out.append(b.arena, i);
-        return out.items;
+        var n: usize = 0;
+        for (items) |i| n += @intFromBool(i != none);
+        const out = try b.arena.alloc(u32, n);
+        n = 0;
+        for (items) |i| if (i != none) {
+            out[n] = i;
+            n += 1;
+        };
+        return out;
     }
 
     /// The engine's elaborated frame supplies widths even for automatic
@@ -496,10 +502,7 @@ pub const Builder = struct {
     /// result variable in the entered subroutine scope. Register its name
     /// before building expressions that reference it.
     fn subVar(b: *Builder, vars: *SubVars, v: Ast.VarDecl, slot: ?u32, automatic: bool) Error!u32 {
-        // ponytail: subroutine arrays and time variables still have no
-        // object here; the latter needs the model's vpiTimeVar class.
-        if (v.dims.len != 0 or v.storage == .time) return none;
-        const kind: @FieldType(Obj, "kind") = if (v.ty == .real) .real_var else if (v.storage == .reg) .reg else .integer;
+        const kind = subVarKind(v) orelse return none;
         const at = try b.add(.{
             .kind = kind,
             .owner = .of(b.scope),
@@ -514,8 +517,37 @@ pub const Builder = struct {
         });
         try b.setName(at, try b.arena.dupe(u8, b.file.str(v.name)));
         try b.attributes(at, .{ .kind = .declaration, .tok = v.main_tok }, false);
-        try (if (kind == .reg) &vars.regs else if (kind == .real_var) &vars.reals else &vars.ints).append(b.arena, at);
+        (if (kind == .reg) &vars.regs else if (kind == .real_var) &vars.reals else &vars.ints).appendAssumeCapacity(at);
         return at;
+    }
+
+    /// The object class `subVar` gives `v`, or null for none.
+    ///
+    /// ponytail: subroutine arrays and time variables still have no
+    /// object here; the latter needs the model's vpiTimeVar class.
+    fn subVarKind(v: Ast.VarDecl) ?@FieldType(Obj, "kind") {
+        if (v.dims.len != 0 or v.storage == .time) return null;
+        return if (v.ty == .real) .real_var else if (v.storage == .reg) .reg else .integer;
+    }
+
+    /// `t`'s subroutine variables, each list sized to what `subVar` will
+    /// append to it.
+    fn subVars(b: *Builder, t: *const Ast.Subroutine) Error!SubVars {
+        var n: [3]usize = .{ 0, 0, 0 };
+        const tally = struct {
+            fn one(counts: *[3]usize, v: Ast.VarDecl) void {
+                const kind = subVarKind(v) orelse return;
+                counts[if (kind == .reg) 0 else if (kind == .real_var) 2 else 1] += 1;
+            }
+        }.one;
+        if (t.is_function) tally(&n, t.result);
+        for (t.ports) |p| tally(&n, p.v);
+        for (t.vars) |v| tally(&n, v);
+        return .{
+            .regs = try .initCapacity(b.arena, n[0]),
+            .ints = try .initCapacity(b.arena, n[1]),
+            .reals = try .initCapacity(b.arena, n[2]),
+        };
     }
 
     // ---------------------------------------------------------------- module
@@ -526,8 +558,10 @@ pub const Builder = struct {
     /// identities. Storage order is the engine's increasing row-major order;
     /// vpiRange retains source direction, vpiIndex runs innermost first.
     fn eventDecls(b: *Builder, declarations: []const Ast.EventDecl) Error!Events {
-        var scalars: std.ArrayList(u32) = .empty;
-        var arrays: std.ArrayList(u32) = .empty;
+        var n_arrays: usize = 0;
+        for (declarations) |e| n_arrays += @intFromBool(e.dims.len != 0);
+        var scalars: std.ArrayList(u32) = try .initCapacity(b.arena, declarations.len - n_arrays);
+        var arrays: std.ArrayList(u32) = try .initCapacity(b.arena, n_arrays);
         for (declarations) |e| {
             const slot = if (b.run) |r| r.names.get(.{ .scope = b.engine, .str = e.name }) else null;
             const scope: []const Edge = if (b.inner == none) &.{} else &.{.{ .tag = vpiScope, .to = b.inner }};
@@ -539,10 +573,10 @@ pub const Builder = struct {
             try b.attributes(at, .{ .kind = .declaration, .tok = e.main_tok }, false);
             if (e.dims.len == 0) {
                 b.objects.hot.items[at].slot = .of(if (b.automatic) null else slot);
-                try scalars.append(b.arena, at);
+                scalars.appendAssumeCapacity(at);
                 continue;
             }
-            try arrays.append(b.arena, at);
+            arrays.appendAssumeCapacity(at);
             const base = slot orelse continue;
             const arr = b.run.?.arrays.get(base).?;
             const ranges = try b.arena.alloc(u32, e.dims.len);
@@ -551,7 +585,7 @@ pub const Builder = struct {
             const members = try b.arena.alloc(u32, arr.count);
             for (members, 0..) |*member, k| {
                 const indices = try b.arena.alloc(u32, e.dims.len);
-                var suffix: std.ArrayList(u8) = .empty;
+                var suffix: std.ArrayList(u8) = try .initCapacity(b.arena, indices.len * model.index_text_max);
                 var q: i64 = @intCast(k);
                 for (indices, 0..) |*index, j| {
                     const d = indices.len - 1 - j;
@@ -560,8 +594,8 @@ pub const Builder = struct {
                     const i = sp.low + @mod(q, count);
                     q = @divTrunc(q, count);
                     index.* = try b.constant(.{ .int = i }, 32, root.vpiDecConst);
-                    var buf: [24]u8 = undefined;
-                    try suffix.insertSlice(b.arena, 0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
+                    var buf: [model.index_text_max]u8 = undefined;
+                    suffix.insertSliceAssumeCapacity(0, std.mem.print(&buf, "[{d}]", .{i}) catch unreachable);
                 }
                 const local = try b.arena.print("{s}{s}", .{ b.file.str(e.name), suffix.items });
                 member.* = try b.code(vpiNamedEvent, &.{ .{ .tag = vpiParent, .to = at }, .{ .tag = vpiIndex, .to = indices[0] } }, &.{.{ .tag = vpiIndex, .items = indices }}, &.{ .{ .prop = root.vpiArray, .value = 1 }, auto_prop });
@@ -583,6 +617,7 @@ pub const Builder = struct {
     /// events, tasks and functions, continuous assignments and processes.
     pub fn module(b: *Builder, m: *const Ast.ModuleDecl) Error!void {
         try b.attributes(b.scope, .{ .kind = .declaration, .tok = m.main_tok }, true);
+        try b.reserveModule(m);
         const events = try b.eventDecls(m.events);
         try b.lists.events.appendSlice(b.gpa, events.scalars);
         try b.lists.event_arrays.appendSlice(b.gpa, events.arrays);
@@ -590,7 +625,7 @@ pub const Builder = struct {
         for (m.tasks) |*t| {
             const at = try b.add(.{ .kind = .code, .owner = .of(b.scope), .name = "", .full = "", .vtype = if (t.is_function) vpiFunction else vpiTask });
             try b.setName(at, try b.arena.dupe(u8, b.file.str(t.name)));
-            try (if (t.is_function) &b.lists.functions else &b.lists.tasks).append(b.gpa, at);
+            (if (t.is_function) &b.lists.functions else &b.lists.tasks).appendAssumeCapacity(at);
             // §26.6.18/§26.6.19: publish all function types before building
             // any body, including calls of a later-declared function.
             const frame = b.subFrame(t);
@@ -612,14 +647,14 @@ pub const Builder = struct {
             const frame = b.subFrame(t);
             if (frame) |fr| b.engine = fr.scope;
             const local_events = try b.eventDecls(t.events);
-            var vars: SubVars = .{};
+            var vars = try b.subVars(t);
             if (t.is_function) _ = try b.subVar(&vars, t.result, if (frame) |fr| fr.result else null, t.automatic);
-            var ios: std.ArrayList(u32) = .empty;
-            for (t.ports, 0..) |p, i| {
+            const ios = try b.arena.alloc(u32, t.ports.len);
+            for (t.ports, ios, 0..) |p, *io, i| {
                 const slot = if (frame) |fr| fr.ports[i] else null;
                 const formal = try b.subVar(&vars, p.v, slot, t.automatic);
                 const local = try b.arena.dupe(u8, b.file.str(p.v.name));
-                try ios.append(b.arena, try b.add(.{
+                io.* = try b.add(.{
                     .kind = .code,
                     .owner = .of(b.scope),
                     .name = local,
@@ -628,7 +663,7 @@ pub const Builder = struct {
                     .src_tok = p.v.main_tok,
                     .props = try ioProps(b.arena, direction(p.direction), b.declWidth(p.v, slot), p.v.is_signed),
                     .edges = try b.arena.dupe(Edge, &.{ .{ .tag = vpiExpr, .to = formal }, .{ .tag = vpiScope, .to = at } }),
-                }));
+                });
             }
             for (t.vars) |v| {
                 const slot = if (frame) |fr| b.run.?.names.get(.{ .scope = fr.scope, .str = v.name }) else null;
@@ -638,7 +673,7 @@ pub const Builder = struct {
             b.leave(saved);
             b.objects.hot.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiStmt, .to = body }});
             b.objects.hot.items[at].lists = try b.arena.dupe(List, &.{
-                .{ .tag = vpiIODecl, .items = ios.items },
+                .{ .tag = vpiIODecl, .items = ios },
                 .{ .tag = root.vpiReg, .items = vars.regs.items },
                 .{ .tag = root.vpiIntegerVar, .items = vars.ints.items },
                 .{ .tag = root.vpiRealVar, .items = vars.reals.items },
@@ -660,7 +695,7 @@ pub const Builder = struct {
             b.objects.hot.items[at].delays = try b.delays(a.delay);
             b.objects.hot.items[at].src_tok = a.main_tok;
             try b.attributes(at, .{ .kind = .declaration, .tok = a.main_tok }, false);
-            try b.lists.cont_assigns.append(b.gpa, at);
+            b.lists.cont_assigns.appendAssumeCapacity(at);
         }
         // IEEE 1364-2005 §26.6.24: a net declaration assignment (A.2.4) is a
         // continuous assignment too, "-> net decl assign bool:
@@ -675,15 +710,15 @@ pub const Builder = struct {
             }, &.{}, &.{.{ .prop = vpiNetDeclAssign, .value = 1 }});
             b.objects.hot.items[at].delays = try b.delays(n.delay);
             b.objects.hot.items[at].src_tok = n.main_tok;
-            try b.lists.cont_assigns.append(b.gpa, at);
+            b.lists.cont_assigns.appendAssumeCapacity(at);
         }
         // §11.6.13 gates, in source order, then pull sources, switches and
         // UDP instances.
         for (m.gates) |g| {
-            var terms: std.ArrayList(Ast.ExprId) = .empty;
-            try terms.append(b.arena, g.out);
-            try terms.appendSlice(b.arena, g.ins);
-            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items, &.{}, &.{
+            const terms = try b.arena.alloc(Ast.ExprId, 1 + g.ins.len);
+            terms[0] = g.out;
+            @memcpy(terms[1..], g.ins);
+            const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms, &.{}, &.{
                 .{ .prop = root.vpiArray, .value = @intFromBool(g.range != null) },
                 .{ .prop = vpiStrength0, .value = drive(g.strength0) },
                 .{ .prop = vpiStrength1, .value = drive(g.strength1) },
@@ -712,17 +747,17 @@ pub const Builder = struct {
                 .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => true,
                 .cmos, .rcmos, .nmos, .pmos, .rnmos, .rpmos => false,
             };
-            var dirs: std.ArrayList(c_int) = .empty;
-            for (sw.terms, 0..) |_, k| try dirs.append(b.arena, if (k == 0) (if (pass) root.vpiInout else root.vpiOutput) else if (pass and k == 1) root.vpiInout else root.vpiInput);
-            const at = try b.primitive(vpiSwitch, switchType(sw.kind), @tagName(sw.kind), sw.terms, dirs.items, &.{.{ .prop = root.vpiArray, .value = 0 }});
+            const dirs = try b.arena.alloc(c_int, sw.terms.len);
+            for (dirs, 0..) |*dir, k| dir.* = (if (k == 0) (if (pass) root.vpiInout else root.vpiOutput) else if (pass and k == 1) root.vpiInout else root.vpiInput);
+            const at = try b.primitive(vpiSwitch, switchType(sw.kind), @tagName(sw.kind), sw.terms, dirs, &.{.{ .prop = root.vpiArray, .value = 0 }});
             try b.attributes(at, .{ .kind = .declaration, .tok = sw.main_tok }, false);
         }
         if (b.udps) |udps| for (m.instances) |inst| {
             const defn = udps.get(inst.module) orelse continue;
-            var terms: std.ArrayList(Ast.ExprId) = .empty;
-            for (inst.ports) |c| try terms.append(b.arena, c.expr);
+            const terms = try b.arena.alloc(Ast.ExprId, inst.ports.len);
+            for (inst.ports, terms) |c, *t| t.* = c.expr;
             const d = b.objects.hot.items[defn];
-            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms.items, &.{}, &.{
+            const at = try b.primitive(vpiUdp, d.props[1].value, d.def_name, terms, &.{}, &.{
                 .{ .prop = root.vpiArray, .value = @intFromBool(inst.range != null) },
                 .{ .prop = vpiStrength0, .value = drive(inst.strength0) },
                 .{ .prop = vpiStrength1, .value = drive(inst.strength1) },
@@ -745,19 +780,45 @@ pub const Builder = struct {
             const body = try b.stmt(d.body);
             const at = try b.code(if (d.is_always) vpiAlways else vpiInitial, &.{.{ .tag = vpiStmt, .to = body }}, &.{}, &.{});
             try b.attributes(at, .{ .kind = .declaration, .tok = d.main_tok }, false);
-            try b.lists.processes.append(b.gpa, at);
+            b.lists.processes.appendAssumeCapacity(at);
         }
+    }
+
+    /// Sizes the scope lists only `module` fills to what it will append:
+    /// one per task or function, continuous assignment (with net
+    /// declaration assignments), primitive, module path and process; at most
+    /// one per timing check (an unknown one is skipped).
+    fn reserveModule(b: *Builder, m: *const Ast.ModuleDecl) Error!void {
+        var n_fn: usize = 0;
+        for (m.tasks) |t| n_fn += @intFromBool(t.is_function);
+        var n_assign = m.assigns.len;
+        for (m.nets) |n| n_assign += @intFromBool(n.init != .none);
+        var n_prim = m.gates.len + m.pulls.len + m.switches.len;
+        if (b.udps) |udps| for (m.instances) |inst| {
+            n_prim += @intFromBool(udps.contains(inst.module));
+        };
+        const l = b.lists;
+        try l.functions.ensureTotalCapacityPrecise(b.gpa, n_fn);
+        try l.tasks.ensureTotalCapacityPrecise(b.gpa, m.tasks.len - n_fn);
+        try l.cont_assigns.ensureTotalCapacityPrecise(b.gpa, n_assign);
+        try l.primitives.ensureTotalCapacityPrecise(b.gpa, n_prim);
+        try l.mod_paths.ensureTotalCapacityPrecise(b.gpa, m.paths.len);
+        try l.tchks.ensureTotalCapacityPrecise(b.gpa, m.timing_checks.len);
+        try l.processes.ensureTotalCapacityPrecise(b.gpa, m.discrete.len);
     }
 
     /// §11.6.21's third process, `analog`, over the flattened analog blocks
     /// that belong to this scope (`AnalogBlock.unit`).
     pub fn analogBlocks(b: *Builder, blocks: []const Ast.AnalogBlock) Error!void {
+        var n: usize = 0;
+        for (blocks) |blk| n += @intFromBool(blk.unit == b.scope);
+        try b.lists.processes.ensureUnusedCapacity(b.gpa, n);
         for (blocks) |blk| {
             if (blk.unit != b.scope) continue;
             const body = try b.stmt(blk.body);
             const at = try b.code(vpiAnalog, &.{.{ .tag = vpiStmt, .to = body }}, &.{}, &.{});
             try b.attributes(at, .{ .kind = .declaration, .tok = blk.main_tok }, false);
-            try b.lists.processes.append(b.gpa, at);
+            b.lists.processes.appendAssumeCapacity(at);
         }
     }
 
@@ -777,28 +838,29 @@ pub const Builder = struct {
         }.at;
         var inputs: c_int = 0;
         for (terms, 0..) |_, k| inputs += @intFromBool(dir(dirs, k) == root.vpiInput);
-        var all: std.ArrayList(Prop) = .empty;
-        try all.appendSlice(b.arena, &.{
-            .{ .prop = vpiPrimType, .value = prim_type },
-            // NOTE 1: "vpiSize shall return the number of inputs."
-            .{ .prop = vpiSize, .value = inputs },
+        const all = try std.mem.concat(b.arena, Prop, &.{
+            &.{
+                .{ .prop = vpiPrimType, .value = prim_type },
+                // NOTE 1: "vpiSize shall return the number of inputs."
+                .{ .prop = vpiSize, .value = inputs },
+            },
+            props,
         });
-        try all.appendSlice(b.arena, props);
-        const at = try b.code(vtype, &.{}, &.{}, all.items);
+        const at = try b.code(vtype, &.{}, &.{}, all);
         b.objects.hot.items[at].def_name = def_name;
-        var items: std.ArrayList(u32) = .empty;
-        for (terms, 0..) |t, k| {
+        const items = try b.arena.alloc(u32, terms.len);
+        for (terms, items, 0..) |t, *item, k| {
             const e = try b.expr(t);
-            try items.append(b.arena, try b.code(vpiPrimTerm, &.{
+            item.* = try b.code(vpiPrimTerm, &.{
                 .{ .tag = vpiExpr, .to = e },
                 .{ .tag = vpiPrimitive, .to = at },
             }, &.{}, &.{
                 .{ .prop = vpiDirection, .value = dir(dirs, k) },
                 .{ .prop = vpiTermIndex, .value = @intCast(k) },
-            }));
+            });
         }
-        b.objects.hot.items[at].lists = try b.arena.dupe(List, &.{.{ .tag = vpiPrimTerm, .items = items.items }});
-        try b.lists.primitives.append(b.gpa, at);
+        b.objects.hot.items[at].lists = try b.arena.dupe(List, &.{.{ .tag = vpiPrimTerm, .items = items }});
+        b.lists.primitives.appendAssumeCapacity(at);
         return at;
     }
 
@@ -815,10 +877,10 @@ pub const Builder = struct {
     /// ->vpiCondition its `if` expression, and vpiPathType, vpiPolarity,
     /// vpiDataPolarity. Its delays are the A.7.4 list, for §12.11.
     fn modPath(b: *Builder, p: Ast.SpecPath) Error!void {
-        var ins: std.ArrayList(u32) = .empty;
-        for (p.ins) |e| try ins.append(b.arena, try b.term(vpiPathTerm, e, root.vpiInput, p.edge));
-        var outs: std.ArrayList(u32) = .empty;
-        for (p.outs) |e| try outs.append(b.arena, try b.term(vpiPathTerm, e, root.vpiOutput, .none));
+        const ins = try b.arena.alloc(u32, p.ins.len);
+        for (p.ins, ins) |e, *t| t.* = try b.term(vpiPathTerm, e, root.vpiInput, p.edge);
+        const outs = try b.arena.alloc(u32, p.outs.len);
+        for (p.outs, outs) |e, *t| t.* = try b.term(vpiPathTerm, e, root.vpiOutput, .none);
         const cond = if (p.cond != .none) try b.expr(p.cond) else none;
         const data = try b.term(vpiPathTerm, p.data, root.vpiInput, .none);
         const at = try b.code(vpiModPath, &.{
@@ -826,8 +888,8 @@ pub const Builder = struct {
             .{ .tag = vpiDelay, .to = try b.delayListExpr(p.delays) },
             .{ .tag = vpiModDataPathIn, .to = data },
         }, &.{
-            .{ .tag = vpiModPathIn, .items = ins.items },
-            .{ .tag = vpiModPathOut, .items = outs.items },
+            .{ .tag = vpiModPathIn, .items = ins },
+            .{ .tag = vpiModPathOut, .items = outs },
         }, &.{
             .{ .prop = vpiPathType, .value = if (p.full) vpiPathFull else vpiPathParallel },
             .{ .prop = vpiPolarity, .value = polarity(p.polarity) },
@@ -836,7 +898,7 @@ pub const Builder = struct {
         });
         b.objects.hot.items[at].delays = try b.foldAll(p.delays);
         b.objects.hot.items[at].src_tok = p.main_tok;
-        try b.lists.mod_paths.append(b.gpa, at);
+        b.lists.mod_paths.appendAssumeCapacity(at);
     }
 
     /// §11.6.15 a timing check: vpiTchkType, ->vpiTchkRefTerm its first event,
@@ -861,34 +923,33 @@ pub const Builder = struct {
         const notifier = if (arg(t, kind.notifier) != .none) try b.expr(arg(t, kind.notifier)) else none;
         // Details b: every argument written, in order, the events as their
         // tchk terms.
-        var args: std.ArrayList(u32) = .empty;
-        for (t.args, 0..) |a, k| try args.append(b.arena, if (k == r) ref else if (kind.data and k == dt) data else if (k == kind.notifier) notifier else try b.expr(a));
-        var limits: std.ArrayList(Ast.ExprId) = .empty;
-        for (kind.limits[0..kind.n_limits]) |k| try limits.append(b.arena, arg(t, k));
+        const args = try b.arena.alloc(u32, t.args.len);
+        for (t.args, args, 0..) |a, *out, k| out.* = if (k == r) ref else if (kind.data and k == dt) data else if (k == kind.notifier) notifier else try b.expr(a);
+        var limit_buf: [kind.limits.len]Ast.ExprId = undefined;
+        const limits = limit_buf[0..kind.n_limits];
+        for (kind.limits[0..kind.n_limits], limits) |k, *l| l.* = arg(t, k);
         const at = try b.code(vpiTchk, &.{
             .{ .tag = vpiTchkRefTerm, .to = ref },
             .{ .tag = vpiTchkDataTerm, .to = data },
             .{ .tag = vpiTchkNotifier, .to = notifier },
-            .{ .tag = vpiDelay, .to = try b.delayListExpr(limits.items) },
-        }, &.{.{ .tag = vpiExpr, .items = try b.many(args.items) }}, &.{.{ .prop = vpiTchkType, .value = kind.type }});
-        b.objects.hot.items[at].delays = try b.foldAll(limits.items);
+            .{ .tag = vpiDelay, .to = try b.delayListExpr(limits) },
+        }, &.{.{ .tag = vpiExpr, .items = try b.many(args) }}, &.{.{ .prop = vpiTchkType, .value = kind.type }});
+        b.objects.hot.items[at].delays = try b.foldAll(limits);
         b.objects.hot.items[at].src_tok = t.main_tok;
-        try b.lists.tchks.append(b.gpa, at);
+        b.lists.tchks.appendAssumeCapacity(at);
     }
 
     /// A path or timing-check terminal: its expression, direction and edge.
     fn term(b: *Builder, vtype: c_int, e: Ast.ExprId, dir: c_int, edge: Ast.SpecEdge) Error!u32 {
         if (e == .none) return none;
         const x = try b.expr(e);
-        var props: std.ArrayList(Prop) = .empty;
-        if (dir != 0) try props.append(b.arena, .{ .prop = vpiDirection, .value = dir });
-        try props.append(b.arena, .{ .prop = vpiEdge, .value = switch (edge) {
+        const props: [2]Prop = .{ .{ .prop = vpiDirection, .value = dir }, .{ .prop = vpiEdge, .value = switch (edge) {
             .none => vpiNoEdge,
             .posedge => vpiPosedge,
             .negedge => vpiNegedge,
             .edge => vpiAnyEdge,
-        } });
-        return b.code(vtype, &.{.{ .tag = vpiExpr, .to = x }}, &.{}, props.items);
+        } } };
+        return b.code(vtype, &.{.{ .tag = vpiExpr, .to = x }}, &.{}, props[@intFromBool(dir == 0)..]);
     }
 
     /// IEEE 1364-2005 §26.3.4 vpiDelay: the one delay expression, or a
@@ -904,9 +965,9 @@ pub const Builder = struct {
     /// Every expression folded to a literal, or none of them when one does
     /// not fold (a specparam name, which this model does not elaborate).
     fn foldAll(b: *Builder, es: []const Ast.ExprId) Error![]const f64 {
-        var out: std.ArrayList(f64) = .empty;
-        for (es) |e| try out.append(b.arena, literal(b.file, e) orelse return &.{});
-        return out.items;
+        const out = try b.arena.alloc(f64, es.len);
+        for (es, out) |e, *v| v.* = literal(b.file, e) orelse return &.{};
+        return out;
     }
 
     /// IEEE 1364-2005 §26.3.4 vpiDelay: "an expression that evaluates to a
@@ -922,12 +983,14 @@ pub const Builder = struct {
 
     fn delays(b: *Builder, d: Ast.Delay3) Error![]const f64 {
         if (!d.any()) return &.{};
-        var out: std.ArrayList(f64) = .empty;
+        var out: [3]f64 = undefined;
+        var n: usize = 0;
         for ([_]Ast.ExprId{ d.rise, d.fall, d.off }) |e| {
             if (e == .none) break;
-            try out.append(b.arena, literal(b.file, e) orelse return &.{});
+            out[n] = literal(b.file, e) orelse return &.{};
+            n += 1;
         }
-        return out.items;
+        return b.arena.dupe(f64, out[0..n]);
     }
 
     // ------------------------------------------------------------ statements
@@ -970,10 +1033,10 @@ pub const Builder = struct {
                     if (b.run) |r| b.engine = r.block_scopes.get(.{ .scope = b.engine, .stmt = id }) orelse b.engine;
                 }
                 const events = try b.eventDecls(blk.events);
-                var items: std.ArrayList(u32) = .empty;
-                for (blk.body) |s| try items.append(b.arena, try b.stmt(s));
+                const items = try b.arena.alloc(u32, blk.body.len);
+                for (blk.body, items) |s, *item| item.* = try b.stmt(s);
                 if (saved) |sv| b.leave(sv);
-                const stmts: List = .{ .tag = vpiStmt, .items = try b.many(items.items) };
+                const stmts: List = .{ .tag = vpiStmt, .items = try b.many(items) };
                 b.objects.hot.items[at].lists = if (named)
                     try b.arena.dupe(List, &.{ stmts, .{ .tag = root.vpiInternalScope, .items = try b.arena.dupe(u32, inner.items) }, .{ .tag = vpiNamedEvent, .items = events.scalars }, .{ .tag = vpiNamedEventArray, .items = events.arrays } })
                 else
@@ -1041,15 +1104,15 @@ pub const Builder = struct {
             },
             .case_stmt => |s| blk: {
                 const cond = try b.expr(s.scrutinee);
-                var items: std.ArrayList(u32) = .empty;
-                for (s.arms) |arm| {
+                const items = try b.arena.alloc(u32, s.arms.len);
+                for (s.arms, items) |arm, *item| {
                     // §11.6.23 NOTE 2: the default item has no expression, so
                     // its vpiExpr set is empty and vpi_iterate is NULL.
-                    var labels: std.ArrayList(u32) = .empty;
-                    for (arm.labels) |l| try labels.append(b.arena, try b.expr(l));
-                    try items.append(b.arena, try b.code(vpiCaseItem, &.{.{ .tag = vpiStmt, .to = try b.stmt(arm.body) }}, &.{.{ .tag = vpiExpr, .items = try b.many(labels.items) }}, &.{}));
+                    const labels = try b.arena.alloc(u32, arm.labels.len);
+                    for (arm.labels, labels) |l, *label| label.* = try b.expr(l);
+                    item.* = try b.code(vpiCaseItem, &.{.{ .tag = vpiStmt, .to = try b.stmt(arm.body) }}, &.{.{ .tag = vpiExpr, .items = try b.many(labels) }}, &.{});
                 }
-                break :blk b.code(vpiCase, &.{.{ .tag = vpiCondition, .to = cond }}, &.{.{ .tag = vpiCaseItem, .items = items.items }}, &.{.{ .prop = vpiCaseType, .value = switch (s.kind) {
+                break :blk b.code(vpiCase, &.{.{ .tag = vpiCondition, .to = cond }}, &.{.{ .tag = vpiCaseItem, .items = items }}, &.{.{ .prop = vpiCaseType, .value = switch (s.kind) {
                     .normal => vpiCaseExact,
                     .casex => vpiCaseX,
                     .casez => vpiCaseZ,
@@ -1104,12 +1167,12 @@ pub const Builder = struct {
             },
             .sys_task => |s| blk: {
                 const name = f.str(s.name);
-                var args: std.ArrayList(u32) = .empty;
-                for (s.args) |a| try args.append(b.arena, if (a == .none) none else try b.expr(a));
+                const args = try b.arena.alloc(u32, s.args.len);
+                for (s.args, args) |a, *arg| arg.* = if (a == .none) none else try b.expr(a);
                 // A.6.9: a name without `$` is a user task enable (§11.6.16
                 // task call -> task).
                 const user = name.len == 0 or name[0] != '$';
-                const at = try b.code(if (user) vpiTaskCall else vpiSysTaskCall, if (user) &.{.{ .tag = vpiTask, .to = b.lookupAs(name, .task) }} else &.{}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, &.{});
+                const at = try b.code(if (user) vpiTaskCall else vpiSysTaskCall, if (user) &.{.{ .tag = vpiTask, .to = b.lookupAs(name, .task) }} else &.{}, &.{.{ .tag = vpiArgument, .items = try b.many(args) }}, &.{});
                 b.objects.hot.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.hot.items[at].in_analog = b.analog != null;
                 b.objects.hot.items[at].src_tok = f.stmtTok(id);
@@ -1225,10 +1288,13 @@ pub const Builder = struct {
         return switch (ex.tag(id)) {
             .ident => b.lookup(b.file.str(ex.strOf(id))),
             .hier_ident => blk: {
-                var name: std.ArrayList(u8) = .empty;
-                for (ex.nameParts(id), 0..) |p, k| {
-                    if (k != 0) try name.append(b.arena, '.');
-                    try name.appendSlice(b.arena, b.file.str(p));
+                const parts = ex.nameParts(id);
+                var len: usize = parts.len -| 1;
+                for (parts) |p| len += b.file.str(p).len;
+                var name: std.ArrayList(u8) = try .initCapacity(b.arena, len);
+                for (parts, 0..) |p, k| {
+                    if (k != 0) name.appendAssumeCapacity('.');
+                    name.appendSliceAssumeCapacity(b.file.str(p));
                 }
                 break :blk b.names.get(name.items) orelse b.lookup(name.items);
             },
@@ -1271,18 +1337,20 @@ pub const Builder = struct {
             .multi_concat => blk: {
                 var inner = ex.rhs(id);
                 if (ex.tag(inner) == .concat and ex.args(inner).len == 1 and ex.tag(ex.args(inner)[0]) == .concat) inner = ex.args(inner)[0];
-                var ops: std.ArrayList(Ast.ExprId) = .empty;
-                try ops.append(b.arena, ex.lhs(id));
-                if (ex.tag(inner) == .concat) try ops.appendSlice(b.arena, ex.args(inner)) else try ops.append(b.arena, inner);
-                break :blk b.operation(vpiMultiConcatOp, ops.items);
+                const one = [1]Ast.ExprId{inner};
+                const rest: []const Ast.ExprId = if (ex.tag(inner) == .concat) ex.args(inner) else &one;
+                const ops = try b.arena.alloc(Ast.ExprId, 1 + rest.len);
+                ops[0] = ex.lhs(id);
+                @memcpy(ops[1..], rest);
+                break :blk b.operation(vpiMultiConcatOp, ops);
             },
             .event_posedge => b.operation(vpiPosedgeOp, &.{ex.lhs(id)}),
             .event_negedge => b.operation(vpiNegedgeOp, &.{ex.lhs(id)}),
             .event_or => b.operation(vpiEventOrOp, &.{ ex.lhs(id), ex.rhs(id) }),
             .index => b.select(id),
             .sys_call, .call => blk: {
-                var args: std.ArrayList(u32) = .empty;
-                for (ex.args(id)) |a| try args.append(b.arena, try b.expr(a));
+                const args = try b.arena.alloc(u32, ex.args(id).len);
+                for (ex.args(id), args) |a, *arg| arg.* = try b.expr(a);
                 const name = b.file.str(ex.strOf(id));
                 const sys = ex.tag(id) == .sys_call;
                 const func = if (sys) none else b.lookupAs(name, .function);
@@ -1292,7 +1360,7 @@ pub const Builder = struct {
                 if (func != none) for (b.objects.hot.items[func].props) |p| {
                     if (p.prop == vpiFuncType) ftype = p;
                 };
-                const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = func }}, &.{.{ .tag = vpiArgument, .items = try b.many(args.items) }}, if (ftype) |p| &.{p} else &.{});
+                const at = try b.code(if (sys) vpiSysFuncCall else vpiFuncCall, if (sys) &.{} else &.{.{ .tag = vpiFunction, .to = func }}, &.{.{ .tag = vpiArgument, .items = try b.many(args) }}, if (ftype) |p| &.{p} else &.{});
                 b.objects.hot.items[at].name = try b.arena.dupe(u8, name);
                 b.objects.hot.items[at].in_analog = b.analog != null;
                 b.objects.hot.items[at].src_tok = ex.mainTok(id);
@@ -1327,9 +1395,9 @@ pub const Builder = struct {
     /// expression first; in no scope, as every expression is. Invalidates
     /// pointers into `objects.hot.items`.
     pub fn operation(b: *Builder, op: c_int, operands: []const Ast.ExprId) Error!u32 {
-        var items: std.ArrayList(u32) = .empty;
-        for (operands) |o| try items.append(b.arena, try b.expr(o));
-        const at = try b.code(vpiOperation, &.{}, &.{.{ .tag = vpiOperand, .items = try b.many(items.items) }}, &.{.{ .prop = vpiOpType, .value = op }});
+        const items = try b.arena.alloc(u32, operands.len);
+        for (operands, items) |o, *item| item.* = try b.expr(o);
+        const at = try b.code(vpiOperation, &.{}, &.{.{ .tag = vpiOperand, .items = try b.many(items) }}, &.{.{ .prop = vpiOpType, .value = op }});
         b.objects.hot.items[at].owner = .none;
         return at;
     }
@@ -1496,29 +1564,30 @@ pub fn udpDefns(
 ) Error![]const u32 {
     const defns = try arena.alloc(u32, file.udps.len);
     for (file.udps, defns) |*u, *at| {
-        var ios: std.ArrayList(u32) = .empty;
-        for (u.ports, 0..) |p, k| {
-            try ios.append(arena, @intCast(objects.hot.items.len));
+        const ios = try arena.alloc(u32, u.ports.len);
+        for (u.ports, ios, 0..) |p, *io, k| {
+            io.* = @intCast(objects.hot.items.len);
             try objects.append(.{ .kind = .code, .owner = .none, .name = try arena.dupe(u8, file.str(p)), .full = "", .vtype = vpiIODecl, .props = try ioProps(arena, if (k == 0) root.vpiOutput else root.vpiInput, 1, false) });
         }
-        var rows: std.ArrayList(u32) = .empty;
-        for (u.rows) |r| {
+        const rows = try arena.alloc(u32, u.rows.len);
+        for (u.rows, rows) |r, *row| {
             var fields: c_int = 0;
             var in_edge = false;
-            var text: std.ArrayList(u8) = .empty;
+            // Each input symbol and its separator, then two " : c" columns.
+            var text: std.ArrayList(u8) = try .initCapacity(arena, 2 * r.inputs.len + 8);
             for (r.inputs) |c| switch (c) {
                 ' ', '\t' => {},
                 else => {
-                    if (!in_edge and text.items.len != 0) try text.append(arena, ' ');
-                    try text.append(arena, c);
+                    if (!in_edge and text.items.len != 0) text.appendAssumeCapacity(' ');
+                    text.appendAssumeCapacity(c);
                     if (c == '(') in_edge = true;
                     if (c == ')') in_edge = false;
                     if (!in_edge) fields += 1;
                 },
             };
-            if (u.is_sequential) try text.print(arena, " : {c}", .{r.state});
-            try text.print(arena, " : {c}", .{r.output});
-            try rows.append(arena, @intCast(objects.hot.items.len));
+            if (u.is_sequential) text.printAssumeCapacity(" : {c}", .{r.state});
+            text.printAssumeCapacity(" : {c}", .{r.output});
+            row.* = @intCast(objects.hot.items.len);
             try objects.append(.{ .kind = .code, .owner = .none, .name = "", .full = "", .vtype = vpiTableEntry, .value = .{ .str = text.items }, .props = try arena.dupe(Prop, &.{
                 .{ .prop = vpiSize, .value = fields + @intFromBool(u.is_sequential) + 1 },
             }) });
@@ -1533,7 +1602,7 @@ pub fn udpDefns(
             const rhs = try b.expr(u.init);
             const assign: u32 = @intCast(objects.hot.items.len);
             try objects.append(.{ .kind = .code, .owner = .none, .name = "", .full = "", .vtype = vpiAssignment, .edges = try arena.dupe(Edge, &.{
-                .{ .tag = vpiLhs, .to = ios.items[0] },
+                .{ .tag = vpiLhs, .to = ios[0] },
                 .{ .tag = vpiRhs, .to = rhs },
             }), .props = try arena.dupe(Prop, &.{.{ .prop = vpiBlocking, .value = 1 }}) });
             init = @intCast(objects.hot.items.len);
@@ -1553,8 +1622,8 @@ pub fn udpDefns(
             }),
             .edges = try arena.dupe(Edge, &.{.{ .tag = vpiInitial, .to = init }}),
             .lists = try arena.dupe(List, &.{
-                .{ .tag = vpiIODecl, .items = ios.items },
-                .{ .tag = vpiTableEntry, .items = rows.items },
+                .{ .tag = vpiIODecl, .items = ios },
+                .{ .tag = vpiTableEntry, .items = rows },
             }),
         });
         try out.put(gpa, u.name, at.*);
