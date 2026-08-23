@@ -5,6 +5,9 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 ## Unreleased
 
 - Nix: `nix run github:OmarSiwy/VerA`, release binaries as `.#"1.0.0"`/`latest` (`sources.json`), `overlays.default`, and `nix flake check` in CI.
+- `tools/external_analog.py`: the external analog suites under `tests/fixtures/external/` (hand-derived OSDI decks, VA-Models against OpenVAF-Reloaded, the CMC and TU Dresden QA references, Xyce), run in `nix develop .#benchmarking`; CI job `external-analog` reports their FAIL names.
+- `` `include "discipline.h" `` and `"constants.h"`, the Verilog-A 1.0 names of the Annex D headers, now resolve to the built-ins (VD-093) (#4).
+- `vera --emit-osdi FILE.va -o out.osdi`: an OSDI 0.4 library ngspice loads with `pre_osdi` (`tools/osdi_dyn.zig`), the same device `--emit-so` builds.
 - Fix: a hosted `.v` device prints its `$display` output (to stderr) for each step the host accepts; a rejected step prints nothing, and a step past 4096 bytes is cut (#8).
 - Fix: a `.v` device holds up to 65535 pins (was 256), and past 64 its `deriv_reads`/`ddx_reads`/`jac_pattern` are declared in `contract.MaskOf(|U|)`: one derivative lane per output row instead of a dense Jacobian. The contract accepts any unsigned `U` tag of 8 bits or more; `contract.Mask(D)` is a device's mask type (u64 for every device that declares no wide mask) (#5).
 - Fix: an `output reg` port connected to a bit-select, part-select or concatenation drives exactly those bits (IEEE 1364-2005 §12.3.9.2), no longer E1100 (#6).

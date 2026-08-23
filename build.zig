@@ -619,6 +619,8 @@ fn simSources(b: *std.Build) *std.Build.Module {
         seen.put(b.allocator, spec.path, {}) catch @panic("OOM");
         for (spec.imports) |dep| for (module_specs) |d| if (std.mem.eql(u8, d.name, dep)) seen.put(b.allocator, d.path, {}) catch @panic("OOM");
     };
+    // `vera --emit-osdi`'s dyn, written beside the contract it imports.
+    seen.put(b.allocator, "tools/osdi_dyn.zig", {}) catch @panic("OOM");
     var i: usize = 0;
     while (i < seen.count()) : (i += 1) {
         const path = seen.keys()[i];

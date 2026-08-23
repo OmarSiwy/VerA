@@ -174,6 +174,42 @@ jobs:
             /tmp/sweep.txt
             /tmp/source-audit.txt
 
+  # The external analog suites (tools/external_analog.py): VerA's
+  # `--emit-osdi` libraries in ngspice against hand-derived values,
+  # OpenVAF-Reloaded, the CMC and TU Dresden QA references and Xyce, every
+  # reference tool from `nix develop .#benchmarking`. It reports and does not
+  # gate until every disagreement is triaged (each suite folder's TRIAGE.md);
+  # the FAIL name list is the artifact (AGENTS.md §0 rule 3).
+  external-analog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#benchmarking -c zig build -Doptimize=ReleaseFast install
+      - name: External analog suites (osdi, va-models, cmcqa, hicum-qa, xyce)
+        run: |
+          nix develop .#benchmarking -c python3 tools/external_analog.py --out external-out 2>&1 | tee external.txt
+          exit "${PIPESTATUS[0]}"
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## External analog suites'
+            echo '```'; tail -1 external.txt; echo '```'
+            echo '### FAIL names'
+            echo '```'; cat external-out/fail.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-analog
+          path: |
+            external.txt
+            external-out/fail.txt
+
   # Cross-platform builds hold because VerA calls no OS but through `std`
   # (tests/exhaustive.zig's portability guard; lib/dynlib.zig is the one
   # allowlisted file). `build-all` compiles every artifact `test` builds, the
