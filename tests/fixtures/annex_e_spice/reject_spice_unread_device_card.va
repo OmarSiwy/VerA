@@ -7,9 +7,11 @@
 // circuit (a dropped R is an open), the silent wrong answer AGENTS.md §4
 // forbids.
 //
-// A Q card has no Table E.1 equation VerA reads in a body (E.2 leaves the
-// bjt's behaviour implementation dependent), so the subcircuit cannot be the
-// circuit its netlist describes.
+// An S card (a voltage-controlled switch) has no Table E.1 row and no reader
+// in VerA, so the subcircuit cannot be the circuit its netlist describes.
+// (This file used a Q card until Q, M, J and D cards became readable with a
+// model: spice_fet_card_instantiates_model_module.va; a Q bound to a Table E.1
+// `npn` model is reject_spice_fet_card_model_has_no_behaviour.va's E0953.)
 //
 // Legal neighbour: h04_06_subckt_body_contributes_equations.va, the same RDIV
 // with two numeric R cards, which compiles and divides 1 V into 0.75/0.25.
@@ -22,7 +24,7 @@
 //! spice .SUBCKT RDIV IN OUT GND
 //! spice R1 IN OUT 1K
 //! spice R2 OUT GND 3K
-//! spice Q1 OUT IN GND QMOD
+//! spice S1 OUT GND IN GND SWMOD
 //! spice .ENDS RDIV
 `include "check.vh"
 module rdiv_user(in, gnd);

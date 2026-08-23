@@ -53,6 +53,7 @@ const Keyword = enum {
     tran,
     onoise,
     @"discipline-resolution",
+    display,
 };
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
@@ -240,6 +241,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             },
             // §7.4.4's mode, as `vera --discipline-resolution=` selects it.
             .@"discipline-resolution" => d.discipline_resolution = std.meta.stringToEnum(@TypeOf(d.discipline_resolution), rest) orelse return error.BadSyntax,
+            // §9.4 `vera --emit-exe --display=record`: the device's `say`.
+            .display => d.display_record = if (std.mem.eql(u8, rest, "record")) true else return error.BadSyntax,
             .print => {
                 if (std.mem.eql(u8, rest, "none")) {
                     d.print_residual = false;

@@ -45,6 +45,7 @@ pub fn solve(ckt: anytype, ws: anytype, x: []f64, kind: contract.AnalysisKind) !
         error.Singular => return error.NoOperatingPoint,
     };
     if (!r.converged) return error.NoOperatingPoint;
+    ckt.say(x);
     _ = ckt.stateCtl(.commit);
     ckt.setSimState(.{ .kind = kind, .analog_initial = false });
     return r;

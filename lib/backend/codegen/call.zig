@@ -550,10 +550,13 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$error",
         .@"$warning",
         .@"$info",
-        => return if (self.display == .emit)
-            cg_display.emitDisplayTask(self, c, args, @backingInt(inst))
-        else
-            voidTask(self),
+        => return switch (self.display) {
+            .emit => cg_display.emitDisplayTask(self, c, args, @backingInt(inst)),
+            // A device's `say` records the task (`contract.SaySite`); a task
+            // it does not record, and every other unit, renders it void.
+            .record => if (self.emitting_display) cg_display.emitSay(self, inst) else voidTask(self),
+            .drop => voidTask(self),
+        },
         // §9.7.1/§9.7.2 same gate: in a printing artifact the run ends at the
         // call's position among the prints; in a device the call is dead.
         .@"$finish", .@"$stop" => return if (self.display == .emit)
@@ -562,7 +565,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             voidTask(self),
         // §9.4.1 a monitor's registration is a side effect, performed only by
         // the display unit.
-        .@"$monitor$arm" => return if (self.emitting_display) cg_display.emitMonitorArm(self, args) else voidTask(self),
+        .@"$monitor$arm" => return if (self.emitting_display and self.display == .emit) cg_display.emitMonitorArm(self, args) else voidTask(self),
         .@"$monitoron", .@"$monitoroff" => return voidTask(self),
         // §9.5 the descriptor family runs only in the display unit. Everywhere
         // else, including every `.drop` build, `emitFileCallDropped` answers
@@ -587,7 +590,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$fscanf$int",
         .@"$fscanf$real",
         .@"$fscanf$str",
-        => return if (self.emitting_display)
+        => return if (self.emitting_display and self.display == .emit)
             cg_display.emitFileCall(self, c, args, @backingInt(inst))
         else
             emitFileCallDropped(self, c, args, @backingInt(inst)),

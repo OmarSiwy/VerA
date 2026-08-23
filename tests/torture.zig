@@ -296,6 +296,7 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
         .diags = &diags,
         // Annex E.2: the fixture's `//! spice` cards, read as a netlist.
         .spice_netlist = d.spice,
+        .spice_path = f.path,
         .discipline_resolution = d.discipline_resolution,
     }) catch |err| {
         if (err == error.OutOfMemory) {
@@ -459,8 +460,9 @@ fn runAndCheck(
         .include_dirs = &.{ f.dir(), f.root },
         .diags = &diags,
         .lint = levels,
-        .display = .emit,
+        .display = if (d.display_record) .record else .emit,
         .spice_netlist = d.spice,
+        .spice_path = f.path,
         .discipline_resolution = d.discipline_resolution,
     };
     var result = vera.compileSourceOpts(gpa, source, .build, opts) catch |err| {

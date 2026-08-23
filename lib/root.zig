@@ -114,10 +114,15 @@ pub const Options = struct {
     /// `+` continuations included; see `spice_cards.synthesize` for the subset
     /// that is read. Empty is the default and reads nothing.
     spice_netlist: []const u8 = "",
-    /// What to do with the model's display tasks (LRM §9.4). `.drop` makes a
-    /// device: no text and no syscall in the Newton loop, with a W0850 for each
-    /// dropped task. `.emit` makes an executable whose prints are the output.
-    /// See `codegen.Display`.
+    /// The file `spice_netlist` came from, so its `.INCLUDE`, `.LIB` and
+    /// `.HDL` cards find files beside it; "" resolves them against the
+    /// working directory.
+    spice_path: []const u8 = "",
+    /// What to do with the model's display tasks (LRM §9.4). `.record` makes a
+    /// device whose `say` records them for its host (`contract.SaySite`), and
+    /// `.drop` one without it: either way no text and no syscall in the
+    /// Newton loop, and a W0850 for each task dropped. `.emit` makes an
+    /// executable whose prints are the output. See `codegen.Display`.
     display: codegen.Display = .drop,
     /// Emits `pub const jac_f32 = true`: the device tolerates a host scalar S
     /// whose derivative half is single precision. See `codegen.Options.jac_f32`.
@@ -281,6 +286,7 @@ fn compileInArena(
         .file_name = opts.file_name,
         .std_defs = opts.std_defs,
         .spice_netlist = opts.spice_netlist,
+        .spice_path = opts.spice_path,
         .bag = bag,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -330,6 +336,7 @@ fn compileInArena(
     file.builtin_modules = builtins;
     file.netlist_modules = netlist_modules;
     file.netlist_unsupported = pp.netlist_unsupported;
+    try Elaborate.spiceCase(arena, file);
     // §3.7/§6.5.3 wreal structure rules. The digital runner calls the same
     // check, so both routes refuse the same wirings.
     try @import("frontend").wreal.check(file, starts, bag);
@@ -373,15 +380,20 @@ fn compileInArena(
     // §9.4/§9.5. Reported here, not in lowering, because whether a side effect
     // is kept depends on what the caller asked to build. The model is legal
     // either way, so these are warnings.
-    if (opts.display == .drop) for (lowered.displays.items) |d| {
+    if (opts.display != .emit) for (lowered.displays.items) |d| {
         // §9.7.3 a device reports these through its status channel
         // (`contract.StatusSite`): kept, not dropped.
         if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
+        // §9.4 a `.record` device's `say` records these; codegen names one
+        // it cannot (`cg_display.planSay`).
+        if (opts.display == .record and cg_display.sayRecords(.fromName(d.name))) continue;
         const span = lowered.tokenSpan(d.tok);
         // A §9.5 file task is kept for sequencing, not text; its answer is
         // §9.5.1's zero descriptor rather than a dropped print.
         if (Mir.callee.isFileCall(.fromName(d.name)))
             try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
+        else if (opts.display == .record)
+            try bag.add(.lower, .W0850, span, "`{s}` — a device's `say` records the printing tasks, not this one", .{d.name})
         else
             try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
     };
