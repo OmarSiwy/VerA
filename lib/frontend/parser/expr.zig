@@ -121,7 +121,13 @@ pub fn parsePostfix(self: *Parser) Error!Ast.ExprId {
 /// One select on `base`, `[i]`, `[msb:lsb]` or IEEE 1364-2005 §5.2.1's
 /// `[base +: width]` / `[base -: width]`, the cursor on the `[`.
 pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
-    const tok = try self.expect(.lbracket);
+    return parseSelectAt(self, base, self.pos);
+}
+
+/// `parseSelect` with the `.index` node's token `tok`: a branch terminal's
+/// is its name's, as for a bit-select (`parseNetRef`).
+fn parseSelectAt(self: *Parser, base: Ast.ExprId, tok: u32) Error!Ast.ExprId {
+    _ = try self.expect(.lbracket);
     var idx = try parseExpr(self);
     if (self.eat(.colon)) { // A.8.3 analog_range_expression
         const lsb = try parseExpr(self);
@@ -137,15 +143,20 @@ pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
 }
 
 /// Parses IEEE 1364-2005 §5.3 / A.8.3 `mintypmax_expression ::= expression
-/// | expression : expression : expression`, in a digital parse: in
-/// parentheses wherever an expression is, and bare where A.2.2.3, A.2.4 and
-/// A.7.4 write one (a `delay3` element, a specparam, a path delay). The tool
-/// chooses one member of each triple; this one takes the typical, the
-/// middle, whose compound expressions then all read their middle members.
-/// An analog parse reads a plain expression and leaves any `:` unconsumed.
+/// | expression : expression : expression`: in parentheses wherever a
+/// non-analog expression is (A.8.4 `( mintypmax_expression )`), and bare
+/// where A.2.2.3, A.2.4, A.4.1, A.7.4 and A.7.5.2 write one (a `delay3`
+/// element, a parameter or specparam default, a defparam, a named parameter
+/// override, a path delay, a timing check offset). The tool chooses one
+/// member of each triple; VerA takes the typical, the middle, in every
+/// context, so compound expressions all read their middle members
+/// (`docs/Vague_Decisions.md` VD-099). The others are parsed and dropped.
+///
+/// ponytail: a dropped member is never elaborated, so a name it misspells
+/// is not diagnosed. Keeping all three needs an AST node and a fold.
 pub fn parseMinTypMax(self: *Parser) Error!Ast.ExprId {
     const e = try parseExpr(self);
-    if (!self.digital or !self.eat(.colon)) return e;
+    if (!self.eat(.colon)) return e;
     const typ = try parseExpr(self);
     _ = try self.expect(.colon);
     _ = try parseExpr(self);
@@ -170,7 +181,14 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
         },
         .lparen => {
             self.pos += 1;
-            const e = try parseMinTypMax(self);
+            if (!self.analog_expr) {
+                const e = try parseMinTypMax(self);
+                _ = try self.expect(.rparen);
+                return e;
+            }
+            // A.8.4 `analog_primary ::= ... | ( analog_expression )`.
+            const e = try parseExpr(self);
+            if (self.peek() == .colon) return self.failAt(self.pos, .E0295, "", .{});
             _ = try self.expect(.rparen);
             return e;
         },
@@ -234,17 +252,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
                 // elaboration gives the child's function because
                 // `Elaborate.sep` is the same `.`. This join and
                 // `Lower.flatName` must change together.
-                if (self.peek() == .lparen) {
-                    var n = parts.items.len - 1;
-                    for (parts.items) |part| n += self.file.str(part).len;
-                    var joined: std.ArrayList(u8) = try .initCapacity(self.arena, n);
-                    for (parts.items, 0..) |part, i| {
-                        if (i != 0) joined.appendAssumeCapacity('.');
-                        joined.appendSliceAssumeCapacity(self.file.str(part));
-                    }
-                    const flat = try self.file.strings.intern(self.arena, joined.items);
-                    return parseCall(self, .call, tok, flat);
-                }
+                if (self.peek() == .lparen) return parseCall(self, .call, tok, try joinName(self, parts.items));
                 const off = try self.file.exprs.addStrList(self.arena, parts.items);
                 return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
             }
@@ -277,7 +285,13 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // { identifier [ [ constant_expression ] ] . } identifier`. `$root`
             // anchors the path at the top of the instantiation tree; it rides
             // along as part 0 and `Lower.flatName`, which knows the root, strips it.
-            if (self.eat(.dot)) return hierTerminal(self, &.{name}, tok);
+            if (self.eat(.dot)) {
+                const h = try hierTerminal(self, &.{name}, tok);
+                // A.9.3 `hierarchical_function_identifier`, `$root.top.f(x)`:
+                // a call under the joined name, as for a dotted name above.
+                if (self.peek() != .lparen) return h;
+                return parseCall(self, .call, tok, try joinName(self, self.file.exprs.nameParts(h)));
+            }
             if (self.peek() == .lparen) return parseCall(self, .sys_call, tok, name);
             return addCall(self, .sys_call, tok, name, &.{});
         },
@@ -390,12 +404,17 @@ fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 /// potential one, which should also discard what the child retained. The
 /// upgrade is to attribute the contribution to the child's
 /// `Ast.AnalogBlock.unit`, which `Lower.discardOpposite` already keys on.
-/// The production's `( < port_identifier > )` alternatives are not parsed.
+/// The production's `( < port_identifier > )` alternatives are the child
+/// port's §3.12.1 port branch, so they become the `I(<inst.p>)` port access
+/// they name. A path may open with `$root` (A.9.3), and a terminal may carry
+/// A.2.1.3's `[ constant_expression ]`, which selects on the whole path as in
+/// `parseNetRef`.
 fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
+    const rooted = self.peek() == .system_identifier and std.mem.eql(u8, self.tokenText(self.pos), "$root");
     // The lookahead counts the parts the loop below then reads.
     const n_parts = blk: {
         var i = self.pos;
-        if (!self.identLike(i)) return null;
+        if (!rooted and !self.identLike(i)) return null;
         while (self.tags[i + 1] == .dot) : (i += 2) {
             if (self.tags[i + 2] == .kw_branch) {
                 if (self.tags[i + 3] != .lparen) return null;
@@ -406,15 +425,26 @@ fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprI
         break :blk (i - self.pos) / 2 + 1;
     };
     var parts: std.ArrayList(Ast.StrId) = try .initCapacity(self.arena, n_parts);
-    while (true) {
+    if (rooted) {
+        parts.appendAssumeCapacity(try self.internTok(self.pos));
+        self.pos += 1;
+        _ = try self.expect(.dot);
+    }
+    while (!self.eat(.kw_branch)) {
         parts.appendAssumeCapacity(try self.expectIdent());
         _ = try self.expect(.dot);
-        if (self.eat(.kw_branch)) break;
     }
     _ = try self.expect(.lparen);
-    const hi = try hierTerminal(self, parts.items, tok);
+    if (self.eat(.lt)) {
+        const port = try hierBranchTerminal(self, parts.items, tok);
+        _ = try self.expect(.gt);
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.rparen);
+        return try self.file.exprs.add(self.arena, .{ .tag = .port_access, .main_tok = tok, .lhs = port, .str = name });
+    }
+    const hi = try hierBranchTerminal(self, parts.items, tok);
     var lo: Ast.ExprId = .none;
-    if (self.eat(.comma)) lo = try hierTerminal(self, parts.items, tok);
+    if (self.eat(.comma)) lo = try hierBranchTerminal(self, parts.items, tok);
     _ = try self.expect(.rparen);
     _ = try self.expect(.rparen);
     return try self.file.exprs.add(self.arena, .{
@@ -427,6 +457,31 @@ fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprI
         // decided by it: mark the node (`Ast.branch_ref_hier_unnamed`).
         .extra = Ast.branch_ref_hier_unnamed,
     });
+}
+
+/// One `branch_terminal` of a hierarchical unnamed branch on the instance
+/// path `prefix`, with its optional select (`parseHierBranchRef`).
+fn hierBranchTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
+    const base = try hierTerminal(self, prefix, tok);
+    if (self.peek() != .lbracket) return base;
+    self.pos += 1;
+    const idx = try parseExpr(self);
+    _ = try self.expect(.rbracket);
+    return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
+}
+
+/// The flat name `a.b.c` of a §6.7 hierarchical name's parts, interned: the
+/// name elaboration gives the entity (`Elaborate.sep` is the same `.`), so
+/// `Lower.flatName` and this join must change together.
+pub fn joinName(self: *Parser, parts: []const Ast.StrId) Error!Ast.StrId {
+    var n = parts.len - 1;
+    for (parts) |part| n += self.file.str(part).len;
+    var joined: std.ArrayList(u8) = try .initCapacity(self.arena, n);
+    for (parts, 0..) |part, i| {
+        if (i != 0) joined.appendAssumeCapacity('.');
+        joined.appendSliceAssumeCapacity(self.file.str(part));
+    }
+    return self.file.strings.intern(self.arena, joined.items);
 }
 
 /// `prefix . id { . id }` as one `.hier_ident`, the cursor on the first `id`:
@@ -464,10 +519,22 @@ pub fn parseNetRef(self: *Parser) Error!Ast.ExprId {
     else
         try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
     if (self.peek() != .lbracket) return base;
-    self.pos += 1;
-    const idx = try parseExpr(self);
-    _ = try self.expect(.rbracket);
-    return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
+    // A.2.1.3 `branch_terminal ::= net_identifier [ constant_range_expression ]`:
+    // a bit, a part or an indexed part (`vecTerminal` judges which).
+    return parseSelectAt(self, base, tok);
+}
+
+/// Parses an A.8.5 `net_lvalue ::= hierarchical_net_identifier [ ... ]
+/// | { net_lvalue { , net_lvalue } }`, a primitive's output or inout
+/// terminal (A.3.3, A.5.4). A one-element concatenation is its element, the
+/// same bits (IEEE 1364-2005 §5.1.14); a wider one stays a `.concat` for the
+/// executor to judge.
+pub fn parseNetLvalue(self: *Parser) Error!Ast.ExprId {
+    if (self.peek() != .lbrace) return parseNetRef(self);
+    const c = try parse_concat.parseConcat(self, self.pos);
+    const ex = &self.file.exprs;
+    if (ex.tag(c) == .concat and ex.args(c).len == 1) return ex.args(c)[0];
+    return c;
 }
 
 /// Parses an A.8.2 / A.6.9 argument list, cursor on the `(`. An omitted

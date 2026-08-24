@@ -441,7 +441,8 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         const arg = self.pos;
         var slot: Ast.ExprId = .none;
         var ev: Ast.SpecEdge = .none;
-        const controlled = self.peek() != .comma and self.peek() != .rparen and try parseTimingCheckArg(self, &slot, &ev);
+        const controlled = self.peek() != .comma and self.peek() != .rparen and
+            try parseTimingCheckArg(self, &slot, &ev, mintypmaxArg(self.tokenText(tok), n));
         if (n <= max_timing_args) {
             args[n - 1] = slot;
             edges[n - 1] = ev;
@@ -494,7 +495,7 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
 /// Every argument accepts that union; `parseTimingCheck` enforces the
 /// mandatory control of a `controlled_reference_event` (`$period`,
 /// `$width`).
-fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
+fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge, mtm: MinTypMaxArg) Error!bool {
     ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
     var controlled = ev.* != .none;
     if (!controlled and self.reservedIs(self.pos, "edge")) {
@@ -522,11 +523,39 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
             self.pos += 1; // `,`
         };
     }
-    slot.* = try parse_expr.parseExpr(self);
+    slot.* = switch (mtm) {
+        .no => try parse_expr.parseExpr(self),
+        .yes => try parse_expr.parseMinTypMax(self),
+        // `terminal_identifier [ constant_mintypmax_expression ]`.
+        .select => if (self.identLike(self.pos) and self.peekAt(1) == .lbracket) sel: {
+            const base = try parse_expr.parsePrimary(self);
+            const at = try self.expect(.lbracket);
+            const i = try parse_expr.parseMinTypMax(self);
+            _ = try self.expect(.rbracket);
+            break :sel try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = at, .lhs = base, .rhs = i });
+        } else try parse_expr.parseExpr(self),
+    };
     // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
     // has no tag for it.
     if (self.eatSymbol("&&&")) _ = try parse_expr.parseExpr(self);
     return controlled;
+}
+
+const MinTypMaxArg = enum { no, yes, select };
+
+/// Which A.7.5.2 argument productions are `mintypmax_expression`: the
+/// stamptime and checktime conditions (6th, 7th) of `$setuphold` and
+/// `$recrem`, whose delayed reference and data (8th, 9th) take one as their
+/// select, and `$nochange`'s two edge offsets (3rd, 4th). The rest are
+/// `expression` or narrower.
+fn mintypmaxArg(name: []const u8, n: u8) MinTypMaxArg {
+    if (std.mem.eql(u8, name, "$nochange")) return if (n == 3 or n == 4) .yes else .no;
+    if (!std.mem.eql(u8, name, "$setuphold") and !std.mem.eql(u8, name, "$recrem")) return .no;
+    return switch (n) {
+        6, 7 => .yes,
+        8, 9 => .select,
+        else => .no,
+    };
 }
 
 /// A.7.5.3 `edge_descriptor ::= 01 | 10 | z_or_x zero_or_one | zero_or_one

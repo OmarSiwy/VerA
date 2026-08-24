@@ -397,7 +397,7 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
         _ = try self.expect(.lparen);
         var ports: std.ArrayList(Ast.PortConn) = .empty;
         const out_tok = self.pos;
-        try ports.append(self.arena, .{ .expr = try parse_expr.parseNetRef(self), .main_tok = out_tok }); // A.3.3 output_terminal ::= net_lvalue
+        try ports.append(self.arena, .{ .expr = try parse_expr.parseNetLvalue(self), .main_tok = out_tok }); // A.3.3 output_terminal ::= net_lvalue
         while (self.eat(.comma)) {
             const in_tok = self.pos;
             try ports.append(self.arena, .{ .expr = try parse_expr.parseExpr(self), .main_tok = in_tok }); // input_terminal ::= expression

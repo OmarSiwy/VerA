@@ -4860,9 +4860,16 @@ DIFF_RULES = [
     ("context-rule", "both refuse: Annex A derives no such text, and VerA's parser reads a wider form and "
      "refuses it after parsing, by clause (later stage); only the stage differs",
      {"dir": "V", "vera": r"^semantic E0(40[1-8]|41[0-4]|42[2]|43[045]|316|317|326|330|349|363|50[25]|509|516|522|"
-                          r"70[123]|90[16])"}),
+                          r"70[123]|708|517|894|90[16])"}),
     ("bnf-transcription", "an assignment pattern where A.8.1 and A.2.4 derive none (nested, an override value, a "
      "nodeset, a function argument); 3.3, 3.4.8, 3.6.3 and 4.7.2.3 use one there", {"dir": "V", "at": r">>'<< \{"}),
+    ("bnf-transcription", "the recognizer's tokenizer reads `+:`/`-:` as A.8.3's indexed part-select operator, but "
+     "in A.7.4's edge-sensitive path `( terminal [ polarity_operator ] : data_source_expression )` they are a "
+     "polarity and a colon (IEEE 1364-2005 14.2.3 writes `( posedge clock => ( out +: in ) ) = (10, 8);`)",
+     {"dir": "V", "at": r">>[-+]:<<"}),
+    ("bnf-transcription", "A.7.5.3's edge_descriptor and A.5.3's edge_indicator are characters (`x1`, `0x`, "
+     "`(01)`), which the token-level recognizer reads as an identifier or a number; IEEE 1364-2005 15.4 writes "
+     "`edge[01, 0x, x1] clr`", {"dir": "V", "at": r"(edge \[[^>]*|table \( )>>\w+<<"}),
     # VerA's parser takes text no rule gives it.
     ("vera-bug", "VerA extension (AGENTS.md §6 `vera_lte`, `vera_interp`): an attribute after `ddt`/`absdelay`; "
      "A.8.2 allows { attribute_instance } only after an analog_function_identifier (probe "
@@ -4882,11 +4889,14 @@ DIFF_RULES = [
      {"dir": "V", "at": r"(supply[01]|tri[01]?|wire|wand|wor|triand|trior|trireg|uwire) >>\1<<"}),
     ("vera-bug", "VerA takes VAMS 2.x's `{...}` concatenation, `{}` included, as a filter coefficient list "
      "(probe); A.8.2's analog_filter_function_arg is a parameter, a `'{...}` pattern or nothing (4.5.11 writes "
-     "`laplace_zp(white_noise(k), , '{1,0,1,0,-1,0,-1,0})`)", {"dir": "V", "at": r"\{ >>\}<<", "vera": r"positive"}),
+     "`laplace_zp(white_noise(k), , '{1,0,1,0,-1,0,-1,0})`)", {"dir": "V", "at": r"(\{ >>\}<<|, >>\{<<)", "vera": r"positive"}),
+    ("vera-bug", "VerA takes a variable initializer that is no constant_expression (`real w = white_noise(4e-21, "
+     "\"dec\");`); Syntax 3-1 and A.2.2.1 write `real_identifier = constant_expression` "
+     "(ch04_expressions/white_noise_declaration_initializer.va relies on it)", {"dir": "V", "at": r"real \w+ = >>\w+<<"}),
     ("vera-bug", "VerA takes a null item among an analog function's declarations (`input a; ; real a;`, probe); "
      "A.2.6 has none", {"dir": "V", "at": r"(input|inout|output) \w+ ; >>;<<"}),
     ("vera-bug", "VerA takes `child(s);`, a module item with no instance name (probe); A.4.1's module_instance "
-     "needs a name_of_module_instance", {"dir": "V", "case": r"lrm_6_5_7\.va: delete"}),
+     "needs a name_of_module_instance", {"dir": "V", "at": r"\w+ \( \w+ >>\)<< ;", "vera": r"^$"}),
     ("vera-bug", "VerA takes `#d 20 = 1'bx;`, a number as an assignment target (probe)", {"dir": "V", "at": r"# \w+ \d+ = >>"}),
     ("vera-bug", "VerA takes `output` in a function declared without `analog` (probe `function real f; input a; "
      "output b; ...`); A.2.6's function_item_declaration has tf_input_declaration only", {"dir": "V", "at": r">>output<<"}),
@@ -4902,7 +4912,7 @@ DIFF_RULES = [
      {"dir": "E", "case": r"\b(abstol|access|ddt_nature|idt_nature|units) \("}),
     ("bnf-transcription", "A.8.5 ends array_analog_variable_assignment with `;` and A.6.2 adds another (Annex "
      "A's editorial note), so the grammar as printed derives `g2 = g3; ;` and `for (a = b; c; d = e;)`, which "
-     "VerA refuses", {"dir": "E", "case": r"(=[^;]*;\s*;|\bfor\s*\()", "vera": r"found `;`"}),
+     "VerA refuses", {"dir": "E", "case": r"(=[^;]*;\s*;|\bfor\s*\(|duplicate line \d+ `;`)", "vera": r"found `;`|E0219"}),
     ("bnf-transcription", "A.2.4 prints `PATHPULSE$` as a terminal of its own, but 2.8.1's identifier syntax makes "
      "`PATHPULSE$a$y` one identifier (which VerA takes, probe): the spaced sequence the grammar derives is "
      "another text", {"dir": "E", "case": r"PATHPULSE\$\s+\\?\w+\s+\$"}),
@@ -4924,9 +4934,6 @@ DIFF_RULES = [
      {"dir": "E", "vera": r"E022[67]"}),
     ("context-rule", "4.7.1's analog function rules: each formal has a direction and a data type, and there is "
      "at least one", {"dir": "E", "vera": r"E022[45]", "file": r"analog\s+function"}),
-    ("vera-bug", "VerA applies 4.7.1's analog-function typing rule (E0225) to a function declared without "
-     "`analog`; IEEE 1364-2005 10.4 lets a function's input be untyped (probe `function integer f; input a; "
-     "f = a; endfunction`)", {"dir": "E", "vera": r"E0225"}),
     ("context-rule", "a function declares at least one input (IEEE 1364-2005 10.4.1; 4.7.1 for analog "
      "functions)", {"dir": "E", "vera": r"E0224"}),
     ("context-rule", "6.4.1's restrictions on paramset statements", {"dir": "E", "vera": r"E0237"}),
@@ -4943,30 +4950,12 @@ DIFF_RULES = [
      "paramset_statement derives analog_function_statement, jump statements included",
      {"dir": "E", "vera": r"E0205 .*(return|break|continue)"}),
     # VerA's parser refuses what the grammar derives and no rule forbids.
-    ("vera-bug", "VerA refuses an empty port (A.1.3 port ::= [ port_expression ]; 6.5.1: \"The port expression "
-     "is optional\") or a named port with no expression, `.a()` (probes)", {"dir": "E", "vera": r"E0208 .*found `[,)]`"}),
-    ("vera-bug", "VerA refuses a null statement in an analog event block; A.6.4's analog_event_statement has "
-     "`{ attribute_instance } ;` (probe)", {"dir": "E", "vera": r"E0219"}),
-    ("vera-bug", "VerA refuses a min:typ:max expression, or a conditional in a range, where the grammar derives "
-     "one (parameter default, specparam, delay, path delay; probes)", {"dir": "E", "vera": r"found `:`|path delay lists"}),
-    ("vera-bug", "VerA refuses `function automatic` and `task automatic` (A.2.6, A.2.7; probe)", {"dir": "E", "vera": r"found automatic"}),
-    ("vera-bug", "VerA refuses fork ... join (A.6.3 par_block; probe)", {"dir": "E", "vera": r"found fork"}),
-    ("vera-bug", "VerA refuses A.8.9's hierarchical unnamed branch, `inst.branch(...)` (probe)",
-     {"dir": "E", "vera": r"^syntax: E02", "case": r"\.\s*branch\s*\("}),
-    ("vera-bug", "VerA refuses a `$root.` name (A.9.3 hierarchical_identifier; probe `defparam $root.m.x = 1;`)", {"dir": "E", "vera": r"found \$root"}),
-    ("vera-bug", "VerA refuses a hierarchical name the grammar derives there (lvalue, event `@ c.e`, task "
-     "enable `c.t;`, function call; probes)", {"dir": "E", "vera": r"found `\.`|E0214|found `\(`|E0209 .*found `\.`"}),
-    ("vera-bug", "VerA refuses a declaration form A.2 derives: `reg signed`, `function signed`, `function "
-     "realtime`, `function time`, `input reg` (probes)", {"dir": "E", "vera": r"found `(signed|reg|realtime|time)`"}),
-    ("vera-bug", "VerA refuses a concatenation as a switch or MOS terminal (A.3.3's net_lvalue; probe "
-     "`tranif0 ({a}, b, c);`, while `buf ({a}, b);` passes)", {"dir": "E", "vera": r"found `\{`"}),
-    ("vera-bug", "VerA refuses an indexed part-select, `[b +: w]`, in a branch terminal (A.2.1.3 branch_terminal "
-     "takes a constant_range_expression, A.8.3)", {"dir": "E", "vera": r"found `[-+]`", "case": r"branch \("}),
-    ("vera-bug", "VerA refuses `driver_update` in a digital event expression (A.6.5; probe)", {"dir": "E", "vera": r"driver_update"}),
-    ("vera-bug", "VerA refuses `@*` after `repeat (n)` or an intra-assignment `@(*)` (A.6.5)",
-     {"dir": "E", "vera": r"found `\*`", "case": r"@\s*\*|@\s*\(\s*\*\s*\)"}),
-    ("vera-bug", "VerA refuses a discipline on a reg, `reg logic r;` (A.2.1.3 reg_declaration ::= reg [ "
-     "discipline_identifier ] ...; probe)", {"dir": "E", "vera": r"E0207 unexpected token: found \w+$", "file": r"reg\s+\w+\s+\w+\s*;"}),
+    # (Wave 2 A, 2026-10-08: the min:typ:max, null port, declaration-form,
+    # `$root`, hierarchical-name, switch-terminal, branch-terminal, `@*`,
+    # analog-event null and E0225 rows parse now; their rules went with them.)
+    ("context-rule", "9.22: the driver access family, driver_update with it, is legal only in a connect module; A.6.5 "
+     "derives `driver_update` in any digital event, and VerA parses it and refuses it by that clause (E0818)",
+     {"dir": "E", "vera": r"E0818"}),
 ]
 
 

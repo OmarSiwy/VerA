@@ -59,13 +59,20 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
     // a fold and a mask in lowering, where the default is already folded.
     const packed_range: ?Ast.Dim =
         if (ty == .unspecified and self.peek() == .lbracket) try parseDim(self) else null;
+    // A declaration in an analog block or function is constant, not
+    // analog_expression: A.8.4's `( constant_mintypmax_expression )` holds.
+    const saved_expr = self.analog_expr;
+    self.analog_expr = false;
+    defer self.analog_expr = saved_expr;
 
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
         const dims = try parseDims(self);
         _ = try self.expect(.assign_eq);
-        const default = try parse_expr.parseExpr(self);
+        // A.2.4 `param_assignment ::= parameter_identifier =
+        // constant_mintypmax_expression { value_range }`.
+        const default = try parse_expr.parseMinTypMax(self);
         try self.copyAttributes(decl_tok, tok);
 
         var ranges: std.ArrayList(Ast.ValueRange) = .empty;
@@ -179,14 +186,21 @@ pub fn varType(tag: token.Tag) ?Ast.Type {
     };
 }
 
-/// Parses an A.2.1.3 `reg_declaration`, cursor on `reg`, through its `;`,
-/// appending one `VarDecl` per name to `out`. An analog parse keeps Table
-/// 7-1's integer mapping and its 31-bit width gate; a digital parse keeps
-/// packed width and signedness.
+/// Parses an A.2.1.3 `reg_declaration ::= reg [ discipline_identifier ]
+/// [ signed ] [ range ] list_of_variable_identifiers ;`, cursor on `reg`,
+/// through its `;`, appending one `VarDecl` per name to `out`. The analog
+/// context reads any `reg` as Table 7-1's nonnegative integer ("The sign bit
+/// (bit 31) of the integer is always set to zero"), so `signed` changes only
+/// the digital kernel's arithmetic.
 pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
     const tok = self.pos;
     self.pos += 1;
-    const signed = self.digital and self.eat(.kw_signed);
+    const disc: Ast.StrId = if (regDisciplineAhead(self)) d: {
+        const d = try self.internTok(self.pos);
+        self.pos += 1;
+        break :d d;
+    } else .none;
+    const signed = self.eat(.kw_signed);
     // §7.3.1's 31-bit limit is on an ACCESS ("Access of discrete bit
     // groupings with greater than 31 bits is illegal"), not on a declaration:
     // `lower_var.analogRead` judges each grouping the analog context reads,
@@ -217,10 +231,36 @@ pub fn parseRegDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
             .is_signed = signed,
             .dims = dims,
             .init = value,
+            .discipline = disc,
         });
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);
+}
+
+/// Whether a `reg` declaration's optional discipline_identifier is at the
+/// cursor: a name followed by another name, by `signed`, or by a `[ range ]`
+/// that a name follows. A name followed by `[`, `;`, `,` or `=` otherwise is
+/// the variable itself (`reg r[0:3];` declares an array).
+fn regDisciplineAhead(self: *const Parser) bool {
+    if (!self.identLike(self.pos)) return false;
+    var i = self.pos + 1;
+    if (self.tags[i] == .lbracket) {
+        var depth: u32 = 0;
+        while (self.tags[i] != .eof) : (i += 1) {
+            switch (self.tags[i]) {
+                .lbracket => depth += 1,
+                .rbracket => {
+                    depth -= 1;
+                    if (depth == 0) break;
+                },
+                else => {}, // else: a token inside the range
+            }
+        }
+        if (self.tags[i] == .eof) return false;
+        i += 1;
+    } else if (self.tags[i] == .kw_signed) return true;
+    return self.identLike(i);
 }
 
 /// Parses an A.2.1.3 integer/real/string/time declaration (§3.2, §3.3), cursor

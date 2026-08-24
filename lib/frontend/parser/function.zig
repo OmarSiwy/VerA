@@ -26,15 +26,32 @@ const Error = parser.Error;
 /// (`input real x;`) or from a matching variable declaration (`input x; real
 /// x;`, A.2.6). Reports E0224 for no formals and E0225 for an untyped one,
 /// then carries on.
+///
+/// A function without `analog` (an analog parse's digital function, §4.7)
+/// takes A.2.6's `function_declaration` header and A.2.7's `tf_*_declaration`
+/// formals, as `parseSubroutine` reads them: `automatic`, `[ signed ]
+/// [ range ]`, `realtime`, `time`, `reg` formals, and an untyped formal, which
+/// A.2.7's `input [ reg ] [ signed ] [ range ]` makes a 1-bit `reg` (so no
+/// E0225). Only the type's class is kept: the analog compile refuses a call
+/// to it (E0436), and the mixed-signal kernel runs it from its own digital
+/// parse.
 pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_analog: bool) Error!void {
     self.pos += 1; // 'function'
-    const ret_ty: Ast.Type = switch (self.peek()) {
+    const ret_ty: Ast.Type = if (!is_analog) digital: {
+        if (self.reservedIs(self.pos, "automatic")) self.pos += 1;
+        if (self.peek() == .kw_string) {
+            self.pos += 1;
+            break :digital .string;
+        }
+        if (!tfTypeAhead(self)) break :digital .real;
+        break :digital (try tfPortType(self)).ty;
+    } else switch (self.peek()) {
         .kw_integer => .integer,
         .kw_real => .real,
         .kw_string => .string,
         else => .real, // else: no type keyword, so §4.7.1's `real` default
     };
-    if (self.peek() == .kw_integer or self.peek() == .kw_real or self.peek() == .kw_string) {
+    if (is_analog and (self.peek() == .kw_integer or self.peek() == .kw_real or self.peek() == .kw_string)) {
         self.pos += 1;
     }
     const name = try self.expectIdent();
@@ -55,7 +72,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                 },
                 else => Ast.Direction.input, // else: no direction keyword, so A.2.7's `input` default
             };
-            try analogFormals(self, &args, dir, false);
+            try analogFormals(self, &args, dir, false, is_analog);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
@@ -77,12 +94,18 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
 
     while (true) {
         try self.skipAttributes();
+        // A.2.8 block_item_declaration's `reg_declaration`, a digital
+        // function's local (A.2.6 `function_item_declaration`).
+        if (!is_analog and self.peek() == .kw_reg) {
+            try parse_decl.parseRegDecl(self, &vars);
+            continue;
+        }
         switch (self.peek()) {
             .eof, .kw_endfunction => break,
             .kw_input, .kw_output, .kw_inout => {
                 const dir = parse_net.portDirection(self.peek()).?;
                 self.pos += 1;
-                try analogFormals(self, &args, dir, true);
+                try analogFormals(self, &args, dir, true, is_analog);
                 _ = try self.expect(.semicolon);
             },
             .kw_parameter, .kw_localparam => {
@@ -110,6 +133,9 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
             },
             else => { // else: not a declaration, so the function body's statement
                 const before = self.pos;
+                const saved_expr = self.analog_expr;
+                self.analog_expr = is_analog;
+                defer self.analog_expr = saved_expr;
                 const s = parse_stmt.parseStmt(self) catch |e| {
                     if (e == error.OutOfMemory) return e;
                     self.recoverStatement(before);
@@ -131,6 +157,10 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     // `.real` after the diagnostic only to keep the rest of the parse
     // well-typed; the compile has already failed.
     for (args.items) |*a| if (a.ty == .unspecified) {
+        if (!is_analog) {
+            a.ty = .integer; // A.2.7 `input [ reg ] ...`: a 1-bit `reg`
+            continue;
+        }
         var d = self.failWith(a.main_tok, .E0225);
         d.msg("formal `{s}` of `{s}` has no data type declaration", .{
             self.file.str(a.name), self.file.str(name),
@@ -164,10 +194,22 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
 /// (§4.7.2.3 `output [0:1] out;`, §4.7.1 Example 3 `inout [0:1]a;`).
 /// `list` reads `, name` onward, as a body declaration does; a port-list
 /// entry names one formal.
-fn analogFormals(self: *Parser, args: *std.ArrayList(Ast.FuncArg), dir: Ast.Direction, list: bool) Error!void {
-    const ty = parse_decl.varType(self.peek()) orelse .unspecified;
+///
+/// After a discipline, A.2.1.2's `output [ discipline_identifier ] reg
+/// [ signed ] [ range ]` and A.2.7's `tf_*_declaration` write `reg [ signed ]`:
+/// read, and no data type for an analog function (§4.7.1 types a formal by a
+/// block item declaration: E0225). A digital function's formal takes
+/// `tfPortType`'s A.2.7 types, its range a packed width, not dimensions.
+fn analogFormals(self: *Parser, args: *std.ArrayList(Ast.FuncArg), dir: Ast.Direction, list: bool, is_analog: bool) Error!void {
+    var ty = parse_decl.varType(self.peek()) orelse .unspecified;
     if (ty != .unspecified) self.pos += 1 else _ = try parse_net.optDiscipline(self);
-    const dims = try parse_decl.parseDims(self);
+    var dims: []const Ast.Dim = &.{};
+    if (ty == .unspecified and !is_analog) {
+        if (tfTypeAhead(self)) ty = (try tfPortType(self)).ty;
+    } else {
+        if (ty == .unspecified and self.eat(.kw_reg)) _ = self.eat(.kw_signed);
+        dims = try parse_decl.parseDims(self);
+    }
     while (true) {
         const at = self.pos;
         try args.append(self.arena, .{
@@ -322,6 +364,16 @@ fn tfPortType(self: *Parser) Error!Ast.VarDecl {
     var v = tfType(self);
     if (v.storage == .reg and self.peek() == .lbracket) v.packed_range = try parse_decl.parseDim(self);
     return v;
+}
+
+/// Whether an A.2.7 `[ reg ] [ signed ] [ range ]` or `task_port_type`
+/// begins at the cursor, so `tfPortType` reads a written type and not the
+/// bare-direction default.
+fn tfTypeAhead(self: *const Parser) bool {
+    return switch (self.peek()) {
+        .kw_reg, .kw_signed, .lbracket, .kw_integer, .kw_time, .kw_real, .kw_realtime => true,
+        else => false, // else: no type is written here
+    };
 }
 
 /// The keyword half of `tfPortType`, which a function's result shares.

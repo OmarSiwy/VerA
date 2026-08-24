@@ -14,6 +14,7 @@ const parse_literal = @import("literal.zig");
 const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
 const parse_specify = @import("specify.zig");
+const parse_hier = @import("hier.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
 
@@ -59,6 +60,9 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
 
 fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
+    const event_block = self.analog_event_block;
+    self.analog_event_block = false;
+    defer self.analog_event_block = event_block;
     if (self.eat(.hash)) {
         if (!self.discreteGrammar()) try self.report(tok, .E0254, "", .{});
         const delay = try parseDelay(self);
@@ -123,7 +127,10 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
             self.pos += 1;
             return self.file.addStmt(self.arena, .empty, tok);
         },
-        .kw_begin => return parseSeqBlock(self),
+        .kw_begin => {
+            self.analog_event_block = event_block; // A.6.3 analog_event_seq_block
+            return parseSeqBlock(self);
+        },
         .kw_if => return parse_generate.parseIf(self, null, tok), // §5.8 / A.6.6
         // §5.8.3 / A.6.7. `casex`/`casez` share the production; §7.3.2
         // lists all three among the analog context's four-state features.
@@ -159,7 +166,9 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
         },
         .kw_disable => { // §5.11
             self.pos += 1;
-            const name = try self.expectIdent();
+            // A.6.5 `disable hierarchical_block_identifier` (A.9.3), one
+            // flat name, `$root.` included.
+            const name = try parse_hier.parseDottedName(self, false);
             _ = try self.expect(.semicolon);
             return self.file.addStmt(self.arena, .{ .disable = .{ .name = name } }, tok);
         },
@@ -187,8 +196,12 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
             _ = try self.expect(.semicolon);
             return self.file.addStmt(self.arena, .{ .jump = .{ .kind = kind } }, tok);
         },
-        // A.6.9 analog_system_task_enable (§5.12, ch9)
-        .system_identifier => return parseSysTask(self),
+        // A.6.9 analog_system_task_enable (§5.12, ch9). `$root.` opens an
+        // A.9.3 hierarchical name instead: an lvalue or a task enable.
+        .system_identifier => return if (self.peekAt(1) == .dot and std.mem.eql(u8, self.tokenText(self.pos), "$root"))
+            parseExprOrContributeStmt(self)
+        else
+            parseSysTask(self),
         else => return parseExprOrContributeStmt(self), // else: not a statement keyword, so an expression or contribution statement
     }
 }
@@ -198,6 +211,9 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
 /// any, leaving lowering to report the resulting undeclared name.
 fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
+    const event_block = self.analog_event_block;
+    self.analog_event_block = false;
+    defer self.analog_event_block = event_block;
     const parallel = self.peek() != .kw_begin; // `fork`
     self.pos += 1; // 'begin' / 'fork'
     var blk: Ast.SeqBlock = .{ .parallel = parallel };
@@ -269,8 +285,10 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     while (!(if (parallel) self.reservedIs(self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
         const before = self.pos;
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
-        // has no null alternative, so a stray `;` here is E0219.
-        const s = parseStmtNoNull(self) catch |e| {
+        // has no null alternative, so a stray `;` here is E0219. An
+        // `analog_event_seq_block`'s `analog_event_statement` has one (A.6.4).
+        self.analog_event_block = event_block;
+        const s = (if (event_block) parseStmt(self) else parseStmtNoNull(self)) catch |e| {
             if (e == error.OutOfMemory) return e;
             self.recoverStatement(before);
             continue;
@@ -341,19 +359,28 @@ fn parseEventControl(self: *Parser) Error!Ast.StmtId {
     // same implicit list and carry no expression, so the statement records
     // `.none` (`Ast.StmtKind.event_control`). The §2.9 attribute tokens split
     // `(*)` three ways: `(*` `)`, `(` `*)`, `(` `*` `)`.
+    if (eatImplicitEvent(self))
+        return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
+    const event = try parseEvent(self);
+    // A.6.4 `analog_event_control_statement ::= analog_event_control
+    // analog_event_statement`.
+    self.analog_event_block = !self.discreteGrammar();
+    const body = try parseStmt(self);
+    return self.file.addStmt(self.arena, .{ .event_control = .{ .event = event, .body = body } }, tok);
+}
+
+/// Consumes A.6.5's `*` or `(*)` after an `@`, the implicit event list, and
+/// returns whether it was there. The §2.9 attribute tokens split `(*)` three
+/// ways: `(*` `)`, `(` `*)`, `(` `*` `)`.
+fn eatImplicitEvent(self: *Parser) bool {
     const star_toks: u32 = switch (self.peek()) {
         .star => 1,
         .attr_open => if (self.peekAt(1) == .rparen) 2 else 0,
         .lparen => if (self.peekAt(1) == .attr_close) 2 else if (self.peekAt(1) == .star and self.peekAt(2) == .rparen) 3 else 0,
         else => 0, // else: any other token after `@` starts an event expression or a name
     };
-    if (star_toks != 0) {
-        self.pos += star_toks;
-        return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try parseStmt(self) } }, tok);
-    }
-    const event = try parseEvent(self);
-    const body = try parseStmt(self);
-    return self.file.addStmt(self.arena, .{ .event_control = .{ .event = event, .body = body } }, tok);
+    self.pos += star_toks;
+    return star_toks != 0;
 }
 
 /// Parses an A.6.5 `delay_control` after the `#`: `( mintypmax_expression )`
@@ -376,6 +403,8 @@ fn parseEvent(self: *Parser) Error!Ast.ExprId {
         _ = try self.expect(.rparen);
         return e;
     }
+    // A.9.3 `hierarchical_event_identifier`: `c.e`, `$root.top.e`.
+    if (self.peekAt(1) == .dot) return parse_expr.parsePrimary(self);
     const id_tok = self.pos;
     const name = try self.expectIdent();
     return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name });
@@ -407,9 +436,16 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     // A.6.5 `event_expression ::= … | driver_update expression` is digital,
     // absent from `analog_event_expression`, and legal only in a §7.6
-    // connect module (§9.22). Elsewhere the keyword falls through to
-    // `parseExpr` and is "expected an expression" (§2.8.2).
-    if (self.in_connect_module and self.peek() == .kw_driver_update) {
+    // connect module (§9.22, E0818), where VerA also reads it in an analog
+    // event. Any other analog event falls through to `parseExpr`, which
+    // finds no expression (§2.8.2).
+    if (self.peek() == .kw_driver_update and (self.in_connect_module or self.discreteGrammar())) {
+        if (!self.in_connect_module) {
+            var d = self.failWith(tok, .E0818);
+            d.msg("`driver_update` in a module that is not a connect module", .{});
+            d.note("§9.22: \"Driver access functions can only be called from connect modules\", and driver_update \"is used in combination with the driver access functions\"", .{});
+            try d.emit();
+        }
         self.pos += 1;
         const sig = try parse_expr.parseExpr(self);
         return self.file.exprs.add(self.arena, .{ .tag = .event_driver_update, .main_tok = tok, .lhs = sig });
@@ -482,6 +518,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
             .timing = timing.expr,
             .timing_is_delay = timing.is_delay,
             .timing_repeat = timing.count,
+            .timing_implicit = timing.implicit,
         } }, tok);
     }
     // A.6.4 `task_enable ::= hierarchical_task_identifier [ ( expression
@@ -490,12 +527,14 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
     // the engine tells the two apart by that first character.
     if (self.discreteGrammar() and self.peek() == .semicolon) {
         const ex = &self.file.exprs;
-        if (ex.tag(lhs) == .ident or ex.tag(lhs) == .call) {
+        if (ex.tag(lhs) == .ident or ex.tag(lhs) == .call or ex.tag(lhs) == .hier_ident) {
             self.pos += 1;
             // A copy: `ex.args` points into the expression pool, which the
             // rest of the file grows and moves.
             const args: []const Ast.ExprId = if (ex.tag(lhs) == .call) try self.arena.dupe(Ast.ExprId, ex.args(lhs)) else &.{};
-            return self.file.addStmt(self.arena, .{ .sys_task = .{ .name = ex.strOf(lhs), .args = args } }, tok);
+            // A.9.3 `hierarchical_task_identifier`, `c.t;`: the flat name.
+            const name = if (ex.tag(lhs) == .hier_ident) try parse_expr.joinName(self, ex.nameParts(lhs)) else ex.strOf(lhs);
+            return self.file.addStmt(self.arena, .{ .sys_task = .{ .name = name, .args = args } }, tok);
         }
     }
     switch (self.peek()) {
@@ -516,6 +555,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
                 .timing = timing.expr,
                 .timing_is_delay = timing.is_delay,
                 .timing_repeat = timing.count,
+                .timing_implicit = timing.implicit,
             } }, tok);
         },
         .colon => { // §5.6.7 / A.6.10 indirect contribution
@@ -538,7 +578,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
 /// operator: A.6.5 `delay_control | event_control`. Analog has no such
 /// production, so outside the discrete grammar this reads nothing and the
 /// expression parser reports a `#` or `@`.
-fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool, count: Ast.ExprId = .none } {
+fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool, count: Ast.ExprId = .none, implicit: bool = false } {
     if (!self.discreteGrammar()) return .{ .expr = .none, .is_delay = false };
     switch (self.peek()) {
         .hash => {
@@ -547,6 +587,7 @@ fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bo
         },
         .at => {
             self.pos += 1;
+            if (eatImplicitEvent(self)) return .{ .expr = .none, .is_delay = false, .implicit = true };
             return .{ .expr = try parseEvent(self), .is_delay = false };
         },
         // A.6.5 `repeat ( expression ) event_control`.
@@ -556,6 +597,7 @@ fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bo
             const count = try parse_expr.parseExpr(self);
             _ = try self.expect(.rparen);
             _ = try self.expect(.at);
+            if (eatImplicitEvent(self)) return .{ .expr = .none, .is_delay = false, .count = count, .implicit = true };
             return .{ .expr = try parseEvent(self), .is_delay = false, .count = count };
         },
         else => return .{ .expr = .none, .is_delay = false }, // else: no intra-assignment timing control

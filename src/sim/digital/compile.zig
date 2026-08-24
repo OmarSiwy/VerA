@@ -1058,17 +1058,17 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             // §10.4.4: "Functions shall not contain any time-controlled
             // statements" and "shall not have any nonblocking assignments".
             if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});
-            if (self.in_function and s.timing != .none) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
+            if (self.in_function and intraTimed(s)) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             try checkTarget(self, s.target);
             if (s.nonblocking) try notAutomatic(self, s.target, "a nonblocking assignment");
             try checkExpr(self, s.value);
-            if (s.timing == .none) {
+            if (!intraTimed(s)) {
                 _ = try append(self, .{ .assign = .{ .target = s.target, .value = s.value, .nonblocking = s.nonblocking } });
                 return;
             }
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
             if (s.timing_is_delay) try checkDelay(self, s.timing) else {
-                try checkEvent(self, s.timing);
+                if (!s.timing_implicit) try checkEvent(self, s.timing);
                 if (s.timing_repeat != .none) {
                     try checkExpr(self, s.timing_repeat);
                     if (typeOf(self, s.timing_repeat).width > 64) return self.exprFail(s.timing_repeat, "repeat counts wider than 64 bits are not implemented");
@@ -1102,10 +1102,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 try self.repeats.append(self.arena, 0);
                 const test_pc = try append(self, .{ .repeat_start = .{ .count = s.timing_repeat, .counter = counter, .end = 0, .clamp = true } });
                 const body_pc = position(self);
-                _ = try append(self, .{ .wait_event = s.timing });
+                try waitIntra(self, id, s, depth);
                 _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
                 self.code.items[test_pc].repeat_start.end = position(self);
-            } else _ = try append(self, .{ .wait_event = s.timing });
+            } else try waitIntra(self, id, s, depth);
             _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
             if (skip) |at| {
                 _ = try append(self, .stop);
@@ -1493,7 +1493,7 @@ fn stmtTimed(self: *Run, inst: u32, id: Ast.StmtId) Error!bool {
     if (id == .none) return false;
     return switch (self.file.stmt(id)) {
         .event_control => true,
-        .assign => |s| s.timing != .none,
+        .assign => |s| intraTimed(s),
         .block => |b| for (b.body) |s| {
             if (try stmtTimed(self, inst, s)) break true;
         } else false,
@@ -1723,7 +1723,26 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
 /// value, the wait compiled after it: a `repeat` count, or an event control
 /// on a nonblocking assignment (§9.7.7)?
 pub fn parksOnly(s: @FieldType(Ast.Stmt, "assign")) bool {
-    return !s.timing_is_delay and (s.nonblocking or s.timing_repeat != .none);
+    return !s.timing_is_delay and (s.nonblocking or s.timing_repeat != .none or s.timing_implicit);
+}
+
+/// Whether assignment `s` carries an A.6.2 intra-assignment timing control.
+fn intraTimed(s: @FieldType(Ast.Stmt, "assign")) bool {
+    return s.timing != .none or s.timing_implicit;
+}
+
+/// The wait of intra-assignment event control on assignment `id`: its event
+/// expression, or for `@*` (`timing_implicit`) the slots the assignment reads,
+/// IEEE 1364-2005 §9.7.5's list as `event_control`'s `@*` builds it from a
+/// statement.
+fn waitIntra(self: *Run, id: Ast.StmtId, s: @FieldType(Ast.Stmt, "assign"), depth: u16) Error!void {
+    if (!s.timing_implicit) {
+        _ = try append(self, .{ .wait_event = s.timing });
+        return;
+    }
+    var watched: std.ArrayList(u32) = .empty;
+    try readSlots(self, id, &watched, depth);
+    _ = try append(self, .{ .wait_slots = watched.items });
 }
 
 /// §10.2.3: an automatic task's variables "shall not be assigned values

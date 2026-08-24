@@ -330,10 +330,15 @@ pub fn declareBranches(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                     .lo = lo,
                     .id = newBranchId(self),
                 });
-        } else if (vecTerminal(self, b.hi) != null or vecTerminal(self, b.lo) != null) {
+        } else if (try vecTerminal(self, b.hi, b.main_tok)) |hv| {
             // §3.12 a branch with a vector terminal is a vector branch.
-            try declareVectorBranch(self, &b);
+            try declareVectorBranch(self, &b, hv, try vecTerminal(self, b.lo, b.main_tok));
             continue;
+        } else if (try vecTerminal(self, b.lo, b.main_tok)) |lv| {
+            try declareVectorBranch(self, &b, null, lv);
+            continue;
+        } else if (partSelect(self, b.hi) or partSelect(self, b.lo)) {
+            continue; // `vecTerminal` has refused the part (E0352)
         } else {
             const hi = try nodeOf(self, b.hi);
             const lo = if (b.lo == .none) ground else try nodeOf(self, b.lo);
@@ -675,6 +680,12 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` was not declared with a range", .{name});
                 return ground;
             };
+            // A part-select names several nets: a vector branch's terminal
+            // (`vecTerminal`), never one node.
+            if (ex.tag(ex.rhs(e)) == .range or ex.tag(ex.rhs(e)) == .indexed_range) {
+                try self.err(self.file.exprs.mainTok(e), .E0351, "a part-select of `{s}` names several nets; a branch declaration takes one (§3.12), a probe one element", .{name});
+                return ground;
+            }
             // §5.5.2 "The index must be a constant expression, though it may
             // include genvar variables"; `tryUnrollFor` binds the genvar in
             // `consts` for each unrolled copy.
@@ -760,12 +771,69 @@ pub fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
     return dir_r orelse ty_r;
 }
 
-/// The vector a branch terminal names, or null when it is a scalar (or not a
-/// bare identifier at all: `branch (a[1], b)` is two scalars).
-pub fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
+/// Whether branch terminal `e` is a part-select, `a[2:1]` or `a[b +: w]`.
+fn partSelect(self: *const Lower, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    if (e == .none or ex.tag(e) != .index) return false;
+    return ex.tag(ex.rhs(e)) == .range or ex.tag(ex.rhs(e)) == .indexed_range;
+}
+
+/// A vector branch terminal: the vector `name` and the elements it covers.
+pub const VecTerm = struct { name: []const u8, range: VecRange };
+
+/// The vector a branch terminal names, or null when it is a scalar
+/// (`branch (a[1], b)` is two scalars) or not a net reference at all. A.2.1.3's
+/// `net_identifier [ constant_range_expression ]` selects part of one: `a[2:1]`,
+/// or IEEE 1364-2005 §5.2.1's `a[b +: w]` / `a[b -: w]`, whose bounds fold and
+/// lie within the declaration, the msb on the declared msb's side (E0352).
+/// Null after such a diagnostic; `declareBranches` then skips the branch
+/// (`partSelect`) rather than have `nodeOf` refuse the range again.
+pub fn vecTerminal(self: *Lower, e: Ast.ExprId, tok: u32) Oom!?VecTerm {
     if (e == .none) return null;
-    if (self.file.exprs.tag(e) != .ident) return null;
-    return self.out.vectors.get(self.file.str(self.file.exprs.strOf(e)));
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .ident) {
+        const name = self.file.str(ex.strOf(e));
+        return .{ .name = name, .range = self.out.vectors.get(name) orelse return null };
+    }
+    if (!partSelect(self, e)) return null;
+    const sel = ex.rhs(e);
+    if (ex.tag(ex.lhs(e)) != .ident) {
+        // ponytail: a hierarchical terminal's part (`u.v[1:0]`) needs the
+        // flat name's vector; refused by name until a fixture needs it.
+        try self.err(tok, .E0351, "a part-select of a hierarchical branch terminal", .{});
+        return null;
+    }
+    const name = self.file.str(ex.strOf(ex.lhs(e)));
+    const decl = self.out.vectors.get(name) orelse {
+        try self.err(tok, .E0351, "`{s}` was not declared with a range", .{name});
+        return null;
+    };
+    const a = lower_constfold.constEval(self, ex.lhs(sel));
+    const b = lower_constfold.constEval(self, ex.rhs(sel));
+    if (a == null or b == null) {
+        try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant expression", .{name});
+        return null;
+    }
+    const asc = decl.msb < decl.lsb;
+    const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?.asInt(), .lsb = b.?.asInt() } else w: {
+        // §5.2.1: `+:` counts up from the base, `-:` down, and the selected
+        // range reads in the declaration's direction.
+        const base = a.?.asInt();
+        const width = b.?.asInt();
+        if (width < 1) {
+            try self.err(tok, .E0352, "the indexed part-select of `{s}` is {d} wide", .{ name, width });
+            return null;
+        }
+        const down = ex.extraOf(sel) != 0;
+        const lo_i = if (down) base - width + 1 else base;
+        const hi_i = if (down) base else base + width - 1;
+        break :w if (asc) .{ .msb = lo_i, .lsb = hi_i } else .{ .msb = hi_i, .lsb = lo_i };
+    };
+    if (!decl.has(r.msb) or !decl.has(r.lsb) or (r.msb != r.lsb and (r.msb < r.lsb) != asc)) {
+        try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so [{d}:{d}] is not a part of it", .{ name, decl.msb, decl.lsb, r.msb, r.lsb });
+        return null;
+    }
+    return .{ .name = name, .range = r };
 }
 
 /// §3.12 a vector branch. The LRM's own example:
@@ -778,25 +846,21 @@ pub fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
 /// scalar terminal repeats (Figure 3-2), and the branch is indexed `[0:size-1]`.
 /// Elements are registered in `branches` under scalarised names; the base name
 /// goes into `vectors` for the vector diagnostics.
-pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
+pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl, hv: ?VecTerm, lv: ?VecTerm) Oom!void {
     const name = self.file.str(b.name);
-    const hv = vecTerminal(self, b.hi);
-    const lv = vecTerminal(self, b.lo);
     if (hv) |h| if (lv) |l| {
-        if (h.size() != l.size()) {
-            try self.err(b.main_tok, .E0353, "`{s}` joins a size-{d} vector to a size-{d} one", .{ name, h.size(), l.size() });
+        if (h.range.size() != l.range.size()) {
+            try self.err(b.main_tok, .E0353, "`{s}` joins a size-{d} vector to a size-{d} one", .{ name, h.range.size(), l.range.size() });
             return;
         }
     };
-    const size = if (hv) |h| h.size() else lv.?.size();
+    const size = if (hv) |h| h.range.size() else lv.?.range.size();
     // A scalar terminal is the same node on every element (Figure 3-2).
     const h_scalar = if (hv == null) try nodeOf(self, b.hi) else ground;
     const l_scalar = if (lv == null) try nodeOf(self, b.lo) else ground;
-    const h_name = if (hv != null) self.file.str(self.file.exprs.strOf(b.hi)) else "";
-    const l_name = if (lv != null) self.file.str(self.file.exprs.strOf(b.lo)) else "";
     for (0..size) |k| {
-        const hi = if (hv) |h| try internNode(self, try self.arena.print("{s}[{d}]", .{ h_name, h.at(@intCast(k)) }), "") else h_scalar;
-        const lo = if (lv) |l| try internNode(self, try self.arena.print("{s}[{d}]", .{ l_name, l.at(@intCast(k)) }), "") else l_scalar;
+        const hi = if (hv) |h| try internNode(self, try self.arena.print("{s}[{d}]", .{ h.name, h.range.at(@intCast(k)) }), "") else h_scalar;
+        const lo = if (lv) |l| try internNode(self, try self.arena.print("{s}[{d}]", .{ l.name, l.range.at(@intCast(k)) }), "") else l_scalar;
         // §3.12 → §3.11 once: every element pairs the same two disciplines.
         if (k == 0) try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo);
         try self.branches.put(self.arena, try self.arena.print("{s}[{d}]", .{ name, @as(i64, @intCast(k)) }), .{

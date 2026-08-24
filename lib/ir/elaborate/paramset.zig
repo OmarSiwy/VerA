@@ -216,7 +216,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
             for (inst.ports) |c| {
                 if (c.name == .none) continue;
                 const found = for (child.ports) |p| {
-                    if (p.name == c.name) break true;
+                    if (p.connName() == c.name) break true;
                 } else false;
                 if (!found) return false;
             }

@@ -23,10 +23,12 @@ const VarSlot = Lower.VarSlot;
 const poison = Lower.poison;
 const astTy = Lower.astTy;
 
-/// Reports E0510 on every function in `fns` that calls itself directly or
-/// indirectly: "recursive functions are not permitted" (LRM §4.7.3). Checked on the
-/// declarations, not only at reached calls, because an uncalled recursive function
-/// is still illegal.
+/// Reports E0510 on every analog function in `fns` that calls itself directly
+/// or indirectly: "recursive functions are not permitted" (LRM §4.7.3, of an
+/// analog user-defined function). Checked on the declarations, not only at
+/// reached calls, because an uncalled recursive function is still illegal. A
+/// digital function (§4.7) is IEEE 1364-2005's, which may recurse (§10.4.1
+/// `automatic`: "reentrant").
 ///
 /// Cost: one reachability walk per function, O(fns * edges); the graph is one module's.
 pub fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
@@ -40,6 +42,7 @@ pub fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
     const seen = try self.arena.alloc(bool, fns.len);
     var stack: std.ArrayList(u32) = .empty;
     for (fns, 0..) |*fd, i| {
+        if (!fd.is_analog) continue;
         @memset(seen, false);
         stack.clearRetainingCapacity();
         try stack.append(self.arena, @intCast(i));

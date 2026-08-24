@@ -240,24 +240,32 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             // "electrical [3:0] a, b" declares two 4-bit ports).
             range = try parse_decl.optDim(self);
         }
-        // A.1.3 `port ::= [ port_expression ] | ...`: an empty port_expression
-        // is a null port, a header position nothing inside connects to (a
-        // digital parse only; the analog pipeline has no such terminal).
-        if (self.digital and dir == .unspecified and (self.peek() == .comma or self.peek() == .rparen)) {
-            try b.ports.append(self.arena, .{ .name = .none, .main_tok = self.pos });
+        // A.1.3 `port ::= [ port_expression ]`: an empty port_expression is a
+        // null port, a header position nothing inside connects to (§6.5.1:
+        // "The port expression is optional").
+        if (dir == .unspecified and (self.peek() == .comma or self.peek() == .rparen)) {
+            try b.ports.append(self.arena, .{ .name = try nullPortName(self, b), .main_tok = self.pos });
             plain = true;
             if (!self.eat(.comma)) break;
             continue;
         }
         // A.1.3 `port ::= [ port_expression ] | . port_identifier (
         // [ port_expression ] )`. The second alternative gives the port an
-        // external name distinct from the internal nets it connects to.
+        // external name distinct from the internal nets it connects to, and
+        // with no port_expression (`.a()`) it connects to none of them.
         var external: Ast.StrId = .none;
         var close_named = false;
         if (self.eat(.dot)) {
+            const tok = self.pos;
             external = try self.expectIdent();
             _ = try self.expect(.lparen);
             close_named = true;
+            if (dir == .unspecified and self.eat(.rparen)) {
+                try b.ports.append(self.arena, .{ .name = try nullPortName(self, b), .external_name = external, .main_tok = tok });
+                plain = true;
+                if (!self.eat(.comma)) break;
+                continue;
+            }
         }
         // ponytail: a concatenated port becomes N terminals, not one N-bit
         // terminal, the same model §3.6.3 vector ports get (`electrical
@@ -298,6 +306,19 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.rparen);
+}
+
+/// The internal name of a null port, the next `b.ports` entry. A digital
+/// parse leaves it `.none`, which `sim/digital/elab.zig` skips. The analog
+/// pipeline keys every port by name and keeps it as a terminal (the host
+/// binds terminals by position), so it gets a name no source text can
+/// spell: an escaped identifier ends at white space, and a tab is no `.`
+/// that `internTok` turns into a space. Nothing inside refers to it, so a
+/// parent's actual reaches no node of the child, and on the top-level device
+/// the terminal touches nothing.
+fn nullPortName(self: *Parser, b: *const Body) Error!Ast.StrId {
+    if (self.digital) return .none;
+    return self.file.intern(self.arena, try self.arena.print("\tnull{d}", .{b.ports.items.len + 1}));
 }
 
 // -----------------------------------------------------------------------
@@ -405,7 +426,9 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
                 var indices: std.ArrayList(Ast.ExprId) = .empty;
                 const path = try parse_hier.parseDottedPath(self, true, if (self.digital) &indices else null);
                 _ = try self.expect(.assign_eq);
-                const value = try parse_expr.parseExpr(self);
+                // A.2.4 `defparam_assignment ::= hierarchical_parameter_identifier
+                // = constant_mintypmax_expression`.
+                const value = try parse_expr.parseMinTypMax(self);
                 try b.defparams.append(self.arena, .{
                     .path = path,
                     .value = value,
@@ -522,7 +545,15 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             }
             _ = try self.expect(.semicolon);
         },
-        .kw_reg => try parse_decl.parseRegDecl(self, &b.vars),
+        .kw_reg => {
+            const first = b.vars.items.len;
+            try parse_decl.parseRegDecl(self, &b.vars);
+            // A `reg` that names a header port declares that port's
+            // discipline, as a net declaration does (`parseNetNames`).
+            for (b.vars.items[first..]) |v| if (v.discipline != .none) if (parse_net.findPort(b, v.name)) |p| {
+                if (p.discipline == .none) p.discipline = v.discipline;
+            };
+        },
         // A.3.1 `gate_instantiation ::= … | pass_switchtype
         // pass_switch_instance { , pass_switch_instance } ;`: the two
         // A.3.4 switch spellings with tags of their own. The other eight
@@ -589,7 +620,11 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             if (self.peekAt(1) == .lparen) return parse_udp.parseUdpInst(self, b);
             // `discipline [range] names ;`. A range after the name is
             // refused by the name list ("expected identifier").
-            if (!self.identLike(self.pos + 1) and self.peekAt(1) != .lbracket) {
+            // A.2.1.3's `hierarchical_net_identifier` may open with `$root.`
+            // (A.9.3), an Annex F.2.1 out-of-context declaration.
+            const rooted = self.peekAt(1) == .system_identifier and self.peekAt(2) == .dot and
+                std.mem.eql(u8, self.tokenText(self.pos + 1), "$root");
+            if (!self.identLike(self.pos + 1) and self.peekAt(1) != .lbracket and !rooted) {
                 return parse_inst.notAModuleItem(self);
             }
             const disc = try self.internTok(self.pos);
@@ -643,6 +678,9 @@ fn parseAnalog(self: *Parser, b: *Body) Error!void {
     if (self.peek() == .kw_function) return parse_function.parseFuncDecl(self, b, main_tok, true);
     // §5.2.1 `analog initial analog_function_statement`
     const is_initial = self.eat(.kw_initial);
+    const saved = self.analog_expr;
+    self.analog_expr = true;
+    defer self.analog_expr = saved;
     const body = try parse_stmt.parseStmtNoNull(self); // A.6.2 takes one analog_statement
     try b.analog.append(self.arena, .{
         .is_initial = is_initial,

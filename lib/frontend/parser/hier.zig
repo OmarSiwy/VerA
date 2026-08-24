@@ -29,7 +29,15 @@ const Error = parser.Error;
 /// `false`, because there a `[` after the name is A.2.1.3's vector range.
 /// A §6.3.6 system name (`u.$xposition`) ends the path.
 pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayList(Ast.ExprId)) Error!Ast.StrId {
-    const first = try self.expectIdent();
+    // A.9.3 `hierarchical_identifier ::= [ $root . ] ...`: `$root` is part
+    // 0 of the flat string, which its consumer roots (`override.rootedPath`).
+    const first = if (self.peek() == .system_identifier and self.peekAt(1) == .dot and
+        std.mem.eql(u8, self.tokenText(self.pos), "$root"))
+    root: {
+        const id = try self.internTok(self.pos);
+        self.pos += 1;
+        break :root id;
+    } else try self.expectIdent();
     if (self.peek() != .dot and !(allow_index and self.peek() == .lbracket)) return first;
     var joined: std.ArrayList(u8) = .empty;
     try joined.appendSlice(self.arena, self.file.str(first));

@@ -173,7 +173,7 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
         .event_control => return true,
         // §8.5.3.2: a procedural continuous assignment "corresponds to a
         // process that is sensitive to the source elements in the expression".
-        .assign => |a| if (a.nonblocking or a.timing != .none or a.continuous != .none) return true,
+        .assign => |a| if (a.nonblocking or a.timing != .none or a.timing_implicit or a.continuous != .none) return true,
         // A.6.4 `task_enable` (a `sys_task` row with no `$`): IEEE 1364 §10.2's
         // task body is the kernel's to run, delays and all.
         .sys_task => |s| if (file.str(s.name)[0] != '$') return true,

@@ -10,6 +10,7 @@ const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
 const elab_insert = @import("insert.zig");
+const elab_override = @import("override.zig");
 const discipline = @import("../discipline_rules.zig");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
@@ -114,7 +115,8 @@ fn checkOocOverride(self: *Flatten, path: []const u8, local: Ast.StrId, declared
 pub fn collectOoc(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error!void {
     for (module.nets) |n| {
         if (!isOoc(self.ctx.file.str(n.name))) continue;
-        const key = try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
+        const key = elab_override.rootedPath(self, self.ctx.file.str(n.name)) orelse
+            try self.ctx.arena.print("{s}{s}", .{ path, self.ctx.file.str(n.name) });
         if (self.ooc.get(key)) |first| {
             try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
                 key, self.ctx.file.str(first.disc),
@@ -504,5 +506,10 @@ pub fn checkNetDisciplines(self: *Flatten) Error!void {
             })
         else
             try self.err(n.main_tok, .E0371, "`{s}` in the declaration of `{s}`", .{ file.str(n.discipline), file.str(n.name) });
+    };
+    // A.2.1.3 `reg [ discipline_identifier ] ...` names a discipline too.
+    for (file.userModules()) |*m| for (m.vars) |v| {
+        if (v.discipline == .none or discipline.declOf(file, v.discipline) != null) continue;
+        try self.err(v.main_tok, .E0371, "`{s}` in the declaration of the reg `{s}`", .{ file.str(v.discipline), file.str(v.name) });
     };
 }
