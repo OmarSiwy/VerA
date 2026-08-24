@@ -1,0 +1,7 @@
+$ vera --run counter.v
+10 ns: count = 1
+20 ns: count = 2
+30 ns: count = 3
+40 ns: count = 4
+50 ns: count = 5
+$finish at tick 60, counter.v byte 270

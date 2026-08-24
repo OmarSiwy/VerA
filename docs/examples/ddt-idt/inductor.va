@@ -1,0 +1,25 @@
+// An inductor is a potential source: V = l * dI/dt (LRM 5.6.4). In DC its
+// voltage is 0, a short. Here 1 V drives it through r = 1k from t = 0, and
+// backward Euler with a step of one time constant (tau = l/r = 100 us) gives
+//   i_k = (V + (l/h) * i_{k-1}) / (r + l/h),  l/h = 0.1 / 100u = 1k
+//       = (1 + 1k * i_{k-1}) / 2k
+//   i_0 = 0 (the source is 0 V at t = 0), i_1 = 0.5 mA, i_2 = 0.75 mA,
+//   i_3 = 0.875 mA
+//! time 0, 100u, 200u, 300u
+//! wave V(in) = 0, 1
+//! bias V(n) = 0
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module inductor(in, n);
+  inout in, n;
+  electrical in, n, mid;
+  parameter real r = 1k from (0:inf);
+  parameter real l = 100m from [0:inf);
+  analog begin
+    I(in, mid) <+ V(in, mid) / r;
+    V(mid, n) <+ l * ddt(I(mid, n));
+    $strobe("t = %g s: I = %g A, V(mid) = %g V", $abstime, I(mid, n), V(mid));
+  end
+endmodule

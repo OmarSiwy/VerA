@@ -1,0 +1,19 @@
+// cap.va with a step instead of a ramp: V(p) rises 1 V over the first
+// microsecond, then stays. With c = 1 nF:
+//   t = 0:    0 (no history; ddt is 0 in DC)
+//   t = 1 us: 1n * (1 V / 1 us) = 1 mA
+//   t = 2 us, 3 us: the voltage no longer moves, so 0
+//! time 0, 1u, 2u, 3u
+//! wave V(p) = 0, 1, 1, 1
+//! print none
+`include "disciplines.vams"
+
+module cap_step(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real c = 1n from [0:inf);
+  analog begin
+    I(p, n) <+ c * ddt(V(p, n));
+    $strobe("t = %g s: V = %g V, I = %g A", $abstime, V(p, n), I(p, n));
+  end
+endmodule

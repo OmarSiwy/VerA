@@ -1,0 +1,20 @@
+// exp and limexp side by side (LRM 4.5.13). At a normal forward bias they
+// agree. At 3 V, a bias Newton can try on its way to a solution, exp(V/$vt)
+// is about e^116; VerA's limexp follows exp only up to an argument of 80 and
+// continues on the tangent line above it, so its value there is
+// e^80 * (1 + 116 - 80), about 2e36: some 1e14 times smaller than exp.
+//! sweep V(a) = 0.7, 3
+//! print none
+`include "disciplines.vams"
+
+module limexp_vs_exp(a, k);
+  inout a, k;
+  electrical a, k;
+  parameter real is = 1e-14 from (0:inf);
+  real x;
+  analog begin
+    x = V(a, k) / $vt;
+    I(a, k) <+ is * (limexp(x) - 1);
+    $strobe("V = %g V: x = %.4f  exp(x) = %.6e  limexp(x) = %.6e", V(a, k), x, exp(x), limexp(x));
+  end
+endmodule

@@ -1,0 +1,2 @@
+$ vera --run alias.va
+$ vera --run --param res=4000 alias.va

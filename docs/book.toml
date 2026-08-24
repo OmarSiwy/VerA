@@ -1,0 +1,17 @@
+# The user documentation: `mdbook build docs` (`nix develop .#docs`).
+# Every `.out` transcript a page includes is re-run by tools/doctest.py.
+[book]
+title = "VerA"
+description = "Learn Verilog-AMS, and compile it to Zig devices with VerA"
+language = "en"
+src = "."
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/OmarSiwy/VerA"
+edit-url-template = "https://github.com/OmarSiwy/VerA/edit/main/docs/{path}"
+additional-js = ["runner/runner.js"]
+additional-css = ["runner/runner.css"]

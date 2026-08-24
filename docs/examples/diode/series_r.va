@@ -1,0 +1,21 @@
+// A diode with series resistance: the junction sits between an internal
+// node `ai` and k, and rs connects ai to the anode. `//! solve` finds V(ai):
+// the current through rs must equal the junction current,
+//   (V(a) - V(ai)) / rs = is * (exp(V(ai) / $vt) - 1)
+//! bias V(a) = 0.8, V(k) = 0
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module series_r(a, k);
+  inout a, k;
+  electrical a, k, ai;
+  parameter real is = 1e-14 from (0:inf);
+  parameter real rs = 10 from (0:inf);
+  analog begin
+    I(a, ai) <+ V(a, ai) / rs;
+    I(ai, k) <+ is * (exp(V(ai, k) / $vt) - 1);
+    $strobe("V(ai) = %.6f V  I(rs) = %.6e A  I(junction) = %.6e A",
+            V(ai), I(a, ai), I(ai, k));
+  end
+endmodule

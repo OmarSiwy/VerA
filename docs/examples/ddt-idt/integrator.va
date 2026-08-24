@@ -1,0 +1,23 @@
+// An integrator: V(out) = idt(k * V(in), ic) (LRM 4.5.4). With V(in) = 1 V
+// held from t = 0 and k = 1000 /s, the output rises 1 V per millisecond from
+// its initial condition ic = 0.5:
+//   t = 0: 0.5 (idt returns ic at the first point), 1 ms: 1.5, 2 ms: 2.5,
+//   3 ms: 3.5
+// The testbench integrates with backward Euler, which is exact for a
+// constant input.
+//! time 0, 1m, 2m, 3m
+//! bias V(in) = 1
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module integrator(in, out);
+  inout in, out;
+  electrical in, out;
+  parameter real k = 1000;
+  parameter real ic = 0.5;
+  analog begin
+    V(out) <+ idt(k * V(in), ic);
+    $strobe("t = %g s: V(out) = %g V", $abstime, V(out));
+  end
+endmodule

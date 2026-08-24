@@ -1,0 +1,41 @@
+// Exercise: a 3.3 V logic family. The connect statement overrides the
+// connect module's parameter (LRM §7.7.3), so d = 1 now drives toward
+// 3.3 V through the same divider: (V - 3.3) / 1k + V / 1k = 0, V(a) = 1.65 V.
+//! time 0, 4n, 8n
+//! solve
+//! print none
+`include "disciplines.vams"
+`timescale 1ns/1ns
+
+connectmodule d2a(d, a);
+  input d;
+  output a;
+  ddiscrete d;
+  electrical a;
+  parameter real vdd = 1.8 from (0:inf);
+  parameter real rout = 1k from (0:inf);
+  analog I(a) <+ (V(a) - vdd * ((d == 1'b1) ? 1.0 : 0.0)) / rout;
+endmodule
+
+connectrules rules;
+  connect d2a #(.vdd(3.3));
+endconnectrules
+
+module driver(q);
+  output q;
+  ddiscrete q;
+  reg q;
+  initial begin
+    q = 1'b0;
+    #5 q = 1'b1;
+  end
+endmodule
+
+module top;
+  electrical a;
+  driver u1(a);
+  analog begin
+    I(a) <+ V(a) / 1k;
+    $strobe("t = %g  V(a) = %g", $abstime, V(a));
+  end
+endmodule

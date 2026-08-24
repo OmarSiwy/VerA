@@ -1,0 +1,16 @@
+$ vera --lint undeclared.va
+error[E0314]: unknown identifier: `rr`
+ --> undeclared.va:7:31
+  |
+7 |   analog I(p, n) <+ V(p, n) / rr;
+  |                               ^^
+  |
+  = note: LRM 6.8
+  = help: did you mean `r`?
+  |
+7 |   analog I(p, n) <+ V(p, n) / r;
+  |                               ~
+  = help: run `vera --explain E0314` for a detailed explanation
+
+error: could not compile due to 1 previous error(s)
+(exit 1)

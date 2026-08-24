@@ -1,0 +1,21 @@
+// diode.va at 350.15 K instead of 300.15 K. $vt grows by 350.15/300.15, so
+// with the same is the current at a given bias FALLS:
+//   I(0.62 V) = is * exp(0.62 / $vt(350.15)) is smaller than at 300.15 K.
+// Real junctions do the opposite, because is itself rises steeply with
+// temperature; a compact model scales is with T (see the compact-model
+// chapter).
+//! sweep V(a) = 0.5, 0.56, 0.62
+//! temp 350.15
+//! print none
+`include "disciplines.vams"
+
+module diode_hot(a, k);
+  inout a, k;
+  electrical a, k;
+  parameter real is = 1e-14 from (0:inf);
+  parameter real n = 1 from [0.5:10];
+  analog begin
+    I(a, k) <+ is * (exp(V(a, k) / (n * $vt)) - 1);
+    $strobe("$vt = %.6f V  V(a,k) = %.2f V  I = %.4e A", $vt, V(a, k), I(a, k));
+  end
+endmodule

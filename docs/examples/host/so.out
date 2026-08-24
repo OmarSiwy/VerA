@@ -1,0 +1,6 @@
+$ vera --emit-so --allow=W0650 --dyn dyn.zig --work-dir build diode.va
+build/libdiode.1.so
+$ zig run load.zig
+f = { 3.6720e-4, -3.6712e-4, -7.6340e-8 }
+df[ai]/dx[ai] = 1.1419e-1 S
+$ rm -r build

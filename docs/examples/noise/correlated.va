@@ -1,0 +1,19 @@
+// Perfectly correlated noise (LRM §4.6.4.6, Example 1): one generator,
+// assigned to a variable, contributed to two branches. Both rows carry the
+// same source id, #0, which tells a simulator they are one physical source.
+//! bias V(a) = 1.0, V(b) = 0.5
+//! noise thermal(a,b)#0
+//! noise thermal(b,c)#0
+//! print none
+`include "disciplines.vams"
+
+module correlated(a, b, c);
+  inout a, b, c;
+  electrical a, b, c;
+  real n;
+  analog begin
+    n = white_noise(1e-18, "shared");
+    I(a, b) <+ n;
+    I(b, c) <+ 2.0 * n;
+  end
+endmodule
