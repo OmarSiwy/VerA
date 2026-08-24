@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 A.1.4
 //! reject E0240
 //! reject not a module item
+//! neighbour b_A_1_4_module_items.v
 module b_A_1_4_statement_as_item_rejected;
   reg r;
   r = 1;

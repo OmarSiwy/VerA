@@ -10,7 +10,7 @@
 // `ParseError` would stay green on a typo anywhere in the file.
 //
 //! lrm G.2.4
-//! reject E0115
+//! reject-only E0115
 //! reject default_function_type_analog
 `default_function_type_analog real
 module annex_g_obsolete_default_function_type(p, n);

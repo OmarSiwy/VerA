@@ -16,7 +16,8 @@
 // 754 division of a finite negative by zero, whose result is -inf.
 //
 //! lrm 7.3.2.1
-//! reject contribution of an infinite value
+//! lrm 7.3.2.1:1
+//! reject-only contribution of an infinite value
 //! reject E0424
 module ch7_neg_inf_contribution(p);
   inout p; electrical p;

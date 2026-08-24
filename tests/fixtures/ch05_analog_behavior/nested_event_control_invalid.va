@@ -11,7 +11,10 @@
 // nesting is the only thing wrong with the file.
 //
 //! lrm 5.10
-//! reject E0703
+//! lrm 5.10:2
+//! reject-only E0703
+//! neighbour event_initial_or_cross.va
+//! neighbour event_or.va
 module ch5_nested_event_control(p);
   inout p; electrical p; real x;
   analog begin

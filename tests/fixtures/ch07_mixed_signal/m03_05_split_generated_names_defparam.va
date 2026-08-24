@@ -68,6 +68,9 @@
 //! lrm 7.8.5.1
 //! lrm 7.8.3.2
 //! lrm 6.3.1
+//! lrm 7.8.4
+//! lrm 7.8.4:7
+//! lrm 7.8.5:1000
 //! solve
 `include "check.vh"
 

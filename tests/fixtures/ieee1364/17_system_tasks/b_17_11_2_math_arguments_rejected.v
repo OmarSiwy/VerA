@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 17.11.2
 //! reject E1100
 //! reject wrong number of arguments to a §17.11.2 math function
+//! neighbour audit_ieee_math_real_result.v
 `timescale 1 ns / 1 ns
 module b_17_11_2_math_arguments_rejected;
   real r;

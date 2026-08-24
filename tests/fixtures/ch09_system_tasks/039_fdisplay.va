@@ -11,6 +11,7 @@
 //
 //! bias V(p) = 1.25, V(n) = 0.25
 //! lrm 9.5.1
+//! lrm 9.5.1:2
 //! lrm 9.5.2
 `include "check.vh"
 module ch09_atomic_fdisplay(p, n);

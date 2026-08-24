@@ -82,6 +82,17 @@ pub fn find(name: []const u8, domain: Domain) ?*Systf {
     return null;
 }
 
+/// The analog system functions registered with sysfunctype vpiIntFunc: the
+/// names a device is compiled to call as integers (§12.32.1,
+/// `vera.Options.int_systfs`). The slice is `a`'s; the names are this file's
+/// until `reset`.
+pub fn intAnalogNames(a: std.mem.Allocator) error{OutOfMemory}![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (regs.items) |s| if (s.domain == .analog and s.analog.type == vpiAnalogSysFunc and s.analog.sysfunctype == vpiIntFunc)
+        try out.append(a, s.name);
+    return out.items;
+}
+
 /// One registration, owned by this file until `reset`.
 pub const Systf = struct {
     domain: Domain,

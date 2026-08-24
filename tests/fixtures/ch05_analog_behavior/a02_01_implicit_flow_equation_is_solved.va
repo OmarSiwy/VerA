@@ -45,6 +45,7 @@
 // derived solution, so the assertions distinguish the missing feedback.
 //
 //! lrm 5.6.6
+//! lrm 5.6.6:1
 //! lrm 5.6.1.2
 //! bias V(s) = 1.0
 //! bias V(g) = 0.0

@@ -12,7 +12,8 @@
 // netlist, so the mix is a diagnostic in both directions.
 //
 //! lrm 6.5.5
-//! reject E0906
+//! lrm 6.5.5:4
+//! reject-only E0906
 //! reject a named connection in a list of ordered connections
 module ch6_mixed_conn_parent(p, n);
   inout p, n; electrical p, n;

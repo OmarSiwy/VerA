@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 4.2.1
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour b_4_2_1_net_takes_driver_value.v
 module b_4_2_1_net_redeclared_rejected;
   wire w;
   wire w;

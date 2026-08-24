@@ -45,6 +45,8 @@
 // 0.75 - 0.25 = 0.5 V across the pair.
 //
 //! lrm A.4.1
+//! lrm 3.8
+//! lrm 3.8:1000
 //! bias V(a) = 0.75, V(b) = 0.25
 `include "check.vh"
 connectmodule ch8_sw_bridge(d, e);

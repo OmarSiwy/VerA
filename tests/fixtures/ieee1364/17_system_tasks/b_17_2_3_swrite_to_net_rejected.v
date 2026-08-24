@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 17.2.3
 //! reject E1100
 //! reject there is no procedural assignment to a net
+//! neighbour b_17_2_3_string_output.v
 module b_17_2_3_swrite_to_net_rejected;
   wire [8*8:1] w;
   initial $swrite(w, "v=%0d", 8'd42);

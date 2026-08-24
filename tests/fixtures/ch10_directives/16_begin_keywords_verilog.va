@@ -34,6 +34,7 @@
 // can never be shown to denote anything.
 //
 //! lrm 10.6
+//! lrm 10.6:1
 //! bias V(sin) = 0.75, V(n) = 0.25
 `begin_keywords "1364-2005"
 `include "check.vh"

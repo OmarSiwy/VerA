@@ -1,7 +1,7 @@
 // Counts beyond the supported signed-32 reference domain cannot be replaced
 // by a smaller count. This is an explicit implementation limitation.
 //! lrm 9.13.2
-//! reject E0816
+//! reject-only E0816
 //! reject fractional or out-of-range
 module ch09_rng_count_range_rejected(p, n);
   inout p, n; electrical p, n;

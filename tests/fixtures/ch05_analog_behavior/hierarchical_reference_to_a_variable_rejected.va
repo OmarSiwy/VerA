@@ -22,7 +22,10 @@
 //
 //! lrm 5.5.4
 //! lrm 6.7.1
-//! reject E0901
+//! lrm 6.7.1:3
+//! lrm 5.5.1
+//! lrm 5.5.1:1
+//! reject-only E0901
 //! reject names no net
 module ch5_hier_variable_ref(p);
   inout p;

@@ -414,9 +414,8 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
 
     // "…unless the conditional expression is a constant expression": a folded
     // condition lowers its arm straight into the current block, so it never
-    // raises `cond_depth`. (A §3.4 `parameter` is deliberately NOT foldable
-    // here — one artifact serves every model card — and `foldExpr(..., false)` treats a
-    // §3.4.5 `localparam` the same way, so this uses a literal.)
+    // raises `cond_depth`. A parameter condition folds too, as a shape
+    // parameter (`lowerIf`); the second harness below.
     var ok: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module a(o, i);
@@ -429,6 +428,20 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
     _ = try ok.low.lowerFile();
     try std.testing.expectEqual(@as(usize, 1), ok.low.out.contributions.items.len);
     try std.testing.expectEqual(Kind.indirect, ok.low.out.contributions.items[0].kind);
+
+    var par: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module a(o, i);
+        \\  inout o, i;
+        \\  electrical o, i;
+        \\  parameter integer sel = 1;
+        \\  analog if (sel) V(o) : V(i) == 0.0;
+        \\endmodule
+    , &par);
+    defer par.deinit();
+    _ = try par.low.lowerFile();
+    try std.testing.expectEqual(Kind.indirect, par.low.out.contributions.items[0].kind);
+    try std.testing.expect(par.low.out.params.items[0].shape);
 }
 
 test "lower: a ddt that is not a linear factor is its own unknown, row and charge site (§4.5.2)" {
@@ -1166,9 +1179,9 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
         // nothing to install and nothing computed it before the analysis.
         .{ .stmt = "q = v;", .code = .E0433 },
         // §5.10 event control: the block suspends, so it is a PROCESS and the
-        // module is mixed; what it suspends on is an ANALOG event, which is
-        // §7.3.6.1's A2D path the mixed-signal kernel does not have yet.
-        .{ .stmt = "@(initial_step) q = 1;", .code = .E0437 },
+        // module is mixed; what it suspends on is `initial_step`, which §5.10
+        // does not allow "in the digital context".
+        .{ .stmt = "@(initial_step) q = 1;", .code = .E0708 },
         // §5.9.2 a loop, and §5.8 a conditional over a runtime value: both are
         // only worth writing over something that changes during the run.
         .{ .stmt = "for (q = 0; q < 3; q = q + 1) q = 1;", .code = .E0433 },
@@ -1221,4 +1234,121 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
     try std.testing.expectEqual(@as(usize, 0), h.bag.count());
     // Last assignment wins: the body is sequential.
     try std.testing.expectEqual(@as(usize, 2), h.low.initial_state.count());
+}
+
+test "lower: a 60000-statement dependency chain lowers without exhausting the stack" {
+    // tests/fixtures/ADVERSARIAL.tsv: `scanFinite` recursed along the whole
+    // chain and overflowed the native stack at 2e4 chained statements.
+    const gpa = std.testing.allocator;
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(gpa);
+    try src.appendSlice(gpa, "module m(p);\ninout p; electrical p;\nreal x;\nanalog begin\nx = 0.0;\n");
+    for (0..60000) |_| try src.appendSlice(gpa, "x = x + 1.0;\n");
+    try src.appendSlice(gpa, "I(p) <+ x;\nend\nendmodule\n");
+    var h: Harness = undefined;
+    try Harness.run(gpa, src.items, &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 0), h.bag.count());
+}
+
+test "§6.6.1 a genvar loop of exactly the unroll limit is legal; a longer one is E0485; an endless one is E0420" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { cond: []const u8, step: []const u8, code: ?diag.Code }{
+        .{ .cond = "i < 4096", .step = "i = i + 1", .code = null }, // ends exactly at the cap
+        .{ .cond = "i < 5000", .step = "i = i + 1", .code = .E0485 }, // ends, past the cap
+        .{ .cond = "i < 3", .step = "i = i - 1", .code = .E0420 }, // runs away
+        .{ .cond = "i < 9000", .step = "i = (i + 1) % 8", .code = .E0420 }, // repeats a value
+    };
+    for (cases) |c| {
+        const src = try gpa.print(
+            \\module m(p);
+            \\inout p; electrical p;
+            \\genvar i;
+            \\generate for (i = 0; {s}; {s}) begin end endgenerate
+            \\analog I(p) <+ 0.0;
+            \\endmodule
+        , .{ c.cond, c.step });
+        defer gpa.free(src);
+        var h: Harness = undefined;
+        try Harness.run(gpa, src, &h);
+        defer h.deinit();
+        _ = h.low.lowerFile() catch |err| switch (err) {
+            error.DiagnosticsReported => {},
+            else => |e| return e,
+        };
+        if (c.code) |want| {
+            try std.testing.expect(h.bag.count() >= 1);
+            try std.testing.expectEqual(want, h.code(0));
+        } else try std.testing.expectEqual(@as(usize, 0), h.bag.count());
+    }
+}
+
+test "A.8.2 an omitted system-function argument with no meaning is a named error, never a crash" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { call: []const u8, bad: bool }{
+        .{ .call = "$limit(V(p), \"pnjlim\", 0.025, 0.6)", .bad = false },
+        .{ .call = "$limit(V(p), , 0.025, 0.6)", .bad = true },
+        .{ .call = "$table_model(V(p), , \"1LL\")", .bad = true },
+        .{ .call = "$hypot(V(p), )", .bad = true },
+    };
+    for (cases) |c| {
+        const src = try gpa.print(
+            \\module m(p);
+            \\inout p; electrical p;
+            \\analog I(p) <+ {s};
+            \\endmodule
+        , .{c.call});
+        defer gpa.free(src);
+        var h: Harness = undefined;
+        try Harness.run(gpa, src, &h);
+        defer h.deinit();
+        _ = h.low.lowerFile() catch |err| switch (err) {
+            error.DiagnosticsReported => {},
+            else => |e| return e,
+        };
+        var errors: usize = 0;
+        var e0894 = false;
+        for (0..h.bag.count()) |i| if (h.bag.at(i).severity == .err) {
+            errors += 1;
+            e0894 = e0894 or h.code(i) == .E0894;
+        };
+        if (errors != @intFromBool(c.bad) or e0894 != c.bad) {
+            for (0..h.bag.count()) |i| std.debug.print("{s}: {s} {s}\n", .{ c.call, @tagName(h.code(i)), h.msg(i) });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "A.8.1 an empty pattern element is E0894 except in §3.6.3.2's bus nodeset; A.8.2 noise functions take no empty slot" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { src: []const u8, code: ?diag.Code }{
+        .{ .src = "parameter real a[0:2] = '{1.0, , 3.0};\nanalog I(p) <+ a[1] * V(p);", .code = .E0894 },
+        .{ .src = "parameter real a[0:2] = '{1.0, 2.0, 3.0};\nanalog I(p) <+ a[1] * V(p);", .code = null },
+        .{ .src = "real a[0:2];\nanalog begin a = '{1.0, , 3.0}; I(p) <+ a[1] * V(p); end", .code = .E0894 },
+        .{ .src = "analog I(p) <+ white_noise(1e-20, , \"x\");", .code = .E0505 },
+        .{ .src = "analog I(p) <+ white_noise(1e-20, \"x\");", .code = null },
+    };
+    for (cases) |c| {
+        const src = try gpa.print(
+            \\module m(p);
+            \\inout p; electrical p;
+            \\{s}
+            \\endmodule
+        , .{c.src});
+        defer gpa.free(src);
+        var h: Harness = undefined;
+        try Harness.run(gpa, src, &h);
+        defer h.deinit();
+        _ = h.low.lowerFile() catch |err| switch (err) {
+            error.DiagnosticsReported => {},
+            else => |e| return e,
+        };
+        var first: ?diag.Code = null;
+        for (0..h.bag.count()) |i| if (h.bag.at(i).severity == .err) {
+            first = h.code(i);
+            break;
+        };
+        try std.testing.expectEqual(c.code, first);
+    }
 }

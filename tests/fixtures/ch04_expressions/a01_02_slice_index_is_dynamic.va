@@ -67,6 +67,8 @@
 //! lrm 5.7
 //! lrm 4.2.1
 //! lrm A.8.5
+//! lrm 5.7:4
+//! lrm A.8.5:1000
 //! bias V(p) = 0.5
 //! print none
 `include "check.vh"

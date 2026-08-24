@@ -164,6 +164,8 @@
 //! lrm 9.22.2
 //! lrm G.1
 //! lrm 7.8.4
+//! lrm 9.22.2:1000
+//! lrm 9.22:1000
 //! analysis tran
 //! time 0, 50n
 //! checks 3

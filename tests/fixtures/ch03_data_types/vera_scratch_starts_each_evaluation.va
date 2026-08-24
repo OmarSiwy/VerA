@@ -37,6 +37,7 @@
 //
 // Eight verdicts at two points.
 //! lrm 2.9
+//! lrm 2.9:3
 //! lrm 3.2
 //! analysis tran
 //! bias V(a) = 0.5, V(b) = 0.0

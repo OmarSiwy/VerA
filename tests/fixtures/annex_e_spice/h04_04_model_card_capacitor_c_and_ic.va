@@ -50,6 +50,7 @@
 //! lrm E.3
 //! lrm 4.5.4
 //! lrm 6.7.1
+//! lrm 6.7.1:1
 //! analysis tran
 //! time 0, 0.5, 1.0
 //! bias V(n) = 0.0

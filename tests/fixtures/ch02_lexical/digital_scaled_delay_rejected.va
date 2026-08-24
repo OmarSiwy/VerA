@@ -3,7 +3,9 @@
 // restriction as a standalone digital design. digital_delay_notation.va is
 // the emitted mixed-host legal neighbour, with #2.5 and #5e3 in ns units.
 //! lrm 2.6.2
-//! reject E0247
+//! lrm 2.6.2:3
+//! reject-only E0247
+//! neighbour digital_delay_notation.va
 `timescale 1ns/1ps
 module digital_scaled_delay_rejected(p);
   inout p;

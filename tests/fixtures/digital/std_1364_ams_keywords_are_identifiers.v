@@ -7,6 +7,7 @@
 // 0101); above = ddt * 2 = 12.
 // digital-runner: --std=1364-2005
 //! lrm 10.6
+//! lrm 10.6:2
 //! expect stdout std_1364_ams_keywords_are_identifiers.expected.txt
 module std_1364_ams_keywords_are_identifiers;
   reg [3:0] analog;

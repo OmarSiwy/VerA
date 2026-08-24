@@ -16,7 +16,9 @@
 // decimal point": an underscore is not a digit, so the fraction of `1._5`
 // begins with a non-digit and the requirement is unmet.
 //! lrm 2.6.2
-//! reject E0207
+//! lrm 2.6.2:2
+//! reject-only E0207
+//! neighbour 34_real_underscores.va
 module ch02_real_underscore_after_dot_rejected;
     real value;
     analog value = 1._5;

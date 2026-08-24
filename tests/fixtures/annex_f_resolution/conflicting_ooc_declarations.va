@@ -32,9 +32,13 @@
 // sentence are one rule.
 //
 //! lrm F.2.1
+//! lrm F.2.1:3
 //! lrm F.2.2
+//! lrm F.2.2:4
 //! lrm 3.10
-//! reject E0902
+//! lrm 7.4.4
+//! lrm 7.4.4:3
+//! reject-only E0902
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 module annex_f_ooc_leaf(p);

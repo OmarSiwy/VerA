@@ -11,6 +11,10 @@
 // evaluate `last` cannot have made a four-element array at all.
 //
 //! lrm 3.4.4
+//! lrm 3.2
+//! lrm 3.2:2
+//! lrm 3.4
+//! lrm 3.4:2
 `include "check.vh"
 module ch03_parameter_array(p, n);
     inout p, n;

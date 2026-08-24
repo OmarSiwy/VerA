@@ -57,10 +57,12 @@
 // declined.
 //
 //! lrm E.2
+//! lrm E.2:3
 //! lrm E.2.2.2
 //! lrm E.2.2.3
 //! lrm E.1.1
 //! lrm 6.7.1
+//! lrm 6.7.1:1
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve
 //! spice .SUBCKT RDIV IN OUT GND

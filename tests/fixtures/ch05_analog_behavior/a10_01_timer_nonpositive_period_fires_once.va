@@ -48,6 +48,7 @@
 // where `@(timer(-1n, 0))` fires once at t = 0 and every row reads 1.
 //
 //! lrm 5.10.3.3
+//! lrm 5.10.3.3:4
 //! analysis tran
 //! time 0, 1n, 2n, 3n, 5n
 //! bias V(p) = 0

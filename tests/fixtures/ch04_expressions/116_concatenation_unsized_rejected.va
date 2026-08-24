@@ -15,7 +15,9 @@
 // asserts the 165 that this rule protects.
 //
 //! lrm 4.2.13
-//! reject E0216
+//! lrm 4.2.13:2
+//! reject-only E0216
+//! neighbour 30_concatenation.va
 module ch04_concatenation_unsized_rejected(p, n);
     inout p, n;
     electrical p, n;

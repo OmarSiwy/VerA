@@ -4,6 +4,7 @@
 // capacity and achieved maximum coincide, so this does not distinguish them.
 // Do not assert job/info outputs on failed removal.
 //! lrm 9.9
+//! lrm 9.9:1000
 //! inherited IEEE 1364-2005 17.6
 //! expect stdout audit_queue_capacity_stats.expected.txt
 module audit_queue_capacity_stats;

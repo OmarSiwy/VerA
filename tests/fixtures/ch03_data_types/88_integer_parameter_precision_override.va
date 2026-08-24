@@ -1,6 +1,10 @@
 // §3.4.1 derives an untyped parameter from its FINAL HDL instance override.
 //! lrm 3.4.1
 //! lrm 6.3
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.3.4
+//! lrm 6.3.4:1000
 `include "check.vh"
 module precision_child;
   parameter code = 1;

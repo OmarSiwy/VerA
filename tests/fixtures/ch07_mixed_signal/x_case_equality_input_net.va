@@ -18,6 +18,7 @@
 // z as 0 and gives 0 at 50n.
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:1
 //! solve
 //! analysis tran
 //! time 10n, 30n, 50n, 70n

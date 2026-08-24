@@ -133,6 +133,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    // the bits `eval` would have computed.
         \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model);
         \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
+        \\    // §4.6.2 one per analysis: `initState` at each analysis's first point.
+        \\    // A deck run by `src/sim/spice` (`//! tran`) has no point here.
+        \\    var state: State = undefined;
+        \\    _ = &state;
         \\
     );
     try out.appendSlice(arena,
@@ -231,8 +235,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     }
 
     // --- one straight-line block per operating point ------------------------
-    // Sweep outer, time inner. Each sweep point is its own transient run with a
-    // fresh `State`, so no bias inherits another's §4.5 operator history.
+    // Sweep outer, time inner. With `//! time` each sweep point is its own
+    // transient run with a fresh `State`, so no bias inherits another's §4.5
+    // operator history or §4.6.2 variables; a dc sweep's points share them.
     const points = try expand(arena, d);
     // §5.10.2 / Table 5-1: `initial_step` fires on an analysis's first point
     // and `final_step` on its last. With `//! time` each sweep block is its own
@@ -257,7 +262,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm);\n");
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setupInstance\")) D.setupInstance(&pm, &inst);\n");
         }
-        try pointUnknowns(&out, arena, d, pt, mdl);
+        // §4.6.2 a new analysis re-initializes its variables (`initState`);
+        // the steps of one dc sweep are one analysis and keep them.
+        try pointUnknowns(&out, arena, d, pt, mdl, per_block or n == 0);
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
                 // A short `wave` holds its last value.
@@ -557,6 +564,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
         \\    if (comptime @hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\    var n: usize = 0;
+        \\    var state: State = undefined;
         \\
     );
     // Each sweep point is its own analysis: fresh digital elaboration and `State`.
@@ -572,7 +580,7 @@ fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed)
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| try setCard(&out, arena, "        ", "pm", s.name, v);
             try deriveCard(&out, arena, "        ", "pm", null);
         }
-        try pointUnknowns(&out, arena, d, pt, mdl);
+        try pointUnknowns(&out, arena, d, pt, mdl, true);
         try out.print(arena, "        runMixed(&{s}, &inst, &x, &forced, &state, &n);\n    }}\n", .{mdl});
     }
     try out.print(arena, "}}\n\nconst print_residual = {};\n", .{d.print_residual});
@@ -651,6 +659,8 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
 fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8, d: Directives) Error!void {
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try out.print(arena, "/// Read by `contract.validating`: run the contract's conformance checks.\npub const vera_validate_contract = {};\n", .{d.validate_contract});
+    try out.print(arena, "/// The switch of `fdCheck`, `finiteCheck` and `stateCheck`: the suite's `--certify` (docs/TESTING.md L4).\nconst fd_certify = {};\n", .{d.certify});
+    try out.print(arena, "/// `finiteCheck`'s claim: every contribution unit was proved finite.\nconst finite_proved = {};\n", .{d.finite_proved});
     try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     // §9.15 `$simparam$str("analysis_name")`: this testbench's one analysis.
     const name = if (d.analysis_name.len != 0) d.analysis_name else @tagName(d.analysis);
@@ -682,8 +692,9 @@ fn deriveCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, car
 
 /// Writes one operating point's unknowns for the fixed-grid and mixed
 /// runners: `x` and `forced`, the §3.6.3.2 nodeset, a fresh `State` on card
-/// `mdl`, then what the directives pin. `pt` is the point's row of `expand`.
-fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: []const f64, mdl: []const u8) Error!void {
+/// `mdl` when the point starts an analysis (`fresh`), then what the
+/// directives pin. `pt` is the point's row of `expand`.
+fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: []const f64, mdl: []const u8, fresh: bool) Error!void {
     // `forced` marks the unknowns the host drives rather than Newton. By
     // default every unknown is tied to the reference; `//! solve` unties
     // the ones no line names. §3.6.3.2 a nodeset is an initial guess: it
@@ -695,9 +706,9 @@ fn pointUnknowns(out: *std.ArrayList(u8), arena: Allocator, d: Directives, pt: [
         \\        if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {{
         \\            if (nodeset_i) |v| x[i] = v;
         \\        }};
-        \\        var state = newState(&{s}, &inst);
         \\
-    , .{ if (d.solve_free) "null" else "0.0", mdl });
+    , .{if (d.solve_free) "null" else "0.0"});
+    if (fresh) try out.print(arena, "        state = newState(&{s}, &inst);\n", .{mdl});
     // §4.5.2 operator unknowns are never forced (`Directives.op_states`).
     for (d.op_states) |u| try out.print(arena, "        forced[{d}] = null;\n", .{u});
     for (d.bias) |b|

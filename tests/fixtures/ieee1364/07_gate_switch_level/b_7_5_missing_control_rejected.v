@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 7.5
 //! reject E0209
 //! reject a mos switch (A.3.4 mos_switchtype) takes an output, an input and an enable terminal
+//! neighbour b_7_1_1_every_primitive.v
 module b_7_5_missing_control_rejected;
   reg a;
   wire o;

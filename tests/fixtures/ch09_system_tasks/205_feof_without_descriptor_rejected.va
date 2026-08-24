@@ -16,8 +16,9 @@
 // "wrong number of arguments to a system task or function".
 //
 //! lrm 9.5.8
-//! reject E0887
+//! reject-only E0887
 //! reject `$feof` takes 1 argument, got 0
+//! neighbour 054_feof.va
 `include "disciplines.vams"
 module ch09_feof_without_descriptor(p, n);
   inout p, n; electrical p, n;

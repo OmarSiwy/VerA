@@ -15,7 +15,8 @@
 // half's gap, not this rule's.
 //
 //! lrm A.2.1.2
-//! reject E0208
+//! lrm A.2.1.2:1000
+//! reject-only E0208
 `include "disciplines.vams"
 module annex_a_input_real(p, n, k);
   inout p, n;

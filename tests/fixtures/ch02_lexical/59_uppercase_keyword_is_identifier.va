@@ -20,6 +20,8 @@
 // in binary, hence CHECKX.
 //! lrm 2.8.2
 //! lrm 2.8
+//! lrm 2.8:5
+//! lrm 2.8.2:1000
 `include "check.vh"
 module ch02_uppercase_keyword_is_identifier(p, n);
     inout p, n;

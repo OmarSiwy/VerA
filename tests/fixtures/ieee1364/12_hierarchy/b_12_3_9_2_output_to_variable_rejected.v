@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 12.3.9 12.3.9.2 12.3.8
 //! reject E1100
 //! reject an output port can only drive a net
+//! neighbour b_12_3_8_structural_sinks_and_expression_sources.v
 module m(a, y);
   input a;
   output y;

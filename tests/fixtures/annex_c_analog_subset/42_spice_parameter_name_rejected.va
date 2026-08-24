@@ -24,8 +24,12 @@
 //! lrm C.18
 //! lrm E.3
 //! lrm 6.3.3
-//! reject E0907
+//! lrm 6.3.3:1
+//! lrm E.1.2
+//! lrm E.1.2:2
+//! reject-only E0907
 //! reject `rsh`
+//! neighbour 41_spice_primitive.va
 module annex_c_spice_parameter_name_rejected(p, n);
     inout p, n;
     electrical p, n;

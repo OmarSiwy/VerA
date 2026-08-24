@@ -7,7 +7,8 @@
 // the branch that steers it. The legal neighbour reads a §5.10 held variable
 // and `$abstime` instead, which no iteration moves: vera_timepoint_cache.va.
 //! lrm 2.9
-//! reject E0531
+//! reject-only E0531
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_reads_iterate(p, n);
   inout p, n; electrical p, n;
   real w, y;

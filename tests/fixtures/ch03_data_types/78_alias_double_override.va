@@ -29,8 +29,11 @@
 // accepting any unrelated diagnostic that happens to mention an alias.
 //
 //! lrm 3.4.7
+//! lrm 3.4.7:4
 //! lrm C.8
-//! reject E0908
+//! reject-only E0908
+//! neighbour 07_parameter_alias.va
+//! neighbour 34_implicit_nets.va
 module ch3_alias_override_target(d, s);
     inout d, s;
     electrical d, s;

@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 19.4
 //! reject E0105
 //! reject `elsif without `ifdef
+//! neighbour b_19_4_conditional_compilation.v
 `elsif some_macro
 module b_19_4_elsif_without_ifdef_rejected;
   initial $display("accepted");

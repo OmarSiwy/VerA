@@ -46,10 +46,12 @@
 // refusal has its own code, E0922, which the tag names.
 //
 //! lrm 7.8.4
+//! lrm 7.8.4:2
 //! lrm 7.8
 //! lrm 7.7.1
 //! lrm 7.7.2.1
-//! reject E0922
+//! lrm 7.7.2.1:3
+//! reject-only E0922
 
 connectmodule m03_a2d_fast(el, cm);
   input el;

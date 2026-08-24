@@ -21,8 +21,10 @@
 // sibling compiles.
 //
 //! lrm 5.5.3
+//! lrm 5.5.3:1
 //! lrm A.8.9
-//! reject E0359
+//! reject-only E0359
+//! neighbour nature_attribute_unsupported.va
 module ch5_nature_attribute_nonconstant(a, b);
   inout a, b; electrical a, b;
   parameter real c = 1p;

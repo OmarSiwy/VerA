@@ -35,6 +35,7 @@
 //
 //! lrm E.3.1
 //! lrm E.2
+//! lrm E.3.1:1000
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve
 //! spice .SUBCKT CMIRROR IN OUT GND

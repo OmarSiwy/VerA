@@ -19,6 +19,7 @@
 // can break them).
 //
 //! lrm 4.6.2
+//! lrm 4.6.2:1
 //! lrm 4.6.1
 //! analysis dc
 //! sweep V(p) = 0.2, 0.4, 0.6

@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 3.4
 //! reject E0207
 //! reject unexpected token: found `~`
+//! neighbour b_3_4_operator_positions.v
 module b_3_4_postfix_unary_rejected;
   reg a, b;
   initial begin

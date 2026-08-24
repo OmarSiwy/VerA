@@ -26,8 +26,10 @@
 //
 //! lrm 6.1
 //! lrm 6.2.2
+//! lrm 6.1:1000
 //! reject E0240
 //! reject found `module`
+//! neighbour hierarchy_overview_instances_and_overrides.va
 module ch6_nested_outer(p);
   inout p; electrical p;
   module ch6_nested_inner(q);

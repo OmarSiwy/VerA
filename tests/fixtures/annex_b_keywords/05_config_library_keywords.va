@@ -25,7 +25,7 @@
 // file, 14_include_reserved.va, for the preprocessor-position reason given
 // there.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject cell
 //! reject design
 //! reject endconfig

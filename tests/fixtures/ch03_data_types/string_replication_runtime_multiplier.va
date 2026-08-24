@@ -27,6 +27,8 @@
 // retired.
 //
 //! lrm 3.3
+//! lrm 3.3:1
+//! lrm 3.3:4
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch3_string_replication_runtime_multiplier(p);

@@ -17,8 +17,10 @@
 // with E0924, the §6.7.1 code.
 //
 //! lrm 6.7.1
+//! lrm 6.7.1:2
 //! lrm 6.9.4
 //! reject E0924
+//! neighbour oomr_parameter_unsupported.va
 `include "disciplines.vams"
 module ch6_oomr_in_parameter_declaration(p);
   inout p; electrical p;

@@ -32,7 +32,9 @@
 //! lrm 8.5.3.4
 //! lrm 8.5.3
 //! lrm A.6.2
-//! reject E0482
+//! lrm A.6.2:1000
+//! reject-only E0482
+//! neighbour ../ch07_mixed_signal/m02_07_glitch_absorbed_at_one_tick.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch8534_nba_wire(p);

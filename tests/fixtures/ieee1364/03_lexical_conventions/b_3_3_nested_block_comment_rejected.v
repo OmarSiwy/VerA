@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 3.3
 //! reject E0214
 //! reject found `*`
+//! neighbour b_3_3_comment_forms.v
 module b_3_3_nested_block_comment_rejected;
   reg a;
   initial begin

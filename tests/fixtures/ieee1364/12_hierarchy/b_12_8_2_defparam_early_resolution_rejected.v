@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 12.8.2
 //! reject E1100
 //! reject would resolve differently
+//! neighbour b_12_8_1_defparam_before_generate.v
 module m;
   m1 n();
 endmodule

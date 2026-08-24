@@ -31,8 +31,10 @@
 // (§6.6.3: a generate block is a scope), `g1.u1` and `g2.u4`.
 //
 //! lrm 6.9.2
+//! lrm 6.9.2:1
 //! lrm 6.4.2
 //! bias V(p) = 0.75, V(n) = 0.25
+//! checks 2
 `include "check.vh"
 paramset ch6_psg_sel ch6_psg_leaf;
   parameter real w = 10.0 from [5.0:inf);

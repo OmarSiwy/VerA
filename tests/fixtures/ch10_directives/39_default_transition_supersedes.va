@@ -59,6 +59,7 @@
 // residue, which is not a chapter-10 defect.
 //
 //! lrm 10.3
+//! lrm 10.3:1000
 //! bias V(n) = 0
 //! wave V(in) = 0, 1
 //! time 0, 1n, 2n, 3n, 4n

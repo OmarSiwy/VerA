@@ -32,6 +32,9 @@
 //! lrm A.4.1
 //! lrm C.8
 //! lrm 6.3.2
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm A.4.1:1000
 //! print none
 `include "check.vh"
 module annex_a_module_instantiation(p, n);

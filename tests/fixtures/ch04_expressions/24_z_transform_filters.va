@@ -64,6 +64,15 @@
 //    forms, or that drops a feedback term in one of them, fails.
 //
 //! lrm 4.5.12
+//! lrm 4.5.12:2
+//! lrm 4.5.12.1
+//! lrm 4.5.12.1:1
+//! lrm 4.5.12.2
+//! lrm 4.5.12.2:1
+//! lrm 4.5.12.3
+//! lrm 4.5.12.3:1
+//! lrm 4.5.12.4
+//! lrm 4.5.12.4:1000
 //! analysis dc
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0

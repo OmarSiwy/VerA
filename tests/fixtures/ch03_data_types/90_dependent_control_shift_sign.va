@@ -2,6 +2,7 @@
 //! lrm 3.2.1
 //! lrm 4.2.11
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param count = 0
 `include "check.vh"
 module dependent_control_shift_sign;

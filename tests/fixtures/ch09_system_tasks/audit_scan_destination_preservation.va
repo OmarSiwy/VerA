@@ -4,6 +4,8 @@
 // Repeating a destination must preserve the most recent successful assignment
 // when a later conversion fails: scanning "12 nope" writes shared=12 once.
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:4
+//! lrm 9.5.4.2:5
 //! checks 15
 `include "check.vh"
 module audit_scan_destination_preservation(p, n);

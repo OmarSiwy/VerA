@@ -48,6 +48,9 @@
 //! lrm-reject 12.18
 //! lrm 12.30
 //! lrm 12.32
+//! lrm 12.18:1
+//! lrm 12.18:2
+//! lrm 12.30:1
 
 #include "p03_vpi_analog.h"
 

@@ -26,7 +26,11 @@
 //
 //! lrm 7.8.3
 //! lrm 7.7.4
-//! reject a connect_mode is `merged` or `split`
+//! lrm 7.7.4:1000
+//! reject-only a connect_mode is `merged` or `split`
+//! neighbour connect_mode_accepted.va
+//! neighbour m03_01_merged_is_the_default_one_instance.va
+//! neighbour m03_02_split_one_instance_per_port.va
 `include "disciplines.vams"
 connectmodule ch7_cm_a2d(el, dg);
   input el;

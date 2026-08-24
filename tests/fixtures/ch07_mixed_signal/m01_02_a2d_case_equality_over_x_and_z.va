@@ -42,6 +42,7 @@
 // is the clause's and VerA's retention is the gap.
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:1
 //! lrm 7.3.1
 //! analysis tran
 //! time 0, 10n, 30n, 50n

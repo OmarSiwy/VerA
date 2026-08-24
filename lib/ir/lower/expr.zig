@@ -87,7 +87,13 @@ fn lowerExprRaw(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bo
 }
 
 fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
-    if (e == .none) return poison;
+    // An omitted A.8.2 slot reaches here only when its function gave it no
+    // meaning: every slot with a default is read before lowering. The cursor
+    // is still the enclosing call's token.
+    if (e == .none) {
+        try self.err(self.mir.cur_tok, .E0894, "write the argument", .{});
+        return poison;
+    }
     const ex = &self.file.exprs;
     // Provenance: every MIR instruction emitted while this node is being
     // lowered is stamped with its token (Mir.addInst reads the cursor), which
@@ -1152,7 +1158,15 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.err(self.file.exprs.mainTok(e), .E0530, "a probe (§4.4)", .{});
         return poison;
     }
-    return portFlowRead(self, e, try lower_node.nodeOf(self, self.file.exprs.lhs(e)));
+    // `nodeOf` stands ground in for a terminal it refused (E0351/E0352), and
+    // ground is no port: that is the same mistake, not a second E0508.
+    const had = self.had_error;
+    self.had_error = false;
+    const p = try lower_node.nodeOf(self, self.file.exprs.lhs(e));
+    const refused = self.had_error;
+    self.had_error = had or refused;
+    if (refused) return poison;
+    return portFlowRead(self, e, p);
 }
 
 /// The read half of §5.4.3, shared by `I(<p>)` and by a §3.12.1 port branch
@@ -1234,25 +1248,25 @@ pub fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
     if (unaryMathOp(name)) |op| {
         if (args.len != 1) return arityError(self, e, name, 1);
-        const a = try lowerExpr(self, args[0]);
+        const a = try numOperand(self, args[0]) orelse return poison;
         return .{ .v = try self.emit(op, &.{try self.toReal(a)}), .ty = .real };
     }
     if (binaryMathOp(name)) |op| {
         if (args.len != 2) return arityError(self, e, name, 2);
-        const a = try lowerExpr(self, args[0]);
-        const b = try lowerExpr(self, args[1]);
+        const a = try numOperand(self, args[0]) orelse return poison;
+        const b = try numOperand(self, args[1]) orelse return poison;
         return .{ .v = try self.emit(op, &.{ try self.toReal(a), try self.toReal(b) }), .ty = .real };
     }
     if (std.mem.eql(u8, name, "abs")) {
         if (args.len != 1) return arityError(self, e, name, 1);
-        const a = try lowerExpr(self, args[0]);
+        const a = try numOperand(self, args[0]) orelse return poison;
         const int = a.ty == .integer;
         return .{ .v = try self.emit(if (int) .iabs else .fabs, &.{a.v}), .ty = a.ty };
     }
     if (std.mem.eql(u8, name, "min") or std.mem.eql(u8, name, "max")) {
         if (args.len != 2) return arityError(self, e, name, 2);
-        const a = try lowerExpr(self, args[0]);
-        const b = try lowerExpr(self, args[1]);
+        const a = try numOperand(self, args[0]) orelse return poison;
+        const b = try numOperand(self, args[1]) orelse return poison;
         const ty = unify(a.ty, b.ty);
         const is_min = name[1] == 'i';
         const op: Mir.Opcode = if (ty == .real)
@@ -1265,6 +1279,20 @@ pub fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     try unknownCall(self, e, name);
     return poison;
+}
+
+/// Lowers one §4.3 built-in operand: §4.3.1 "The operands shall be numeric
+/// (integer or real)", §4.3.2 "All operands shall be numeric". A string
+/// literal is one (§2.7: an unsigned integer constant); a string variable is
+/// not (§3.3 Table 3-3 gives it no arithmetic), and is E0321 with null. The
+/// test is the expression's shape: a variable assigned a literal carries the
+/// literal's constant value, and is still a string.
+fn numOperand(self: *Lower, arg: Ast.ExprId) Oom!?TypedValue {
+    const tv = try lowerExpr(self, arg);
+    if (tv.ty != .string) return tv;
+    if (self.file.exprs.tag(arg) == .str_literal) return try self.strNum(tv);
+    try self.err(self.file.exprs.mainTok(arg), .E0321, "a §4.3 math function operand shall be numeric (integer or real); this one is a string", .{});
+    return null;
 }
 
 /// Reports E0512 with a suggestion drawn from everything that could have been

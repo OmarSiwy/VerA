@@ -6,7 +6,8 @@
 // legal neighbour puts the loop inside the statement, as
 // vera_timepoint_cache.va's `for (i = 0; i < 3; i = i + 1) e[i] = ...` does.
 //! lrm 2.9
-//! reject E0532
+//! reject-only E0532
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_in_loop(p, n);
   inout p, n; electrical p, n;
   integer i;

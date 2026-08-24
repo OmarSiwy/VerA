@@ -11,7 +11,8 @@
 // what the genvar requirement exists to exclude.
 //
 //! lrm 5.9.2
-//! reject E0514
+//! lrm 5.9.2:1
+//! reject-only E0514
 `include "disciplines.vams"
 module ch5_analog_operator_in_integer_for(p, n);
   inout p, n;

@@ -17,6 +17,8 @@
 //! lrm 6.4.2
 //! lrm 9.14
 //! inherited IEEE 1364-2005 12.2
+//! lrm 6.4.2:4
+//! lrm 9.14:1
 //! param wide = 4294967296
 //! param unsigned_word = 2147483648
 //! param narrow = 1

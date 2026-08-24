@@ -18,7 +18,7 @@
 // real_valued_wreal_port.va is the running positive neighbour.
 //
 //! lrm 3.7
-//! reject E0919
+//! reject-only E0919
 module ch3_wreal_to_wand_child(o);
     output o;
     wreal o;

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 13.1
 //! reject E1100
 //! reject undeclared module in instantiation
+//! neighbour b_13_1_every_instance_bound.v
 module top;
   absent u();
   initial $display("bound");

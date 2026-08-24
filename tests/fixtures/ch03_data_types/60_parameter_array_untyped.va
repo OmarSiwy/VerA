@@ -13,8 +13,11 @@
 // E0346 identifies the missing explicit type, not an arbitrary earlier failure.
 //
 //! lrm 3.4.4
+//! lrm 3.4.4:1
+//! lrm 3.4.4:2
 //! lrm 3.4.1
-//! reject E0346
+//! reject-only E0346
+//! neighbour 08_parameter_array.va
 module ch3_parameter_array_untyped(p, n);
     inout p, n;
     electrical p, n;

@@ -49,6 +49,8 @@
  * REFUSED: [3] as one delay onto the buf, which leaves [2, 8] in place.
  */
 
+//! lrm 12.11
+//! lrm 12.11:3
 //! inherited IEEE 1364-2005 27.9
 //! inherited-reject IEEE 1364-2005 27.9
 //! inherited IEEE 1364-2005 27.30

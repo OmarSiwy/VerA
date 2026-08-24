@@ -44,6 +44,7 @@
 //
 //! lrm G.1
 //! lrm 5.6.1
+//! lrm 5.6.1:4
 //! print none
 //! solve
 `include "check.vh"

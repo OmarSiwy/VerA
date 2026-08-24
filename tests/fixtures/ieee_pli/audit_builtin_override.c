@@ -15,6 +15,8 @@
 //! lrm 12.33
 //! lrm 12.33.1
 //! lrm 12.35
+//! lrm 12.33.1:7
+//! lrm 12.33.1:11
 
 #include "vpi_user.h"
 #include <stdio.h>

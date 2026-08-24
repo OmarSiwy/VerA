@@ -4,6 +4,8 @@
 // yields7 and establishes a legal neighbor to39_block_comment_separates_tokens.
 //! lrm 2.2
 //! lrm 2.4
+//! lrm 2.2:1
+//! lrm 2.4:2
 //! checks 1
 `include "check.vh"
 module audit_comment_separator_legal_neighbor(p);

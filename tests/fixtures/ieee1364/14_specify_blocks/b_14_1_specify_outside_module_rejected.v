@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.1
 //! reject outside a module
+//! neighbour specify_timing_checks_named_by_w0251.v
 specify
   specparam tpd = 1;
 endspecify

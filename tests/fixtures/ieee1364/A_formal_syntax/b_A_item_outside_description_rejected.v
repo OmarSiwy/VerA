@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A
 //! reject E0201
 //! reject `wire`
+//! neighbour b_A_source_text.v
 wire stray;
 module b_A_item_outside_description_rejected;
   initial $display("unreachable");

@@ -8,6 +8,7 @@
 // the top-level value, 0.0 m, exactly.
 //
 //! lrm 9.18
+//! lrm 9.18:1000
 `include "check.vh"
 module ch09_atomic_yposition(p, n);
   inout p, n; electrical p, n;

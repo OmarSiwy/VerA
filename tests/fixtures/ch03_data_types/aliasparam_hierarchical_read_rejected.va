@@ -2,7 +2,8 @@
 // must also name the original parameter. The root-qualified path cannot
 // bypass that rule. aliasparam_source_bindings.va reads child.gain legally.
 //! lrm 3.4.7
-//! reject E0373
+//! reject-only E0373
+//! neighbour aliasparam_source_bindings.va
 module aliasparam_hierarchical_top(p);
   inout p; electrical p;
   aliasparam_hierarchical_child #(.alternate(3)) child();

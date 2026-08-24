@@ -32,8 +32,12 @@
 //
 //! lrm G.1
 //! lrm 3.4
+//! lrm 3.4:2
 //! lrm 4.2.14
-//! reject E0349
+//! lrm 4.2.14:1000
+//! reject-only E0349
+//! neighbour ../ch03_data_types/08_parameter_array.va
+//! neighbour ../ch04_expressions/09_assignment_pattern.va
 module annex_g_brace_array(p, n);
   inout p, n; electrical p, n;
   parameter real coeffs[0:1] = {2.1, 4.5};

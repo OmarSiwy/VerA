@@ -57,12 +57,20 @@ pub fn report(
         // A fixture whose directives do not parse is reported by the run
         // proper; a coverage report is not the place to fail on it.
         const d = vera.tb.parse(arena, source) catch continue;
-        if (d.lrm.len != 0) citing += 1;
-        for (d.lrm) |s| try cites.append(arena, .{
-            .section = s,
-            .path = f.path,
-            .side = if (d.reject.len != 0) .neg else .pos,
-        });
+        var cited = false;
+        for (d.lrm) |s| {
+            // A sentence cite (`5.6.1.3:2`) is the requirement ledger's
+            // (docs/TESTING.md §3.2, `conformance.py metric`), not this
+            // clause inventory's: only a bare clause cite counts here.
+            if (std.mem.indexOfScalar(u8, s, ':') != null) continue;
+            cited = true;
+            try cites.append(arena, .{
+                .section = s,
+                .path = f.path,
+                .side = if (d.reject.len != 0) .neg else .pos,
+            });
+        }
+        if (cited) citing += 1;
     }
     const c_files = try cFixtures(arena, io, root, filter);
     var bad_tags: usize = 0;
@@ -425,6 +433,8 @@ fn cCites(
             return error.BadCTag;
         const section = words.next() orelse return error.BadCTag;
         if (words.next() != null) return error.BadCTag;
+        // A sentence cite is the ledger's, as in `report`.
+        if (std.mem.indexOfScalar(u8, section, ':') != null) continue;
         try out.append(arena, .{
             .section = section,
             .path = path,
@@ -438,7 +448,8 @@ test "a .c fixture's polarity is per line, and only a running one counts" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\n" ++
-        "//! inherited IEEE 1364-2005 27.14\n//! inherited-reject IEEE 1364-2005 27.14\nint x;\n";
+        "//! inherited IEEE 1364-2005 27.14\n//! inherited-reject IEEE 1364-2005 27.14\n" ++
+        "//! lrm 12.16:3\nint x;\n"; // a sentence cite is the ledger's, not counted here
     var cites: std.ArrayList(Cite) = .empty;
     try cCites(arena, &cites, "a.c", src, true);
     try std.testing.expectEqual(@as(usize, 2), cites.items.len);

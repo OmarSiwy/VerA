@@ -2,6 +2,8 @@
 // during the evaluation of the loop generate scheme." The iteration `i = i`
 // leaves i at 0, so the second evaluation of the scheme sees 0 again.
 // digital-runner: reject
+//! lrm 6.6.1
+//! lrm 6.6.1:7
 //! inherited IEEE 1364-2005 12.4.1
 //! reject a genvar value is repeated
 `timescale 1ns/1ns

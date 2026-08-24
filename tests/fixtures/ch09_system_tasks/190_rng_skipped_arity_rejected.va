@@ -1,7 +1,7 @@
 // Skipping evaluation does not relax a call's static signature or scope.
 //! lrm 4.2.3
 //! lrm 9.13.2
-//! reject E0816
+//! reject-only E0816
 //! reject takes 2 arguments
 module ch09_rng_skipped_arity(p,n);
   inout p,n; electrical p,n;

@@ -27,8 +27,11 @@
 // production that starts with the keyword.
 //
 //! lrm 9.22.5
-//! reject E0209
+//! lrm 9.2
+//! lrm 9.2:1000
+//! reject-only E0209
 //! reject found `driver_update`
+//! neighbour 38_driver_update_connectmodule.va
 `include "disciplines.vams"
 module ch09_driver_update_in_analog_event(p, n);
   inout p, n; electrical p, n;

@@ -16,7 +16,9 @@
 //
 //! lrm A.1.9
 //! lrm 6.4
-//! reject E0205
+//! lrm A.1.9:1000
+//! reject-only E0205
+//! neighbour paramset_output_unsupported.va
 module ch6_typo_user(p, n);
   inout p, n; electrical p, n;
   ch6_typo_ps u(p, n);

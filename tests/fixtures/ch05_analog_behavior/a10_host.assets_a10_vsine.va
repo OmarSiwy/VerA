@@ -57,6 +57,7 @@
 // the clause's own listing character for character.
 //
 //! lrm 9.17.2
+//! lrm 9.17.2:3
 //! analysis tran
 //! time 0, 5e-5, 2.5e-4
 //! bias V(p) = 0.0

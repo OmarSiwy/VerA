@@ -24,6 +24,8 @@
 // that the guard resolves the way the clause describes.
 //
 //! lrm 6.3.6
+//! lrm 6.3.6:8
+//! lrm 6.3.6:1
 //! bias V(a) = 0.75, V(b) = 0.25
 `include "check.vh"
 module parares(a, b);

@@ -2,6 +2,7 @@
 // still requires an error for the same numeric arguments when executed.
 //! lrm 4.2.3
 //! lrm 9.13.2
+//! lrm 4.2.3:4
 `include "check.vh"
 module ch09_rng_short_circuit(p,n);
   inout p,n; electrical p,n;

@@ -11,6 +11,8 @@
 // a zero lower bound indexes both of them wrong.
 //
 //! lrm 3.2
+//! lrm 3.2:1
+//! lrm 3.2:2
 `include "check.vh"
 module ch03_variable_arrays(p, n);
     inout p, n;

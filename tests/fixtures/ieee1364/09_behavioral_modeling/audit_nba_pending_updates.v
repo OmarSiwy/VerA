@@ -9,6 +9,7 @@
 // This tests ordinary digital NBAs, not the disputed AMS glitch example's
 // driver look-ahead or transition filtering.
 //! lrm 8.5.3.4
+//! lrm 8.5.3.4:1000
 //! inherited IEEE 1364-2005 9.2.2
 `timescale 1ns/1ns
 module audit_nba_pending_updates;

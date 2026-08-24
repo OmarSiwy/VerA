@@ -5,7 +5,10 @@
 // This is a compile-time refusal, so there is no runtime value to derive.
 //
 //! lrm 5.10.3.3
-//! reject E0517
+//! lrm 5.10.3.3:2
+//! reject-only E0517
+//! neighbour a10_03_timer_dynamic_period.va
+//! neighbour event_timer.va
 module a10_timer_negative_time_tol(p);
   inout p;
   electrical p;

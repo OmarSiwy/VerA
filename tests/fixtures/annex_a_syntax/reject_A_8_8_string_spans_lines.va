@@ -23,8 +23,11 @@
 //! lrm A.8
 //! lrm A.8.8
 //! lrm 2.7
-//! reject E0138
+//! lrm A.8.8:1000
+//! reject-only E0138
 //! reject may not span lines
+//! neighbour 07_expressions.va
+//! neighbour 67_string_literal.va
 module annex_a_string_spans_lines(p, n);
     inout p, n;
     electrical p, n;

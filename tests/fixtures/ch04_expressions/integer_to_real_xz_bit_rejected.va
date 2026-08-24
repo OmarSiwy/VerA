@@ -16,7 +16,8 @@
 // assignment and contribution forms; this row is the §4.2.1.2 conversion.
 //
 //! lrm 4.2.1.2
-//! reject E0130
+//! lrm 4.2.1.2:2
+//! reject-only E0130
 module ch04_integer_to_real_xz_bit(p, n);
     inout p, n;
     electrical p, n;

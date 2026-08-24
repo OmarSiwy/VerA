@@ -1,0 +1,95 @@
+// A.7.4, the positive half: every legal length of a path delay list, in both
+// `path_delay_value` arms, with specparam and expression values, on a module
+// whose outputs are then read. 63_specify_block_unsupported.va spells two of
+// these, but its only check reads the testbench bias.
+//
+//     path_delay_value ::= list_of_path_delay_expressions
+//             | ( list_of_path_delay_expressions )
+//     list_of_path_delay_expressions ::= t_path_delay_expression
+//             | trise_path_delay_expression , tfall_path_delay_expression
+//             | trise_... , tfall_... , tz_path_delay_expression
+//             | t01_... , t10_... , t0z_... , tz1_... , t1z_... , tz0_...
+//             | (the twelve-value list, t01 ... tzx)
+//     path_delay_expression ::= constant_mintypmax_expression
+//
+// WHAT IS SPELLED. One output per form: 1 value bare (q1), 2 specparams in
+// parentheses (q2), 2 values bare (q2b, the first `path_delay_value` arm),
+// 3 values (q3), 6 (q6), 12 (q12), and one constant expression over a
+// specparam (qe). reject_A_7_4_four_path_delays.va is the refusal: a
+// four-value list derives from no arm. The constant_mintypmax_expression arm of
+// path_delay_expression (`1:2:3`) is b8_specify_path_delay_mintypmax_list.va's
+// (an xfail).
+//
+// WHAT IS NOT CLAIMED. VerA reads every list and applies none (W0251, pinned
+// below; ROADMAP §1 B and CLAUSES.tsv keep path delays not-supported), so no
+// delay is observed. IEEE 1364-2005 §14.1 makes the specify block "the vehicle
+// for ... assigning delays to these paths": the outputs' values come from the
+// assigns. Every sample is 15 ns after the last change of c, past the longest
+// value written (12), so a simulator that applies the delays
+// reads the same values. The claim is that each list length is accepted and
+// the module around the block runs with its function intact.
+//
+// DERIVATION. q1 = q2b = q6 = qe = c and q2 = q3 = q12 = ~c. The cell's
+// outputs leave on the top's wires, and a second initial block checks them
+// packed MSB first as {q1, q2, q2b, q3, q6, q12, qe}:
+//
+//   c = 0:  0 1 0 1 0 1 0  = 0x2A = 42    (t = 16 and 56)
+//   c = 1:  1 0 1 0 1 0 1  = 0x55 = 85    (t = 36)
+//
+// c is 0 from 1 ns, 1 from 21 ns, 0 from 41 ns. Three verdicts, checked in the
+// digital half so the count is exact (an analog-block check also prints at
+// every point the mixed run inserts at a digital event).
+//
+//! lrm A.7.4
+//! lrm A.7.4:1000
+//! warn W0251
+//! analysis tran
+//! time 0, 60n
+//! checks 3
+`timescale 1ns/1ns
+`include "check.vh"
+module b8_specify_path_delays_design_runs(p);
+  inout p; electrical p;
+  reg c;
+  wire t1, t2, t2b, t3, t6, t12, te;
+
+  b8_pd_cell u(c, t1, t2, t2b, t3, t6, t12, te);
+
+  initial begin
+    #1 c = 1'b0;
+    #20 c = 1'b1;
+    #20 c = 1'b0;
+  end
+
+  initial begin
+    #16 `CHECKI("t=16 c=0: {q1,q2,q2b,q3,q6,q12,qe}", ({t1, t2, t2b, t3, t6, t12, te}), 42);
+    #20 `CHECKI("t=36 c=1", ({t1, t2, t2b, t3, t6, t12, te}), 85);
+    #20 `CHECKI("t=56 c=0", ({t1, t2, t2b, t3, t6, t12, te}), 42);
+  end
+
+  analog I(p) <+ V(p);
+endmodule
+
+module b8_pd_cell(c, q1, q2, q2b, q3, q6, q12, qe);
+  input c;
+  output q1, q2, q2b, q3, q6, q12, qe;
+
+  assign q1 = c;
+  assign q2 = ~c;
+  assign q2b = c;
+  assign q3 = ~c;
+  assign q6 = c;
+  assign q12 = ~c;
+  assign qe = c;
+
+  specify
+    specparam tplh = 1, tphl = 2;
+    (c => q1) = 4;
+    (c => q2) = (tplh, tphl);
+    (c => q2b) = 3, 5;
+    (c => q3) = (1, 2, 3);
+    (c => q6) = (1, 2, 3, 4, 5, 6);
+    (c => q12) = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    (c => qe) = (2 * tplh + 1);
+  endspecify
+endmodule

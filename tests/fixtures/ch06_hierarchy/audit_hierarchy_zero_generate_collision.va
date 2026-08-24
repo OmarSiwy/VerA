@@ -3,7 +3,10 @@
 // Legal counterpart audit_hierarchy_zero_generate_control.va uses real value.
 //! lrm 6.6.1
 //! lrm 6.8
-//! reject E0230
+//! lrm 6.6.1:5
+//! lrm 6.8:1
+//! reject-only E0230
+//! neighbour audit_hierarchy_zero_generate_control.va
 module audit_hierarchy_zero_generate_collision(p);
   inout p; electrical p;
   real empty;

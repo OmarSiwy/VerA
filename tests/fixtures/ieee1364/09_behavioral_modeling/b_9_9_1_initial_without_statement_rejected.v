@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 9.9.1
 //! reject E0209
 //! reject statement
+//! neighbour b_9_9_initial_and_always.v
 module b_9_9_1_initial_without_statement_rejected;
   initial ;
 endmodule

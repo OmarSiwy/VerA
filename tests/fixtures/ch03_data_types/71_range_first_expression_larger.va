@@ -15,7 +15,8 @@
 // E0347 identifies the malformed bound order, not an arbitrary earlier failure.
 //
 //! lrm 3.4.2
-//! reject E0347
+//! lrm 3.4.2:1
+//! reject-only E0347
 module ch3_range_first_expression_larger(p, n);
     inout p, n;
     electrical p, n;

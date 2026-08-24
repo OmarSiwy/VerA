@@ -23,6 +23,7 @@
 // at its 2 V, and the 0.002 has to come out of the KCL row the device stamps.
 //
 //! lrm 3.12.1
+//! lrm 3.12.1:1000
 //! bias V(p) = 2.0
 //! solve
 `include "check.vh"

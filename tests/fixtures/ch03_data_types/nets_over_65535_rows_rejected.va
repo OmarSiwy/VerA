@@ -3,7 +3,7 @@
 // 40000 elements, but together they need 80001 rows with the port, so the
 // module is refused once with E1015, naming it.
 //
-//! reject E1015
+//! reject-only E1015
 //! reject `nets_over_65535_rows_rejected` needs more than 65535
 module nets_over_65535_rows_rejected(a);
   inout a; electrical a;

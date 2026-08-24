@@ -7,6 +7,8 @@
 //! inherited IEEE 1364-2005 7.3
 //! reject E0210
 //! reject expected ')'
+//! neighbour b_7_1_1_every_primitive.v
+//! neighbour b_7_1_3_gate_delays.v
 module b_7_3_three_delays_rejected;
   reg a;
   wire o;

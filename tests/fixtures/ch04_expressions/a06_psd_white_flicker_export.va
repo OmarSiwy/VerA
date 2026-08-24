@@ -47,6 +47,8 @@
 //
 //! lrm 4.6.4.1
 //! lrm 4.6.4.2
+//! lrm 4.6.4.1:1000
+//! lrm 4.6.4.2:1000
 //! noise thermal(p,n)#0 name=thermal white=1.65678036e-23
 //! noise flicker(p,n)#1 name=flicker flicker=1e-20 ef=1.25
 //! analysis noise

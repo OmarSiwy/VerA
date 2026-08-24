@@ -15,7 +15,7 @@
 // E0145 is VerA's code for this rule.
 //
 //! lrm 10.4
-//! reject E0145
+//! reject-only E0145
 `include "disciplines.vams"
 `define first_half "start of string
 module ch10_macro_text_does_not_split_a_string(p, n);

@@ -10,6 +10,7 @@
 // number. A stray division or multiplication by anything but 1.0 moves it.
 //
 //! lrm 6.3.6
+//! lrm 6.3.6:4
 //! sweep flowZ28pZ2cnZ29 = 0.003
 `include "check.vh"
 module ch6_mfactor_flow_probe(p, n, out);

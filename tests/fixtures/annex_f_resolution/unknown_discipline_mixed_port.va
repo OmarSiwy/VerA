@@ -61,7 +61,12 @@
 //
 //! lrm F.2.1
 //! lrm F.2.2
+//! lrm F.2.2:10
+//! lrm F.2.2:15
+//! lrm F.2.1:7
 //! reject E0903
+//! neighbour ../ch07_mixed_signal/connectmodule_accepted.va
+//! neighbour resolveto_resolution.va
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 discipline annex_f_dig; domain discrete; enddiscipline

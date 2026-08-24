@@ -8,6 +8,9 @@
 // nothing reads the child's own floating node instead.
 //
 //! lrm 6.5.7.1
+//! lrm 6.5.7.1:1
+//! lrm 6.7.1
+//! lrm 6.7.1:1
 //! bias V(b[0]) = 0.5, V(b[1]) = 0.0, V(b[2]) = 0.0
 `include "check.vh"
 module ch6_port_net_matching_width(b);

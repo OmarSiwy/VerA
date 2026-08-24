@@ -11,7 +11,8 @@
 // ddiscrete out;`), which is one item, not two.
 //
 //! lrm 6.8
-//! reject E0362
+//! lrm 6.8:1
+//! reject-only E0362
 `include "disciplines.vams"
 module ch6_net_variable_same_name(p);
   inout p; electrical p;

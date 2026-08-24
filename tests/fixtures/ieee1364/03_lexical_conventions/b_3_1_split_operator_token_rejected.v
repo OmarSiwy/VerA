@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 3.1
 //! reject E0207
 //! reject unexpected token: found `=`
+//! neighbour b_3_1_free_format_layout.v
 module b_3_1_split_operator_token_rejected;
   reg a;
   initial begin

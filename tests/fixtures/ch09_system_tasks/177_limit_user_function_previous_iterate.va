@@ -35,13 +35,31 @@
 // contributed current uses the LIMITED voltage, so the residual is the one a
 // SPICE load routine would stamp.
 //
-//
 // UNTAGGED (VD-082: a pinned choice carries no clause tag): §9.17.3 says the
 // second argument is "generally" the previous return; which evaluation counts
 // as "previous" (here, the harness's last evaluated point) and the per-access-
 // function keying are VerA's.
 // The callbacks call $discontinuity(-1) when they return other than their
 // first argument, as §9.17.3 requires of a user-defined limiter.
+//
+// WHAT THIS RESTS ON, AND THE CITE IT GAVE UP (reconciler, 2026-10-08). Every
+// row above is a value at a `//! wave`-FORCED point, and VerA's testbench treats
+// a forced point as ONE Newton iteration of an unbroken solve
+// (runner_text.zig `stepAdvance`), printing the $strobe of that one iteration.
+// That is a harness convention, not a solution. §9.17.3 says "On any iteration
+// where the output value is not the same as the value of the access function
+// (within appropriate tolerances), the simulator is prevented from terminating
+// the iteration", and `setnew` calls $discontinuity(-1) whenever it clamps, so
+// no conforming simulator ACCEPTS t = 1, 2, 3 with vlim = 0.5, 1.0, 1.5 against
+// V(p,n) = 2, 4, 6: it keeps iterating until vlim = V(p,n), and what `vold`
+// holds at that accepted iteration depends on how many iterations it took. So
+// these digits evidence the previous-iterate hand-off only under the harness's
+// one-iteration-per-point reading, and the sentence cite `9.17.3:7` is
+// withdrawn; 183_limit_newton_convergence.va is the solved form (§9.17.3 on a
+// converged point). Kept as a regression pin of the access-function-keyed
+// limiter state, which is VerA's choice for two sites on one access function.
+//
+//! fd-exempt §9.17.3: the residual is evaluated at the limited iterate and the Jacobian is taken w.r.t. it (Newton linearization), so a difference across the clamp is not the Jacobian
 //! time 0, 1, 2, 3
 //! wave V(p) = 0, 2, 4, 6
 `include "check.vh"

@@ -326,29 +326,88 @@ pub const FiniteScan = struct { r: ?Const, bad: ?f64 };
 /// widens the surface for a false accusation. Add transcendentals when a model
 /// needs them.
 fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
-    const v = self.mir.resolveAlias(v0);
-    if (self.finite_scan.get(v)) |s| {
-        if (bad.* == null) bad.* = s.bad;
-        return s.r;
+    const root = self.mir.resolveAlias(v0);
+    if (!self.finite_scan.contains(root)) {
+        // Post-order with an explicit stack: a model's dependency chain is
+        // as long as its statement list, and recursion along it overflowed
+        // the native stack at 2e4 chained statements (ADVERSARIAL.tsv).
+        var stack: std.ArrayList(Mir.Value) = .empty;
+        try stack.append(self.arena, root);
+        while (stack.items.len != 0) {
+            const v = stack.items[stack.items.len - 1];
+            if (self.finite_scan.contains(v)) {
+                _ = stack.pop();
+                continue;
+            }
+            const ops = finiteOperands(self, v);
+            var pending = false;
+            for (ops.slice()) |o| if (!self.finite_scan.contains(o)) {
+                try stack.append(self.arena, o);
+                pending = true;
+            };
+            if (pending) continue;
+            _ = stack.pop();
+            try self.finite_scan.put(self.arena, v, scanOne(self, v, ops));
+        }
     }
-    // ponytail: recursion as deep as the DAG; an explicit stack if a model
-    // ever chains deep enough to exhaust it.
+    const s = self.finite_scan.get(root).?;
+    if (bad.* == null) bad.* = s.bad;
+    return s.r;
+}
+
+/// At most two operands, in order: what `scanFinite` walks under one value.
+const Operands = struct {
+    items: [2]Mir.Value = undefined,
+    len: u8 = 0,
+
+    fn slice(o: *const Operands) []const Mir.Value {
+        return o.items[0..o.len];
+    }
+    fn push(o: *Operands, v: Mir.Value) void {
+        o.items[o.len] = v;
+        o.len += 1;
+    }
+};
+
+/// The operands `scanFinite` walks under `v`, aliases resolved: those of a
+/// unary or binary instruction, in order. Everything else is a leaf.
+fn finiteOperands(self: *Lower, v: Mir.Value) Operands {
+    var out: Operands = .{};
+    switch (self.mir.valueDef(v)) {
+        .inst_result => |inst| switch (self.mir.instData(inst)) {
+            .unary => |u| out.push(self.mir.resolveAlias(u.operand)),
+            .binary => |bn| {
+                out.push(self.mir.resolveAlias(bn.lhs));
+                out.push(self.mir.resolveAlias(bn.rhs));
+            },
+            .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => {},
+        },
+        .float_const, .int_const, .undef, .str_const, .param_ref, .block_param => {},
+    }
+    return out;
+}
+
+/// One value's scan, its operands' already in `finite_scan`: the fold of
+/// IEEE arithmetic and sign (`accuses`), and the first non-finite value met,
+/// operands before the value itself and lhs before rhs.
+fn scanOne(self: *Lower, v: Mir.Value, ops: Operands) FiniteScan {
     var sub: ?f64 = null;
+    for (ops.slice()) |o| if (sub == null) {
+        sub = self.finite_scan.get(o).?.bad;
+    };
     const r: ?Const = switch (self.mir.valueDef(v)) {
         .float_const => |x| .{ .real = x },
         .int_const => |x| .{ .int = x },
         .inst_result => |inst| switch (self.mir.instData(inst)) {
             .unary => |u| blk: {
-                const a = try scanFinite(self, u.operand, &sub) orelse break :blk null;
+                const a = self.finite_scan.get(ops.items[0]).?.r orelse break :blk null;
                 break :blk if (accuses(u.op)) Mir.opcode.fold(u.op, &.{a}) else null;
             },
-            // Both sides walked before either is tested: the scan is the
-            // point, the fold is only how it gets there.
             .binary => |bn| blk: {
-                const a = try scanFinite(self, bn.lhs, &sub);
-                const b = try scanFinite(self, bn.rhs, &sub);
                 if (!accuses(bn.op)) break :blk null;
-                break :blk Mir.opcode.fold(bn.op, &.{ a orelse break :blk null, b orelse break :blk null });
+                const a = self.finite_scan.get(ops.items[0]).?.r orelse break :blk null;
+                const b = self.finite_scan.get(ops.items[1]).?.r orelse break :blk null;
+                break :blk Mir.opcode.fold(bn.op, &.{ a, b });
             },
             .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => null,
         },
@@ -358,9 +417,7 @@ fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
         const x = c.asReal();
         if (!std.math.isFinite(x) and sub == null) sub = x;
     }
-    try self.finite_scan.put(self.arena, v, .{ .r = r, .bad = sub });
-    if (bad.* == null) bad.* = sub;
-    return r;
+    return .{ .r = r, .bad = sub };
 }
 
 /// The opcodes `scanFinite` folds: IEEE arithmetic and sign, the ponytail

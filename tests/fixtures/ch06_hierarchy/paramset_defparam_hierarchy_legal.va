@@ -10,9 +10,12 @@
 // A zero-volt source connects p to sum_node, fixing both at 1/2 V. The branch
 // currents are 5/2, 7/2, and 3/2 A. By KCL the source supplies their sum, 15/2 A;
 // an extra contribution from either unselected hierarchy changes that current.
+// A.1.9: a paramset needs >= 1 paramset_item_declaration (corrected 2026-10-08)
 //! lrm 6.3.1
 //! lrm 6.4
 //! lrm 6.6.2
+//! lrm 6.3
+//! lrm 6.3:1
 //! solve
 //! bias V(p) = 0.5
 //! checks 7
@@ -39,14 +42,17 @@ module ps_dp_legal_top(p);
   end
 endmodule
 paramset ps_dp_legal_card ps_dp_legal_wrapper;
+  parameter real unused_item = 0;
   .gain = 3.0;
   .enabled = 0;
 endparamset
 paramset ps_dp_legal_unused_card ps_dp_legal_body;
+  parameter real unused_item = 0;
   .marker = 2.0;
 endparamset
 // This additional association is never instantiated anywhere in the design.
 paramset ps_dp_legal_unreferenced_card ps_dp_legal_body;
+  parameter real unused_item = 0;
   .marker = 4.0;
 endparamset
 module ps_dp_legal_wrapper(p);

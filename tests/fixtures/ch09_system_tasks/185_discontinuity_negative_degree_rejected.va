@@ -1,5 +1,6 @@
 //! lrm 9.17.1
-//! reject E0820
+//! lrm 9.17.1:2
+//! reject-only E0820
 module ch09_discontinuity_negative_degree_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

@@ -13,6 +13,8 @@
 //! inherited IEEE 1364-2005 6 6.2
 //! reject E1100
 //! reject there is no procedural assignment to a net
+//! neighbour b_6_2_variable_holds_value.v
+//! neighbour b_6_table_6_1_left_hand_forms.v
 module b_6_procedural_assign_to_net_rejected;
   wire w;
   initial begin

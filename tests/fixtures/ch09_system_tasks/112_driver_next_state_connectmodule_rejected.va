@@ -14,7 +14,9 @@
 //
 //! lrm 9.22
 //! lrm 9.23.2
-//! reject connect module
+//! lrm 9.23
+//! lrm 9.23:1000
+//! reject-only connect module
 //! reject E0818
 module ch09_atomic_driver_next_state_connectmodule_rejected(p, n);
   inout p, n; electrical p, n;

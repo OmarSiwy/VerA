@@ -14,7 +14,8 @@
 //
 //! lrm 5.11
 //! lrm 4.7.1
-//! reject E0404
+//! reject-only E0404
+//! neighbour jump_in_function_binds_function_loop.va
 module ch5_jump_in_function_outside_loop(p);
     inout p; electrical p;
     integer j, acc;

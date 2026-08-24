@@ -17,6 +17,8 @@
 //
 //! lrm 4.6
 //! lrm 4.6.4
+//! lrm 4.6:1000
+//! lrm 4.6.4:1000
 //! noise thermal(p,n)#0
 //! noise flicker(p,n)#1
 //! noise table(p,n)#2

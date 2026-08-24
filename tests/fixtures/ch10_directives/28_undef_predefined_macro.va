@@ -27,7 +27,9 @@
 // asserted: a tool that stays silent is conforming.
 //
 //! lrm 10.4
+//! lrm 10.4:2
 //! lrm 10.5
+//! lrm 10.5:1
 //! bias V(p) = 0.75, V(n) = 0.25
 `resetall
 `include "check.vh"

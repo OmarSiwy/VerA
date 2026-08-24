@@ -1,4 +1,5 @@
 //! lrm 2.9
+//! lrm 2.9:2
 `include "check.vh"
 //! bias V(p) = 0.625
 module ch2_stmt_attr(p); inout p; electrical p; real x; analog begin (* assign_attr *) x=V(p); (* contribution_attr=1 *) I(p)<+x;

@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 17.1.1
 //! reject E1100
 //! reject missing display argument
+//! neighbour audit_display_write_runs.v
 module b_17_1_1_too_few_arguments_rejected;
   initial $display("%d then %h", 7);
 endmodule

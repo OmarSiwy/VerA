@@ -24,6 +24,9 @@
 // used". No literal below carries the `s` designator, so all five are unsigned.
 // 23_signed_based_number.va is the positive for the `s` arm of that sentence.
 //! lrm 2.6.1
+//! lrm 2.6.1:16
+//! lrm 2.6.1:18
+//! lrm 2.6.1:4
 `include "check.vh"
 module ch02_size_truncation_and_padding(p, n);
     inout p, n;

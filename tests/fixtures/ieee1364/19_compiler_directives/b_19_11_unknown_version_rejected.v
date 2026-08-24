@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 19.11
 //! reject E0135
 //! reject unsupported keyword set
+//! neighbour b_19_11_keyword_versions.v
 `begin_keywords "1364-2099"
 module b_19_11_unknown_version_rejected;
   initial $display("accepted");

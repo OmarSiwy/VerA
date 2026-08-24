@@ -9,7 +9,10 @@
 // VerA reports E0208 "expected an identifier: found 1".
 //
 //! lrm A.9.3
-//! reject E0208
+//! lrm A.9.3:1000
+//! lrm A.10
+//! lrm A.10:2
+//! reject-only E0208
 `include "disciplines.vams"
 module annex_a_identifier_digit_first(p, n);
   inout p, n;

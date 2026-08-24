@@ -10,7 +10,8 @@
 // which is the form the rule takes in the discipline tables.
 //
 //! lrm 5.5.1
-//! reject E0501
+//! lrm 5.5.1:2
+//! reject-only E0501
 `include "disciplines.vams"
 module ch5_probe_of_discrete_net(p, n);
   inout p, n;

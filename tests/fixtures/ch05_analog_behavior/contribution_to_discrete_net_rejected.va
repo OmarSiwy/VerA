@@ -30,7 +30,8 @@
 //! lrm 5.4
 //! lrm 5.6
 //! lrm 5.6.1
-//! reject E0501
+//! lrm 5.6.1:5
+//! reject-only E0501
 //! reject `V` is not an access function of `d`
 module ch5_contribution_to_discrete(p, d);
   inout p; electrical p;

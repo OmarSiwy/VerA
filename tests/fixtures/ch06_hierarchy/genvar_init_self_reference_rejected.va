@@ -24,7 +24,8 @@
 // a VerA parser extension, and a conforming compiler would have rejected the body
 // and never evaluated the loop scheme the directive below pins.
 //! lrm 6.6.1
-//! reject E0417
+//! lrm 6.6.1:4
+//! reject-only E0417
 module ch6_genvar_init_self_reference(p);
   inout p; electrical p;
   genvar i;

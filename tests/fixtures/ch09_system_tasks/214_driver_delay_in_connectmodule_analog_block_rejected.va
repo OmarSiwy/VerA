@@ -26,8 +26,11 @@
 //! lrm 9.23
 //! lrm 9.23.1
 //! lrm 9.2
-//! reject E0806
+//! lrm 9.2:1000
+//! lrm 9.23:1000
+//! reject-only E0806
 //! reject `$driver_delay` in the analog block of a connect module
+//! neighbour ../ch07_mixed_signal/m04_15_driver_delay_and_next_state.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 

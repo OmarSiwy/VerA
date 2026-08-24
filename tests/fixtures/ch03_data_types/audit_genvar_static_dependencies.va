@@ -5,6 +5,7 @@
 // are independently observed; ordinary integer-loop acceptance alone does not
 // establish the restriction against nonstatic genvar control expressions.
 //! lrm 3.5
+//! lrm 3.5:1000
 //! checks 3
 `include "check.vh"
 module audit_genvar_static_dependencies;

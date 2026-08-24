@@ -10,7 +10,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
-//! reject E0126
+//! reject-only E0126
 `include "ch10_no_such_header_exists.vh"
 `include "disciplines.vams"
 module ch10_include_file_not_found(p, n);

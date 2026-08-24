@@ -34,8 +34,10 @@
 // output VARIABLES, not parameters.
 //
 //! lrm 6.4.3
+//! lrm 6.4.3:1
 //! lrm 9.16
-//! reject E0817
+//! lrm 9.16:1
+//! reject-only E0817
 //! reject `$simprobe("u_dev", "id")`
 module ch6_pshide_top(p, n);
   inout p, n;

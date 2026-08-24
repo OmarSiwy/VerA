@@ -5,7 +5,9 @@
 // which explicitly names the current absence of module-path execution.
 // digital-runner: reject
 //! lrm 2.6.2
+//! lrm 2.6.2:3
 //! reject E0247
+//! neighbour ../ieee1364/14_specify_blocks/b_14_3_path_delay_values.v
 module scaled_delay_path_rejected(input a, output y);
   buf g(y, a);
   specify

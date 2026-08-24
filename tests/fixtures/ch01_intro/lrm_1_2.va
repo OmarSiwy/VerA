@@ -5,6 +5,7 @@
 // integer (digital) signals in one scope.
 //
 //! lrm 1.2
+//! lrm 1.2:1000
 //! bias V(p) = 1.0, V(n) = 0.0
 `include "check.vh"
 module ch01_mixed_signal_language(p, n);

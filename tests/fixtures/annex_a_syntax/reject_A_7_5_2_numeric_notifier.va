@@ -17,6 +17,7 @@
 //
 //! lrm A.7.5
 //! lrm A.7.5.2
+//! lrm A.7.5.2:1000
 //! reject notifier
 module annex_a_numeric_notifier(o, a, clk);
   output o;

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 12.3.3
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour b_12_3_3_port_signed_inheritance.v
 module m(a, y);
   input a;
   output reg y;

@@ -1,5 +1,5 @@
 // Numeric string conversion must not guess a width lost by the analog IR.
-//! reject E0819
+//! reject-only E0819
 module ch09_numeric_string_arithmetic_width_rejected(p,n);
   inout p,n; electrical p,n;
 

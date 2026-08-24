@@ -45,6 +45,11 @@
 //! lrm 2.9.1
 //! lrm A.2.6
 //! lrm A.2.8
+//! lrm 2.9.1:1000
+//! lrm A.2.6:1000
+//! lrm A.2.8:1000
+//! lrm A.9.1
+//! lrm A.9.1:1000
 `include "check.vh"
 module ch02_attribute_block_item_and_function_port(p, n);
     inout p, n;

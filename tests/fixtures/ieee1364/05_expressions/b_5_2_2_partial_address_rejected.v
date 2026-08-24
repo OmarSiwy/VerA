@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 5.2.2 4.9
 //! reject E1100
 //! reject an unpacked array reference requires an element index
+//! neighbour b_5_2_2_memory_indirection.v
 module b_5_2_2_partial_address_rejected;
   reg [7:0] twod[0:3][0:3];
   reg [7:0] w;

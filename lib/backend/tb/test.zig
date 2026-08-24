@@ -153,6 +153,41 @@ test "directives: an lrm cite is a section, and an xfail points either way" {
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! xfail\n"));
 }
 
+test "directives: a sentence cite names one normative sentence of a clause" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena, "//! lrm 5.6.1.3:2\n//! lrm A.6.4:12\n//! inherited IEEE 1364-2005 9.2.2:1\n");
+    try testing.expectEqualStrings("5.6.1.3:2", d.lrm[0]);
+    try testing.expectEqualStrings("A.6.4:12", d.lrm[1]);
+    // Sentences count from 1, and the ordinal is a number.
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm 5.6.1.3:0\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm 5.6.1.3:\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm 5.6.1.3:2a\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm :2\n"));
+}
+
+test "directives: reject-only refuses alone, and a neighbour belongs to a refusal" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena, "//! reject-only E0310\n//! neighbour legal_twin.va\n");
+    try testing.expect(d.reject_only);
+    try testing.expectEqualStrings("E0310", d.reject[0]);
+    try testing.expectEqualStrings("legal_twin.va", d.neighbours[0]);
+    // A plain reject is not exclusive.
+    try testing.expect(!(try tb_directive.parse(arena, "//! reject E0310\n")).reject_only);
+    // `reject-only` is still a reject: no check count, no warnings.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject-only E0310\n//! checks 1\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject-only\n"));
+    // A neighbour on a positive fixture has nothing to be the neighbour of.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! neighbour legal_twin.va\n"));
+    // One path per line, no spaces.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject E1\n//! neighbour a.va b.va\n"));
+}
+
 test "§2.6 a scale factor is an exponent, not a multiplier" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -492,6 +527,9 @@ test "each sweep point starts its transient from a fresh State" {
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "= newState("));
     // Point numbers are global, so no two transcript blocks share a label.
     try testing.expect(std.mem.indexOf(u8, src, "point(5, &x") != null);
+    // §4.6.2 a dc sweep is one analysis: its points share one `State`.
+    const dc = try tb_runner.renderRunner(arena, "061_dc", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, dc, "= newState("));
 }
 
 test "§5.10.2 global events mark the first and last point of each analysis" {

@@ -6,6 +6,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject $fread loads a one-dimensional memory
+//! neighbour native_binary_file_targets.v
 module b_17_2_4_4_fread_multidim_rejected;
   integer fd, code;
   reg [7:0] mem [0:1][0:1];

@@ -5,7 +5,8 @@
 // model-card parameters, which are fixed throughout a simulation.
 //! lrm 6.3.3
 //! lrm 6.3.6
-//! reject E0363
+//! reject-only E0363
+//! neighbour geometry_parameter_sweep.va
 module geometry_dynamic_top(p);
   inout p; electrical p;
   geometry_dynamic_child #(.$xposition(V(p))) child();

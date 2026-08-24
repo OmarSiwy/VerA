@@ -6,6 +6,7 @@
 // clog2_nested_contexts.va; its <=32-bit arithmetic also runs.
 //! lrm 9.14
 //! reject E0893
+//! neighbour clog2_nested_contexts.va
 module reject_clog2_wide_arithmetic;
   parameter p = 40'h7fffffff;
   integer result;

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.2.1.3
 //! reject E0207
 //! reject a drive strength is only legal on a net declaration assignment
+//! neighbour b_A_2_1_3_type_declarations.v
 module b_A_2_1_3_strength_without_assignment_rejected;
   wire (strong0, strong1) w;
   initial $display("unreachable");

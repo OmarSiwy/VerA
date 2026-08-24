@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.6.5
 //! reject E0208
 //! reject found `posedge`
+//! neighbour b_A_6_5_timing_controls.v
 module b_A_6_5_posedge_without_parentheses_rejected;
   reg clk;
   initial @ posedge clk $display("unreachable");

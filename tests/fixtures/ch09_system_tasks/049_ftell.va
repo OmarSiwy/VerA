@@ -20,6 +20,7 @@
 // not arise, and pinning it would need a descriptor the LRM does not fix.
 //
 //! lrm 9.5.5
+//! lrm 9.5.5:1
 `include "check.vh"
 module ch09_atomic_ftell(p, n);
   inout p, n; electrical p, n;

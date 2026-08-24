@@ -19,6 +19,7 @@
 // -1 unconditionally. Every §9.5 fixture now owns its filename.
 //
 //! lrm 9.5.5
+//! lrm 9.5.5:3
 `include "check.vh"
 module ch09_atomic_fseek(p, n);
   inout p, n; electrical p, n;

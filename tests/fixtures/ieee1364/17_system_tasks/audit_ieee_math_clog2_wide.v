@@ -3,6 +3,7 @@
 // power boundary so result65. A129-bit operand with only bit128 set gives128.
 // All values are known, and explicitly wide operands avoid unsized-shift traps.
 //! lrm 9.14
+//! lrm 9.14:1
 //! inherited IEEE 1364-2005 17.11.1
 module audit_ieee_math_clog2_wide;
   reg [64:0] wide;

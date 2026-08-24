@@ -100,6 +100,15 @@ pub const StmtHook = struct {
     fire: *const fn (r: *Run, pc: u32) Error!void,
 };
 
+/// A host's callback after a statement IEEE 1364-2005 §27.33.1 reports
+/// completed: a §9.3 `assign`, `deassign`, `force` or `release` (cbAssign,
+/// cbDeassign, cbForce, cbRelease: "after ... has been executed") or a §10.3
+/// `disable` (cbDisable). `pc` is the statement's last instruction, a key of
+/// `Run.done_sites`. An `assign`/`force` reports once its process has written
+/// the target, so the value the host reads is the one it put there; one
+/// undone or replaced before its process ran reports then (`exec.doneFlush`).
+pub const DoneHook = *const fn (r: *Run, pc: u32) Error!void;
+
 /// A PLI application's system tasks and functions (IEEE 1364-2005 §20.3):
 /// "the user-provided C application shall override the built-in system
 /// task/function" of its name (§20.4).
@@ -515,6 +524,14 @@ pub const Run = struct {
     /// sites checks it before each instruction, including after a calltf
     /// registers the first callback during a process run.
     stmt_hook: ?StmtHook = null,
+    /// `DoneHook`'s statements while `Options.stmt_sites`: each one's last
+    /// instruction, to the site it starts at.
+    done_sites: std.AutoHashMapUnmanaged(u32, StmtSite) = .empty,
+    /// The host's `DoneHook` (VPI's, set when it binds the run).
+    done_hook: ?DoneHook = null,
+    /// An `assign`/`force` `done_hook` will report: its process's first pc
+    /// (an `override_eval`) to the statement's last pc.
+    done_pending: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Some digital expression probes the analog solution (`probe`).
     has_probes: bool = false,
     /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
@@ -970,6 +987,26 @@ pub const Run = struct {
             .bits => |v| evaluate.indexInt(v),
             .real => null,
         };
+    }
+
+    /// IEEE 1364-2005 §27.32 / VAMS §12.30: "Sequential UDPs shall be set to
+    /// the indicated value with no delay regardless of any delay on the
+    /// primitive instance." Driver `at` (a sequential UDP's) takes `bit` as
+    /// its state and output now; a transition its delay held back is
+    /// cancelled, and the net re-resolves.
+    pub fn vpiPutUdp(self: *Run, at: u32, bit: Int.Bit) Error!void {
+        const d = &self.drivers[at];
+        const u = d.source.udp;
+        u.state = bit;
+        u.started = true;
+        if (d.transition != no_transition) {
+            const st = &self.transitions.items[d.transition];
+            if (st.in_flight) |h| try exec.cancel(self, h);
+            st.in_flight = null;
+        }
+        setBit(d.current, u.out_bit orelse 0, bit);
+        d.or_z = false;
+        try resolution.resolve(self, d.net);
     }
 
     /// IEEE §3.8 / AMS §2.9: attribute values are constant expressions in

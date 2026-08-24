@@ -7,6 +7,7 @@
 // Three final-step assertions give checks = 3.
 //! lrm 5.10.3.4
 //! lrm 8.4.6
+//! lrm 8.4.6:1000
 //! analysis tran
 //! time 0, 10n
 //! wave V(p) = 0.0, 1.0

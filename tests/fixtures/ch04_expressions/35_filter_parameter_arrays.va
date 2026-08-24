@@ -13,6 +13,8 @@
 //
 //! lrm 4.5.1
 //! lrm 4.5.11
+//! lrm 4.5.11:2
+//! lrm 4.5.1:1000
 //! bias V(p) = 0.8
 //! bias V(n) = 0.0
 `include "check.vh"

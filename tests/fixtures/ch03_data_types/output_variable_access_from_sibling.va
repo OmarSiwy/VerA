@@ -29,7 +29,9 @@
 // and reads 0 or -1 if the attributed block variable were dropped.
 //
 //! lrm 3.2.1
+//! lrm 3.2.1:1
 //! lrm 9.16
+//! lrm 3.2.1:2
 //! analysis dc
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

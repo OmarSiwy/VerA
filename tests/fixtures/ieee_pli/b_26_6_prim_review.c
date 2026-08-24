@@ -34,6 +34,10 @@
  * registers that action callback. The final marker requires all seven
  * read-only checkpoints, UDP checks, and the final end callback.
  */
+//! lrm 12.16
+//! lrm 12.16:14
+//! lrm 12.16:15
+//! lrm 12.16:17
 //! inherited IEEE 1364-2005 26.6.6
 //! inherited IEEE 1364-2005 26.6.14
 //! inherited-reject IEEE 1364-2005 26.6.14

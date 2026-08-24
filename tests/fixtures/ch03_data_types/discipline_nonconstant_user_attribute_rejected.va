@@ -12,7 +12,10 @@
 //
 //! lrm 3.6.2.7
 //! lrm 3.6.1.3
-//! reject E0340
+//! lrm 3.6.1.3:1
+//! lrm 3.6.2.7:1000
+//! reject-only E0340
+//! neighbour lrm_3_6_2_7.va
 nature ch3_dna_voltage;
     units = "V";
     access = V;

@@ -22,7 +22,11 @@
 // and not on the dot.
 //
 //! lrm 5.7
-//! reject E0316
+//! lrm 5.7:3
+//! reject-only E0316
+//! neighbour hierarchical_access_unsupported.va
+//! neighbour hierarchical_contribution_unsupported.va
+//! neighbour procedural_assignments.va
 module ch5_assignment_hierarchical(p);
   inout p; electrical p; real x;
   analog begin

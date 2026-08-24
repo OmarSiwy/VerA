@@ -7,6 +7,8 @@
 // `cpu3` is declared plainly, written through `\cpu3 `, and read back plainly.
 //! lrm 2.8.2
 //! lrm 2.8.1
+//! lrm 2.8.1:1
+//! lrm 2.8.2:1000
 `include "check.vh"
 //! bias V(p) = 1.5
 module ch02_escaped_keyword(p, n);

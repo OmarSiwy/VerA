@@ -3,7 +3,8 @@
 // integral width. The legal neighbour clog2_unsigned_width.va explicitly
 // converts a real with $rtoi and also exercises integer-valued arguments.
 //! lrm 9.14
-//! reject E0892
+//! reject-only E0892
+//! neighbour clog2_unsigned_width.va
 module reject_clog2_real;
   integer result;
   analog result = $clog2(8.5);

@@ -12,6 +12,8 @@
 //! inherited IEEE 1364-2005 9.3.1
 //! reject E1100
 //! reject assign/deassign take a variable
+//! neighbour audit_assignment_assign_deassign.v
+//! neighbour audit_assignment_force_release.v
 module b_9_3_1_assign_to_net_rejected;
   wire w;
   initial assign w = 1'b1;

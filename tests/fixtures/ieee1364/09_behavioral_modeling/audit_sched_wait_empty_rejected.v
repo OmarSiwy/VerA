@@ -3,9 +3,11 @@
 // audit_sched_wait_expression.v runs and prints ready. Diagnostic must identify the expression syntax error.
 // digital-runner: reject
 //! lrm A.6.5
+//! lrm A.6.5:1000
 //! inherited IEEE 1364-2005 9.7.6
 //! reject E0209
 //! reject expected an expression
+//! neighbour audit_sched_wait_expression.v
 module audit_sched_wait_empty_rejected;
   reg flag;
   initial begin

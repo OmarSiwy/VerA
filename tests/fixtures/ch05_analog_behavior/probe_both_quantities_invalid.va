@@ -18,7 +18,11 @@
 // rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.4.2.1
-//! reject E0423
+//! lrm 5.4.2.1:1
+//! reject-only E0423
+//! neighbour flow_probe.va
+//! neighbour potential_probe.va
+//! neighbour source_probe_both.va
 module ch5_probe_both_quantities(a, b);
   inout a, b; electrical a, b;
   analog I(a) <+ V(a, b) + I(a, b);

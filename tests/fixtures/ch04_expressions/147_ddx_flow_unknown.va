@@ -27,6 +27,7 @@
 // the operating point is for; both wants are independent of it.
 //
 //! lrm 4.5.6
+//! lrm 4.5.6:1
 //! bias V(p) = 1.5
 //! bias V(n) = 0.0
 //! print none

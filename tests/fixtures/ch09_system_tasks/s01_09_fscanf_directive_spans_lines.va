@@ -42,6 +42,7 @@
 //
 //! lrm 9.5.4.2
 //! lrm 9.5.5
+//! lrm 9.5.4.2:4
 //! print none
 `include "check.vh"
 module s01_fscanf_multiline(p, n);

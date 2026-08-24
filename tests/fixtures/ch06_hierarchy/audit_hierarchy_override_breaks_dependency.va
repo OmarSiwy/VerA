@@ -2,6 +2,9 @@
 // Base a overridden4; explicit b override11 REPLACES b=a+1, so b does
 // not become5. Dependent c=a*b recomputes to44. All values are exact.
 //! lrm 6.3.4
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.3.4:1000
 // inherited IEEE 1364-2005 12.2.3
 `include "check.vh"
 module audit_hierarchy_override_breaks_dependency(p);

@@ -36,7 +36,10 @@
 //
 //! lrm G.1
 //! lrm 9.10
-//! reject E0806
+//! lrm 9.2
+//! lrm 9.2:1000
+//! reject-only E0806
+//! neighbour 01_abstime_replaced_realtime.va
 `timescale 1ns/1ns
 module annex_g_realtime_analog_context(p, n);
   inout p, n; electrical p, n;

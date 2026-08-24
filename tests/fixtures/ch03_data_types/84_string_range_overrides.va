@@ -1,6 +1,10 @@
 // Final instance values, not unused model defaults, are checked against sets.
 //! lrm 3.4.2
 //! lrm 6.3
+//! lrm 3.4.2:2
+//! lrm 3.4.2:3
+//! lrm 6.3.3
+//! lrm 6.3.3:1
 `include "check.vh"
 module string_range_target(p);
     inout p;

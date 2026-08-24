@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 19 19.3.1
 //! reject E0115
 //! reject undefined macro
+//! neighbour b_19_3_1_text_macros.v
 module b_19_use_before_define_rejected;
   initial $display("%0d", `late);
 endmodule

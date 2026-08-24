@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 3.6
 //! reject E0138
 //! reject may not span lines
+//! neighbour audit_lexical_packed_strings.v
 module b_3_6_string_spans_lines_rejected;
   reg [23:0] s;
   initial begin

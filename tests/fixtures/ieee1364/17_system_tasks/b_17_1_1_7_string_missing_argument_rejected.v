@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 17.1.1.7
 //! reject E1100
 //! reject missing display argument
+//! neighbour audit_display_packed_ascii.v
 module b_17_1_1_7_string_missing_argument_rejected;
   initial $display("name=%s");
 endmodule

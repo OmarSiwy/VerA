@@ -52,6 +52,8 @@
 //! lrm 5.6.8.2
 //! lrm 5.6.1.2
 //! lrm A.8.9
+//! lrm 5.6.1.2:1000
+//! lrm A.8.9:1000
 //! bias V(g) = 0.0
 //! solve
 `include "check.vh"

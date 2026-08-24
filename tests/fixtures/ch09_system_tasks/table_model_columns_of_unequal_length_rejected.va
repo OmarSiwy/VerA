@@ -11,7 +11,8 @@
 //
 //! lrm 9.21
 //! lrm 9.21.1
-//! reject E0815
+//! reject-only E0815
+//! neighbour 131_table_model_array_control.va
 `include "disciplines.vams"
 module ch09_table_model_columns_of_unequal_length(p, n);
   inout p, n; electrical p, n;

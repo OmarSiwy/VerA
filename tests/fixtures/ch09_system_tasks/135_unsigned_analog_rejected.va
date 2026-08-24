@@ -15,7 +15,8 @@
 //
 //! lrm 9.2
 //! lrm 9.11
-//! reject analog context
+//! lrm 9.2:1000
+//! reject-only analog context
 //! reject E0806
 module ch09_atomic_unsigned_analog_rejected(p, n);
   inout p, n; electrical p, n;

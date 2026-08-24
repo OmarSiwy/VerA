@@ -19,6 +19,7 @@
 //
 //! lrm G.1
 //! lrm 9.10
+//! lrm 9.10:1000
 //! time 1e-6
 //! print none
 `timescale 1ns/1ns

@@ -59,6 +59,8 @@
 // does not itself require termination or prescribe this process status.
 //
 //! lrm 4.3.2
+//! lrm 4.3.2:1
+//! lrm 4.3.2:2
 //! lrm 4.2.1
 //! exit 1
 //! sweep V(p) = 0.5, 2.0

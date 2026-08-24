@@ -8,8 +8,11 @@
 // and the search for a variable stops at leaf's boundary. `top.j` would be
 // the legal spelling (audit_hierarchy_upward_reference.v).
 // digital-runner: reject
+//! lrm 6.8
+//! lrm 6.8:5
 //! inherited IEEE 1364-2005 12.7
 //! reject undeclared digital variable
+//! neighbour audit_hierarchy_upward_reference.v
 `timescale 1ns/1ns
 module audit_hierarchy_simple_name_stops_at_module_rejected;
   integer j;

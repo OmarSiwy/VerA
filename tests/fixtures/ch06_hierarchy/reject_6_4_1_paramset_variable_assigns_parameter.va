@@ -14,7 +14,8 @@
 // `.r = rr;` compiles.)
 //
 //! lrm 6.4.1
-//! reject E0237
+//! lrm 6.4.1:6
+//! reject-only E0237
 `include "disciplines.vams"
 module ch6_ps_var_res(p, n);
   inout p, n;

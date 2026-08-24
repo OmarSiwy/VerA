@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 8.1.1
 //! reject E0207
 //! reject found `inout`
+//! neighbour b_8_1_1_header_forms.v
 primitive bidir(q, a, b);
   output q;
   input a;

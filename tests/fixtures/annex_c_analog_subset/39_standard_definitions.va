@@ -28,6 +28,7 @@
 //   `M_PI` (D.2): pi to double precision, 3.141592653589793, exact.
 //
 //! lrm C.17
+//! lrm C.17:1
 //! lrm D.1
 //! lrm D.2
 //! bias V(p) = 1.0, V(n) = 0.0

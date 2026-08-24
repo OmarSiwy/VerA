@@ -10,7 +10,8 @@
 // VerA reports E0209 "a buf/not gate needs at least one output and one input".
 //
 //! lrm A.3.1
-//! reject E0209
+//! lrm A.3.1:1000
+//! reject-only E0209
 //! reject needs at least one output and one input
 module annex_a_buf_one_terminal(o, a);
   output o;

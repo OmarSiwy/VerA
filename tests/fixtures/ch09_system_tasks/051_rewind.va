@@ -29,6 +29,7 @@
 // now, sequenced above the checks.
 //
 //! lrm 9.5.5
+//! lrm 9.5.5:3
 `include "check.vh"
 module ch09_atomic_rewind(p, n);
   inout p, n; electrical p, n;

@@ -8,6 +8,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 14.2.3
 //! reject destination
+//! neighbour b_14_2_4_3_edge_state_dependent_paths.v
 `timescale 1ns/1ns
 module b_14_2_3_parallel_edge_vector_destination_rejected(clk, data, q);
   input clk, data;

@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 12.5
 //! reject E1100
 //! reject instance select out of range
+//! neighbour b_12_5_instance_select.v
 module leaf;
   integer x;
   initial x = 1;

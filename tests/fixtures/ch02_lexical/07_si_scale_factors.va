@@ -25,6 +25,7 @@
 // (no space before the symbol) and 56_scale_factor_alphabet_rejected.va (the
 // alphabet is exactly these eleven letters, with the case load-bearing).
 //! lrm 2.6.2
+//! lrm 2.6.2:1
 `include "check.vh"
 module ch02_si_scale_factors(p, n);
     inout p, n;

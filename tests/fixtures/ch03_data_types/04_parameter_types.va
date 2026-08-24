@@ -8,6 +8,10 @@
 // pass both.
 //! lrm 3.4.1
 //! lrm 4.2.1
+//! lrm 3.4
+//! lrm 3.4:5
+//! lrm 3.4.6
+//! lrm 3.4.6:2
 `include "check.vh"
 module ch03_parameter_types(p, n);
     inout p, n;

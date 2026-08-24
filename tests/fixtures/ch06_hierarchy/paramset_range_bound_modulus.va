@@ -17,6 +17,7 @@
 // folder knew + - * / and nothing else.
 //
 //! lrm 6.4.2
+//! lrm 6.4.2:4
 //! lrm 4.2.4
 //! bias V(a) = 0.5
 `include "check.vh"

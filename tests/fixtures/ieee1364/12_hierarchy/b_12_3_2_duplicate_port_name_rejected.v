@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 12.3.2
 //! reject E1100
 //! reject port defined twice
+//! neighbour b_12_3_2_explicit_port_names.v
 module m(.p(a), .p(b));
   input a, b;
 endmodule

@@ -18,7 +18,7 @@
 // line earlier.
 //
 //! lrm 10.6
-//! reject E0202
+//! reject-only E0202
 module ch10_begin_keywords_inside_module(p, n);
   inout p, n;
   electrical p, n;

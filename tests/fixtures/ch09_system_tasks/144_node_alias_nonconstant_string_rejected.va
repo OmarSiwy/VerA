@@ -17,7 +17,8 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.20
-//! reject hierarchical_reference_string
+//! lrm 9.20:4
+//! reject-only hierarchical_reference_string
 //! reject E0812
 module ch09_node_alias_nonconstant_string_rejected(p, n);
   inout p, n; electrical p, n;

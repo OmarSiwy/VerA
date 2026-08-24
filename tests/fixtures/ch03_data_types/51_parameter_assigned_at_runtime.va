@@ -14,7 +14,9 @@
 // direction, through the harness's `//! param` override.
 //
 //! lrm 3.4
-//! reject E0312
+//! lrm 3.4:3
+//! reject-only E0312
+//! neighbour 06_local_parameter.va
 module ch3_parameter_assigned_at_runtime(p, n);
     inout p, n;
     electrical p, n;

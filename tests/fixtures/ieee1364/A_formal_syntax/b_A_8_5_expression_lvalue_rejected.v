@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.8.5
 //! reject E0214
 //! reject found `+`
+//! neighbour b_A_8_5_lvalues.v
 module b_A_8_5_expression_lvalue_rejected;
   reg [3:0] a, b;
   initial begin

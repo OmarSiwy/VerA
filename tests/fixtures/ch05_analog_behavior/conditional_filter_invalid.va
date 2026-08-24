@@ -2,7 +2,14 @@
 // analysis_or_constant_expression. If this fixture ever COMPILES again, the
 // operator is back to being fed 0 on every step its branch was off.
 //! lrm 5.8.1
-//! reject E0514
+//! lrm 5.6.1
+//! lrm 5.6.1:3
+//! lrm 5.6.5
+//! lrm 5.6.5:3
+//! lrm 5.8.1:1
+//! lrm 5.8.4
+//! lrm 5.8.4:1000
+//! reject-only E0514
 // §5.8.1: "If any of the conditionally-executed statements contains an analog
 // operator, the conditional expression shall be a analysis_or_constant_
 // expression." `V(c) > 0.0` is neither — a probe moves on every Newton

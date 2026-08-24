@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 10.4.4
 //! reject E1100
 //! reject event trigger
+//! neighbour b_9_7_3_event_array_native_effects.v
 module b_9_7_3_event_array_selector_trigger_rejected;
   event ev [0:1];
   function integer choose(input integer i);

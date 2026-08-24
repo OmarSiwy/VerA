@@ -15,8 +15,9 @@
 // in the analog block to the mixed signal context".
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:2
 //! lrm C.3
-//! reject E0130
+//! reject-only E0130
 module ch7_x_literal(p);
   inout p; electrical p; integer var1;
   analog begin var1 = 1'bx; I(p) <+ var1; end

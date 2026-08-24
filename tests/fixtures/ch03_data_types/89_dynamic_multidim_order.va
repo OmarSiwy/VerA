@@ -1,5 +1,7 @@
 // §§3.4.8, 5.7 and 9.21.1: every array consumer walks declaration order.
 //! lrm 5.7
+//! lrm 5.7:4
+//! lrm 5.7:8
 `include "check.vh"
 module ch03_dynamic_multidim_order(p);
     inout p;

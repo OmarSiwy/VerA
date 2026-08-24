@@ -13,7 +13,9 @@
 //
 //! lrm 4.2.6
 //! lrm 4.2.1
-//! reject E0369
+//! lrm 4.2.1:1
+//! reject-only E0369
+//! neighbour ../annex_a_syntax/66_case_equality_in_analog.va
 module ch04_case_equality_real_operand(a, b);
     inout a, b;
     electrical a, b;

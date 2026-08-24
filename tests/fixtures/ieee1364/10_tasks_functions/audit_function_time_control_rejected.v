@@ -7,6 +7,7 @@
 //! lrm 1.1
 //! inherited IEEE 1364-2005 10.4.4
 //! reject function body cannot contain a time control
+//! neighbour audit_function_return_variable.v
 module audit_function_time_control_rejected;
   function f(input a); begin #1; f=a; end endfunction
   reg r;

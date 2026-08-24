@@ -29,8 +29,12 @@
 // Still inert downstream — nothing in VerA reads attribute values — which is why
 // the rule is checked and the value is then dropped.
 //! lrm 2.9
+//! lrm 2.9:5
 //! lrm A.9.1
-//! reject E0357
+//! lrm 2.9:2
+//! lrm A.9.1:1000
+//! reject-only E0357
+//! neighbour 29_attribute_default_and_multiple.va
 module ch02_attribute_value_not_constant_rejected(p, n);
     inout p, n;
     electrical p, n;

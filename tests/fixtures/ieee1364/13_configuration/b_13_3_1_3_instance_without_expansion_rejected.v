@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 13.3.1.3 13.3.1
 //! reject E0207
 //! reject pairs with `liblist` or `use`
+//! neighbour b_13_3_1_every_rule_form.v
 config cfg;
   design work.top;
   instance top.u;

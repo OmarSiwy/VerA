@@ -6,7 +6,8 @@
 //
 // Legal neighbour: 02_variable_arrays.va.
 //
-//! reject E1016
+//! reject-only E1016
+//! neighbour 02_variable_arrays.va
 module array_over_2_20_elements_rejected(a);
   inout a; electrical a;
   real x[0:1048576];

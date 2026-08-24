@@ -6,7 +6,9 @@
 // the negative that closes it. Without it, a lexer that treated the base
 // letter as "any letter, defaulting to decimal" would pass the whole chapter.
 //! lrm 2.6.1
-//! reject E0131
+//! lrm 2.6.1:6
+//! reject-only E0131
+//! neighbour 35_uppercase_bases_hex.va
 module ch02_illegal_base_letter_rejected;
     integer value;
     analog value = 8'y11;

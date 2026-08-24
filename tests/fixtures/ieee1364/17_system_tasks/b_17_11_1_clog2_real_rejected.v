@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 17.11.1
 //! reject E1100
 //! reject not a real
+//! neighbour d09_10_clog2.v
 `timescale 1 ns / 1 ns
 module b_17_11_1_clog2_real_rejected;
   integer r;

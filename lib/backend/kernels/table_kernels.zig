@@ -42,12 +42,13 @@ fn ztExtrapError() noreturn {
     ztstd.process.exit(1);
 }
 
-/// §9.21.1: the data source named by this site could not be read. Reported at
-/// the call for the same reason `ztDuplicateError` is — "the state of the data
-/// source is captured on the first call", so a site that is never executed
-/// captures nothing and has nothing to be wrong about.
+/// §9.21.1: the data source named by this site could not be read, or is not a
+/// data set ("The numbers shall be real or integer"). Reported at the call for
+/// the same reason `ztDuplicateError` is — "the state of the data source is
+/// captured on the first call", so a site that is never executed captures
+/// nothing and has nothing to be wrong about.
 fn ztMissingSource() noreturn {
-    ztstd.debug.print("error: $table_model: LRM 9.21.1: the data source of this call could not be read\n", .{});
+    ztstd.debug.print("error: $table_model: LRM 9.21.1: the data source of this call could not be read as a data set of real or integer numbers\n", .{});
     ztstd.process.exit(1);
 }
 

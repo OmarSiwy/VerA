@@ -6,9 +6,12 @@
 // b_12_1_module_header_forms.v instantiates b_12_1_noports as u3() with no
 // connection.
 // digital-runner: reject
+//! lrm 6.2.2
+//! lrm 6.2.2:1
 //! inherited IEEE 1364-2005 12.1.2
 //! reject E1100
 //! reject more port connections than the module has ports
+//! neighbour b_12_1_module_header_forms.v
 module noports;
   initial $display("x");
 endmodule

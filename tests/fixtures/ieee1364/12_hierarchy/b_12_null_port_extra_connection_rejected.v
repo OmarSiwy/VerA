@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 12.3.5
 //! reject E1100
 //! reject more port connections than the module has ports
+//! neighbour b_12_null_port_combinations.v
 module null_leaf(a, , , y);
   input a;
   output y;

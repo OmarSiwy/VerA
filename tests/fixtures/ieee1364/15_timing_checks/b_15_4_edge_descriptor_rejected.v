@@ -13,6 +13,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 15.4
 //! reject edge descriptor
+//! neighbour b_15_1_timing_check_forms.v
 `timescale 1ns/1ns
 module b_15_4_edge_descriptor_rejected(clk, d);
   input clk, d;

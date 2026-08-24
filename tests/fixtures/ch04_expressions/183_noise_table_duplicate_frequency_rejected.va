@@ -9,8 +9,10 @@
 // divide by, and no sort resolves which of the two the spectrum should read.
 //
 //! lrm 4.6.4.3
-//! reject E0519
+//! lrm 4.6.4.3:6
+//! reject-only E0519
 //! reject appears twice
+//! neighbour 181_noise_table_topology.va
 module ch04_noise_table_duplicate_frequency_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -6,7 +6,10 @@
 // UDP with decimal/scientific delays, and digital/digital_delay_notation.v
 // executes real module parameter overrides that do permit scale factors.
 //! lrm 2.6.2
+//! lrm 2.6.2:3
 //! reject E0247
+//! neighbour ../digital/digital_delay_notation.v
+//! neighbour ../digital/digital_delay_primitive_notation.v
 module digital_scaled_udp_delay_rejected(p);
   inout p;
   electrical p;

@@ -10,7 +10,8 @@
 // is real".
 //
 //! lrm 9.5.3
-//! reject E0813
+//! lrm 9.5.3:1
+//! reject-only E0813
 `include "disciplines.vams"
 module ch9_swrite_into_real(p, n);
   inout p, n;

@@ -11,7 +11,10 @@
 //
 // Sum: 36 + (-2) + 0 + 0.5 = 34.5.
 //! lrm 4.2.1.1
+//! lrm 4.2.1.1:1
 //! lrm 4.2.4
+//! lrm 4.2.1.3
+//! lrm 4.2.1.3:1000
 `include "check.vh"
 module ch04_numeric_conversions(p, n);
     inout p, n;

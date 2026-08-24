@@ -10,7 +10,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0101
+//! reject-only E0101
 `ifdef CH10_NEVER_DEFINED
 module ch10_ifdef_without_endif(p, n);
   inout p, n; electrical p, n;

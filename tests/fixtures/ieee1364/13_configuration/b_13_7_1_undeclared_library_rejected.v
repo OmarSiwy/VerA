@@ -12,3 +12,4 @@
 //! inherited IEEE 1364-2005 13.7.1
 //! reject E0244
 //! reject no library map declares library `nosuch`
+//! neighbour b_13_7_1_command_line_search_order.v

@@ -10,5 +10,6 @@
 //! inherited IEEE 1364-2005 13.2.2
 //! reject E0244
 //! reject found `module`
+//! neighbour b_13_2_2_include_map.v
 module top;
 endmodule

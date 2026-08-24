@@ -18,6 +18,7 @@
 //! inherited IEEE 1364-2005 13.3.2
 //! reject another config
 //! reject E0243
+//! neighbour b_13_3_2_hierarchical_config.v
 config bot;
   design work.bot;
   default liblist work;

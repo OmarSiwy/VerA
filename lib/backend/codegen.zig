@@ -201,6 +201,9 @@ const F64Context = struct {
 // The generator
 // ===========================================================================
 
+/// One `systf_calls` entry: a `$name` call and the token it was lowered from.
+pub const SystfSite = struct { name: []const u8, tok: u32 };
+
 /// The emitter's state for one device. Built and driven by `generate`.
 ///
 /// Fields are grouped by who writes them and when: the inputs (never
@@ -342,11 +345,14 @@ pub const Gen = struct {
     /// Sticky: generation failed, even outside a unit body. Reported out so
     /// callers do not have to substring-search generated text for a refusal.
     any_fatal: bool = false,
-    /// §2.8.3/§12.32: the `$name`s this backend did not resolve, in first-call
-    /// order. Becomes `systf_calls`, so the index is the host's binding index.
-    /// Deduplicated by name, because `vpi_register_analog_systf()` registers
-    /// names and requires them unique. Linear scan: the list is tiny.
-    systf_names: std.ArrayList([]const u8) = .empty,
+    /// §2.8.3/§12.32: the `$name` call sites this backend did not resolve, in
+    /// first-call order. Becomes `systf_calls`, so the index is the host's
+    /// binding index. One entry per source call (name and token), not per
+    /// name: §12.32.1's calltf runs for "each" invocation with
+    /// `vpi_handle(vpiSysTfCall, NULL)` naming that call, so the host must
+    /// know which call it is. A unit that renders one call twice reuses its
+    /// entry. Linear scan: the list is tiny.
+    systf_names: std.ArrayList(SystfSite) = .empty,
     /// The `Instance` fields `updateState` advances, in declaration order
     /// (`file.emitInstance` fills it). `stateCtl` commits each to, and reverts
     /// it from, the `State` field of the same name.

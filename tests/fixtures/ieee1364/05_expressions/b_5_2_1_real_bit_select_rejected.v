@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 5.2.1 4.8.1
 //! reject E1100
 //! reject a real has no bits to select
+//! neighbour b_5_2_operand_forms.v
 module b_5_2_1_real_bit_select_rejected;
   realtime r;
   initial begin

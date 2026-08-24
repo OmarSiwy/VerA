@@ -19,7 +19,7 @@
 //! lrm 7.2.3
 //! lrm 6.2.2
 //! lrm C.8
-//! reject E0904
+//! reject-only E0904
 module ch7_mixed_parent(p);
   inout p; electrical p;
   digital_child u(p);

@@ -22,8 +22,10 @@
 //
 //! lrm 6.3
 //! lrm 6.3.3
-//! reject E0907
+//! lrm 6.3.3:1
+//! reject-only E0907
 //! reject is not a parameter of
+//! neighbour defparam_precedence_over_instance_override.va
 module ch6_override_variable_top(p);
   inout p; electrical p;
   ch6_override_variable_child #(.x(2.0)) u(p);

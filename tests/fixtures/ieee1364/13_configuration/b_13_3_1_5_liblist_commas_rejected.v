@@ -9,6 +9,8 @@
 //! inherited IEEE 1364-2005 13.3.1.5
 //! reject E0208
 //! reject expected an identifier: found `,`
+//! neighbour audit_config_default_liblist.v
+//! neighbour b_13_3_1_5_empty_liblist_parent_library.v
 config cfg;
   design work.top;
   default liblist work, work;

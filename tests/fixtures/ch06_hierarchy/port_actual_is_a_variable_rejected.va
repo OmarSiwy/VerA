@@ -23,7 +23,7 @@
 // `electrical` net declared in A and the design is legal.
 //
 //! lrm 6.5
-//! reject E0906
+//! reject-only E0906
 //! reject is a variable
 module ch6_port_var_top(p);
   inout p; electrical p;

@@ -30,7 +30,8 @@
 //! lrm 7.7.2
 //! lrm F.2.1
 //! lrm F.2.2
-//! reject E0917
+//! lrm 7.7.2:1000
+//! reject-only E0917
 discipline annex_f_e18; domain continuous; enddiscipline
 discipline annex_f_e33; domain continuous; enddiscipline
 connectrules annex_f_supply_walls;

@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 17.10.1
 //! reject E1100
 //! reject $test$plusargs takes (string)
+//! neighbour b_17_10_1_plusargs_variable_query.v
 `timescale 1 ns / 1 ns
 module b_17_10_1_test_plusargs_arguments_rejected;
   integer r;

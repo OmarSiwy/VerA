@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 19.3.2
 //! reject E0115
 //! reject undefined macro
+//! neighbour b_19_3_2_undef.v
 `define w 8
 `undef w
 module b_19_3_2_use_after_undef_rejected;

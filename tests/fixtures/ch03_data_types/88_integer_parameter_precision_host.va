@@ -3,6 +3,7 @@
 // representable by the fixture runner's real-valued card API.
 //! lrm 3.4.1
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param base = 9007199254740996
 //! param word = 2147483646
 `include "check.vh"

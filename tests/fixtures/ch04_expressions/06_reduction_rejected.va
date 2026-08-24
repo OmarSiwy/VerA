@@ -16,7 +16,8 @@
 // rather than accepting an implementation extension as the expected result.
 //
 //! lrm 4.2.10
-//! reject E0348
+//! lrm 4.2.10:1000
+//! reject-only E0348
 module ch04_reduction_rejected(p, n);
     inout p, n;
     electrical p, n;

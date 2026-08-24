@@ -6,6 +6,7 @@
 `include "check.vh"
 
 //! lrm 9.19
+//! lrm 9.19:6
 //! bias V(p) = 0.5
 
 module ch09_atomic_port_connected(p, n);

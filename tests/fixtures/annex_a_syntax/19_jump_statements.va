@@ -24,5 +24,5 @@
 //! lrm A.6.5
 //! lrm 5.11
 //! lrm 5.9.3
-//! reject E0403
+//! reject-only E0403
 module annex_a_jumps(p); inout p; electrical p; integer i; analog begin for(i=0;i<3;i=i+1) begin if(i==1) continue; if(i==2) break; end return; I(p)<+V(p); end endmodule

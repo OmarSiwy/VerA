@@ -1,6 +1,8 @@
 // IEEE1364-2005 12.2.2.2, also AMS6.3.3.
 // Empty .gain() retains gain3; .offset(7) overrides only offset.
 //! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.3.3:2
 //! checks 2
 // inherited IEEE 1364-2005 12.2.2.2
 `include "check.vh"

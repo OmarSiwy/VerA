@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 8.1.2 8.3
 //! reject E1100
 //! reject reg declaration
+//! neighbour b_8_1_1_header_forms.v
 `timescale 1ns/1ns
 primitive latch_no_reg(q, clock, data);
   output q;

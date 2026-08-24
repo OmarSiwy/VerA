@@ -15,6 +15,7 @@
 // source to one destination".
 //
 //! lrm A.7.2
+//! lrm A.7.2:1000
 //! reject parallel
 module annex_a_parallel_two_sources(o, a, b);
   output o;

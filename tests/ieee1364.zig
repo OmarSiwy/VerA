@@ -278,7 +278,8 @@ fn hasReject(source: []const u8) bool {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (!std.mem.startsWith(u8, line, "//!")) continue;
         var words = std.mem.tokenizeAny(u8, line["//!".len..], " \t");
-        if (std.mem.eql(u8, words.next() orelse continue, "reject")) return true;
+        const word = words.next() orelse continue;
+        if (std.mem.eql(u8, word, "reject") or std.mem.eql(u8, word, "reject-only")) return true;
     }
     return false;
 }

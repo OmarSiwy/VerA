@@ -33,7 +33,7 @@
 //
 //! lrm 7.6
 //! lrm 7.5
-//! reject E0982
+//! reject-only E0982
 `include "disciplines.vams"
 connectmodule ch7_both_in(el, dg);
   input el;

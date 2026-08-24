@@ -18,7 +18,8 @@
 // is real".
 //
 //! lrm 9.5.4.1
-//! reject E0813
+//! lrm 9.5.4.1:1000
+//! reject-only E0813
 //! reject `$fgets` writes into a `string` variable, and this one is real
 `include "disciplines.vams"
 module ch09_fgets_into_real(p, n);

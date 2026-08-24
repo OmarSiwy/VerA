@@ -224,6 +224,8 @@
  *            does).
  */
 
+//! lrm 12.5
+//! lrm 12.5:5
 //! inherited IEEE 1364-2005 26.2.2
 //! inherited-reject IEEE 1364-2005 26.2.2
 //! inherited IEEE 1364-2005 26.3

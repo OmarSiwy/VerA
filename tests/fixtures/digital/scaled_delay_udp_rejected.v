@@ -3,7 +3,9 @@
 // with decimal rise/fall delays and observes the update on its stated tick.
 // digital-runner: reject
 //! lrm 2.6.2
+//! lrm 2.6.2:3
 //! reject E0247
+//! neighbour digital_delay_primitive_notation.v
 primitive scaled_delay_udp(q, a);
   output q;
   input a;

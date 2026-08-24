@@ -18,7 +18,9 @@
 // generate_implicit_localparam.va covers it.
 //
 //! lrm 6.6.1
-//! reject E0314
+//! lrm 6.6.1:2
+//! reject-only E0314
+//! neighbour generate_implicit_localparam.va
 module ch6_genvar_outside_loop(p);
   inout p; electrical p;
   genvar i;

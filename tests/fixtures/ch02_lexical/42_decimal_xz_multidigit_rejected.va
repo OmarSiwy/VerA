@@ -12,7 +12,8 @@
 // E0133 now diagnoses the malformed decimal syntax before the analog
 // execution boundary. Legal single X/Z decimal digits parse successfully.
 //! lrm 2.6.1
-//! reject E0133
+//! lrm 2.6.1:21
+//! reject-only E0133
 module ch02_decimal_xz_multidigit_rejected;
     integer value;
     analog value = 8'd1x;

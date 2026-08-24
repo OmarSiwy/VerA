@@ -36,6 +36,7 @@
 // written anywhere in the chapter.
 //
 //! lrm 4.5.9
+//! lrm 4.5.9:1
 //! bias V(n) = 0
 //! wave V(p) = 0, 5
 //! time 0, 1u, 2u, 3u, 4u, 5u, 6u

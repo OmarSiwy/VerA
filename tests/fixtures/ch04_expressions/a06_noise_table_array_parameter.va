@@ -56,6 +56,8 @@
 // which the harness sets.)
 //
 //! lrm 4.6.4.3
+//! lrm 4.5.1
+//! lrm 4.5.1:1000
 //! noise table(p,n)#0 name=tbl interp=linear points=1.0:1e-18,1000.0:1e-21,1000000.0:1e-24
 //! analysis noise
 //! bias V(p) = 1.0

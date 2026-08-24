@@ -4,7 +4,9 @@
 // runs and brackets its update in digital_delay_primitive_notation.v.
 // digital-runner: reject
 //! lrm 2.6.2
+//! lrm 2.6.2:3
 //! reject E0247
+//! neighbour digital_delay_primitive_notation.v
 module scaled_delay_net_rejected;
   wire #(1u:2:3) q;
 endmodule

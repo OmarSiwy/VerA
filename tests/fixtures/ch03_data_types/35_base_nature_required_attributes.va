@@ -10,7 +10,9 @@
 // declaration added an unrelated port error and has been corrected.
 //
 //! lrm 3.6.1.2
-//! reject E0332
+//! lrm 3.6.1
+//! lrm 3.6.1:2
+//! reject-only E0332
 nature ch3_incomplete_nature; units="V"; access=IncompleteV; endnature
 discipline ch3_incomplete_disc; potential ch3_incomplete_nature; enddiscipline
 module ch3_incomplete(p); output p; ch3_incomplete_disc p; analog IncompleteV(p)<+0.0; endmodule

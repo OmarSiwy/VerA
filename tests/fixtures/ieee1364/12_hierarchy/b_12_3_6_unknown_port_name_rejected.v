@@ -4,9 +4,12 @@
 // m has ports a and y; u connects zz. Legal neighbour:
 // b_12_3_2_explicit_port_names.v (.en, .e, .a all name ports of m).
 // digital-runner: reject
+//! lrm 6.5.5
+//! lrm 6.5.5:1
 //! inherited IEEE 1364-2005 12.3.6
 //! reject E1100
 //! reject the instantiated module has no such port
+//! neighbour b_12_3_2_explicit_port_names.v
 module m(a, y);
   input a;
   output y;

@@ -14,7 +14,8 @@
 // never an assert, so the pinned substring is the code and not just the phase.
 //
 //! lrm 3.4.2
-//! reject E0207
+//! reject-only E0207
+//! neighbour 05_parameter_ranges.va
 module ch3_from_range_without_bracket(p, n);
     inout p, n;
     electrical p, n;

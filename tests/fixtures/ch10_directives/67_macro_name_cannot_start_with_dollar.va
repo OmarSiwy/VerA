@@ -11,7 +11,8 @@
 //
 //! lrm 10.4
 //! lrm 2.8
-//! reject E0109
+//! lrm 2.8:4
+//! reject-only E0109
 `define $X 1
 `include "disciplines.vams"
 module ch10_macro_name_cannot_start_with_dollar(p, n);

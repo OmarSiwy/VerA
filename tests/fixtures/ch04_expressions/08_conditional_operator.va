@@ -20,6 +20,9 @@
 // testing it, passes the first assertion and fails these.
 //
 //! lrm 4.2.12
+//! lrm 4.2.3
+//! lrm 4.2.3:1
+//! lrm 4.2.12:1
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch04_conditional_operator(p, n);

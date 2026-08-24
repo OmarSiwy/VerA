@@ -14,7 +14,7 @@
 // be pinned here; they belong with a fixture that has one.
 //
 //! lrm 5.10.3.4
-//! reject E0513
+//! reject-only E0513
 //! reject only allowed in an initial or always block
 module ch5_absdelta(p);
   inout p; electrical p; real x;

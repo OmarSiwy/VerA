@@ -29,6 +29,8 @@
 //! lrm C.11
 //! lrm 9.10
 //! lrm 9.11
+//! lrm 9.10:1000
+//! lrm 9.11:1000
 //! analysis tran
 //! time 0, 1u, 2.5u
 //! bias V(p) = 1.0, V(n) = 0.0

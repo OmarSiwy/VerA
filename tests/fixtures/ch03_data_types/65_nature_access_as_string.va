@@ -16,6 +16,7 @@
 // unrelated failed compilation phase.
 //
 //! lrm 3.6.1.2
-//! reject E0340
+//! lrm 3.6.1.2:2
+//! reject-only E0340
 nature ch3_access_string; units="V"; access="AccessStr"; abstol=1u; endnature
 module ch3_nature_access_as_string; endmodule

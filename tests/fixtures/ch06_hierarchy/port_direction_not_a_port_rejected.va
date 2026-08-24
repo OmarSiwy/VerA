@@ -16,7 +16,7 @@
 //
 //! lrm 6.5.2
 //! lrm 6.2
-//! reject E0206
+//! reject-only E0206
 module ch6_port_direction_not_a_port(p);
   inout p; electrical p;
   inout q;

@@ -17,7 +17,8 @@
 // this file's own module name.
 //
 //! lrm 10.6
-//! reject E0208
+//! lrm 10.6:3
+//! reject-only E0208
 `begin_keywords "VAMS-2023"
 module ch10_begin_keywords_vams(sin, n);
   inout sin, n; electrical sin, n;

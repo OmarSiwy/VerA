@@ -12,7 +12,8 @@
 //
 // This fixture used to assert the opposite — that the illegal form COMPILES.
 //! lrm 4.5.15
-//! reject E0514
+//! lrm 4.5.15:3
+//! reject-only E0514
 // §5.9: "Analog filter functions are not allowed" in repeat/while/non-genvar
 // for — `integer i` makes this a procedural for, not a §5.9.3 analog_for.
 // Rejected as E0514.

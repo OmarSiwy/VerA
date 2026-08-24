@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.2.4
 //! reject E0207
 //! reject unexpected token: found `;`
+//! neighbour b_A_2_4_declaration_assignments.v
 module b_A_2_4_parameter_without_value_rejected;
   parameter P;
   initial $display("unreachable");

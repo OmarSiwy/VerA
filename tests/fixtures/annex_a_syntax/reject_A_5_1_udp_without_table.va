@@ -19,7 +19,8 @@
 //
 //! lrm A.5
 //! lrm A.5.1
-//! reject E0207
+//! lrm A.5.1:1000
+//! reject-only E0207
 //! reject a udp_body is a
 primitive annex_a_udp_no_table(o, a);
   output o;

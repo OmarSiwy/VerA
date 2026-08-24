@@ -8,7 +8,8 @@
 // already a complete expression and the point is a stray token after it
 // (E0207). Both codes are pinned so a change to either path is visible.
 //! lrm 2.6.2
-//! reject E0207
+//! lrm 2.6.2:2
+//! reject-only E0207
 module ch02_real_trailing_dot_scale_rejected;
     real value;
     analog value = 34.M;

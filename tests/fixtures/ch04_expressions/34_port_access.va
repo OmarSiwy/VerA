@@ -16,6 +16,7 @@
 // check rather than agreeing with itself.
 //
 //! lrm 4.4
+//! lrm 4.4:1
 //! bias flowZ28Z3cpZ3eZ29 = 0.375
 //! bias V(p) = 0.25
 `include "check.vh"

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 8.1.2
 //! reject E1100
 //! reject cannot contain a reg declaration
+//! neighbour b_8_1_definition_placement.v
 `timescale 1ns/1ns
 primitive comb_reg(q, a);
   output q;

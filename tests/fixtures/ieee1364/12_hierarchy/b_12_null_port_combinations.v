@@ -10,6 +10,8 @@
 // sample is one tick after the inputs change, with no scheduling race.
 // Rejection neighbour: b_12_null_port_extra_connection_rejected.v isolates
 // an extra positional connection beyond the null ports' header positions.
+//! lrm 6.5.1
+//! lrm 6.5.1:1
 //! inherited IEEE 1364-2005 A.1.3 12.1.2
 `timescale 1ns/1ns
 module null_plain(a, , , y);

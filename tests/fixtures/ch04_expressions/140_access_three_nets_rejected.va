@@ -9,7 +9,9 @@
 // 13_signal_access.va is the legal one- and two-net side.
 //
 //! lrm 4.4
-//! reject E0207
+//! lrm 4.4:1
+//! reject-only E0207
+//! neighbour 13_signal_access.va
 module ch04_access_three_nets_rejected(p, n, q);
     inout p, n, q;
     electrical p, n, q;

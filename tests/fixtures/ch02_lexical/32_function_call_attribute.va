@@ -11,6 +11,8 @@
 // CHECKX is the right strength.
 //! lrm 2.9
 //! lrm A.8.2
+//! lrm 2.9:2
+//! lrm A.8.2:1000
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch2_call_attr(p);

@@ -18,6 +18,9 @@
 // its filename.
 //
 //! lrm 9.5.4.1
+//! lrm 9.4.2
+//! lrm 9.4.2:1000
+//! lrm 9.5.4.1:1000
 `include "check.vh"
 module ch09_atomic_fgets(p, n);
   inout p, n; electrical p, n;

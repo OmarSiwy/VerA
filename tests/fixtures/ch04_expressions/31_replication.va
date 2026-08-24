@@ -48,6 +48,7 @@
 // zero-count evaluation independently of these value cases.
 //
 //! lrm 4.2.13
+//! lrm 4.2.13:4
 //! bias V(p) = 0.0
 `include "check.vh"
 module ch04_replication(p, n);

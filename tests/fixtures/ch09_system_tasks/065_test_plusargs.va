@@ -10,6 +10,8 @@
 //
 //! lrm 9.2
 //! lrm 9.12
+//! lrm 9.2:1000
+//! lrm 9.12:1000
 `include "check.vh"
 module ch09_atomic_test_plusargs(p, n);
   inout p, n; electrical p, n;

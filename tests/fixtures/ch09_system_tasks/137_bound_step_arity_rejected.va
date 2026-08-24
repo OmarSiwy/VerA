@@ -6,7 +6,7 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.17.2
-//! reject E0802
+//! reject-only E0802
 module ch09_bound_step_arity_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

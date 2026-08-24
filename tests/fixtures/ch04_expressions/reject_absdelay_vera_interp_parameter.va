@@ -5,7 +5,7 @@
 // `absdelay` site, before any model card exists, so it must fold without
 // one. E0524 names that.
 //! lrm 2.9
-//! reject E0524
+//! reject-only E0524
 module reject_absdelay_vera_interp_parameter(p, n);
   inout p, n; electrical p, n;
   parameter integer order = 2;

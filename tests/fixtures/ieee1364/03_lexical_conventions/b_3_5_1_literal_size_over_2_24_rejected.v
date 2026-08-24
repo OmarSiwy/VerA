@@ -6,6 +6,7 @@
 // neighbour.
 // digital-runner: reject
 //! reject E1019
+//! neighbour b_3_5_1_literal_size_65536.v
 module b_3_5_1_literal_size_over_2_24_rejected;
   initial $display("%0d", 4294967295'h0 == 0);
 endmodule

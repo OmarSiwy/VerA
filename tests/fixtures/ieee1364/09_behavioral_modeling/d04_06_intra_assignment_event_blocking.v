@@ -33,6 +33,8 @@
 //! lrm A.6.2
 //! lrm A.6.5
 //! lrm 8.5.3.3
+//! lrm A.6.2:1000
+//! lrm A.6.5:1000
 //! timescale 1ns/1ps
 //! inherited IEEE 1364-2005 9.7.2 9.7.7
 `timescale 1ns/1ps

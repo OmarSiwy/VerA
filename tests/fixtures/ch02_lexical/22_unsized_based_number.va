@@ -12,6 +12,7 @@
 // implementation picked — §2.6.1 leaves that open, so the fixture must not pin
 // it.
 //! lrm 2.6.1
+//! lrm 2.6.1:2
 `include "check.vh"
 module ch02_unsized_based_number(p, n);
     inout p, n;

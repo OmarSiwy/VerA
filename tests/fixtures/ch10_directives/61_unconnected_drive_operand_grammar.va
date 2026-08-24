@@ -18,7 +18,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.9
-//! reject E0141
+//! reject-only E0141
 `unconnected_drive
 module ch10_unconnected_drive_operand_grammar(p, n);
     inout p, n;

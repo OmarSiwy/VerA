@@ -23,6 +23,7 @@
 // them a nature. 35 and 36 pin the withdrawing half of the same rule.
 //
 //! lrm 10.2
+//! lrm 10.2:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `default_discipline electrical
 `include "check.vh"

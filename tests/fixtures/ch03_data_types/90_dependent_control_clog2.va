@@ -13,6 +13,7 @@
 // that froze `size` at its declared-default value reads 1 at the override.
 //
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param amount = 5
 `include "check.vh"
 module dependent_control_unsupported(p);

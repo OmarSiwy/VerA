@@ -15,6 +15,7 @@
 // 12 values".
 //
 //! lrm A.7.4
+//! lrm A.7.4:1000
 //! reject path delay
 module annex_a_four_path_delays(o, a, b);
   output o;

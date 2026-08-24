@@ -16,7 +16,7 @@
 // spellings' diagnostics. They are censused in 22_shadowed_spellings.va and
 // 23_shadowed_spellings_inner.va, which explain the mechanism.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject endprimitive
 //! reject endtable
 module annex_b_reserved_udp_keywords;

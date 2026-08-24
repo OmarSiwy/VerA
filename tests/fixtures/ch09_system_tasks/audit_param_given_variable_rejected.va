@@ -4,7 +4,9 @@
 // The distinctive rejection phrase below is the intended diagnostic contract,
 // carried by E0822 (it used to be accepted without a diagnostic).
 //! lrm 9.19
-//! reject $param_given requires a parameter identifier
+//! lrm 9.19:3
+//! reject-only $param_given requires a parameter identifier
+//! neighbour audit_binding_source_overrides.va
 module audit_param_given_variable_rejected;
   real value;
   integer flag;

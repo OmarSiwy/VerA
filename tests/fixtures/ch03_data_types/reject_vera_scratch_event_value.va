@@ -11,7 +11,8 @@
 // vera_scratch_starts_each_evaluation.va.
 //! lrm 2.9
 //! lrm 5.10
-//! reject E0536
+//! reject-only E0536
+//! neighbour vera_scratch_starts_each_evaluation.va
 module reject_vera_scratch_event_value(p, n);
   inout p, n; electrical p, n;
   (* vera_scratch *) real k;

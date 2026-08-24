@@ -25,6 +25,7 @@
 // is on the chord (a,c), a node pair no probe branch names.
 //
 //! lrm 1.3.2
+//! lrm 1.3.2:1000
 //! bias V(a) = 1.0, V(b) = 0.25, V(c) = -0.5, V(d) = 0.125
 `include "check.vh"
 module ch01_kpl_loop(a, b, c, d);

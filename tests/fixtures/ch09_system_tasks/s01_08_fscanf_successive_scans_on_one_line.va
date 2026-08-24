@@ -54,6 +54,7 @@
 //! lrm 9.5.4.2
 //! lrm 9.5.5
 //! lrm 9.5.8
+//! lrm 9.5.8:1000
 //! print none
 `include "check.vh"
 module s01_fscanf_successive(p, n);

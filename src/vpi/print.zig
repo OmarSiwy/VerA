@@ -1,7 +1,9 @@
 //! §12.24-§12.28: `vpi_printf` and the multichannel descriptor family.
 //! Channels 1-3 are stdout, stderr and the log (§12.27), predefined and
-//! unclosable; `vpi_mcd_open` hands out the lowest free channel from 4. VerA
-//! has no product log file, so channel 3 discards and `vpi_printf` is stdout.
+//! unclosable; `vpi_mcd_open` hands out the lowest free channel from 4.
+//! Channel 3 is the product log file the host names (`setLogFile`), created
+//! on its first write; with none named it discards. `vpi_printf` writes
+//! channels 1 and 3.
 //! While a digital design runs, the HDL's §17.2 tasks share these channels
 //! (`share`, IEEE 1364-2005 §27.25). Formatting is C's printf done here over
 //! `va.arg`, since the `vpi` module is linked into binaries without libc; the
@@ -38,6 +40,21 @@ const Channel = struct {
 
 var channels: [channel_count]?Channel = @splat(null);
 const gpa = std.heap.smp_allocator;
+
+/// §12.26 "Descriptor 3 is the current log file": its name, owned by `gpa`,
+/// and the file once the first write created it.
+var log_name: ?[:0]u8 = null;
+var log_file: ?Io.File = null;
+
+/// Names the product log file channel 3 writes, in the working directory
+/// unless `path` says otherwise. The LRM names no file; a host picks one
+/// (tests/vpi_host.zig: the application's name with `.log`).
+pub fn setLogFile(path: []const u8) error{OutOfMemory}!void {
+    if (log_file) |f| f.close(io());
+    log_file = null;
+    if (log_name) |n| gpa.free(n);
+    log_name = try gpa.dupeSentinel(u8, path, 0);
+}
 
 /// §12.25's buffer: "This routine shall overwrite the returned value on
 /// subsequent calls."
@@ -139,7 +156,10 @@ pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
         break :name switch (i) {
             0 => "stdout",
             1 => "stderr",
-            2 => "log",
+            2 => log_name orelse {
+                root.fail("NOLOG", "vpi_mcd_name: this host names no product log file", .{});
+                return null;
+            },
             else => if (i < channel_count and channels[i] != null) channels[i].?.name else {
                 root.fail("BADMCD", "vpi_mcd_name: channel {d} is not open", .{i + 1});
                 return null;
@@ -242,18 +262,24 @@ fn fdErr(d: i64) i64 {
     return if (fds.err) |e| e(fdOnly(d)) else 0;
 }
 
-/// Channel `i`'s file; null for the log, which discards.
+/// Channel `i`'s file; null for a log the host named none for, which
+/// discards.
 fn channelFile(i: usize) error{NotOpen}!?Io.File {
     return switch (i) {
         0 => .stdout(),
         1 => .stderr(),
-        2 => null, // no product log file; see the file header
+        2 => {
+            const name = log_name orelse return null;
+            if (log_file == null) log_file = Io.Dir.cwd().createFile(io(), name, .{}) catch return error.NotOpen;
+            return log_file;
+        },
         else => if (channels[i]) |ch| ch.file else error.NotOpen,
     };
 }
 
-/// The body of `varargs.c`'s vpi_printf (mcd 1), vpi_mcd_printf and their
-/// IEEE 1364-2005 §27.37/§27.27 `v` forms over a started `va_list`.
+/// The body of `varargs.c`'s vpi_printf (mcd 1 | 4: stdout and the log),
+/// vpi_mcd_printf and their IEEE 1364-2005 §27.37/§27.27 `v` forms over a
+/// started `va_list`.
 ///
 /// §12.28 "shall write to both stdout and the current product log file ...
 /// shall return the number of characters printed or EOF if an error occurred."

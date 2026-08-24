@@ -14,7 +14,10 @@
 // A compiler that compared the signed carrier would evaluate -1 > 1 = 0.
 //
 //! lrm 4.2.9
+//! lrm 4.2.9:2
+//! lrm 4.2.9:4
 //! lrm 4.2.11
+//! lrm 4.2.9:1
 `include "check.vh"
 module dependent_control_shift_mixed(p);
   inout p; electrical p;

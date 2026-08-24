@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 12.1.2 7.1.6
 //! reject E1100
 //! reject as wide as the port or as the port times the array size
+//! neighbour b_12_instance_array_width_product.v
 module wide_leaf(input [65535:0] p);
 endmodule
 module b_12_instance_array_width_product_rejected;

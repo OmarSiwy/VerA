@@ -47,6 +47,9 @@
 //
 //! lrm A.8.8
 //! lrm 2.7
+//! lrm 2.7:1
+//! lrm 2.7:2
+//! lrm A.8.8:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_string_literal(p, n);

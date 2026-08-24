@@ -27,7 +27,8 @@
 //! lrm 7.3.6.1
 //! lrm 7.3.5
 //! lrm 5.10.3.1
-//! reject direction shall evaluate to an integer
+//! lrm 5.10.3.1:3
+//! reject-only direction shall evaluate to an integer
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_cross_dir_digital(x, n);

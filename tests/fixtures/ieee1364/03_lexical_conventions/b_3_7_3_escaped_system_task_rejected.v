@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 3.7.3
 //! reject E1100
 //! reject undeclared task
+//! neighbour b_3_7_3_system_task_forms.v
 module b_3_7_3_escaped_system_task_rejected;
   initial \$display ("x");
 endmodule

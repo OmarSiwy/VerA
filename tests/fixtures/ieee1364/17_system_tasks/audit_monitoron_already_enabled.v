@@ -7,6 +7,7 @@
 // without imposing order among events in a single time slot. No time function
 // is monitored, so this case is independent of the time-trigger exception.
 //! lrm 9.1
+//! lrm 9.1:1000
 //! inherited IEEE 1364-2005 17.1.3
 `timescale 1ns/1ns
 module audit_monitoron_already_enabled;

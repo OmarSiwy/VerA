@@ -23,7 +23,9 @@
 //
 //! lrm 5.9.1
 //! lrm 5.9
-//! reject E0426
+//! lrm 5.9:1
+//! reject-only E0426
+//! neighbour while_loop.va
 module ch5_while_contribution(p);
   inout p; electrical p;
   integer i;

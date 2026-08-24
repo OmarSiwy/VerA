@@ -17,6 +17,8 @@
 //   t=0 top work.top; t=1 top.u1 liba.a.
 // digital-runner: --libmap a11/incdir.map
 // digital-runner: files a11/cells/a.v
+//! lrm A.1.1
+//! lrm A.1.1:1000
 //! inherited IEEE 1364-2005 A.1.1
 `timescale 1ns/1ns
 module top;

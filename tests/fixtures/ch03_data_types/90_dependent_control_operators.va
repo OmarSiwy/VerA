@@ -3,6 +3,7 @@
 //! lrm 4.2.11
 //! lrm 4.2.12
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param amount = 4
 //! param negative_count = -1
 //! param wide_count = 32

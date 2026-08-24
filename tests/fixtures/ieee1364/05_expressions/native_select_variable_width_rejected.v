@@ -5,6 +5,7 @@
 // digital-runner: reject
 //! reject E1100
 //! reject constant expression
+//! neighbour native_indexed_selects.v
 module native_select_variable_width_rejected;
   reg [7:0] v;
   integer w;

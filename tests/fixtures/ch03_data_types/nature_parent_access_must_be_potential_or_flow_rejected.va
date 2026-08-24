@@ -16,7 +16,10 @@
 //
 //! lrm 3.6.2.6
 //! lrm A.1.6
-//! reject E0211
+//! lrm 3.6.2.6:2
+//! lrm A.1.6:1000
+//! reject-only E0211
+//! neighbour 20_derived_nature_from_discipline.va
 `include "disciplines.vams"
 nature ch3_parent_access_n : electrical.voltage
 endnature

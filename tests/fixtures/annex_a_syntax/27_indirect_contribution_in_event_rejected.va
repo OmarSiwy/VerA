@@ -14,7 +14,11 @@
 //! lrm A.6.4
 //! lrm 5.10
 //! lrm 5.6.7
-//! reject E0411
+//! lrm 5.6.5
+//! lrm 5.6.5:2
+//! lrm 5.10:2
+//! lrm A.6.4:1000
+//! reject-only E0411
 module annex_a_indirect_in_event(p, c); inout p, c; electrical p, c;
 analog begin @(cross(V(p), 1)) V(p) : V(c) == 2.0 * V(p); I(c) <+ 0.0; end
 endmodule

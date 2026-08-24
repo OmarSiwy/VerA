@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 9.7.3
 //! reject E1100
 //! reject undeclared named event
+//! neighbour d04_03_named_event_digital.v
 module b_9_7_3_undeclared_event_rejected;
   initial -> ev;
 endmodule

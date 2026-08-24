@@ -16,7 +16,8 @@
 // The mutual-exclusion half of the production — a literal takes `exp` or
 // `scale_factor`, never both — is 58_exponent_and_scale_factor_rejected.va.
 //! lrm 2.6.2
-//! reject E0207
+//! reject-only E0207
+//! neighbour 07_si_scale_factors.va
 module ch02_scale_factor_alphabet_rejected;
     real value;
     analog value = 1g;

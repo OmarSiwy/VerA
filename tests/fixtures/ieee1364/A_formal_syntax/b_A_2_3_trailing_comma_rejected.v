@@ -9,6 +9,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.2.3
 //! reject E0208
+//! neighbour b_A_2_3_declaration_lists.v
 module b_A_2_3_trailing_comma_rejected;
   wire a, ;
   initial $display("unreachable");

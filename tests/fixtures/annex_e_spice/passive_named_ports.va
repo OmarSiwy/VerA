@@ -37,9 +37,16 @@
 // compiler would FAIL and only one without SPICE support would pass.
 //
 //! lrm E.1.2
+//! lrm E.1.2:1
 //! lrm E.3
 //! lrm E.2.2.3
 //! lrm 6.7.1
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.5.5
+//! lrm 6.5.5:1
+//! lrm 6.7.1:1
+//! lrm E.1.2:2
 //! bias V(p) = 1.0, V(n) = 0.0
 `include "check.vh"
 module annex_e_passive_named_ports(p, n);

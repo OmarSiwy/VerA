@@ -2,6 +2,7 @@
 // size. Three replacement elements differ from every default; independently
 // reading all three detects dropped overrides, truncation and reordered values.
 //! lrm 3.4.4
+//! lrm 3.4.4:3
 //! checks 3
 `include "check.vh"
 module exact_array_target;

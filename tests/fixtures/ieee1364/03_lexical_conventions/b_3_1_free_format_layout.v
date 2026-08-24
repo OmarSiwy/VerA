@@ -11,6 +11,8 @@
 // The exception: the escaped identifier \a+b ends at the space after it, so
 // `\a+b +1` is the identifier a+b plus 1: \a+b = 10 -> 11.
 // Printed: "7 12 6 11".
+//! lrm 2.2
+//! lrm 2.2:3
 //! inherited IEEE 1364-2005 3.1
 module b_3_1_free_format_layout;reg[7:0]a,b,c,d,e;integer \a+b ;
   initial begin

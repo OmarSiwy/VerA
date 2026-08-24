@@ -25,7 +25,7 @@
 // stops there.
 //
 //! lrm 6.5.2.2
-//! reject E0208
+//! reject-only E0208
 module ch6_real_port(x);
   input real x;
   electrical p;

@@ -11,6 +11,9 @@
 // 0x12ABF001 has a clear MSB so it is positive in a 32-bit signed integer),
 // so none of them exercises the left-truncation rule.
 //! lrm 2.6.1
+//! lrm 2.6.1:2
+//! lrm 2.6.1:8
+//! lrm 2.6.1:22
 `include "check.vh"
 module ch02_integer_bases(p, n);
     inout p, n;

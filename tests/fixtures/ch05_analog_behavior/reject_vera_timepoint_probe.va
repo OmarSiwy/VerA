@@ -7,7 +7,8 @@
 // neighbour, the same statement over `$abstime` and a held variable, is
 // vera_timepoint_cache.va.
 //! lrm 2.9
-//! reject a probe (§4.4)
+//! reject-only a probe (§4.4)
+//! neighbour vera_timepoint_cache.va
 module reject_vera_timepoint_probe(p, n);
   inout p, n; electrical p, n;
   real w;

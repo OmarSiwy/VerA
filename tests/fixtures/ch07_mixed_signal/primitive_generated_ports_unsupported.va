@@ -52,7 +52,9 @@
 //! lrm 7.8.5.1
 //! lrm 7.8.5
 //! lrm C.9
-//! reject E0907
+//! reject-only E0907
+//! neighbour ../annex_a_syntax/12_defparam.va
+//! neighbour ../annex_a_syntax/56_gate_instantiation_unsupported.va
 module ch7_primitive_generated_ports(a, b, y);
   input a, b; output y; wire a, b, y;
   and gate_instance(y, a, b);

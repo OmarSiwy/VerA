@@ -14,6 +14,8 @@
 //! inherited IEEE 1364-2005 9.3 9.3.2
 //! reject E1100
 //! reject names one whole variable or net
+//! neighbour audit_assignment_force_release.v
+//! neighbour b_9_3_2_force_net_selects.v
 module b_9_3_2_force_variable_bit_select_rejected;
   reg [3:0] r;
   initial force r[1] = 1'b1;

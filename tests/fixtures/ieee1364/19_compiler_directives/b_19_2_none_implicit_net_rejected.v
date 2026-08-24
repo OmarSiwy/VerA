@@ -11,6 +11,8 @@
 //! inherited IEEE 1364-2005 19.2
 //! reject E1100
 //! reject undeclared digital variable
+//! neighbour b_19_2_implicit_net_types.v
+//! neighbour b_19_2_none_all_declared.v
 `timescale 1ns/1ns
 `default_nettype none
 module b_19_2_child(output wire o);

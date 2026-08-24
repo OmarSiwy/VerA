@@ -25,6 +25,7 @@
 //
 //! lrm 6.2.1
 //! lrm 6.7
+//! lrm 6.2.1:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch6_root_top(p, n);

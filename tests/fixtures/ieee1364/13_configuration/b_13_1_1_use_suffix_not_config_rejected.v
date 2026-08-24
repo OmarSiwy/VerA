@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 13.1.1 13.3.1.6
 //! reject E0207
 //! reject a use_clause's `:` is followed by the word `config`
+//! neighbour b_13_3_1_every_rule_form.v
 config cfg;
   design work.top;
   instance top.u use work.leaf:module;

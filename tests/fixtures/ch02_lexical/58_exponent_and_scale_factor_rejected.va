@@ -19,7 +19,9 @@
 // production; 07_si_scale_factors.va and 06_real_notation.va are the positives
 // for the scaled and scientific arms respectively.
 //! lrm 2.6.2
-//! reject E0207
+//! reject-only E0207
+//! neighbour 06_real_notation.va
+//! neighbour 07_si_scale_factors.va
 module ch02_exponent_and_scale_factor_rejected;
     real value;
     analog value = 1.0e3K;

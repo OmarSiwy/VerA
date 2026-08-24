@@ -103,6 +103,10 @@
  * simulation unit. A NULL time_p is no application-allocated structure.
  */
 
+//! lrm 12.16
+//! lrm 12.16:5
+//! lrm 12.30
+//! lrm 12.30:19
 //! inherited IEEE 1364-2005 27.12
 //! inherited-reject IEEE 1364-2005 27.12
 //! inherited IEEE 1364-2005 27.14
@@ -197,9 +201,9 @@ static void get_values(void)
   CHECK(v.format == vpiVectorVal && v.value.vector[0].aval == 0xa71, "27.14: a vector -> vpiVectorVal");
   v.format = vpiObjTypeVal;
   vpi_get_value(p02_by_name("b_27_values.tv"), &v);
-  XFAIL(v.format == vpiTimeVal && v.value.time->type == vpiSimTime &&
+  CHECK(v.format == vpiTimeVal && v.value.time->type == vpiSimTime &&
         v.value.time->high == 1 && v.value.time->low == 705032704,
-        "27.14", "a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000");
+        "27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000");
 
   v.format = vpiStrengthVal;
   v.value.strength = &st;

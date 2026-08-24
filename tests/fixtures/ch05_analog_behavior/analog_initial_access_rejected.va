@@ -1,6 +1,7 @@
 // LRM 5.2.1: access functions are forbidden in an analog initial block.
 //! lrm 5.2.1
-//! reject E0421
+//! lrm 5.2.1:1
+//! reject-only E0421
 module ch5_initial_access_rejected(p);
   inout p; electrical p; real initialized;
   analog initial initialized = V(p);

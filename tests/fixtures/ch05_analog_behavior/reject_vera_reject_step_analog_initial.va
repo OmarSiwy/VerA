@@ -6,7 +6,8 @@
 // it. The legal neighbour, the task in an analog block, is
 // vera_reject_step_retry.va.
 //! lrm 2.8.3
-//! reject E0533
+//! reject-only E0533
+//! neighbour vera_reject_step_retry.va
 module reject_vera_reject_step_analog_initial(p, n);
   inout p, n; electrical p, n;
   analog initial $vera_reject_step(0.5);

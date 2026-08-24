@@ -28,7 +28,8 @@
 // withdrawn — see tests/fixtures/ch09_system_tasks/COVERAGE.md at 8b1514d4 §s9.22.2.
 //
 //! lrm 9.22
-//! reject connect module
+//! lrm 9.22:1000
+//! reject-only connect module
 //! reject E0818
 module ch09_driver_access(p, n);
   inout p, n; electrical p, n;

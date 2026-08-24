@@ -23,6 +23,8 @@
 //
 //! lrm 1.3.4.2
 //! lrm 5.4.2.2
+//! lrm 1.3.4.2:1
+//! lrm 1.3.4.2:2
 //! bias I(in) = 0.125
 `include "check.vh"
 module ch01_flow_signal_flow(in, out);

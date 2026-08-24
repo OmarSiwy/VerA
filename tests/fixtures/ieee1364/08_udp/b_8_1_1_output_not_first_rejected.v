@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 8.1.1
 //! reject E1100
 //! reject output port shall be the first
+//! neighbour b_8_1_definition_placement.v
 primitive last_out(a, q);
   input a;
   output q;

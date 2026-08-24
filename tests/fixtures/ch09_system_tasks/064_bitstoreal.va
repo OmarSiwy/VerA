@@ -19,6 +19,8 @@
 //
 //! lrm 9.2
 //! lrm 9.11
+//! lrm 9.2:1000
+//! lrm 9.11:1000
 `include "check.vh"
 module ch09_atomic_bitstoreal(p, n);
   inout p, n; electrical p, n;

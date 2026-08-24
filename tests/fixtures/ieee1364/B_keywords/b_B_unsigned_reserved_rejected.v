@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 B
 //! reject E0208
 //! reject found `unsigned`
+//! neighbour b_B_keywords.v
 module b_B_unsigned_reserved_rejected;
   reg unsigned;
   initial $display("unreachable");

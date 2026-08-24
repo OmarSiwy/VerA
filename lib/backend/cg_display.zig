@@ -456,6 +456,38 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
     try g.b("}}) catch zSOver()); }}", .{});
 }
 
+/// Emits §9.5.3 `$sformat` whose format_string is a string VARIABLE ("whose
+/// content is interpreted as the format string"): `args[0]` is the format,
+/// the rest its operands, each passed in its own type to
+/// `str_kernels.zSFormatRt`, which walks the format at run time. `%m` prints
+/// what `translateFormat` prints for it.
+pub fn emitStringFormatRt(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
+    try g.b("zStringStore(zSFormatRt(zSBuf({d}), ", .{site});
+    try g.renderVal(if (args.len > 0) args[0] else Mir.Value.f_zero, .str);
+    try g.b(", \"{f}\", .{{", .{std.zig.fmtString(g.mir.name)});
+    for (args[@min(1, args.len)..], 0..) |a, k| {
+        if (k != 0) try g.b(", ", .{});
+        switch (g.an.tyOf(g.an.rv(a))) {
+            .real => {
+                try g.b("@as(f64, (", .{});
+                try g.renderVal(a, .real);
+                try g.b(").val())", .{});
+            },
+            .int => {
+                try g.b("@as(i64, ", .{});
+                try g.renderVal(a, .int);
+                try g.b(")", .{});
+            },
+            .str => {
+                try g.b("@as([]const u8, ", .{});
+                try g.renderVal(a, .str);
+                try g.b(")", .{});
+            },
+        }
+    }
+    try g.b("}}))", .{});
+}
+
 // ------------------------------------------------------- §9.5 file I/O ----
 //
 // §9.5.2 defines its five output tasks as the §9.4.1 ones "with one additional
@@ -758,10 +790,18 @@ pub fn translateFormat(
         i += 1;
         // §9.4.3 `%m` names the enclosing module, and `%l` consumes no operand
         // either: "for each % character (except %m, %% and %l) … a
-        // corresponding expression argument shall be supplied". Table 9-22's
-        // `%l` is "library.cell"; VerA has no library map, so the library is
-        // empty and the cell is the module, the same text `%m` gives.
-        if (conv == 'm' or conv == 'M' or conv == 'l' or conv == 'L') {
+        // corresponding expression argument shall be supplied".
+        if (conv == 'm' or conv == 'M') {
+            try fmt.appendSlice(a, g.mir.name);
+            continue;
+        }
+        // Table 9-22's `%l` is "library.cell". A Verilog-A source takes no
+        // library map (`vera --libmap` configures a .v design), and IEEE
+        // 1364-2005 §13.2.1 compiles a file no map matches "into a library
+        // named work"; the cell is the module, as `%m` names it. The digital
+        // runner prints the same shape (`work.top`).
+        if (conv == 'l' or conv == 'L') {
+            try fmt.appendSlice(a, "work.");
             try fmt.appendSlice(a, g.mir.name);
             continue;
         }

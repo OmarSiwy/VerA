@@ -4,6 +4,7 @@
 //! lrm 4.2.7
 //! lrm 4.2.12
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param zero_divisor = 0
 //! param nonzero_divisor = -2
 `include "check.vh"

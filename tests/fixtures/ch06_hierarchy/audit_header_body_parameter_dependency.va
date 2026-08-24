@@ -6,6 +6,10 @@
 // prove that the body parameter itself is protected from direct overrides.
 //! lrm 3.4.5
 //! lrm 6.2
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! checks 2
 `include "check.vh"
 module header_body_dependency_target #(parameter real header_value = 2.0) ();

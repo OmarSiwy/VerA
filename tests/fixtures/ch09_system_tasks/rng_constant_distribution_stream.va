@@ -12,6 +12,8 @@
 // rejection is invented for the stream-identity rule itself.
 //! lrm 9.13.2
 //! lrm 9.13.3
+//! lrm 9.13.2:4
+//! lrm 9.13.3:1000
 //! time 0, 1, 2
 //! checks 7
 `include "check.vh"

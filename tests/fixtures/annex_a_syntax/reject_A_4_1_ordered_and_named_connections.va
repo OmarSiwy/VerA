@@ -11,7 +11,8 @@
 // VerA reports E0906 "a named connection in a list of ordered connections".
 //
 //! lrm A.4.1
-//! reject E0906
+//! lrm A.4.1:1000
+//! reject-only E0906
 `include "disciplines.vams"
 module annex_a_mix_child(a, b);
   inout a, b;

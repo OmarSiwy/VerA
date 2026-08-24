@@ -17,6 +17,7 @@
 // answered "equal" on a prefix would pass the first check and fail this one.
 //
 //! lrm 3.3
+//! lrm 3.3:4
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch3_string_repl(p);

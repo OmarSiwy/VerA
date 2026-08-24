@@ -19,14 +19,21 @@
 //
 // The ordered connection is what the digit tests: the sign of the current says
 // which net the FIRST positional port went to. A tool that read the list as
-// (n, p) stamps -1.0e-3 and fails.
+// (n, p) puts r1's port p on the 0 V net, reads -1.0e-3 there, and fails.
 //
 // HOW THE PRIMITIVE IS OBSERVED. §6.7.1: "Potential and flow access for named
 // and unnamed branches (including port branches) can be done hierarchically",
-// and "access of parameters can be done hierarchically". So `I(r1.p, r1.n)` is
-// the flow of the primitive's own p-n branch — the branch the behaviour column
-// describes — reached by an out-of-module reference, and `r1.r` is the parameter
-// the `.r(1k)` override landed on. Table E.1 is what gives those two names:
+// and "access of parameters can be done hierarchically". So `I(<r1.p>)`, §5.4.3's
+// port access on the hierarchical port r1.p (A.8.9 analog_port_reference), is
+// the flow into the primitive through its port p — the current the behaviour
+// column fixes, entering at p and leaving at n — and `r1.r` is the parameter
+// the `.r(1k)` override landed on.
+//
+// (Reconciler, 2026-10-08: an earlier revision read `I(r1.p, r1.n)`. §5.5.4
+// makes that a NEW unnamed branch in THIS module between the hierarchical nets,
+// a flow probe shorting the biased p/n pair, not r1's branch; its digit was the
+// harness's. `//! solve` frees the port-flow unknown so Kirchhoff sets it; p
+// and n stay biased, each driven by the testbench, so the point is a solution.) Table E.1 is what gives those two names:
 // E.1.2, "when instantiating SPICE primitives in Verilog-AMS HDL, the primitives
 // shall, and parameters and ports can, be named".
 //
@@ -36,10 +43,21 @@
 // `resistor #(.r(10k)) R1 (b1, gnd);`.
 //
 //! lrm E.3
+//! lrm E.3:1
 //! lrm E.2
+//! lrm E.2:1
 //! lrm E.2.2.3
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
 //! bias V(p) = 1.0, V(n) = 0.0
+//! solve
+//! checks 4
 `include "check.vh"
 module annex_e_spice_passive_primitives(p, n);
   inout p, n; electrical p, n;
@@ -49,9 +67,9 @@ module annex_e_spice_passive_primitives(p, n);
     `CHECKX("the r override reaches Table E.1's r parameter", r1.r, 1000.0);
     `CHECKX("tc1 is zero, so the linear temperature term vanishes", r1.tc1, 0.0);
     `CHECKX("tc2 is zero, so the quadratic term vanishes", r1.tc2, 0.0);
-    // V = I*r*(1 + 0*T + 0*T^2)  =>  I = 1.0/1000. 1e-15 relative is ~4 ulp,
-    // the freedom a tool has in evaluating the polynomial factor and in
-    // stamping a conductance rather than dividing.
-    `CHECKR("Table E.1: I = V/r = 1.0/1000, p to n", I(r1.p, r1.n), 1.0e-3, 1e-15);
+    // V = I*r*(1 + 0*T + 0*T^2)  =>  I = 1.0/1000. 1e-12 relative leaves a
+    // tool room to evaluate the polynomial factor, stamp a conductance rather
+    // than divide, and solve the port-flow row.
+    `CHECKR("Table E.1: I = V/r = 1.0/1000, into r1 at p", I(<r1.p>), 1.0e-3, 1e-12);
   end
 endmodule

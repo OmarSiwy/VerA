@@ -24,7 +24,7 @@
 // forbids — is a run fixture and this one is not.
 //
 //! lrm 10.6
-//! reject E0136
+//! reject-only E0136
 `end_keywords
 module ch10_end_keywords_unmatched(p, n);
   inout p, n;

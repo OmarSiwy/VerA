@@ -9,7 +9,7 @@
 // to differentiate with respect to a time that did not advance.
 //
 //! lrm 4.5.15
-//! reject E0422
+//! reject-only E0422
 module ch04_operator_in_always_rejected(p, n);
     inout p, n;
     electrical p, n;

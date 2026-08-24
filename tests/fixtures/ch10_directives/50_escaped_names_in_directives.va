@@ -25,6 +25,7 @@
 //
 //! lrm 10.4
 //! lrm 10.2
+//! lrm 10.2:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `define \M-X 1
 `ifdef \M-X

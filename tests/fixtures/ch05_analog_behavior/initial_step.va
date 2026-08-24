@@ -5,6 +5,7 @@
 // `initial_step` that never fired would leave 0.0 — the two are distinguishable.
 //
 //! lrm 5.10.2
+//! lrm 5.10.2:1000
 `include "check.vh"
 module ch5_initial_step(p);
   inout p; electrical p; real x;

@@ -13,6 +13,8 @@
 //   d in {1, 3, 5} -> ok=1 for all three.
 // The bufif1 carries three triples (rise, fall, turn-off), each unordered.
 // Line: "ok=1 ok=1 ok=1 ok=1".
+//! lrm A.2.2.3
+//! lrm A.2.2.3:1000
 //! inherited IEEE 1364-2005 7.14.1
 `timescale 1ns/1ns
 module b_7_14_1_unordered_delay_triples;

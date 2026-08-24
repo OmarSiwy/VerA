@@ -2,7 +2,9 @@
 // 7 is an integer constant, not a string. Isolate this violation so a check
 // for op or multiplicity alone cannot satisfy this fixture.
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:1
+//! lrm 2.9.2:2
+//! reject-only E0358
 module ch02_desc_attribute_numeric_rejected(p, n);
     inout p, n;
     electrical p, n;

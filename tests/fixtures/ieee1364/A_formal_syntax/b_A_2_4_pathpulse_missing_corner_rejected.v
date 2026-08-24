@@ -6,6 +6,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.2.4
 //! reject E0209
+//! neighbour b_A_2_4_pathpulse_mintypmax.v
 module b_A_2_4_pathpulse_missing_corner_rejected(input a, output y);
   assign y = a;
   specify

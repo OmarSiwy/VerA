@@ -6,6 +6,7 @@
 // Two aliases of x share its one storage; the card uses the first spelling.
 //! lrm 3.4.7
 //! lrm 9.18
+//! lrm 9.18:1000
 //! param placement_x = 4
 //! param placement_y = -2
 //! param rotation = 350

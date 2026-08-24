@@ -25,6 +25,7 @@
 // six calls. All integers, so every comparison is exact.
 //
 //! lrm 9.9
+//! lrm 9.9:1000
 //! analysis tran
 //! time 0, 10n
 //! print none

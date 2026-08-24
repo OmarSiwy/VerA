@@ -6,7 +6,8 @@
 // neighbour, the same attribute on a variable declaration, is in
 // vera_scratch_starts_each_evaluation.va.
 //! lrm 2.9
-//! reject E0535
+//! reject-only E0535
+//! neighbour vera_scratch_starts_each_evaluation.va
 module reject_vera_scratch_on_parameter(p, n);
   inout p, n; electrical p, n;
   (* vera_scratch *) parameter real g = 1m;

@@ -40,6 +40,7 @@
 // point) and not 0.0 (never fired).
 //
 //! lrm 5.10.3.2
+//! lrm 5.10.3.2:4
 //! analysis dc
 //! sweep V(p) = 0, 0.4, 0.6, 1.0
 //! print none

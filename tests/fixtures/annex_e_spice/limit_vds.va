@@ -47,6 +47,7 @@
 //
 //! lrm E.3.4
 //! lrm 9.17.3
+//! lrm 9.17.3:4
 //! bias V(p) = 0.4, V(mid) = 0.4
 `include "check.vh"
 module annex_e_vdslim(p);

@@ -18,6 +18,7 @@
 //
 //! lrm 8.5.3.1
 //! lrm 8.5.3.3 (the `#0` inactive-region sampling idiom used to read settled values)
+//! lrm 8.5.3.1:1000
 //! timescale 1ns/1ns
 //! inherited IEEE 1364-2005 6.1.2 11.6.1
 //

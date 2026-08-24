@@ -13,7 +13,8 @@
 // 18_system_whitespace_rejected.va is the neighbouring rule — the `$` may not
 // be SEPARATED from its name. This one is that the name may not be absent.
 //! lrm 2.8.3
-//! reject E0209
+//! lrm 2.8.3:1
+//! reject-only E0209
 module ch02_bare_dollar_rejected;
     real value;
     analog value = $ ;

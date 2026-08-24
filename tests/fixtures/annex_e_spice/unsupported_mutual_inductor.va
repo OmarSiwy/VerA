@@ -33,7 +33,8 @@
 // and is now retired.
 //
 //! lrm E.3.1
-//! reject E0904
+//! lrm E.3.1:1000
+//! reject-only E0904
 module annex_e_unsupported_mutual_inductor(p, n);
   inout p, n; electrical p, n;
   // l1 and l2 are the names of two INDUCTOR INSTANCES — E.3.1's "passing an

@@ -17,6 +17,7 @@
 //
 //! lrm 6.3
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param a = 4.0
 `include "check.vh"
 module ch6_param_chain(p);

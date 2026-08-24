@@ -5,7 +5,9 @@
 // target to jump to and the module is illegal.
 //
 //! lrm 5.11
-//! reject E0404
+//! reject-only E0404
+//! neighbour jump_break.va
+//! neighbour jump_continue.va
 module ch5_jump_outside_loop(p);
   inout p; electrical p;
   analog begin

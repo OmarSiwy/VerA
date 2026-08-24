@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 18.2.1
 //! reject E1100
 //! reject $dumpvars names a module instance or a variable
+//! neighbour d09_13_vcd_dumpvars_levels.v
 `timescale 1ns/1ns
 module b_18_2_1_part_select_rejected;
   reg a;

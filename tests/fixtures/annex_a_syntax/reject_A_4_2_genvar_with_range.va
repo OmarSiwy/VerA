@@ -10,7 +10,8 @@
 // VerA reports E0208 "expected an identifier: found `[`".
 //
 //! lrm A.4.2
-//! reject E0208
+//! lrm A.4.2:1000
+//! reject-only E0208
 `include "disciplines.vams"
 module annex_a_genvar_range(p, n);
   inout p, n;

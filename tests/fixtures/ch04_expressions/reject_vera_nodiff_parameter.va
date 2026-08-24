@@ -5,7 +5,7 @@
 // device computes, before any model card exists, so the value must fold
 // without one. E0525 names that.
 //! lrm 2.9
-//! reject E0525
+//! reject-only E0525
 module reject_vera_nodiff_parameter(p, n);
   inout p, n; electrical p, n;
   parameter integer stop = 1;

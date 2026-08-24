@@ -14,7 +14,7 @@
 //
 //! lrm 10.4
 //! lrm 10.1
-//! reject E0143
+//! reject-only E0143
 `define include 1
 `include "disciplines.vams"
 module ch10_directive_name_is_not_a_macro_name(p, n);

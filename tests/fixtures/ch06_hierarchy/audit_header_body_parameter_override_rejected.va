@@ -6,7 +6,7 @@
 // A header-only default test cannot observe this body/header distinction.
 //! lrm 3.4.5
 //! lrm 6.2
-//! reject E0907
+//! reject-only E0907
 module header_body_parameter_target #(parameter real header_value = 2.0) ();
   parameter real body_value = 2.0 * header_value;
   analog begin end

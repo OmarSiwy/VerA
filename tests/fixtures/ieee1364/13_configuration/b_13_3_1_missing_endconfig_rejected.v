@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 13.3.1
 //! reject E0207
 //! reject no `endconfig` closes the configuration
+//! neighbour b_13_3_1_every_rule_form.v
 module top;
   initial $display("top");
 endmodule

@@ -16,6 +16,7 @@
 // Fixtures 84–87 use HDL instance overrides to test set membership and rejection.
 //
 //! lrm 3.4.2
+//! lrm 3.4.2:3
 `include "check.vh"
 module ch03_string_parameter_range(p);
     inout p;

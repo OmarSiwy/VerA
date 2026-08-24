@@ -8,6 +8,7 @@
 // V(b) + I(b) = 0.875. Every value is a dyadic rational, hence exact.
 //
 //! lrm 5.4.2.2
+//! lrm 5.4.2.2:1000
 //! bias V(p) = 1.0, V(n) = 0.25
 //! sweep flowZ28pZ2cnZ29 = 0.125
 `include "check.vh"

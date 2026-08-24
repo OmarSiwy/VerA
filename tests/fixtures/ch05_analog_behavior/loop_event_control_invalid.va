@@ -8,7 +8,10 @@
 // same loops without an event, and must keep compiling.
 //
 //! lrm 5.9
-//! reject E0707
+//! lrm 5.9:1
+//! reject-only E0707
+//! neighbour repeat_loop.va
+//! neighbour while_loop.va
 module ch5_loop_event_control(p);
   inout p; electrical p; integer i; real x;
   analog begin

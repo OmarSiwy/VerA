@@ -4,9 +4,12 @@
 // A generate region is opened inside another. Legal neighbour:
 // b_12_4_generate_region_optional.v (one region, in g2b1).
 // digital-runner: reject
+//! lrm 6.6
+//! lrm 6.6:7
 //! inherited IEEE 1364-2005 12.4
 //! reject E0228
 //! reject a generate region inside another generate region
+//! neighbour b_12_4_generate_region_optional.v
 module b_12_4_nested_generate_region_rejected;
   generate
     generate

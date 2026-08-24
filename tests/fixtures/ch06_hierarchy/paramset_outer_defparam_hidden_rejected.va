@@ -3,6 +3,8 @@
 // boundary: secret belongs only to the underlying module, so no member admits
 // this binding. The precedence fixture exposes and overrides w legally.
 //! lrm 6.4
+//! lrm 6.4.2
+//! lrm 6.4.2:3
 //! reject E0911
 module ps_outer_hidden_top(p);
   inout p; electrical p;

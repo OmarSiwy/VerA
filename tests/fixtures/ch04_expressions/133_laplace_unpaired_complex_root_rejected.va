@@ -20,7 +20,9 @@
 // which a bare "conjugate" would.
 //
 //! lrm 4.5.11.1
-//! reject no conjugate partner
+//! lrm 4.5.11.1:2
+//! reject-only no conjugate partner
+//! neighbour 23_laplace_filters.va
 module ch04_laplace_unpaired_complex_root_rejected(p, n);
     inout p, n;
     electrical p, n;

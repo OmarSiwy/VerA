@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.9.2
 //! reject E0240
 //! reject not a module item: found tail
+//! neighbour b_A_9_2_comments.v
 module b_A_9_2_nested_block_comment_rejected;
   /* outer /* inner */ tail */
   initial $display("unreachable");

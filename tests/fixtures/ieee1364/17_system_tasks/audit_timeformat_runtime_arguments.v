@@ -4,6 +4,7 @@
 // Changing variable precision alone cannot change the installed setting;
 // reinvoking with precision2 then gives2.00ns.
 //! lrm 9.6
+//! lrm 9.6:1000
 //! inherited IEEE 1364-2005 17.3.2
 //! expect stdout audit_timeformat_runtime_arguments.expected.txt
 `timescale 1ns/1ps

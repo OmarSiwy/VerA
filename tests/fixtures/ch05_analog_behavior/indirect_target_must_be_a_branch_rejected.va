@@ -10,7 +10,8 @@
 // indirect_contribution.va.
 //
 //! lrm 5.6.7
-//! reject E0413
+//! reject-only E0413
+//! neighbour indirect_contribution.va
 `include "disciplines.vams"
 module ch5_indirect_target_must_be_a_branch(p, n);
   inout p, n; electrical p, n;

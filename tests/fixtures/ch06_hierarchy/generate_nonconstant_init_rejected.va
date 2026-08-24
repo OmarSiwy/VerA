@@ -23,7 +23,8 @@
 // and never evaluated the loop scheme the directive below pins.
 //! lrm 6.6.1
 //! lrm 6.6
-//! reject E0417
+//! lrm 6.6:2
+//! reject-only E0417
 module ch6_generate_nonconstant_init(p);
   inout p; electrical p;
   integer rv;

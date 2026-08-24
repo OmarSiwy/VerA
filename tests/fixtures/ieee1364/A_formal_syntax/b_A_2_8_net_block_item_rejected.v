@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.2.8
 //! reject E0209
 //! reject found `wire`
+//! neighbour b_A_2_8_block_item_declarations.v
 module b_A_2_8_net_block_item_rejected;
   task run ();
     wire w;

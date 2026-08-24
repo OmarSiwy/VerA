@@ -25,6 +25,7 @@
 // moves nothing in the solve; it exists to put ddx() in `eval`.
 //
 //! lrm 4.5.6
+//! lrm 4.5.6:1
 //! bias V(p) = 1.0
 //! solve
 `include "check.vh"

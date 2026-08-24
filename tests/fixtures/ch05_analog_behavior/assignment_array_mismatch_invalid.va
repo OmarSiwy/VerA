@@ -26,7 +26,10 @@
 // the clause's own verdict and now carries it, so the pin is the code.
 //
 //! lrm 5.7
-//! reject E0429
+//! lrm 5.7:6
+//! lrm 5.7:7
+//! lrm 5.7:8
+//! reject-only E0429
 module ch5_assignment_array_mismatch(p);
   inout p; electrical p;
   integer A[10:1];             // 10 elements

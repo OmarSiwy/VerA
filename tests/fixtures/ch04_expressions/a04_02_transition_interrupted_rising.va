@@ -59,6 +59,11 @@
 // every other point is shared, so a failure here is unambiguous.
 //
 //! lrm 4.5.8
+//! lrm 4.5.8:3
+//! lrm 4.5.8:5
+//! lrm 4.5.8:6
+//! lrm 4.5.8:11
+//! lrm 4.5.8:4
 //! bias V(n) = 0
 //! wave V(p) = 0, 4, 4, 4, 0
 //! time 0, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n

@@ -2,7 +2,8 @@
 // must match. This supplies one expression for two formals; no empty argument
 // interpretation is involved. audit_macro_empty_and_spacing.va supplies two.
 //! lrm 10.4
-//! reject E0117
+//! reject-only E0117
+//! neighbour audit_macro_empty_and_spacing.va
 `define AUDIT_ADD(A,B) ((A)+(B))
 module audit_macro_too_few_actuals_rejected;
   parameter real value = `AUDIT_ADD(1.0);

@@ -118,6 +118,68 @@ pub fn build(b: *std.Build) void {
     const all_run: *std.Build.Step.Run = @fieldParentPtr("step", testRun(b, "test_all", all_mod, runner));
     all_run.has_side_effects = true;
     test_step.dependOn(&all_run.step);
+    // tests/fuzz.zig again, on the stock runner: `zig build fuzz --fuzz[=N]` is
+    // the coverage-guided run (zrunner replays the corpus and seeded inputs
+    // under `test`, but cannot drive the fuzzer).
+    const fuzz_test = b.addTest(.{ .name = "fuzz", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "vera", .module = byName(mods, "vera") }},
+    }) });
+    b.step("fuzz", "The in-process fuzz targets on the stock runner (`zig build fuzz --fuzz[=N]`: coverage-guided)")
+        .dependOn(&b.addRunArtifact(fuzz_test).step);
+    b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);
+
+    // docs/TESTING.md L3's references that need the C library: the IEEE 1364
+    // §17.9.3 listing compiled as C against `rng_kernels`, and `snprintf`
+    // against `str_kernels.zCReal`. Neither shares code with what it judges.
+    const kernels = byName(mods, "kernels");
+    const rng_ref = b.createModule(.{
+        .root_source_file = b.path("tests/rng_reference.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "kernels", .module = kernels }},
+    });
+    rng_ref.addCSourceFile(.{ .file = b.path("tests/rng_reference.c"), .flags = &.{"-ffp-contract=off"} });
+    const rng_run = testRun(b, "rng_reference", rng_ref, runner);
+    const rng_step = b.step("test-rng-reference", "Compare rng_kernels with the IEEE 1364 §17.9.3 C listing, and run its domain refusals");
+    rng_step.dependOn(rng_run);
+    test_step.dependOn(rng_run);
+    // A domain refusal panics, so each is a process of its own.
+    const rng_domains = b.addExecutable(.{ .name = "rng-domains", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/rng_domains.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "kernels", .module = kernels }},
+    }) });
+    for (0..46) |case| {
+        const r = b.addRunArtifact(rng_domains);
+        r.addArg(b.fmt("{d}", .{case}));
+        // §9.13.2 "an error shall be reported": the kernel names the rule
+        // and ends the run with status 1 (`rng_kernels.zRngDomain`).
+        r.expectExitCode(1);
+        r.expectStdErrMatch(switch (case / 2) {
+            6, 7, 9, 10, 12, 13, 21 => "error[E0816]: LRM 9.13.2: fractional or out-of-range",
+            17, 18, 19, 22 => "error[E0816]: LRM 9.13.2: random uniform start shall be smaller than end",
+            else => "error[E0816]: LRM 9.13.2: random distribution mean/df/stages shall be greater than zero",
+        });
+        rng_step.dependOn(&r.step);
+        test_step.dependOn(&r.step);
+    }
+    // ReleaseSafe whatever -Doptimize says: zCReal expands every double
+    // exactly, and 10^5 of them take minutes in Debug.
+    const printf_ref = b.createModule(.{
+        .root_source_file = b.path("tests/printf_reference.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{.{ .name = "kernels", .module = kernels }},
+    });
+    const printf_run = testRun(b, "printf_reference", printf_ref, runner);
+    b.step("test-printf-reference", "Compare str_kernels.zCReal's %e/%f/%g with the C library's snprintf").dependOn(printf_run);
+    test_step.dependOn(printf_run);
 
     // The suite runner's options are only the absolute paths it cannot compute
     // itself; defaults (the foreign compiler's command line, the fixture
@@ -150,7 +212,11 @@ pub fn build(b: *std.Build) void {
     // lint, verdict tally, emitted-size table) do go on `test`.
     const suite_exe = b.addExecutable(.{ .name = "vera-suite", .root_module = suite_mod });
     all_step.dependOn(&suite_exe.step);
-    test_step.dependOn(testRun(b, "suite", suite_mod, runner));
+    const suite_run = testRun(b, "suite", suite_mod, runner);
+    test_step.dependOn(suite_run);
+    b.step("test-suite", "Run the suite runner's own unit tests only").dependOn(suite_run);
+    // Compiles the runner itself: `test` does not analyse every path of it.
+    b.step("suite-exe", "Build the suite runner (tests/bench.zig)").dependOn(&suite_exe.step);
 
     // The suite step: the runner takes the `vera` path, then whatever follows
     // `--`.
@@ -228,6 +294,17 @@ pub fn build(b: *std.Build) void {
     golden.addPassthruArgs();
     b.step("golden", "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)")
         .dependOn(&golden.step);
+
+    // The judge judged: `tests/canary/` holds fixtures wrong on purpose, and
+    // each must get the verdict `tests/canary/EXPECT.tsv` names. On `test`,
+    // because a harness that stopped saying FAIL would pass everything else.
+    const canary = b.addRunArtifact(suite_exe);
+    canary.addArtifactArg2(exe, .{});
+    canary.addArg("canary");
+    canary.expectExitCode(0);
+    canary.has_side_effects = true; // reads tests/canary/ at run time, invisible to the graph
+    b.step("test-canary", "Check the harness FAILs every wrong-on-purpose fixture in tests/canary/").dependOn(&canary.step);
+    test_step.dependOn(&canary.step);
 
     // docs/UNITS.md and the architecture map in AGENTS.md, read from the code.
     const map = b.addRunArtifact(suite_exe);
@@ -1043,7 +1120,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_27_values.c",
         .design = "tests/fixtures/ieee_pli/b_27_values.v",
-        .stdout = "xfail 27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000\np02: b_27_values checks=140\n",
+        .stdout = "p02: b_27_values checks=140\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
@@ -1074,7 +1151,109 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 85 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=359\n",
+        .stdout = "xfail G: 78 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=366\n",
+    },
+    // VAMS-2023 ch12 ledger rows (tests/fixtures/OBLIGATIONS.tsv). Each `.xfail`
+    // is a requirement VerA does not meet yet; its fixture's header says why.
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_path_delays.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
+        .stdout = "p02: b7_path_delays checks=60\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_buffers.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "p02: b7_buffers checks=37\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_cb_fields.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "p02: b7_cb_fields checks=30\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_time_scaling.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_scales.v",
+        .stdout = "p02: b7_time_scaling checks=25\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_pulse_limits.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
+        .stdout = "p02: b7_pulse_limits checks=25\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_pulse_retain.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
+        .stdout = "p02: b7_pulse_retain checks=14\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_intermod_path.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
+        .xfail = "12.22: vpi_handle_multi(vpiInterModPath, output port u1.y, input port u2.a) returned no inter-module path",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_tchk_violation.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
+        .xfail = "12.31.4: registering the action callback cbTchkViolation was refused",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_objtype_time.c",
+        .design = "tests/fixtures/ieee_pli/b_27_values.v",
+        .stdout = "p02: b7_objtype_time checks=18\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_seq_udp.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_udp.v",
+        .stdout = "p02: b7_seq_udp checks=11\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_force_cb.c",
+        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
+        .stdout = "p02: b7_force_cb checks=10\np04_behaviour: d=12\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_assign_cb.c",
+        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
+        .stdout = "p02: b7_assign_cb checks=19\np04_behaviour: d=12\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_printf_log.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "b7-printf-log: marker\np02: b7_printf_log checks=5\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_stop.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "p02: b7_sim_control_stop checks=6\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_reset.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .xfail = "12.36: vpi_sim_control(vpiReset, 0, 0, 1) failed",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_scope.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
+        .stdout = "p02: b7_sim_control_scope checks=8\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_analog_time.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "b7-analog-time: t=0.0025\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_fail_converge.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "b7-fail-converge: retested=1 t_final=0.005\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_functype.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_functype.va",
+        .stdout = "b7-functype: a=1 b=1.25\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/b7_calltf_sites.c",
+        .design = "tests/fixtures/ch12_vpi_routines/b7_two_sites.va",
+        .stdout = "b7-calltf-sites: sites=2 v=2\n",
     },
 };
 

@@ -5,8 +5,8 @@
 //! `lib/` a dependency of `src/`, never the reverse.
 //!
 //! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
-//! check, lower, `pruneHeld`, if-conversion, prove, then the §9.4 drop
-//! warnings. Codegen runs later and lazily, from `CompileResult.generateOutput`.
+//! check, lower, `pruneHeld`, if-conversion (each followed by the MIR
+//! verifier under runtime safety), prove, then the §9.4 drop warnings. Codegen runs later and lazily, from `CompileResult.generateOutput`.
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
 
@@ -50,6 +50,7 @@ const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
+const verify = @import("ir").verify;
 const naming = @import("backend").naming;
 const cg_display = @import("backend").cg_display;
 const cg_filters = @import("backend").cg_filters;
@@ -134,6 +135,11 @@ pub const Options = struct {
     /// Also emits `vpiContribs`, the §5.6 contribution rows a Clause 12
     /// analog host reads. See `codegen.Options.vpi_contribs`.
     vpi_contribs: bool = false,
+    /// §12.32.1 the user analog system functions registered with sysfunctype
+    /// vpiIntFunc: a call to one returns an integer. A VPI host that ran its
+    /// startup routines before building the device passes them; with none,
+    /// every unresolved `$name` returns a real.
+    int_systfs: []const []const u8 = &.{},
 };
 
 // ---------------------------------------------------------------------------
@@ -351,6 +357,7 @@ fn compileInArena(
         .param_overrides = opts.param_overrides, // §3.4 `--param`
         .displays_dropped = opts.display == .drop, // §3.2 retention, see `Exposed`
         .discipline_resolution = opts.discipline_resolution,
+        .int_systfs = opts.int_systfs, // §12.32.1 vpiIntFunc
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.NoModule => {
@@ -360,15 +367,21 @@ fn compileInArena(
         error.DiagnosticsReported => return error.CompileFailed,
     };
 
+    // The MIR's postcondition after each stage that writes it (Debug and
+    // ReleaseSafe only). The proof and codegen take it `*const`.
+    try verify.check(mir, lowered, "lowering");
+
     // §3.2: drop the held slots no card can observe. Runs before ifconv,
     // whose selects would hide the merges it reads. See `codegen.pruneHeld`.
     try codegen.pruneHeld(arena, mir, lowered);
+    try verify.check(mir, lowered, "pruneHeld");
 
     // If-convert pure diamonds to §4.2.12 selects before the proof: a
     // select's guard facts come from markSelectArms, so the proof sees the
     // evidence the CFG edge carried and codegen can emit proven-total
     // conditionals as `S.sel`. Arena, because ifconv appends to MIR tables.
     _ = try ifconv.run(arena, mir);
+    try verify.check(mir, lowered, "ifconv");
 
     // The proof gates every target and is the source of the W0650 finiteness
     // warning, which is why `.lint` runs it too.

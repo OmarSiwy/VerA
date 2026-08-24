@@ -32,6 +32,8 @@
 //
 //! lrm G.2.4
 //! lrm 4.7.1
+//! lrm 4.7.1:1
+//! lrm 4.7.1:2
 //! bias V(p) = 0.375, V(n) = 0.0
 `include "check.vh"
 module annex_g_analog_function_keyword(p, n);

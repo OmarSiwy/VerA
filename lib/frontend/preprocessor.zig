@@ -94,6 +94,11 @@ pub const max_include_depth = 32;
 /// Deepest nesting of live macro expansions, argument pre-expansion
 /// included; one more is E0119, not a panic.
 pub const max_expansion_depth = 128;
+/// Total bytes of macro bodies substituted over one compilation; one more is
+/// E0150, not an out-of-memory. Depth alone does not bound a macro that
+/// doubles its argument at each of 40 levels (2^40 tokens,
+/// tests/fixtures/ADVERSARIAL.tsv).
+pub const max_expanded_bytes = 64 << 20;
 /// Largest `include file read, in bytes.
 pub const max_include_bytes = 1 << 24;
 
@@ -535,6 +540,8 @@ pub const Pp = struct {
     /// and not `expanding.items.len`, because pre-expansion runs before the
     /// name is pushed and `` `M(`M(`M(... `` would otherwise recurse unbounded.
     expand_depth: u32 = 0,
+    /// Bytes of substituted macro bodies so far; E0150 bounds it.
+    expanded_bytes: usize = 0,
     /// `include stack, innermost last: `includes[0..n_includes]`, whose
     /// length is the include depth. E0125 refuses one past the array.
     includes: [max_include_depth][]const u8 = undefined,

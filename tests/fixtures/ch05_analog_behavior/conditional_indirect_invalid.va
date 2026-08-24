@@ -10,7 +10,10 @@
 // legal form.
 //
 //! lrm 5.6.7
-//! reject E0412
+//! lrm 5.6.7:2
+//! reject-only E0412
+//! neighbour indirect_contribution.va
+//! neighbour multiple_indirect.va
 module ch5_conditional_indirect(p, c);
   inout p, c; electrical p, c;
   analog begin

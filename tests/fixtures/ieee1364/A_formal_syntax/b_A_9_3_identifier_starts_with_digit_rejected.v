@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.9.3
 //! reject E0208
 //! reject expected an identifier: found 9
+//! neighbour audit_grammar_escaped_system_name.v
 module b_A_9_3_identifier_starts_with_digit_rejected;
   reg 9r;
   initial $display("unreachable");

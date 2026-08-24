@@ -12,7 +12,9 @@
 //
 //! lrm 3.6.2.2
 //! lrm A.1.7
-//! reject E0212
+//! lrm A.1.7:1000
+//! reject-only E0212
+//! neighbour 11_discipline_declarations.va
 `include "disciplines.vams"
 discipline ch3_domain_analog
   potential Voltage;

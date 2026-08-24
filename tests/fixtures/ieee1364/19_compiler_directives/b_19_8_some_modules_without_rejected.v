@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 19.8
 //! reject E1100
 //! reject it shall be an error if some modules have a `timescale specified and others do not
+//! neighbour b_19_8_units_and_precision.v
 module b_19_8_untimed;
   initial $display("untimed");
 endmodule

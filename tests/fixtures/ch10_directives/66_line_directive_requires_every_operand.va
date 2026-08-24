@@ -15,7 +15,7 @@
 // E0128 is VerA's "malformed `line directive".
 //
 //! lrm 10.7
-//! reject E0128
+//! reject-only E0128
 `include "disciplines.vams"
 `line 10 "virtual.va"
 module ch10_line_directive_requires_every_operand(p, n);

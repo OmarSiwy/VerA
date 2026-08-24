@@ -25,6 +25,7 @@
 // points and the oracle is the sweep variable's own last value.
 //
 //! lrm 5.10.2
+//! lrm 5.10.2:1000
 //! analysis dc
 //! sweep V(s) = 0.0, 1.0, 2.0
 `include "check.vh"

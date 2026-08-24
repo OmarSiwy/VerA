@@ -48,8 +48,14 @@
 // claim and drops the numerics, so this fixture cannot be tuned into passing.
 //
 //! lrm 7.9
+//! lrm 7.9:3
+//! lrm 7.9:4
 //! lrm 9.22.6
+//! lrm 9.22.6:1
+//! lrm 9.22.6:2
 //! lrm 9.22.3
+//! lrm 7.9:2
+//! lrm 9.22.3:1000
 //! analysis tran
 //! time 0, 50n
 //! checks 3

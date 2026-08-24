@@ -167,10 +167,28 @@ pub fn packedShapeWidth(self: *Lower, range: Ast.Dim) ?u32 {
 /// A `.concat` is accepted alongside `.assign_pattern` because the parser folds
 /// `{a,b}` to the same node shape and §3.4.4's diagnostic (E0349) already
 /// covers the spelling.
-pub fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]const Ast.ExprId {
+///
+/// `holes_ok` is §3.6.3.2's bus nodeset alone: "a null value in the constant
+/// array indicates that no nodeset value is being specified for this element".
+/// Everywhere else A.8.1's assignment_pattern has no empty element, and one is
+/// E0894 rather than a silent zero.
+pub fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, holes_ok: bool) Oom![]const Ast.ExprId {
+    if (!holes_ok) try refuseHoles(self, e);
     const out = try self.arena.alloc(Ast.ExprId, shapeCells(dims));
     try fillPattern(self, e, dims, out);
     return out;
+}
+
+fn refuseHoles(self: *Lower, e: Ast.ExprId) Oom!void {
+    const ex = &self.file.exprs;
+    if (e == .none or ex.tag(e) != .assign_pattern) return;
+    for (ex.args(e)) |el| {
+        if (el == .none) {
+            try self.err(ex.mainTok(e), .E0894, "an element of this assignment pattern is empty (A.8.1)", .{});
+            return;
+        }
+        try refuseHoles(self, el);
+    }
 }
 
 fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {

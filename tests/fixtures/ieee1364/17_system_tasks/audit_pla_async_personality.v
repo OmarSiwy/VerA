@@ -4,6 +4,7 @@
 // This checks reevaluation by the later observation, not same-step timing or
 // exact scheduler-region order.
 //! lrm 9.8
+//! lrm 9.8:1000
 //! inherited IEEE 1364-2005 17.5.1,17.5.3
 //! expect stdout audit_pla_async_personality.expected.txt
 module audit_pla_async_personality;

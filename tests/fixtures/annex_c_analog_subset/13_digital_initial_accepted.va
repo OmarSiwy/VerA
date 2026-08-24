@@ -31,6 +31,7 @@
 //! lrm C.7
 //! lrm A.6.2
 //! lrm 7.2.2
+//! lrm A.6.2:1000
 //! bias V(p) = 0.25
 `include "check.vh"
 module annex_c_digital_initial_accepted(p);

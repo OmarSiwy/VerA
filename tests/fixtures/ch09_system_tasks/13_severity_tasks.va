@@ -23,6 +23,7 @@
 // harness that can observe a terminated run, which this suite does not have.
 //
 //! lrm 9.7.3
+//! lrm 9.7.3:4
 //! bias V(p) = 3.0, V(n) = 0.5
 `include "check.vh"
 module ch09_severity_tasks(p, n);

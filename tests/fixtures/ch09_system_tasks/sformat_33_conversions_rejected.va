@@ -4,7 +4,8 @@
 // as an error in the generated Zig (sformat_32_conversions.va is the widest call
 // that runs).
 //
-//! reject E1010
+//! reject-only E1010
+//! neighbour sformat_32_conversions.va
 module sformat_33_conversions_rejected(p, n);
   inout p, n; electrical p, n;
   string s;

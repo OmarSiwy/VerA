@@ -32,9 +32,14 @@
 //
 //! lrm E.3
 //! lrm E.1.2
+//! lrm E.1.2:2
 //! lrm E.2.2.3
 //! lrm 6.5.5
 //! lrm 6.7.1
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm 6.5.5:1
+//! lrm 6.7.1:1
 //! bias V(hi) = 1.0, V(lo) = 0.25
 `include "check.vh"
 module annex_e_spice_source_primitives(hi, lo);

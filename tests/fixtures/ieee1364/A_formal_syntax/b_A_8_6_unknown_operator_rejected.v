@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.8.6
 //! reject E0209
 //! reject expected an expression: found `>`
+//! neighbour b_A_8_6_operators.v
 module b_A_8_6_unknown_operator_rejected;
   reg [3:0] a, b;
   initial begin

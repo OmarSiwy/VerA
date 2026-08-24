@@ -18,6 +18,7 @@
 //! lrm H
 //! lrm 3.6
 //! lrm 4.4
+//! lrm 3.6:1000
 //! bias V(terminal_p) = 0.5, V(terminal_n) = 0.125, V(internal_node) = 0.3125
 `include "check.vh"
 module glossary_node_port_terminal(terminal_p, terminal_n);

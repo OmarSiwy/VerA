@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 17.2.4.3
 //! reject E1100
 //! reject there is no procedural assignment to a net
+//! neighbour b_17_2_4_3_sscanf_conversions.v
 module b_17_2_4_3_sscanf_to_net_rejected;
   wire [7:0] w;
   integer code;

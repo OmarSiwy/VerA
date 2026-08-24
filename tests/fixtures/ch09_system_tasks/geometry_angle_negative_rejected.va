@@ -4,7 +4,10 @@
 // and geometry_defparam_alias.va exercises legal defparam angle composition.
 //! lrm 6.3.6
 //! lrm 9.18
-//! reject E0890
+//! lrm 9.18:1000
+//! reject-only E0890
+//! neighbour geometry_defparam_alias.va
+//! neighbour geometry_parameter_sweep.va
 module geometry_negative_angle_top;
   geometry_negative_angle_child child();
   defparam child.$angle = -0.5;

@@ -21,7 +21,7 @@
 //
 //! lrm 10.4
 //! lrm 2.4
-//! reject E0209
+//! reject-only E0209
 `include "disciplines.vams"
 `define S /
 `define ST *

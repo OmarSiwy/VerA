@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 18.1.4
 //! reject E1100
 //! reject $dumpoff, $dumpon, $dumpall and $dumpflush take no arguments
+//! neighbour b_18_2_4_example_value_changes.v
 `timescale 1ns/1ns
 module b_18_1_4_dumpall_argument_rejected;
   reg a;

@@ -11,6 +11,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.7.5.3
 //! reject E0207
+//! neighbour b_A_7_5_system_timing_checks.v
 module b_A_7_5_3_edge_descriptor_11_rejected (clk, d, y);
   input clk, d;
   output y;

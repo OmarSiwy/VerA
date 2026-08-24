@@ -21,6 +21,7 @@
 // record.
 //
 //! lrm 9.7.1
+//! lrm 9.7.1:2
 //! sweep V(p) = 1.0, 2.0
 `include "check.vh"
 module ch09_finish_terminates(p, n);

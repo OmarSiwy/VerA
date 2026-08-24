@@ -673,7 +673,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
             // scalarized element is an SSA value whose zero costs nothing,
             // and a zero is one of the values an unwritten read may see.
             self.out.mem_arrays.items[self.arrays.get(name).?.mem.?.id].uninit = scratch == .uninit;
-            const elems = try lower_shape.flattenPattern(self, decl.init, dims);
+            const elems = try lower_shape.flattenPattern(self, decl.init, dims, false);
             if (hold) {
                 // §5.10 the initializer is the `Instance` field's default and
                 // nothing else, exactly as for a held scalar: every evaluation
@@ -700,7 +700,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         // the declaration takes an initializer like a §3.4.4 array parameter.
         // The pattern is positional from the left bound, following the declared
         // direction, one list per dimension (§3.3, §3.4.8).
-        const elems = try lower_shape.flattenPattern(self, decl.init, dims);
+        const elems = try lower_shape.flattenPattern(self, decl.init, dims, false);
         var sub: [lower_shape.max_stack_dims]i64 = undefined;
         const idx = try lower_shape.subscriptBuf(self, &sub, dims.len);
         for (elems, 0..) |elem, k| {

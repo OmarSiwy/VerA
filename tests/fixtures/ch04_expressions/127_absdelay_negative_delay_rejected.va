@@ -14,9 +14,11 @@
 // LRM's own word for the bound is required alongside it.
 //
 //! lrm 4.5.7
-//! reject td
+//! lrm 4.5.7:1
+//! reject-only td
 //! reject positive
 //! reject E0516
+//! neighbour 19_absdelay.va
 module ch04_absdelay_negative_delay_rejected(p, n);
     inout p, n;
     electrical p, n;

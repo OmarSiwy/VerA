@@ -95,6 +95,9 @@ pub const Parser = struct {
     /// its body. §6.6.2's direct nesting applies to conditional constructs only,
     /// so a loop body is a scope even when it is one bare `if`.
     gen_loop_body: bool = false,
+    /// Set while a §6.4 paramset statement is parsed: §6.4.3's
+    /// `.module_output_variable_identifier` is then a primary (`parsePrimary`).
+    in_paramset: bool = false,
     /// Every §2.9 `attr_spec` of the module being parsed, flattened. Moved into
     /// the `ModuleDecl` at `endmodule` and cleared; see `parseAttributes`.
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,

@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 19.11
 //! reject E0202
 //! reject directive is only legal outside a design element
+//! neighbour b_19_11_keyword_versions.v
 module b_19_11_inside_module_rejected;
 `begin_keywords "1364-2001"
   initial $display("accepted");

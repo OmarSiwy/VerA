@@ -21,7 +21,7 @@
 //
 //! lrm 9.5.4
 //! lrm 9.5.4.2
-//! reject E0888
+//! reject-only E0888
 //! reject `$fscanf`'s descriptor argument is a real
 `include "disciplines.vams"
 module ch09_fscanf_real_descriptor(p, n);

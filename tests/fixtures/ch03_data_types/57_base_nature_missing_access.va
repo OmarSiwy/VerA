@@ -14,7 +14,8 @@
 //
 //! lrm 3.6.1.2
 //! lrm 3.6.1
-//! reject E0332
+//! lrm 3.6.1:2
+//! reject-only E0332
 nature ch3_no_access; units="V"; abstol=1u; endnature
 discipline ch3_no_access_disc; potential ch3_no_access; enddiscipline
 module ch3_missing_access(p); output p; ch3_no_access_disc p; analog begin end endmodule

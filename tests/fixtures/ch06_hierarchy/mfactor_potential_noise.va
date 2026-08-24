@@ -16,6 +16,7 @@
 //
 //! lrm 9.18
 //! lrm 4.6.4
+//! lrm 9.18:1000
 `include "check.vh"
 module ch6_mfactor_potential_noise(p, n);
   inout p, n; electrical p, n;

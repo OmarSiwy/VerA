@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 13.2.1.1
 //! reject E0244
 //! reject libraries `lib1` and `lib4`
+//! neighbour b_13_2_1_1_resolution_order.v
 module top;
   foover u();
 endmodule

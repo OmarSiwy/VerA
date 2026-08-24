@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 8.1.6
 //! reject E0233
 //! reject `-` is not a UDP output symbol
+//! neighbour b_8_1_6_table_symbols.v
 primitive comb_dash(q, a);
   output q;
   input a;

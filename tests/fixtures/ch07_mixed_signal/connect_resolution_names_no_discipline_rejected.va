@@ -12,7 +12,9 @@
 // is resolution_connect_accepted.va.
 //
 //! lrm 7.7.2
-//! reject E0916
+//! lrm 7.7.2:1000
+//! reject-only E0916
+//! neighbour resolution_connect_accepted.va
 `include "disciplines.vams"
 module ch7_resolution_host(p);
   inout p; electrical p;

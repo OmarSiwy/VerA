@@ -11,5 +11,6 @@
 //! inherited IEEE 1364-2005 13.2.1
 //! reject E0244
 //! reject needs a file_path_spec
+//! neighbour b_13_5_1_default_search_order.v
 module top;
 endmodule

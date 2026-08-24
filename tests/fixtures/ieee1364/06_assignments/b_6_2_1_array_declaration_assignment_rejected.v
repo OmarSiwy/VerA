@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 6.2.1
 //! reject E1100
 //! reject an unpacked array declaration takes no initializer
+//! neighbour b_6_2_1_examples.v
 module b_6_2_1_array_declaration_assignment_rejected;
   reg [3:0] array [3:0] = 0;
   initial #1 $display("%b", array[0]);

@@ -16,6 +16,7 @@
 // audit_nodeset_unclamped_solution.va owns the independent solved-node claim.
 //
 //! lrm 3.6.3.2
+//! lrm 3.6.3.2:1
 //! bias V(p) = 3.0, V(node) = 2.0, V(n) = 0.0
 `include "check.vh"
 module ch03_net_nodeset(p, n);

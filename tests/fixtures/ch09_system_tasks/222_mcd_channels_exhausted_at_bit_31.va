@@ -32,6 +32,7 @@
 // multichannel descriptor mcd".
 //
 //! lrm 9.5.1
+//! lrm 9.5.1:1
 //! lrm 9.5.7
 `include "check.vh"
 module ch09_mcd_channels_exhausted_at_bit_31(p, n);

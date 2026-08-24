@@ -16,7 +16,10 @@
 // VerA refuses it with E0517, the §5.10.3 event-argument code.
 //
 //! lrm 5.10.3.1
-//! reject E0517
+//! lrm 5.10.3.1:2
+//! reject-only E0517
+//! neighbour event_cross.va
+//! neighbour event_cross_falling.va
 module ch5_cross_tolerance_negative(p);
   inout p; electrical p; real x;
   analog begin

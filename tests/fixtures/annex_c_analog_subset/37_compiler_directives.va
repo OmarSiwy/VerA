@@ -25,6 +25,9 @@
 //! lrm C.12
 //! lrm 10.4
 //! lrm 10.5
+//! lrm 10.5:1
+//! lrm 10.1
+//! lrm 10.1:1000
 //! bias V(p) = 0.75, V(n) = 0.0
 `include "check.vh"
 `define TWICE(x) ((x) + (x))

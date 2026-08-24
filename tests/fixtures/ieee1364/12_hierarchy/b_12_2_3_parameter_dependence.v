@@ -12,6 +12,10 @@
 //   d2 #(.memory_size(5))        -> 32, 5 (word_size no longer matters)
 //   d3 with defparam word_size=3 -> 3,  12288
 //   d4 #(4) (ordered, first)     -> 4,  16384
+//! lrm 6.3.2
+//! lrm 6.3.2:2
+//! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! inherited IEEE 1364-2005 12.2.3
 module mem_params;
   parameter

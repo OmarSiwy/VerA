@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 4.4.2 4.4
 //! reject E0207
 //! reject drive strength
+//! neighbour b_4_4_2_net_declaration_drive_strength.v
 module b_4_4_2_drive_strength_without_assignment_rejected;
   wire (strong1, strong0) w;
   initial $display("%b", w);

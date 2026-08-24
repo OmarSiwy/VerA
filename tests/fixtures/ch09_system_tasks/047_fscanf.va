@@ -17,6 +17,18 @@
 // and assigned, so code is 1 and value is 42. Those two digits separate a real
 // $fscanf from a constant, and `code <= 0` on its own cannot.
 //
+// WHEN THE FILE IS WRITTEN, AND WHEN IT IS READ. §9.5.9: "If a file is being
+// written to during an iterative solve, then the file write operations shall
+// not be performed unless the iteration is accepted." So "42\n" is written by
+// `@(initial_step)` inside the t = 0 solve and reaches the file only when that
+// point is accepted; the read happens at t = 1e-3, the next point, where the
+// file holds exactly "42\n" whichever way a tool orders the "w" open's
+// truncation against acceptance. The missing-file half is asserted at both
+// points (2 + 2), the read-back half at t = 1e-3 only (2): six checks.
+// (Reconciler, 2026-10-08: an earlier revision wrote, closed, reopened and
+// scanned in ONE evaluation and asserted 1/42 there. That read cannot see a
+// write §9.5.9 holds back until the iteration it is in is accepted.)
+//
 // The filenames are unique to this fixture on purpose: nine §9.5 fixtures used
 // to share "fixture.dat" and one of them created it, which silently retired the
 // missing-file rule from the second run onward.
@@ -24,6 +36,9 @@
 //! lrm 9.5.1
 //! lrm 9.5.4.2
 //! lrm 9.5.4
+//! lrm 9.5.9
+//! time 0, 1e-3
+//! checks 6
 `include "check.vh"
 module ch09_atomic_fscanf(p, n);
   inout p, n; electrical p, n;
@@ -31,16 +46,20 @@ module ch09_atomic_fscanf(p, n);
   analog begin
     fd = $fopen("ch09_047_missing.dat", "r");
     code = $fscanf(fd, "%d", value);
-    good_fd = $fopen("ch09_047_fscanf.dat", "w");
-    $fwrite(good_fd, "42\n");
-    $fclose(good_fd);
-    good_fd = $fopen("ch09_047_fscanf.dat", "r");
-    good_code = $fscanf(good_fd, "%d", good_value);
-    $fclose(good_fd);
+    @(initial_step) begin
+      good_fd = $fopen("ch09_047_fscanf.dat", "w");
+      $fwrite(good_fd, "42\n");
+      $fclose(good_fd);
+    end
     `CHECKI("open r of a missing file returns 0", fd, 0);
     `CHECKI("nothing to read, so no item is matched", (code <= 0), 1);
-    `CHECKI("§9.5.4.2 one %d matched and assigned, so code is 1", good_code, 1);
-    `CHECKI("§9.5.4.2 and the assigned item is the 42 in the file", good_value, 42);
+    if ($abstime > 0.0) begin
+      good_fd = $fopen("ch09_047_fscanf.dat", "r");
+      good_code = $fscanf(good_fd, "%d", good_value);
+      $fclose(good_fd);
+      `CHECKI("§9.5.4.2 one %d matched and assigned, so code is 1", good_code, 1);
+      `CHECKI("§9.5.4.2 and the assigned item is the 42 in the file", good_value, 42);
+    end
     I(p,n) <+ V(p,n) + code + value + good_code + good_value;
   end
 endmodule

@@ -20,6 +20,8 @@
 //! lrm 5.3
 //! lrm 5.8
 //! lrm 4.2.5
+//! lrm 5.8.1
+//! lrm 5.8.1:4
 //! bias V(p) = -0.4
 `include "check.vh"
 module glossary_block_control_flow(p, n);

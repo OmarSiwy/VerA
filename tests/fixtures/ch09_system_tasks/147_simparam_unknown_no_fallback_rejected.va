@@ -29,8 +29,9 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.15
-//! reject simulation parameter is not known
+//! reject-only simulation parameter is not known
 //! reject E0811
+//! neighbour 22_simparam.va
 module ch09_simparam_unknown_no_fallback_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

@@ -6,6 +6,8 @@
 //! lrm E.3.2.1
 //! lrm 2.9
 //! lrm 6.7.1
+//! lrm 6.7.1:1
+//! lrm E.3.2.1:4
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module audit_e_ordinary_leaf(p,n);

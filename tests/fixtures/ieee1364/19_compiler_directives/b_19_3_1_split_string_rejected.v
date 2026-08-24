@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 19.3.1
 //! reject E0145
 //! reject macro text splits a string literal
+//! neighbour b_19_3_1_text_macros.v
 `define first_half "start of string
 module b_19_3_1_split_string_rejected;
   initial $display(`first_half end of string");

@@ -45,7 +45,9 @@
 //! lrm 9.17
 //! lrm 9.17.1
 //! lrm 9.17.2
+//! lrm 9.17.2:4
 //! lrm 9.17.3
+//! lrm 9.17.3:1
 //! solve
 //! bias V(n) = 0
 `include "check.vh"

@@ -43,7 +43,10 @@
 //
 //! lrm 7.3
 //! lrm 7.2.1
-//! reject E0435
+//! lrm 7.2.3
+//! lrm 7.2.3:1000
+//! lrm 7.3:1000
+//! reject-only E0435
 module m01_contribution_from_digital(p);
   inout p;
   electrical p;

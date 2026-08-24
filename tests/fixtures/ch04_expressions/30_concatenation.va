@@ -9,6 +9,7 @@
 // `{}` as the §4.1 assignment pattern '{} gives an array rather than 165.
 //
 //! lrm 4.2.13
+//! lrm 4.2.13:1
 //! bias V(p) = 0.0
 `include "check.vh"
 module ch04_concatenation(p, n);

@@ -33,7 +33,7 @@
 // there is no clause behind it.
 //
 //! lrm 6.5.2
-//! reject E1003
+//! reject-only E1003
 module ch6_unknown_ceiling(bus);
   inout [0:256] bus;
   electrical [0:256] bus;

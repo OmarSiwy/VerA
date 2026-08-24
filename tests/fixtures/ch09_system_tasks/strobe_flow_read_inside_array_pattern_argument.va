@@ -20,6 +20,7 @@
 //! lrm 9.4.1
 //! lrm 5.6.1.2
 //! lrm 4.7.2.3
+//! lrm 5.6.1.2:1000
 `include "check.vh"
 module ch09_strobe_flow_read_in_pattern(p, n);
   inout p, n; electrical p, n;

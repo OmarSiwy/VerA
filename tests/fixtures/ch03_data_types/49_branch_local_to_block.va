@@ -16,7 +16,9 @@
 // review, rather than silently accepting an arbitrary failed phase.
 //
 //! lrm 3.13.4
-//! reject E0209
+//! lrm 3.13.4:1000
+//! reject-only E0209
+//! neighbour 14_named_branches.va
 module ch3_branch_local_to_block(p, n);
     inout p, n;
     electrical p, n;

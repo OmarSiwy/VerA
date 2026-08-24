@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 7.7
 //! reject E0209
 //! reject a cmos switch (A.3.4 cmos_switchtype) takes an output, an input, an ncontrol and a pcontrol terminal
+//! neighbour b_7_1_1_every_primitive.v
 module b_7_7_missing_pcontrol_rejected;
   reg a, n;
   wire o;

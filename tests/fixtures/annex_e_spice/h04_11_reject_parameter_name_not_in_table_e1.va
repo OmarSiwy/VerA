@@ -93,8 +93,10 @@
 //! lrm E.2.2.1
 //! lrm E.1.2
 //! lrm 6.3.3
+//! lrm 6.3.3:1
+//! lrm E.1.2:2
 //! bias V(a) = 1.0, V(b) = 0.0
-//! reject E0907
+//! reject-only E0907
 module h04_reject_unnamed_primitive_param(a, b);
   inout a, b; electrical a, b;
   // Table E.1's resistor row declares exactly r, tc1, tc2. `rsh` is a perfectly

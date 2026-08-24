@@ -65,6 +65,7 @@
 //! lrm 4.6.4
 //! lrm 4.6.4.3
 //! lrm 4.5.6
+//! lrm 4.6.4.3:6
 //! noise table(p,n)#0 name=tbl_lin interp=linear points=1000.0:1e-18,5000.0:9e-18,9000.0:4e-18
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0

@@ -8,7 +8,8 @@
 // range written over a parameter.
 //
 //! lrm 6.2.2
-//! reject E0909
+//! reject-only E0909
+//! neighbour instance_array_range_over_parameter.va
 module ch6_iarv_parent(p, n);
   inout p, n; electrical p, n;
   integer k;

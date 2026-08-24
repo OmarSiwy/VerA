@@ -15,6 +15,7 @@
 //! inherited IEEE 1364-2005 A.2.6
 //! reject E1100
 //! reject a function argument is an input
+//! neighbour b_A_2_6_function_declarations.v
 module b_A_2_6_function_output_port_rejected;
   function f(input a, output b);
     f = a;

@@ -23,6 +23,7 @@
 // their reserved words cannot parse this body. See 16.
 //
 //! lrm 10.6
+//! lrm 10.6:1
 //! bias V(sin) = 0.75, V(n) = 0.25
 `begin_keywords "1364-2001"
 `include "check.vh"

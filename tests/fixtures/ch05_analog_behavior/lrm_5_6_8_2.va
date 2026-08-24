@@ -2,7 +2,7 @@
 // been indirectly contributed to (see 5.6.7)." A hierarchical direct contribution
 // to a branch that already has an indirect contribution is rejected.
 //! lrm 5.6.8.2
-//! reject E0415
+//! reject-only E0415
 module lrm_5_6_8_2_hierarchical_indirect_branch(p, n);
   inout p, n;
   electrical p, n;

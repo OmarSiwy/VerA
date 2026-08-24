@@ -11,7 +11,8 @@
 // VerA reports E0207 "unexpected token: found `inout`".
 //
 //! lrm A.5.2
-//! reject E0207
+//! lrm A.5.2:1000
+//! reject-only E0207
 //! reject found `inout`
 primitive annex_a_udp_inout(o, a);
   output o;

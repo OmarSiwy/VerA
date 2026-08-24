@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 5.1.1
 //! reject E1100
 //! reject §5.1.1: this operator does not take a real operand
+//! neighbour b_5_1_1_real_operand_results.v
 module b_5_1_1_real_operand_diagnostic_clause_rejected;
   real r;
   reg b;

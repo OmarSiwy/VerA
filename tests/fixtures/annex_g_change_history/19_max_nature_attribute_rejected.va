@@ -11,8 +11,9 @@
 //! lrm G.1
 //! lrm 3.6.1.1
 //! lrm 3.6.2.6
-//! reject E0208
+//! reject-only E0208
 //! reject max
+//! neighbour ../ch03_data_types/10_nature_declarations.va
 nature n_test;
   units = "V";
   access = V;

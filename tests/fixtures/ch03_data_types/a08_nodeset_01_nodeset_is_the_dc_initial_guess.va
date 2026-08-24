@@ -15,6 +15,7 @@
 // The generated u_nodeset table supplies the initial value to the runner.
 //
 //! lrm 3.6.3.2
+//! lrm 3.6.3.2:1
 //! bias V(g) = 0.0
 //! solve
 //! print none

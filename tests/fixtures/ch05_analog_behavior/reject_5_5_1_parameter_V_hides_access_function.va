@@ -17,7 +17,9 @@
 // parameter_V_with_generic_access.va.
 //
 //! lrm 5.5.1
-//! reject not an access function
+//! lrm 5.5.1:5
+//! reject-only not an access function
+//! neighbour parameter_V_with_generic_access.va
 `include "disciplines.vams"
 module ch5_parameter_V_hides_access(p, n);
   inout p, n;

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 12.3.5
 //! reject E1100
 //! reject more port connections than the module has ports
+//! neighbour b_12_1_2_ffnand_instances.v
 module m(a, y);
   input a;
   output y;

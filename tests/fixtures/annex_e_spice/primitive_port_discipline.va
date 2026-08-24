@@ -42,6 +42,9 @@
 //! lrm A.4.1
 //! lrm 2.9
 //! lrm 6.7.1
+//! lrm 6.7.1:1
+//! lrm E.3.2.1:2
+//! lrm A.4.1:1000
 //! bias node1 = 2.0, node2 = 0.0
 `include "check.vh"
 module annex_e_primitive_port_discipline(node1, node2);

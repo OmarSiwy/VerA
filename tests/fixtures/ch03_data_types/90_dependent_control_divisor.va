@@ -2,6 +2,7 @@
 //! lrm 3.4.1
 //! lrm 4.2.3
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param divisor = -3
 `include "check.vh"
 module dependent_control_divisor;

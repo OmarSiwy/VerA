@@ -7,8 +7,11 @@
 // `begin integer k; ... end` declares in an unnamed block. Legal neighbour:
 // b_A_6_3_named_block_declarations.v (`begin : blk integer k; ... end`).
 // digital-runner: reject
+//! lrm A.6.3
+//! lrm A.6.3:1000
 //! inherited IEEE 1364-2005 A.6.3
 //! reject E0209
+//! neighbour b_A_6_3_named_block_declarations.v
 module b_A_6_3_unnamed_block_declaration_rejected;
   initial begin
     integer k;

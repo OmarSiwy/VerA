@@ -19,7 +19,8 @@
 //
 //! lrm 9.5.2
 //! lrm 9.5.1
-//! reject E0888
+//! lrm 9.5.2:1
+//! reject-only E0888
 //! reject `$fwrite`'s descriptor argument is a real
 `include "disciplines.vams"
 module ch09_file_output_real_descriptor(p, n);

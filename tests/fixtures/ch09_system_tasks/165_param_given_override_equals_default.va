@@ -17,6 +17,7 @@
 // overrides nothing. This is the input that separates a comparison from a flag.
 //
 //! lrm 9.19
+//! lrm 9.19:4
 //! param gain = 1.0
 //! bias V(p) = 0.5
 `include "check.vh"

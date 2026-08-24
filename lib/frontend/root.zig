@@ -27,4 +27,6 @@ pub const libmap = @import("libmap.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
+    // docs/TESTING.md L3: the four-state reference `Integer` is judged by.
+    _ = @import("ref4.zig");
 }

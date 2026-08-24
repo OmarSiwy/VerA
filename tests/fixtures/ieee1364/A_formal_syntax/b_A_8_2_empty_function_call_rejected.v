@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 A.8.2
 //! reject E1100
 //! reject `f` takes 1 arguments, not 0
+//! neighbour b_A_8_2_function_calls.v
 module b_A_8_2_empty_function_call_rejected;
   function integer f(input integer a);
     f = a;

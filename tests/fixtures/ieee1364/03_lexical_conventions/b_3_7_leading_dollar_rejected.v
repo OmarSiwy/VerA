@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 3.7
 //! reject E0208
 //! reject expected an identifier: found $abc
+//! neighbour b_3_7_identifier_examples.v
 module b_3_7_leading_dollar_rejected;
   reg $abc;
   initial $display("unreachable");

@@ -6,6 +6,8 @@
 // Both writers stay open. After the three forms of $fflush, the byte each
 // wrote is in its file, so a second descriptor opened for reading sees it:
 //   fd wrote "P" (80), mcd wrote "M" (77) -> "80 77"
+//! lrm 9.5.6
+//! lrm 9.5.6:1000
 //! inherited IEEE 1364-2005 17.2.6
 module b_17_2_6_fflush;
   integer fd, mcd, rd, c1, c2;

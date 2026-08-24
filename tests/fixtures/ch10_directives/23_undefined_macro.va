@@ -7,7 +7,7 @@
 // pass the old form of this fixture while the macro rule went untested.
 //
 //! lrm 10.4
-//! reject E0115
+//! reject-only E0115
 module ch10_undefined_macro(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ `MISSING*V(p,n);

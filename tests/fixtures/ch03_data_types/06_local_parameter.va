@@ -12,6 +12,7 @@
 // audit_localparam_override_rejected.va, which uses source-level named binding.
 //
 //! lrm 3.4.5
+//! lrm 3.4.5:1000
 //! param base_gain = 3.0
 //! checks 2
 `include "check.vh"

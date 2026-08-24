@@ -21,6 +21,7 @@
 // By 10n the digital kernel has long since propagated it.
 //
 //! lrm 7.3.6.4
+//! lrm 7.3.6.4:1000
 //! analysis tran
 //! time 0, 10n, 20n
 //! print none

@@ -8,7 +8,11 @@
 // it is unimplemented, and the diagnostic cannot be reached by accident.
 //
 //! lrm 5.10
-//! reject E0406
+//! lrm 5.6.5
+//! lrm 5.6.5:2
+//! lrm 5.6.5:4
+//! lrm 5.10:2
+//! reject-only E0406
 module ch5_event_contribution_rejected(p);
   inout p; electrical p;
   analog begin

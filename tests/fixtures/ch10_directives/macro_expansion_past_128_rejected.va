@@ -6,7 +6,7 @@
 //
 // Legal neighbour: any fixture using a macro from check.vh.
 //
-//! reject E0119
+//! reject-only E0119
 `define M0 1.0
 `define M1 `M0
 `define M2 `M1

@@ -165,32 +165,40 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
         }
     }
 
-    // §3.6.1.2 idt_nature "shall be the name (not a string) of a nature which
-    // is defined elsewhere", and a derived nature that overrides it "shall be
-    // related (share the same base nature) to the nature the parent uses".
-    // Both halves share one code: an unresolved name and an unrelated nature
-    // leave the integral's tolerance equally undefined.
-    for (natures) |*n| {
-        const own = for (n.attrs) |a| {
-            if (std.mem.eql(u8, self.file.str(a.name), "idt_nature")) break a;
-        } else continue;
-        // A non-identifier value is E0340's report, not a second one here.
-        if (self.file.exprs.tag(own.value) != .ident) continue;
-        const target = self.file.exprs.strOf(own.value);
-        const target_base = rules.baseNatureOf(self.file, target);
-        if (target_base == .none) {
-            try self.err(own.main_tok, .E0341, "`{s}` is not a declared nature", .{self.file.str(target)});
-            continue;
+    // §3.6.1.2, of idt_nature and of ddt_nature alike: the value "shall be
+    // the name (not a string) of a nature which is defined elsewhere", "the
+    // default value is the nature itself", and a derived nature's override
+    // "shall be related (share the same base nature) to the nature the
+    // parent uses". One code per attribute covers both halves: an unresolved
+    // name and an unrelated nature leave the operator's tolerance equally
+    // undefined.
+    for ([_]struct { []const u8, diag.Code }{ .{ "idt_nature", .E0341 }, .{ "ddt_nature", .E0374 } }) |rule| {
+        const attr, const code = rule;
+        for (natures) |*n| {
+            const own = for (n.attrs) |a| {
+                if (std.mem.eql(u8, self.file.str(a.name), attr)) break a;
+            } else continue;
+            // A non-identifier value is E0340's report, not a second one here.
+            if (self.file.exprs.tag(own.value) != .ident) continue;
+            const target = self.file.exprs.strOf(own.value);
+            const target_base = rules.baseNatureOf(self.file, target);
+            if (target_base == .none) {
+                try self.err(own.main_tok, code, "`{s}` is not a declared nature", .{self.file.str(target)});
+                continue;
+            }
+            // `.none` for a base nature; a parent value that names no nature
+            // is reported where the parent writes it.
+            const inherited = rules.parentDerivNatureOf(self.file, n, attr);
+            if (inherited == .none) continue;
+            const inherited_base = rules.baseNatureOf(self.file, inherited);
+            if (inherited_base == .none or inherited_base == target_base) continue;
+            var b = self.errWith(own.main_tok, code);
+            b.msg("`{s}` is not related to `{s}`", .{ self.file.str(target), self.file.str(inherited) });
+            b.note("`{s}` derives from `{s}`, which uses `{s}` for its `{s}`; an override shares its base nature", .{
+                self.file.str(n.name), self.file.str(n.parent), self.file.str(inherited), attr,
+            });
+            try b.emit();
         }
-        if (n.parent == .none) continue;
-        const inherited = rules.idtNatureOf(self.file, n.parent);
-        if (inherited == .none or rules.baseNatureOf(self.file, inherited) == target_base) continue;
-        var b = self.errWith(own.main_tok, .E0341);
-        b.msg("`{s}` is not related to `{s}`", .{ self.file.str(target), self.file.str(inherited) });
-        b.note("`{s}` derives from `{s}`, whose `idt_nature` is `{s}`; an override shares its base nature", .{
-            self.file.str(n.name), self.file.str(n.parent), self.file.str(inherited),
-        });
-        try b.emit();
     }
 
     // §3.13.2 "the access function of each base nature shall be unique". Keyed

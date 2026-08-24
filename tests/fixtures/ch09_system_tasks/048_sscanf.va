@@ -15,6 +15,7 @@
 // matching failure or conversion".
 //
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:1
 `include "check.vh"
 module ch09_atomic_sscanf(p, n);
   inout p, n; electrical p, n;

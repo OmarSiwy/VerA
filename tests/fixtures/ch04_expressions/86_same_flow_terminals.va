@@ -9,8 +9,11 @@
 // The replacement spelling is covered by 34_port_access.va.
 //
 //! lrm 4.4
+//! lrm 4.4:2
 //! lrm G.1
-//! reject E0315
+//! lrm 4.4:4
+//! reject-only E0315
+//! neighbour 34_port_access.va
 module ch4_same_flow(p);
   inout p; electrical p;
   analog begin

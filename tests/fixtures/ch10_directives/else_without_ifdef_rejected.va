@@ -13,7 +13,8 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0105
+//! reject-only E0105
+//! neighbour 09_ifdef_else.va
 `else
 module ch10_else_without_ifdef(p, n);
   inout p, n; electrical p, n;

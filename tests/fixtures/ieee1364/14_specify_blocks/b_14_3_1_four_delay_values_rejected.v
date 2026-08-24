@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 14.3 14.3.1
 //! reject E0207
 //! reject 1, 2, 3, 6 or 12
+//! neighbour b_14_3_path_delay_values.v
 `timescale 1ns/1ns
 module b_14_3_1_four_delay_values_rejected(C, Q);
   input C;

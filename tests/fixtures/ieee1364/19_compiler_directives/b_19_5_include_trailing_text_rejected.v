@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 19.5
 //! reject E0144
 //! reject text after the `include file name
+//! neighbour b_19_5_include_inserts_contents.v
 `include "constants.vams" wire_after
 module b_19_5_include_trailing_text_rejected;
   initial $display("accepted");

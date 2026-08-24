@@ -34,6 +34,9 @@
 // the ten assertions above down with it.
 //
 //! lrm 4.2.3
+//! lrm 4.2.3:3
+//! lrm 4.2.3:4
+//! lrm 4.2.3:2
 `include "check.vh"
 module ch04_short_circuit_side_effects(p, n);
     inout p, n;

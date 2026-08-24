@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 5.2.2
 //! reject E1100
 //! reject each array dimension takes an index
+//! neighbour b_5_2_2_element_selects.v
 module b_5_2_2_scalar_element_part_select_rejected;
   wire threed_array[0:255][0:255][0:7];
   initial $display("%b", threed_array[14][1][3:0]);

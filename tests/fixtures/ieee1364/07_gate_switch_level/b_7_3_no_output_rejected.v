@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.3
 //! reject E0209
 //! reject a buf/not gate needs at least one output and one input
+//! neighbour b_7_1_1_every_primitive.v
 module b_7_3_no_output_rejected;
   wire o;
   buf g(o);

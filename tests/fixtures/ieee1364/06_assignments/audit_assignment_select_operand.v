@@ -12,6 +12,7 @@
 // (§9.7.5) over the same kind of operands.
 //
 //! lrm 8.5.3.1
+//! lrm 8.5.3.1:1000
 //! timescale 1ns/1ns
 //! inherited IEEE 1364-2005 5.2.1 6.1.2 9.7.5
 //

@@ -9,8 +9,9 @@
 // conforming outcome here is a diagnostic.
 //
 //! lrm C.4
+//! lrm C.4:2
 //! lrm 3.8
-//! reject discipline
+//! reject-only discipline
 module annex_c_no_discipline_rejected(p);
     inout p;
     analog I(p) <+ V(p);

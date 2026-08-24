@@ -17,7 +17,11 @@
 // against this source instead of accepting arbitrary compilation failures.
 //
 //! lrm 3.5
-//! reject E0313
+//! lrm 3.5:1000
+//! lrm 6.6.1
+//! lrm 6.6.1:2
+//! reject-only E0313
+//! neighbour 09_genvar.va
 module ch3_genvar_assigned_outside_loop(p, n);
     inout p, n;
     electrical p, n;

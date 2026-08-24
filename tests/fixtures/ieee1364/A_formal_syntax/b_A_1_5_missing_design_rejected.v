@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.1.5
 //! reject E0207
 //! reject begins with its `design` statement
+//! neighbour b_A_1_5_configuration.v
 config b_A_1_5_nodesign;
   default liblist work;
 endconfig

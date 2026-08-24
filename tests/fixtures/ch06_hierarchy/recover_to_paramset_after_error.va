@@ -15,7 +15,8 @@
 //
 //! lrm A.1.2
 //! lrm A.1.9
-//! reject E0201
+//! lrm A.1.2:1000
+//! reject-only E0201
 //! reject E0205
 frobnicate
 

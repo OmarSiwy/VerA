@@ -11,6 +11,7 @@
 `include "check.vh"
 //! lrm B
 //! lrm 2.8
+//! lrm 2.8:5
 module Module(p, n);
     inout p, n;
     electrical p, n;

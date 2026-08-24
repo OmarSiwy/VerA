@@ -3,7 +3,8 @@
 // violation, whose error alone could satisfy its rejection expectation.
 // A positive maxdelay cannot make negative td legal.
 //! lrm 4.5.7
-//! reject positive
+//! lrm 4.5.7:1
+//! reject-only positive
 //! reject E0516
 module audit_absdelay_three_arg_negative_rejected(p, n);
     inout p, n;

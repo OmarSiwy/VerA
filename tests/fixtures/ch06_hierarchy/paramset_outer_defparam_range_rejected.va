@@ -3,6 +3,7 @@
 // this instance. The precedence fixture's w=7 is the behavioral legal neighbor.
 //! lrm 6.3
 //! lrm 6.4.2
+//! lrm 6.4.2:4
 //! reject E0911
 module ps_outer_range_top(p);
   inout p; electrical p;

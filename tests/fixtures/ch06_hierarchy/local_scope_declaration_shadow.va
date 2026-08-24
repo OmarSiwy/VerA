@@ -25,6 +25,8 @@
 // stamp is the OUTER value, 1.0 * 0.5 = 0.5.
 //
 //! lrm 6.8
+//! lrm 6.8:3
+//! lrm 6.8:4
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch6_scope_declaration_shadow(p);

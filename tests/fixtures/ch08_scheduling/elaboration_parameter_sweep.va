@@ -34,7 +34,9 @@
 // once w is past 1.5 the area cannot still be the first point's 1.0.
 //
 //! lrm 8.2
+//! lrm 8.2:2
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! psweep w = 1.0, 2.0, 4.0
 // Two assertions at each of the three sweep points; omitting a point must fail.
 //! checks 6

@@ -10,7 +10,9 @@
 // "expected an expression: found `;`".
 //
 //! lrm 2.5
-//! reject E0209
+//! lrm 2.5:1
+//! lrm 2.5:2
+//! reject-only E0209
 `include "disciplines.vams"
 module ch2_unary_after_operand(p, n);
   inout p, n;

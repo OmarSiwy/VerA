@@ -15,7 +15,8 @@
 //
 //! lrm A.2.2
 //! lrm A.2.2.3
-//! reject E0210
+//! lrm A.2.2.3:1000
+//! reject-only E0210
 module annex_a_net_four_delays(o, a);
   output o;
   input a;

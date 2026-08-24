@@ -17,7 +17,10 @@
 // one-declaration `input|output|inout wreal p;` spelling.
 //
 //! lrm 6.5.3
+//! lrm 6.5.3:1
 //! lrm 3.7
+//! lrm 7.4.2
+//! lrm 7.4.2:2
 //! solve
 `include "check.vh"
 module ch6_real_valued_wreal_port(out);

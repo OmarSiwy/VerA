@@ -29,6 +29,8 @@
 // argument is a critical voltage vcrit"), which is why they are present.
 //
 //! lrm 9.17.3
+//! lrm 9.17.3:3
+//! lrm 9.17.3:4
 //! bias V(p) = 0.3
 `include "check.vh"
 module ch09_limit_named(p, n);

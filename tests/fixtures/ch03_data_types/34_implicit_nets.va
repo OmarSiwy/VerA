@@ -21,7 +21,10 @@
 //
 //! bias V(p) = 1.5
 //! lrm 3.6.2.4
+//! lrm 3.6.2.4:1
 //! lrm C.8
+//! lrm 3.6.2
+//! lrm 3.6.2:3
 `include "check.vh"
 module ch3_implicit_child(a, b);
     inout a, b;

@@ -12,7 +12,9 @@
 // VerA reports E0115 "undefined macro: `GAIN".
 //
 //! lrm 2.8.4
-//! reject E0115
+//! lrm 2.8.4:1
+//! lrm 2.8.4:2
+//! reject-only E0115
 `include "disciplines.vams"
 module ch2_macro_before_define(p, n);
   inout p, n;

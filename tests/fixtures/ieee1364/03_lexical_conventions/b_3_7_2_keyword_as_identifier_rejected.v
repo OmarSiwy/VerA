@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 3.7.2
 //! reject E0208
 //! reject expected an identifier: found `wire`
+//! neighbour b_3_7_2_escaped_keyword.v
 module b_3_7_2_keyword_as_identifier_rejected;
   reg wire;
   initial $display("unreachable");

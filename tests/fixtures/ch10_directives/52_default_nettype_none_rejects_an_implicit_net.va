@@ -23,7 +23,8 @@
 //
 //! lrm 10.1
 //! lrm 3.6.5
-//! reject E0367
+//! reject-only E0367
+//! neighbour ../ch03_data_types/34_implicit_nets.va
 `default_nettype none
 module ch10_nettype_none_child(a, b);
     inout a, b;

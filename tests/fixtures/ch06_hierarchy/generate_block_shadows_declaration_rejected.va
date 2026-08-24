@@ -27,8 +27,10 @@
 // clause puts it in.
 //
 //! lrm 6.6.2
+//! lrm 6.6.2:3
 //! lrm 6.8
-//! reject E0230
+//! lrm 6.8:1
+//! reject-only E0230
 module ch6_generate_block_shadows_declaration(p);
   inout p; electrical p;
   real sel;

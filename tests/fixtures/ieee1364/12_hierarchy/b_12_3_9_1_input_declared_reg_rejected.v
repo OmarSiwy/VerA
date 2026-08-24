@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 12.3.9 12.3.9.1
 //! reject E1100
 //! reject only an output port may be declared as a variable
+//! neighbour b_12_3_8_structural_sinks_and_expression_sources.v
 module m(a, y);
   input a;
   reg a;

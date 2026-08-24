@@ -55,7 +55,9 @@
 // rather than an optimization.
 //
 //! lrm 5.2.1
+//! lrm 5.2.1:2
 //! lrm 8.2
+//! lrm 8.2:2
 //! psweep gain = 1.0, 2.0, 4.0
 // Two assertions at each of the three sweep points; omitting a point must fail.
 //! checks 6

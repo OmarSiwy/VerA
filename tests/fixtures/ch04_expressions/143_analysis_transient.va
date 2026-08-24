@@ -25,6 +25,7 @@
 // simulator defines reads 0 rather than raising anything.
 //
 //! lrm 4.6.1
+//! lrm 4.6.1:1
 //! analysis tran
 //! bias V(p) = 0.5
 `include "check.vh"

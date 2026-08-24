@@ -33,7 +33,11 @@
 // the reasoning that pinning a code the construct cannot produce would freeze the
 // file at XFAIL forever. E0358 is that code and the pin is now it.
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:1
+//! lrm 2.9.2:2
+//! lrm 2.9.2:3
+//! reject-only E0358
+//! neighbour 11_attributes.va
 module ch02_standard_attribute_domain_rejected(p, n);
     inout p, n;
     electrical p, n;

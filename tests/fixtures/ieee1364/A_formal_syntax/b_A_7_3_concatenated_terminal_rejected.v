@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.7.3
 //! reject E0208
 //! reject expected an identifier: found `{`
+//! neighbour b_A_7_3_specify_terminals.v
 module b_A_7_3_concatenated_terminal_rejected (a, b, y);
   input a, b;
   output y;

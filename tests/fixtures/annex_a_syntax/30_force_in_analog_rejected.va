@@ -17,7 +17,9 @@
 //
 //! lrm A.6.4
 //! lrm A.6.2
-//! reject E0258
+//! lrm A.6.4:1000
+//! reject-only E0258
+//! neighbour ../ch08_scheduling/procedural_continuous_semantics.va
 module annex_a_force_in_analog(p); inout p; electrical p; real x;
 analog begin force x = 1.0; I(p) <+ V(p); end
 endmodule

@@ -8,6 +8,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 4.3.2
 //! reject range
+//! neighbour b_4_3_2_scalared_vectored.v
 module b_4_3_2_scalared_without_range_rejected;
   tri scalared w;
   initial $display("%b", w);

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.1.5
 //! reject E1100
 //! reject t_nand
+//! neighbour b_7_1_5_two_named_arrays.v
 module b_7_1_5_split_array_rejected;
   reg [3:0] a1, b1, a2, b2;
   wire [3:0] o1, o2;

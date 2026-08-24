@@ -11,8 +11,9 @@
 // operator with a real operand is E0322, a separate code.)
 //
 //! lrm 4.2.1
+//! lrm 4.2.1:1
 //! lrm 4.2.9
-//! reject E0318
+//! reject-only E0318
 `include "disciplines.vams"
 module ch04_bitwise_not_on_real(p, n);
   inout p, n; electrical p, n;

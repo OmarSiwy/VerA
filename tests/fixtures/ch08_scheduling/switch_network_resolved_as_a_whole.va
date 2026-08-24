@@ -30,6 +30,7 @@
 // the t = 0 read is a scheduling question this fixture does not ask.
 //
 //! lrm 8.5.3.5
+//! lrm 8.5.3.5:1
 //! analysis tran
 //! time 0, 10n
 //! print none

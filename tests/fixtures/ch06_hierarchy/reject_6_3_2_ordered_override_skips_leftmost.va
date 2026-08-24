@@ -11,7 +11,7 @@
 // VerA reports E0209 "expected an expression: found `,`" at the empty slot.
 //
 //! lrm 6.3.2
-//! reject E0209
+//! reject-only E0209
 `include "disciplines.vams"
 module ch6_skip_child(p, n);
   inout p, n;

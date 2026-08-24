@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.3.2
 //! reject E0207
 //! reject a single-strength bracket on this gate is A.3.2
+//! neighbour b_A_3_2_primitive_strengths.v
 module b_A_3_2_pullup_strength0_only_rejected;
   wire y;
   pullup (weak0) (y);

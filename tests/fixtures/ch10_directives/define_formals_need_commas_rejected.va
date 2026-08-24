@@ -10,7 +10,8 @@
 //
 //! lrm 10.4
 //! inherited IEEE 1364-2005 19.3.1
-//! reject E0112
+//! reject-only E0112
+//! neighbour 05_define_function.va
 `define MUL(a b) ((a)*(b))
 module ch10_define_formals_need_commas(p, n);
   inout p, n; electrical p, n;

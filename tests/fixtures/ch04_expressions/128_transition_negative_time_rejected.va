@@ -17,12 +17,14 @@
 // guard happened to cover, which would defeat the point of writing four.
 //
 //! lrm 4.5.8
-//! reject non-negative
+//! lrm 4.5.8:1
+//! reject-only non-negative
 //! reject td
 //! reject rise_time
 //! reject fall_time
 //! reject time_tol
 //! reject E0516
+//! neighbour 20_transition.va
 module ch04_transition_negative_time_rejected(p, n);
     inout p, n;
     electrical p, n;

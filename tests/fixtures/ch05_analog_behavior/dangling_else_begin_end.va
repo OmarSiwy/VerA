@@ -18,6 +18,7 @@
 // with either binding hard-wired fails exactly one of the two fixtures.
 //
 //! lrm 5.8.2
+//! lrm 5.8.2:2
 `include "check.vh"
 module ch5_dangling_else_begin_end(p);
   inout p; electrical p;

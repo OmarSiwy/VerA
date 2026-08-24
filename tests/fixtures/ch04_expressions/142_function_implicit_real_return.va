@@ -26,6 +26,9 @@
 // gives a string-returning analog function an observable value to pin.
 //
 //! lrm 4.7.1
+//! lrm 4.7.1:2
+//! lrm 4.2.1.1
+//! lrm 4.2.1.1:1
 `include "check.vh"
 module ch04_function_implicit_real_return(p, n);
     inout p, n;

@@ -23,8 +23,9 @@
 // taught about that verdict.
 //
 //! lrm 3.4.2
+//! lrm 3.4.2:2
 //! lrm C.8
-//! reject E0361
+//! reject-only E0361
 module ch3_range_target_interior(p, n);
     inout p, n;
     electrical p, n;

@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 13.3.1.4
 //! reject library name
 //! reject E0243
+//! neighbour audit_config_cell_liblist.v
 config cfg;
   design work.top;
   cell work.top liblist work;

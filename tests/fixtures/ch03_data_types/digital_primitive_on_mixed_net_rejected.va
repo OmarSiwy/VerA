@@ -23,7 +23,9 @@
 // ch08_scheduling/switch_primitive_accepted.va, which does both for a `tran`.
 //
 //! lrm 3.9
-//! reject E0960
+//! lrm 3.9:2
+//! reject-only E0960
+//! neighbour ../ch08_scheduling/switch_primitive_accepted.va
 `include "disciplines.vams"
 module ch3_digital_primitive_on_mixed_net(p, n);
     inout p, n;

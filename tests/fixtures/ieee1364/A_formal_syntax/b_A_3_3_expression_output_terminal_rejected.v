@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 A.3.3
 //! reject E0207
 //! reject a gate's output terminal is a net_lvalue
+//! neighbour b_A_3_3_primitive_terminals.v
 module b_A_3_3_expression_output_terminal_rejected;
   wire a, b, c, d;
   and (a & b, c, d);

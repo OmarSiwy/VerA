@@ -20,6 +20,8 @@
 // correctly rounded, and 0.25 is a perfect square).
 //
 //! lrm A.10
+//! lrm A.9.3
+//! lrm A.9.3:1000
 //! bias V(p) = 0.5
 `include "check.vh"
 module annex_a_identifier_details_positive(p);

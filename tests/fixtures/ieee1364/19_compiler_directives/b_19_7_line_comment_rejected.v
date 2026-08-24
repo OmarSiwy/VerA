@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 19.7
 //! reject E0128
 //! reject malformed `line directive
+//! neighbour b_19_7_line_directive.v
 `line 10 "orig.v" 0 // a comment
 module b_19_7_line_comment_rejected;
   initial $display("accepted");

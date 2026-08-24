@@ -23,6 +23,9 @@
 // parse (E0207). That is a §10.3 substitution bug, not a §2.8.1 one, so this
 // fixture states the §2.8.1 claim in a form the bug does not block.
 //! lrm 2.8.1
+//! lrm 2.8
+//! lrm 2.8:2
+//! lrm 2.8.1:1
 `include "check.vh"
 module ch02_escaped_identifiers(p, n);
     inout p, n;

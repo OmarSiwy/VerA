@@ -5,6 +5,7 @@
 // Prescribed potentials 1.5 and 0.25 give 1.25; reversed order gives -1.25.
 //! lrm 3.11
 //! lrm 3.11.1
+//! lrm 3.11.1:2
 //! bias V(p) = 1.5, V(other) = 0.25
 //! checks 2
 `include "check.vh"

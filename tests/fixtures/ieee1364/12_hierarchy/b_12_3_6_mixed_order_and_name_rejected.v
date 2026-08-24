@@ -6,9 +6,12 @@
 // u connects a by name and y by order. Legal neighbour:
 // b_12_1_2_ffnand_instances.v (ff1 all by order, ff2 all by name).
 // digital-runner: reject
+//! lrm 6.5.5
+//! lrm 6.5.5:4
 //! inherited IEEE 1364-2005 12.3.6
 //! reject E1100
 //! reject mixes ordered and named port connections
+//! neighbour b_12_1_2_ffnand_instances.v
 module m(a, y);
   input a;
   output y;

@@ -19,6 +19,7 @@
 // (`2.0 * shared_noise`) must not break the sharing.
 //
 //! lrm 4.6.4.6
+//! lrm 4.6.4.6:1000
 //! noise thermal(a,b)#0
 //! noise thermal(b,c)#0
 //! analysis dc

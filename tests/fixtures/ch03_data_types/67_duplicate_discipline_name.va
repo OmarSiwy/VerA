@@ -15,8 +15,9 @@
 // E0342 existed.
 //
 //! lrm 3.6.2
+//! lrm 3.6.2:2
 //! lrm 3.13.1
-//! reject E0342
+//! reject-only E0342
 nature ch3_twice_d_p; units="V"; access=TwiceDV; abstol=1u; endnature
 nature ch3_twice_d_f; units="A"; access=TwiceDI; abstol=1p; endnature
 discipline ch3_twice_d; potential ch3_twice_d_p; enddiscipline

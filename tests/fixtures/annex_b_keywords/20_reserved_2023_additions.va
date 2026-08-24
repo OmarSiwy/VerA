@@ -16,7 +16,7 @@
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject break
 //! reject continue
 //! reject expm1

@@ -7,6 +7,7 @@
 // unoverridden Table 9-29 identity remains in 097_mfactor.va.
 //! lrm 3.4.7
 //! lrm 9.18
+//! lrm 9.18:1000
 //! param m = 4
 //! bias V(p) = 0.75, V(n) = 0.25
 //! checks 2

@@ -13,7 +13,7 @@
 // E0120 says the PREPROCESSOR refused the argument list.
 //
 //! lrm 10.4
-//! reject E0120
+//! reject-only E0120
 `define SQ(x) ((x)*(x))
 module ch10_mismatched_macro_argument_bracket(p, n);
   inout p, n; electrical p, n;

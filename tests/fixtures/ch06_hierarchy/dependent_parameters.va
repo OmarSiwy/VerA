@@ -15,6 +15,7 @@
 // exact `width` line uses. Anything looser stops being a check.
 //
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param width = 3u
 //! bias V(p) = 2.0
 `include "check.vh"

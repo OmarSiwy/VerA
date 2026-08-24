@@ -7,7 +7,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0107
+//! reject-only E0107
 `ifdef CH10_NEVER_DEFINED
 `elsif
 `endif

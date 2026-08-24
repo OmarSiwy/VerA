@@ -11,6 +11,7 @@
 // cannot hide the keyword-name test; see KEY-MACRO-001 in the audit.
 //! lrm B
 //! lrm 2.8.2
+//! lrm B:1
 //! checks 215
 //! print none
 `include "check.vh"

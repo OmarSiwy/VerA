@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 12.1.1
 //! reject E1100
 //! reject found no top-level module
+//! neighbour b_12_1_module_header_forms.v
 module a;
   b u();
 endmodule

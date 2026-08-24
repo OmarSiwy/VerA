@@ -21,6 +21,7 @@
 // that ignored the period leaves it at 1 for t = 1n.
 //
 //! lrm 5.10.3.3
+//! lrm 5.10.3.3:1
 //! analysis tran
 //! time 0, 1n
 `include "check.vh"

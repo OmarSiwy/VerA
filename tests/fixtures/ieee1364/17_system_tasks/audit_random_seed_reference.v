@@ -27,6 +27,9 @@
 // A time variable carries the same stream: its first two draws from 0 are
 // the integer's. Its written-back value is not printed: the listing's seed
 // is a 32-bit long, and how its 64 bits are filled is not stated.
+//! lrm 9.13.1
+//! lrm 9.13.1:1
+//! lrm 9.13.1:4
 //! inherited IEEE 1364-2005 17.9.1,17.9.3
 //! expect stdout audit_random_seed_reference.expected.txt
 module audit_random_seed_reference;

@@ -17,6 +17,7 @@
 // this far, and if it did the branch probe would not be 0.5.
 `include "check.vh"
 //! lrm B
+//! lrm B:1
 //! lrm 2.8.1
 //! bias V(sin) = 0.75, V(n) = 0.25
 module annex_b_escaped_keyword_port(\sin , n);

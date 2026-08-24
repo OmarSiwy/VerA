@@ -2,6 +2,7 @@
 //! lrm 3.4.1
 //! lrm 3.4.4
 //! lrm 6.3.4
+//! lrm 6.3.4:1000
 //! param word = -2147483648
 //! param realbase = 9.0
 `include "check.vh"

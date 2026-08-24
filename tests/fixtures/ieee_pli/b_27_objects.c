@@ -113,6 +113,8 @@
  *   §27.36  scanning ends in NULL; a module is no iterator: NULL.
  */
 
+//! lrm 12.21
+//! lrm 12.21:3
 //! inherited IEEE 1364-2005 27
 //! inherited-reject IEEE 1364-2005 27
 //! inherited IEEE 1364-2005 26.2.3

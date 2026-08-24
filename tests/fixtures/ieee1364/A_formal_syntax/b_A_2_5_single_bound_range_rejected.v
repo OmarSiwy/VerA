@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 A.2.5
 //! reject E0207
 //! reject unexpected token: found `]`
+//! neighbour b_A_2_5_ranges.v
 module b_A_2_5_single_bound_range_rejected;
   reg [7] r;
   initial $display("unreachable");

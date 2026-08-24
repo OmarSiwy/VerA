@@ -21,8 +21,11 @@
 //
 //! lrm E.4.1
 //! lrm 6.3.6
-//! reject E0907
+//! lrm 6.3.3
+//! lrm 6.3.3:1
+//! reject-only E0907
 //! reject `m` is not a parameter of `rcell`
+//! neighbour mfactor_subcircuit.va
 `include "disciplines.vams"
 module e41_top(p, n);
   inout p, n; electrical p, n;

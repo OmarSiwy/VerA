@@ -16,7 +16,11 @@
 //! lrm G.1
 //! lrm 5.10.2
 //! lrm A.6.5
-//! reject E0220
+//! lrm 5.10.2:1000
+//! lrm A.6.5:1000
+//! reject-only E0220
+//! neighbour ../ch05_analog_behavior/final_step.va
+//! neighbour ../ch05_analog_behavior/initial_final_analysis_lists.va
 module annex_g_final_step_empty_parens(p, n);
   inout p, n; electrical p, n;
   real x;

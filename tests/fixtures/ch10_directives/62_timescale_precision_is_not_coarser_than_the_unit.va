@@ -23,7 +23,7 @@
 // that may never ask.
 //
 //! lrm 10.1
-//! reject E0142
+//! reject-only E0142
 `timescale 1ps/1ns
 module ch10_timescale_precision_is_not_coarser_than_the_unit(p, n);
     inout p, n;

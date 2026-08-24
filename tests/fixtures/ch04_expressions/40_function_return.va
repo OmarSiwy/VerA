@@ -32,6 +32,7 @@
 //
 //! lrm 4.7.2.1
 //! lrm 4.7.2.2
+//! lrm 4.7.2.2:1
 //! bias V(p) = 0.75
 `include "check.vh"
 module ch04_function_return(p, n);

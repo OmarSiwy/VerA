@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 10.2.1
 //! reject E1100
 //! reject automatic
+//! neighbour b_10_2_1_static_task_item_hierarchical.v
 module b_10_2_1_automatic_task_item_hierarchical_rejected;
   task automatic t;
     reg [7:0] v;

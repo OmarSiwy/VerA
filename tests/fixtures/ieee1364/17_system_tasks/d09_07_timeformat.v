@@ -50,6 +50,7 @@
 // time" and ignores its argument, prints "30" there and fails.
 //
 //! lrm 9.6
+//! lrm 9.6:1000
 //! inherited IEEE 1364-2005 17.3 ($timeformat and the %t conversion)
 //! expect stdout 07_timeformat.expected.txt
 `timescale 10ns/1ns

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 8.1.3
 //! reject E1100
 //! reject single-bit literal
+//! neighbour b_8_1_3_initial_values.v
 `timescale 1ns/1ns
 primitive wide_init(q, g, d);
   output q;

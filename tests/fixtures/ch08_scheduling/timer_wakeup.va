@@ -32,6 +32,7 @@
 // persist across time points, which is not what this file is pinning.
 //
 //! lrm 8.4.3.2
+//! lrm 8.4.3.2:2
 //! lrm 5.10.3.3
 //! analysis tran
 //! time 0, 0.25n, 0.5n, 0.75n, 1n

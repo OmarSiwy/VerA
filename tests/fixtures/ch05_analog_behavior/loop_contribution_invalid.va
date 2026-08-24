@@ -11,7 +11,9 @@
 // it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.9
-//! reject E0426
+//! lrm 5.9:1
+//! reject-only E0426
+//! neighbour for_loop.va
 module ch5_loop_contribution(p);
   inout p; electrical p; integer i;
   analog begin

@@ -1,7 +1,9 @@
 // LRM 2.9.2, units: "The attribute must be assigned a string."
 // 1.0 is a real constant, not a string. No other attribute is present.
 //! lrm 2.9.2
-//! reject E0358
+//! lrm 2.9.2:1
+//! lrm 2.9.2:2
+//! reject-only E0358
 module ch02_units_attribute_numeric_rejected(p, n);
     inout p, n;
     electrical p, n;

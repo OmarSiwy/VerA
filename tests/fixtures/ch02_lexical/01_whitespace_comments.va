@@ -13,6 +13,11 @@
 // plain comment to every other tool.
 //! lrm 2.4
 //! lrm 2.6.2
+//! lrm 2.4:1
+//! lrm 2.4:2
+//! lrm 2.4:4
+//! lrm A.9.2
+//! lrm A.9.2:1000
 `include "check.vh"
 `define CH02_SCALE 4.0
 // `define CH02_SCALE 9.0

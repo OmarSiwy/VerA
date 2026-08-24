@@ -13,7 +13,8 @@
 // The legal alias is 07_parameter_alias.va.
 //
 //! lrm 3.4.7
-//! reject E0303
+//! reject-only E0303
+//! neighbour 07_parameter_alias.va
 `include "disciplines.vams"
 module ch3_aliasparam_target_must_be_a_parameter(p, n);
   inout p, n; electrical p, n;

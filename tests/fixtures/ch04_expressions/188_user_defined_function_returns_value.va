@@ -11,6 +11,7 @@
 // sits in, `1.0 + sq_plus(...)`, is 1.5. Every step is exact in binary64.
 //
 //! lrm 4.7
+//! lrm 4.7:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch04_user_defined_function_returns_value(p, n);

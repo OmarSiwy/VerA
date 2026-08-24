@@ -16,7 +16,7 @@
 // VerA reports E0887 "wrong number of arguments to a system task or function".
 //
 //! lrm 9.5.1
-//! reject E0887
+//! reject-only E0887
 //! reject `$fclose` takes 1 argument, got 2
 `include "disciplines.vams"
 module ch09_fclose_two_descriptors(p, n);

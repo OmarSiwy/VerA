@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 A.5.2
 //! reject E1100
 //! reject exactly one output port
+//! neighbour b_A_5_1_udp_declarations.v
 primitive b_A_5_2_two (output y, output z, input a);
   table
     0 : 1;

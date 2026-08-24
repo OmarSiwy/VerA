@@ -1,5 +1,6 @@
 // §§3.3, 5.3.2, 5.7: direction and shape belong to the current declaration.
 //! lrm 5.7
+//! lrm 5.7:1
 //! bias V(p) = 1
 `include "check.vh"
 module ch03_dynamic_multidim_scope(p);

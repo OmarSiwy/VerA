@@ -13,7 +13,8 @@
 // VerA enforces it in codegen, so the expectation is the message fragment.
 //
 //! lrm 4.5.11.3
-//! reject no conjugate partner
+//! lrm 4.5.11.3:2
+//! reject-only no conjugate partner
 `include "disciplines.vams"
 module ch4_laplace_np_unpaired_pole(p, n);
   inout p, n;

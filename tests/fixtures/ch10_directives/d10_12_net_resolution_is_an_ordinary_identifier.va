@@ -90,6 +90,7 @@
 //! lrm B
 //! lrm C.16
 //! lrm G.1
+//! lrm C.16:1000
 //! bias V(net_resolution) = 1.25, V(n) = 0.25
 `begin_keywords "VAMS-2023"
 `include "check.vh"

@@ -3,6 +3,7 @@
 // leaf's initial must never run; only top prints. A delayed top finish
 // cannot race away an erroneously instantiated leaf's time0 message.
 //! lrm 6.2.1
+//! lrm 6.2.1:1000
 //! inherited IEEE 1364-2005 12.1.1
 //! expect stdout audit_hierarchy_unselected_instance_not_top.expected.txt
 `timescale 1ns/1ns

@@ -15,8 +15,10 @@
 // is pinned on a legal function by 28_user_function.va.
 //
 //! lrm 4.7.1
-//! reject named block
+//! lrm 4.7.1:3
+//! reject-only named block
 //! reject E0226
+//! neighbour 28_user_function.va
 module ch4_fn_named(p);
   inout p;
   electrical p;

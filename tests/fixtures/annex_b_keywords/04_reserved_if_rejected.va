@@ -24,7 +24,7 @@
 //! lrm B
 //! lrm 2.8
 //! lrm 2.8.2
-//! reject E0208
+//! reject-only E0208
 //! reject if
 module annex_b_reserved_if_rejected;
     real if;

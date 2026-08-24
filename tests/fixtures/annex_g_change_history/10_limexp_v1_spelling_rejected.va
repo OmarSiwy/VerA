@@ -16,7 +16,8 @@
 //
 //! lrm G.1
 //! lrm 4.5.13
-//! reject E0808
+//! reject-only E0808
+//! neighbour ../ch04_expressions/25_limexp.va
 module annex_g_limexp_v1(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ $limexp(V(p,n));

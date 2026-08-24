@@ -50,6 +50,16 @@
 // body Syntax 6-4 admits — one item declaration and one statement — and it is
 // legal under both readings, so the file's only claim is the chain itself.
 //
+// BOTH LINKS DECLARE SOMETHING (reconciler, 2026-10-08). Syntax 6-4 / A.1.9:
+// `paramset_item_declaration { paramset_item_declaration }` — every paramset
+// declares at least one item before its statements. An earlier revision gave
+// the far link only `.j = 2.0;`, which made the file ill-formed under that
+// production. The far link now declares a variable, `real slow_tag;`, which
+// changes nothing it assigns; j is still 2.0. (A far link whose statement READS
+// its own parameter, `.j = jval;`, is refused by VerA with E0314 — that is
+// pinned as an xfail in rc_h01_paramset_chain_far_link_parameter.va, kept out of
+// this file so the chain itself stays observable.)
+//
 // GROUND TRUTH TODAY: green, both checks. It was refused at line 68 with E0904,
 // "`h01_slow`, the module this paramset specializes": `Flatten` resolved
 // `ps.target` with `findModule` only, so the second identifier was required to
@@ -58,7 +68,9 @@
 // does not make, recorded at `paramsetOverrides` and asserted nowhere.
 //
 //! lrm 6.4
+//! lrm 6.4:1
 //! lrm 6.4.1
+//! lrm 6.4:2
 //! bias V(p) = 0.5
 `include "check.vh"
 module h01_chain(p, n);
@@ -72,6 +84,7 @@ paramset h01_fast h01_slow;
 endparamset
 
 paramset h01_slow h01_chain_base;
+  real slow_tag;
   .j = 2.0;
 endparamset
 

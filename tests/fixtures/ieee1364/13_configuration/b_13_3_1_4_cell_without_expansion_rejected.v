@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 13.3.1.4
 //! reject E0207
 //! reject a cell pairs with `liblist` or `use`
+//! neighbour audit_config_cell_liblist.v
 config cfg;
   design work.top;
   cell leaf;

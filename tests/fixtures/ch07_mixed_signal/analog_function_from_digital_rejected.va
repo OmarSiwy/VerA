@@ -25,7 +25,10 @@
 //
 //! lrm 7.3.7
 //! lrm 4.7.3
+//! lrm 4.7.3:2
+//! lrm 7.3.7:1000
 //! reject E0430
+//! neighbour digital_initial_accepted.va
 module ch7_analog_function_from_digital;
   real sampled;
   analog function real analog_scale;

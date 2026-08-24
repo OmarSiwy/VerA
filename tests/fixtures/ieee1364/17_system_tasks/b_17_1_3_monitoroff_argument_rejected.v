@@ -16,6 +16,8 @@
 //! inherited IEEE 1364-2005 17.1.3
 //! reject E1100
 //! reject $monitoron and $monitoroff take no arguments
+//! neighbour audit_monitoron_already_enabled.v
+//! neighbour d09_04_monitor.v
 module b_17_1_3_monitoroff_argument_rejected;
   reg a;
   initial begin

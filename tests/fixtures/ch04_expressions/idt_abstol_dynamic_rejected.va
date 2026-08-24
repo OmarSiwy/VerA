@@ -15,7 +15,9 @@
 //
 //! lrm 4.5.4
 //! lrm 4.5.14
-//! reject E0515
+//! reject-only E0515
+//! neighbour 145_ddt_idt_nature_tolerance.va
+//! neighbour 15_idt.va
 module ch04_idt_abstol_dynamic(a, b);
     inout a, b;
     electrical a, b;

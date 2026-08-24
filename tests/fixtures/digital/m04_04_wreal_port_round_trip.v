@@ -32,8 +32,13 @@
 // the check is on all 64 bits of the value that came back out of the child.
 //
 //! lrm 6.5.3
+//! lrm 6.5.3:1
 //! lrm 6.5.2
 //! lrm 3.7
+//! lrm 3.7:2
+//! lrm 6.5.2:1000
+//! lrm 6.5.5
+//! lrm 6.5.5:1
 //! timescale 1ns/1ns
 //
 // HAND DERIVATION

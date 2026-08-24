@@ -13,7 +13,9 @@
 // written); 22_port_branch.va is that legal form, run and asserted.
 //
 //! lrm 3.12.1
-//! reject E0372
+//! lrm 3.12.1:1000
+//! reject-only E0372
+//! neighbour 22_port_branch.va
 module ch3_port_branch_on_internal_net(p);
     inout p;
     electrical p;

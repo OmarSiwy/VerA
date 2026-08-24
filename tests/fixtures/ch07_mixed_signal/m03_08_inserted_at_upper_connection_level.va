@@ -49,10 +49,15 @@
 // inserted -> the defparam target does not exist and the file must not compile.
 //
 //! lrm 7.8.4
+//! lrm 7.8.4:5
 //! lrm 7.8.1
 //! lrm 7.8.5
 //! lrm 7.8.2
 //! lrm 6.3.1
+//! lrm 7.8.1:1000
+//! lrm 7.8.5:1000
+//! lrm F.2.1
+//! lrm F.2.1:1
 //! solve
 `include "check.vh"
 

@@ -684,6 +684,7 @@ pub fn close() void {
     callback.reset();
     value.reset();
     systf.reset();
+    delays.reset();
     clearError();
 }
 
@@ -978,6 +979,9 @@ pub const VlogInfo = extern struct {
 /// application's use of it.
 var inv_argc: c_int = 0;
 var inv_argv: [*c][*c]u8 = null;
+
+/// §12.26 the product log file channel 3 writes (`print.setLogFile`).
+pub const setLogFile = print.setLogFile;
 
 /// A host calls this once, from its `main`, before the startup routines run.
 /// A host that never does reports an invocation of no options.

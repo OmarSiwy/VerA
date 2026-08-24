@@ -35,8 +35,11 @@
 //! lrm 5.4.2.2
 //! lrm 5.4.2
 //! lrm 5.6.7.2
-//! reject E0409
+//! lrm 5.6.7.2:1000
+//! reject-only E0409
 //! reject indirectly assigned
+//! neighbour switch_branch.va
+//! neighbour value_retention.va
 module ch5_source_both_kinds(p, n, c);
   inout p, n, c;
   electrical p, n, c;

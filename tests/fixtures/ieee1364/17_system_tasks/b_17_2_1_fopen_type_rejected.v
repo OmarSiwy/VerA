@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 17.2.1
 //! reject E1100
 //! reject Table 17-7
+//! neighbour b_17_2_5_append_writes_at_end.v
 module b_17_2_1_fopen_type_rejected;
   integer fd;
   initial fd = $fopen("b_17_2_1_fopen_type.txt", "q");

@@ -13,7 +13,10 @@
 //
 //! lrm 4.2.14
 //! lrm A.8.1
-//! reject E0223
+//! lrm 4.2.14:1000
+//! lrm A.8.1:1000
+//! reject-only E0223
+//! neighbour assignment_pattern_replication_count_over_parameter.va
 module ch04_pattern_repl_count_variable(p, n);
     inout p, n;
     electrical p, n;

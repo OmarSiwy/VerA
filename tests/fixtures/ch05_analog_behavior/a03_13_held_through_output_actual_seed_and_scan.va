@@ -67,6 +67,8 @@
 //! lrm 4.7.2.3
 //! lrm 9.13.1
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:1
+//! lrm 9.13.1:3
 //! analysis tran
 //! time 0, 1n, 2n
 `include "check.vh"

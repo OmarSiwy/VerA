@@ -20,7 +20,7 @@
 // `reg` is a substring of `trireg` for the same reason; it is already censused
 // unshadowed in 19_reserved_core_keywords.va, so it needs no second home.
 //! lrm B
-//! reject E0208
+//! reject-only E0208
 //! reject highz0
 //! reject highz1
 //! reject large

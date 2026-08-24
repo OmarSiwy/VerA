@@ -33,7 +33,9 @@
 // differ only in whether the folded bounds agree.
 //
 //! lrm 6.5.2.2
-//! reject E0350
+//! lrm 6.5.2.2:2
+//! reject-only E0350
+//! neighbour vector_ports_range_equal.va
 module ch6_vector(p);
   inout [3:0] p; electrical [0:3] p;
   analog begin I(p[0]) <+ V(p[1]); I(p[2]) <+ V(p[3]); end

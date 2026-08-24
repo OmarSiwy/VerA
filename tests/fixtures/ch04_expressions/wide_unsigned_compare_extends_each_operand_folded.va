@@ -10,6 +10,8 @@
 //   -1 > 128'h1                    2^32 - 1 > 1 -> 1
 //
 //! lrm 4.2.9
+//! lrm 4.2.9:2
+//! lrm 4.2.9:4
 `include "check.vh"
 module ch04_wide_unsigned_compare_folded(p);
   inout p; electrical p;

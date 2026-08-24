@@ -26,6 +26,8 @@
 //! lrm 7.1
 //! lrm 7.6
 //! lrm 7.3.1
+//! lrm 7.5
+//! lrm 7.5:1000
 //! solve
 `include "check.vh"
 connectmodule ch7_manual_a2d(el, cm);

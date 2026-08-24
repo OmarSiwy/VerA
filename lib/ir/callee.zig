@@ -177,6 +177,9 @@ pub const Callee = enum(u8) {
     @"$sscanf$int",
     @"$sscanf$real",
     @"$sscanf$str",
+    // §9.5.3 `$sformat` whose format_string is a string variable: (format,
+    // operands...), formatted at run time (`str_kernels.zSFormatRt`).
+    @"$sformat$rt",
     // §9.12 / IEEE 1364 §17.10.2 `Lower.lowerValuePlusargs`: the first
     // matching plusarg, which `$sscanf$<ty>` then converts.
     @"$plusarg$str",
@@ -395,6 +398,7 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$feof" = .{ .ty = .int, .args = one, .fd = 0, .family = .file_func },
     .@"$simparam$str" = .{ .ty = .str },
     .@"$sformat" = .{ .ty = .str },
+    .@"$sformat$rt" = .{ .ty = .str },
     .@"$sscanf$str" = .{ .ty = .str },
     .@"$plusarg$str" = .{ .ty = .str },
     .@"$str$cat" = .{ .ty = .str },
@@ -559,6 +563,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$ferror",
         .@"$feof",
         .@"$sformat",
+        .@"$sformat$rt",
         .@"$sscanf",
         .@"$limit",
         .@"$table_model",

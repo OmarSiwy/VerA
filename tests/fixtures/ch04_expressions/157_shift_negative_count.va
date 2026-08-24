@@ -16,6 +16,7 @@
 // to it).
 //
 //! lrm 4.2.11
+//! lrm 4.2.11:1000
 `include "check.vh"
 module ch04_shift_negative_count(p, n);
     inout p, n;

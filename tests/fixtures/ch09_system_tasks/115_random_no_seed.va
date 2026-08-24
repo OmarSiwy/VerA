@@ -33,6 +33,7 @@
 // updated.
 //
 //! lrm 9.13.1
+//! lrm 9.13.1:2
 `include "check.vh"
 module ch09_random_no_seed(p, n);
   inout p, n; electrical p, n;

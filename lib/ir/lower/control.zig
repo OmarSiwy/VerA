@@ -76,8 +76,35 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
     if (lower_constfold.foldExpr(self, cond, false)) |c| {
         return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);
     }
+    // §5.6.7 "Indirect branch contributions shall not be used in conditional
+    // ... statements, unless the conditional expression is a constant
+    // expression", and a parameter is a `constant_primary` (A.8.4). The arm
+    // decides the circuit's topology, so its parameters become shape
+    // parameters a card cannot move (`shapeEval`), as a generate scheme's do.
+    if ((try hasIndirect(self, then_s) or try hasIndirect(self, else_s)) and
+        lower_constfold.foldExpr(self, cond, true) != null)
+    {
+        const c = lower_constfold.shapeEval(self, cond).?;
+        return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);
+    }
     const c = try self.toBool(try lower_expr.lowerExpr(self, cond));
     try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond) or try isStaticValue(self, c), cond);
+}
+
+/// Whether statement `id` or one under it is a §5.6.7 indirect contribution.
+fn hasIndirect(self: *Lower, id: Ast.StmtId) Oom!bool {
+    if (id == .none) return false;
+    if (self.file.stmt(id) == .indirect) return true;
+    var walk = struct {
+        lower: *Lower,
+        found: bool = false,
+        pub fn expr(_: *@This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+        pub fn stmt(w: *@This(), s: Ast.StmtId) Oom!void {
+            w.found = w.found or try hasIndirect(w.lower, s);
+        }
+    }{ .lower = self };
+    try self.file.stmtEdges(id, &walk);
+    return walk.found;
 }
 
 /// Lowers a body that only runs under a runtime condition, raising `cond_depth` for
@@ -534,8 +561,23 @@ const max_unroll: u32 = 4096;
 /// exist, so it is a §3.4 shape parameter like an array bound.
 fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!bool {
     const gv = genvarOf(self, init_s) orelse return false;
-    const start = lower_constfold.shapeEval(self, assignValueOf(self, init_s).?) orelse {
-        try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
+    // §6.6.1 "Both the initialization and iteration assignments shall assign
+    // to the same genvar": a property of the text, so judged before any trip
+    // (a zero-trip loop never evaluates its step). E0419's explain owns it.
+    if (step != .none and self.file.stmt(step) == .assign) {
+        const t = self.file.stmt(step).assign.target;
+        const name = if (self.file.exprs.tag(t) == .ident) self.file.str(self.file.exprs.strOf(t)) else "";
+        if (!std.mem.eql(u8, name, gv)) {
+            try self.err(self.file.exprs.mainTok(t), .E0419, "the iteration assigns `{s}`, and the initialization the genvar `{s}`: both shall assign the same genvar", .{ name, gv });
+            return true;
+        }
+    }
+    const init_v = assignValueOf(self, init_s).?;
+    const start = lower_constfold.shapeEval(self, init_v) orelse {
+        if (unknownLiteral(self, init_v)) |lit|
+            try self.err(self.file.exprs.mainTok(lit), .E0486, "the initialization sets the genvar `{s}`", .{gv})
+        else
+            try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
         return true;
     };
     try self.consts.put(self.arena, gv, start);
@@ -558,16 +600,51 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
         if (body != .none and self.file.stmt(body) == .block and self.file.stmt(body).block.gen_name != .none)
             self.gen_iter = if (self.consts.get(gv)) |v| v.asInt() else null;
         try lower_stmt.lowerStmt(self, body);
-        const next = lower_constfold.shapeEval(self, assignValueOf(self, step) orelse .none) orelse {
-            try self.err(self.file.exprs.mainTok(cond), .E0419, "", .{});
+        const step_v = assignValueOf(self, step) orelse .none;
+        const next = lower_constfold.shapeEval(self, step_v) orelse {
+            if (unknownLiteral(self, step_v)) |lit|
+                try self.err(self.file.exprs.mainTok(lit), .E0486, "the iteration sets the genvar `{s}`", .{gv})
+            else
+                try self.err(self.file.exprs.mainTok(cond), .E0419, "", .{});
             break;
         };
         try self.consts.put(self.arena, gv, next);
     }
-    if (n == max_unroll)
-        try self.err(self.file.exprs.mainTok(cond), .E0420, "gave up after {d} iterations", .{max_unroll});
+    if (n == max_unroll) try loopBeyondCap(self, gv, cond, step);
     _ = self.consts.remove(gv);
     return true;
+}
+
+/// Iterations `loopBeyondCap` follows a loop's scheme alone, body unlowered,
+/// to tell a long loop from one that never ends.
+const max_probe: u32 = 1 << 20;
+
+/// The body has been unrolled `max_unroll` times. The scheme alone (§6.6.1's
+/// condition and step, which fold without the body) decides what that means:
+/// it may end right here (exactly `max_unroll` iterations, legal); end later
+/// (E0485, the engine's limit and not a language rule); or never end, which
+/// a genvar value that repeats proves outright and a scheme still running
+/// after `max_probe` iterations is taken to mean (E0420, §6.6.1's error).
+fn loopBeyondCap(self: *Lower, gv: []const u8, cond: Ast.ExprId, step: Ast.StmtId) Oom!void {
+    const tok = self.file.exprs.mainTok(cond);
+    var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
+    var k: u32 = max_unroll;
+    while (k < max_unroll + max_probe) : (k += 1) {
+        const c = lower_constfold.shapeEval(self, cond) orelse return;
+        if (!c.isTrue()) {
+            if (k != max_unroll)
+                try self.err(tok, .E0485, "it runs {d} iterations; at most {d} are unrolled", .{ k, max_unroll });
+            return;
+        }
+        const v = (self.consts.get(gv) orelse return).asInt();
+        if ((try seen.getOrPut(self.arena, v)).found_existing) {
+            try self.err(tok, .E0420, "`{s}` repeats the value {d}", .{ gv, v });
+            return;
+        }
+        const next = lower_constfold.shapeEval(self, assignValueOf(self, step) orelse .none) orelse return;
+        try self.consts.put(self.arena, gv, next);
+    }
+    try self.err(tok, .E0420, "still running after {d} iterations", .{max_unroll + max_probe});
 }
 
 /// Returns the genvar a `for` init statement assigns, or null (LRM §3.5).
@@ -580,6 +657,19 @@ fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
     if (self.file.exprs.tag(t) != .ident) return null;
     const name_id = self.file.exprs.strOf(t);
     for (m.genvars) |g| if (g == name_id) return self.file.str(name_id);
+    return null;
+}
+
+/// §6.6.1 "It shall be an error if any bit of the genvar is set to x or z":
+/// the first literal under `e` with an x or z bit, which is what keeps a
+/// genvar assignment's value from folding. `markDiscreteExprs` exempts these
+/// literals from E0130, since the scheme is folded, never executed.
+fn unknownLiteral(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .logic_literal) return if (ex.logicValue(e).hasUnknown()) e else null;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (unknownLiteral(self, c)) |hit| return hit;
     return null;
 }
 

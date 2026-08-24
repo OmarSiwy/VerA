@@ -51,10 +51,18 @@
 // below therefore gets its own net, sharing only the common return.
 //
 //! lrm E.3
+//! lrm E.3:1
+//! lrm E.3:2
 //! lrm E.1.2
+//! lrm E.1.2:1
 //! lrm E.2
 //! lrm E.3.2.1
 //! lrm 6.7.1
+//! lrm 6.2.2
+//! lrm 6.2.2:2
+//! lrm 6.5.4
+//! lrm 6.5.4:1
+//! lrm 6.7.1:1
 //! bias V(ps) = 1.25, V(ns) = 0.25, V(n) = 0.0
 //! solve
 `include "check.vh"

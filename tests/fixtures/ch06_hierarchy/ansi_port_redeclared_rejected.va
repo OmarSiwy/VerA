@@ -31,7 +31,10 @@
 // is the sentence quoted at the top and is the whole authority here.
 //
 //! lrm 6.2
-//! reject E0218
+//! lrm 6.2:6
+//! reject-only E0218
+//! neighbour nonansi_ports.va
+//! neighbour output_port.va
 module ch6_ansi_port_redeclared(inout electrical p);
   inout electrical p;
   analog I(p) <+ V(p);

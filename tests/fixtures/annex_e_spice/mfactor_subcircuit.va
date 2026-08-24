@@ -29,6 +29,7 @@
 //
 //! lrm E.4.1
 //! lrm 9.18
+//! lrm 9.18:1000
 //! bias V(p) = 2.0
 `include "check.vh"
 module annex_e_mfactor(p);

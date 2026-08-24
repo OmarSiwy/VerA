@@ -15,7 +15,8 @@
 // VerA reports E0207 "unexpected token: found 1.0".
 //
 //! lrm A.2.5
-//! reject E0207
+//! lrm A.2.5:1000
+//! reject-only E0207
 `include "disciplines.vams"
 module annex_a_numeric_value_list(p, n);
   inout p, n;

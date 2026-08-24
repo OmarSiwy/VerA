@@ -37,6 +37,9 @@
 // check widens to 1.16e-3 relative and is written at 2e-3.
 //
 //! lrm 9.17.3
+//! lrm 9.17.3:7
+//! lrm 9.17.3:5
+//! lrm 9.17.3:6
 //! bias V(p) = 0.3
 `include "check.vh"
 module ch09_limit_user_function(p, n);

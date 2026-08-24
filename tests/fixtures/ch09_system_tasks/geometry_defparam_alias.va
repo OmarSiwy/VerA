@@ -11,6 +11,9 @@
 //! lrm 6.3.1
 //! lrm 6.3.6
 //! lrm 9.18
+//! lrm 6.3.6:2
+//! lrm 6.3:1
+//! lrm 9.18:1000
 //! checks 6
 `include "check.vh"
 module geometry_defparam_top;

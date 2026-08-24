@@ -13,9 +13,11 @@
 // point. 17_idtmod.va is the legal side with modulus 2.0.
 //
 //! lrm 4.5.5
-//! reject modulus
+//! lrm 4.5.5:3
+//! reject-only modulus
 //! reject positive
 //! reject E0516
+//! neighbour 17_idtmod.va
 module ch04_idtmod_modulus_rejected(p, n);
     inout p, n;
     electrical p, n;

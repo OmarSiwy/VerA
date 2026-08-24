@@ -5,9 +5,12 @@
 // The right-hand side is the reg r. Legal neighbour:
 // b_12_2_1_defparam_last_wins.v (numbers on every right-hand side).
 // digital-runner: reject
+//! lrm 6.3.1
+//! lrm 6.3.1:5
 //! inherited IEEE 1364-2005 12.2.1
 //! reject E1100
 //! reject a constant expression is required here
+//! neighbour b_12_2_1_defparam_last_wins.v
 module leaf;
   parameter p = 0;
   initial $display("%0d", p);

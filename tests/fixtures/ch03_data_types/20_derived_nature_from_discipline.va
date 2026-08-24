@@ -24,6 +24,8 @@
 //! bias V(dp) = 4.0, V(dn) = 1.0
 //! lrm 3.6.2.6
 //! lrm 3.6.1.2
+//! lrm 3.6.2.6:1
+//! lrm 3.6.2.6:2
 `include "check.vh"
 nature ch03_ttl_volt;
     units = "V";

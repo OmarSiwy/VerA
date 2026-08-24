@@ -26,7 +26,9 @@
 //
 //! lrm 8.5.3.3
 //! lrm A.6.2
-//! reject E0482
+//! lrm A.6.2:1000
+//! reject-only E0482
+//! neighbour blocking_assignment_delay.va
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch8533_blocking_wire(p);

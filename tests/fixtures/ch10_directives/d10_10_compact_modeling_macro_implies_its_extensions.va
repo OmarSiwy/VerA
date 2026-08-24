@@ -96,6 +96,7 @@
 // tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 rather than silently dropped.
 //
 //! lrm 10.5
+//! lrm 10.5:2
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module d10_compact_modeling_macro_implies_its_extensions(p, n);

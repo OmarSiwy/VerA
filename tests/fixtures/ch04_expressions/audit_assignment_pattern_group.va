@@ -6,6 +6,7 @@
 // initialization. Both use exact binary fractions. This tests values/order,
 // not operand evaluation count or every permitted pattern context.
 //! lrm 4.2.14
+//! lrm 4.2.14:1000
 //! checks 8
 //! bias V(p) = 0.75
 //! bias V(n) = 0.0

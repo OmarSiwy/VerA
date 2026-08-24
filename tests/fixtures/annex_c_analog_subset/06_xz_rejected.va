@@ -13,7 +13,7 @@
 //
 //! lrm C.3
 //! lrm 2.6.1
-//! reject E0130
+//! reject-only E0130
 //! reject 4'b0x1z
 //! reject 4'b01?1
 module annex_c_xz_rejected;

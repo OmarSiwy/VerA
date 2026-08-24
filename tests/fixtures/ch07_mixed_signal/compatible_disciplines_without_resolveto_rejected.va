@@ -33,8 +33,12 @@
 // shape, with the different abstols that make the choice observable.
 //
 //! lrm 7.2.4
+//! lrm 7.2.4:2
 //! lrm 7.4.1
+//! lrm F.2.1
+//! lrm F.2.1:7
 //! reject E0903
+//! neighbour figure_7_2_resolveto_two_levels.va
 `include "disciplines.vams"
 nature ch724_i;
   units = "A";

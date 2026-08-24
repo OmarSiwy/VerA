@@ -4,7 +4,11 @@
 // the base letter (`8'h Af`) and 2.6.1 explicitly permits it. Space before the
 // base letter is prohibited, so `4' h5` is not a based number at all.
 //! lrm 2.6.1
-//! reject E0131
+//! lrm 2.6.1:7
+//! lrm A.10
+//! lrm A.10:1
+//! reject-only E0131
+//! neighbour 36_based_number_digit_whitespace.va
 module ch02_base_apostrophe_whitespace_rejected;
     integer value;
     analog value = 4' h5;

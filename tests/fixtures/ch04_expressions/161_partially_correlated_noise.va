@@ -22,6 +22,7 @@
 // branch retains 0 V and the flow branch 0 A whatever `corr` is.
 //
 //! lrm 4.6.4.6
+//! lrm 4.6.4.6:1000
 //! noise thermal(a,b)#0
 //! noise thermal(a,b)#1
 //! noise thermal(b,c)#2

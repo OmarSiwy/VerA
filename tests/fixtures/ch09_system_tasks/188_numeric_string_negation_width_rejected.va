@@ -1,7 +1,7 @@
 // The current integer negation IR wraps to 32 bits. Do not print a truncated
 // value under a format wrapper claiming a preserved 64-bit operand.
 //! lrm 9.4.5
-//! reject E0819
+//! reject-only E0819
 module ch09_numeric_string_negation_width_rejected(p,n);
   inout p,n; electrical p,n;
   parameter select = 1;

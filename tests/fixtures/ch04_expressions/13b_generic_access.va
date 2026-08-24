@@ -19,6 +19,7 @@
 // generic that almost anything satisfies it — on source 4.4 declares supported.
 //
 //! lrm 4.4
+//! lrm 4.4:1
 //! bias V(p) = 1.5
 //! bias V(n) = 0.5
 `include "check.vh"

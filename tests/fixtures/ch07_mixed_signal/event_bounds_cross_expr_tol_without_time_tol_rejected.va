@@ -5,7 +5,9 @@
 // fixture event_bounds_mixed_legal.va supplies both and observes the crossing.
 //! lrm 5.10.3.1
 //! lrm 7.3.5
-//! reject E0517
+//! lrm 5.10.3.1:6
+//! reject-only E0517
+//! neighbour event_bounds_mixed_legal.va
 module event_bounds_digital_cross_missing_time(p);
   inout p; electrical p;
   integer n;

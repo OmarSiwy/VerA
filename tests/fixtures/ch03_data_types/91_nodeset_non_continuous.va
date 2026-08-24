@@ -20,7 +20,8 @@
 // about.
 //
 //! lrm 3.6.3.2
-//! reject E0366
+//! lrm 3.6.3.2:1
+//! reject-only E0366
 discipline ch3_nodeset_discrete;
     domain discrete;
 enddiscipline

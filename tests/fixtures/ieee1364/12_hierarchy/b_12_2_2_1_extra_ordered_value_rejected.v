@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 12.2.2.1
 //! reject E1100
 //! reject more parameter values than the module has parameters
+//! neighbour b_12_2_2_parameter_assignment_forms.v
 module my_mem;
   parameter addr_width = 16;
   localparam mem_size = 1 << addr_width;

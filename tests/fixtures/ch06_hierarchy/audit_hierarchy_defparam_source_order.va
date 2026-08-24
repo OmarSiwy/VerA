@@ -2,6 +2,8 @@
 // Same-file defparams: last text assignment7 wins over earlier5 and inline2.
 // There is no cross-file ordering premise; IEEE makes that case undefined.
 //! lrm 6.3.1
+//! lrm 6.3
+//! lrm 6.3:1
 // inherited IEEE 1364-2005 12.2.1
 `include "check.vh"
 module audit_hierarchy_defparam_source_order(p);

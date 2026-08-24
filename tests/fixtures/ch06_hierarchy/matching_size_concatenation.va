@@ -26,6 +26,7 @@
 // Both dyadic, so exact. A reversed concatenation order swaps 0.625 and 0.375.
 //
 //! lrm 6.5.7.1
+//! lrm 6.5.7.1:1
 //! bias V(p) = 0.125
 //! solve
 `include "check.vh"

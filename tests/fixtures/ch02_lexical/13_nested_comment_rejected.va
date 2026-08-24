@@ -10,7 +10,8 @@
 // the non-nesting rule leaves the trailing tokens. (It was E0205 "unsupported
 // module item" until that code was kept for derivable items VerA lacks.)
 //! lrm 2.4
-//! reject E0240
+//! lrm 2.4:3
+//! reject-only E0240
 module ch02_nested_comment_rejected;
     /* outer /* nested */ still_outer */
 endmodule

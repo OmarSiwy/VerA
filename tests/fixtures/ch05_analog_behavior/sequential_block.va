@@ -4,6 +4,8 @@
 // a = 3.0 — not 2.0 (the second read stale), and not 1.0 (order reversed).
 //
 //! lrm 5.3.1
+//! lrm 5.3
+//! lrm 5.3:1
 `include "check.vh"
 module ch5_sequential(p);
   inout p; electrical p; real a;

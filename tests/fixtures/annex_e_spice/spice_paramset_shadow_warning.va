@@ -9,6 +9,7 @@
 // covers legal names that differ in case and do not hide the SPICE fallback.
 //! lrm E.3.3
 //! lrm 6.4
+//! lrm E.3.3:3
 //! warn W0951
 //! bias V(p) = 1, V(q) = 1, V(n) = 0
 //! checks 2

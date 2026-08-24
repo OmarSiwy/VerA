@@ -47,8 +47,10 @@
 // widen it back to a substring that E0311 answers.
 //
 //! lrm 3.2
+//! lrm 3.2:1
+//! lrm 3.2:2
 //! lrm 4.2.1.1
-//! reject E0310
+//! reject-only E0310
 module a01_nonfinite_array_subscript_rejected(p, n);
   inout p, n;
   electrical p, n;

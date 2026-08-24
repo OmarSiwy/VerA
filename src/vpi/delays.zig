@@ -4,8 +4,10 @@
 //! module paths and timing checks. A put on a gate, UDP or continuous
 //! assignment rewrites the engine driver its statement became, and the row;
 //! on a path or timing check, the row alone (no simulation applies a specify
-//! block). Either way vpi_get_delays reads the put back.
+//! block). Either way vpi_get_delays reads the put back, a path's pulse
+//! limits included (`limits`).
 
+const std = @import("std");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
 const root = @import("root.zig");
@@ -21,6 +23,25 @@ const vpiUdp = code.vpiUdp;
 // ---------------------------------------------------------------------------
 // §12.11 vpi_get_delays
 // ---------------------------------------------------------------------------
+
+/// The pulse limits a §12.29 put gave a module path, by object index: each
+/// written delay's reject and error limit, kept apart from the delays so a
+/// put of the delays alone leaves them ("If only the delay changes, and not
+/// the pulse limits, the pulse limits shall retain the values they had"). A
+/// path absent here has IEEE 1364 §14.6.1's default, both limits the delay
+/// itself, which therefore follows a delay put. Slices live in the design's
+/// arena; `reset` drops the table with the design.
+const Limits = struct { reject: []const f64, err: []const f64 };
+var limits: std.AutoHashMapUnmanaged(usize, Limits) = .empty;
+
+/// Forgets every path's pulse limits (`root.close`).
+pub fn reset() void {
+    limits.clearAndFree(std.heap.smp_allocator);
+}
+
+fn objIndex(o: *const root.Obj) usize {
+    return (@intFromPtr(o) - @intFromPtr(root.design.?.objects.ptr)) / @sizeOf(root.Obj);
+}
 
 /// Figure 12-4, laid out as Annex G does (its `bool`s are PLI_INT32).
 pub const Delay = extern struct {
@@ -46,8 +67,9 @@ pub const Delay = extern struct {
 /// §7.14's derived one: fall = rise, turn-off = min(rise, fall).
 ///
 /// Table 12-3's min/typ/max triple is one value three times (no mintypmax
-/// expression reaches this model), and the reject and error limits of an
-/// inertial delay are the delay itself (IEEE 1364 §14.6.1's default).
+/// expression reaches this model), and the reject and error limits are the
+/// ones a put gave a path, else the delay itself (IEEE 1364 §14.6.1's
+/// default, an inertial delay).
 pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     if (root.refused("vpi_get_delays")) return;
     const o = root.asObj(obj) orelse {
@@ -100,13 +122,24 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
         values_buf[0..3].* = .{ rise, fall, off };
         break :blk values_buf[0..3];
     };
+    // A path's put limits, spread over its transitions as its delays are.
+    var reject_buf: [12]f64 = undefined;
+    var err_buf: [12]f64 = undefined;
+    const lim = if (o.vtype == vpiModPath) limits.get(objIndex(o)) else null;
+    const rejects: []const f64 = if (lim) |l| pathDelays(l.reject, &reject_buf) else values;
+    const errs: []const f64 = if (lim) |l| pathDelays(l.err, &err_buf) else values;
     const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
     const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
     var at: usize = 0;
     // A path's first three transitions (0->1, 1->0, 0->z) ARE its rise,
     // fall and turn-off, so every count reads a prefix.
-    for (values[0..@intCast(d.no_of_delays)]) |v| {
-        for (0..pulse) |_| for (0..mtm) |_| {
+    for (values[0..@intCast(d.no_of_delays)], 0..) |delay_v, i| {
+        for (0..pulse) |p| for (0..mtm) |_| {
+            const v = switch (p) {
+                0 => delay_v,
+                1 => if (i < rejects.len) rejects[i] else delay_v,
+                else => if (i < errs.len) errs[i] else delay_v,
+            };
             var t: callback.Time = .{ .type = d.time_type, .high = 0, .low = 0, .real = v };
             if (d.time_type == callback.vpiSimTime) {
                 const ticks = run.ticksOf(.{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = v }, obj) orelse return;
@@ -140,9 +173,10 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
 /// Table 12-5's layouts: with `mtm_flag` each delay is a min/typ/max triple
 /// and the TYPICAL is applied (no mintypmax selection reaches the engine,
 /// which runs typical, as `vpi_get_delays` reports); with `pulsere_flag` each
-/// is a (delay, reject, error) triple, and the limits have nowhere to live
-/// apart from the delay — IEEE 1364 §14.6.1's inertial default, "the pulse
-/// limits ... the delay itself" — so they follow it, as they read back.
+/// is a (delay, reject, error) triple. A path keeps the limits (`limits`).
+/// The engine's gates and continuous assignments run IEEE 1364 §14.6.1's
+/// inertial default, both limits the delay itself, and no other: a put of
+/// other limits onto one is refused rather than dropped.
 pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     if (root.refused("vpi_put_delays")) return;
     const o = root.asObj(obj) orelse {
@@ -189,13 +223,21 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     var units: [3]f64 = undefined;
     for (0..n) |k| {
         // The k-th delay's element: its typical (mtm), its delay (pulsere).
-        const t = d.da[k * mtm * pulse + (if (mtm == 3) @as(usize, 1) else 0)];
+        const t = d.da[element(k, 0, mtm, pulse)];
         if (t.type != d.time_type) {
             root.fail("BADDELAY", "vpi_put_delays: da[{d}] is not of the structure's time_type", .{k});
             return;
         }
         ticks[k] = run.ticksOf(t, obj) orelse return;
         units[k] = if (t.type == callback.vpiScaledRealTime) t.real else @floatFromInt(ticks[k]);
+        if (pulse == 3) for (1..3) |p| {
+            const lt = d.da[element(k, p, mtm, pulse)];
+            const same = if (lt.type == callback.vpiSimTime) lt.high == t.high and lt.low == t.low else lt.real == t.real;
+            if (lt.type != t.type or !same) {
+                root.fail("NOTSUPPORTED", "vpi_put_delays: this object's pulse limits are its delay (IEEE 1364 §14.6.1); other reject or error limits are not implemented for it", .{});
+                return;
+            }
+        };
     }
     // IEEE 1364 §7.14's derivations for the delays not given.
     if (n < 2) ticks[1] = ticks[0];
@@ -248,6 +290,12 @@ fn pathDelays(w: []const f64, out: *[12]f64) []const f64 {
     return out[0..12];
 }
 
+/// Table 12-5's index of delay `k`'s part `p` (0 delay, 1 reject, 2 error),
+/// its typical when `mtm` is 3.
+fn element(k: usize, p: usize, mtm: usize, pulse: usize) usize {
+    return k * mtm * pulse + p * mtm + (if (mtm == 3) @as(usize, 1) else 0);
+}
+
 fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
     const legal = if (o.vtype == vpiModPath) switch (d.no_of_delays) {
         1, 2, 3, 6, 12 => true,
@@ -269,7 +317,23 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
         root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
         return;
     };
-    for (out, 0..) |*v, k| v.* = d.da[k * mtm * pulse + (if (mtm == 3) @as(usize, 1) else 0)].real;
-    const idx = (@intFromPtr(o) - @intFromPtr(design.objects.ptr)) / @sizeOf(root.Obj);
+    for (out, 0..) |*v, k| v.* = d.da[element(k, 0, mtm, pulse)].real;
+    const idx = objIndex(o);
+    // §12.29: a put with pulsere_flag sets a path's limits; one without
+    // leaves them.
+    if (pulse == 3 and o.vtype == vpiModPath) {
+        const a = design.arena.allocator();
+        const reject = a.alloc(f64, n) catch return noMem();
+        const err = a.alloc(f64, n) catch return noMem();
+        for (0..n) |k| {
+            reject[k] = d.da[element(k, 1, mtm, pulse)].real;
+            err[k] = d.da[element(k, 2, mtm, pulse)].real;
+        }
+        limits.put(std.heap.smp_allocator, idx, .{ .reject = reject, .err = err }) catch return noMem();
+    }
     design.objects[idx].delays = out;
+}
+
+fn noMem() void {
+    root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
 }

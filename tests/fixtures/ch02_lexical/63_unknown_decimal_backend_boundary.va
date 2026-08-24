@@ -12,7 +12,8 @@
 // rule; the code is pinned because it is the one VerA emits.
 //
 //! lrm 7.3.2
-//! reject E0130
+//! lrm 7.3.2:2
+//! reject-only E0130
 module ch02_unknown_decimal_backend_boundary;
     integer value;
     analog value = 80'sd?__;

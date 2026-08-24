@@ -41,7 +41,8 @@
 //! lrm 9.17.1
 //! lrm 3.2
 //! lrm 4.2.1.1
-//! reject $discontinuity
+//! lrm 9.17.1:2
+//! reject-only $discontinuity
 module a01_discontinuity_degree_out_of_range_rejected(p, n);
   inout p, n;
   electrical p, n;

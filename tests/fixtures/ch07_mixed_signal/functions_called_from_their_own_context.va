@@ -30,6 +30,7 @@
 //
 //! lrm 7.3.7
 //! lrm 4.7
+//! lrm 4.7:1000
 //! analysis tran
 //! time 5n, 10n, 15n
 //! bias V(p) = 0.75

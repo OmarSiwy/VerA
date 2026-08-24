@@ -13,6 +13,7 @@
 // so the sums are exact and `CHECKX` is the right form.
 //
 //! lrm 9.18
+//! lrm 9.18:1000
 `include "check.vh"
 module ch09_hierarchical_parameters(p, n);
   inout p, n; electrical p, n;

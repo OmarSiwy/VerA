@@ -31,7 +31,9 @@
 //! lrm 1.3.5
 //! lrm 1.3.4
 //! lrm 4.4
-//! reject binds no flow nature
+//! lrm 1.3.5:1000
+//! lrm 4.4:5
+//! reject-only binds no flow nature
 module ch01_undeclared_quantity_read(p, n);
     inout p, n;
     electrical p, n;

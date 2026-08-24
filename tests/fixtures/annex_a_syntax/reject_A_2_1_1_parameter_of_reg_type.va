@@ -17,7 +17,8 @@
 //
 //! lrm A.2.1
 //! lrm A.2.1.1
-//! reject E0208
+//! lrm A.2.1.1:1000
+//! reject-only E0208
 `include "disciplines.vams"
 module annex_a_param_reg(p, n);
   inout p, n;

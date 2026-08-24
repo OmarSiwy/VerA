@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 7.9 7.1.2
 //! reject E0207
 //! reject both drive strengths cannot be high impedance
+//! neighbour b_7_9_strength_levels.v
 module b_7_9_gate_highz_pair_rejected;
   reg a, b;
   wire o;

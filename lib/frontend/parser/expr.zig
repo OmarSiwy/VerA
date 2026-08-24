@@ -281,6 +281,18 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             if (self.peek() == .lparen) return parseCall(self, .sys_call, tok, name);
             return addCall(self, .sys_call, tok, name, &.{});
         },
+        // §6.4.3: "A paramset output variable's value may be computed from
+        // values of any output parameters of the module by using the special
+        // syntax .module_output_variable_identifier." A primary in a paramset
+        // statement only, interned with its period: no other name holds one
+        // (`internTok` interns an escaped identifier's period as a space), and
+        // elaboration binds `.gm` to the instance's `gm`.
+        .dot => if (self.in_paramset) {
+            self.pos += 1;
+            const name = try self.expectIdent();
+            const dotted = try self.file.intern(self.arena, try std.fmt.allocPrint(self.arena, ".{s}", .{self.file.str(name)}));
+            return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = dotted });
+        },
         // A.2.5 value_range_expression `inf` (only meaningful in §3.4.2).
         .kw_inf => {
             self.pos += 1;

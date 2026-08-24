@@ -12,6 +12,7 @@
 // an operand and the check stays unconditional.
 //
 //! lrm 9.15
+//! lrm 9.15:4
 //! analysis dc
 `include "check.vh"
 module ch09_simparam_string(p, n);

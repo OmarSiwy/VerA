@@ -8,7 +8,8 @@
 // line makes the file legal.
 //
 //! lrm 6.8
-//! reject E0362
+//! lrm 6.8:1
+//! reject-only E0362
 module ch6_duplicate_parameter(p);
   inout p; electrical p;
   parameter real k = 1.0;

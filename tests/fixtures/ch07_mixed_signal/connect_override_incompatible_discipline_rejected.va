@@ -28,8 +28,12 @@
 // statement was accepted. It is now judged once per statement.
 //
 //! lrm 7.7.1
+//! lrm 7.7.1:1
 //! lrm 3.11.1
-//! reject cannot stand for
+//! lrm 3.11.1:1
+//! lrm 7.7.1:2
+//! reject-only cannot stand for
+//! neighbour m03_07_discipline_and_direction_overrides.va
 `include "disciplines.vams"
 connectmodule ch7_ovr_a2d(el, dg);
   input el;

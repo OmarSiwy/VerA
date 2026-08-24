@@ -10,6 +10,8 @@
 //! lrm 4.2.2
 //! lrm 5.10.3.3
 //! lrm 9.5.9
+//! lrm 9.5.4.1
+//! lrm 9.5.4.1:1000
 //! analysis tran
 //! time 0, 2, 3, 6
 //! checks 8

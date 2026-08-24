@@ -12,8 +12,9 @@
 // 06_reduction_rejected.va (E0348).
 //
 //! lrm 4.2.1
+//! lrm 4.2.1:1
 //! lrm 4.2.10
-//! reject E0319
+//! reject-only E0319
 `include "disciplines.vams"
 module ch04_reduction_on_real(p, n);
   inout p, n; electrical p, n;

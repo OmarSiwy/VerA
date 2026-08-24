@@ -22,7 +22,7 @@
 // wording is free to change.
 //
 //! lrm 10.4
-//! reject E0110
+//! reject-only E0110
 `define SQUARE(\esc-x ) ((\esc-x )*(\esc-x ))
 module ch10_macro_formal_must_be_simple_identifier(p, n);
   inout p, n; electrical p, n;

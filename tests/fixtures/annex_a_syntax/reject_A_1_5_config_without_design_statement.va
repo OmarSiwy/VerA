@@ -15,7 +15,8 @@
 // begins with its `design` statement".
 //
 //! lrm A.1.5
-//! reject E0207
+//! lrm A.1.5:1000
+//! reject-only E0207
 //! reject begins with its `design` statement
 `include "disciplines.vams"
 module annex_a_cfg_top(p, n);

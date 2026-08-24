@@ -10,6 +10,7 @@
 // the behavioral oracle; changing this into a rejection would hide the gap.
 // test-devices does not implement //! xfail; it must report this case as FAIL.
 //! lrm 2.6.1
+//! lrm 2.6.1:20
 //! inherited IEEE 1364-2005 3.5.1
 module lexical_unsized_context_fill;
     reg [39:0] wide;

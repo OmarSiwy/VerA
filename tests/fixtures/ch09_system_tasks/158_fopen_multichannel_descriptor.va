@@ -39,6 +39,7 @@
 // shift differently. `& 2147483648` is bit 31 whatever the width.
 //
 //! lrm 9.5.1
+//! lrm 9.5.1:1
 `include "check.vh"
 module ch09_fopen_multichannel_descriptor(p, n);
   inout p, n; electrical p, n;

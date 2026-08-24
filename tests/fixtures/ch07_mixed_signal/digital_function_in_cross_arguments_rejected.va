@@ -28,7 +28,9 @@
 //
 //! lrm 7.3.5
 //! lrm 7.3.7
-//! reject E0436
+//! lrm 7.3.5:1000
+//! lrm 7.3.7:1000
+//! reject-only E0436
 `timescale 1ns/1ns
 `include "disciplines.vams"
 module ch7_dfunc_in_cross(in, out);

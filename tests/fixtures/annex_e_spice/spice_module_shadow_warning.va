@@ -8,6 +8,7 @@
 // The source is legal: this rule calls for a warning, not a rejection.
 //! lrm E.3.3
 //! lrm E.2.1
+//! lrm E.3.3:3
 //! warn W0951
 //! bias V(p) = 1, V(q) = 1, V(n) = 0
 //! checks 2

@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 19.11
 //! reject E0208
 //! reject expected an identifier: found `uwire`
+//! neighbour b_19_11_keyword_versions.v
 `begin_keywords "1364-2005"
 module b_19_11_uwire_in_2005_rejected;
   wire [63:0] uwire;

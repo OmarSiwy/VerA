@@ -7,9 +7,12 @@
 // body. Legal neighbour: b_12_1_module_header_forms.v (b_12_1_adder declares
 // its ports only in the header).
 // digital-runner: reject
+//! lrm 6.2
+//! lrm 6.2:6
 //! inherited IEEE 1364-2005 12.1 12.3.4
 //! reject E0218
 //! reject port redeclared in the module body
+//! neighbour b_12_1_module_header_forms.v
 module m(input a, output y);
   wire a;
   assign y = a;

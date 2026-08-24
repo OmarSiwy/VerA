@@ -29,7 +29,8 @@
 //
 //! lrm 7.8.5
 //! lrm 6.3.1
-//! reject E0907
+//! reject-only E0907
+//! neighbour ../annex_a_syntax/12_defparam.va
 module ch7_connect_generated_defparam;
   defparam signal__converter__ddiscrete.threshold = 0.6;
 endmodule

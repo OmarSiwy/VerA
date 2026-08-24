@@ -6,6 +6,7 @@
 // IEEE4.8 permits integer width>=32, so native integer -1 has result>=32,
 // not necessarily exactly32. The explicit packed operand fixes its width.
 //! lrm 9.14
+//! lrm 9.14:1
 //! inherited IEEE 1364-2005 17.11.1
 module audit_ieee_math_clog2_unsigned;
   reg signed [7:0] octet;

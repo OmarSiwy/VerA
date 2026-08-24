@@ -16,6 +16,7 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.1.1
+//! lrm 9.5.1.1:1
 //! bias V(p) = 0
 `include "check.vh"
 module write_mode_path_65_fails_open(p, n);

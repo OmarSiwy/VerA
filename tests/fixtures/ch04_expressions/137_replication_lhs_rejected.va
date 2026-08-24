@@ -8,7 +8,9 @@
 // 31_replication.va is the legal right-hand-side use.
 //
 //! lrm 4.2.13
-//! reject E0317
+//! lrm 4.2.13:3
+//! reject-only E0317
+//! neighbour 31_replication.va
 module ch04_replication_lhs_rejected(p, n);
     inout p, n;
     electrical p, n;

@@ -7,6 +7,7 @@
 //! lrm 1.1
 //! inherited IEEE 1364-2005 10.2.2
 //! reject task output actual must be a procedural lvalue
+//! neighbour audit_task_output_lifetime.v
 module audit_task_output_expression_rejected;
   task give(output [3:0] result); result=4'd5; endtask
   initial give(4'd1+4'd2);

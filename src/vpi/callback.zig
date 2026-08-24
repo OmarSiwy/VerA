@@ -72,6 +72,9 @@ pub const CbData = extern struct {
 pub const vpiScaledRealTime: c_int = 1;
 pub const vpiSimTime: c_int = 2;
 pub const vpiSuppressTime: c_int = 3;
+/// §12.15 "scaled real, analog, or simulation time": the analog time, in
+/// seconds, in `real`. The LRM gives it no number; this is VerA's (vpi_user.h).
+pub const vpiAnalogTime: c_int = 4;
 
 // §12.31 reasons, Annex G numbering.
 pub const cbValueChange: c_int = 1;
@@ -87,6 +90,10 @@ pub const cbEndOfCompile: c_int = 10;
 pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
 pub const cbError: c_int = 13;
+pub const cbInteractiveScopeChange: c_int = 23;
+pub const cbAssign: c_int = 25;
+pub const cbDeassign: c_int = 26;
+pub const cbDisable: c_int = 27;
 pub const cbPLIError: c_int = 28;
 
 // §12.31.3 the analog reasons. Verilog-AMS names them and numbers none; the
@@ -140,7 +147,7 @@ pub const Cb = struct {
     /// accepted solution it is delivered upon — and which it forces.
     due_real: f64 = 0,
     /// cbStmt: each (pc, statement object) it fires at, in the engine's
-    /// order; owned by `gpa`.
+    /// order; cbDisable: the named block's one. Owned by `gpa`.
     sites: []const Site = &.{},
     dead: bool = false,
 };
@@ -265,15 +272,34 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // cb_rtn, and user_data". IEEE 1364-2005 §27.33.3 adds cbError and
         // cbPLIError to the actions "that shall occur in all VPI-compliant
         // products".
-        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError => {},
+        // IEEE 1364-2005 §27.33.3's feature reason cbInteractiveScopeChange
+        // "Simulation command to change interactive scope executed": §12.36's
+        // vpiSetInteractiveScope is the only such command here.
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError, cbInteractiveScopeChange => {},
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
-        // must be one VerA issued.
-        cbForce, cbRelease => {
+        // must be one VerA issued. cbAssign/cbDeassign take the same: the
+        // clause states the NULL rule for force and release only, and VerA
+        // reads it for the procedural pair too (one statement per callback).
+        cbForce, cbRelease, cbAssign, cbDeassign => {
             if (d.obj != null and root.asObj(d.obj) == null) {
                 root.fail("BADHANDLE", "vpi_register_cb: obj is not a handle to an object", .{});
                 return null;
             }
+            cb.reference = d.obj;
+        },
+        // §12.31.1 cbDisable "After a named block or task containing a system
+        // task/function has been disabled". ponytail: obj is a named begin or
+        // fork; a task, function or system call as obj is refused, and the
+        // block need not contain a system call (VerA does not check it).
+        cbDisable => {
+            const o = root.asObj(d.obj);
+            const code = @import("code.zig");
+            if (o == null or o.?.kind != .code or (o.?.vtype != code.vpiNamedBegin and o.?.vtype != code.vpiNamedFork)) {
+                root.fail("NOTSUPPORTED", "vpi_register_cb: cbDisable is delivered for a named begin or fork in obj", .{});
+                return null;
+            }
+            cb.sites = stmtSites(d.obj) orelse return null;
             cb.reference = d.obj;
         },
         // §12.31.1 "After value change on an expression or terminal". The
@@ -475,11 +501,11 @@ fn sweep() void {
 /// the registered object itself.
 fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     var t: Time = std.mem.zeroes(Time);
-    const override = cb.reason == cbForce or cb.reason == cbRelease;
+    const override = cb.reason == cbForce or cb.reason == cbRelease or cb.reason == cbAssign or cb.reason == cbDeassign;
     var data: CbData = .{
         .reason = cb.reason,
         .cb_rtn = cb.rtn,
-        .obj = if (override or cb.reason == cbStmt) @ptrCast(@constCast(from.?)) else cb.obj,
+        .obj = if (override or cb.reason == cbStmt or cb.reason == cbInteractiveScopeChange) @ptrCast(@constCast(from.?)) else cb.obj,
         .time = null,
         .value = null,
         .index = index,
@@ -501,7 +527,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     var v: Value = std.mem.zeroes(Value);
     if ((cb.reason == cbValueChange or override) and cb.value_format != vpiSuppressVal) {
         v.format = cb.value_format;
-        value.read(from orelse root.asObj(cb.obj).?, &v, &value.cb_store);
+        value.read(lhsOf(from) orelse root.asObj(cb.obj).?, &v, &value.cb_store);
         data.value = &v;
     }
     depth += 1;
@@ -510,6 +536,16 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     active = cb.reason;
     defer active = outer;
     return cb.rtn(&data);
+}
+
+/// What an override callback reads its value from: a §9.3 statement's
+/// left-hand side ("the resultant value of the left-hand expression"), or
+/// `from` itself, the object a vpi_put_value force wrote.
+fn lhsOf(from: ?*const root.Obj) ?*const root.Obj {
+    const o = from orelse return null;
+    if (o.stmt == .none) return o;
+    for (o.edges) |e| if (e.tag == @import("code.zig").vpiLhs and e.to != root.no_obj) return &root.design.?.objects[e.to];
+    return null;
 }
 
 /// Every live callback of `reason`, in registration order. Only the ones
@@ -542,6 +578,17 @@ pub fn startOfSimulation() void {
 /// §12.31.4 cbEndOfSimulation — "e.g., $finish system task executed".
 pub fn endOfSimulation() void {
     fireAll(cbEndOfSimulation);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbInteractiveScopeChange: "obj shall be a handle
+/// to the new scope".
+pub fn interactiveScopeChange(scope: *const root.Obj) void {
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (!cb.dead and cb.reason == cbInteractiveScopeChange) _ = call(cb, cb.index, scope);
+    }
+    sweep();
 }
 
 /// IEEE 1364-2005 §27.33.3 cbError: "Simulation run-time error occurred".
@@ -637,10 +684,8 @@ pub fn fireSlot(slot: u32) void {
 /// callback registered on `o`, and every one registered with a NULL obj.
 /// "the object returned in the obj field shall be a handle to the force,
 /// release ... statement"; a vpi_put_value force has no statement, so obj is
-/// the object it forced. The value is `o`'s, after the force or release.
-/// ponytail: only vpi_put_value's forces fire this. A procedural `force`
-/// statement has no §11.6 statement object here for obj to name; hook the
-/// engine's `.override_on`/`.override_off` when one exists.
+/// the object it forced. The value is `o`'s, after the force or release. A
+/// design statement's force or release fires through `onDone` instead.
 pub fn fireOverride(reason: c_int, o: *root.Obj) void {
     const n = cbs.items.len;
     for (0..n) |i| {
@@ -648,6 +693,62 @@ pub fn fireOverride(reason: c_int, o: *root.Obj) void {
         if (cb.dead or cb.reason != reason) continue;
         if (cb.obj != null and root.asObj(cb.obj) != o) continue;
         _ = call(cb, cb.index, o);
+    }
+    sweep();
+}
+
+/// `digital.DoneHook`: a design statement completed. A §9.3 `force`,
+/// `release`, `assign` or `deassign` fires cbForce, cbRelease, cbAssign or
+/// cbDeassign with obj the statement, on each callback registered with a NULL
+/// obj or on one of the variables or nets it overrides. A `disable` fires
+/// cbDisable on each callback whose named block it disabled.
+pub fn onDone(r: *digital.Run, pc: u32) digital.Error!void {
+    const site = r.done_sites.get(pc) orelse return;
+    const code = @import("code.zig");
+    const reason: c_int = switch (r.code.items[pc]) {
+        .override_on => |o| if (o.force) cbForce else cbAssign,
+        .override_off => |o| if (o.force) cbRelease else cbDeassign,
+        .disable_block => |b| {
+            const n = cbs.items.len;
+            for (0..n) |i| {
+                const cb = cbs.items[i];
+                if (cb.dead or cb.reason != cbDisable) continue;
+                for (cb.sites) |st| if (st.pc >= b.start and st.pc < b.end) {
+                    _ = call(cb, cb.index, null);
+                    break;
+                };
+            }
+            sweep();
+            return;
+        },
+        else => return, // else: `done_sites` keys only these three instructions
+    };
+    const d = &root.design.?;
+    const want: c_int = switch (reason) {
+        cbForce => code.vpiForce,
+        cbRelease => code.vpiRelease,
+        cbAssign => code.vpiAssignStmt,
+        else => code.vpiDeassign,
+    };
+    const stmt = for (d.objects) |*o| {
+        if (o.kind == .code and o.vtype == want and o.stmt == site.stmt and o.owner != .none and d.scopes[o.owner.get().?].engine == site.scope) break o;
+    } else return;
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.dead or cb.reason != reason) continue;
+        if (cb.obj != null) {
+            const target = (root.asObj(cb.obj) orelse continue).slot.get() orelse continue;
+            // The slots the statement's instructions override (a
+            // concatenation overrides several).
+            const hit = for (r.code.items[site.pc .. pc + 1]) |ins| switch (ins) {
+                .override_on => |o| if (o.slot == target) break true,
+                .override_off => |o| if (o.slot == target) break true,
+                else => {}, // else: only an override names a slot it overrides
+            } else false;
+            if (!hit) continue;
+        }
+        _ = call(cb, cb.index, stmt);
     }
     sweep();
 }

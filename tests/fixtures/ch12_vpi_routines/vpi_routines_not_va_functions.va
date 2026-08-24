@@ -9,7 +9,7 @@
 // fixtures'. It pins only that the routine names do not leak into Verilog-A.
 //
 //! lrm 4.7
-//! reject E0512
+//! reject-only E0512
 //! reject `vpi_chk_error`
 //! reject `vpi_compare_objects`
 //! reject `vpi_free_object`

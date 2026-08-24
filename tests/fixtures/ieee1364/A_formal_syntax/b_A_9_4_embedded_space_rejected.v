@@ -10,6 +10,8 @@
 //! inherited IEEE 1364-2005 A.9.4
 //! reject E0207
 //! reject unexpected token: found 0101
+//! neighbour b_A_8_7_numbers.v
+//! neighbour b_A_9_4_white_space.v
 module b_A_9_4_embedded_space_rejected;
   reg [7:0] v;
   initial begin

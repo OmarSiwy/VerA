@@ -60,29 +60,48 @@ pub fn caseSelected(has_golden: bool, source: []const u8) bool {
 
 /// Match a normal digital diagnostic exit, not a signal, successful program,
 /// empty/bare reject, or unrelated failure. Every declared pattern must match.
+/// `//! reject-only` also requires every `error[` line to match some pattern,
+/// as the analog judge does (docs/TESTING.md §3.3 c).
 pub fn rejectionMatches(source: []const u8, exit_code: u8, stderr: []const u8) bool {
     if (exit_code != 1 or std.mem.indexOf(u8, stderr, "error[") == null) return false;
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var patterns: [32][]const u8 = undefined;
     var count: usize = 0;
+    var only = false;
+    var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (!std.mem.startsWith(u8, line, "//!")) continue;
         var fields = std.mem.tokenizeAny(u8, line[3..], " \t\r");
         const key = fields.next() orelse continue;
-        if (!std.mem.eql(u8, key, "reject")) continue;
+        const exclusive = std.mem.eql(u8, key, "reject-only");
+        if (!exclusive and !std.mem.eql(u8, key, "reject")) continue;
+        only = only or exclusive;
         const pattern = std.mem.trim(u8, fields.rest(), " \t\r");
-        if (pattern.len == 0) return false;
-        var diagnostics = std.mem.splitScalar(u8, stderr, '\n');
-        var found = false;
-        while (diagnostics.next()) |diagnostic_raw| {
-            const diagnostic = std.mem.trim(u8, diagnostic_raw, " \t\r");
-            if (std.mem.startsWith(u8, diagnostic, "error[") and
-                std.mem.indexOf(u8, diagnostic, pattern) != null) found = true;
-        }
-        if (!found) return false;
+        if (pattern.len == 0 or count == patterns.len) return false;
+        if (!errorSays(stderr, &.{pattern}, .any)) return false;
+        patterns[count] = pattern;
         count += 1;
     }
-    return count != 0;
+    if (count == 0) return false;
+    return !only or errorSays(stderr, patterns[0..count], .every);
+}
+
+/// `.any`: some `error[` line contains one of `patterns`. `.every`: each
+/// `error[` line contains one of them.
+fn errorSays(stderr: []const u8, patterns: []const []const u8, mode: enum { any, every }) bool {
+    var diagnostics = std.mem.splitScalar(u8, stderr, '\n');
+    while (diagnostics.next()) |raw| {
+        const diagnostic = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, diagnostic, "error[")) continue;
+        const hit = for (patterns) |p| {
+            if (std.mem.indexOf(u8, diagnostic, p) != null) break true;
+        } else false;
+        switch (mode) {
+            .any => if (hit) return true,
+            .every => if (!hit) return false,
+        }
+    }
+    return mode == .every;
 }
 
 /// `//! xfail <reason>` on a digital case: the reason, "" for a bare marker,
@@ -230,6 +249,10 @@ test "digital negative routing is explicit and diagnostics are specific" {
     try std.testing.expect(!rejectionMatches("//! reject\n", 1, diagnostic));
     try std.testing.expect(!rejectionMatches("//! lrm 9.10\n", 1, diagnostic));
     try std.testing.expect(rejectionMatches("//! reject E1100\n//! xfail pending\n", 1, diagnostic));
+    // reject-only: the named error alone. A second, unnamed error fails it.
+    try std.testing.expect(rejectionMatches("//! reject-only E1100\n", 1, diagnostic));
+    try std.testing.expect(!rejectionMatches("//! reject-only E1100\n", 1, "error[E1100]: x\nerror[E0001]: y\n"));
+    try std.testing.expect(rejectionMatches("//! reject-only E1100\n//! reject E0001\n", 1, "error[E1100]: x\nerror[E0001]: y\n"));
     try std.testing.expectEqualStrings("pending", xfailReason("//! reject E1100\n  //! xfail pending \n").?);
     try std.testing.expectEqualStrings("", xfailReason("//! xfail\n").?);
     try std.testing.expect(xfailReason("// xfail prose\n//! xfailed\n") == null);

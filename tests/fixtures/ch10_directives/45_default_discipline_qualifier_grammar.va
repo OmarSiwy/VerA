@@ -28,7 +28,7 @@
 // "qualifier" from satisfying the file.
 //
 //! lrm 10.2
-//! reject qualifier
+//! reject-only qualifier
 //! reject E0127
 `default_discipline electrical electrical
 module ch10_default_discipline_qualifier_grammar(p, n);

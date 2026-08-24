@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 A.7.5.1
 //! reject E0207
 //! reject `$setup` takes 3 to 4 arguments
+//! neighbour b_A_7_5_system_timing_checks.v
 module b_A_7_5_1_setup_without_limit_rejected (clk, d, y);
   input clk, d;
   output y;

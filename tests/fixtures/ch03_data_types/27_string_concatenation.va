@@ -3,6 +3,7 @@
 // So {"hello", " ", "world"} is "hello world" — the middle literal is an
 // operand like any other, not a separator the compiler may drop.
 //! lrm 3.3
+//! lrm 3.3:3
 `include "check.vh"
 module ch3_string_concat(p);
   inout p;

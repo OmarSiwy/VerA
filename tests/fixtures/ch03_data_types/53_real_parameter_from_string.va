@@ -14,7 +14,8 @@
 // are untestable. Those paths remain separate obligations in the parameter audit.
 //
 //! lrm 3.4.1
-//! reject E0345
+//! lrm 3.4.1:2
+//! reject-only E0345
 module ch3_real_parameter_from_string(p, n);
     inout p, n;
     electrical p, n;

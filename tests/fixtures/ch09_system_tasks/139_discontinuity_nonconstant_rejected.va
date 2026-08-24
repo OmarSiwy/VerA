@@ -16,7 +16,9 @@
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.17.1
-//! reject E0805
+//! lrm 9.17.1:2
+//! reject-only E0805
+//! neighbour 24_discontinuity.va
 module ch09_discontinuity_nonconstant_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin

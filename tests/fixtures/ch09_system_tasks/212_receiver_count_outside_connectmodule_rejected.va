@@ -21,7 +21,8 @@
 //
 //! lrm 9.22.2
 //! lrm 9.22
-//! reject E0818
+//! lrm 9.22:1000
+//! reject-only E0818
 //! reject `$receiver_count` can only be called from a connect module
 `include "disciplines.vams"
 module ch09_receiver_count_outside_connectmodule(p, n);

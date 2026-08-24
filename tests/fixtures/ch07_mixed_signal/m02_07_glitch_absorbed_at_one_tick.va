@@ -116,11 +116,13 @@
 // tests/fixtures/ch05_analog_behavior/event_cross_fires.va.)
 //
 //! lrm 8.4.4
+//! lrm 8.4.4:3
 //! lrm 8.4.3.3
 //! lrm 8.5.1
 //! lrm 8.5.2
 //! lrm 8.5.3.4
 //! lrm 5.10.3.1
+//! lrm 8.5.2:1
 //! analysis tran
 //! time 0, 5n, 5.2n, 5.4n, 6n, 8n
 //! wave V(vi) = 0, 0.50, 0.54, 0.50, 0.30, 0.0

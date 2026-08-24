@@ -28,6 +28,7 @@
 // transcript's two `got=` columns are where a reviewer sees 0.5 then 0.75.
 //
 //! lrm 6.6.2.1
+//! lrm 6.6.2.1:1
 //! bias V(in) = 0.25
 //! psweep gain = 2.0, 3.0
 //! solve

@@ -13,8 +13,9 @@
 // "codegen refused a construct" for any refused filter.
 //
 //! lrm 4.5.11.1
-//! reject E0540
+//! reject-only E0540
 //! reject PAIRS
+//! neighbour laplace_zp_parameter_roots_step.va
 `include "disciplines.vams"
 module reject_4_5_11_1_laplace_zp_parameter_roots(in, out);
   inout in, out;

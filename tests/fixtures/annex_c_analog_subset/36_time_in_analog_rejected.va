@@ -23,8 +23,10 @@
 //! lrm C.11
 //! lrm 9.2
 //! lrm 9.10
-//! reject E0806
+//! lrm 9.2:1000
+//! reject-only E0806
 //! reject analog context
+//! neighbour 35_analog_context_system_functions.va
 module annex_c_time_in_analog_rejected(p, n);
     inout p, n;
     electrical p, n;

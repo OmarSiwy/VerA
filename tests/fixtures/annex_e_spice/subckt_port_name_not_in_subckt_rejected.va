@@ -25,7 +25,7 @@
 //
 //! lrm E.2
 //! lrm E.2.2.2
-//! reject E0906
+//! reject-only E0906
 //! reject `vcc` is not a port
 //! spice .SUBCKT ECPOSC OUT GND
 //! spice VA VCC GND 5

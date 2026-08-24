@@ -25,6 +25,9 @@
 //! lrm 3.4
 //! lrm 4.2
 //! lrm 6.3.4
+//! lrm 3.4:1
+//! lrm 4.1
+//! lrm 4.1:1000
 `include "check.vh"
 module ch03_parameter_default_over_parameter(p, n);
     inout p, n;

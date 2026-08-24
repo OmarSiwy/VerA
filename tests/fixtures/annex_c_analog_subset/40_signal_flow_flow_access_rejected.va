@@ -24,7 +24,9 @@
 //! lrm C.17
 //! lrm D.1
 //! lrm 4.4
-//! reject E0501
+//! lrm 4.4:5
+//! reject-only E0501
+//! neighbour 39_standard_definitions.va
 `include "disciplines.vams"
 module annex_c_signal_flow_flow_access_rejected(p, n);
     inout p, n;

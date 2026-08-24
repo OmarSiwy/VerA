@@ -15,8 +15,9 @@
 // hierarchy and no elaborator are needed to provoke it.
 //
 //! lrm 7.4.4
+//! lrm 7.4.4:3
 //! lrm 3.11
-//! reject more than one discipline declaration
+//! reject-only more than one discipline declaration
 nature ch7_conf_potential;
   units = "V";
   access = V;

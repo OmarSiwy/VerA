@@ -218,6 +218,17 @@ test "§10.4 a nested invocation in an actual argument is not recursion" {
     try expectFail("`define F(x) `F(x)\n`F(1)\n", .E0118);
     try expectFail("`define A(x) `B(x)\n`define B(y) `A(y)\n`A(1)\n", .E0118);
 
+    // E0150: depth alone does not bound a macro that doubles at every level
+    // (2^40 tokens here); the total substituted size does, by name.
+    {
+        var dbl: std.ArrayList(u8) = .empty;
+        defer dbl.deinit(testing.allocator);
+        try dbl.appendSlice(testing.allocator, "`define D0 x\n");
+        for (1..41) |i| try dbl.print(testing.allocator, "`define D{d} `D{d} `D{d}\n", .{ i, i - 1, i - 1 });
+        try dbl.appendSlice(testing.allocator, "`D40\n");
+        try expectFail(dbl.items, .E0150);
+    }
+
     // E0119's ceiling counts argument pre-expansion too: nested same-macro
     // calls never repeat a name on `expanding`, so depth bounds the stack.
     var src: std.ArrayList(u8) = .empty;

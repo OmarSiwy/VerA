@@ -11,6 +11,7 @@
 // can satisfy these checks. Indexed hierarchy expression reads are not used.
 //! lrm 6.3.1
 //! lrm 6.4.2
+//! lrm 6.4.2:4
 //! solve
 //! checks 3
 `include "check.vh"

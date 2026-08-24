@@ -24,7 +24,11 @@
 // name never reaches it.
 //
 //! lrm 6.8
-//! reject E0362
+//! lrm 6.8:1
+//! lrm 6.8:2
+//! reject-only E0362
+//! neighbour local_scope_declaration_shadow.va
+//! neighbour local_scope_shadow.va
 module ch6_duplicate_declaration(p);
   inout p; electrical p;
   real value;

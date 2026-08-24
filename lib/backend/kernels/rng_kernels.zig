@@ -157,8 +157,21 @@ fn zRngPoissonCore(s: *u32, mean: f64) f64 {
     return n;
 }
 
+// `std` is spelled `zrstd` here for `table_kernels.zig`'s reason: this text
+// is embedded into device.zig, which declares its own `std`.
+const zrstd = @import("std");
+
+/// §9.13.2: "Otherwise an error shall be reported." The argument is a run-time
+/// value, so the report is here, at the call, and the run ends with status 1
+/// as `table_kernels.ztExtrapError` ends it: no draw the clause permits
+/// exists. E0816 is the same rule's compile-time code.
+fn zRngDomain(rule: []const u8) noreturn {
+    zrstd.debug.print("error[E0816]: LRM 9.13.2: {s}\n", .{rule});
+    zrstd.process.exit(1);
+}
+
 fn zRngPositive(value: f64) void {
-    if (!(value > 0.0)) @panic("VerA: random distribution mean/df/stages shall be greater than zero");
+    if (!(value > 0.0)) zRngDomain("random distribution mean/df/stages shall be greater than zero");
 }
 
 /// Exact supported count domain. Do not truncate an AMS real count or replace
@@ -166,7 +179,7 @@ fn zRngPositive(value: f64) void {
 fn zRngDf(df: f64) u32 {
     zRngPositive(df);
     if (!(df <= 2147483647.0) or df != @trunc(df))
-        @panic("VerA: fractional or out-of-range random distribution df/stages are unsupported");
+        zRngDomain("fractional or out-of-range random distribution df/stages are unsupported");
     return @intFromFloat(df);
 }
 
@@ -179,7 +192,7 @@ pub fn zRngCheck(previous: f64, rules: u4, a: f64, b: f64) f64 {
     if (rules & 2 != 0) zRngPositive(b);
     if (rules & 4 != 0) _ = zRngDf(a);
     if (rules & 8 != 0 and !(a < b))
-        @panic("VerA: random uniform start shall be smaller than end");
+        zRngDomain("random uniform start shall be smaller than end");
     return 0;
 }
 
@@ -307,7 +320,7 @@ pub fn zRngIUniformNext(seed: i64, start: f64, end: f64) f64 {
 /// §9.13.2 `$rdist_uniform` — Table 9-26 row one, the listing's `uniform`
 /// itself, with the real bounds required by §9.13.2.
 pub fn zRngUniform(seed: i64, start: f64, end: f64) f64 {
-    if (!(start < end)) @panic("VerA: random uniform start shall be smaller than end");
+    if (!(start < end)) zRngDomain("random uniform start shall be smaller than end");
     var s = zRngS32(seed);
     return zRngUniformCore(&s, start, end);
 }
@@ -315,7 +328,7 @@ pub fn zRngUniform(seed: i64, start: f64, end: f64) f64 {
 /// The seed `zRngUniform` leaves behind: §9.13's seed is inout, so the call
 /// writes this back to the seed variable.
 pub fn zRngUniformNext(seed: i64, start: f64, end: f64) f64 {
-    if (!(start < end)) @panic("VerA: random uniform start shall be smaller than end");
+    if (!(start < end)) zRngDomain("random uniform start shall be smaller than end");
     var s = zRngS32(seed);
     _ = zRngUniformCore(&s, start, end);
     return zRngSOut(s);

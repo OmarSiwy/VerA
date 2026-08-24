@@ -12,7 +12,8 @@
 // net_lvalue (A.3.3)".
 //
 //! lrm A.3.3
-//! reject net_lvalue
+//! lrm A.3.3:1000
+//! reject-only net_lvalue
 module annex_a_constant_output_terminal(o, a, b);
   output o;
   input a, b;

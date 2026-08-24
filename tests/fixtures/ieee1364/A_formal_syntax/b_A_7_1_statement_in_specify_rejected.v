@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 A.7.1
 //! reject E0207
 //! reject which begins no A.7.1 specify_item
+//! neighbour b_A_7_1_specify_block.v
 module b_A_7_1_statement_in_specify_rejected (a, y);
   input a;
   output y;

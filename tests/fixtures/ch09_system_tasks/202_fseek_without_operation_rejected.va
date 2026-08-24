@@ -18,7 +18,7 @@
 // arguments to a system task or function".
 //
 //! lrm 9.5.5
-//! reject E0887
+//! reject-only E0887
 //! reject `$fseek` takes 3 arguments, got 2
 `include "disciplines.vams"
 module ch09_fseek_without_operation(p, n);

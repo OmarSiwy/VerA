@@ -275,6 +275,113 @@ fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     return try cloneExpr(self, p.default);
 }
 
+/// What `upward` made of a dotted name's first part.
+const Upward = union(enum) {
+    /// Not a scope of any enclosing unit: the name stays rooted at the top.
+    keep,
+    /// The flat name of the scope it found.
+    head: Ast.StrId,
+    /// The whole reference, a generate block's localparam, as its value.
+    value: Ast.ExprId,
+};
+
+/// §6.7.1 adopts IEEE 1364-2005 12.6 for `scope_name.item_name`: look in the
+/// current scope, then "in the parent module's outermost scope", and "repeat
+/// step b), going up the hierarchy". §6.8 says the same of generate blocks
+/// (12.7: "searched first at the current level and then in higher level
+/// modules until found"). `parts[0]` is not a name the unit binds; this
+/// walks the unit and the units above it (`Unit.up`) for a module instance
+/// (12.6 restricts scope_name to a hierarchical_inst_identifier) or a named
+/// generate block of that name, nearest first.
+fn upward(self: *Flatten, e: Ast.ExprId, parts: []const Ast.StrId) Error!Upward {
+    if (parts.len < 2) return .keep;
+    var at: ?*const Flatten.Unit = &self.unit;
+    while (at) |u| : (at = u.up) {
+        const m = u.module orelse return .keep;
+        // The top's names are its flat names; below it, the unit bound it.
+        if (declaresInstance(self, m, parts[0])) return if (u.up == null) .keep else .{ .head = u.rename.get(parts[0]) orelse return .keep };
+        var conds: std.ArrayList(GenCond) = .empty;
+        for (m.analog) |blk| if (try genBlock(self, blk.body, parts[0], &conds)) |b|
+            return genBlockRef(self, e, u, b, conds.items, parts);
+    }
+    return .keep;
+}
+
+/// Whether `m` declares a (non-array) module instance `name`, in its body or
+/// in a generate block.
+fn declaresInstance(self: *Flatten, m: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (m.instances) |inst| if (inst.name == name and inst.range == null) return true;
+    for (self.genInstancesOf(m)) |inst| if (inst.name == name and inst.range == null) return true;
+    return false;
+}
+
+/// One if-generate scheme on the way down to a generate block: its
+/// condition, negated in the else arm.
+const GenCond = struct { cond: Ast.ExprId, negate: bool };
+
+/// The named generate block `name` under statement `id`, with the
+/// if-generate schemes that select it appended to `conds`. A block inside a
+/// loop generate is `name[i]` (§6.6.1) and a case arm's needs its selector
+/// matched, so neither is found here.
+fn genBlock(self: *Flatten, id: Ast.StmtId, name: Ast.StrId, conds: *std.ArrayList(GenCond)) Error!?Ast.SeqBlock {
+    if (id == .none) return null;
+    switch (self.ctx.file.stmt(id)) {
+        .block => |b| {
+            if (b.gen_name != .none and b.name == name) return b;
+            for (b.body) |s| if (try genBlock(self, s, name, conds)) |hit| return hit;
+        },
+        .if_stmt => |s| if (s.is_generate) for ([_]Ast.StmtId{ s.then_s, s.else_s }, [_]bool{ false, true }) |arm, negate| {
+            try conds.append(self.ctx.arena, .{ .cond = s.cond, .negate = negate });
+            if (try genBlock(self, arm, name, conds)) |hit| return hit;
+            _ = conds.pop();
+        },
+        else => {}, // else: only blocks and if-generates lead to a scope this search may name
+    }
+    return null;
+}
+
+/// A reference through the generate block `b` of unit `u`. §6.6.2: a block
+/// its scheme does not select does not exist, so the schemes must fold true
+/// in `u`'s names (E0901 otherwise). `b.k` for one of the block's
+/// localparams is that localparam's value, cloned in `u`'s names, which no
+/// lowering order can make unready; any other item is the block's flat name.
+///
+/// ponytail: a localparam whose value reads another of the block's own
+/// localparams, or an integer one whose value does not fold to an integer
+/// (§3.4.1's conversion), keeps the flat name, which lowering resolves or
+/// refuses (E0901). The upgrade is `bindGenLocals`-style substitution.
+fn genBlockRef(self: *Flatten, e: Ast.ExprId, u: *const Flatten.Unit, b: Ast.SeqBlock, conds: []const GenCond, parts: []const Ast.StrId) Error!Upward {
+    const saved = self.unit;
+    self.unit = u.*;
+    defer self.unit = saved;
+    for (conds) |c| {
+        const v = elab_names.constValue(self, c.cond, true, null);
+        if (v != null and v.?.isTrue() != c.negate) continue;
+        try self.err(self.ctx.file.exprs.mainTok(e), .E0901, "`{s}` is a generate block its scheme does not select (§6.6.2)", .{self.ctx.file.str(parts[0])});
+        return .keep;
+    }
+    const flat_head: Upward = if (u.up == null) .keep else .{ .head = try elab_names.join(self, u.path, parts[0]) };
+    if (parts.len != 2) return flat_head;
+    const p = for (b.params) |*q| {
+        if (q.name == parts[1] and q.dims.len == 0) break q;
+    } else return flat_head;
+    for (b.params) |q| if (readsName(self.ctx.file, p.default, q.name)) return flat_head;
+    if (p.ty == .integer) {
+        const v = elab_names.constValue(self, p.default, true, null) orelse return flat_head;
+        if (v != .int) return flat_head;
+    }
+    return .{ .value = try cloneExpr(self, p.default) };
+}
+
+/// Whether `e` reads the identifier `name`.
+fn readsName(file: *const Ast.SourceFile, e: Ast.ExprId, name: Ast.StrId) bool {
+    if (e == .none) return false;
+    if (file.exprs.tag(e) == .ident and file.exprs.strOf(e) == name) return true;
+    var buf: [3]Ast.ExprId = undefined;
+    for (file.exprs.children(e, &buf)) |c| if (readsName(file, c, name)) return true;
+    return false;
+}
+
 /// Copies one expression subtree into the store, renaming the names that
 /// belong to the unit being inlined, and applies the per-instance rewrites
 /// (§6.3.6 flow-probe division, §9.18/§9.19 answers, §6.4.1 references).
@@ -299,8 +406,14 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             // local scope". A `$root` prefix names no unit, so it passes
             // through and `Lower.flatName` strips it.
             const parts = x.nameParts(e);
+            var head = elab_names.flat(self, parts[0]);
+            if (!self.unit.rename.contains(parts[0])) switch (try upward(self, e, parts)) {
+                .keep => {},
+                .head => |h| head = h,
+                .value => |v| return v,
+            };
             const out = try self.ctx.arena.alloc(Ast.StrId, parts.len);
-            for (parts, out, 0..) |p, *o, i| o.* = if (i == 0) elab_names.flat(self, p) else p;
+            for (parts, out, 0..) |p, *o, i| o.* = if (i == 0) head else p;
             n.extra = try self.ctx.file.exprs.addStrList(self.ctx.arena, out);
         },
         .unary => n.lhs = try cloneExpr(self, x.lhs(e)),
@@ -350,8 +463,13 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             if (self.in_paramset) if (try rewriteParamsetDist(self, e)) |out| return out;
             n.extra = try cloneArgs(self, x.args(e));
         },
-        .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
+        .builtin_call, .filter_call, .event_function, .concat, .assign_pattern => {
             n.extra = try cloneArgs(self, x.args(e));
+        },
+        // §6.3.6 rules 3 and 4 scale the noise power.
+        .noise_call => {
+            n.extra = try cloneArgs(self, x.args(e));
+            return elab_names.mfactorNoise(self, try self.ctx.file.exprs.add(self.ctx.arena, n));
         },
     }
     const out = try self.ctx.file.exprs.add(self.ctx.arena, n);

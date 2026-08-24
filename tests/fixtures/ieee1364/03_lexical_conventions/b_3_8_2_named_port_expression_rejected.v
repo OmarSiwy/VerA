@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 3.8.2
 //! reject E0209
 //! reject expected an expression: found `(*`
+//! neighbour b_3_8_2_attribute_positions.v
 module b_3_8_2_named_port_expression_rejected_child (input i, output o);
   assign o = i;
 endmodule

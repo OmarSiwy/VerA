@@ -27,6 +27,12 @@
 //
 //! lrm 7.4.4.1
 //! lrm 6.5.7
+//! lrm 7.4.4
+//! lrm 7.4.4:1
+//! lrm 7.4.4.1:1000
+//! lrm F.2.1
+//! lrm F.2.1:4
+//! lrm F.2.1:6
 //! bias V(shared) = 0.5
 `include "check.vh"
 discipline ch7441_discrete;

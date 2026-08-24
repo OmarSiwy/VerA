@@ -15,8 +15,9 @@
 // VerA refuses it with E0355, "incompatible disciplines" — the §3.11 rule.
 //
 //! lrm 3.12
+//! lrm 3.12:1
 //! lrm 3.11
-//! reject E0355
+//! reject-only E0355
 module ch3_branch_incompatible_terminals(p, n);
     inout p, n;
     electrical p, n;

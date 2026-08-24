@@ -8,9 +8,13 @@
 // x is declared as a reg, then again as an integer, in one module. Legal
 // neighbour: b_4_11_name_spaces.v (one x per space).
 // digital-runner: reject
+//! lrm 6.8
+//! lrm 6.8:1
+//! lrm 6.8:2
 //! inherited IEEE 1364-2005 4.11
 //! reject E1100
 //! reject duplicate
+//! neighbour b_4_11_name_spaces.v
 module b_4_11_variable_redefined_rejected;
   reg x;
   integer x;

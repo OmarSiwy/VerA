@@ -1,49 +1,40 @@
-// The three remaining analog-context "No" tables, and the two of them the LRM
-// backs with a flat prose sentence as well as a column.
-//
-// Table 9-3 (in §9.2; the tasks are §9.6's):
+// The analog-context "No" of Table 9-3 (in §9.2; the tasks are §9.6's):
 //     $printtimescale  Yes  No
 //     $timeformat      Yes  No
-// Both report or set how a TICK COUNT is printed, and the analog kernel has no
-// tick — it advances by a continuously variable step. That is the same reason
-// Table 9-7 withdraws $time and $stime (149) and gives the analog context
-// $abstime in seconds instead (14_abstime.va).
+// and §9.6 in full: "Verilog AMS HDL does not extend the timescale tasks
+// defined in IEEE Std 1364 Verilog." Both tasks report or set how a TICK COUNT
+// is printed, and the analog kernel has no tick — it advances by a
+// continuously variable step. That is the same reason Table 9-7 withdraws
+// $time and $stime (149) and gives the analog context $abstime in seconds
+// instead (14_abstime.va).
 //
-// Table 9-5 (in §9.2; the §9.8 PLA modeling tasks), all sixteen $async/$sync array
-// and plane spellings, "No" in the analog context, and §9.8 in full:
-//     "Verilog AMS HDL does not extend the PLA modeling tasks defined in
-//      IEEE Std 1364 Verilog."
+// ONE CONSTRUCT, ONE RULE. $printtimescale is the representative of Table 9-3.
+// The legal neighbour is 203_timescale_tasks_in_digital_context.va: the same
+// task called from a digital `initial` block, Table 9-3's "Yes" column, so the
+// pair differs only in the context and the refusal cannot be a blanket refusal
+// of the task.
 //
-// Table 9-6 (in §9.2; the §9.9 stochastic analysis tasks), $q_initialize, $q_remove,
-// $q_exam, $q_add and $q_full, "No" in the analog context, and §9.9 in full:
-//     "Verilog AMS HDL does not extend the stochastic analysis tasks defined in
-//      IEEE Std 1364 Verilog."
-//
-// "Does not extend" is the whole of §9.8 and §9.9 — there is no other sentence
-// in either subclause — so these two are the least ambiguous rows in the
-// chapter. Nothing in this directory tests them because there is no positive
-// side to test: unlike the display and file families, these tables have no
-// analog-context "Yes" row at all.
-//
-// One representative per table rather than twenty-three files. The first
-// diagnostic ends the compile; the rest name the coverage.
+// RECONCILER, 2026-10-08. This file used to hold four constructs, one per
+// table (9-3, 9-5, 9-6), with 14_abstime.va as its neighbour. The first
+// diagnostic ends the compile, so only $printtimescale was ever evidenced, and
+// 14_abstime uses none of these tasks. Tables 9-5 and 9-6 moved to
+// rc_154_pla_array_analog_rejected.va and
+// rc_154_stochastic_queue_analog_rejected.va, each with its digital-context
+// neighbour; the `//! lrm 9.8`/`9.9` cites moved with them.
 //
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.2
 //! lrm 9.6
-//! lrm 9.8
-//! lrm 9.9
-//! reject analog context
+//! lrm 9.2:1000
+//! lrm 9.6:1000
+//! reject-only analog context
 //! reject E0806
+//! neighbour 203_timescale_tasks_in_digital_context.va
 module ch09_timescale_pla_queue_analog_rejected(p, n);
   inout p, n; electrical p, n;
-  integer in_array, out_array, status;
   analog begin
     $printtimescale;
-    $timeformat(-9, 2, " ns", 10);
-    $async$and$array(in_array, in_array, out_array);
-    status = $q_initialize(1, 1, 16);
-    I(p,n) <+ V(p,n) + status;
+    I(p,n) <+ V(p,n);
   end
 endmodule

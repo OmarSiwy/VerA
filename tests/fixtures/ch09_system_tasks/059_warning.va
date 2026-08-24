@@ -21,6 +21,8 @@
 //
 //! lrm 9.2
 //! lrm 9.7.3
+//! lrm 9.2:1000
+//! lrm 9.7.3:4
 //! bias V(p) = 2.0, V(n) = 0.5
 `include "check.vh"
 module ch09_atomic_warning(p, n);

@@ -21,7 +21,11 @@
 //! lrm C.7
 //! lrm 5.7
 //! lrm A.6.2
-//! reject E0214
+//! lrm A.6.2:1000
+//! lrm A.6.4
+//! lrm A.6.4:1000
+//! reject-only E0214
+//! neighbour ../ch07_mixed_signal/m02_10_macro_process_runs_after_nba.va
 module annex_c_nonblocking_assign_rejected(p);
     inout p;
     electrical p;

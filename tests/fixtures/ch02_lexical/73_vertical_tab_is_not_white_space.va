@@ -14,7 +14,8 @@
 // (here E0208, expecting the variable name), so the phrase is what is pinned.
 //
 //! lrm 2.3
-//! reject invalid token
+//! lrm 2.3:1
+//! reject-only invalid token
 `include "disciplines.vams"
 module ch02_vertical_tab_is_not_white_space(p, n);
   inout p, n; electrical p, n;

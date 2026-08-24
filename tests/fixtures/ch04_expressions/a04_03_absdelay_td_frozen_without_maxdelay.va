@@ -40,6 +40,7 @@
 // LESS than what the operator already computes every step.
 //
 //! lrm 4.5.7
+//! lrm 4.5.7:2
 //! bias V(n) = 0
 //! wave V(d) = 2, 2, 2, 5, 5, 5
 //! time 0, 1n, 2n, 3n, 4n, 5n

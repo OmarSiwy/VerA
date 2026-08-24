@@ -16,6 +16,7 @@
 //! lrm A.9.2
 //! lrm A.9.3
 //! lrm 2.8.1
+//! lrm A.9.3:1000
 //! print none
 `include "check.vh"
 (* annex = "A.9" *)

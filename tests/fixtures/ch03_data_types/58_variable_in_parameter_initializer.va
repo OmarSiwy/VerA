@@ -16,6 +16,7 @@
 // pins E0314 for the other half: a name not yet defined at the point of use.
 //
 //! lrm 3.4
+//! lrm 3.4:1
 //! reject E0363
 module ch3_variable_in_parameter_initializer(p, n);
     inout p, n;

@@ -10,7 +10,7 @@
 //
 //! lrm 6.6.2
 //! lrm 6.2.2
-//! reject E0905
+//! reject-only E0905
 `include "disciplines.vams"
 module ch6_self(p, n);
   inout p, n; electrical p, n;

@@ -11,7 +11,10 @@
 // 34_port_access.va is the legal side.
 //
 //! lrm 4.4
-//! reject E0508
+//! lrm A.8.9
+//! lrm A.8.9:1000
+//! reject-only E0508
+//! neighbour 34_port_access.va
 module ch04_port_access_not_a_port_rejected(p, n);
     inout p, n;
     electrical p, n;

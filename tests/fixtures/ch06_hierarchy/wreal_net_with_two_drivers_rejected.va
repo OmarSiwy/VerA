@@ -22,8 +22,9 @@
 //
 //! lrm 6.5.3
 //! lrm 3.7
-//! reject E0918
+//! reject-only E0918
 //! reject `stim` is already driven
+//! neighbour real_valued_wreal_port.va
 module ch6_wreal_two_drivers(out);
   output out;
   voltage out;

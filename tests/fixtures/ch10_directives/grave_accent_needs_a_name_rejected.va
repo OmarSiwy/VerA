@@ -14,7 +14,8 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.3.1
-//! reject E0103
+//! reject-only E0103
+//! neighbour 04_define_object.va
 ` define B 2
 module ch10_grave_accent_needs_a_name(p, n);
   inout p, n; electrical p, n;

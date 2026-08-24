@@ -6,6 +6,7 @@
 // modulo_integer_unused_zero.va executes that assignment at d=0 and fails.
 //! lrm 4.2.3
 //! lrm 4.2.4
+//! lrm 4.2.3:4
 //! sweep V(p) = 0, 3
 //! checks 12
 `include "check.vh"

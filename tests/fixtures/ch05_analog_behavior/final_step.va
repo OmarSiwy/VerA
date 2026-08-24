@@ -15,6 +15,7 @@
 //
 //! lrm 5.10.2
 //! lrm 8.4.7
+//! lrm 5.10.2:1000
 //! analysis dc
 //! bias V(p) = 0.7
 `include "check.vh"

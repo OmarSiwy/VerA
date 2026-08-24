@@ -27,7 +27,10 @@
 //
 //! lrm A.6.8
 //! lrm A.6.4
-//! reject E0256
+//! lrm A.6.4:1000
+//! lrm A.6.8:1000
+//! reject-only E0256
+//! neighbour 61_looping_statements.va
 `include "check.vh"
 module annex_a_forever_rejected(p, n);
     inout p, n;

@@ -4,6 +4,7 @@
 // +empty= supplies an empty numeric remainder, which must convert to zero.
 // Status is nonzero, not necessarily 1; normalize successful statuses.
 //! lrm 9.12
+//! lrm 9.12:1000
 //! plusargs +gain=7 +gain=8
 //! plusargs +empty=
 //! checks 6

@@ -3,6 +3,8 @@
 // runner gives up after 65536 iterations (docs/Vague_Decisions.md) with E1100,
 // which is also what a loop that never ends meets. This one never ends.
 // digital-runner: reject
+//! lrm 6.6.1
+//! lrm 6.6.1:6
 //! reject E1100
 //! reject does not terminate within 65536 iterations
 module b_12_generate_past_65536_iterations_rejected;

@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 7.13.2
 //! reject E0207
 //! reject which is not a charge strength
+//! neighbour b_7_13_2_charge_strength_sharing.v
 module b_7_13_2_non_charge_strength_rejected;
   trireg (strong) t;
   initial $finish(0);

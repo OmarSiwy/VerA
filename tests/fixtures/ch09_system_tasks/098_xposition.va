@@ -9,6 +9,7 @@
 // that could round, so the check is for exact equality.
 //
 //! lrm 9.18
+//! lrm 9.18:1000
 `include "check.vh"
 module ch09_atomic_xposition(p, n);
   inout p, n; electrical p, n;

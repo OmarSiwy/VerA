@@ -4,7 +4,7 @@
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.4
-//! reject E0108
+//! reject-only E0108
 `endif
 module ch10_endif_without_ifdef(p, n);
   inout p, n; electrical p, n;

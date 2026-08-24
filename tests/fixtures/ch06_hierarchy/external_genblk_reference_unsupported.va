@@ -29,7 +29,7 @@
 //
 //! lrm 6.6.2
 //! lrm 6.6.3
-//! reject E0901
+//! reject-only E0901
 module ch6_external_genblk_reference(p);
   inout p; electrical p;
   parameter integer genblk2 = 0;

@@ -20,7 +20,11 @@
 //
 //! lrm A.6.4
 //! lrm 5.10
-//! reject E0406
+//! lrm 5.6.5
+//! lrm 5.6.5:2
+//! lrm 5.10:2
+//! lrm A.6.4:1000
+//! reject-only E0406
 module annex_a_contribution_in_event(p, n); inout p, n; electrical p, n;
 analog begin @(cross(V(p, n), 1)) I(p, n) <+ V(p, n); I(p, n) <+ 0.0; end
 endmodule

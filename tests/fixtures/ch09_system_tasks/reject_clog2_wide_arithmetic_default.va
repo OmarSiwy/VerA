@@ -5,6 +5,7 @@
 // arithmetic and wide carrier-only forms run in clog2_nested_contexts.va.
 //! lrm 9.14
 //! reject E0893
+//! neighbour clog2_nested_contexts.va
 module reject_clog2_wide_arithmetic_default;
   localparam integer result = $clog2(33'h1ffffffff + 33'h1);
   analog begin end

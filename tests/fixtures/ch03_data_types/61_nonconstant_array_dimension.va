@@ -11,7 +11,11 @@
 // (08_parameter_array.va does the parameter form).
 //
 //! lrm 3.2
+//! lrm 3.2:1
+//! lrm 3.2:2
 //! reject E0308
+//! neighbour 08_parameter_array.va
+//! neighbour 15_dynamic_array_index.va
 module ch3_nonconstant_array_dimension(p, n);
     inout p, n;
     electrical p, n;

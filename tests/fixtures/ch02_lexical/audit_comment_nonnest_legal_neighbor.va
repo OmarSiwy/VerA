@@ -4,6 +4,9 @@
 // therefore executes and supplies5. Unlike13_nested_comment_rejected.va,
 // there is no later stray closer or malformed trailing source here.
 //! lrm 2.4
+//! lrm 2.4:3
+//! lrm A.9.2
+//! lrm A.9.2:1000
 //! checks 1
 `include "check.vh"
 module audit_comment_nonnest_legal_neighbor(p);

@@ -22,6 +22,9 @@
 // undefined variable, and the three outcomes stay distinguishable.
 //
 //! lrm 6.6
+//! lrm 6.6:3
+//! lrm 6.6:5
+//! lrm 6.6:6
 //! param enabled = 0
 //! bias V(p) = 0.5
 `include "check.vh"

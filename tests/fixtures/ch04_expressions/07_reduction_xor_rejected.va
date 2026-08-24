@@ -17,7 +17,8 @@
 // fixture would have FAILED for being fixed.
 //
 //! lrm 4.2.10
-//! reject E0320
+//! lrm 4.2.10:1000
+//! reject-only E0320
 module ch04_reduction_xor_rejected;
     integer bits, parity;
     analog parity = ^bits;

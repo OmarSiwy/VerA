@@ -25,6 +25,10 @@
 //
 //! lrm 9.21
 //! lrm 9.21.1
+//! lrm 9.21.1:1
+//! lrm 9.21:2
+//! lrm 9.21:3
+//! lrm 9.21:8
 //! bias V(p) = 3.5
 `include "check.vh"
 module ch09_table_model(p, n);

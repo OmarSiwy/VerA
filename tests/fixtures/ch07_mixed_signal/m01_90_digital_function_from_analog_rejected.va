@@ -47,7 +47,8 @@
 //
 //! lrm 7.3.7
 //! lrm 4.7
-//! reject E0436
+//! lrm 7.3.7:1000
+//! reject-only E0436
 module m01_digital_function_from_analog(p);
   inout p;
   electrical p;

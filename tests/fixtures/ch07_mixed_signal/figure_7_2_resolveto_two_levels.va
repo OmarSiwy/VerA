@@ -61,6 +61,16 @@
 //! lrm 7.4.1
 //! lrm 7.7.2
 //! lrm 5.5.3
+//! lrm 7.2.4:1
+//! lrm 7.2.4:2
+//! lrm 7.4.1:1000
+//! lrm 7.4.5
+//! lrm 7.4.5:1
+//! lrm 7.7.2:1000
+//! lrm F.2
+//! lrm F.2:2
+//! lrm F.2:3
+//! lrm F.2:4
 //! bias V(NetA) = 0.5
 //! abstol NetA = 1e-9
 //! print none

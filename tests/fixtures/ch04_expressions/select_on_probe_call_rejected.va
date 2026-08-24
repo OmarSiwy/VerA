@@ -10,7 +10,8 @@
 // real number with no elements to index. `V(p, n)[0]` has no derivation.
 //
 //! lrm A.8.4
-//! reject E0330
+//! lrm A.8.4:1000
+//! reject-only E0330
 `include "disciplines.vams"
 module ch04_select_on_probe_call(p, n);
   inout p, n; electrical p, n;

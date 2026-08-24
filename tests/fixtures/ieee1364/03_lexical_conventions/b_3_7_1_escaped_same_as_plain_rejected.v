@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 3.7.1
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour audit_ams_lexical_escaped_terminators.v
 module b_3_7_1_escaped_same_as_plain_rejected;
   reg cpu3;
   reg \cpu3 ;

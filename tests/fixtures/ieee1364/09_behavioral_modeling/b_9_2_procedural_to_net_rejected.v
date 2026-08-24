@@ -12,6 +12,7 @@
 //! inherited IEEE 1364-2005 9.2 9.2.1
 //! reject E1100
 //! reject there is no procedural assignment to a net
+//! neighbour b_9_2_lvalue_forms.v
 module b_9_2_procedural_to_net_rejected;
   wire w;
   initial w = 1'b1;

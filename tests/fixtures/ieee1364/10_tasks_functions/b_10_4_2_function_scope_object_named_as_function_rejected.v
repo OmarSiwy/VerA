@@ -10,6 +10,7 @@
 //! inherited IEEE 1364-2005 10.4.2
 //! reject E1100
 //! reject duplicate digital variable
+//! neighbour b_10_4_1_function_declaration_forms.v
 module b_10_4_2_function_scope_object_named_as_function_rejected;
   reg x;
   function f;

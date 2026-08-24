@@ -14,6 +14,7 @@
 //! inherited IEEE 1364-2005 9.8.2 9.8.3
 //! reject E0209
 //! reject found `reg`
+//! neighbour b_9_8_3_named_fork_declarations.v
 module b_9_8_2_unnamed_fork_declaration_rejected;
   initial fork
     reg r;

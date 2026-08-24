@@ -22,8 +22,10 @@
 // is connected to, which is all this fixture needs of it.
 //
 //! lrm 3.6.1.2
+//! lrm 3.6.1.2:3
 //! lrm 3.6.1.1
 //! lrm 1.3.4.1
+//! lrm 3.6.1.1:1
 //! bias V(p) = 0.75
 `include "check.vh"
 nature ch3_parent_n; units="V"; access=ParentV; abstol=1u; endnature

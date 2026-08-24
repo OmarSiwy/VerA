@@ -4,7 +4,9 @@
 // unpaired pole in zero/pole form. The same-form legal neighbor is
 // audit_laplace_zd_conjugate_zeros.va; fixture23's pair is instead a pole pair.
 //! lrm 4.5.11.2
-//! reject no conjugate partner
+//! lrm 4.5.11.2:2
+//! reject-only no conjugate partner
+//! neighbour audit_laplace_zd_conjugate_zeros.va
 module audit_laplace_zd_unpaired_zero_rejected(p,n);
     inout p,n;
     electrical p,n;

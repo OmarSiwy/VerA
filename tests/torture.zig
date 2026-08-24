@@ -279,6 +279,33 @@ fn verifyRejected(
             return .unmet;
         }
     }
+    // `//! reject-only`: the refusal is the named rule's alone. An error no
+    // pattern names is a second refusal riding inside this one, which a plain
+    // `reject` cannot see (CLAUSE-AUDIT.md §6.3, §6.4).
+    if (harness.probe_reject_only) {
+        for (0..bad.diags.count()) |i| {
+            if (bad.diags.at(i).severity != .err) continue;
+            for (d.reject) |pattern| {
+                if (diagSays(&bad.diags, i, pattern)) break;
+            } else {
+                try w.print("ONLY-NO {s}: {t}\n", .{ f.path, bad.diags.at(i).code });
+                return .met;
+            }
+        }
+        try w.print("ONLY-OK {s}\n", .{f.path});
+        return .met;
+    }
+    if (d.reject_only) for (0..bad.diags.count()) |i| {
+        if (bad.diags.at(i).severity != .err) continue;
+        for (d.reject) |pattern| {
+            if (diagSays(&bad.diags, i, pattern)) break;
+        } else {
+            const e = bad.diags.at(i);
+            try w.print("FAIL {s}: `//! reject-only`, and a second error fired: {t} {s}\n", .{ f.path, e.code, vera.diag.info(e.code).title });
+            try printDiags(bad, w);
+            return .unmet;
+        }
+    };
     return .met;
 }
 
@@ -321,7 +348,9 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
     if (diags.failed()) {
         return .{ .refused = .{ .error_name = "DiagnosticsReported", .diags = diags } };
     }
-    if (result.device_has_compile_error or std.mem.indexOf(u8, generated, "@compileError") != null) {
+    // The compiler's own flag, not a text search: a kernel may carry
+    // `@compileError` in a guard that never fires (`$table_model`'s does).
+    if (result.device_has_compile_error) {
         // Transfer the GPA-owned text before dropping the compilation.
         result.device.text = "";
         return .{ .refused = .{
@@ -444,6 +473,9 @@ fn runAndCheck(
     stage_into: ?*?vera.tb.Staged,
 ) !Result {
     const cfg = ctx.cfg;
+    // `--perturb`: check.vh moves every want by a relative δ (TESTING.md L2b).
+    // A define ahead of the text, so the first `include "check.vh"` sees it.
+    const compiled_src = if (harness.perturb) |p| try arena.print("`define VERA_PERTURB {e}\n{s}", .{ p, source }) else source;
     // Stages 1-6 with §9.4 display ON. W0650 is about speed, and every fixture
     // that probes a node trips it; allowing it here keeps the transcript about
     // the model rather than about float modes — unless a `//! warn` names it.
@@ -465,7 +497,7 @@ fn runAndCheck(
         .spice_path = f.path,
         .discipline_resolution = d.discipline_resolution,
     };
-    var result = vera.compileSourceOpts(gpa, source, .build, opts) catch |err| {
+    var result = vera.compileSourceOpts(gpa, compiled_src, .build, opts) catch |err| {
         try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
         vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
         return .unmet;
@@ -477,7 +509,7 @@ fn runAndCheck(
     if (opts.param_overrides.len != 0) {
         diags.deinit(gpa);
         diags = .init(gpa);
-        const again = vera.compileSourceOpts(gpa, source, .build, opts) catch |err| {
+        const again = vera.compileSourceOpts(gpa, compiled_src, .build, opts) catch |err| {
             try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
             vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
             return .unmet;
@@ -507,6 +539,12 @@ fn runAndCheck(
     dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
     dm.op_states = try vera.tb.opStates(arena, result.lowered);
     dm.validate_contract = true;
+    dm.certify = harness.certify and d.fd_exempt == null;
+    // L4b: the prover's claim `finiteCheck` tests. Every contribution unit
+    // rated `.optimized` (proof.zig `FloatMode`); a device with none claims nothing.
+    dm.finite_proved = for (result.verdict.unit_modes) |mode| {
+        if (mode != .optimized) break false;
+    } else result.verdict.unit_modes.len != 0;
     const runner = try vera.tb.renderRunner(arena, f.stem(), dm);
 
     // One work directory per fixture, keyed on the whole relative path: two
@@ -558,6 +596,7 @@ fn runAndCheck(
 
     // THE ASSERTION, and the only one there is.
     const tally = countVerdicts(got);
+    if (harness.perturb != null) return perturbed(f, got, w);
     if (d.expected_checks) |expected| {
         if (tally.total != expected) {
             try w.print("FAIL {s}: observed {d} assertion(s), expected exactly {d}\n", .{
@@ -592,6 +631,61 @@ fn runAndCheck(
         return .unasserted;
     }
     return .met;
+}
+
+/// A `--perturb` transcript's verdict: every want was moved, so every check
+/// must now print a failing verdict. Each `ok=1` left is LOOSE, named here
+/// for `tools/conformance.py`. The runner's own directive checks (`//! noise`,
+/// `acstim`, `acdyn`, `qsite`, `seed`, `limit`, `abstol`) are not the
+/// fixture's: check.vh does not move their wants, and whether they can fail
+/// is the runner's property (its exact or 1e-12 comparisons, pinned by
+/// lib/backend/tb/test.zig and tests/canary), so they are left out.
+fn perturbed(f: Fixture, got: []const u8, w: *Io.Writer) !Result {
+    var own: Tally = .{ .total = 0, .failed = 0 };
+    var runner_checks: usize = 0;
+    var lines = std.mem.splitScalar(u8, got, '\n');
+    while (lines.next()) |line| {
+        const at = std.mem.indexOf(u8, line, "ok=") orelse continue;
+        if (directiveCheck(line)) {
+            runner_checks += 1;
+            continue;
+        }
+        own.total += 1;
+        const rest = line[at + 3 ..];
+        if (!(rest.len != 0 and rest[0] == '1' and (rest.len == 1 or std.ascii.isWhitespace(rest[1])))) own.failed += 1;
+    }
+    if (own.total == 0) return if (runner_checks != 0) .met else .unasserted;
+    if (own.failed == own.total) return .met;
+    try w.print("FAIL {s}: {d} of {d} check(s) still pass with their want perturbed:\n", .{ f.path, own.total - own.failed, own.total });
+    lines = std.mem.splitScalar(u8, got, '\n');
+    while (lines.next()) |line| {
+        if (directiveCheck(line)) continue;
+        const at = std.mem.indexOf(u8, line, "ok=1") orelse continue;
+        if (at + 4 == line.len or std.ascii.isWhitespace(line[at + 4])) try w.print("LOOSE {s}: {s}\n", .{ f.path, line });
+    }
+    return .unmet;
+}
+
+/// Whether a verdict line is one the runner prints for a device-table
+/// directive (`tb/runner.zig`), not a check the fixture wrote.
+fn directiveCheck(line: []const u8) bool {
+    const tags = [_][]const u8{ "noise[", "noise count", "acstim[", "acstim count", "acdyn[", "qsite[", "qsite count", "seed[", "limit[", "abstol[" };
+    for (tags) |t| if (std.mem.startsWith(u8, line, t)) return true;
+    return false;
+}
+
+test "a perturbed run judges the fixture's checks, not the runner's directive tables" {
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    const f: Fixture = .{ .path = "x.va", .root = ".", .slug = "x" };
+    // Every own check flipped; a directive check still ok=1 is not LOOSE.
+    try std.testing.expectEqual(Result.met, try perturbed(f, "own got=1 want=1.001 ok=0\nnoise[0] got=a want=a ok=1\n", &aw.writer));
+    // Only directive checks: the runner's comparisons are what can fail.
+    try std.testing.expectEqual(Result.met, try perturbed(f, "limit[0].g got=1 want=1 ok=1\n", &aw.writer));
+    try std.testing.expectEqual(Result.unasserted, try perturbed(f, "nothing\n", &aw.writer));
+    // An own check that survives is LOOSE, by name.
+    try std.testing.expectEqual(Result.unmet, try perturbed(f, "loose got=1 want=1.001 ok=1\n", &aw.writer));
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "LOOSE x.va: loose") != null);
 }
 
 const Tally = struct { total: usize, failed: usize };

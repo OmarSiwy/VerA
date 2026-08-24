@@ -133,6 +133,8 @@
  * not the built-in's 4'sb1000 sign-extended, 16'hfff8.
  */
 
+//! lrm 12.33.1
+//! lrm 12.33.1:9
 //! inherited IEEE 1364-2005 20.2
 //! inherited IEEE 1364-2005 20.3
 //! inherited IEEE 1364-2005 20.4

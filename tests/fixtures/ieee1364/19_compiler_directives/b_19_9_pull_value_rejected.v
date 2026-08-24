@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 19.9
 //! reject E0141
 //! reject `unconnected_drive takes pull0 or pull1
+//! neighbour b_19_9_unconnected_drive.v
 `unconnected_drive pull2
 module b_19_9_pull_value_rejected(input i);
   initial $display("accepted");

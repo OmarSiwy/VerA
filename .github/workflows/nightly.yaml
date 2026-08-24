@@ -1,0 +1,74 @@
+# The nightly tier (docs/TESTING.md §6): the slow evidence the merge gate
+# cannot afford, and the conformance metric it feeds (§3.7).
+#
+#   perturb   every check run with its want moved by 0.1%: a LOOSE check
+#             cannot see an error that size (L2b)
+#   certify   every Jacobian entry against a central difference (L4a)
+#   metric    each ledger row's evidence level, ratcheted against the
+#             committed tests/fixtures/LEVELS.tsv, and the table in the summary
+name: nightly
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Strict suite, with verdicts
+        continue-on-error: true
+        run: zig build -Doptimize=ReleaseFast test-ams -- --verdicts=/tmp/verdicts.tsv 2>&1 | tail -5
+
+      - name: Perturbed run (L2b)
+        continue-on-error: true
+        run: |
+          zig build -Doptimize=ReleaseFast benchmark -- --perturb --verdicts=/tmp/perturbed.tsv 2> /tmp/perturb.txt | tail -3
+          grep '^LOOSE ' /tmp/perturb.txt | sed 's|^LOOSE .*/tests/fixtures/|LOOSE |' | sort > /tmp/loose.txt || true
+
+      - name: Derivative certificate (L4a)
+        continue-on-error: true
+        run: |
+          zig build -Doptimize=ReleaseFast benchmark -- --certify --verdicts=/tmp/certified.tsv 2> /tmp/certify.txt | tail -3
+          grep -E '^fd_check FAIL|^FAIL ' /tmp/certify.txt > /tmp/fd-failures.txt || true
+
+      - name: Coverage-guided fuzzing, bounded (L6)
+        continue-on-error: true
+        run: zig build fuzz --fuzz=200K 2>&1 | tail -20
+
+      - name: Conformance metric and level ratchet (gate)
+        run: |
+          python3 tools/conformance.py metric --verdicts=/tmp/verdicts.tsv --perturbed=/tmp/perturbed.tsv --levels=/tmp/levels.tsv | tee /tmp/metric.txt
+          python3 tools/conformance.py ratchet --verdicts=/tmp/verdicts.tsv --levels=/tmp/levels.tsv
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## Conformance metric (docs/TESTING.md §3.7)'
+            echo '```'; cat /tmp/metric.txt 2>/dev/null; echo '```'
+            echo '## LOOSE checks (want moved 0.1%, still ok=1)'
+            echo '```'; wc -l < /tmp/loose.txt 2>/dev/null; head -50 /tmp/loose.txt 2>/dev/null; echo '```'
+            echo '## Derivative certificate failures'
+            echo '```'; head -50 /tmp/fd-failures.txt 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-evidence
+          path: |
+            /tmp/verdicts.tsv
+            /tmp/perturbed.tsv
+            /tmp/certified.tsv
+            /tmp/levels.tsv
+            /tmp/metric.txt
+            /tmp/loose.txt
+            /tmp/fd-failures.txt

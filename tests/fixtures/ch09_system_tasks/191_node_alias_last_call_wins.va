@@ -16,6 +16,8 @@
 // reads 5.0; one that performed neither reads 0.
 //
 //! lrm 9.20
+//! lrm 9.20:14
+//! lrm 9.20:10
 //! bias V(a) = 5.0, V(b) = 2.0, V(g) = 0.0
 `include "check.vh"
 

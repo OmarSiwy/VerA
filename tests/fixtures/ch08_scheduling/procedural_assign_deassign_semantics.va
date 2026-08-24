@@ -30,6 +30,7 @@
 // keywords while the parser had no statement production for them.
 //
 //! lrm 8.5.3.2
+//! lrm 8.5.3.2:1000
 //! analysis tran
 //! time 0, 8, 25
 `include "check.vh"

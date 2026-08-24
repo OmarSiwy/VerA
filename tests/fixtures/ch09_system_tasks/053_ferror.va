@@ -29,6 +29,7 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.7
+//! lrm 9.5.7:1
 `include "check.vh"
 module ch09_atomic_ferror(p, n);
   inout p, n; electrical p, n;

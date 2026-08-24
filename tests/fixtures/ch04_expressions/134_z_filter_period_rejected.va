@@ -19,7 +19,9 @@
 // expectation is the message fragment and not an E-code.
 //
 //! lrm 4.5.12
-//! reject filter shall be positive
+//! lrm 4.5.12:2
+//! reject-only filter shall be positive
+//! neighbour 24_z_transform_filters.va
 module ch04_z_filter_period_rejected(p, n);
     inout p, n;
     electrical p, n;

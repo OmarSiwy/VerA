@@ -5,6 +5,7 @@
 // V(p) exercises runtime analog input; the separate constant-conversion fixture
 // records the independently failing parameter-default path.
 //! lrm 9.11
+//! lrm 9.11:1000
 //! bias V(p) = 1.75
 //! checks 5
 `include "check.vh"

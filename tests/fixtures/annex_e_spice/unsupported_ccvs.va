@@ -21,7 +21,8 @@
 // dedicated to the E.3.1 primitives and is not this fixture's to buy.
 //
 //! lrm E.3.1
-//! reject E0904
+//! lrm E.3.1:1000
+//! reject-only E0904
 module annex_e_unsupported_ccvs(p, n);
   inout p, n; electrical p, n;
   // Third argument is a controlling INSTANCE name, which E.3.1 has no way to pass.

@@ -1,7 +1,7 @@
 // The numeric ASCII implementation currently accepts integral operands only.
 // A real must be diagnosed in string tasks as it is in display/file tasks;
 // do not emit uncompilable Zig or silently choose a real bit interpretation.
-//! reject E0819
+//! reject-only E0819
 module ch09_numeric_string_real_rejected(p, n);
   inout p, n; electrical p, n;
   string text;

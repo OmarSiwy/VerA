@@ -37,6 +37,8 @@
 //! lrm 9.22
 //! lrm 9.22.1
 //! lrm 7.8.4
+//! lrm 9.22.1:1000
+//! lrm 9.22:1000
 //! analysis tran
 //! time 0, 50n
 //! checks 2

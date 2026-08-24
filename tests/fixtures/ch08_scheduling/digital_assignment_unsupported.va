@@ -11,7 +11,8 @@
 //
 //! lrm 8.5
 //! lrm A.6.1
-//! reject E0438
+//! lrm A.6.1:1000
+//! reject-only E0438
 //! reject assign
 module ch8_continuous_assignment;
   integer source, target;

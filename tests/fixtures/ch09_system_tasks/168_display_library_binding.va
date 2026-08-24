@@ -39,6 +39,8 @@
 //! lrm 9.4.3
 //! lrm 9.5.3
 //! lrm 9.5.4.2
+//! lrm 9.5.4.2:1
+//! lrm 9.5.4.2:5
 `include "check.vh"
 module ch09_display_library_binding(p, n);
   inout p, n; electrical p, n;

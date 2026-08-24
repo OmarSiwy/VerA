@@ -45,6 +45,7 @@
 // want this pins that `D` can sit in EITHER position.
 //
 //! lrm 9.21
+//! lrm 9.21:4
 //! lrm 9.21.2
 //! lrm 9.21.4
 `include "check.vh"

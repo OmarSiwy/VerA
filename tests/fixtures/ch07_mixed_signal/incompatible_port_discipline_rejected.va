@@ -19,10 +19,15 @@
 // compatible_port_discipline.va is the positive half.
 //
 //! lrm 7.4.3
+//! lrm 7.4.3:1
+//! lrm 7.4.3:2
 //! lrm 3.11
 //! lrm 3.11.1
-//! reject E0355
+//! lrm 3.11:4
+//! lrm 3.11.1:1
+//! reject-only E0355
 //! reject rotational
+//! neighbour compatible_port_discipline.va
 module ch07_incompatible_port_child(a);
     inout a;
     rotational a;

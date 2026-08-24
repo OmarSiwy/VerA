@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 18.3.4
 //! reject E1100
 //! reject size
+//! neighbour b_18_3_4_dumpportslimit_stops_with_comment.v
 `timescale 1ns/1ns
 module b_18_3_4_dumpportslimit_without_size_rejected_dev(a, y);
   input a;

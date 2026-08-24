@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 A.3.1
 //! reject E0209
 //! reject an n-input gate takes an output and at least one input
+//! neighbour b_A_3_1_gate_instantiations.v
 module b_A_3_1_missing_input_terminal_rejected;
   wire y;
   and a1 (y);

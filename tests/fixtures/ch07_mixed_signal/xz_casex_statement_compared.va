@@ -19,6 +19,7 @@
 // at 10n; one running it as casez reads r1 = 0.0 at 30n.
 //
 //! lrm 7.3.2
+//! lrm 7.3.2:1
 //! analysis tran
 //! time 0, 10n, 30n, 50n, 70n
 `timescale 1ns/1ns

@@ -8,6 +8,7 @@
 //! inherited IEEE 1364-2005 A.8.8
 //! reject E0138
 //! reject a string literal may not span lines
+//! neighbour b_A_8_8_strings.v
 module b_A_8_8_string_across_newline_rejected;
   initial $display("one
 two");

@@ -13,6 +13,7 @@
 //! inherited IEEE 1364-2005 17.2.1
 //! reject E1100
 //! reject $fclose takes one descriptor
+//! neighbour audit_fopen_write_append_mcd.v
 module b_17_2_1_fclose_two_descriptors_rejected;
   integer a, b;
   initial begin

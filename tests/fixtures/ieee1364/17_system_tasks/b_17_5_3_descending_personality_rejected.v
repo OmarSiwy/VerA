@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 17.5.3
 //! reject E1100
 //! reject ascending
+//! neighbour audit_pla_async_personality.v
 `timescale 1 ns / 1 ns
 module b_17_5_3_descending_personality_rejected;
   reg [2:1] mem [1:1];

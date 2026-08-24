@@ -2,7 +2,7 @@
 // replacement is also erroneous. Two distinct names defeat a self-name-only
 // guard. The first definition is not itself an invocation.
 //! lrm 10.4
-//! reject E0118
+//! reject-only E0118
 `define AUDIT_FIRST `AUDIT_SECOND
 `define AUDIT_SECOND `AUDIT_FIRST
 module audit_macro_indirect_recursion_rejected;

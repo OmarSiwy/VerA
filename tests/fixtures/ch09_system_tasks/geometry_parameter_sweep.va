@@ -8,6 +8,7 @@
 // cannot rotate, reflect or scale it (§6.3.6); only mfactor scales the flow.
 //! lrm 6.3.6
 //! lrm 9.18
+//! lrm 9.18:1000
 //! psweep k = 0, 1, 2, 3
 //! bias V(p) = 1
 //! checks 28

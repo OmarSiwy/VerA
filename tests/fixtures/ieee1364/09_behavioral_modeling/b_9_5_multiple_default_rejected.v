@@ -7,6 +7,7 @@
 //! inherited IEEE 1364-2005 9.5
 //! reject E1100
 //! reject multiple default items
+//! neighbour b_9_5_case_linear_search.v
 module b_9_5_multiple_default_rejected;
   reg [1:0] s;
   initial begin

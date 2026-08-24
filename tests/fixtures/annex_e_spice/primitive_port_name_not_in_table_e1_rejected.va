@@ -25,8 +25,10 @@
 //! lrm E.2.2.3
 //! lrm E.3
 //! lrm E.1.2
-//! reject E0906
+//! lrm E.1.2:2
+//! reject-only E0906
 //! reject `a` is not a port of `resistor`
+//! neighbour passive_named_ports.va
 `include "disciplines.vams"
 module e223_osc_fragment(b1, gnd);
   inout b1, gnd; electrical b1, gnd;

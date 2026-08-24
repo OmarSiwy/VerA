@@ -8,6 +8,7 @@
 // a truncation to whole ticks fails too.
 //
 //! lrm 9.10
+//! lrm 9.10:1000
 //! analysis tran
 //! time 2.5e-9
 `include "check.vh"

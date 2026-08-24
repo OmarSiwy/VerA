@@ -10,6 +10,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 A.6.4
 //! reject E0209
+//! neighbour b_A_6_4_statements.v
 module b_A_6_4_null_initial_statement_rejected;
   initial ;
   initial $display("unreachable");

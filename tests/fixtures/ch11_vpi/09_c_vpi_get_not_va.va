@@ -8,7 +8,7 @@
 // The rule that travels to any compiler is §4.7; E0512 is VerA's code for it.
 //
 //! lrm 4.7
-//! reject E0512
+//! reject-only E0512
 //! reject `vpi_get`
 module ch11_c_vpi_get_not_va(p, n);
   inout p, n; electrical p, n;

@@ -27,6 +27,7 @@
 //
 //! lrm 9.4.1
 //! lrm 5.4.2.2
+//! lrm 5.4.2.2:1000
 //! bias V(p) = 0.25, V(n) = 0.0
 `include "check.vh"
 module ch5_read_before_write(p, n);

@@ -11,6 +11,7 @@
 //! inherited IEEE 1364-2005 11.6.6
 //! reject E1100
 //! reject a gate's output terminal must be a net
+//! neighbour b_11_6_6_terminal_and_port_connections.v
 module b_11_6_6_primitive_output_to_reg_rejected;
   reg r;
   wire a;

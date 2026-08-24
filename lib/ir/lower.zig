@@ -119,6 +119,9 @@ pub const ArrayInfo = struct {
     /// and `id` is its `out.mem_arrays` row. Null: scalarized, one place per
     /// element under `elemName`. See `lower_var.declareVarDecl`.
     mem: ?Mem = null,
+    /// §3.4.4 an array parameter: its elements are `param_index` rows, and
+    /// §5.7 lets only its declaration assign it.
+    param: bool = false,
     /// A memory-backed array's SSA place and `out.mem_arrays` row.
     pub const Mem = struct { place: Ssa.Place, id: u32, reg_width: ?u32 = null };
 };
@@ -333,6 +336,10 @@ in_analog_initial: bool = false,
 displays_dropped: bool = false,
 /// §7.4.4's resolution mode (`Options.discipline_resolution`).
 discipline_resolution: Elaborate.DisciplineResolution = .basic,
+/// §12.32.1 the user analog system functions a VPI application registered
+/// with sysfunctype vpiIntFunc (`Options.int_systfs`): a call to one is an
+/// integer. Every other unresolved `$name` is real.
+int_systfs: []const []const u8 = &.{},
 /// `Ast.AnalogBlock.unit` of the block being lowered: the module instance that
 /// wrote it. Read by `discardOpposite` only; see `newContrib`.
 cur_unit: u32 = 0,
@@ -413,6 +420,9 @@ gen_iter: ?i64 = null,
 /// §6.4.3 `Elaborate.Design.ps_hidden`: module output variables a paramset
 /// makes unavailable, by flat name. Read by `lowerSimprobe`.
 ps_hidden: []const []const u8 = &.{},
+/// §6.4.3 `Elaborate.Design.ps_outputs`: paramset output variables, reported
+/// under the instance's name by §9.16's `$simprobe`.
+ps_outputs: []const Elaborate.PsOutput = &.{},
 /// §6.3.1/§6.4 forbidden defparams, awaiting final generate-scheme values.
 paramset_defparams: []const Elaborate.ParamsetDefparam = &.{},
 /// §6.4.2 parameters whose values selected an overloaded paramset.
@@ -477,6 +487,7 @@ pub const Options = struct {
     param_overrides: []const ParamOverride = &.{},
     displays_dropped: bool = false,
     discipline_resolution: Elaborate.DisciplineResolution = .basic,
+    int_systfs: []const []const u8 = &.{},
 };
 
 /// Lowers `file` into the empty `mir`. Retains nothing: the SSA builder's map
@@ -497,6 +508,7 @@ pub fn lower(
     self.param_overrides = opts.param_overrides;
     self.displays_dropped = opts.displays_dropped;
     self.discipline_resolution = opts.discipline_resolution;
+    self.int_systfs = opts.int_systfs;
     defer {
         self.deinit();
         assert(self.builder.dir.len == 0);
@@ -537,6 +549,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     self.ps_hidden = design.ps_hidden; // §6.4.3
+    self.ps_outputs = design.ps_outputs;
     self.paramset_defparams = design.paramset_defparams;
     self.selection_params = design.selection_params;
     self.system_checks = design.system_checks;
@@ -734,6 +747,7 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             try lower_control.lowerBranchStmt(self, flag, blk.body, .none, false, .none);
             self.in_analog_initial = false;
             self.restrict = prev;
+            try lower_systask.haltAfterInitError(self);
         } else {
             try lower_stmt.lowerStmt(self, blk.body);
         }

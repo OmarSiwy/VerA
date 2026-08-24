@@ -37,6 +37,7 @@
 //
 //! lrm G.2.1
 //! lrm A.6.8
+//! lrm A.6.8:1000
 //! analysis tran
 //! time 0, 2.5n, 5.5n, 10.5n
 `timescale 1ns/1ns

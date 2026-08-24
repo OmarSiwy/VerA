@@ -19,7 +19,9 @@
 //
 //! lrm 4.5.1
 //! lrm 4.5.11.4
-//! reject E0572
+//! lrm 4.5.1:1000
+//! reject-only E0572
+//! neighbour 35_filter_parameter_arrays.va
 module ch04_filter_scalar_coefficient(in, n);
     inout in, n;
     electrical in, n;

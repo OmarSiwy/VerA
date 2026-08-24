@@ -33,6 +33,7 @@
 // becomes E0501 with nothing to access. Last-wins would do the same.
 //
 //! lrm 10.2
+//! lrm 10.2:1000
 //! bias V(p) = 0.75, V(n) = 0.25
 `default_discipline electrical wire
 `default_discipline ddiscrete reg

@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 4.8.1
 //! reject E1100
 //! reject real
+//! neighbour ../05_expressions/b_5_2_1_bit_part_select_addressing.v
 module b_4_8_1_real_index_rejected;
   reg [3:0] v;
   initial begin

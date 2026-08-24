@@ -38,8 +38,12 @@
 //
 //! lrm 5.6.8.1
 //! lrm 5.6.8
-//! reject E0477
+//! lrm 5.6.8.1:1
+//! reject-only E0477
 //! reject closes a loop of potential sources
+//! neighbour a02_07_hierarchical_contribution_creates_a_new_branch.va
+//! neighbour a02_08_hierarchical_named_branch_accumulates.va
+//! neighbour hierarchical_contribution_unsupported.va
 module ch5_hier_vloop(g);
   inout g;
   electrical g;

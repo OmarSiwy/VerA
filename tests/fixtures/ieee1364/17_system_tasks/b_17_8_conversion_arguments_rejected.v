@@ -9,6 +9,7 @@
 //! inherited IEEE 1364-2005 17.8
 //! reject E1100
 //! reject a §17.8 conversion takes exactly one argument
+//! neighbour b_17_8_conversions.v
 `timescale 1 ns / 1 ns
 module b_17_8_conversion_arguments_rejected;
   integer i;

@@ -126,7 +126,10 @@
 //! lrm 9.2
 //! lrm 9.11
 //! lrm 4.2.1.1
+//! lrm 4.2.1.1:1
 //! lrm G.1
+//! lrm 9.2:1000
+//! lrm 9.11:1000
 //! bias V(p) = 1.7
 //! print none
 `include "check.vh"

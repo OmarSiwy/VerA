@@ -15,7 +15,10 @@
 // = 6/3, and compiles (checked by hand when this fixture was written).
 //
 //! lrm 4.5.11.4
-//! reject E0505
+//! lrm 4.5.15
+//! lrm 4.5.15:4
+//! reject-only E0505
+//! neighbour 153_laplace_nd_dc_gain.va
 module ch04_laplace_nd_null_denominator(in, n);
     inout in, n;
     electrical in, n;

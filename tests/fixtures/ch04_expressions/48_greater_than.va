@@ -4,6 +4,7 @@
 // the value is the integer 0. Moving the operand above the boundary gives the 1.
 //
 //! lrm 4.2.5
+//! lrm 4.2.5:1000
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_greater_than(p, n);

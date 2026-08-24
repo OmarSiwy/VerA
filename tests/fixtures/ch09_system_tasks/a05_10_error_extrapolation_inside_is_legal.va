@@ -36,6 +36,8 @@
 //       whose character is `L`, so this too is legal: 4.5
 //
 //! lrm 9.21.2
+//! lrm 9.21.2:1
+//! lrm 9.21.2:2
 `include "check.vh"
 module a05_error_extrapolation_inside_is_legal(p, n);
   inout p, n; electrical p, n;

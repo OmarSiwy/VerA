@@ -29,6 +29,8 @@
 //! print none
 //! lrm 9.4.3
 //! lrm 9.5.3
+//! lrm 9.4.1
+//! lrm 9.4.1:1
 `include "check.vh"
 module ch09_display_c_format_flags(p, n);
   inout p, n; electrical p, n;
