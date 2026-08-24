@@ -1,0 +1,48 @@
+// A digital driver on an analog net, bridged by a connect module (LRM
+// §7.7, §7.8). `driver` has a ddiscrete output; `top` connects it to the
+// electrical net `a`. That mixed port matches the connect statement, so
+// VerA inserts one `d2a` between them. By hand, d2a drives `a` through
+// 1 kohm toward vdd * d, and top loads `a` with 1 kohm to ground:
+//
+//   d = 0:  (V - 0) / 1k + V / 1k = 0    ->  V(a) = 0
+//   d = 1:  (V - 1.8) / 1k + V / 1k = 0  ->  V(a) = 0.9 V
+//
+// The driver switches d from 0 to 1 at 5 ns.
+//! time 0, 4n, 8n
+//! solve
+//! print none
+`include "disciplines.vams"
+`timescale 1ns/1ns
+
+connectmodule d2a(d, a);
+  input d;
+  output a;
+  ddiscrete d;
+  electrical a;
+  parameter real vdd = 1.8 from (0:inf);
+  parameter real rout = 1k from (0:inf);
+  analog I(a) <+ (V(a) - vdd * ((d == 1'b1) ? 1.0 : 0.0)) / rout;
+endmodule
+
+connectrules rules;
+  connect d2a;
+endconnectrules
+
+module driver(q);
+  output q;
+  ddiscrete q;
+  reg q;
+  initial begin
+    q = 1'b0;
+    #5 q = 1'b1;
+  end
+endmodule
+
+module top;
+  electrical a;
+  driver u1(a);
+  analog begin
+    I(a) <+ V(a) / 1k;
+    $strobe("t = %g  V(a) = %g", $abstime, V(a));
+  end
+endmodule

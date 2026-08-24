@@ -1,0 +1,16 @@
+// `//! psweep` runs one point per card value: 1 V across 1k, 2k and 4k
+// draws 1 mA, 0.5 mA and 0.25 mA.
+//! psweep r = 1000, 2000, 4000
+//! bias V(p) = 1
+//! print none
+`include "disciplines.vams"
+
+module psweep(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    $strobe("r = %g: I(p,n) = %g A", r, I(p, n));
+  end
+endmodule

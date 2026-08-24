@@ -1,0 +1,2 @@
+$ vera --run --param r=-500 negres.va
+$ vera --run --param r=0 negres.va

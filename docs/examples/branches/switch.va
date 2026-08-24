@@ -1,0 +1,24 @@
+// A switch branch (LRM 5.6.5), after tests/fixtures' switch_branch_solved:
+// a 2 V source behind 1k drives p, and a 1k load hangs from n.
+//   closed (V(c) = 1): V(p,n) <+ 0 ties p to n:
+//                      (V - 2)/1k + V/1k = 0  ->  V(p) = V(n) = 1 V
+//   open   (V(c) = 0): I(p,n) <+ 0 carries no current:
+//                      V(p) = 2 V (unloaded), V(n) = 0 V
+//! sweep V(c) = 1, 0
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module switch(p, n, c);
+  inout p, n, c;
+  electrical p, n, c;
+  analog begin
+    I(p) <+ (V(p) - 2) / 1k;
+    I(n) <+ V(n) / 1k;
+    if (V(c) > 0.5)
+      V(p, n) <+ 0;
+    else
+      I(p, n) <+ 0;
+    $strobe("V(c) = %g: V(p) = %g V, V(n) = %g V", V(c), V(p), V(n));
+  end
+endmodule

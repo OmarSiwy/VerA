@@ -1,0 +1,12 @@
+$ vera --run --param r=-5 hello.va
+error[E0361]: overridden parameter value is outside its range: `r` is -5, outside the declared range
+ --> hello.va:7:18
+  |
+7 |   parameter real r = 1k from (0:inf);
+  |                  ^
+  |
+  = note: LRM 3.4.2
+  = help: run `vera --explain E0361` for a detailed explanation
+
+error: could not compile due to 1 previous error(s)
+(exit 1)

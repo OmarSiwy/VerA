@@ -1,0 +1,2 @@
+$ vera --run --param stages=4 params.va
+$ vera --run --param rseries=1 params.va

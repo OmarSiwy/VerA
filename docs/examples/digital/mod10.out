@@ -1,0 +1,13 @@
+$ vera --run mod10.v
+10 ns: count = 1
+20 ns: count = 2
+30 ns: count = 3
+40 ns: count = 4
+50 ns: count = 5
+60 ns: count = 6
+70 ns: count = 7
+80 ns: count = 8
+90 ns: count = 9
+100 ns: count = 0
+110 ns: count = 1
+$finish at tick 120, mod10.v byte 309

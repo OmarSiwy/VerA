@@ -1,0 +1,23 @@
+// An analog-to-digital crossing (LRM §7.3.5): `always @(cross(...))` is a
+// digital process woken by an analog event. V(in) rises through 0.6 V
+// between 10 ns (0.4 V) and 20 ns (0.8 V), and falls through it between
+// 30 ns (1.2 V) and 40 ns (0.2 V). Each crossing sets `q`, and the digital
+// $display reports the time the digital side saw it.
+//! time 0, 10n, 20n, 30n, 40n
+//! wave V(in) = 0, 0.4, 0.8, 1.2, 0.2
+//! print none
+`include "disciplines.vams"
+`timescale 1ns/1ns
+
+module comparator(in);
+  input in;
+  electrical in;
+  reg q;
+
+  initial q = 0;
+  always @(cross(V(in) - 0.6, +1)) q = 1;
+  always @(cross(V(in) - 0.6, -1)) q = 0;
+  always @(q) $display("%0t ns: q = %b", $time, q);
+
+  analog $strobe("t = %g  V(in) = %g  q = %d", $abstime, V(in), q);
+endmodule

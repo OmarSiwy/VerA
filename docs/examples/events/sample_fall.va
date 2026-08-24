@@ -1,0 +1,21 @@
+// Exercise 1: sample on the falling edge. dir = -1 keeps only the falling
+// crossing of V(clk) - 0.5, between 3 us (1 V) and 4 us (0 V), so the event
+// fires at 4 us and samples V(in) = 0.4; `held` is 0 at every earlier point.
+//! time 0, 1u, 2u, 3u, 4u
+//! wave V(clk) = 0, 0, 1, 1, 0
+//! wave V(in) = 0, 0.1, 0.2, 0.3, 0.4
+//! print none
+`include "disciplines.vams"
+
+module sample_fall(in, clk, out);
+  input in, clk;
+  output out;
+  electrical in, clk, out;
+  real held;
+  analog begin
+    @(cross(V(clk) - 0.5, -1))
+      held = V(in);
+    V(out) <+ held;
+    $strobe("t = %g  V(clk) = %g  V(in) = %g  held = %g", $abstime, V(clk), V(in), held);
+  end
+endmodule

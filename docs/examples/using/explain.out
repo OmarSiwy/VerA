@@ -1,0 +1,6 @@
+$ vera --color=never --explain E0314
+E0314: unknown identifier
+LRM 6.8
+
+Nothing with this name is declared in scope — not a variable, a
+parameter, a net, a branch, a discipline, or a function.

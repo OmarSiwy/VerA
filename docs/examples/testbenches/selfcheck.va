@@ -1,0 +1,20 @@
+// A self-checking testbench: each check prints its verdict as `ok=1` or
+// `ok=0`. The fixture suite fails on any `ok=0`, and `//! checks 2` makes it
+// fail unless exactly two verdicts were printed.
+//! bias V(p) = 0.75, V(n) = 0.25
+//! print none
+//! checks 2
+`include "disciplines.vams"
+`define CHECK(NAME, GOT, WANT, TOL) \
+  $strobe("%s got=%g want=%g ok=%d", NAME, GOT, WANT, (abs((GOT) - (WANT)) <= (TOL)))
+
+module selfcheck(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 2k from (0:inf);
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    `CHECK("V(p,n)", V(p, n), 0.5, 1e-12);
+    `CHECK("I(p,n) = V/r", I(p, n), 0.25e-3, 1e-15);
+  end
+endmodule

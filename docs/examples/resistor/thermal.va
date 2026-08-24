@@ -1,0 +1,17 @@
+// A thermal resistance in the `thermal` discipline (LRM Annex D): its
+// potential is a temperature (Temp, kelvin) and its flow a power (Pwr, watts).
+// 10 K across rth = 50 K/W carries 10 / 50 = 0.2 W.
+// Directives name an unknown that is not electrical by its bare net name.
+//! bias a = 310, b = 300
+//! print none
+`include "disciplines.vams"
+
+module thermal_r(a, b);
+  inout a, b;
+  thermal a, b;
+  parameter real rth = 50 from (0:inf);
+  analog begin
+    Pwr(a, b) <+ Temp(a, b) / rth;
+    $strobe("dT = %g K, P = %g W", Temp(a, b), Pwr(a, b));
+  end
+endmodule

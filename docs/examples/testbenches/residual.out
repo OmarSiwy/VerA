@@ -1,0 +1,11 @@
+$ vera --run residual.va
+=== residual ===
+--- point 0 ---
+  x[p] = 1.000000e0
+  x[n] = 0.000000e0
+  res[p] = 1.000000e-3
+    d res[p]/d x[p] = 1.000000e-3
+    d res[p]/d x[n] = -1.000000e-3
+  res[n] = -1.000000e-3
+    d res[n]/d x[p] = -1.000000e-3
+    d res[n]/d x[n] = 1.000000e-3

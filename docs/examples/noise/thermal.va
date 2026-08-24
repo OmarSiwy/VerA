@@ -1,0 +1,24 @@
+// The thermal noise of a resistor, LRM §4.6.4.1's own example. The current
+// noise density is 4kT/R. constants.vams (LRM Annex D.2) defines `P_K as
+// the NIST 1998 value, 1.3806503e-23 J/K, unless another set is selected,
+// and the testbench's temperature is 300.15 K, so by hand:
+//
+//   4 * 1.3806503e-23 * 300.15 / 1000 = 1.65760875018e-23 A^2/Hz
+//
+// Outside a noise analysis the source reads 0 (LRM §4.6.4), so the dc
+// current is the resistive 1 V / 1 kohm = 1 mA alone.
+//! bias V(p) = 1.0
+//! noise thermal(p,n)#0 name=thermal white=1.65760875018e-23
+//! print none
+`include "constants.vams"
+`include "disciplines.vams"
+
+module noisy_resistor(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog begin
+    I(p, n) <+ V(p, n) / r + white_noise(4 * `P_K * $temperature / r, "thermal");
+    $strobe("I(p,n) = %g A", I(p, n));
+  end
+endmodule

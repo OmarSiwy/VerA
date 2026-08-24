@@ -1,0 +1,2 @@
+$ vera --run swap_tmp.v
+a = 2, b = 1

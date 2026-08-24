@@ -1,0 +1,21 @@
+// transition() turns a step into a ramp (LRM §4.5.8). The input steps from
+// 0 to 1 at t = 1 ns. With no delay and a 2 ns rise time the ramp starts at
+// 1 ns and ends at 3 ns, so the output is 0, 0, 0.5, 1, 1, 1 at the six
+// points.
+//! time 0, 1n, 2n, 3n, 4n, 5n
+//! wave V(in) = 0, 1
+//! print none
+`include "disciplines.vams"
+
+module smooth(in, out);
+  input in;
+  output out;
+  electrical in, out;
+  real level, y;
+  analog begin
+    level = (V(in) > 0.5) ? 1.0 : 0.0;
+    y = transition(level, 0, 2n);
+    V(out) <+ y;
+    $strobe("t = %g  level = %g  transition = %g", $abstime, level, y);
+  end
+endmodule

@@ -1,0 +1,21 @@
+// divider.va with an ammeter between the two resistors: `amm` is never
+// contributed to and only its flow is read, so it is a flow probe (LRM
+// 5.4.2.1), a branch whose potential is 0. It reads the 1 mA that flows, and
+// V(mid1) = V(mid2) = 3 V.
+//! bias V(p) = 4, V(n) = 0
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module ammeter(p, n);
+  inout p, n;
+  electrical p, n, mid1, mid2;
+  parameter real r1 = 1k from (0:inf);
+  parameter real r2 = 3k from (0:inf);
+  branch (mid1, mid2) amm;
+  analog begin
+    I(p, mid1) <+ V(p, mid1) / r1;
+    I(mid2, n) <+ V(mid2, n) / r2;
+    $strobe("I(amm) = %g A, V(mid1) = %g V, V(mid2) = %g V", I(amm), V(mid1), V(mid2));
+  end
+endmodule

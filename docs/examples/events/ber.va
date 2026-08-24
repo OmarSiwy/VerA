@@ -1,0 +1,30 @@
+// LRM §5.10.2's bit-error-rate monitor. The timer fires at t = 0, 1, 2, 3
+// and 4 s (start 0, period 1), so 5 bits are compared. `in` and `ref` differ
+// only at t = 2 s, so 1 bit of 5 is wrong: 100 * 1 / 5 = 20 %, printed by
+// the final_step event at the last point.
+//! time 0, 1, 2, 3, 4
+//! wave V(in) = 0, 1, 1, 0, 1
+//! wave V(ref) = 0, 1, 0, 0, 1
+//! print none
+`include "disciplines.vams"
+
+module bit_error_rate(in, ref);
+  input in, ref;
+  electrical in, ref;
+  parameter real period = 1 from (0:inf);
+  parameter real thresh = 0.5;
+  integer bits, errors;
+  analog begin
+    @(initial_step) begin
+      bits = 0;
+      errors = 0;
+    end
+    @(timer(0, period)) begin
+      if ((V(in) > thresh) != (V(ref) > thresh))
+        errors = errors + 1;
+      bits = bits + 1;
+    end
+    @(final_step)
+      $strobe("bit error rate = %f%% (%d of %d bits)", 100.0 * errors / bits, errors, bits);
+  end
+endmodule

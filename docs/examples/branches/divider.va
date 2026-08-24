@@ -1,0 +1,21 @@
+// Two resistors in series through an internal node `mid`, which is not a
+// port: the testbench solves for it (`//! solve`). With 4 V across
+// r1 = 1k and r2 = 3k, 1 mA flows and V(mid) = 4 - 1k * 1m = 3 V.
+//! bias V(p) = 4, V(n) = 0
+//! solve
+//! print none
+`include "disciplines.vams"
+
+module divider(p, n);
+  inout p, n;
+  electrical p, n, mid;
+  parameter real r1 = 1k from (0:inf);
+  parameter real r2 = 3k from (0:inf);
+  branch (p, mid) top;
+  branch (mid, n) bottom;
+  analog begin
+    I(top) <+ V(top) / r1;
+    I(bottom) <+ V(bottom) / r2;
+    $strobe("V(mid) = %g V, I(top) = %g A, I(bottom) = %g A", V(mid), I(top), I(bottom));
+  end
+endmodule

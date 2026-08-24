@@ -1,0 +1,25 @@
+// A resistor whose resistance rises with temperature:
+//   rt = r * (1 + tc1 * (T - tnom))
+// At T = 350.15 K, with tnom = 300.15 K and tc1 = 1e-3 /K:
+//   rt = 1k * (1 + 1e-3 * 50) = 1050 Ohm,  I = 1 V / 1050 Ohm = 0.952381 mA
+//! bias V(p) = 1
+//! temp 350.15
+//! print none
+`include "disciplines.vams"
+
+module resistor_tc(p, n);
+  inout p, n;
+  electrical p, n;
+  (* desc = "resistance at tnom", units = "Ohm" *)
+  parameter real r = 1k from (0:inf);
+  (* desc = "linear temperature coefficient", units = "1/K" *)
+  parameter real tc1 = 1e-3 from [0:1];
+  (* desc = "temperature at which r is measured", units = "K" *)
+  parameter real tnom = 300.15 from (0:inf);
+  real rt;
+  analog begin
+    rt = r * (1 + tc1 * ($temperature - tnom));
+    I(p, n) <+ V(p, n) / rt;
+    $strobe("T = %g K: rt = %g Ohm, I = %g A", $temperature, rt, I(p, n));
+  end
+endmodule

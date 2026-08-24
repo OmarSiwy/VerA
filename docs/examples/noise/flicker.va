@@ -1,0 +1,28 @@
+// Flicker noise whose power follows the bias. flicker_noise(pwr, exp) is
+// pwr / f^exp (LRM §4.6.4.2). With 1 V across 1 kohm the current is 1 mA,
+// so pwr = kf * I^af = 1e-12 * (1e-3)^2 = 1e-18 A^2/Hz at 1 Hz, and ef = 1.
+// The white_noise is the shot noise 2qI with `P_Q the NIST 1998 charge
+// 1.602176462e-19 C: 2 * 1.602176462e-19 * 1e-3 = 3.204352924e-22 A^2/Hz.
+// Two calls are two independent generators: source ids #0 and #1.
+//! bias V(p) = 1.0
+//! noise thermal(p,n)#0 name=shot white=3.204352924e-22
+//! noise flicker(p,n)#1 name=flicker flicker=1e-18 ef=1
+//! print none
+`include "constants.vams"
+`include "disciplines.vams"
+
+module noisy_conductor(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  parameter real kf = 1e-12 from [0:inf);
+  parameter real af = 2 from (0:inf);
+  parameter real ef = 1 from (0:2];
+  real i;
+  analog begin
+    i = V(p, n) / r;
+    I(p, n) <+ i
+      + white_noise(2 * `P_Q * abs(i), "shot")
+      + flicker_noise(kf * pow(abs(i), af), ef, "flicker");
+  end
+endmodule

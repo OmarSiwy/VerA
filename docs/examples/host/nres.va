@@ -1,0 +1,16 @@
+// A resistor with its thermal noise (LRM §4.6.4.1) and an AC stimulus
+// source in parallel (LRM §4.6.3), to show what a device publishes for a
+// small-signal analysis.
+`include "disciplines.vams"
+`include "constants.vams"
+
+module nres(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1k from (0:inf);
+  analog begin
+    I(p, n) <+ V(p, n) / r;
+    I(p, n) <+ white_noise(4 * `P_K * $temperature / r, "thermal");
+    I(p, n) <+ ac_stim("ac", 1e-3);
+  end
+endmodule

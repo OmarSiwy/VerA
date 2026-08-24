@@ -1,0 +1,21 @@
+// above() also fires in a dc analysis; cross() never does (LRM §5.10.3.2).
+// The sweep's points run in order and variables carry over between them
+// (LRM §4.6.2), so the counts accumulate: V(p) - 0.5 turns positive once,
+// between the 0.4 V and 0.6 V points, and above() counts that one event.
+//! analysis dc
+//! sweep V(p) = 0, 0.4, 0.6, 1.0
+//! print none
+`include "disciplines.vams"
+
+module above_vs_cross(p);
+  inout p;
+  electrical p;
+  integer n_above, n_cross;
+  analog begin
+    @(above(V(p) - 0.5))
+      n_above = n_above + 1;
+    @(cross(V(p) - 0.5, +1))
+      n_cross = n_cross + 1;
+    $strobe("V(p) = %g  above events = %d  cross events = %d", V(p), n_above, n_cross);
+  end
+endmodule

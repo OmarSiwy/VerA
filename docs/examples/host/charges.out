@@ -1,0 +1,7 @@
+$ vera --emit-zig --allow=W0650 cdiode.va | grep -A3 "^pub const q_stamps"
+pub const q_stamps = [_]contract.QStamp(U){
+    .{ .site = 0, .row = .k, .sign = -1.0 },
+    .{ .site = 0, .row = .ai, .sign = 1.0 },
+};
+$ vera --emit-zig --allow=W0650 cdiode.va | grep "^pub const q_lte"
+pub const q_lte = [n_q]bool{ true };

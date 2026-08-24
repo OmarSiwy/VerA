@@ -1,0 +1,14 @@
+$ vera --emit-zig --allow=W0650 nres.va | grep -A2 "^pub const noise_gens"
+pub const noise_gens = [_]contract.NoiseGen(Self){
+    .{ .row = @intFromEnum(U.p), .col = @intFromEnum(U.n), .kind = .thermal, .source = 0, .name = "thermal" },
+};
+$ vera --emit-zig --allow=W0650 nres.va | grep -A4 "^pub fn noisePsd"
+pub fn noisePsd(comptime S: type, x: [n_u]f64, model: *const Model, inst: *const Instance, sim: contract.SimState) [noise_gens.len]contract.PsdTerm {
+    const m = nres__common__core__noise(S, zVals(S, &x), model, inst, sim);
+    return .{
+        .{ .white = m.f0.val(), .coeff = 1 },
+    };
+$ vera --emit-zig --allow=W0650 nres.va | grep -A2 "^pub const ac_gens"
+pub const ac_gens = [_]contract.AcGen(Self){
+    .{ .row = @intFromEnum(U.p), .col = @intFromEnum(U.n), .name = "ac" },
+};
