@@ -1580,6 +1580,7 @@ pass	ch06_hierarchy/lrm_6_5_7_2.va
 pass	ch06_hierarchy/lrm_6_9.va
 pass	ch06_hierarchy/macromodule_unsupported.va
 pass	ch06_hierarchy/matching_size_concatenation.va
+pass	ch06_hierarchy/matching_size_concatenation_of_a_vector.va
 pass	ch06_hierarchy/matching_size_vector_net.va
 pass	ch06_hierarchy/mfactor.va
 pass	ch06_hierarchy/mfactor_conditional_only.va
@@ -1669,6 +1670,15 @@ pass	ch06_hierarchy/port_connected_of_an_internal_net_rejected.va
 pass	ch06_hierarchy/port_direction_not_a_port_rejected.va
 pass	ch06_hierarchy/port_directions.va
 pass	ch06_hierarchy/port_expression_literal_in_concatenation_rejected.va
+pass	ch06_hierarchy/port_part_select_on_a_scalar_port_rejected.va
+pass	ch06_hierarchy/port_part_select_out_of_range_rejected.va
+pass	ch06_hierarchy/port_part_select_reversed_rejected.va
+pass	ch06_hierarchy/port_part_select_width_mismatch_rejected.va
+pass	ch06_hierarchy/port_select_genvar_index.va
+pass	ch06_hierarchy/port_select_index_out_of_range_rejected.va
+pass	ch06_hierarchy/port_select_indexed_part_select.va
+pass	ch06_hierarchy/port_select_of_a_scalar_net_rejected.va
+pass	ch06_hierarchy/port_select_ordered_of_a_parent_port.va
 pass	ch06_hierarchy/rc_generate_block_instance_name.va
 pass	ch06_hierarchy/rc_h01_paramset_chain_far_link_parameter.va
 pass	ch06_hierarchy/real_port_unsupported.va

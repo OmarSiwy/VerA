@@ -133,8 +133,9 @@ pub const Design = struct {
     /// connected to a concatenation or to §6.5.5's scalar member or sub-range
     /// of a net (`.v(bus[1])`, `.w(bus[3:2])`): the child's port, renamed to a flat
     /// name of its own, whose element k (declaration order, msb first per IEEE
-    /// 1364 §12.3.9.2) is the parent net `elems[k]`. Lowering interns no node for it: each element
-    /// aliases its net's node (`Lower.lowerModule`).
+    /// 1364 §12.3.9.2) is bit k of `parts`, read left to right. Lowering
+    /// interns no node for it: each element aliases its net's node
+    /// (`lower_node.bindPortConnections`).
     port_concats: []const PortConcat = &.{},
     /// §6.5.7.1 "The sizes of the ports and net must match." One entry per
     /// port bound to a net: the bound flat net and the child's declared range
@@ -213,8 +214,22 @@ pub const PortConcat = struct {
     /// parameter in it folds against the instance's own overrides. Null for
     /// a scalar port bound to one bit (§6.5.5 `.v(bus[1])`).
     range: ?Ast.Dim,
-    elems: []const []const u8,
+    /// The connection's members, left to right: one for a select, one per
+    /// operand of a concatenation.
+    parts: []const NetPart,
     main_tok: u32,
+};
+
+/// One member of a `PortConcat` connection: a parent net (its flat name),
+/// whole or under the constant select the connection wrote, its bounds folded
+/// in the parent's names. Lowering, which knows each net's declared range,
+/// checks the select against it and expands the part to bits.
+pub const NetPart = struct {
+    net: []const u8,
+    /// `[a]`, `[a:b]`, or IEEE 1364-2005 §5.2.1's `[a +: b]` and `[a -: b]`.
+    sel: enum { whole, bit, range, up, down } = .whole,
+    a: i64 = 0,
+    b: i64 = 0,
 };
 
 /// One port §7.8.4 re-pointed at a connect module (`elaborate/insert.zig`), by

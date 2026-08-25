@@ -9,7 +9,8 @@
 //! states), so a row index, once handed out, is stable. At most `max_nodes`
 //! rows; past that, E1015.
 //!
-//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §7.2.4.
+//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2, §6.5.5, §6.5.7.1, §7.2.4;
+//! IEEE 1364-2005 §5.2.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -17,6 +18,7 @@ const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
 const discipline_rules = @import("../discipline_rules.zig");
+const Elaborate = @import("../elaborate.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
@@ -184,7 +186,8 @@ pub fn declareNets(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
 /// §6.5.7.1 the port connections elaboration recorded: E0925 when a port and
 /// its net differ in width, and each element of a port bound to a
-/// concatenation named as the net it is (E0906 when the counts differ).
+/// concatenation or a select named as the net it is (E0925 when the counts
+/// differ).
 pub fn bindPortConnections(self: *Lower) Oom!void {
     // §6.5.7.1 "The sizes of the ports and net must match." A net this module
     // never interned (a discrete input) has no width here to compare.
@@ -195,29 +198,86 @@ pub fn bindPortConnections(self: *Lower) Oom!void {
             try self.err(pw.main_tok, .E0925, "`{s}` is {d} wide and the port it connects is {d}", .{ pw.net, net, port });
     }
 
-    // §6.5.7.1 a vector port bound to a concatenated net expression: element k
-    // of the port IS net `elems[k]`, so its key names that net's node.
+    // §6.5.7.1 a vector port bound to a concatenated net expression or to
+    // §6.5.5's sub-range of a net: element k of the port IS bit k of the
+    // connection, so its key names that bit's node.
+    var bits: std.ArrayList(u16) = .empty;
     for (self.port_concats) |pc| {
+        bits.clearRetainingCapacity();
+        var ok = for (pc.parts) |part| {
+            if (!try partNodes(self, part, pc.main_tok, &bits)) break false;
+        } else true;
+        const r: ?VecRange = if (pc.range) |d| (try foldDim(self, d, pc.main_tok)) orelse continue else null;
+        const width: usize = if (r) |v| v.size() else 1;
+        if (ok and bits.items.len != width) {
+            ok = false;
+            if (r == null)
+                try self.err(pc.main_tok, .E0925, "the connection is {d} nets wide and the port it connects is scalar", .{bits.items.len})
+            else
+                try self.err(pc.main_tok, .E0925, "the connection is {d} nets wide and the port it connects is {d}", .{ bits.items.len, width });
+        }
+        // A refused connection binds the port to ground, as `nodeOf` stands
+        // ground in for a refused terminal, so the child's own accesses of the
+        // port add no diagnostics of their own.
         // §6.5.5 a scalar port on one bit of a net (`.v(bus[1])`) is that bit.
-        const range = pc.range orelse {
-            if (pc.elems.len != 1) {
-                try self.err(pc.main_tok, .E0906, "the connection is {d} nets wide and the port it connects is scalar", .{pc.elems.len});
-                continue;
-            }
-            try self.node_voltages.put(self.arena, pc.name, try internNode(self, pc.elems[0], ""));
+        const v = r orelse {
+            try self.node_voltages.put(self.arena, pc.name, if (ok) bits.items[0] else ground);
             continue;
         };
-        const r = (try foldDim(self, range, pc.main_tok)) orelse continue;
-        if (r.size() != pc.elems.len) {
-            try self.err(pc.main_tok, .E0906, "the connection is {d} nets wide and the port it connects is {d}", .{ pc.elems.len, r.size() });
-            continue;
-        }
-        for (pc.elems, 0..) |el, k| {
-            const idx = try internNode(self, el, "");
-            try self.node_voltages.put(self.arena, try self.arena.print("{s}[{d}]", .{ pc.name, r.at(@intCast(k)) }), idx);
-        }
-        try self.out.vectors.put(self.arena, pc.name, r);
+        for (0..width) |k|
+            try self.node_voltages.put(self.arena, try self.arena.print("{s}[{d}]", .{ pc.name, v.at(@intCast(k)) }), if (ok) bits.items[k] else ground);
+        try self.out.vectors.put(self.arena, pc.name, v);
     }
+}
+
+/// Appends the nodes of one member of a port connection, msb first: every
+/// element of a vector net (a concatenation's operand, §6.5.7.1), one net,
+/// or the elements a constant select names (§6.5.5), which must be a part of
+/// the net's declared range (E0351 on a net with none, E0352 outside it).
+/// Returns false after the diagnostic.
+fn partNodes(self: *Lower, part: Elaborate.NetPart, tok: u32, out: *std.ArrayList(u16)) Oom!bool {
+    const decl = self.out.vectors.get(part.net) orelse {
+        if (part.sel == .whole) {
+            try out.append(self.arena, try internNode(self, part.net, ""));
+            return true;
+        }
+        try self.err(tok, .E0351, "`{s}` was not declared with a range", .{part.net});
+        return false;
+    };
+    const r: VecRange = switch (part.sel) {
+        .whole => decl, // §6.5.7.1 a vector net in a concatenation: all of it
+        .bit => .{ .msb = part.a, .lsb = part.a },
+        .range => .{ .msb = part.a, .lsb = part.b },
+        .up, .down => if (part.b < 1) {
+            try self.err(tok, .E0352, "the indexed part-select of `{s}` is {d} wide", .{ part.net, part.b });
+            return false;
+        } else indexedRange(decl, part.a, part.b, part.sel == .down),
+    };
+    if (!partOf(decl, r)) {
+        if (part.sel == .bit)
+            try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ part.net, decl.msb, decl.lsb, part.a })
+        else
+            try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so [{d}:{d}] is not a part of it", .{ part.net, decl.msb, decl.lsb, r.msb, r.lsb });
+        return false;
+    }
+    for (0..r.size()) |k| try out.append(self.arena, try internNodeElem(self, part.net, r.at(@intCast(k))));
+    return true;
+}
+
+/// IEEE 1364-2005 §5.2.1's `base +: width` (`down` false) or `base -: width`
+/// on a net declared `decl`: `+:` counts up from the base, `-:` down, and the
+/// part reads in the declaration's direction. Saturates rather than overflow;
+/// a saturated bound then lies outside `decl` (`partOf`).
+fn indexedRange(decl: VecRange, base: i64, width: i64, down: bool) VecRange {
+    const lo_i = if (down) base -| (width - 1) else base;
+    const hi_i = if (down) base else base +| (width - 1);
+    return if (decl.msb < decl.lsb) .{ .msb = lo_i, .lsb = hi_i } else .{ .msb = hi_i, .lsb = lo_i };
+}
+
+/// Whether `r` is a part of `decl` (IEEE 1364-2005 §5.2.1): both bounds lie
+/// within it, and the msb is on the declared msb's side.
+fn partOf(decl: VecRange, r: VecRange) bool {
+    return decl.has(r.msb) and decl.has(r.lsb) and (r.msb == r.lsb or (r.msb < r.lsb) == (decl.msb < decl.lsb));
 }
 
 /// §7.4 resolution, as far as VerA implements it: §10.2's default discipline
@@ -825,22 +885,15 @@ pub fn vecTerminal(self: *Lower, e: Ast.ExprId, tok: u32) Oom!?VecTerm {
         try self.err(tok, .E0352, "the part-select of `{s}` has a bound that is not a constant expression", .{name});
         return null;
     }
-    const asc = decl.msb < decl.lsb;
     const r: VecRange = if (ex.tag(sel) == .range) .{ .msb = a.?.asInt(), .lsb = b.?.asInt() } else w: {
-        // §5.2.1: `+:` counts up from the base, `-:` down, and the selected
-        // range reads in the declaration's direction.
-        const base = a.?.asInt();
         const width = b.?.asInt();
         if (width < 1) {
             try self.err(tok, .E0352, "the indexed part-select of `{s}` is {d} wide", .{ name, width });
             return null;
         }
-        const down = ex.extraOf(sel) != 0;
-        const lo_i = if (down) base - width + 1 else base;
-        const hi_i = if (down) base else base + width - 1;
-        break :w if (asc) .{ .msb = lo_i, .lsb = hi_i } else .{ .msb = hi_i, .lsb = lo_i };
+        break :w indexedRange(decl, a.?.asInt(), width, ex.extraOf(sel) != 0);
     };
-    if (!decl.has(r.msb) or !decl.has(r.lsb) or (r.msb != r.lsb and (r.msb < r.lsb) != asc)) {
+    if (!partOf(decl, r)) {
         try self.err(tok, .E0352, "`{s}` is [{d}:{d}], so [{d}:{d}] is not a part of it", .{ name, decl.msb, decl.lsb, r.msb, r.lsb });
         return null;
     }
