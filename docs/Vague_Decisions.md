@@ -313,7 +313,7 @@ summary and has a **Status** line naming what landed.
 - **Rule**: not an LRM reading. Project scope (ROADMAP §5.1).
 - **Why vague**: it was an open product decision, not a reading of the standard.
 - **Options**: n/a.
-- **Decision**: `DECIDED:` implemented, as recorded in ROADMAP §5.1 item 16. The device runtime is in `src/sim/rt/device.zig`, and host tests pass at `15bb97ca` (2026-09-29). Remaining extensions are tracked elsewhere (`FUTURE_PLANS.md` §4).
+- **Decision**: `DECIDED:` implemented, as recorded in ROADMAP §5.1 item 16. The device runtime is in `src/sim/rt/device.zig`, and host tests pass at `15bb97ca` (2026-09-29). Remaining extensions are tracked as GitHub issues.
 - **VerA today**: `src/sim/rt/device.zig`, `tests/vdev_host.zig`, `tests/vdev_so_host.zig`. No change.
 - **Measure impact**: none.
 
