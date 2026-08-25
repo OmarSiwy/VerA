@@ -209,8 +209,12 @@
         ];
 
         # A shell carries what nixpkgs builds for this system (Xyce and perf
-        # are not on Darwin, iverilog not on 26.05's x86_64-darwin).
-        available = lib.filter (lib.meta.availableOn pkgs.stdenv.hostPlatform);
+        # are not on Darwin, iverilog not on 26.05's x86_64-darwin) and does
+        # not mark broken (gnucap on Darwin): `availableOn` reads only
+        # `platforms` and `badPlatforms`, and evaluating a broken package fails.
+        available = lib.filter (
+          p: lib.meta.availableOn pkgs.stdenv.hostPlatform p && !(p.meta.broken or false)
+        );
 
         # GPU Toolchains: CUDA on Linux, ROCm on x86_64-linux. Gated by hand,
         # since `available` sees only the top package, not its dependencies.
@@ -258,12 +262,15 @@
           available [
             pkgs.iverilog # IEEE 1364 simulation reference (ivtest, sv-tests)
             pkgs.verilator # lint / parse reference
-            pkgs.yosys # parse / elaborate reference
             pkgs.ngspice # OSDI host: VerA's .osdi vs OpenVAF's, same deck
             pkgs.xyce # second analog simulator
             pkgs.gnucap # third opinion for disagreements
             pkgs.python3 # harness scripts
           ]
+          # parse / elaborate reference. Gated by hand: its check inputs hold
+          # iverilog, which 26.05 refuses on x86_64-darwin, and `available`
+          # sees only yosys's own platforms.
+          ++ available (lib.optional (system != "x86_64-darwin") pkgs.yosys)
           ++ pkgs.lib.optional (system == "x86_64-linux") openvaf;
 
         gpuLibPath = pkgs.lib.makeLibraryPath (
@@ -305,13 +312,16 @@
           LD_LIBRARY_PATH = gpuLibPath;
         });
 
+        # The reference tools alone: what tools/external_analog.py and
+        # tools/external_digital.py run, without the GPU toolchains (CI).
+        devShells.external = pkgs.mkShell { packages = commonInputs ++ referenceTools; };
+
         # The user documentation (docs/): `mdbook build docs`, and
         # tools/doctest.py re-running every transcript a page shows.
         devShells.docs = pkgs.mkShell {
           packages = commonInputs ++ [
             pkgs.mdbook
             pkgs.python3
-            pkgs.nodejs # the in-browser runner's smoke test (docs/runner/)
           ];
         };
 

@@ -11,13 +11,4 @@ warning[W0650]: unit is not provably finite, so it compiles in strict float mode
    = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
    = help: run `vera --explain W0650` for a detailed explanation
 
-warning[W0850]: task dropped: a device does not print and has no file table: `$strobe`
-  --> nmos1.va:67:5
-   |
-67 |     $strobe("vgs = %.1f V  vds = %.1f V  ids = %.5e A", V(g, s), V(d, s), ids);
-   |     ^^^^^^^
-   |
-   = note: LRM 9.4
-   = help: run `vera --explain W0850` for a detailed explanation
-
-warning: 2 warning(s) emitted
+warning: 1 warning(s) emitted

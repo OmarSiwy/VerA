@@ -382,6 +382,31 @@ fn readsName(file: *const Ast.SourceFile, e: Ast.ExprId, name: Ast.StrId) bool {
     return false;
 }
 
+/// §5.4.3 the flow into a port of this unit's own module, read from inside
+/// an instance: `I(<a>)` (`I(<a[k]>)`) with `a` one of its ports, or `I(pb)`
+/// with `pb` its §3.12.1 port branch, which names the same quantity. Returns
+/// the port's local name, else null. At the top (`unit.up == null`) the
+/// host binds the ports and `I(<a>)` is its own exact unknown.
+fn ownPortFlow(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
+    if (self.unit.up == null or self.unit.path.len == 0) return null;
+    const m = self.unit.module orelse return null;
+    const x = &self.ctx.file.exprs;
+    var t = x.lhs(e);
+    if (t != .none and x.tag(t) == .index) t = x.lhs(t);
+    if (t == .none or x.tag(t) != .ident) return null;
+    const name = x.strOf(t);
+    if (x.tag(e) == .port_access) {
+        for (m.ports) |p| if (p.name == name) return name;
+    } else if (x.rhs(e) == .none) {
+        for (m.branches) |b| if (b.is_port_branch and b.name == name) {
+            var h = b.hi;
+            if (h != .none and x.tag(h) == .index) h = x.lhs(h);
+            return if (h != .none and x.tag(h) == .ident) x.strOf(h) else name;
+        };
+    }
+    return null;
+}
+
 /// Copies one expression subtree into the store, renaming the names that
 /// belong to the unit being inlined, and applies the per-instance rewrites
 /// (§6.3.6 flow-probe division, §9.18/§9.19 answers, §6.4.1 references).
@@ -441,6 +466,17 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
         .event_posedge, .event_negedge, .event_driver_update => n.lhs = try cloneExpr(self, x.lhs(e)),
         .event_initial_step, .event_final_step => {}, // §5.10.2 analysis names
         .branch_access, .port_access => {
+            // §5.4.3 the flow into this INSTANCE's own port. Joined, the port
+            // is the parent's net, whose port flow is another quantity (the
+            // top's, or none: E0508), and VerA sums an instance's port flow
+            // only for a reader above it (`lower_expr.instancePortFlow`).
+            if (!self.contrib_target) if (ownPortFlow(self, e)) |port| {
+                const access = self.ctx.file.str(n.str);
+                try self.err(n.main_tok, .E0997, "`{s}` inside instance `{s}` reads the flow into its own port `{s}`; VerA sums that flow only for a module above it, as `{s}(<{s}{s}>)`", .{
+                    access, self.unit.path[0 .. self.unit.path.len - 1], self.ctx.file.str(port), access, self.unit.path, self.ctx.file.str(port),
+                });
+                return x.addReal(self.ctx.arena, n.main_tok, 0.0);
+            };
             // §4.4 `str` is the access function (`V`, `I`), not a name in
             // this unit; the terminals are `lhs`/`rhs`.
             n.lhs = try cloneExpr(self, x.lhs(e));

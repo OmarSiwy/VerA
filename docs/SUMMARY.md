@@ -27,7 +27,6 @@
 - [`$limit` arguments](using/limit.md)
 - [Implementation-defined choices](using/implementation.md)
 - [External accuracy suites](using/external-suites.md)
-- [Running examples in the browser](using/browser.md)
 
 # VerA devices in your own simulator
 

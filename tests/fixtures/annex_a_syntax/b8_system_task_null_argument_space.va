@@ -25,13 +25,14 @@
 //
 // `$strobe;` takes the other A.6.9 bracket, the whole argument list omitted;
 // it prints nothing a check can read, so it only has to compile. A tool that
-// dropped a null argument writes "ab", "xy" and "z".
+// dropped a null argument writes "ab", "xy" and "z" (VerA did until
+// 2026-10-08). A null argument a conversion consumes is VD-101's
+// (ch09_system_tasks/null_argument_consumed_by_s.va).
 //
 //! lrm A.6.9
 //! lrm 9.4.1
 //! lrm 9.5.3
 //! lrm A.6.9:1000
-//! xfail a null argument writes nothing into the $swrite string: $swrite(s, "a",,"b") gives "ab" and $swrite(s, ,"z") gives "z" (probed), where §9.4.1 makes each null argument one space
 //! bias V(p) = 0.5
 //! checks 3
 `include "check.vh"

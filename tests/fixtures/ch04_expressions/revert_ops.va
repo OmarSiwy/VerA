@@ -1,6 +1,13 @@
 // The device tests/revert_host.zig runs twice, once with a rejected step and
 // once without: one §4.5/§5.10/§9.13 construct that keeps history in the
 // device per output row, each read off its own node, all fed by V(a).
+//
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
 module revert_ops(a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra);
     inout a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra;
     electrical a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im, o_rn, o_rc, o_rp, o_ra;
@@ -17,8 +24,8 @@ module revert_ops(a, o_tr, o_ad, o_sl, o_lp, o_zi, o_lc, o_cr, o_ab, o_tm, o_im,
         I(o_tr) <+ transition(V(a), 0, 1n);
         I(o_ad) <+ absdelay(V(a), 0.5n);
         I(o_sl) <+ slew(V(a), 0.5e9);
-        I(o_lp) <+ laplace_nd(V(a), {1}, {1, 1n});
-        I(o_zi) <+ zi_nd(V(a), {1}, {1, -0.5}, 1n);
+        I(o_lp) <+ laplace_nd(V(a), '{1}, '{1, 1n});
+        I(o_zi) <+ zi_nd(V(a), '{1}, '{1, -0.5}, 1n);
         I(o_lc) <+ 1e9 * last_crossing(V(a) - 0.5, 0);
         I(o_cr) <+ 1e9 * t_cross;
         I(o_ab) <+ 1e9 * t_above;

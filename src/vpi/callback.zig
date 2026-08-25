@@ -90,6 +90,7 @@ pub const cbEndOfCompile: c_int = 10;
 pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
 pub const cbError: c_int = 13;
+pub const cbTchkViolation: c_int = 14;
 pub const cbInteractiveScopeChange: c_int = 23;
 pub const cbAssign: c_int = 25;
 pub const cbDeassign: c_int = 26;
@@ -275,7 +276,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // IEEE 1364-2005 §27.33.3's feature reason cbInteractiveScopeChange
         // "Simulation command to change interactive scope executed": §12.36's
         // vpiSetInteractiveScope is the only such command here.
-        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError, cbInteractiveScopeChange => {},
+        // IEEE 1364-2005 §27.33.3 and VAMS 12.31.4's action reason
+        // cbTchkViolation, "Timing check error occurred": the digital
+        // engine's timing checks (`digital.Run.tchk_hook`, `onTchk`).
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError, cbInteractiveScopeChange, cbTchkViolation => {},
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
         // must be one VerA issued. cbAssign/cbDeassign take the same: the
@@ -505,7 +509,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     var data: CbData = .{
         .reason = cb.reason,
         .cb_rtn = cb.rtn,
-        .obj = if (override or cb.reason == cbStmt or cb.reason == cbInteractiveScopeChange) @ptrCast(@constCast(from.?)) else cb.obj,
+        .obj = if (override or cb.reason == cbStmt or cb.reason == cbInteractiveScopeChange or cb.reason == cbTchkViolation) @ptrCast(@constCast(from.?)) else cb.obj,
         .time = null,
         .value = null,
         .index = index,
@@ -587,6 +591,31 @@ pub fn interactiveScopeChange(scope: *const root.Obj) void {
     for (0..n) |i| {
         const cb = cbs.items[i];
         if (!cb.dead and cb.reason == cbInteractiveScopeChange) _ = call(cb, cb.index, scope);
+    }
+    sweep();
+}
+
+/// `digital.Run.tchk_hook`: timing check `check` of the run reported a
+/// violation. IEEE 1364-2005 §27.33.3 / VAMS 12.31.4 cbTchkViolation,
+/// "Timing check error occurred", and "For cbTchkViolation callbacks, the obj
+/// field shall be a handle to the timing check": the §11.6.15 object built
+/// from the same command (`src_tok`) in the same instance.
+pub fn onTchk(r: *digital.Run, check: u32) void {
+    const n = cbs.items.len;
+    const wanted = for (cbs.items) |cb| {
+        if (!cb.dead and cb.reason == cbTchkViolation) break true;
+    } else false;
+    if (!wanted) return;
+    const site = r.tchkSite(check);
+    const d = &root.design.?;
+    const tchk = for (d.objects) |*o| {
+        if (o.kind != .code or o.vtype != @import("code.zig").vpiTchk or o.src_tok != site.tok) continue;
+        const owner = o.owner.get() orelse continue;
+        if (d.scopes[owner].engine == site.scope) break o;
+    } else return;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (!cb.dead and cb.reason == cbTchkViolation) _ = call(cb, cb.index, tchk);
     }
     sweep();
 }

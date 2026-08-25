@@ -29,6 +29,13 @@
 // T and re-arms on the sample grid rather than from the accepted time, which
 // also stops the instants drifting with the timestep.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+//
 //! lrm 4.5.12
 //! analysis tran
 //! bias V(n) = 0
@@ -44,7 +51,7 @@ module ch04_zi_sampling_period(in, n);
     analog begin
         // T = 1 us, and the timepoints are 10 us apart: 10 sampling periods
         // elapse between consecutive evaluations.
-        slow = zi_zp(V(in, n), {0.0, 0.0}, {0.5, 0.0}, 1u);
+        slow = zi_zp(V(in, n), '{0.0, 0.0}, '{0.5, 0.0}, 1u);
         $strobe("t=%g slow=%.17g", $abstime / 1u, slow);
         // 200 sampling periods at |pole| = 1/2 is 2^-200 of remaining error, so
         // the settled value is exact to the last bit of a double. A filter that

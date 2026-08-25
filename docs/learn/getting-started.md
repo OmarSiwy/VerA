@@ -113,7 +113,7 @@ means the source has an error; 2 means the command line does.
 2. Give `r` a value outside its range with `vera --run --param r=-5
    hello.va`. What does VerA say, and which clause does it cite?
 3. Add a second parameter `g`, a conductance in siemens, and make the
-   contribution `V(p, n) * g + V(p, n) / r`. Run it with `--param g=1m`.
+   contribution `V(p, n) * g + V(p, n) / r`. Run it with `--param g=0.001`.
 
 <details>
 <summary>Solutions</summary>

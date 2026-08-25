@@ -28,6 +28,12 @@ The first point is the start of the analysis. There is no history yet, and
 `ddt` returns 0, as it does in any DC analysis (LRM §4.5.3): in DC, a
 capacitor is an open circuit. After that, each 1 V step over 1 µs gives 1 mA.
 
+The transcript lists one more unknown than the model has nodes, `x[ddt$0]`
+(spelled `ddtZ240` to be a valid Zig identifier). "Analog operators require
+new equations and new unknowns be introduced by the simulator" (LRM §4.5.2),
+and VerA gives each `ddt` and `idt` site one: here its value is `ddt`'s
+result, the 1 mA.
+
 How a simulator turns `ddt` into numbers is its choice. The testbench uses
 backward Euler, `(V_now − V_before)/dt`, at the step you give it, which is
 exact for this ramp. A real simulator picks its own steps and method, and

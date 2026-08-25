@@ -1,1 +1,3 @@
 $ "$(vera --emit-exe --state=2 xstate.v)"
+note: --two-state is not IEEE 1364 §3.2/§4.1 4-state simulation; output differs wherever an x or z would have arisen
+r = 0000, w = 0000, r + 1 = 0001, r == 0 is 1

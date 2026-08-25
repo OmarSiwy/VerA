@@ -161,12 +161,11 @@ pub fn emitNoiseCore(self: *Gen) Error!void {
 /// earlier `noise_tables[i].points.len`. Emitted only when some knot is a
 /// parameter. Re-sorted at run time, because §4.6.4.3's "the simulator shall
 /// internally sort the pairs into ascending frequency" must hold for any card.
+/// `derive` stores its result in the row (`Model.noise_table_points__`,
+/// `contract.noiseTable`).
 pub fn emitNoiseTablePoints(self: *Gen) Error!void {
-    var any = false;
-    for (self.noise.tab_vals) |mvs| any = any or mvs.len != 0;
-    if (!any) return;
-    var total: usize = 0;
-    for (self.noise.tabs) |pts| total += pts.len;
+    if (!hasCardKnots(self)) return;
+    const total = cardKnotCount(self);
     try self.w(
         \\/// §4.6.4.3 every tabulated knot AT THIS CARD, in `noise_tables`
         \\/// order and ascending in frequency within each table. Table k is
@@ -204,6 +203,23 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
         at += pts.len;
     }
     try self.w("    return pts;\n}}\n\n", .{});
+}
+
+/// Returns whether the device emits `noiseTablePoints`: a §4.6.4.3/.4 table
+/// some knot of which is a parameter, so the `Model` row also carries
+/// `noise_table_points__` and `derive` fills it. False when the noise tables
+/// were refused, since then no `noise_tables` is emitted either.
+pub fn hasCardKnots(self: *const Gen) bool {
+    if (self.noise.fatal != null or self.noise.rows.len == 0) return false;
+    for (self.noise.tab_vals) |mvs| if (mvs.len != 0) return true;
+    return false;
+}
+
+/// The knots of every table, the length of `noiseTablePoints`' result.
+pub fn cardKnotCount(self: *const Gen) usize {
+    var total: usize = 0;
+    for (self.noise.tabs) |pts| total += pts.len;
+    return total;
 }
 
 /// Emits the §4.6.3 AC stimulus tables: `ac_gens[k]` (branch and analysis

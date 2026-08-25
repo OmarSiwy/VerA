@@ -43,10 +43,12 @@
 //!                (the uncollapsed system is exact, a 0 V branch's flow kept
 //!                as an unknown)
 //!
-//! Not mapped, each because OSDI 0.4 has no slot for it: opvars; correlated
-//! noise (`NoiseGen.source` shared by rows, `PsdTerm.corr_with`): each row
-//! is an independent source; a step rejection a device asks for
-//! (`request_reject_at`); and acceptance itself: OSDI has no accept
+//! Not mapped, each because OSDI 0.4 has no slot for it (docs/Vague_Decisions.md
+//! VD-102): opvars; correlated noise (`NoiseGen.source` shared by rows,
+//! `PsdTerm.corr_with`): each row is an independent source, and `vera`
+//! warns W1098; a step rejection a device asks for (`request_reject_at`),
+//! which `vera` refuses (E1099) before building this; the device's display
+//! records (`say`); and acceptance itself: OSDI has no accept
 //! callback, so `updateState` and `stateCtl(.commit)` run at every iterate
 //! of a static solve and, in a transient, at the last point evaluated before
 //! the simulator moves time forward (a rejected step retries at an earlier
@@ -779,22 +781,10 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
         const gens = if (@hasDecl(D, "noise_gens")) D.noise_gens else [0]contract.NoiseGen(D){};
 
         /// §4.6.4.3/.4 a table generator's PSD at `f`, from the card's
-        /// knots when the device has `noiseTablePoints` (as
-        /// src/sim/spice/noise.zig `tableAt`).
+        /// knots (`contract.noiseTable` on the derived row).
         fn tableAt(row: *const D.Model, comptime table: ?u16, f: f64) f64 {
             const ti = table orelse return 0;
-            var tbl = D.noise_tables[ti];
-            if (@hasDecl(D, "noiseTablePoints")) {
-                const card = D.noiseTablePoints(row);
-                var off: usize = 0;
-                for (D.noise_tables[0..ti]) |t0| off += t0.points.len;
-                var pts: [card.len][2]f64 = undefined;
-                const mine = pts[0..tbl.points.len];
-                @memcpy(mine, card[off..][0..tbl.points.len]);
-                contract.sortNoiseTable(mine);
-                tbl.points = mine;
-            }
-            return contract.noiseTableAt(tbl, f);
+            return contract.noiseTableAt(contract.noiseTable(D, row, ti), f);
         }
 
         fn loadNoise(ip: *anyopaque, _: *anyopaque, freq: f64, dens: [*]f64) callconv(.c) void {

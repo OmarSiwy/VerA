@@ -1,5 +1,3 @@
-XFAIL annex_a_syntax/b8_net_decl_assignment_refused.va
-XFAIL annex_a_syntax/b8_output_time_port_written_mixed.va
-XFAIL annex_a_syntax/b8_system_task_null_argument_space.va
+ONEWAY-IEEE §15.6
 XFAIL ch07_mixed_signal/b5_gate_generated_connect_name_defparam.va
 XFAIL ch09_system_tasks/b6_fdebug_writes_in_rejected_iterations.va

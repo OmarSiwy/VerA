@@ -2,11 +2,12 @@
 """VerA's IEEE 1364-2005 behaviour against outside suites and tools.
 
     tools/external_digital.py [VERA] [--native] [--only SUITE] [--names FILE]
+    tools/external_digital.py --selftest
 
-`zig build test-external-digital` runs this with the built `vera`. Three
-suites, each a folder under tests/fixtures/external/ with a MANIFEST.md (the
-upstream URL and pinned commit are read from its `- upstream:` and
-`- commit:` lines) and a TRIAGE.md:
+VERA defaults to zig-out/bin/vera (`zig build -Doptimize=ReleaseFast
+install`). Three suites, each a folder under tests/fixtures/external/ with a
+MANIFEST.md (the upstream URL and pinned commit are read from its
+`- upstream:` and `- commit:` lines) and a TRIAGE.md:
 
     ivtest         the Icarus Verilog regression suite: its lists, gold files
                    and PASSED convention (MANIFEST.md has the selection rule)
@@ -16,16 +17,21 @@ upstream URL and pinned commit are read from its `- upstream:` and
                    selections above; verilator and yosys are a second opinion
                    where the two disagree on accepting a source
 
-Upstream sources are fetched into .zig-cache/external/ (git-ignored) at the
-pinned commit, never committed: ivtest is GPL-2.0.
+Upstream sources are fetched at the pinned commit into $VERA_EXTERNAL_CACHE
+(default .zig-cache/external/, git-ignored) at test time, never committed:
+ivtest is GPL-2.0.
 
-Every disagreement prints as `FAIL <suite>/<name>: why`, or `KNOWN` when its
-name has a row in the suite's TRIAGE.md (which carries the verdict). Exit 1
-while any FAIL is untriaged. Needs python3, git; iverilog/vvp for
-iverilog-diff, verilator/yosys for its second opinion (`nix develop
-.#benchmarking`). A suite whose tool is missing is reported as skipped.
+Every disagreement prints as `FAIL <suite>/<name>: why`, or `KNOWN` when a row
+of the suite's TRIAGE.md (`| `pattern` | verdict | ... |`, an fnmatch pattern
+over the name, so one root cause is one row) covers it; `ivtest-native`'s rows
+are ivtest/TRIAGE-native.md. A row that covers no disagreement of a suite that
+ran is `STALE`. Exit 1 while any FAIL is untriaged or any row is STALE. Needs
+python3, git; iverilog/vvp for iverilog-diff, verilator/yosys for its second
+opinion (`nix develop .#external`). A suite whose tool is missing is reported
+as skipped.
 """
 import concurrent.futures
+import fnmatch
 import os
 import re
 import shutil
@@ -35,7 +41,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXT = ROOT / "tests/fixtures/external"
-CACHE = ROOT / ".zig-cache/external"
+CACHE = Path(os.environ.get("VERA_EXTERNAL_CACHE", ROOT / ".zig-cache/external")).resolve()
 TIMEOUT = 20
 JOBS = min(4, os.cpu_count() or 1)
 # Prepended to every tool invocation, e.g. a memory cap:
@@ -140,11 +146,29 @@ def fetch(suite):
     return d
 
 
+# A report whose triage is not `<suite>/TRIAGE.md`.
+TRIAGE = {"ivtest-native": "ivtest/TRIAGE-native.md"}
+
+
 def triage(suite):
-    """name -> verdict, from TRIAGE.md's `| name | verdict | ... |` rows."""
-    p = EXT / suite / "TRIAGE.md"
+    """pattern -> verdict, from TRIAGE.md's `| `pattern` | verdict | ... |` rows."""
+    p = EXT / TRIAGE.get(suite, f"{suite}/TRIAGE.md")
     rows = re.findall(r"(?m)^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|", p.read_text()) if p.is_file() else []
     return dict(rows)
+
+
+def judge(results, rows):
+    """(known [(name, why, pattern)], untriaged [(name, why)], stale patterns)
+    for one report's (name, why) disagreements against its triage rows."""
+    known, new, used = [], [], set()
+    for name, why in results:
+        pat = next((p for p in rows if fnmatch.fnmatchcase(name, p)), None)
+        if pat:
+            used.add(pat)
+            known.append((name, why, pat))
+        else:
+            new.append((name, why))
+    return known, new, [p for p in rows if p not in used]
 
 
 def run(argv, cwd, timeout=TIMEOUT):
@@ -305,7 +329,7 @@ def ivtest(vera, report):
     results = list(concurrent.futures.ThreadPoolExecutor(JOBS).map(one, cases))
     report("ivtest", [(n, w, e) for n, w, _, e in results], len(skipped))
     if vera.native:
-        report("ivtest-native", [(n, nw, "") for n, _, nw, _ in results if nw != "-"], 0, triage_as="ivtest")
+        report("ivtest-native", [(n, nw, "") for n, _, nw, _ in results if nw != "-"], 0)
     return cases
 
 
@@ -483,7 +507,20 @@ def iverilog_diff(vera, report, iv_cases, sv_cases):
 
 # ---------------------------------------------------------------------------
 
+def selftest():
+    rows = {"ivtest/br*": "VerA bug: fixture x", "gone": "fixed"}
+    assert judge([("ivtest/br1", "a"), ("sv-tests/x.v", "b")], rows) == (
+        [("ivtest/br1", "a", "ivtest/br*")], [("sv-tests/x.v", "b")], ["gone"])
+    assert normalise("a\r\n$finish at tick 5\nb\n") == "a\nb"
+    assert sv_reasons(strip("logic a; // int\ni++;")) == ["logic", "++"]
+    assert non_1364_systf(strip('$display("$foo"); $sformatf(x);')) == ["sformatf"]
+    print("selftest: ok")
+    return 0
+
+
 def main(argv):
+    if "--selftest" in argv:
+        return selftest()
     native = "--native" in argv
     only = argv[argv.index("--only") + 1] if "--only" in argv else None
     names_file = argv[argv.index("--names") + 1] if "--names" in argv else None
@@ -491,26 +528,21 @@ def main(argv):
     vera = Vera(os.path.realpath(pos[0] if pos else ROOT / "zig-out/bin/vera"), native)
     lines, tallies, untriaged = [], [], [0]
 
-    def report(suite, results, excluded, triage_as=None):
-        known = triage(triage_as or suite)
+    def report(suite, results, excluded):
+        rows = triage(suite)
         agree = sum(1 for _, w, _ in results if w is None)
-        new = 0
-        for name, why, _ in results:
-            if why is None:
-                continue
-            if name in known:
-                lines.append(f"KNOWN {suite}/{name}: {why} [{known[name]}]")
-            else:
-                lines.append(f"FAIL {suite}/{name}: {why}")
-                new += 1
-        untriaged[0] += new
-        tallies.append(f"{suite}\t{len(results)}\t{agree}\t{len(results) - agree}\t{new}\t{excluded}")
+        known, new, stale = judge([(n, w) for n, w, _ in results if w is not None], rows)
+        lines.extend(f"KNOWN {suite}/{n}: {w} [{p}: {rows[p]}]" for n, w, p in known)
+        lines.extend(f"FAIL {suite}/{n}: {w}" for n, w in new)
+        lines.extend(f"STALE {suite}/{p}: TRIAGE row covers no disagreement; delete it" for p in stale)
+        untriaged[0] += len(new) + len(stale)
+        tallies.append(f"{suite}\t{len(results)}\t{agree}\t{len(results) - agree}\t{len(new)}\t{excluded}")
 
-    iv = ivtest(vera, report) if only in (None, "ivtest", "iverilog-diff") else []
-    sv = svtests(vera, report) if only in (None, "sv-tests", "iverilog-diff") else []
+    # iverilog-diff alone still reads the other two suites' selections.
+    diff_only = only == "iverilog-diff"
+    iv = ivtest(vera, report) if only in (None, "ivtest") else ivtest_select(fetch("ivtest") / "ivtest")[0] if diff_only else []
+    sv = svtests(vera, report) if only in (None, "sv-tests") else svtests_select(fetch("sv-tests"))[0] if diff_only else []
     if only in (None, "iverilog-diff"):
-        if only:
-            tallies.clear(), lines.clear()
         iverilog_diff(vera, report, iv, sv)
 
     lines.sort()

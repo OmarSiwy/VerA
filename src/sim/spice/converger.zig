@@ -15,7 +15,9 @@
 //! factor-reuse signature goes with it. Not taken: JFNK/GMRES, the
 //! `ESPICE_SOLVER` pin and the `ZP_*` debug traces (environment reads), the
 //! profiler, the GPU `deviceSolve`, `loadCheck`, `evalFollows`, `checkpoint`,
-//! `force` holds and gmin stamps (the operating point's later rungs).
+//! `force` holds and `gmin_stamps` (Sparse's preorder twins: here gmin is on
+//! every voltage row's diagonal, which moves no answer, since the operating
+//! point's last solve carries none).
 const std = @import("std");
 const dense_lu = @import("dense_lu.zig");
 
@@ -36,7 +38,9 @@ pub const Options = struct {
     vntol: f64 = 1e-6,
     /// Floor of the row-scaled residual gate.
     residual_tol: f64 = 1e-9,
-    /// Conductance added to every diagonal (and gmin * x to the residual).
+    /// Conductance from every voltage unknown to ground: gmin on its
+    /// diagonal and gmin * x on its residual. A current row (`current_row`,
+    /// a V source's branch equation) has no diagonal to take it.
     gmin: f64 = 0,
     /// The solve is a cold operating point, ngspice's MODEINITJCT/INITFIX:
     /// the first iterate that passes every gate only switches to INITFLOAT
@@ -92,7 +96,7 @@ pub fn newton(
         if (comptime @hasDecl(S, "advanceIteration")) if (iter != 0) sys.advanceIteration(x_old);
         hook.assemble(sys, x, t);
         const v = hook.vals(sys);
-        if (opts.gmin > 0) for (0..n) |i| {
+        if (opts.gmin > 0) for (0..n) |i| if (!sys.current_row[i]) {
             v[sys.diag_slots[i]] += opts.gmin;
             sys.rhs[i] += opts.gmin * x[i];
         };

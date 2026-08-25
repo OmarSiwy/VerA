@@ -1,23 +1,25 @@
 // LRM E.1.2: "whether a particular Verilog-AMS simulator is SPICE compatible,
 // and with which particular variant of SPICE it is compatible, is solely
-// determined by the authors of the simulator." VerA claims SPICE3 card syntax
-// for `.MODEL` and for flat `.SUBCKT` bodies of numeric-valued
-// R/C/L/V/I/E/F/G/H cards (Vague_Decisions VD-012). Inside a definition,
-// anything else is refused rather than skipped: a skipped card changes the
-// circuit (a dropped R is an open), the silent wrong answer AGENTS.md §4
-// forbids.
+// determined by the authors of the simulator." VerA's claim (VD-012) reads
+// `{expr}` values over a subcircuit's own `PARAMS:`, and refuses inside a
+// definition what it does not read: a skipped card changes the circuit (a
+// dropped R is an open), the silent wrong answer AGENTS.md §4 forbids.
 //
-// `{RTOP}` is an expression value (HSPICE/Spectre), not a SPICE3 number.
-// Skipping the card (what VerA did before) left `in` and `out` unconnected.
+// `{RTOP}` here reads a name the subcircuit does not declare. HSPICE would
+// look for a global `.PARAM RTOP`, which VerA does not read, so the card is
+// refused at its line rather than left to fail as an unknown identifier
+// inside the synthesized module (or, before #9, skipped: `in` and `out`
+// unconnected).
 //
-// Legal neighbour: h04_06_subckt_body_contributes_equations.va, the same RDIV
-// with two numeric R cards, which compiles and divides 1 V into 0.75/0.25.
+// Legal neighbour: spice_subckt_params_expressions.va, the same RDIV with
+// `PARAMS: RTOP=1K ...` on its header, which compiles and divides.
 //
 //! lrm E.1.2
 //! lrm E.2
 //! bias V(in) = 1.0, V(gnd) = 0.0
-//! reject E0928
-//! reject expression value
+//! reject-only E0928
+//! reject expression value `{rtop}` reads `rtop`
+//! neighbour spice_subckt_params_expressions.va
 //! spice .SUBCKT RDIV IN OUT GND
 //! spice R1 IN OUT {RTOP}
 //! spice R2 OUT GND 3K

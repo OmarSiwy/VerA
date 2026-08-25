@@ -637,7 +637,14 @@ test "fuzz: .lint never panics, and every refusal is diagnosed" {
 **L7. External differential.** An external engine is evidence by agreement,
 not an authority. Each disagreement is triaged as a VerA bug, an engine bug, or
 a reading of the standard (`docs/Vague_Decisions.md` §2, §3), and recorded in
-`tests/fixtures/<engine>.tsv` beside the existing `VERILATOR.tsv`.
+`tests/fixtures/<engine>.tsv` beside the existing `VERILATOR.tsv`. The
+external suites (`tools/external_analog.py`, `tools/external_digital.py`, CI
+jobs `external-analog` and `external-digital`, in `nix develop .#external`)
+fetch their upstream at a pinned commit into `.zig-cache/external` and record
+each root cause as one row of `tests/fixtures/external/<suite>/TRIAGE.md`:
+`| `<fnmatch pattern over the FAIL name>` | <verdict> | <evidence> |`. A VerA
+bug's evidence is the fixture or `//! xfail` that pins it. An untriaged FAIL
+fails the job, and so does a row that covers no FAIL (`STALE`, the XPASS rule).
 
 - **Digital.** Icarus Verilog becomes the primary second engine: it is
   4-state and event-driven. Verilator stays (`conformance.py verilator`), but it

@@ -28,8 +28,11 @@
 // Two reports. Each prints ok = whether its (time, value) pair is one of the
 // two above. A tool that ran region 4 before 3b would see V(vo) = 0 at 4 ns
 // and report the 7 only at 6 ns, printing ok=0; one that never re-evaluated
-// the monitor after an analog solve would print one report. 0.0, 4.0 and 7.0
-// are exact in binary.
+// the monitor after an analog solve would print one report. The solutions at
+// 2 ns and 6 ns, which no digital event shares, are checked too
+// (monitor_at_analog_only_solutions.va), and V(vo) has not moved at either;
+// the third argument does fall to 0 at 2 ns, but only through $realtime,
+// which is no change (VD-111). 0.0, 4.0 and 7.0 are exact in binary.
 //
 // The analog CHECK pins the solve the monitor reads, once per accepted
 // solution (0, 2, 4, 6 ns; the D2A time is the declared 4 ns): V(vo) is 0

@@ -511,7 +511,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §4.6.3 ac_stim(analysis_name, mag, phase) "returns zero (0) during
         // large-signal analyses ... as well as on all small-signal analyses
         // using names which do not match analysis_name". Defaults: "ac", 1.0,
-        // 0.0.
+        // 0.0. Which analysis a name matches is `contract.acStimActive`'s
+        // rule (VD-064, VD-109).
         //
         // ponytail: the residual is real, so a matching analysis contributes
         // mag·cos(phase) and drops the quadrature part. Upgrade path: an
@@ -523,10 +524,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const mag = try ctrlEval(self, args, 1, "1.0");
             const phase = try ctrlEval(self, args, 2, "0.0");
             try self.b("S.con(if (", .{});
-            if (args.len == 0) {
-                self.uses.sim = true;
-                try self.b("sim.kind == .ac", .{});
-            } else try analysisMatch(self, args[0..1]);
+            try acStimMatch(self, args);
             try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
             return;
         },
@@ -682,9 +680,10 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b("S.con(0.0)", .{});
         },
         // §9.15 Table 9-28 `$simparam$str`: "analysis_type" and "module" are
-        // answered here, "cwd" and "analysis_name" from the host-written
-        // `Instance` fields (`host_strings`). `Lower` answers a literal
-        // "instance" or "path"; any other name reads "".
+        // answered here, "cwd" and "analysis_name" from what the host wrote
+        // (`host_strings`): its table at the `Model` row's index when nonzero,
+        // else the `Instance` slice (`contract.hostString`). `Lower` answers a
+        // literal "instance" or "path"; any other name reads "".
         .@"$simparam$str" => {
             // §9.15 param_name may be a string variable, so the lookup runs
             // at run time. §4.6.1's analysis names are the `AnalysisKind` tag
@@ -698,11 +697,12 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             try self.b(", \"module\")) \"{f}\" else ", .{std.zig.fmtString(self.mir.name)});
             if (self.lowered.uses.contains(.host_strings)) {
                 self.uses.inst = true;
+                self.uses.model = true;
                 float_lanes.instPin(self);
                 for ([_][]const u8{ "cwd", "analysis_name" }) |field| {
                     try self.b("if (std.mem.eql(u8, ", .{});
                     try gen_render.renderValueRef(self, self.an.rv(args[0]));
-                    try self.b(", \"{s}\")) inst.{s} else ", .{ field, field });
+                    try self.b(", \"{0s}\")) contract.hostString(model.{0s}_idx__, inst.{0s}) else ", .{field});
                 }
             }
             return self.b("\"\")", .{});
@@ -962,6 +962,26 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
         }
     }
     if (first) try self.b("false", .{});
+}
+
+/// Writes §4.6.3's activity test of `ac_stim(args...)`, `contract.acStimActive`
+/// with the comparisons the name decides at compile time folded away. A
+/// Table 4-21 small-signal spelling ("ac", the default, or "noise") is that
+/// kind; any other name is a small-signal analysis whose host label (Table
+/// 9-28 `analysis_name`, `Lower` made the device publish its fields) is that
+/// name. Never a large-signal analysis, whatever its name.
+fn acStimMatch(self: *Gen, args: []const Mir.Value) Error!void {
+    self.uses.sim = true;
+    const def = if (args.len == 0) Mir.Def{ .str_const = "ac" } else self.mir.valueDef(self.an.rv(args[0]));
+    // A.8.2 quotes the name, so `Lower` refused anything else (E0521).
+    if (def != .str_const) return self.b("false", .{});
+    const name = def.str_const;
+    if (std.mem.eql(u8, name, "ac") or std.mem.eql(u8, name, "noise")) return self.b("sim.kind == .{s}", .{name});
+    self.uses.inst = true;
+    self.uses.model = true;
+    float_lanes.instPin(self);
+    try self.b("((sim.kind == .ac or sim.kind == .noise) and std.mem.eql(u8, " ++
+        "contract.hostString(model.analysis_name_idx__, inst.analysis_name), \"{f}\"))", .{std.zig.fmtString(name)});
 }
 
 /// Writes one §2.8.3/§12.32 hand-off of `$name` to the host's VPI

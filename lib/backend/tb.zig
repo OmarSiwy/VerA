@@ -274,10 +274,12 @@ pub const Mixed = struct {
 ///                                        [ef=<v>] [corr=<j>:<rho>]... [rtol=<v>]
 ///     //! noise table(<row>,<col>)#<src> [name=<s>] interp=linear|log
 ///                                        points=<f>:<p>,<f>:<p>,…
+///                                        psd=<f>:<S>,<f>:<S>,…
 ///
 /// Fields after `topo` are optional and assert nothing when absent. `topo` is
 /// checked against `noise_gens` at comptime; `white`, `flicker` and `ef` are
-/// read from `noisePsd` at the first operating point.
+/// read from `noisePsd` at the first operating point. A table row is read as
+/// a host reads it, `contract.noiseTable` on the derived card.
 pub const NoiseWant = struct {
     /// `kind(row,col)#source`, verbatim, compared byte-exact against the
     /// device's own spelling of the row.
@@ -299,6 +301,10 @@ pub const NoiseWant = struct {
     /// sorted by frequency.
     interp: ?[]const u8 = null,
     points: ?[]const [2]f64 = null,
+    /// §4.6.4.3/.4 `psd=<f>:<S>,...`: the table's own density at each
+    /// frequency f, `contract.noiseTableAt` over the card's knots, before
+    /// §4.6.4.6's `coeff²`. Compared with `rtol`.
+    psd: ?[]const [2]f64 = null,
     /// §4.6.4.6 `corr=<j>:<rho>`, repeatable: the correlation coefficient
     /// between this row's contribution and row j's, from the published
     /// table: the sign of `coeff_k · coeff_j` when the rows share a `source`

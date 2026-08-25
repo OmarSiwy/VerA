@@ -1,1 +1,14 @@
 $ vera --run resistor.va
+=== resistor ===
+--- point 0 ---
+  x[p] = 1.000000e0
+  x[n] = 0.000000e0
+  x[flowZ28pZ2cnZ29] = 1.000000e-3
+  res[p] = 1.000000e-3
+    d res[p]/d x[flowZ28pZ2cnZ29] = 1.000000e0
+  res[n] = -1.000000e-3
+    d res[n]/d x[flowZ28pZ2cnZ29] = -1.000000e0
+  res[flowZ28pZ2cnZ29] = 0.000000e0
+    d res[flowZ28pZ2cnZ29]/d x[p] = 1.000000e0
+    d res[flowZ28pZ2cnZ29]/d x[n] = -1.000000e0
+    d res[flowZ28pZ2cnZ29]/d x[flowZ28pZ2cnZ29] = -1.000000e3

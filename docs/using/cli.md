@@ -35,6 +35,7 @@ flag never silently wins over an earlier one of another kind.
 | `--emit-exe` | build a self-checking testbench from the source's `//!` directives (or a `.v` design's executable) and print its path | yes |
 | `--run` | `--emit-exe`, then run it; the testbench's exit status is `vera`'s | yes |
 | `--emit-so` | build the device as a shared library for your simulator, through your `--dyn` module | yes |
+| `--emit-osdi` | build the device as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `tools/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
 | `--explain CODE` | print the long explanation of a diagnostic code | no |
 
 With no mode flag, `vera FILE.va` is `vera --lint FILE.va`.
@@ -43,7 +44,8 @@ With no mode flag, `vera FILE.va` is `vera --lint FILE.va`.
 **stderr**, so `P=$(vera --emit-exe model.va)` captures only the path.
 Testbenches are covered in [Testbenches and `//!` directives](testbenches.md),
 `--emit-so` in [Shared libraries, validation and GPUs](../host/linking.md),
-and `--emit-verilog` below.
+`--emit-osdi` in [OSDI interoperability](../host/osdi.md), and
+`--emit-verilog` below.
 
 ## Source options
 
@@ -94,7 +96,7 @@ These matter to `--check`, `--emit-exe`, `--run` and `--emit-so`.
 |---|---|
 | `--jac-f32` | mark the device as tolerating a single-precision Jacobian. It emits `pub const jac_f32 = true`, not different arithmetic: the host decides |
 | `--jac-f32-host` | and ask the host to use it on its CPU path too |
-| `--display=drop\|emit` | LRM chapter 9 display tasks: compiled to nothing (`drop`, the default for a device) or printed (`emit`, what a testbench uses) |
+| `--display=record\|drop\|emit` | LRM chapter 9 display tasks (`$strobe`, `$display`, ...). `record` (the default): the device records them, and its host prints the records once per accepted point. `drop`: compiled to nothing. `emit`: the device prints them itself, which is what `--emit-exe` and `--run` default to; with `--display=record` a testbench prints the device's records instead |
 
 ## Digital options (`.v` designs)
 

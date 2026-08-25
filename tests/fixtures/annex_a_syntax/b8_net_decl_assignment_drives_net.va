@@ -34,9 +34,11 @@
 //   36  wd 1 (a fell at 31)     37  wd 0
 // Five verdicts.
 //
-// VerA compiled `wire (strong1, pull0) w1 = a;` when the analog block read w1
-// (an earlier draft of b8_drive_strength_resolves.va) and refuses it when only
-// digital processes read it, as here.
+// Until 2026-10-08 VerA refused both declarations here with E0365 ("net
+// initializer is not a constant expression"), reading each `= a` as a
+// §3.6.3.2 nodeset, when only digital processes read the net (the file was
+// b8_net_decl_assignment_refused.va, an xfail). It compiled the same strength
+// form when the analog block read the net.
 //
 //! lrm A.2.1.3
 //! lrm A.2.2.2
@@ -44,13 +46,14 @@
 //! lrm A.2.4
 //! lrm A.2.1.3:1000
 //! lrm A.2.2.3:1000
-//! xfail E0365 "net initializer is not a constant expression" takes `wire (strong1, pull0) ws = a;` and `wire #(2, 6) wd = a;` for §3.6.3.2 nodeset initializers; 1364 §4.4.2/§6.1.3 make each a continuous assignment
+//! inherited IEEE 1364-2005 4.4.2
+//! inherited IEEE 1364-2005 6.1.3
 //! analysis tran
 //! time 0, 40n
 //! checks 5
 `timescale 1ns/1ns
 `include "check.vh"
-module b8_net_decl_assignment_refused(p);
+module b8_net_decl_assignment_drives_net(p);
   inout p; electrical p;
   reg a;
   wire (strong1, pull0) ws = a;

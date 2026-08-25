@@ -28,18 +28,18 @@ t = 2e-06  held = 0.2
   t = 3.000000e-6  dt = 1.000000e-6
 t = 3e-06  held = 0.2
 warning[W0750]: event fires on the testbench's fixed time grid, not at its own time: the testbench inserts no timepoint at it
-  --> first_sample.va:18:5
+  --> first_sample.va:17:5
    |
-18 |     @(initial_step or cross(V(clk) - 0.5, +1))
+17 |     @(initial_step or cross(V(clk) - 0.5, +1))
    |     ^
    |
    = note: LRM 5.10.3
    = help: run `vera --explain W0750` for a detailed explanation
 
 warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 0 — V(out,gnd) — compiles with @setFloatMode(.strict)
-  --> first_sample.va:20:5
+  --> first_sample.va:19:5
    |
-20 |     V(out) <+ held;
+19 |     V(out) <+ held;
    |     ^
    |     - an expression of a probe of node `in` is not provably finite
    |

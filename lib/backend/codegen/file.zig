@@ -573,6 +573,28 @@ fn emitModel(self: *Gen) Error!void {
     // host writes it. Read by `$port_connected` in setup, derive and eval, so
     // the host writes it with the card, before `derive`.
     if (self.lowered.uses.contains(.port_mask)) try self.w("    port_connected__: u64 = std.math.maxInt(u64), // §9.19 host-written connection mask\n", .{});
+    // §9.15 Table 9-28 through the GPU-safe channel: indices into the host's
+    // `contract.host_strings`, 0 ("not written") unless the host writes them,
+    // beside the `Instance.cwd`/`analysis_name` slices a CPU host may write.
+    if (self.lowered.uses.contains(.host_strings)) try self.w(
+        "    cwd_idx__: u32 = 0, // §9.15 $simparam$str(\"cwd\"): index into contract.host_strings — host-written\n" ++
+            "    analysis_name_idx__: u32 = 0, // §9.15 $simparam$str(\"analysis_name\"), §4.6.3: likewise\n",
+        .{},
+    );
+    // §4.6.4.3 the row's own sorted copy of the card's noise-table knots
+    // (`contract.noiseTable`), so it survives row sharing and copying. Not a
+    // parameter: `derive` overwrites it. The initializer is the declared
+    // defaults, `noise_tables` flattened, which is what `derive` computes
+    // for a card that sets nothing.
+    if (gen_noise.hasCardKnots(self)) {
+        try self.w("    noise_table_points__: [{d}][2]f64 = .{{", .{gen_noise.cardKnotCount(self)});
+        var first = true;
+        for (self.noise.tabs) |pts| for (pts) |p| {
+            try self.w("{s}.{{ {s}, {s} }}", .{ if (first) " " else ", ", try fmtF64(self, p[0]), try fmtF64(self, p[1]) });
+            first = false;
+        };
+        try self.w(" }}, // §4.6.4.3 the card's knots, sorted — `derive` writes it\n", .{});
+    }
     // The setup roots (`Setup`), LAST so a new parameter does not move them.
     // `su_ok` exists only where it is asserted: Debug, in a program that
     // asked for the contract's checks (`contract.validating`).
@@ -657,6 +679,9 @@ pub fn emitDerive(self: *Gen) Error!void {
         }
     }
     if (!try deriveFlags(self)) gen_unit.patchParam(self, at_s, "S".len);
+    // §4.6.4.3 the card's noise-table knots, sorted, into the row: LAST, so
+    // a knot that is a derived parameter reads its value from above.
+    if (gen_noise.hasCardKnots(self)) try self.w("    model.noise_table_points__ = noiseTablePoints(model);\n", .{});
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("}}\n\n", .{});
 }

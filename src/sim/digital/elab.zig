@@ -269,11 +269,13 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
             _ = try mintVar(r, read);
             continue;
         };
-        // A mixed module's initialized variables, and its reals no discrete
-        // process writes, are the ANALOG block's (§7.2.2: "the domain of a
-        // variable is that of the context from which its value is assigned");
-        // a digital process naming one is an undeclared name.
-        if (r.mixed and (v.init != .none or v.storage == .time or (v.ty != .integer and !written.contains(v.name)))) continue;
+        // A mixed module's initialized variables, and its reals and `time`s no
+        // discrete process writes, are the ANALOG block's (§7.2.2: "the domain
+        // of a variable is that of the context from which its value is
+        // assigned"); a digital process naming one is an undeclared name. A
+        // `time` a discrete process writes is the digital engine's 64-bit
+        // variable (IEEE 1364-2005 §4.8), `output time t` (A.2.1.2) included.
+        if (r.mixed and (v.init != .none or ((v.ty != .integer or v.storage == .time) and !written.contains(v.name)))) continue;
         if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
         // IEEE 1364-2005 §12.3.3: "If either the port or the net/reg is
         // declared as signed, then the other shall also be considered signed."

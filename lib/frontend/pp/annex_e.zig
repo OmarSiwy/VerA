@@ -32,6 +32,13 @@ const std = @import("std");
 /// `ac_stim`, which needs the complex small-signal side
 /// `codegen.analysisMatch` does not have yet.
 ///
+/// Every independent source (the i* and v* rows) multiplies its value by
+/// §9.15's `$simparam("sourceScaleFactor")`, Table 9-27's "Multiplicative
+/// factor for independent sources for source stepping homotopy": 1 unless a
+/// host steps it (`src/sim/spice/op.zig`), and then the factor SPICE's
+/// source stepping applies to every source (ngspice CKTsrcFact). E.2 makes
+/// "all aspects of SPICE primitives" implementation dependent.
+///
 /// E.3.1's ccvs, cccs and mutual inductor are absent: they take an instance
 /// name as a parameter, which E.3.1 says is "not supported" (E0904).
 pub const spice_primitives =
@@ -104,15 +111,15 @@ pub const spice_primitives =
     \\   analog begin
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         I(p, n) <+ dc;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else if ($abstime <= td0)
-    \\         I(p, n) <+ val0;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val0);
     \\      else if ($abstime <= td1)
-    \\         I(p, n) <+ val1 - (val1 - dc) * exp((td0 - $abstime) / tau0);
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val1 - (val1 - dc) * exp((td0 - $abstime) / tau0));
     \\      else
-    \\         I(p, n) <+ val0 - (val0 - (val1 - (val1 - dc)
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val0 - (val0 - (val1 - (val1 - dc)
     \\                                   * exp((td0 - td1) / tau0)))
-    \\                          * exp((td1 - $abstime) / tau1);
+    \\                          * exp((td1 - $abstime) / tau1));
     \\   end
     \\endmodule
     \\
@@ -141,17 +148,17 @@ pub const spice_primitives =
     \\         tp = tp - period * floor(tp / period);
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         I(p, n) <+ dc;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else if (tp <= 0.0)
-    \\         I(p, n) <+ val0;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val0);
     \\      else if (tp <= rise)
-    \\         I(p, n) <+ val0 + (val1 - val0) * tp / rise;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val0 + (val1 - val0) * tp / rise);
     \\      else if (tp <= rise + width)
-    \\         I(p, n) <+ val1;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val1);
     \\      else if (tp <= rise + width + fall)
-    \\         I(p, n) <+ val1 + (val0 - val1) * (tp - rise - width) / fall;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val1 + (val0 - val1) * (tp - rise - width) / fall);
     \\      else
-    \\         I(p, n) <+ val0;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (val0);
     \\   end
     \\endmodule
     \\
@@ -181,9 +188,9 @@ pub const spice_primitives =
     \\      end
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         I(p, n) <+ dc;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else
-    \\         I(p, n) <+ iw;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (iw);
     \\   end
     \\endmodule
     \\
@@ -216,16 +223,16 @@ pub const spice_primitives =
     \\   analog
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         I(p, n) <+ dc;
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else
-    \\         I(p, n) <+ offset + ampl
+    \\         I(p, n) <+ $simparam("sourceScaleFactor") * (offset + ampl
     \\         * (1.0 - ammodindex * cos(`M_TWO_PI * ammodfreq * ($abstime - td)
     \\                                   - ammodphase))
     \\         * (1.0 - damp * ($abstime - td))
     \\         * cos(`M_TWO_PI * freq
     \\               * (1.0 - fmmodindex * cos(`M_TWO_PI * fmmodfreq
     \\                                         * ($abstime - td)))
-    \\               * ($abstime - td) - sinephase);
+    \\               * ($abstime - td) - sinephase));
     \\endmodule
     \\
     \\// vexp | p, n | dc, mag, phase, val0, val1, td0, tau0, td1, tau1
@@ -245,15 +252,15 @@ pub const spice_primitives =
     \\   analog begin
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         V(p, n) <+ dc;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else if ($abstime <= td0)
-    \\         V(p, n) <+ dc;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else if ($abstime <= td1)
-    \\         V(p, n) <+ val1 - (val1 - dc) * exp((td0 - $abstime) / tau0);
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val1 - (val1 - dc) * exp((td0 - $abstime) / tau0));
     \\      else
-    \\         V(p, n) <+ val0 - (val0 - (val1 - (val1 - dc)
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val0 - (val0 - (val1 - (val1 - dc)
     \\                                   * exp((td0 - td1) / tau0)))
-    \\                          * exp((td1 - $abstime) / tau1);
+    \\                          * exp((td1 - $abstime) / tau1));
     \\   end
     \\endmodule
     \\
@@ -278,17 +285,17 @@ pub const spice_primitives =
     \\         tp = tp - period * floor(tp / period);
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         V(p, n) <+ dc;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else if (tp <= 0.0)
-    \\         V(p, n) <+ val0;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val0);
     \\      else if (tp <= rise)
-    \\         V(p, n) <+ val0 + (val1 - val0) * tp / rise;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val0 + (val1 - val0) * tp / rise);
     \\      else if (tp <= rise + width)
-    \\         V(p, n) <+ val1;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val1);
     \\      else if (tp <= rise + width + fall)
-    \\         V(p, n) <+ val1 + (val0 - val1) * (tp - rise - width) / fall;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val1 + (val0 - val1) * (tp - rise - width) / fall);
     \\      else
-    \\         V(p, n) <+ val0;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (val0);
     \\   end
     \\endmodule
     \\
@@ -314,9 +321,9 @@ pub const spice_primitives =
     \\      end
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         V(p, n) <+ dc;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else
-    \\         V(p, n) <+ vw;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (vw);
     \\   end
     \\endmodule
     \\
@@ -343,16 +350,16 @@ pub const spice_primitives =
     \\   analog
     \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
     \\      if (analysis("static") && !analysis("tran"))
-    \\         V(p, n) <+ dc;
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (dc);
     \\      else
-    \\         V(p, n) <+ offset + ampl
+    \\         V(p, n) <+ $simparam("sourceScaleFactor") * (offset + ampl
     \\         * (1.0 - ammodindex * cos(`M_TWO_PI * ammodfreq * ($abstime - td)
     \\                                   - ammodphase))
     \\         * (1.0 - damp * ($abstime - td))
     \\         * cos(`M_TWO_PI * freq
     \\               * (1.0 - fmmodindex * cos(`M_TWO_PI * fmmodfreq
     \\                                         * ($abstime - td)))
-    \\               * ($abstime - td) - sinephase);
+    \\               * ($abstime - td) - sinephase));
     \\endmodule
     \\
     \\// tline | t1, b1, t2, b2 | z0, td, f, nl | (Behavior column EMPTY)

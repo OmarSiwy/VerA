@@ -99,7 +99,9 @@ pub fn emitInstance(self: *Gen) Error!void {
         .{},
     );
     // §9.15 Table 9-28: only a model that asks has somewhere for the host to
-    // write its working directory and its name for the analysis.
+    // write its working directory and its name for the analysis. A host that
+    // cannot put a pointer here (a GPU copy) writes the `Model` indices
+    // instead (`emitModel`, `contract.host_strings`).
     if (self.lowered.uses.contains(.host_strings)) try self.w(
         "    /// §9.15 `$simparam$str(\"cwd\")`: the directory the simulator was\n" ++
             "    /// started in, written by the host.\n" ++

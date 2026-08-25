@@ -25,9 +25,10 @@
 // controlled_reference_event ($period, $width), a `&&& en` condition, and
 // three edge_control_specifiers, one with z transitions.
 //
-// WHAT IS NOT CLAIMED. VerA evaluates no timing check (W0251, pinned below,
-// names each one); ROADMAP §1 B and CLAUSES.tsv keep §15.2-§15.3.6 and
-// §15.5-§15.8 not-supported. So no violation is provoked, and nothing here
+// WHAT IS NOT CLAIMED. An analog compile, and the digital half of a mixed
+// design like this one, evaluates no timing check (W0251, pinned below,
+// names each one); VerA's digital engine evaluates them for a `.v` run
+// (ieee1364/15_timing_checks/). So no violation is provoked, and nothing here
 // would tell a simulator that evaluates the checks from one that ignores them.
 // The cell and stimulus are ieee1364/15_timing_checks/
 // b_15_1_timing_check_forms.v's, whose header derives event by event that the

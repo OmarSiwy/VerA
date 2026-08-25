@@ -1,0 +1,24 @@
+// `vera_lte` (VerA's attribute, LRM §2.9): leave a charge out of the host's
+// truncation-error check. Two charge sites (LRM §5.6.1.2), each a `ddt`:
+//
+//   I(g, s) <+ ddt(cgs * V(g, s))   no attribute    rows g+ s-   lte
+//   I(b, s) <+ ddt(cbs * V(b, s))   vera_lte = 0    rows s- b+   nolte
+//
+// A site lists its rows in the order of the device's unknowns, the ports as
+// declared (g, s, b): + where the charge enters, - where it leaves. The
+// attribute changes which charges the host checks, never a value.
+//! qsite g+ s- lte
+//! qsite s- b+ nolte
+//! print none
+`include "disciplines.vams"
+
+module mos_charges(g, s, b);
+  inout g, s, b;
+  electrical g, s, b;
+  parameter real cgs = 1f from [0:inf);
+  parameter real cbs = 2f from [0:inf);
+  analog begin
+    I(g, s) <+ ddt(cgs * V(g, s));
+    (* vera_lte = 0 *) I(b, s) <+ ddt(cbs * V(b, s));
+  end
+endmodule

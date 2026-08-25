@@ -63,6 +63,10 @@ pub const Pending = union(enum) {
     /// VAMS §7.3.6.1 an A2D event: wake the processes waiting on this
     /// monitor slot (`Run.deliverA2d`).
     a2d: u32,
+    /// VAMS §8.4 an analog solution at a tick no digital event reached
+    /// (`Run.analogPoint`): it brings digital time there and does nothing
+    /// else, so a monitor that probes the solution is re-checked.
+    analog_point,
 };
 
 /// One payload row. Rows are recycled: a row is live exactly while the
@@ -192,7 +196,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d => {},
+        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point => {},
     }
     return at;
 }
@@ -228,7 +232,7 @@ pub fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
-        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d => {},
+        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point => {},
     };
     return hit;
 }
@@ -535,16 +539,17 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                     .monitor => |sh| {
                         for (self.monitor_slots.items) |at| self.watch[at].remove(.monitor);
                         self.monitor_slots.clearRetainingCapacity();
-                        var probes = false;
+                        var probes: std.ArrayList(Ast.ExprId) = .empty;
                         for (s.args) |arg| if (arg != .none and self.file.exprs.tag(arg) != .str_literal)
                             try compile.sensitivityProbes(self, arg, &self.monitor_slots, &probes);
                         for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
                         self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc };
-                        // VAMS §8.5.1 row 4 after 3b: an argument that probes
-                        // the analog solution is compared at every time step
+                        // VAMS §8.5.1 row 4 after 3b: a probe of the analog
+                        // solution is an operand no slot holds, so it is
+                        // compared at every time step and analog solution
                         // (`display.monitorDue`). The first report is due.
-                        self.monitor_probes = probes;
-                        self.monitor_last = if (probes) try self.arena.alloc(u64, s.args.len) else &.{};
+                        self.monitor_probes = probes.items;
+                        self.monitor_last = try self.arena.alloc(f64, probes.items.len);
                         @memset(self.monitor_last, 0);
                         self.monitor_slot_hit = true;
                         try waiters.requestMonitor(self);

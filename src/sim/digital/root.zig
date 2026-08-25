@@ -32,6 +32,7 @@ const elab = @import("elab.zig");
 const evaluate = @import("evaluate.zig");
 const waiters = @import("waiters.zig");
 const resolution = @import("resolution.zig");
+const tchk = @import("tchk.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
@@ -224,7 +225,9 @@ pub const VecRange = struct {
 /// change asks for the end-of-step section (`vcd.zig`).
 /// `d2a` is VAMS §8.5's explicit D2A: the slot is the operand of a digital
 /// event term in an analog event control (see `watchEvent`).
-pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports };
+/// `tchk` is IEEE 1364-2005 §15: a timing check's event names the slot
+/// (`tchk.changed`).
+pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports, tchk };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -485,18 +488,18 @@ pub const Run = struct {
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
-    /// VAMS §7.3.6.3: an argument of the standing monitor probes the analog
-    /// solution, which no slot holds. Such a monitor is checked at every time
+    /// VAMS §7.3.6.3: the analog probes in the standing monitor's arguments,
+    /// operands no slot holds. With any, the monitor is checked at every time
     /// step (`runUntil`), after the step's region-3b solve (§8.5.1 row 4),
-    /// and reports when a probing argument's value moved
+    /// and at every analog solution at a tick no digital event reached
+    /// (`analogPoint`), and reports when a probe's value moved
     /// (`display.monitorDue`).
-    monitor_probes: bool = false,
+    monitor_probes: []const Ast.ExprId = &.{},
     /// A watched slot changed since the monitor last reported, so the report
     /// is due without a comparison (§17.1.3). The first report is due too.
     monitor_slot_hit: bool = false,
-    /// Per monitor argument, the f64 bits of its value at the last report;
-    /// read only for arguments that probe (`monitor_probes`).
-    monitor_last: []u64 = &.{},
+    /// Per `monitor_probes` entry, the value it read at the last report.
+    monitor_last: []f64 = &.{},
     /// The slots the standing monitor's arguments read: §17.1.3's "variable
     /// or an expression in the argument list". Clock queries read no slot,
     /// which is the clause's `$time`/`$stime`/`$realtime` exception.
@@ -616,6 +619,19 @@ pub const Run = struct {
     ports_dump: @import("evcd.zig").Check = .{},
     /// §18.3 the extended dump.
     evcd: @import("evcd.zig").Evcd = .{},
+    /// IEEE 1364-2005 §15 every instance's timing checks (`tchk.zig`), in
+    /// elaboration order.
+    tchks: std.ArrayList(tchk.Tchk) = .empty,
+    /// The checks a watched slot wakes, each as `check * 2 + event`.
+    tchk_by_slot: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty,
+    /// Called after timing check `check` (a `tchks` row) reported a
+    /// violation. The VPI installs it (VAMS 12.31.4 cbTchkViolation);
+    /// nothing in the engine reads it.
+    tchk_hook: ?*const fn (r: *Run, check: u32) void = null,
+    /// The source and options `elaborate` ran, which IEEE 1364-2005 C.7's
+    /// reset elaborates again (`reset`).
+    source: []const u8 = "",
+    opts: Options = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -743,6 +759,18 @@ pub const Run = struct {
         _ = try exec.enqueue(r, .{ .a2d = r.monitors.items[m].slot }, if (tick > now) tick - now else null, false);
     }
 
+    /// VAMS §8.4, IEEE 1364-2005 §17.1.3: the mixed kernel accepted an analog
+    /// solution at tick `k`, which no digital event has reached. A standing
+    /// monitor's probes may read a new value there, and a probe has no slot
+    /// to wake it, so an event at `k` makes it a time step: `runUntil(k)`
+    /// brings digital time to `k` and re-checks the monitor in region 4.
+    /// False, with nothing queued, when no monitor probes or `k` has run.
+    pub fn analogPoint(r: *Run, k: Tick) Error!bool {
+        if (r.monitor_probes.len == 0 or !r.monitor_on or k <= r.scheduler.now) return false;
+        _ = try exec.enqueue(r, .analog_point, k - r.scheduler.now, false);
+        return true;
+    }
+
     /// Dispatch every event at a time <= `limit` (IEEE 1364 §11.4's loop,
     /// VAMS §8.5.1's regions), then return with the queue holding only later
     /// work. `limit = maxInt` is the whole simulation, which is `run`. Calling
@@ -762,7 +790,7 @@ pub const Run = struct {
                 // §8.5.1: monitor events "are continuously re-enabled in
                 // every successive time step"; one that probes the analog
                 // solution has no slot to wake it, so each step asks.
-                if (r.monitor_probes) try waiters.requestMonitor(r);
+                if (r.monitor_probes.len != 0) try waiters.requestMonitor(r);
             }
             r.budget_used += 1;
             if (r.budget_used > r.budget)
@@ -801,6 +829,9 @@ pub const Run = struct {
                     if (try display.monitorDue(r, scratch.allocator())) try display.monitorPrint(r, scratch.allocator());
                 },
                 .vcd_tick => try @import("vcd.zig").tick(r, scratch.allocator()),
+                // `analogPoint`: only its time, at whose arrival above the
+                // probing monitor was asked for.
+                .analog_point => {},
                 .tran_switch => |at| {
                     const t = &r.trans[at];
                     t.pending = null;
@@ -1023,6 +1054,55 @@ pub const Run = struct {
         setBit(d.current, u.out_bit orelse 0, bit);
         d.or_z = false;
         try resolution.resolve(self, d.net);
+    }
+
+    /// IEEE 1364-2005 §27.31 / VAMS 12.29 vpi_put_delays on the timing check
+    /// whose command token is `tok` in instance `scope`: `ticks` are its
+    /// limits in A.7.5.1's written order, from the next event it judges.
+    /// False when the run holds no such check.
+    pub fn tchkLimits(self: *Run, scope: u32, tok: u32, ticks: []const u64) bool {
+        return tchk.putLimits(self, scope, tok, ticks);
+    }
+
+    /// The instance scope and command token of timing check `check` (a
+    /// `Run.tchk_hook` argument), which a host's object for it carries.
+    pub fn tchkSite(self: *const Run, check: u32) struct { scope: u32, tok: u32 } {
+        const c = self.tchks.items[check];
+        return .{ .scope = c.scope, .tok = c.tok };
+    }
+
+    /// IEEE 1364-2005 C.7 `$reset`: "return the processing of the design to
+    /// its logical state at time 0": every process, override and scheduled
+    /// event dropped, the time 0, "All regs and nets contain their initial
+    /// values", and the first statement of every initial and always block
+    /// next. The run is elaborated again from the source and options it was
+    /// made from, into the same arena, so every slot, scope, pc and check
+    /// keeps its number and what a host holds by number stays valid. What a
+    /// host installed over the run is kept (docs/Vague_Decisions.md VD-106):
+    /// its hooks, its value-change watches, and the delays and timing check
+    /// limits it put. ponytail: each reset leaves the old run's memory in
+    /// the arena; a long run of resets wants the run in an arena of its own.
+    pub fn reset(self: *Run) Error!void {
+        // Its warnings are the first elaboration's again.
+        var quiet = diag.Bag.init(self.arena);
+        var fresh = elaborate(self.arena, self.source, self.opts, &quiet, self.out) catch |e| switch (e) {
+            error.DigitalFailed => return self.fail(0, "IEEE 1364-2005 C.7: the reset could not elaborate the design again", .{}),
+            else => |other| return other,
+        };
+        if (fresh.watch.len != self.watch.len or fresh.drivers.len != self.drivers.len or fresh.tchks.items.len != self.tchks.items.len)
+            return self.fail(0, "IEEE 1364-2005 C.7: the design elaborated again into a different shape", .{});
+        fresh.bag = self.bag;
+        fresh.vpi_change = self.vpi_change;
+        fresh.done_hook = self.done_hook;
+        fresh.stmt_hook = self.stmt_hook;
+        fresh.tchk_hook = self.tchk_hook;
+        fresh.file_io = self.file_io;
+        fresh.probe = self.probe;
+        fresh.probe_ctx = self.probe_ctx;
+        for (self.watch, fresh.watch) |old, *w| if (old.contains(.vpi)) w.insert(.vpi);
+        for (self.drivers, fresh.drivers) |old, *d| d.delay = old.delay;
+        for (self.tchks.items, fresh.tchks.items) |old, *c| c.lim = old.lim;
+        self.* = fresh;
     }
 
     /// IEEE §3.8 / AMS §2.9: attribute values are constant expressions in
@@ -1382,7 +1462,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null, .source = source, .opts = opts };
     try binding.libraries(&r, file, opts, pp.more_starts);
     // IEEE 1364-2005 §8.1's rules hold for every UDP declaration, whether or
     // not an instance uses it.
@@ -1633,6 +1713,11 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             try r.analogTriggers(inst.module, &named);
         }
         try processes(&r, inst.module.discrete);
+        // IEEE 1364-2005 §15: the instance's timing checks, bound to the
+        // slots their events name. Not in the digital half of a
+        // mixed-signal design: that is an analog compile, whose parse has
+        // already named each check as never evaluated (W0251).
+        if (!r.mixed) try tchk.compileChecks(&r, inst.module.timing_checks);
     }
     for (e.procs.items) |p| {
         r.scope = p.scope;
@@ -1664,6 +1749,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .empty);
+    try tchk.arm(&r);
     try waiters.buildFanout(&r);
     try driver.arm(&r);
     return r;
@@ -1720,6 +1806,7 @@ test {
     _ = @import("vcd.zig");
     _ = @import("evcd.zig");
     _ = @import("driver.zig");
+    _ = tchk;
 }
 
 /// Test helper: runs `source` and expects its transcript to be `expected`

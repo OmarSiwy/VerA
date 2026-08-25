@@ -174,7 +174,15 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 }
                 if (is_timer and k < 2) self.event_state.timer_capture = &captured;
                 defer self.event_state.timer_capture = null;
-                try args.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, a)));
+                // §2.7 reads a string literal operand as an unsigned integer
+                // constant (`cross("s")` monitors 115, which never crosses);
+                // a §3.3 string-typed value has no number to monitor.
+                const tv = try self.strNum(try lower_expr.lowerExpr(self, a));
+                if (tv.ty == .string) {
+                    try self.err(ex.mainTok(a), .E0517, "`{s}()` argument {d} is a string", .{ name, k + 1 });
+                    return null;
+                }
+                try args.append(self.arena, try self.toReal(tv));
             }
             const result = try self.call(name, args.items);
             if (is_timer) try self.event_state.timers.append(self.arena, .{
@@ -220,6 +228,14 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!bo
     var complete = true;
     for (requiredSlots(name), 0..) |slot, i| if (i >= args.len or args[i] == .none) {
         try self.err(self.file.exprs.mainTok(e), .E0517, "`{s}()` requires its {s} argument", .{ name, slot });
+        complete = false;
+    };
+    // A.6.5 writes the enable, every form's last slot, `analog_expression`
+    // and not `_or_null`: a comma before it promises one (`timer(0, 1n,
+    // 1p, )` derives from nothing).
+    const last: ?usize = if (std.mem.eql(u8, name, "absdelta")) 4 else enableSlot(name);
+    if (last) |k| if (k < args.len and args[k] == .none) {
+        try self.err(self.file.exprs.mainTok(e), .E0517, "`{s}()` has a comma before its enable and no enable", .{name});
         complete = false;
     };
     if (!complete) return false;

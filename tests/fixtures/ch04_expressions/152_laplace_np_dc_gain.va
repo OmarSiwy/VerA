@@ -10,6 +10,13 @@
 // coefficient is present precisely so that a lowering which summed the
 // numerator instead of evaluating it at s = 0 would read 4 and fail.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+//
 //! lrm 4.5.11.3
 //! lrm 4.5.11
 //! analysis dc
@@ -22,11 +29,11 @@ module ch04_laplace_np_dc_gain(in, n);
     real y, y_two_poles;
 
     analog begin
-        y = laplace_np(V(in, n), {3.0, 1.0}, {-1.0, 0.0});
+        y = laplace_np(V(in, n), '{3.0, 1.0}, '{-1.0, 0.0});
         // A complex-conjugate pole pair instead of the single real pole. Still
         // H(0) = n0: a pole is a 1/(1 - s/ρ) factor and every one of them is 1
         // at s = 0, so the count and the position are both irrelevant here.
-        y_two_poles = laplace_np(V(in, n), {3.0, 1.0}, {-1.0, -1.0, -1.0, 1.0});
+        y_two_poles = laplace_np(V(in, n), '{3.0, 1.0}, '{-1.0, -1.0, -1.0, 1.0});
         `CHECKX("H(0) = n0, one real pole", y, 3.0);
         `CHECKX("H(0) = n0, a conjugate pole pair", y_two_poles, 3.0);
         I(in, n) <+ 0.0;

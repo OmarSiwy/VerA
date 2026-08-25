@@ -133,7 +133,8 @@ pub const Options = struct {
     /// `jac_f32`. See `codegen.Options.jac_f32_host`.
     jac_f32_host: bool = false,
     /// Also emits `vpiContribs`, the §5.6 contribution rows a Clause 12
-    /// analog host reads. See `codegen.Options.vpi_contribs`.
+    /// analog host reads, and `vpiShares`, each instance's share of a row
+    /// several share. See `codegen.Options.vpi_contribs`.
     vpi_contribs: bool = false,
     /// §12.32.1 the user analog system functions registered with sysfunctype
     /// vpiIntFunc: a call to one returns an integer. A VPI host that ran its

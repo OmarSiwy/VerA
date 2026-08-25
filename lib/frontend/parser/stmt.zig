@@ -207,8 +207,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
 }
 
 /// Parses a §5.3.2 / A.6.3 analog_seq_block, or a digital `fork … join`.
-/// Local declarations are only legal on a named block but are accepted on
-/// any, leaving lowering to report the resulting undeclared name.
+/// Local declarations are only legal on a named block (E0290).
 fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     const event_block = self.analog_event_block;
@@ -236,10 +235,18 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     while (true) {
         const mark = self.markAttributes();
         try self.skipAttributes();
-        // IEEE 1364-2005 A.6.3: `begin [ : block_identifier
-        // { block_item_declaration } ]`, so an unnamed block declares nothing.
-        if (self.digital and blk.name == .none) switch (self.peek()) {
-            .kw_parameter, .kw_localparam, .kw_integer, .kw_real, .kw_realtime, .kw_time, .kw_reg, .kw_event => return self.failAt(self.pos, .E0209, "found {s}: only a named block has block_item_declarations (A.6.3)", .{self.found(self.pos)}),
+        // A.6.3 `analog_seq_block ::= begin [ : analog_block_identifier
+        // { analog_block_item_declaration } ] ...`, and IEEE 1364-2005's
+        // `seq_block`/`par_block` alike: an unnamed block declares nothing.
+        // The digital parse stops here, since its `reg` and `event` arms
+        // below read a named block's only; elsewhere the declaration is
+        // reported and read on, so the statements after it still parse.
+        if (blk.name == .none) switch (self.peek()) {
+            .kw_parameter, .kw_localparam, .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => if (self.digital)
+                return self.failAt(self.pos, .E0290, "found {s}", .{self.found(self.pos)})
+            else
+                try self.report(self.pos, .E0290, "found {s}", .{self.found(self.pos)}),
+            .kw_reg, .kw_event => if (self.digital) return self.failAt(self.pos, .E0290, "found {s}", .{self.found(self.pos)}),
             else => {}, // else: not a declaration
         };
         switch (self.peek()) {
@@ -506,7 +513,15 @@ fn parseSysTask(self: *Parser) Error!Ast.StmtId {
 /// enable. Anything else after the expression is E0214.
 fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
+    // A.6.9: a call heading a discrete statement is a task enable.
+    self.task_enable_head = self.discreteGrammar();
     const lhs = if (self.discreteGrammar()) try parse_expr.parsePostfix(self) else try parse_expr.parseExpr(self);
+    // A.8.5: every lvalue (variable_lvalue, net_lvalue,
+    // analog_variable_lvalue) opens with a name or `{`, so a literal before
+    // `=` or `<=` is no assignment (`#d 20 = 1'bx;`). Other targets are
+    // judged by lowering, which knows what a name declares.
+    if ((self.peek() == .assign_eq or (self.discreteGrammar() and self.peek() == .lt_eq)) and isLiteral(self.file.exprs.tag(lhs)))
+        return self.failAt(tok, .E0207, "found {s}: an A.8.5 assignment target is a variable, never a literal", .{self.found(tok)});
     if (self.discreteGrammar() and self.eat(.lt_eq)) {
         const timing = try parseIntraTiming(self);
         const value = try parse_expr.parseExpr(self);
@@ -572,6 +587,14 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
         },
         else => return self.failAt(self.pos, .E0214, "found {s}", .{self.found(self.pos)}), // else: an lvalue is followed by `<+`, `=` or `:`: E0214
     }
+}
+
+/// Whether `tag` is a literal, which no A.8.5 lvalue is.
+fn isLiteral(tag: Ast.ExprTag) bool {
+    return switch (tag) {
+        .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => true,
+        else => false, // else: a name, call, select or operator node: lowering judges it as a target
+    };
 }
 
 /// Parses A.6.2's optional `delay_or_event_control` after the assignment

@@ -1,9 +1,10 @@
 //! One VerA device as the deck runner's system: the device's unknowns are
 //! the circuit's, and one `eval` fills the four planes the analyses read
 //! (g = dI/dx, c = dQ/dx, rhs = I, q = Q), dense and row-major. It also
-//! carries the state hooks `converger` and `tran` call (`updateStates`,
-//! `stateCtl`, `boundStep`, `nextBreakpoint`), each one call into the
-//! device through `tools/contract.zig`.
+//! carries the state hooks `converger`, `op` and `tran` call (`updateStates`,
+//! `stateCtl`, `boundStep`, `nextBreakpoint`, and `setHomotopy`, the §9.15
+//! gmin and source-scale knobs), each one call into the device through
+//! `tools/contract.zig`.
 //!
 //! The role of OmarSiwy/ESPice's src/analysis/Circuit.zig and the VerA half
 //! of src/device/eval.zig at 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d,
@@ -38,7 +39,8 @@ pub fn Circuit(comptime D: type) type {
         pub const Device = D;
 
         n: usize = n_u,
-        model: *const D.Model,
+        /// Mutable for the operating point's homotopy knobs (`setHomotopy`).
+        model: *D.Model,
         inst: *D.Instance,
         state: State,
         /// The last accepted `inst` and `state`, which `.revert` restores.
@@ -70,9 +72,31 @@ pub fn Circuit(comptime D: type) type {
 
         /// `model` is derived and set up, `inst` set up; the device's own
         /// `initState` gives the first state.
-        pub fn init(model: *const D.Model, inst: *D.Instance) Self {
+        pub fn init(model: *D.Model, inst: *D.Instance) Self {
             const st: State = if (State == void) {} else D.initState(model, inst);
             return .{ .model = model, .inst = inst, .state = st, .saved_inst = inst.*, .saved_state = st };
+        }
+
+        /// Whether `setup` caches a value derived from either homotopy knob,
+        /// so writing one has to re-run it (`setup_simparams`).
+        const caches_homotopy = blk: {
+            if (!@hasDecl(D, "setup_simparams")) break :blk false;
+            for (D.setup_simparams) |name| {
+                if (std.mem.eql(u8, name, "gmin") or std.mem.eql(u8, name, "sourceScaleFactor")) break :blk true;
+            }
+            break :blk false;
+        };
+
+        /// Writes §9.15's two homotopy knobs, Table 9-27's `gmin` and
+        /// `sourceScaleFactor` (`Model.gmin__`, `Model.source_scale__`; a
+        /// device without the field ignores that knob), then re-runs `setup`
+        /// and `setupInstance` when the device caches either.
+        pub fn setHomotopy(self: *Self, gmin: f64, source_scale: f64) void {
+            if (@hasField(D.Model, "gmin__")) self.model.gmin__ = gmin;
+            if (@hasField(D.Model, "source_scale__")) self.model.source_scale__ = source_scale;
+            if (!caches_homotopy) return;
+            D.setup(Dual, self.model);
+            if (@hasDecl(D, "setupInstance")) D.setupInstance(self.model, self.inst);
         }
 
         /// Publishes the analysis kind, time and step flags; the Newton

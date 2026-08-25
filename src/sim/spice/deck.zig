@@ -30,8 +30,9 @@ fn TranRows(comptime D: type) type {
 
 /// `//! tran tstep, tstop`: the operating point (a transient's own, so
 /// `analysis("ic")`), then `tran.simulate`. `model` and `inst` are derived
-/// and set up.
-pub fn runTran(comptime D: type, title: []const u8, model: *const D.Model, inst: *D.Instance, tstep: f64, tstop: f64) void {
+/// and set up; the operating point's homotopy writes `model`'s §9.15
+/// knobs while it steps and restores them.
+pub fn runTran(comptime D: type, title: []const u8, model: *D.Model, inst: *D.Instance, tstep: f64, tstop: f64) void {
     var ckt: Circuit(D) = .init(model, inst);
     var ws: converger.Workspace(contract.nU(D)) = .{};
     var x: [contract.nU(D)]f64 = undefined;
@@ -42,7 +43,7 @@ pub fn runTran(comptime D: type, title: []const u8, model: *const D.Model, inst:
 
 /// `//! onoise V(out) = f, ...`: the operating point, then `noise.sweep`;
 /// prints `noise f=<f> onoise=<V/sqrt(Hz)>`.
-pub fn runNoise(comptime D: type, title: []const u8, model: *const D.Model, inst: *D.Instance, out: D.U, comptime freqs: []const f64) void {
+pub fn runNoise(comptime D: type, title: []const u8, model: *D.Model, inst: *D.Instance, out: D.U, comptime freqs: []const f64) void {
     var ckt: Circuit(D) = .init(model, inst);
     var ws: converger.Workspace(contract.nU(D)) = .{};
     var x: [contract.nU(D)]f64 = undefined;

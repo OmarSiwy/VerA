@@ -2,17 +2,23 @@ $ vera --run partial.va
 === partial ===
 noise count got=4 want=4 ok=1
 noise[0] got=thermal(a,b)#0 want=thermal(a,b)#0 ok=1
-noise[1] got=thermal(a,b)#1 want=thermal(a,b)#2 ok=0
-noise[2] got=thermal(b,c)#2 want=thermal(b,c)#1 ok=0
-noise[3] got=thermal(b,c)#1 want=thermal(b,c)#2 ok=0
+noise[1] got=thermal(a,b)#1 want=thermal(a,b)#1 ok=1
+noise[2] got=thermal(b,c)#2 want=thermal(b,c)#2 ok=1
+noise[3] got=thermal(b,c)#1 want=thermal(b,c)#1 ok=1
 --- point 0 ---
   x[a] = 1.000000e0
   x[b] = 5.000000e-1
   x[c] = 0.000000e0
+noise[0].white got=0.00000000000000000075000000000000015 want=0.00000000000000000075 ok=1
+noise[0].corr[2] got=0 want=0 ok=1
+noise[1].white got=0.00000000000000000025 want=0.00000000000000000025 ok=1
+noise[1].corr[3] got=1 want=1 ok=1
+noise[2].white got=0.00000000000000000075000000000000015 want=0.00000000000000000075 ok=1
+noise[3].white got=0.00000000000000000025 want=0.00000000000000000025 ok=1
 warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 0 — I(a,b) — compiles with @setFloatMode(.strict)
-  --> partial.va:23:5
+  --> partial.va:30:5
    |
-23 |     I(a, b) <+ 1e-9 * (n1 + n12);
+30 |     I(a, b) <+ 1e-9 * (n1 + n12);
    |     ^
    |     - a computed expression is not provably finite
    |
@@ -22,9 +28,9 @@ warning[W0650]: unit is not provably finite, so it compiles in strict float mode
    = help: run `vera --explain W0650` for a detailed explanation
 
 warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 1 — I(b,c) — compiles with @setFloatMode(.strict)
-  --> partial.va:24:5
+  --> partial.va:31:5
    |
-24 |     I(b, c) <+ 1e-9 * (n2 + n12);
+31 |     I(b, c) <+ 1e-9 * (n2 + n12);
    |     ^
    |     - a computed expression is not provably finite
    |

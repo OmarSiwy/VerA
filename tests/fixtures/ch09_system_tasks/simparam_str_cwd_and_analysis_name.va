@@ -4,7 +4,9 @@
 //   "cwd"            The current working directory in which the simulator
 //                    was started
 // Both describe the host's run, not the design, so the host writes them
-// (`Instance.analysis_name`, `Instance.cwd`, tools/contract.zig). This
+// (tools/contract.zig: `contract.host_strings` at the `Model` row's
+// `cwd_idx__`/`analysis_name_idx__`, which this testbench uses, or the
+// `Instance.cwd`/`analysis_name` slices). This
 // testbench names its analysis with the second word of `//! analysis`, so
 // "analysis_name" must read "mydc", while "analysis_type" still reads the
 // kind, "dc" (23_simparam_string.va): the two rows are different strings.

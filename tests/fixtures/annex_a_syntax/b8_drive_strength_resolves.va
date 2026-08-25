@@ -17,7 +17,7 @@
 //
 // Every drive_strength below sits on A.6.1's continuous_assign. The other
 // home, a net_declaration with an assignment (`wire (strong1, pull0) w = a;`),
-// is b8_net_decl_assignment_refused.va's (an xfail).
+// is b8_net_decl_assignment_drives_net.va's.
 //
 // IEEE 1364-2005 (inherited through §1.1). §6.1.4: "The driving strength of a
 // continuous assignment can be specified by the user"; one strength "applies

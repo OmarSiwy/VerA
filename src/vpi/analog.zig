@@ -26,6 +26,8 @@ pub const Lib = struct {
     n_rows: *const fn () callconv(.c) usize,
     row: *const fn (usize, *[4]i32) callconv(.c) void,
     rows: *const fn ([*]f64) callconv(.c) void,
+    n_shares: *const fn () callconv(.c) usize,
+    shares: *const fn ([*]f64) callconv(.c) void,
     systf: *const fn (?HostCall, ?HostOut) callconv(.c) void,
     n_systf: *const fn () callconv(.c) usize,
     systf_name: *const fn (usize, *usize) callconv(.c) [*]const u8,
@@ -74,10 +76,11 @@ const Row = struct { flow: bool, hi: i32, lo: i32, flow_u: i32 };
 
 var lib: ?Lib = null;
 var rows: []Row = &.{};
-/// Each row's (resistive, reactive) value at the current x.
+/// Each row's (resistive, reactive) value at the current x, then each
+/// instance's share of a shared row (`Lib.shares`), the same way.
 var now_vals: []f64 = &.{};
-/// Each row's reactive value at the last ACCEPTED solution — the other
-/// operand of the backward-Euler difference.
+/// The same rows' and shares' reactive value at the last ACCEPTED solution:
+/// the other operand of the backward-Euler difference.
 var prev_react: []f64 = &.{};
 var vals_fresh = false;
 
@@ -171,8 +174,9 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     if (n_calls != 0) l.systf(deviceCall, deviceOut);
     const n = l.n_rows();
     rows = try gpa.alloc(Row, n);
-    now_vals = try gpa.alloc(f64, 2 * n);
-    prev_react = try gpa.alloc(f64, n);
+    const n_vals = n + l.n_shares();
+    now_vals = try gpa.alloc(f64, 2 * n_vals);
+    prev_react = try gpa.alloc(f64, n_vals);
     ac_x = try gpa.alloc(f64, 2 * l.n_u());
     for (rows, 0..) |*r, k| {
         var m: [4]i32 = undefined;
@@ -359,6 +363,7 @@ fn accept(l: Lib, first: bool, last: bool) void {
 fn refreshRows(l: Lib) void {
     if (vals_fresh or rows.len == 0) return;
     l.rows(now_vals.ptr);
+    if (now_vals.len > 2 * rows.len) l.shares(now_vals[2 * rows.len ..].ptr);
     vals_fresh = true;
 }
 
@@ -370,8 +375,6 @@ fn unknownU16(x: [*]const f64, row: u16) f64 {
     return if (row == @import("ir").Lower.ground) 0 else x[row];
 }
 
-/// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
-/// device does not publish.
 /// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
 /// device does not publish. `SmallSignal`: a flow source's flow at an AC
 /// point, which this host does not linearise per row.
@@ -385,7 +388,9 @@ pub const Value = struct { re: f64, im: f64 = 0 };
 /// potential is the difference of two unknowns. A flow is an unknown for a
 /// potential source, and for a flow source the §5.6 row the device publishes
 /// (`codegen.Options.vpi_contribs`): resistive part plus the backward-Euler
-/// derivative of the reactive part over the step being solved.
+/// derivative of the reactive part over the step being solved. When several
+/// instances' unnamed branches share the row, it is this instance's own share
+/// (`vpiShares`, §5.4.1), the same way.
 pub fn quantityValue(q: *const root.Obj) ValueError!Value {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
@@ -407,9 +412,12 @@ pub fn quantityValue(q: *const root.Obj) ValueError!Value {
         const u: usize = @intCast(r.flow_u);
         return .{ .re = sign * x[u], .im = if (ac) sign * xi[u] else 0 };
     }
-    if (b.contrib_flow) |k| {
+    if (b.contrib_flow) |row| {
         if (ac) return error.SmallSignal;
         refreshRows(l);
+        // A share's values follow the rows'.
+        const k = if (b.contrib_share) |sh| rows.len + sh else row;
+        if (2 * k + 1 >= now_vals.len) return error.Unknowable;
         var v = now_vals[2 * k];
         if (delta > 0) v += (now_vals[2 * k + 1] - prev_react[k]) / delta;
         return .{ .re = sign * v };
@@ -436,8 +444,10 @@ pub const AnalogValue = extern struct {
 ///
 /// A non-quantity object or a NULL structure is refused. The value is the
 /// current solution of analog.zig's analysis; with none, the error is
-/// NOANALYSIS, and a flow shared with a parallel instance is SHARED. The
-/// imaginary part is 0 except at an AC point (`quantityValue`).
+/// NOANALYSIS, and a flow the model cannot tell from a parallel branch's is
+/// SHARED. An instance's unnamed branch over a pair other instances also
+/// drive reads its own share. The imaginary part is 0 except at an AC point
+/// (`quantityValue`).
 pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void {
     _ = root.enter("vpi_get_analog_value") orelse return;
     const o = root.object("vpi_get_analog_value", obj) orelse return;
@@ -452,9 +462,10 @@ pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void 
     const val = quantityValue(o) catch |e| {
         switch (e) {
             error.NoAnalysis => root.fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{}),
-            // A row two instances' <+ summed into holds their total; this
-            // branch's share of it is not a number the model has.
-            error.Unknowable => root.fail("SHARED", "vpi_get_analog_value: this branch's flow was summed with a parallel instance's and cannot be told apart", .{}),
+            // Two named branches over one pair, or an instance that drives
+            // the pair only through another's branch (§5.6.8.2): the model
+            // has no row of this branch's own to read.
+            error.Unknowable => root.fail("SHARED", "vpi_get_analog_value: this branch's flow cannot be told apart from a parallel branch's", .{}),
             error.SmallSignal => root.fail("NOTSUPPORTED", "vpi_get_analog_value: the small-signal flow of a flow contribution is not computed at an AC point; its potentials are", .{}),
         }
         return;

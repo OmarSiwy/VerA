@@ -4,8 +4,9 @@ hand-derived values, OpenVAF-Reloaded, published QA references and Xyce.
 
     tools/external_analog.py [--vera PATH] [--out DIR] [SUITE ...]
 
-Run it in `nix develop .#benchmarking` (ngspice, openvaf-r, Xyce). SUITE is
-one or more of the folders under tests/fixtures/external/ (default: all):
+Run it in `nix develop .#external` (ngspice, openvaf-r, Xyce; `.#benchmarking`
+has them too). SUITE is one or more of the folders under
+tests/fixtures/external/ (default: all):
 
     selftest   the harness's own compare, sweep and qaSpec parsing
     osdi       hand-derived ngspice decks over `vera --emit-osdi` devices
@@ -22,7 +23,10 @@ its license. Nothing fetched is committed: it lands in the cache
 
 Prints one `PASS <name>` or `FAIL <name>: <why>` line per (model x analysis x
 quantity) and writes the sorted FAIL names to `<out>/fail.txt` (the name list
-AGENTS.md §0 rule 3 diffs). Exits 1 when any check FAILs.
+AGENTS.md §0 rule 3 diffs). A FAIL is `KNOWN` when a row of its suite's
+TRIAGE.md names it (`| `pattern` | verdict | ... |`, an fnmatch pattern over
+the whole name, so one root cause is one row); a row that names no FAIL of a
+suite that ran in full is `STALE`. Exits 1 on any untriaged FAIL or STALE row.
 
 QA tests use the CMC qaSpec format and compare with the CMC rule (ominux/cmcqa
 `lib/compareSimulationResults.pl`): two numbers match when either is under the
@@ -35,6 +39,7 @@ off it; noise: the pin current's PSD through a unit CCVS) with the instance
 wired straight to the sources (the `standard` variant only).
 """
 import argparse
+import fnmatch
 import hashlib
 import math
 import os
@@ -83,15 +88,34 @@ def manifest(suite):
 
 
 def fetch_git(cache, suite):
+    """The MANIFEST's `url` at its pinned `commit`, shallow-fetched once."""
     m = manifest(suite)
     dest = cache / suite
-    if not (dest / ".git").exists():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "-q", m["url"], str(dest)], check=True)
-    if run(["git", "-C", str(dest), "rev-parse", "HEAD"]).stdout.strip() != m["commit"]:
-        subprocess.run(["git", "-C", str(dest), "fetch", "-q", "origin", m["commit"]], check=False)
-        subprocess.run(["git", "-C", str(dest), "checkout", "-q", "--detach", m["commit"]], check=True)
+    if (dest / ".git").exists() and run(["git", "-C", str(dest), "rev-parse", "HEAD"]).stdout.strip() == m["commit"]:
+        return dest
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    for argv in (["git", "init", "-q"], ["git", "fetch", "-q", "--depth", "1", m["url"], m["commit"]],
+                 ["git", "checkout", "-q", "FETCH_HEAD"]):
+        subprocess.run(argv, cwd=dest, check=True)
     return dest
+
+
+def triage(suite):
+    """pattern -> verdict, from the suite's TRIAGE.md `| `pattern` | verdict |` rows."""
+    p = EXT / suite / "TRIAGE.md"
+    return dict(re.findall(r"(?m)^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|", p.read_text())) if p.is_file() else {}
+
+
+def judge(fails, rows):
+    """(known, untriaged, stale): `fails` names split by whether an fnmatch
+    pattern of `rows` covers them, and the patterns that cover none."""
+    known, new, used = [], [], set()
+    for n in fails:
+        pat = next((p for p in rows if fnmatch.fnmatchcase(n, p)), None)
+        (known if pat else new).append((n, pat))
+        used.add(pat)
+    return known, [n for n, _ in new], [p for p in rows if p not in used]
 
 
 def fetch_zip(cache, suite, url, sha256):
@@ -125,8 +149,8 @@ class Compiler:
     def __init__(self, vera, cache):
         self.vera = Path(vera).resolve()
         self.cache = cache
-        st = self.vera.stat()
-        self.vera_id = f"{st.st_mtime_ns}:{st.st_size}"
+        st = self.vera.stat() if self.vera.exists() else None  # selftest needs none
+        self.vera_id = f"{st.st_mtime_ns}:{st.st_size}" if st else ""
 
     def osdi(self, tool, va, includes=()):
         """`va` compiled by `tool` ("vera" or "openvaf"), cached; (path, error)."""
@@ -144,6 +168,8 @@ class Compiler:
             cmd = [str(self.vera), "--emit-osdi", "--work-dir", str(self.cache / "vera-work"), *inc, str(va), "-o", str(out)]
         else:
             cmd = ["openvaf-r", *inc, str(va), "-o", str(out)]
+        if not shutil.which(cmd[0]):
+            return None, f"{cmd[0]} not found: run in `nix develop .#external`"
         r = run(wrap + cmd, cwd=va.parent)
         if r.returncode != 0 or not out.exists():
             errs = [line for line in (r.stderr + r.stdout).splitlines() if "error" in line.lower()]
@@ -829,6 +855,9 @@ def suite_selftest(_ctx):
     assert drange(0, 1, 0.25) == [0, 0.25, 0.5, 0.75, 1.0]
     assert drange(1, -0.7, -0.5) == [1, 0.5, 0.0, -0.5]
     assert ifdefs(["`ifdef a", "x", "`else", "y", "`end", "`ifdef b", "z", "`endif"], {"a": True}) == ["x"]
+    rows = {"va-models/bsim4/*": "upstream", "osdi/diode/n1k": "reading", "osdi/gone": "fixed"}
+    assert judge(["va-models/bsim4/dc/I(d)", "osdi/diode/n1k", "osdi/r/va"], rows) == (
+        [("va-models/bsim4/dc/I(d)", "va-models/bsim4/*"), ("osdi/diode/n1k", "osdi/diode/n1k")], ["osdi/r/va"], ["osdi/gone"])
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp, "card")
         f.write_text("* c\n.model n1 nmos type=1\n+ c10 = ( 9.074e-030 ) vth0= 0.4 $ note\n.model n2 nmos type=-1\n")
@@ -853,18 +882,32 @@ def main():
     ctx.cache = Path(os.environ.get("VERA_EXTERNAL_CACHE", ROOT / ".zig-cache" / "external")).resolve()
     ctx.cc = Compiler(a.vera, ctx.cache)
     ctx.only = set(a.only)
-    for tool in ("ngspice",):
-        if not shutil.which(tool):
-            sys.exit(f"error: {tool} not on PATH: run in `nix develop .#benchmarking`")
     fns = {"selftest": suite_selftest, "osdi": suite_osdi, "va-models": suite_va_models, "cmcqa": suite_cmcqa, "hicum-qa": suite_hicum_qa, "xyce": suite_xyce}
     for s in a.suites:
-        fns[s](ctx)
+        if s != "selftest" and not shutil.which("ngspice"):
+            record(f"{s}/harness", False, "ngspice not on PATH: run in `nix develop .#external`")
+            continue
+        try:
+            fns[s](ctx)
+        except Exception as e:  # noqa: BLE001 - one suite's crash is a FAIL line, the rest still run
+            record(f"{s}/harness", False, f"{type(e).__name__}: {e}"[:300])
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     fails = sorted(n for n, ok, _ in results if not ok)
     (out / "fail.txt").write_text("".join(n + "\n" for n in fails))
-    print(f"external-analog: {len(results) - len(fails)} PASS, {len(fails)} FAIL ({out / 'fail.txt'})")
-    return 1 if fails else 0
+    untriaged = stale = 0
+    for s in a.suites:
+        mine = [n for n in fails if n.split("/", 1)[0] == s]
+        known, new, gone = judge(mine, triage(s))
+        for n, pat in known:
+            print(f"KNOWN {n} [{pat}: {triage(s)[pat]}]")
+        untriaged += len(new)
+        if not ctx.only:  # a partial run cannot show a row is stale
+            for p in gone:
+                print(f"STALE {s}/TRIAGE.md `{p}`: names no FAIL; delete the row")
+            stale += len(gone)
+    print(f"external-analog: {len(results) - len(fails)} PASS, {len(fails)} FAIL, {untriaged} untriaged, {stale} STALE ({out / 'fail.txt'})")
+    return 1 if untriaged or stale else 0
 
 
 if __name__ == "__main__":

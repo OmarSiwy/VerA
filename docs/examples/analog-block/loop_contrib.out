@@ -1,1 +1,12 @@
 $ vera --lint loop_contrib.va
+error[E0426]: contribution inside a runtime loop
+  --> loop_contrib.va:11:7
+   |
+11 |       I(p, n) <+ V(p, n) / 1k;
+   |       ^
+   |
+   = note: LRM 5.9
+   = help: run `vera --explain E0426` for a detailed explanation
+
+error: could not compile due to 1 previous error(s)
+(exit 1)

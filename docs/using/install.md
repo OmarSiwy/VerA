@@ -8,20 +8,25 @@ nothing but `vera`.
 
 ## With Nix
 
-> **Not yet verified on `main`.** The commands below are the interface of the
-> flake being prepared on branch `nix-package`. Until it is merged, use one of
-> the other two ways.
-
 ```sh
-nix run github:OmarSiwy/VerA -- model.va --lint      # build from source and run
-nix profile install github:OmarSiwy/VerA             # install the latest source build
-nix profile install 'github:OmarSiwy/VerA#"1.0.0"'   # a release binary, pinned
+nix run github:OmarSiwy/VerA -- model.va --lint     # build from source and run
+nix profile add github:OmarSiwy/VerA                # install it (`nix profile install` on older Nix)
+nix profile add 'github:OmarSiwy/VerA#"1.0.0"'      # a release binary, pinned
 ```
 
 The packaged `vera` is wrapped with the Zig 0.17.0 it generates code for, so
-`--run` and `--emit-so` work with no Zig of your own. As a flake input, take
-`vera.packages.${system}.default` (or `."1.0.0"`, `latest`), or apply
-`vera.overlays.default` to get `pkgs.vera` and `pkgs.veraPackages.<version>`.
+`--run` and `--emit-so` work with no Zig of your own, and it installs the
+device contract of its own version as `share/vera/contract.zig`. As a flake
+input, take `vera.packages.${system}.default` (built from source) or
+`."1.0.0"` and `latest` (release binaries, listed in the repository's
+`sources.json`), or apply `vera.overlays.default` to get `pkgs.vera` and
+`pkgs.veraPackages.<version>`. The flake covers x86_64 and aarch64 Linux and
+macOS.
+
+`vera` writes its scratch tree under `.zig-cache/` in the working directory
+and uses Zig's global cache, so inside a Nix build sandbox (no `$HOME`), run
+it in a writable directory with
+`export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache`.
 
 ## A release binary
 
@@ -35,7 +40,10 @@ tar xzf vera-v1.0.0-x86_64-linux-gnu.tar.gz      # one file: vera
 ./vera --help
 ```
 
-Install Zig 0.17.0 from <https://ziglang.org/download/> beside it.
+Install the Zig that release targets beside it, from
+<https://ziglang.org/download/>: 0.17.0 for v1.0.0 (the repository's
+`sources.json` records each release's). The release's device contract is
+`tools/contract.zig` at its tag.
 
 ## From source
 

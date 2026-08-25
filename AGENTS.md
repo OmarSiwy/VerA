@@ -331,7 +331,8 @@ runner only needs a nonempty, all-passing transcript.
 Device-table directives assert what a device PUBLISHES to a host, as
 `got=/want= ok=` lines: `//! noise` (`corr=<j>:<rho>` states §4.6.4.6's
 correlation coefficient with row j, from the rows' shared `source` and the
-signs of their `coeff`), `//! acstim`, `//! qsite` (one line
+signs of their `coeff`; a table row's `points=` and `psd=<f>:<S>,...` are read
+through `contract.noiseTable` on the derived card), `//! acstim`, `//! qsite` (one line
 per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order),
 `//! meta <kind> <name> [desc="..."] [units="..."]` (one per §2.9.2
 `decl_meta` row, `contract.DeclMeta`; `//! meta none`), and
@@ -542,6 +543,9 @@ Learned expensively, and none of it is style preference:
       `zig build test-vpi-fixtures` still compiles every `.c` fixture.
 - [ ] `zig build` AND the suite runner compile, not only `zig build test`:
       `test` does not analyse every path of the CLI or the harness.
+- [ ] Changed what `vera` prints, or the contract? `tools/doctest.py` passes:
+      the user book (`docs/`) shows real transcripts and CI fails on drift.
+      `--update` rewrites them; then re-read the prose around each one.
 - [ ] No new `else =>` over a boundary enum without a `// else:` reason.
 - [ ] Refactor phase? Goldens are byte-identical.
 - [ ] Changed a fixture's expectation? The derivation is in its header and you

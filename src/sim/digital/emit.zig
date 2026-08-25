@@ -525,6 +525,8 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         else => {}, // else: only a `disable` resumes a process somewhere it did not suspend
     };
     if (r.drv.watched.items.len != 0) return self.refuse("VAMS §9.22 driver access");
+    // `rt` evaluates no timing check; the interpreter does (`tchk.zig`).
+    if (r.tchks.items.len != 0) return self.refuse("IEEE 1364-2005 §15 timing checks");
     // §7.6: what a switch passes is a strength, which an x or z carries.
     if (r.trans.len != 0) try self.xMeaning("a §7.6 pass switch", null);
     try portDumps(self);
@@ -534,7 +536,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     var order: std.ArrayList(u32) = .empty;
     while (r.scheduler.next()) |ev| switch (r.pending.items[ev.payload].item) {
         .run_process => |pc| try order.append(self.arena, pc),
-        .@"resume", .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d => return self.refuse("an event queued at elaboration"),
+        .@"resume", .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d, .analog_point => return self.refuse("an event queued at elaboration"),
     };
 
     try self.print(

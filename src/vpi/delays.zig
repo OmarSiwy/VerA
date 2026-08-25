@@ -192,9 +192,18 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     // §11.6.15's paths and timing checks: "For path delay objects, the
     // no_of_delays value shall be 1, 2, 3, 6, or 12. For timing check
     // objects, the no_of_delays value shall match the number of limits".
-    // They are the model's to hold — no simulation here applies a specify
-    // block (W0251) — so the put sets what vpi_get_delays reads back.
-    if (o.kind == .code and (o.vtype == vpiModPath or o.vtype == vpiTchk)) return putModelDelays(o, d);
+    // A path's delays are the model's to hold — no simulation here applies
+    // a path delay (W0251) — so the put sets what vpi_get_delays reads
+    // back. A timing check's limits are the engine's too: a digital run
+    // judges every later event with them (IEEE 1364-2005 clause 15).
+    if (o.kind == .code and o.vtype == vpiModPath) {
+        _ = putModelDelays(o, d);
+        return;
+    }
+    if (o.kind == .code and o.vtype == vpiTchk) {
+        if (putModelDelays(o, d)) putEngineLimits(obj, o, d);
+        return;
+    }
     if (!primitive and !assign) {
         root.fail("NODELAY", "vpi_put_delays: that object has no delays a put can set", .{});
         return;
@@ -296,18 +305,20 @@ fn element(k: usize, p: usize, mtm: usize, pulse: usize) usize {
     return k * mtm * pulse + p * mtm + (if (mtm == 3) @as(usize, 1) else 0);
 }
 
-fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
+/// A path's or a timing check's delays, as the model holds them; false,
+/// with the error recorded, when the put is refused.
+fn putModelDelays(o: *const root.Obj, d: *const Delay) bool {
     const legal = if (o.vtype == vpiModPath) switch (d.no_of_delays) {
         1, 2, 3, 6, 12 => true,
         else => false,
     } else d.no_of_delays == o.delays.len;
     if (!legal) {
         root.fail("BADDELAY", "vpi_put_delays: no_of_delays {d} is not legal for this object", .{d.no_of_delays});
-        return;
+        return false;
     }
     if (d.time_type != callback.vpiScaledRealTime or d.da == null) {
         root.fail("BADDELAY", "vpi_put_delays: a specify object's delays are put as vpiScaledRealTime, in an array", .{});
-        return;
+        return false;
     }
     const n: usize = @intCast(d.no_of_delays);
     const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
@@ -315,7 +326,7 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
     const design = &root.design.?;
     const out = design.arena.allocator().alloc(f64, n) catch {
         root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
-        return;
+        return false;
     };
     for (out, 0..) |*v, k| v.* = d.da[element(k, 0, mtm, pulse)].real;
     const idx = objIndex(o);
@@ -332,8 +343,26 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
         limits.put(std.heap.smp_allocator, idx, .{ .reject = reject, .err = err }) catch return noMem();
     }
     design.objects[idx].delays = out;
+    return true;
 }
 
-fn noMem() void {
+/// The limits a put gave timing check `o`, in its module's time unit, as
+/// the digital engine's (`digital.Run.tchkLimits`). Without a digital run
+/// (the analog model) the model's copy is all there is.
+fn putEngineLimits(obj: root.vpiHandle, o: *const root.Obj, d: *const Delay) void {
+    const r = run.attached() orelse return;
+    const n: usize = @intCast(d.no_of_delays);
+    const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
+    const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
+    var ticks: [2]u64 = undefined;
+    if (n > ticks.len) return;
+    for (ticks[0..n], 0..) |*t, k| t.* = run.ticksOf(d.da[element(k, 0, mtm, pulse)], obj) orelse return;
+    const scope = root.design.?.scopes[o.owner.get() orelse 0].engine;
+    if (!r.tchkLimits(scope, o.src_tok, ticks[0..n]))
+        root.fail("NODRIVER", "vpi_put_delays: the engine holds no timing check for that object", .{});
+}
+
+fn noMem() bool {
     root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
+    return false;
 }

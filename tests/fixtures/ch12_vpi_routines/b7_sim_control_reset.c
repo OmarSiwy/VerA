@@ -16,17 +16,16 @@
  * resetting the tool. A nonzero value passed to $reset causes the tool to
  * begin processing immediately." So this call resets to time 0 and then
  * enters interactive mode, which a batch run reads as $stop does (VD-070:
- * the run ends). A listed operation with its three arguments succeeds: 1,
- * and no error. The routine asks only once (a reset does not re-run the
- * startup routine or a cbAfterDelay that already fired), and
+ * the run ends; VD-106). A listed operation with its three arguments
+ * succeeds: 1, and no error. The routine asks only once (a reset does not
+ * re-run the startup routine or a cbAfterDelay that already fired), and
  * cbEndOfSimulation follows whichever way the run ends.
+ * b7_sim_control_reset_run.c is the nonzero stop_value: the run starts over.
  *
- * KNOWN GAP: VerA refuses vpiReset ("needs an interactive mode VerA does not
- * have", src/vpi/run.zig). The failure is pinned as `.xfail` in build.zig's
- * vpi_runs. Only the ledger rows are cited, not the bare clause, because a
- * vpi_runs entry counts for --coverage whether or not it is an xfail.
+ * CENSUS: setup 2, eoc 1, at1 2 at its one call, eos 1: checks=6.
  */
 
+//! lrm 12.36
 //! lrm 12.36:5
 //! lrm 12.36:6
 

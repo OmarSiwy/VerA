@@ -519,6 +519,12 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             // Syntax 4-1 admits only in the alternatives that carry a range.
             const advisory = self.pos;
             const advised = self.eat(.kw_scalared) or self.eat(.kw_vectored);
+            // A.2.1.3's net_declaration names one net_type. `optPortType`
+            // reads a port declaration's `[ net_type | wreal ]` after the
+            // discipline, which this arm has already consumed.
+            const after_disc = self.pos + @intFromBool(self.peek() == .identifier and self.identLike(self.pos + 1));
+            if (parse_net.netKind(self.tags[after_disc]) != null or self.reservedIs(after_disc, "wreal"))
+                return self.failAt(after_disc, .E0207, "found {s}: A.2.1.3's net_declaration names one net_type", .{self.found(after_disc)});
             var signed = false;
             var ignored: Ast.NetKind = .wire;
             const disc = try parse_net.optPortType(self, &ignored, &signed);

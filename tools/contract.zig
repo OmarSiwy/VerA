@@ -1849,12 +1849,50 @@ const sim_state_fields = [_]SimStateField{
     // $test$plusargs/$value$plusargs search answers 0.
     .{ .name = "plusargs", .T = []const [:0]const u8 },
     // §9.15 Table 9-28 `$simparam$str("cwd")`: the directory the simulator
-    // was started in. Left at "", the device answers "".
+    // was started in. Left at "", the device answers "". A host pointer in
+    // the Instance, so a host that copies Instances to a GPU, or binds only
+    // numbers, writes `Model.cwd_idx__` instead (`host_strings`).
     .{ .name = "cwd", .T = []const u8 },
     // §9.15 Table 9-28 `$simparam$str("analysis_name")`: the host's name for
     // the current analysis ("tran1", "mydc"), written before each analysis.
+    // The GPU-safe twin is `Model.analysis_name_idx__`.
     .{ .name = "analysis_name", .T = []const u8 },
 };
+
+/// Host-written `Model` fields of type `u32`, each an index into
+/// `host_strings`: the GPU-safe channel of §9.15 Table 9-28's strings. A
+/// device declares both exactly when it declares the `Instance` fields `cwd`
+/// and `analysis_name` above, and reads `host_strings[i]` for a nonzero index,
+/// else the `Instance` field (`hostString`). Each is 0 ("not written") by
+/// default, so a host that writes neither gets what it got before. `setup`
+/// does not read them, so a host may rewrite one between evaluations (a new
+/// analysis) without calling `setup` again. Additive: no `abi_version` change.
+const host_model_index_fields = [_][]const u8{
+    "cwd_idx__", // $simparam$str("cwd")
+    "analysis_name_idx__", // $simparam$str("analysis_name"); also §4.6.3 (`acStimActive`)
+};
+
+/// §9.15 Table 9-28 the host's strings: entry i is the text a `Model` index
+/// field holding i names (`cwd_idx__`, `analysis_name_idx__`). The host owns
+/// the bytes, sets the slice before the first evaluation that reads an index,
+/// and does not change it while one runs; entry 0 is never read, since index
+/// 0 means "not written". One table per compilation of this file: an
+/// in-process host sets it once, and a `--emit-so` library has its own, which
+/// the host's `dyn` module sets inside the library (in a split build that
+/// exports `eval` from another part, in that part too).
+///
+/// Only the CPU reads it. On an NVPTX or AMDGCN target `hostString` answers
+/// its fallback, so a host keeps a device whose `Model` has `cwd_idx__` on its
+/// CPU path when the strings matter to it.
+pub var host_strings: []const []const u8 = &.{};
+
+/// Returns `host_strings[i]`, or `fallback` (a device passes the `Instance`
+/// field) when `i` is 0 or past the end of the table, and always on a GPU
+/// target, whose kernels cannot reach host memory.
+pub fn hostString(i: u32, fallback: []const u8) []const u8 {
+    if (comptime gm.dev) return fallback;
+    return if (i != 0 and i < host_strings.len) host_strings[i] else fallback;
+}
 
 /// Host-written `Model` fields, all `f64`: §9.15 `$simparam` names whose value
 /// is one number per run (SPICE `.options`). Presence is optional, and each is
@@ -1874,8 +1912,8 @@ const host_model_fields = [_][]const u8{
 
 /// §4.6.4 one noise generator: position k of `noise_gens` is a generator of
 /// `kind` on the (row, col) branch, and position k of `noisePsd`'s result is
-/// its PSD. A `.table` generator's PSD is `noise_tables[table.?]` (see
-/// `NoiseTable`); its `noisePsd` entry reads zero. The per-use scale factor is
+/// its PSD. A `.table` generator's PSD is its table at the card,
+/// `noiseTable(D, &model, table.?)`; its `noisePsd` entry reads zero. The per-use scale factor is
 /// `PsdTerm.coeff`, because it may depend on the bias.
 pub fn NoiseGen(comptime D: type) type {
     const n = nU(D);
@@ -1905,7 +1943,8 @@ pub fn NoiseGen(comptime D: type) type {
 ///
 /// `validate` guarantees: at least one point, frequencies strictly ascending
 /// and > 0, powers >= 0, and > 0 in a `.log` table. When the device declares
-/// `noiseTablePoints`, these are only the parameter defaults; see that hook.
+/// `noiseTablePoints`, these are only the parameter defaults; a host reads a
+/// generator's table through `noiseTable`, which gives the card's knots.
 pub const NoiseTable = struct {
     /// §4.6.4.3 linear in (f, p); §4.6.4.4 linear in (log f, log p).
     interp: enum(u8) { linear, log },
@@ -1922,6 +1961,28 @@ pub fn sortNoiseTable(pts: [][2]f64) void {
             return a[0] < b[0];
         }
     }.lt);
+}
+
+/// Returns table `k` of `D` (`noise_gens[i].table == k`) as card `model` sets
+/// it. For a table whose knots are model parameters (§4.6.4.3 "an array
+/// parameter", or a pattern of parameters) that is the row's own sorted copy,
+/// `model.noise_table_points__`, which `derive` writes from `noiseTablePoints`
+/// after every card: `points` then points INTO `model`, so it lives as long as
+/// the row and moves with it, and a host that copies or shares rows (a GPU, a
+/// row tape) copies the knots with them. Any other table is `noise_tables[k]`.
+/// A device with `noiseTablePoints` but no such field is from an earlier VerA,
+/// and is a compile error here rather than its declared defaults.
+pub fn noiseTable(comptime D: type, model: *const D.Model, k: usize) NoiseTable {
+    const t = D.noise_tables[k];
+    if (comptime !@hasField(D.Model, "noise_table_points__")) {
+        if (comptime @hasDecl(D, "noiseTablePoints"))
+            @compileError(@typeName(D) ++ " has `noiseTablePoints` but no `Model.noise_table_points__`; " ++
+                "regenerate it with this contract's VerA, or read `noiseTablePoints` directly");
+        return t;
+    }
+    var off: usize = 0;
+    for (D.noise_tables[0..k]) |t0| off += t0.points.len;
+    return .{ .interp = t.interp, .points = model.noise_table_points__[off..][0..t.points.len] };
 }
 
 /// Returns the §4.6.4.3/.4 tabulated PSD at `f`. Outside the table it clamps
@@ -1949,8 +2010,8 @@ pub fn noiseTableAt(t: NoiseTable, f: f64) f64 {
 /// One generator's PSD at a state vector, position k of `noisePsd`'s result
 /// (generator `noise_gens[k]`). The density generator k contributes is
 ///
-///     S_k(f) = coeff² · (white + flicker/f^ef)                              parametric row
-///     S_k(f) = coeff² · noiseTableAt(noise_tables[noise_gens[k].table.?], f)  table row
+///     S_k(f) = coeff² · (white + flicker/f^ef)                                   parametric row
+///     S_k(f) = coeff² · noiseTableAt(noiseTable(D, &model, noise_gens[k].table.?), f)  table row
 ///
 /// A table row's `white` and `flicker` are zero, so a host that adds both
 /// shapes is right for every row. The device computes `white` itself.
@@ -2071,10 +2132,27 @@ pub fn AcGen(comptime D: type) type {
         row: std.math.IntFittingRange(0, n - 1),
         col: std.math.IntFittingRange(0, n - 1),
         /// §4.6.3 `analysis_name`: the source is active only in the
-        /// small-signal analysis of this name (Table 4-21), and zero in every
-        /// other analysis.
+        /// small-signal analysis of this name, and zero in every other
+        /// analysis; `acStimActive` is the rule.
         name: []const u8 = "ac",
     };
+}
+
+/// §4.6.3 whether an `ac_stim` whose `analysis_name` is `name` (`AcGen.name`)
+/// is active in an analysis of `kind` that the host labels `label` (the
+/// Table 9-28 `analysis_name` it publishes, `host_strings[analysis_name_idx__]`;
+/// "" for none). Never in a large-signal analysis ("returns zero (0) during
+/// large-signal analyses"). A small-signal analysis answers to its Table 4-21
+/// spelling, "ac" or "noise" (VD-064), and to its label for any other name
+/// (VD-109): `ac_stim("ac")` is active in every `.ac` analysis, and
+/// `ac_stim("ac2")` only in one the host labels "ac2". The device's residual
+/// applies the same rule; a host gating `ac_gens` calls this with the label it
+/// published, so the two agree.
+pub fn acStimActive(name: []const u8, kind: AnalysisKind, label: []const u8) bool {
+    if (kind != .ac and kind != .noise) return false;
+    if (std.mem.eql(u8, name, "ac") or std.mem.eql(u8, name, "noise"))
+        return std.mem.eql(u8, name, @tagName(kind));
+    return std.mem.eql(u8, name, label);
 }
 
 /// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, position k of `acStim`'s
@@ -3284,7 +3362,8 @@ pub fn InstancePtr(comptime D: type) type {
 /// calls them:
 ///
 ///   derive(S, *model)            after writing a card, before building instances
-///                                (§6.3.4 parameters derived from others)
+///                                (§6.3.4 parameters derived from others, and the
+///                                row's sorted noise-table knots, `noiseTable`)
 ///   checkShape(&model)           after derive; non-null names a §3.4 shape
 ///                                parameter the card moved, so refuse the card
 ///   checkCard(&model)            after derive; non-null names a §9.18 system
@@ -3366,6 +3445,10 @@ pub fn validate(comptime D: type) void {
     for (host_model_fields) |f| {
         if (@hasField(D.Model, f) and @FieldType(D.Model, f) != f64)
             @compileError(name ++ ".Model." ++ f ++ ": host-written field must be f64");
+    }
+    for (host_model_index_fields) |f| {
+        if (@hasField(D.Model, f) and @FieldType(D.Model, f) != u32)
+            @compileError(name ++ ".Model." ++ f ++ ": host-written index into `contract.host_strings` must be u32");
     }
     // `SimState` carries these, so an Instance field of the same name is one
     // no host writes: a device built for an earlier contract.
@@ -3572,6 +3655,9 @@ pub fn validate(comptime D: type) void {
     requireWith(D, "vpiContribs", "vpi_contrib_hi");
     requireWith(D, "vpiContribs", "vpi_contrib_lo");
     requireWith(D, "vpiContribs", "vpi_contrib_flow_u");
+    // And one instance's share of a row several instances share, by row.
+    requireWith(D, "vpiShares", "vpi_share_row");
+    requireWith(D, "vpiShares", "vpiContribs");
     if (@hasDecl(D, "noisePsd"))
         expectGeneric(D, "noisePsd", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [noise_gens.len]PsdTerm");
 
@@ -3605,7 +3691,14 @@ pub fn validate(comptime D: type) void {
             var total: usize = 0;
             for (tables) |t| total += t.points.len;
             expectFn(D, "noiseTablePoints", fn (*const D.Model) [total][2]f64);
-        }
+            // The row's own sorted copy of those knots, which `derive` writes
+            // and `noiseTable` reads. Optional, for a device from an earlier
+            // VerA; additive, so no `abi_version` change.
+            if (@hasField(D.Model, "noise_table_points__") and @FieldType(D.Model, "noise_table_points__") != [total][2]f64)
+                @compileError(name ++ ".Model.noise_table_points__ must be [" ++
+                    std.fmt.comptimePrint("{d}", .{total}) ++ "][2]f64, the knots of every table in `noise_tables` order");
+        } else if (@hasField(D.Model, "noise_table_points__"))
+            @compileError(name ++ ".Model.noise_table_points__ without `noiseTablePoints`: nothing defines its knots");
     }
 
     // §4.6.3 AC stimuli; `AcGen`'s integer widths range-check row and col.
@@ -3685,7 +3778,8 @@ pub fn validate(comptime D: type) void {
 ///     host calls the first after every iterate and the second before
 ///     accepting one, on the same Instance `eval` reads;
 ///   `noise_table_points` when D has `noiseTablePoints`: the host reads the
-///     card's knots from it, not the defaults in `noise_tables`;
+///     card's knots, through `noiseTable` (the row's `noise_table_points__`)
+///     or from the hook itself, not the defaults in `noise_tables`;
 ///   `shape_check` when D has `checkShape`: the host calls it after `derive`
 ///     and refuses a card it names;
 ///   `calls_ac_dyn` when D declares `ac_dyn_slots`: true when the host adds
@@ -3728,7 +3822,8 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
             @compileError(@typeName(H) ++ " must read `noiseTablePoints`: " ++ @typeName(D) ++
                 " has a 4.6.4.3 noise table whose knots are model parameters, and " ++
                 "`noise_tables` carries only their declared defaults. Declare " ++
-                "noise_table_points = true once the host reads the hook.");
+                "noise_table_points = true once the host reads each table through " ++
+                "`contract.noiseTable(D, &model, k)` (or the hook).");
     }
     // A card that moves a §3.4 shape parameter would otherwise evaluate with a
     // wrong-sized array, silently.
@@ -3848,6 +3943,11 @@ const AllowedPubDecl = enum {
     vpi_contrib_hi,
     vpi_contrib_lo,
     vpi_contrib_flow_u,
+    // Each instance's own share of a row several instances' unnamed branches
+    // share (§5.4.1), the §11.6.7 flow of that instance's branch; emitted
+    // under `vpi_contribs` when a row is shared.
+    vpiShares,
+    vpi_share_row,
     lane_masks,
 };
 
@@ -4266,11 +4366,19 @@ const MockAll = struct {
     pub const Model = struct {
         g: f32 = 1e-3,
         temperature__: f64 = 300.15,
+        // §4.6.4.3 the row's sorted copy of `noiseTablePoints`, which
+        // `derive` writes; the initializer is the declared defaults.
+        noise_table_points__: [2][2]f64 = .{ .{ 1, 1e-18 }, .{ 1e6, 1e-24 } },
+        // §9.15 Table 9-28 through `host_strings`, beside the Instance slices.
+        cwd_idx__: u32 = 0,
+        analysis_name_idx__: u32 = 0,
         su: Setup = .{},
     };
     pub const Instance = struct {
         mfactor: f64 = 1,
         bound_step: f64 = std.math.inf(f64),
+        cwd: []const u8 = "",
+        analysis_name: []const u8 = "",
         systf: ?*const SystfHost = null,
         vera_status__: u32 = 0,
         vera_status_args__: [4]f64 = @splat(0.0),
@@ -4442,7 +4550,9 @@ const MockAll = struct {
         const td: F = if (@typeInfo(F) == .vector) @splat(1e-9) else 1e-9;
         out[0] = .init(@cos(omega * td), -@sin(omega * td));
     }
-    pub fn derive(comptime _: type, _: *Model) void {}
+    pub fn derive(comptime _: type, m: *Model) void {
+        m.noise_table_points__ = noiseTablePoints(m);
+    }
     pub fn checkShape(m: *const Model) ?[]const u8 {
         return if (m.g != 1e-3) "g" else null;
     }
@@ -4468,6 +4578,12 @@ const MockAll = struct {
     pub const vpi_contrib_flow_u = [_]i32{-1};
     pub fn vpiContribs(comptime S: type, x: *const [n_u]S.V, m: *const Model, _: *const Instance, _: SimState) [1][2]f64 {
         return .{.{ (x[0] - x[1]) * m.g, 0.0 }};
+    }
+    /// Two instances' shares of row 0.
+    pub const vpi_share_row = [_]u32{ 0, 0 };
+    pub fn vpiShares(comptime S: type, x: *const [n_u]S.V, m: *const Model, _: *const Instance, _: SimState) [2][2]f64 {
+        const g = (x[0] - x[1]) * m.g;
+        return .{ .{ 0.25 * g, 0.0 }, .{ 0.75 * g, 0.0 } };
     }
     pub const lane_masks = [_]LaneUse{.{ .mask = 0b11, .uses = 1 }};
 };
@@ -4851,6 +4967,49 @@ test "§4.6.4.3 noise_table interpolates linearly BETWEEN the pairs" {
     try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 1));
     try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 5));
     try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 1e9));
+}
+
+test "§4.6.4.3 noiseTable reads the card's knots from the Model row, and they move with it" {
+    // MockAll's second knot power is 1e-18·g: the card's, not the default.
+    var m: MockAll.Model = .{ .g = 2e-3 };
+    MockAll.derive(f64, &m);
+    const t = noiseTable(MockAll, &m, 0);
+    try testing.expect(t.interp == .log);
+    try testing.expectEqual(@as(usize, 2), t.points.len);
+    try testing.expectEqual(1e-18 * @as(f64, m.g), t.points[0][1]);
+    try testing.expect(t.points[0][1] != MockAll.noise_tables[0].points[0][1]);
+    // The slice is the row's own storage, so a copied row carries the knots.
+    try testing.expectEqual(@intFromPtr(&m.noise_table_points__), @intFromPtr(t.points.ptr));
+    const copy = m;
+    try testing.expectEqual(t.points[0][1], noiseTable(MockAll, &copy, 0).points[0][1]);
+    // A row that never saw a card holds the declared defaults.
+    const fresh: MockAll.Model = .{};
+    try testing.expectEqualSlices([2]f64, MockAll.noise_tables[0].points, noiseTable(MockAll, &fresh, 0).points);
+}
+
+test "§9.15 Table 9-28 hostString reads the host's table by index; 0 and out of range fall back" {
+    const saved = host_strings;
+    defer host_strings = saved;
+    host_strings = &.{ "", "/run/here", "tran1" };
+    try testing.expectEqualStrings("/run/here", hostString(1, "inst"));
+    try testing.expectEqualStrings("tran1", hostString(2, ""));
+    // 0 is "not written": the Instance field a host of the old channel wrote.
+    try testing.expectEqualStrings("inst", hostString(0, "inst"));
+    try testing.expectEqualStrings("inst", hostString(3, "inst"));
+}
+
+test "§4.6.3 acStimActive: the kind's spelling, else the host's label, never large-signal" {
+    try testing.expect(acStimActive("ac", .ac, ""));
+    try testing.expect(acStimActive("ac", .ac, "ac1"));
+    try testing.expect(!acStimActive("ac", .noise, ""));
+    try testing.expect(acStimActive("noise", .noise, "mynoise"));
+    try testing.expect(acStimActive("myac", .ac, "myac"));
+    try testing.expect(acStimActive("myac", .noise, "myac"));
+    try testing.expect(!acStimActive("myac", .ac, "ac"));
+    // "returns zero (0) during large-signal analyses", whatever the label.
+    try testing.expect(!acStimActive("tran1", .tran, "tran1"));
+    try testing.expect(!acStimActive("tran", .tran, ""));
+    try testing.expect(!acStimActive("dc", .dc, "dc"));
 }
 
 test "§4.6.4.4 noise_table_log is a straight line on a log-log plot" {

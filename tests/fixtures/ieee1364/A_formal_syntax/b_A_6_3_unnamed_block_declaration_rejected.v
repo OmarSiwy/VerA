@@ -6,11 +6,14 @@
 //
 // `begin integer k; ... end` declares in an unnamed block. Legal neighbour:
 // b_A_6_3_named_block_declarations.v (`begin : blk integer k; ... end`).
+// The code moved 2026-10-08 with the refusal unchanged: E0209 ("expected an
+// expression", A.8.3) became E0290, A.6.3's own "a declaration in an unnamed
+// block", which the analog parse now reports too.
 // digital-runner: reject
 //! lrm A.6.3
 //! lrm A.6.3:1000
 //! inherited IEEE 1364-2005 A.6.3
-//! reject E0209
+//! reject E0290
 //! neighbour b_A_6_3_named_block_declarations.v
 module b_A_6_3_unnamed_block_declaration_rejected;
   initial begin

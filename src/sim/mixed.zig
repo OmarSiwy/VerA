@@ -3,7 +3,7 @@
 //!
 //! The analog side is a comptime interface (`run`'s `A`), so the tests below
 //! drive the real digital engine against a fake solver.
-//! Clauses: VAMS §7.3.5, §7.3.6, §8.4, §8.5, §5.10.3.
+//! Clauses: VAMS §7.3.5, §7.3.6, §8.4, §8.5, §5.10.3; IEEE 1364-2005 §17.1.3.
 // ponytail: the analog never steps past the next digital event (Figure 8-7's
 // conservative half), so nothing is ever rolled back (§8.4.6) and an A2D is
 // delivered once, from the solution that is kept. A step the analog device
@@ -523,7 +523,8 @@ fn State(comptime A: type) type {
         /// event: §5.10.3.1 / §8.4.7 cut it at the first monitored crossing,
         /// deliver the A2D events it carries (§7.3.6.1, rounded per §8.4.3.3),
         /// then run the digital ticks at or before the step and re-solve at
-        /// it for every D2A they cause (§8.4.3.2 "accept at wake-up time").
+        /// it for every D2A they cause (§8.4.3.2 "accept at wake-up time"),
+        /// and re-check a `$monitor` that probes the solution at its tick.
         fn step(s: *Self, t_end: f64) !void {
             const base = s.acc.?;
             for (s.mons, 0..) |*m, j| if (m.kind != .timer) {
@@ -567,7 +568,14 @@ fn State(comptime A: type) type {
                 .crossing => |c| if (try s.active(c.enable, j) and crosses(c.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick),
             };
             _ = try s.refreshTimers(s.acc.?);
-            try s.drainAbsdelta(base, tickAtOrBefore(s.acc.?, s.opts.tick));
+            const k = tickAtOrBefore(s.acc.?, s.opts.tick);
+            try s.drainAbsdelta(base, k);
+            // §8.4, IEEE 1364-2005 §17.1.3: this solution may move what a
+            // probing `$monitor` reads although no digital event shares its
+            // tick, so the tick is a time step of its own (`analogPoint`).
+            // ponytail: a solution between ticks whose lower tick has run
+            // is reported at the next tick a solution reaches.
+            if (try s.dig.analogPoint(k)) try s.runDigital(k);
         }
 
         /// The digital ticks at or before `horizon`, re-solving at the current
@@ -830,6 +838,27 @@ test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.
     // not at 5.2 ns where the event was detected.
     const at: f64 = @bitCast(dig.values[dig.slotOf("at").?].values()[0]);
     try testing.expectApproxEqAbs(@as(f64, 0.5), at, 1e-12);
+}
+
+test "§8.4 / IEEE 1364-2005 §17.1.3 a probing $monitor reports at each analog solution no digital event shares" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(vi);
+        \\  inout vi; electrical vi; integer u;
+        \\  initial begin u = 0; $monitor("%0d %0d", $time, V(vi) > 1.5); end
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    // V(vi) = 1 V/ns. Nothing digital happens after time 0, so each report
+    // past it comes from an analog solution's own tick. V(vi) is the operand:
+    // it moves at 1 ns and 3 ns too, where `V(vi) > 1.5` does not.
+    var f: Fake = .{ .slot = dig.slotOf("u").?, .gpa = arena, .slope = 1e9 };
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 1e-9, 2e-9, 3e-9 }, .tick = 1e-9 });
+    try testing.expectEqualStrings("0 0\n1 0\n2 1\n3 1\n", out.written());
 }
 
 test "§5.10.3.1 a crossing the secant only creeps toward is still cut to within time_tol" {

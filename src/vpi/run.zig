@@ -1,7 +1,8 @@
 //! The digital run a VPI application's time callbacks live in: the engine's
 //! IEEE 1364 §11.4 loop (`src/sim/digital`), driven one time queue at a time
 //! with §12.31.2's callback moments cut into it, plus §12.15 vpi_get_time,
-//! §12.36 vpi_sim_control and §11.6.25 time queues.
+//! §12.36 vpi_sim_control (vpiReset: IEEE 1364-2005 C.7) and §11.6.25 time
+//! queues.
 
 const std = @import("std");
 const sim = @import("sim");
@@ -10,6 +11,7 @@ const property = @import("property.zig");
 const iterate = @import("iterate.zig");
 const handle = @import("handle.zig");
 const callback = @import("callback.zig");
+const value = @import("value.zig");
 const analog = @import("analog.zig");
 const va = @import("va.zig");
 const code = @import("code.zig");
@@ -38,6 +40,8 @@ pub fn attach(r: *digital.Run) void {
     // §12.31.1 cbForce/cbRelease/cbAssign/cbDeassign/cbDisable on design
     // statements; a callback registered before elaboration counts too.
     r.done_hook = callback.onDone;
+    // VAMS 12.31.4 cbTchkViolation on the engine's timing checks.
+    r.tchk_hook = callback.onTchk;
 }
 
 /// Unbinds the engine and invalidates every time-queue handle.
@@ -45,6 +49,7 @@ pub fn detach() void {
     engine = null;
     clock = 0;
     started = false;
+    reset_request = null;
     var it = queues.valueIterator();
     while (it.next()) |q| gpa.destroy(q.*);
     queues.clearAndFree(gpa);
@@ -70,6 +75,9 @@ pub fn attached() ?*digital.Run {
 ///                                     at t runs before t is left
 ///   cbReadOnlySynch                   the same, with writes refused
 ///
+/// An application's vpiReset stops the queue it was asked in; the run is
+/// then reset (IEEE 1364-2005 C.7) and either goes on from time 0 or ends.
+///
 /// A design that calls a registered system task as a function
 /// (`systf.misuse`, IEEE 1364-2005 §20.3) does not run: DigitalFailed.
 pub fn simulate() digital.Error!void {
@@ -77,6 +85,37 @@ pub fn simulate() digital.Error!void {
     if (@import("systf.zig").misuse != null) return error.DigitalFailed;
     callback.startOfSimulation();
     started = false;
+    while (true) {
+        try timeSteps(r);
+        // §12.36 vpiReset, "upon return of user VPI function".
+        const go = reset_request orelse break;
+        reset_request = null;
+        r.reset() catch |e| {
+            callback.runError();
+            return e;
+        };
+        value.dropScheduled();
+        clock = 0;
+        started = false;
+        // C.7: "A value of 0 or no argument causes interactive mode to be
+        // entered after resetting the tool", which a batch run has not, so
+        // it ends there as $stop does (VD-070, VD-106).
+        if (!go) {
+            r.scheduler.finish();
+            break;
+        }
+    }
+    callback.endOfSimulation();
+}
+
+/// A §12.36 vpiReset an application asked for: whether the run goes on
+/// after it (a nonzero stop_value). `simulate` performs it once the
+/// application's routine has returned and the engine has stopped.
+var reset_request: ?bool = null;
+
+/// The time queues of one run, from its current time to `$finish`, an empty
+/// queue, a vpiFinish or a vpiReset.
+fn timeSteps(r: *digital.Run) digital.Error!void {
     while (!stopped(r)) {
         const ev = r.scheduler.peekTime();
         const due = callback.nextDue(clock, true);
@@ -108,7 +147,6 @@ pub fn simulate() digital.Error!void {
         callback.fireDue(callback.cbReadOnlySynch, t);
         read_only = false;
     }
-    callback.endOfSimulation();
 }
 
 /// True inside a cbReadOnlySynch dispatch, where §12.31.2 forbids "writing
@@ -242,10 +280,14 @@ pub const vpiTransientFailConverge: c_int = 731;
 /// ponytail: the scope is not kept, because nothing here reads an
 /// interactive scope (no interactive mode, no $scope); keep it when one does.
 ///
-/// ponytail: vpiReset needs a restartable run (time back to 0, every
-/// variable re-initialised), which VerA's engine does not have, so it fails
-/// with vpiError rather than pretending. Upgrade path: re-elaborate the run
-/// in place and re-fire cbStartOfSimulation.
+/// vpiReset (stop_value, reset_value, diagnostic_level) is IEEE 1364-2005
+/// C.7's $reset "upon return": the engine stops dispatching, and once the
+/// routine has returned `simulate` resets the run (`digital.Run.reset`: time
+/// 0, every reg and net at its initial value, every process from its first
+/// statement, every scheduled event gone) and goes on from time 0 when
+/// stop_value is nonzero, else ends the run (C.7's interactive mode, which a
+/// batch run reads as $stop). Registered callbacks stand; cbStartOfSimulation
+/// does not fire again (VD-106).
 ///
 /// vpiRejectTransientStep (one double: the current timestep) rejects the
 /// analog solution being attempted (`analog.rejectStep`), and fails when none
@@ -293,8 +335,17 @@ export fn vera_vpi_control(operation: c_int, ap: *va.List) c_int {
             return 0;
         },
         vpiReset => {
-            root.fail("NOCONTROL", "vpi_sim_control(vpiReset): a reset needs a restartable run, which VerA's engine does not have", .{});
-            return 0;
+            const stop_value = va.arg(ap, c_int);
+            _ = va.arg(ap, c_int); // reset_value: what $reset_value returns, which VerA does not have (VD-106)
+            _ = va.arg(ap, c_int); // diagnostic_level: VerA prints no reset diagnostics
+            const r = engine orelse {
+                root.fail("NORUN", "vpi_sim_control(vpiReset): no digital simulation is running", .{});
+                return 0;
+            };
+            reset_request = stop_value != 0;
+            // The engine dispatches nothing more of the run being reset.
+            r.scheduler.finish();
+            return 1;
         },
         else => {
             root.fail("NOCONTROL", "vpi_sim_control: {d} is not a §12.36 operation", .{operation});
@@ -586,11 +637,60 @@ test "§12.36: vpiFinish from a callback ends the run at that time, and the desi
     try std.testing.expectEqualStrings("", h.out.written());
 
     // §12.36 "must support" vpiStop: with no interactive mode it ends the run,
-    // as vpiFinish does. vpiReset needs a restart the engine cannot do.
+    // as vpiFinish does.
     try std.testing.expectEqual(@as(c_int, 1), vpi_sim_control(vpiStop, @as(c_int, 0)));
     try std.testing.expectEqual(@as(c_int, 0), root.vpi_chk_error(null));
-    try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(vpiReset, @as(c_int, 0), @as(c_int, 0), @as(c_int, 1)));
-    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
     try std.testing.expectEqual(@as(c_int, 0), vpi_sim_control(12345));
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+const restart_source =
+    \\`timescale 1ns/1ns
+    \\module rs;
+    \\  reg [7:0] s;
+    \\  initial begin
+    \\    $display("start s=%0d", s);
+    \\    s = 1;
+    \\    #10 $display("end s=%0d", s);
+    \\  end
+    \\endmodule
+;
+
+var reset_stop: c_int = 0;
+
+fn resetNow(_: *callback.CbData) callconv(.c) c_int {
+    if (vpi_sim_control(vpiReset, reset_stop, @as(c_int, 0), @as(c_int, 0)) != 1) finish_seen = 999;
+    return 0;
+}
+
+fn resetAt(stop: c_int) !void {
+    reset_stop = stop;
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 5, .real = 0 };
+    const d: callback.CbData = .{ .reason = callback.cbAfterDelay, .cb_rtn = resetNow, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    if (callback.vpi_register_cb(&d) == null) return error.TestUnexpectedResult;
+}
+
+test "§12.36/IEEE 1364-2005 C.7: vpiReset runs the design again from time 0, every reg at x" {
+    var h: Harness = undefined;
+    try h.init(restart_source);
+    defer h.deinit();
+    finish_seen = 0;
+    // Reset at 5, before `end` at 10, with a nonzero stop_value: the second
+    // run starts with s at x again, and the one-shot cbAfterDelay does not
+    // ask twice.
+    try resetAt(1);
+    try simulate();
+    try std.testing.expectEqual(@as(u64, 0), finish_seen);
+    try std.testing.expectEqualStrings("start s=x\nstart s=x\nend s=1\n", h.out.written());
+    try std.testing.expectEqual(@as(u64, 10), now());
+}
+
+test "§12.36/IEEE 1364-2005 C.7: a reset with stop_value 0 ends a batch run at time 0" {
+    var h: Harness = undefined;
+    try h.init(restart_source);
+    defer h.deinit();
+    try resetAt(0);
+    try simulate();
+    try std.testing.expectEqualStrings("start s=x\n", h.out.written());
+    try std.testing.expectEqual(@as(u64, 0), now());
 }

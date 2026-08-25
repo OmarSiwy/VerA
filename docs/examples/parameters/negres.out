@@ -1,2 +1,31 @@
 $ vera --run --param r=-500 negres.va
+=== negres ===
+--- point 0 ---
+  x[p] = 1.000000e0
+  x[n] = 0.000000e0
+r = -500: I(p,n) = -0.002 A
+warning[W0650]: unit is not provably finite, so it compiles in strict float mode: unit 0 — I(p,n) — compiles with @setFloatMode(.strict)
+  --> negres.va:12:5
+   |
+12 |     I(p, n) <+ V(p, n) / r;
+   |     ^
+   |     - an expression of parameter `r` is not provably finite
+   |
+   = note: LRM 4.3
+   = help: constrain the operands with a range or a guard the prover can see
+   = note: `.strict` is correct and spec-legal — this warning is about speed, not correctness
+   = help: run `vera --explain W0650` for a detailed explanation
+
+warning: 1 warning(s) emitted
 $ vera --run --param r=0 negres.va
+error[E0361]: overridden parameter value is outside its range: `r` is 0, which the declared range excludes
+  --> negres.va:10:18
+   |
+10 |   parameter real r = 1k exclude 0;
+   |                  ^
+   |
+   = note: LRM 3.4.2
+   = help: run `vera --explain E0361` for a detailed explanation
+
+error: could not compile due to 1 previous error(s)
+(exit 1)

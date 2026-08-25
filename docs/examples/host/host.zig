@@ -27,13 +27,13 @@ pub fn main() void {
     // The card: every parameter at its default. Then the card-time hooks,
     // in the contract's order.
     var model: D.Model = .{};
-    if (@hasDecl(D, "derive")) D.derive(Val.Of(0), &model);
-    D.setup(Val.Of(0), &model);
+    if (@hasDecl(D, "derive")) D.derive(Val, &model);
+    D.setup(Val, &model);
     var inst: D.Instance = .{};
     if (@hasDecl(D, "setupInstance")) D.setupInstance(&model, &inst);
 
-    const a = @intFromEnum(D.U.a);
-    const ai = @intFromEnum(D.U.ai);
+    const a = @backingInt(D.U.a);
+    const ai = @backingInt(D.U.ai);
     const v_src = 1.0;
     const r_ext = 1000.0;
 
@@ -56,7 +56,7 @@ pub fn main() void {
         // partials are in `jac_const` (this diode has none).
         inline for (comptime contract.jacConst(D)) |e| {
             if (contract.jacConstApplies(D, e, &model, S.collapse_applied))
-                j[@intFromEnum(e.row)][@intFromEnum(e.col)] = e.g;
+                j[@backingInt(e.row)][@backingInt(e.col)] = e.g;
         }
         // The host's own element: R from the source to a.
         f[a] += (x[a] - v_src) / r_ext;

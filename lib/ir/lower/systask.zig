@@ -182,8 +182,16 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     var tys: std.ArrayList(Ty) = .empty;
     defer tys.deinit(self.arena);
     for (args, 0..) |a, i| {
-        if (a == .none) continue; // A.6.9 empty argument slot
-        const tv = try lower_sysfunc.lowerTaskArg(self, a, name);
+        if (a == .none) {
+            // A.6.9 empty argument slot: §9.4.1's space for a formatting task,
+            // nothing for any other. A descriptor has no space to print.
+            if (!formats) continue;
+            if (Mir.callee.fdArg(c)) |fd| if (fd == i) {
+                try self.err(tok, .E0888, "`{s}`'s descriptor argument is a null argument", .{name});
+                return;
+            };
+        }
+        const tv = if (a == .none) try nullArg(self) else try lower_sysfunc.lowerTaskArg(self, a, name);
         if (try lower_sysfunc.checkDescriptor(self, name, i, a, tv)) return;
         try vals.append(self.arena, tv.v);
         try live.append(self.arena, a);
@@ -198,7 +206,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (formats) {
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
-        try prepareFormatArgs(self, live.items, tys.items, vals.items);
+        try prepareFormatArgs(self, tok, live.items, tys.items, vals.items);
     }
     // A restricted context's monitor reports at the statement: its operands
     // are diagnosed there, and an inlined function's locals end with the body.
@@ -234,7 +242,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 fn systfOutputs(self: *Lower, call: Mir.Value, live: []const Ast.ExprId, vals: []const Mir.Value) Oom!void {
     const ex = &self.file.exprs;
     for (live, 0..) |a, j| {
-        if (ex.tag(a) != .ident) continue;
+        if (a == .none or ex.tag(a) != .ident) continue;
         const s = self.vars.get(self.file.str(ex.strOf(a))) orelse continue;
         // A `reg` (§7.3.1) keeps its width rule; a string has no partials.
         if (s.ty == .string or s.reg_width != null) continue;
@@ -697,7 +705,7 @@ fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
 /// operands so a string used by `%s` does not become a new format. Numeric
 /// `%s` operands also retain their source width through an identity call.
 /// A shortfall stops where the operands stop; E0810 already owns it.
-fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
+fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
     std.debug.assert(live.len == tys.len);
     var at: usize = 0;
     while (at < live.len) {
@@ -730,6 +738,12 @@ fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, va
             const ty = tys[next];
             const arg = live[next];
             next += 1;
+            // §9.4.1 gives a null argument one rendering, the space, which
+            // `%s` prints; any other conversion would print a value it has not.
+            if (arg == .none) {
+                if (conv != 's') try self.err(tok, .E0819, "`%{c}` consumes a null argument, which §9.4.1 gives only a space; write `%s`", .{conv});
+                continue;
+            }
             // What `cg_display.appendConv` renders per (conversion, type):
             //   %d/%b/%o/%h/%x — any type; a string takes §2.7's integer view.
             //   %c             — an integer's low byte (Table 9-22); a real rounds.
@@ -799,6 +813,13 @@ fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
     v.* = try self.call("$display$width", &.{ v.*, try self.mir.addIntConst(self.arena, lit.width) });
 }
 
+/// §9.4.1: "Any null argument produces a single space character in the
+/// display." A formatting task's null slot is the one-space string, which
+/// `cg_display.buildArgs` writes as a format with no conversion, at its place.
+fn nullArg(self: *Lower) Oom!TypedValue {
+    return .{ .v = try self.mir.addStrConst(self.arena, " "), .ty = .string };
+}
+
 // ---- §9.5 string and file I/O -----------------------------------------------
 
 /// §9.5.3 `$swrite(str, …)` / `$sformat(str, fmt, …)` — the §9.4.3 formatter
@@ -836,10 +857,8 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
             return;
         }
         try vals.append(self.arena, f.v);
-        for (args[2..]) |a| {
-            if (a == .none) continue;
-            try vals.append(self.arena, (try lower_sysfunc.lowerFormatArg(self, a)).v);
-        }
+        for (args[2..]) |a|
+            try vals.append(self.arena, (if (a == .none) try nullArg(self) else try lower_sysfunc.lowerFormatArg(self, a)).v);
         self.out.uses.insert(.str_tasks);
         return lower_stmt.writeLvalue(self, slot, try self.call("$sformat$rt", vals.items));
     }
@@ -851,14 +870,13 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // picks depends on the operand's own type (§9.4.3 `%d` on a real is a
     // §4.2.1.1 conversion, `%s` on a string is the text).
     for (args[1..]) |a| {
-        if (a == .none) continue;
-        const tv = try lower_sysfunc.lowerFormatArg(self, a);
+        const tv = if (a == .none) try nullArg(self) else try lower_sysfunc.lowerFormatArg(self, a);
         try vals.append(self.arena, tv.v);
         try live.append(self.arena, a);
         try tys.append(self.arena, tv.ty);
     }
     try checkFormatPairing(self, tok, args[1..]);
-    try prepareFormatArgs(self, live.items, tys.items, vals.items);
+    try prepareFormatArgs(self, tok, live.items, tys.items, vals.items);
     self.out.uses.insert(.str_tasks);
     const v = try self.call("$sformat", vals.items);
     try lower_stmt.writeLvalue(self, slot, v);
@@ -1174,15 +1192,15 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         var tys: std.ArrayList(Ty) = .empty;
         defer tys.deinit(self.arena);
         for (dd.args, dd.pre) |a, p| {
-            if (a == .none) continue;
-            const tv = p orelse try lower_sysfunc.lowerTaskArg(self, a, dd.name);
+            if (a == .none and !Mir.callee.takesFormat(.fromName(dd.name))) continue;
+            const tv = if (a == .none) try nullArg(self) else p orelse try lower_sysfunc.lowerTaskArg(self, a, dd.name);
             try vals.append(self.arena, tv.v);
             try live.append(self.arena, a);
             try tys.append(self.arena, tv.ty);
         }
         for (dd.genvars) |g| _ = self.consts.remove(g.name);
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
-        try prepareFormatArgs(self, live.items, tys.items, vals.items);
+        try prepareFormatArgs(self, dd.tok, live.items, tys.items, vals.items);
         if (dd.monitor) |k| try vals.insert(self.arena, 0, k);
         self.out.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }

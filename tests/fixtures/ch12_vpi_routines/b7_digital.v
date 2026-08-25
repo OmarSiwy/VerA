@@ -1,5 +1,5 @@
 // The design the b7 digital applications run: b7_buffers.c, b7_cb_fields.c,
-// b7_printf_log.c and the three b7_sim_control_*.c (VAMS-2023 12.4, 12.12,
+// b7_printf_log.c and the four b7_sim_control_*.c (VAMS-2023 12.4, 12.12,
 // 12.16, 12.25, 12.28, 12.31.1, 12.36). No `//!` directive, so the suite does
 // not collect it (tests/harness.zig `fixtureExt`); every number about it is
 // asserted from C.

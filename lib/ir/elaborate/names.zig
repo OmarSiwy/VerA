@@ -599,9 +599,9 @@ pub const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
 /// the scaling is source arithmetic. The top's $mfactor stays with the host
 /// (Table 9-29's 1.0; `unit.hier.get(.mfactor)` is `.none` there and nothing fires).
 ///
-/// ponytail: a named branch (`I(br)`) is not in `disc_of`, so it is left
-/// unscaled; the upgrade is a branch → net map here. Rules 3 and 4 (noise
-/// power) are `mfactorNoise`'s.
+/// A §3.12 named branch (`I(br)`, `I(br[k])`) answers through its first
+/// terminal's discipline (`accessNet`). Rules 3 and 4 (noise power) are
+/// `mfactorNoise`'s.
 pub fn mfactorScale(
     self: *Flatten,
     value: Ast.ExprId,
@@ -611,7 +611,7 @@ pub fn mfactorScale(
     tok: u32,
 ) Error!?Ast.ExprId {
     if (self.unit.hier.get(.mfactor) == .none) return null;
-    const name = netRefName(self, net) orelse return null;
+    const name = netRefName(self, accessNet(self, net)) orelse return null;
     const disc = self.disc_of.get(name) orelse return null;
     const flow = discipline.accessOf(self.ctx.file, disc, .flow) orelse return null;
     if (flow != access) return null; // a potential
@@ -624,6 +624,22 @@ pub fn mfactorScale(
     });
 }
 
+/// The net whose discipline answers for an access to `net` (flat names): `net`
+/// itself, or the first terminal of the §3.12 named branch `net` names (an
+/// element of a branch array included). A unit's branches are appended to
+/// `branches` before its analog blocks are cloned (`instance.zig`).
+///
+/// ponytail: a linear scan per flow access of a scaled instance; a flat name
+/// → branch map if a design with many branches makes it show.
+fn accessNet(self: *Flatten, net: Ast.ExprId) Ast.ExprId {
+    const x = &self.ctx.file.exprs;
+    var base = net;
+    if (base != .none and x.tag(base) == .index) base = x.lhs(base);
+    if (base == .none or x.tag(base) != .ident) return net;
+    for (self.branches.items) |b| if (b.name == x.strOf(base)) return b.hi;
+    return net;
+}
+
 /// Returns noise call `call` scaled for §6.3.6's rules 3 and 4: "Contributions
 /// to a branch flow quantity using the noise functions (white_noise,
 /// flicker_noise, noise_table) shall have the noise power multiplied by
@@ -633,9 +649,6 @@ pub fn mfactorScale(
 /// power m; a potential, which rule 1 leaves alone, gets power 1/m. §4.6.3's
 /// `ac_stim` is a stimulus, not noise, and keeps rule 1 alone. The top's
 /// $mfactor stays with the host, as in `mfactorScale`.
-///
-/// ponytail: a noise source on a named branch gets 1/m, since rule 1 misses
-/// that branch (`mfactorScale`'s note); the same branch → net map fixes both.
 pub fn mfactorNoise(self: *Flatten, call: Ast.ExprId) Error!Ast.ExprId {
     const m = self.unit.hier.get(.mfactor);
     if (m == .none) return call;

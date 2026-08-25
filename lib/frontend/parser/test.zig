@@ -378,8 +378,8 @@ test "§4.2.13 a sized-constant concatenation joins BITS" {
     const wide = try parseForTest(arena, "module m; integer a; analog a = {16'h0, 16'h0, 1'b1}; endmodule");
     try std.testing.expectEqual(diag.Code.E0217, wide.code(0));
     try std.testing.expectEqualStrings("at least 33 bits wide", wide.msg(0));
-    // A brace list with no sized operand stays a `.concat` (§4.5.11 filter
-    // coefficients spell their vector that way).
+    // A brace list with no sized operand stays a `.concat`. As a §4.5.11
+    // filter coefficient it is lowering's refusal (E0572), not the parser's.
     const coeffs = try parseForTest(arena, "module m; real a; analog a = laplace_nd(1.0, {1,0}, {1,1}); endmodule");
     try std.testing.expectEqual(@as(usize, 0), coeffs.count());
 }
@@ -957,6 +957,12 @@ test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
         .{ .body = "input x; real x; begin : b f = x; end endfunction", .code = .E0226 },
         // 4.7.2.2 "shall specify an expression"
         .{ .body = "input x; real x; begin return; end endfunction", .code = .E0227 },
+        // A.2.6: the item is A.2.1.2's input_declaration, which has no type.
+        .{ .body = "input real x; f = x; endfunction", .code = .E0291 },
+        // A.2.6 has no null item, A.6.4 no null analog_function_statement.
+        .{ .body = "input x; ; real x; f = x; endfunction", .code = .E0219 },
+        // A.6.3: only a named block declares, and 4.7.1 forbids the name.
+        .{ .body = "input x; real x; begin real y; y = x; f = y; end endfunction", .code = .E0290 },
     };
     for (cases) |c| {
         const src = try std.mem.concat(arena, u8, &.{ head, c.body, " analog I(p) <+ f(1.0); endmodule" });
@@ -964,11 +970,11 @@ test "4.7.1's bullet list and 4.7.2.2 are checked at the declaration" {
         try std.testing.expectEqual(c.code, res.code(0));
     }
 
-    // The legal spellings: the type on the direction, the type in a separate
-    // block item declaration, an unnamed block, and a `return` with an
-    // expression. None may report anything.
+    // The legal spellings: the type in a separate block item declaration,
+    // A.2.1.2's one typed direction (`output integer`), an unnamed block, and
+    // a `return` with an expression. None may report anything.
     for ([_][]const u8{
-        "input real x; f = x; endfunction",
+        "input x; output integer k; real x; f = x; endfunction",
         "input x; real x; f = x; endfunction",
         "input x; real x; begin f = x; end endfunction",
         "input x; real x; begin return x; end endfunction",
@@ -1285,4 +1291,56 @@ test "A.1.3 a null port keeps its position under a name no source spells" {
     try std.testing.expectEqualStrings("\tnull3", res.file.str(ports[2].name));
     try std.testing.expectEqualStrings("x", res.file.str(ports[2].connName()));
     try std.testing.expectEqualStrings("b", res.file.str(ports[3].connName()));
+}
+
+test "Annex A text the parser used to take is refused by its production; the neighbour parses" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const head = "module m(p, n); inout p, n; electrical p, n; ";
+    const add2 = "analog function real add2; input a, b; real a, b; add2 = a + b; endfunction ";
+    const cases = [_]struct { bad: []const u8, good: []const u8, code: diag.Code }{
+        // A.8.2 `analog_function_call ::= ... ( analog_expression { , analog_expression } )`.
+        .{ .bad = head ++ add2 ++ "analog I(p, n) <+ add2(, 1.0);", .good = head ++ add2 ++ "analog I(p, n) <+ add2(2.0, 1.0);", .code = .E0289 },
+        .{ .bad = head ++ add2 ++ "analog I(p, n) <+ add2(1.0, );", .good = head ++ add2 ++ "analog I(p, n) <+ add2(1.0, 2.0);", .code = .E0289 },
+        .{ .bad = head ++ "analog I(p, n) <+ Vp(, n);", .good = head ++ "analog I(p, n) <+ V(p, n);", .code = .E0289 },
+        .{ .bad = head ++ "analog Ip() <+ V(p, n);", .good = head ++ "analog I(p) <+ V(p, n);", .code = .E0289 },
+        // A.6.3: only a named block declares.
+        .{ .bad = head ++ "analog begin real x; x = V(p, n); I(p, n) <+ x; end ", .good = head ++ "analog begin : b real x; x = V(p, n); I(p, n) <+ x; end ", .code = .E0290 },
+        // A.2.1.3: names, or assignments, never both.
+        .{ .bad = "module m(p, n); inout p, n; electrical p = 1.5, n; ", .good = "module m(p, n); inout p, n; electrical p = 1.5; electrical n; ", .code = .E0292 },
+        .{ .bad = "module m(p, n); inout p, n; electrical p, n = 1.5; ", .good = "module m(p, n); inout p, n; electrical p; electrical n = 1.5; ", .code = .E0292 },
+        .{ .bad = head ++ "supply1 supply1 s1; ", .good = head ++ "supply1 s1; ", .code = .E0207 },
+        // A.4.1 names a module instance; A.5.4's unnamed UDP instance has two terminals.
+        .{ .bad = head ++ "child(p); ", .good = head ++ "child c1(p); ", .code = .E0293 },
+        // A.7.1 `pulsestyle_onevent list_of_path_outputs ;`.
+        .{ .bad = head ++ "specify pulsestyle_onevent (p); endspecify ", .good = head ++ "specify pulsestyle_onevent p; endspecify ", .code = .E0207 },
+        // A.8.5: an lvalue opens with a name or `{`.
+        .{ .bad = head ++ "analog begin 2.0 = V(p, n); end ", .good = head ++ "analog begin : b real x; x = V(p, n); end ", .code = .E0207 },
+        .{ .bad = head ++ "reg q; initial begin #1 20 = 1'bx; end ", .good = head ++ "reg q; initial begin #1 q = 1'bx; end ", .code = .E0207 },
+        // A.2.6: a function without `analog` has `input` formals only.
+        .{ .bad = head ++ "function real g; input a; output b; g = a; endfunction ", .good = head ++ "function real g; input a; g = a; endfunction ", .code = .E0207 },
+    };
+    for (cases) |c| {
+        for ([_][]const u8{ c.bad, c.good }, [_]bool{ true, false }) |body, bad| {
+            const res = try parseForTest(arena, try std.mem.concat(arena, u8, &.{ body, "endmodule" }));
+            var first: ?diag.Code = null;
+            for (0..res.count()) |i| if (res.bag.at(i).severity == .err) {
+                first = res.code(i);
+                break;
+            };
+            try std.testing.expectEqual(if (bad) @as(?diag.Code, c.code) else null, first);
+        }
+    }
+
+    // A.6.9: a call heading a discrete statement is a task enable, whose null
+    // argument is IEEE 1364-2005 §10.2.2's refusal (the digital engine's),
+    // not A.8.2's E0289. A function call in the same block is still E0289.
+    const task_src = "module m; integer x; task take(input a, input b); begin end endtask " ++
+        "function integer f(input a, input b); f = a; endfunction ";
+    const enable = try parseForTest(arena, task_src ++ "initial take(1'b1, ); endmodule");
+    for (0..enable.count()) |i| try std.testing.expect(enable.code(i) != .E0289);
+    const call = try parseForTest(arena, task_src ++ "initial x = f(1, ); endmodule");
+    try std.testing.expect(call.count() > 0);
+    try std.testing.expectEqual(diag.Code.E0289, call.code(0));
 }

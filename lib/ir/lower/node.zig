@@ -168,7 +168,17 @@ pub fn declareNets(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // §3.6.3.2 the net_decl_assignment, folded. `consts` is already loaded
         // (the parameter loop runs above the port loop), so a nodeset written
         // over a parameter folds here and not later.
-        if (n.init != .none) try recordNodeset(self, idx, n.init, n.main_tok, name);
+        //
+        // §3.6.3.2 gives initializers to "net discipline declarations" of
+        // continuous disciplines. On a mixed module's net with no discipline
+        // (`wire (strong1, pull0) w = a;`) the assignment is IEEE 1364-2005
+        // §6.1.3's instead, "a continuous assignment that is part of the net
+        // declaration": the digital engine's driver of w
+        // (`sim.digital.elab.declareNet`), not a nodeset. The interned node's
+        // discipline decides, not the entry's: `electrical p = 5.0;` on a
+        // header port is an entry with none over a port that has one.
+        const undisciplined = idx != ground and self.out.nodes.items(.disc)[idx].len == 0;
+        if (n.init != .none and !(self.out.mixed_signal and undisciplined)) try recordNodeset(self, idx, n.init, n.main_tok, name);
     }
 }
 

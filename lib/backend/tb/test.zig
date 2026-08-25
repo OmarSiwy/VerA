@@ -387,6 +387,13 @@ test "§4.6.4 a `//! noise` line states the row's contents as well as its place"
     try testing.expectEqualSlices([2]f64, &.{ .{ 1.0, 1e-18 }, .{ 1e3, 1e-21 } }, d.noise[2].points.?);
     try testing.expect(!d.noise[2].needsPoint());
 
+    // `psd` is the same pair syntax, densities at frequencies, and also needs
+    // no bias: it reads the table, not `noisePsd`.
+    const with_psd = try tb_directive.parse(arena, "//! noise table(p,n)#0 psd=4e3:1.7e-17,1.0:9e-18\n");
+    try testing.expectEqualSlices([2]f64, &.{ .{ 4e3, 1.7e-17 }, .{ 1.0, 9e-18 } }, with_psd.noise[0].psd.?);
+    try testing.expect(with_psd.noise[0].points == null);
+    try testing.expect(!with_psd.noise[0].needsPoint());
+
     // A space inside the parentheses still parses.
     const spaced = try tb_directive.parse(arena, "//! noise thermal(p, n)#0 name=x\n");
     try testing.expectEqualStrings("thermal(p, n)#0", spaced.noise[0].topo);
@@ -396,6 +403,7 @@ test "§4.6.4 a `//! noise` line states the row's contents as well as its place"
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! noise thermal(a,b)#0 name\n"));
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! noise table(a,b)#0 interp=spline\n"));
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! noise table(a,b)#0 points=1.0\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! noise table(a,b)#0 psd=\n"));
 }
 
 test "§9.17.3 `//! seed` and `//! limit` state the published cold start and clamp" {

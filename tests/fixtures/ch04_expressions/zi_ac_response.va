@@ -11,7 +11,7 @@
 // delay", so H = 1 must read 1 at every ω. A host reads the response through
 // `acDyn` (`contract.acDynSlots`): `//! acdyn (row,col) f= re= im=` at ω = 2πf.
 //
-// THE NUMBERS. zi_nd(V(in), {1}, {1, −0.5}, 1u): H(z) = 1/(1 − 0.5·z^(−1)),
+// THE NUMBERS. zi_nd(V(in), '{1}, '{1, −0.5}, 1u): H(z) = 1/(1 − 0.5·z^(−1)),
 // T = 1 µs, so ωT = 2π·f·1µs and z^(−1) = e^(−jωT). Slot (a, in) is H itself,
 // a KCL current into `a`:
 //
@@ -21,20 +21,27 @@
 //
 // The other three forms, at the same T:
 //
-//   c  §4.5.12.1 zi_zp(V(in), {-1, 0}, {0.5, 0}, 1u): (1 + z^(−1))/(1 − 0.5·z^(−1)).
+//   c  §4.5.12.1 zi_zp(V(in), '{-1, 0}, '{0.5, 0}, 1u): (1 + z^(−1))/(1 − 0.5·z^(−1)).
 //      H(1) = 2/0.5 = 4; at 250k, (1 − j)/(1 + 0.5j) = (0.5 − 1.5j)/1.25 = (0.4, −1.2).
-//   d  §4.5.12.2 zi_zd(V(in), {-1, 0}, {4, -2}, 1u): (1 + z^(−1))/(4 − 2·z^(−1)).
+//   d  §4.5.12.2 zi_zd(V(in), '{-1, 0}, '{4, -2}, 1u): (1 + z^(−1))/(4 − 2·z^(−1)).
 //      H(1) = 2/2 = 1; at 250k, (1 − j)/(4 + 2j) = (2 − 6j)/20 = (0.1, −0.3).
-//   e  §4.5.12.3 zi_np(V(in), {3, 1}, {0.5, 0}, 1u): (3 + z^(−1))/(1 − 0.5·z^(−1)).
+//   e  §4.5.12.3 zi_np(V(in), '{3, 1}, '{0.5, 0}, 1u): (3 + z^(−1))/(1 − 0.5·z^(−1)).
 //      H(1) = 4/0.5 = 8; at 250k, (3 − j)/(1 + 0.5j) = (2.5 − 2.5j)/1.25 = (2, −2).
 //
 // At f = 0 every form reads H(1) EXACTLY (tol=0): each is a ratio of dyadic
 // coefficient sums, and the operating-point analysis scales by the same one.
 //
-// Row `b` is the unity filter, zi_nd(V(in), {1}, {1}, 1u): (1, 0) at 250k.
+// Row `b` is the unity filter, zi_nd(V(in), '{1}, '{1}, 1u): (1, 0) at 250k.
 // A filter left at its DC gain in AC (the answer before this fixture) reads
 // (2, 0) at every f on row `a`. The operating point is the DC gain the model
 // can see: H(1)·V(in) = 2·0.5 = 1.
+//
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
 //
 //! lrm 4.5.12
 //! lrm 4.5.12.1
@@ -61,11 +68,11 @@ module zi_ac_response(in, a, b, c, d, e);
 
     analog begin
         `CHECK("zi_nd at the operating point is H(1)·V(in)",
-               zi_nd(V(in), {1.0}, {1.0, -0.5}, 1u), 1.0, 1e-12);
-        I(a) <+ zi_nd(V(in), {1.0}, {1.0, -0.5}, 1u);
-        I(b) <+ zi_nd(V(in), {1.0}, {1.0}, 1u);
-        I(c) <+ zi_zp(V(in), {-1.0, 0.0}, {0.5, 0.0}, 1u);
-        I(d) <+ zi_zd(V(in), {-1.0, 0.0}, {4.0, -2.0}, 1u);
-        I(e) <+ zi_np(V(in), {3.0, 1.0}, {0.5, 0.0}, 1u);
+               zi_nd(V(in), '{1.0}, '{1.0, -0.5}, 1u), 1.0, 1e-12);
+        I(a) <+ zi_nd(V(in), '{1.0}, '{1.0, -0.5}, 1u);
+        I(b) <+ zi_nd(V(in), '{1.0}, '{1.0}, 1u);
+        I(c) <+ zi_zp(V(in), '{-1.0, 0.0}, '{0.5, 0.0}, 1u);
+        I(d) <+ zi_zd(V(in), '{-1.0, 0.0}, '{4.0, -2.0}, 1u);
+        I(e) <+ zi_np(V(in), '{3.0, 1.0}, '{0.5, 0.0}, 1u);
     end
 endmodule

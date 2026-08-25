@@ -1600,13 +1600,14 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
     return sensitivityProbes(self, e, out, null);
 }
 
-/// `sensitivity`, where a VAMS §7.3.6.3 analog probe sets `probes` instead of
-/// being refused. A probe reads the analog solution, which no slot holds, so
-/// nothing here can wake on it; only `$monitor` has another trigger (it is
-/// re-checked every time step, `Run.monitor_probes`). Elsewhere (a
-/// continuous assignment, `@*`) a probe would be read once and never again,
-/// so it is refused by name rather than silently frozen.
-pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), probes: ?*bool) Error!void {
+/// `sensitivity`, where each VAMS §7.3.6.3 analog probe is appended to
+/// `probes` instead of being refused. A probe reads the analog solution,
+/// which no slot holds, so nothing here can wake on it; only `$monitor` has
+/// another trigger (its probes are compared at every time step and analog
+/// solution, `Run.monitor_probes`). Elsewhere (a continuous assignment,
+/// `@*`) a probe would be read once and never again, so it is refused by
+/// name rather than silently frozen.
+pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), probes: ?*std.ArrayList(Ast.ExprId)) Error!void {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal => {},
@@ -1629,7 +1630,7 @@ pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), pr
             for (ex.children(e, &buf)) |c| if (c != .none) try sensitivityProbes(self, c, out, probes);
         },
         .branch_access => if (probes) |p| {
-            p.* = true;
+            try p.append(self.arena, e);
         } else return self.exprFail(e, "VAMS §7.3.6.3: an analog probe is re-read here only when this process runs, never when the analog solution changes; read it in a procedural statement or `$monitor`"),
         else => unreachable, // else: checkExpr admitted only the forms above
     }

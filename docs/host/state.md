@@ -19,7 +19,8 @@ setup(S, &model)             after derive, and after every card,
                              temperature__ or setup_simparams write
 setupInstance(&model, &inst) per instance after every setup
 collapse(S, &model, &inst)   once per instance at build
-initState(&model, &inst)     once per instance, before the first solve
+initState(&model, &inst)     once per instance, before the first solve, and
+                             at the start of each later analysis
 seed(S, ...)                 once before Newton iteration 1
 eval / q / evalQ             every iterate
 limit(S, ..., cur, old, sim) every iterate, on the instance's private limited image
@@ -28,17 +29,25 @@ advanceIteration / checkConvergence
 updateState(S, ..., x, &state, sim)
                              at each accepted point; acceptQ fuses it with q
 stateCtl(op)                 query, commit or revert the accepted state
-display(S, &x, ...)          per accepted point, --display=emit artifacts only
+display(S, &x, ...)          per accepted point, --display=emit artifacts only;
+                             a $finish/$stop/$fatal in it exits the process
 noisePsd / acStim            at any state vector
 acDyn(F, ..., omega, &out)   per small-signal frequency
 nextBreakpoint / pendingBreakpoint / delays
                              transient breakpoint scheduling
 ```
 
-`src/sim/spice/` (a copy of ESPice's CPU paths: Newton, LTE-controlled
-transient and noise) drives a device through all of these in about 1600
-lines; `src/sim/spice/circuit.zig` is the device-facing part, one call into
-the contract per hook.
+A device whose model has LRM §9.4 display tasks also has `say_sites` and
+`say` (under `--display=record`, the default): call `say` once per accepted point, after the solve and before
+`updateState`, with a `contract.Say` buffer you lend it, and print what it
+recorded with `contract.formatSay`. That is how the model's `$strobe`,
+`$display` and the other display tasks reach your output; [tables](tables.md)
+has the details.
+
+`src/sim/spice/` (the role of ESPice's CPU paths, rewritten for one device:
+Newton, LTE-controlled transient and noise) is a small host to read beside
+this list; `src/sim/spice/circuit.zig` is the device-facing part, one call
+into the contract per hook.
 
 ## Charges
 
@@ -90,7 +99,9 @@ pub const StateClass = enum { none, path_latch, history };
 
 `contract.stateClass(D)` reads it. The protocol:
 
-1. `state = initState(&model, &inst)` once, before the first solve.
+1. `state = initState(&model, &inst)` once, before the first solve, and
+   again at the start of each later analysis: it resets everything
+   `updateState` advances (LRM §4.6.2).
 2. At every accepted point, the operating point included,
    `updateState(S, &model, &inst, x, &state, sim)`, then
    `stateCtl(&model, &inst, &state, .commit)`.

@@ -22,6 +22,13 @@
 // at 10ns (a04_11's derivation), so the tolerance is 1e-3. Resampling the
 // pole gives τ = 1ns from t = 0.5ns on, and y(10ns) near 9: out by 5.
 //
+// Corrected 2026-10-08 (construct only, the wants are unchanged): the
+// coefficient vectors were VAMS 2.x concatenations, `{...}`. A.8.2's
+// analog_filter_function_arg is a parameter, a part of one or a `'{...}`
+// assignment pattern (annex G: "Add apostrophe before opening { in list of
+// values"), and a concatenation there is E0572
+// (reject_4_5_11_concatenation_coefficients.va), so each is now `'{...}`.
+//
 //! lrm 4.5.14
 //! lrm 4.5.11.1
 //! checks 21
@@ -39,7 +46,7 @@ module laplace_zp_dynamic_pole_sampled(k, n);
     analog begin
         tns = $abstime * 1e9;
         `CHECKEQ("the pole is sampled at the analysis start",
-                 laplace_zp(tns, , {-1.0 / (V(k, n) * 1n), 0.0}),
+                 laplace_zp(tns, , '{-1.0 / (V(k, n) * 1n), 0.0}),
                  tns - 10.0 * (1.0 - exp(-tns / 10.0)), 1e-3);
         I(k, n) <+ 0.0;
     end

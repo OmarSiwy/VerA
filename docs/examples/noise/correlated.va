@@ -1,9 +1,14 @@
 // Perfectly correlated noise (LRM §4.6.4.6, Example 1): one generator,
 // assigned to a variable, contributed to two branches. Both rows carry the
 // same source id, #0, which tells a simulator they are one physical source.
+//
+// By hand: the generator's density is 1e-18 A^2/Hz. Row 0 contributes it
+// with coefficient 1, row 1 with coefficient 2, so the rows' densities are
+// 1^2 * 1e-18 = 1e-18 and 2^2 * 1e-18 = 4e-18 A^2/Hz. One generator with
+// coefficients of the same sign is a correlation coefficient of +1.
 //! bias V(a) = 1.0, V(b) = 0.5
-//! noise thermal(a,b)#0
-//! noise thermal(b,c)#0
+//! noise thermal(a,b)#0 name=shared white=1e-18 corr=1:1
+//! noise thermal(b,c)#0 name=shared white=4e-18 corr=0:1
 //! print none
 `include "disciplines.vams"
 

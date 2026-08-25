@@ -668,7 +668,18 @@ pub fn funcParamShadows(self: *const Lower, name: []const u8) bool {
 /// A.8.6 unary operators. §4.2.3 (+/-), §4.2.7 (!), §4.2.9 (~).
 fn lowerUnary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
-    const a = try lowerOperand(self, ex.lhs(e), plan, sized, 0);
+    var a = try lowerOperand(self, ex.lhs(e), plan, sized, 0);
+    switch (ex.unOp(e)) {
+        .plus, .minus => if (a.ty == .string) {
+            // §2.7: a literal is a number; §3.3 Table 3-3: a string-typed operand is not.
+            if (ex.tag(ex.lhs(e)) != .str_literal) {
+                try self.err(ex.mainTok(e), .E0321, "a string variable or parameter is not a number; §3.3 Table 3-3 gives it no arithmetic", .{});
+                return poison;
+            }
+            a = try self.strNum(a);
+        },
+        .logical_not, .bit_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => {},
+    }
     switch (ex.unOp(e)) {
         .plus => return a,
         .minus => {
@@ -823,11 +834,29 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: boo
         return .{ .v = if (op == .case_eq) same else try self.emit(.lognot, &.{same}), .ty = .integer };
     var a = try lowerOperand(self, ex.lhs(e), plan, sized, 0);
     var b = try lowerOperand(self, ex.rhs(e), plan, sized, 1);
-    // §2.7 makes a string operand an unsigned integer, so a MIXED pair is
-    // arithmetic and not a string operation. Two strings stay strings: Table
-    // 3-3's relational row is a string comparison and `{a, " ", b}` is a
-    // concatenation, and both would be destroyed by converting either side.
+    // §2.7 makes a string LITERAL an unsigned integer, so a MIXED pair with a
+    // literal is arithmetic and not a string operation. Two strings stay
+    // strings: Table 3-3's relational row is a string comparison and
+    // `{a, " ", b}` is a concatenation, and both would be destroyed by
+    // converting either side.
     if ((a.ty == .string) != (b.ty == .string)) {
+        // A string-typed operand (variable, parameter, function result) is no
+        // number: §3.3 Table 3-3 gives it only ==, !=, the relational operators,
+        // concatenation and replication, each against another string or a
+        // literal, and "A string cannot be assigned to an integral type". The
+        // test is the expression's shape, as `numOperand`'s: a variable
+        // assigned a literal carries the literal's constant and is still a string.
+        const str_side = if (a.ty == .string) ex.lhs(e) else ex.rhs(e);
+        if (ex.tag(str_side) != .str_literal) {
+            const other = @tagName(if (a.ty == .string) b.ty else a.ty);
+            switch (op) {
+                .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => try self.err(ex.mainTok(e), .E0322, "got a string and {s}", .{other}),
+                .add, .sub, .mul, .div, .mod, .pow => try self.err(ex.mainTok(e), .E0321, "a string variable or parameter is not a number; §3.3 Table 3-3 gives it no arithmetic", .{}),
+                .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => try self.err(ex.mainTok(e), .E0321, "§3.3 Table 3-3 compares a string only with a string or a string literal; the other operand is {s}", .{other}),
+                .logical_and, .logical_or => unreachable, // `lowerShortCircuit` returned for both at the top
+            }
+            return poison;
+        }
         a = try self.strNum(a);
         b = try self.strNum(b);
     }

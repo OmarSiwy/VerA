@@ -32,10 +32,6 @@ with `$`, and what follows them) is a `.out` file that CI re-runs with
 until the page is updated. So the output you read is the output the current
 VerA prints.
 
-On the published site, an example can also be edited and re-run in the
-browser. [Running examples in the browser](using/browser.md) says what that
-runs and what it costs.
-
 ## The standard
 
 VerA implements the Verilog-AMS Language Reference Manual 2023 (the "LRM"),

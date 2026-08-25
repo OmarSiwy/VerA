@@ -47,10 +47,11 @@ fn gen(w: *Io.Writer, n_contrib: u32, n_vals: u32, n_inst: u32) Io.Writer.Error!
         \\  inout a, b;
         \\  electrical a, b;
         \\  parameter real gain = 1.0;
-        \\  analog begin
         \\
     );
+    // A.6.3: only a named block declares, so the chain lives at module scope.
     for (0..n_vals) |i| try w.print("    real v{d};\n", .{i});
+    try w.writeAll("  analog begin\n");
     try w.writeAll("    v0 = V(a, b) * gain;\n");
     for (1..n_vals) |i| try w.print("    v{d} = v{d} * 1.5 + 0.25;\n", .{ i, i - 1 });
     for (0..n_contrib) |i| try w.print(

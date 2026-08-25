@@ -1,13 +1,20 @@
 // Exercise: partially correlated noise (LRM §4.6.4.6, Example 2). n1 and n2
 // are each used once and n12 on both branches, so the table has four rows:
-// (a,b) from n1 and n12, (b,c) from n2 and n12. The shared n12 rows have the
-// same source id; n1 and n2 have ids of their own. VerA numbers generators
-// in the order they are called: n1 is #0, n2 #1, n12 #2.
+// (a,b) from n1 and n12, (b,c) from n2 and n12. The two n12 rows share a
+// source id; n1 and n2 have ids of their own. VerA numbers generators in
+// the order the contributions reach them (lib/backend/codegen/plan/noise.zig):
+// n1 is #0, n12 #1, n2 #2.
+//
+// By hand, with corr = 0.25 and the coefficient 1e-9 on every generator:
+//   n1, n2 rows:  (1e-9)^2 * (1 - 0.25) = 7.5e-19 A^2/Hz
+//   n12 rows:     (1e-9)^2 * 0.25       = 2.5e-19 A^2/Hz
+// The n12 rows are one generator with coefficients of the same sign, so
+// their correlation is +1; n1 and n2 are independent, so theirs is 0.
 //! bias V(a) = 1.0, V(b) = 0.5
-//! noise thermal(a,b)#0
-//! noise thermal(a,b)#2
-//! noise thermal(b,c)#1
-//! noise thermal(b,c)#2
+//! noise thermal(a,b)#0 white=7.5e-19 corr=2:0
+//! noise thermal(a,b)#1 white=2.5e-19 corr=3:1
+//! noise thermal(b,c)#2 white=7.5e-19
+//! noise thermal(b,c)#1 white=2.5e-19
 //! print none
 `include "disciplines.vams"
 

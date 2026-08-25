@@ -1,3 +1,14 @@
+$ vera --run --param r=4000 residual.va
+=== residual ===
+--- point 0 ---
+  x[p] = 1.000000e0
+  x[n] = 0.000000e0
+  res[p] = 2.500000e-4
+    d res[p]/d x[p] = 2.500000e-4
+    d res[p]/d x[n] = -2.500000e-4
+  res[n] = -2.500000e-4
+    d res[n]/d x[p] = -2.500000e-4
+    d res[n]/d x[n] = 2.500000e-4
 $ vera --run --param r=4k residual.va
 error: --param r=4k: `4k` is not a number
 (exit 2)

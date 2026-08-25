@@ -10,9 +10,12 @@
 // b_9_8_3_named_fork_declarations.v declares reg v in `fork : par` (an xfail:
 // VerA refuses that legal form with the same parse error, so this refusal is
 // not evidence that VerA distinguishes the two).
+// The code moved 2026-10-08 with the refusal unchanged: E0209 ("expected an
+// expression", A.8.3) became E0290, A.6.3's own "a declaration in an unnamed
+// block", which the analog parse now reports too.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 9.8.2 9.8.3
-//! reject E0209
+//! reject E0290
 //! reject found `reg`
 //! neighbour b_9_8_3_named_fork_declarations.v
 module b_9_8_2_unnamed_fork_declaration_rejected;
