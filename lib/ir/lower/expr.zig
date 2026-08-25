@@ -2,7 +2,7 @@
 //!
 //! In: expression AST. Out: typed MIR values (`TypedValue`).
 //!
-//! LRM clauses this file's code cites: §2.9, §3.3, §4.2.3, §4.2.4, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §6.7, §6.7.1, §6.8.
+//! LRM clauses this file's code cites: §2.9, §3.3, §4.2.3, §4.2.4, §4.2.7, §4.3, §4.4, §4.5.15, §4.7, §5.4.3, §5.6.1.2, §5.6.8.2, §6.6.2, §6.6.3, §6.7, §6.7.1, §6.8, A.8.9.
 //! §9.14 / IEEE §§5.4–5.5 size the self-determined `$clog2` operand.
 
 const std = @import("std");
@@ -145,6 +145,7 @@ fn lowerExprInner(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: 
             // elaboration gave the child's entity, so once the join resolves
             // there is nothing hierarchical left to do; E0901 is what is left
             // when it does not.
+            if (try refuseUnnamedGen(self, e)) return poison;
             const name = try flatName(self, e);
             // §6.7.1's fifth bullet, and the only one of the list that is a
             // prohibition: "It shall be an error to access analog variables
@@ -228,8 +229,10 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     };
     const name = self.file.str(chain.name);
     const info = self.arrays.get(name) orelse {
-        if (chain.subs.len == 1) if (self.vars.get(name)) |slot| if (self.reg_ranges.get(name)) |rr|
-            return lowerRegSelect(self, name, slot, rr, chain.subs[0]);
+        if (chain.subs.len == 1) if (self.reg_ranges.get(name)) |rr| {
+            if (self.vars.get(name)) |slot| return lowerRegSelect(self, e, name, .{ .slot = slot }, rr, chain.subs[0]);
+            if (self.out.discrete_inputs.contains(name)) return lowerRegSelect(self, e, name, .input, rr, chain.subs[0]);
+        };
         try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return poison;
     };
@@ -292,7 +295,14 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// So `r[30:0]` of a `reg [39:0] r` is legal and `r` itself is E0222.
 /// The right-hand bound of a packed range is its LSB in either direction
 /// (IEEE 1364-2005 §4.2.1), so bit k sits |k - right| places above bit 0.
-fn lowerRegSelect(self: *Lower, name: []const u8, slot: VarSlot, rr: Lower.RegRange, sub: Ast.ExprId) Oom!TypedValue {
+///
+/// The `reg` is a variable (`slot`) or a mixed module's discrete input
+/// (`input`, the `Model` field the host writes). Bits 0 to 31 are its §3.2
+/// integer's. Above them: a discrete input's further 32-bit words
+/// (`Lowered.discrete_words`), or the literal a variable holds for the whole
+/// analysis (`Lower.reg_consts`). A variable the analog context assigns is
+/// computed in 32 bits and has no bits above 31 to read (E0329).
+fn lowerRegSelect(self: *Lower, e: Ast.ExprId, name: []const u8, src: union(enum) { slot: VarSlot, input }, rr: Lower.RegRange, sub: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const ranged = ex.tag(sub) == .range;
     const hi_e, const lo_e = if (ranged) .{ ex.lhs(sub), ex.rhs(sub) } else .{ sub, sub };
@@ -314,7 +324,7 @@ fn lowerRegSelect(self: *Lower, name: []const u8, slot: VarSlot, rr: Lower.RegRa
         try self.err(ex.mainTok(sub), .E0329, "a select of `{s}` read from the analog context needs constant bounds", .{name});
         return poison;
     };
-    const w = slot.reg_width.?;
+    const w = rr.width;
     const pos = struct {
         fn f(r: Lower.RegRange, width: u32, k: i64) ?u32 {
             const d = if (r.asc) r.right - k else k - r.right;
@@ -324,19 +334,67 @@ fn lowerRegSelect(self: *Lower, name: []const u8, slot: VarSlot, rr: Lower.RegRa
     };
     const pa = pos.f(rr, w, a) orelse return outside(self, sub, name, a, w);
     const pb = pos.f(rr, w, b) orelse return outside(self, sub, name, b, w);
-    const raw = try self.builder.readVariable(slot.place, self.cur);
     const lo = @min(pa, pb);
     const width = @max(pa, pb) - lo + 1;
-    // ponytail: the analog context holds a `reg` as its 32-bit §3.2 integer,
-    // so bits 32 and up never reach it. A grouping wider than 31 bits is
-    // still Table 7-1's E0222 first; a legal one above bit 31 is refused by
-    // name until the carrier is widened.
-    if (width <= 31 and @max(pa, pb) >= 32) {
-        try self.err(ex.mainTok(sub), .E0329, "`{s}[{d}:{d}]` reaches above bit 31 of the `reg`, and the analog context holds a `reg` as a 32-bit integer", .{ name, a, b });
-        return poison;
+    // Bits 0 to 31, or a grouping Table 7-1 refuses (E0222, `analogRead`).
+    if (@max(pa, pb) < 32 or width > 31) {
+        const raw = switch (src) {
+            .slot => |slot| try self.builder.readVariable(slot.place, self.cur),
+            .input => (try lookupName(self, e, name)).v,
+        };
+        const shifted = if (lo == 0 or width > 31) raw else try self.emit(.shr, &.{ raw, try self.mir.addIntConst(self.arena, lo) });
+        return .{ .v = try lower_var.analogRead(self, shifted, width), .ty = .integer };
     }
-    const shifted = if (lo == 0) raw else try self.emit(.shr, &.{ raw, try self.mir.addIntConst(self.arena, lo) });
-    return .{ .v = try lower_var.analogRead(self, shifted, width), .ty = .integer };
+    switch (src) {
+        // The literal's bits, zero- or sign-extended to the `reg`'s width as
+        // an assignment extends it (IEEE 1364-2005 §5.5.1).
+        .slot => {
+            const lit = self.reg_consts.get(name) orelse {
+                try self.err(ex.mainTok(sub), .E0329, "`{s}[{d}:{d}]` reaches above bit 31 of a `reg` whose value the analog context computes, as its 32-bit integer; only a literal it is given or a digital process's copy carries the higher bits", .{ name, a, b });
+                return poison;
+            };
+            var v: i64 = 0;
+            for (0..width) |i| if (literalBit(self, lit, lo + @as(u32, @intCast(i)))) {
+                v |= @as(i64, 1) << @intCast(i);
+            };
+            return .{ .v = try self.mir.addIntConst(self.arena, v), .ty = .integer };
+        },
+        // Words k0 and k1 of the host's copy: `>>` and `<<` act on 32 bits
+        // (§3.2.1), which is each word's width, and `analogRead` masks.
+        .input => {
+            if (self.in_d2a_body and self.out.discrete_snaps.contains(name)) {
+                try self.err(ex.mainTok(sub), .E0329, "`{s}[{d}:{d}]` reaches above bit 31 under an explicit D2A event, whose region-1b copy holds bits 0 to 31", .{ name, a, b });
+                return poison;
+            }
+            const k0 = lo / 32;
+            const k1 = (lo + width - 1) / 32;
+            const s = lo % 32;
+            const w0 = try regWord(self, e, name, k0);
+            var v = if (s == 0) w0 else try self.emit(.shr, &.{ w0, try self.mir.addIntConst(self.arena, s) });
+            if (k1 != k0) v = try self.emit(.bitor, &.{ v, try self.emit(.shl, &.{ try regWord(self, e, name, k1), try self.mir.addIntConst(self.arena, 32 - s) }) });
+            return .{ .v = try lower_var.analogRead(self, v, width), .ty = .integer };
+        },
+    }
+}
+
+/// Word `k` of a discrete `reg` input: the `Model` field the host writes it in.
+fn regWord(self: *Lower, e: Ast.ExprId, name: []const u8, k: u32) Oom!Mir.Value {
+    if (k == 0) return (try lookupName(self, e, name)).v;
+    const idx = self.param_index.get(try self.arena.print("{s}__w{d}", .{ name, k })).?;
+    return self.param_values.items[idx];
+}
+
+/// Bit `k` of the literal initializer `lit` (`.none`: zero) of a `reg`.
+fn literalBit(self: *Lower, lit: Ast.ExprId, k: u32) bool {
+    if (lit == .none) return false;
+    const ex = &self.file.exprs;
+    if (ex.tag(lit) == .int_literal) {
+        const x = ex.intValue(lit);
+        return (x >> @as(u6, @intCast(@min(k, 63)))) & 1 != 0;
+    }
+    const l = ex.logicValue(lit);
+    if (k < l.width) return l.bit(k) == .one;
+    return l.signed and l.bit(l.width - 1) == .one;
 }
 
 fn outside(self: *Lower, sub: Ast.ExprId, name: []const u8, k: i64, w: u32) Oom!TypedValue {
@@ -494,10 +552,67 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
 /// Allocates the result in `self.arena` on every call.
 pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
     const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, e);
+    if (self.scope_path.len != 0) if (try inScope(self, path)) |hit| return hit;
     // The one place the join is NOT the answer: a child port bound to a parent
     // net is the same signal as that net, so `u.a` denotes `p` and there is no
     // `u.a` to find. `Design.names` holds those aliases and nothing else.
     return self.out.hier_names.get(path) orelse path;
+}
+
+/// §6.6.2: a generate block's declarations can be referenced hierarchically
+/// "from within the hierarchy instantiated by the generate block itself",
+/// and §6.8 (IEEE 1364-2005 12.7) searches a name "first at the current level
+/// and then in higher level modules". Inside a generate block (`scope_path`,
+/// its §6.6.3 name included for an unnamed one) `u1.gain` is first the
+/// block's own `u1`, which the flatten named `genblk1.u1`: the innermost
+/// enclosing scope whose prefix makes `path` name something, or null.
+fn inScope(self: *Lower, path: []const u8) Oom!?[]const u8 {
+    const unit = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    var scope = self.scope_path;
+    while (scope.len != 0) {
+        const cand = try self.arena.print("{s}{s}{c}{s}", .{ unit, scope, Elaborate.sep, path });
+        const flat = self.out.hier_names.get(cand) orelse cand;
+        if (self.param_index.contains(flat) or self.vars.contains(flat) or self.consts.contains(flat) or
+            self.node_voltages.contains(flat) or self.branches.contains(flat) or self.port_branches.contains(flat))
+            return flat;
+        scope = scope[0 .. std.mem.lastIndexOfScalar(u8, scope, Elaborate.sep) orelse 0];
+    }
+    return null;
+}
+
+/// §6.6.2 the unnamed generate block whose flat prefix the hierarchical name
+/// `e` spells its way into from outside, or null. "Outside" is the unit that
+/// wrote `e`: a unit instantiated inside the block is "within the hierarchy
+/// instantiated by the generate block itself" and may name what it holds.
+pub fn unnamedGenScope(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
+    const scopes = self.unnamed_gen orelse blk: {
+        var out: std.ArrayList([]const u8) = .empty;
+        // A tree of one has no unit table; its module is the source's own.
+        if (self.out.unit_paths.len == 0) {
+            if (self.out.module) |m| try Elaborate.unnamedGenScopes(self.file, self.arena, m, "", &out);
+        } else for (self.out.unit_paths) |u| try Elaborate.unnamedGenScopes(self.file, self.arena, u.decl, u.path, &out);
+        self.unnamed_gen = out.items;
+        break :blk out.items;
+    };
+    if (scopes.len == 0) return null;
+    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, e);
+    const own = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    for (scopes) |s| if (std.mem.startsWith(u8, path, s) and !std.mem.startsWith(u8, own, s)) return s;
+    return null;
+}
+
+/// Reports E0998 when `e` names something inside an unnamed generate block
+/// from outside it (§6.6.2, §6.6.1; §6.6.3 "has no name that can be used in
+/// a hierarchical name"), and returns whether it did.
+pub fn refuseUnnamedGen(self: *Lower, e: Ast.ExprId) Oom!bool {
+    const scope = try unnamedGenScope(self, e) orelse return false;
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0998);
+    b.msg("`{s}` reaches into `{s}`, an unnamed generate block", .{
+        try Elaborate.flatReference(self.file, self.arena, self.out.module, e), scope[0 .. scope.len - 1],
+    });
+    b.help("name the block (`begin : g`) and reach it as `g.<item>`", .{});
+    try b.emit();
+    return true;
 }
 
 /// §2.8 name resolution: variables (§3.2) shadow parameters (§3.4), which
@@ -1158,6 +1273,7 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.err(self.file.exprs.mainTok(e), .E0530, "a probe (§4.4)", .{});
         return poison;
     }
+    if (try instancePortFlow(self, e)) |tv| return tv;
     // `nodeOf` stands ground in for a terminal it refused (E0351/E0352), and
     // ground is no port: that is the same mistake, not a second E0508.
     const had = self.had_error;
@@ -1167,6 +1283,101 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     self.had_error = had or refused;
     if (refused) return poison;
     return portFlowRead(self, e, p);
+}
+
+/// §5.4.3 "The port access function accesses the flow into a port of a
+/// module", and A.8.9 lets the port be hierarchical
+/// (`analog_port_reference ::= hierarchical_port_identifier`; §6.7.1 "flow
+/// access for ... port branches can be done hierarchically"): `I(<u.p>)` is
+/// the flow into instance `u` through its own port `p`, not the flow through
+/// the net `p` is joined to. By KCL it is what `u`'s hierarchy conducts away
+/// from that net: the sum of the flow contributions its units made to
+/// branches touching the net, an instance's own share of a row several
+/// instances share (`unit_accum`, §5.6.8.2), the reactive half through one
+/// `ddt`. Null when `e`'s port is not hierarchical (the module's own port).
+///
+/// Read as a sum of accumulators, so every block of `u`'s hierarchy must be
+/// lowered before the read, and every branch of it at the net must be a flow
+/// source: a potential source's or an indirect branch's current is a solver
+/// unknown whose static retention codegen decides. Either case is E0997.
+fn instancePortFlow(self: *Lower, e: Ast.ExprId) Oom!?TypedValue {
+    const ex = &self.file.exprs;
+    const lhs = ex.lhs(e);
+    if (ex.tag(lhs) != .hier_ident) return null;
+    const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, lhs);
+    const cut = std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse return null;
+    const inst = path[0 .. cut + 1];
+    const units = self.out.unit_paths;
+    const lo: u32 = for (units, 0..) |u, i| {
+        if (std.mem.eql(u8, u.path, inst)) break @intCast(i);
+    } else return null;
+    // Units are numbered depth first, so `inst`'s hierarchy is one run.
+    var hi = lo + 1;
+    while (hi < units.len and std.mem.startsWith(u8, units[hi].path, inst)) hi += 1;
+    const port_name = path[cut + 1 ..];
+    const decl = units[lo].decl;
+    for (decl.ports) |pt| {
+        if (std.mem.eql(u8, self.file.str(pt.name), port_name)) break;
+    } else {
+        try self.err(ex.mainTok(e), .E0508, "`{s}` is not a port of `{s}`", .{ path, self.file.str(decl.name) });
+        return poison;
+    }
+    const name = self.file.str(ex.strOf(e));
+    const access = self.access_kind.get(name) orelse return null; // `portFlowRead` names it (E0501)
+    if (access == .potential) return null; // and this (E0507)
+    const had = self.had_error;
+    self.had_error = false;
+    const p = try lower_node.nodeOf(self, lhs);
+    const refused = self.had_error;
+    self.had_error = had or refused;
+    if (refused) return poison;
+    try lower_contrib.checkAccessMatch(self, e, name, access, p);
+    // Every block of the hierarchy is behind this one.
+    for (self.cur_block..self.out.module.?.analog.len) |j| {
+        const unit = self.out.module.?.analog[j].unit;
+        if (unit < lo or unit >= hi) continue;
+        var b = self.errWith(ex.mainTok(e), .E0997);
+        b.msg("`{s}(<{s}>)` is read before `{s}`'s own analog blocks are lowered", .{ name, path, inst[0 .. inst.len - 1] });
+        b.note("VerA sums the instance's contributions at the port; read it from a module instantiated above it, after it", .{});
+        try b.emit();
+        return poison;
+    }
+    var resist: Mir.Value = .f_zero;
+    var react: Mir.Value = .f_zero;
+    for (self.out.contributions.items, self.accum.items, 0..) |c, acc, i| {
+        if (c.hi != p and c.lo != p) continue;
+        if (c.kind != .direct or c.access != .flow) {
+            if (c.unit < lo or c.unit >= hi) continue;
+            var b = self.errWith(ex.mainTok(e), .E0997);
+            b.msg("`{s}` drives `{s}` through a {s}", .{ inst[0 .. inst.len - 1], path, if (c.kind != .direct) "§5.6.7 indirect branch" else "potential source" });
+            b.note("that branch's current is a solver unknown; VerA sums only flow contributions at a hierarchical port", .{});
+            try b.emit();
+            return poison;
+        }
+        const neg = c.lo == p;
+        if (c.shared) {
+            for (lo..hi) |k| if (self.unit_accum.get(.{ .row = @intCast(i), .unit = @intCast(k) })) |pa| {
+                resist = try addSigned(self, resist, try self.builder.readVariable(pa.resist, self.cur), neg);
+                react = try addSigned(self, react, try self.builder.readVariable(pa.react, self.cur), neg);
+            };
+        } else if (c.unit >= lo and c.unit < hi) {
+            resist = try addSigned(self, resist, try self.builder.readVariable(acc.resist, self.cur), neg);
+            react = try addSigned(self, react, try self.builder.readVariable(acc.react, self.cur), neg);
+        }
+    }
+    if (react != .f_zero) {
+        // The charges' own sites already carry their truncation check.
+        const dq = try lower_analog_op.opDdt(self, ex.mainTok(e), react, flowAbstol(self, p), false);
+        resist = if (resist == .f_zero) dq else try self.emit(.fadd, &.{ resist, dq });
+    }
+    return .{ .v = resist, .ty = .real };
+}
+
+/// `acc ± v`, folding a zero on either side.
+fn addSigned(self: *Lower, acc: Mir.Value, v: Mir.Value, neg: bool) Oom!Mir.Value {
+    if (v == .f_zero) return acc;
+    if (acc == .f_zero) return if (neg) try self.emit(.fneg, &.{v}) else v;
+    return self.emit(if (neg) .fsub else .fadd, &.{ acc, v });
 }
 
 /// The read half of §5.4.3, shared by `I(<p>)` and by a §3.12.1 port branch

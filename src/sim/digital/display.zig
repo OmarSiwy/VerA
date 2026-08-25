@@ -724,8 +724,8 @@ fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
 }
 
 /// Prints the standing monitor's argument list, if there is one and it is
-/// on. The caller decides whether to print (a watched slot changed in
-/// `waiters.store`, or `$monitoron` ran), never by comparing text.
+/// on. The caller decides whether to print (`monitorDue` at the time step's
+/// `.monitor` event, or `$monitoron` ran), never by comparing text.
 pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     const m = self.monitor orelse return;
     if (!self.monitor_on) return;
@@ -734,6 +734,45 @@ pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     self.scope = m.scope;
     self.pc = m.pc;
     try display(self, m.args, a, m.show);
+    // What a probing argument read at this report, the base the next
+    // time step compares against (`monitorDue`).
+    if (self.monitor_probes) for (m.args, self.monitor_last) |arg, *last| {
+        if (try probes(self, arg)) last.* = @bitCast(try evaluate.evalReal(self, a, arg));
+    };
+    self.monitor_slot_hit = false;
+}
+
+/// Whether the `.monitor` event of this time step reports (§17.1.3: when "any
+/// one of the variables or expressions in the argument list changes"). A
+/// watched slot's change says so already (`monitor_slot_hit`); a VAMS
+/// §7.3.6.3 probe has no slot, so each argument that probes is compared, by
+/// its bits, with its value at the last report. The exceptions `$time`,
+/// `$stime` and `$realtime` read no slot and are compared only inside an
+/// argument that also probes.
+// ponytail: a probing argument is compared as its real value, so a 4-state
+// argument's x and z both read as their real conversion; compare the
+// literal planes if a monitor ever mixes a probe with x/z data.
+pub fn monitorDue(self: *Run, a: std.mem.Allocator) Error!bool {
+    const m = self.monitor orelse return false;
+    if (!self.monitor_probes or self.monitor_slot_hit) return true;
+    self.scope = m.scope;
+    self.pc = m.pc;
+    for (m.args, self.monitor_last) |arg, last| {
+        if (!try probes(self, arg)) continue;
+        const now: u64 = @bitCast(try evaluate.evalReal(self, a, arg));
+        if (now != last) return true;
+    }
+    return false;
+}
+
+/// Whether monitor argument `arg` reads a VAMS §7.3.6.3 analog probe.
+fn probes(self: *Run, arg: Ast.ExprId) Error!bool {
+    if (arg == .none or self.file.exprs.tag(arg) == .str_literal) return false;
+    var seen = false;
+    var scratch: std.ArrayList(u32) = .empty;
+    defer scratch.deinit(self.arena);
+    try compile.sensitivityProbes(self, arg, &scratch, &seen);
+    return seen;
 }
 
 // ---- tests ------------------------------------------------------------------

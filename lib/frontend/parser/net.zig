@@ -369,6 +369,10 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         if (port != null and b.ansi and disc == .none) try self.report(tok, .E0218, "`{s}`", .{self.file.str(name)});
         if (port != null and signed) port.?.is_signed = true;
         if (port != null and port.?.discipline == .none) {
+            // §3.6.3.1: "the description attribute may also be specified on
+            // the port declaration line ... the last attribute value shall be
+            // used". This line appends no row, so its prefix joins the port's.
+            try self.copyAttributes(self.item_tok, port.?.main_tok);
             port.?.discipline = disc;
             // §6.5.2.2: this is the port type declaration. Recorded beside the
             // direction declaration's range, not over it (`Ast.Port.type_range`).

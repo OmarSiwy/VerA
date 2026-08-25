@@ -345,6 +345,9 @@ fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
 pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
     const tok = self.pos;
     const tag = self.peek();
+    const outer_item = self.item_tok;
+    self.item_tok = tok;
+    defer self.item_tok = outer_item;
     // The lengths, not a copy of `b`: an item only appends to these lists.
     var before: [attributed_lists.len]usize = undefined;
     inline for (attributed_lists, 0..) |field, i| before[i] = @field(b.*, field).items.len;

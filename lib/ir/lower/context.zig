@@ -14,6 +14,7 @@ const lower_event = @import("event.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const lower_systask = @import("systask.zig");
 const lower_contrib = @import("contrib.zig");
+const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
@@ -356,6 +357,23 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
         try self.out.discrete_inputs.put(self.arena, name, t.tok);
         try lower_param.addParam(self, name, ty, zero, folded, &.{}, false, t.tok);
+        // §7.3.1 a `reg` input: its packed range, for a select's bits, and
+        // past 32 bits one more `Model` field per 32-bit word, so a select
+        // anywhere in it reads exact bits (`lower_expr.lowerRegSelect`).
+        if (!real) for (module.vars) |v| {
+            if (v.name != t.name or v.storage != .reg or v.dims.len != 0) continue;
+            const range = v.packed_range orelse break;
+            const width = lower_shape.packedShapeWidth(self, range) orelse break;
+            const m = lower_constfold.constEval(self, range.msb) orelse break;
+            const l = lower_constfold.constEval(self, range.lsb) orelse break;
+            const right = l.asIntExact() orelse 0;
+            try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = width });
+            if (width <= 32) break;
+            const n_words: u32 = (width + 31) / 32;
+            try self.out.discrete_words.put(self.arena, name, n_words);
+            for (1..n_words) |k| try lower_param.addParam(self, try self.arena.print("{s}__w{d}", .{ name, k }), .integer, zero, folded, &.{}, false, t.tok);
+            break;
+        };
         if (!real and reads.fourStateOnly(name)) {
             // §7.3.2 the unknown plane, for `===`/`!==`/`case` (`lower_expr.fourState`).
             // A name also read any other way keeps the x/z error at every

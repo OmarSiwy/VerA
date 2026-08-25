@@ -3,7 +3,7 @@
 //! the §4.5 control-argument frames (`ctrlEval` for the residual, `ctrlStep`
 //! for `updateState`) and the `systf_calls` table. A control argument's
 //! host-side `f64` text is `host_expr.zig`.
-//! LRM clauses cited: §2.8.3, §4.5, §4.6, §5.10.3, §6.3.4, §9, §10.3, §12.32.
+//! LRM clauses cited: §2.8.3, §4.5, §4.6, §5.10.3, §6.3.4, §9, §10.3, §12.22.2, §12.32.
 
 const std = @import("std");
 const float_lanes = @import("float/lanes.zig");
@@ -252,6 +252,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         // §5.10 a held value is what the last accepted step left.
         .@"$rng$auto",
         .systf,
+        .@"$systf$out",
         .@"$held_real",
         .@"$held_int",
         .@"$held_str",
@@ -623,12 +624,12 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             float_lanes.instLanes(self, c == .@"$held_int");
             return self.b("{s}(S, inst, \"{s}\")", .{ if (c == .@"$held_int") "zInstI" else "zInst", f });
         },
-        // §5.10/§3.3 a held string: a slice field, read from the one
-        // instance `inst` is, so an eval-side read is not `batch_ok`.
+        // §5.10/§3.3 a held string: its `ZStrHeld` field's text, read from
+        // the one instance `inst` is, so an eval-side read is not `batch_ok`.
         .@"$held_str" => {
             self.uses.inst = true;
             float_lanes.instPin(self);
-            return self.b("inst.{s}", .{self.names.held_names[heldIdx(self, args)]});
+            return self.b("inst.{s}.get()", .{self.names.held_names[heldIdx(self, args)]});
         },
         // VerA's `vera_timepoint` (§2.9): is statement b's cache current, and
         // its slot k (`Lower.TpBlock`, the fields `emitInstance` declares).
@@ -884,6 +885,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             if (Mir.opClass(op) == .binary and args.len >= 2) return gen_render.renderOp(self, op, args[0], args[1], .real);
             return emitUnregistered(self, inst, name, args);
         },
+        // §12.22.2 an output argument of the user system task `args[0]` calls.
+        .@"$systf$out" => return emitSystfOut(self, args),
         // A `$name` is an unregistered system function; anything else is a
         // MIR call no clause defines.
         .systf => {
@@ -967,12 +970,51 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
 /// S: `arg.addC(-arg.val()).scale(p)` adds p·d(arg) to the derivative and
 /// zero to the value (§12.22.1's `derivtf`).
 fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
-    const k = for (self.systf_names.items, 0..) |n, i| {
-        if (n.tok == self.call_tok and std.mem.eql(u8, n.name, name)) break i;
-    } else blk: {
-        try self.systf_names.append(self.arena, .{ .name = name, .tok = self.call_tok });
-        break :blk self.systf_names.items.len - 1;
-    };
+    const k = try systfIndex(self, name, self.call_tok);
+    return emitHostCall(self, null, args, try self.arena.print("zsh.call(zsh.ctx, {d}, &zsv, &zsp)", .{k}));
+}
+
+/// Writes §12.22.2 output argument j of the user system task call
+/// `args[0]`, whose arguments are `args[2..]`: the value its calltf put
+/// there and the partials, through `SystfHost.output`. The call is rendered
+/// first, so its calltf has run when the output is read.
+fn emitSystfOut(self: *Gen, args: []const Mir.Value) Error!void {
+    const call = systfOutCall(self, args) orelse
+        return abort(self, .E1020, "VerA: `$systf$out` does not read a user system task call", .{});
+    const k = try systfIndex(self, call.name, call.tok);
+    // Crosses to the host through concrete f64s, as the call does.
+    float_lanes.pinCrossing(self);
+    return emitHostCall(self, args[0], args[2..], try self.arena.print("zsh.output({d}, {d}, &zsv, &zsp)", .{ k, call.j }));
+}
+
+/// The user system task call a `$systf$out` reads (its name and token) and
+/// the argument position j, or null for MIR lowering never makes.
+fn systfOutCall(self: *const Gen, args: []const Mir.Value) ?struct { name: []const u8, tok: u32, j: usize } {
+    if (args.len < 2) return null;
+    const def = self.mir.valueDef(self.an.rv(args[0]));
+    if (def != .inst_result) return null;
+    const d = self.mir.instData(def.inst_result);
+    if (d != .call or d.call.callee != .systf) return null;
+    const j = self.mir.valueDef(self.an.rv(args[1]));
+    if (j != .int_const or j.int_const < 1 or j.int_const > args.len - 2) return null;
+    return .{ .name = d.call.name, .tok = self.mir.instTok(def.inst_result), .j = @intCast(j.int_const) };
+}
+
+/// The `systf_calls` index of the call `name` at `tok`, added at the end
+/// when it is new.
+fn systfIndex(self: *Gen, name: []const u8, tok: u32) Error!usize {
+    for (self.systf_names.items, 0..) |n, i| {
+        if (n.tok == tok and std.mem.eql(u8, n.name, name)) return i;
+    }
+    try self.systf_names.append(self.arena, .{ .name = name, .tok = tok });
+    return self.systf_names.items.len - 1;
+}
+
+/// Writes `zs<label>: { ... }`, the S value of `host` (an expression over
+/// `zsh`, the f64 values `zsv` and the partials `zsp` it fills) with every
+/// argument's lanes put back. `first`, when set, is rendered and discarded
+/// before the arguments.
+fn emitHostCall(self: *Gen, first: ?Mir.Value, args: []const Mir.Value, host: []const u8) Error!void {
     // Reads `inst`, so `emitUnit` keeps the parameter named.
     self.uses.inst = true;
     float_lanes.instPin(self);
@@ -980,6 +1022,11 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     const label = self.systf_sites;
     self.systf_sites += 1;
     try self.b("zs{d}: {{\n", .{label});
+    if (first) |f| {
+        try self.b("        _ = ", .{});
+        try gen_render.renderVal(self, f, .real);
+        try self.b(";\n", .{});
+    }
     for (args, 0..) |a, j| {
         try self.b("        const zs{d}a{d} = ", .{ label, j });
         try gen_render.renderVal(self, a, .real);
@@ -997,7 +1044,7 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     for (args) |a| m |= family.mask(self, a);
     const to = try self.arena.print("zTo(S, 0x{x}, ", .{m});
     const end = ")";
-    try self.b("        var zsr = {s}S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp)){s};\n", .{ to, k, end });
+    try self.b("        var zsr = {s}S.con({s}){s};\n", .{ to, host, end });
     for (args, 0..) |_, j|
         try self.b("        zsr = {s}zsr.add(zs{d}a{d}.addC(-zsv[{d}]).scale(zsp[{d}])){s};\n", .{ to, label, j, j, j, end });
     try self.b("        break :zs{d} zsr;\n    }}", .{label});
@@ -1016,7 +1063,26 @@ pub fn emitSystfTable(self: *Gen) Error!void {
         \\pub const systf_calls = [_]contract.Systf{{
         \\
     , .{});
-    for (self.systf_names.items) |n| try self.w("    .{{ .name = \"{s}\", .tok = {d} }},\n", .{ n.name, n.tok });
+    // §12.22.2 each call's output arguments: every `$systf$out` lowering
+    // made, rendered or not, so the set is the source's and not the plan's.
+    const outs = try self.arena.alloc(u64, self.systf_names.items.len);
+    @memset(outs, 0);
+    for (0..self.mir.insts.len) |ii| {
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
+        if (self.mir.instOp(inst) != .call) continue;
+        const d = self.mir.instData(inst).call;
+        if (d.callee != .@"$systf$out") continue;
+        const c = systfOutCall(self, d.args) orelse continue;
+        if (c.j > 64) continue;
+        for (self.systf_names.items, outs) |n, *o| {
+            if (n.tok == c.tok and std.mem.eql(u8, n.name, c.name)) o.* |= @as(u64, 1) << @intCast(c.j - 1);
+        }
+    }
+    for (self.systf_names.items, outs) |n, o| {
+        try self.w("    .{{ .name = \"{s}\", .tok = {d}", .{ n.name, n.tok });
+        if (o != 0) try self.w(", .outs = 0x{x}", .{o});
+        try self.w(" }},\n", .{});
+    }
     try self.w("}};\n\n", .{});
 }
 

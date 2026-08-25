@@ -1,8 +1,8 @@
 // §9.5.3 / §9.5.4.2 string formatting and scanning kernels — EMITTED VERBATIM
-// into every device that calls `$sformat`/`$swrite`/`$sscanf` (`codegen.str_txt`
-// is `@embedFile` of this file) and `@import`ed by codegen.zig's tests. One
-// source, so the conversions the tests check are the conversions the device
-// runs.
+// into every device that calls `$sformat`/`$swrite`/`$sscanf` or holds a
+// string (`codegen.str_txt` is `@embedFile` of this file) and `@import`ed by
+// codegen.zig's tests. One source, so the conversions the tests check are the
+// conversions the device runs.
 //
 // WHY THE SCANNER RE-PARSES. `$sscanf(str, fmt, a, b)` assigns to two variables
 // and returns a count, but a unit body is an SSA expression tree: a value is
@@ -920,6 +920,38 @@ pub fn zSBuf(comptime site: usize) []u8 {
         var b: [4096]u8 = undefined;
     };
     return &Buf.b;
+}
+
+/// §5.10/§3.3 a held string variable's own bytes, an `Instance` field (#19).
+/// Not a slice: a `$sformat` result lives in its site's `zSBuf`, which the
+/// site rewrites the next time it runs (a Newton iterate, a rejected step, a
+/// second instance), so a held slice of it changed under the device's feet.
+/// `stateCtl` copies the whole value, so a revert restores the text.
+// ponytail: 4096 bytes per held string, the `zSBuf` row every run-time
+// string is composed in; `stateCtl` copies all of it per commit and revert.
+// Copy `n` bytes there if a model holds many strings and it measures hot.
+pub const ZStrHeld = struct {
+    n: u16 = 0,
+    b: [4096]u8 = @splat(0),
+
+    /// The held text.
+    pub fn get(h: *const ZStrHeld) []const u8 {
+        return h.b[0..h.n];
+    }
+};
+
+/// Returns a `ZStrHeld` holding a copy of `s`: a fresh value, so `s` may be
+/// a slice of the field the result is stored into. Longer than 4096 bytes is
+/// E1011, at compile time for an initializer.
+pub fn zStrHeld(s: []const u8) ZStrHeld {
+    var h: ZStrHeld = .{};
+    if (s.len > h.b.len) {
+        if (@inComptime()) @compileError("error[E1011]: a held string initializer exceeds 4096 bytes");
+        zSOver();
+    }
+    @memcpy(h.b[0..s.len], s);
+    h.n = @intCast(s.len);
+    return h;
 }
 
 /// E1011: formatted text outgrew its call site's `zSBuf` row. Fatal, like

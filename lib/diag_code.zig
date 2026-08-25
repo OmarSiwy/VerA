@@ -460,6 +460,8 @@ pub const Code = enum(u16) {
     E0930,
     E0960,
     E0982,
+    E0997,
+    E0998,
     E0482,
     E0483,
     E0484,
@@ -5851,7 +5853,9 @@ fn infoOf(c: Code) Info {
             \\has been accepted"), appends each $strobe, $display, $write,
             \\$debug, $warning and $info it runs to a buffer the host lends, as
             \\a site index and its numbers, and the host prints them
-            \\(`contract.SaySite`, `contract.formatSay`). $fatal and $error
+            \\(`contract.SaySite`, `contract.formatSay`). A host that also
+            \\calls it after each Newton iteration (`contract.SayPass`) shows
+            \\$debug at every iteration, as 9.4.1 has it. $fatal and $error
             \\latch the device's status (`contract.StatusSite`), which stops its
             \\rows until the host clears it.
             \\
@@ -6399,14 +6403,15 @@ fn infoOf(c: Code) Info {
             \\the connections to the port is digital and the other is analog. In
             \\this case, the port shall match one (and only one) connect
             \\statement." A connect statement matches this port, but VerA decides
-            \\where connect modules go from the module and instance declarations
-            \\before it inlines them (7.6: "The disciplines of mixed nets are
-            \\determined prior to the connect module insertion phase"), and that
-            \\pass found no domain for the port's upper connection. Its discipline
-            \\came from a segment the pass does not read: an instance inside a
-            \\generate block, an instance array, a paramset instance more than one
-            \\level below the port, or an out-of-context declaration made in a
-            \\module below the one being planned.
+            \\where connect modules go before it inlines a level (7.6: "The
+            \\disciplines of mixed nets are determined prior to the connect
+            \\module insertion phase"), from the subtree a first walk that
+            \\inserts nothing elaborated below it: generate schemes evaluated,
+            \\instance arrays expanded, paramsets selected, every out-of-context
+            \\declaration applied. That walk found no domain for the port's
+            \\upper connection, and the net resolved one afterwards: the segment
+            \\that decides it sits under a generate scheme that does not fold to
+            \\a constant, or in a subtree the first walk could not elaborate.
             \\
             \\This is a limit of VerA, not of the design: declare the upper
             \\connection's discipline at the level of the port, or instantiate
@@ -6531,6 +6536,44 @@ fn infoOf(c: Code) Info {
             \\Declare the ports as one of the three pairs, or override them in
             \\the connect statement: `connect cm input electrical, output
             \\ddiscrete;`.
+            ,
+        },
+        .E0997 => .{
+            .title = "a hierarchical port access VerA cannot sum",
+            .lrm = "5.4.3",
+            .explain =
+            \\LRM 5.4.3: "The port access function accesses the flow into a port
+            \\of a module", and A.8.9 lets the port be hierarchical: `I(<u.p>)`
+            \\is the flow into instance u through its own port p. Elaboration
+            \\joins u's port onto the net it is connected to, so VerA reads the
+            \\flow as what u's hierarchy conducts away from that net: the sum of
+            \\its flow contributions to branches at the net.
+            \\
+            \\That sum is refused when it cannot be exact:
+            \\  - the access is read before u's own analog blocks are lowered
+            \\    (inside u's hierarchy, or from a sibling written before u);
+            \\    read it from a module above u;
+            \\  - u drives the net through a potential source or a 5.6.7
+            \\    indirect branch, whose current is a solver unknown.
+            ,
+        },
+        .E0998 => .{
+            .title = "a hierarchical name reaches into an unnamed generate block",
+            .lrm = "6.6.2",
+            .explain =
+            \\LRM 6.6.2: "If the generate block selected for instantiation is
+            \\not named, it still creates a scope; but the declarations within
+            \\it cannot be referenced using hierarchical names other than from
+            \\within the hierarchy instantiated by the generate block itself."
+            \\6.6.1 says the same of a loop generate, and 6.6.3 adds that an
+            \\unnamed generate block "has no name that can be used in a
+            \\hierarchical name": `genblk<n>` is its name for external
+            \\interfaces (VPI, `$simparam$str("path")`), not for the HDL.
+            \\
+            \\Name the block to reach into it:
+            \\
+            \\    if (on) begin : g1  sub u(p);  end
+            \\    ... g1.u.r ...       // 6.6.2: "Normal rules for hierarchical naming apply"
             ,
         },
         .E0482 => .{

@@ -146,6 +146,15 @@ pub const Directives = struct {
     seeds: []const Binding = &.{},
     /// Whether any `//! seed` line was written (see `asserts_noise`).
     asserts_seed: bool = false,
+    /// `//! meta <kind> <name> [desc="..."] [units="..."]`, one per expected
+    /// `decl_meta` row (`contract.DeclMeta`) in table order, stored in the
+    /// form the runner prints a row (`kind name desc="..." units="..."`, the
+    /// two fields in that order and only when present). `//! meta none`
+    /// asserts no row. §2.9.2's `desc`/`units` reach only a host, so the
+    /// published table is what a fixture asserts.
+    meta: []const []const u8 = &.{},
+    /// Whether any `//! meta` line was written (see `asserts_noise`).
+    asserts_meta: bool = false,
     /// `//! abstol <unknown> = v, ...`: the §3.6.1.2 tolerance the device
     /// publishes for each named unknown (`u_abstol`). Lines accumulate.
     abstols: []const Binding = &.{},
@@ -163,6 +172,14 @@ pub const Directives = struct {
     /// also match EVERY error the compile reported, so an incidental error
     /// on legal source cannot ride inside a passing refusal.
     reject_only: bool = false,
+    /// `//! reject-run <substring>`, one per line: a refusal the TESTBENCH
+    /// makes, not the compiler. The fixture compiles and runs; the run must
+    /// exit nonzero (`expected_exit`, 1 unless `//! exit` says otherwise) and
+    /// print an `error[...]` line holding each substring, and every
+    /// `error[...]` line it prints must hold one of them (`reject-only`'s
+    /// rule, always on). The `ok=` lines printed before the refusal are
+    /// judged as a positive fixture's are. Never with `reject`.
+    reject_run: []const []const u8 = &.{},
     /// `//! neighbour <path>`, one per line, relative to the fixture's
     /// directory: the legal variant of a refused construct, which must be a
     /// collected fixture that compiles and asserts. Only on a reject fixture.
@@ -229,6 +246,10 @@ pub const Mixed = struct {
     snaps: []const []const u8 = &.{},
     /// §7.3.2 inputs read four-state, each with a `<name>__xz` `Model` field.
     xz: []const []const u8 = &.{},
+    /// §7.3.1 inputs that are a `reg` wider than 32 bits, beside their
+    /// number of 32-bit words (`Lowered.discrete_words`).
+    wide: []const []const u8 = &.{},
+    words: []const u32 = &.{},
     /// §8.5 the explicit D2A terms, in site order.
     events: []const @import("ir").Lowered.DiscreteEvent = &.{},
     /// §7.8.4 the inserted connect modules, which the source hierarchy the
@@ -250,7 +271,7 @@ pub const Mixed = struct {
 /// One `//! noise` line:
 ///
 ///     //! noise <kind>(<row>,<col>)#<src> [name=<s>] [white=<v>] [flicker=<v>]
-///                                        [ef=<v>] [rtol=<v>]
+///                                        [ef=<v>] [corr=<j>:<rho>]... [rtol=<v>]
 ///     //! noise table(<row>,<col>)#<src> [name=<s>] interp=linear|log
 ///                                        points=<f>:<p>,<f>:<p>,…
 ///
@@ -278,11 +299,20 @@ pub const NoiseWant = struct {
     /// sorted by frequency.
     interp: ?[]const u8 = null,
     points: ?[]const [2]f64 = null,
+    /// §4.6.4.6 `corr=<j>:<rho>`, repeatable: the correlation coefficient
+    /// between this row's contribution and row j's, from the published
+    /// table: the sign of `coeff_k · coeff_j` when the rows share a `source`
+    /// (one generator, so |ρ| = 1), `PsdTerm.corr` times that sign when one
+    /// row's `corr_with` names the other, else 0. Read at the first point,
+    /// since a coefficient may depend on the bias. Compared with `rtol`.
+    corrs: []const Corr = &.{},
+
+    pub const Corr = struct { with: u16, rho: f64 };
 
     /// Returns whether this line asserts a bias-dependent density, which needs
     /// an operating point.
     pub fn needsPoint(self: NoiseWant) bool {
-        return self.white != null or self.flicker != null or self.ef != null;
+        return self.white != null or self.flicker != null or self.ef != null or self.corrs.len != 0;
     }
 };
 

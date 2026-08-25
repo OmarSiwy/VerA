@@ -41,13 +41,16 @@ const Hit = struct {
     port: Ast.StrId,
 };
 
-/// The instances of `module` as §7.8.4 leaves them: every port matched by a
-/// connect statement is bound to a fresh digital segment instead of its upper
-/// connection, and the connect module instances bridging the two are appended
-/// after the originals, so `module.instances.len` is the index at which the
-/// auto-inserted ones begin. Returns `module.instances` itself when nothing is
-/// mixed; otherwise the list is new, in the arena. Reports E0922 for a port
-/// that matches more than one connect statement.
+/// The instances of `module` as §7.8.4 leaves them: `src` is its source
+/// instances, then its §6.6 generate instances, whose schemes `gates` holds
+/// from index `module.instances.len` on (one whose scheme does not hold is
+/// not planned). Every port matched by a connect statement is bound to a
+/// fresh digital segment instead of its upper connection, and the connect
+/// module instances bridging the two are appended after the originals, so
+/// `src.len` is the index at which the auto-inserted ones begin. Returns
+/// `src` itself when nothing is mixed; otherwise the list is new, in the
+/// arena. Reports E0922 for a port that matches more than one connect
+/// statement.
 ///
 /// §7.8.4: "A connection shall be selected for a port only
 /// if one of the connections to the port is digital and the other is analog.
@@ -73,10 +76,11 @@ const Hit = struct {
 /// ponytail: rules are read only from connect modules with exactly one
 /// continuous and one discrete port (every §7.6 example). Supply-sensitive
 /// bridges with a third port (§7.8.6) are the upgrade.
-pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Error![]const Ast.Instance {
-    // Per level: an out-of-context declaration below is collected only when
-    // its module is walked (`resolve.collectOoc`), so an answer cached for
-    // the level above may predate it.
+pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src: []const Ast.Instance, gates: []const Ast.ExprId) Error![]const Ast.Instance {
+    // Per level: without the first walk's list (`Flatten.tree_ooc`), an
+    // out-of-context declaration below is collected only when its module is
+    // walked (`resolve.collectOoc`), so an answer cached for the level above
+    // may predate it.
     self.seg_up.clearRetainingCapacity();
     var n_ins: usize = 0;
     for (self.ctx.file.connectrules) |cr| n_ins += cr.insertions.len;
@@ -90,7 +94,8 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
     };
     const file = self.ctx.file;
     var hits: std.ArrayList(Hit) = .empty;
-    for (module.instances, 0..) |inst, ii| {
+    for (src, 0..) |inst, ii| {
+        if (ii >= module.instances.len and !elab_names.gateHolds(self, gates[ii - module.instances.len])) continue;
         const child_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(inst.name), elaborate.sep });
         const child = try moduleOf(self, &inst, child_path) orelse continue;
         if (child.is_connect) continue;
@@ -134,12 +139,12 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
             });
         }
     }
-    if (hits.items.len == 0) return module.instances;
+    if (hits.items.len == 0) return src;
 
     // Copies of the originals, whose connection lists the segments rewrite.
     // The originals, then at most one bridge per hit.
-    var out: std.ArrayList(Ast.Instance) = try .initCapacity(self.ctx.arena, module.instances.len + hits.items.len);
-    out.appendSliceAssumeCapacity(module.instances);
+    var out: std.ArrayList(Ast.Instance) = try .initCapacity(self.ctx.arena, src.len + hits.items.len);
+    out.appendSliceAssumeCapacity(src);
     const conns = try self.ctx.arena.alloc([]Ast.PortConn, out.items.len);
     for (out.items, conns) |*inst, *c| {
         c.* = try self.ctx.arena.dupe(Ast.PortConn, inst.ports);

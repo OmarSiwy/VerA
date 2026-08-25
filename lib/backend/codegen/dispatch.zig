@@ -370,8 +370,9 @@ pub fn emitDisplay(self: *Gen) Error!void {
         try self.w(
             \\}};
             \\
-            \\/// §9.4/§9.4.6 run this module's display tasks at the accepted point `x`
-            \\/// and append each one that runs to `out` (`contract.Say`).
+            \\/// §9.4/§9.4.6 run this module's display tasks at `x`, the accepted point
+            \\/// or (`out.pass = .iteration`, `$debug` only) an iterate, and append
+            \\/// each one that runs and `out.pass` records to `out` (`contract.Say`).
             \\pub fn say(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState, out: *contract.Say) void {{
             \\    _ = {s}(S, zProbe(S, x), model, inst, sim, out);
             \\}}

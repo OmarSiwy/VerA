@@ -247,6 +247,21 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     const body = self.out.items.len;
     // §9.7.3 a latched status: the device stopped, so its state stays put.
     if (gen_instance.hasStatus(self)) try self.w("    if (inst.vera_status__ != 0) return .ok;\n", .{});
+    // §9.21.1 + §9.3 (VD-095): a `$table_model` capture becomes the
+    // instance's at an accepted point. The core runs once more at `x`; each
+    // first call it makes captures, and those are kept. Every evaluation
+    // starts from `table_kept` (`unit.tableReset`), so a capture made by an
+    // iterate the host discards, or by a step it rejects, leaves nothing.
+    // ponytail: one extra core evaluation per accepted point while a site is
+    // uncaptured, every point for a site never called; a per-site flag the
+    // core returns is the upgrade if a model measures it.
+    if (self.lowered.table_samples.items.len != 0 and self.core.lo_vals.len != 0) try self.w(
+        \\    if (std.mem.indexOfScalar(bool, &inst.table_kept, false) != null) {{
+        \\        _ = {s}(S, zVals(S, &x), model, inst, sim{s});
+        \\        inst.table_kept = inst.table_ready;
+        \\    }}
+        \\
+    , .{ self.core.name, self.heldArg(false) });
     // One slice evaluation serves every operator's input.
     const full = self.core;
     var at_m: ?usize = null;
@@ -310,6 +325,9 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     // §9.7.3 a latched status leaves the state alone, which `updateState`
     // checks first; a status device calls `q` and `updateState`.
     if (gen_instance.hasStatus(self)) return;
+    // §9.21.1 (VD-095) `updateState` keeps a table capture from its own core
+    // run; a table device's host calls `q` and `updateState`.
+    if (self.lowered.table_samples.items.len != 0) return;
     self.uses.x = false;
     self.uses.model = false;
     self.uses.inst = true; // the §9.17 resets below always write it
@@ -565,6 +583,15 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     }
     // §5.10 store every held variable back, only here: writing from `eval`
     // would latch a Newton iterate the solver may discard.
+    //
+    // A string's new text may be a slice of another held string's field
+    // (`b = a; a = "x";` in one event body), so every string is copied out
+    // before any is stored (#19).
+    for (self.lowered.held_vars.items, 0..) |h, i| {
+        const k = self.core.held_idx[i];
+        if (h.ty == .string and h.array == none_u32 and k != none_u32)
+            try self.w("    const zs{d} = zStrHeld(m.f{d});\n", .{ i, k });
+    }
     for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.core.held_idx[i];
         const n = self.names.held_names[i];
@@ -589,7 +616,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     try self.w("    inst.{s} = m.f{d};\n", .{ n, k })
                 else
                     try self.w("    inst.{s} = std.math.lossyCast(i64, @round(m.f{d}{s}));\n", .{ n, k, val }),
-                .string => try self.w("    inst.{s} = m.f{d};\n", .{ n, k }),
+                .string => try self.w("    inst.{s} = zs{d};\n", .{ n, i }),
                 .real => if (core_int)
                     try self.w("    inst.{s} = @floatFromInt(m.f{d});\n", .{ n, k })
                 else

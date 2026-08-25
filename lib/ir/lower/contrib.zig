@@ -760,7 +760,8 @@ fn branchKey(self: *Lower, buf: *[lower_shape.elem_key_len]u8, e: Ast.ExprId) Oo
         // `branches`/`port_branches` already hold. A miss falls through to
         // `nodeOf`, whose `.hier_ident` arm owns E0901. Arena rather than `buf`:
         // cold, one path per source reference.
-        .hier_ident => try lower_expr.flatName(self, e),
+        // §6.6.2: into an unnamed generate block, `nodeOf` refuses it (E0998).
+        .hier_ident => if (try lower_expr.unnamedGenScope(self, e) != null) null else try lower_expr.flatName(self, e),
         // Into the caller's buffer, not the arena: both consumers only call
         // `branches.get`/`port_branches.get`, which never retain a key, and this
         // runs once per §4.4.1 access.

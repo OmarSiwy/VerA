@@ -10,12 +10,16 @@
  * it, so this file does.
  *
  * DERIVATION. At t=1, from a cbAfterDelay routine, vpi_sim_control(vpiReset,
- * 0, 0, 1): stop_value 0 (IEEE 1364-2005 F.7: the run restarts rather than
- * entering interactive mode), reset_value 0, diagnostic level 1. A listed
- * operation with its three arguments succeeds: 1, and no error. The routine
- * asks only once (a reset that re-runs time 0 does not re-run the startup
- * routine or a cbAfterDelay that already fired), so the run ends at its
- * $finish either way.
+ * 0, 0, 1): stop_value 0, reset_value 0, diagnostic level 1. The $reset the
+ * clause points at is IEEE 1364-2005 C.7 (VAMS 12.36 cites it as F.7):
+ * "A value of 0 or no argument causes interactive mode to be entered after
+ * resetting the tool. A nonzero value passed to $reset causes the tool to
+ * begin processing immediately." So this call resets to time 0 and then
+ * enters interactive mode, which a batch run reads as $stop does (VD-070:
+ * the run ends). A listed operation with its three arguments succeeds: 1,
+ * and no error. The routine asks only once (a reset does not re-run the
+ * startup routine or a cbAfterDelay that already fired), and
+ * cbEndOfSimulation follows whichever way the run ends.
  *
  * KNOWN GAP: VerA refuses vpiReset ("needs an interactive mode VerA does not
  * have", src/vpi/run.zig). The failure is pinned as `.xfail` in build.zig's

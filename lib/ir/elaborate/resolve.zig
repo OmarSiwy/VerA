@@ -67,7 +67,18 @@ pub fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!vo
 /// told apart from a legal form this pass does not reach. The upgrade is a
 /// `used` flag on `ooc`, like `Defparam.used`.
 pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
-    const d = self.ooc.getAdapted(PathKey{ .path = path, .local = self.ctx.file.str(local) }, PathKey.Context{}) orelse return null;
+    return oocIn(&self.ooc, self, path, local);
+}
+
+/// `oocDiscipline` over every declaration in the design, those in modules
+/// below the level being planned included (`Flatten.tree_ooc`), for
+/// `segment.up`.
+pub fn oocDisciplineBelow(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
+    return oocIn(&self.tree_ooc, self, path, local) orelse oocDiscipline(self, path, local);
+}
+
+fn oocIn(map: *const std.StringHashMapUnmanaged(elaborate.OocDecl), self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
+    const d = map.getAdapted(PathKey{ .path = path, .local = self.ctx.file.str(local) }, PathKey.Context{}) orelse return null;
     return if (d.disc == .none) null else d.disc;
 }
 

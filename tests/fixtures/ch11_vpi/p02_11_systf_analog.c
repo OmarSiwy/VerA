@@ -100,6 +100,21 @@
  * and 12.22.1 permits the call "only ... for those derivatives allocated during
  * the derivtf phase". A tool that hands out a handle for every pair makes the
  * declarative half of derivtf meaningless.
+ *
+ * THE OUTPUT ARGUMENT. 12.22.2's calltf puts the conductance on the
+ * derivative object and curr = V(p,n)*g on argument 1, and the next statement
+ * contributes curr. Both puts must succeed (no error): argument 1 is a real
+ * variable the design reads back. The analysis is the banner's operating
+ * point, at p02_analog.va's bias V(p,n) = 1.0, so calltf runs during it.
+ *
+ * THE CENSUS. `checks` counts the assertions whose number the LRM fixes:
+ * compiletf's 10 at each of the two sites (seven CHECKs, then expect_error's
+ * three), the startup routine's 3 and census's 12, so 20 + 3 + 12 = 35.
+ * calltf's 11 per invocation run every time, but how often the solver
+ * evaluates the block is its own business, so they are taken back out of
+ * the count before it is printed (`call_checks`).
+ *
+ *! analysis op
  */
 
 //! lrm 11.6.16
@@ -121,6 +136,7 @@ static int order = 0;
 static int compiles = 0, derivs_called = 0, calls = 0;
 static int last_build_order = 0, first_call_order = 0;
 static int saw_r1000 = 0, saw_r2000 = 0;
+static int call_checks = 0;
 static vpiHandle systf_analog;
 
 static double real_of(vpiHandle h)
@@ -178,6 +194,7 @@ static PLI_INT32 res_calltf(p_cb_data cb_data)
   vpiHandle call, i_handle, v_handle, r_handle, didv, not_declared;
   s_vpi_value value;
   double g, r;
+  int before = p02_checks;
   (void)cb_data;
 
   if (calls == 0) first_call_order = order + 1;
@@ -220,6 +237,7 @@ static PLI_INT32 res_calltf(p_cb_data cb_data)
   value.value.real = real_of(v_handle) * g;
   vpi_put_value(i_handle, &value, NULL, vpiNoDelay);
   expect_no_error("vpi_put_value onto an analog task output argument");
+  call_checks += p02_checks - before;
   return 0;
 }
 
@@ -254,6 +272,7 @@ static int census(p_cb_data cb_data)
   CHECK(info.derivtf   == res_derivtf,   "derivtf should round trip");
   CHECK(info.sizetf    == NULL, "$p02_resistor is a task and registered no sizetf");
 
+  p02_checks -= call_checks;
   p02_done("11_systf_analog");
   return 0;
 }

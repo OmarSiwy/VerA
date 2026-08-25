@@ -123,6 +123,16 @@ pub const PortProbe = struct { port: u16, u: u16 };
 /// and reaches nothing in the residual.
 pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
 
+/// §2.9.2 one `decl_meta` row (`contract.DeclMeta`): a module-scope
+/// declaration of the device's own module and its last `desc` and `units`
+/// (§2.9), each null when absent. Metadata for a host; reaches no residual.
+pub const DeclMeta = struct {
+    kind: enum(u8) { parameter, variable, net },
+    name: []const u8,
+    desc: ?[]const u8 = null,
+    units: ?[]const u8 = null,
+};
+
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
 /// `[3:5]`), so nothing here assumes msb ≥ lsb.
@@ -611,6 +621,10 @@ port_probes: std.ArrayList(PortProbe) = .empty,
 /// already folded. Sparse (most modules declare none), so codegen emits the
 /// optional `u_nodeset` table only when this is non-empty.
 nodesets: std.ArrayList(Nodeset) = .empty,
+/// §2.9.2 the `desc`/`units` rows, parameters then variables then nets, each
+/// in declaration order (`lower_param.collectDeclMeta`). Sparse, so codegen
+/// emits the optional `decl_meta` table only when this is non-empty.
+decl_meta: std.ArrayList(DeclMeta) = .empty,
 disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
 
 // ---- §3.4 the model card and §5.6 the equations -----------------------------
@@ -708,6 +722,11 @@ discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// or a `case` subject: their unknown plane arrives in a `<name>__xz` `Model`
 /// field beside the value plane, and an x or z there is not an error.
 discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// §7.3.1 the `discrete_inputs` that are a `reg` wider than 32 bits, name →
+/// its number of 32-bit words: word 0 (bits 0 to 31) arrives in the `<name>`
+/// `Model` field, word k in `<name>__w<k>`, so a part-select anywhere in the
+/// `reg` reads exact bits.
+discrete_words: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// §7.3.6.4 / §7.3.1 the other direction: module variables a digital
 /// expression reads and the discrete context does not assign (the analog
 /// block's), name → first reading token. The mixed runner copies each one's

@@ -631,7 +631,7 @@ fn decide(
     // A perturbed run asks one question of a passing positive fixture: does
     // each check fail when its want is wrong? A refusal has no want, and an
     // xfail does not pass to begin with.
-    if (perturb != null and (d.reject.len != 0 or d.xfail != null)) return .pass;
+    if (perturb != null and (d.reject.len != 0 or d.reject_run.len != 0 or d.xfail != null)) return .pass;
     if (probe_reject_only and (d.reject.len == 0 or d.reject_only or d.xfail != null)) return .pass;
 
     // The other half of a refusal: each named neighbour is a collected
@@ -649,10 +649,10 @@ fn decide(
         const refusing = if (std.mem.endsWith(u8, n, ".v"))
             digital.negative(text) or std.mem.indexOf(u8, text, "//! reject") != null
         else
-            (vera.tb.parse(arena, text) catch |err| {
+            refuses(vera.tb.parse(arena, text) catch |err| {
                 try w.print("FAIL {s}: `//! neighbour {s}`: its directives do not parse: {t}\n", .{ f.path, n, err });
                 return .fail;
-            }).reject.len != 0;
+            });
         if (refusing or !hasDirective(text)) {
             try w.print("FAIL {s}: `//! neighbour {s}` is not a positive fixture\n", .{ f.path, n });
             return .fail;
@@ -665,7 +665,9 @@ fn decide(
     const finding = if (d.reject.len != 0) .ok else lint.checkAssertions(source);
     switch (finding) {
         .ok => {},
-        .none => if (compiler.runs and strict) {
+        // A run-time refusal is its own assertion: the run must end in the
+        // named error, which may come before any check.
+        .none => if (compiler.runs and strict and d.reject_run.len == 0) {
             try w.print(
                 "FAIL {s}: asserts nothing — compiling and running is not an expectation.\n" ++
                     "  Add `CHECK(\"what this proves\", got, want, tol)` from check.vh.\n",
@@ -751,6 +753,12 @@ pub var perturb: ?f64 = null;
 /// rows at random unknowns; and the state gate (`stateCheck`, L4c): revert
 /// after `updateState` restores every field. Set once by `takeArg`.
 pub var certify: bool = false;
+
+/// Whether `d` is a refusal, by the compiler (`//! reject`) or by the run
+/// (`//! reject-run`): not a legal neighbour.
+fn refuses(d: vera.tb.Directives) bool {
+    return d.reject.len != 0 or d.reject_run.len != 0;
+}
 
 /// `--probe-reject-only`: judges each `//! reject` fixture as if it were
 /// `//! reject-only` and prints `ONLY-OK <path>` or `ONLY-NO <path>: <code>`,

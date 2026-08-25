@@ -17,8 +17,8 @@
 // v/k = 0.75.
 //
 // The rejected-step half of the A05 note (capture around a step a host
-// rejects) is not asserted: §9.21.1 does not say whether a first call made on
-// a rejected attempt has captured.
+// rejects) is docs/Vague_Decisions.md VD-095, asserted by
+// table_capture_rejected_step_recaptures.va.
 //
 //! lrm 9.21.1
 //! analysis tran

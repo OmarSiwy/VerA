@@ -2173,11 +2173,12 @@ SUBCOMMANDS["obligations"] = obligations
 
 def fixture_tags(path):
     """The directive lines the metric reads: lrm cites with their polarity,
-    reject-only, neighbours, xfail. A `.c` fixture's polarity is per line
+    reject-only (and reject-run, which is always exclusive), neighbours,
+    xfail. A `.c` fixture's polarity is per line
     (`lrm` / `lrm-reject`)."""
     tags = {"cites": [], "reject": False, "only": False, "neighbours": [], "xfail": False, "c": path.suffix == ".c"}
     lines = path.read_text(errors="replace").split("\n")
-    rejecting = any(re.match(r"\s*//!\s*reject(-only)?\s", ln) for ln in lines)
+    rejecting = any(re.match(r"\s*//!\s*reject(-only|-run)?\s", ln) for ln in lines)
     for line in lines:
         line = line.strip()
         if not line.startswith("//!"):
@@ -2190,7 +2191,9 @@ def fixture_tags(path):
             tags["cites"].append((rest, "neg"))
         elif word == "reject":
             tags["reject"] = True
-        elif word == "reject-only":
+        elif word in ("reject-only", "reject-run"):
+            # A run-time refusal (`//! reject-run`) is always exclusive: every
+            # `error[` line the run prints must match (tests/torture.zig).
             tags["reject"] = tags["only"] = True
         elif word == "neighbour":
             tags["neighbours"].append(str((path.parent / rest).relative_to(ROOT / "tests/fixtures")))

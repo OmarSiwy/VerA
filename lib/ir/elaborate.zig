@@ -51,6 +51,9 @@ const elab_segment = @import("elaborate/segment.zig");
 /// path resolution and the §3.4.7 alias check share it. See
 /// `elaborate/names.zig`.
 pub const flatReference = elab_names.flatReference;
+/// §6.6.2 the flat prefixes no hierarchical name may open from outside:
+/// see `elaborate/names.zig`.
+pub const unnamedGenScopes = elab_names.unnamedGenScopes;
 /// E.2.1 for a netlist card's names: see `elaborate/names.zig`.
 pub const spiceCase = elab_names.spiceCase;
 const Ast = @import("frontend").Ast;
@@ -153,6 +156,12 @@ pub const Design = struct {
     /// available for instances using the paramset." The flat names of those
     /// variables, for §9.16's `$simprobe` to treat as unresolvable.
     ps_hidden: []const []const u8 = &.{},
+    /// §6.8 IEEE 1364-2005 §12.3.3: the flat names of the output ports
+    /// "declared as a variable" that the walk renamed onto the net their
+    /// parent connects (`instance.zig`). Such a variable is in the child's
+    /// scope and the net in the parent's, so sharing one flat name is not
+    /// two declarations in one scope (`lower_var.checkOneItemPerScope`).
+    port_vars: []const Ast.StrId = &.{},
     /// §6.4.3 "Integer or real variables in the paramset declared with
     /// descriptions are considered output variables", and "the paramset's
     /// value is reported for instances using the paramset": one row per such
@@ -224,6 +233,19 @@ pub const Inserted = struct {
     upper_port: []const u8,
     lower_port: []const u8,
 };
+
+/// One instance the first walk elaborated (`Flatten.tree`): the instance as
+/// its parent wrote it (an array element or a generate copy as the walk
+/// named it), the module it elaborated to, and its own instance path.
+pub const TreeKid = struct {
+    inst: Ast.Instance,
+    module: *const Ast.ModuleDecl,
+    path: []const u8,
+};
+
+/// An out-of-context discipline declaration (`Flatten.ooc`), with its token
+/// for §3.6.2's compatibility diagnostic.
+pub const OocDecl = struct { disc: Ast.StrId, tok: u32 };
 
 /// One entry of `Design.units`. `path` is the instance prefix, separator
 /// included and empty at the top, so `path ++ local` is the flat name.
@@ -316,6 +338,39 @@ pub fn elaborate(ctx: Ctx) Error!Design {
         return .{ .top = top };
     }
 
+    // IEEE 1364-2005 §12.8.1: every defparam is in force before the
+    // parameters it names take their values. A design whose defparams may
+    // name a parameter bound before the walk reaches them is walked twice,
+    // the first walk (diagnostics discarded) only collecting them.
+    const bind_early = elab_override.mayBindEarly(ctx.file);
+    var scratch: diag.Bag = .init(ctx.arena);
+    scratch.levels = ctx.bag.levels;
+    var first_ctx = ctx;
+    first_ctx.bag = &scratch;
+    var first: Flatten = .{ .ctx = first_ctx, .gen_instances = gen_instances };
+    if (bind_early) {
+        _ = first.run(top) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoModule, error.DiagnosticsReported => {},
+        };
+        try elab_override.seedDefparams(&f, &first);
+    }
+    // §7.8.4: insertion "depends on a complete hierarchical examination of
+    // each signal", and a level is planned before its children are walked.
+    // So a design that can insert connect modules is walked twice: once
+    // inserting none, recording what it elaborated (`Flatten.tree`), then
+    // for real. The first walk's diagnostics are the second's, so they go to
+    // a scratch bag. It sees the same collected defparams as the real walk.
+    if (ctx.file.connectrules.len != 0) {
+        var dry_scratch: diag.Bag = .init(ctx.arena);
+        var dry_ctx = ctx;
+        dry_ctx.bag = &dry_scratch;
+        var dry: Flatten = .{ .ctx = dry_ctx, .gen_instances = gen_instances, .dry = true };
+        if (bind_early) try elab_override.seedDefparams(&dry, &first);
+        if (dry.run(top)) |_| {} else |e| if (e == error.OutOfMemory) return e;
+        f.tree = dry.tree;
+        f.tree_ooc = dry.ooc;
+    }
     return f.run(top);
 }
 
@@ -465,6 +520,8 @@ pub const Flatten = struct {
     unit_paths: std.ArrayList(UnitPath) = .empty,
     /// `Design.ps_hidden`, as the walk finds them.
     ps_hidden: std.ArrayList([]const u8) = .empty,
+    /// `Design.port_vars`, as the walk renames them.
+    port_vars: std.ArrayList(Ast.StrId) = .empty,
     /// `Design.ps_outputs`, as `paramset.paramsetOverrides` declares them.
     ps_outputs: std.ArrayList(PsOutput) = .empty,
     /// `Design.paramset_defparams`, before generate schemes have final values.
@@ -506,6 +563,18 @@ pub const Flatten = struct {
     /// was planned (`segment.down`), the same keys: the upper connection of
     /// the ports one level further down.
     seg_down: std.StringHashMapUnmanaged(elab_segment.Seg) = .empty,
+    /// §7.8.4 "a complete hierarchical examination of each signal": a first
+    /// walk that inserts no connect module (`dry`) records here every
+    /// instance it elaborates, under its parent's instance path, and the
+    /// walk that inserts reads it (`segment.up`). So a level is planned from
+    /// the subtree below it as elaborated: generate blocks evaluated,
+    /// instance arrays expanded, paramsets selected (`elaborate`).
+    tree: std.StringHashMapUnmanaged(std.ArrayList(TreeKid)) = .empty,
+    /// The first walk's `ooc`: every out-of-context declaration, those
+    /// declared below the level being planned included.
+    tree_ooc: std.StringHashMapUnmanaged(OocDecl) = .empty,
+    /// This is that first walk.
+    dry: bool = false,
 
     /// The discipline every flat net has been declared with, keyed by the flat
     /// name: §3.10's precedence orders 1 and 2 after they have been decided.
@@ -554,6 +623,10 @@ pub const Flatten = struct {
     /// which is before any instance below it is inlined, so a defparam is always
     /// in the map before the parameter it names is created.
     defparams: std.StringHashMapUnmanaged(elab_override.Defparam) = .empty,
+    /// IEEE 1364-2005 §12.8.1: the first walk's flat parameters, when
+    /// `override.seedDefparams` ran one; `override.seededValue` reads a
+    /// not-yet-inlined parameter's value from them.
+    seed_params: []const Ast.ParamDecl = &.{},
 
     /// Annex F.2.1 step 3 / §3.10 precedence order 1: every OUT-OF-CONTEXT
     /// discipline declaration, keyed by the absolute flat name of the net segment
@@ -563,7 +636,7 @@ pub const Flatten = struct {
     /// declared for sig in the module where sig was declared." With the
     /// declaration's token, for §3.6.2's compatibility diagnostic
     /// (`resolve.checkOocOverrides`).
-    ooc: std.StringHashMapUnmanaged(struct { disc: Ast.StrId, tok: u32 }) = .empty,
+    ooc: std.StringHashMapUnmanaged(OocDecl) = .empty,
     /// §3.6.3.2's nodeset on an out-of-context declaration
     /// (`electrical u.w = 2.75;`), in `collectOoc` order (top-down), with the
     /// initializer cloned in the declaring module's namespace. Applied after
@@ -675,6 +748,7 @@ pub const Flatten = struct {
         // flat namespace, so an identity rename would rewrite every expression
         // in the device for no change.
         try self.params.appendSlice(self.ctx.arena, top.params);
+        try elab_override.applyTopDefparams(self);
         try self.aliasparams.appendSlice(self.ctx.arena, top.aliasparams);
         for (top.aliasparams) |al| if (elab_alias.original(self.ctx.file, top.params, top.aliasparams, al)) |target|
             try self.expression_aliases.append(self.ctx.arena, .{ .alias = al.alias, .target = target });
@@ -773,6 +847,7 @@ pub const Flatten = struct {
             .attribute_disciplines = self.attribute_disciplines,
             .local_accesses = self.local_accesses,
             .ps_hidden = self.ps_hidden.items,
+            .port_vars = self.port_vars.items,
             .ps_outputs = self.ps_outputs.items,
             .paramset_defparams = self.paramset_defparams.items,
             .selection_params = self.selection_params.items,

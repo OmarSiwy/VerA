@@ -1597,6 +1597,16 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
 // ponytail: an array element operand watches every element of its array;
 // a per-array wake list if a big memory ever feeds one.
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
+    return sensitivityProbes(self, e, out, null);
+}
+
+/// `sensitivity`, where a VAMS §7.3.6.3 analog probe sets `probes` instead of
+/// being refused. A probe reads the analog solution, which no slot holds, so
+/// nothing here can wake on it; only `$monitor` has another trigger (it is
+/// re-checked every time step, `Run.monitor_probes`). Elsewhere (a
+/// continuous assignment, `@*`) a probe would be read once and never again,
+/// so it is refused by name rather than silently frozen.
+pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), probes: ?*bool) Error!void {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal => {},
@@ -1608,16 +1618,19 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
                 const base = try self.slot(self.chainBase(e).base);
                 for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
                 var x = e;
-                while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
+                while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivityProbes(self, ex.rhs(x), out, probes);
             } else {
-                try sensitivity(self, ex.lhs(e), out);
-                try sensitivity(self, ex.rhs(e), out);
+                try sensitivityProbes(self, ex.lhs(e), out, probes);
+                try sensitivityProbes(self, ex.rhs(e), out, probes);
             }
         },
         .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .indexed_range, .call => {
             var buf: [3]Ast.ExprId = undefined;
-            for (ex.children(e, &buf)) |c| if (c != .none) try sensitivity(self, c, out);
+            for (ex.children(e, &buf)) |c| if (c != .none) try sensitivityProbes(self, c, out, probes);
         },
+        .branch_access => if (probes) |p| {
+            p.* = true;
+        } else return self.exprFail(e, "VAMS §7.3.6.3: an analog probe is re-read here only when this process runs, never when the analog solution changes; read it in a procedural statement or `$monitor`"),
         else => unreachable, // else: checkExpr admitted only the forms above
     }
 }

@@ -1,0 +1,29 @@
+// AMS §4.2.4: "It shall be an error to pass zero (0) as the second argument
+// to the modulus operator." and "The result of a modulus operation takes the
+// sign of the first operand."
+//
+// The legal neighbour of modulo_integer_dynamic_zero.va: the same module and
+// the same probe-dependent divisor, whose second point is -3 instead of 0, so
+// no zero ever reaches `%` and the run ends normally (status 0).
+//
+//   point 0, V(p) = 3:  d = 3,  11 % 3  = 2.
+//   point 1, V(p) = -3: d = -3, 11 % -3 = 2 (Table 4-6's own row: the result
+//     takes the sign of the first operand, 11).
+//
+// Two checks, both want 2.
+//! lrm 4.2.4
+//! lrm 4.2.4:1002
+//! sweep V(p) = 3, -3
+//! checks 2
+//! print none
+`include "check.vh"
+module modulo_integer_dynamic_nonzero(p, n);
+  inout p, n; electrical p, n;
+  integer d, remainder;
+  analog begin
+    d = V(p,n);
+    remainder = 11 % d;
+    `CHECKI("every point completes: no divisor is zero", remainder, 2);
+    I(p,n) <+ remainder;
+  end
+endmodule

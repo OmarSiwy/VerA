@@ -723,6 +723,12 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         if (selected) |at| exec.trigger(r, at) catch return engineFail();
         return null;
     }
+    // §12.22.2 an output argument of the analog call calltf is running for,
+    // as a real or an integer.
+    if (value_p) |pv| if (pv.format == vpiRealVal or pv.format == vpiIntVal) {
+        const r: f64 = if (pv.format == vpiRealVal) pv.value.real else @floatFromInt(pv.value.integer);
+        if (@import("analog.zig").putArg(o, r)) return null;
+    };
     if (o.kind == .code and o.vtype == root.code.vpiUdp) return putUdp(o, value_p, mode);
     const at = o.slot.get() orelse {
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});

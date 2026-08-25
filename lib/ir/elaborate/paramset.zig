@@ -379,23 +379,37 @@ pub fn paramsetOverrides(
     self.in_paramset = true;
     try elab_clone.cloneParams(self, ps.params, ps.aliasparams, &ps_over);
 
+    // §6.4.1 "The right-hand side can be composed of numbers, parameters,
+    // ...": each link's statements read that link's own parameters. Only the
+    // near link is named by an instance, so only its parameters take a §6.3
+    // override; a farther link's are its defaults, localparams under
+    // `path ++ link ++ sep` as the near link's are under `ps_path`. One unit
+    // per link, near first, each statement cloned in its own link's.
+    const units = try self.ctx.arena.alloc(Unit, chain.items.len);
+    units[0] = self.unit;
+    const no_over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
+    for (chain.items[1..], units[1..]) |link, *u| {
+        const link_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, self.ctx.file.str(link.name), sep });
+        u.* = .{ .hier = ps_unit.hier };
+        for (link.params) |p| try elab_names.bind(self, u, link_path, p.name);
+        for (link.aliasparams) |al| try elab_names.bind(self, u, link_path, al.alias);
+        self.unit = u.*;
+        try elab_clone.cloneParams(self, link.params, link.aliasparams, &no_over);
+        u.* = self.unit;
+    }
+
     // ---- level 2: the module's parameters, from the paramsets' statements
     //
     // §6.4's chain, applied far link first so a nearer link's assignment to
     // the same module parameter wins. §6.4 gives no precedence rule;
     // nearest-wins treats the near link as the more specific one, as §6.3
     // ranks an instance override over a default.
-    //
-    // ponytail: a farther link's own parameters are not brought into scope;
-    // its statements are evaluated in the near link's. Only the near link is
-    // named by an instance, so only its parameters can take a §6.3 override,
-    // and no fixture writes a far link that reads one. The upgrade path is a
-    // per-link `Unit` + `cloneParams` under `path ++ link.name ++ sep`,
-    // built in the same loop.
     var hier = ps_unit.hier;
     var i = chain.items.len;
     while (i > 0) {
         i -= 1;
+        self.unit = units[i];
+        defer units[i] = self.unit;
         for (chain.items[i].overrides) |o| switch (o.kind) {
             .module_param => {
                 var target = o.name;
@@ -440,7 +454,7 @@ pub fn paramsetOverrides(
             .output_var => {}, // §6.4.3, dropped in the parser
         };
     }
-    try paramsetStatements(self, chain.items, child, path, stmts);
+    try paramsetStatements(self, chain.items, units, child, path, stmts);
     self.in_paramset = false;
     self.unit = saved;
 
@@ -455,10 +469,12 @@ pub fn paramsetOverrides(
 /// parameters are) and its statements cloned into `stmts`, far link first
 /// as the module assignments are; a described variable is reported as the
 /// instance's own (`Design.ps_outputs`). §6.4.3's `.gm` reads the module's
-/// `gm` of this instance. Runs with the near link's unit in force.
+/// `gm` of this instance. Each link's statements run in its own unit
+/// (`units`, parallel to `chain`), so they read that link's parameters.
 fn paramsetStatements(
     self: *Flatten,
     chain: []const *const Ast.ParamsetDecl,
+    units: []Unit,
     child: *const Ast.ModuleDecl,
     path: []const u8,
     stmts: *std.ArrayList(Ast.StmtId),
@@ -467,12 +483,14 @@ fn paramsetStatements(
     var any = false;
     for (chain) |link| any = any or link.body.len != 0 or link.vars.len != 0;
     if (!any) return;
-    for (child.vars) |v| try bindDotted(self, path, v.name);
-    for (child.params) |p| try bindDotted(self, path, p.name);
     var i = chain.len;
     while (i > 0) {
         i -= 1;
         const link = chain[i];
+        self.unit = units[i];
+        defer units[i] = self.unit;
+        for (child.vars) |v| try bindDotted(self, path, v.name);
+        for (child.params) |p| try bindDotted(self, path, p.name);
         const link_path = try self.ctx.arena.print("{s}{s}{c}", .{ path, file.str(link.name), sep });
         for (link.vars) |v| try self.unit.rename.put(self.ctx.arena, v.name, try elab_names.join(self, link_path, v.name));
         for (link.vars) |v| {

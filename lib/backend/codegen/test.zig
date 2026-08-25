@@ -3833,6 +3833,7 @@ test "codegen: no embedded kernel shadows a device-level declaration" {
         "u_abstol",
         "u_kinds",
         "u_nodeset",
+        "decl_meta",
         "vpi_contrib_access",
         "acceptQ",
         "acStim",

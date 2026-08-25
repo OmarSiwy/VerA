@@ -1,6 +1,7 @@
 //! The analog analysis a VPI application watches: a compiled device library
 //! (`tb.renderVpiLib`, loaded by the host) -> §12.31.3 callbacks, §12.7-§12.10
-//! analog time and values, and §12.32 calltf per device system function call.
+//! analog time and values, and §12.32 calltf per device system task or
+//! function call, with the §12.22.2 output arguments it puts.
 //!
 //! The time walk lives here, not in the library, because §12.31.3 lets the
 //! application force solution times (acbAbsTime, acbElapsedTime) and reject a
@@ -25,33 +26,47 @@ pub const Lib = struct {
     n_rows: *const fn () callconv(.c) usize,
     row: *const fn (usize, *[4]i32) callconv(.c) void,
     rows: *const fn ([*]f64) callconv(.c) void,
-    systf: *const fn (?HostCall) callconv(.c) void,
+    systf: *const fn (?HostCall, ?HostOut) callconv(.c) void,
     n_systf: *const fn () callconv(.c) usize,
     systf_name: *const fn (usize, *usize) callconv(.c) [*]const u8,
     systf_tok: *const fn (usize) callconv(.c) u32,
+    systf_outs: *const fn (usize) callconv(.c) u64,
+    ac: *const fn (f64, [*]f64, [*]f64) callconv(.c) bool,
 };
 
 /// The C function the library forwards `contract.SystfHost.call` to.
 pub const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
+/// The C function the library forwards `contract.SystfHost.out` to.
+pub const HostOut = *const fn (usize, usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
 
-/// The analyses a host can run: a DC operating point or a transient.
-pub const Kind = enum { op, tran };
+/// The analyses a host can run: a DC operating point, a transient, or a
+/// small-signal AC sweep around an operating point.
+pub const Kind = enum { op, tran, ac };
 
 /// One `analysis` line: §12.18's vpiStartTime/vpiEndTime/vpiTransientMaxStep
-/// are its fields.
+/// and vpiStartFrequency/vpiEndFrequency are its fields. An AC sweep takes
+/// `points` frequencies, evenly spaced from `fstart` to `fstop`.
 pub const Analysis = struct {
     kind: Kind,
     start: f64 = 0,
     stop: f64 = 0,
     max_step: f64 = 0,
+    fstart: f64 = 0,
+    fstop: f64 = 0,
+    points: u32 = 1,
 };
 
 /// The device's `AnalysisKind` ordinals (`static, ic, nodeset, dc, tran, ac,
 /// noise`): an operating point is a DC analysis, a transient a transient.
+/// An AC sweep's operating point is "static" (Table 4-21: "the DC analysis
+/// which precedes an AC or noise analysis"): the device's `ac_stim` is live
+/// in every `.ac` evaluation, and is zero here (§4.6.1); the sweep itself
+/// evaluates as `.ac` (`Lib.ac`).
 fn kindOrdinal(k: Kind) u8 {
     return switch (k) {
         .op => 3,
         .tran => 4,
+        .ac => 0,
     };
 }
 
@@ -86,6 +101,12 @@ var reject_step = false;
 var awaiting = false;
 /// §12.36 vpiTransientFailConverge was called on the awaiting solution.
 var fail_converge = false;
+/// §12.8 the frequency of the small-signal solution an AC sweep stands on,
+/// 0 elsewhere (its operating point included).
+var freq: f64 = 0;
+/// That solution, every unknown's real part then every imaginary part
+/// (`Lib.ac`); meaningful while `freq != 0`.
+var ac_x: []f64 = &.{};
 
 /// §12.36 vpiRejectTransientStep: "cause the current analog simulation time
 /// point to be rejected". The walk backs up as for an acbConvergenceTest
@@ -120,6 +141,9 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     // than handed to the wrong one.
     const n_calls = l.n_systf();
     call_obj = try gpa.alloc(?u32, n_calls);
+    call_outs = try gpa.alloc(u64, n_calls);
+    outs = try gpa.alloc(?Out, n_calls);
+    @memset(outs, null);
     const Site = struct { name: []const u8, tok: u32 };
     const SiteCtx = struct {
         pub fn hash(_: @This(), s: Site) u64 {
@@ -138,16 +162,18 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
         const g = try by_site.getOrPut(gpa, .{ .name = o.name, .tok = o.src_tok });
         g.value_ptr.* = if (g.found_existing) null else @intCast(i);
     }
-    for (call_obj, 0..) |*c, k| {
+    for (call_obj, call_outs, 0..) |*c, *m, k| {
         var len: usize = 0;
         const name = l.systf_name(k, &len)[0..len];
         c.* = by_site.get(.{ .name = name, .tok = l.systf_tok(k) }) orelse null;
+        m.* = l.systf_outs(k);
     }
-    if (n_calls != 0) l.systf(deviceCall);
+    if (n_calls != 0) l.systf(deviceCall, deviceOut);
     const n = l.n_rows();
     rows = try gpa.alloc(Row, n);
     now_vals = try gpa.alloc(f64, 2 * n);
     prev_react = try gpa.alloc(f64, n);
+    ac_x = try gpa.alloc(f64, 2 * l.n_u());
     for (rows, 0..) |*r, k| {
         var m: [4]i32 = undefined;
         l.row(k, &m);
@@ -160,12 +186,23 @@ pub fn detach() void {
     lib = null;
     gpa.free(call_obj);
     call_obj = &.{};
+    gpa.free(call_outs);
+    call_outs = &.{};
+    for (outs) |o| if (o) |r| {
+        gpa.free(r.buf);
+        gpa.free(r.put);
+    };
+    gpa.free(outs);
+    outs = &.{};
     arg_values.clearAndFree(gpa);
     active_call = null;
     n_derivs = 0;
     gpa.free(rows);
     gpa.free(now_vals);
     gpa.free(prev_react);
+    gpa.free(ac_x);
+    ac_x = &.{};
+    freq = 0;
     rows = &.{};
     now_vals = &.{};
     prev_react = &.{};
@@ -206,16 +243,20 @@ pub fn sameTime(a: f64, b: f64) bool {
 }
 
 /// `run`'s failures: `NoLibrary`, no `attach` yet; `BackupExhausted`, see
-/// `run`. `DidNotConverge` is never returned today: `attempt` discards
+/// `run`; `Singular`, an AC point whose small-signal system has no solution.
+/// `DidNotConverge` is never returned today: `attempt` discards
 /// `Lib.solve`'s result.
-pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted };
+pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted, Singular };
 
 /// Runs one analysis to its end, delivering every §12.31.3 callback.
 ///
 /// `tran` walks a grid of `max_step` (default (stop - start)/50) plus every
 /// forced time; each tentative solution passes acbConvergenceTest before it is
 /// accepted, and a rejection (or §12.36 vpiRejectTransientStep) halves the step from the last accepted point.
-/// `op` is one DC solution, first and last at once. A rejected solution
+/// `op` is one DC solution, first and last at once. `ac` is that solution
+/// (acbInitialStep, at frequency 0), then one small-signal solution per
+/// frequency, each an acbAcceptedPoint and the last also acbFinalStep
+/// (`Vague_Decisions.md` VD-098). A rejected solution
 /// leaves no history. §12.36 vpiTransientFailConverge solves the same time
 /// again. `BackupExhausted`: 60 rejections or re-solves of one step.
 pub fn run(a: Analysis) Error!void {
@@ -228,7 +269,7 @@ pub fn run(a: Analysis) Error!void {
     current = run_a;
     defer current = null;
     t_accepted = a.start;
-    const last0 = a.kind == .op or a.stop <= a.start;
+    const last0 = a.kind == .op or (a.kind == .tran and a.stop <= a.start);
     // The first solution has no earlier time to back up to; §12.31.3's
     // rejection is honoured from the next one on. §12.36's
     // vpiTransientFailConverge needs none, so it is honoured here too.
@@ -241,6 +282,7 @@ pub fn run(a: Analysis) Error!void {
     }
     accept(l, true, last0);
     if (last0) return;
+    if (a.kind == .ac) return sweep(l, a);
 
     const h = run_a.max_step;
     while (!sameTime(t_accepted, a.stop) and t_accepted < a.stop) {
@@ -262,6 +304,24 @@ pub fn run(a: Analysis) Error!void {
             if (rejected) target = t_accepted + (target - t_accepted) / 2;
         }
         accept(l, false, sameTime(target, a.stop));
+    }
+}
+
+/// The AC half of `run`: `a.points` small-signal solutions around the
+/// accepted operating point. §12.31.3 names no per-frequency reason, so each
+/// is an acbAcceptedPoint, the last also acbFinalStep; §12.8's
+/// vpi_get_analog_freq() tells an application which kind of solution it is
+/// standing on.
+fn sweep(l: Lib, a: Analysis) Error!void {
+    defer freq = 0;
+    const n = @max(a.points, 1);
+    for (0..n) |k| {
+        const f = if (n == 1) a.fstart else a.fstart + (a.fstop - a.fstart) * @as(f64, @floatFromInt(k)) / @as(f64, @floatFromInt(n - 1));
+        const u = ac_x.len / 2;
+        if (!l.ac(2 * std.math.pi * f, ac_x.ptr, ac_x[u..].ptr)) return error.Singular;
+        freq = f;
+        callback.fireAnalog(callback.acbAcceptedPoint);
+        if (k == n - 1) callback.fireAnalog(callback.acbFinalStep);
     }
 }
 
@@ -312,38 +372,51 @@ fn unknownU16(x: [*]const f64, row: u16) f64 {
 
 /// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
 /// device does not publish.
-pub const ValueError = error{ NoAnalysis, Unknowable };
+/// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
+/// device does not publish. `SmallSignal`: a flow source's flow at an AC
+/// point, which this host does not linearise per row.
+pub const ValueError = error{ NoAnalysis, Unknowable, SmallSignal };
 
-/// Returns the real part of quantity `q`'s value (§11.6.7); no small-signal
-/// analysis runs here, so the imaginary part is always 0. A potential is the
-/// difference of two unknowns. A flow is an unknown for a potential source,
-/// and for a flow source the §5.6 row the device publishes
+/// §11.6.7 a quantity's "real value" and "imaginary value".
+pub const Value = struct { re: f64, im: f64 = 0 };
+
+/// Returns quantity `q`'s value (§11.6.7): at an AC point the small-signal
+/// phasor, elsewhere the large-signal value with imaginary part 0. A
+/// potential is the difference of two unknowns. A flow is an unknown for a
+/// potential source, and for a flow source the §5.6 row the device publishes
 /// (`codegen.Options.vpi_contribs`): resistive part plus the backward-Euler
 /// derivative of the reactive part over the step being solved.
-pub fn quantityValue(q: *const root.Obj) ValueError!f64 {
+pub fn quantityValue(q: *const root.Obj) ValueError!Value {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
     const d = &root.design.?;
     const b = root.coldOf(&d.objects[root.coldOf(q).branch orelse return error.NoAnalysis]);
-    const x = l.x();
+    const ac = freq != 0;
+    const x = if (ac) ac_x.ptr else l.x();
+    const xi = ac_x[ac_x.len / 2 ..].ptr;
     const is_flow = b.flow != null and &d.objects[b.flow.?] == q;
-    if (!is_flow) return unknownU16(x, b.hi_row) - unknownU16(x, b.lo_row);
+    if (!is_flow) return .{
+        .re = unknownU16(x, b.hi_row) - unknownU16(x, b.lo_row),
+        .im = if (ac) unknownU16(xi, b.hi_row) - unknownU16(xi, b.lo_row) else 0,
+    };
     if (b.flow_unknowable) return error.Unknowable;
     const sign: f64 = if (b.flow_neg) -1 else 1;
     if (b.contrib_pot) |k| {
         const r = rows[k];
         if (r.flow_u < 0) return error.Unknowable;
-        return sign * x[@intCast(r.flow_u)];
+        const u: usize = @intCast(r.flow_u);
+        return .{ .re = sign * x[u], .im = if (ac) sign * xi[u] else 0 };
     }
     if (b.contrib_flow) |k| {
+        if (ac) return error.SmallSignal;
         refreshRows(l);
         var v = now_vals[2 * k];
         if (delta > 0) v += (now_vals[2 * k + 1] - prev_react[k]) / delta;
-        return sign * v;
+        return .{ .re = sign * v };
     }
     // §5.6.1.3: a branch with no source retains nothing, and is an open
     // circuit — its flow is zero.
-    return 0;
+    return .{ .re = 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -363,8 +436,8 @@ pub const AnalogValue = extern struct {
 ///
 /// A non-quantity object or a NULL structure is refused. The value is the
 /// current solution of analog.zig's analysis; with none, the error is
-/// NOANALYSIS, and a flow shared with a parallel instance is SHARED. Every
-/// imaginary part is 0 (no small-signal analysis runs).
+/// NOANALYSIS, and a flow shared with a parallel instance is SHARED. The
+/// imaginary part is 0 except at an AC point (`quantityValue`).
 pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void {
     _ = root.enter("vpi_get_analog_value") orelse return;
     const o = root.object("vpi_get_analog_value", obj) orelse return;
@@ -376,17 +449,18 @@ pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void 
         root.fail("BADVALUE", "vpi_get_analog_value: value_p is NULL", .{});
         return;
     };
-    const re = quantityValue(o) catch |e| {
+    const val = quantityValue(o) catch |e| {
         switch (e) {
             error.NoAnalysis => root.fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{}),
             // A row two instances' <+ summed into holds their total; this
             // branch's share of it is not a number the model has.
             error.Unknowable => root.fail("SHARED", "vpi_get_analog_value: this branch's flow was summed with a parallel instance's and cannot be told apart", .{}),
+            error.SmallSignal => root.fail("NOTSUPPORTED", "vpi_get_analog_value: the small-signal flow of a flow contribution is not computed at an AC point; its potentials are", .{}),
         }
         return;
     };
-    // No small-signal analysis runs here: every imaginary part is 0.
-    const im: f64 = 0;
+    const re = val.re;
+    const im = val.im;
     switch (v.format) {
         vpiRealVal => {
             v.real = .{ .real = re };
@@ -492,7 +566,7 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
 /// or the time zero transient solution."
 pub export fn vpi_get_analog_time() f64 {
     if (root.refused("vpi_get_analog_time")) return 0;
-    if (current) |a| if (a.kind == .op) return 0;
+    if (current) |a| if (a.kind != .tran) return 0;
     return t_now;
 }
 
@@ -503,16 +577,16 @@ pub export fn vpi_get_analog_time() f64 {
 /// accepted, so it is the step that reached it.
 pub export fn vpi_get_analog_delta() f64 {
     if (root.refused("vpi_get_analog_delta")) return 0;
-    if (current) |a| if (a.kind == .op) return 0;
+    if (current) |a| if (a.kind != .tran) return 0;
     return delta;
 }
 
 /// §12.8 "the current frequency used in the small-signal analysis. The
-/// function shall return zero (0) during DC or transient analysis." No
-/// small-signal analysis runs in this process, so it is zero throughout.
+/// function shall return zero (0) during DC or transient analysis." Nonzero
+/// only at an AC sweep's small-signal points, not at its operating point.
 pub export fn vpi_get_analog_freq() f64 {
     if (root.refused("vpi_get_analog_freq")) return 0;
-    return 0;
+    return freq;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,8 +597,29 @@ pub export fn vpi_get_analog_freq() f64 {
 /// or more than one.
 var call_obj: []?u32 = &.{};
 
+/// Per device call index: the arguments the device reads back after the
+/// call (`contract.Systf.outs`, bit j - 1 for argument j).
+var call_outs: []u64 = &.{};
+
+/// §12.22.2 one call's output arguments, as its latest calltf left them:
+/// `val[j - 1]` and row j - 1 of `part` (d(argument j)/d(argument i)) for each
+/// argument j with `put[j - 1]`, which calltf put a value or a partial on.
+/// `deviceOut` answers from it. One buffer, `buf`, holds all three.
+const Out = struct {
+    buf: []f64,
+    put: []bool,
+    n: usize,
+    fn val(o: Out) []f64 {
+        return o.buf[0..o.n];
+    }
+    fn part(o: Out) []f64 {
+        return o.buf[o.n..];
+    }
+};
+var outs: []?Out = &.{};
+
 /// The call whose §12.32 calltf is running.
-const Active = struct { obj: u32, result: f64, partials: []f64 };
+const Active = struct { obj: u32, k: usize, result: f64, partials: []f64 };
 var active_call: ?*Active = null;
 
 /// Each call argument's value at the latest evaluation, by object index —
@@ -552,7 +647,22 @@ fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv
         for (l.items[0..@min(n, l.items.len)], 0..) |a, j| arg_values.put(gpa, a, args[j]) catch {};
     };
     const f = reg.analog.calltf orelse return 0;
-    var st: Active = .{ .obj = obj, .result = 0, .partials = partials[0..n] };
+    // This call's outputs start over: an argument calltf does not put keeps
+    // its value (`deviceOut`).
+    if (call_outs[k] != 0) {
+        if (outs[k] == null) outs[k] = .{
+            .buf = gpa.alloc(f64, n * (n + 1)) catch return oom(),
+            .put = gpa.alloc(bool, n) catch return oom(),
+            .n = n,
+        };
+        const rec = outs[k].?;
+        // One call site always passes the same arguments.
+        std.debug.assert(rec.n == n);
+        @memcpy(rec.val(), args[0..n]);
+        @memset(rec.put, false);
+        @memset(rec.part(), 0);
+    }
+    var st: Active = .{ .obj = obj, .k = k, .result = 0, .partials = partials[0..n] };
     const prev_call = active_call;
     const prev_sys = systf.active;
     active_call = &st;
@@ -564,6 +674,61 @@ fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv
     var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(o), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
     _ = f(&cb);
     return st.result;
+}
+
+fn oom() f64 {
+    root.fail("NOMEM", "out of memory for a call's output arguments", .{});
+    return 0;
+}
+
+/// `contract.SystfHost.out`, for the library: argument j of call k as its
+/// latest calltf left it (§12.22.2), with its partials; an argument calltf
+/// put nothing on is unchanged (partial 1 on itself).
+fn deviceOut(k: usize, j: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
+    @memset(partials[0..n], 0);
+    if (j == 0 or j > n) return 0;
+    const o = (if (k < outs.len) outs[k] else null) orelse {
+        partials[j - 1] = 1;
+        return args[j - 1];
+    };
+    if (o.n != n or !o.put[j - 1]) {
+        partials[j - 1] = 1;
+        return args[j - 1];
+    }
+    @memcpy(partials[0..n], o.part()[(j - 1) * n ..][0..n]);
+    return o.val()[j - 1];
+}
+
+/// §12.30 onto argument j of the call calltf is running for: the value the
+/// device reads back as that variable (§12.22.2). False when `o` is no
+/// argument of that call, so the ordinary put rules apply; an argument the
+/// device does not read back is refused (NOPUT).
+pub fn putArg(o: *const root.Obj, v: f64) bool {
+    const st = active_call orelse return false;
+    const j = argPosition(st.obj, o) orelse return false;
+    const out = outputOf(st, j, "vpi_put_value") orelse return true;
+    out.val()[j - 1] = v;
+    out.put[j - 1] = true;
+    return true;
+}
+
+/// The running call's output record when argument j is one the device reads
+/// back, else null with a NOPUT error.
+fn outputOf(st: *const Active, j: usize, routine: []const u8) ?Out {
+    if (j > 64 or (call_outs[st.k] >> @intCast(j - 1)) & 1 == 0) {
+        root.fail("NOPUT", "{s}: argument {d} of `{s}` is not a variable the design reads back after the call (§12.22.2)", .{ routine, j, root.design.?.objects[st.obj].name });
+        return null;
+    }
+    return outs[st.k];
+}
+
+/// Which argument (1-based) of call `obj` the object `o` is, or null.
+fn argPosition(obj: u32, o: *const root.Obj) ?usize {
+    const d = &root.design.?;
+    for (d.objects[obj].lists) |l| if (l.tag == code.vpiArgument) {
+        for (l.items, 0..) |a, j| if (&d.objects[a] == o) return j + 1;
+    };
+    return null;
 }
 
 /// §12.16 for an analog call argument that has no value of its own: its
@@ -649,9 +814,9 @@ pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
 }
 
 /// §12.32.2 "values can then be contributed to the derivative using the
-/// vpi_put_value function in the calltf call back". The device carries the
-/// partials of the RETURNED value (its `SystfHost` returns one value), so a
-/// derivative of an output argument has nowhere to go and is refused.
+/// vpi_put_value function in the calltf call back": a partial of the returned
+/// value, or of an argument the device reads back (§12.22.2); any other
+/// argument's is refused (NOPUT).
 pub fn putDerivative(dv: *Deriv, v: f64) bool {
     const st = active_call orelse {
         root.fail("NOCALL", "vpi_put_value: a derivative takes a value during its call's calltf", .{});
@@ -661,11 +826,16 @@ pub fn putDerivative(dv: *Deriv, v: f64) bool {
         root.fail("NOCALL", "vpi_put_value: that derivative belongs to another call", .{});
         return false;
     }
-    if (dv.of != 0) {
-        root.fail("NOTSUPPORTED", "vpi_put_value: the derivative of an output argument; this device takes the returned value's partials only", .{});
-        return false;
-    }
     const j: usize = @intCast(dv.wrt - 1);
+    if (dv.of != 0) {
+        const of: usize = @intCast(dv.of);
+        const out = outputOf(st, of, "vpi_put_value") orelse return false;
+        if (j >= out.n) return false;
+        out.part()[(of - 1) * out.n + j] = v;
+        out.put[of - 1] = true;
+        dv.value = v;
+        return true;
+    }
     if (j >= st.partials.len) return false;
     st.partials[j] = v;
     dv.value = v;

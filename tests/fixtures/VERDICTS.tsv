@@ -72,7 +72,7 @@ pass	annex_a_syntax/70_identifier_details_positive.va
 pass	annex_a_syntax/audit_library_declaration_in_design_rejected.va
 pass	annex_a_syntax/audit_period_requires_event_control.va
 pass	annex_a_syntax/audit_width_requires_event_control.va
-xfail	annex_a_syntax/b8_child_output_reg_drives_parent_wire.va
+pass	annex_a_syntax/b8_child_output_reg_drives_parent_wire.va
 pass	annex_a_syntax/b8_drive_strength_resolves.va
 pass	annex_a_syntax/b8_gate_instantiation_truth_table.va
 pass	annex_a_syntax/b8_macromodule_contributes.va
@@ -303,7 +303,7 @@ pass	annex_e_spice/primitive_mixed_discipline_override.va
 pass	annex_e_spice/primitive_named_ports.va
 pass	annex_e_spice/primitive_port_discipline.va
 pass	annex_e_spice/primitive_port_name_not_in_table_e1_rejected.va
-xfail	annex_e_spice/primitive_segment_discipline.va
+pass	annex_e_spice/primitive_segment_discipline.va
 pass	annex_e_spice/primitive_segment_scan.va
 pass	annex_e_spice/primitive_tline.va
 pass	annex_e_spice/primitive_vccs.va
@@ -347,7 +347,7 @@ pass	annex_e_spice/unsupported_cccs.va
 pass	annex_e_spice/unsupported_ccvs.va
 pass	annex_e_spice/unsupported_mutual_inductor.va
 pass	annex_e_spice/verilog_module_shadowing_primitive_keeps_its_own_parameters_rejected.va
-xfail	annex_f_resolution/b5_net_read_by_digital_code_resolves_digital.va
+pass	annex_f_resolution/b5_net_read_by_digital_code_resolves_digital.va
 pass	annex_f_resolution/conflicting_declarations.va
 pass	annex_f_resolution/conflicting_ooc_declarations.va
 pass	annex_f_resolution/continuous_discipline.va
@@ -678,6 +678,8 @@ pass	ch03_data_types/aliasparam_paramset_read_rejected.va
 pass	ch03_data_types/aliasparam_source_bindings.va
 pass	ch03_data_types/aliasparam_system_read_rejected.va
 pass	ch03_data_types/aliasparam_target_must_be_a_parameter_rejected.va
+pass	ch03_data_types/annex_d_access_v_included_rejected.va
+pass	ch03_data_types/annex_d_access_v_without_include.va
 pass	ch03_data_types/array_extra_subscript_rejected.va
 pass	ch03_data_types/array_over_2_20_elements_rejected.va
 pass	ch03_data_types/audit_compatible_flow_units.va
@@ -713,6 +715,9 @@ pass	ch03_data_types/b1_3_6_2_4_wire_without_discipline_is_discrete.va
 pass	ch03_data_types/b1_3_6_2_5_discipline_overrides_flow_abstol.va
 pass	ch03_data_types/b1_3_6_2_compatible_hierarchical_override.va
 pass	ch03_data_types/b1_3_6_2_incompatible_hierarchical_override_rejected.va
+pass	ch03_data_types/desc_net_rows.va
+pass	ch03_data_types/desc_units_output_variable_rows.va
+pass	ch03_data_types/desc_units_parameter_rows.va
 pass	ch03_data_types/digital_primitive_on_mixed_net_rejected.va
 pass	ch03_data_types/discipline_domain_is_continuous_or_discrete_rejected.va
 pass	ch03_data_types/discipline_duplicate_user_attribute_rejected.va
@@ -980,6 +985,7 @@ pass	ch04_expressions/a06_ac_stim_name_not_literal_rejected.va
 pass	ch04_expressions/a06_ac_stim_noise_analysis.va
 pass	ch04_expressions/a06_ac_stim_quadrature.va
 pass	ch04_expressions/a06_flicker_noise_missing_exponent_rejected.va
+pass	ch04_expressions/a06_noise_anticorrelated_coefficient.va
 pass	ch04_expressions/a06_noise_coefficient_beside_a_loop.va
 pass	ch04_expressions/a06_noise_coefficient_through_a_conditional.va
 pass	ch04_expressions/a06_noise_correlated_scale.va
@@ -1068,6 +1074,7 @@ pass	ch04_expressions/ddt_in_expression_is_a_charge_site.va
 pass	ch04_expressions/ddt_output_abstol.va
 pass	ch04_expressions/ddx_runtime_indexed_array_element.va
 pass	ch04_expressions/ddx_vera_nodiff_assignment.va
+pass	ch04_expressions/dynamic_constant_argument_resampled_per_analysis.va
 pass	ch04_expressions/filter_scalar_coefficient_rejected.va
 pass	ch04_expressions/function_array_output_pattern_size_rejected.va
 pass	ch04_expressions/function_array_output_scalar_actual_rejected.va
@@ -1096,6 +1103,7 @@ pass	ch04_expressions/lrm_4_7_2.va
 pass	ch04_expressions/minmax_nan_signed_zero_fold_matches_run.va
 pass	ch04_expressions/modulo_integer_display_zero.va
 pass	ch04_expressions/modulo_integer_dynamic.va
+pass	ch04_expressions/modulo_integer_dynamic_nonzero.va
 pass	ch04_expressions/modulo_integer_dynamic_zero.va
 pass	ch04_expressions/modulo_integer_parameter.va
 pass	ch04_expressions/modulo_integer_short_circuit.va
@@ -1296,6 +1304,7 @@ pass	ch05_analog_behavior/flow_source.va
 pass	ch05_analog_behavior/for_loop.va
 pass	ch05_analog_behavior/for_zero_iterations.va
 pass	ch05_analog_behavior/generic_access.va
+pass	ch05_analog_behavior/held_sformat_string_survives_rejected_step.va
 pass	ch05_analog_behavior/hierarchical_access_unsupported.va
 pass	ch05_analog_behavior/hierarchical_contribution_closes_a_source_triangle_rejected.va
 pass	ch05_analog_behavior/hierarchical_contribution_unsupported.va
@@ -1344,6 +1353,8 @@ pass	ch05_analog_behavior/nested_sequential_blocks.va
 pass	ch05_analog_behavior/net_named_gnd_is_not_ground.va
 pass	ch05_analog_behavior/parallel_instances_own_unnamed_branch.va
 pass	ch05_analog_behavior/parameter_V_with_generic_access.va
+pass	ch05_analog_behavior/port_access_hierarchical_instance.va
+pass	ch05_analog_behavior/port_access_hierarchical_potential_source_rejected.va
 pass	ch05_analog_behavior/port_flow_contribution_invalid.va
 pass	ch05_analog_behavior/port_flow_probe.va
 pass	ch05_analog_behavior/port_potential_invalid.va
@@ -1454,6 +1465,7 @@ pass	ch06_hierarchy/defparam_instance_array_element.va
 pass	ch06_hierarchy/defparam_path_names_nothing_rejected.va
 pass	ch06_hierarchy/defparam_precedence_over_instance_override.va
 pass	ch06_hierarchy/defparam_unsupported.va
+pass	ch06_hierarchy/defparam_upward_collect_first.va
 pass	ch06_hierarchy/defparam_upward_module_name_path.va
 pass	ch06_hierarchy/dependent_parameter_transcendental.va
 pass	ch06_hierarchy/dependent_parameters.va
@@ -1622,7 +1634,7 @@ pass	ch06_hierarchy/port_direction_not_a_port_rejected.va
 pass	ch06_hierarchy/port_directions.va
 pass	ch06_hierarchy/port_expression_literal_in_concatenation_rejected.va
 pass	ch06_hierarchy/rc_generate_block_instance_name.va
-xfail	ch06_hierarchy/rc_h01_paramset_chain_far_link_parameter.va
+pass	ch06_hierarchy/rc_h01_paramset_chain_far_link_parameter.va
 pass	ch06_hierarchy/real_port_unsupported.va
 pass	ch06_hierarchy/real_valued_wreal_port.va
 pass	ch06_hierarchy/recover_to_paramset_after_error.va
@@ -1641,6 +1653,8 @@ pass	ch06_hierarchy/top_initial_block_with_a_child.va
 pass	ch06_hierarchy/top_level_module.va
 pass	ch06_hierarchy/typed_ports.va
 pass	ch06_hierarchy/unnamed_generate_block_external_names.va
+pass	ch06_hierarchy/unnamed_generate_instance_reference_rejected.va
+pass	ch06_hierarchy/unnamed_generate_reference_from_within.va
 pass	ch06_hierarchy/untyped_port_behavioral_use_rejected.va
 pass	ch06_hierarchy/vector_port_unknown_ceiling_rejected.va
 pass	ch06_hierarchy/vector_ports.va
@@ -1664,6 +1678,7 @@ pass	ch07_mixed_signal/analog_reads_integer.va
 pass	ch07_mixed_signal/audit_child_wrong_flow_rejected.va
 pass	ch07_mixed_signal/audit_child_wrong_potential_rejected.va
 pass	ch07_mixed_signal/auto_insertion_figure_7_6_basic_merged.va
+pass	ch07_mixed_signal/auto_insertion_figure_7_6_case2_detail_merged.va
 pass	ch07_mixed_signal/auto_insertion_figure_7_6_detail_merged.va
 pass	ch07_mixed_signal/auto_insertion_figure_7_6_detail_split.va
 pass	ch07_mixed_signal/b5_connect_plain_discipline_override.va
@@ -1685,8 +1700,13 @@ pass	ch07_mixed_signal/compatible_port_discipline.va
 pass	ch07_mixed_signal/conflicting_discipline_declaration_rejected.va
 pass	ch07_mixed_signal/connect_directions_not_table_7_2_rejected.va
 pass	ch07_mixed_signal/connect_generated_defparam_unsupported.va
+pass	ch07_mixed_signal/connect_insertion_generate_block_port.va
 pass	ch07_mixed_signal/connect_insertion_names_an_ordinary_module_rejected.va
 pass	ch07_mixed_signal/connect_insertion_resolved_above.va
+pass	ch07_mixed_signal/connect_insertion_upper_from_deep_paramset.va
+pass	ch07_mixed_signal/connect_insertion_upper_from_generate_block.va
+pass	ch07_mixed_signal/connect_insertion_upper_from_instance_array.va
+pass	ch07_mixed_signal/connect_insertion_upper_from_ooc_below.va
 pass	ch07_mixed_signal/connect_mode_accepted.va
 pass	ch07_mixed_signal/connect_mode_not_merged_or_split_rejected.va
 pass	ch07_mixed_signal/connect_module_manually_inserted.va
@@ -1718,6 +1738,7 @@ pass	ch07_mixed_signal/discrete_bus_narrow.va
 pass	ch07_mixed_signal/discrete_bus_over31_rejected.va
 pass	ch07_mixed_signal/discrete_bus_part_select_31.va
 pass	ch07_mixed_signal/discrete_bus_part_select_32_rejected.va
+pass	ch07_mixed_signal/discrete_bus_part_select_above_31.va
 pass	ch07_mixed_signal/discrete_bus_part_select_above_31_unsupported.va
 pass	ch07_mixed_signal/discrete_discipline.va
 pass	ch07_mixed_signal/discrete_real_from_analog.va
@@ -1772,6 +1793,7 @@ pass	ch07_mixed_signal/m02_12_comparator_dac_feedback.va
 pass	ch07_mixed_signal/m02_13_absdelta_interpolated_a2d.va
 pass	ch07_mixed_signal/m02_14_zero_delay_settles_before_the_macro_process.va
 pass	ch07_mixed_signal/m02_15_explicit_d2a_per_delta_cycle.va
+pass	ch07_mixed_signal/m02_16_wide_reg_part_select_above_31.va
 pass	ch07_mixed_signal/m03_01_merged_is_the_default_one_instance.va
 pass	ch07_mixed_signal/m03_02_split_one_instance_per_port.va
 pass	ch07_mixed_signal/m03_03_merged_groups_per_connect_module.va
@@ -1805,6 +1827,8 @@ pass	ch07_mixed_signal/node_abstol_local_attribute_rejected.va
 pass	ch07_mixed_signal/node_abstol_resolved_segment.va
 pass	ch07_mixed_signal/node_abstol_vector_ports.va
 pass	ch07_mixed_signal/primitive_generated_ports_unsupported.va
+pass	ch07_mixed_signal/probe_in_continuous_assign_refused.va
+pass	ch07_mixed_signal/probe_in_procedural_read.va
 pass	ch07_mixed_signal/probe_of_a_discrete_net_in_digital_rejected.va
 pass	ch07_mixed_signal/reject_display_x_operand_analog.va
 pass	ch07_mixed_signal/reject_mixed_port_no_connect_statement.va
@@ -1837,7 +1861,7 @@ pass	ch08_scheduling/analog_initial_order.va
 pass	ch08_scheduling/analog_initial_parameter_sweep.va
 pass	ch08_scheduling/analog_macro_process.va
 pass	ch08_scheduling/audit_coupled_nodal_solution.va
-xfail	ch08_scheduling/b3_analog_initial_before_digital_initial.va
+pass	ch08_scheduling/b3_analog_initial_before_digital_initial.va
 pass	ch08_scheduling/b3_one_solve_consumes_simultaneous_d2a.va
 pass	ch08_scheduling/b3_strobe_after_macro_process.va
 pass	ch08_scheduling/blocking_assignment_delay.va
@@ -1851,6 +1875,8 @@ pass	ch08_scheduling/elaboration_parameter_sweep.va
 pass	ch08_scheduling/event_state.va
 pass	ch08_scheduling/explicit_guard.va
 pass	ch08_scheduling/integrator_state.va
+pass	ch08_scheduling/macro_process_one_solve_for_coincident_events.va
+pass	ch08_scheduling/monitor_after_macro_process.va
 pass	ch08_scheduling/multi_branch_kfl.va
 pass	ch08_scheduling/multiple_analog_blocks.va
 pass	ch08_scheduling/nonblocking_assignment_to_a_net_rejected.va
@@ -2166,6 +2192,7 @@ pass	ch09_system_tasks/b6_finish_in_rejected_iteration_has_no_effect.va
 pass	ch09_system_tasks/b6_l_format_library_cell.va
 pass	ch09_system_tasks/b6_port_alias_to_a_net_returns_zero.va
 pass	ch09_system_tasks/b6_port_connected_controls_analog_operator.va
+pass	ch09_system_tasks/b6_rdist_positive_mean_at_run_time.va
 pass	ch09_system_tasks/b6_rdist_zero_mean_at_run_time_is_an_error.va
 pass	ch09_system_tasks/b6_severity_in_rejected_iteration_has_no_effect.va
 pass	ch09_system_tasks/b6_sformat_variable_format_mismatch_continues.va
@@ -2232,6 +2259,7 @@ pass	ch09_system_tasks/s01_10_fscanf_failed_match_leaves_input.va
 pass	ch09_system_tasks/s01_11_fscanf_real_destination.va
 pass	ch09_system_tasks/s01_12_sscanf_engineering_and_path_codes.va
 pass	ch09_system_tasks/s01_13_long_record_is_not_truncated.va
+pass	ch09_system_tasks/say_debug_every_iteration.va
 pass	ch09_system_tasks/say_device_records.va
 pass	ch09_system_tasks/sformat_32_conversions.va
 pass	ch09_system_tasks/sformat_33_conversions_rejected.va
@@ -2245,6 +2273,7 @@ pass	ch09_system_tasks/simparam_str_unknown_name_rejected.va
 pass	ch09_system_tasks/simprobe_string_parameter_name_resolves.va
 pass	ch09_system_tasks/string_concat_overrun_is_fatal.va
 pass	ch09_system_tasks/strobe_flow_read_inside_array_pattern_argument.va
+pass	ch09_system_tasks/table_capture_rejected_step_recaptures.va
 pass	ch09_system_tasks/table_model_columns_of_unequal_length_rejected.va
 pass	ch09_system_tasks/table_model_file_over_16mib_rejected.va
 pass	ch09_system_tasks/write_mode_path_65_fails_open.va

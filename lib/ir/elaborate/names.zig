@@ -1,7 +1,8 @@
 //! Hierarchical names: an instance path and a local name → the flat, injective
 //! name the lowered design uses; module and paramset lookup; access-function
 //! respelling across a port join; constant folding of instance bounds.
-//! LRM §3.6.1.4, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.7, §7.4, E.3.2, E.3.3.
+//! LRM §3.6.1.4, §3.6.5, §4.4, §6.2.2, §6.3.6, §6.4, §6.6.1, §6.6.2, §6.6.3, §6.7, §7.4,
+//! E.3.2, E.3.3.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -49,6 +50,71 @@ pub fn flatReference(file: *const Ast.SourceFile, arena: std.mem.Allocator, modu
         try out.appendSlice(arena, file.str(p));
     }
     return out.toOwnedSlice(arena);
+}
+
+/// §6.6.2: "If the generate block selected for instantiation is not named,
+/// it still creates a scope; but the declarations within it cannot be
+/// referenced using hierarchical names other than from within the hierarchy
+/// instantiated by the generate block itself" (§6.6.1 says the same of a
+/// loop), and §6.6.3: it "has no name that can be used in a hierarchical
+/// name". Appends to `out` the flat prefix of each unnamed generate block of
+/// `m` instantiated at `path`: `path ++ "genblk1."`, inside named blocks too,
+/// and `path ++ "genblk4["` for an unnamed loop block, whose copies are
+/// `genblk4[i]`. A hierarchical name spelled into one of them from outside
+/// it is E0998 (`Lower`'s `refuseUnnamedGen`).
+///
+/// ponytail: blocks nested inside a loop's block are not listed; their
+/// prefixes carry the iteration index. The upgrade is `loopInstances`'s walk.
+pub fn unnamedGenScopes(file: *const Ast.SourceFile, arena: std.mem.Allocator, m: *const Ast.ModuleDecl, path: []const u8, out: *std.ArrayList([]const u8)) std.mem.Allocator.Error!void {
+    for (m.analog) |blk| try genScopesIn(file, arena, blk.body, path, out);
+}
+
+fn genScopesIn(file: *const Ast.SourceFile, arena: std.mem.Allocator, id: Ast.StmtId, prefix: []const u8, out: *std.ArrayList([]const u8)) std.mem.Allocator.Error!void {
+    if (id == .none) return;
+    switch (file.stmt(id)) {
+        .block => |b| {
+            var inner = prefix;
+            if (b.gen_name != .none) {
+                inner = try arena.print("{s}{s}{c}", .{ prefix, file.str(b.gen_name), elaborate.sep });
+                if (b.name == .none) try out.append(arena, inner);
+            }
+            for (b.body) |st| try genScopesIn(file, arena, st, inner, out);
+        },
+        .if_stmt => |st| if (st.is_generate) {
+            try genScopesIn(file, arena, st.then_s, prefix, out);
+            try genScopesIn(file, arena, st.else_s, prefix, out);
+        },
+        .case_stmt => |st| for (st.arms) |a| try genScopesIn(file, arena, a.body, prefix, out),
+        .for_stmt => |st| if (st.body != .none and file.stmt(st.body) == .block) {
+            const b = file.stmt(st.body).block;
+            if (b.gen_name != .none and b.name == .none)
+                try out.append(arena, try arena.print("{s}{s}[", .{ prefix, file.str(b.gen_name) }));
+        },
+        else => {}, // else: no other statement holds a generate block
+    }
+}
+
+/// Whether `name` is the §6.6.3 external name of an unnamed generate block
+/// at `m`'s own scope (not nested in a named block): the first part of a
+/// hierarchical name written in `m` that would open it (§6.6.2, E0998).
+pub fn namesUnnamedGen(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (m.analog) |blk| if (unnamedGenIn(file, blk.body, name)) return true;
+    return false;
+}
+
+fn unnamedGenIn(file: *const Ast.SourceFile, id: Ast.StmtId, name: Ast.StrId) bool {
+    if (id == .none) return false;
+    switch (file.stmt(id)) {
+        // A generate scope's own blocks are a level further down.
+        .block => |b| {
+            if (b.gen_name != .none) return b.name == .none and b.gen_name == name;
+            for (b.body) |st| if (unnamedGenIn(file, st, name)) return true;
+        },
+        .if_stmt => |st| if (st.is_generate) return unnamedGenIn(file, st.then_s, name) or unnamedGenIn(file, st.else_s, name),
+        .case_stmt => |st| for (st.arms) |a| if (unnamedGenIn(file, a.body, name)) return true,
+        else => {}, // else: no other statement holds a generate block at this scope
+    }
+    return false;
 }
 
 // ---- names ------------------------------------------------------------
@@ -594,6 +660,15 @@ pub fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
 pub fn constIntFlat(self: *Flatten, e: Ast.ExprId) ?i64 {
     const c = constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = false }) orelse return null;
     return if (c == .int) c.int else null;
+}
+
+/// §6.6.2 whether the generate scheme `gate` (flat names, `.none` for an
+/// instance outside any scheme) brings its instance into existence: it folds
+/// true. One that does not fold is not known to.
+pub fn gateHolds(self: *Flatten, gate: Ast.ExprId) bool {
+    if (gate == .none) return true;
+    const c = constValue(self, gate, false, null) orelse return false;
+    return c.isTrue();
 }
 
 /// §6.4.2 folds an override in its source namespace. When `reads` is supplied,

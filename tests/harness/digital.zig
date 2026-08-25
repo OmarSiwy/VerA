@@ -87,8 +87,8 @@ pub fn rejectionMatches(source: []const u8, exit_code: u8, stderr: []const u8) b
 }
 
 /// `.any`: some `error[` line contains one of `patterns`. `.every`: each
-/// `error[` line contains one of them.
-fn errorSays(stderr: []const u8, patterns: []const []const u8, mode: enum { any, every }) bool {
+/// `error[` line contains one of them. Also `torture.zig`'s `//! reject-run`.
+pub fn errorSays(stderr: []const u8, patterns: []const []const u8, mode: enum { any, every }) bool {
     var diagnostics = std.mem.splitScalar(u8, stderr, '\n');
     while (diagnostics.next()) |raw| {
         const diagnostic = std.mem.trim(u8, raw, " \t\r");

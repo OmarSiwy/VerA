@@ -311,6 +311,11 @@ carries the machine-readable tags:
 //! bias V(p) = 0.75, V(n) = 0.25
 //! reject E0310     <- a SUBSTRING. A bare `//! reject` matches ANY diagnostic.
 //!                     Always name the code or a distinctive phrase.
+//! reject-run E0816 <- a RUN-TIME refusal: the fixture compiles and runs, and
+//!                     the run must exit nonzero (1 unless `//! exit` says) with
+//!                     an `error[` line holding each substring, and no other
+//!                     `error[` line (always `reject-only`'s rule). Takes a
+//!                     `//! neighbour`, `//! checks` and the checks before it.
 //! warn W0853       <- the fixture still compiles and runs; each substring must
 //!                     match a WARNING. Unnamed warnings pass (W0650 is off
 //!                     unless named). `//! nowarn`: this source warns nothing.
@@ -324,8 +329,12 @@ A verdict is the whole token `ok=1`; `ok=10` fails. Without `//! checks` the
 runner only needs a nonempty, all-passing transcript.
 
 Device-table directives assert what a device PUBLISHES to a host, as
-`got=/want= ok=` lines: `//! noise`, `//! acstim`, `//! qsite` (one line
-per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order), and
+`got=/want= ok=` lines: `//! noise` (`corr=<j>:<rho>` states §4.6.4.6's
+correlation coefficient with row j, from the rows' shared `source` and the
+signs of their `coeff`), `//! acstim`, `//! qsite` (one line
+per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order),
+`//! meta <kind> <name> [desc="..."] [units="..."]` (one per §2.9.2
+`decl_meta` row, `contract.DeclMeta`; `//! meta none`), and
 `//! abstol <unknown> = v` (the §3.6.1.2 `u_abstol` entry).
 
 **Vendor attributes.** VerA reads five §2.9 attributes. `vera_lte` is a
@@ -483,11 +492,10 @@ Checked against the code on 2026-09-27.
   `$vera_reject_step` retries. `//! onoise` is its small-signal noise.
   Both are for generated decks.
 - **VPI.** Every `.c` fixture compiles against `src/vpi/vpi_user.h`
-  (`zig build test-vpi-fixtures`). The ones in `build.zig`'s `vpi_runs` also run
-  in-process under `zig build test`, analog routines included. The rest only
-  compile, for reasons listed above `vpi_runs`: a user `$systf` call from
-  digital code, an analog system task whose calltf writes an output argument,
-  and an `ac` analysis.
+  (`zig build test-vpi-fixtures`), and every one runs in-process under
+  `zig build test` (`build.zig`'s `vpi_runs`, and `vpi_app.c` under
+  `test-vpi`), analog routines, analog task output arguments and `ac` sweeps
+  included. The `.xfail` rows of `vpi_runs` are the known gaps.
 - **Setup split** (`codegen/plan/setup.zig`) computes solve-invariant values
   once. Array operations are classified per evaluation, so an array filled
   once in `analog initial` is still recomputed every eval. A per-timepoint

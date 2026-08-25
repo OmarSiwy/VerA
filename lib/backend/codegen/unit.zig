@@ -279,6 +279,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     }
     self.fatal = pre;
     try emitUnitBody(self, .undef);
+    try tableReset(self, body_start);
     try closeSig(self, slots, body_start);
     if (self.core.held_only.len != 0 and !self.uses.held) patchParam(self, at_held, "held".len);
     // A slice of integers and plain arrays alone never names `S`.
@@ -329,9 +330,21 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
 
     const body_start = self.out.items.len;
     try emitUnitBody(self, target);
+    try tableReset(self, body_start);
     try closeSig(self, slots, body_start);
     try self.w("}}\n\n", .{});
     return at_fn;
+}
+
+/// §9.21.1 + §9.3 (VD-095): a body that calls `$table_model` on a captured
+/// data source starts from the captures an accepted point kept
+/// (`Instance.table_kept`). A first call it makes then fixes the data for
+/// every later call of that site in this evaluation only: an evaluation the
+/// host discards must leave no capture behind for the next one.
+fn tableReset(self: *Gen, body_start: usize) Error!void {
+    if (self.lowered.table_samples.items.len == 0) return;
+    if (std.mem.indexOfPos(u8, self.out.items, body_start, "inst.table_ready[") == null) return;
+    try self.out.insertSlice(self.gpa, body_start, "    inst.table_ready = inst.table_kept;\n");
 }
 
 /// Offsets of a unit signature's four uniform parameter names, and of a

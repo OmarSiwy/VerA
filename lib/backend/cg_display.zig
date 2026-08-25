@@ -269,6 +269,8 @@ pub const SaySite = struct {
     tok: u32,
     /// The arguments a record carries, in format order.
     vals: []const Mir.Value,
+    /// §9.4.1 `$debug`, shown per iteration (`contract.Say.putDebug`).
+    debug: bool = false,
 };
 
 /// The display tasks a `.record` device records, in source order
@@ -299,7 +301,7 @@ pub fn planSay(g: *Gen) Error![]const SaySite {
         }
         // §9.4.1: `$write` is the family member that does NOT end the line.
         if (endsLine(c)) try fmt.append(g.arena, '\n');
-        try out.append(g.arena, .{ .call = call, .fmt = fmt.items, .tok = d.tok, .vals = vals.items });
+        try out.append(g.arena, .{ .call = call, .fmt = fmt.items, .tok = d.tok, .vals = vals.items, .debug = c == .@"$debug" });
     }
     return out.items;
 }
@@ -391,7 +393,7 @@ pub fn emitSay(g: *Gen, inst: Mir.Inst) Error!void {
         if (site.call == call) break j;
     } else return g.b("S.con(0.0)", .{});
     g.uses.out = true;
-    try g.b("zd: {{ out.put({d}, &.{{", .{k});
+    try g.b("zd: {{ out.{s}({d}, &.{{", .{ if (g.say[k].debug) "putDebug" else "put", k });
     for (g.say[k].vals, 0..) |v, i| {
         try g.b("{s}", .{if (i == 0) " " else ", "});
         if (g.an.tyOf(v) == .real) {

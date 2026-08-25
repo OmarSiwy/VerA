@@ -240,7 +240,7 @@ fn constGenvar(self: *Flatten, e: Ast.ExprId, gv: Ast.StrId, at: ?Ast.ExprId) Er
 
 /// `e` with every identifier `name` replaced by `with`; rows unchanged where
 /// nothing below them changed.
-fn substIdent(self: *Flatten, e: Ast.ExprId, name: Ast.StrId, with: Ast.ExprId) Error!Ast.ExprId {
+pub fn substIdent(self: *Flatten, e: Ast.ExprId, name: Ast.StrId, with: Ast.ExprId) Error!Ast.ExprId {
     if (e == .none) return e;
     const x = &self.ctx.file.exprs;
     var n = x.get(e);
@@ -351,11 +351,20 @@ pub fn walkInstances(
     try elab_override.collectDefparams(self, module, path); // §6.3.1
     try elab_resolve.collectOoc(self, module, path); // Annex F.2.1 step 3
 
+    // The source instances, then the §6.6 generate instances, whose schemes
+    // `gates` holds in parallel from index `module.instances.len` on.
+    var src: std.ArrayList(Ast.Instance) = .empty;
+    try src.appendSlice(self.ctx.arena, module.instances);
+    var gates: std.ArrayList(Ast.ExprId) = .empty;
+    for (module.analog) |blk| try genInstances(self, blk.body, .none, "", &.{}, &src, &gates);
+    std.debug.assert(src.items.len == module.instances.len + gates.items.len);
+
     // §7.8.4 connect modules are inserted "in the context of the ports
     // upper connection", which is this module: `plan` re-points each mixed
     // port at a digital segment and appends the bridges, which then inline
-    // like any child. Indices past `module.instances.len` are those.
-    const insts = try elab_insert.plan(self, module, path);
+    // like any child. Indices past `src.items.len` are those.
+    // The first walk (`Flatten.dry`) inserts nothing: it records the tree.
+    const all = if (self.dry) src.items else try elab_insert.plan(self, module, path, src.items, gates.items);
 
     // E.3.2's first source, "A port_discipline attribute on the analog
     // primitive", bound for every primitive of this level before any is
@@ -376,23 +385,16 @@ pub fn walkInstances(
         }
     }
 
-    // The planned instances, then the §6.6 generate instances, whose schemes
-    // `gates` holds in parallel from index `insts.len` on.
-    var all: std.ArrayList(Ast.Instance) = .empty;
-    try all.appendSlice(self.ctx.arena, insts);
-    var gates: std.ArrayList(Ast.ExprId) = .empty;
-    for (module.analog) |blk| try genInstances(self, blk.body, .none, "", &.{}, &all, &gates);
-    std.debug.assert(all.items.len == insts.len + gates.items.len);
-    for (all.items, 0..) |inst, idx| {
-        const auto = idx >= module.instances.len and idx < insts.len;
-        const gate: Ast.ExprId = if (idx < insts.len) .none else gates.items[idx - insts.len];
+    for (all, 0..) |inst, idx| {
+        const auto = idx >= src.items.len;
+        const gate: Ast.ExprId = if (idx < module.instances.len or auto) .none else gates.items[idx - module.instances.len];
         // §3.6.5, the structural half: an actual that names nothing `module`
         // declared is an implicit net (see `Design.implicit_nets`).
         // Collected here, not in `inlineInstance`, because only this loop
         // still has `module` in hand; one level down the names are flat.
         // Reads the source's own connections, not `plan`'s segments.
         if (!auto and idx < module.instances.len) try checkVariableActuals(self, module, &module.instances[idx]);
-        if (!auto) for ((if (idx < module.instances.len) module.instances[idx] else inst).ports) |c| {
+        if (!auto) for (src.items[idx].ports) |c| {
             const n = elab_names.netRefName(self, c.expr) orelse continue;
             if (declares(module, n)) continue;
             try self.implicit_nets.append(self.ctx.arena, .{
@@ -462,6 +464,14 @@ pub fn walkInstances(
             if (depth >= max_depth) {
                 try self.err(inst.main_tok, .E1018, "at `{s}`", .{child_path});
                 return;
+            }
+            // Both arms of an if-generate are inlined under their gates; the
+            // tree holds only an instance its scheme brings into existence
+            // (one whose gate does not fold is left out, as unknown).
+            if (self.dry and elab_names.gateHolds(self, gate)) {
+                const kids = try self.tree.getOrPut(self.ctx.arena, path);
+                if (!kids.found_existing) kids.value_ptr.* = .empty;
+                try kids.value_ptr.append(self.ctx.arena, .{ .inst = inst, .module = child, .path = child_path });
             }
             try inlineInstance(self, &inst, child, ps, child_path, stack, depth, gate);
         }
@@ -705,7 +715,14 @@ fn inlineInstance(
         const again = port and for (self.vars.items) |seen| {
             if (seen.name == out.name) break true;
         } else false;
-        if (!again) try self.vars.append(self.ctx.arena, out);
+        if (again) continue;
+        try self.vars.append(self.ctx.arena, out);
+        // §6.8: renamed onto the parent's net, the variable and that net
+        // share a flat name from two scopes (`Design.port_vars`).
+        const flat_name = self.ctx.file.str(out.name);
+        const local = self.ctx.file.str(v.name);
+        const own = flat_name.len == path.len + local.len and std.mem.startsWith(u8, flat_name, path) and std.mem.endsWith(u8, flat_name, local);
+        if (port and !own) try self.port_vars.append(self.ctx.arena, out.name);
     }
     for (child.branches) |b| {
         var out = b;

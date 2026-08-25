@@ -12,12 +12,18 @@
 //     reported at that call and the run ends. Had it continued, the check
 //     would print 0.0 > 0.5 = 0 against want 1, ok=0.
 //
-// The status is the suite's for a run ended by a run-time error, 1 (a05_12's
-// `E` extrapolation, E0601's zero modulus).
+// The report is the run's own refusal, so the fixture names it with
+// `//! reject-run E0816`: the run must end with status 1 (the suite's for a
+// run ended by a run-time error, as a05_12's `E` extrapolation and E0601's
+// zero modulus end) and print `error[E0816]`, and no other `error[` line.
+// b6_rdist_positive_mean_at_run_time.va is the legal neighbour: the same
+// module whose second point has mean 0.75 > 0, which runs to the end.
 //
 //! lrm 9.13.2
+//! lrm 9.13.2:1
 //! lrm 9.13.2:2
-//! exit 1
+//! reject-run E0816
+//! neighbour b6_rdist_positive_mean_at_run_time.va
 //! sweep V(p) = 1.0, 0.0
 //! checks 1
 `include "check.vh"

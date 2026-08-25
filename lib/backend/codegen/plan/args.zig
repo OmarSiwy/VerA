@@ -137,6 +137,12 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$simparam$str" => i == 0,
         .ddx, .limexp => i == 0,
         .@"$vt", .@"$limit", .@"$clog2", .@"$rtoi", .@"$itor" => i == 0,
+        // §12.32 a user system function's arguments, and §12.22.2 the
+        // call an output argument is read back from: `emitSystfCall` and
+        // `emitSystfOut` render every one, and the call itself must be one
+        // value so its calltf runs once per evaluation.
+        .systf,
+        .@"$systf$out",
         // IEEE 1364 §17.11 math: every operand.
         .@"$sqrt",
         .@"$exp",
@@ -215,7 +221,6 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$sscanf$real",
         .@"$sscanf$str",
         .@"$plusarg$str",
-        .systf,
         => false,
     };
 }

@@ -23,7 +23,17 @@
 // it a mixed-signal one: a digital initial block reading a continuous variable
 // has no constant reading and runs on the digital kernel. Nothing reads tick.
 //
-//! xfail `copy = av` now runs on the digital kernel (f14d4500), but reads av before the analog initial block assigns it: copy = 0 at every point, not 2.5. The mixed runner also solves at tick's events (3, 6, 9 ns), so the transcript has 6 points against `checks 3`, which counts the declared points only
+// THE COUNT. §8 leaves the analog timepoints to the simulator, and §7.3.6.3
+// lets a digital read of a continuous value be served by a solution at the
+// digital time or by interpolation, so a tool may solve at tick's events.
+// VerA's mixed runner does (`sim.mixed.run` steps the analog to every digital
+// event once a digital expression reads an analog value), so tick toggles
+// every 5 ns: its events (5n, 10n) fall on declared points, and the count is
+// the same for either choice. Solutions at 0, 5n and 10n (copy's D2A at time
+// zero re-solves the DC point, it adds none), one CHECKX each: checks 3.
+// (Until 2026-10-08 tick toggled every 3 ns, which made `checks 3` assume
+// that no tool solves at 3n, 6n, 9n.)
+//
 //! lrm 8.4.1
 //! lrm 8.4.1:1000
 //! lrm 7.3.3
@@ -42,7 +52,7 @@ module b3_analog_initial_before_digital_initial(p);
     copy = av;
     tick = 1'b0;
   end
-  always #3 tick = ~tick;
+  always #5 tick = ~tick;
   analog begin
     `CHECKX("the digital initial block read what the analog initial block assigned", copy, 2.5);
     I(p) <+ 0.0;

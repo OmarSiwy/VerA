@@ -1,7 +1,7 @@
 //! The clone: one child instance's declarations, statements and expressions →
 //! new AST rows in the flat namespace, with ports bound and parameters
 //! overridden. LRM §3.4.4, §4.4, §4.7.1, §5.3.2, §5.5.3, §6.2.1, §6.3, §6.3.6 ($mfactor
-//! scaling), §6.4.1, §6.7, §9.13.1/§9.13.2 (paramset distribution calls),
+//! scaling), §6.4.1, §6.6.2, §6.7, §9.13.1/§9.13.2 (paramset distribution calls),
 //! §9.18, §9.19.
 
 const std = @import("std");
@@ -407,11 +407,19 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             // through and `Lower.flatName` strips it.
             const parts = x.nameParts(e);
             var head = elab_names.flat(self, parts[0]);
-            if (!self.unit.rename.contains(parts[0])) switch (try upward(self, e, parts)) {
-                .keep => {},
-                .head => |h| head = h,
-                .value => |v| return v,
-            };
+            // §6.6.2 an unnamed generate block of this unit is no scope a name
+            // may open; joined onto the unit's path, lowering refuses it by
+            // name (E0998) instead of reading it from the top's namespace.
+            if (!self.unit.rename.contains(parts[0])) {
+                if (parts.len > 1 and self.unit.up != null and self.unit.module != null and
+                    elab_names.namesUnnamedGen(self.ctx.file, self.unit.module.?, parts[0]))
+                    head = try elab_names.join(self, self.unit.path, parts[0])
+                else switch (try upward(self, e, parts)) {
+                    .keep => {},
+                    .head => |h| head = h,
+                    .value => |v| return v,
+                }
+            }
             const out = try self.ctx.arena.alloc(Ast.StrId, parts.len);
             for (parts, out, 0..) |p, *o, i| o.* = if (i == 0) head else p;
             n.extra = try self.ctx.file.exprs.addStrList(self.ctx.arena, out);

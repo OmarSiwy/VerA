@@ -188,6 +188,89 @@ test "directives: reject-only refuses alone, and a neighbour belongs to a refusa
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject E1\n//! neighbour a.va b.va\n"));
 }
 
+test "directives: reject-run is a refusal the run makes, with a failing status" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena, "//! reject-run E0816\n//! neighbour legal.va\n//! checks 1\n");
+    try testing.expectEqualStrings("E0816", d.reject_run[0]);
+    try testing.expectEqual(@as(usize, 0), d.reject.len);
+    // The run compiles and may assert before it is refused.
+    try testing.expectEqual(@as(?usize, 1), d.expected_checks);
+    // The status every run-time `error[...]` exits with, unless named.
+    try testing.expectEqual(1, d.expected_exit);
+    try testing.expectEqual(3, (try tb_directive.parse(arena, "//! exit 3\n//! reject-run E0601\n")).expected_exit);
+    // A refusal that exits 0 is not one.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject-run E0601\n//! exit 0\n"));
+    // Refused by the compiler or by the run, never both; and never unnamed.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject-run E0601\n//! reject E0601\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! reject-run\n"));
+}
+
+test "§4.6.4.6 `//! noise` states a correlation coefficient with another row" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena, "//! noise thermal(a,b)#0 corr=1:-1 corr=2:0\n");
+    const w = d.noise[0];
+    try testing.expectEqual(@as(usize, 2), w.corrs.len);
+    try testing.expectEqual(@as(u16, 1), w.corrs[0].with);
+    try testing.expectEqual(@as(f64, -1), w.corrs[0].rho);
+    try testing.expectEqual(@as(f64, 0), w.corrs[1].rho);
+    // A coefficient may depend on the bias, so it is read at a point.
+    try testing.expect(w.needsPoint());
+    for ([_][]const u8{ "corr=1", "corr=:1", "corr=x:1", "corr=1:", "corr=-1:1" }) |bad| {
+        // BadSyntax or BadNumber: either way the line asserts nothing silently.
+        if (tb_directive.parse(arena, try arena.print("//! noise thermal(a,b)#0 {s}\n", .{bad}))) |_| {
+            return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+}
+
+test "§2.9.2 `//! meta` states one published desc/units row, in a fixed spelling" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena,
+        \\//! meta parameter res units="Ohms" desc="Resistance"
+        \\//! meta variable cgs desc="gate-source capacitance"
+        \\//! meta net d   desc="drain terminal"
+        \\
+    );
+    try testing.expect(d.asserts_meta);
+    // `desc` before `units`, one space apart, whatever order the line used.
+    try testing.expectEqualStrings("parameter res desc=\"Resistance\" units=\"Ohms\"", d.meta[0]);
+    try testing.expectEqualStrings("variable cgs desc=\"gate-source capacitance\"", d.meta[1]);
+    try testing.expectEqualStrings("net d desc=\"drain terminal\"", d.meta[2]);
+    const none = try tb_directive.parse(arena, "//! meta none\n");
+    try testing.expect(none.asserts_meta and none.meta.len == 0);
+    for ([_][]const u8{ "port p desc=\"x\"", "net", "net d desc=x", "net d desc=\"x", "net d note=\"x\"", "net d desc=\"a\" desc=\"b\"" }) |bad| {
+        try testing.expectError(error.BadSyntax, tb_directive.parse(arena, try arena.print("//! meta {s}\n", .{bad})));
+    }
+}
+
+test "renderRunner emits the meta and correlation checks as parseable Zig" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena,
+        \\//! noise thermal(a,b)#0 corr=1:-1
+        \\//! noise thermal(c,d)#0
+        \\//! meta parameter r desc="R" units="Ohm"
+        \\
+    );
+    const src = try tb_runner.renderRunner(arena, "corr_meta", d);
+    const z = try arena.dupeSentinel(u8, src, 0);
+    var ast = try std.zig.Ast.parse(testing.allocator, z, .{ .mode = .zig });
+    defer ast.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), ast.errors.len);
+    try testing.expect(std.mem.indexOf(u8, src, "noise[0].corr[1] got=") != null);
+    try testing.expect(std.mem.indexOf(u8, src, "\"parameter r desc=\\\"R\\\" units=\\\"Ohm\\\"\"") != null);
+}
+
 test "§2.6 a scale factor is an exponent, not a multiplier" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

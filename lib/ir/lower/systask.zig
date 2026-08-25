@@ -15,7 +15,8 @@
 //! LRM clauses this file's code cites: §2.7, §3.2, §3.3, §3.4.1, §3.6.1.4, §4.2.1.1,
 //! §4.4.1, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12, §9.2,
 //! §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1, §9.5.4.2,
-//! §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17, §9.17.1, §9.17.2.
+//! §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17, §9.17.1, §9.17.2,
+//! §12.22.2, §12.30, §12.32.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -203,6 +204,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // are diagnosed there, and an inlined function's locals end with the body.
     if (mon) |k| try vals.insert(self.arena, 0, k);
     const v = try self.call(name, vals.items);
+    if (c == .systf) try systfOutputs(self, v, live.items, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
     if (formats or family == .simctl) {
         // §9.7.1/§9.7.2 simulation control joins the per-accepted-point
@@ -220,6 +222,29 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
             .tok = tok,
             .conditional = cond,
         });
+    }
+}
+
+/// §12.22.2 a user system task's output arguments: `$resistor(curr, V(p, n),
+/// r)`'s calltf puts `curr` (§12.30) and its partials (§12.32.2), and the
+/// next statement reads it. Every argument that is a real or integer variable
+/// is read back after `call` as `$systf$out(call, j, args...)`, j 1-based as
+/// §12.32.2 numbers arguments; an argument calltf did not put keeps its value
+/// (`contract.SystfHost.output`). An integer takes the real §4.2.1.1 rounds.
+fn systfOutputs(self: *Lower, call: Mir.Value, live: []const Ast.ExprId, vals: []const Mir.Value) Oom!void {
+    const ex = &self.file.exprs;
+    for (live, 0..) |a, j| {
+        if (ex.tag(a) != .ident) continue;
+        const s = self.vars.get(self.file.str(ex.strOf(a))) orelse continue;
+        // A `reg` (§7.3.1) keeps its width rule; a string has no partials.
+        if (s.ty == .string or s.reg_width != null) continue;
+        const args = try self.arena.alloc(Mir.Value, vals.len + 2);
+        args[0] = call;
+        args[1] = try self.mir.addIntConst(self.arena, @intCast(j + 1));
+        @memcpy(args[2..], vals);
+        const out = try self.call("$systf$out", args);
+        const lv: lower_stmt.Lvalue = .{ .ty = s.ty, .at = .{ .place = s.place } };
+        try lower_stmt.writeLvalue(self, lv, if (s.ty == .integer) try self.emit(.fi_cast, &.{out}) else out);
     }
 }
 

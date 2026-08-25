@@ -242,6 +242,13 @@ pub const SourceFile = struct {
     /// be a module the user wrote. Zero with `--no-std-defs`; set by the caller,
     /// not the parser, because it is a property of the compilation.
     builtin_modules: u32 = 0,
+    /// How many leading entries of `natures` are annex D.1's, preloaded with
+    /// the prelude. Zero with `--no-std-defs`; set by the caller.
+    builtin_natures: u32 = 0,
+    /// The source `include`d annex D.1 itself (`Preprocessor.Output.annex_d_included`),
+    /// so the `builtin_natures` take part in §3.13.2's uniqueness rule
+    /// (docs/Vague_Decisions.md VD-096). Set by the caller.
+    annex_d_included: bool = false,
 
     /// How many of the last `builtin_modules` entries were synthesized from
     /// SPICE `.MODEL`/`.SUBCKT` cards (`spice_cards.synthesize`) rather than

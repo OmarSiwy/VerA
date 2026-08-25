@@ -67,7 +67,7 @@ pub fn report(
             try cites.append(arena, .{
                 .section = s,
                 .path = f.path,
-                .side = if (d.reject.len != 0) .neg else .pos,
+                .side = if (d.reject.len != 0 or d.reject_run.len != 0) .neg else .pos,
             });
         }
         if (cited) citing += 1;
