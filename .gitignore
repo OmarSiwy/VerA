@@ -19,3 +19,4 @@ __pycache__/
 
 # tools/report.py output: generated, never committed.
 /report/
+/specification/figures/
