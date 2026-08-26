@@ -5,7 +5,7 @@
 # Chapter 8 is the simulation cycle: almost every "shall" in it binds the
 # SIMULATOR (what it solves, when, in which order), so the evidence for it is a
 # run whose asserted value depends on that order, not a refused source.
-# Read against docs/ch8-scheduling.html on 2026-09-24.
+# Read against specification/ch8-scheduling.html on 2026-09-24.
 8.1	no-prohibition	"A mixed-signal simulator shall contain an analog solver that complies with the analog simulation cycle described in 8.3 ... A mixed signal simulator shall also contain a discrete event simulator that complies with the scheduling semantics described in 8.5." Requirements on the tool; "an analog macro-process is a set of continuous nodes that must be solved together". Positive: analog_macro_process.va.
 8.2	no-prohibition	"It is during this process that module-level variable declaration assignments are evaluated followed by the execution of analog initial blocks." and "for parametric sweep type analyses like dc sweep, the tool shall re-evaluate the Elaboration and Pre-simulation steps". An order the tool follows. Positive: declaration_assignment_order.va, analog_initial_order.va, elaboration_parameter_sweep.va, analog_initial_parameter_sweep.va.
 8.3	no-prohibition	"Through transient analysis, the value and flow equations are solved incrementally with respect to time. At each time increment, equations for each signal are iteratively solved until they converge on a final solution." A parent summary of 8.3.1-8.3.3. Positive: transient_derivative.va (cites 8.3 and 8.3.2).

@@ -2,7 +2,7 @@
 // maxdelay will be used as a substitute for td", so maxdelay bounds every
 // lookback the site can make. VerA sizes the site's history ring from it:
 // ceil(maxdelay / 1ps) + 2 samples, at least 1024 and at most 16384
-// (docs/Vague_Decisions.md, `codegen.hist_min_step`). This is the transmission
+// (specification/Vague_Decisions.md, `codegen.hist_min_step`). This is the transmission
 // line case: td = 1.5ns resolved at a 1ps step.
 //
 // HAND DERIVATION. The input is the ramp $abstime*1e12 (1 per ps), td =

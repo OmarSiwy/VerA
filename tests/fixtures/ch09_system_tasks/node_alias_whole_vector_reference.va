@@ -12,7 +12,7 @@
 // will be aliased to that hierarchical node and shall refer to the same
 // circuit matrix position". A whole vector aliased to one scalar node
 // therefore puts every element on that node's matrix position (the reading
-// recorded in docs/Vague_Decisions.md, AMS 9.20).
+// recorded in specification/Vague_Decisions.md, AMS 9.20).
 //
 // By hand, with the top's a biased to 5 V and vb[0], vb[1] to 2 V and 3 V:
 //   bus[0:1] -> "nalias_vec_top.a":  status 1, V(bus[0]) = V(bus[1]) = 5;

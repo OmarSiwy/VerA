@@ -150,7 +150,7 @@ fn parseSelectAt(self: *Parser, base: Ast.ExprId, tok: u32) Error!Ast.ExprId {
 /// override, a path delay, a timing check offset). The tool chooses one
 /// member of each triple; VerA takes the typical, the middle, in every
 /// context, so compound expressions all read their middle members
-/// (`docs/Vague_Decisions.md` VD-099). The others are parsed and dropped.
+/// (`specification/Vague_Decisions.md` VD-099). The others are parsed and dropped.
 ///
 /// ponytail: a dropped member is never elaborated, so a name it misspells
 /// is not diagnosed. Keeping all three needs an AST node and a fold.

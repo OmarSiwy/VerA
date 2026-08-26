@@ -1,7 +1,7 @@
 # Clauses of Clause 6 that state no rule an input can break, classified per
-# docs/CLAUSE-AUDIT.md §5. Tab-separated: <clause> <kind> <evidence>.
+# specification/CLAUSE-AUDIT.md §5. Tab-separated: <clause> <kind> <evidence>.
 # `no-prohibition` names the positive fixture(s) in this suite that run and
-# assert the clause's behaviour. Read against docs/ch6-hierarchy.html, 2026-09-24.
+# assert the clause's behaviour. Read against specification/ch6-hierarchy.html, 2026-09-24.
 6.5.7.2	no-prohibition	"Undeclared interconnects between module instances are supported when describing hierarchical structures. A signal appearing in the connection list of a module instantiation need not appear in any port declaration or discipline declaration (see 7.4)." A permission; what makes an undeclared interconnect illegal (an unknown discipline on a mixed port) is 7.4 / F.2.1 and is rejected there (annex_f_resolution/unknown_discipline_mixed_port.va). Positive: lrm_6_5_7_2.va (runs, asserts 0.5 through the undeclared net).
 6.6.2.1	implementation-defined	"In connection with the conditional generate construct, an implementation may choose to limit sweepable parameters to those that do not influence the structure of the circuit." Whether a structure-fixing parameter may be swept is the implementation's choice. Positive for the part that is required (a dc sweep of an ordinary parameter): dynamic_parameter_dc_sweep.va.
 6.9	no-prohibition	"Elaboration is the process that occurs between parsing and simulation. It binds modules to module instances, builds the model hierarchy, computes parameter values, selects paramsets, resolves hierarchical names, establishes net connectivity, resolves disciplines, inserts connect modules, and prepares all of this for simulation." A definition; the ordering rules are 6.9.1-6.9.4. Positive: lrm_6_9.va.

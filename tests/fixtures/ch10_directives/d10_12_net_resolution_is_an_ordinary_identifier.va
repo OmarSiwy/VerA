@@ -14,7 +14,7 @@
 //   Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." The word
 //   is in neither printing's place in the 2023 table — it would sit among
 //   `negedge`/`nmos`/`nor`, and it is not there in the 2023 source PDF or in
-//   docs/annex-b-keywords.html.
+//   specification/annex-b-keywords.html.
 //
 //   Annex C.16: "The keywords in Annex B are the complete set of Verilog-AMS
 //   HDL keywords, including those from IEEE Std 1364 Verilog. The following

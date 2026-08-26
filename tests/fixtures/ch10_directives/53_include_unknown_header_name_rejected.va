@@ -1,5 +1,5 @@
 // The refusal neighbour of 52_include_verilog_a_1_0_header_names.va
-// (docs/Vague_Decisions.md VD-093): only the Annex D names and their two
+// (specification/Vague_Decisions.md VD-093): only the Annex D names and their two
 // Verilog-A 1.0 spellings are built in. "disciplines.h" is neither, exists
 // on no search path, and so is E0126.
 //! lrm 10.1

@@ -4,7 +4,7 @@
 // source code", and the reserved set holds "until the matching `end_keywords
 // directive is encountered".
 //
-// The reading (docs/Vague_Decisions.md VD-043): a region closed only by its
+// The reading (specification/Vague_Decisions.md VD-043): a region closed only by its
 // matching directive is not a setting with a "default value", so `resetall
 // leaves it open. Otherwise §19.6's own recommended usage, `resetall at the
 // head of each file, would break §19.11's pairing inside any region.

@@ -15,7 +15,7 @@
 // (a) A POLE AT s = 0. n = '{1}, d = '{0, T}, T = 1 ns: H(s) = 1/(sT), an
 //     integrator. H(0) is infinite, and §4.5.11 does not say what a DC
 //     analysis returns for it. VerA's answer is IMPLEMENTATION-DEFINED and
-//     recorded in docs/Vague_Decisions.md §6: the output is 0, the integrator
+//     recorded in specification/Vague_Decisions.md §6: the output is 0, the integrator
 //     state starting at 0, the same choice VerA makes for §4.5.4's idt()
 //     with no loop forcing its argument ("c = 0"). From that start the
 //     filter is the LTI integrator, y(t) = (1/T)∫0^t u. With

@@ -1,4 +1,4 @@
-// A VerA limit, not an LRM rule (docs/Vague_Decisions.md §7). §5.4.3 makes
+// A VerA limit, not an LRM rule (specification/Vague_Decisions.md §7). §5.4.3 makes
 // `I(<u1.a>)` the flow into instance u1 through its port a. VerA reads it as
 // the sum of u1's own flow contributions at the net the port is joined to
 // (`lower/expr.zig` `instancePortFlow`). A potential source's current is a

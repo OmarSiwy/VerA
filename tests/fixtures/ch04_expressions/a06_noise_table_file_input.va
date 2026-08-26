@@ -47,7 +47,7 @@
 // The .tbl transcribes the clause verbatim, slips included, because §4.6.4.3's
 // requirement is on what a reader does with the printed file, not on whether
 // the file is physical. A reviewer must NOT "correct" 6.636320e-23 to
-// 6.630320e-23: it would then stop matching docs/ch4-expressions.html, which is
+// 6.630320e-23: it would then stop matching specification/ch4-expressions.html, which is
 // the only thing this fixture is faithful to. The doubling is therefore NOT a
 // transcription check, and no `CHECK` asserts it; check the seven pairs against
 // the clause by eye instead.

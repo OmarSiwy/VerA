@@ -1,6 +1,6 @@
 // IEEE 1364-2005 §19.8: "If there is no `timescale specified or it has been
 // reset by a `resetall directive, the time unit and precision are
-// simulator-specific." VerA's choice (docs/Vague_Decisions.md) is a unit of
+// simulator-specific." VerA's choice (specification/Vague_Decisions.md) is a unit of
 // 1 s and a precision of 1 s. This pins that choice; a tool with another
 // default conforms too.
 //

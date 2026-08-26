@@ -14,7 +14,7 @@
 //
 // The FIELD WIDTHS are the inherited IEEE 1364-2005 §17.1.1.3 rule, "Automatic
 // sizing of displayed data" — NOT §17.1.1.2, which is "Format specifications".
-// The repo's own mapping of the two is docs/CLAUSE-AUDIT.md:274-275 (17.1-04 =
+// The repo's own mapping of the two is specification/CLAUSE-AUDIT.md:274-275 (17.1-04 =
 // "17.1.1.2 format specifications", 17.1-05 = "17.1.1.3 automatic sizing of
 // displayed data"); this header cited the wrong subclause until the review.
 // The rule: a radix conversion is sized to the operand's declared width, and

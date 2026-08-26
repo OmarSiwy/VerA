@@ -2,7 +2,7 @@
 // digits ... Implementations may issue an error if the character represented
 // is greater than \377." IEEE 1364-2005 3.6.3 has the same row.
 //
-// VerA issues it (docs/Vague_Decisions.md VD-053): a string holds 8-bit
+// VerA issues it (specification/Vague_Decisions.md VD-053): a string holds 8-bit
 // bytes and \477 = 4*64 + 7*8 + 7 = 319 names none, so keeping some byte of
 // it would be a value VerA invented. The escape is isolated: the module is
 // otherwise octal_escape_377_largest_byte.va, its legal neighbour, with

@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §8.1.2: "Implementations may limit the maximum number of
 // inputs to a UDP, but they shall allow at least 9 inputs for sequential UDPs
 // and 10 inputs for combinational UDPs." VerA's limit is 64 inputs
-// (docs/Vague_Decisions.md, E1017 past it). This UDP sits on the limit: 64
+// (specification/Vague_Decisions.md, E1017 past it). This UDP sits on the limit: 64
 // inputs, and its one table row carries an edge, `(01)`, which is one symbol
 // written in four characters. VerA used to count characters against a
 // 64-character column and refused this legal row.

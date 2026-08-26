@@ -14,7 +14,7 @@
 // output is 0.625 at every point. The CHECK's 1e-9 is the steady-state
 // tolerance asked of the transient.
 //
-// WHAT IT PINS (docs/Vague_Decisions.md, AMS 4.5.11 transient realisation).
+// WHAT IT PINS (specification/Vague_Decisions.md, AMS 4.5.11 transient realisation).
 // Direct form on the bilinear-mapped coefficients makes the discrete fixed
 // point Σb/Σa, and with ω·dt = 1e-5 that sum is roundoff: the output drifted
 // 5.3e-7 off H(0) in these 200 steps (and 1e-3 in 2000). The state-space

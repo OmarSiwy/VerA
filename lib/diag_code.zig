@@ -893,7 +893,7 @@ fn infoOf(c: Code) Info {
             \\    prohibition, not a VerA limit;
             \\  - a two-state literal wider than the 64-bit carrier the analog
             \\    backend stores integers in. That is an implementation limit
-            \\    (docs/Vague_Decisions.md §7), not a rule of the LRM.
+            \\    (specification/Vague_Decisions.md §7), not a rule of the LRM.
             ,
         },
         .E0131 => .{
@@ -5486,7 +5486,7 @@ fn infoOf(c: Code) Info {
             \\with or without the fallback expression: "cannot be resolved" is about
             \\whether the name exists, so returning the fallback for a name that
             \\exists would be a wrong value with no diagnostic. This is an
-            \\implementation limit (docs/Vague_Decisions.md §7), not a rule of the
+            \\implementation limit (specification/Vague_Decisions.md §7), not a rule of the
             \\LRM. Spell the name as a literal or a string parameter.
             ,
         },
@@ -7136,7 +7136,7 @@ fn infoOf(c: Code) Info {
         .W1156 => .{
             .title = "memory file address outside the memory",
             .lrm = "IEEE 1364-2005 17.2.9",
-            .explain = "A `$readmemb`/`$readmemh` call with no start or finish argument met an `@` address outside the memory's declared range. The clause's error for an address outside the load range applies only when the task gives addresses, so VerA does not stop the load: the words at addresses outside the memory are skipped, and loading continues at the next in-range address. The warning names the first such address (docs/Vague_Decisions.md VD-040).",
+            .explain = "A `$readmemb`/`$readmemh` call with no start or finish argument met an `@` address outside the memory's declared range. The clause's error for an address outside the load range applies only when the task gives addresses, so VerA does not stop the load: the words at addresses outside the memory are skipped, and loading continues at the next in-range address. The warning names the first such address (specification/Vague_Decisions.md VD-040).",
         },
         .W1160 => .{
             .title = "dissimilar net types joined through a port",
@@ -7161,7 +7161,7 @@ fn infoOf(c: Code) Info {
             \\15.3.4's $width or 15.3.5's $period measured a pulse or a period
             \\shorter than its limit. The warning is at the check, naming the
             \\instance and the times of its timestamp and timecheck events in
-            \\the instance's time unit (docs/Vague_Decisions.md VD-105). Like
+            \\the instance's time unit (specification/Vague_Decisions.md VD-105). Like
             \\every diagnostic it is reported once per site, so it is the
             \\check's FIRST violation; each later one still toggles the
             \\check's notifier as Table 15-13 says (VD-103) and runs a VPI

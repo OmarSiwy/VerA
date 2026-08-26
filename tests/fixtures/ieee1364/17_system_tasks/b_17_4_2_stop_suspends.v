@@ -1,10 +1,10 @@
 // IEEE 1364-2005 §17.4.2, p. 301: "The $stop system task causes simulation to
 // be suspended." What a suspended run does next and the text of each
 // diagnostic level are the tool's (CLAUSES.tsv: implementation-defined).
-// VerA's choice for a batch run is print-and-exit-0 (docs/Vague_Decisions.md
+// VerA's choice for a batch run is print-and-exit-0 (specification/Vague_Decisions.md
 // VD-070), its diagnostic going to stderr, so stdout holds what ran before
 // the $stop and nothing after it. That is VerA's choice, not the clause's,
-// so this fixture cites no clause (docs/Vague_Decisions.md VD-082: a pinned
+// so this fixture cites no clause (specification/Vague_Decisions.md VD-082: a pinned
 // choice is untagged). The runner prints `$stop at tick 1, <file> byte <n>`
 // on stderr and exits 0.
 `timescale 1ns/1ns

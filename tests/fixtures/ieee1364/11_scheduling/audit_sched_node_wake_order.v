@@ -1,6 +1,6 @@
 // IEEE1364-2005 §11.4.2: "active events can be taken off the queue and
 // processed in any order", so the LRM would also accept an empty transcript
-// here. VerA documents one order (docs/Vague_Decisions.md) and this pins it, so
+// here. VerA documents one order (specification/Vague_Decisions.md) and this pins it, so
 // it cites no clause: the static schedule levelizes an `always @*`, but not
 // one whose output a process waits on, which it wakes after an event control
 // that suspended before it, as `vera --run` does.

@@ -1,7 +1,7 @@
 // An engine limit, not a language rule. IEEE 1364-2005 §11.4 dispatches
 // events at one time until none is left, so a zero-delay loop never lets time
 // advance and §11 has nothing to stop it. VerA refuses a time step past a
-// budget of events (docs/Vague_Decisions.md): 10,000,000 by default, set by
+// budget of events (specification/Vague_Decisions.md): 10,000,000 by default, set by
 // `vera --event-budget=N`. The default takes minutes to reach in a Debug
 // build, so this fixture sets 1000 and pins that the budget ends the run by
 // name rather than hanging.

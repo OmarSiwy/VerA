@@ -1,6 +1,6 @@
 // An engine limit, not a language rule. IEEE 1364-2005 §12.4.1 unrolls a loop
 // generate at elaboration and bounds nothing about the count. The digital
-// runner gives up after 65536 iterations (docs/Vague_Decisions.md) with E1100,
+// runner gives up after 65536 iterations (specification/Vague_Decisions.md) with E1100,
 // which is also what a loop that never ends meets. This one never ends.
 // digital-runner: reject
 //! lrm 6.6.1

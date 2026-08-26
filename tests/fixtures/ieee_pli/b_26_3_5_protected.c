@@ -6,7 +6,7 @@
  * object_handle represents code that is protected; otherwise, it shall be
  * FALSE." Annex G's vpi_user.h numbers no vpiIsProtected; its vpiProtected
  * (10) is §26.6.1's "source protected module". VerA's vpi_user.h defines
- * vpiIsProtected as vpiProtected (docs/Vague_Decisions.md VD-045), so the
+ * vpiIsProtected as vpiProtected (specification/Vague_Decisions.md VD-045), so the
  * module property and the all-objects property are one question.
  *
  * ------------------------------------------------------------------ DERIVATION

@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §19.5 (taken whole by VAMS §10.1): "The filename can be a full
 // or relative path name." Neither standard says what a relative name is
-// relative to. VerA's reading (docs/Vague_Decisions.md VD-091,
-// docs/Vague_Decisions.md): the directory of the file that holds the
+// relative to. VerA's reading (specification/Vague_Decisions.md VD-091,
+// specification/Vague_Decisions.md): the directory of the file that holds the
 // `include first, then each -I directory in order, then the built-in annex D
 // headers.
 //

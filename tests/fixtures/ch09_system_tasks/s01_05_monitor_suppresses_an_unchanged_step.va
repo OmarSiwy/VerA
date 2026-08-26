@@ -1,5 +1,5 @@
 // §9.4.1, the sentence that separates $monitor from $strobe and is the whole
-// reason the task exists (docs/ch9-system.html, quoted in full):
+// reason the task exists (specification/ch9-system.html, quoted in full):
 //
 //   "When a $monitor task is invoked with one or more arguments, the simulator
 //    sets up a mechanism whereby for each accepted step, IF THE VARIABLE OR AN

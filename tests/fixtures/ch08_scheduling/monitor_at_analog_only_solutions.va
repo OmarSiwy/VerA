@@ -39,7 +39,7 @@
 // that compared the third argument whole would see it fall from 1 to 0 at
 // 3 ns, where only $realtime moved, and report there with ok=0: the
 // clause's $realtime exception holds inside an expression too
-// (docs/Vague_Decisions.md VD-111).
+// (specification/Vague_Decisions.md VD-111).
 //
 // Exactness: $abstime * 2.0e9 is fl(k e-9) * 2e9, exactly 2k for k = 0..4
 // (python3; 2e9 is exact in binary), and the solve of a potential source

@@ -2,7 +2,7 @@
 // wait time in the queue". q_stat_value is an integer and the clause gives no
 // conversion. §3.5.3: "Real numbers shall be converted to integers by rounding
 // the real number to the nearest integer, rather than by truncating it."
-// VerA's reading (docs/Vague_Decisions.md VD-052): each mean is the exact
+// VerA's reading (specification/Vague_Decisions.md VD-052): each mean is the exact
 // mean rounded that way, ties away from zero.
 //
 // HAND DERIVATION. Queue 1, FIFO, max_length 5, times in ns (1 ns / 1 ns):

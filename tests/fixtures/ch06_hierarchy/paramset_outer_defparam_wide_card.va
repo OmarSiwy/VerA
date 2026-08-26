@@ -1,7 +1,7 @@
 // A numeric host card value is an override with no Verilog width: IEEE
 // 1364-2005 12.2 gives an untyped, unranged parameter "the type and range of
 // the final override value", and VerA reads a card value as an unsized
-// integer, 32 bits or 64 when the value needs them (docs/Vague_Decisions.md
+// integer, 32 bits or 64 when the value needs them (specification/Vague_Decisions.md
 // VD-089). The cards give wide=2^32, unsigned_word=2^31 and narrow=1. The
 // explicit integer neighbor retains its declared 32-bit type.
 //

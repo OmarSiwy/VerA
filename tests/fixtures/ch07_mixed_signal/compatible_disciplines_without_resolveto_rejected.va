@@ -42,7 +42,7 @@
 //
 // No `include "disciplines.vams"`: ch724_i and ch724_v are base natures with
 // access I and V, which §3.13.2 makes unique, so with D.1 included they would
-// collide with annex D's Current and Voltage (E0335, docs/Vague_Decisions.md
+// collide with annex D's Current and Voltage (E0335, specification/Vague_Decisions.md
 // VD-096). `ddiscrete` is annex D's and is preloaded either way.
 nature ch724_i;
   units = "A";

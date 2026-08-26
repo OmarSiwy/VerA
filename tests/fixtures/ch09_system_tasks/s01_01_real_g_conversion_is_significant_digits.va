@@ -1,5 +1,5 @@
 // §9.4.3, the two sentences this file rests on, quoted in full from
-// docs/ch9-system.html:
+// specification/ch9-system.html:
 //
 //   "The format specifications in Table 9-23 are used for real numbers and have
 //    the full formatting capabilities available in the C language. For example,

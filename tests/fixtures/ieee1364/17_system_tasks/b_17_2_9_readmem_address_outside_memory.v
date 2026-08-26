@@ -3,7 +3,7 @@
 // be within the address range specified by the system task arguments;
 // otherwise, an error message is issued, and the load operation is
 // terminated." The rule needs task bounds. With none, a file address outside
-// the declared memory matches no rule; VerA's reading (docs/Vague_Decisions.md
+// the declared memory matches no rule; VerA's reading (specification/Vague_Decisions.md
 // VD-040) is the clause's nearest sibling, a warning: W1156 names the
 // address, its words are skipped, and loading goes on at the next in-range
 // address.

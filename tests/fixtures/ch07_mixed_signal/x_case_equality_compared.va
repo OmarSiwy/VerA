@@ -9,7 +9,7 @@
 // outside the mixed-signal context. VerA targets Verilog-AMS, and this module
 // IS the mixed-signal context, so the refusal is withdrawn and the claim stated
 // positively. (The same clause's `converter` example annotates
-// `dnet === 1'bx` "error"; the LRM text in docs/ch7-mixed-signal.html records
+// `dnet === 1'bx` "error"; the LRM text in specification/ch7-mixed-signal.html records
 // that as an editorial discrepancy against the feature list and the `a2d`
 // example, which this file follows.)
 //

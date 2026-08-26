@@ -3,7 +3,7 @@
 // compile time (geometry_*_rejected.va). A value that reads the model card is
 // known only when the host writes the card, so VerA checks it then: the
 // device's `checkCard`, which the host calls after `derive`, names the first
-// one outside its domain (docs/Vague_Decisions.md VD-079), and the testbench
+// one outside its domain (specification/Vague_Decisions.md VD-079), and the testbench
 // stops with E0890 (exit 1, VerA's executable error policy).
 //
 // The top passes its card parameter k to the child as `.$mfactor(k)`,

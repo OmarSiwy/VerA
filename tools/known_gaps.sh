@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print VerA's known gaps, one per line, sorted: every FAIL/XFAIL fixture of
 # the strict suite and every one-way or uncited clause of the two coverage
-# inventories. CI diffs this against docs/known-gaps.txt (AGENTS.md §0 rule
+# inventories. CI diffs this against specification/known-gaps.txt (AGENTS.md §0 rule
 # 3: names, not counts), so a new gap fails and a fixed one fails until its
 # line is deleted.
 #

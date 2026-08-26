@@ -286,7 +286,7 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the including file's directory and then the include dirs
-/// (docs/Vague_Decisions.md VD-091), else a built-in annex D file by
+/// (specification/Vague_Decisions.md VD-091), else a built-in annex D file by
 /// basename. Null if nothing matched. The bytes and the path are on
 /// `pp.arena`, since the bag keeps both.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {

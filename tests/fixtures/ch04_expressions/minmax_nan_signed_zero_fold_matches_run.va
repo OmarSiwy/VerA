@@ -2,7 +2,7 @@
 // (x < y) ? x : y max(x,y) is equivalent to (x > y) ? x : y". Table 4-14
 // gives both the domain "All x, all y", so a NaN or a signed zero is a legal
 // operand and the conditional form decides the result
-// (docs/Vague_Decisions.md VD-026). By hand, with N a NaN (every comparison
+// (specification/Vague_Decisions.md VD-026). By hand, with N a NaN (every comparison
 // with it is false) and -0 < +0 false (IEEE 754 5.11):
 //   min(1, N) = N      min(N, 1) = 1      max(1, N) = N      max(N, 1) = 1
 //   min(-0, +0) = +0   min(+0, -0) = -0   max(-0, +0) = +0   max(+0, -0) = -0

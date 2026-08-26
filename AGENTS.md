@@ -45,15 +45,15 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `docs/Vague_Decisions.md` |
+| `git show ae9633f1:docs/ROADMAP.md` | the old v1.0.0 roadmap (deleted 2026-10-04 as outdated; a citation of `ROADMAP.md` means this revision) | history only. v1.0.0 is §2 below; open decisions and their work items are `specification/Vague_Decisions.md` |
 | `CHANGELOG.md` | every change since v1.0.0, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
-| `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
-| `docs/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
-| `docs/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
-| `docs/Vague_Decisions.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
-| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `ROADMAP.md` §5 (at ae9633f1) and from there into `docs/Vague_Decisions.md` |
+| `specification/*.html`, `specification/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
+| `specification/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
+| `specification/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
+| `specification/Vague_Decisions.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
+| `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `ROADMAP.md` §5 (at ae9633f1) and from there into `specification/Vague_Decisions.md` |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`
 entry, or by running the commands in §2. When two disagree, the newest wins and
@@ -130,7 +130,7 @@ artifact. It **gates** on `zig build test`, `test-1364`, `test-devices`,
 `test-vpi-fixtures`, `test-spice`, the cross builds, and the fixture suite
 with 0 FAIL and 0 unasserted. The known gaps are gated by **name**:
 `tools/known_gaps.sh` lists every XFAIL fixture and every one-way or uncited
-clause, and the job fails if that list differs from `docs/known-gaps.txt`. A
+clause, and the job fails if that list differs from `specification/known-gaps.txt`. A
 new gap fails, and so does a fixed one until you delete its line. Only the
 sweep and the audit-tool self-tests report without gating.
 
@@ -503,7 +503,7 @@ Checked against the code on 2026-09-27.
   "step" tier was measured and not built: compact models gain 0-16 values each.
 - **Known gaps are markers, in both trees.** `grep -rl '^//! xfail'
   tests/fixtures` lists them; `.v` fixtures under `tests/fixtures/ieee1364` carry
-  them too. Decisions still to implement are the `CHANGE NEEDED` entries of `docs/Vague_Decisions.md` not marked `DONE`.
+  them too. Decisions still to implement are the `CHANGE NEEDED` entries of `specification/Vague_Decisions.md` not marked `DONE`.
 
 ---
 

@@ -5,7 +5,7 @@
 //   H(s) = ∏ (1 − s/ζ_k) / ∏ (1 − s/ρ_k),  ζ = −3, −4,  ρ = −1 ± j, −2 ± 3j.
 //
 // The card sets the imaginary parts, so VerA pairs the roots when the model
-// is evaluated (docs/Vague_Decisions.md, `zRootSecs`) instead of at compile
+// is evaluated (specification/Vague_Decisions.md, `zRootSecs`) instead of at compile
 // time; this fixture holds that pairing to the closed-form step response
 // and to the same filter with literal roots.
 //
@@ -23,7 +23,7 @@
 //
 // THE DISCRETE STEP. The input is 0 at the operating point and 1 from the
 // first step on, a 5 ms grid. The trapezoidal rule (§4.5.11's transient
-// realisation, docs/Vague_Decisions.md) sees that as a ramp across the first
+// realisation, specification/Vague_Decisions.md) sees that as a ramp across the first
 // step, whose response is y(t − dt/2) to O(dt²); with ρ up to |−2 + 3j| =
 // 3.6 rad/s and t ≤ 4 s the trapezoidal phase error ω³·t·dt²/12 stays below
 // 4e-4 of the 0.25 amplitude of the fast mode, so 2e-4 absolute bounds it.

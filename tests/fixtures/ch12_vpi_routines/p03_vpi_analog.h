@@ -150,7 +150,7 @@ static P03_UNUSED void p03_no_error(const char *what)
  * cbEndOfSimulation, cbUnresolvedSystf, cbError and cbPLIError. The analog
  * callbacks and every other routine wait for cbEndOfCompile, where "all
  * functionality is available": p03_defer(fn) runs fn there
- * (docs/Vague_Decisions.md VD-044). One deferral per plugin. */
+ * (specification/Vague_Decisions.md VD-044). One deferral per plugin. */
 static P03_UNUSED void (*p03_deferred)(void);
 
 static P03_UNUSED PLI_INT32 p03_run_deferred(p_cb_data d)

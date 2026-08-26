@@ -3,7 +3,7 @@
 //
 // Which names are known is implementation-defined ("There is no fixed list of
 // simulation parameters"). VerA publishes three SPICE `.options` tolerances,
-// "reltol", "abstol" and "vntol" (docs/Vague_Decisions.md, §9.15), and no other
+// "reltol", "abstol" and "vntol" (specification/Vague_Decisions.md, §9.15), and no other
 // option. "chgtol" is a SPICE option too, so it is the closest legal-looking
 // name the set leaves out, and the bare call is the error.
 //

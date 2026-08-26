@@ -19,7 +19,7 @@
 // format can be used wherever expressions can appear". Its Example 1,
 // `(a:b:c) + (d:e:f)`, has "the typical value is b+e". §5.3 leaves the choice
 // of member to the tool; VerA takes the typical one everywhere
-// (docs/Vague_Decisions.md VD-099), so this file tests that choice, and a tool
+// (specification/Vague_Decisions.md VD-099), so this file tests that choice, and a tool
 // that picks another member also conforms.
 //
 // DERIVATION, every value exact in binary:

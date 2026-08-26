@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §17.2.9: a file address is "an at character (@) followed by
 // a hexadecimal number". §3.5.1: "The underscore character (_) shall be legal
 // anywhere in a number except as the first character." VerA's reading
-// (docs/Vague_Decisions.md VD-041): an address is such a number, so `_` is
+// (specification/Vague_Decisions.md VD-041): an address is such a number, so `_` is
 // legal after its first digit, the last position included.
 //
 // HAND DERIVATION. mem[0:1], no bounds. The file:

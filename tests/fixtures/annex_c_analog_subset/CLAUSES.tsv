@@ -1,5 +1,5 @@
 # Annex C clauses that no fixture can take both ways, with the reason quoted
-# from docs/annex-c-veriloga.html (LRM 2023). Tab-separated:
+# from specification/annex-c-veriloga.html (LRM 2023). Tab-separated:
 #   <clause>	<kind>	<evidence>
 # Read 2026-09-24. CLAUSE-AUDIT §5.2: "The Verilog-A analog subset as a whole |
 # Annex C is a subset definition for tools that choose it. VerA does not."

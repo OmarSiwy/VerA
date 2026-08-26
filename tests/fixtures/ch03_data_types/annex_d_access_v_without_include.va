@@ -4,7 +4,7 @@
 //
 // VerA preloads annex D (D.1 `disciplines.vams`) into every compilation, so
 // Voltage (access V) and Current (access I) are declared whether or not the
-// source asks for them. docs/Vague_Decisions.md VD-096 decides that those
+// source asks for them. specification/Vague_Decisions.md VD-096 decides that those
 // preloaded natures take part in §3.13.2's rule only when the source includes
 // D.1 itself. This source does not, so its own base natures ch3_vd096_volt
 // (access V) and ch3_vd096_amp (access I) are the only base natures it

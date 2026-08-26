@@ -2,7 +2,7 @@
 //
 // The attribute is a promise by the author that every element is written
 // before it is read in the evaluation. Breaking it is the author's bug. VerA's
-// documented answer (docs/Vague_Decisions.md, the `vera_scratch` row): in a
+// documented answer (specification/Vague_Decisions.md, the `vera_scratch` row): in a
 // device built with runtime safety (Debug, ReleaseSafe) the storage is filled
 // with NaN, value and every derivative lane, so the bug shows up as NaN in
 // the outputs; in ReleaseFast/ReleaseSmall nothing is stored and the value is

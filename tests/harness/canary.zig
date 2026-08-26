@@ -1,7 +1,7 @@
 //! `zig build test-canary`: the judge judged. `tests/canary/` holds fixtures
 //! that are wrong on purpose, and `tests/canary/EXPECT.tsv` says what the
 //! harness must answer for each -> exit 0 only when every answer is the
-//! expected one (docs/TESTING.md §3.6).
+//! expected one (specification/TESTING.md §3.6).
 //!
 //! A suite that cannot say FAIL proves nothing by saying PASS: each row here
 //! is a way a fixture can look green while asserting nothing, and the run

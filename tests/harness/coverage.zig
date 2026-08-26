@@ -1,12 +1,12 @@
 //! `zig build benchmark -- --coverage`: the collected fixtures' `//! lrm`
 //! cites, the `.c` VPI fixtures' cites, every `CLAUSES.tsv` row, and the LRM's
-//! table of contents read out of `docs/*.html` -> the static citation
+//! table of contents read out of `specification/*.html` -> the static citation
 //! inventory on stderr (measure C). Nothing is compiled or run.
 //!
 //! The report's lines are parsed by `tools/conformance.py`: the
 //! `<n> of <m> LRM clauses cited` tally and its polarity row are frozen text.
 //!
-//! Clauses: `docs/CLAUSE-AUDIT.md` §5 (the classification kinds) and §5.7
+//! Clauses: `specification/CLAUSE-AUDIT.md` §5 (the classification kinds) and §5.7
 //! (`not_supported`, IEEE 1364-only).
 
 const std = @import("std");
@@ -19,7 +19,7 @@ const Fixture = harness.Fixture;
 const strLess = harness.strLess;
 
 /// `--coverage`: the cited clauses, the uncited ones, and cites that name no
-/// clause, all against the table of contents read from `docs/*.html`.
+/// clause, all against the table of contents read from `specification/*.html`.
 ///
 /// A static inventory: nothing is compiled or run, so a cite proves nothing
 /// (an XFAIL still cites). Each cite carries its fixture's declared polarity,
@@ -60,7 +60,7 @@ pub fn report(
         var cited = false;
         for (d.lrm) |s| {
             // A sentence cite (`5.6.1.3:2`) is the requirement ledger's
-            // (docs/TESTING.md §3.2, `conformance.py metric`), not this
+            // (specification/TESTING.md §3.2, `conformance.py metric`), not this
             // clause inventory's: only a bare clause cite counts here.
             if (std.mem.indexOfScalar(u8, s, ':') != null) continue;
             cited = true;
@@ -463,7 +463,7 @@ test "a .c fixture's polarity is per line, and only a running one counts" {
     try std.testing.expectError(error.BadCTag, cCites(arena, &cites, "a.c", "//! lrm\n", true));
 }
 
-/// One numbered clause of the LRM, as `docs/*.html` spells it.
+/// One numbered clause of the LRM, as `specification/*.html` spells it.
 pub const Clause = struct {
     /// `4.2.1`, `A.8.3`, `B` — the spelling a `//! lrm` line uses.
     id: []const u8,
@@ -473,7 +473,7 @@ pub const Clause = struct {
     file: []const u8,
 };
 
-/// The LRM's table of contents, read out of `docs/*.html` at run time.
+/// The LRM's table of contents, read out of `specification/*.html` at run time.
 ///
 /// Headings are recovered from the rendered text, not `id=` anchors: the
 /// chapters disagree on markup and the anchors are incomplete, while text finds

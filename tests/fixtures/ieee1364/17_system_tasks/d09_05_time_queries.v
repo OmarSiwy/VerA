@@ -8,7 +8,7 @@
 // time system functions" — this header said §17.3 until the review, and §17.3
 // is *Timescale system tasks* ($printtimescale/$timeformat), which is
 // 07_timeformat.v's clause, not this one. The repo's own mapping is
-// docs/CLAUSE-AUDIT.md:331-333 (17.7-01 $time, 17.7-02 $stime, 17.7-03
+// specification/CLAUSE-AUDIT.md:331-333 (17.7-01 $time, 17.7-02 $stime, 17.7-03
 // $realtime) against :323 (17.3-01 $printtimescale/$timeformat).
 //
 // The inherited definitions this file pins:

@@ -2,7 +2,7 @@
 // multiply a string by any non-negative count. A replication whose count is
 // known only at run time builds its text in a 4096-byte buffer and ends the
 // run past it (E1011); one whose count and text fold is refused past the same
-// 4096 bytes when the model compiles (docs/Vague_Decisions.md), so the two
+// 4096 bytes when the model compiles (specification/Vague_Decisions.md), so the two
 // agree. {5000{"x"}} is 5000 bytes. A count of 10^12 used to exhaust memory
 // while folding.
 //

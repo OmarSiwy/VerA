@@ -1,10 +1,10 @@
 //! The `archmap` mode: the two maps of VerA's Zig source, read from the code
 //! itself, written where agents read them.
 //!
-//!   zig build archmap                # docs/UNITS.md and the AGENTS.md block
+//!   zig build archmap                # specification/UNITS.md and the AGENTS.md block
 //!   zig build archmap -- <file.md>   # the block in another file (a test copy)
 //!
-//! `docs/UNITS.md`: the smallest independently-ownable units. A unit is a
+//! `specification/UNITS.md`: the smallest independently-ownable units. A unit is a
 //! strongly connected component of the file-level `@import` graph (relative
 //! paths, plus `build.zig` module names mapped to their root file): files that
 //! import each other in a cycle cannot change shape apart, and an acyclic edge
@@ -31,7 +31,7 @@ const Args = std.process.Args.Iterator;
 pub const begin = "<!-- BEGIN zig build archmap: generated, do not edit by hand -->";
 pub const end = "<!-- END zig build archmap -->";
 
-/// Writes `docs/UNITS.md`, then the map between the markers of the file named
+/// Writes `specification/UNITS.md`, then the map between the markers of the file named
 /// in `args` (default `AGENTS.md`). Exit 1 when that file has no markers.
 pub fn run(init: std.process.Init, args: *Args) !u8 {
     const io = init.io;
@@ -47,8 +47,8 @@ pub fn run(init: std.process.Init, args: *Args) !u8 {
     defer root.close(io);
     var src: Source = .{ .arena = arena, .io = io, .root = root };
 
-    try root.writeFile(io, .{ .sub_path = "docs/UNITS.md", .data = try units(&src) });
-    try w.writeAll("docs/UNITS.md written\n");
+    try root.writeFile(io, .{ .sub_path = "specification/UNITS.md", .data = try units(&src) });
+    try w.writeAll("specification/UNITS.md written\n");
 
     const target = args.next() orelse "AGENTS.md";
     const doc = try Io.Dir.cwd().readFileAlloc(io, if (std.fs.path.isAbsolute(target)) target else try std.fs.path.join(arena, &.{ options.repo_root, target }), arena, .unlimited);
@@ -114,7 +114,7 @@ fn lineCount(text: []const u8) u32 {
 }
 
 // ---------------------------------------------------------------------------
-// docs/UNITS.md
+// specification/UNITS.md
 // ---------------------------------------------------------------------------
 
 /// Lines one agent owns: smaller units are not split.

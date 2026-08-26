@@ -67,7 +67,7 @@ test "zH0: the gain at s = 0, common powers of s cancelled, a pole answers 0" {
 test "zLaplaceStep: a slow pole holds H(0), and a step follows the bilinear difference equation" {
     // 0.625 / ((1 + s/1e5)(1 + s/1e9)) at dt = 0.1 ns: ω·dt = 1e-5 on the
     // slow pole. Direct form on the bilinear coefficients drifts off H(0)
-    // here (docs/Vague_Decisions.md); the state-space step may not move at all.
+    // here (specification/Vague_Decisions.md); the state-space step may not move at all.
     const sec: [1][2][3]f64 = .{.{ .{ 0.625, 0.0, 0.0 }, .{ 1.0, 1e-5 + 1e-9, 1e-14 } }};
     var uh: [2]f64 = undefined;
     var yh: [2]f64 = undefined;

@@ -83,13 +83,13 @@ builds a host step by step.
   generator feeds two rows (W1098); OSDI has no slot for operating-point
   variables, an acceptance callback or display output.
 - SystemVerilog (E1104) and VHDL are refused.
-- Known gaps are listed by name in [`docs/known-gaps.txt`](docs/known-gaps.txt); CI fails if the list changes.
+- Known gaps are listed by name in [`specification/known-gaps.txt`](specification/known-gaps.txt); CI fails if the list changes.
 
 ## Conformance
 
 Every fixture under `tests/fixtures/` names the LRM clause or sentence it
 tests. `tools/conformance.py` measures the evidence for each normative sentence
-([`docs/TESTING.md`](docs/TESTING.md)); the numbers are in
+([`specification/TESTING.md`](specification/TESTING.md)); the numbers are in
 [`CHANGELOG.md`](CHANGELOG.md) and the [live report](https://omarsiwy.github.io/VerA/report/).
 
 ## Contributing

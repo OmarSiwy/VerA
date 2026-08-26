@@ -1,7 +1,7 @@
 // LRM 2.9 Syntax 2-4 and A.9.1: `attr_name ::= identifier`. A keyword is
 // not an identifier (§2.8.2: keywords are "reserved identifiers"), and only
 // §2.9.2's own `units`, which annex B reserves and §2.9.2 prints unescaped,
-// is exempt (docs/Vague_Decisions.md VD-024). IEEE 1364-2005 A.9.1 has the
+// is exempt (specification/Vague_Decisions.md VD-024). IEEE 1364-2005 A.9.1 has the
 // same production.
 //
 // The keyword `module` is the only change from the legal neighbour

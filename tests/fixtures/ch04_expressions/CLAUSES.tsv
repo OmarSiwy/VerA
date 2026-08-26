@@ -1,5 +1,5 @@
 # Chapter 4 clauses that state no rule an input can break, read against
-# docs/ch4-expressions.html on 2026-09-24. Format: <clause>\t<kind>\t<evidence>.
+# specification/ch4-expressions.html on 2026-09-24. Format: <clause>\t<kind>\t<evidence>.
 # `no-prohibition` rows name the positive fixture that runs and asserts.
 4.2	no-prohibition	The clause is "The symbols for the Verilog-AMS HDL operators are similar to those in the C programming language. Table 4-1 lists these operators." — a list, no "shall". The restrictions on those operators are §4.2.1 (real operands), §4.2.10 and §4.2.11 (analog block), each with its own reject fixtures. Positive evidence that runs and asserts: ch04_expressions/table_4_1_every_operator.va (every Table 4-1 row an analog block may use, 30 exact CHECKI values).
 4.2.1.3	no-prohibition	"For operands, a common data type for each operand is determined before the operator is applied. If either operand is real, the other operand is converted to real. Implicit conversion takes place when a integer number is used with a real number in an operand." followed by four examples. A conversion rule with no illegal input (the operators illegal on reals are §4.2.1's). Positive evidence that runs and asserts: ch04_expressions/a01_10_itor_widens_an_integer.va, ch04_expressions/integer_power_is_integer.va.

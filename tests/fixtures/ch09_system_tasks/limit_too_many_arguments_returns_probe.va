@@ -2,7 +2,7 @@
 // limiting should be applied and what the return value is on a given iteration.
 // In particular, the simulator may simply choose to have $limit() return the
 // value of its first argument". After an algorithm's own arguments VerA reads
-// an optional frame sign and then an optional seed (docs/Vague_Decisions.md);
+// an optional frame sign and then an optional seed (specification/Vague_Decisions.md);
 // steplim's own is the step, so its fullest call has five arguments. A sixth
 // has no meaning VerA gives it, so the site is declined: it compiles, warns
 // W0853, and returns the probe unchanged. 230 is the too-few side.

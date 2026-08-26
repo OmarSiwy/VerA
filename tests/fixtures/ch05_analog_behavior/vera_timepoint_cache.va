@@ -7,7 +7,7 @@
 // prefix attached to a declaration, a module item, a statement, or a port
 // connection." And: "If a value is not specifically assigned to the
 // attribute, then its value shall be 1." §2.9 leaves an attribute's meaning
-// to the tool; this one is VerA's (docs/Vague_Decisions.md §6).
+// to the tool; this one is VerA's (specification/Vague_Decisions.md §6).
 //
 // WHY. A transmission line's convolution walks its whole accepted history
 // once per timepoint (ngspice's `cache_t`); without a cache the walk reruns

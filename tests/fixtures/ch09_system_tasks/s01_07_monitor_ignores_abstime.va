@@ -1,4 +1,4 @@
-// §9.4.1 (docs/ch9-system.html):
+// §9.4.1 (specification/ch9-system.html):
 //
 //   "When a $monitor task is invoked with one or more arguments, the simulator
 //    sets up a mechanism whereby for each accepted step, if the variable or an

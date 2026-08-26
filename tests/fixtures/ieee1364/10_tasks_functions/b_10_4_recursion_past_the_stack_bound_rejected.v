@@ -2,7 +2,7 @@
 // automatic function call itself and bounds nothing about the depth. The
 // digital interpreter runs each activation on the host thread's stack, so it
 // stops at 1024 nested activations or 4 MiB of stack, whichever comes first
-// (docs/Vague_Decisions.md), and refuses the call there with E1100 rather than
+// (specification/Vague_Decisions.md), and refuses the call there with E1100 rather than
 // overflow the stack. f(5000) passes both bounds.
 // digital-runner: reject
 //! reject E1100

@@ -6,7 +6,7 @@
 // an analog block. The inherited clause is §17.3, "Timescale system tasks" —
 // this header said §17.7 until the review, and §17.7 is *Simulation time system
 // functions* ($time/$stime/$realtime), which belongs to 05_time_queries.v and
-// 06_time_rounding.v. The repo's own mapping is docs/CLAUSE-AUDIT.md:323
+// 06_time_rounding.v. The repo's own mapping is specification/CLAUSE-AUDIT.md:323
 // (17.3-01 "$printtimescale, $timeformat") against :331-333.
 //
 // The inherited call is

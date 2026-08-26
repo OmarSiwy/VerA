@@ -6,7 +6,7 @@ other than the fixture author's own reading. `AGENTS.md` §2 defines v1.0.0 and
 its measures; this file says how each one is tested, and adds what those
 measures cannot see. A `ROADMAP.md` citation here means the revision main
 deleted (`git show ae9633f1:docs/ROADMAP.md`, as `AGENTS.md` §1 says); its
-open items now live in `docs/Vague_Decisions.md`. It holds no measured numbers (`AGENTS.md` §0 rule 1):
+open items now live in `specification/Vague_Decisions.md`. It holds no measured numbers (`AGENTS.md` §0 rule 1):
 every number comes from a command named here.
 
 It is step 2 of the restructure in `../UPDATE_APPS.md` (outside this repository):
@@ -127,12 +127,12 @@ The layers are §5.
 
 | | Requirement set | Extracted from | Closed when |
 |---|---|---|---|
-| **R1** | every normative sentence of the AMS LRM | `docs/ch*.html`, `docs/annex-*.html` | §3.3 |
-| **R2** | every normative sentence of IEEE 1364-2005, `ROADMAP.md` §1 B's scope | `docs/1364-2005.pdf` (licensed, gitignored) | §3.3 |
+| **R1** | every normative sentence of the AMS LRM | `specification/ch*.html`, `specification/annex-*.html` | §3.3 |
+| **R2** | every normative sentence of IEEE 1364-2005, `ROADMAP.md` §1 B's scope | `specification/1364-2005.pdf` (licensed, gitignored) | §3.3 |
 | **R3** | every alternative of every grammar production | Annex A and the chapter Syntax boxes (`class="syntax"`) | a passing positive fixture derives it (L5c) |
 | **R4** | every cell of a normative table: Table 9-x function × analog/digital context, operator and precedence tables, Table B.1, Annex D natures, VPI object/property/relation | the same HTML; VPI from ch. 11's diagrams | a passing fixture exercises that cell |
 | **R5** | every diagnostic code (reverse direction) | `lib/diag_code.zig` | a passing `reject-only` fixture with a legal neighbour, or the code is deleted |
-| **R6** | every implementation-defined choice and resource limit | `docs/Vague_Decisions.md` §6, §7 (`ROADMAP.md` §1 E) | documented and tested; a limit at bound and bound+1 |
+| **R6** | every implementation-defined choice and resource limit | `specification/Vague_Decisions.md` §6, §7 (`ROADMAP.md` §1 E) | documented and tested; a limit at bound and bound+1 |
 
 `tools/conformance.py obligations` extracts R1-R4 and diffs them against the
 ledger. It sits beside `lrm-audit`, `ieee1364-audit` and `keywords`, which
@@ -212,20 +212,20 @@ e. **A second oracle agrees** (the `oracle` column, not `hand`).
   (`lib/ir/opcode.zig`), parser production function and diagnostic emission
   site is hit by a passing fixture: coverage marks (L12).
 - Every system task, function and attribute VerA accepts is in an R4 table or
-  in `docs/Vague_Decisions.md` §6 as a vendor extension (`$vera_reject_step`, `vera_*`).
+  in `specification/Vague_Decisions.md` §6 as a vendor extension (`$vera_reject_step`, `vera_*`).
 
 Anything VerA does that no rule asks for is either documented as an extension
 or deleted.
 
 ### 3.5 The text the ledger comes from
 
-- `docs/*.html` is a transcription. `conformance.py lrm-audit` diffs it against
-  `docs/VAMS-LRM-2023.pdf` section by section; that diff is a release gate.
+- `specification/*.html` is a transcription. `conformance.py lrm-audit` diffs it against
+  `specification/VAMS-LRM-2023.pdf` section by section; that diff is a release gate.
 - Errata (`ROADMAP.md` §5.8) and readings the standards leave open
-  (`docs/Vague_Decisions.md` §2, §3) each become a row. The row is either
-  `unspecified` (`docs/Vague_Decisions.md` §8), where tests assert the set of
+  (`specification/Vague_Decisions.md` §2, §3) each become a row. The row is either
+  `unspecified` (`specification/Vague_Decisions.md` §8), where tests assert the set of
   permitted outcomes and never pick one, or a decision recorded in
-  `docs/Vague_Decisions.md` with a fixture. At v1.0.0 no reading is left open.
+  `specification/Vague_Decisions.md` with a fixture. At v1.0.0 no reading is left open.
 
 ### 3.6 Checking the checker
 
@@ -327,7 +327,7 @@ AMS  total                            .    .     .   .   .   .   .   .   .     .
 
 ### 4.1 Work units
 
-`docs/UNITS.md` (`zig build archmap`) is the work queue. A unit is an import
+`specification/UNITS.md` (`zig build archmap`) is the work queue. A unit is an import
 cycle. A multi-file unit lists its **hubs**, frozen as seams, and its
 **slices**, each of which "can be owned alone while its `pub` signatures hold".
 One agent owns one slice, or one single-file unit. The `s1-*` areas in
@@ -498,7 +498,7 @@ VerA.
 - **RNG.** The restored `rng_reference.c` (the §17.9.3 listing) against
   `rng_kernels.zig`, over seeds, every distribution and its argument ranges.
 - **Math.** `contract.gm`'s exp/log/pow and the rest against f128, with the
-  bound written into `docs/Vague_Decisions.md` §7. Every f32 input exhaustively for any
+  bound written into `specification/Vague_Decisions.md` §7. Every f32 input exhaustively for any
   f32 path (`jac_f32`); for f64, hard cases (reduction boundaries, denormals,
   ±0, inf, NaN) plus random values.
 - **Literals.** Every base × size {1, 31, 32, 33, 64, 65, 128} × digit class
@@ -636,7 +636,7 @@ test "fuzz: .lint never panics, and every refusal is diagnosed" {
 
 **L7. External differential.** An external engine is evidence by agreement,
 not an authority. Each disagreement is triaged as a VerA bug, an engine bug, or
-a reading of the standard (`docs/Vague_Decisions.md` §2, §3), and recorded in
+a reading of the standard (`specification/Vague_Decisions.md` §2, §3), and recorded in
 `tests/fixtures/<engine>.tsv` beside the existing `VERILATOR.tsv`. The
 external suites (`tools/external_analog.py`, `tools/external_digital.py`, CI
 jobs `external-analog` and `external-digital`, in `nix develop .#external`)
@@ -856,7 +856,7 @@ moves.
    item.
 2. **`AGENTS.md` §2 and §6.** The `:<n>` cites, `reject-only`, `neighbour`,
    `race-free`, and zrunner's `xfail(` prefix join the directive tables.
-3. **R6's home.** `docs/Vague_Decisions.md` §6 and §7 hold §1 E's list.
+3. **R6's home.** `specification/Vague_Decisions.md` §6 and §7 hold §1 E's list.
 4. **Step 3 vs `AGENTS.md` §5.** `../UPDATE_APPS.md` asks for SIMD "whenever we
    can"; §5 records `@Vector` losing in the compiler at every size measured.
    §4.4's gate (a scalar oracle and a measured win) lets the two coexist; say

@@ -7,7 +7,7 @@
 // `$sformat` site's buffer, and the rejected attempt, every Newton iterate
 // and the next firing all rewrote that buffer under it).
 //
-// VerA's `$vera_reject_step(t_retry)` (docs/Vague_Decisions.md §6) rejects a
+// VerA's `$vera_reject_step(t_retry)` (specification/Vague_Decisions.md §6) rejects a
 // step from its own accepted solution: the testbench undoes the step, solves
 // and accepts t_retry, then solves the rejected time again.
 //

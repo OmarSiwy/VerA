@@ -1,4 +1,4 @@
-// A VerA limit, not an LRM rule (docs/Vague_Decisions.md §7, E0997). §5.4.3:
+// A VerA limit, not an LRM rule (specification/Vague_Decisions.md §7, E0997). §5.4.3:
 // "The port access function accesses the flow into a port of a module ...
 // I(<a>) accesses the current through module port a." Inside an instance, a
 // module's own `I(<a>)` is the flow into THAT instance's port a, which is

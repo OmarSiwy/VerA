@@ -4,13 +4,13 @@
 // keeps. §9.3 states the goal for every system function in the analog
 // context: "a call to a such system task or function in an analog block
 // during an iteration that is rejected should cause no side-effects on the
-// next iteration". docs/Vague_Decisions.md VD-095 reads the two together: a
+// next iteration". specification/Vague_Decisions.md VD-095 reads the two together: a
 // first call fixes the data for the rest of its own evaluation, and the
 // capture stays with the instance only once an ACCEPTED iteration made it. A
 // rejected step's capture is undone with the step, and the next first call
 // captures again.
 //
-// VerA's `$vera_reject_step(t_retry)` (docs/Vague_Decisions.md §6) rejects a
+// VerA's `$vera_reject_step(t_retry)` (specification/Vague_Decisions.md §6) rejects a
 // step from its own accepted solution: the testbench undoes the step, solves
 // and accepts t_retry, then solves the rejected time again.
 //

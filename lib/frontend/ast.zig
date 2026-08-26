@@ -247,7 +247,7 @@ pub const SourceFile = struct {
     builtin_natures: u32 = 0,
     /// The source `include`d annex D.1 itself (`Preprocessor.Output.annex_d_included`),
     /// so the `builtin_natures` take part in §3.13.2's uniqueness rule
-    /// (docs/Vague_Decisions.md VD-096). Set by the caller.
+    /// (specification/Vague_Decisions.md VD-096). Set by the caller.
     annex_d_included: bool = false,
 
     /// How many of the last `builtin_modules` entries were synthesized from

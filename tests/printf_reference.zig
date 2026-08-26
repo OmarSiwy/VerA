@@ -1,4 +1,4 @@
-//! L3 formatting oracle (docs/TESTING.md §5): `str_kernels.zCReal`, the one
+//! L3 formatting oracle (specification/TESTING.md §5): `str_kernels.zCReal`, the one
 //! `%e %f %g` conversion the analog devices (`cg_display`) and the digital
 //! engine (`sim/digital/display.zig`, `sim/rt`) both print through, against
 //! the C library's `snprintf`, which IEEE 1364-2005 §17.1.1.3 and VAMS §9.4.3

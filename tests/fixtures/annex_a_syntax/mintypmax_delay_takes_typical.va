@@ -12,7 +12,7 @@
 // IEEE 1364-2005 §5.3: "Verilog HDL models typically specify three values for
 // delay expressions. The three values allow a design to be tested with
 // minimum, typical, or maximum delay values." Which one a run uses is the
-// tool's; VerA takes the typical, the middle (docs/Vague_Decisions.md VD-099),
+// tool's; VerA takes the typical, the middle (specification/Vague_Decisions.md VD-099),
 // so this file tests that choice, not the clause.
 //
 // DERIVATION (`timescale 1ns/1ns):

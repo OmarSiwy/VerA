@@ -17,7 +17,7 @@
 // v/k = 0.75.
 //
 // The rejected-step half of the A05 note (capture around a step a host
-// rejects) is docs/Vague_Decisions.md VD-095, asserted by
+// rejects) is specification/Vague_Decisions.md VD-095, asserted by
 // table_capture_rejected_step_recaptures.va.
 //
 //! lrm 9.21.1

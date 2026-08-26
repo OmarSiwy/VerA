@@ -9,7 +9,7 @@
 // neither leaves that position empty. So `$limit(V(p,n), , vte, vcrit)` names
 // no algorithm and no function, and the empty slot has no value: E0894.
 // Before 2026-10-08 VerA crashed here (index out of bounds on the empty node);
-// found by the Annex A grammar oracle (docs/TESTING.md L5c).
+// found by the Annex A grammar oracle (specification/TESTING.md L5c).
 //
 // The neighbour is the same module with the algorithm written.
 //

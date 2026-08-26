@@ -1,7 +1,7 @@
 # Clauses of Clause 5 that state no rule an input can break, classified per
-# docs/CLAUSE-AUDIT.md §5. Tab-separated: <clause> <kind> <evidence>.
+# specification/CLAUSE-AUDIT.md §5. Tab-separated: <clause> <kind> <evidence>.
 # `no-prohibition` names the positive fixture(s) in this suite that run and
-# assert the clause's behaviour. Read against docs/ch5-analog.html, 2026-09-24.
+# assert the clause's behaviour. Read against specification/ch5-analog.html, 2026-09-24.
 5.1	no-prohibition	"The description of an analog behavior consists of setting up contributions for various signals under certain procedural or timing control. This section describes an analog procedural block, analog signals, contribution statements, procedural control statements, and analog timing control functions." A table of contents for the clause; its rules live in 5.2-5.11. Positive: annex_a_syntax/05_behavioral_statements.va (runs, asserts).
 5.4.4	no-prohibition	"If a value is not assigned to a branch, and it is not a probe branch, the branch flow is set to zero (0)." A default, not a restriction: every input has a defined meaning. Positive: conditional_potential_open.va, implicit_zero_contribution.va, unassigned_switch_arm.va.
 5.5	no-prohibition	"The methods for accessing signal and attributes of nets and branches are described in this section." An introduction; the rules are 5.5.1-5.5.5, each cited both ways. Positive: analog_signals_nets_branches_contributions.va (net and named-branch access on a solved point), hierarchical_net_reference_probes_solve.va.
