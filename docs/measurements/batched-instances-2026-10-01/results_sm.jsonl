@@ -1,8 +1,0 @@
-{"so": "bsim4va.x86_64_v3.w4", "W": 4, "check_mismatches": 0, "scalar": 3878.7, "scalar_ins": 6044.9, "batch": 2747.2, "batch_ins": 3798.7, "speedup": 1.412}
-{"so": "bsim4va.x86_64_v3.w8", "W": 8, "check_mismatches": 0, "scalar": 3812.2, "scalar_ins": 6044.9, "batch": 2989.5, "batch_ins": 3898.2, "speedup": 1.275}
-{"so": "diode.x86_64_v3.w4", "W": 4, "check_mismatches": 0, "scalar": 75.3, "scalar_ins": 182.0, "batch": 62.1, "batch_ins": 122.8, "speedup": 1.213}
-{"so": "diode.x86_64_v3.w8", "W": 8, "check_mismatches": 0, "scalar": 75.2, "scalar_ins": 182.0, "batch": 58.6, "batch_ins": 118.8, "speedup": 1.283}
-{"so": "mos1.x86_64_v3.w4", "W": 4, "check_mismatches": 0, "scalar": 256.6, "scalar_ins": 557.6, "batch": 187.5, "batch_ins": 316.0, "speedup": 1.369}
-{"so": "mos1.x86_64_v3.w8", "W": 8, "check_mismatches": 0, "scalar": 272.2, "scalar_ins": 557.6, "batch": 192.9, "batch_ins": 295.0, "speedup": 1.411}
-{"so": "psp103.x86_64_v3.w4", "W": 4, "check_mismatches": 0, "scalar": 4142.5, "scalar_ins": 6560.0, "batch": 2532.6, "batch_ins": 4075.1, "speedup": 1.636}
-{"so": "psp103.x86_64_v3.w8", "W": 8, "check_mismatches": 0, "scalar": 4186.4, "scalar_ins": 6560.0, "batch": 3041.2, "batch_ins": 4242.6, "speedup": 1.377}
