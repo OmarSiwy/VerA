@@ -21,7 +21,7 @@
 // (an xfail).
 //
 // WHAT IS NOT CLAIMED. VerA reads every list and applies none (W0251, pinned
-// below; ROADMAP §1 B and CLAUSES.tsv keep path delays not-supported), so no
+// below; CLAUSES.tsv keeps path delays not-supported), so no
 // delay is observed. IEEE 1364-2005 §14.1 makes the specify block "the vehicle
 // for ... assigning delays to these paths": the outputs' values come from the
 // assigns. Every sample is 15 ns after the last change of c, past the longest

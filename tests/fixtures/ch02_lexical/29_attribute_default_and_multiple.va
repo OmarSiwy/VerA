@@ -3,8 +3,8 @@
 // attr_specs may be comma-separated in one instance. The default-1 rule lives
 // in the tool's attribute database and is not visible to HDL, so what is
 // observed here is only computation with decorated syntax, not metadata or
-// universal attribute inertness. Default-value evidence remains AMS-ATTR-DEFAULT
-// in docs/ROADMAP.md (Open items). There is one instance containing three
+// universal attribute inertness. Default-value evidence (AMS-ATTR-DEFAULT) is not
+// claimed here. There is one instance containing three
 // specs, not multiple adjacent attribute instances.
 // V(p) is held at 0.375 (exact in binary), so V(p)*8 is exactly 3.
 //! lrm 2.9

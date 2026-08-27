@@ -2,7 +2,7 @@
 // modeling extensions are supported by the simulator". A simulator supporting
 // all the extensions must define it; one lacking an extension must not.
 // This fixture checks ddx in the selected arm. It does not establish support
-// for the complete extension set; that obligation remains in ROADMAP §5.7.
+// for the complete extension set.
 //
 // §4.5.6 worked example (the `vccs` module), verbatim: for vin = V(pin,nin),
 //   ddx(vin, V(pin)) is +1, ddx(vin, V(nin)) is -1, ddx(vin, V(pout)) is 0.

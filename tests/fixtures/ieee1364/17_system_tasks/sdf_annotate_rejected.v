@@ -3,7 +3,7 @@
 // SDF annotator refers to any tool capable of backannotating SDF data to a
 // Verilog simulator."
 //
-// VerA is not an SDF annotator: ROADMAP.md §1 B puts clause 16 out of scope.
+// VerA is not an SDF annotator: clause 16 is out of scope (CLAUSES.tsv).
 // Carrying on past the call would run a design whose timing the SDF file was
 // meant to set, so the call is refused by name (E1102), never skipped. The
 // file need not exist: the refusal is at compile time.

@@ -6,7 +6,7 @@ Status: **open**. This document is the inventory, not the result.
 Citations below of a `COVERAGE.md`, a `*_SPEC.md`, `tests/fixtures/MANIFEST.md`,
 `docs/CONFORMANCE.md`, `docs/PLAN.md` or a `docs/conformance-*.md` name files
 removed from the tree. Read them at git revision `8b1514d4`
-(`git show 8b1514d4:<path>`). Their open items are in `docs/ROADMAP.md`.
+(`git show 8b1514d4:<path>`).
 
 This is an audit artifact. It records what was checked, against what, and with
 what evidence. It does not change the compiler and it does not close anything.
@@ -32,7 +32,7 @@ is inferred from the handful of corrected rows.
 
 This document was written **2026-09-16** against a 1301-fixture tree, deleted in
 `2cc1c08`, and restored and partly re-derived at **2026-09-21** for release
-v0.0.2 (`ROADMAP.md §4`). **It is two documents in one and the sections are
+v0.0.2. **It is two documents in one and the sections are
 dated separately.**
 
 > **The re-derivation read a moving tree, and four citations were wrong because
@@ -47,9 +47,8 @@ dated separately.**
 > Every line citation was then re-checked against `a99a37f`. **Four had
 > drifted** and are corrected here: `lib/frontend/parser.zig:4812` → `:5043`,
 > `src/sim/digital.zig:3477` → `:3478`, `:3414` → `:3421`, `:3515` → `:3522`.
-> The rest were spot-checked and land. `ROADMAP.md` Appendix A item 8 already
-> warns that line citations drift and concludes "cite sections and symbols, not
-> line numbers" — this document still cites lines, because a verdict needs the
+> The rest were spot-checked and land. Line citations drift, and the rule is
+> "cite sections and symbols, not line numbers" — this document still cites lines, because a verdict needs the
 > exact site, and that is the maintenance cost of doing so.
 >
 > This is `AGENTS.md §8`'s first rule — **own worktree per agent** — and it was
@@ -183,7 +182,7 @@ one.**
 reported `1301/1301` because no fixture carried `//! xfail` — the marker did not
 exist. 28 do now, and `--strict` exits 0 only when FAIL, unasserted *and* XFAIL
 are all 0. The 63 rows behind that exit code are named in `CHANGELOG.md`'s
-v0.0.1 entry and are `ROADMAP.md`'s measure A, not this document's subject.
+v0.0.1 entry and are measure A, not this document's subject.
 
 **These clause numbers are measure C and this document no longer owns them.**
 `tools/conformance.py` writes them into `CHANGELOG.md` and `publish.yaml`
@@ -197,8 +196,8 @@ new line numbers and a new step name. `build.zig:149` puts the fixture walk
 behind the **`benchmark`** step (the `torture` step this document was written
 against is gone; `build.zig:14` now says "THERE IS ONE SUITE STEP, `benchmark`").
 `build.zig:141` adds only the *suite runner's own unit tests* to `test`. Any
-"N fixtures pass" claim sourced from a `zig build test` summary is unsupported —
-`ROADMAP.md` Appendix A item 9 settles this. **Measure A is always
+"N fixtures pass" claim sourced from a `zig build test` summary is unsupported.
+**Measure A is always
 `zig build benchmark -- --strict`.**
 
 **b. Refusal is 30.6% of the suite.** 477 of 1558 fixtures assert that the
@@ -222,8 +221,8 @@ On 2026-09-21 `collect` walked `*.va` **only**, so the 81 `.v` digital fixtures,
 
 A `.v` joins measure A when it carries a directive and has no `.expected.txt`;
 it stays `test-devices`' when it has one (`tests/bench.zig`'s `digitalCases`).
-`test-devices` **reports 48/66 and still FAILs** — `ROADMAP.md` Appendix A item 5
-records 47/66, which was measured before the port-net-type fix landed.
+`test-devices` **reports 48/66 and still FAILs** — the earlier 47/66 was
+measured before the port-net-type fix landed.
 
 Several §4 rows below are carried by `tests/fixtures/ieee1364/17_system_tasks/d09_*.v` evidence
 that is executable and byte-exact against committed transcripts but sits in the
@@ -562,8 +561,8 @@ into a generated device), and both committed fixtures are digital `.v` run by
 `src/sim/digital.zig`, whose task table has no `$fopen`, no `$fclose` and no file
 handle of any kind (row 17.2-07). They are not blocked on D03 or D05, but they
 are blocked on **digital-side file I/O** — a smaller prerequisite, and a real one.
-`ROADMAP.md:447` still asserts the old reading and `MANIFEST.md:59` still claims
-the grep returns zero hits; both are recorded in §7.3 item 11.
+`MANIFEST.md:59` still claims the grep returns zero hits; that is recorded in
+§7.3 item 11.
 
 ### 4.5 AMS additions to the inherited facilities, which need their own audit
 
@@ -684,7 +683,7 @@ still repeat the withdrawn claim.
 
 ### 5.7 Not supported — IEEE 1364 only, measure B
 
-`ROADMAP.md` §1 B scopes measure B to the IEEE 1364-2005 chapters VerA
+Measure B is scoped to the IEEE 1364-2005 chapters VerA
 implements. A clause outside that scope is `not-supported` in
 `tests/fixtures/ieee1364/CLAUSES.tsv`, and its evidence column names the
 diagnostic that stops a design depending on it. Unlike the five kinds above,
@@ -845,7 +844,7 @@ the cheapest way to close this section permanently.
 ### 7.1 Obligations classified in this document — **measure B**
 
 **Re-derived row by row at `a99a37f` on 2026-09-21.** This is the only
-one of `ROADMAP.md`'s four measures with no command behind it. It cannot be
+one of the four measures (AGENTS.md §2) with no command behind it. It cannot be
 measured, so the next best thing is an arithmetic a reader can redo: **every
 number below is a count of rows in §4, and each §4 subsection carries its own
 tally that sums to its own row count.**
@@ -884,7 +883,7 @@ unasserted. Everything else is open.
 
 #### Why this is not "36 / 119", and why that number could not be reproduced
 
-`ROADMAP.md §2`, `CHANGELOG.md`'s v0.0.1 entry and `AGENTS.md §2` all quote
+`CHANGELOG.md`'s v0.0.1 entry and `AGENTS.md §2` both quoted
 measure B as **36 / 119** from this document's 2026-09-16 text. **That
 arithmetic does not close, and restoring the file is what revealed it.** The old
 §7.1 verdict table read missing 63 · partial 11 · implemented-without-evidence 9
@@ -936,8 +935,7 @@ cross-check they have always been, measured 2026-09-21 at `a99a37f` and re-confi
 | **refused only** | 99 | **76** | **cannot be positive coverage** — §6.1 worklist |
 | uncited | 156 | **83** | unexamined; per the plan, therefore open |
 
-`ROADMAP.md` Appendix A item 1 settles this conflict in favour of the measured
-run and records that the widely quoted "463 clauses remaining" is **416**. Do not
+The measured run settles this conflict, and the widely quoted "463 clauses remaining" is **416**. Do not
 re-litigate it from this document's 2026-09-16 column.
 
 **The two measures still do not add up to each other and must not be made to.**
@@ -965,8 +963,8 @@ re-derivation.
 | 8 | **Add IEEE 1364-2005 to `docs/`** or confirm §§17–18 numbering another way | **open.** `2cc1c08` swapped the AMS LRM 2.4 PDF for the 2023 one; the *inherited* standard is still absent, so §4's subclause numbers remain structural rather than citable |
 | 9 | **Teach `--coverage` about the inherited clauses** | **open, and it is the reason measure B has no command.** Until it is done, §7.1 is hand-read and this document is the only artifact that can move B |
 | **10** | **Restore the twelve tests `2cc1c08` deleted that are still gone** | **NEW, and owned by no release.** Fourteen test files and `tools/source_guards.zig` went in one docs commit. `6f2e1c5` restored the VPI three — because `build.zig` still referenced them and the build broke. The other **twelve took their own build steps down with them**, so nothing broke: the six RNG files, the three `literal_nul` files, `limiter_host.zig`, `table_snapshot_host.zig`, `source_guards.zig`. `zig build test-rng-reference` and `zig build test-literal-output` no longer exist. It cost six closed rows in §7.1. **Not v0.0.2 work** — v0.0.2 changes no code — and there is no row for it on the ladder |
-| **11** | **Three documents still assert the pre-re-derivation reading of §18** | **NEW.** `ROADMAP.md:447` says 18.1-01/18.1-06 are unblocked file handling (they are blocked on digital-side file I/O — §4.4); `MANIFEST.md:59` says `grep -rn 'dumpvars\|dumpfile' tests/` returns 0 hits (it returns 7). Both are cheap corrections |
-| **13** | **492 lines of new accept-surface landed with zero two-way evidence** | **NEW.** Between tag `v0.0.1` and `a99a37f`, `lib/frontend/parser.zig` (+401), `ast.zig`, `token.zig`, `diag_code.zig` and `src/sim/digital.zig` changed — "A.3.1's other three switch arms, which were E0205 for a grammar that has them", "A.5.3's table was validated and then thrown away", §3.7 `wreal`. **Measure C did not move**: 612 clauses split 196/257/76/83 at both endpoints, both measured. Source VerA newly accepts is by `AGENTS.md`'s own rule a **minor**, and the grammar arms it opened are pinned by no fixture. Chasing them is measure-C work and belongs at v0.2.1 or later (`ROADMAP.md §5`); recording it is this document's job. See also `fixture_fixes.md`, added in `a99a37f` |
+| **11** | **A document still asserts the pre-re-derivation reading of §18** | **NEW.** 18.1-01/18.1-06 are blocked on digital-side file I/O (§4.4), not unblocked file handling; `MANIFEST.md:59` says `grep -rn 'dumpvars\|dumpfile' tests/` returns 0 hits (it returns 7). Both are cheap corrections |
+| **13** | **492 lines of new accept-surface landed with zero two-way evidence** | **NEW.** Between tag `v0.0.1` and `a99a37f`, `lib/frontend/parser.zig` (+401), `ast.zig`, `token.zig`, `diag_code.zig` and `src/sim/digital.zig` changed — "A.3.1's other three switch arms, which were E0205 for a grammar that has them", "A.5.3's table was validated and then thrown away", §3.7 `wreal`. **Measure C did not move**: 612 clauses split 196/257/76/83 at both endpoints, both measured. Source VerA newly accepts is by `AGENTS.md`'s own rule a **minor**, and the grammar arms it opened are pinned by no fixture. Chasing them is measure-C work; recording it is this document's job. See also `fixture_fixes.md`, added in `a99a37f` |
 | **14** | **The `.v` tree writes four directives the `.va` tree never taught the parser** | **NEW, from v0.0.3. Corrected 2026-09-21 — the first version of this row got the causes wrong and is restated here.** Eight of the twelve `.v` fixtures the widened walk now reads FAIL on their own header, and they do it for **four** reasons, not one. Measured, not inferred: <br>• **`lrm annex A.2.2.2`** — 4 rows (`d03_12`, `d03_13`, `d06_reject_delay4`, `d06_reject_intra_assign_on_net`). `validSection` (`lib/backend/tb.zig:428-435`) takes a single letter `A`–`H` then digit parts, so `A.2.2.2` is **valid** and the word `annex` in front of it is not. **107 `.va` fixtures write the bare form and none writes `annex`** — this is a spelling divergence between the two trees, and the cheapest of the four to close. <br>• **`lrm inherited IEEE 1364-2005 18.1`** — 2 rows (`d09_11`, `d09_12`). This one *is* a real vocabulary gap: an inherited clause must not enter `--coverage`'s AMS denominator (§1.1 c), so these cannot use the AMS spelling, and there is no other. Same hole as item 9 from the fixture side. <br>• **`//! rule`** — 2 rows (`d09_90`, `d09_91`), prose stating the obligation. <br>• **`//! data`** — `d09_91` also. <br>**`//! expect vcd` is not among the causes.** It sits on `d09_11`/`d09_12`, which fail on the `lrm` line before the parser reaches it |
 | **15** | **Every `.sp` deck's `.hdl` reference is dangling** | **NEW, from v0.0.3.** All 7 decks name models through an `.assets/` subdirectory that does not exist — `a10_host.assets/a10_vsine.va` is filed as `a10_host.assets_a10_vsine.va`, `/` turned into `_`. That is `collect`'s slug rule applied to the *tree*, so a nested layout was flattened and the decks were not updated with it. `test-spice` resolves it with a documented fallback rather than renaming six fixtures on a guess about the old layout; un-flattening the tree makes the fallback dead code, which is the tell that it should be un-flattened |
 | **12** | **Four in-tree claims the §4 re-derivation found false** | **NEW.** `lib/ir/lower.zig:7597-7600` still calls `$receiver_count` "Non-normative" and cites a fixture deleted in `2cc1c08` (AMS-05); `ch09_system_tasks/COVERAGE.md:96-98` still says §9.21's splines and `E` extrapolation are refused at E0815 (AMS-09 — they are implemented); `COVERAGE.md:78` still says `$rtoi`/`$itor` are unimplemented (17.8-01 — both are, at `lib/backend/codegen.zig:6043`/`:6049`); `COVERAGE.md:50` still cites the deleted `zig build test-literal-output` (17.1-03) |
@@ -974,8 +972,7 @@ re-derivation.
 ### 7.4 What this audit did not do
 
 - **No `.zig` source was modified, and no fixture was added, renamed or deleted** —
-  by either pass. Release v0.0.2 changes no code; `ROADMAP.md §4` scopes it that
-  way deliberately.
+  by either pass. Release v0.0.2 changes no code, deliberately.
 - **§6 was not re-derived at HEAD.** It carries a banner saying so. Its
   population is 452 rejection fixtures of 1301, now 477 of 1558.
 - **The `.v`, `.c` and `.sp` populations were outside measure A when §4 was
@@ -992,8 +989,7 @@ re-derivation.
 - A clause-by-clause re-read of chapters 1–8 and 10 against the LRM HTML — the
   full Q01 obligation expansion for the *AMS* clauses, as opposed to the
   inherited ones — is still not done. §7.2's 83 uncited and 76 refused-only
-  clauses are the entry points, and `ROADMAP.md` schedules them as v0.2.1,
-  v0.6.2 and v0.9.1.
+  clauses are the entry points.
 - X01 native-device compatibility is deliberately out of scope, per Q01.
 
 ### 7.5 Questions the re-derivation could not settle
@@ -1060,7 +1056,7 @@ Recorded rather than guessed. Each would change a §7.1 row.
 
 ### 7.6 `docs/CONFORMANCE-GAPS.md` — retired, not rebuilt
 
-`ROADMAP.md` Appendix B and §7 decision 7 leave this open. **Decided 2026-09-21:
+**Decided 2026-09-21:
 retire it.** It was 57 lines, deleted in `2cc1c08`, and `TODO.md §3.6` already
 described it as stale before the deletion — 375 units, 1313 fixtures, 295 host
 units, none of which survives contact with a 1558-fixture tree.
@@ -1072,11 +1068,9 @@ distinct contents are better homed elsewhere and both already have owners:
 
 - **The published list of implementation-defined choices** — its one obligation
   nothing else carries — is **§5.3 of this document**, which already says "this
-  table should become that list". `ROADMAP.md` schedules publishing it as
-  **v0.9.2**, together with the stated resource limits in §5.4.
+  table should become that list".
 - **ARPice host gap counts** are not measurable from this worktree and never
-  were. They belong to ARPice, and `ROADMAP.md §6` already tracks what is
-  blocked on it.
+  were. They belong to ARPice.
 
 What is lost is the ARPice plan's inbound link. That is a broken link in another
 repository, not a reason to carry a stale document in this one. **Anything that

@@ -5,7 +5,7 @@
 // pragma "is reserved by this standard for the description of protected
 // envelopes".
 //
-// VerA does not decrypt (ROADMAP.md §1 B puts clause 28 out of scope).
+// VerA does not decrypt (clause 28 is out of scope, CLAUSES.tsv).
 // Treating the directive as an unknown pragma would hand the data_block's
 // ciphertext below to the parser as Verilog, so the first `pragma protect is
 // refused by name (E0146). The envelope is §28.2.1's rot13 example, cut down:

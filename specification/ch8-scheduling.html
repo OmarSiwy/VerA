@@ -288,7 +288,7 @@ endmodule</code></pre>
 <figcaption><strong>Figure 8-6.</strong> Glitch timing example (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=224">physical PDF page 224 (printed page 211)</a>.</figcaption>
 </figure>
 
-<div class="note"><strong>Editorial oracle warning:</strong> The example's cancellation of a queued assignment must not be generalized to ordinary nonblocking assignments. IEEE 1364-2005, 9.2.2, preserves queued assignments, including ordered updates to the same variable. The interaction between this AMS example's driver look-ahead, transition filtering and assignment semantics remains an open source discrepancy (<code>docs/ROADMAP.md</code>, Open items).</div>
+<div class="note"><strong>Editorial oracle warning:</strong> The example's cancellation of a queued assignment must not be generalized to ordinary nonblocking assignments. IEEE 1364-2005, 9.2.2, preserves queued assignments, including ordered updates to the same variable. The interaction between this AMS example's driver look-ahead, transition filtering and assignment semantics remains an open source discrepancy (<code>specification/Vague_Decisions.md</code>).</div>
 
 <p>If the canceling event arrived after the ramp on <code>B</code> had started but before the assignment to the digital <code>B</code>, it is possible to see the glitch propagate back into the analog domain without an event appearing on <code>B</code>.</p>
 

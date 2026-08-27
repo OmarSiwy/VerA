@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.22 assignment and §5.9.2 for: the loop tests `k < 3` before each pass,
 // so the body runs for k = 0, 1, 2 — three passes — and leaves k at the first
 // value that failed the test, 3. Each pass adds the branch potential to the

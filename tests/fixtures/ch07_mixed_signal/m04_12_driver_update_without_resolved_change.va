@@ -42,8 +42,8 @@
 //! time 0, 60n
 //! checks 8
 //
-// WHOSE DRIVERS ARE WATCHED — settled 2026-09-24 by the user
-// (docs/ROADMAP.md §7 item 1): `driver_update` does NOT fire for the connect
+// WHOSE DRIVERS ARE WATCHED — settled 2026-09-24 by the user:
+// `driver_update` does NOT fire for the connect
 // module's OWN driver of the signal, the `assign d = out;` below. The reading
 // is §9.22.6's separation of the two kinds of driver: with that assignment
 // "the digital port of the connect module will drive the receivers with a

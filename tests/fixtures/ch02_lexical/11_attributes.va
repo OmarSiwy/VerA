@@ -3,9 +3,9 @@
 // a decorated-declaration computation regression, not proof that attributes
 // are universally inert or that metadata reporting works. Here
 // `conductance` still holds the §2.6.2 scaled literal `1m` = 1e-3 after four
-// attributes were attached to it, and the module still conducts. Missing
-// metadata/report observations are tracked in AMS-ATTR-DESC-HELP,
-// AMS-ATTR-OP-YES and AMS-ATTR-MULT-NONE, open in docs/ROADMAP.md.
+// attributes were attached to it, and the module still conducts. The
+// metadata/report observations (AMS-ATTR-DESC-HELP, AMS-ATTR-OP-YES,
+// AMS-ATTR-MULT-NONE) are not claimed here.
 //! lrm 2.9
 //! lrm 3.4.3
 //! lrm 2.9:2

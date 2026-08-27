@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.16 sys func call, the half of the object that 06 cannot reach: the
 // clause gives the sys task call / sys func call class the properties
 // `-> value — vpi_put_value(), vpi_get_value()` and

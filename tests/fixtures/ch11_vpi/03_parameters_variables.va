@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.12/11.6.10 parameter and variable objects. The language-level facts
 // behind them: a parameter is overridable at instantiation (§3.4) and an integer
 // variable promotes to real in a mixed-type sum (§4.2.1.3 Arithmetic

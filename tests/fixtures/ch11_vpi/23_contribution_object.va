@@ -1,6 +1,6 @@
 // Source-audit correction: this HDL-only fixture does not execute VPI.
-// Chapter 11 API/object-model obligations remain open in
-// docs/ROADMAP.md (Open items); only language clauses are credited.
+// Chapter 11's API and object model are exercised by the `.c` fixtures in
+// build.zig's `vpi_runs`; only language clauses are credited here.
 // §11.6.20 contrib: the right-hand side of `<+` is an ordinary expression, and
 // its `1k` operand is a real constant in scaled notation — Table 2-1 of §2.6.2
 // makes the symbol k exactly 1e3, so `1k` is 1000.0 and not 1.0 with a stray
