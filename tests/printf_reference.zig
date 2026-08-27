@@ -10,6 +10,11 @@
 //! (the digital path is zCReal with no flags, padded to the width), so this
 //! is its oracle too.
 //!
+//! The oracle is glibc's, and build.zig runs this nowhere else: a NaN's sign
+//! is the implementation's to print (C11 7.21.6.1; Windows' UCRT differs),
+//! and macOS libc keeps the trailing zeros on a `%g` tie, which C11 removes
+//! (`%g` of 1347705: "1.34770e+06", not "1.3477e+06").
+//!
 //! One deliberate gap: `%g` with an explicit precision. Both clauses' own
 //! example reads `%10.3g` as "3 fractional digits" where C reads significant
 //! digits, and VerA follows the example (`zCReal`'s comment, and the

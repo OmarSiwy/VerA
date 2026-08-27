@@ -1,0 +1,113 @@
+# The website (https://omarsiwy.github.io/VerA/): the user documentation
+# (docs/, mdBook) at / and the conformance and speed report at /report/.
+#
+# It runs when conformance.yaml finishes on main, whatever its verdict, so
+# the book's conformance page carries that run's measures block (`measured`)
+# and the site follows main commit by commit. On a pull request it builds the
+# book and checks its transcripts, and deploys nothing.
+name: pages
+
+on:
+  workflow_run:
+    workflows: [conformance]
+    types: [completed]
+    branches: [main]
+  pull_request:
+    paths: [docs/**, tools/doctest.py, .github/workflows/pages.yaml]
+  workflow_dispatch:
+
+# One deployment at a time, the newest last; never cancel one halfway.
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  # Every transcript a page shows is re-run against this commit's vera, and a
+  # page that no longer matches what vera prints fails the job
+  # (tools/doctest.py). One heavy build at a time, two jobs wide (-j2): the
+  # runner's RAM.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: cachix/install-nix-action@v31
+      - name: Build vera
+        run: nix develop .#docs -c zig build -Doptimize=ReleaseFast -j2 install
+      - name: Transcripts match vera (gate)
+        run: nix develop .#docs -c python3 tools/doctest.py
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        with:
+          name: measured
+          path: docs
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Build the book (gate)
+        run: |
+          test -s docs/measured.md || echo '(the conformance workflow did not measure this run)' > docs/measured.md
+          nix develop .#docs -c mdbook build docs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: book
+          path: docs/book/
+
+  # The conformance and speed report (tools/report.py): one self-contained
+  # page with the measures, the clause-by-clause rule map, the gaps, and the
+  # timing charts, re-measured from scratch in ReleaseFast. A published
+  # record, not a gate.
+  report:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          repository: OmarSiwy/ESPice
+          path: arpice
+          sparse-checkout: models
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Generate report/
+        run: |
+          python3 tools/report.py --selftest
+          python3 tools/report.py --models arpice/models
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report/
+
+  deploy:
+    needs: [docs, report]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: book
+          path: site
+      - uses: actions/download-artifact@v4
+        with:
+          name: report
+          path: site/report
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

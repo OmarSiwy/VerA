@@ -5,8 +5,7 @@
 //! compiled. A no-op dyn exports nothing and Zig never analyses the device
 //! (measured 2026-10-04: every model's .so was 1312-1320 bytes).
 //! A real host (ARPice's vtable) also compiles updateState: a lower bound.
-//! Used by tools/report.py's model-build timing. CI's consumer check builds
-//! ARPice itself (.github/workflows/bench.yaml arpice-consumer).
+//! Used by tools/report.py's model-build timing.
 
 /// Opt into the contract's conformance checks (AGENTS.md §6).
 pub const vera_validate_contract = true;

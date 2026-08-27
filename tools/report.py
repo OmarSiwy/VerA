@@ -54,7 +54,7 @@ SUITES = {
     "sweep": ["zig", "build", OPT, "benchmark", "--", "--sweep"],
 }
 MODELS = ["diode", "mos1", "bsim4va", "psp103", "psp103_nqs", "vbic13_4t"]
-# The `--dyn` host the model timing builds under. NOT bench.yaml's no-op one:
+# The `--dyn` host the model timing builds under. NOT a no-op one (`NOOP_DYN`):
 # that exports nothing, so Zig never analyses the device and the .so is a
 # ~1 KB stub (measured: every model, 1312-1320 bytes). This one exports one
 # `evalQ` over the sparse reference family (the SIMD lanes a host runs; the
@@ -62,7 +62,7 @@ MODELS = ["diode", "mos1", "bsim4va", "psp103", "psp103_nqs", "vbic13_4t"]
 # caller, so the device's eval and charge code is compiled. A real host
 # (ARPice's vtable) also compiles updateState and the rest: a lower bound.
 DYN = (Path(__file__).resolve().parent.parent / "tests" / "arpice_dyn.zig").read_text()
-# bench.yaml's arpice-models `dyn`: exports nothing, so no device code compiles.
+# A no-op `dyn`: exports nothing, so no device code compiles.
 NOOP_DYN = "pub fn exportDevice(comptime D: type, comptime name: []const u8) void {\n    _ = D;\n    _ = name;\n}\n"
 BUILD_TIMEOUT_S = 1800
 KINDS = ["non-normative", "no-prohibition", "optional", "implementation-defined",
@@ -351,7 +351,7 @@ def time_models(models, reps, scratch):
       copy of a base global cache.
     - The base holds what every first build on a machine pays once
       (compiler_rt and friends): it is primed by building one model under
-      bench.yaml's no-op `dyn`, which compiles no device code. That priming,
+      a no-op `dyn` (`NOOP_DYN`), which compiles no device code. That priming,
       timed from an empty global cache, is reported as the one-time cost.
     - The work dir and vera's cwd (whose `.zig-cache` the spawned builds use)
       are fresh per run.
@@ -675,7 +675,7 @@ def render(d):
         o.append(f"<p class=note>Median of {md['reps']} runs, ReleaseFast device, built under a <code>--dyn</code> that "
                  "exports one <code>evalQ</code> over the sparse reference family (the device's eval and charge code; "
                  "a full host also compiles <code>updateState</code> and the rest of its vtable, so this is a lower "
-                 "bound). bench.yaml's no-op <code>dyn</code> exports nothing, so Zig never analyses the device: it "
+                 "bound). A no-op <code>dyn</code> exports nothing, so Zig never analyses the device: it "
                  "cannot be timed. Cold for the device: every run has a fresh work dir, a fresh local cache, and its "
                  "own copy of a global cache that holds only compiler_rt and the other per-machine one-time builds "
                  "(Zig's global cache would otherwise return a whole previous build of the same device). Priming "

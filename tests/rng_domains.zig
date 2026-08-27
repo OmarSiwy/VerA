@@ -13,7 +13,7 @@ const std = @import("std");
 const k = @import("kernels").rng_kernels;
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
-    var args = init.args.iterate();
+    var args = try init.args.iterateAllocator(std.heap.page_allocator);
     _ = args.skip();
     const id = try std.fmt.parseInt(u8, args.next() orelse return 2, 10);
     const next = id & 1 != 0;
