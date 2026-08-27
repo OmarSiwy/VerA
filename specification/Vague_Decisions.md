@@ -1634,8 +1634,8 @@ own evaluation quota where it computes those tables.
 
 ## 10. Open gaps no fixture pins yet
 
-Pinned gaps are `//! xfail` fixtures and one-way clauses, listed by name in
-`specification/known-gaps.txt` (CI gates on that list). These are the rest: found in
+Pinned gaps are `//! xfail` fixtures, gated by name by the verdict ratchet
+(`tests/fixtures/VERDICTS.tsv`). These are the rest: found in
 the 2026-10-04 conformance pass, with no fixture yet, because a fixture cannot
 express them or the work was larger than the pass. Each names its clause.
 

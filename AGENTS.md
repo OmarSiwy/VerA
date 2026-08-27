@@ -125,13 +125,12 @@ patch, because it is byte-identical by construction.
 
 `.github/workflows/bench.yaml` runs on every push and PR. It writes the
 torture suite, clause coverage, digital transcripts and the footprint/speed
-sweep into the job summary, and uploads the known-gap name list as an
-artifact. It **gates** on `zig build test`, `test-1364`, `test-devices`,
+sweep into the job summary, and uploads the verdicts as an artifact. It **gates** on `zig build test`, `test-1364`, `test-devices`,
 `test-vpi-fixtures`, `test-spice`, the cross builds, and the fixture suite
-with 0 FAIL and 0 unasserted. The known gaps are gated by **name**:
-`tools/known_gaps.sh` lists every XFAIL fixture and every one-way or uncited
-clause, and the job fails if that list differs from `specification/known-gaps.txt`. A
-new gap fails, and so does a fixed one until you delete its line. Only the
+with 0 FAIL and 0 unasserted. Every verdict is gated by **name**: the
+ratchet (`tools/conformance.py ratchet`) compares each fixture's verdict with
+`tests/fixtures/VERDICTS.tsv`, so a new failure fails, and so does a fixed one
+until `ratchet --update` records it. Only the
 sweep and the audit-tool self-tests report without gating.
 
 **Nix.** `flake.nix` exports `packages.<system>.default` (`vera`, built from

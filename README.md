@@ -87,9 +87,9 @@ builds a host step by step.
   VerA's own device contract carries all four.
 - **Languages:** Verilog-AMS and IEEE 1364-2005 Verilog. SystemVerilog (E1104)
   and VHDL are out of scope.
-- **Known gaps** are listed by name in
-  [`specification/known-gaps.txt`](specification/known-gaps.txt), and CI fails
-  if the list changes. Operating-point variables are not exported to OSDI yet.
+- **Open bugs** are `//! xfail` fixtures, each naming its clause; CI's verdict
+  ratchet ([`tests/fixtures/VERDICTS.tsv`](tests/fixtures/VERDICTS.tsv)) fails
+  on any verdict change. Operating-point variables are not exported to OSDI yet.
 
 ## Conformance
 

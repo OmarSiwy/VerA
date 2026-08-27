@@ -1,3 +1,0 @@
-ONEWAY-IEEE §15.6
-XFAIL ch07_mixed_signal/b5_gate_generated_connect_name_defparam.va
-XFAIL ch09_system_tasks/b6_fdebug_writes_in_rejected_iterations.va

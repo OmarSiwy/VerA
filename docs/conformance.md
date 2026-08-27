@@ -46,11 +46,11 @@ ledger](https://github.com/OmarSiwy/VerA/blob/main/specification/TESTING.md)
 breaks the LRM into its individual normative sentences, and tracks the
 evidence for each.
 
-The places VerA knowingly falls short are listed by name in
-[`specification/known-gaps.txt`](https://github.com/OmarSiwy/VerA/blob/main/specification/known-gaps.txt):
-every fixture marked as a known failure, and every clause with evidence on
-only one side. CI fails if that list changes in either direction, so a new
-gap cannot slip in and a fixed one has to be crossed off.
+The places VerA knowingly falls short are its `//! xfail` fixtures, each
+naming the clause it fails. CI's verdict ratchet compares every fixture's
+verdict with
+[`tests/fixtures/VERDICTS.tsv`](https://github.com/OmarSiwy/VerA/blob/main/tests/fixtures/VERDICTS.tsv)
+by name, so a new failure cannot slip in and a fixed one has to be recorded.
 [Implementation-defined choices](using/implementation.md) lists the open
 defects in prose.
 
