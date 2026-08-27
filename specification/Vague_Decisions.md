@@ -1087,7 +1087,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (2026-10-08): `ch03_data_types/annex_d_access_v_included_rejected.va` (E0335), neighbour `annex_d_access_v_without_include.va`.
 
 ### VD-097: The derivative of `$realtobits`
-- **Source**: the derivative certificate (specification/TESTING.md L4a): `ch09_system_tasks/15_conversion_functions.va` contributes `$bitstoreal($realtobits(V(p,n)))`, whose value is V(p,n) and whose Jacobian VerA gives as 0, so a central difference disagrees.
+- **Source**: the derivative certificate: `ch09_system_tasks/15_conversion_functions.va` contributes `$bitstoreal($realtobits(V(p,n)))`, whose value is V(p,n) and whose Jacobian VerA gives as 0, so a central difference disagrees.
 - **Rule**: VAMS 9.11 extends `$realtobits` to the analog context and says nothing about derivatives; IEEE 1364-2005 17.8 makes its result the 64-bit pattern of the real, an integer.
 - **Why vague**: neither standard says how a simulator linearizes through a conversion to an integer, and the round trip back through `$bitstoreal` is the identity on values.
 - **Options**: (a) carry the derivative through the pattern, so the round trip has slope 1; (b) the pattern is an integer, with no derivative, like every integer (VD-026's conditional form, `$rtoi`, `floor`).
@@ -1106,7 +1106,7 @@ summary and has a **Status** line naming what landed.
 - **Status**: DONE (#20): `ch12_vpi_routines/p03_09_ac_freq_and_imaginary.c` over `p03_rc_ac.va`.
 
 ### VD-099: Which member of a min:typ:max expression a value takes
-- **Source**: the Annex A grammar oracle (`specification/TESTING.md` L5c, `tests/fixtures/GRAMMAR-DIFF.tsv`, 2026-10-08): 203 sentences with a min:typ:max expression, all refused by a `.va` parse (E0207 at the first `:`), which the `.v` path already read.
+- **Source**: the Annex A grammar oracle (`tests/fixtures/GRAMMAR-DIFF.tsv`, 2026-10-08): 203 sentences with a min:typ:max expression, all refused by a `.va` parse (E0207 at the first `:`), which the `.v` path already read.
 - **Rule**: IEEE 1364-2005 5.3: delay expressions "can be specified as three expressions separated by colons ... intended to represent minimum, typical, and maximum values—in that order", "The three values allow a design to be tested with minimum, typical, or maximum delay values", and "The min:typ:max format can be used wherever expressions can appear." VAMS A.8.3 carries `mintypmax_expression` and `constant_mintypmax_expression`; A.2.4 gives one to `param_assignment`, `defparam_assignment` and `specparam_assignment`, A.4.1 to `named_parameter_assignment`, A.7.4 to a path delay; A.8.4 gives `( mintypmax_expression )` to `primary` and `constant_primary` and only `( analog_expression )` to `analog_primary`.
 - **Why vague**: 5.3 names three values and says the design can be tested with any one, but not which one a run uses or how it is chosen (IEEE 1364's tools take a command-line switch, typical by default). The analog LRM says nothing about a parameter written as a triple.
 - **Options**: (a) typical always; (b) a `--mintypmax=min|typ|max` switch; (c) refuse a triple outside a digital delay.

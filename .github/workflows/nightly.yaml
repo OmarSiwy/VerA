@@ -1,4 +1,4 @@
-# The nightly tier (specification/TESTING.md §6): the slow evidence the merge gate
+# The nightly tier: the slow evidence the merge gate
 # cannot afford, and the conformance metric it feeds (§3.7).
 #
 #   perturb   every check run with its want moved by 0.1%: a LOOSE check
@@ -52,7 +52,7 @@ jobs:
         if: always()
         run: |
           {
-            echo '## Conformance metric (specification/TESTING.md §3.7)'
+            echo '## Conformance metric'
             echo '```'; cat /tmp/metric.txt 2>/dev/null; echo '```'
             echo '## LOOSE checks (want moved 0.1%, still ok=1)'
             echo '```'; wc -l < /tmp/loose.txt 2>/dev/null; head -50 /tmp/loose.txt 2>/dev/null; echo '```'

@@ -1,6 +1,6 @@
-# Independent oracles per fixture (specification/TESTING.md §3.3 e), read by `tools/conformance.py metric`.
+# Independent oracles per fixture (read by `tools/conformance.py metric`.
 # `hand2`: a second reader derived every want from the LRM alone, before seeing the fixture's,
-# and agreed (2026-10-08 reading round; disagreements are listed in specification/TESTING.md §10, not here).
+# and agreed (2026-10-08 reading round; disagreements were adjudicated in the fixtures, not here).
 fixture	oracle
 annex_a_syntax/01_source_text.va	hand2
 annex_a_syntax/05_behavioral_statements.va	hand2

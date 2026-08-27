@@ -1,4 +1,4 @@
-/* specification/TESTING.md L3: the independent oracle for IEEE 1364-2005 §17.9.3,
+/* The independent oracle for IEEE 1364-2005 §17.9.3,
  * pp. 313-320, restored from `git show 4250899d^:tests/rng_reference.c`.
  * The listed arithmetic and draw order are kept. The listing's `long` is a
  * 32-bit word: the seed wraps as uint32_t, and rtl_dist_uniform's bounds are

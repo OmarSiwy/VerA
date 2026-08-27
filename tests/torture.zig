@@ -473,7 +473,7 @@ fn runAndCheck(
     stage_into: ?*?vera.tb.Staged,
 ) !Result {
     const cfg = ctx.cfg;
-    // `--perturb`: check.vh moves every want by a relative δ (TESTING.md L2b).
+    // `--perturb`: check.vh moves every want by a relative δ.
     // A define ahead of the text, so the first `include "check.vh"` sees it.
     const compiled_src = if (harness.perturb) |p| try arena.print("`define VERA_PERTURB {e}\n{s}", .{ p, source }) else source;
     // Stages 1-6 with §9.4 display ON. W0650 is about speed, and every fixture

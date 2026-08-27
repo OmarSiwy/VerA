@@ -1312,7 +1312,7 @@ def icarus(argv):
     """`icarus [--work=DIR]`: Icarus Verilog (4-state, event-driven) over every
     .v with a committed transcript or a refusal under tests/fixtures/ieee1364
     and tests/fixtures/digital -> tests/fixtures/ICARUS.tsv, one row each, in
-    VERILATOR.tsv's columns. The second engine specification/TESTING.md L7 names:
+    VERILATOR.tsv's columns. The second engine:
     Verilator is 2-state, so its x/z disagreements are expected; Icarus's are
     not. A disagreement is data for a reader (VerA bug, Icarus bug, or a
     reading of the standard), never a reason to edit the fixture. Needs
@@ -1390,7 +1390,7 @@ def icarus(argv):
         f"# {version} — `iverilog -g2005`, `vvp -n`; written by `tools/conformance.py icarus`.\n"
         "# agrees: a transcript fixture's stdout (vvp's own VCD/$finish notices dropped) equals its\n"
         "# .expected.txt; a reject fixture is refused at build or exits nonzero. Disagreements are\n"
-        "# listed, never resolved (specification/TESTING.md L7). Read by `metric` as an independent oracle.\n"
+        "# listed, never resolved. Read by `metric` as an independent oracle.\n"
         "fixture\texpect\ticarus\texit\tagrees\tnote\n" + rows)
     agree = sum(1 for r in rows.splitlines() if r.split("\t")[4] == "yes")
     print(f"icarus: {agree} / {len(rows.splitlines())} fixtures agree -> {out.relative_to(ROOT)}", file=sys.stderr)
@@ -2013,14 +2013,14 @@ class InformativeSource(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # obligations / metric: the requirement ledger and the conformance metric
-# (specification/TESTING.md §3). The ledger's rows are the normative sentences of the
+#. The ledger's rows are the normative sentences of the
 # LRM, extracted here; the metric is each row's evidence level, computed from
 # the fixtures' cites and one strict run's verdicts.
 # ---------------------------------------------------------------------------
 
 LEDGER = ROOT / "tests/fixtures/OBLIGATIONS.tsv"
 LEDGER_HEAD = (
-    "# The AMS LRM's normative sentences: the requirement ledger, specification/TESTING.md §3.2.\n"
+    "# The AMS LRM's normative sentences: the requirement ledger.\n"
     "# Rows are extracted by `tools/conformance.py obligations --update`; a reader\n"
     "# classifies `pol`, `kind` and `oracle` and adds `declar.` rows (ordinal >= 1000,\n"
     "# hash `manual`) for rules stated without a modal verb. A changed hash means the\n"
@@ -2151,7 +2151,7 @@ def obligations(argv):
                 added.append(rid)
             new[rid] = {"id": rid, "hash": h, "modal": m, "pol": pol, "kind": kind, "oracle": "?", "text": sent[:400]}
         # A clause no modal verb reaches still states something: a placeholder
-        # a reader replaces with the clause's rules (specification/TESTING.md §3.2).
+        # a reader replaces with the clause's rules.
         if not rows and kinds.get(("ams", clause)) != "non-normative":
             rid = f"{clause}:{MANUAL_ORDINAL}"
             if rid not in old:
@@ -2300,7 +2300,7 @@ def read_oracles():
     """{fixture: [engine]} from the independent engines' agreement tables:
     tests/fixtures/ieee1364/VERILATOR.tsv (`agrees` = yes) and any
     tests/fixtures/ORACLES.tsv rows `<fixture>\t<engine>` (iverilog, ngspice,
-    ...). Agreement is evidence, not authority (specification/TESTING.md L7)."""
+    ...). Agreement is evidence, not authority."""
     out = {}
     ver = ROOT / "tests/fixtures/ieee1364/VERILATOR.tsv"
     if ver.exists():
@@ -2330,7 +2330,7 @@ def chapter_of(clause):
 
 def metric(argv):
     """`metric --verdicts=F [--perturbed=F] [--killed=F] [--levels=OUT]`: the
-    specification/TESTING.md §3.7 table. F files are `zig build benchmark -- --strict
+    evidence-level table. F files are `zig build benchmark -- --strict
     --verdicts=F` (and `--perturb --verdicts=F`) outputs; `--killed` is one row
     id per line. `--levels` writes `<id>\t<level>`, the ratchet file."""
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
@@ -2372,7 +2372,7 @@ def metric(argv):
         return (0, int(h)) if h.isdigit() else (1, h)
 
     total = {"rows": 0, "mand": 0, **{k: 0 for k in order}, "unattr": 0}
-    print("CONFORMANCE (specification/TESTING.md §3.7) — mandatory rows by evidence level; F = known nonconformance")
+    print("CONFORMANCE — mandatory rows by evidence level; F = known nonconformance")
     print("block\trows\tmand\t" + "\t".join(order) + "\tF?\tproven\tnot-refuted")
     for ch in sorted(table, key=keyf):
         t = table[ch]
@@ -2412,7 +2412,7 @@ def ratchet(argv):
     verdicts (and per-row levels) against the committed VERDICTS.tsv and
     LEVELS.tsv. Any difference fails, a fix as much as a regression, so the
     committed files are always this tree's truth and every change to them is
-    reviewed by name (AGENTS.md §0 rule 3, specification/TESTING.md §3.6, §3.7).
+    reviewed by name (AGENTS.md §0 rule 3).
     `--update` writes the run's files over the committed ones."""
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
     if "verdicts" not in opts:
@@ -2540,7 +2540,7 @@ def link_neighbours(argv):
     twin in prose (`conductor.va runs`, `Fixture 08 is the legal form` with
     the file in the same directory) gets `//! neighbour <file>`. Only files
     that exist and are positive fixtures are linked; the rest are listed as
-    the worklist (specification/TESTING.md §3.3 c)."""
+    the worklist."""
     apply = "--apply" in argv
     linked = missing = 0
     worklist = []
@@ -2702,7 +2702,7 @@ def load_vq():
 
 def mutate(argv):
     """`mutate [--files=a.zig,b.zig] [--per-file=N] [--max-fixtures=K] [--seed=S]`:
-    specification/TESTING.md L13. For each source file, up to N mutants at sites
+    mutation testing. For each source file, up to N mutants at sites
     chosen by seed; each is built incrementally in W1 (`vq check -- ...`,
     so it queues like any build) and judged by the strict suite over the
     fixtures that cite the file's header clauses (at most K). A mutant some
@@ -2735,7 +2735,7 @@ def mutate(argv):
     passing = {ln.split("\t", 1)[1] for ln in baseline.read_text().split("\n") if ln.startswith("pass\t")}
     print(f"mutate: baseline {len(passing)} passing fixtures", flush=True)
     if not MUTANTS.exists():
-        MUTANTS.write_text("# specification/TESTING.md L13, written by `tools/conformance.py mutate`.\n"
+        MUTANTS.write_text("# Written by `tools/conformance.py mutate`.\n"
                            "file\tsha\tline\top\toutcome\tkilled_by\n")
     for path in files:
         text = path.read_text()
@@ -2825,7 +2825,7 @@ def killed_rows(ledger):
 
 
 # ---------------------------------------------------------------------------
-# adversarial, determinism: specification/TESTING.md L10 sizes and L11 device text
+# adversarial, determinism: input-size limits and device-text determinism
 # ---------------------------------------------------------------------------
 
 ADVERSARIAL = ROOT / "tests/fixtures/ADVERSARIAL.tsv"
@@ -2876,7 +2876,7 @@ def adversarial_verdict(rc, err):
 
 def adversarial_cases():
     """name -> a legal Verilog-A source, so exit 0 is the plain good answer and
-    a named limit diagnostic the other. Sizes are specification/TESTING.md L10's."""
+    a named limit diagnostic the other."""
     ports = "(p, n);\n  inout p, n;\n  electrical p, n;\n"
     head = "module top" + ports
 
@@ -2955,7 +2955,7 @@ def adversarial(argv):
         rows.append(f"{case}\t{bname}\t{len(cases[case])}\t{exit_}\t{secs:.1f}\t{v}\t{note[:200].replace(chr(9), ' ')}\n")
     shutil.rmtree(work, ignore_errors=True)
     ADVERSARIAL.write_text(
-        "# Written by `tools/conformance.py adversarial` (specification/TESTING.md L10): each input through\n"
+        "# Written by `tools/conformance.py adversarial`: each input through\n"
         f"# `vera --check` under `ulimit -v {AS_KIB}` and a {TIMEOUT_S} s budget. verdict: ok (exit 0), named\n"
         "# (refused with an error[Ennnn] code), else a finding: signal, timeout, unnamed (exit 1, no code).\n"
         "# bytes is the input's size; note is the first error line.\n"
@@ -3052,8 +3052,7 @@ def read_tsv(path):
 
 
 def ledger_apply(argv):
-    """`ledger-apply <dir> [--apply]`: merge readers' output (specification/TESTING.md
-    §3.2, the rubric in the reading round) into the ledger and the fixtures.
+    """`ledger-apply <dir> [--apply]`: merge readers' output (the rubric in the reading round) into the ledger and the fixtures.
     `*-class.tsv` sets a row's pol and kind (a `:1000` placeholder takes the
     note as its rule); `*-declar.tsv` adds `declar.` rows; `*-links.tsv` adds
     `//! lrm <id>` to a fixture. Every value and every link is validated:
@@ -3218,7 +3217,7 @@ class ObligationLedger(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# grammar: the R3 oracle (specification/TESTING.md §3.1 R3, L5c). Every Syntax box read
+# grammar: the R3 oracle (L5c). Every Syntax box read
 # into BNF, an Earley recognizer over it, the alternatives passing positive
 # fixtures derive, and VerA's parse-level acceptance against the recognizer's.
 # None of it reads VerA's parser: the oracle is the LRM's text.
@@ -3473,7 +3472,7 @@ def read_syntax(docs=None):
 
 def write_grammar_tsv(alts, path=None):
     path = path or GRAMMAR_TSV
-    head = ("# Every alternative of every Syntax box: the R3 denominator, specification/TESTING.md §3.1.\n"
+    head = ("# Every alternative of every Syntax box: the grammar-coverage denominator.\n"
             "# Written by `tools/conformance.py grammar extract`; never edit by hand.\n"
             "# Terminals (bold in the LRM) are quoted; plain-type punctuation is bare.\n"
             "# note: empty for Annex A; a chapter row says how it relates to Annex A.\n"
@@ -3503,7 +3502,7 @@ GRAMMAR_COMMANDS = {"extract": grammar_extract}
 
 def grammar(argv):
     """`grammar extract|earley|coverage|diff [...]`: the R3 oracle
-    (specification/TESTING.md §3.1 R3, L5c)."""
+    (L5c)."""
     if not argv or argv[0] not in GRAMMAR_COMMANDS:
         print(f"usage: conformance.py grammar {'|'.join(GRAMMAR_COMMANDS)} ...", file=sys.stderr)
         return 2
@@ -4352,7 +4351,7 @@ def grammar_coverage(argv):
     done = [a for a in rows if a.id in covered]
     print(f"alternatives: {len(rows)}; derived by a passing positive fixture: {len(done)} ({pct(len(done), len(rows))}); "
           f"not derived: {len(rows) - len(done)}")
-    print("worklist (R3, specification/TESTING.md §3.1): id\tproduction\ttext")
+    print("worklist (grammar coverage): id\tproduction\ttext")
     for a in rows:
         if a.id not in covered:
             print(f"  {a.id}\t{a.lhs}\t{a.text}")
@@ -4654,7 +4653,7 @@ def generated_cases(o, k, seed):
 
 DIFF_HEAD = (
     "# Where the Annex A recognizer and VerA's parse-level acceptance disagree:\n"
-    "# specification/TESTING.md L5c, written by `tools/conformance.py grammar diff`.\n"
+    "# Written by `tools/conformance.py grammar diff`.\n"
     "# source: fixture (as committed), mutant (one token deleted, duplicated or\n"
     "# swapped), generated (a sentence derived from the grammar for one alternative).\n"
     "# earley: accept | refuse at >>token<<; `(needs a chapter box)` marks an\n"
@@ -4677,7 +4676,7 @@ DIFF_HEAD = (
 def grammar_diff(argv):
     """`diff --vera=PATH [--verdicts=F] [--k=2] [--mutants=3] [--seed=1]
     [--jobs=8] [--only=fixture,mutant,generated] [--limit=N] [--work=DIR]
-    [--no-vera]`: specification/TESTING.md L5c. The recognizer and VerA (`--lint`,
+    [--no-vera]`: the grammar oracle's diff. The recognizer and VerA (`--lint`,
     at most four at once, each under `ulimit -v 4 GiB`) judge the same text:
     every .va fixture, one-token mutants of the positive ones the recognizer
     derives, and k sentences generated for each alternative. Each
@@ -4829,7 +4828,7 @@ def grammar_diff(argv):
 # case. A rule that matches nothing is reported, and so is a case no rule
 # matches, so the table cannot silently outlive the disagreements it reads.
 DIFF_RULES = [
-    # VerA crashed: always a VerA bug (specification/TESTING.md bug class 1).
+    # VerA crashed: always a VerA bug.
     ("vera-bug", "VerA segfaults (exit 139) on `cross()` with only its first argument (A.6.5 makes the rest "
      "optional); probe `analog @(cross(V(p) - 1.0)) x = 1.0;`", {"dir": "X", "case": r"cross \( [^,]*\) \)"}),
     ("vera-bug", "VerA segfaults (exit 139) on an empty argument to `$table_model` or `$limit`; probes "
@@ -5035,7 +5034,7 @@ class GrammarOracle(unittest.TestCase):
         rows = [ln for ln in GRAMMAR_TSV.read_text().split("\n") if ln and not ln.startswith("#")]
         self.assertEqual(rows, [f"{a.id}\t{a.lhs}\t{a.text}\t{a.note}" for a in alts],
                          "GRAMMAR.tsv drifted from docs/: run `grammar extract`")
-        self.assertIn("R3 denominator", head)
+        self.assertIn("grammar-coverage denominator", head)
 
     def test_tokens(self):
         kinds = lambda s: [(t.kind, t.text) for t in lex(s)]  # noqa: E731

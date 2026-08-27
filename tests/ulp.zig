@@ -1,4 +1,4 @@
-//! L3 math oracle (specification/TESTING.md §5): every f64 function `contract.gm`
+//! L3 math oracle: every f64 function `contract.gm`
 //! exports, against an f128 reference, in units of the last place of an f64
 //! at the reference's magnitude. In: hard cases (specials, range ends,
 //! reduction seams, subnormals) and seeded random arguments; out: each

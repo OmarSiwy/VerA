@@ -42,7 +42,7 @@ python3 tools/conformance.py
 B and C count *citations*: they show that a clause has a fixture on each
 side, not that every rule in the clause is tested. A clause can hold several
 rules. The [requirement
-ledger](https://github.com/OmarSiwy/VerA/blob/main/specification/TESTING.md)
+ledger](https://github.com/OmarSiwy/VerA/blob/main/tests/fixtures/OBLIGATIONS.tsv)
 breaks the LRM into its individual normative sentences, and tracks the
 evidence for each.
 

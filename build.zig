@@ -131,7 +131,7 @@ pub fn build(b: *std.Build) void {
         .dependOn(&b.addRunArtifact(fuzz_test).step);
     b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);
 
-    // specification/TESTING.md L3's references that need the C library: the IEEE 1364
+    // The independent references that need the C library: the IEEE 1364
     // §17.9.3 listing compiled as C against `rng_kernels`, and `snprintf`
     // against `str_kernels.zCReal`. Neither shares code with what it judges.
     const kernels = byName(mods, "kernels");

@@ -8,7 +8,7 @@
 // being specified for this element"); a parameter default is not a nodeset, so
 // `'{1.0, , 3.0}` here has no second value: E0894. Before 2026-10-08 VerA read
 // the hole as 0.0 with no diagnostic (found by the Annex A grammar oracle,
-// specification/TESTING.md L5c).
+// `tools/conformance.py grammar`).
 //
 // The neighbour writes the element.
 //

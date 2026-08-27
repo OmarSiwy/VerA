@@ -11,7 +11,7 @@ const TestFn = std.lang.TestFn;
 pub const vera_validate_contract = true;
 
 /// A test named `xfail(<reason>): ...` states a behaviour the code does not
-/// have yet (specification/TESTING.md §4.4): it must fail, and passing is an XPASS
+/// have yet: it must fail, and passing is an XPASS
 /// failure, so the marker cannot outlive the gap. A leak is never excused.
 const xfail_prefix = "xfail(";
 

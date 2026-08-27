@@ -154,7 +154,7 @@ pub const Config = struct {
     batch: bool = true,
     /// `--verdicts=<file>`: one `<verdict>\t<path under the root>` row per
     /// fixture, sorted, for `tools/conformance.py`'s ratchet and metric
-    /// (specification/TESTING.md §3.6, §3.7).
+    /// (§3.7).
     verdicts: ?[]const u8 = null,
 
     /// Returns the defaults, with `jobs` from `defaultJobs`.
@@ -741,13 +741,13 @@ fn decide(
     }
 }
 
-/// `--perturb[=δ]`: specification/TESTING.md L2b. Every fixture is compiled with
+/// `--perturb[=δ]`: the perturbation pass. Every fixture is compiled with
 /// `VERA_PERTURB` defined to δ, which makes `check.vh` move each want by a
 /// relative δ, and a check that still prints `ok=1` is LOOSE: it cannot see an
 /// error of that size. Null: an ordinary run. Set once by `takeArg`.
 pub var perturb: ?f64 = null;
 
-/// `--certify`: specification/TESTING.md L4. Every testbench also runs the derivative
+/// `--certify`: the device certificates. Every testbench also runs the derivative
 /// gate (`fdCheck`, L4a): each Jacobian entry against a central difference;
 /// the prover-soundness gate (`finiteCheck`, L4b): a proved-finite device's
 /// rows at random unknowns; and the state gate (`stateCheck`, L4c): revert

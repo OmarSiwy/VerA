@@ -60,7 +60,7 @@ pub fn report(
         var cited = false;
         for (d.lrm) |s| {
             // A sentence cite (`5.6.1.3:2`) is the requirement ledger's
-            // (specification/TESTING.md §3.2, `conformance.py metric`), not this
+            // (`conformance.py metric`), not this
             // clause inventory's: only a bare clause cite counts here.
             if (std.mem.indexOfScalar(u8, s, ':') != null) continue;
             cited = true;

@@ -1,4 +1,4 @@
-//! In-process fuzz targets (specification/TESTING.md L6): bytes or generated tokens in,
+//! In-process fuzz targets: bytes or generated tokens in,
 //! a property checked on what the front end does with them.
 //!
 //! Under `zig build test` each runs through zrunner's `fuzz` (the corpus plus

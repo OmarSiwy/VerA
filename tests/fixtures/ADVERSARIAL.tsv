@@ -1,4 +1,4 @@
-# Written by `tools/conformance.py adversarial` (specification/TESTING.md L10): each input through
+# Written by `tools/conformance.py adversarial`: each input through
 # `vera --check` under `ulimit -v 4194304` and a 300 s budget. verdict: ok (exit 0), named
 # (refused with an error[Ennnn] code), else a finding: signal, timeout, unnamed (exit 1, no code).
 # bytes is the input's size; note is the first error line.
