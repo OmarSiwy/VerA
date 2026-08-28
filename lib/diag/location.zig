@@ -77,7 +77,8 @@ pub const Segment = struct {
     pub const no_parent: u32 = std.math.maxInt(u32);
 
     // Budget: 32 B, one row per origin change (7,769 rows on hisimhv_va).
-    // Half of it is the `macro` slice; see docs/seams/s1-diag.md.
+    // Half of it is the `macro` slice; see docs/seams/s1-diag.md (removed
+    // from the tree; `git show 6e59b3d4^:docs/seams/s1-diag.md`).
     comptime {
         std.debug.assert(@sizeOf(Segment) == 32);
     }
@@ -138,7 +139,10 @@ pub const SourceMap = struct {
     };
 
     /// Returns the file and file offset a preprocessed offset came from. An
-    /// offset inside a macro expansion resolves to the invocation site.
+    /// offset inside a macro expansion resolves to the invocation site; one
+    /// before the first segment resolves to that segment's start. `segs` must
+    /// be sorted by `out_start`, which the preprocessor's appending guarantees.
+    /// O(log n), plus the length of a macro segment's parent chain.
     pub fn resolve(self: *const SourceMap, off: u32) Resolved {
         if (self.segs.len == 0)
             return .{ .file = .root, .offset = off, .seg = Segment.no_parent };
@@ -185,7 +189,7 @@ pub const LineIndex = struct {
         starts[0] = 0;
         var n: usize = 1;
         var pos: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, text, pos, '\n')) |i| : (n += 1) {
+        while (std.mem.findScalarPos(u8, text, pos, '\n')) |i| : (n += 1) {
             pos = i + 1;
             starts[n] = @intCast(pos);
         }
@@ -193,8 +197,8 @@ pub const LineIndex = struct {
         return .{ .starts = starts };
     }
 
-    /// 1-based line and column of `off`. An `off` past the text lands on the
-    /// last line, with a column past its end.
+    /// Returns the 1-based line and byte column of `off`. An `off` past the
+    /// text lands on the last line, with a column past its end. O(log lines).
     pub fn loc(self: LineIndex, off: u32) Loc {
         // `starts[0]` is 0, so the count is at least 1.
         const lo = std.sort.partitionPoint(u32, self.starts, off, struct {

@@ -97,9 +97,12 @@ const Placed = struct {
 
 /// Renders `bag` to `w`. Entries are sorted into source order first, so the
 /// output of a run is stable regardless of which stage found what; that sort
-/// invalidates every `Entry.index` taken before. Line-index scratch is
-/// allocated on `bag.arena` and freed before returning. Fails only with
-/// `w`'s write error or `OutOfMemory`.
+/// invalidates every `Entry.index` taken before. A span is drawn on its first
+/// line only, clamped to that line, even one that starts past the line's end;
+/// a label in another file than the primary span's gets its own
+/// `::: file:line:col` header. Line-index scratch is allocated on `bag.arena`
+/// and freed before returning. Fails only with `w`'s write error or
+/// `OutOfMemory`.
 pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
     if (bag.isEmpty() and bag.suppressed == 0) return;
     bag.sort();
@@ -429,8 +432,11 @@ pub fn explain(c: Code, w: *std.Io.Writer, palette: Palette) !void {
 }
 
 /// Writes one JSON object per diagnostic per line (JSON Lines), shaped like
-/// rustc's `--message-format json` so editor plumbing can consume it. Sorts
-/// the bag first, which invalidates earlier `Entry.index` values.
+/// rustc's `--message-format json` so editor plumbing can consume it. A span
+/// is `null` when absent, else its 1-based `line` and byte `col` in the
+/// original file and its `byte_start`/`byte_end` in span currency. Sorts the
+/// bag first, which invalidates earlier `Entry.index` values. The suppressed
+/// and deduped counts are not reported.
 pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     bag.sort();
     var scratch_state = std.heap.ArenaAllocator.init(bag.arena);
