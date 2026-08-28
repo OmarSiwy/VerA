@@ -1,4 +1,7 @@
 //! The AST the parser builds from the token stream (LRM annex A, ch3 declarations).
+//! In: rows the parser appends. Out: `SourceFile`, read by elaboration,
+//! lowering, the digital engine and VPI. Clauses: §1 source_text, §2.7,
+//! §2.8, §2.9, ch5's statement pool; the row types cite their own.
 //! Expressions are SoA rows addressed by `ExprId`, statements a flat pool addressed
 //! by `StmtId`, names interned as `StrId`; variable-arity payloads share one `u32`
 //! pool. Every store is append-only, so the same tokens give the same ids. Lists are
@@ -168,6 +171,9 @@ pub const StringInterner = struct {
 
     /// Returns the id for `s`, adding it if new. `s` is borrowed and must
     /// outlive the table. On OOM the table is unchanged.
+    /// Invalidates slices of `strings.items` when it adds.
+    /// Asserts the table holds fewer than `maxInt(u32)` strings (that value
+    /// is `StrId.none`).
     pub fn intern(self: *StringInterner, gpa: std.mem.Allocator, s: []const u8) !StrId {
         // Room for the text first, so a failed append can never leave the
         // map holding an id with no string.
@@ -315,8 +321,10 @@ pub const SourceFile = struct {
 
     pub const empty: SourceFile = .{};
 
-    /// Frees the append-only stores so an AST built on a gpa is leak-free. The
-    /// decl slices are not freed; they belong to the arena or caller.
+    /// Frees the append-only stores (strings, expressions, statements, blocks,
+    /// the token column, `attributes` and `lte_attrs`) so an AST built on a
+    /// gpa is leak-free. The decl slices are not freed; they belong to the
+    /// arena or caller.
     pub fn deinit(self: *SourceFile, gpa: std.mem.Allocator) void {
         self.strings.deinit(gpa);
         self.exprs.deinit(gpa);
@@ -330,11 +338,13 @@ pub const SourceFile = struct {
     /// Starts this file from `src`, a parse of a prefix of its source (see
     /// `parser.Seed`). Asserts `self` is empty.
     ///
-    /// The strings, expressions and statements are copied with `gpa`, because
-    /// later stages append to them; ids stay valid since every column is
-    /// append-only. The module, discipline, nature, paramset and connectrules
-    /// slices are borrowed: no later stage writes a decl, so `src` must outlive
-    /// `self`.
+    /// The strings, expressions, statements, `attributes` and `lte_attrs` are
+    /// copied with `gpa`, because later stages append to them; ids stay valid
+    /// since every column is append-only. The module, discipline, nature,
+    /// paramset, connectrules, UDP and config slices are borrowed: no later
+    /// stage writes a decl, so `src` must outlive `self`. The caller-set
+    /// counts (`builtin_modules` and the rest) are not copied.
+    /// On OOM `self` holds a partial copy that `deinit(gpa)` frees.
     pub fn seedFrom(self: *SourceFile, gpa: std.mem.Allocator, src: *const SourceFile) !void {
         std.debug.assert(self.strings.strings.items.len == 0);
         std.debug.assert(self.exprs.nodes.len == 0);
@@ -365,6 +375,8 @@ pub const SourceFile = struct {
 
     /// Appends a statement and its token; both columns stay in lockstep, and a
     /// `.block`'s `SeqBlock` goes to `blocks`. On OOM nothing is appended.
+    /// Invalidates `seqBlockMut` pointers and `seqBlocks` iterators.
+    /// Asserts the pool holds fewer than `maxInt(u32)` statements.
     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
         const id: u32 = @intCast(self.stmts.items.len);
         std.debug.assert(id != @backingInt(StmtId.none));

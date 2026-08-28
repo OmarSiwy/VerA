@@ -1,8 +1,11 @@
 //! The declaration rows of the AST: modules, their parameters, variables,
 //! nets, ports, branches, instances and processes (LRM ch3, §4.7, ch6, §7.7),
 //! natures and disciplines (§3.6), paramsets (§6.4), and the IEEE 1364-2005
-//! user-defined primitives (A.5) and configurations (§13.3). The parser builds
-//! each as a struct with its lists as arena slices; no later stage writes one.
+//! user-defined primitives (A.5) and configurations (§13.3).
+//! In: the declarations the parser recognises. Out: one struct per
+//! declaration, its lists as arena slices, read by elaboration, lowering and
+//! the digital engine; no later stage writes one. Also the one walk over
+//! them, `natureAttrExpr` (§3.6.1.1).
 
 const std = @import("std");
 const ast = @import("ast.zig");
@@ -150,7 +153,7 @@ pub const NetKind = enum(u8) {
 
 /// A.2.2.2 `strength0`/`strength1`/`charge_strength` as one scale (IEEE 1364
 /// clause 7): supply > strong > pull > large > weak > medium > small > highz.
-/// The numeric values are that order, so `@intFromEnum` comparison is "stronger
+/// The numeric values are that order, so `@backingInt` comparison is "stronger
 /// than". The 0-side/1-side split belongs to the keyword, so the parser checks
 /// it (rejecting `(strong0, pull0)`).
 pub const Strength = enum(u8) { highz = 0, small = 1, medium = 2, weak = 3, large = 4, pull = 5, strong = 6, supply = 7 };
@@ -484,10 +487,12 @@ pub const TimingCheck = struct {
     /// §15.4: "negedge clr is the same as ... edge[10, x0, 1x] clr".
     pub const negedge_mask: u8 = 0b011100;
 
-    /// The `masks` bit of the transition `from` -> `to`, each `0`, `1`, `x`
-    /// or `z` (§15.4: "Edge transitions involving z are treated the same
-    /// way as edge transitions involving x"); 0 when they name none (the
-    /// same level, or x to z). Bits 0..5 are 01, 0x, 10, 1x, x0, x1.
+    /// Returns the `masks` bit of the transition `from` -> `to` (§15.4:
+    /// "Edge transitions involving z are treated the same way as edge
+    /// transitions involving x"); 0 when they name none (the same level, or
+    /// x to z). Bits 0..5 are 01, 0x, 10, 1x, x0, x1.
+    /// Asserts each of `from` and `to` is `0`, `1`, `x` or `z`, lower case;
+    /// the parser folds a descriptor's case before calling.
     pub fn transition(from: u8, to: u8) u8 {
         const f: u8 = if (from == 'z') 'x' else from;
         const t: u8 = if (to == 'z') 'x' else to;
@@ -499,8 +504,9 @@ pub const TimingCheck = struct {
         };
     }
 
-    /// The transitions `mask` names, each turned around (01 <-> 10, 0x <->
-    /// x0, 1x <-> x1): §15.3.4's "reference event signal with opposite edge".
+    /// Returns the transitions `mask` names, each turned around (01 <-> 10,
+    /// 0x <-> x0, 1x <-> x1): §15.3.4's "reference event signal with
+    /// opposite edge". An involution on bits 0..5; bits 6 and 7 are dropped.
     pub fn opposite(mask: u8) u8 {
         const swap = [6]u3{ 2, 4, 0, 5, 1, 3 };
         var out: u8 = 0;
@@ -934,7 +940,12 @@ pub const ConfigDecl = struct {
 
 /// Returns the value expression a (possibly derived) nature gives `attr`, or
 /// null (§3.6.1.1). A derived nature overrides its base, so the first hit
-/// walking up the parent chain wins; the walk stops after 16 hops.
+/// walking up the parent chain wins. A parent written as
+/// `discipline.potential_or_flow` continues at the nature that discipline
+/// binds there (§3.6.2.6). Null when a name in the chain is undeclared, a
+/// bound half is empty, or the chain is longer than 16 hops (so a cyclic
+/// chain ends). Where two natures share a name the first declared is used.
+/// Cost: O(16 × (natures + disciplines + attributes)).
 /// Lowering and elaboration both call it.
 pub fn natureAttrExpr(self: *const SourceFile, name: StrId, attr: []const u8) ?ExprId {
     var want = name;
