@@ -167,9 +167,11 @@ pub const SourceMap = struct {
             }
             return .{ .file = s.file, .offset = s.in_start, .seg = @intCast(lo) };
         }
+        // Saturating: an `off` before the first segment (lo clamped to 0)
+        // lands on that segment's start instead of underflowing.
         return .{
             .file = s.file,
-            .offset = s.in_start + (off - s.out_start),
+            .offset = s.in_start + (off -| s.out_start),
             .seg = @intCast(lo),
         };
     }
