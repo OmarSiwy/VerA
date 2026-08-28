@@ -1432,7 +1432,7 @@ test "explain: a code with no citation prints no LRM line" {
     try diag_render.explain(.E1003, &aw.writer, .off);
     const out = aw.writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, out, "E1003: more solver unknowns than the device contract can hold\n\nAn engine limit"));
-    try std.testing.expect(std.mem.find(u8, out, "LRM ") == null);
+    try std.testing.expect(std.mem.find(u8, out, "\nLRM ") == null);
 
     var aw2: std.Io.Writer.Allocating = .init(gpa);
     defer aw2.deinit();
