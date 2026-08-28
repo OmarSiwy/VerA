@@ -97,9 +97,12 @@ const Placed = struct {
 
 /// Renders `bag` to `w`. Entries are sorted into source order first, so the
 /// output of a run is stable regardless of which stage found what; that sort
-/// invalidates every `Entry.index` taken before. Line-index scratch is
-/// allocated on `bag.arena` and freed before returning. Fails only with
-/// `w`'s write error or `OutOfMemory`.
+/// invalidates every `Entry.index` taken before. A span is drawn on its first
+/// line only, clamped to that line, even one that starts past the line's end;
+/// a label in another file than the primary span's gets its own
+/// `::: file:line:col` header. Line-index scratch is allocated on `bag.arena`
+/// and freed before returning. Fails only with `w`'s write error or
+/// `OutOfMemory`.
 pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
     if (bag.isEmpty() and bag.suppressed == 0) return;
     bag.sort();
@@ -115,7 +118,9 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 
     // Line indices are built lazily, once per file that actually appears in a
     // diagnostic. A 60-file include tree with one error touches one index.
-    const n_files = @max(bag.files.items.len, 1);
+    // The extra last slot is shared by every unknown `FileId` (whose text is
+    // always empty), so one can never cache its index in a real file's slot.
+    const n_files = bag.files.items.len + 1;
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
@@ -187,7 +192,10 @@ fn place(
     // A span that runs past the end of its line is clamped: an underline may
     // not wrap, and the first line is the informative one.
     const line_end = src_off + @as(u32, @intCast(line_text.len)) - (loc.col - 1);
-    const clamped = @min(src_end, line_end);
+    // A span that STARTS past its line's text (at the '\n' of a "\r\n", or past
+    // the end of the file) has `line_end < src_off`: hold the end at the start,
+    // so the caret sits just after the line, one column wide.
+    const clamped = @max(src_off, @min(src_end, line_end));
     const end_col = displayCol(line_text, clamped - src_off + (loc.col - 1));
 
     return .{
@@ -300,8 +308,17 @@ fn renderSnippet(
     width: u32,
 ) !void {
     const p = opts.palette;
-    std.mem.sort(Placed, placed, {}, struct {
-        fn f(_: void, a: Placed, b: Placed) bool {
+    // The primary's file is drawn first, under the `-->` line; any other file
+    // follows in id order. Within a file: line, then column. A stable sort,
+    // so spans at one position keep the primary-then-labels order.
+    std.debug.assert(placed[0].primary);
+    const home = placed[0].file;
+    std.mem.sort(Placed, placed, home, struct {
+        fn f(h: diag_location.FileId, a: Placed, b: Placed) bool {
+            if (a.file != b.file) {
+                if ((a.file == h) != (b.file == h)) return a.file == h;
+                return @backingInt(a.file) < @backingInt(b.file);
+            }
             if (a.line != b.line) return a.line < b.line;
             return a.col < b.col;
         }
@@ -311,12 +328,24 @@ fn renderSnippet(
 
     var i: usize = 0;
     var prev_line: u32 = 0;
+    var prev_file = home;
     while (i < placed.len) {
         const line = placed[i].line;
         const file = placed[i].file;
         var j = i;
         while (j < placed.len and placed[j].line == line and placed[j].file == file) j += 1;
 
+        if (file != prev_file) {
+            // A label in another file: rustc's `:::` header, aligned with the
+            // `-->` line, so its line is never read as the primary file's.
+            try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
+            try w.print("{s}{s}:::{s} {s}:{d}:{d}\n", .{
+                spaces(width), p.gutter, p.reset, bag.fileName(file), line, placed[i].col + 1,
+            });
+            try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
+            prev_file = file;
+            prev_line = 0;
+        }
         if (prev_line != 0 and line > prev_line + 1) try w.print("{s}...{s}\n", .{ p.gutter, p.reset });
         prev_line = line;
 
@@ -375,7 +404,11 @@ fn renderFix(
     try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
     try w.print("{s}{d}{s} |{s} ", .{ p.gutter, loc.line, spaces(width -| digits(loc.line)), p.reset });
     try writeExpanded(w, line[0..cut]);
-    try w.print("{s}{s}{s}", .{ p.good, fix.replacement, p.reset });
+    // Expanded like the line around it, so the ruler below can count it in
+    // the same display columns a caret uses.
+    try w.print("{s}", .{p.good});
+    try writeExpanded(w, fix.replacement);
+    try w.print("{s}", .{p.reset});
     try writeExpanded(w, line[cut_end..]);
     try w.writeByte('\n');
 
@@ -385,7 +418,7 @@ fn renderFix(
     // `+` when nothing was removed, `~` when text was replaced.
     try w.splatByteAll(
         if (fix.span.len() == 0) '+' else '~',
-        @max(@as(usize, 1), fix.replacement.len),
+        @max(@as(u32, 1), displayCol(fix.replacement, @intCast(fix.replacement.len))),
     );
     try w.print("{s}\n", .{p.reset});
 }
@@ -429,14 +462,17 @@ pub fn explain(c: Code, w: *std.Io.Writer, palette: Palette) !void {
 }
 
 /// Writes one JSON object per diagnostic per line (JSON Lines), shaped like
-/// rustc's `--message-format json` so editor plumbing can consume it. Sorts
-/// the bag first, which invalidates earlier `Entry.index` values.
+/// rustc's `--message-format json` so editor plumbing can consume it. A span
+/// is `null` when absent, else its 1-based `line` and byte `col` in the
+/// original file and its `byte_start`/`byte_end` in span currency. Sorts the
+/// bag first, which invalidates earlier `Entry.index` values. The suppressed
+/// and deduped counts are not reported.
 pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     bag.sort();
     var scratch_state = std.heap.ArenaAllocator.init(bag.arena);
     defer scratch_state.deinit();
     const scratch = scratch_state.allocator();
-    const n_files = @max(bag.files.items.len, 1);
+    const n_files = bag.files.items.len + 1; // + the unknown-file slot, as in `render`
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
