@@ -708,9 +708,10 @@ pub fn radixOf(text: []const u8) u8 {
 /// white space allowed around the base) into a `Literal` whose planes are
 /// allocated from `arena`; the caller owns them. A sized value wider than its
 /// size is truncated from the left. An unsized literal is at least 64 bits
-/// wide and, when it has no X or Z digit, only as wide as its value needs; a
-/// simple decimal number (no base format), which §2.6.1 makes signed, also
-/// keeps a sign bit, so its value is never negative.
+/// wide and, when it has no X or Z digit, only as wide as its value needs. A
+/// simple decimal number (no base format) is signed (§2.6.1) and gets no
+/// extra sign bit, so one of 2^63 or more has its top bit set and reads
+/// negative.
 ///
 /// Fails with `MissingBase` for a `'` with no base letter, `MissingDigits`
 /// for no digits, `ZeroSize` for a size of 0, `DigitOutOfRange` for a digit
@@ -1846,4 +1847,177 @@ test "asExactInt: a wide two-state literal is an integer only when an i64 holds 
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h1_0000_0000_0000_0000")).asExactInt());
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h8000_0000_0000_0000")).asExactInt());
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'hx")).asExactInt());
+}
+
+test "asInt hands a 64-bit unsigned value back as its bit pattern, and asExactInt is asInt up to 64 bits" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const top = try parse(a, "64'h8000_0000_0000_0000");
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), top.asInt());
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), top.asExactInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "64'hFFFF_FFFF_FFFF_FFFF")).asInt());
+    // Below 64 bits only a signed value is sign-extended.
+    try std.testing.expectEqual(@as(?i64, 255), (try parse(a, "8'hff")).asInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "8'shff")).asInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "1'sb1")).asInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'h1")).asInt());
+    // 65 bits: a signed -1 repeats bit 63 into bit 64; 2^64 has no i64.
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "65'sh1_FFFF_FFFF_FFFF_FFFF")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'h1_0000_0000_0000_0000")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, 5), (try parse(a, "65'h5")).asExactInt());
+    // A signed 65-bit value whose bit 64 disagrees with bit 63 is out of range.
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'sh0_8000_0000_0000_0000")).asExactInt());
+}
+
+test "asIndex keeps values past i64 and saturates past i128 by sign" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try std.testing.expectEqual(@as(?i128, -1), (try parse(a, "3'sb111")).asIndex());
+    try std.testing.expectEqual(@as(?i128, 7), (try parse(a, "3'b111")).asIndex());
+    try std.testing.expectEqual(@as(?i128, null), (try parse(a, "3'b1x1")).asIndex());
+    try std.testing.expectEqual(@as(?i128, null), (try parse(a, "3'b1z1")).asIndex());
+    // 2^64 has no i64 and is kept.
+    try std.testing.expectEqual(@as(?i128, 1 << 64), (try parse(a, "80'h1_0000_0000_0000_0000")).asIndex());
+    // 128 ones: unsigned 2^128-1 is past i128 and saturates high; signed it is -1.
+    try std.testing.expectEqual(@as(?i128, std.math.maxInt(i128)), (try parse(a, "128'hFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF")).asIndex());
+    try std.testing.expectEqual(@as(?i128, -1), (try parse(a, "128'shFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF")).asIndex());
+    // -2^128 (a 129-bit signed minimum) is below i128 and saturates low.
+    try std.testing.expectEqual(@as(?i128, std.math.minInt(i128)), (try parse(a, "129'sh1_0000_0000_0000_0000_0000_0000_0000_0000")).asIndex());
+    // Wider than 128 bits with zero (or, negative, all-ones) high words fits;
+    // a set bit at 128 does not.
+    try std.testing.expectEqual(@as(?i128, 5), (try parse(a, "200'h5")).asIndex());
+    try std.testing.expectEqual(@as(?i128, -5), (try (try parse(a, "8'shfb")).resize(a, 200, .sign)).asIndex());
+    try std.testing.expectEqual(@as(?i128, std.math.maxInt(i128)), (try parse(a, "200'h1_0000_0000_0000_0000_0000_0000_0000_0000")).asIndex());
+}
+
+test "§2.6.1 an unsized literal's width: the 64-bit floor, then its value's bits" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const max = try parse(a, "9223372036854775807");
+    try std.testing.expectEqual(@as(u32, 64), max.width);
+    try std.testing.expectEqual(@as(?i64, std.math.maxInt(i64)), max.asInt());
+    try std.testing.expect(max.signed and !max.sized);
+    // 2^64 needs 65 bits.
+    const wide = try parse(a, "18446744073709551616");
+    try std.testing.expectEqual(@as(u32, 65), wide.width);
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1 }, wide.values()[0..2]);
+    // A based unsized literal is unsigned unless it says `s`.
+    const based = try parse(a, "'h8000_0000_0000_0000");
+    try std.testing.expectEqual(@as(u32, 64), based.width);
+    try std.testing.expect(!based.signed);
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), based.asInt());
+    try std.testing.expect((try parse(a, "'sh1")).signed);
+    try std.testing.expectEqual(@as(u32, 64), (try parse(a, "0")).width);
+}
+
+test "parse agrees with std.fmt on random sized hex and unsized decimal numbers" {
+    // Oracle: std.fmt prints the number and a u128 holds the expected bits.
+    // The sized value is truncated from the left (§2.6.1); the decimal one
+    // is as wide as its value, never under 64.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var prng = std.Random.DefaultPrng.init(0x2611_2005);
+    const random = prng.random();
+    var buf: [96]u8 = undefined;
+    for (0..2000) |_| {
+        _ = arena_state.reset(.retain_capacity);
+        const x = random.int(u128) >> random.int(u7);
+        const w = random.intRangeAtMost(u32, 1, 128);
+        const lit = try parse(arena, try std.mem.print(&buf, "{d}'h{x}", .{ w, x }));
+        const want = if (w == 128) x else x & ((@as(u128, 1) << @intCast(w)) - 1);
+        const v = lit.values();
+        try std.testing.expectEqual(w, lit.width);
+        try std.testing.expectEqual(want, @as(u128, v[0]) | (if (v.len > 1) @as(u128, v[1]) << 64 else 0));
+        try std.testing.expect(!lit.hasUnknown() and lit.sized and !lit.signed);
+
+        const dec = try parse(arena, try std.mem.print(&buf, "{d}", .{x}));
+        const bits: u32 = 128 - @clz(x);
+        const dv = dec.values();
+        try std.testing.expectEqual(@max(@as(u32, 64), bits), dec.width);
+        try std.testing.expectEqual(x, @as(u128, dv[0]) | (if (dv.len > 1) @as(u128, dv[1]) << 64 else 0));
+        try std.testing.expect(dec.signed and !dec.sized);
+    }
+}
+
+test "E1019 bounds an unsized literal by the width its digits need" {
+    const gpa = std.testing.allocator;
+    // `'h1` and 4194304 zeros need 4194304 * 4 + 1 bits, one past `max_width`.
+    const known = try gpa.alloc(u8, 3 + 4194304);
+    defer gpa.free(known);
+    @memcpy(known[0..3], "'h1");
+    @memset(known[3..], '0');
+    try std.testing.expectError(error.Overflow, parse(gpa, known));
+    // X digits fill `count * 4` bits: 4194305 of them is past the limit.
+    const unknown = try gpa.alloc(u8, 2 + 4194305);
+    defer gpa.free(unknown);
+    @memcpy(unknown[0..2], "'h");
+    @memset(unknown[2..], 'x');
+    try std.testing.expectError(error.Overflow, parse(gpa, unknown));
+    // Leading zeros need no bits.
+    const zeros = try parse(gpa, "'h000000000000000000001");
+    defer gpa.free(zeros.planes);
+    try std.testing.expectEqual(@as(u32, 64), zeros.width);
+}
+
+test "parse: a leading x or z fills the size, digits and sizes take `_`, and malformed text names its rule" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, u32, u64, u64 };
+    // §2.6.1: a number whose leftmost digit is x or z is extended with that
+    // digit; a known leftmost digit zero-extends.
+    for ([_]Case{
+        .{ "16'hz1", 16, 0x0001, 0xfff0 },
+        .{ "16'hx1", 16, 0xfff1, 0xfff0 },
+        .{ "16'h1x", 16, 0x001f, 0x000f },
+        .{ "16'h?", 16, 0x0000, 0xffff },
+        .{ "1_6'h1", 16, 0x0001, 0x0000 },
+        .{ "8'dx_", 8, 0x00ff, 0x00ff },
+        .{ "8'dz", 8, 0x0000, 0x00ff },
+        .{ "8'b1_0_1", 8, 0x0005, 0x0000 },
+        .{ " 8 'h f", 8, 0x000f, 0x0000 },
+    }) |c| {
+        const lit = try parse(a, c[0]);
+        try std.testing.expectEqual(c[1], lit.width);
+        try std.testing.expectEqual(c[2], lit.values()[0]);
+        try std.testing.expectEqual(c[3], lit.unknowns()[0]);
+    }
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'h_1"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "x"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "1 6'h1"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'o8"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'hg"));
+    try std.testing.expectError(error.MissingBase, parse(a, "4'q1"));
+    try std.testing.expectError(error.MissingBase, parse(a, "'"));
+    try std.testing.expectError(error.MissingBase, parse(a, "8's"));
+    try std.testing.expectError(error.MissingDigits, parse(a, "8'h "));
+    try std.testing.expectError(error.MissingDigits, parse(a, ""));
+    try std.testing.expectEqual(@as(u8, 10), radixOf("4'sD1"));
+    try std.testing.expectEqual(@as(u8, 2), radixOf("'B1"));
+    try std.testing.expectEqual(@as(u8, 10), radixOf("8'"));
+}
+
+fn testOneAllocation(allocator: std.mem.Allocator) !void {
+    const a = try parse(allocator, "70'sh2f_0123_4567_89ab_cdef");
+    defer allocator.free(a.planes);
+    const count = try parse(allocator, "7'd3");
+    defer allocator.free(count.planes);
+    const inverted = try a.bitwiseNot(allocator);
+    defer allocator.free(inverted.planes);
+    const xor = try a.bitwise(allocator, .xor_bits, count);
+    defer allocator.free(xor.planes);
+    const wide = try a.resize(allocator, 130, .sign);
+    defer allocator.free(wide.planes);
+    const shifted = try a.shift(allocator, .arithmetic_right, count);
+    defer allocator.free(shifted.planes);
+    const merged = try count.conditional(allocator, a, count);
+    defer allocator.free(merged.planes);
+}
+
+test "an allocation failure in a one-allocation operation leaks nothing" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOneAllocation, .{});
 }

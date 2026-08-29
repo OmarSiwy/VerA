@@ -800,3 +800,482 @@ test "negate and abs wrap a 32-bit operand and keep a wider literal's width" {
     try std.testing.expectEqual(@as(i64, -5000000000), unary(.minus, .{ .int = 5000000000 }).?.int);
     try std.testing.expectEqual(@as(i64, 5000000000), math(.abs, &.{.{ .int = -5000000000 }}).?.int);
 }
+
+const testing = std.testing;
+
+fn expectInt(want: i64, got: ?Const) !void {
+    const c = got orelse return error.TestExpectedEqual;
+    try testing.expect(c == .int);
+    try testing.expectEqual(want, c.int);
+}
+
+fn expectReal(want: f64, got: ?Const) !void {
+    const c = got orelse return error.TestExpectedEqual;
+    try testing.expect(c == .real);
+    try testing.expectEqual(want, c.real);
+}
+
+test "Const conversions: §4.2.1.1 rounding, the i64 range, and truth" {
+    // §4.2.1.1: a real converts to an integer by rounding to nearest, ties
+    // away from zero.
+    try testing.expectEqual(@as(?i64, 3), (Const{ .real = 2.5 }).asIntExact());
+    try testing.expectEqual(@as(?i64, -3), (Const{ .real = -2.5 }).asIntExact());
+    try testing.expectEqual(@as(?i64, 2), (Const{ .real = 2.4999 }).asIntExact());
+    // 2^63 is the first double past i64; -2^63 is minInt itself.
+    try testing.expectEqual(@as(?i64, null), (Const{ .real = 9223372036854775808.0 }).asIntExact());
+    try testing.expectEqual(@as(?i64, std.math.minInt(i64)), (Const{ .real = -9223372036854775808.0 }).asIntExact());
+    try testing.expectEqual(@as(?i64, null), (Const{ .real = std.math.nan(f64) }).asIntExact());
+    try testing.expectEqual(@as(?i64, null), (Const{ .real = std.math.inf(f64) }).asIntExact());
+    try testing.expectEqual(@as(?i64, 0), (Const{ .str = "12" }).asIntExact());
+    try testing.expectEqual(@as(?i64, -7), (Const{ .int = -7 }).asIntExact());
+    // `asInt` saturates and maps NaN to 0 instead of failing.
+    try testing.expectEqual(std.math.maxInt(i64), (Const{ .real = 1e300 }).asInt());
+    try testing.expectEqual(std.math.minInt(i64), (Const{ .real = -1e300 }).asInt());
+    try testing.expectEqual(@as(i64, 0), (Const{ .real = std.math.nan(f64) }).asInt());
+    try testing.expectEqual(@as(f64, 0), (Const{ .str = "1.5" }).asReal());
+    try testing.expectEqual(@as(f64, -4), (Const{ .int = -4 }).asReal());
+    try testing.expect(!(Const{ .str = "" }).isTrue());
+    try testing.expect((Const{ .str = "0" }).isTrue());
+    try testing.expect(!(Const{ .real = -0.0 }).isTrue());
+    try testing.expect((Const{ .real = std.math.nan(f64) }).isTrue());
+    // §3.2's 32-bit wrap.
+    try testing.expectEqual(@as(i64, -2147483648), wrap32(2147483648));
+    try testing.expectEqual(@as(i64, 2147483647), wrap32(-2147483649));
+    try testing.expectEqual(@as(i64, 0), wrap32(4294967296));
+}
+
+test "§3.4.1 parameterValue converts to the declared type; a host card does not impose `integer`'s wrap" {
+    try expectReal(3, parameterValue(.real, .{ .int = 3 }));
+    try testing.expect(parameterValue(.real, .{ .str = "s" }) == .str);
+    try expectInt(3, parameterValue(.integer, .{ .real = 2.5 }));
+    try expectInt(1, parameterValue(.integer, .{ .int = 4294967297 }));
+    // A real with no integer value stays real, for the caller's diagnostic.
+    try testing.expect(parameterValue(.integer, .{ .real = std.math.nan(f64) }) == .real);
+    try expectInt(4, parameterValue(.string, .{ .int = 4 }));
+    try expectReal(0.5, parameterValue(.unspecified, .{ .real = 0.5 }));
+    // 5e9 mod 2^32 = 705032704: an `integer` declaration wraps the card...
+    try expectInt(705032704, parameterCardValue(.integer, null, 5e9));
+    // ...an inferred integral one keeps the whole value...
+    try expectInt(5000000000, parameterCardValue(.unspecified, .{ .int = 1 }, 5e9));
+    // ...rounding a fraction as §4.2.1.1 does, unless the default was real.
+    try expectInt(3, parameterCardValue(.unspecified, .{ .int = 1 }, 2.5));
+    try expectReal(3, parameterCardValue(.unspecified, .{ .real = 1 }, 3));
+    try expectReal(3, parameterCardValue(.unspecified, null, 3));
+}
+
+test "ipow32 agrees with repeated 32-bit multiplication" {
+    // Oracle: n wrapping multiplications of the truncated base, which is
+    // what §3.2's 32-bit power is for n >= 0.
+    var prng = std.Random.DefaultPrng.init(0x1364_0506);
+    const random = prng.random();
+    for (0..4000) |i| {
+        const b: i64 = if (i < 1000) @as(i64, @intCast(i % 11)) - 5 else random.int(i32);
+        const reps: usize = i % 70;
+        var want: i32 = 1;
+        for (0..reps) |_| want *%= @as(i32, @truncate(b));
+        try testing.expectEqual(@as(?i64, want), ipow32(b, @intCast(reps)));
+    }
+    // A huge even or odd exponent of -1, and of 2 (which wraps to 0).
+    try testing.expectEqual(@as(?i64, 1), ipow32(-1, 1 << 40));
+    try testing.expectEqual(@as(?i64, -1), ipow32(-1, (1 << 40) + 1));
+    try testing.expectEqual(@as(?i64, 0), ipow32(2, 1 << 40));
+}
+
+test "unary folds a sign, a logical not and a complement; reductions need a width" {
+    try testing.expect(unary(.plus, .{ .str = "s" }).? == .str);
+    try testing.expect(unary(.minus, .{ .str = "s" }) == null);
+    try expectReal(-1.5, unary(.minus, .{ .real = 1.5 }));
+    try expectInt(std.math.minInt(i64), unary(.minus, .{ .int = std.math.minInt(i64) }));
+    try expectInt(1, unary(.logical_not, .{ .real = 0.0 }));
+    try expectInt(0, unary(.logical_not, .{ .str = "a" }));
+    try expectInt(-1, unary(.bit_not, .{ .int = 0 }));
+    for ([_]Ast.UnaryOp{ .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor }) |op|
+        try testing.expect(unary(op, .{ .int = 3 }) == null);
+}
+
+test "binary over integers: §3.2's 32-bit wrap, §4.2.11 shifts, and the cases that have no value" {
+    const Case = struct { Ast.BinaryOp, i64, i64, ?bool, ?i64 };
+    const min32: i64 = std.math.minInt(i32);
+    for ([_]Case{
+        .{ .add, 2147483647, 1, null, min32 },
+        .{ .sub, min32, 1, null, 2147483647 },
+        .{ .mul, 65536, 65536, null, 0 },
+        // Division truncates toward zero; the remainder has the dividend's sign.
+        .{ .div, -7, 2, null, -3 },
+        .{ .div, 7, -2, null, -3 },
+        .{ .div, 1, 0, null, null },
+        // minInt(i64) / -1 is 2^63, whose low 32 bits are 0.
+        .{ .div, std.math.minInt(i64), -1, null, 0 },
+        .{ .mod, -7, 2, null, -1 },
+        .{ .mod, 7, -2, null, 1 },
+        .{ .mod, 5, 0, null, null },
+        .{ .mod, std.math.minInt(i64), -1, null, 0 },
+        .{ .pow, 2, 10, null, 1024 },
+        .{ .pow, 0, -1, null, null },
+        .{ .eq, 3, 3, null, 1 },
+        .{ .neq, 3, 3, null, 0 },
+        .{ .lt, -1, 0, null, 1 },
+        .{ .le, 0, 0, null, 1 },
+        .{ .gt, 0, -1, null, 1 },
+        .{ .ge, -1, 0, null, 0 },
+        .{ .bit_and, 12, 10, null, 8 },
+        .{ .bit_or, 12, 10, null, 14 },
+        .{ .bit_xor, 12, 10, null, 6 },
+        .{ .bit_xnor, 12, 10, null, -7 },
+        .{ .logical_and, 2, 0, null, 0 },
+        .{ .logical_or, 0, 3, null, 1 },
+        // `1 << 31` is negative and `1 << 32` zero at 32 bits; a count
+        // outside 0..63 has no constant value here.
+        .{ .shl, 1, 31, null, min32 },
+        .{ .shl, 1, 32, null, 0 },
+        .{ .shl, 3, 63, null, 0 },
+        .{ .shl, 1, -1, null, null },
+        .{ .shl, 1, 64, null, null },
+        // `>>` zero-fills over 32 bits: -16 >> 2 is 0x3FFFFFFC.
+        .{ .shr, -16, 2, null, 1073741820 },
+        .{ .shr, -16, 0, null, -16 },
+        .{ .shr, -16, 32, null, 0 },
+        .{ .shr, 1, 64, null, null },
+        .{ .ashl, 1, 31, null, min32 },
+        // `>>>` fills with the sign bit only when the operand is signed.
+        .{ .ashr, -16, 2, true, -4 },
+        .{ .ashr, -16, 40, true, -1 },
+        .{ .ashr, -16, 2, false, 1073741820 },
+        .{ .ashr, -1, 32, false, 0 },
+        .{ .ashr, -16, 2, null, null },
+        .{ .ashr, -16, -1, true, null },
+        .{ .case_eq, 3, 3, null, 1 },
+        .{ .case_neq, 3, 4, null, 1 },
+    }) |c| {
+        const got = binary(c[0], .{ .int = c[1] }, .{ .int = c[2] }, c[3]);
+        if (c[4]) |want| try expectInt(want, got) else try testing.expect(got == null);
+    }
+}
+
+test "binary over reals and strings: IEEE arithmetic, Table 3-3, and the mixes that decline" {
+    try expectReal(std.math.inf(f64), binary(.div, .{ .real = 1 }, .{ .real = 0 }, null));
+    try testing.expect(binary(.mod, .{ .real = 5 }, .{ .real = 0 }, null) == null);
+    try expectReal(1.5, binary(.mod, .{ .real = 7.5 }, .{ .int = 2 }, null));
+    try expectReal(1.5, binary(.add, .{ .int = 1 }, .{ .real = 0.5 }, null));
+    try expectInt(1, binary(.lt, .{ .int = 1 }, .{ .real = 1.5 }, null));
+    try testing.expect(binary(.ashr, .{ .real = 8 }, .{ .int = 1 }, true) == null);
+    try testing.expect(binary(.case_eq, .{ .real = 3 }, .{ .real = 3 }, null) == null);
+    const p = binary(.pow, .{ .real = 2 }, .{ .real = 0.5 }, null).?.real;
+    try testing.expect(std.math.approxEqRel(f64, std.math.sqrt2, p, 1e-15));
+    // Table 3-3: equality and lexicographic order, nothing else.
+    try expectInt(1, binary(.lt, .{ .str = "ab" }, .{ .str = "b" }, null));
+    try expectInt(1, binary(.eq, .{ .str = "ab" }, .{ .str = "ab" }, null));
+    try expectInt(0, binary(.eq, .{ .str = "slow" }, .{ .str = "fast" }, null));
+    try expectInt(1, binary(.ge, .{ .str = "b" }, .{ .str = "b" }, null));
+    try testing.expect(binary(.add, .{ .str = "a" }, .{ .str = "b" }, null) == null);
+    try testing.expect(binary(.eq, .{ .str = "a" }, .{ .int = 1 }, null) == null);
+}
+
+test "§4.3 math: integer abs/min/max, the conditional min/max, and arity" {
+    try testing.expect(math(.sqrt, &.{ .{ .real = 1 }, .{ .real = 2 } }) == null);
+    try testing.expect(math(.min, &.{.{ .int = 1 }}) == null);
+    try testing.expect(math(.exp, &.{.{ .str = "1" }}) == null);
+    try expectInt(3, math(.abs, &.{.{ .int = -3 }}));
+    try expectInt(std.math.minInt(i64), math(.abs, &.{.{ .int = std.math.minInt(i64) }}));
+    try expectReal(2.5, math(.abs, &.{.{ .real = -2.5 }}));
+    try expectInt(1, math(.min, &.{ .{ .int = 1 }, .{ .int = 2 } }));
+    try expectInt(2, math(.max, &.{ .{ .int = 1 }, .{ .int = 2 } }));
+    try expectReal(1, math(.min, &.{ .{ .int = 1 }, .{ .real = 2 } }));
+    // §4.3.1 "(x < y) ? x : y": a NaN first loses, a NaN second wins, and
+    // the second of two zeros is taken.
+    const nan = std.math.nan(f64);
+    try expectReal(1, math(.min, &.{ .{ .real = nan }, .{ .real = 1 } }));
+    try testing.expect(std.math.isNan(math(.min, &.{ .{ .real = 1 }, .{ .real = nan } }).?.real));
+    try expectReal(1, math(.max, &.{ .{ .real = nan }, .{ .real = 1 } }));
+    try testing.expect(!std.math.signbit(math(.min, &.{ .{ .real = -0.0 }, .{ .real = 0.0 } }).?.real));
+    try testing.expect(std.math.signbit(math(.min, &.{ .{ .real = 0.0 }, .{ .real = -0.0 } }).?.real));
+    // `log` is decimal (§4.3.1), `ln` natural.
+    try testing.expect(std.math.approxEqAbs(f64, 3, math(.log, &.{.{ .int = 1000 }}).?.real, 1e-15));
+    try testing.expect(std.math.approxEqAbs(f64, 1, math(.ln, &.{.{ .real = std.math.e }}).?.real, 1e-15));
+    try expectReal(-2, math(.floor, &.{.{ .real = -1.5 }}));
+    try expectReal(-1, math(.ceil, &.{.{ .real = -1.5 }}));
+    try expectReal(5, math(.hypot, &.{ .{ .int = 3 }, .{ .int = 4 } }));
+    try testing.expect(std.math.approxEqAbs(f64, std.math.pi, math(.atan2, &.{ .{ .real = 0 }, .{ .real = -1 } }).?.real, 1e-15));
+    try testing.expect(std.math.isNan(math(.sqrt, &.{.{ .real = -1 }}).?.real));
+    // Every name, and only the five two-argument functions take two.
+    for (std.enums.values(MathFn)) |f| {
+        try testing.expectEqual(@as(?MathFn, f), MathFn.fromName(@tagName(f)));
+        const two = f == .min or f == .max or f == .pow or f == .hypot or f == .atan2;
+        try testing.expectEqual(@as(usize, if (two) 2 else 1), f.arity());
+    }
+    try testing.expectEqual(@as(?MathFn, null), MathFn.fromName("LOG"));
+    try testing.expectEqual(@as(?MathFn, null), MathFn.fromName("log10"));
+}
+
+test "IntContext.normalize agrees with modular arithmetic at every width" {
+    // Oracle: the value modulo 2^width in i128, less 2^width when signed and
+    // at or above 2^(width-1).
+    var prng = std.Random.DefaultPrng.init(0x0555_0002);
+    const random = prng.random();
+    for (0..5000) |_| {
+        const width = random.intRangeAtMost(u32, 1, 70);
+        const signed = random.boolean();
+        const value = random.int(i64) >> random.int(u6);
+        var want: i128 = value;
+        if (width < 64) {
+            const m: i128 = @as(i128, 1) << @intCast(width);
+            want = @mod(want, m);
+            if (signed and want >= @divExact(m, 2)) want -= m;
+        }
+        try testing.expectEqual(@as(i64, @intCast(want)), (IntContext{ .width = width, .signed = signed }).normalize(value));
+    }
+    // 4 bits signed holds 15 as -1, then widens unchanged; unsigned, 31 is 15.
+    const plan: IntPlan = .{ .result = .{ .width = 8, .signed = true }, .from_width = 4 };
+    try testing.expectEqual(@as(i64, -1), plan.resize(15));
+    const unsigned: IntPlan = .{ .result = .{ .width = 8, .signed = false }, .from_width = 4 };
+    try testing.expectEqual(@as(i64, 15), unsigned.resize(31));
+}
+
+test "clog2 is the least k with 2^k at or above the unsigned value" {
+    // Oracle: the smallest k for which 2^k >= the value read unsigned at
+    // `width`, counted in u128.
+    for (1..13) |w| {
+        const width: u32 = @intCast(w);
+        for (0..@as(usize, 1) << @intCast(w)) |v| {
+            var k: i64 = 0;
+            while ((@as(u128, 1) << @intCast(k)) < v) k += 1;
+            try testing.expectEqual(k, clog2(@intCast(v), width));
+        }
+        // A negative carrier value is read at `width` bits, unsigned.
+        try testing.expectEqual(clog2((@as(i64, 1) << @intCast(w)) - 1, width), clog2(-1, width));
+    }
+    try testing.expectEqual(@as(i64, 64), clog2(-1, 64));
+    try testing.expectEqual(@as(i64, 63), clog2((1 << 62) | 1, 64));
+    try testing.expectEqual(@as(i64, 65), clog2(-1, 65));
+    try testing.expectEqual(@as(i64, 3), clog2(5, 70));
+}
+
+test "UnsignedCompare.extend masks each side at its own width and orders 64-bit pairs as u64" {
+    const u: UnsignedCompare = .{ .mask = .{ 0xff, null }, .flip = false };
+    try testing.expectEqual(@as(i64, 255), u.extend(.lhs, -1));
+    try testing.expectEqual(@as(i64, -1), u.extend(.rhs, -1));
+    const f: UnsignedCompare = .{ .mask = .{ null, null }, .flip = true };
+    try testing.expect(f.extend(.lhs, -1) > f.extend(.rhs, 1));
+}
+
+/// `fold`'s environment in these tests: `a` is a signed 32-bit integer
+/// holding -1 and `u` an unsigned 8-bit one holding 255; a literal reports its
+/// own signedness, as lowering's environment does.
+const TestEnv = struct {
+    file: *const Ast.SourceFile,
+
+    fn name(env: TestEnv, e: Ast.ExprId) ?[]const u8 {
+        if (env.file.exprs.tag(e) != .ident) return null;
+        return env.file.str(env.file.exprs.strOf(e));
+    }
+    pub fn leaf(env: TestEnv, e: Ast.ExprId) ?Const {
+        const n = env.name(e) orelse return null;
+        if (std.mem.eql(u8, n, "a")) return .{ .int = -1 };
+        if (std.mem.eql(u8, n, "u")) return .{ .int = 255 };
+        return null;
+    }
+    pub fn signed(env: TestEnv, e: Ast.ExprId) ?bool {
+        const ex = &env.file.exprs;
+        if (ex.tag(e) == .int_literal) return ex.intLiteral(e).signed;
+        if (ex.tag(e) == .logic_literal) return ex.logicValue(e).signed;
+        const n = env.name(e) orelse return null;
+        if (std.mem.eql(u8, n, "a")) return true;
+        if (std.mem.eql(u8, n, "u")) return false;
+        return null;
+    }
+    pub fn width(env: TestEnv, e: Ast.ExprId) ?u32 {
+        const n = env.name(e) orelse return null;
+        if (std.mem.eql(u8, n, "a")) return 32;
+        if (std.mem.eql(u8, n, "u")) return 8;
+        return null;
+    }
+};
+
+const TestExpr = struct { file: Ast.SourceFile, e: Ast.ExprId, vars: []const Ast.VarDecl };
+
+/// Parses `module m; <decls> parameter p = <src>; endmodule` with the real
+/// lexer and parser, and returns `p`'s default.
+fn testParse(arena: std.mem.Allocator, decls: []const u8, src: []const u8) !TestExpr {
+    const text = try arena.print("module m; {s} parameter p = {s}; endmodule\n", .{ decls, src });
+    const r = try @import("parser/test.zig").parseForTest(arena, text);
+    try testing.expectEqual(@as(u32, 0), r.bag.err_count);
+    const m = r.file.modules[0];
+    return .{ .file = r.file, .e = m.params[0].default, .vars = m.vars };
+}
+
+fn testFold(arena: std.mem.Allocator, src: []const u8, comptime sized: bool) !?Const {
+    const t = try testParse(arena, "", src);
+    const env: TestEnv = .{ .file = &t.file };
+    return if (sized) foldSized(&t.file, t.e, env) else fold(&t.file, t.e, env);
+}
+
+test "fold over parsed constant expressions: literals, operators, a lazy ?:, §4.3 calls and names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try expectInt(3, try testFold(a, "1 + 2", false));
+    try expectInt(-2147483648, try testFold(a, "2147483647 + 1", false));
+    try expectReal(3, try testFold(a, "1.5 * 2", false));
+    try expectInt(1, try testFold(a, "\"ab\" == \"ab\"", false));
+    // §4.2.12: only the taken arm has to have a value.
+    try expectInt(4, try testFold(a, "1 ? 4 : 1/0", false));
+    try expectInt(5, try testFold(a, "0 ? 1/0 : 5", false));
+    // `fold` evaluates both operands of `&&`; `foldSized` short-circuits.
+    try testing.expect((try testFold(a, "0 && 1/0", false)) == null);
+    try expectInt(0, try testFold(a, "0 && 1/0", true));
+    try expectInt(1, try testFold(a, "1 || 1/0", true));
+    try expectInt(-1, try testFold(a, "a", false));
+    try testing.expect((try testFold(a, "zz", false)) == null);
+    try expectReal(2, try testFold(a, "sqrt(4.0)", false));
+    try testing.expect(std.math.approxEqRel(f64, 8, (try testFold(a, "pow(2, 3)", false)).?.real, 1e-15));
+    try expectInt(3, try testFold(a, "abs(-3)", false));
+    try expectReal(1, try testFold(a, "min(1, 2.0)", false));
+    try expectInt(7, try testFold(a, "max(a, 7)", false));
+    try expectInt(255, try testFold(a, "8'hff", false));
+    // A four-state literal has no analog value; a wide one with an i64 value does.
+    try testing.expect((try testFold(a, "4'b1x01", false)) == null);
+    try expectInt(5, try testFold(a, "128'h5", false));
+    try expectInt(8, try testFold(a, "-4'sb1000", false));
+    // `literal_env` folds literals and declines a name.
+    const t = try testParse(a, "", "a + 1");
+    try testing.expect(fold(&t.file, t.e, literal_env) == null);
+    const lit = try testParse(a, "", "2 * 3");
+    try expectInt(6, fold(&lit.file, lit.e, literal_env));
+}
+
+test "IEEE 1364-2005 §5.1.11 reductions fold over a literal at its size, or an unsized one's width" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, ?i64 };
+    for ([_]Case{
+        .{ "&4'b1111", 1 },
+        .{ "~&4'b1111", 0 },
+        .{ "|4'b0000", 0 },
+        .{ "~|4'b0000", 1 },
+        .{ "^3'b111", 1 },
+        .{ "~^3'b111", 0 },
+        .{ "&64'hFFFF_FFFF_FFFF_FFFF", 1 },
+        .{ "^64'h8000_0000_0000_0001", 0 },
+        // Unsized: §3.2's 32 bits, so 15 is not all ones and 2^32-1 is.
+        .{ "&15", 0 },
+        .{ "~&15", 1 },
+        .{ "&4294967295", 1 },
+        // 2^32 needs 64 bits (`operandWidth`), and its one bit is set.
+        .{ "|4294967296", 1 },
+        .{ "&4294967296", 0 },
+        // No width to read: a wide literal, or anything but a literal.
+        .{ "&65'h1", null },
+        .{ "&(1 + 1)", null },
+    }) |c| {
+        const got = try testFold(a, c[0], false);
+        if (c[1]) |want| try expectInt(want, got) else try testing.expect(got == null);
+    }
+}
+
+test "§4.2.9 a comparison with an unsigned operand compares unsigned values at each operand's own width" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // `a` is a signed 32-bit -1: against an unsigned operand it is 2^32-1.
+    try expectInt(1, try testFold(a, "a > 40'h0", false));
+    try expectInt(1, try testFold(a, "a == 32'hFFFF_FFFF", false));
+    try expectInt(1, try testFold(a, "a < 0", false));
+    // 8-bit 255 against 2^32-1.
+    try expectInt(0, try testFold(a, "u > a", false));
+    // A 64-bit unsigned literal orders as a u64.
+    try expectInt(1, try testFold(a, "64'hFFFF_FFFF_FFFF_FFFF > 1", false));
+    // §5.1.12 `>>>` reads the left operand's signedness from the environment.
+    try expectInt(-1, try testFold(a, "a >>> 1", false));
+    try expectInt(127, try testFold(a, "u >>> 1", false));
+    try expectInt(-1, try testFold(a, "8'shff >>> 1", false));
+}
+
+test "foldSized: IEEE §§5.4-5.5 propagate a context's width and signedness into the operands" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // 4-bit addition wraps at 4 bits; `fold`'s carrier does not.
+    try expectInt(0, try testFold(a, "4'b1111 + 4'b0001", true));
+    try expectInt(16, try testFold(a, "4'b1111 + 4'b0001", false));
+    try expectInt(0, try testFold(a, "4'sb1111 + 8'sb1", true));
+    // -(-8) at 4 signed bits is -8 again.
+    try expectInt(-8, try testFold(a, "-4'sb1000", true));
+    try expectInt(4, try testFold(a, "4'b1000 >> 1", true));
+    try expectInt(-4, try testFold(a, "4'sb1000 >>> 1", true));
+    // Both sides become 32-bit unsigned: 255 against 2^32-1.
+    try expectInt(0, try testFold(a, "8'hFF == -1", true));
+    try expectInt(15, try testFold(a, "1 ? 4'b1111 : 8'h00", true));
+    // Arithmetic wider than 32 bits is past the carrier's plan.
+    try testing.expect((try testFold(a, "40'h1 + 40'h1", true)) == null);
+}
+
+test "operandWidth, clog2Width and clog2Signed size an expression as §2.6.1 and IEEE §5.4-5.5 do" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const W = struct { []const u8, ?u32, ?u32 };
+    // Source, operandWidth, clog2Width.
+    for ([_]W{
+        .{ "4'b1010", 4, 4 },
+        .{ "5000000000", 64, 64 },
+        .{ "7", 32, 32 },
+        .{ "-4'sb1", 32, 4 },
+        .{ "~40'h1", 40, 40 },
+        .{ "a < 1", 32, 1 },
+        .{ "!u", 32, 1 },
+        .{ "$realtobits(1.0)", 64, 64 },
+        .{ "1 ? 8'h1 : 40'h1", 40, 40 },
+        .{ "u", 8, 8 },
+        .{ "u + u", 32, 8 },
+        .{ "4'b1 + 8'b1", 32, 8 },
+        .{ "4'b1 << 3", 32, 4 },
+        .{ "u ** 2", 32, 8 },
+        .{ "128'h1", 128, 128 },
+        .{ "zz", null, null },
+    }) |c| {
+        const t = try testParse(a, "", c[0]);
+        const env: TestEnv = .{ .file = &t.file };
+        try testing.expectEqual(c[1], operandWidth(&t.file, t.e, env));
+        try testing.expectEqual(c[2], clog2Width(&t.file, t.e, env));
+    }
+    const S = struct { []const u8, ?bool };
+    for ([_]S{
+        .{ "4'sb1", true },
+        .{ "4'b1", false },
+        .{ "4'sb1 + 4'b1", false },
+        .{ "4'sb1 << 4'b1", true },
+        .{ "1 == 1", false },
+        .{ "~4'sb1", true },
+        .{ "$realtobits(1.0)", false },
+        .{ "$random", true },
+        .{ "a", true },
+        .{ "1.5", null },
+    }) |c| {
+        const t = try testParse(a, "", c[0]);
+        try testing.expectEqual(c[1], clog2Signed(&t.file, t.e, TestEnv{ .file = &t.file }));
+    }
+}
+
+test "§3.4 firstStateRead names the first simulation-state or variable read of a default" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, ?[]const u8 };
+    for ([_]Case{
+        .{ "x + 1", "x" },
+        .{ "$abstime * 2", "$abstime" },
+        .{ "1 + $temperature", "$temperature" },
+        .{ "$random", "$random" },
+        .{ "$dist_normal(1, 2, 3)", "$dist_normal" },
+        .{ "$rdist_uniform(1, 2, 3)", "$rdist_uniform" },
+        // §9.15's table is the host's, constant for the run.
+        .{ "$simparam(\"gmin\")", null },
+        .{ "2 * y", null },
+        .{ "2 * 3", null },
+    }) |c| {
+        const t = try testParse(a, "real x;", c[0]);
+        const got = firstStateRead(&t.file, t.e, t.vars);
+        if (c[1]) |want| try testing.expectEqualStrings(want, got.?) else try testing.expect(got == null);
+    }
+}

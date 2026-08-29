@@ -1828,4 +1828,403 @@ test "a card value at or past 2^31 that is integral is spelled real" {
     try std.testing.expectEqualStrings("2147483647", try std.mem.print(&buf, "{f}", .{num(2147483647)}));
     try std.testing.expectEqualStrings("2.147483648e9", try std.mem.print(&buf, "{f}", .{num(2147483648)}));
     try std.testing.expectEqualStrings("0.5", try std.mem.print(&buf, "{f}", .{num(0.5)}));
+    try std.testing.expectEqualStrings("-2.147483648e9", try std.mem.print(&buf, "{f}", .{num(-2147483648)}));
+    try std.testing.expectEqualStrings("-0.5", try std.mem.print(&buf, "{f}", .{num(-0.5)}));
+}
+
+/// Requires every `want` in `text`, printing the text when one is missing.
+fn expectHas(text: []const u8, wants: []const []const u8) !void {
+    for (wants) |want| if (std.mem.find(u8, text, want) == null) {
+        std.debug.print("missing: {s}\n in:\n{s}\n", .{ want, text });
+        return error.TestUnexpectedResult;
+    };
+}
+
+/// Requires the refusals' reasons to hold `wants`, one each, in order.
+fn expectRefusals(refused: []const Refusal, wants: []const []const u8) !void {
+    errdefer for (refused, 0..) |r, i| std.debug.print("refusal {d}: {s}\n", .{ i, r.why });
+    try std.testing.expectEqual(wants.len, refused.len);
+    for (refused, wants) |r, want| try expectHas(r.why, &.{want});
+}
+
+test "the card text helpers: tightEquals, Tokens, strip, unquote, hasEntry" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const Pair = struct { []const u8, []const u8 };
+    for ([_]Pair{
+        .{ "level = 72", "level=72" },
+        .{ "a  =  b c", "a=b c" },
+        .{ "x= y", "x=y" },
+        .{ "x =y", "x=y" },
+        .{ "no equals here", "no equals here" },
+    }) |p| try std.testing.expectEqualStrings(p[1], try tightEquals(arena, p[0]));
+    const Split = struct { []const u8, []const []const u8 };
+    for ([_]Split{
+        .{ ".subckt ecposc (out gnd)", &.{ ".subckt", "ecposc", "out", "gnd" } },
+        .{ "r1 a b {w * 2}", &.{ "r1", "a", "b", "{w * 2}" } },
+        .{ "x1 a 'max(a, b)' c", &.{ "x1", "a", "'max(a, b)'", "c" } },
+        .{ "{a {b} c} d", &.{ "{a {b} c}", "d" } },
+        // A stray `}` does not open anything.
+        .{ "a}b c", &.{ "a}b", "c" } },
+        .{ " ,() ", &.{} },
+    }) |c| {
+        var it = tokens(c[0]);
+        for (c[1]) |want| try std.testing.expectEqualStrings(want, it.next().?);
+        try std.testing.expect(it.next() == null);
+    }
+    try std.testing.expectEqualStrings("", strip("* a full-line comment"));
+    try std.testing.expectEqualStrings("r1 a b 1k", strip("r1 a b 1k ; note"));
+    try std.testing.expectEqualStrings("r1 a b 1k", strip("r1 a b 1k $ note"));
+    try std.testing.expectEqualStrings("x", strip("  x \r"));
+    try std.testing.expectEqualStrings("", strip("   ; only a comment"));
+    try std.testing.expectEqualStrings("a", unquote("'a'"));
+    try std.testing.expectEqualStrings("a", unquote("\"a\""));
+    try std.testing.expectEqualStrings("'a\"", unquote("'a\""));
+    try std.testing.expect(hasEntry(".lib tt\n.endl\n", "TT"));
+    try std.testing.expect(hasEntry("* c\n.LIB 'tt'\n", "tt"));
+    try std.testing.expect(!hasEntry(".lib file.sp tt\n", "tt"));
+}
+
+test "names: isIdent, isSpiceName, spell and binBound" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "_a1", "w" }) |t| try std.testing.expect(isIdent(t));
+    for ([_][]const u8{ "", "a$", "1a", "a.b" }) |t| try std.testing.expect(!isIdent(t));
+    for ([_][]const u8{ "2n2222", "a.b", "0", "{x}" }) |t| try std.testing.expect(isSpiceName(t));
+    for ([_][]const u8{ "", "a=b", "x:", "a\x7f", "a b" }) |t| try std.testing.expect(!isSpiceName(t));
+    try std.testing.expectEqualStrings("w", try spell(arena, "w"));
+    try std.testing.expectEqualStrings("\\wire ", try spell(arena, "wire"));
+    try std.testing.expectEqualStrings("\\2n ", try spell(arena, "2n"));
+    try std.testing.expectEqualStrings("\\a.b ", try spell(arena, "a.b"));
+    try std.testing.expectEqual(@as(?BinBound, .lmin), binBound("lmin"));
+    try std.testing.expectEqual(@as(?BinBound, .wmax), binBound("wmax"));
+    try std.testing.expectEqual(@as(?BinBound, null), binBound("l"));
+}
+
+test "spiceNumber never panics: an exponent past i32 is not a number, a huge one is infinite" {
+    // `1e2147483647k` scales an exponent already at maxInt(i32) by 10^3.
+    try std.testing.expect(std.math.isInf(spiceNumber("1e2147483647k").?));
+    const tiny = spiceNumber("-1e-2147483648f").?;
+    try std.testing.expect(tiny == 0 and std.math.signbit(tiny));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("1e99999999999k"));
+    // Past the 128-byte join a scaled number is refused; unscaled it is read.
+    var long: [132]u8 = @splat('0');
+    long[0] = '1';
+    long[131] = 'k';
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber(&long));
+    try std.testing.expectEqual(@as(?f64, 1e130), spiceNumber(long[0..131]));
+    try std.testing.expectEqual(@as(?f64, 0.5), spiceNumber("+.5"));
+    try std.testing.expectEqual(@as(?f64, 5e-7), spiceNumber(".5u"));
+    // An incomplete exponent is unit noise, as are other letters.
+    try std.testing.expectEqual(@as(?f64, 1), spiceNumber("1e"));
+    try std.testing.expectEqual(@as(?f64, 1), spiceNumber("1x"));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("-"));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("+"));
+    try std.testing.expectEqual(@as(?f64, null), spiceNumber("e5"));
+}
+
+test "SPICE expressions name what they refuse, and nesting past max_depth is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const Case = struct { []const u8, []const u8 };
+    for ([_]Case{
+        .{ "1 2", "has `2` after a complete expression" },
+        .{ "foo(1)", "calls `foo`" },
+        .{ "max(1, 2", "has a `max(` with no `)`" },
+        .{ "(1", "has a `(` with no `)`" },
+        .{ "", "ends before an operand" },
+        .{ "1 +", "ends before an operand" },
+        .{ "#", "has `#`, which is not read" },
+        .{ "q", "reads `q`, which names no parameter in scope" },
+    }) |c| {
+        const got = try expression(arena, c[0], &.{"w"});
+        try std.testing.expect(got == .refused);
+        try expectHas(got.refused, &.{c[1]});
+    }
+    try std.testing.expectEqualStrings("1e0", (try expression(arena, "+1", &.{})).text);
+    try std.testing.expectEqualStrings("(2e0 ** (3e0 ** 2e0))", (try expression(arena, "2**3**2", &.{})).text);
+    // Every recursive rule passes through `unary`: 200 parentheses or signs
+    // open 201 frames and are read; 300 open 301, past `max_depth`.
+    var buf: [700]u8 = undefined;
+    for ([_]usize{ 200, 300 }) |n| {
+        @memset(buf[0..n], '(');
+        buf[n] = '1';
+        @memset(buf[n + 1 .. 2 * n + 1], ')');
+        const parens = try expression(arena, buf[0 .. 2 * n + 1], &.{});
+        @memset(buf[0..n], '-');
+        const signs = try expression(arena, buf[0 .. n + 1], &.{});
+        if (n <= ExprParser.max_depth) {
+            try std.testing.expectEqualStrings("1e0", parens.text);
+            try std.testing.expect(signs == .text);
+        } else {
+            try std.testing.expect(parens == .refused and signs == .refused);
+            try expectHas(parens.refused, &.{"deeper"});
+        }
+    }
+}
+
+test "cards: `+` continues the card above, a leading `+` is dropped, and an unterminated .SUBCKT keeps its body" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const s = try synthesize(arena,
+        \\+ R0 A B 1
+        \\.SUBCKT CONT A
+        \\+ B PARAMS: W = 2 ; comment
+        \\R1 A B
+        \\+ {W}
+        \\.ENDS
+        \\.MODEL
+        \\.MODEL NOTYPE
+        \\.SUBCKT OPEN A B
+        \\R1 A B 1K
+    , "");
+    try expectRefusals(s.refused, &.{});
+    try std.testing.expectEqual(@as(u32, 2), s.modules);
+    try expectHas(s.text, &.{
+        "module cont(a, b);",
+        "   parameter real w = 2;",
+        "   resistor #(.r(w)) r1(a, b);",
+        "module open(a, b);",
+        "   resistor #(.r(1000)) r1(a, b);",
+    });
+    try std.testing.expect(std.mem.find(u8, s.text, "r0") == null);
+}
+
+test "E.2 a .SUBCKT header and body refuse what they cannot read, and name it" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const s = try synthesize(arena,
+        \\.SUBCKT
+        \\.ENDS
+        \\.SUBCKT A=1
+        \\.ENDS
+        \\.SUBCKT S1 A PARAMS: W=1 B
+        \\.ENDS
+        \\.SUBCKT S2 A 1X=2
+        \\.ENDS
+        \\.SUBCKT S3 A B
+        \\.PARAM W=1
+        \\K1 L1 L2 0.9
+        \\X1
+        \\X2 A B SUB W=1 C
+        \\R1 A
+        \\M1 A B NCH
+        \\D1 A B DIO 2 3
+        \\R2 A B W=
+        \\R3 A B {W
+        \\.ENDS
+    , "");
+    try expectRefusals(s.refused, &.{
+        "`.subckt` names no definition",
+        "`a=1` is not a name for a definition",
+        "`b` on `.subckt s1`: neither a node before the parameters nor a `k=v` parameter",
+        "`1x` is not a parameter name",
+        "`.param` inside a `.subckt` body is not read",
+        "a `k` device card is not one VerA reads",
+        "`x1` names no subcircuit",
+        "the field `c` after its parameters is not read",
+        "`r1` has too few fields",
+        "`m1` has too few fields",
+        "the field `2` after the model is not read",
+        "the value `w=` is not a number",
+        "the expression value `{w` does not end in `}`",
+    });
+    try std.testing.expectEqual(@as(u32, 1), s.modules);
+    try expectHas(s.text, &.{"module s3(a, b);"});
+}
+
+test "E.2 Q's substrate is read as SPICE3 reads it, by which field a .MODEL card names" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // `2N2222` is also SPICE's 2n with unit noise; the `.MODEL` card says it
+    // is the model, so `S` before it is the substrate.
+    const s = try synthesize(arena,
+        \\.MODEL 2N2222 MYBJT BF=100
+        \\.MODEL QM MYBJT
+        \\.SUBCKT AMP C B E S
+        \\Q1 C B E S 2N2222
+        \\Q2 C B E 2N2222 3
+        \\Q3 C B E QM SUB
+        \\.ENDS
+    , "");
+    try expectHas(s.text, &.{
+        "   mybjt #(.bf(100)) q1(c, b, e, s);",
+        "   mybjt #(.bf(100), .area(3)) q2(c, b, e);",
+    });
+    // The fourth field names a model, so the fifth is no substrate.
+    try expectRefusals(s.refused, &.{"`q3`: the field `sub` after the model is not read"});
+}
+
+test "E.3.1 a controlled source in its POLY, VALUE, TABLE or LAPLACE form is refused, not misread" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const s = try synthesize(arena,
+        \\.SUBCKT P A B C D
+        \\VS C D 0
+        \\E1 A B POLY(1) 5
+        \\G1 A B VALUE={V(C)*2}
+        \\E2 A B TABLE {V(C)} = (0,0) (1,1)
+        \\G2 A B LAPLACE {V(C)} {1/(1+S)}
+        \\F1 A B POLY(1) VS 0 2
+        \\E3 A B C D 2
+        \\.ENDS
+    , "");
+    try expectRefusals(s.refused, &.{ "`poly`", "`value`", "`table`", "`laplace`", "`poly`" });
+    try expectHas(s.text, &.{"V(a, b) <+ 2 * V(c, d);"});
+    try std.testing.expect(std.mem.find(u8, s.text, "poly") == null);
+}
+
+test "a top-level .LIB block is a library entry, read only when called" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const s = try synthesize(arena,
+        \\.LIB TT
+        \\.SUBCKT HIDDEN A B
+        \\.ENDS
+        \\.ENDL
+        \\.SUBCKT SEEN A B
+        \\.ENDS
+        \\.LIB OPEN
+        \\.SUBCKT LOST A B
+        \\.ENDS
+    , "");
+    try std.testing.expectEqual(@as(u32, 1), s.modules);
+    try expectHas(s.text, &.{"module seen(a, b);"});
+    try std.testing.expect(std.mem.find(u8, s.text, "hidden") == null);
+    try std.testing.expect(std.mem.find(u8, s.text, "lost") == null);
+    try expectRefusals(s.refused, &.{"`.lib` entry has no `.endl`"});
+}
+
+const test_lib =
+    \\* corners
+    \\.LIB FF
+    \\.SUBCKT FAST A B
+    \\R1 A B 1
+    \\.ENDS
+    \\.ENDL
+    \\.LIB TT
+    \\.SUBCKT TYP A B
+    \\R1 A B 2
+    \\.ENDS
+    \\.ENDL
+    \\.LIB EMPTY
+    \\.ENDL
+    \\
+;
+
+const test_top =
+    \\.INCLUDE "inc.sp"
+    \\.INC 'inc.sp'
+    \\.LIB 'lib.sp' tt
+    \\.LIB lib.sp empty
+    \\.LIB lib.sp ss
+    \\.INCLUDE
+    \\.INCLUDE nothere.sp
+    \\.LIB open.sp tt
+    \\.HDL "a.va"
+    \\.HDL a.va
+    \\.HDL
+    \\
+;
+
+test "Reader: .INCLUDE, .LIB entries and .HDL beside the netlist, and the refusal for each failure" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try tmp.dir.writeFile(io, .{ .sub_path = "inc.sp", .data = ".SUBCKT FROMINC A B\nR1 A B 1K\n.ENDS\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "lib.sp", .data = test_lib });
+    try tmp.dir.writeFile(io, .{ .sub_path = "open.sp", .data = ".LIB TT\n.SUBCKT T2 A B\n.ENDS\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "top.sp", .data = test_top });
+    const top: []const u8 = try tmp.dir.realPathFileAlloc(io, "top.sp", arena);
+    const s = try synthesize(arena, test_top, top);
+    // inc.sp twice (the second module is a repeat), lib.sp's `tt` entry and
+    // open.sp's unterminated one.
+    try std.testing.expectEqual(@as(u32, 3), s.modules);
+    try expectHas(s.text, &.{ "module frominc(a, b);", "module typ(a, b);", "module t2(a, b);" });
+    try std.testing.expect(std.mem.find(u8, s.text, "fast") == null);
+    try expectRefusals(s.refused, &.{
+        "has no `.lib ss` entry",
+        "`.include` names no file",
+        "cannot read",
+        "`.lib` entry has no `.endl`",
+        "`.hdl` names no file",
+    });
+    // The unterminated entry is reported in open.sp, the file it is in.
+    try std.testing.expect(std.mem.endsWith(u8, s.files[s.refused[3].file].name, "open.sp"));
+    // top, inc.sp twice, lib.sp three times, open.sp; nothere.sp is not a file.
+    try std.testing.expectEqual(@as(usize, 7), s.files.len);
+    try std.testing.expectEqual(@as(usize, 1), s.hdl.len);
+    try std.testing.expect(std.mem.endsWith(u8, s.hdl[0], "a.va"));
+}
+
+test "Reader: an .INCLUDE cycle stops at the nesting bound with one refusal" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try tmp.dir.writeFile(io, .{ .sub_path = "self.sp", .data = ".include self.sp\n" });
+    const path: []const u8 = try tmp.dir.realPathFileAlloc(io, "self.sp", arena);
+    const s = try synthesize(arena, ".include self.sp\n", path);
+    try expectRefusals(s.refused, &.{"nested more than 16 files deep"});
+    // The netlist and the 16 nested reads of self.sp.
+    try std.testing.expectEqual(@as(usize, 17), s.files.len);
+}
+
+/// The words `synthesizeOne` builds netlists from: cards, fields and the
+/// punctuation the readers split on. No `.include`, `.lib` or `.hdl` call,
+/// so a run reads no file.
+const fuzz_words = [_][]const u8{ ".subckt", ".ends", ".model", ".param", ".endl", "+", "r1", "c1", "v1", "i1", "e1", "f1", "g1", "h1", "m1", "q1", "j1", "d1", "x1", "k1", "a", "b", "0", "1", "1k", "2n2222", "nch", "nch.1", "npn", "nmos", "bsim4", "params:", "w=1", "l={2*w}", "m=2", "lmin=0", "lmax=1", "{w*2}", "'w+1'", "{", "}", "'", "(", ")", ",", "=", "**", "-", "poly", "value={1}", "*", ";", "$", "\n", "1e999k", "wire" };
+
+fn synthesizeOne(_: void, s: *std.testing.Smith) anyerror!void {
+    var buf: [2048]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    while (!s.eos()) {
+        w.writeAll(fuzz_words[s.index(fuzz_words.len)]) catch break;
+        w.writeByte(' ') catch break;
+    }
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const out = try synthesize(arena_state.allocator(), w.buffered(), "");
+    // Every refusal points inside the file it names, and a module count
+    // comes with module text.
+    for (out.refused) |r| {
+        try std.testing.expect(r.file < out.files.len);
+        try std.testing.expect(@as(usize, r.at) + r.len <= out.files[r.file].text.len);
+    }
+    try std.testing.expect((out.modules == 0) == (out.text.len == 0));
+}
+
+test "fuzz: synthesize never panics on card-shaped text, and every refusal points into its file" {
+    try std.testing.fuzz({}, synthesizeOne, .{});
+}
+
+fn expressionOne(_: void, s: *std.testing.Smith) anyerror!void {
+    const words = [_][]const u8{ "w", "1", "1k", "2e3", ".5", "(", ")", "+", "-", "*", "/", "**", "max", "sqrt", "log", ",", " ", "_x", "#", "'" };
+    var buf: [1024]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    while (!s.eos()) w.writeAll(words[s.index(words.len)]) catch break;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    switch (try expression(arena_state.allocator(), w.buffered(), &.{"w"})) {
+        // Every operation is parenthesized: the text's parentheses balance.
+        .text => |t| try std.testing.expectEqual(std.mem.count(u8, t, "("), std.mem.count(u8, t, ")")),
+        .refused => |why| try std.testing.expect(why.len != 0),
+    }
+}
+
+test "fuzz: a SPICE expression is read or refused with a reason, never a panic" {
+    try std.testing.fuzz({}, expressionOne, .{});
 }
