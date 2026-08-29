@@ -1,4 +1,6 @@
 //! Token kinds, the keyword table and the §10.6 reserved-word sets (LRM §2.5-§2.8, §10.6, annex B).
+//! In: a word's spelling. Out: its `Tag` (`lookupKeyword`), whether a §10.6 set
+//! reserves it (`isReserved`), and the call group the parser files it under.
 //! A stored token is `{tag, start}`; its end is recomputed by re-lexing from `start`.
 //! `Tag` is ordered `invalid, eof, literals, symbols, keywords`, keywords contiguous and last,
 //! so `isKeyword` is one compare. Every keyword tag is `kw_` ++ its source spelling and
@@ -323,6 +325,8 @@ pub const Tag = enum(u8) {
 
     /// Returns the source spelling, for diagnostics. `null` when the tag does not
     /// imply the text (identifiers, literals, `kw_reserved`); slice the source then.
+    /// `.dir_outside_module` stands for three directives and returns a
+    /// description instead of one spelling.
     pub fn lexeme(tag: Tag) ?[]const u8 {
         return switch (tag) {
             .invalid, .eof, .kw_reserved => null,
@@ -1021,4 +1025,62 @@ test "Stored stays 5 bytes of payload (SoA columns, no len field)" {
     try std.testing.expectEqual(2, @typeInfo(Stored).@"struct".field_names.len);
     try std.testing.expectEqual(1, @sizeOf(Tag));
     try std.testing.expectEqual(4, @sizeOf(u32));
+}
+
+test "§10.6 every version_specifier round-trips; nothing else is one" {
+    for (std.enums.values(KeywordSet)) |set| {
+        try std.testing.expectEqual(set, KeywordSet.fromSpecifier(set.specifier()).?);
+    }
+    // §10.6 and IEEE 1364-2005 §19.11 name exactly six strings.
+    try std.testing.expectEqual(@as(?KeywordSet, null), KeywordSet.fromSpecifier(""));
+    try std.testing.expectEqual(@as(?KeywordSet, null), KeywordSet.fromSpecifier("1364-2005 "));
+    try std.testing.expectEqual(@as(?KeywordSet, null), KeywordSet.fromSpecifier("VAMS-2.4"));
+}
+
+test "§19.11 1364-2001-noconfig is 1364-2001 less exactly the ten config words" {
+    for (keyword_map.keys()) |name| {
+        // Between its neighbours in the chain.
+        if (isReserved(name, .v1364_1995)) try std.testing.expect(isReserved(name, .v1364_2001_noconfig));
+        if (isReserved(name, .v1364_2001_noconfig)) try std.testing.expect(isReserved(name, .v1364_2001));
+        const differs = isReserved(name, .v1364_2001) != isReserved(name, .v1364_2001_noconfig);
+        try std.testing.expectEqual(noconfig_words.has(name), differs);
+    }
+    try std.testing.expectEqual(@as(usize, 10), noconfig_words.keys().len);
+    // An annex B keyword no 1364 list dates is a Verilog-AMS word: `wreal`
+    // (§3.7) is free under 1364-2005 and reserved from VAMS-2.3 on.
+    try std.testing.expect(!isReserved("wreal", .v1364_2005));
+    try std.testing.expect(isReserved("wreal", .vams_2_3));
+    // Annex G Table G.6 item 4803: `absdelta` arrived after VAMS-2.3.
+    try std.testing.expect(!isReserved("absdelta", .vams_2_3));
+    try std.testing.expect(isReserved("absdelta", .vams_2023));
+}
+
+test "Tag.quoted is lexeme in backticks, and null exactly where lexeme is" {
+    for (std.enums.values(Tag)) |t| {
+        if (Tag.lexeme(t)) |l| {
+            const q = Tag.quoted(t).?;
+            try std.testing.expectEqual(l.len + 2, q.len);
+            try std.testing.expect(q[0] == '`' and q[q.len - 1] == '`');
+            try std.testing.expectEqualStrings(l, q[1 .. q.len - 1]);
+        } else try std.testing.expectEqual(@as(?[]const u8, null), Tag.quoted(t));
+    }
+    // The tags whose text is the source's, not the tag's.
+    for ([_]Tag{ .invalid, .eof, .identifier, .escaped_identifier, .system_identifier, .int_literal, .real_literal, .string_literal, .kw_reserved }) |t| {
+        try std.testing.expectEqual(@as(?[]const u8, null), Tag.lexeme(t));
+    }
+}
+
+test "lookupKeyword is case-sensitive and whole-word (§2.8: identifiers are case sensitive)" {
+    try std.testing.expectEqual(Tag.kw_module, lookupKeyword("module").?);
+    try std.testing.expectEqual(@as(?Tag, null), lookupKeyword("Module"));
+    try std.testing.expectEqual(@as(?Tag, null), lookupKeyword("MODULE"));
+    try std.testing.expectEqual(@as(?Tag, null), lookupKeyword("modul"));
+    try std.testing.expectEqual(@as(?Tag, null), lookupKeyword("modules"));
+    // The longest keyword sits in the last bucket, and is found there.
+    var longest: []const u8 = "";
+    for (keyword_map.keys()) |k| if (k.len > longest.len) {
+        longest = k;
+    };
+    try std.testing.expectEqual(kw_max_len, longest.len);
+    try std.testing.expectEqual(keyword_map.get(longest).?, lookupKeyword(longest).?);
 }

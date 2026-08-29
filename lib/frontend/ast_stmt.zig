@@ -225,9 +225,13 @@ pub const Edge = enum {
 
 /// Visits every edge of statement `id`: `v.expr(e, edge)` for each of its own
 /// expressions and `v.stmt(s)` for each child statement, in source order,
-/// except that an assignment's intra-assignment timing comes after its
-/// value. `.none` operands and children are passed through. `v` is
-/// duck-typed; this is the statement counterpart of `ExprStore.children`.
+/// except that an assignment's intra-assignment timing (its `repeat` count,
+/// then its event or delay) comes after its value. An `-> event` target is
+/// an identity, so only its index expressions are visited. A block's own
+/// declarations are not statements and are not visited. `.none` operands and
+/// children are passed through. `v` is duck-typed (`expr(ExprId, Edge)` and
+/// `stmt(StmtId)`, both returning the same error union); this is the
+/// statement counterpart of `ExprStore.children`. `id` must not be `.none`.
 pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
     switch (self.stmt(id)) {
         .empty, .disable => {},
@@ -236,6 +240,8 @@ pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
         .assign => |a| {
             try v.expr(a.target, .write);
             try v.expr(a.value, .read);
+            // IEEE 1364-2005 §9.7.7: `repeat (count)` precedes its event control.
+            try v.expr(a.timing_repeat, .read);
             try v.expr(a.timing, .read);
         },
         .contribute => |c| {
@@ -300,7 +306,8 @@ pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
 /// An array actual written as an A.8.1 assignment pattern (§4.7.2.3 "an
 /// array assignment pattern of analog variables") yields its elements.
 /// The appended ids are the lvalues as written (`x[i]` stays `x[i]`); see
-/// `lvalueBase` for the declaration it names.
+/// `lvalueBase` for the declaration it names. A `.none` `id` appends nothing.
+/// Invalidates `out`'s element pointers if it grows; `out` is grown with `gpa`.
 pub fn stmtWrites(self: *const SourceFile, funcs: []const FuncDecl, id: StmtId, gpa: std.mem.Allocator, out: *std.ArrayList(ExprId)) !void {
     if (id == .none) return;
     if (self.stmt(id) == .sys_task) {
@@ -429,4 +436,210 @@ test "statement pool keeps handles and token column in lockstep" {
     try std.testing.expectEqual(name, it.next().?.gen_name);
     try std.testing.expectEqual(null, it.next());
     try std.testing.expectEqual(name, f.stmt(blk).block.gen_name);
+}
+
+/// One `stmtEdges` callback, as a test records it.
+const Visit = union(enum) {
+    expr: struct { e: ExprId, edge: Edge },
+    stmt: StmtId,
+};
+
+/// A `stmtEdges` visitor that records every callback in order.
+const Recorder = struct {
+    gpa: std.mem.Allocator,
+    seen: std.ArrayList(Visit) = .empty,
+
+    pub fn expr(r: *Recorder, e: ExprId, edge: Edge) std.mem.Allocator.Error!void {
+        try r.seen.append(r.gpa, .{ .expr = .{ .e = e, .edge = edge } });
+    }
+    pub fn stmt(r: *Recorder, s: StmtId) std.mem.Allocator.Error!void {
+        try r.seen.append(r.gpa, .{ .stmt = s });
+    }
+};
+
+fn expectEdges(f: *const SourceFile, id: StmtId, want: []const Visit) !void {
+    var r: Recorder = .{ .gpa = std.testing.allocator };
+    defer r.seen.deinit(std.testing.allocator);
+    try stmtEdges(f, id, &r);
+    try std.testing.expectEqualSlices(Visit, want, r.seen.items);
+}
+
+fn identExpr(f: *SourceFile, gpa: std.mem.Allocator, name: []const u8) !ExprId {
+    return f.exprs.add(gpa, .{ .tag = .ident, .str = try f.intern(gpa, name) });
+}
+
+fn read(e: ExprId) Visit {
+    return .{ .expr = .{ .e = e, .edge = .read } };
+}
+
+test "stmtEdges: an assignment's edges, its repeat count included, in the documented order" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const q = try identExpr(&f, gpa, "q");
+    const d = try identExpr(&f, gpa, "d");
+    const n = try identExpr(&f, gpa, "n");
+    const clk = try identExpr(&f, gpa, "clk");
+    const ev = try f.exprs.add(gpa, .{ .tag = .event_posedge, .lhs = clk });
+    // IEEE 1364-2005 §9.7.7 `q <= repeat (n) @(posedge clk) d;`: `n` is read.
+    const s = try f.addStmt(gpa, .{ .assign = .{ .target = q, .value = d, .nonblocking = true, .timing = ev, .timing_repeat = n } }, 0);
+    try expectEdges(&f, s, &.{ .{ .expr = .{ .e = q, .edge = .write } }, read(d), read(n), read(ev) });
+    // Without the timing, the `.none` slots still come through.
+    const plain = try f.addStmt(gpa, .{ .assign = .{ .target = q, .value = d } }, 0);
+    try expectEdges(&f, plain, &.{ .{ .expr = .{ .e = q, .edge = .write } }, read(d), read(.none), read(.none) });
+}
+
+test "stmtEdges: every other arm, operands then children in source order" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const a = try identExpr(&f, gpa, "a");
+    const b = try identExpr(&f, gpa, "b");
+    const c = try identExpr(&f, gpa, "c");
+    const s0 = try f.addStmt(gpa, .empty, 0);
+    const s1 = try f.addStmt(gpa, .empty, 0);
+    const br = try f.exprs.add(gpa, .{ .tag = .branch_access, .lhs = a });
+    const branch: Visit = .{ .expr = .{ .e = br, .edge = .branch } };
+
+    try expectEdges(&f, s0, &.{});
+    try expectEdges(&f, try f.addStmt(gpa, .{ .disable = .{ .name = f.exprs.strOf(a) } }, 0), &.{});
+    try expectEdges(&f, try f.addStmt(gpa, .{ .block = .{ .body = &.{ s0, s1 } } }, 0), &.{ .{ .stmt = s0 }, .{ .stmt = s1 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .contribute = .{ .lhs = br, .rhs = b } }, 0), &.{ branch, read(b) });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .indirect = .{ .lhs = br, .probe = b, .eqn = c } }, 0), &.{ branch, read(b), read(c) });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .if_stmt = .{ .cond = a, .then_s = s0, .else_s = .none } }, 0), &.{ read(a), .{ .stmt = s0 }, .{ .stmt = .none } });
+    const arms = [_]CaseArm{ .{ .labels = &.{ b, c }, .body = s0 }, .{ .labels = &.{}, .body = s1 } };
+    try expectEdges(&f, try f.addStmt(gpa, .{ .case_stmt = .{ .scrutinee = a, .arms = &arms } }, 0), &.{ read(a), read(b), read(c), .{ .stmt = s0 }, .{ .stmt = s1 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .for_stmt = .{ .init = s0, .cond = a, .step = s1, .body = s0 } }, 0), &.{ .{ .stmt = s0 }, read(a), .{ .stmt = s1 }, .{ .stmt = s0 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .while_stmt = .{ .cond = a, .body = s0 } }, 0), &.{ read(a), .{ .stmt = s0 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .repeat_stmt = .{ .count = a, .body = s0 } }, 0), &.{ read(a), .{ .stmt = s0 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .event_control = .{ .event = a, .body = s0, .kind = .delay } }, 0), &.{ read(a), .{ .stmt = s0 } });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .sys_task = .{ .name = f.exprs.strOf(a), .args = &.{ b, .none, c } } }, 0), &.{ read(b), read(.none), read(c) });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .jump = .{ .kind = .ret, .value = b } }, 0), &.{read(b)});
+    try expectEdges(&f, try f.addStmt(gpa, .{ .jump = .{ .kind = .brk } }, 0), &.{read(.none)});
+}
+
+test "stmtEdges: an event trigger's target is an identity; its indices are reads, leftmost first" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const ev = try identExpr(&f, gpa, "ev");
+    const i = try identExpr(&f, gpa, "i");
+    const j = try identExpr(&f, gpa, "j");
+    const evi = try f.exprs.add(gpa, .{ .tag = .index, .lhs = ev, .rhs = i });
+    const evij = try f.exprs.add(gpa, .{ .tag = .index, .lhs = evi, .rhs = j });
+    // §5.10.4 `-> ev[i][j];`
+    try expectEdges(&f, try f.addStmt(gpa, .{ .event_trigger = .{ .target = evij } }, 0), &.{ read(i), read(j) });
+    try expectEdges(&f, try f.addStmt(gpa, .{ .event_trigger = .{ .target = ev } }, 0), &.{});
+}
+
+test "stmtWrites: assignment targets, output and inout actuals, assignment patterns" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const x = try identExpr(&f, gpa, "x");
+    const y = try identExpr(&f, gpa, "y");
+    const z = try identExpr(&f, gpa, "z");
+    const w = try identExpr(&f, gpa, "w");
+    // analog function real g; input a; output b; inout c; ... (§4.7.2.3)
+    const g = try f.intern(gpa, "g");
+    const formals = [_]ast.FuncArg{
+        .{ .name = try f.intern(gpa, "a"), .ty = .real, .direction = .input },
+        .{ .name = try f.intern(gpa, "b"), .ty = .real, .direction = .output },
+        .{ .name = try f.intern(gpa, "c"), .ty = .real, .direction = .inout },
+    };
+    const funcs = [_]FuncDecl{.{ .name = g, .ret_ty = .real, .args = &formals, .body = .none }};
+    var out: std.ArrayList(ExprId) = .empty;
+    defer out.deinit(gpa);
+
+    // x = g(y, z, w): x is assigned, z and w are written through, y is not.
+    const call = try f.exprs.add(gpa, .{ .tag = .call, .str = g, .extra = try f.exprs.addExprList(gpa, &.{ y, z, w }) });
+    try f.stmtWrites(&funcs, try f.addStmt(gpa, .{ .assign = .{ .target = x, .value = call } }, 0), gpa, &out);
+    try std.testing.expectEqualSlices(ExprId, &.{ x, z, w }, out.items);
+
+    // §4.7.2.3 an array actual written as an assignment pattern: each element.
+    out.clearRetainingCapacity();
+    const pattern = try f.exprs.add(gpa, .{ .tag = .assign_pattern, .extra = try f.exprs.addExprList(gpa, &.{ z, w }) });
+    const call2 = try f.exprs.add(gpa, .{ .tag = .call, .str = g, .extra = try f.exprs.addExprList(gpa, &.{ y, pattern, x }) });
+    try f.stmtWrites(&funcs, try f.addStmt(gpa, .{ .sys_task = .{ .name = try f.intern(gpa, "$strobe"), .args = &.{call2} } }, 0), gpa, &out);
+    try std.testing.expectEqualSlices(ExprId, &.{ z, w, x }, out.items);
+
+    // Fewer actuals than formals, an unknown function, a contribution's
+    // branch, and `.none`: nothing is written.
+    out.clearRetainingCapacity();
+    const short = try f.exprs.add(gpa, .{ .tag = .call, .str = g, .extra = try f.exprs.addExprList(gpa, &.{y}) });
+    const unknown = try f.exprs.add(gpa, .{ .tag = .call, .str = try f.intern(gpa, "h"), .extra = try f.exprs.addExprList(gpa, &.{ y, z, w }) });
+    const sum = try f.exprs.add(gpa, .{ .tag = .binary, .lhs = short, .rhs = unknown, .extra = @backingInt(ast.BinaryOp.add) });
+    const br = try f.exprs.add(gpa, .{ .tag = .branch_access, .lhs = y });
+    try f.stmtWrites(&funcs, try f.addStmt(gpa, .{ .contribute = .{ .lhs = br, .rhs = sum } }, 0), gpa, &out);
+    try f.stmtWrites(&funcs, .none, gpa, &out);
+    try std.testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+test "stmtWrites: a system task's or function's destinations (§9.5, §9.13)" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const seed = try identExpr(&f, gpa, "seed");
+    const n = try identExpr(&f, gpa, "n");
+    const s = try identExpr(&f, gpa, "s");
+    const a = try identExpr(&f, gpa, "a");
+    const b = try identExpr(&f, gpa, "b");
+    var out: std.ArrayList(ExprId) = .empty;
+    defer out.deinit(gpa);
+
+    // `$random(seed);` as a task.
+    try f.stmtWrites(&.{}, try f.addStmt(gpa, .{ .sys_task = .{ .name = try f.intern(gpa, "$random"), .args = &.{seed} } }, 0), gpa, &out);
+    try std.testing.expectEqualSlices(ExprId, &.{seed}, out.items);
+
+    // `n = $sscanf(s, "%d %d", a, b);`: the count and both destinations.
+    out.clearRetainingCapacity();
+    const fmt = try f.exprs.add(gpa, .{ .tag = .str_literal, .str = try f.intern(gpa, "%d %d") });
+    const scan = try f.exprs.add(gpa, .{ .tag = .sys_call, .str = try f.intern(gpa, "$sscanf"), .extra = try f.exprs.addExprList(gpa, &.{ s, fmt, a, b }) });
+    try f.stmtWrites(&.{}, try f.addStmt(gpa, .{ .assign = .{ .target = n, .value = scan } }, 0), gpa, &out);
+    try std.testing.expectEqualSlices(ExprId, &.{ n, a, b }, out.items);
+}
+
+test "sysWrites: the argument positions the syntax boxes write through" {
+    const a = [4]ExprId{ @fromBackingInt(0), @fromBackingInt(1), @fromBackingInt(2), @fromBackingInt(3) };
+    const cases = [_]struct { name: []const u8, args: []const ExprId, want: []const ExprId }{
+        // Syntax 9-8/9-9: the seed comes first; Table 9-10's 17 names.
+        .{ .name = "$random", .args = a[0..1], .want = a[0..1] },
+        .{ .name = "$arandom", .args = a[0..2], .want = a[0..1] },
+        .{ .name = "$dist_uniform", .args = a[0..3], .want = a[0..1] },
+        .{ .name = "$rdist_poisson", .args = a[0..2], .want = a[0..1] },
+        // §9.5.3/§9.5.4.2: after the source and the format.
+        .{ .name = "$sscanf", .args = a[0..4], .want = a[2..4] },
+        .{ .name = "$fscanf", .args = a[0..3], .want = a[2..3] },
+        // §9.5.7 `$ferror(fd, str)`, §9.5.4.1 `$fgets(str, fd)`.
+        .{ .name = "$ferror", .args = a[0..2], .want = a[1..2] },
+        .{ .name = "$fgets", .args = a[0..2], .want = a[0..1] },
+        .{ .name = "$swrite", .args = a[0..3], .want = a[0..1] },
+        .{ .name = "$sformat", .args = a[0..3], .want = a[0..1] },
+        // IEEE 1364 §17.10.2 `$value$plusargs(user_string, variable)`.
+        .{ .name = "$value$plusargs", .args = a[0..2], .want = a[1..2] },
+        .{ .name = "$display", .args = a[0..2], .want = a[0..0] },
+        .{ .name = "$dist", .args = a[0..2], .want = a[0..0] },
+        .{ .name = "random", .args = a[0..1], .want = a[0..0] },
+    };
+    for (cases) |c| {
+        try std.testing.expectEqualSlices(ExprId, c.want, sysWrites(c.name, c.args));
+        // An empty argument list is never indexed past its end.
+        try std.testing.expectEqual(@as(usize, 0), sysWrites(c.name, &.{}).len);
+    }
+}
+
+test "lvalueBase walks selects down to the declared name" {
+    const gpa = std.testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const x = try identExpr(&f, gpa, "x");
+    const i = try identExpr(&f, gpa, "i");
+    const xi = try f.exprs.add(gpa, .{ .tag = .index, .lhs = x, .rhs = i });
+    const xij = try f.exprs.add(gpa, .{ .tag = .index, .lhs = xi, .rhs = i });
+    const r = try f.exprs.add(gpa, .{ .tag = .range, .lhs = i, .rhs = i });
+    const part = try f.exprs.add(gpa, .{ .tag = .index, .lhs = x, .rhs = r });
+    const call = try f.exprs.add(gpa, .{ .tag = .call, .str = f.exprs.strOf(x), .extra = try f.exprs.addExprList(gpa, &.{}) });
+    const call_i = try f.exprs.add(gpa, .{ .tag = .index, .lhs = call, .rhs = i });
+    for ([_]ExprId{ x, xi, xij, part }) |e| try std.testing.expectEqual(x, f.lvalueBase(e));
+    for ([_]ExprId{ call, call_i, .none }) |e| try std.testing.expectEqual(ExprId.none, f.lvalueBase(e));
 }
