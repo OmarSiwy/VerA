@@ -584,6 +584,10 @@ const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_
     .{ .letter = 'h', .lhs = "V", .rhs = "I", .by_current = true },
 };
 
+// The keywords (HSPICE and ngspice) that open a controlled source's
+// polynomial, behavioural, table or frequency-domain form.
+const source_forms = [_][]const u8{ "poly", "value", "table", "laplace", "freq" };
+
 // ponytail: two terminals and one positional value, which is every row of
 // `device_cards`; a three-terminal or `k=v` card needs its own arity column.
 // The `controlled` letters are the exception, and read their own shape.
@@ -643,6 +647,18 @@ fn emitBody(
                 try refusals.add(card, short, .{inst});
                 continue;
             });
+            // SPICE's other shapes of these letters put a keyword where the
+            // control goes; read as nodes, `E1 A B POLY(1) 5` would be a gain
+            // on V(poly, 1).
+            var look = it;
+            const field = look.next() orelse "";
+            const key = field[0 .. std.mem.findScalar(u8, field, '=') orelse field.len];
+            if (for (source_forms) |k| {
+                if (std.mem.eql(u8, k, key)) break true;
+            } else false) {
+                try refusals.add(card, "`{s}`: the `{s}` form of a controlled source is not read", .{ inst, key });
+                continue;
+            }
             // The controlling quantity: a V card's branch, or a node pair.
             const ctl = if (c.by_current) blk: {
                 const v = it.next() orelse {
@@ -804,10 +820,12 @@ fn emitModelCard(
         };
         try setOverride(arena, &over, t[0..eq], try paramValue(arena, t, eq, inst, card, refusals, scope) orelse return);
     }
-    // Q's substrate is optional: a fifth name that is not a number is the
-    // model after it, as SPICE3 reads the card.
-    var nodes: usize = row.nodes;
-    if (row.letter == 'q' and plain.items.len >= 5 and spiceNumber(plain.items[4]) == null) nodes = 4;
+    // Q's substrate is optional. SPICE3 takes the fourth field as the model
+    // when a `.MODEL` names it; otherwise a fifth field a `.MODEL` names, or
+    // one that is not a number, is the model after a substrate.
+    const substrate = row.letter == 'q' and plain.items.len >= 5 and !namesModel(models, plain.items[3]) and
+        (namesModel(models, plain.items[4]) or spiceNumber(plain.items[4]) == null);
+    const nodes: usize = if (substrate) 4 else row.nodes;
     if (plain.items.len <= nodes) return refusals.add(card, "`{s}` has too few fields", .{inst});
     const model = plain.items[nodes];
     var extra = plain.items[nodes + 1 ..];
@@ -866,11 +884,9 @@ fn binBound(key: []const u8) ?BinBound {
 /// (`emitModelCard`), wrapped in an optional: `.{null}` when `model` is not
 /// binned at all, null after a refusal.
 fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const ModelCard, over: []const Override, refusals: *Refusals) Allocator.Error!??ModelCard {
-    var any = false;
-    for (models) |m| {
-        if (!(std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.')) continue;
-        any = true;
-    }
+    const any = for (models) |m| {
+        if (isBinOf(m.name, model)) break true;
+    } else false;
     if (!any) return @as(?ModelCard, null);
     // The card's L and W, numbers: the bin is chosen here, before elaboration.
     var lw: [2]f64 = undefined;
@@ -890,7 +906,7 @@ fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const Mode
         };
     }
     for (models) |m| {
-        if (!(std.mem.startsWith(u8, m.name, model) and m.name.len > model.len + 1 and m.name[model.len] == '.')) continue;
+        if (!isBinOf(m.name, model)) continue;
         // lmin, lmax, wmin, wmax; a bound the card does not give is open.
         var b = [4]f64{ 0, std.math.inf(f64), 0, std.math.inf(f64) };
         var mit = tokens(m.card.text);
@@ -907,6 +923,17 @@ fn pickBin(card: Card, inst: []const u8, model: []const u8, models: []const Mode
     }
     try refusals.add(card, "`{s}`: no bin of the binned model `{s}` (`.model {s}.N`) holds L={d}, W={d}", .{ inst, model, model, lw[0], lw[1] });
     return null;
+}
+
+// Whether `name` is a bin of the binned model `model`: `model.N`.
+fn isBinOf(name: []const u8, model: []const u8) bool {
+    return name.len > model.len + 1 and std.mem.startsWith(u8, name, model) and name[model.len] == '.';
+}
+
+// Whether a `.MODEL` card names `name`, itself or as a binned model.
+fn namesModel(models: []const ModelCard, name: []const u8) bool {
+    for (models) |m| if (std.mem.eql(u8, m.name, name) or isBinOf(m.name, name)) return true;
+    return false;
 }
 
 /// Emits the instance an X card is: `Xname n1 ... nk subckt [PARAMS:] [k=v
@@ -1128,6 +1155,9 @@ const ExprParser = struct {
 
     /// unary := ('+' | '-') unary | power
     fn unary(p: *ExprParser) Allocator.Error!?[]const u8 {
+        if (p.depth == max_depth) return p.refuse("nests deeper than {d}", .{max_depth});
+        p.depth += 1;
+        defer p.depth -= 1;
         if (p.eat("-")) return try p.arena.print("(-{s})", .{try p.unary() orelse return null});
         if (p.eat("+")) return p.unary();
         return p.power();
@@ -1343,7 +1373,8 @@ fn spiceNumber(t: []const u8) ?f64 {
     // Rounds once, as `Lexer.scaleExp`'s callers do: `50n` is
     // parseFloat("50e-9"), while 50 * 1e-9 is a different double.
     var buf: [128]u8 = undefined;
-    const joined = std.mem.print(&buf, "{s}e{d}", .{ t[0..mant_end], own + scale.exp }) catch return null;
+    // i64: an exponent at the end of i32 plus the scale's would overflow.
+    const joined = std.mem.print(&buf, "{s}e{d}", .{ t[0..mant_end], @as(i64, own) + scale.exp }) catch return null;
     return std.fmt.parseFloat(f64, joined) catch null;
 }
 
