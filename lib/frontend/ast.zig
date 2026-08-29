@@ -458,3 +458,226 @@ test {
     _ = decl_file;
     _ = stmt_file;
 }
+
+const testing = std.testing;
+
+test "StringInterner: dense ids in insertion order; find never inserts" {
+    const gpa = testing.allocator;
+    var t: StringInterner = .empty;
+    defer t.deinit(gpa);
+    const a = try t.intern(gpa, "a");
+    const b = try t.intern(gpa, "b");
+    try testing.expectEqual(@as(u32, 0), @backingInt(a));
+    try testing.expectEqual(@as(u32, 1), @backingInt(b));
+    try testing.expectEqual(a, try t.intern(gpa, "a"));
+    try testing.expectEqual(@as(?StrId, null), t.find("c"));
+    try testing.expectEqual(@as(usize, 2), t.strings.items.len);
+    try testing.expectEqual(b, t.find("b").?);
+    // The key is the text, not the slice: equal bytes elsewhere are the same id.
+    const elsewhere: []const u8 = "ab"[1..];
+    try testing.expectEqual(b, try t.intern(gpa, elsewhere));
+    try testing.expect(t.eql(a, "a"));
+    try testing.expect(!t.eql(a, "b"));
+    try testing.expect(!t.eql(.none, ""));
+    // The empty string is a name like any other.
+    const e = try t.intern(gpa, "");
+    try testing.expectEqual(@as(u32, 2), @backingInt(e));
+    try testing.expectEqualStrings("", t.get(e));
+}
+
+test "StringInterner: ids survive the map's rehashes, and a clone grows alone" {
+    const gpa = testing.allocator;
+    var names: [300][8]u8 = undefined;
+    var t: StringInterner = .empty;
+    defer t.deinit(gpa);
+    for (&names, 0..) |*n, i| {
+        _ = std.fmt.bufPrint(n, "n{d:0>7}", .{i}) catch unreachable;
+        try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(try t.intern(gpa, n)));
+    }
+    for (&names, 0..) |*n, i| try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(t.find(n).?));
+
+    var c = try t.clone(gpa);
+    defer c.deinit(gpa);
+    try testing.expectEqual(@as(u32, 300), @backingInt(try c.intern(gpa, "only-in-clone")));
+    try testing.expectEqual(@as(?StrId, null), t.find("only-in-clone"));
+    try testing.expectEqual(@as(usize, 300), t.strings.items.len);
+    for (&names, 0..) |*n, i| try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(c.find(n).?));
+}
+
+fn internSome(gpa: std.mem.Allocator) !void {
+    var names: [40][4]u8 = undefined;
+    var t: StringInterner = .empty;
+    defer t.deinit(gpa);
+    for (&names, 0..) |*n, i| {
+        _ = std.fmt.bufPrint(n, "s{d:0>3}", .{i}) catch unreachable;
+        const before = t.strings.items.len;
+        const id = t.intern(gpa, n) catch |err| {
+            // No id without its string, and no string without its id.
+            try testing.expectEqual(before, t.strings.items.len);
+            try testing.expectEqual(@as(u32, @intCast(before)), t.map.count());
+            try testing.expectEqual(@as(?StrId, null), t.find(n));
+            return err;
+        };
+        try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(id));
+    }
+}
+
+test "StringInterner.intern leaves the table unchanged on OOM" {
+    try testing.checkAllAllocationFailures(testing.allocator, internSome, .{});
+}
+
+test "the module views partition `modules` in order, counts clamped to its length" {
+    var mods: [5]ModuleDecl = undefined;
+    for (&mods, 0..) |*m, i| m.* = .{ .name = @fromBackingInt(@as(u32, @intCast(i))), .ports = &.{} };
+    var f: SourceFile = .{ .modules = &mods };
+    for (0..8) |builtin| {
+        for (0..8) |netlist| {
+            f.builtin_modules = @intCast(builtin);
+            f.netlist_modules = @intCast(netlist);
+            const table = f.tablePrimitives();
+            const net = f.netlistModules();
+            const user = f.userModules();
+            // Table E.1, then the netlist's modules, then the user's: contiguous.
+            try testing.expect(table.ptr == f.modules.ptr);
+            try testing.expect(net.ptr == f.modules.ptr + table.len);
+            try testing.expect(user.ptr == f.modules.ptr + table.len + net.len);
+            try testing.expectEqual(mods.len, table.len + net.len + user.len);
+            const prelude = @min(builtin, mods.len);
+            try testing.expectEqual(prelude, table.len + net.len);
+            try testing.expectEqual(@min(netlist, prelude), net.len);
+        }
+    }
+}
+
+test "stmtLte/exprLte: the last attribute of the kind wins; other kinds and owners do not count" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var f: SourceFile = .empty;
+    const s: StmtId = @fromBackingInt(3);
+    const e: ExprId = @fromBackingInt(5);
+    const v: ExprId = @fromBackingInt(10);
+    try f.lte_attrs.append(a, .{ .kind = .vera_lte, .stmt = s, .value = v, .main_tok = 1 });
+    try f.lte_attrs.append(a, .{ .kind = .vera_interp, .stmt = s, .value = v, .main_tok = 2 });
+    try f.lte_attrs.append(a, .{ .kind = .vera_lte, .stmt = s, .value = v, .main_tok = 3 });
+    try f.lte_attrs.append(a, .{ .kind = .vera_lte, .expr = e, .value = v, .main_tok = 4 });
+    try testing.expectEqual(@as(u32, 3), f.stmtLte(s, .vera_lte).?.main_tok);
+    try testing.expectEqual(@as(u32, 2), f.stmtLte(s, .vera_interp).?.main_tok);
+    try testing.expectEqual(null, f.stmtLte(s, .vera_nodiff));
+    try testing.expectEqual(null, f.stmtLte(@fromBackingInt(4), .vera_lte));
+    try testing.expectEqual(@as(u32, 4), f.exprLte(e, .vera_lte).?.main_tok);
+    try testing.expectEqual(null, f.exprLte(e, .vera_interp));
+}
+
+test "addStmt/stmt round-trip every arm, and the token column follows" {
+    const gpa = testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const e: ExprId = @fromBackingInt(1);
+    const s: StmtId = @fromBackingInt(0);
+    const arms = [_]Stmt{
+        .empty,
+        .{ .block = .{ .name = @fromBackingInt(2), .parallel = true, .body = &.{s} } },
+        .{ .assign = .{ .target = e, .value = e, .nonblocking = true, .timing = e, .timing_is_delay = true, .timing_repeat = e, .timing_implicit = true, .continuous = .force } },
+        .{ .contribute = .{ .lhs = e, .rhs = e } },
+        .{ .indirect = .{ .lhs = e, .probe = e, .eqn = e } },
+        .{ .if_stmt = .{ .cond = e, .then_s = s, .else_s = .none, .is_generate = true } },
+        .{ .case_stmt = .{ .kind = .casez, .scrutinee = e, .arms = &.{.{ .labels = &.{e}, .body = s }} } },
+        .{ .for_stmt = .{ .init = s, .cond = e, .step = s, .body = s } },
+        .{ .while_stmt = .{ .cond = e, .body = s } },
+        .{ .repeat_stmt = .{ .count = e, .body = s } },
+        .{ .event_control = .{ .event = e, .body = s, .kind = .level } },
+        .{ .event_trigger = .{ .target = e } },
+        .{ .disable = .{ .name = @fromBackingInt(3) } },
+        .{ .sys_task = .{ .name = @fromBackingInt(4), .args = &.{ e, .none } } },
+        .{ .jump = .{ .kind = .ret, .value = e } },
+    };
+    // One of each arm, so a new arm must be added here.
+    comptime std.debug.assert(arms.len == @typeInfo(Stmt).@"union".field_names.len);
+    for (arms, 0..) |arm, i| {
+        const id = try f.addStmt(gpa, arm, @intCast(i));
+        try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(id));
+        try testing.expect(std.meta.eql(arm, f.stmt(id)));
+        try testing.expectEqual(@as(u32, @intCast(i)), f.stmtTok(id));
+    }
+    try testing.expectEqual(@as(usize, 1), f.blocks.items.len);
+}
+
+fn addStmtsOom(gpa: std.mem.Allocator) !void {
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    for (0..20) |i| {
+        const rows = f.stmts.items.len;
+        const blocks = f.blocks.items.len;
+        const s: Stmt = if (i % 3 == 0) .{ .block = .{} } else .empty;
+        _ = f.addStmt(gpa, s, @intCast(i)) catch |err| {
+            // Nothing is appended, to any of the three columns.
+            try testing.expectEqual(rows, f.stmts.items.len);
+            try testing.expectEqual(rows, f.stmt_toks.items.len);
+            try testing.expectEqual(blocks, f.blocks.items.len);
+            return err;
+        };
+    }
+    try testing.expectEqual(@as(usize, 7), f.blocks.items.len);
+}
+
+test "addStmt appends nothing on OOM" {
+    try testing.checkAllAllocationFailures(testing.allocator, addStmtsOom, .{});
+}
+
+test "deinit frees every store it appends to, the vendor attributes included" {
+    const gpa = testing.allocator;
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    const one = try f.exprs.addInt(gpa, 0, 1);
+    const s = try f.addStmt(gpa, .empty, 0);
+    _ = try f.addStmt(gpa, .{ .block = .{ .body = &.{s} } }, 0);
+    _ = try f.intern(gpa, "x");
+    try f.attributes.append(gpa, .{ .owner = .{ .kind = .statement, .tok = 0 }, .specs = &.{} });
+    // `testing.allocator` reports this row as a leak unless `deinit` frees it.
+    try f.lte_attrs.append(gpa, .{ .stmt = s, .value = one, .main_tok = 0 });
+}
+
+test "seedFrom copies the growing stores, borrows the decls, and the copy grows alone" {
+    const gpa = testing.allocator;
+    var src: SourceFile = .empty;
+    defer src.deinit(gpa);
+    const x = try src.intern(gpa, "x");
+    const one = try src.exprs.addInt(gpa, 0, 1);
+    const planes = try gpa.dupe(u64, &.{ 1, 0 });
+    _ = try src.exprs.addLogic(gpa, 1, .{ .width = 1, .sized = true, .signed = false, .planes = planes });
+    const s = try src.addStmt(gpa, .empty, 2);
+    _ = try src.addStmt(gpa, .{ .block = .{ .body = &.{s} } }, 3);
+    try src.attributes.append(gpa, .{ .owner = .{ .kind = .statement, .tok = 2 }, .specs = &.{} });
+    try src.lte_attrs.append(gpa, .{ .stmt = s, .value = one, .main_tok = 2 });
+    const mods = [_]ModuleDecl{.{ .name = x, .ports = &.{} }};
+    const udps = [_]UdpDecl{.{ .name = x }};
+    const configs = [_]ConfigDecl{.{ .name = x, .design = &.{}, .rules = &.{}, .main_tok = 0 }};
+    src.modules = &mods;
+    src.udps = &udps;
+    src.configs = &configs;
+
+    var f: SourceFile = .empty;
+    defer f.deinit(gpa);
+    try f.seedFrom(gpa, &src);
+    try testing.expectEqual(x, f.strings.find("x").?);
+    try testing.expectEqual(@as(i64, 1), f.exprs.intValue(one));
+    try testing.expectEqual(s, f.stmt(@fromBackingInt(1)).block.body[0]);
+    try testing.expectEqual(@as(u32, 3), f.stmtTok(@fromBackingInt(1)));
+    try testing.expectEqual(@as(usize, 1), f.attributes.items.len);
+    const lte = f.stmtLte(s, .vera_lte) orelse return error.TestExpectedLteAttr;
+    try testing.expectEqual(one, lte.value);
+    try testing.expect(f.modules.ptr == src.modules.ptr);
+    try testing.expect(f.udps.ptr == src.udps.ptr);
+    try testing.expect(f.configs.ptr == src.configs.ptr);
+    // The logic planes are the copy's own; `deinit` frees each once.
+    try testing.expect(f.exprs.logic.items[0].planes.ptr != planes.ptr);
+
+    // Appending to the copy leaves the source alone.
+    _ = try f.intern(gpa, "y");
+    _ = try f.addStmt(gpa, .empty, 4);
+    try f.lte_attrs.append(gpa, .{ .stmt = s, .value = one, .main_tok = 4 });
+    try testing.expectEqual(@as(?StrId, null), src.strings.find("y"));
+    try testing.expectEqual(@as(usize, 2), src.stmts.items.len);
+    try testing.expectEqual(@as(usize, 1), src.lte_attrs.items.len);
+}

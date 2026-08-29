@@ -443,3 +443,118 @@ test "ExprStore round-trips rows, lists and literals" {
     const t = try f.exprs.add(gpa, .{ .tag = .ternary, .lhs = probe, .rhs = one, .extra = @backingInt(two_pt_5) });
     try std.testing.expectEqual(two_pt_5, f.exprs.ternaryElse(t));
 }
+
+test "children: every tag's operands, in source order" {
+    const gpa = std.testing.allocator;
+    var s: ExprStore = .empty;
+    defer s.deinit(gpa);
+    const a = try s.addInt(gpa, 0, 1);
+    const b = try s.addInt(gpa, 0, 2);
+    const c = try s.addInt(gpa, 0, 3);
+    const one = [_]ExprId{a};
+    const two = [_]ExprId{ a, b };
+    const three = [_]ExprId{ a, b, c };
+    // A list may hold `.none` (an omitted argument) and keeps its order.
+    const listed = [_]ExprId{ c, .none, a };
+    const name: StrId = @fromBackingInt(7);
+    const list_off = try s.addExprList(gpa, &listed);
+    const names_off = try s.addStrList(gpa, &.{name});
+    var buf: [3]ExprId = undefined;
+    const Case = struct { node: Node, want: []const ExprId };
+    for (std.enums.values(ExprTag)) |t| {
+        // The oracle is this table, written from `ExprTag`'s arm comments.
+        const case: Case = switch (t) {
+            .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf, .ident => .{ .node = .{ .tag = t, .lhs = a, .rhs = b }, .want = &.{} },
+            .hier_ident, .event_initial_step, .event_final_step => .{ .node = .{ .tag = t, .extra = names_off }, .want = &.{} },
+            .unary, .event_posedge, .event_negedge, .event_driver_update, .port_access => .{ .node = .{ .tag = t, .lhs = a, .rhs = b }, .want = &one },
+            .binary, .index, .range, .indexed_range, .multi_concat, .pattern_repl, .event_or, .branch_access => .{ .node = .{ .tag = t, .lhs = a, .rhs = b }, .want = &two },
+            .ternary => .{ .node = .{ .tag = t, .lhs = a, .rhs = b, .extra = @backingInt(c) }, .want = &three },
+            .call, .builtin_call, .sys_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => .{ .node = .{ .tag = t, .extra = list_off }, .want = &listed },
+        };
+        const id = try s.add(gpa, case.node);
+        try std.testing.expectEqualSlices(ExprId, case.want, s.children(id, &buf));
+    }
+    try std.testing.expectEqualSlices(StrId, &.{name}, s.nameParts(try s.add(gpa, .{ .tag = .hier_ident, .extra = names_off })));
+}
+
+test "unOp/binOp read back every operator" {
+    const gpa = std.testing.allocator;
+    var s: ExprStore = .empty;
+    defer s.deinit(gpa);
+    for (std.enums.values(UnaryOp)) |op| {
+        const id = try s.add(gpa, .{ .tag = .unary, .extra = @backingInt(op) });
+        try std.testing.expectEqual(op, s.unOp(id));
+    }
+    for (std.enums.values(BinaryOp)) |op| {
+        const id = try s.add(gpa, .{ .tag = .binary, .extra = @backingInt(op) });
+        try std.testing.expectEqual(op, s.binOp(id));
+    }
+}
+
+test "literal side tables keep width, sign, radix and every f64 bit; an empty list is empty" {
+    const gpa = std.testing.allocator;
+    var s: ExprStore = .empty;
+    defer s.deinit(gpa);
+    // `-8'sh6`'s operand as the parser stores it: 8 bits, signed, radix 16.
+    const want: IntLiteral = .{ .value = 6, .width = 8, .signed = true, .radix = 16 };
+    const lit = try s.addIntLiteral(gpa, 3, want);
+    try std.testing.expectEqual(want, s.intLiteral(lit));
+    try std.testing.expectEqual(@as(u32, 3), s.mainTok(lit));
+    try std.testing.expectEqual(ExprTag.int_literal, s.tag(lit));
+    // `addInt` is the unsized, signed, decimal form.
+    const synth = try s.addInt(gpa, 0, -1);
+    try std.testing.expectEqual(IntLiteral{ .value = -1, .width = 0, .signed = true, .radix = 10 }, s.intLiteral(synth));
+    const nan = try s.addReal(gpa, 0, std.math.nan(f64));
+    try std.testing.expect(std.math.isNan(s.realValue(nan)));
+    const neg_zero = try s.addReal(gpa, 0, -0.0);
+    try std.testing.expect(std.math.signbit(s.realValue(neg_zero)));
+    try std.testing.expectEqual(@as(usize, 0), s.list(try s.addExprList(gpa, &.{})).len);
+    // Lists share one pool; each offset reads back its own.
+    const l1 = try s.addExprList(gpa, &.{lit});
+    const l2 = try s.addExprList(gpa, &.{ synth, nan });
+    try std.testing.expectEqual(@as(usize, 1), s.list(l1).len);
+    try std.testing.expectEqual(@as(usize, 2), s.list(l2).len);
+}
+
+/// Allocates planes and hands them to `addLogic`; frees them itself only
+/// when `addLogic` stored nothing, which is its documented contract.
+fn addPlanes(s: *ExprStore, gpa: std.mem.Allocator, tok: u32) !ExprId {
+    const planes = try gpa.alloc(u64, 2);
+    @memset(planes, 0);
+    errdefer gpa.free(planes);
+    return s.addLogic(gpa, tok, .{ .width = 64, .sized = true, .signed = false, .planes = planes });
+}
+
+fn addLiteralsOom(gpa: std.mem.Allocator) !void {
+    var s: ExprStore = .empty;
+    defer s.deinit(gpa);
+    for (0..12) |i| {
+        const before = [4]usize{ s.nodes.len, s.ints.items.len, s.reals.items.len, s.logic.items.len };
+        const tok: u32 = @intCast(i);
+        const added = switch (i % 3) {
+            0 => s.addInt(gpa, tok, 1),
+            1 => s.addReal(gpa, tok, 0.5),
+            else => addPlanes(&s, gpa, tok),
+        };
+        _ = added catch |err| {
+            // No row without its value, and no value without its row.
+            const after = [4]usize{ s.nodes.len, s.ints.items.len, s.reals.items.len, s.logic.items.len };
+            try std.testing.expectEqualSlices(usize, &before, &after);
+            return err;
+        };
+    }
+}
+
+test "the literal adders store nothing on OOM, so the planes stay the caller's" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, addLiteralsOom, .{});
+}
+
+fn addLogicOnce(gpa: std.mem.Allocator) !void {
+    var s: ExprStore = .empty;
+    defer s.deinit(gpa);
+    _ = try addPlanes(&s, gpa, 0);
+}
+
+test "deinit frees each logic literal's planes" {
+    try addLogicOnce(std.testing.allocator);
+}

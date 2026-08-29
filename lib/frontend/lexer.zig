@@ -859,3 +859,212 @@ test "a real .va fixture lexes with no invalid tokens" {
         try testing.expect(tag != .invalid);
     }
 }
+
+test "every tag with a spelling lexes back to itself, whole (§2.5, §2.8.2)" {
+    // `token.Tag.lexeme` and the scanners are written independently; each
+    // is the other's oracle. A keyword read back as an identifier, or an
+    // operator split in two, fails here.
+    for (std.enums.values(token.Tag)) |t| {
+        if (t == .dir_outside_module) continue; // three directives, described in prose
+        const l = token.Tag.lexeme(t) orelse continue;
+        var lx: Lexer = .{ .src = l };
+        try testing.expectEqual(token.Stored{ .tag = t, .start = 0 }, lx.next());
+        try testing.expectEqual(@as(u32, @intCast(l.len)), lx.pos);
+        try testing.expectEqual(token.Tag.eof, lx.next().tag);
+    }
+}
+
+test "next returns .eof at the end, repeatedly, past trailing white space" {
+    var lx: Lexer = .{ .src = "a \n\t" };
+    try testing.expectEqual(token.Tag.identifier, lx.next().tag);
+    for (0..3) |_| try testing.expectEqual(token.Stored{ .tag = .eof, .start = 4 }, lx.next());
+    var empty: Lexer = .{ .src = "" };
+    try testing.expectEqual(token.Stored{ .tag = .eof, .start = 0 }, empty.next());
+}
+
+test "tokenizeSeeded equals tokenize for a seed ending at every token boundary" {
+    const src = "module m(a); real x = 8 'h ff + 1.5k; $strobe(\"s\"); endmodule\n";
+    var full = try Lexer.tokenize(testing.allocator, src);
+    defer full.deinit(testing.allocator);
+    const tags = full.items(.tag);
+    const starts = full.items(.start);
+    // A prefix ends between tokens: at any token's start (the last one is
+    // `.eof`'s, the end of the text).
+    for (0..tags.len) |k| {
+        const seed: Lexer.Seed = .{ .tags = tags[0..k], .starts = starts[0..k], .len = starts[k] };
+        var got = try Lexer.tokenizeSeeded(testing.allocator, src, seed);
+        defer got.deinit(testing.allocator);
+        try testing.expectEqualSlices(token.Tag, tags, got.items(.tag));
+        try testing.expectEqualSlices(u32, starts, got.items(.start));
+    }
+}
+
+fn tokenizeMany(gpa: std.mem.Allocator) !void {
+    // Past the up-front estimate of one token per 4 bytes, so the list grows.
+    const semis: [100]u8 = @splat(';');
+    var list = try Lexer.tokenize(gpa, &semis);
+    defer list.deinit(gpa);
+    try testing.expectEqual(@as(usize, 101), list.len);
+}
+
+test "tokenize leaks nothing when any allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, tokenizeMany, .{});
+}
+
+test "byte classes: §2.3 white space, §2.8 identifier characters, Table 2-1 scale factors" {
+    for (0..256) |i| {
+        const c: u8 = @intCast(i);
+        try testing.expectEqual(c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0c, isSpace(c));
+        const ident = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '$';
+        try testing.expectEqual(ident, isIdentChar(c));
+        try testing.expectEqual(std.mem.findScalar(u8, "TGMKkmunpfa", c) != null, scaleExp(c) != null);
+    }
+}
+
+test "isBasedDigit is §2.6.1's digit set of each radix, plus _ x z ?" {
+    for ([_]u8{ 2, 8, 10, 16 }) |radix| {
+        for (0..256) |i| {
+            const c: u8 = @intCast(i);
+            const value: ?u8 = switch (c) {
+                '0'...'9' => c - '0',
+                'a'...'f' => c - 'a' + 10,
+                'A'...'F' => c - 'A' + 10,
+                else => null,
+            };
+            const four_state = std.mem.findScalar(u8, "_xXzZ?", c) != null;
+            const in_radix = if (value) |v| v < radix else false;
+            try testing.expectEqual(four_state or in_radix, isBasedDigit(c, radix));
+        }
+    }
+}
+
+test "escapedEnd stops at the first byte outside printable ASCII 33-126 (§2.8.1)" {
+    try testing.expectEqual(@as(usize, 6), escapedEnd("\\a+b-c d", 1));
+    try testing.expectEqual(@as(usize, 4), escapedEnd("\\a~!\x7f", 1));
+    try testing.expectEqual(@as(usize, 2), escapedEnd("\\a\x80", 1));
+    try testing.expectEqual(@as(usize, 1), escapedEnd("\\ x", 1));
+    try testing.expectEqual(@as(usize, 3), escapedEnd("\\ab", 1)); // end of text
+    // A lone backslash names nothing.
+    try expectTags("\\ x", &.{ .invalid, .identifier, .eof });
+}
+
+test "IEEE 1364 §19 directives the parser places survive; any other is one invalid byte" {
+    try expectTags("`resetall `default_nettype `unconnected_drive `nounconnected_drive", &.{
+        .dir_resetall, .dir_outside_module, .dir_outside_module, .dir_outside_module, .eof,
+    });
+    var lx: Lexer = .{ .src = "`timescale" };
+    try testing.expectEqual(token.Stored{ .tag = .invalid, .start = 0 }, lx.next());
+    try testing.expectEqual(token.Stored{ .tag = .identifier, .start = 1 }, lx.next());
+    try expectTags("`", &.{ .invalid, .eof });
+}
+
+test "§2.6.1 based literal corners: signed designator, case, unknown digits, missing digits" {
+    try expectTags("4'sb1001 4'SB1 'sd5 16'sd? 12'hx 3'b01x 8'hzZ?", &.{
+        .int_literal, .int_literal, .int_literal, .int_literal, .int_literal, .int_literal, .int_literal, .eof,
+    });
+    // A base format with no digits: the token ends at the base letter.
+    try expectTags("2'b", &.{ .invalid, .eof });
+    try expectTags("'h;", &.{ .invalid, .semicolon, .eof });
+    // An apostrophe with no base letter after it is not a base format.
+    try expectTags("8'", &.{ .int_literal, .invalid, .eof });
+    try expectTags("8's", &.{ .int_literal, .invalid, .identifier, .eof });
+    try expectTags("3 'x", &.{ .int_literal, .invalid, .identifier, .eof });
+    // A digit outside the radix ends the digits: `2'b12` is `2'b1` then `2`.
+    try expectTags("2'b12", &.{ .int_literal, .int_literal, .eof });
+}
+
+test "§2.6.2 real corners: exponent forms, a dangling e, scale factor against identifier" {
+    try expectTags("1.5e+3 1.5E-3 2e0 1_e3", &.{ .real_literal, .real_literal, .real_literal, .real_literal, .eof });
+    // An `e` with no digits after it starts an identifier.
+    try expectTags("1e", &.{ .int_literal, .identifier, .eof });
+    try expectTags("1e+", &.{ .int_literal, .identifier, .plus, .eof });
+    try expectTags("1.5e_3", &.{ .real_literal, .identifier, .eof });
+    // A scale factor followed by an identifier character is not one.
+    try expectTags("1m$x 2k_", &.{ .int_literal, .identifier, .int_literal, .identifier, .eof });
+    // An exponent and a scale factor never combine.
+    try expectTags("1e3k", &.{ .real_literal, .identifier, .eof });
+}
+
+test "bytes outside the grammar are one .invalid token each" {
+    try expectTags("\xc3\xa9", &.{ .invalid, .invalid, .eof });
+    try expectTags("a\x00b", &.{ .identifier, .invalid, .identifier, .eof });
+    // Vertical tab is not §2.3 white space.
+    try expectTags("a\x0bb", &.{ .identifier, .invalid, .identifier, .eof });
+}
+
+test "string corners (§2.7): empty, escaped quote last, runaway at end of file" {
+    try expectTags("\"\"", &.{ .string_literal, .eof });
+    try expectTags("\"a\\\"\"", &.{ .string_literal, .eof });
+    try expectTags("\"abc", &.{ .invalid, .eof });
+    try expectTags("\"abc\\", &.{ .invalid, .eof });
+}
+
+test "stringContents corners: empty, undefined escape, short and long octal, the byte wrap" {
+    const cases = [_]struct { text: []const u8, want: []const u8 }{
+        .{ .text = "\"\"", .want = "" },
+        .{ .text = "\"\\q\"", .want = "q" },
+        // Table 2-2: fewer than three digits when the next byte is no octal digit.
+        .{ .text = "\"\\08\"", .want = "\x008" },
+        // At most three digits: 0o123 is 'S', and the 4 is a character.
+        .{ .text = "\"\\1234\"", .want = "S4" },
+        // 0o777 = 511 keeps its low byte; `badEscape` reports it first.
+        .{ .text = "\"\\777\"", .want = "\xff" },
+        .{ .text = "\"tab\\tnl\\n\"", .want = "tab\tnl\n" },
+    };
+    for (cases) |c| {
+        const got = try stringContents(testing.allocator, c.text);
+        defer testing.allocator.free(got);
+        try testing.expectEqualStrings(c.want, got);
+    }
+}
+
+fn decodeOnce(gpa: std.mem.Allocator) !void {
+    const s = try stringContents(gpa, "\"a\\101\\q\"");
+    defer gpa.free(s);
+    try testing.expectEqualStrings("aAq", s);
+}
+
+test "stringContents frees its buffer when any allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, decodeOnce, .{});
+}
+
+test "badEscape corners: from past the end, an escaped backslash, a short octal escape" {
+    try testing.expectEqual(BadEscape{ .start = 1, .end = 3, .above_377 = false }, badEscape("\"\\q\"", 0).?);
+    try testing.expectEqual(@as(?BadEscape, null), badEscape("\"\\q\"", 4));
+    // `\\` then `q`: an escaped backslash and a plain q.
+    try testing.expectEqual(@as(?BadEscape, null), badEscape("\"\\\\q\"", 0));
+    // `\1` then `8`: Table 2-2's short form; the 8 is a character.
+    try testing.expectEqual(@as(?BadEscape, null), badEscape("\"\\18\"", 0));
+    // \400 is the first value above \377.
+    try testing.expectEqual(BadEscape{ .start = 1, .end = 5, .above_377 = true }, badEscape("\"\\400\"", 0).?);
+}
+
+test "parseReal: the 512-byte buffer, underscores free, overflow is inf" {
+    var buf: [600]u8 = @splat('1');
+    buf[1] = '.';
+    // 512 bytes fit; 513 do not.
+    try testing.expect(std.math.isFinite(try parseReal(buf[0..512])));
+    try testing.expectError(error.LiteralTooLong, parseReal(buf[0..513]));
+    // The rewritten scale factor counts: 511 + "e-3" is 514 bytes.
+    buf[511] = 'm';
+    try testing.expectError(error.LiteralTooLong, parseReal(buf[0..512]));
+    buf[509] = 'm';
+    try testing.expect(std.math.isFinite(try parseReal(buf[0..510])));
+    // `_` is dropped before the buffer is filled.
+    var spaced: [1022]u8 = undefined;
+    spaced[0] = '1';
+    spaced[1] = '.';
+    for (0..510) |i| {
+        spaced[2 + 2 * i] = '1';
+        spaced[3 + 2 * i] = '_';
+    }
+    try testing.expect(std.math.isFinite(try parseReal(&spaced)));
+    // §2.6.2 leaves overflow to IEEE 754: inf, not an error.
+    try testing.expect(std.math.isPositiveInf(try parseReal("1e400")));
+    try testing.expectEqual(@as(f64, 0), try parseReal("1e-400"));
+}
+
+test "tokenSpan of an empty token column is the end of the text; stringRunaway past it is .none" {
+    try testing.expectEqual(diag.Span{ .start = 3, .end = 3 }, tokenSpan("abc", &.{}, 0));
+    try testing.expectEqual(StringRunaway.none, stringRunaway("ab", .{ .start = 2, .end = 2 }));
+}
