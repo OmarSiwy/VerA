@@ -43,6 +43,8 @@ pub const Map = struct {
 
     /// §13.2.1.1 the library `file` (absolute) maps into: the one whose
     /// specification matches it most specifically, else `work` (§13.2.1).
+    /// A tie names the first two libraries, in declaration order, whose best
+    /// specifications share the most specific class. O(specifications).
     pub fn libraryOf(map: Map, file: []const u8) Placement {
         var best: ?Class = null;
         var lib: []const u8 = "work";
@@ -87,7 +89,9 @@ pub const Error = error{ MapFailed, OutOfMemory };
 /// Reads the map files at `paths`, in order (§13.2.1: "If multiple map files
 /// are specified, then they shall be read in the order in which they are
 /// specified"). A refusal is E0244 in `bag`, whose files it registers, and
-/// `error.MapFailed`.
+/// `error.MapFailed`: an unreadable file, a statement other than `library`
+/// or `include` (§13.2.2), a malformed one (Syntax 13-2), or an `include`
+/// nested past 32 files. Every slice of the `Map` lives in `arena`.
 pub fn load(arena: std.mem.Allocator, io: Io, bag: *diag.Bag, paths: []const []const u8) Error!Map {
     var l: Loader = .{ .arena = arena, .io = io, .bag = bag };
     for (paths) |p| try l.read(p, null, 0);
@@ -137,7 +141,8 @@ const Loader = struct {
                 var prev = name;
                 while (true) {
                     const spec = t.next() orelse return l.fail(.{ .file = file, .tok = prev }, "a library declaration ends with `;`", .{});
-                    if (isPunct(spec.text)) return l.fail(.{ .file = file, .tok = spec }, "`library {s}` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{ name.text, spec.text });
+                    // A.1.1: the `-incdir` list follows at least one file_path_spec.
+                    if (isPunct(spec.text) or std.mem.eql(u8, spec.text, "-incdir")) return l.fail(.{ .file = file, .tok = spec }, "`library {s}` needs a file_path_spec here (Syntax 13-2), found `{s}`", .{ name.text, spec.text });
                     try lib.specs.append(l.arena, try resolveSpec(l.arena, dir, unquote(spec.text)));
                     const sep = t.next() orelse return l.fail(.{ .file = file, .tok = spec }, "a library declaration ends with `;`", .{});
                     if (std.mem.eql(u8, sep.text, ";")) break;
@@ -193,15 +198,15 @@ const Tokens = struct {
             if (std.ascii.isWhitespace(s[t.pos])) {
                 t.pos += 1;
             } else if (std.mem.startsWith(u8, s[t.pos..], "//")) {
-                t.pos = std.mem.indexOfScalarPos(u8, s, t.pos, '\n') orelse s.len;
+                t.pos = std.mem.findScalarPos(u8, s, t.pos, '\n') orelse s.len;
             } else if (std.mem.startsWith(u8, s[t.pos..], "/*")) {
-                t.pos = if (std.mem.indexOfPos(u8, s, t.pos + 2, "*/")) |e| e + 2 else s.len;
+                t.pos = if (std.mem.findPos(u8, s, t.pos + 2, "*/")) |e| e + 2 else s.len;
             } else break;
         }
         if (t.pos == s.len) return null;
         const start = t.pos;
         if (s[t.pos] == '"') {
-            t.pos = if (std.mem.indexOfScalarPos(u8, s, t.pos + 1, '"')) |e| e + 1 else s.len;
+            t.pos = if (std.mem.findScalarPos(u8, s, t.pos + 1, '"')) |e| e + 1 else s.len;
         } else if (isPunct(s[t.pos .. t.pos + 1])) {
             t.pos += 1;
         } else while (t.pos < s.len and !std.ascii.isWhitespace(s[t.pos]) and s[t.pos] != ',' and s[t.pos] != ';') t.pos += 1;
@@ -223,14 +228,17 @@ fn unquote(w: []const u8) []const u8 {
     return if (w.len >= 2 and w[0] == '"' and w[w.len - 1] == '"') w[1 .. w.len - 1] else w;
 }
 
-/// §13.2.1 "Paths that do not begin with / are relative to the directory in
-/// which the current lib.map file is located"; "Paths that end in / shall
-/// include all files in the specified directory. Identical to /*."
+/// Returns `raw`, a `file_path_spec`, resolved against `dir` (absolute,
+/// `/`-separated) and classed for §13.2.1.1. §13.2.1 "Paths that do not
+/// begin with / are relative to the directory in which the current lib.map
+/// file is located"; "Paths that end in / shall include all files in the
+/// specified directory. Identical to /*." The pattern is allocated in
+/// `arena`.
 pub fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) error{OutOfMemory}!Spec {
     const base = std.fs.path.basenamePosix(raw);
     const class: Class = if (std.mem.endsWith(u8, raw, "/"))
         .directory
-    else if (std.mem.indexOfAny(u8, base, "*?") != null or std.mem.eql(u8, base, "..."))
+    else if (std.mem.findAny(u8, base, "*?") != null or std.mem.eql(u8, base, "..."))
         .wildcard
     else
         .file;
@@ -247,10 +255,11 @@ fn slashed(arena: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]cons
     return out;
 }
 
-/// Does `file` match `pattern`, both absolute? §13.2.1's wildcards: `?` one
-/// character, `*` any run within one name, `...` any number of directories.
-/// `pattern` is `/`-separated (`resolveSpec`); `file` is a host path, split
-/// on the host's separators.
+/// Reports whether `file` matches `pattern`, both absolute. §13.2.1's
+/// wildcards: `?` one character, `*` any run within one name, `...` any
+/// number of directories. `pattern` is `/`-separated (`resolveSpec`); `file`
+/// is a host path, split on the host's separators. Each name is matched in
+/// time linear in the product of its pattern and name lengths.
 pub fn matches(pattern: []const u8, file: []const u8) bool {
     var f = file;
     while (f.len != 0 and std.fs.path.isSep(f[0])) f = f[1..];
@@ -264,7 +273,7 @@ fn nextSep(f: []const u8) ?usize {
 
 fn segments(p: []const u8, f: []const u8) bool {
     if (p.len == 0) return f.len == 0;
-    const p_end = std.mem.indexOfScalar(u8, p, '/') orelse p.len;
+    const p_end = std.mem.findScalar(u8, p, '/') orelse p.len;
     const p_rest = if (p_end == p.len) "" else p[p_end + 1 ..];
     if (std.mem.eql(u8, p[0..p_end], "...")) {
         var rest = f;
@@ -280,14 +289,30 @@ fn segments(p: []const u8, f: []const u8) bool {
 }
 
 fn glob(p: []const u8, s: []const u8) bool {
-    if (p.len == 0) return s.len == 0;
-    if (p[0] == '*') {
-        var i: usize = 0;
-        while (i <= s.len) : (i += 1) if (glob(p[1..], s[i..])) return true;
-        return false;
+    // Greedy, with one way back: the last `*` and how much of `s` it has
+    // taken. A later `*` makes every earlier one's choice final, so a
+    // failure only ever grows the last star's run: O(len(p) * len(s)),
+    // where trying every split among the stars was exponential in them.
+    var pi: usize = 0;
+    var si: usize = 0;
+    var star: ?usize = null;
+    var taken: usize = 0;
+    while (si < s.len) {
+        if (pi < p.len and p[pi] != '*' and (p[pi] == '?' or p[pi] == s[si])) {
+            pi += 1;
+            si += 1;
+        } else if (pi < p.len and p[pi] == '*') {
+            star = pi;
+            pi += 1;
+            taken = si;
+        } else if (star) |at| {
+            pi = at + 1;
+            taken += 1;
+            si = taken;
+        } else return false;
     }
-    if (s.len == 0) return false;
-    return (p[0] == '?' or p[0] == s[0]) and glob(p[1..], s[1..]);
+    while (pi < p.len and p[pi] == '*') pi += 1;
+    return pi == p.len;
 }
 
 const testing = std.testing;
@@ -337,4 +362,253 @@ test "§13.7.3 resolving multiple path specifications" {
     try testing.expectEqualStrings("work", map.libraryOf("/proj/tb/top.v").lib);
     // A directory specification is not recursive.
     try testing.expectEqualStrings("work", map.libraryOf("/proj/lib1/sub/bar.v").lib);
+}
+
+test "Tokens: words, quoted strings, `,` and `;`, and comments only where a word could start" {
+    var t: Tokens = .{ .text = "library lib1 \"a b.v\",lib/*.v; // tail\n/* block */ include x;" };
+    for ([_][]const u8{ "library", "lib1", "\"a b.v\"", ",", "lib/*.v", ";", "include", "x", ";" }) |w|
+        try testing.expectEqualStrings(w, t.next().?.text);
+    try testing.expect(t.next() == null);
+    // An unterminated string or comment runs to the end of the text.
+    var q: Tokens = .{ .text = "\"open" };
+    try testing.expectEqualStrings("\"open", q.next().?.text);
+    try testing.expect(q.next() == null);
+    var c: Tokens = .{ .text = "a /* open" };
+    try testing.expectEqualStrings("a", c.next().?.text);
+    try testing.expect(c.next() == null);
+    // `start` is the byte the diagnostic points at.
+    var s: Tokens = .{ .text = "  ab ;" };
+    try testing.expectEqual(@as(u32, 2), s.next().?.start);
+    try testing.expectEqual(@as(u32, 5), s.next().?.start);
+}
+
+test "isIdentifier is a simple identifier; unquote strips one pair of quotes" {
+    for ([_][]const u8{ "lib1", "_a$", "A_b9" }) |w| try testing.expect(isIdentifier(w));
+    for ([_][]const u8{ "", "1a", "$a", "a-b", "\"a\"" }) |w| try testing.expect(!isIdentifier(w));
+    try testing.expectEqualStrings("a b", unquote("\"a b\""));
+    try testing.expectEqualStrings("\"a", unquote("\"a"));
+    try testing.expectEqualStrings("", unquote("\"\""));
+    try testing.expectEqualStrings("a", unquote("a"));
+}
+
+test "resolveSpec classes a specification by its last name and resolves it against the map's directory" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, []const u8, Class };
+    for ([_]Case{
+        .{ "a.v", "/m/a.v", .file },
+        .{ "rtl/*.v", "/m/rtl/*.v", .wildcard },
+        .{ "a?.v", "/m/a?.v", .wildcard },
+        // §13.2.1.1 classes by the file name: `...` in a directory does not
+        // make an explicit file name a wildcard.
+        .{ ".../a.v", "/m/.../a.v", .file },
+        .{ "rtl/...", "/m/rtl/...", .wildcard },
+        .{ "rtl/", "/m/rtl/*", .directory },
+        .{ "/abs/x.v", "/abs/x.v", .file },
+        .{ "../up/x.v", "/up/x.v", .file },
+    }) |c| {
+        const s = try resolveSpec(a, "/m", c[0]);
+        try testing.expectEqualStrings(c[1], s.pattern);
+        try testing.expectEqual(c[2], s.class);
+    }
+}
+
+test "matches: `?` is one character, `*` stays inside one name, `...` spans any number of directories" {
+    const Case = struct { []const u8, []const u8, bool };
+    for ([_]Case{
+        .{ "/p/a?.v", "/p/ab.v", true },
+        .{ "/p/a?.v", "/p/a.v", false },
+        .{ "/p/a?.v", "/p/abc.v", false },
+        .{ "/p/*.v", "/p/x/y.v", false },
+        .{ "/p/*.v", "/p/.v", true },
+        .{ "/p/*", "/p/x", true },
+        .{ "/p/.../x.v", "/p/x.v", true },
+        .{ "/p/.../x.v", "/p/a/b/c/x.v", true },
+        .{ "/p/.../x.v", "/q/x.v", false },
+        // `...` names directories: a pattern ending in it holds no file.
+        .{ "/p/...", "/p/x.v", false },
+        .{ "/p/a.v", "/p/a.v", true },
+        .{ "/p/a.v", "/p", false },
+    }) |c| try testing.expectEqual(c[2], matches(c[0], c[1]));
+}
+
+/// Independent oracle for `glob`: the textbook dynamic program, `dp[i][j]`
+/// true when the first `i` pattern characters match the first `j` of `s`.
+fn testGlobOracle(p: []const u8, s: []const u8) bool {
+    var dp: [8][8]bool = @splat(@splat(false));
+    dp[0][0] = true;
+    for (1..p.len + 1) |i| {
+        dp[i][0] = p[i - 1] == '*' and dp[i - 1][0];
+        for (1..s.len + 1) |j| {
+            if (p[i - 1] == '*') {
+                dp[i][j] = dp[i - 1][j] or dp[i][j - 1];
+            } else {
+                dp[i][j] = dp[i - 1][j - 1] and (p[i - 1] == '?' or p[i - 1] == s[j - 1]);
+            }
+        }
+    }
+    return dp[p.len][s.len];
+}
+
+test "glob agrees with a dynamic-programming oracle on every short pattern and name" {
+    // Exhaustive: patterns of up to 4 characters over `a b * ?` against
+    // names of up to 5 over `a b`.
+    const alphabet = "ab*?";
+    var pbuf: [4]u8 = undefined;
+    var sbuf: [5]u8 = undefined;
+    for (0..5) |plen| {
+        for (0..std.math.pow(usize, 4, plen)) |pi| {
+            var x = pi;
+            for (pbuf[0..plen]) |*ch| {
+                ch.* = alphabet[x % 4];
+                x /= 4;
+            }
+            for (0..6) |slen| {
+                for (0..@as(usize, 1) << @intCast(slen)) |si| {
+                    for (sbuf[0..slen], 0..) |*ch, k| ch.* = if ((si >> @intCast(k)) & 1 == 0) 'a' else 'b';
+                    try testing.expectEqual(testGlobOracle(pbuf[0..plen], sbuf[0..slen]), glob(pbuf[0..plen], sbuf[0..slen]));
+                }
+            }
+        }
+    }
+}
+
+test "glob stays fast on a pattern of many stars against a long name" {
+    // A matcher that backtracks over every split of the name among the stars
+    // tries about C(60, 14) of them here before answering.
+    const pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+    var name: [60]u8 = @splat('a');
+    try testing.expect(!glob(pattern, &name));
+    name[59] = 'b';
+    try testing.expect(glob(pattern, &name));
+}
+
+test "libraryOf: a better class ends a tie, and a tie names the first two libraries" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const map: Map = .{ .libraries = &.{
+        .{ .name = "w1", .specs = &.{try resolveSpec(a, "/p", "*.v")} },
+        .{ .name = "w2", .specs = &.{try resolveSpec(a, "/p", "?.v")} },
+        .{ .name = "w3", .specs = &.{try resolveSpec(a, "/p", "x*")} },
+        .{ .name = "d", .specs = &.{try resolveSpec(a, "/p", "./")} },
+        .{ .name = "f", .specs = &.{ try resolveSpec(a, "/p", "y.v"), try resolveSpec(a, "/p", "*.v") } },
+    } };
+    // x.v: three libraries tie on a wildcard (the directory is less specific).
+    const tie = map.libraryOf("/p/x.v").ambiguous;
+    try testing.expectEqualStrings("w1", tie[0]);
+    try testing.expectEqualStrings("w2", tie[1]);
+    // y.v: `f`'s explicit file name beats the wildcards that tied before it.
+    try testing.expectEqualStrings("f", map.libraryOf("/p/y.v").lib);
+    // z.txt: only the directory specification matches.
+    try testing.expectEqualStrings("d", map.libraryOf("/p/z.txt").lib);
+}
+
+test "§13.5.1 order is declaration order, with `work` last unless a map declares it" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { Map, []const []const u8 };
+    for ([_]Case{
+        .{ .{}, &.{"work"} },
+        .{ .{ .libraries = &.{ .{ .name = "b", .specs = &.{} }, .{ .name = "a", .specs = &.{} } } }, &.{ "b", "a", "work" } },
+        .{ .{ .libraries = &.{ .{ .name = "x", .specs = &.{} }, .{ .name = "work", .specs = &.{} } } }, &.{ "x", "work" } },
+    }) |c| {
+        const got = try c[0].order(a);
+        try testing.expectEqual(c[1].len, got.len);
+        for (c[1], got) |want, name| try testing.expectEqualStrings(want, name);
+    }
+    const map: Map = .{ .libraries = &.{ .{ .name = "x", .specs = &.{} }, .{ .name = "y", .specs = &.{} } } };
+    try testing.expectEqual(@as(?usize, 1), map.declares("y"));
+    try testing.expectEqual(@as(?usize, null), map.declares("work"));
+}
+
+const test_map =
+    \\// §13.2.1: a library declaration, then an include.
+    \\library rtl rtl/*.v, "q/x.v" -incdir inc, "inc 2";
+    \\include sub/more.map;
+    \\
+;
+
+test "§13.2.2 load reads library and include statements, and a library declared twice holds both" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try tmp.dir.createDirPath(io, "sub");
+    try tmp.dir.writeFile(io, .{ .sub_path = "lib.map", .data = test_map });
+    try tmp.dir.writeFile(io, .{ .sub_path = "sub/more.map", .data = "library rtl gates/;\nlibrary gl *.vg;\n" });
+    const path: []const u8 = try tmp.dir.realPathFileAlloc(io, "lib.map", a);
+    var bag: diag.Bag = .init(a);
+    const map = try load(a, io, &bag, &.{path});
+    try testing.expectEqual(@as(usize, 0), bag.count());
+    try testing.expectEqual(@as(usize, 2), map.libraries.len);
+    const rtl = map.libraries[0];
+    try testing.expectEqualStrings("rtl", rtl.name);
+    try testing.expectEqual(@as(usize, 3), rtl.specs.len);
+    try testing.expect(std.mem.endsWith(u8, rtl.specs[0].pattern, "/rtl/*.v") and rtl.specs[0].class == .wildcard);
+    try testing.expect(std.mem.endsWith(u8, rtl.specs[1].pattern, "/q/x.v") and rtl.specs[1].class == .file);
+    // An included map's relative paths are relative to that map.
+    try testing.expect(std.mem.endsWith(u8, rtl.specs[2].pattern, "/sub/gates/*") and rtl.specs[2].class == .directory);
+    try testing.expectEqualStrings("gl", map.libraries[1].name);
+    try testing.expectEqual(@as(usize, 2), map.incdirs.len);
+    try testing.expect(std.mem.endsWith(u8, map.incdirs[0], "/inc"));
+    try testing.expect(std.mem.endsWith(u8, map.incdirs[1], "/inc 2"));
+}
+
+/// Loads `text` as `bad.map` in `tmp`, requires one E0244 refusal, and
+/// returns its message (allocated in `a`).
+fn testLoadRefusal(a: std.mem.Allocator, tmp: *std.testing.TmpDir, name: []const u8, text: []const u8) ![]const u8 {
+    const io = testing.io;
+    try tmp.dir.writeFile(io, .{ .sub_path = name, .data = text });
+    const path: []const u8 = try tmp.dir.realPathFileAlloc(io, name, a);
+    var bag: diag.Bag = .init(a);
+    try testing.expectError(error.MapFailed, load(a, io, &bag, &.{path}));
+    try testing.expectEqual(@as(usize, 1), bag.count());
+    try testing.expectEqual(diag.Code.E0244, bag.at(0).code);
+    return bag.at(0).message;
+}
+
+test "§13.2.2 Syntax 13-2: every malformed statement is E0244 naming what it found" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, []const u8 };
+    for ([_]Case{
+        .{ "config c;", "a library map holds `library` and `include` statements only" },
+        .{ "library 1x a.v;", "`1x` is not a library_identifier" },
+        .{ "library", "`library` names no library" },
+        .{ "library lib a.v", "a library declaration ends with `;`" },
+        .{ "library lib ;", "needs a file_path_spec here (Syntax 13-2), found `;`" },
+        .{ "library lib a.v b.v;", "found `b.v`: file_path_specs are separated by `,`" },
+        // A.1.1: the `-incdir` list follows at least one file_path_spec.
+        .{ "library lib -incdir x;", "needs a file_path_spec here (Syntax 13-2), found `-incdir`" },
+        .{ "library lib a.v, -incdir x;", "needs a file_path_spec here (Syntax 13-2), found `-incdir`" },
+        .{ "library lib a.v -incdir ;", "`-incdir` needs a file_path_spec here" },
+        .{ "library lib a.v -incdir x y;", "found `y`: -incdir file_path_specs are separated by `,`" },
+        .{ "library lib a.v -incdir x", "a library declaration ends with `;`" },
+        .{ "include ;", "`include` names no file_path_spec" },
+        .{ "include", "`include` names no file_path_spec" },
+        .{ "include x.map", "an `include` statement ends with `;`" },
+        .{ "include x.map y;", "found `y`: an `include` statement ends with `;`" },
+        .{ "include missing.map;", "cannot read library map" },
+        // A map that includes itself stops at the nesting bound.
+        .{ "include bad.map;", "nested deeper than 32" },
+    }) |c| {
+        const msg = try testLoadRefusal(a, &tmp, "bad.map", c[0]);
+        if (std.mem.find(u8, msg, c[1]) == null) {
+            std.debug.print("`{s}`: got \"{s}\", want \"{s}\"\n", .{ c[0], msg, c[1] });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // A top-level map that cannot be read has no file to point into.
+    var bag: diag.Bag = .init(a);
+    try testing.expectError(error.MapFailed, load(a, testing.io, &bag, &.{"/nonexistent-vera-dir/x.map"}));
+    try testing.expectEqual(@as(usize, 1), bag.count());
+    try testing.expect(std.mem.find(u8, bag.at(0).message, "cannot read library map") != null);
 }

@@ -30,18 +30,24 @@ pub const Arithmetic = enum(u3) { add, subtract, multiply, divide, remainder };
 /// A four-state integer of any width. Both planes are one allocation, owned by
 /// the allocator the producing call was given; free `planes` to release it.
 /// Widths share the AST's u32 address space; an unsized literal is at least 64
-/// bits wide.
+/// bits wide. Every operation keeps the bits above `width` in each plane's
+/// last word zero, and reads only the declared bits of its operands.
 pub const Literal = struct {
+    /// Declared bits, at least 1.
     width: u32,
+    /// Written with a §2.6.1 size; an unsized literal's width is VerA's.
     sized: bool,
     signed: bool,
+    /// The value plane then the unknown plane, equal halves.
     planes: []u64,
 
-    /// Returns the value plane, least significant word first.
+    /// Returns the value plane, least significant word first. It can be
+    /// longer than `width` needs: a `parse`d unsized decimal keeps the words
+    /// it reserved, all zero above its value.
     pub fn values(self: Literal) []u64 {
         return self.planes[0 .. self.planes.len / 2];
     }
-    /// Returns the unknown plane; a set bit is X or Z.
+    /// Returns the unknown plane, laid out as `values`; a set bit is X or Z.
     pub fn unknowns(self: Literal) []u64 {
         return self.planes[self.planes.len / 2 ..];
     }
@@ -50,7 +56,9 @@ pub const Literal = struct {
         return !std.mem.allEqual(u64, self.unknowns(), 0);
     }
     /// Returns the value as an i64, sign-extended when `signed`. Null when the
-    /// literal is wider than 64 bits or holds an X or Z bit.
+    /// literal is wider than 64 bits or holds an X or Z bit. A 64-bit unsigned
+    /// value comes back as its bit pattern, negative from 2^63 up: the i64 is
+    /// the carrier the analog integer path reads, not a numeric conversion.
     pub fn asInt(self: Literal) ?i64 {
         if (self.width > 64 or self.hasUnknown()) return null;
         var bits = self.values()[0];
@@ -58,9 +66,10 @@ pub const Literal = struct {
             bits |= ~mask(self.width);
         return @bitCast(bits);
     }
-    /// Returns the numeric value when an i64 holds it exactly, at any width:
-    /// a wider literal qualifies when every bit above bit 63 repeats bit 63
-    /// (signed) or is 0 with bit 63 clear (unsigned). Null on an X or Z bit.
+    /// Returns the value as an i64 at any width: at 64 bits or fewer it is
+    /// `asInt`, and a wider literal qualifies when every bit above bit 63
+    /// repeats bit 63 (signed) or is 0 with bit 63 clear (unsigned), so its
+    /// numeric value is the i64's. Null on an X or Z bit.
     pub fn asExactInt(self: Literal) ?i64 {
         if (self.width <= 64) return self.asInt();
         if (self.hasUnknown()) return null;
@@ -74,10 +83,11 @@ pub const Literal = struct {
         }
         return low;
     }
-    /// A self-determined address (§5.2.1/§5.2.2), null on any x/z bit.
-    /// Retain values beyond i64 so a part-select based just outside a
-    /// declaration can still overlap it. Saturate only beyond i128: those
-    /// values cannot overlap an i64 declaration with a u32 select width.
+    /// Returns the value as a self-determined address (§5.2.1/§5.2.2), null
+    /// on any x/z bit. Values beyond i64 are kept so a part-select based just
+    /// outside a declaration can still overlap it; beyond i128 the result
+    /// saturates to maxInt(i128) or minInt(i128) by sign, since such a value
+    /// cannot overlap an i64 declaration with a u32 select width.
     pub fn asIndex(self: Literal) ?i128 {
         if (self.hasUnknown()) return null;
         const negative = self.signed and self.bit(self.width - 1) == .one;
@@ -122,7 +132,10 @@ pub const Literal = struct {
     }
 
     /// Joins self-determined operands, leftmost at the most significant end
-    /// (IEEE 1364-2005 §5.1.14). The result is unsigned and owns its planes.
+    /// (IEEE 1364-2005 §5.1.14). The result is unsigned; caller owns its
+    /// planes and frees them with `allocator`. Fails with `ZeroSize` for no
+    /// parts or a zero-width part and `Overflow` when the widths sum past
+    /// u32, both before allocating.
     pub fn concatenate(allocator: std.mem.Allocator, parts: []const Literal) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         var width: u32 = 0;
         for (parts) |part| {
@@ -140,9 +153,11 @@ pub const Literal = struct {
         return out;
     }
 
-    /// Repeats an already evaluated operand `count` times, unsigned. Zero
-    /// replication is a source-level exception inside a larger concat; it never
-    /// creates a zero-width Literal.
+    /// Repeats an already evaluated operand `count` times, unsigned; caller
+    /// owns the result's planes and frees them with `allocator`. Zero
+    /// replication is a source-level exception inside a larger concat; it
+    /// never creates a zero-width Literal: `count == 0` fails with `ZeroSize`,
+    /// and a width past u32 with `Overflow`, both before allocating.
     pub fn replicate(self: Literal, allocator: std.mem.Allocator, count: u32) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         if (self.width == 0 or count == 0) return error.ZeroSize;
         const width = std.math.mul(u32, self.width, count) catch return error.Overflow;
@@ -172,6 +187,7 @@ pub const Literal = struct {
     }
 
     /// Returns `~self` (IEEE 1364-2005 Table 5-16). X and Z both negate to X.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn bitwiseNot(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         for (out.values(), out.unknowns(), 0..) |*v, *u, i| {
@@ -185,6 +201,7 @@ pub const Literal = struct {
     /// Applies a bitwise operator (IEEE 1364-2005 Tables 5-12 to 5-15, §§5.4
     /// and 5.5). Self-determined result
     /// sizing only: a surrounding expression must propagate its context first.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn bitwise(self: Literal, allocator: std.mem.Allocator, op: Bitwise, rhs: Literal) std.mem.Allocator.Error!Literal {
         const signed = self.signed and rhs.signed;
         const extension: Extension = if (signed) .sign else .zero;
@@ -221,6 +238,8 @@ pub const Literal = struct {
     /// Results wrap at that width; X/Z in either operand and division/remainder
     /// by zero produce all X. Signed division truncates toward zero, and the
     /// remainder has the dividend's sign. Inputs and output never alias.
+    /// Caller owns the result's planes and frees them with `allocator`; a
+    /// failed allocation frees every intermediate.
     pub fn arithmetic(self: Literal, allocator: std.mem.Allocator, op: Arithmetic, rhs: Literal) std.mem.Allocator.Error!Literal {
         return self.arithmeticIn(allocator, op, rhs, @max(self.width, rhs.width) <= 64);
     }
@@ -293,7 +312,8 @@ pub const Literal = struct {
 
     /// Returns `-self`. Unary minus retains the operand width and signedness,
     /// including wrap at the most negative value. Any X/Z bit makes the entire
-    /// result X.
+    /// result X. Caller owns the result's planes and frees them with
+    /// `allocator`.
     pub fn negate(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         return self.negateIn(allocator, self.width <= 64);
     }
@@ -323,7 +343,9 @@ pub const Literal = struct {
     /// 5-8). The caller propagates the
     /// result context to the base first; the exponent keeps its own size and
     /// signedness. Integer results wrap at the base width. Any declared X/Z
-    /// bit yields all X, including an unknown base raised to zero.
+    /// bit yields all X, including an unknown base raised to zero. Caller owns
+    /// the result's planes and frees them with `allocator`. This operation is
+    /// O(exponent bits) multiplications at the base width.
     pub fn power(self: Literal, allocator: std.mem.Allocator, exponent: Literal) std.mem.Allocator.Error!Literal {
         return self.powerIn(allocator, exponent, self.width <= 64);
     }
@@ -426,7 +448,9 @@ pub const Literal = struct {
     /// Shifts `self` by `rhs` (IEEE 1364-2005 §5.1.12). The caller propagates
     /// the expression's result width/type to self first (§§5.4–5.5); rhs is
     /// self-determined, unsigned, and cannot change the result width or
-    /// signedness. Shifted X/Z survive.
+    /// signedness. Shifted X/Z survive; an X/Z bit in `rhs` makes the whole
+    /// result X. Caller owns the result's planes and frees them with
+    /// `allocator`.
     pub fn shift(self: Literal, allocator: std.mem.Allocator, op: Shift, rhs: Literal) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         if (rhs.hasUnknown()) {
@@ -591,6 +615,7 @@ pub const Literal = struct {
     /// sentence does not override the prior signed normalization.
     /// Inputs are already evaluated values, so expression short-circuiting is
     /// the caller's responsibility. Outer context sizing is as for `bitwise`.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn conditional(self: Literal, allocator: std.mem.Allocator, yes: Literal, no: Literal) std.mem.Allocator.Error!Literal {
         const signed = yes.signed and no.signed;
         const extension: Extension = if (signed) .sign else .zero;
@@ -658,15 +683,16 @@ fn mask(width: u32) u64 {
     return if (n == 0) std.math.maxInt(u64) else (@as(u64, 1) << n) - 1;
 }
 
-/// The widest size a number literal may give (E1019). 1364-2005 §4.3.1 asks
-/// a tool for vectors of 65536 bits; this is 256 times that, and the planes
-/// a literal allocates stay at 4 MiB.
+/// The widest a number literal may be (E1019), by its size or, unsized, by
+/// the width its digits need. 1364-2005 §4.3.1 asks a tool for vectors of
+/// 65536 bits; this is 256 times that, and the planes a literal allocates
+/// stay at 4 MiB.
 pub const max_width: u32 = 1 << 24;
 
 /// §2.6.1 the radix `text`'s base format names: 2, 8, 10 or 16, and 10 for
 /// a literal without one. `text` is one `parse` accepted.
 pub fn radixOf(text: []const u8) u8 {
-    const q = std.mem.indexOfScalar(u8, text, '\'') orelse return 10;
+    const q = std.mem.findScalar(u8, text, '\'') orelse return 10;
     var i = q + 1;
     if (i < text.len and (text[i] == 's' or text[i] == 'S')) i += 1;
     if (i >= text.len) return 10;
@@ -682,14 +708,22 @@ pub fn radixOf(text: []const u8) u8 {
 /// white space allowed around the base) into a `Literal` whose planes are
 /// allocated from `arena`; the caller owns them. A sized value wider than its
 /// size is truncated from the left. An unsized literal is at least 64 bits
-/// wide and, when it has no X or Z digit, only as wide as its value needs.
+/// wide and, when it has no X or Z digit, only as wide as its value needs. A
+/// simple decimal number (no base format) is signed (§2.6.1) and gets no
+/// extra sign bit, so one of 2^63 or more has its top bit set and reads
+/// negative.
+///
+/// Fails with `MissingBase` for a `'` with no base letter, `MissingDigits`
+/// for no digits, `ZeroSize` for a size of 0, `DigitOutOfRange` for a digit
+/// the base does not have (an X/Z digit in a simple decimal, a size with a
+/// leading 0) and `Overflow` when the width passes `max_width`.
 pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Allocator.Error)!Literal {
     var digits = text;
     var radix: u8 = 10;
     var width: u32 = 0;
     var sized = false;
     var signed = true;
-    if (std.mem.indexOfScalar(u8, text, '\'')) |q| {
+    if (std.mem.findScalar(u8, text, '\'')) |q| {
         var i = q + 1;
         signed = false;
         if (i < text.len and (text[i] == 's' or text[i] == 'S')) {
@@ -731,13 +765,31 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         }
     }
     if (count == 0) return error.MissingDigits;
-    if (any_unknown and std.mem.indexOfScalar(u8, text, '\'') == null) return error.DigitOutOfRange;
+    if (any_unknown and std.mem.findScalar(u8, text, '\'') == null) return error.DigitOutOfRange;
     if (radix == 10 and any_unknown and count != 1) return error.DigitOutOfRange;
     const shift: u3 = switch (radix) {
         2 => 1,
         8 => 3,
         else => 4,
     };
+    if (!sized) {
+        // E1019 bounds the width an unsized literal's digits need, checked
+        // before the planes exist: x/z digits fill `count * shift` bits, and
+        // known ones at least the first significant digit's bit plus `shift`
+        // per digit after it (decimal: log2(10) > 3.3219). This lower bound
+        // never refuses a literal that fits; the trimmed width is checked
+        // again below.
+        const least: u64 = if (any_unknown) @as(u64, count) * shift else blk: {
+            var significant: u64 = 0;
+            for (digits) |c| {
+                if (c == '_' or (c == '0' and significant == 0)) continue;
+                significant += 1;
+            }
+            if (significant == 0) break :blk 0;
+            break :blk if (radix == 10) (significant - 1) * 33219 / 10000 + 1 else (significant - 1) * shift + 1;
+        };
+        if (least > max_width) return error.Overflow;
+    }
     // Decimal gets an upper bound while accumulating, then loses unused limbs.
     if (!sized) width = @max(64, std.math.mul(u32, count, shift) catch return error.Overflow);
     const words = (@as(usize, width) + 63) / 64;
@@ -790,6 +842,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
             if (word != 0) actual = @intCast(i * 64 + 64 - @clz(word));
         }
         literal.width = @max(64, actual);
+        if (literal.width > max_width) return error.Overflow;
     }
     return literal;
 }
@@ -1813,4 +1866,177 @@ test "asExactInt: a wide two-state literal is an integer only when an i64 holds 
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h1_0000_0000_0000_0000")).asExactInt());
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'h8000_0000_0000_0000")).asExactInt());
     try std.testing.expectEqual(@as(?i64, null), (try parse(a, "128'hx")).asExactInt());
+}
+
+test "asInt hands a 64-bit unsigned value back as its bit pattern, and asExactInt is asInt up to 64 bits" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const top = try parse(a, "64'h8000_0000_0000_0000");
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), top.asInt());
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), top.asExactInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "64'hFFFF_FFFF_FFFF_FFFF")).asInt());
+    // Below 64 bits only a signed value is sign-extended.
+    try std.testing.expectEqual(@as(?i64, 255), (try parse(a, "8'hff")).asInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "8'shff")).asInt());
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "1'sb1")).asInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'h1")).asInt());
+    // 65 bits: a signed -1 repeats bit 63 into bit 64; 2^64 has no i64.
+    try std.testing.expectEqual(@as(?i64, -1), (try parse(a, "65'sh1_FFFF_FFFF_FFFF_FFFF")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'h1_0000_0000_0000_0000")).asExactInt());
+    try std.testing.expectEqual(@as(?i64, 5), (try parse(a, "65'h5")).asExactInt());
+    // A signed 65-bit value whose bit 64 disagrees with bit 63 is out of range.
+    try std.testing.expectEqual(@as(?i64, null), (try parse(a, "65'sh0_8000_0000_0000_0000")).asExactInt());
+}
+
+test "asIndex keeps values past i64 and saturates past i128 by sign" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try std.testing.expectEqual(@as(?i128, -1), (try parse(a, "3'sb111")).asIndex());
+    try std.testing.expectEqual(@as(?i128, 7), (try parse(a, "3'b111")).asIndex());
+    try std.testing.expectEqual(@as(?i128, null), (try parse(a, "3'b1x1")).asIndex());
+    try std.testing.expectEqual(@as(?i128, null), (try parse(a, "3'b1z1")).asIndex());
+    // 2^64 has no i64 and is kept.
+    try std.testing.expectEqual(@as(?i128, 1 << 64), (try parse(a, "80'h1_0000_0000_0000_0000")).asIndex());
+    // 128 ones: unsigned 2^128-1 is past i128 and saturates high; signed it is -1.
+    try std.testing.expectEqual(@as(?i128, std.math.maxInt(i128)), (try parse(a, "128'hFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF")).asIndex());
+    try std.testing.expectEqual(@as(?i128, -1), (try parse(a, "128'shFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF")).asIndex());
+    // -2^128 (a 129-bit signed minimum) is below i128 and saturates low.
+    try std.testing.expectEqual(@as(?i128, std.math.minInt(i128)), (try parse(a, "129'sh1_0000_0000_0000_0000_0000_0000_0000_0000")).asIndex());
+    // Wider than 128 bits with zero (or, negative, all-ones) high words fits;
+    // a set bit at 128 does not.
+    try std.testing.expectEqual(@as(?i128, 5), (try parse(a, "200'h5")).asIndex());
+    try std.testing.expectEqual(@as(?i128, -5), (try (try parse(a, "8'shfb")).resize(a, 200, .sign)).asIndex());
+    try std.testing.expectEqual(@as(?i128, std.math.maxInt(i128)), (try parse(a, "200'h1_0000_0000_0000_0000_0000_0000_0000_0000")).asIndex());
+}
+
+test "§2.6.1 an unsized literal's width: the 64-bit floor, then its value's bits" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const max = try parse(a, "9223372036854775807");
+    try std.testing.expectEqual(@as(u32, 64), max.width);
+    try std.testing.expectEqual(@as(?i64, std.math.maxInt(i64)), max.asInt());
+    try std.testing.expect(max.signed and !max.sized);
+    // 2^64 needs 65 bits.
+    const wide = try parse(a, "18446744073709551616");
+    try std.testing.expectEqual(@as(u32, 65), wide.width);
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1 }, wide.values()[0..2]);
+    // A based unsized literal is unsigned unless it says `s`.
+    const based = try parse(a, "'h8000_0000_0000_0000");
+    try std.testing.expectEqual(@as(u32, 64), based.width);
+    try std.testing.expect(!based.signed);
+    try std.testing.expectEqual(@as(?i64, std.math.minInt(i64)), based.asInt());
+    try std.testing.expect((try parse(a, "'sh1")).signed);
+    try std.testing.expectEqual(@as(u32, 64), (try parse(a, "0")).width);
+}
+
+test "parse agrees with std.fmt on random sized hex and unsized decimal numbers" {
+    // Oracle: std.fmt prints the number and a u128 holds the expected bits.
+    // The sized value is truncated from the left (§2.6.1); the decimal one
+    // is as wide as its value, never under 64.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var prng = std.Random.DefaultPrng.init(0x2611_2005);
+    const random = prng.random();
+    var buf: [96]u8 = undefined;
+    for (0..2000) |_| {
+        _ = arena_state.reset(.retain_capacity);
+        const x = random.int(u128) >> random.int(u7);
+        const w = random.intRangeAtMost(u32, 1, 128);
+        const lit = try parse(arena, try std.mem.print(&buf, "{d}'h{x}", .{ w, x }));
+        const want = if (w == 128) x else x & ((@as(u128, 1) << @intCast(w)) - 1);
+        const v = lit.values();
+        try std.testing.expectEqual(w, lit.width);
+        try std.testing.expectEqual(want, @as(u128, v[0]) | (if (v.len > 1) @as(u128, v[1]) << 64 else 0));
+        try std.testing.expect(!lit.hasUnknown() and lit.sized and !lit.signed);
+
+        const dec = try parse(arena, try std.mem.print(&buf, "{d}", .{x}));
+        const bits: u32 = 128 - @clz(x);
+        const dv = dec.values();
+        try std.testing.expectEqual(@max(@as(u32, 64), bits), dec.width);
+        try std.testing.expectEqual(x, @as(u128, dv[0]) | (if (dv.len > 1) @as(u128, dv[1]) << 64 else 0));
+        try std.testing.expect(dec.signed and !dec.sized);
+    }
+}
+
+test "E1019 bounds an unsized literal by the width its digits need" {
+    const gpa = std.testing.allocator;
+    // `'h1` and 4194304 zeros need 4194304 * 4 + 1 bits, one past `max_width`.
+    const known = try gpa.alloc(u8, 3 + 4194304);
+    defer gpa.free(known);
+    @memcpy(known[0..3], "'h1");
+    @memset(known[3..], '0');
+    try std.testing.expectError(error.Overflow, parse(gpa, known));
+    // X digits fill `count * 4` bits: 4194305 of them is past the limit.
+    const unknown = try gpa.alloc(u8, 2 + 4194305);
+    defer gpa.free(unknown);
+    @memcpy(unknown[0..2], "'h");
+    @memset(unknown[2..], 'x');
+    try std.testing.expectError(error.Overflow, parse(gpa, unknown));
+    // Leading zeros need no bits.
+    const zeros = try parse(gpa, "'h000000000000000000001");
+    defer gpa.free(zeros.planes);
+    try std.testing.expectEqual(@as(u32, 64), zeros.width);
+}
+
+test "parse: a leading x or z fills the size, digits and sizes take `_`, and malformed text names its rule" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const Case = struct { []const u8, u32, u64, u64 };
+    // §2.6.1: a number whose leftmost digit is x or z is extended with that
+    // digit; a known leftmost digit zero-extends.
+    for ([_]Case{
+        .{ "16'hz1", 16, 0x0001, 0xfff0 },
+        .{ "16'hx1", 16, 0xfff1, 0xfff0 },
+        .{ "16'h1x", 16, 0x001f, 0x000f },
+        .{ "16'h?", 16, 0x0000, 0xffff },
+        .{ "1_6'h1", 16, 0x0001, 0x0000 },
+        .{ "8'dx_", 8, 0x00ff, 0x00ff },
+        .{ "8'dz", 8, 0x0000, 0x00ff },
+        .{ "8'b1_0_1", 8, 0x0005, 0x0000 },
+        .{ " 8 'h f", 8, 0x000f, 0x0000 },
+    }) |c| {
+        const lit = try parse(a, c[0]);
+        try std.testing.expectEqual(c[1], lit.width);
+        try std.testing.expectEqual(c[2], lit.values()[0]);
+        try std.testing.expectEqual(c[3], lit.unknowns()[0]);
+    }
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'h_1"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "x"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "1 6'h1"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'o8"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "8'hg"));
+    try std.testing.expectError(error.MissingBase, parse(a, "4'q1"));
+    try std.testing.expectError(error.MissingBase, parse(a, "'"));
+    try std.testing.expectError(error.MissingBase, parse(a, "8's"));
+    try std.testing.expectError(error.MissingDigits, parse(a, "8'h "));
+    try std.testing.expectError(error.MissingDigits, parse(a, ""));
+    try std.testing.expectEqual(@as(u8, 10), radixOf("4'sD1"));
+    try std.testing.expectEqual(@as(u8, 2), radixOf("'B1"));
+    try std.testing.expectEqual(@as(u8, 10), radixOf("8'"));
+}
+
+fn testOneAllocation(allocator: std.mem.Allocator) !void {
+    const a = try parse(allocator, "70'sh2f_0123_4567_89ab_cdef");
+    defer allocator.free(a.planes);
+    const count = try parse(allocator, "7'd3");
+    defer allocator.free(count.planes);
+    const inverted = try a.bitwiseNot(allocator);
+    defer allocator.free(inverted.planes);
+    const xor = try a.bitwise(allocator, .xor_bits, count);
+    defer allocator.free(xor.planes);
+    const wide = try a.resize(allocator, 130, .sign);
+    defer allocator.free(wide.planes);
+    const shifted = try a.shift(allocator, .arithmetic_right, count);
+    defer allocator.free(shifted.planes);
+    const merged = try count.conditional(allocator, a, count);
+    defer allocator.free(merged.planes);
+}
+
+test "an allocation failure in a one-allocation operation leaks nothing" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOneAllocation, .{});
 }
