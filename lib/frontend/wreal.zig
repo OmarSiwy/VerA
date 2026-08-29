@@ -34,7 +34,7 @@ pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) s
             } else continue;
             for (inst.ports, 0..) |conn, i| {
                 if (conn.expr == .none or ex.tag(conn.expr) != .ident) continue;
-                const port = if (conn.name == .none) (if (i < child.ports.len) child.ports[i] else continue) else for (child.ports) |p| {
+                const port = if (conn.name == .none) (nthPort(child.ports, i) orelse continue) else for (child.ports) |p| {
                     if (p.connName() == conn.name) break p;
                 } else continue;
                 // A name the parent never declared as a net is a variable
@@ -61,6 +61,18 @@ fn wrealDrivers(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag
         const start = starts[@min(a.main_tok, starts.len - 1)];
         try bag.add(.lower, .E0918, .{ .start = start, .end = start }, "`{s}` is already driven", .{file.str(name)});
     }
+}
+
+// The `n`-th A.1.3 port of `ports`, or null past the last. The parts of a
+// concatenated port after its first (`concat_rest`) are the same port.
+fn nthPort(ports: []const Ast.Port, n: usize) ?Ast.Port {
+    var k: usize = 0;
+    for (ports) |p| {
+        if (p.concat_rest) continue;
+        if (k == n) return p;
+        k += 1;
+    }
+    return null;
 }
 
 /// The declared net type of `name` in `m`, or null if `m` declares no such net.

@@ -240,6 +240,8 @@ pub fn stmtEdges(self: *const SourceFile, id: StmtId, v: anytype) !void {
         .assign => |a| {
             try v.expr(a.target, .write);
             try v.expr(a.value, .read);
+            // IEEE 1364-2005 §9.7.7: `repeat (count)` precedes its event control.
+            try v.expr(a.timing_repeat, .read);
             try v.expr(a.timing, .read);
         },
         .contribute => |c| {

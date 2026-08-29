@@ -494,6 +494,8 @@ pub const TimingCheck = struct {
     /// Asserts each of `from` and `to` is `0`, `1`, `x` or `z`, lower case;
     /// the parser folds a descriptor's case before calling.
     pub fn transition(from: u8, to: u8) u8 {
+        std.debug.assert(std.mem.findScalar(u8, "01xz", from) != null);
+        std.debug.assert(std.mem.findScalar(u8, "01xz", to) != null);
         const f: u8 = if (from == 'z') 'x' else from;
         const t: u8 = if (to == 'z') 'x' else to;
         if (f == t) return 0;
