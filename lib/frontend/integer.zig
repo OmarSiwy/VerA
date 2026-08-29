@@ -30,18 +30,24 @@ pub const Arithmetic = enum(u3) { add, subtract, multiply, divide, remainder };
 /// A four-state integer of any width. Both planes are one allocation, owned by
 /// the allocator the producing call was given; free `planes` to release it.
 /// Widths share the AST's u32 address space; an unsized literal is at least 64
-/// bits wide.
+/// bits wide. Every operation keeps the bits above `width` in each plane's
+/// last word zero, and reads only the declared bits of its operands.
 pub const Literal = struct {
+    /// Declared bits, at least 1.
     width: u32,
+    /// Written with a §2.6.1 size; an unsized literal's width is VerA's.
     sized: bool,
     signed: bool,
+    /// The value plane then the unknown plane, equal halves.
     planes: []u64,
 
-    /// Returns the value plane, least significant word first.
+    /// Returns the value plane, least significant word first. It can be
+    /// longer than `width` needs: a `parse`d unsized decimal keeps the words
+    /// it reserved, all zero above its value.
     pub fn values(self: Literal) []u64 {
         return self.planes[0 .. self.planes.len / 2];
     }
-    /// Returns the unknown plane; a set bit is X or Z.
+    /// Returns the unknown plane, laid out as `values`; a set bit is X or Z.
     pub fn unknowns(self: Literal) []u64 {
         return self.planes[self.planes.len / 2 ..];
     }
@@ -50,7 +56,9 @@ pub const Literal = struct {
         return !std.mem.allEqual(u64, self.unknowns(), 0);
     }
     /// Returns the value as an i64, sign-extended when `signed`. Null when the
-    /// literal is wider than 64 bits or holds an X or Z bit.
+    /// literal is wider than 64 bits or holds an X or Z bit. A 64-bit unsigned
+    /// value comes back as its bit pattern, negative from 2^63 up: the i64 is
+    /// the carrier the analog integer path reads, not a numeric conversion.
     pub fn asInt(self: Literal) ?i64 {
         if (self.width > 64 or self.hasUnknown()) return null;
         var bits = self.values()[0];
@@ -58,9 +66,10 @@ pub const Literal = struct {
             bits |= ~mask(self.width);
         return @bitCast(bits);
     }
-    /// Returns the numeric value when an i64 holds it exactly, at any width:
-    /// a wider literal qualifies when every bit above bit 63 repeats bit 63
-    /// (signed) or is 0 with bit 63 clear (unsigned). Null on an X or Z bit.
+    /// Returns the value as an i64 at any width: at 64 bits or fewer it is
+    /// `asInt`, and a wider literal qualifies when every bit above bit 63
+    /// repeats bit 63 (signed) or is 0 with bit 63 clear (unsigned), so its
+    /// numeric value is the i64's. Null on an X or Z bit.
     pub fn asExactInt(self: Literal) ?i64 {
         if (self.width <= 64) return self.asInt();
         if (self.hasUnknown()) return null;
@@ -74,10 +83,11 @@ pub const Literal = struct {
         }
         return low;
     }
-    /// A self-determined address (§5.2.1/§5.2.2), null on any x/z bit.
-    /// Retain values beyond i64 so a part-select based just outside a
-    /// declaration can still overlap it. Saturate only beyond i128: those
-    /// values cannot overlap an i64 declaration with a u32 select width.
+    /// Returns the value as a self-determined address (§5.2.1/§5.2.2), null
+    /// on any x/z bit. Values beyond i64 are kept so a part-select based just
+    /// outside a declaration can still overlap it; beyond i128 the result
+    /// saturates to maxInt(i128) or minInt(i128) by sign, since such a value
+    /// cannot overlap an i64 declaration with a u32 select width.
     pub fn asIndex(self: Literal) ?i128 {
         if (self.hasUnknown()) return null;
         const negative = self.signed and self.bit(self.width - 1) == .one;
@@ -122,7 +132,10 @@ pub const Literal = struct {
     }
 
     /// Joins self-determined operands, leftmost at the most significant end
-    /// (IEEE 1364-2005 §5.1.14). The result is unsigned and owns its planes.
+    /// (IEEE 1364-2005 §5.1.14). The result is unsigned; caller owns its
+    /// planes and frees them with `allocator`. Fails with `ZeroSize` for no
+    /// parts or a zero-width part and `Overflow` when the widths sum past
+    /// u32, both before allocating.
     pub fn concatenate(allocator: std.mem.Allocator, parts: []const Literal) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         var width: u32 = 0;
         for (parts) |part| {
@@ -140,9 +153,11 @@ pub const Literal = struct {
         return out;
     }
 
-    /// Repeats an already evaluated operand `count` times, unsigned. Zero
-    /// replication is a source-level exception inside a larger concat; it never
-    /// creates a zero-width Literal.
+    /// Repeats an already evaluated operand `count` times, unsigned; caller
+    /// owns the result's planes and frees them with `allocator`. Zero
+    /// replication is a source-level exception inside a larger concat; it
+    /// never creates a zero-width Literal: `count == 0` fails with `ZeroSize`,
+    /// and a width past u32 with `Overflow`, both before allocating.
     pub fn replicate(self: Literal, allocator: std.mem.Allocator, count: u32) (std.mem.Allocator.Error || error{ ZeroSize, Overflow })!Literal {
         if (self.width == 0 or count == 0) return error.ZeroSize;
         const width = std.math.mul(u32, self.width, count) catch return error.Overflow;
@@ -172,6 +187,7 @@ pub const Literal = struct {
     }
 
     /// Returns `~self` (IEEE 1364-2005 Table 5-16). X and Z both negate to X.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn bitwiseNot(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         for (out.values(), out.unknowns(), 0..) |*v, *u, i| {
@@ -185,6 +201,7 @@ pub const Literal = struct {
     /// Applies a bitwise operator (IEEE 1364-2005 Tables 5-12 to 5-15, §§5.4
     /// and 5.5). Self-determined result
     /// sizing only: a surrounding expression must propagate its context first.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn bitwise(self: Literal, allocator: std.mem.Allocator, op: Bitwise, rhs: Literal) std.mem.Allocator.Error!Literal {
         const signed = self.signed and rhs.signed;
         const extension: Extension = if (signed) .sign else .zero;
@@ -221,6 +238,8 @@ pub const Literal = struct {
     /// Results wrap at that width; X/Z in either operand and division/remainder
     /// by zero produce all X. Signed division truncates toward zero, and the
     /// remainder has the dividend's sign. Inputs and output never alias.
+    /// Caller owns the result's planes and frees them with `allocator`; a
+    /// failed allocation frees every intermediate.
     pub fn arithmetic(self: Literal, allocator: std.mem.Allocator, op: Arithmetic, rhs: Literal) std.mem.Allocator.Error!Literal {
         return self.arithmeticIn(allocator, op, rhs, @max(self.width, rhs.width) <= 64);
     }
@@ -293,7 +312,8 @@ pub const Literal = struct {
 
     /// Returns `-self`. Unary minus retains the operand width and signedness,
     /// including wrap at the most negative value. Any X/Z bit makes the entire
-    /// result X.
+    /// result X. Caller owns the result's planes and frees them with
+    /// `allocator`.
     pub fn negate(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
         return self.negateIn(allocator, self.width <= 64);
     }
@@ -323,7 +343,9 @@ pub const Literal = struct {
     /// 5-8). The caller propagates the
     /// result context to the base first; the exponent keeps its own size and
     /// signedness. Integer results wrap at the base width. Any declared X/Z
-    /// bit yields all X, including an unknown base raised to zero.
+    /// bit yields all X, including an unknown base raised to zero. Caller owns
+    /// the result's planes and frees them with `allocator`. This operation is
+    /// O(exponent bits) multiplications at the base width.
     pub fn power(self: Literal, allocator: std.mem.Allocator, exponent: Literal) std.mem.Allocator.Error!Literal {
         return self.powerIn(allocator, exponent, self.width <= 64);
     }
@@ -426,7 +448,9 @@ pub const Literal = struct {
     /// Shifts `self` by `rhs` (IEEE 1364-2005 §5.1.12). The caller propagates
     /// the expression's result width/type to self first (§§5.4–5.5); rhs is
     /// self-determined, unsigned, and cannot change the result width or
-    /// signedness. Shifted X/Z survive.
+    /// signedness. Shifted X/Z survive; an X/Z bit in `rhs` makes the whole
+    /// result X. Caller owns the result's planes and frees them with
+    /// `allocator`.
     pub fn shift(self: Literal, allocator: std.mem.Allocator, op: Shift, rhs: Literal) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         if (rhs.hasUnknown()) {
@@ -591,6 +615,7 @@ pub const Literal = struct {
     /// sentence does not override the prior signed normalization.
     /// Inputs are already evaluated values, so expression short-circuiting is
     /// the caller's responsibility. Outer context sizing is as for `bitwise`.
+    /// Caller owns the result's planes and frees them with `allocator`.
     pub fn conditional(self: Literal, allocator: std.mem.Allocator, yes: Literal, no: Literal) std.mem.Allocator.Error!Literal {
         const signed = yes.signed and no.signed;
         const extension: Extension = if (signed) .sign else .zero;
@@ -658,15 +683,16 @@ fn mask(width: u32) u64 {
     return if (n == 0) std.math.maxInt(u64) else (@as(u64, 1) << n) - 1;
 }
 
-/// The widest size a number literal may give (E1019). 1364-2005 §4.3.1 asks
-/// a tool for vectors of 65536 bits; this is 256 times that, and the planes
-/// a literal allocates stay at 4 MiB.
+/// The widest a number literal may be (E1019), by its size or, unsized, by
+/// the width its digits need. 1364-2005 §4.3.1 asks a tool for vectors of
+/// 65536 bits; this is 256 times that, and the planes a literal allocates
+/// stay at 4 MiB.
 pub const max_width: u32 = 1 << 24;
 
 /// §2.6.1 the radix `text`'s base format names: 2, 8, 10 or 16, and 10 for
 /// a literal without one. `text` is one `parse` accepted.
 pub fn radixOf(text: []const u8) u8 {
-    const q = std.mem.indexOfScalar(u8, text, '\'') orelse return 10;
+    const q = std.mem.findScalar(u8, text, '\'') orelse return 10;
     var i = q + 1;
     if (i < text.len and (text[i] == 's' or text[i] == 'S')) i += 1;
     if (i >= text.len) return 10;
@@ -682,14 +708,21 @@ pub fn radixOf(text: []const u8) u8 {
 /// white space allowed around the base) into a `Literal` whose planes are
 /// allocated from `arena`; the caller owns them. A sized value wider than its
 /// size is truncated from the left. An unsized literal is at least 64 bits
-/// wide and, when it has no X or Z digit, only as wide as its value needs.
+/// wide and, when it has no X or Z digit, only as wide as its value needs; a
+/// simple decimal number (no base format), which §2.6.1 makes signed, also
+/// keeps a sign bit, so its value is never negative.
+///
+/// Fails with `MissingBase` for a `'` with no base letter, `MissingDigits`
+/// for no digits, `ZeroSize` for a size of 0, `DigitOutOfRange` for a digit
+/// the base does not have (an X/Z digit in a simple decimal, a size with a
+/// leading 0) and `Overflow` when the width passes `max_width`.
 pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Allocator.Error)!Literal {
     var digits = text;
     var radix: u8 = 10;
     var width: u32 = 0;
     var sized = false;
     var signed = true;
-    if (std.mem.indexOfScalar(u8, text, '\'')) |q| {
+    if (std.mem.findScalar(u8, text, '\'')) |q| {
         var i = q + 1;
         signed = false;
         if (i < text.len and (text[i] == 's' or text[i] == 'S')) {
@@ -731,7 +764,7 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         }
     }
     if (count == 0) return error.MissingDigits;
-    if (any_unknown and std.mem.indexOfScalar(u8, text, '\'') == null) return error.DigitOutOfRange;
+    if (any_unknown and std.mem.findScalar(u8, text, '\'') == null) return error.DigitOutOfRange;
     if (radix == 10 and any_unknown and count != 1) return error.DigitOutOfRange;
     const shift: u3 = switch (radix) {
         2 => 1,
