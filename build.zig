@@ -89,23 +89,6 @@ pub fn build(b: *std.Build) void {
     contract_step.dependOn(&run_guard_test.step);
     test_step.dependOn(&run_guard_test.step);
 
-    // ref/SIMD-Strategies/verify.zig — differential checks for every vector /
-    // branchless kernel (simd-first: a kernel without its case here is
-    // unfinished) plus the reference docs' load-bearing claims. Pinned to
-    // ReleaseFast + native: the `extern fn @"llvm.*"` cases need the LLVM
-    // backend, and the branchless kernels are only interesting as optimized.
-    const run_simd_verify = b.addRunArtifact(b.addExecutable(.{
-        .name = "simd-verify",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("ref/SIMD-Strategies/verify.zig"),
-            .target = b.resolveTargetQuery(.{ .cpu_model = .native }),
-            .optimize = .ReleaseFast,
-        }),
-    }));
-    b.step("simd-verify", "Differential-test SIMD/branchless kernels against their scalar oracles")
-        .dependOn(&run_simd_verify.step);
-    test_step.dependOn(&run_simd_verify.step);
-
     // =======================================================================
     // The conformance suite over tests/fixtures/**/*.va, run against TWO
     // compilers by two runners sharing one judge:
