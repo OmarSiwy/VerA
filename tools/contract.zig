@@ -36,9 +36,25 @@
 //! The engine instantiates S — a plain-f64 value form for residuals, a
 //! derivative-carrying dual for the Jacobian. The S primitive set devices may
 //! use: con addC scale · add sub neg mul div · exp log expm1 log1p sqrt
-//! pow(a,c) · sin cos tanh sinh cosh atan · abs minC maxC min max · val.
+//! pow(a,c) · sin cos tanh sinh cosh atan · abs minC maxC min max ·
+//! lt le eq sel · val.
 //! expm1/log1p are primitives and not exp(x)-1 / log(1+x): §4.3.1 Table 4-14
 //! names the C library forms precisely because those two compositions cancel.
+//!
+//! lt/le/eq (§4.2.5/§4.2.7) return an S MASK — 1.0 where the relation holds,
+//! 0.0 elsewhere, PER LANE, derivative zero: a comparison is piecewise
+//! constant. `sel(c, a, b)` (§4.2.12) is `a` where the mask is nonzero and
+//! `b` elsewhere, carrying the winner's derivative — the same selection
+//! semantics §4.3.1 gives min/max. gt/ge are operand swaps and ne swaps
+//! sel's arms, so four primitives close the set. Codegen emits them ONLY for
+//! a conditional that may run BOTH arms: a `.strict` unit whose arms contain
+//! no call and no domain-restricted op, where a dead arm's NaN/inf is
+//! IEEE-defined and the pick discards it. That buys two things — the host's
+//! predictor stops eating a data-dependent branch per Newton iteration, and
+//! a lane-parallel S (one operating point per lane) gets a true per-lane
+//! decision where a `.val()` steer has no single answer. A conditional the
+//! finiteness proof accepted only UNDER its guard (`x > 0 ? ln(x) : 0`)
+//! keeps the lazy Zig `if` instead.
 //!
 //! THE WIDTHS INSIDE S ARE THE HOST'S, NOT THE DEVICE'S. Every member of that
 //! primitive set takes and returns `f64` at the boundary — `con(f64)`,
@@ -58,7 +74,8 @@
 //!   - Everything not depending on x (param prep, temperature, geometry)
 //!     stays plain f64. Only x-dependent chains use S ops.
 //!   - Never branch on an S with `if` directly; use .val() for topology-level
-//!     decisions and minC/maxC/min/max for clamps.
+//!     decisions, minC/maxC/min/max for clamps, and lt/le/eq + sel for
+//!     value-form conditionals.
 
 const std = @import("std");
 
@@ -521,6 +538,13 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // note in the header. Optional; absent means f64, which is the default a
     // host must assume.
     .{ "jac_f32", {} },
+    // Lane-parallel permission: eval/q instantiated with a vector S (one
+    // operating point per lane) is exact per lane — no `.val()` steering, no
+    // per-call scalar draw, no value-collapsing helper on an x-dependent
+    // chain. Emitted by codegen only when nothing in the device pinned lanes;
+    // the generated testbench's batch differential check asserts the claim on
+    // every fixture that carries it. Absent means batching is NOT sound.
+    .{ "lane_clean", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
