@@ -302,6 +302,26 @@ pub fn nU(comptime D: type) comptime_int {
 // Validation
 // ============================================================================
 
+/// The S primitive set, as data — the header's prose list, machine-checkable.
+/// Every scalar a host hands to `eval`/`q` must carry all of these;
+/// `checkScalar` is the one-line way to pin an implementation to the list, so
+/// a primitive added to the contract cannot silently miss a scalar (four
+/// spellings exist today: R in codegen's rscalar_txt, Dual and Vec in tb.zig,
+/// and whatever the embedding host brings).
+pub const s_primitives = [_][]const u8{
+    "con",  "addC", "scale", "add",   "sub",  "neg",  "mul",  "div",
+    "exp",  "log",  "expm1", "log1p", "sqrt", "pow",  "sin",  "cos",
+    "tanh", "sinh", "cosh",  "atan",  "abs",  "minC", "maxC", "min",
+    "max",  "lt",   "le",    "eq",    "sel",  "val",  "ddxAt",
+};
+
+pub fn checkScalar(comptime S: type) void {
+    inline for (s_primitives) |p| {
+        if (!@hasDecl(S, p))
+            @compileError(@typeName(S) ++ ": scalar S is missing contract primitive `" ++ p ++ "`");
+    }
+}
+
 pub fn validate(comptime D: type) void {
     @setEvalBranchQuota(1_000_000);
     const name = @typeName(D);

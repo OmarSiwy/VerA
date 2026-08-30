@@ -970,6 +970,11 @@ const runner_body =
     \\    pub fn sel(c: T, a: T, b: T) T { return .{ .v = @select(f64, c.v != zeros, a.v, b.v) }; }
     \\};
     \\
+    \\comptime { // pinned to the contract's list, so a new primitive cannot miss one
+    \\    contract.checkScalar(Dual);
+    \\    contract.checkScalar(Vec);
+    \\}
+    \\
     \\/// The batch differential gate (ref/SIMD-Strategies T8): one vector eval
     \\/// over NL perturbed copies of the operating point must agree with NL
     \\/// scalar evals, lane by lane. Bit equality is the expectation — the same

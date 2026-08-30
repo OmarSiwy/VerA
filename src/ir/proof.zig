@@ -312,6 +312,18 @@ pub const Domain = enum {
 /// For the binary members the obligation is on the SECOND operand
 /// (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else constrains the
 /// single unary operand.
+/// Is this value a 0/1 predicate (§4.2.5/§4.2.8)? Shared with ifconv.zig's
+/// `peelToBool`: what peels there must be exactly what `condFacts` can mine
+/// here, or a peel silently un-guards `b != 0 ? a/b : 0`.
+pub fn isPredicateValue(mir: *const Mir, v: Mir.Value) bool {
+    const def = mir.valueDef(mir.resolveAlias(v));
+    if (def != .inst_result) return false;
+    return switch (mir.instOp(def.inst_result)) {
+        .flt, .fgt, .fle, .fge, .feq, .fne, .ilt, .igt, .ile, .ige, .ieq, .ine, .lognot => true,
+        else => false,
+    };
+}
+
 pub fn domainOf(op: Mir.Opcode) Domain {
     return switch (op) {
         .ln, .log10 => .positive,
@@ -813,12 +825,7 @@ const Prover = struct {
 
     /// Is this value already a 0/1 predicate (§4.2.5/§4.2.8)?
     fn isPredicate(self: *const Prover, v: Mir.Value) bool {
-        const def = self.mir.valueDef(self.mir.resolveAlias(v));
-        if (def != .inst_result) return false;
-        return switch (self.mir.instOp(def.inst_result)) {
-            .flt, .fgt, .fle, .fge, .feq, .fne, .ilt, .igt, .ile, .ige, .ieq, .ine, .lognot => true,
-            else => false,
-        };
+        return isPredicateValue(self.mir, v);
     }
 
     /// Facts implied by taking (or not taking) a branch on `cond`.
