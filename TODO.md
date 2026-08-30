@@ -10,7 +10,7 @@ per-site ceilings, and this file carries the cross-cutting ones.
 ## 1. The remaining XFAILs — none
 
 **0 XFAIL as of this tree** (`zig build torture -- --strict` passes:
-1233/1233). The last three closed in the 2026-08-30 wave:
+1235/1235). The last three closed in the 2026-08-30 wave:
 
 - `annex_f_resolution/unknown_discipline_mixed_port.va` — annex F.2.1 step 4.b
   multi-candidate resolution landed with `connectrules` parsing (A.1.8),
