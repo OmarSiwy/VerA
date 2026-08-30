@@ -64,7 +64,10 @@
 //!   --unknown-bound=X      solver compliance limit, in volts/amps (see W0650)
 //!
 //! exit status: 0 on success (warnings do not fail), 1 on a diagnosed error,
-//! 2 on a usage error.
+//! 2 on a usage error. Conflicting flags are usage errors, not last-one-wins:
+//! `--lint` with any codegen mode (`--emit-zig`/`-o`/`--check`/`--emit-so`/
+//! `--emit-exe`/`--run`), and `--emit-exe`/`--run` with `--display=drop` —
+//! a testbench exists to print, so dropping its prints is a contradiction.
 
 const std = @import("std");
 const vera = @import("root.zig");
@@ -134,6 +137,14 @@ pub fn main(init: std.process.Init) !u8 {
     var run_exe = false;
     var display: vera.codegen.Display = .drop;
     var jac_f32 = false;
+    // What the user actually TYPED, kept apart from the derived state above so
+    // conflicting spellings can be refused by name after the loop — argument
+    // order must not decide silently (`--emit-exe --display=drop` used to
+    // build a testbench whose model prints were all dropped, exit 0).
+    var lint_flag = false;
+    var display_drop_flag = false;
+    var codegen_flag: ?[]const u8 = null; // the last flag that implies codegen
+    var exe_flag: ?[]const u8 = null; // --emit-exe or --run, whichever was typed
     var contract_path: ?[]const u8 = null;
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
@@ -158,15 +169,19 @@ pub fn main(init: std.process.Init) !u8 {
             return 0;
         } else if (std.mem.eql(u8, arg, "--lint")) {
             target = .lint;
+            lint_flag = true;
         } else if (std.mem.eql(u8, arg, "--emit-zig")) {
             emit_zig = true;
             target = .release_fast;
+            codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--check")) {
             check = true;
             target = .release_fast;
+            codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-so")) {
             emit_so = true;
             target = .release_fast;
+            codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-exe") or std.mem.eql(u8, arg, "--run")) {
             // The testbench IS the display output, so asking for one and then
             // dropping the prints would build an artifact with nothing to say.
@@ -174,10 +189,14 @@ pub fn main(init: std.process.Init) !u8 {
             run_exe = run_exe or std.mem.eql(u8, arg, "--run");
             display = .emit;
             target = .release_fast;
+            codegen_flag = arg;
+            exe_flag = arg;
         } else if (std.mem.eql(u8, arg, "--display=emit")) {
             display = .emit;
+            display_drop_flag = false;
         } else if (std.mem.eql(u8, arg, "--display=drop")) {
             display = .drop;
+            display_drop_flag = true;
         } else if (std.mem.eql(u8, arg, "--jac-f32")) {
             jac_f32 = true;
         } else if (std.mem.eql(u8, arg, "--contract")) {
@@ -195,6 +214,7 @@ pub fn main(init: std.process.Init) !u8 {
             };
             emit_zig = true;
             target = .release_fast;
+            codegen_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--expect-module=")) {
             expect_module = arg["--expect-module=".len..];
         } else if (std.mem.eql(u8, arg, "-I")) {
@@ -247,6 +267,28 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         }
     }
+
+    // Conflicting flags are refused by NAME, whatever order they came in.
+    // Without this the last one silently won: `--emit-exe --display=drop`
+    // built a testbench with every model print discarded and exited 0, and
+    // `--emit-zig --lint` left `emit_zig` set while the pipeline stopped
+    // before codegen, so the "generated device" step read a lint result.
+    if (exe_flag) |f| if (display_drop_flag) {
+        try err.print(
+            "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
+                "output, and `--display=drop` discards every print\n",
+            .{f},
+        );
+        return 2;
+    };
+    if (lint_flag) if (codegen_flag) |f| {
+        try err.print(
+            "error: `--lint` and `{s}` conflict: --lint stops after the frontend " ++
+                "and `{s}` needs codegen\n",
+            .{ f, f },
+        );
+        return 2;
+    };
 
     const in_path = path orelse {
         try err.writeAll(usage_text);
