@@ -1855,7 +1855,10 @@ test "A.1.4 module items: nets, assigns, defparams, regs, and the identifier dis
         // A.2.2.3 `delay3` has at most three values (E0210 at the fourth).
         .{ .src = "module m; wire #(1, 2, 3, 4) w; endmodule", .code = .E0210 },
         // An analog compilation has no array of nodes (IEEE 1364-2005 §4.9.1).
-        .{ .src = "module m; electrical n[0:3]; endmodule", .code = .E0205 },
+        // (`electrical n[0:3];` alone is an instance of module `electrical`:
+        // the identifier dispatch reads `ident ident [` as A.4.1's.)
+        .{ .src = "module m; wire n[0:3]; endmodule", .code = .E0205 },
+        .{ .src = "module m; electrical a, n[0:3]; endmodule", .code = .E0205 },
         // §6.3.1 / A.9.3: an index that does not fold, in an analog parse.
         .{ .src = "module m; defparam u[k].x = 1; endmodule", .code = .E0231 },
     }, false);
