@@ -1,0 +1,55 @@
+// §9.4.3 Table 9-23 gives the real conversions "the full formatting
+// capabilities available in the C language", so C (C11 7.21.6.1) fixes what
+// each spelling produces; the integer conversions share the same
+// `%[flags][width][.precision]` prefix. Pinned through §9.5.3 $sformat plus a
+// string comparison, exactly as 170_display_argument_runs.va does — the
+// formatted text is the assertion, and every want below is derived by hand
+// from C's printf:
+//
+//   %e of 1.5       -> "1.500000e+00"  default precision 6; the exponent is
+//                      signed and at least two digits. (Zig's own {e} would
+//                      print "1.5e0".)
+//   %10.4e of 0.0625-> "6.2500e-02"    0.0625 = 6.25e-2, four fractional
+//                      digits, exactly ten characters so the width-10 minimum
+//                      adds nothing — the same value 045_sformat.va uses.
+//   %05d of -42     -> "-0042"         '0' packs zeros AFTER the sign
+//                      (7.21.6.1: "leading zeros ... are used to pad to the
+//                      field width" following the sign), never "00-42".
+//   %+05d of 7      -> "+0007"         '+' spells the sign, zeros follow it.
+//   %+d of 42       -> "+42"           the flag prints; it used to be dropped.
+//   % d of 42       -> " 42"           a space where the sign would be.
+//   %5d of -42      -> "  -42"         width alone: blanks, sign untouched.
+//   %h of -42       -> "ffffffffffffffd6"
+//                      Table 9-22 displays the operand in hexadecimal, and the
+//                      1364-2005 §17.1.1.2 heritage sizes the display to the
+//                      operand — the two's-complement bit pattern, not a
+//                      minus sign. VerA's integer model is 64-bit (§2.6.1),
+//                      so the pattern of -42 is sixteen hex digits.
+//
+//! print none
+//! lrm 9.4.3
+//! lrm 9.5.3
+`include "check.vh"
+module ch09_display_c_format_flags(p, n);
+  inout p, n; electrical p, n;
+  string t;
+  analog begin
+    $sformat(t, "%e", 1.5);
+    `CHECKI("%e is C's exponential: precision 6, signed 2-digit exponent", t == "1.500000e+00", 1);
+    $sformat(t, "%10.4e", 0.0625);
+    `CHECKI("%10.4e honors the explicit width and precision", t == "6.2500e-02", 1);
+    $sformat(t, "%05d", -42);
+    `CHECKI("%05d zero-fills after the sign", t == "-0042", 1);
+    $sformat(t, "%+05d", 7);
+    `CHECKI("%+05d spells the sign, then the zeros", t == "+0007", 1);
+    $sformat(t, "%+d", 42);
+    `CHECKI("%+d prints the plus sign", t == "+42", 1);
+    $sformat(t, "% d", 42);
+    `CHECKI("% d prints a space where the sign would be", t == " 42", 1);
+    $sformat(t, "%5d", -42);
+    `CHECKI("%5d pads with blanks and leaves the sign alone", t == "  -42", 1);
+    $sformat(t, "%h", -42);
+    `CHECKI("%h shows the 64-bit two's-complement pattern", t == "ffffffffffffffd6", 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

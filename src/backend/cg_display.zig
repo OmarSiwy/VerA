@@ -32,39 +32,158 @@ const assert = std.debug.assert;
 // output because `Lower.finishDisplays` chained it into a live root; see
 // `buildJobs`.
 
-/// One rendered `std.debug.print` operand: the value and the Zig type the
-/// chosen conversion needs it in. `%h` on a real is a real→integer
-/// conversion (§4.2.1.1), not a reinterpretation, so `want` is not always
-/// the value's own type.
+/// Parsed §9.4.3 conversion prefix: `%[flags][width][.precision]conv`. Table
+/// 9-23 grants the real conversions "the full formatting capabilities
+/// available in the C language", so C (C11 7.21.6.1) is the reference for what
+/// each flag means; the integer conversions get the same prefix grammar.
+/// Width and precision are numbers rather than spec text because the C-int and
+/// C-exponential renderings need them as arithmetic, not as passthrough.
+pub const Spec = struct {
+    left: bool = false, // '-' left-justify; C makes it override '0'
+    plus: bool = false, // '+' always spell the sign
+    space: bool = false, // ' ' a space where the sign would be; '+' wins
+    zero: bool = false, // '0' pad with zeros AFTER the sign
+    width: usize = 0, // 0 = no width given
+    prec: ?usize = null, // null = no precision given
+
+    // ponytail: the scratch for a composed field is a stack array in the
+    // emitted block, so `%99999999d` would otherwise emit a 100 MB frame. 512
+    // is wider than any transcript line; a wider request is clamped, not
+    // honored. Upgrade path: spill to zSBuf if a real model ever wants more.
+    const max_field = 512;
+    fn w(self: Spec) usize {
+        return @min(self.width, max_field);
+    }
+    fn p(self: Spec, default: usize) usize {
+        return @min(self.prec orelse default, max_field);
+    }
+};
+
+/// One rendered `std.debug.print` operand: the value, the Zig type the chosen
+/// conversion needs it in, and HOW it is rendered. `%h` on a real is a
+/// real→integer conversion (§4.2.1.1), not a reinterpretation, so `want` is
+/// not always the value's own type.
 pub const PrintArg = struct {
     v: Mir.Value,
     want: VTy,
-    /// Render through `zPadInt` into a per-call stack buffer instead of
-    /// directly. See `emitDisplayTask` for the one reason this exists.
-    pad: bool = false,
-    /// §9.4.3 `%c`. Zig's `{c}` verb takes a `u8`, so the i64 the operand
-    /// arrives as has to be narrowed at the call site or the generated
-    /// device does not compile. Table 9-22 says "display as an ASCII
-    /// character", which is the low byte — truncation, not a range error.
-    chr: bool = false,
+    how: Mode = .plain,
+    spec: Spec = .{},
+    /// `%E`: C prints the exponent marker in the case the source wrote.
+    upper: bool = false,
+
+    pub const Mode = enum {
+        /// Straight through the Zig verb the conversion mapped to.
+        plain,
+        /// §9.4.3 `%c`. Zig's `{c}` verb takes a `u8`, so the i64 the operand
+        /// arrives as has to be narrowed at the call site or the generated
+        /// device does not compile. Table 9-22 says "display as an ASCII
+        /// character", which is the low byte — truncation, not a range error.
+        chr,
+        /// `%<width>d` with no sign/zero flag: render the decimal TEXT through
+        /// `zPadInt` and pad it as a string. See `emitDisplayTask` for why.
+        pad,
+        /// `%+d` / `% d` / `%0<width>d`: C puts the sign INSIDE the field —
+        /// `+42`, ` 42`, `-0042` — which no Zig format spec can spell, so the
+        /// field text is composed in per-op scratch and printed as `{s}`.
+        cint,
+        /// `%e`/`%E`: C default precision 6, a signed exponent of at least two
+        /// digits (`1.000000e+00`). Zig's `{e}` prints `1e0`, so the operand
+        /// formats through `{e:.P}` and the exponent is rewritten.
+        cexp,
+        /// `%h`/`%o`/`%b`: the two's-complement bit pattern of the operand.
+        /// Zig's radix verbs on an i64 print `-2a` instead, hence a u64
+        /// bitcast around the rendered integer.
+        bits,
+    };
+
+    /// Bytes of per-op scratch the emitted block declares, or null for the
+    /// modes that render straight into the print's argument tuple.
+    fn scratch(self: PrintArg) ?usize {
+        return switch (self.how) {
+            .pad => 24, // i64's widest decimal (20 chars) plus slack
+            .cint => @max(24, self.spec.w() + 2), // the full zero-filled field
+            // two halves: the raw `{e:.P}` text, then the C-ified copy which
+            // can grow by "+0" — see `renderPrintArg`'s .cexp arm.
+            .cexp => 2 * (self.spec.p(6) + 20),
+            else => null,
+        };
+    }
 };
+
+/// §9.4.1's argument-list model, shared by every sink (`$strobe` and family,
+/// §9.5.2 file writers, §9.5.3 string writers): "$strobe displays its
+/// arguments in the same order they appear in the argument list. Each argument
+/// can be a quoted string, an expression which returns a value, or a null
+/// argument." EVERY string argument is a format whose conversions consume the
+/// expression arguments after it; an expression argument no format run
+/// consumed prints in the default format (§9.4.3 "any expression argument with
+/// no corresponding format specification is displayed using the default
+/// decimal format"); and nothing inserts separators — §9.4.1's own way to
+/// write a space between fields is a null argument.
+///
+/// Two documented deviations from the 1364-2005 §17.1.1.2 heritage:
+///   - a bare INTEGER prints minimal-width (1364 auto-sizes the default %d
+///     field to the operand's largest value, 20 columns for VerA's 64-bit
+///     integers — nobody wants that in a transcript);
+///   - a bare REAL prints shortest-round-trip decimal, VerA's documented `%g`
+///     rendering (see `appendConv`), where 1364 gives reals `%g` proper.
+///
+/// `radix` is the default conversion a `$displayb`/`$displayh`/`$displayo`
+/// suffix imposes on unconsumed expressions, 0 for the plain spellings.
+fn buildArgs(
+    g: *Gen,
+    args: []const Mir.Value,
+    radix: u8,
+    fmt: *std.ArrayList(u8),
+    ops: *std.ArrayList(PrintArg),
+) Error!void {
+    var i: usize = 0;
+    while (i < args.len) {
+        if (g.strArg(args, i)) |s| {
+            i += 1;
+            i += try translateFormat(g, s, args[i..], fmt, ops);
+        } else {
+            try appendConv(g, fmt, ops, args[i], radix, .{});
+            i += 1;
+        }
+    }
+}
+
+/// IEEE 1364-2005 §17.1.1.1 (the heritage §9.4.1 extends): only the nine
+/// suffixed display spellings change the DEFAULT radix. Matching by exact name
+/// rather than last letter, because `$info` ends in 'o' and is not an octal
+/// task. Verilog-AMS Table 9-1 withdraws all nine from the analog context, so
+/// lowering rejects them before they reach here — this stays only so the
+/// emitter does not silently depend on that list.
+fn radixSuffix(name: []const u8) u8 {
+    const suffixed = [_]struct { n: []const u8, c: u8 }{
+        .{ .n = "$displayb", .c = 'b' }, .{ .n = "$displayo", .c = 'o' }, .{ .n = "$displayh", .c = 'h' },
+        .{ .n = "$writeb", .c = 'b' },   .{ .n = "$writeo", .c = 'o' },   .{ .n = "$writeh", .c = 'h' },
+        .{ .n = "$strobeb", .c = 'b' },  .{ .n = "$strobeo", .c = 'o' },  .{ .n = "$strobeh", .c = 'h' },
+    };
+    for (suffixed) |s| if (std.mem.eql(u8, name, s.n)) return s.c;
+    return 0;
+}
+
+/// The per-op scratch declarations of one emitted display block.
+fn emitScratch(g: *Gen, ops: []const PrintArg) Error!void {
+    for (ops, 0..) |p, i| {
+        if (p.scratch()) |n| try g.b("var zb{d}: [{d}]u8 = undefined; ", .{ i, n });
+    }
+}
+
+fn renderPrintArgs(g: *Gen, ops: []const PrintArg) Error!void {
+    for (ops, 0..) |p, i| {
+        if (i != 0) try g.b(", ", .{});
+        try renderPrintArg(g, p, i);
+    }
+}
 
 /// Emit one §9.4.1/§9.7.3 task as `std.debug.print`.
 ///
 /// Output goes to stderr, which is where `std.debug.print` writes and where a
 /// simulator's transcript belongs — stdout is for a host that pipes data.
 pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
-    // §9.7.3 `$fatal(finish_number, "fmt", …)` puts a non-string first, and
-    // §9.4.1 allows `$display` with no format at all. Both fall out of
-    // "the format is the first string constant, if there is one".
-    var fmt_at: ?usize = null;
-    for (args, 0..) |_, i| {
-        if (g.strArg(args, i) != null) {
-            fmt_at = i;
-            break;
-        }
-    }
-
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
     // §9.7.3: the severity is the message's whole reason for existing, and a
@@ -73,22 +192,15 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
         try fmt.appendSlice(g.arena, word);
         try fmt.appendSlice(g.arena, ": ");
     }
-    if (fmt_at) |at| {
-        try translateFormat(g, g.strArg(args, at).?, args[at + 1 ..], &fmt, &ops);
-    } else {
-        // §9.4.3 no format string: each operand in its natural default,
-        // separated by a space — with §9.4.1's radix suffix applied.
-        const conv: u8 = switch (name[name.len - 1]) {
-            'b' => 'b',
-            'o' => 'o',
-            'h' => 'x',
-            else => 0,
-        };
-        for (args, 0..) |a, i| {
-            if (i != 0) try fmt.append(g.arena, ' ');
-            try appendConv(g, &fmt, &ops, a, conv, "");
-        }
-    }
+    // §9.7.3 Syntax 9-7: `$fatal ( finish_number [, message_argument … ] )`.
+    // The finish_number sets the $finish diagnostic level; it is not part of
+    // the message, so it must not print. Dropped only when it is not a string,
+    // so a (nonconforming but unambiguous) `$fatal("bye")` keeps its text.
+    const body = if (std.mem.eql(u8, name, "$fatal") and args.len > 0 and g.strArg(args, 0) == null)
+        args[1..]
+    else
+        args;
+    try buildArgs(g, body, radixSuffix(name), &fmt, &ops);
     // §9.4.1: `$write` is the family member that does NOT end the line.
     if (!std.mem.startsWith(u8, name, "$write")) try fmt.append(g.arena, '\n');
 
@@ -99,56 +211,32 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
     // documented behavior, and the scratch it needs is a stack array in the
     // same block as the print.
     try g.b("zd: {{ ", .{});
-    for (ops.items, 0..) |p, i| {
-        if (p.pad) try g.b("var zb{d}: [24]u8 = undefined; ", .{i});
-    }
+    try emitScratch(g, ops.items);
     try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
-    for (ops.items, 0..) |p, i| {
-        if (i != 0) try g.b(", ", .{});
-        try renderPrintArg(g, p, i);
-    }
+    try renderPrintArgs(g, ops.items);
     try g.b("}}); break :zd S.con(0.0); }}", .{});
 }
 
 /// §9.5.3 `$swrite`/`$sformat` — "the same as their counterparts", §9.4.1's
 /// writers, "except that ... the resulting string shall be written" to a string
 /// variable. So the format translation is `emitDisplayTask`'s, verbatim: the
-/// operands, the conversions, the pairing rule and the "no format string at all"
-/// fallback are all the same clause. The only differences are the SINK
-/// (`bufPrint` into this call site's scratch row instead of `std.debug.print`)
-/// and the newline, which §9.4.1 gives to `$display` and not to the writers.
+/// operands, the conversions and the argument-list model are all the same
+/// clause. The only differences are the SINK (`bufPrint` into this call site's
+/// scratch row instead of `std.debug.print`) and the newline, which §9.4.1
+/// gives to `$display` and not to the writers.
 ///
 /// The value of the emitted block is the formatted slice, which lowering
 /// assigns to the string variable the source named.
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
-    var fmt_at: ?usize = null;
-    for (args, 0..) |_, i| {
-        if (g.strArg(args, i) != null) {
-            fmt_at = i;
-            break;
-        }
-    }
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    if (fmt_at) |at| {
-        try translateFormat(g, g.strArg(args, at).?, args[at + 1 ..], &fmt, &ops);
-    } else {
-        for (args, 0..) |a, i| {
-            if (i != 0) try fmt.append(g.arena, ' ');
-            try appendConv(g, &fmt, &ops, a, 0, "");
-        }
-    }
+    try buildArgs(g, args, 0, &fmt, &ops);
     try g.b("zs: {{ ", .{});
-    for (ops.items, 0..) |p, i| {
-        if (p.pad) try g.b("var zb{d}: [24]u8 = undefined; ", .{i});
-    }
+    try emitScratch(g, ops.items);
     // An overrun formats to the empty string: §9.5.3 states no truncation rule,
     // and half a number is a worse answer than none. See `zSBuf`'s size note.
     try g.b("break :zs std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    for (ops.items, 0..) |p, i| {
-        if (i != 0) try g.b(", ", .{});
-        try renderPrintArg(g, p, i);
-    }
+    try renderPrintArgs(g, ops.items);
     try g.b("}}) catch \"\"; }}", .{});
 }
 
@@ -272,9 +360,11 @@ fn emitLine(g: *Gen, args: []const Mir.Value, kernel: []const u8) Error!void {
 
 /// §9.5.2's five output tasks. The descriptor is `args[0]`; everything after it
 /// is the §9.4.1 task this one is named after, so the format translation, the
-/// pairing rule, the "no format string" fallback and the newline rule are all
-/// `emitDisplayTask`'s, applied to the BASE name — `$fwrite` is the one that does
-/// not end the line, exactly as `$write` is.
+/// argument-list model and the newline rule are all `emitDisplayTask`'s,
+/// applied to the BASE name — `$fwrite` is the one that does not end the line,
+/// exactly as `$write` is. No radix-suffixed file spelling exists (§9.5.2
+/// Syntax 9-3 lists five names), so the default conversion is always the
+/// operand's own.
 fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
     const eq = std.mem.eql;
     // §9.5.1 `$fclose` and §9.5.6 `$fflush` take a descriptor and no text.
@@ -284,34 +374,14 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
         return g.b(")", .{});
     }
     // "$fdisplay" → "display", "$fwrite" → "write": the §9.4.1 task §9.5.2 names
-    // this one after, with both the `$` and the `f` gone. The two things it is
-    // read for are §9.4.1's newline rule (`$write` is the member that does not end
-    // the line, and so is `$fwrite`) and §9.4.1's radix suffix.
+    // this one after, with both the `$` and the `f` gone — read for §9.4.1's
+    // newline rule (`$write` is the member that does not end the line, and so
+    // is `$fwrite`).
     const base = name[2..];
     const rest = if (args.len > 0) args[1..] else args;
-    var fmt_at: ?usize = null;
-    for (rest, 0..) |_, i| {
-        if (g.strArg(rest, i) != null) {
-            fmt_at = i;
-            break;
-        }
-    }
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    if (fmt_at) |at| {
-        try translateFormat(g, g.strArg(rest, at).?, rest[at + 1 ..], &fmt, &ops);
-    } else {
-        const conv: u8 = switch (base[base.len - 1]) {
-            'b' => 'b',
-            'o' => 'o',
-            'h' => 'x',
-            else => 0,
-        };
-        for (rest, 0..) |a, i| {
-            if (i != 0) try fmt.append(g.arena, ' ');
-            try appendConv(g, &fmt, &ops, a, conv, "");
-        }
-    }
+    try buildArgs(g, rest, 0, &fmt, &ops);
     if (!std.mem.startsWith(u8, base, "write")) try fmt.append(g.arena, '\n');
 
     // The text is formatted into this call site's own scratch row and then
@@ -319,16 +389,11 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     // string variable. An overrun writes nothing rather than half a line: §9.5.2
     // states no truncation rule, same as §9.5.3.
     try g.b("zf: {{ ", .{});
-    for (ops.items, 0..) |p, i| {
-        if (p.pad) try g.b("var zb{d}: [24]u8 = undefined; ", .{i});
-    }
+    try emitScratch(g, ops.items);
     try g.b("break :zf zFPut(", .{});
     try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
     try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
-    for (ops.items, 0..) |p, i| {
-        if (i != 0) try g.b(", ", .{});
-        try renderPrintArg(g, p, i);
-    }
+    try renderPrintArgs(g, ops.items);
     try g.b("}}) catch \"\"); }}", .{});
 }
 
@@ -346,20 +411,22 @@ pub fn severityWord(name: []const u8) ?[]const u8 {
     return null;
 }
 
-/// §9.4.2/§9.4.3 format string → a Zig one, consuming an operand per
-/// conversion. Literal text is copied through with `{`/`}` doubled, because
-/// it is about to become a `std.fmt` template.
+/// §9.4.2/§9.4.3 one format string → Zig format text, consuming an operand per
+/// conversion. Literal text is copied through with `{`/`}` doubled, because it
+/// is about to become a `std.fmt` template.
 ///
-/// Unmatched operands (more arguments than conversions) are appended
-/// space-separated in their default form, which is what §9.4.3 says the
-/// display tasks do.
+/// Returns how many of `operands` the string's conversions consumed, so the
+/// caller (`buildArgs`) can resume the §9.4.1 argument walk right after them —
+/// a LATER string argument starts the next format run; it is not this one's
+/// operand. A conversion left with no operand at all renders a 0.0 (§9.4.3
+/// makes that a pairing violation, which `Lower.checkFormatPairing` diagnoses).
 pub fn translateFormat(
     g: *Gen,
     src: []const u8,
     operands: []const Mir.Value,
     fmt: *std.ArrayList(u8),
     ops: *std.ArrayList(PrintArg),
-) Error!void {
+) Error!usize {
     const a = g.arena;
     var next: usize = 0;
     var i: usize = 0;
@@ -383,31 +450,29 @@ pub fn translateFormat(
             i += 1;
             continue;
         }
-        // §9.4.3 `%[-0][width][.precision]conv` — the flags Verilog shares
-        // with C. Zig's spec is `[fill][align][width][.precision]`, and its
-        // fill/alignment are only meaningful WITH a width, so they are
-        // emitted only when one was given.
-        var spec: std.ArrayList(u8) = .empty;
-        var left = false;
-        var zero = false;
-        while (i < src.len and (src[i] == '-' or src[i] == '+' or src[i] == ' ' or src[i] == '0')) : (i += 1) {
-            if (src[i] == '-') left = true;
-            if (src[i] == '0') zero = true;
-        }
+        // §9.4.3 `%[flags][width][.precision]conv` — the C prefix Table 9-23
+        // grants. Parsed into numbers here; `appendConv` decides per
+        // conversion whether Zig can spell it or a composed field is needed.
+        var spec: Spec = .{};
+        while (i < src.len) : (i += 1) switch (src[i]) {
+            '-' => spec.left = true,
+            '+' => spec.plus = true,
+            ' ' => spec.space = true,
+            '0' => spec.zero = true,
+            else => break,
+        };
         const width_at = i;
         while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
-        if (i > width_at) {
-            if (zero) try spec.append(a, '0');
-            try spec.append(a, if (left) '<' else '>');
-            try spec.appendSlice(a, src[width_at..i]);
-        }
+        if (i > width_at)
+            spec.width = std.fmt.parseUnsigned(usize, src[width_at..i], 10) catch Spec.max_field;
         if (i < src.len and src[i] == '.') {
-            try spec.append(a, '.');
             i += 1;
-            while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) try spec.append(a, src[i]);
+            const prec_at = i;
+            while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
+            spec.prec = std.fmt.parseUnsigned(usize, src[prec_at..i], 10) catch 0;
         }
         if (i >= src.len) break;
-        const conv = std.ascii.toLower(src[i]);
+        const conv = src[i];
         i += 1;
         // §9.4.3 `%m` names the enclosing module. `%l` is the SAME class —
         // "for each % character (except %m, %% and %l) … a corresponding
@@ -420,18 +485,51 @@ pub fn translateFormat(
         // against and no CLI surface that could supply one — so the library
         // component is empty and the cell is the module, which is the same
         // text `%m` gives.
-        if (conv == 'm' or conv == 'l') {
+        if (conv == 'm' or conv == 'M' or conv == 'l' or conv == 'L') {
             try fmt.appendSlice(a, g.mir.name);
             continue;
         }
         const operand = if (next < operands.len) operands[next] else Mir.Value.f_zero;
         next += 1;
-        try appendConv(g, fmt, ops, operand, conv, spec.items);
+        try appendConv(g, fmt, ops, operand, conv, spec);
     }
-    while (next < operands.len) : (next += 1) {
-        try fmt.append(a, ' ');
-        try appendConv(g, fmt, ops, operands[next], 0, "");
+    return @min(next, operands.len);
+}
+
+/// The Zig `:[fill][align][width][.precision]` tail, for the conversions whose
+/// C and Zig renderings agree (radix on an unsigned, `%f`, `%g`, `%s`, `%c`).
+/// Emits nothing when the source gave nothing. `extra_prec` is `%f`'s C
+/// default of six decimals, applied only when the source did not say
+/// otherwise.
+fn appendZigSpec(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, extra_prec: ?[]const u8) Error!void {
+    const a = g.arena;
+    if (spec.width == 0 and spec.prec == null and extra_prec == null) return;
+    var buf: [48]u8 = undefined;
+    try fmt.append(a, ':');
+    if (spec.width > 0) {
+        // Zig's fill/alignment are only meaningful WITH a width.
+        if (spec.zero) try fmt.append(a, '0');
+        try fmt.append(a, if (spec.left) '<' else '>');
+        try fmt.appendSlice(a, std.fmt.bufPrint(&buf, "{d}", .{spec.width}) catch unreachable);
     }
+    if (spec.prec) |p| {
+        try fmt.appendSlice(a, std.fmt.bufPrint(&buf, ".{d}", .{p}) catch unreachable);
+    } else if (extra_prec) |p| {
+        try fmt.appendSlice(a, p);
+    }
+}
+
+/// `{s}` with the OUTER alignment, for a conversion whose field text is
+/// composed in per-op scratch (.cint, .cexp). `full` marks a field that is
+/// already exactly its width (a zero-filled integer), which no outer
+/// alignment may touch.
+fn appendStrField(g: *Gen, fmt: *std.ArrayList(u8), spec: Spec, full: bool) Error!void {
+    const a = g.arena;
+    if (full or spec.width == 0) return fmt.appendSlice(a, "{s}");
+    var buf: [48]u8 = undefined;
+    try fmt.appendSlice(a, std.fmt.bufPrint(&buf, "{{s:{c}{d}}}", .{
+        @as(u8, if (spec.left) '<' else '>'), spec.width,
+    }) catch unreachable);
 }
 
 /// One conversion: append its `{…}` to `fmt` and its operand to `ops`.
@@ -441,79 +539,312 @@ pub fn appendConv(
     fmt: *std.ArrayList(u8),
     ops: *std.ArrayList(PrintArg),
     v: Mir.Value,
-    conv: u8,
-    spec: []const u8,
+    conv_raw: u8,
+    spec: Spec,
 ) Error!void {
     const a = g.arena;
+    const conv = std.ascii.toLower(conv_raw);
     const ty = g.an.tyOf(g.an.rv(v));
-    // The Zig verb. `%f` is C's fixed-point default of six decimals; `%g`
-    // and `%r` are shortest-round-trip, which is what `{d}` on a float is.
-    // §9.4.3's engineering-notation `%r` scale suffix is NOT reproduced.
-    const verb: []const u8 = switch (conv) {
-        'b' => "b",
-        'o' => "o",
-        'h', 'x' => "x",
-        'c' => "c",
-        's' => "s",
-        'e' => "e",
-        'd', 'f', 'g', 'r', 't', 'u', 'z', 'v' => "d",
-        else => if (ty == .str) "s" else "d",
-    };
-    // A float has no bit pattern to show in a radix conversion, and Zig's
-    // `{x}` on an f64 is a hex FLOAT — not what `%h` asks for. Round it,
-    // exactly like §4.2.1.1 does at any other real→integer boundary.
-    // §2.7 makes a string literal an unsigned base-256 integer wherever it is
-    // used as an operand, and an EXPLICIT numeric conversion is such a use:
-    // `$strobe("%d", "\n")` prints 10. `%s` and the default conversion (`conv
-    // == 0`) still print the text — that is what §9.4.3 asks of them and what
-    // every `CHECK` macro's `%s` name depends on. `renderVal` does the digits.
-    const str_as_int = ty == .str and switch (conv) {
-        'd', 'b', 'o', 'h', 'x' => true,
-        else => false,
-    };
-    const as_int = str_as_int or (ty != .str and (std.mem.eql(u8, verb, "b") or
-        std.mem.eql(u8, verb, "o") or std.mem.eql(u8, verb, "x") or
-        std.mem.eql(u8, verb, "c") or conv == 'd'));
-    // A width (not a bare precision) is what makes std.fmt spell an
-    // integer's sign; only then is the detour through `zPadInt` needed, and
-    // only for the plain decimal conversion — a radix conversion has no
-    // sign to spell.
-    const pad = conv == 'd' and spec.len != 0 and spec[spec.len - 1] != '.' and
-        std.mem.indexOfAny(u8, spec, "<>") != null;
-    try fmt.append(a, '{');
-    try fmt.appendSlice(a, if (pad) "s" else verb);
-    // `%f`'s six decimals only apply when the source did not say otherwise.
-    const default_prec = conv == 'f' and std.mem.indexOfScalar(u8, spec, '.') == null;
-    if (spec.len > 0 or default_prec) {
-        try fmt.append(a, ':');
-        try fmt.appendSlice(a, spec);
-        if (default_prec) try fmt.appendSlice(a, ".6");
+    switch (conv) {
+        // §9.4.3 Table 9-23 gives the real conversions "the full formatting
+        // capabilities available in the C language", and C's %e is
+        // `1.000000e+00`: default precision 6, a signed exponent of at least
+        // two digits. Zig's `{e}` prints `1e0`, so the operand renders through
+        // the .cexp fixup block. An integer operand converts to real first —
+        // Table 9-23 is "for real numbers", and §4.2.1.1 defines the step.
+        'e' => {
+            try appendStrField(g, fmt, spec, false);
+            try ops.append(a, .{ .v = v, .want = .real, .how = .cexp, .spec = spec, .upper = conv_raw == 'E' });
+        },
+        // §9.4.3 Table 9-22: a radix conversion shows the two's-complement bit
+        // pattern of the operand — 1364-2005 §17.1.1.2 sizes the display to
+        // the operand's width, and VerA's integer model is 64-bit (§2.6.1; see
+        // codegen's "an integer literal keeps all 64 bits") — so `%h` of -42
+        // is ffffffffffffffd6. Zig's `{x}` on an i64 writes `-2a` instead,
+        // hence the u64 bitcast of `.bits`. A float has no bit pattern to show
+        // and Zig's `{x}` on an f64 is a hex FLOAT — not what `%h` asks for —
+        // so a real rounds first, exactly like §4.2.1.1 does at any other
+        // real→integer boundary. Zero-filling an unsigned field has no sign to
+        // misplace, so the width/zero spec passes straight through.
+        'b', 'o', 'h', 'x' => {
+            try fmt.append(a, '{');
+            try fmt.append(a, if (conv == 'h') 'x' else conv);
+            try appendZigSpec(g, fmt, spec, null);
+            try fmt.append(a, '}');
+            try ops.append(a, .{ .v = v, .want = .int, .how = .bits, .spec = spec });
+        },
+        // §9.4.5 "%s is used to print ASCII codes as characters" and Table
+        // 9-22 gives %c the single character: the operand's low byte, whatever
+        // type it arrived as — a string operand goes through its §2.7 integer
+        // value like the radix conversions above.
+        'c' => {
+            try fmt.appendSlice(a, "{c");
+            try appendZigSpec(g, fmt, spec, null);
+            try fmt.append(a, '}');
+            try ops.append(a, .{ .v = v, .want = .int, .how = .chr, .spec = spec });
+        },
+        'd' => {
+            // §2.7 makes a string literal an unsigned base-256 integer
+            // wherever it is used as an operand, and an EXPLICIT numeric
+            // conversion is such a use: `$strobe("%d", "\n")` prints 10.
+            // `renderVal(.int)` does the digits, for `%d` and the radix arm
+            // above alike.
+            const zero_fill = spec.zero and !spec.left and spec.width > 0;
+            if (spec.plus or spec.space or zero_fill) {
+                // C 7.21.6.1: '+'/' ' put a sign character in the field and
+                // '0' packs zeros between the sign and the digits — `+42`,
+                // ` 42`, `-0042`. No Zig spec spells any of the three (its
+                // `{d:0>5}` writes `00-42`), so the field is composed in
+                // scratch — see `renderPrintArg`'s .cint arm.
+                try appendStrField(g, fmt, spec, zero_fill);
+                try ops.append(a, .{ .v = v, .want = .int, .how = .cint, .spec = spec });
+            } else if (spec.width > 0) {
+                // A width alone makes std.fmt spell the sign (`{d:>5}` writes
+                // `+42`), so the decimal TEXT pads instead, via `zPadInt`.
+                try appendStrField(g, fmt, spec, false);
+                try ops.append(a, .{ .v = v, .want = .int, .how = .pad, .spec = spec });
+            } else {
+                try fmt.appendSlice(a, "{d}");
+                try ops.append(a, .{ .v = v, .want = .int, .spec = spec });
+            }
+        },
+        else => {
+            // The Zig verb. `%f` is C's fixed-point default of six decimals;
+            // `%g` and `%r` are shortest-round-trip, which is what `{d}` on a
+            // float is. §9.4.3's engineering-notation `%r` scale suffix is NOT
+            // reproduced. `conv == 0` — an operand outside every format run —
+            // is §9.4.3's "default decimal format": the value in its own type's
+            // natural spelling ({d} minimal-width, not 1364's auto-sized
+            // field; see `buildArgs`), and `%s`/the default on a string print
+            // the text, which is what every `CHECK` macro's `%s` depends on.
+            const verb: []const u8 = switch (conv) {
+                's' => "s",
+                'f', 'g', 'r', 't', 'u', 'z', 'v' => "d",
+                else => if (ty == .str) "s" else "d",
+            };
+            try fmt.append(a, '{');
+            try fmt.appendSlice(a, verb);
+            // `%f`'s six decimals only apply when the source did not say otherwise.
+            try appendZigSpec(g, fmt, spec, if (conv == 'f' and spec.prec == null) ".6" else null);
+            try fmt.append(a, '}');
+            try ops.append(a, .{ .v = v, .want = ty, .spec = spec });
+        },
     }
-    try fmt.append(a, '}');
-    try ops.append(a, .{ .v = v, .want = if (as_int) .int else ty, .pad = pad, .chr = conv == 'c' and ty != .str });
 }
 
 /// Render one operand of a `std.debug.print`. The `S` scalar is opaque, so a
 /// real crosses into the format layer through `.val()`; an integer and a
-/// string are already plain Zig values.
+/// string are already plain Zig values. The .cint/.cexp arms emit labeled
+/// block EXPRESSIONS into the argument tuple — their scratch is the `zb{i}`
+/// array `emitScratch` declared in the enclosing display block.
 pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
-    if (p.pad) {
-        try g.b("zPadInt(&zb{d}, ", .{i});
-        try g.renderVal(p.v, .int);
-        return g.b(")", .{});
-    }
-    switch (p.want) {
-        .real => {
-            try g.b("(", .{});
-            try g.renderVal(p.v, .real);
-            try g.b(").val()", .{});
+    switch (p.how) {
+        .pad => {
+            try g.b("zPadInt(&zb{d}, ", .{i});
+            try g.renderVal(p.v, .int);
+            try g.b(")", .{});
         },
-        .int => if (p.chr) {
+        .bits => {
+            try g.b("@as(u64, @bitCast(@as(i64, ", .{});
+            try g.renderVal(p.v, .int);
+            try g.b(")))", .{});
+        },
+        .chr => {
             try g.b("@as(u8, @truncate(@as(u64, @bitCast(@as(i64, ", .{});
             try g.renderVal(p.v, .int);
             try g.b(")))))", .{});
-        } else try g.renderVal(p.v, .int),
-        .str => try g.renderVal(p.v, .str),
+        },
+        .cint => {
+            // C 7.21.6.1 sign placement. Zero-fill: zeros go AFTER the sign,
+            // so the negative branch prints `-` then pads |v| to width-1, and
+            // the non-negative branch prints the '+'/' '/nothing the flags ask
+            // for then pads to what is left. @abs on an i64 returns u64, so
+            // minInt needs no special case. Without zero-fill the field is
+            // sign+digits and the OUTER `{s:>W}` does any padding.
+            const sign: []const u8 = if (p.spec.plus) "+" else if (p.spec.space) " " else "";
+            const w = p.spec.w();
+            const zero_fill = p.spec.zero and !p.spec.left and p.spec.width > 0;
+            try g.b("zi{d}: {{ const zv: i64 = ", .{i});
+            try g.renderVal(p.v, .int);
+            if (zero_fill) {
+                // @abs in BOTH branches: Zig spells `+42` for a SIGNED int the
+                // moment a width fixes the field, and @abs's u64 has no sign
+                // for it to spell.
+                try g.b("; if (zv < 0) break :zi{d} std.fmt.bufPrint(&zb{d}, \"-{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable", .{ i, i, w - 1 });
+                try g.b("; break :zi{d} std.fmt.bufPrint(&zb{d}, \"{s}{{d:0>{d}}}\", .{{@abs(zv)}}) catch unreachable; }}", .{ i, i, sign, w - sign.len });
+            } else {
+                try g.b("; break :zi{d} std.fmt.bufPrint(&zb{d}, \"{{s}}{{d}}\", .{{ if (zv < 0) \"\" else \"{s}\", zv }}) catch unreachable; }}", .{ i, i, sign });
+            }
+        },
+        .cexp => {
+            // Format with Zig's `{e:.P}` into the first half of the scratch,
+            // then rewrite the exponent the way C spells it: sign always
+            // present, at least two digits ("1e4" → "1e+04"). A text with no
+            // 'e' (inf/nan) passes through — C prints those bare too. f64
+            // exponents have at most three digits, so one padding '0' is the
+            // most ever inserted.
+            const prec = p.spec.p(6);
+            const half = prec + 20;
+            try g.b("ze{d}: {{ const zv: f64 = (", .{i});
+            try g.renderVal(p.v, .real);
+            try g.b(").val(); const zt = std.fmt.bufPrint(zb{d}[0..{d}], \"{{e:.{d}}}\", .{{zv}}) catch unreachable; ", .{ i, half, prec });
+            try g.b("const zx = std.mem.lastIndexOfScalar(u8, zt, 'e') orelse break :ze{d} zt; ", .{i});
+            try g.b("const zn = zt[zx + 1] == '-'; const zg = zt[zx + 1 + @intFromBool(zn) ..]; ", .{});
+            try g.b("break :ze{d} std.fmt.bufPrint(zb{d}[{d}..], \"{{s}}{c}{{s}}{{s}}{{s}}\", .{{ zt[0..zx], if (zn) \"-\" else \"+\", if (zg.len < 2) \"0\" else \"\", zg }}) catch unreachable; }}", .{ i, i, half, @as(u8, if (p.upper) 'E' else 'e') });
+        },
+        .plain => switch (p.want) {
+            .real => {
+                try g.b("(", .{});
+                try g.renderVal(p.v, .real);
+                try g.b(").val()", .{});
+            },
+            .int => try g.renderVal(p.v, .int),
+            .str => try g.renderVal(p.v, .str),
+        },
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests — the emitted translation, pinned byte-for-byte. The runtime halves
+// of the same rules (the actual transcript text) are pinned by
+// tests/fixtures/ch09_system_tasks/170_display_argument_runs.va and
+// 171_display_c_format_flags.va, which format into a string variable and
+// compare it to a literal — text a unit test over an emitter cannot execute.
+// ---------------------------------------------------------------------------
+
+const Preprocessor = @import("../frontend/preprocessor.zig");
+const Lexer = @import("../frontend/lexer.zig");
+const Parser = @import("../frontend/parser.zig");
+const proof = @import("../ir/proof.zig");
+const diag = @import("../diag.zig");
+
+/// The pipeline through `cg.generate` with §9.4 display ON, arena-lived — the
+/// same stages codegen.zig's private Harness runs, kept local so this file's
+/// tests do not reach into another file's test scaffolding.
+fn genDisplayText(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
+    var bag = diag.Bag.init(arena);
+    const text = try Preprocessor.process(arena, src, .{ .bag = &bag });
+    const toks = try Lexer.Lexer.tokenize(arena, text);
+    var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &bag);
+    var file = try p.parseSourceFile();
+    file.builtin_modules = Preprocessor.spice_module_count;
+    var mir: Mir = .{};
+    var low = Lower.init(arena, &mir, &file, text, toks.items(.start), &bag);
+    try low.lowerFile();
+    const v = try proof.prove(arena, &mir, &low, &bag);
+    var fatal = false;
+    return (try cg.generate(arena, arena, &mir, &low, v, &fatal, .{ .display = .emit })).text;
+}
+
+/// One analog block body → the printing artifact's text.
+fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
+    const src = try std.fmt.allocPrint(arena,
+        \\module t(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    {s}
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+        \\
+    , .{body});
+    return genDisplayText(arena, src);
+}
+
+fn has(text: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, text, needle) != null;
+}
+
+test "§9.4.1 every string argument opens a format run; output concatenates" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // Two runs, each consuming its own operand: `a=1b=2`, with no separator
+    // anywhere — the second string is a FORMAT, not the first run's operand.
+    const two = try emitBody(a, "$strobe(\"a=%d\", 1, \"b=%d\", 2);");
+    try std.testing.expect(has(two, "\"a={d}b={d}\\n\""));
+
+    // A string consumed BY a conversion stays an operand: `%s` takes "x",
+    // then "y=%d" opens the next run over 2.
+    const eaten = try emitBody(a, "$strobe(\"%s;\", \"x\", \"y=%d\", 2);");
+    try std.testing.expect(has(eaten, "\"{s};y={d}\\n\""));
+
+    // An expression BEFORE the first string prints in the §9.4.3 default —
+    // the old code dropped it on the floor. In order: `3.5lead 7`.
+    const lead = try emitBody(a, "$strobe(3.5, \"lead %d\", 7);");
+    try std.testing.expect(has(lead, "\"{d}lead {d}\\n\""));
+    try std.testing.expect(has(lead, "S.con(3.5)"));
+
+    // No inserted space before a bare trailing operand: `v:42`, not `v: 42`.
+    // §9.4.1's way to write that space is a null argument.
+    const bare = try emitBody(a, "$strobe(\"v:\", 42);");
+    try std.testing.expect(has(bare, "\"v:{d}\\n\""));
+}
+
+test "§9.7.3 $fatal's finish_number is a diagnostic level, not message text" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const out = try emitBody(a, "$fatal(0, \"died %d\", 7);");
+    // The 0 is consumed by the skip, not printed by the walk.
+    try std.testing.expect(has(out, "\"FATAL: died {d}\\n\""));
+    try std.testing.expect(!has(out, "{d}died"));
+}
+
+test "§9.4.3 Table 9-23: %e is C's exponential — .6 default, signed 2-digit exponent" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // `%e` of 1.5 must print `1.500000e+00`: the block formats with Zig's
+    // `{e:.6}` and rewrites the exponent to C's signed, zero-padded form.
+    const e = try emitBody(a, "$strobe(\"%e\", 1.5);");
+    try std.testing.expect(has(e, "\"{e:.6}\""));
+    try std.testing.expect(has(e, "\"{s}e{s}{s}{s}\"")); // the C-ifying rewrite
+    try std.testing.expect(has(e, "\"{s}\\n\"")); // printed as a composed field
+
+    // Explicit width/precision are honored: `%10.4e` pads the composed field.
+    const wp = try emitBody(a, "$strobe(\"%10.4e\", 1.5);");
+    try std.testing.expect(has(wp, "\"{e:.4}\""));
+    try std.testing.expect(has(wp, "\"{s:>10}\\n\""));
+
+    // `%E` keeps C's uppercase exponent marker.
+    const up = try emitBody(a, "$strobe(\"%E\", 1.5);");
+    try std.testing.expect(has(up, "\"{s}E{s}{s}{s}\""));
+}
+
+test "§9.4.3/C: integer sign flags — %05d packs zeros after the sign, %+d prints it" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // `%05d` of -42 must print `-0042`, not Zig's `00-42`: the negative branch
+    // writes the sign first and zero-pads the magnitude to width-1.
+    const z = try emitBody(a, "$strobe(\"%05d\", -42);");
+    try std.testing.expect(has(z, "\"-{d:0>4}\""));
+    try std.testing.expect(has(z, "\"{d:0>5}\""));
+
+    // `%+d` of 7 prints `+7` — the flag used to be parsed and dropped.
+    const plus = try emitBody(a, "$strobe(\"%+d\", 7);");
+    try std.testing.expect(has(plus, "if (zv < 0) \"\" else \"+\""));
+
+    // A width alone still routes through zPadInt (`  -42`, ` 42`), the
+    // documented text-padding detour.
+    const pad = try emitBody(a, "$strobe(\"%5d\", -42);");
+    try std.testing.expect(has(pad, "zPadInt(&zb0, "));
+    try std.testing.expect(has(pad, "\"{s:>5}\\n\""));
+}
+
+test "§9.4.3 Table 9-22: %h shows the operand's two's-complement bit pattern" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // VerA integers are 64-bit (§2.6.1 — a literal keeps all 64 bits), so
+    // `%h` of -42 is ffffffffffffffd6: the u64 bitcast is what stops Zig's
+    // `{x}` from writing `-2a` instead. Same treatment for %o and %b.
+    const out = try emitBody(a, "$strobe(\"%h %o %b\", -42, -42, -42);");
+    try std.testing.expect(has(out, "\"{x} {o} {b}\\n\""));
+    try std.testing.expect(has(out, "@as(u64, @bitCast(@as(i64, "));
+}
