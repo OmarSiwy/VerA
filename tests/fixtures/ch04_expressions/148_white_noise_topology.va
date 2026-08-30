@@ -29,7 +29,7 @@
 //
 //! lrm 4.6.4.1
 //! lrm 4.6.2
-//! noise thermal(a,b)
+//! noise thermal(a,b)#0
 //! analysis dc
 //! temp 300.15
 //! bias V(a) = 1.0

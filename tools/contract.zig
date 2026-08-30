@@ -141,31 +141,31 @@ const sim_state_fields = [_]SimStateField{
 };
 
 /// §4.6.4 noise generator topology. Position k of `noise_gens` names one
-/// generator of `kind` on the (row, col) branch. That is the whole of it, and
-/// what it CANNOT say is worth as much to a host as what it can.
+/// generator of `kind` on the (row, col) branch.
 ///
-/// **§4.6.4.6 correlated noise is not expressible.** The clause's mechanism is
-/// "using the output of one noise function for more than one noise source", so
-/// expressing it needs entries that can SHARE a generator — a `source` field,
-/// and a `coeff` for the scaling each contribution applies. Neither exists.
-/// Two `.thermal` rows on two branches are today indistinguishable from two
-/// independent generators, and a host reading this table has no way to know
-/// which it has.
+/// **§4.6.4.6 correlation is the `source` field.** The clause's mechanism is
+/// "using the output of one noise function for more than one noise source":
+/// two rows carrying the SAME non-null `source` are one physical generator
+/// contributed to two branches — perfectly correlated — while distinct values
+/// (and null) are independent generators. VerA numbers sources densely in
+/// first-appearance order; a hand-written device may leave the default, which
+/// declares every row independent, exactly what an absent field used to mean.
+/// The fixtures that grade the sharing are
+/// `tests/fixtures/ch04_expressions/38_correlated_noise.va` (Example 1, one
+/// shared source) and `161_partially_correlated_noise.va` (Example 2, shared +
+/// unshared).
 ///
-/// This docstring described `source` and `coeff` as if they were fields for
-/// several revisions. They never were. If they are added, the fixture that
-/// grades them is
-/// `tests/fixtures/ch04_expressions/150_noise_source_through_variable.va`,
-/// which is XFAIL on the lowering half of the same gap — a noise source reached
-/// through a variable exports nothing at all — and those two halves land
-/// together: tracking the source as a value through lowering is what produces
-/// the identity a `source` field would name.
+/// Still not expressible: the per-use scaling coefficient (`c1*n` vs `c2*n`) —
+/// a `coeff` lands with the `noisePsd` hook, which is the first thing that
+/// could evaluate it.
 pub fn NoiseGen(comptime D: type) type {
     const n = nU(D);
     return struct {
         row: std.math.IntFittingRange(0, n - 1),
         col: std.math.IntFittingRange(0, n - 1),
         kind: enum { thermal, shot, flicker },
+        /// §4.6.4.6 shared-generator identity; null = independent.
+        source: ?u16 = null,
     };
 }
 
