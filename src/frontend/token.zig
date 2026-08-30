@@ -136,6 +136,24 @@ pub const Tag = enum(u8) {
     kw_endgenerate,
     kw_defparam, // §6.3.1 parameter_override (A.1.4)
 
+    // connect specifications §7.7, annex A.1.8 — the `connectrules` design
+    // element (an A.1.2 description alternative) and the keywords of its two
+    // item forms. Moved out of `reserved_keywords` for the reason
+    // `connectmodule` was: A.1.8 gives each a production, so they are
+    // constructs the parser dispatches (`parseConnectRules`), not spellings
+    // with nothing behind them. All six are Verilog-AMS-only words — none is on
+    // an IEEE 1364 list — so `introducedIn` defaults them to `.vams_2_3`,
+    // which is exactly what the same spellings answered from the reserved
+    // list; §10.6 membership is keyed by spelling and does not move.
+    // `exclude` (A.1.8 discipline_identifier_or_exclude) already has a tag:
+    // §3.4.2 value ranges spend the same keyword, see `kw_exclude` below.
+    kw_connectrules,
+    kw_endconnectrules,
+    kw_connect,
+    kw_resolveto,
+    kw_merged, // §7.7.4 connect_mode
+    kw_split,
+
     // declarations §3.x
     kw_parameter, // §3.4
     kw_localparam, // §3.4.4
@@ -770,10 +788,14 @@ const reserved_keywords = [_][]const u8{
     // `kw_connectmodule` / `kw_driver_update`: A.1.2 makes the first a
     // module_keyword and A.6.5 makes the second an event_expression, so both
     // are constructs the parser dispatches. They stay reserved — this list is
-    // only about which spellings have nothing behind them.
-    "connect",            "connectrules",  "endconnectrules", "merged",
-    "net_resolution",     "resolveto",
-    "split",              "wreal",
+    // only about which spellings have nothing behind them. The A.1.8
+    // `connectrules` family (`connect`, `connectrules`, `endconnectrules`,
+    // `merged`, `resolveto`, `split`) moved out the same way and for the same
+    // reason — see the `kw_connectrules` group. What is left of C.16's list is
+    // the two words annex A really does spend on nothing: `net_resolution`
+    // appears in no production at all, and `wreal` (§3.7) declares a discrete
+    // real net there is no digital kernel to drive.
+    "net_resolution", "wreal",
     // digital behavior / structural §IEEE1364
     //
     // `assert` earns its place the way `net_resolution` above it does: Table

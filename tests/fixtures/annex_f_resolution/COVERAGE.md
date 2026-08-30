@@ -5,36 +5,42 @@ Source: `docs/annex-f-resolution.html`, read section by section.
 HTML section-ID audit: `sF-1` `sF-2` `sF-2-1` `sF-2-2`. Four sections, and Annex F
 is normative.
 
-Seven fixtures live in this folder: 3 carry a `//! reject` arm, 4 run and assert, and
-**exactly one is `//! xfail`** — grep-measured, `unknown_discipline_mixed_port.va`. Two
-of the seven — `continuous_discipline.va` and `in_context_declaration.va` — cite no Annex
-F clause at all and are counted at the bottom, not in the table.
+Eleven fixtures live in this folder: 4 carry a `//! reject` arm, 7 run and assert, and
+**none is `//! xfail`** — grep-measured. Two of the eleven — `continuous_discipline.va`
+and `in_context_declaration.va` — cite no Annex F clause at all and are counted at the
+bottom, not in the table.
 
-This paragraph used to read "all five cite Annex F and all five are `//! xfail` … not one
-sentence of this annex is currently met", and the reason it gave for four of the five was
-that resolution needs an elaborated *signal* while VerA was a flat single-module compiler
-refusing `module instantiation is not supported` (E0204, now retired). Both halves are
-dead: `ir/elaborate.zig` flattens the instance tree, so a signal's segments collapse into
-one node and F.2's parent/child relation *is* the port binding, and `Elaborate.resolveDiscipline`
-gives an undeclared parent its declared child's discipline. Four of the five are green.
-The one that is left needs neither hierarchy nor a digital engine — see its row.
+This paragraph used to read "exactly one is `//! xfail`", and before that "all five cite
+Annex F and all five are `//! xfail` … not one sentence of this annex is currently met".
+Both stages closed the same way: the first when `ir/elaborate.zig` flattened the instance
+tree — a signal's segments collapse into one node, F.2's parent/child relation *is* the
+port binding, and `Elaborate.resolveDiscipline` gives an undeclared parent its declared
+child's discipline — and the last when step 4.b's multi-candidate arm landed
+(`Elaborate.resolveMultiCandidates`): the walk now also collects the SET of a signal's
+segment disciplines, partitions it by domain (4.a), matches it against the parsed
+`connectrules` block's §7.7.2 resolution statements (4.b bullet 3, set equality;
+`resolveto exclude` refuses instead, E0917), and fires the fourth bullet's mixed-port
+error (E0903) where no statement matches. `connectrules` itself parses since the same
+wave (A.1.8; it was E0201).
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
 | `sF-1` | resolution semantics are 7.4's; this annex prints *a possible* algorithm, and other conforming algorithms are allowed | `hierarchy_resolution.va` (`//! lrm F.1`) — green. F.1 states no rule that can fail on its own; the cite is the fixture's argument that its design is one where F.2.1 and F.2.2 provably cannot disagree, so the assertion is about 7.4's semantics and not about an algorithm choice |
 | `sF-2` | parent = upper connection, child = lower connection; post-order depth-first traversal; continuous passed up the hierarchy | `hierarchy_resolution.va` (`//! lrm F.2`) — green. Three segments deep, one declaration at the leaf, `Hpot`/`Hflw` access names so the top segment cannot resolve by accident. Post-order only; the top-down traversal *definition* in the same section has no fixture |
-| `sF-2-1` | default algorithm: elaborate → in-context declarations → out-of-context declarations → conflict is an error → depth-first classify and resolve → insert converters | step 3 error, both halves: `conflicting_declarations.va` (in-context, lowering's own E0902) and `conflicting_ooc_declarations.va` (out-of-context, elaboration's — a duplicate KEY in the out-of-context table, since §3.10 makes two declarations at one precedence level illegal whether or not the disciplines are compatible), both `//! reject E0902`, both green. Step 3 legal override: `out_of_context_declaration.va` — green. Step 4.b single-discipline bullet: `hierarchy_resolution.va` — green. Step 4.b unknown-with-mixed-port bullet: `unknown_discipline_mixed_port.va` (`//! reject E0903`) — still **`//! xfail`**, and NOT for want of a second simulation domain — it demands an error, not an execution. What is missing is a resolution rule: `resolveDiscipline` keeps the FIRST declared discipline of a signal's segments instead of collecting the SET, so "more than one candidate whose domain matches" is never decided. E0903 is reserved for it. Steps 1, 2 and the final insertion step have no fixture of their own |
-| `sF-2-2` | alternate expanded analog algorithm: same first pass, then a *top-down* pass over nets left unknown or marked digital by step 4, then insertion | shared text only. `conflicting_declarations.va`, `conflicting_ooc_declarations.va`, `out_of_context_declaration.va` and `unknown_discipline_mixed_port.va` each carry `//! lrm F.2.2` because the steps they pin are printed word-for-word in both algorithms — each header says so. **F.2.2 step 5, the top-down pass that is the entire difference between the two algorithms, has no fixture.** Three of the four cites are green now; `unknown_discipline_mixed_port.va` is the exception |
+| `sF-2-1` | default algorithm: elaborate → in-context declarations → out-of-context declarations → conflict is an error → depth-first classify and resolve → insert converters | step 3 error, both halves: `conflicting_declarations.va` (in-context, lowering's own E0902) and `conflicting_ooc_declarations.va` (out-of-context, elaboration's — a duplicate KEY in the out-of-context table, since §3.10 makes two declarations at one precedence level illegal whether or not the disciplines are compatible), both `//! reject E0902`, both green. Step 3 legal override: `out_of_context_declaration.va` — green. Step 4.b single-discipline bullet: `hierarchy_resolution.va` — green. Step 4.b resolution-statement bullet: `resolveto_resolution.va` — green, a two-candidate net resolved by its matching `connect ... resolveto` statement to a discipline that is NEITHER candidate (§7.7.2.1 allows that, and it is what makes the assertion observable: the resolved discipline's own access function). Step 4.b unknown-with-mixed-port bullet: `unknown_discipline_mixed_port.va` (`//! reject E0903`) — **green**, the folder's last xfail closed: `Elaborate.resolveMultiCandidates` collects the SET of segment disciplines, finds {annex_f_a, annex_f_b} unmatched by any resolution statement, and errors on the discrete crossing. The §7.7.2 `exclude` refusal that rides the same arm: `exclude_resolution.va` (`//! reject E0917`) — green. Steps 1, 2 and the final insertion step have no fixture of their own |
+| `sF-2-2` | alternate expanded analog algorithm: same first pass, then a *top-down* pass over nets left unknown or marked digital by step 4, then insertion | shared text only. `conflicting_declarations.va`, `conflicting_ooc_declarations.va`, `out_of_context_declaration.va`, `resolveto_resolution.va`, `exclude_resolution.va` and `unknown_discipline_mixed_port.va` each carry `//! lrm F.2.2` because the steps they pin are printed word-for-word in both algorithms — each header says so. **F.2.2 step 5, the top-down pass that is the entire difference between the two algorithms, has no fixture** (in the flattened design both traversals see the same one-node segment set, which is why `resolveMultiCandidates` implements them as one pass — its doc says so). All six cites are green |
 
-Fixture-name audit, 7 files, all mapped above or below: `conflicting_declarations.va`,
-`conflicting_ooc_declarations.va`, `continuous_discipline.va`,
+Fixture-name audit, 11 files, all mapped above or below: `conflicting_declarations.va`,
+`conflicting_ooc_declarations.va`, `continuous_discipline.va`, `exclude_resolution.va`,
 `hierarchy_resolution.va`, `in_context_declaration.va`,
-`out_of_context_declaration.va`, `unknown_discipline_mixed_port.va`.
+`out_of_context_declaration.va`, `out_of_context_internal_net.va`,
+`out_of_context_long_path.va`, `resolveto_resolution.va`,
+`unknown_discipline_mixed_port.va`.
 
 ## The xfail ledger
 
-One Annex F fixture in this folder still runs and fails. The rest of this ledger is
-kept, struck through in prose, because the reason each row gave was the reason it closed.
+NO Annex F fixture runs and fails any more. The ledger is kept, struck through in
+prose, because the reason each row gave was the reason it closed.
 
 | Fixture | Section it serves | Reason |
 |---|---|---|
@@ -43,11 +49,11 @@ kept, struck through in prose, because the reason each row gave was the reason i
 | `out_of_context_declaration.va` | `sF-2-1` step 3, legal override | Green, and it built rather than passing by accident: `annex_f_x` names `Xpot`/`Xflw`, `annex_f_y` names `Ypot`/`Yflw`, and the assertion calls `Ypot`, which only exists if §3.10 order 1 really replaced the leaf's local declaration |
 | `out_of_context_long_path.va` | `sF-2-1` step 3, past 256 path bytes | Green. `out_of_context_internal_net.va` with a 270-character instance identifier: `Elaborate.oocDiscipline` used to build its lookup key in a fixed 256-byte buffer and swallow the overflow, so a long path silently KEPT its local declaration — order-1 precedence inverted for long names only. The key join allocates now, like every sibling |
 | `hierarchy_resolution.va` | `sF-1`, `sF-2`, `sF-2-1` step 4.b | Green. Flattening collapses every segment of one signal into a single node, so F.2's parent/child relation IS the port binding: a segment that declares a discipline gives it to the signal and an undeclared parent inherits it (`Elaborate.resolveDiscipline`). The known ceiling is TWO declared segments of one signal, which is §3.11's compatibility rule and not this one |
-| `unknown_discipline_mixed_port.va` | `sF-2-1` 4.b bullet 4, `sF-2-2` 4.b and 5.b | Still xfail, and the blocker has moved: the `connectmodule` halves PARSE and are accepted now (§7.6, A.1.2 — `ch07_mixed_signal/connectmodule_accepted.va`), so the keyword is not it, and neither is a discrete-time domain — this fixture demands an error, not an execution. What is missing is a RESOLUTION rule: `Elaborate.resolveDiscipline` keeps the FIRST declared discipline of a signal's segments and never builds the SET, so step 4.b's "more than one candidate whose domain matches, no `resolveto` for it, therefore UNKNOWN" is never decided and the mixed-port test over it never fires. `connectrules` is also still E0201. E0903 stays reserved for the rule |
+| `unknown_discipline_mixed_port.va` | `sF-2-1` 4.b bullet 4, `sF-2-2` 4.b and 5.b | Green, and it closed exactly along the line its last update drew: the blocker was a RESOLUTION rule, not a design element. `connectrules` parses (A.1.8; the file's block is two §7.7.1 insertions, which name real connect modules and resolve nothing — the distinction its header stands on), and `Elaborate.resolveMultiCandidates` now builds the SET of segment disciplines, decides "more than one candidate whose domain matches, no `resolveto` for it, therefore UNKNOWN", and fires the mixed-port test over it. E0903 emitted for the first time |
 
-One reserved code left, E0903, and one fixture behind it. E0902 was the other and it
-exists now — which is what reserving a code rather than betting the fixture on a
-message fragment is for: the fixture's `//! reject` line never had to change.
+No reserved codes left in class 9. E0902 closed first, E0903 last — which is what
+reserving a code rather than betting the fixture on a message fragment is for: neither
+fixture's `//! reject` line ever had to change.
 
 ## What this annex needs that no fixture supplies
 
@@ -72,19 +78,21 @@ An empty cell above is a real gap, and these are the gaps:
   own precedence and are green now (both `//! reject E0337` — the directive is applied,
   and *resetting* it leaves the net with no discipline); neither reaches resolution,
   which is what this bullet is about.
-- **F.2.1 step 4.b bullet 3, the resolution `connect` statement.** `resolveto`
-  appears exactly once in this folder, in a comment in
-  `unknown_discipline_mixed_port.va` explaining that its own `connect` statements
-  are §7.7.1 *insertion* and deliberately not resolution. No source matches a
-  discipline list against a resolution statement.
+- **F.2.1 step 4.b bullet 3's subset fallback.** The exact-set match is
+  `resolveto_resolution.va` and its miss is `unknown_discipline_mixed_port.va`, but
+  §7.7.2.1's "when there is no exact fit ... based on the subset of the rules
+  specified" is not implemented (`Elaborate.matchResolution` says so) and has no
+  fixture; nor has its multi-match first-wins warning.
 - **F.2.1 step 4.b bullet 4, the legal half.** Unknown-and-legal (unknown discipline
-  with no mixed-port connection) has no fixture; only the error half does.
+  with no mixed-port connection) has no fixture; the error half does, and the legal
+  half is pinned by a unit test in `src/ir/elaborate.zig` (the net keeps its first
+  arrival and the design elaborates).
 - **F.2.1 / F.2.2 final step, converter selection and insertion (7.7, 7.8).**
-  `unknown_discipline_mixed_port.va` is the only source here with a `connectmodule` or a
-  `connectrules` block (the connect modules are accepted; the `connectrules` is E0201),
-  and it never reaches insertion by construction — §7.6 puts
-  insertion after resolution and this fixture demands that resolution error out
-  first. Insertion itself belongs to `ch07_mixed_signal/`.
+  `connectmodule` declarations and `connectrules` blocks are accepted and validated
+  (E0915/E0916 name the checks), but no fixture reaches insertion because VerA has
+  no insertion phase at all — §7.6 puts it after resolution, and the two reject
+  fixtures here error out in resolution by construction. Insertion itself belongs
+  to `ch07_mixed_signal/`.
 - **F.2.2 step 5 in full.** The top-down re-classification pass, the re-examination
   of nets assigned a digital domain in step 4, and the parent-discipline list of
   5.b are the only content unique to the alternate algorithm, and nothing here
@@ -110,4 +118,4 @@ Annex F sentence is reached.
   than assumed. This is the local declaration that `out_of_context_declaration.va`
   exists to override.
 
-Both are dc: four fixtures carry `//! bias`, none carries `//! analysis`.
+Both are dc: seven fixtures carry `//! bias`, none carries `//! analysis`.
