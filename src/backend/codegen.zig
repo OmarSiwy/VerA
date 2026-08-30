@@ -3564,6 +3564,13 @@ pub const Gen = struct {
         // device they fall through to `void_tasks` below.
         if (self.display == .emit and Lower.isDisplayTask(name))
             return cg_display.emitDisplayTask(self, name, args);
+        // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
+        // the call's position among the prints; in a device the call is dead
+        // (`Lower.isSimCtlTask` calls join the display chain and nothing else,
+        // so under `.drop` nothing ever renders one — the fall-through to
+        // `void_tasks` below is for a model that reads the void result).
+        if (self.display == .emit and Lower.isSimCtlTask(name))
+            return cg_display.emitSimCtl(self, name, args);
         // §9.5 the descriptor family. Real kernels only in the display unit (see
         // `emitting_display`); rendered but discarded in any other unit of the
         // same artifact, so the slice `callArgIsValue` asked for is consumed.
@@ -5684,6 +5691,15 @@ const prelude_str_txt = aliasesOf(str_txt);
 const display_txt =
     \\fn zPadInt(buf: []u8, v: i64) []const u8 { // §9.4.3 %<width>d
     \\    return std.fmt.bufPrint(buf, "{d}", .{v}) catch unreachable;
+    \\}
+    \\
+    \\/// §9.7 simulation control: the run ends here. Declared `f64` and not
+    \\/// `noreturn` ON PURPOSE: statements after a §9.7.3 `$fatal` are legal
+    \\/// dead code (exhaustive/011 writes `$finish; $stop;` after one), and a
+    \\/// noreturn-typed call site would make Zig refuse the block for
+    \\/// unreachable code. The value is never produced.
+    \\fn zHalt(code: u8) f64 {
+    \\    std.process.exit(code);
     \\}
     \\
 ;

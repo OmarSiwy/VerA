@@ -5362,7 +5362,33 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
             .tok = tok,
             .conditional = self.cond_depth != 0,
         });
+    } else if (isSimCtlTask(name)) {
+        // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
+        // side-effect phase as the display tasks: both clauses tie the task to
+        // the SOLVE ("during an accepted iteration"), which is exactly what the
+        // display phase is, and §9.7.3's $fatal — "an implicit call to $finish"
+        // — already travels this way as a member of the severity family. In the
+        // printing artifact the call terminates the run at its position among
+        // the prints (cg_display.emitSimCtl); in a device it is dropped like a
+        // print, with the same W0850, because eval has no channel to stop a
+        // host's solve. A conditional call is dropped under W0851 exactly as a
+        // conditional $strobe is — §9.4.6's argument applies verbatim.
+        try self.displays.append(self.arena, .{
+            .val = v,
+            .name = name,
+            .tok = tok,
+            .conditional = self.cond_depth != 0,
+        });
     }
+}
+
+/// §9.7.1 `$finish` and §9.7.2 `$stop` — the two IEEE 1364 simulation-control
+/// tasks the analog context inherits. NOT `isDisplayTask`: they print only
+/// their Table 9-25 diagnostics, take no §9.4.3 format, and what defines them
+/// is what they do to the RUN. The §9.7.3 severity family ($fatal included) is
+/// in `isDisplayTask`, because its whole content is a formatted message.
+pub fn isSimCtlTask(name: []const u8) bool {
+    return std.mem.eql(u8, name, "$finish") or std.mem.eql(u8, name, "$stop");
 }
 
 /// §9.5 Sequence one file-family call into the per-point I/O phase.
