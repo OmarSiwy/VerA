@@ -782,10 +782,14 @@ pub fn callTy(name: []const u8) VTy {
 pub const Folded = struct { f: f64 };
 
 /// A folded INTEGER back in its own type, so §3.2's width can be applied to it.
-/// Exact by construction: an integer only ever enters the f64 carrier from an
-/// `int_const` or from `@floatFromInt` of a wrapped result, so it is whole.
+/// NOT exact by construction: a `fi_cast` arm below re-enters the carrier as
+/// `@round(a.f)` of an arbitrary REAL, so `integer x = 1e300;` (or a NaN out
+/// of `0.0/0.0`) reaches this cast at any magnitude — `@intFromFloat` here was
+/// safety-checked UB that panicked the compiler. `lossyCast` (saturate,
+/// NaN→0) is the SAME rule codegen emits for the runtime cast, so a folded
+/// expression and the running device answer garbage input identically.
 fn asI64(x: Folded) i64 {
-    return @intFromFloat(@round(x.f));
+    return std.math.lossyCast(i64, @round(x.f));
 }
 
 /// §4.2 constant expression folding over MIR, used for parameter defaults
