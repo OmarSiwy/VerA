@@ -8,8 +8,8 @@ Sixty-eight ids, forty-six of them carrying a fixture that exercises the
 construct. The other twenty-two get an empty cell and a sentence saying why,
 never a plausible file name.
 
-169 `.va` files and one data file (`ch09_table_model_2d.tbl`): 37 carry a `//! reject` arm,
-132 run and assert, and **NONE is `//! xfail`** (grep-measured over this directory). This
+174 `.va` files and one data file (`ch09_table_model_2d.tbl`): 40 carry a `//! reject` arm,
+134 run and assert, and **NONE is `//! xfail`** (grep-measured over this directory). This
 paragraph used to say seventy-eight of the 164 were xfail and called that "by a wide margin
 the most indebted chapter in the suite"; 65 was the number actually in the tree when the
 claim was written, and it is 0 now. This chapter went from the largest debt in the suite to
@@ -64,9 +64,9 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.5.9` | file position rolled back on a rejected iteration; `$fdebug` excepted | — no fixture. The descriptor is real now, but the harness runs one accepted solve per point, so there is no rejected iteration to roll back. The rule is nevertheless what the implementation is BUILT on: every §9.5 call is sequenced in the per-accepted-point phase (`codegen.Gen.emitting_display`) and none of them runs inside `eval`, so a rejected Newton iteration cannot have written anything to undo |
 | `s9.6` | `$printtimescale` `$timeformat`, analog "No" | `154_timescale_pla_queue_analog_rejected.va` — green, `analog context`. This section is no longer all-negative-and-unmet |
 | `s9.7` | simulation control family | — parent; carried by 9.7.1–9.7.3 |
-| `s9.7.1` | `$finish` and its optional diagnostic level | `055_finish.va`, `12_finish_stop.va` |
-| `s9.7.2` | `$stop` and its optional diagnostic level | `056_stop.va`, `12_finish_stop.va`; `140_stop_in_analog_initial_rejected.va` — green, pinning `analog initial`: `$stop` is restricted by block kind |
-| `s9.7.3` | `$fatal` `$error` `$warning` `$info` | `057_fatal.va`, `058_error.va`, `059_warning.va`, `060_info.va`, `13_severity_tasks.va`. These have no return value, so what is pinned is that the run *continues past* the call — the assertion sits after it |
+| `s9.7.1` | `$finish` and its optional diagnostic level | `055_finish.va`, `12_finish_stop.va` (the guarded, not-reached half); `172_finish_terminates.va` executes it — the run exits after the accepted point, before the sweep's second point can print its deliberate `ok=0` |
+| `s9.7.2` | `$stop` and its optional diagnostic level | `056_stop.va`, `12_finish_stop.va`; `140_stop_in_analog_initial_rejected.va` — green, pinning `analog initial`: `$stop` is restricted by block kind. `174_stop_terminates.va` executes it: a batch artifact implements suspension as print-and-exit-0, and nothing after the call runs |
+| `s9.7.3` | `$fatal` `$error` `$warning` `$info` | `057_fatal.va`, `058_error.va`, `059_warning.va`, `060_info.va`, `13_severity_tasks.va`. The non-fatal three have no return value, so what is pinned is that the run *continues past* the call — the assertion sits after it. `173_fatal_terminates.va` executes `$fatal`: the message prints, the run terminates with a nonzero errorcode (the exit code itself is pinned by cg_display.zig's §9.7 emitter test), and the sweep's second point never prints |
 | `s9.8` | PLA tasks not extended to analog | `154_…_rejected.va` (`$async$and$array`) — green, `analog context`. There is no positive side: the table has no analog "Yes" row |
 | `s9.9` | stochastic queue tasks not extended to analog | `154_…_rejected.va` (`$q_initialize`) — green, `analog context`; likewise no positive side |
 | `s9.10` | `$abstime` in seconds; `$realtime` deprecated in analog | `14_abstime.va` (`//! analysis tran`, `//! time 2.5e-9`); `148_realtime_analog_rejected.va` and `149_time_stime_analog_rejected.va` — both green, `analog context`: `$realtime`/`$time`/`$stime` are no longer answered in an analog block like any other time query |
