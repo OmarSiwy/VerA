@@ -42,14 +42,22 @@
 //! keyed by the path it names), §6.4 `paramset` instantiation with §6.4.2's
 //! range-based selection, and Annex F.2's discipline resolution — which in a
 //! flattened design is the port binding itself, since collapsing every segment of
-//! one signal into one node IS F.2's parent/child relation.
+//! one signal into one node IS F.2's parent/child relation. That includes step
+//! 4.b's multi-candidate arm: the §7.7.2 `connect ... resolveto` statements of a
+//! `connectrules` block (parsed since the AMS turn) resolve a net whose segments
+//! declare more than one matching-domain discipline, `resolveto exclude` refuses
+//! one (E0917), and an UNKNOWN result with a mixed-port connection is the
+//! F.2.1/F.2.2 fourth-bullet error, E0903 (`resolveMultiCandidates`).
 //!
 //! WHAT IS NOT HERE, and each is a fixture's `//! xfail` rather than a silent
 //! gap: annex E's SPICE primitive definitions (nothing to look up, so an
-//! instance naming one is E0904), F.2.1 step 4.b's `connect`/`resolveto` arm and
-//! the mixed-port error over it (E0903 — it needs a design element VerA has no
-//! parser for), and §6.5.7.1's vector-net distribution across an instance array
-//! — a port connection has to be a scalar net reference.
+//! instance naming one is E0904), and §6.5.7.1's vector-net distribution across
+//! an instance array — a port connection has to be a scalar net reference. The
+//! §7.8 connect-module INSERTION phase is also not here, deliberately and
+//! without a fixture owed: VerA emits ONE analog device, §7.6 puts insertion
+//! after the resolution this file performs, and a bridge needs the digital
+//! kernel the artifact does not contain — so §7.7.1 insertion statements are
+//! validated (E0915) and then configure nothing.
 
 const std = @import("std");
 const Ast = @import("../frontend/ast.zig");
@@ -132,6 +140,13 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     if (ctx.file.userModules().len == 0) return error.NoModule;
     const top = try pickTop(ctx);
 
+    var f: Flatten = .{ .ctx = ctx };
+    // §7.7's names are judged whether or not the design has a hierarchy to
+    // resolve: a `connectrules` block is a description of the COMPILATION
+    // (A.1.2), not of the top module, so the tree-of-one shortcut below must
+    // not skip a misspelled connect module or discipline in one.
+    try f.checkConnectRules();
+
     // The tree of one. Returned BY POINTER, so a module with no children is
     // handed to lowering as the parser built it — same ids, same order, same
     // slices. This is the whole regression argument for putting a pass in front
@@ -141,9 +156,11 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // names a parameter "in any module instance throughout the design", so with
     // no instance it names nothing, and E0907 is owed. The flatten is where that
     // is noticed, so the shortcut is declined for it.
-    if (top.instances.len == 0 and top.defparams.len == 0) return .{ .top = top };
+    if (top.instances.len == 0 and top.defparams.len == 0) {
+        if (f.had_error) return error.DiagnosticsReported;
+        return .{ .top = top };
+    }
 
-    var f: Flatten = .{ .ctx = ctx };
     return f.run(top);
 }
 
@@ -255,18 +272,27 @@ const Flatten = struct {
     /// read them first: §6.5 the device's terminals are the top's, and a
     /// discipline resolved up the hierarchy lands on one of them.
     ///
-    /// ONE discipline per net, and Annex F.2.1 step 4.b is why that is written
-    /// down rather than merely implemented. 4.b needs the SET of candidates,
-    /// and adding a second arrival-ordered slot does NOT supply it: the
-    /// candidate list is the one filtered BY DOMAIN ("more than one candidate
-    /// whose domain matches"), and the mixed-port bullet under it needs a
-    /// segment from the OTHER domain — so
-    /// `annex_f_resolution/unknown_discipline_mixed_port.va`'s three segments
-    /// {continuous, continuous, discrete} come out right under two slots only
-    /// if the source happens to write its two continuous instances first. The
-    /// shape that decides it is domain-partitioned, and it has no consumer at
-    /// all until `connectrules` is past E0201. See TODO.md §1.
+    /// ONE discipline per net — the answer every consumer reads — and Annex
+    /// F.2.1 step 4.b is why a second slot was never added here: 4.b needs the
+    /// SET of candidates FILTERED BY DOMAIN ("more than one candidate whose
+    /// domain matches"), and the mixed-port bullet under it needs a segment
+    /// from the OTHER domain, so an arrival-ordered pair decides
+    /// `annex_f_resolution/unknown_discipline_mixed_port.va`'s
+    /// {continuous, continuous, discrete} correctly only if the source happens
+    /// to write its two continuous instances first. The shape that decides it
+    /// is the full per-net segment list, and that is `segs` — a SIDE table,
+    /// so this map keeps being the one-slot answer and no reader learns a
+    /// second concept.
     disc_of: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
+
+    /// Annex F.2.1 step 4.b's input, per flat net: EVERY discipline a child
+    /// segment declared onto it, in arrival order, with the token of the first
+    /// segment for the diagnostic. Fed by `resolveDiscipline` — the one place
+    /// a port binding contributes a declared discipline to a parent net — and
+    /// consumed once, after the walk, by `resolveMultiCandidates`. An ARRAY
+    /// hash map so the post-pass visits nets in first-binding order and a
+    /// design with two errors reports them deterministically.
+    segs: std.AutoArrayHashMapUnmanaged(Ast.StrId, Segs) = .empty,
 
     /// The flat nets whose discipline came from a BOUND PORT rather than from a
     /// declaration — §3.6.5's implicit nets, which is exactly the set §7.4.4.1's
@@ -295,6 +321,15 @@ const Flatten = struct {
     /// around the recursive call, so it is a stack discipline, not a field that
     /// outlives its unit.
     unit: Unit = .{},
+
+    /// One `segs` row: the disciplines a net's child segments declared, and
+    /// where the first one was declared (the diagnostic anchor — the same
+    /// "the DECLARATION's token" convention `resolveDiscipline`'s addNet
+    /// states).
+    const Segs = struct {
+        discs: std.ArrayList(Ast.StrId) = .empty,
+        tok: u32,
+    };
 
     const Unit = struct {
         rename: Rename = .empty,
@@ -354,6 +389,11 @@ const Flatten = struct {
         var stack: std.ArrayList(Ast.StrId) = .empty;
         try stack.append(self.a(), top.name);
         try self.walkInstances(top, "", &stack, 0);
+
+        // Annex F.2.1 step 4's multi-candidate arm, over the segment sets the
+        // walk collected — after the walk because 4.b matches the COMPLETE
+        // candidate set of a signal against §7.7.2's resolution statements.
+        try self.resolveMultiCandidates();
 
         // §5.2 analog blocks are CONCURRENT, so the order they land in carries no
         // meaning of its own — except through one rule that is stated in program
@@ -1366,23 +1406,37 @@ const Flatten = struct {
     /// single-discipline case, and the depth-first walk supplies the ORDER for
     /// free, since a child is inlined after its parent's own declarations are in.
     ///
-    /// ponytail: first declaration wins, and the ceiling is that TWO declared
-    /// segments of one signal are not compared here. That is §3.11's Signal
-    /// Connection Rule (compatible disciplines) and lowering already owns it
-    /// (E0902 for one net, two declarations) — what does NOT exist is 4.b's
-    /// resolveto/connectrules arm, which needs the `connect` design element VerA
-    /// has none of. `annex_f_resolution/unknown_discipline_mixed_port.va` is the
-    /// fixture that stays red on it.
+    /// DURING the walk, first declaration wins (plus §7.4.4.1's
+    /// continuous-over-discrete upgrade below) — which is 4.b decided
+    /// correctly wherever the matching-domain candidate set has AT MOST ONE
+    /// member, i.e. every design without a `connect ... resolveto` question to
+    /// ask. The multi-candidate arm cannot run here: 4.b wants the candidates
+    /// partitioned by domain and matched as a SET against §7.7.2's resolution
+    /// statements, and the set is not complete until every segment of the
+    /// signal has been walked. So this function also FEEDS `segs`, and
+    /// `resolveMultiCandidates` re-decides, after the walk, exactly the nets
+    /// where more than one matching-domain candidate arrived — everywhere
+    /// else the post-pass is a no-op and first-wins IS the answer, which is
+    /// what keeps every pre-`connectrules` fixture's behaviour bit-identical.
     ///
-    /// Making `disc_of` a map did NOT move this, and that is worth stating
-    /// because it looks as though it should have. The early return below is not
-    /// a lookup cost, it is a POLICY: 4.b wants the candidates partitioned by
-    /// domain, and it wants a `connect ... resolveto` list to match them
-    /// against. Widening the table without both of the other two would be a
-    /// member with no consumer. TODO.md §1 carries the costed remainder.
+    /// TWO declared segments of one signal are still not JUDGED here: that is
+    /// §3.11's Signal Connection Rule (compatible disciplines) and lowering
+    /// owns it (E0902 for one net, two declarations). What the post-pass adds
+    /// is only what F.2.1 4.b states over the multi-candidate list — resolve
+    /// by statement, or unknown, or E0903.
     fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId) Error!void {
         const disc = (try self.oocDiscipline(path, p.name)) orelse p.discipline;
         if (disc == .none) return;
+        // F.2 step 4.b's raw material: this port's lower connection is a child
+        // segment of `bound`, and it declares `disc`. Recorded UNCONDITIONALLY
+        // — whether the net resolves here, later, or was declared outright —
+        // because the post-pass, not this arrival, is what knows which nets
+        // have a question left (`port_resolved` gates it there).
+        {
+            const gop = try self.segs.getOrPut(self.a(), bound);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .tok = p.main_tok };
+            try gop.value_ptr.discs.append(self.a(), disc);
+        }
         if (self.declaredDiscipline(bound) != .none) {
             // §7.4.4.1, and it is the whole of the basic mode's rule: "At each
             // level of the hierarchy where continuous and discrete meet for an
@@ -1420,6 +1474,189 @@ const Flatten = struct {
     /// top's own declarations, or a segment resolved earlier in the walk.
     fn declaredDiscipline(self: *Flatten, name: Ast.StrId) Ast.StrId {
         return self.disc_of.get(name) orelse .none;
+    }
+
+    /// Annex F.2.1 step 4 (its 4.a/4.b are printed verbatim in F.2.2 step 4;
+    /// F.2.2's own step 5 re-runs the same bullets top-down and is not a
+    /// separate implementation here, because a flattened signal has one node
+    /// and both traversals see the same segment set). Runs ONCE, after the
+    /// walk, over every net that got its discipline from a bound port rather
+    /// than a declaration — F.2's "net ... which still has not been assigned a
+    /// discipline" — and acts only where the walk's first-wins answer was not
+    /// already 4.b's: more than one distinct candidate in the net's domain.
+    ///
+    ///  4.a  domain: "Any net whose child nets are all digital shall be
+    ///       considered digital (discrete domain), any others shall be
+    ///       considered analog (continuous domain)." The clause's other
+    ///       sentence — a net "used in digital behavioral code" is digital —
+    ///       has no input in VerA: §7.2.2 discrete blocks are recorded and
+    ///       never executed, so no net is used in one. §7.4.4.1's basic mode
+    ///       says the same thing as a precedence ("continuous winning over
+    ///       discrete"), which is why the walk's upgrade path and this
+    ///       classification cannot disagree.
+    ///  4.b  candidates: the DISTINCT segment disciplines whose domain matches
+    ///       the net's. Zero or one → the walk already answered (bullet 2, or
+    ///       bullet 1's `default_discipline which lowering applies from the
+    ///       net's own declaration side). More than one → bullet 3: a §7.7.2
+    ///       resolution statement whose list matches the set resolves the net
+    ///       (`resolveto exclude` refuses it instead, E0917); no statement →
+    ///       bullet 4: UNKNOWN, "legal provided the net has no mixed-port
+    ///       connections (i.e., it does not connect through a port to a
+    ///       segment of a different domain). Otherwise this is an error" —
+    ///       E0903.
+    ///
+    /// A legally-unknown net KEEPS the walk's first arrival. F.2 leaves an
+    /// unknown discipline unknown; VerA's downstream needs a spelling for the
+    /// net's access functions, the candidates are §3.11-compatible or lowering
+    /// will say otherwise, and the first arrival is the answer this pass's
+    /// absence always gave — so unknown-and-legal is exactly the old behaviour,
+    /// stated instead of implied.
+    ///
+    /// ponytail: set equality is the whole matching rule, per F.2.1 4.b's "the
+    /// contents of the list match the discipline list of a resolution connect
+    /// statement". §7.7.2.1's tie-break (two exact matches → warn, take the
+    /// first) is first-match without the warning, and its SUBSET fallback
+    /// ("when there is no exact fit ... based on the subset of the rules
+    /// specified") is not implemented — add it in `matchResolution` if a
+    /// design ever needs partial matches, the annex arm itself only states
+    /// exact matching.
+    fn resolveMultiCandidates(self: *Flatten) Error!void {
+        var it = self.segs.iterator();
+        while (it.next()) |entry| {
+            const net = entry.key_ptr.*;
+            // A net the source declared was decided by §3.10 precedence
+            // (steps 2/3); step 4 is only for undeclared interconnect.
+            if (!self.port_resolved.contains(net)) continue;
+            const discs = entry.value_ptr.discs.items;
+
+            // 4.a — all children digital → discrete, any others → continuous.
+            var net_continuous = false;
+            for (discs) |d| {
+                if (self.isContinuous(d)) net_continuous = true;
+            }
+
+            // 4.b's list: distinct matching-domain candidates, arrival order;
+            // and the fourth bullet's predicate on the way — a segment of the
+            // other domain IS a mixed-port connection, since every entry in
+            // `segs` arrived through a port's lower connection.
+            var cands: std.ArrayList(Ast.StrId) = .empty;
+            var mixed_port = false;
+            for (discs) |d| {
+                if (self.isContinuous(d) != net_continuous) {
+                    mixed_port = true;
+                    continue;
+                }
+                for (cands.items) |c| {
+                    if (c == d) break;
+                } else try cands.append(self.a(), d);
+            }
+            if (cands.items.len <= 1) continue; // the walk's answer stands
+
+            if (self.matchResolution(cands.items)) |r| {
+                if (r.exclude) {
+                    // §7.7.2: "deemed to be incompatible and an error is
+                    // indicated if they are found on the same net."
+                    try self.err(entry.value_ptr.tok, .E0917, "the disciplines of `{s}` match `connect ... resolveto exclude`", .{
+                        self.str(net),
+                    });
+                    continue;
+                }
+                // Bullet 3: "the net is of the resolved discipline given by
+                // the statement" — which "need not be one of the disciplines
+                // specified in the discipline list" (§7.7.2.1). Same two
+                // writes as §7.4.4.1's upgrade above.
+                self.disc_of.putAssumeCapacity(net, r.resolved);
+                for (self.nets.items) |*n| {
+                    if (n.name == net) n.discipline = r.resolved;
+                }
+                continue;
+            }
+
+            // Bullet 4. Unknown-and-legal keeps the first arrival (doc above);
+            // unknown with a segment of the other domain is the error.
+            if (mixed_port) try self.err(
+                entry.value_ptr.tok,
+                .E0903,
+                "`{s}` has candidate disciplines {{`{s}`, `{s}`{s}}} and no matching `resolveto`",
+                .{
+                    self.str(net),
+                    self.str(cands.items[0]),
+                    self.str(cands.items[1]),
+                    if (cands.items.len > 2) ", ..." else "",
+                },
+            );
+        }
+    }
+
+    /// §7.7.2 the first resolution statement whose discipline list matches
+    /// `cands` as a SET (order-free, duplicate-free on both sides — 4.b's
+    /// "the contents of the list match"). First match across every
+    /// `connectrules` block in source order, which is §7.7.2.1's tie-break.
+    fn matchResolution(self: *Flatten, cands: []const Ast.StrId) ?*const Ast.ConnectResolution {
+        for (self.ctx.file.connectrules) |*cr| {
+            rule: for (cr.resolutions) |*r| {
+                for (r.disciplines) |d| {
+                    for (cands) |c| {
+                        if (c == d) break;
+                    } else continue :rule;
+                }
+                for (cands) |c| {
+                    for (r.disciplines) |d| {
+                        if (c == d) break;
+                    } else continue :rule;
+                }
+                return r;
+            }
+        }
+        return null;
+    }
+
+    /// §7.7 the names a `connectrules` block spends, judged once per
+    /// compilation (before the tree-of-one shortcut — see `elaborate`).
+    /// A.1.2 puts no order on descriptions, so this is elaboration's and not
+    /// the parser's: the connect module or discipline may be declared after
+    /// the block.
+    fn checkConnectRules(self: *Flatten) Error!void {
+        for (self.ctx.file.connectrules) |cr| {
+            for (cr.insertions) |ins| {
+                // §7.7.1 "connect connectmodule_identifier": the name must be
+                // a §7.6 connect module — an ordinary module bridges nothing
+                // (E0913 is the same fact from the instantiation side).
+                const m = self.findModule(ins.module) orelse {
+                    try self.err(ins.main_tok, .E0915, "nothing declares `{s}`", .{self.str(ins.module)});
+                    continue;
+                };
+                if (!m.is_connect) try self.err(ins.main_tok, .E0915, "`{s}` is not declared with `connectmodule`", .{
+                    self.str(ins.module),
+                });
+                // ponytail: the §7.7.1 discipline/direction overrides and the
+                // §7.7.3 parameter names are NOT judged against the connect
+                // module's declarations — they configure the §7.8 insertion
+                // phase VerA does not have, so a check would be validating
+                // arguments to a call that is never made. Validate them
+                // alongside the insertion phase, when there is one.
+            }
+            for (cr.resolutions) |r| {
+                // §7.7.2 every identifier in a resolution statement is a
+                // discipline_identifier; one that names no discipline can
+                // never match a candidate list, and would silently turn a
+                // resolving design into an E0903 one.
+                for (r.disciplines) |d| if (!self.disciplineExists(d))
+                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.str(d)});
+                if (!r.exclude and !self.disciplineExists(r.resolved))
+                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.str(r.resolved)});
+            }
+        }
+    }
+
+    /// Is `name` a declared discipline? Same linear scan as `isContinuous` and
+    /// `primitiveAccess` — the discipline list is annex D's ~10 plus the
+    /// user's few, and elaboration asks a handful of times.
+    fn disciplineExists(self: *Flatten, name: Ast.StrId) bool {
+        for (self.ctx.file.disciplines) |*d| {
+            if (d.name == name) return true;
+        }
+        return false;
     }
 
     // ---- names ------------------------------------------------------------
@@ -2152,6 +2389,87 @@ test "Annex F.2 a leaf's discipline reaches the top segment it is bound to" {
     try std.testing.expectEqual(@as(usize, 1), design.top.nets.len);
     try std.testing.expectEqualStrings("a", f.file.str(design.top.nets[0].name));
     try std.testing.expectEqualStrings("annex_f_y", f.file.str(design.top.nets[0].discipline));
+}
+
+test "Annex F.2.1 step 4.b: resolveto resolves the multi-candidate net, no rule with a mixed port is E0903, exclude is E0917" {
+    // The candidate topology of all three: an undeclared top net bound to two
+    // leaves with distinct continuous disciplines. The `{s}` slots vary only
+    // the connectrules block and whether the discrete leaf is bound.
+    const src =
+        \\discipline fa; domain continuous; enddiscipline
+        \\discipline fb; domain continuous; enddiscipline
+        \\discipline fc; domain continuous; enddiscipline
+        \\discipline fd; domain discrete; enddiscipline
+        \\{s}
+        // `top` first: when the discrete leaf is not bound it is a second
+        // root, and pickTop takes the first root in source order.
+        \\module top(sig);
+        \\  inout sig;
+        \\  la ia(sig);
+        \\  lb ib(sig);
+        \\  {s}
+        \\endmodule
+        \\module la(p); inout p; fa p; endmodule
+        \\module lb(p); inout p; fb p; endmodule
+        \\module ld(d); inout d; fd d; endmodule
+    ;
+    const S = struct {
+        fn build(f: *Fixture, rules: []const u8, extra: []const u8) !void {
+            try parse(f, try std.fmt.allocPrint(f.arena.allocator(), src, .{ rules, extra }));
+        }
+    };
+
+    // Bullet 3: {fa, fb} matches the statement's list (order-free), so the net
+    // is fc — which is neither candidate, per §7.7.2.1's "need not be one of
+    // the disciplines specified".
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try S.build(&f, "connectrules r; connect fb, fa resolveto fc; endconnectrules", "");
+    const design = try elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 1), design.top.nets.len);
+    try std.testing.expectEqualStrings("fc", f.file.str(design.top.nets[0].discipline));
+
+    // Bullet 4, error half: no statement matches, the discipline is unknown,
+    // and the discrete segment is the mixed-port connection.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try S.build(&g, "", "ld id(sig);");
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
+    try std.testing.expectEqual(diag.Code.E0903, g.bag.at(0).code);
+
+    // Bullet 4, legal half: same unknown, no discrete segment — the net keeps
+    // the first arrival and the design elaborates.
+    var h: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer h.deinit();
+    try S.build(&h, "", "");
+    const legal = try elaborate(h.ctx());
+    try std.testing.expectEqualStrings("fa", h.file.str(legal.top.nets[0].discipline));
+
+    // §7.7.2 exclude: the match refuses the net instead of resolving it.
+    var k: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer k.deinit();
+    try S.build(&k, "connectrules r; connect fa, fb resolveto exclude; endconnectrules", "");
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(k.ctx()));
+    try std.testing.expectEqual(diag.Code.E0917, k.bag.at(0).code);
+}
+
+test "§7.7 connectrules names are judged even for a tree of one (E0915, E0916)" {
+    // `top` has no instances, so this exercises the check ahead of the
+    // tree-of-one shortcut: an insertion naming an ordinary module and a
+    // resolution naming an undeclared discipline are both dead statements.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\discipline fa; domain continuous; enddiscipline
+        \\module top(p); inout p; fa p; endmodule
+        \\connectrules r;
+        \\  connect top;
+        \\  connect fa, nowhere resolveto fa;
+        \\endconnectrules
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
+    try std.testing.expectEqual(diag.Code.E0915, f.bag.at(0).code);
+    try std.testing.expectEqual(diag.Code.E0916, f.bag.at(1).code);
 }
 
 test "an instance naming no module is E0904" {

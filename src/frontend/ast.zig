@@ -822,6 +822,80 @@ pub const ParamsetOverride = struct {
     pub const Kind = enum(u8) { module_param, output_var, system_param };
 };
 
+/// Connect specification block. LRM §7.7 (A.1.8 connectrules_declaration) —
+/// an A.1.2 description, so it is a sibling of the module/discipline lists on
+/// `SourceFile`, not of any module item. The two item forms share the
+/// `connect` keyword and split on what follows the first identifier
+/// (`Parser.parseConnectRules`).
+pub const ConnectRulesDecl = struct {
+    name: StrId,
+    /// §7.7.1 connect module auto-insertion statements, in source order.
+    insertions: []const ConnectInsertion = &.{},
+    /// §7.7.2 discipline resolution statements, in source order — the order is
+    /// load-bearing: §7.7.2.1 breaks a multi-match tie by taking "the first
+    /// match".
+    resolutions: []const ConnectResolution = &.{},
+    main_tok: u32 = 0,
+};
+
+/// `connect connectmodule_identifier [connect_mode] [#(...)] [overrides] ;`
+/// LRM §7.7.1 (A.1.8 connect_insertion): names the connect module the
+/// auto-insertion phase (§7.8) would place on a mixed net of the bridged
+/// discipline pair.
+///
+/// ponytail: `mode`, `params` and `overrides` are parsed and checked for
+/// well-formedness but have no consumer — they parameterize the INSERTION
+/// phase (§7.7.3 parameter passing, §7.7.4 merged/split segregation, §7.7.1
+/// discipline/direction overrides), and VerA does no insertion: it emits one
+/// analog device, and §7.6 puts insertion after the resolution elaboration
+/// does perform. They are carried so a `connectrules` block round-trips
+/// losslessly the day an insertion phase exists.
+pub const ConnectInsertion = struct {
+    /// §7.7.1 connectmodule_identifier — resolved at elaboration, like
+    /// `Instance.module`, because A.1.2 puts no order on descriptions.
+    module: StrId,
+    /// §7.7.4 `merged` | `split`; `.unspecified` when the source wrote none
+    /// (§7.8.3 makes `merged` the default, applied by the consumer, not here).
+    mode: Mode = .unspecified,
+    /// §7.7.3 `#(.tt(3.5n), ...)` — the same A.4.1 parameter_value_assignment
+    /// an instance carries, parsed by the same code.
+    params: []const ParamOverride = &.{},
+    /// §7.7.1 discipline (and optionally direction) overrides, or null when
+    /// the statement ends at the parameter list.
+    overrides: ?PortOverrides = null,
+    main_tok: u32 = 0,
+
+    pub const Mode = enum(u8) { unspecified, merged, split };
+    /// A.1.8 connect_port_overrides — two disciplines, each optionally
+    /// directed. The grammar fixes the legal direction pairings
+    /// (input/output, output/input, inout/inout, or neither); the parser
+    /// enforces that, so a stored pair is always one of the four productions.
+    pub const PortOverrides = struct {
+        a_dir: Direction = .unspecified,
+        a: StrId,
+        b_dir: Direction = .unspecified,
+        b: StrId,
+    };
+};
+
+/// `connect d1 { , dN } resolveto discipline_or_exclude ;` LRM §7.7.2 (A.1.8
+/// connect_resolution): when resolution (annex F.2 step 4.b, third bullet)
+/// finds more than one candidate discipline for an undeclared net and the
+/// candidate set matches `disciplines`, the net is of discipline `resolved` —
+/// which "need not be one of the disciplines specified in the discipline
+/// list" (§7.7.2.1). With `exclude` instead, the listed disciplines "are
+/// deemed to be incompatible and an error is indicated if they are found on
+/// the same net" (§7.7.2).
+pub const ConnectResolution = struct {
+    /// The discipline list before `resolveto`, in source order.
+    disciplines: []const StrId,
+    /// The discipline after `resolveto`; `.none` iff `exclude`.
+    resolved: StrId = .none,
+    /// A.1.8 discipline_identifier_or_exclude took the `exclude` arm.
+    exclude: bool = false,
+    main_tok: u32 = 0,
+};
+
 // ---------------------------------------------------------------------------
 // Statements — LRM ch5, A.6
 // ---------------------------------------------------------------------------
@@ -943,6 +1017,7 @@ pub const SourceFile = struct {
     disciplines: []const DisciplineDecl = &.{}, // §3.6.2
     natures: []const NatureDecl = &.{}, // §3.6.1
     paramsets: []const ParamsetDecl = &.{}, // §6.4
+    connectrules: []const ConnectRulesDecl = &.{}, // §7.7
 
     /// Annex E — how many LEADING entries of `modules` are shipped Table E.1
     /// SPICE primitives rather than the user's own declarations.
@@ -1041,6 +1116,7 @@ pub const SourceFile = struct {
         self.disciplines = src.disciplines;
         self.natures = src.natures;
         self.paramsets = src.paramsets;
+        self.connectrules = src.connectrules;
     }
 
     /// Append a statement; both columns stay in lockstep.
@@ -1128,11 +1204,13 @@ pub const SourceFile = struct {
 //     them. Add `attrs: []const NatureAttr` to ParamDecl/ModuleDecl when the
 //     host needs `units`/`desc` metadata; NatureAttr is already the right shape.
 //   · digital-only statements (fork/join, blocking vs nonblocking,
-//     event_trigger `->`, wait, task/UDP/specify/config/connectrules
-//     declarations) — rejected in the lexer/parser, never AST.
+//     event_trigger `->`, wait, task/UDP/specify/config declarations) —
+//     rejected in the lexer/parser, never AST.
 //     `initial`/`always` came OFF this list: they are `DiscreteBlock` now,
 //     because four rules the LRM states about a discrete context are rules
 //     about the body and were unreachable while the keyword was an error.
+//     `connectrules` came OFF it too: A.1.2 makes it a description and annex
+//     F.2 step 4.b consumes its resolution statements — see ConnectRulesDecl.
 //     `connectmodule` was never on it — A.1.2 makes it a `module_keyword`, so
 //     it is an ordinary `ModuleDecl` with `is_connect` set.
 

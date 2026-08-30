@@ -12,8 +12,9 @@
 // the same reason: a diagnostic quoting the module name must not satisfy
 // the arm.
 //
-// Reserving the spelling is a different rule from refusing the CONSTRUCT; the
-// `connect` statement inside a connect rules block is 24.
+// Reserving the spelling is a different rule from parsing the CONSTRUCT; the
+// `connect` statement inside a connect rules block parses now (A.1.8) and its
+// enclosing declaration's verdict is 24.
 //
 //! lrm C.16
 //! lrm B

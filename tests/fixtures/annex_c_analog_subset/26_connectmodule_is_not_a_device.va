@@ -37,8 +37,9 @@
 // one, not a claim that the language forbids the declaration.
 //
 // The enclosing `connectrules ... endconnectrules` block is 24; see there for
-// why they are two files. That one is still `reject E0201`, and legitimately so:
-// `connectrules` has no parser at all.
+// why they are two files. That one reached the same E1001 verdict by the same
+// settlement: the block parses now (A.1.8, §7.7) and configures a phase that
+// builds no device.
 //
 //! lrm 6.2
 //! lrm A.1.2

@@ -11,8 +11,9 @@
 // `annex_c_reserved_spelling_31`, not after the keyword, for the same reason:
 // a diagnostic quoting the module name must not satisfy the arm.
 //
-// Reserving the spelling is a different rule from refusing the CONSTRUCT; the
-// `connectrules ... endconnectrules` declaration itself is 24.
+// Reserving the spelling is a different rule from parsing the CONSTRUCT; the
+// `connectrules ... endconnectrules` declaration parses now (A.1.8), and its
+// verdict — configuration with no device to configure — is 24.
 //
 //! lrm C.16
 //! lrm B

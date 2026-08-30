@@ -165,15 +165,17 @@ pub const Parser = struct {
         try self.access_names.put(self.arena, "I", {});
 
         // Seeded (`initSeeded`) these already hold the prefix's declarations, in
-        // source order; unseeded all four are empty and this is four no-ops.
+        // source order; unseeded all five are empty and this is five no-ops.
         var modules: std.ArrayList(Ast.ModuleDecl) = .empty;
         var disciplines: std.ArrayList(Ast.DisciplineDecl) = .empty;
         var natures: std.ArrayList(Ast.NatureDecl) = .empty;
         var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
+        var connectrules: std.ArrayList(Ast.ConnectRulesDecl) = .empty;
         try modules.appendSlice(self.arena, self.file.modules);
         try disciplines.appendSlice(self.arena, self.file.disciplines);
         try natures.appendSlice(self.arena, self.file.natures);
         try paramsets.appendSlice(self.arena, self.file.paramsets);
+        try connectrules.appendSlice(self.arena, self.file.connectrules);
 
         while (true) {
             try self.skipAttributes();
@@ -237,9 +239,22 @@ pub const Parser = struct {
                     };
                     try paramsets.append(self.arena, ps);
                 },
+                // §7.7 / A.1.8 connectrules_declaration, the last A.1.2
+                // description alternative VerA parses. Its content is consumed
+                // by annex F.2 discipline resolution (`ir/elaborate.zig`);
+                // refusing it here was refusing the one design element step
+                // 4.b's third bullet reads.
+                .kw_connectrules => {
+                    const cr = self.parseConnectRules() catch |e| {
+                        try self.rethrowOom(e);
+                        self.recoverTopLevel(before);
+                        continue;
+                    };
+                    try connectrules.append(self.arena, cr);
+                },
                 else => {
-                    // UDPs, config/library files and connectrules are all out of
-                    // the annex C subset.
+                    // UDPs and config/library files are out of the annex C
+                    // subset (and have no discrete kernel to mean anything on).
                     _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
                     self.recoverTopLevel(before);
                 },
@@ -259,6 +274,7 @@ pub const Parser = struct {
         self.file.disciplines = disciplines.items;
         self.file.natures = natures.items;
         self.file.paramsets = paramsets.items;
+        self.file.connectrules = connectrules.items;
         if (self.failed) return error.ParseError;
         return self.file;
     }
@@ -296,13 +312,14 @@ pub const Parser = struct {
         while (true) : (self.pos += 1) switch (self.peek()) {
             .eof => return,
             // Everything `parseSource` dispatches a description on. A.1.2's
-            // `macromodule`/`connectmodule` are module_keyword alternatives and
-            // `paramset` starts A.1.9's declaration; leaving any of them out
-            // meant one bad description swallowed every following one of that
-            // kind. (`connectmodule` closes with `endmodule`, so the consume
-            // set below already covers it.)
-            .kw_module, .kw_macromodule, .kw_connectmodule, .kw_discipline, .kw_nature, .kw_paramset => return,
-            .kw_endmodule, .kw_enddiscipline, .kw_endnature, .kw_endparamset => {
+            // `macromodule`/`connectmodule` are module_keyword alternatives,
+            // `paramset` starts A.1.9's declaration and `connectrules`
+            // A.1.8's; leaving any of them out meant one bad description
+            // swallowed every following one of that kind. (`connectmodule`
+            // closes with `endmodule`, so the consume set below already
+            // covers it.)
+            .kw_module, .kw_macromodule, .kw_connectmodule, .kw_discipline, .kw_nature, .kw_paramset, .kw_connectrules => return,
+            .kw_endmodule, .kw_enddiscipline, .kw_endnature, .kw_endparamset, .kw_endconnectrules => {
                 self.pos += 1;
                 return;
             },
@@ -504,6 +521,102 @@ pub const Parser = struct {
             .aliasparams = aliasparams.items,
             .vars = vars.items,
             .overrides = overrides.items,
+            .main_tok = main_tok,
+        };
+    }
+
+    /// LRM §7.7 / A.1.8 connectrules_declaration.
+    ///
+    ///     connectrules connectrules_identifier ;
+    ///         { connectrules_item }
+    ///     endconnectrules
+    ///     connectrules_item ::= connect_insertion | connect_resolution
+    ///
+    /// Both item forms open with `connect identifier`, and the token AFTER the
+    /// identifier decides which production the grammar is in: a `,` or
+    /// `resolveto` can only continue A.1.8's connect_resolution (an insertion
+    /// puts a mode keyword, a `#`, a direction, a second identifier or the `;`
+    /// there), and nothing in an insertion ever spells `resolveto`. One token
+    /// of lookahead, no backtracking — same budget as every other fork here.
+    ///
+    /// Names are not resolved: the connect module of a §7.7.1 insertion and
+    /// the disciplines of a §7.7.2 resolution may be declared after the block
+    /// (A.1.2 puts no order on descriptions), so both are elaboration's to
+    /// judge (`Elaborate.checkConnectRules`).
+    fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
+        const main_tok = self.pos;
+        self.pos += 1; // 'connectrules'
+        const name = try self.expectIdent();
+        _ = try self.expect(.semicolon);
+
+        var insertions: std.ArrayList(Ast.ConnectInsertion) = .empty;
+        var resolutions: std.ArrayList(Ast.ConnectResolution) = .empty;
+        while (!self.eat(.kw_endconnectrules)) {
+            const item_tok = try self.expect(.kw_connect);
+            const first = try self.expectIdent();
+            if (self.peek() == .comma or self.peek() == .kw_resolveto) {
+                // A.1.8 connect_resolution — §7.7.2.
+                var discs: std.ArrayList(Ast.StrId) = .empty;
+                try discs.append(self.arena, first);
+                while (self.eat(.comma)) try discs.append(self.arena, try self.expectIdent());
+                _ = try self.expect(.kw_resolveto);
+                var res: Ast.ConnectResolution = .{ .disciplines = discs.items, .main_tok = item_tok };
+                // A.1.8 discipline_identifier_or_exclude. `exclude` is the
+                // §3.4.2 value-range keyword spent again (annex B reserves it
+                // once), so the tag already exists.
+                if (self.eat(.kw_exclude)) res.exclude = true else res.resolved = try self.expectIdent();
+                _ = try self.expect(.semicolon);
+                try resolutions.append(self.arena, res);
+            } else {
+                // A.1.8 connect_insertion — §7.7.1, with §7.7.4's mode and
+                // §7.7.3's parameter list in their grammar slots.
+                var ins: Ast.ConnectInsertion = .{ .module = first, .main_tok = item_tok };
+                if (self.eat(.kw_merged)) {
+                    ins.mode = .merged;
+                } else if (self.eat(.kw_split)) {
+                    ins.mode = .split;
+                }
+                ins.params = try self.parseParamValueAssignment();
+                if (self.peek() != .semicolon) {
+                    // A.1.8 connect_port_overrides. The grammar admits exactly
+                    // four direction shapes — none/none, input/output,
+                    // output/input, inout/inout — so the FIRST direction fixes
+                    // what the second must be, and `expect` states it.
+                    const a_dir: Ast.Direction = switch (self.peek()) {
+                        .kw_input => .input,
+                        .kw_output => .output,
+                        .kw_inout => .inout,
+                        else => .unspecified,
+                    };
+                    if (a_dir != .unspecified) self.pos += 1;
+                    const a = try self.expectIdent();
+                    _ = try self.expect(.comma);
+                    const b_dir: Ast.Direction = switch (a_dir) {
+                        .unspecified => .unspecified,
+                        .input => blk: {
+                            _ = try self.expect(.kw_output);
+                            break :blk .output;
+                        },
+                        .output => blk: {
+                            _ = try self.expect(.kw_input);
+                            break :blk .input;
+                        },
+                        .inout => blk: {
+                            _ = try self.expect(.kw_inout);
+                            break :blk .inout;
+                        },
+                    };
+                    const second = try self.expectIdent();
+                    ins.overrides = .{ .a_dir = a_dir, .a = a, .b_dir = b_dir, .b = second };
+                }
+                _ = try self.expect(.semicolon);
+                try insertions.append(self.arena, ins);
+            }
+        }
+        return .{
+            .name = name,
+            .insertions = insertions.items,
+            .resolutions = resolutions.items,
             .main_tok = main_tok,
         };
     }
@@ -952,39 +1065,7 @@ pub const Parser = struct {
     fn parseInstantiation(self: *Parser, b: *Body) Error!void {
         const module = try self.internTok(self.pos);
         self.pos += 1;
-
-        // §6.3 `#( list_of_parameter_assignments )`. A.4.1 gives both arms; a
-        // leading `.` is the named one, and the two may not be mixed.
-        var params: std.ArrayList(Ast.ParamOverride) = .empty;
-        if (self.eat(.hash)) {
-            _ = try self.expect(.lparen);
-            if (!self.eat(.rparen)) {
-                while (true) {
-                    const tok = self.pos;
-                    if (self.eat(.dot)) {
-                        // §6.3.6/§9.18 `.$mfactor(expr)` — A.4.1's
-                        // `parameter_identifier` covers the §9.18 system
-                        // parameters too, and §9.18 Example 1 prints
-                        // `module_b #(.$mfactor(2)) B1(p,n);`. One extra token
-                        // tag, not a second production.
-                        const name = if (self.peek() == .system_identifier)
-                            try self.internTok(self.pos)
-                        else
-                            null;
-                        if (name != null) self.pos += 1;
-                        const pname = name orelse try self.expectIdent();
-                        _ = try self.expect(.lparen);
-                        const v = if (self.peek() == .rparen) Ast.ExprId.none else try self.parseExpr();
-                        _ = try self.expect(.rparen);
-                        try params.append(self.arena, .{ .name = pname, .value = v, .main_tok = tok });
-                    } else {
-                        try params.append(self.arena, .{ .value = try self.parseExpr(), .main_tok = tok });
-                    }
-                    if (!self.eat(.comma)) break;
-                }
-                _ = try self.expect(.rparen);
-            }
-        }
+        const params = try self.parseParamValueAssignment();
 
         while (true) {
             const name_tok = self.pos;
@@ -1037,13 +1118,52 @@ pub const Parser = struct {
                 .module = module,
                 .name = name,
                 .range = range,
-                .params = params.items,
+                .params = params,
                 .ports = ports.items,
                 .main_tok = name_tok,
             });
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);
+    }
+
+    /// §6.3 `#( list_of_parameter_assignments )`, A.4.1
+    /// parameter_value_assignment — OPTIONAL: an empty slice when the cursor is
+    /// not on `#`. A.4.1 gives both arms; a leading `.` is the named one, and
+    /// the two may not be mixed. Shared between a module instantiation and a
+    /// §7.7.3 connect statement, which A.1.8 gives the same nonterminal.
+    fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride {
+        var params: std.ArrayList(Ast.ParamOverride) = .empty;
+        if (self.eat(.hash)) {
+            _ = try self.expect(.lparen);
+            if (!self.eat(.rparen)) {
+                while (true) {
+                    const tok = self.pos;
+                    if (self.eat(.dot)) {
+                        // §6.3.6/§9.18 `.$mfactor(expr)` — A.4.1's
+                        // `parameter_identifier` covers the §9.18 system
+                        // parameters too, and §9.18 Example 1 prints
+                        // `module_b #(.$mfactor(2)) B1(p,n);`. One extra token
+                        // tag, not a second production.
+                        const name = if (self.peek() == .system_identifier)
+                            try self.internTok(self.pos)
+                        else
+                            null;
+                        if (name != null) self.pos += 1;
+                        const pname = name orelse try self.expectIdent();
+                        _ = try self.expect(.lparen);
+                        const v = if (self.peek() == .rparen) Ast.ExprId.none else try self.parseExpr();
+                        _ = try self.expect(.rparen);
+                        try params.append(self.arena, .{ .name = pname, .value = v, .main_tok = tok });
+                    } else {
+                        try params.append(self.arena, .{ .value = try self.parseExpr(), .main_tok = tok });
+                    }
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.rparen);
+            }
+        }
+        return params.items;
     }
 
     /// One shared diagnostic for everything VerA leaves out at module scope:
@@ -3987,6 +4107,62 @@ test "a resistor parses into ports, ranged parameters and a contribution" {
     try std.testing.expectEqual(Ast.ExprTag.branch_access, res.file.exprs.tag(contrib.lhs));
     // §4.2.2: `a*b + f(x) - $t` parses as `(a*b + f(x)) - $t`.
     try std.testing.expectEqual(Ast.BinaryOp.sub, res.file.exprs.binOp(contrib.rhs));
+}
+
+test "A.1.8 connectrules: both item forms land in their typed slots" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Every optional slot of connect_insertion in one block, plus both
+    // resolution targets. The AST shape is asserted here because no fixture
+    // can see it: mode/params/overrides have no consumer until an insertion
+    // phase exists (Ast.ConnectInsertion says so), so the parse into the
+    // right slot is the whole of what there is to pin.
+    const src =
+        \\connectrules cr;
+        \\  connect a2d;
+        \\  connect a2d split #(.tt(3.5), .vcc(3.3)) input elec, output dig;
+        \\  connect d2a merged elec, dig;
+        \\  connect e18, e33 resolveto exclude;
+        \\  connect x, y, a resolveto a;
+        \\endconnectrules
+    ;
+    const res = try parseForTest(arena, src);
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    try std.testing.expectEqual(@as(usize, 1), res.file.connectrules.len);
+    const cr = res.file.connectrules[0];
+    try std.testing.expectEqualStrings("cr", res.file.str(cr.name));
+
+    try std.testing.expectEqual(@as(usize, 3), cr.insertions.len);
+    try std.testing.expectEqual(Ast.ConnectInsertion.Mode.unspecified, cr.insertions[0].mode);
+    try std.testing.expectEqual(@as(?Ast.ConnectInsertion.PortOverrides, null), cr.insertions[0].overrides);
+    const full = cr.insertions[1];
+    try std.testing.expectEqual(Ast.ConnectInsertion.Mode.split, full.mode);
+    try std.testing.expectEqual(@as(usize, 2), full.params.len);
+    try std.testing.expectEqualStrings("tt", res.file.str(full.params[0].name));
+    try std.testing.expectEqual(Ast.Direction.input, full.overrides.?.a_dir);
+    try std.testing.expectEqual(Ast.Direction.output, full.overrides.?.b_dir);
+    try std.testing.expectEqualStrings("dig", res.file.str(full.overrides.?.b));
+    // The undirected override shape keeps both directions unspecified.
+    try std.testing.expectEqual(Ast.Direction.unspecified, cr.insertions[2].overrides.?.a_dir);
+
+    try std.testing.expectEqual(@as(usize, 2), cr.resolutions.len);
+    try std.testing.expect(cr.resolutions[0].exclude);
+    try std.testing.expectEqual(Ast.StrId.none, cr.resolutions[0].resolved);
+    try std.testing.expectEqual(@as(usize, 3), cr.resolutions[1].disciplines.len);
+    try std.testing.expect(!cr.resolutions[1].exclude);
+    try std.testing.expectEqualStrings("a", res.file.str(cr.resolutions[1].resolved));
+
+    // A.1.8's connect_port_overrides admits exactly four direction pairings;
+    // `input _, input _` is not one, and `expect` names what the grammar
+    // wanted (E0207).
+    const bad = try parseForTest(arena,
+        \\connectrules crx;
+        \\  connect a2d input elec, input dig;
+        \\endconnectrules
+    );
+    try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
 }
 
 test "A.2.5: `from` needs a bracket, and saying so is a diagnostic not an assert" {
