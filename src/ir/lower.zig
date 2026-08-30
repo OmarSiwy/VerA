@@ -141,6 +141,16 @@ pub const Contribution = struct {
     lo: u16, // node_order index (or `ground`)
     resist_val: Mir.Value = .f_zero, // → eval()
     react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
+    /// §5.6.1.3 "If a value is retained for the potential ... otherwise, if a
+    /// value is retained for the flow ... otherwise the branch is an open
+    /// circuit." Retention is a property of the CYCLE'S EXECUTION PATH, so this
+    /// is the end-of-block read of the `Accum.wrote` flag: the constant 1.0 for
+    /// an unconditional `<+` (codegen keeps today's static row), the constant
+    /// 0.0 for one discarded on the straight line (no row, as today), and a phi
+    /// when an `if` decides — which is what makes codegen select the branch
+    /// row's CONTENT at run time instead of pinning a phantom 0 V short.
+    /// `.direct` only; an indirect entry never reads it.
+    wrote_val: Mir.Value = .f_zero,
     noise_kinds: NoiseKinds = .{}, // §4.6.4
     /// §5.6.7 `V(out) : V(in) == e` is the SAME topology as a direct potential
     /// contribution — a source in the branch, its current an unknown — with a
@@ -553,7 +563,13 @@ const ArrayInfo = struct {
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
-const Accum = struct { resist: Ssa.Place, react: Ssa.Place };
+/// `wrote` is §5.6.1.3's retention FLAG beside the value: 0.0 in the entry
+/// block, 1.0 after every `<+` on this (access, branch), back to 0.0 when the
+/// opposite access discards it. It has exactly the accumulator's phi structure,
+/// so "was a value retained THIS cycle?" survives a conditional as an ordinary
+/// SSA boolean — which is what codegen's runtime-selected branch row reads.
+/// On a straight line it folds to the constant 1.0/0.0 and costs nothing.
+const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place };
 
 /// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
 /// either order is legal — §3.6.3's own examples run `[5:0]` and the LRM's
@@ -1327,10 +1343,13 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     try self.checkProbeBranches();
 
-    // §5.6.1.3 the contribution accumulators' final values.
+    // §5.6.1.3 the contribution accumulators' final values, and beside each the
+    // final value of its retention flag — the "is a value retained [this
+    // cycle]?" question the clause's three-way rule turns on.
     for (self.contributions.items, self.accum.items) |*c, acc| {
         c.resist_val = try self.builder.readVariable(acc.resist, self.cur);
         c.react_val = try self.builder.readVariable(acc.react, self.cur);
+        c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
     }
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
@@ -3884,6 +3903,11 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         const old = try self.builder.readVariable(acc.react, self.cur);
         try self.builder.writeVariable(acc.react, self.cur, try self.emit(.fadd, &.{ old, v }));
     }
+    // §5.6.1.3 this statement RETAINS a value for its quantity on every path
+    // that executes it — even `<+ 0.0`, whose retained zero is §5.6.5's closed
+    // switch and not an absent source. A constant write: no MIR instruction,
+    // and on a straight line no phi either.
+    try self.builder.writeVariable(acc.wrote, self.cur, .f_one);
     // §4.6.4 the noise generators belong to the target, not to one statement,
     // and they ACCUMULATE: two `<+` lines on one branch declare two sources.
     self.contributions.items[idx].noise_kinds =
@@ -4499,11 +4523,17 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
         .lo = t.lo,
         .kind = kind,
     });
-    const acc: Accum = .{ .resist = self.builder.newPlace(), .react = self.builder.newPlace() };
+    const acc: Accum = .{
+        .resist = self.builder.newPlace(),
+        .react = self.builder.newPlace(),
+        .wrote = self.builder.newPlace(),
+    };
     // Seeded in the entry block, which dominates everything: a contribution
-    // that only happens on one arm of an `if` reads 0 on the other (§5.8).
+    // that only happens on one arm of an `if` reads 0 on the other (§5.8) —
+    // and per §5.6.1.3 retains nothing there, which is what `wrote` starts as.
     try self.builder.writeVariable(acc.resist, .entry, .f_zero);
     try self.builder.writeVariable(acc.react, .entry, .f_zero);
+    try self.builder.writeVariable(acc.wrote, .entry, .f_zero);
     try self.accum.append(self.arena, acc);
     return idx;
 }
@@ -4524,11 +4554,11 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// case §5.4.4's open circuit — the state the branch is in when nothing is
 /// retained for it.
 ///
-/// ponytail: under a conditional the discard survives as a phi rather than a
-/// constant, so an arm that discards a POTENTIAL leaves a zero potential source
-/// (a short) instead of no source. Fixing that means making the ROW itself
-/// switchable at run time, i.e. implementing §5.6.5's switch branch in codegen,
-/// which VerA does not do for the plain `if (c) V(p,n) <+ 0;` shape either.
+/// Under a conditional the discard survives as a phi rather than a constant —
+/// and so does the `wrote` flag cleared beside it, which is the whole §5.6.5
+/// switch branch: codegen reads both ends' flags and selects the branch row's
+/// content at run time (retained potential → potential source, retained flow →
+/// flow source, neither → §5.6.1.3's open circuit).
 fn discardOpposite(self: *Lower, t: Target) Oom!void {
     const other: Access = if (t.access == .potential) .flow else .potential;
     for (self.contributions.items, self.accum.items) |c, acc| {
@@ -4539,6 +4569,7 @@ fn discardOpposite(self: *Lower, t: Target) Oom!void {
         if (c.br != t.br) continue;
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
+        try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
     }
 }
 

@@ -1508,6 +1508,60 @@ pub const Gen = struct {
         return self.verdict.unit_modes[i];
     }
 
+    /// §5.6.1.3 what is known STATICALLY about a `.direct` contribution's
+    /// retention this cycle, read off `Lower.Contribution.wrote_val`.
+    const Retention = union(enum) {
+        /// The flag folded to 1.0: a value is retained on every path. Today's
+        /// static row, byte-identical — the common unconditional case.
+        on,
+        /// Folded to 0.0: discarded on every path (§5.6.1.3's unconditional
+        /// replacement). The accumulators folded to `.f_zero` with it, so no
+        /// row is emitted — exactly as before the flag existed.
+        off,
+        /// A phi: which quantity the branch retains is a property of the
+        /// CYCLE'S EXECUTION PATH, so the branch row's CONTENT is selected at
+        /// run time on this flag (carried as a core field).
+        runtime: Mir.Value,
+    };
+
+    fn retention(self: *const Gen, c: Lower.Contribution) Retention {
+        const v = self.an.rv(c.wrote_val);
+        return switch (self.mir.valueDef(v)) {
+            .float_const => |x| if (x != 0.0) Retention.on else Retention.off,
+            .int_const => |x| if (x != 0) Retention.on else Retention.off,
+            else => .{ .runtime = v },
+        };
+    }
+
+    /// The §5.6.5 switch-branch partner of potential contribution `pi`: the one
+    /// `.flow` direct entry over the same (hi, lo, branch), or null.
+    /// `contribIndex` dedupes per (access, pair, branch), so there is at most
+    /// one. ponytail: O(n) scan per potential entry; contributions per module
+    /// are tens, same order as `uIsDriven`'s existing scan.
+    fn switchFlowOf(self: *const Gen, pi: usize) ?usize {
+        const p = self.lower.contributions.items[pi];
+        for (self.lower.contributions.items, 0..) |c, j| {
+            if (j == pi or c.kind != .direct or c.access != .flow) continue;
+            if (c.hi == p.hi and c.lo == p.lo and c.br == p.br) return j;
+        }
+        return null;
+    }
+
+    /// Is flow entry `j` consumed by a RUNTIME-selected potential row over the
+    /// same branch? Then its retained value reaches KCL through the branch
+    /// unknown (row `I_b − value`, stamps ±I_b), and stamping it here as well
+    /// would inject the current twice.
+    fn flowIsMerged(self: *const Gen, j: usize) bool {
+        const f = self.lower.contributions.items[j];
+        if (f.kind != .direct or f.access != .flow) return false;
+        for (self.lower.contributions.items) |c| {
+            if (c.kind != .direct or c.access != .potential) continue;
+            if (c.hi != f.hi or c.lo != f.lo or c.br != f.br) continue;
+            return self.retention(c) == .runtime;
+        }
+        return false;
+    }
+
     fn buildJobs(self: *Gen) Error!void {
         var jobs: std.ArrayList(Job) = .empty;
         for (self.lower.contributions.items, 0..) |c, i| {
@@ -1573,6 +1627,34 @@ pub const Gen = struct {
                     .target = v,
                     .mode = .strict,
                     .comment = "§4.5.15 $limit algorithm argument",
+                });
+            }
+        }
+        // §5.6.1.3 the retention flags of every runtime-selected branch row
+        // (see `Retention.runtime`), so `emitResidual` can read them as core
+        // fields. Queued after the limit arguments and before the §9.4 display
+        // job for the same insert-tolerance reason as both neighbours — and a
+        // module whose every potential contribution is unconditional queues
+        // NOTHING here, so its core fields do not move. Like the `$limit`
+        // arguments, these jobs exist to put a value in the core; the name is
+        // never written.
+        for (self.lower.contributions.items, 0..) |c, i| {
+            if (c.kind != .direct or c.access != .potential) continue;
+            const ret = self.retention(c);
+            if (ret != .runtime) continue;
+            try jobs.append(self.arena, .{
+                .name = "$retained",
+                .target = ret.runtime,
+                .mode = self.unitMode(i),
+                .comment = "§5.6.1.3 retention flag",
+            });
+            if (self.switchFlowOf(i)) |j| {
+                const fret = self.retention(self.lower.contributions.items[j]);
+                if (fret == .runtime) try jobs.append(self.arena, .{
+                    .name = "$retained",
+                    .target = fret.runtime,
+                    .mode = self.unitMode(j),
+                    .comment = "§5.6.1.3 retention flag",
                 });
             }
         }
@@ -4169,6 +4251,19 @@ pub const Gen = struct {
 
         for (self.lower.contributions.items, 0..) |c, i| {
             const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
+            // §5.6.1.3 a `.flow` entry whose branch row is runtime-selected is
+            // consumed BY that row (`I_b − value`); its KCL current is the ±I_b
+            // the potential entry already stamps. Stamping the value here too
+            // would inject it twice — once through the unknown, once directly.
+            if (c.kind == .direct and c.access == .flow and self.flowIsMerged(i)) continue;
+            // §5.6.1.3's three-way rule is decided per cycle. `.on`/`.off` fold
+            // to today's static behaviour; `.runtime` keeps the row alive in
+            // EVERY case, because the open-circuit form (`res[u] = I_b`) is
+            // what pins the branch current when nothing is retained.
+            const run_pot: ?Retention = if (c.kind == .direct and c.access == .potential) ret: {
+                const r = self.retention(c);
+                break :ret if (r == .runtime) r else null;
+            } else null;
             // A zero half normally contributes nothing, and §5.6.1.3's
             // `discardOpposite` relies on that: it writes `.f_zero` to BOTH
             // `acc.resist` and `acc.react`, so a discarded contribution still
@@ -4183,14 +4278,26 @@ pub const Gen = struct {
             // no pivot and the inductor's current out of every node equation —
             // exit 0, no diagnostic. The row is still needed; only `c` is zero,
             // and at DC `V(hi) - V(lo) = 0` is exactly what an inductor is.
-            const live = if (react) val != .f_zero else
-                val != .f_zero or (c.access == .potential and self.an.rv(c.react_val) != .f_zero);
+            //
+            // A runtime-selected row's q half is live only when SOME selectable
+            // form has a flux: its own react, or the switch partner's.
+            const partner_react: Mir.Value = if (run_pot != null) blk: {
+                const j = self.switchFlowOf(i) orelse break :blk .f_zero;
+                break :blk self.an.rv(self.lower.contributions.items[j].react_val);
+            } else .f_zero;
+            const live = if (react)
+                val != .f_zero or partner_react != .f_zero
+            else
+                val != .f_zero or run_pot != null or
+                    (c.access == .potential and self.an.rv(c.react_val) != .f_zero);
             if (!live) continue;
             self.uses_x = true;
             // `model`/`inst` are read through `core` alone, so a residual whose
             // every live row has a zero value never opens one — and an unused
-            // parameter is a compile error in the HOST's build, not here.
-            if (val != .f_zero) {
+            // parameter is a compile error in the HOST's build, not here. A
+            // runtime-selected row always opens it: its retention flag is a
+            // core field by construction (`buildJobs`).
+            if (val != .f_zero or run_pot != null) {
                 self.uses_model = true;
                 self.uses_inst = true;
                 if (!opened) {
@@ -4252,8 +4359,10 @@ pub const Gen = struct {
                 .potential => {
                     // §5.6 branch relation: the branch current is its own
                     // unknown; its row carries V(hi,lo) − <value>.
-                    const u = self.branch_u[i];
-                    if (!react) {
+                    if (run_pot) |ret| {
+                        try self.emitSwitchRow(i, c, ret.runtime, react);
+                    } else if (!react) {
+                        const u = self.branch_u[i];
                         try self.ind(2);
                         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
                         try self.stamp(2, c.hi, "add", "ib");
@@ -4265,6 +4374,7 @@ pub const Gen = struct {
                         try self.nodeVoltage(c.lo);
                         try self.b(").sub(c);\n", .{});
                     } else {
+                        const u = self.branch_u[i];
                         // §5.6.1.2 the reactive part of a branch relation is a
                         // flux: v − dφ/dt = 0 ⇒ q on this row is −φ.
                         try self.ind(2);
@@ -4310,6 +4420,104 @@ pub const Gen = struct {
         if (!self.uses_inst) self.patchParam(at_inst, "inst".len);
         if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
         try self.w("    return res;\n}}\n\n", .{});
+    }
+
+    /// §5.6.1.3 the runtime-selected branch row — §5.6.5's switch branch, and
+    /// the clause's third ("otherwise the branch is an open circuit") case for
+    /// a lone conditional potential contribution, which used to be emitted as
+    /// an unconditional `V(hi,lo) − c` row: a phantom 0 V short on the arm
+    /// that never executed.
+    ///
+    /// The matrix STRUCTURE stays constant — the standard compact-model shape
+    /// for a switch branch: the branch always carries its flow unknown I_b,
+    /// stamped ±I_b into the two KCL rows, and only the branch row's CONTENT
+    /// is selected per cycle on the retention flags lowering carried beside
+    /// the accumulators:
+    ///
+    ///     V retained this cycle:  res[u] = V(hi) − V(lo) − c_V   (potential source)
+    ///     else I retained:        res[u] = I_b − c_I             (flow source)
+    ///     else:                   res[u] = I_b                   (open: pins I_b = 0)
+    ///
+    /// `S.sel` carries the winner's dual, so the Jacobian switches coherently
+    /// with the row: ±1 on the node columns for the potential form, 1 on the
+    /// I_b column (and −∂c_I/∂x) for the flow form, a bare 1 on I_b for the
+    /// open circuit — never singular. In the q residual the same select runs
+    /// over the fluxes (−φ, §5.6.1.2), the open case contributing none.
+    ///
+    /// The flow form's ±c_I KCL stamps are NOT emitted (`flowIsMerged`): the
+    /// retained flow reaches KCL through I_b, which the row pins to c_I.
+    fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
+        const u = self.branch_u[i];
+        const partner = self.switchFlowOf(i);
+        if (!react) {
+            try self.ind(2);
+            try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
+            try self.stamp(2, c.hi, "add", "ib");
+            try self.stamp(2, c.lo, "sub", "ib");
+            try self.ind(2);
+            try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
+            try self.coreRef(flag);
+            try self.b(", ", .{});
+            try self.nodeVoltage(c.hi);
+            try self.b(".sub(", .{});
+            try self.nodeVoltage(c.lo);
+            try self.b(").sub(c), ", .{});
+            try self.switchElse(partner, react);
+            try self.b(");\n", .{});
+        } else {
+            try self.ind(2);
+            try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
+            try self.coreRef(flag);
+            try self.b(", c.neg(), ", .{});
+            try self.switchElse(partner, react);
+            try self.b(");\n", .{});
+        }
+    }
+
+    /// The not-a-potential-source-this-cycle half of a selected branch row:
+    /// the flow form when the switch partner retained one, the open circuit
+    /// otherwise. `react` picks the residual: I_b/current for eval, flux for q.
+    fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
+        const open: []const u8 = if (react) "S.con(0.0)" else "ib";
+        const j = partner orelse return self.b("{s}", .{open});
+        const f = self.lower.contributions.items[j];
+        const fv = self.an.rv(if (react) f.react_val else f.resist_val);
+        switch (self.retention(f)) {
+            // Discarded on every path: the partner entry is dead and the else
+            // case is §5.6.1.3's open circuit.
+            .off => try self.b("{s}", .{open}),
+            // Unreachable by construction (a runtime potential flag implies a
+            // conditional discard of the partner), but the general form is
+            // correct if lowering ever changes: the flow is always retained.
+            .on => if (react) {
+                try self.coreRef(fv);
+                try self.b(".neg()", .{});
+            } else {
+                try self.b("ib.sub(", .{});
+                try self.coreRef(fv);
+                try self.b(")", .{});
+            },
+            .runtime => |fw| {
+                try self.b("S.sel(", .{});
+                try self.coreRef(fw);
+                if (react) {
+                    try self.b(", ", .{});
+                    try self.coreRef(fv);
+                    try self.b(".neg(), {s})", .{open});
+                } else {
+                    try self.b(", ib.sub(", .{});
+                    try self.coreRef(fv);
+                    try self.b("), {s})", .{open});
+                }
+            },
+        }
+    }
+
+    /// One value as the residual reads it: a core field, or the inline zero
+    /// `planCommon` never plans (`.f_zero` has no `m.f<k>`).
+    fn coreRef(self: *Gen, v: Mir.Value) Error!void {
+        if (v == .f_zero) return self.b("S.con(0.0)", .{});
+        try self.b("m.f{d}", .{self.lo_idx[@intFromEnum(v)]});
     }
 
     fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8) Error!void {
