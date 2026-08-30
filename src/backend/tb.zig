@@ -926,7 +926,7 @@ const runner_body =
     \\const Vec = struct {
     \\    v: VF,
     \\    const T = @This();
-    \\    fn map1(a: T, comptime f: fn (f64) f64) T {
+    \\    fn map1(a: T, comptime f: anytype) T { // std.math fns are generic
     \\        var r: VF = undefined;
     \\        inline for (0..NL) |i| r[i] = f(a.v[i]);
     \\        return .{ .v = r };
@@ -986,7 +986,8 @@ const runner_body =
     \\        for (0..n_u) |i| xs[k][i] = x[i] * s + 1.0e-3 * @as(f64, @floatFromInt(k));
     \\    }
     \\    for (0..n_u) |i| {
-    \\        var lanes: VF = undefined;
+    \\        // Through an array: a vector index must be comptime-known.
+    \\        var lanes: [NL]f64 = undefined;
     \\        for (0..NL) |k| lanes[k] = xs[k][i];
     \\        xv[i] = .{ .v = lanes };
     \\    }
@@ -999,12 +1000,8 @@ const runner_body =
     \\        }
     \\        const rs = D.eval(Dual, xd, model, inst, t);
     \\        for (0..n_u) |i| {
-    \\            const a = rv[i].v[k];
-    \\            const b = rs[i].v;
-    \\            if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) continue;
-    \\            if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) continue;
-    \\            std.debug.print("lane_check FAIL: res[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ u_names[i], k, a, b });
-    \\            std.process.exit(1);
+    \\            const lanes: [NL]f64 = rv[i].v;
+    \\            laneAssert("res", i, k, lanes[k], rs[i].v);
     \\        }
     \\    }
     \\    if (comptime @hasDecl(D, "q")) {
@@ -1014,15 +1011,21 @@ const runner_body =
     \\            for (0..n_u) |i| xd[i] = .{ .v = xs[k][i] };
     \\            const qs = D.q(Dual, xd, model, inst, t);
     \\            for (0..n_u) |i| {
-    \\                const a = qv[i].v[k];
-    \\                const b = qs[i].v;
-    \\                if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) continue;
-    \\                if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) continue;
-    \\                std.debug.print("lane_check FAIL: q[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ u_names[i], k, a, b });
-    \\                std.process.exit(1);
+    \\                const lanes: [NL]f64 = qv[i].v;
+    \\                laneAssert("q", i, k, lanes[k], qs[i].v);
     \\            }
     \\        }
     \\    }
+    \\}
+    \\
+    \\/// Bit equality is the expectation — the same IEEE ops run in the same
+    \\/// order per lane — with a 1e-12 relative escape for a vectorizer that
+    \\/// contracts differently than the scalar pipeline.
+    \\fn laneAssert(what: []const u8, i: usize, k: usize, a: f64, b: f64) void {
+    \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
+    \\    if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) return;
+    \\    std.debug.print("lane_check FAIL: {s}[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ what, u_names[i], k, a, b });
+    \\    std.process.exit(1);
     \\}
     \\
     \\/// §4.5.2 accepted-step bookkeeping. `void` for a module with no stateful

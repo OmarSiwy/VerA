@@ -919,6 +919,7 @@ const MockAll = struct {
     pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
+    pub const lane_clean = true;
 
     pub const Model = struct { g: f32 = 1e-3 };
     pub const Instance = struct {

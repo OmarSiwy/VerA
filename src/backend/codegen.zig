@@ -2651,7 +2651,12 @@ pub const Gen = struct {
                 self.pinLanes(a);
                 try self.helper1("zCeil", a);
             },
-            .hypot => try self.helper2("zHypot", a, b2),
+            // zHypot linearizes around `.val()` of both operands — pins.
+            .hypot => {
+                self.pinLanes(a);
+                self.pinLanes(b2);
+                try self.helper2("zHypot", a, b2);
+            },
             .atan2 => {
                 self.pinLanes(a);
                 self.pinLanes(b2);
@@ -2675,7 +2680,15 @@ pub const Gen = struct {
                     try self.b("(", .{});
                     try self.renderVal(a, .real);
                     try self.b(").pow({s})", .{try self.fmtF64(k.f)});
-                } else try self.helper2("zPow", a, b2);
+                } else {
+                    // zPow linearizes around `.val()` of BOTH operands
+                    // (§4.3.1's negative-base/integer-y steering included),
+                    // so either being x-dependent pins lanes — the batch
+                    // gate's fixture-158 catch.
+                    self.pinLanes(a);
+                    self.pinLanes(b2);
+                    try self.helper2("zPow", a, b2);
+                }
             },
             // §4.2.1 conversions
             .if_cast => {
@@ -3613,6 +3626,7 @@ pub const Gen = struct {
         // ours — the clause is silent on overflow and `@intFromFloat` is UB in
         // the ReleaseFast artifact a host actually links.
         if (eq(u8, name, "$rtoi")) {
+            if (args.len > 0) self.pinLanes(args[0]); // scalar collapse
             try self.b("std.math.lossyCast(i64, @trunc((", .{});
             try self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
             return self.b(").val()))", .{});
@@ -3626,6 +3640,7 @@ pub const Gen = struct {
         // the real, verbatim. Exactly representable in the i64 that lowering
         // gives integers, so this is the spec function, not an approximation.
         if (eq(u8, name, "$realtobits")) {
+            if (args.len > 0) self.pinLanes(args[0]); // scalar collapse
             try self.b("@as(i64, @bitCast((", .{});
             try self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
             return self.b(").val()))", .{});
