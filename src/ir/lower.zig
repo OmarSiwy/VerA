@@ -6162,8 +6162,17 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
     // IS RETURNED. The variable is initialized by the user and only updated by
     // the system function." Written AFTER the variate is computed, so both read
     // the same incoming seed however the two calls end up ordered in the MIR.
+    //
+    // The write-back is the kernel's OWN `_next` twin over the SAME argument
+    // list, not a generic step: IEEE 1364 §17.9.3's routines consume a
+    // data-dependent number of LCG draws (`normal` rejects pairs, `poisson`
+    // loops, `chi_square`/`t`/`erlang` walk the degrees), and §9.13.3 binds
+    // this family to that listing — so the updated seed must land exactly
+    // where the reference's `long *seed` did, or the SECOND call on the
+    // variable would leave the reference stream.
     if (write_back) |s| {
-        const next = try self.call("$rng$next", &.{seed});
+        const next_name = try std.fmt.allocPrint(self.arena, "{s}_next", .{d.kernel});
+        const next = try self.call(next_name, vals.items);
         try self.builder.writeVariable(s.place, self.cur, try self.toInt(.{ .v = next, .ty = .real }));
     }
     return .{ .v = if (d.ty == .integer) try self.toInt(.{ .v = v, .ty = .real }) else v, .ty = d.ty };

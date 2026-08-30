@@ -10,7 +10,7 @@ per-site ceilings, and this file carries the cross-cutting ones.
 ## 1. The remaining XFAILs — none
 
 **0 XFAIL as of this tree** (`zig build torture -- --strict` passes:
-1233/1233). The last three closed in the 2026-08-30 wave:
+1234/1234). The last three closed in the 2026-08-30 wave:
 
 - `annex_f_resolution/unknown_discipline_mixed_port.va` — annex F.2.1 step 4.b
   multi-candidate resolution landed with `connectrules` parsing (A.1.8),
@@ -330,10 +330,16 @@ Grouped by area; the file is the authority, this is the index.
   phasor's real part.
 
 ### `$random` (`src/backend/rng_kernels.zig`)
-- Lehmer 16807, **not** IEEE 1364 §17.9.3's reference listing. No fixture pins a
-  digit today; the day one does, all 25 RNG fixtures break together and this file
-  is the single place to fix.
-- 4096 degrees of freedom ceiling on the distributions.
+- ~~Lehmer 16807, **not** IEEE 1364 §17.9.3's reference listing.~~ CLOSED
+  2026-08-30: the kernels are the §17.9.3 listing (LCG `69069·s+1` on a
+  wrapping 32-bit word), ported from Icarus `vpi/sys_random.c` cross-checked
+  against Verilator `verilated_probdist.cpp`, verified bit-exact against the
+  compiled C; `171_random_ieee1364_digits.va` and codegen's §9.13 unit test
+  pin the digits. Per-distribution `_next` write-backs keep the inout seed on
+  the reference stream across successive calls.
+- 4096 degrees of freedom ceiling on the distributions — the one deliberate
+  departure from the listing, plus defined 0-answers (seed untouched) where
+  `rtl_dist_*` warns and returns 0 on a non-positive df/k/mean.
 
 ### File I/O and strings (`file_kernels.zig`, `str_kernels.zig`)
 - `$fscanf` consumes a whole **line** where C consumes only the match. §9.5.4.2
