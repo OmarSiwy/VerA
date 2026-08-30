@@ -2622,6 +2622,20 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         });
     }
 
+    // §3.4/A.2.4: a parameter assignment carries a constant_mintypmax_
+    // expression. "Did not fold" cannot be the test — the derive() fall-through
+    // below deliberately keeps a default that reads OTHER parameters (§6.3.4:
+    // the dependent must follow an override of its base) — so what is policed
+    // is the part no parameter dependence can excuse: a read of the operating
+    // point or the simulation state, which has no value a model card could
+    // carry. Without this, `parameter real bad = $abstime;` compiled and the
+    // card silently read 0.0. Reported and then lowered anyway, like E0347.
+    if (self.simStateInDefault(decl.default)) |what| {
+        var b = self.errWith(decl.main_tok, .E0363);
+        b.msg("`{s}` reads `{s}`", .{ name, what });
+        try b.emit();
+    }
+
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return self.lowerParamArray(decl, name);
 
@@ -2668,6 +2682,51 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     };
 
     try self.addParam(name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+}
+
+/// §3.4/A.2.4: the spelling of the first simulation-state reference in a
+/// parameter default, or null when none exists. Access functions, analog
+/// operators, small-signal sources and event functions are state reads by
+/// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
+/// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
+/// before the solve and are left to the ordinary paths. Same walk shape as
+/// `scanCalleesExpr`: list-carrying tags recurse `args`, the ternary's third
+/// operand lives in `extra`, and `lhs`/`rhs` are `.none` wherever unused.
+fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    switch (tag) {
+        // §4.4 access functions, §4.5 analog operators, §4.6 small-signal
+        // sources, §5.10 event functions: operating-point reads by construction.
+        .branch_access, .port_access, .filter_call, .noise_call, .event_function => return self.file.str(ex.strOf(e)),
+        .sys_call => {
+            const n = self.file.str(ex.strOf(e));
+            if (simStateName(n)) return n;
+        },
+        else => {},
+    }
+    switch (tag) {
+        .call, .builtin_call, .sys_call, .concat, .assign_pattern => {
+            for (ex.args(e)) |a| if (self.simStateInDefault(a)) |w| return w;
+        },
+        .ternary => if (self.simStateInDefault(ex.ternaryElse(e))) |w| return w,
+        else => {},
+    }
+    if (self.simStateInDefault(ex.lhs(e))) |w| return w;
+    return self.simStateInDefault(ex.rhs(e));
+}
+
+/// The `$` (and `analysis`) names whose value belongs to a solve: time, the
+/// ambient temperature pair, the solver's own knobs, the RNG family, and the
+/// analysis type. §9.13's distributions are matched by their two prefixes.
+fn simStateName(n: []const u8) bool {
+    const names = [_][]const u8{
+        "$abstime", "$realtime", "$temperature", "$vt",
+        "$simparam", "$random",  "$arandom",     "analysis",
+    };
+    for (names) |s| if (std.mem.eql(u8, n, s)) return true;
+    return std.mem.startsWith(u8, n, "$dist_") or std.mem.startsWith(u8, n, "$rdist_");
 }
 
 /// §3.4.2: "The parameter value shall be within the range from the smallest
