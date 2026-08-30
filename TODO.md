@@ -10,7 +10,7 @@ per-site ceilings, and this file carries the cross-cutting ones.
 ## 1. The remaining XFAILs — none
 
 **0 XFAIL as of this tree** (`zig build torture -- --strict` passes:
-1233/1233). The last three closed in the 2026-08-30 wave:
+1234/1234). The last three closed in the 2026-08-30 wave:
 
 - `annex_f_resolution/unknown_discipline_mixed_port.va` — annex F.2.1 step 4.b
   multi-candidate resolution landed with `connectrules` parsing (A.1.8),
@@ -304,27 +304,32 @@ Grouped by area; the file is the authority, this is the index.
   4kT·g off the Jacobian it already has — which covers **`.thermal` only**.
   Nothing in a Jacobian yields §4.6.4.2's `kf·I^af / f^ef`, so a `.flicker` row
   in `noise_gens` is topology the host is told about and a PSD it must decline.
-  Three §4.6.4 shapes reach `noise_gens` as NOTHING, deliberately:
+  Two §4.6.4 shapes reach `noise_gens` as NOTHING, deliberately:
   - §4.6.4.3/.4 `noise_table`/`noise_table_log` have no `NoiseGen.kind` tag.
     Adding one is blocked from the other end: `tools/contract.zig`'s `PsdTerm`
     is a parametric white/flicker form that "cannot express" a piecewise
     PSD-vs-frequency table, and its own note says the tag and the replacement
     hook "land together". Refusing the call instead is not available either —
     `ch04_expressions/27_noise_sources.va` asserts all four are accepted and
-    read zero outside a small-signal analysis.
-  - A source assigned to a variable and then contributed
-    (`x = white_noise(k); I(a,b) <+ x;`) exports nothing: `noiseKindsOf` walks
-    the contributed EXPRESSION, and by then the source is an ident.
-    `ch04_expressions/27_noise_sources.va` and `38_correlated_noise.va` are
-    both that shape, and 38 is §4.6.4.6 CORRELATED noise, which is precisely
-    what the table's shared-`source` design exists to express — so this is the
-    one of the three worth paying for. It needs the noise source tracked as a
-    value through lowering, not a tag on the contribution.
+    read zero outside a small-signal analysis. (`noiseSrcsOf` now skips them
+    EXPLICITLY: with per-call identity they no longer hide inside a kind-set
+    union, and tagging one `.thermal` would hand the 4kT·g fallback a PSD that
+    is nothing of the sort.)
   - A generator on a branch both of whose ends are ground, since §1.3.1.1
     leaves it no row or column to name.
-  What is FIXED as of wave 13: the generators are a SET per contribution
-  (`Lower.NoiseKinds`), so a branch carrying a thermal source and a flicker
-  source exports both. It used to export whichever `<+` came last.
+  What is FIXED as of wave 13: the generators are a SET per contribution, so a
+  branch carrying a thermal source and a flicker source exports both. It used
+  to export whichever `<+` came last. And as of 2026-08-30 the set carries
+  IDENTITY (`Lower.NoiseSrc.id` = the declaring call's `Ast.ExprId`, renamed
+  densely into `contract.NoiseGen.source`): a source assigned to a variable and
+  then contributed (`x = white_noise(k); I(a,b) <+ x;`, scaled uses included)
+  exports its generator, and §4.6.4.6 correlation is expressible — two rows
+  sharing one `source` are one physical generator on two branches, two
+  textually separate calls never share. `Lower.var_noise` is reaching, not
+  dataflow: a name reassigned away from a source still counts as holding it
+  (over-reports a topology row; the alternative under-reported a generator).
+  Pinned by `ch04_expressions/38_correlated_noise.va` (Example 1, `#0` shared)
+  and `161_partially_correlated_noise.va` (Example 2, shared + unshared).
 - §5.10.3.3 `enable` honoured only where it folds.
 - The residual is real, so a matching small-signal analysis contributes the
   phasor's real part.

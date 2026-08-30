@@ -135,8 +135,11 @@ pub const Directives = struct {
     /// such a tool reads the netlist off its own command line and the cards here
     /// document which netlist that must be.
     spice: []const u8 = "",
-    /// `//! noise <kind>(<row>,<col>)`, one per expected `noise_gens` entry, in
-    /// table order. `//! noise none` asserts the table is empty.
+    /// `//! noise <kind>(<row>,<col>)#<source>`, one per expected `noise_gens`
+    /// entry, in table order. `//! noise none` asserts the table is empty.
+    /// `#<source>` is §4.6.4.6: two lines writing the same `#k` assert the rows
+    /// share ONE generator (perfectly correlated); distinct `#k` assert
+    /// independence.
     ///
     /// §4.6.4's generators are the one part of a model that is NOT observable
     /// from the model's own text: `white_noise` reads 0 outside a small-signal
@@ -340,10 +343,18 @@ fn digits(s: []const u8) bool {
 /// raw source, before the compiler has been told what unknowns exist.
 fn validNoiseEntry(s: []const u8) bool {
     const open = std.mem.indexOfScalar(u8, s, '(') orelse return false;
-    if (s[s.len - 1] != ')') return false;
+    // `#<source>` after the branch is §4.6.4.6's correlation id — see the
+    // `noise` directive doc. `#null` is a row with no identity declared.
+    const hash = std.mem.indexOfScalarPos(u8, s, open, '#') orelse return false;
+    if (hash == 0 or s[hash - 1] != ')') return false;
+    const src = s[hash + 1 ..];
+    if (!eq(src, "null") and
+        (src.len == 0 or for (src) |c| {
+            if (!std.ascii.isDigit(c)) break true;
+        } else false)) return false;
     const kind = std.mem.trim(u8, s[0..open], " \t");
     if (!eq(kind, "thermal") and !eq(kind, "shot") and !eq(kind, "flicker")) return false;
-    const inner = s[open + 1 .. s.len - 1];
+    const inner = s[open + 1 .. hash - 1];
     const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
     return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
         std.mem.trim(u8, inner[comma + 1 ..], " \t").len != 0;
@@ -601,10 +612,14 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\                // names a `//! bias` line uses and the same ones a
             \\                // diagnostic prints — so a fixture writes what it reads
             \\                // in the source.
-            \\                const got = std.fmt.bufPrint(&buf, "{s}({s},{s})", .{
+            \\                // `#k` is §4.6.4.6's correlation column: two rows
+            \\                // printing the same `#k` share one physical generator;
+            \\                // `#null` is a row that declared no identity.
+            \\                const got = std.fmt.bufPrint(&buf, "{s}({s},{s})#{?d}", .{
             \\                    @tagName(g.kind),
             \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
             \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+            \\                    g.source,
             \\                }) catch "<too long>";
             \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
             \\                std.debug.print("noise[{d}] got={s} want={s} ok={d}\n", .{
@@ -1656,11 +1671,11 @@ test "§4.6.4 `//! noise` states the exported generator table" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const d = try parse(arena, "//! noise thermal(a,b)\n//! noise flicker(d,s)\n");
+    const d = try parse(arena, "//! noise thermal(a,b)#0\n//! noise flicker(d,s)#null\n");
     try testing.expect(d.asserts_noise);
     try testing.expectEqual(@as(usize, 2), d.noise.len);
-    try testing.expectEqualStrings("thermal(a,b)", d.noise[0]);
-    try testing.expectEqualStrings("flicker(d,s)", d.noise[1]);
+    try testing.expectEqualStrings("thermal(a,b)#0", d.noise[0]);
+    try testing.expectEqualStrings("flicker(d,s)#null", d.noise[1]);
 
     // `none` is a CLAIM that the table is empty. It has to be distinguishable
     // from an absent directive, or a fixture could not say "this model declares
@@ -1675,13 +1690,19 @@ test "§4.6.4 `//! noise` states the exported generator table" {
 
     // A misspelled KIND can never match, and its failure would say nothing
     // about the model, so it is caught here instead.
-    try testing.expectError(error.BadSyntax, parse(arena, "//! noise pink(a,b)\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise pink(a,b)#0\n"));
     try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal a,b\n"));
-    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a)\n"));
-    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(,b)\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a)#0\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(,b)#0\n"));
+    // The §4.6.4.6 source id is mandatory (a digit string or `null`): a line
+    // without one asserts nothing about correlation, which is half of what the
+    // directive exists to pin.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)#\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)#x\n"));
     // A node name is NOT checked: nothing here has been told what unknowns the
     // module has, and a wrong one is the assertion working rather than a typo.
-    const odd = try parse(arena, "//! noise shot(nosuchnode,b)\n");
+    const odd = try parse(arena, "//! noise shot(nosuchnode,b)#3\n");
     try testing.expectEqual(@as(usize, 1), odd.noise.len);
 }
 
