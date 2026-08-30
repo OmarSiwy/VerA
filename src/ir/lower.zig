@@ -5298,9 +5298,16 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
+    var live: std.ArrayList(Ast.ExprId) = .empty;
+    defer live.deinit(self.arena);
+    var tys: std.ArrayList(Ty) = .empty;
+    defer tys.deinit(self.arena);
     for (args) |a| {
         if (a == .none) continue; // A.6.9 empty argument slot
-        try vals.append(self.arena, try self.lowerSysArg(a, takesNetRef(name)));
+        const tv = try self.lowerSysArg(a, takesNetRef(name));
+        try vals.append(self.arena, tv.v);
+        try live.append(self.arena, a);
+        try tys.append(self.arena, tv.ty);
     }
     const v = try self.call(name, vals.items);
     if (isFileOutTask(name)) {
@@ -5309,12 +5316,17 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         // module with a §9.5.2 output task needs the string kernels too.
         self.uses_str_tasks = true;
     }
-    if (isDisplayTask(name) or isFileOutTask(name)) try self.displays.append(self.arena, .{
-        .val = v,
-        .name = name,
-        .tok = tok,
-        .conditional = self.cond_depth != 0,
-    });
+    if (isDisplayTask(name) or isFileOutTask(name)) {
+        // §9.4.3's other pairing half — each conversion against its operand's
+        // TYPE. After the loop, because the types are what lowering computed.
+        try self.checkFormatTypes(live.items, tys.items);
+        try self.displays.append(self.arena, .{
+            .val = v,
+            .name = name,
+            .tok = tok,
+            .conditional = self.cond_depth != 0,
+        });
+    }
 }
 
 /// §9.5 Sequence one file-family call into the per-point I/O phase.
@@ -5375,7 +5387,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
         return try self.iconst(0);
     }
-    const fd = try self.lowerSysArg(args[fd_at], false); // a descriptor, never a net
+    const fd = (try self.lowerSysArg(args[fd_at], false)).v; // a descriptor, never a net
     // §9.5.4.2 alone has a control string, and it is an operand of every reader
     // as well as of the count.
     const fmt: ?Mir.Value = if (scan) blk: {
@@ -5533,6 +5545,69 @@ fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void
     var b = self.errWith(tok, .E0810);
     b.msg("the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
     try b.emit();
+}
+
+/// §9.4.3's OTHER pairing rule: each conversion against its operand's TYPE.
+/// `checkFormatPairing` counts; this one checks that the pairs it counted can
+/// be RENDERED — three cannot (see E0819), and each used to sail through here
+/// and fail the generated device's own build as an "engine bug".
+///
+/// The walk mirrors `cg_display.translateFormat` exactly — same format pick
+/// (first argument that folds to a string), same flag/width skipping, same
+/// operand consumption over the LOWERED argument list (`live`/`tys` are the
+/// non-null slots, which is what the emitter receives) — because "would the
+/// emitted Zig compile" is a question about that pairing and no other. A
+/// shortfall stops the check where the operands stop; E0810 already owns it.
+fn checkFormatTypes(self: *Lower, live: []const Ast.ExprId, tys: []const Ty) Oom!void {
+    std.debug.assert(live.len == tys.len);
+    const at, const fmt = for (live, 0..) |a, i| {
+        if (self.constEval(a)) |c| switch (c) {
+            .str => |s| break .{ i, s },
+            else => {},
+        };
+    } else return;
+
+    var next: usize = at + 1;
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        i = p + 1;
+        if (i >= fmt.len) break;
+        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+            (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
+        {}
+        if (i >= fmt.len) break;
+        const conv = std.ascii.toLower(fmt[i]);
+        i += 1;
+        if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
+        if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
+        const ty = tys[next];
+        const arg = live[next];
+        next += 1;
+        // What `cg_display.appendConv` renders per (conversion, type):
+        //   %d/%b/%o/%h/%x — any type; a string takes §2.7's integer view.
+        //   %c             — an integer's low byte (Table 9-22); a real rounds.
+        //   %s             — the text; §9.4.5's ASCII-codes view of a NUMBER
+        //                    is not implemented.
+        //   %e/%f/%g/%r and the %t/%u/%z/%v decimal defaults — numbers only.
+        //   anything else  — the operand's natural form, every type.
+        const bad = switch (conv) {
+            's' => ty != .string,
+            'c' => ty == .string,
+            'e', 'f', 'g', 'r', 't', 'u', 'z', 'v' => ty == .string,
+            else => false,
+        };
+        if (!bad) continue;
+        var b = self.errAtWith(arg, .E0819);
+        b.msg("`%{c}` on a {s} operand", .{ conv, @tagName(ty) });
+        if (conv == 's') {
+            b.help("print the number with `%g` or `%d`", .{});
+        } else if (conv == 'c') {
+            b.help("`%c` takes a character code; use `%s` for the text", .{});
+        } else {
+            b.help("use `%s` for the text, or `%d` for the string's integer value", .{});
+        }
+        try b.emit();
+    }
 }
 
 /// §9.5.3 `$swrite(str, …)` / `$sformat(str, fmt, …)` — the §9.4.3 formatter
@@ -7480,7 +7555,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // (a non-identity limiter would, which is why this is written down).
             return .{
                 // §9.17.3 the probe argument is an ACCESS FUNCTION, never a net.
-                .v = try self.call(name, &.{try self.lowerSysArg(sys_args[0], false)}),
+                .v = try self.call(name, &.{(try self.lowerSysArg(sys_args[0], false)).v}),
                 .ty = sysFuncTy(name),
             };
         }
@@ -7508,7 +7583,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     defer vals.deinit(self.arena);
     for (sys_args) |a| {
         if (a == .none) continue;
-        try vals.append(self.arena, try self.lowerSysArg(a, takesNetRef(name)));
+        try vals.append(self.arena, (try self.lowerSysArg(a, takesNetRef(name))).v);
     }
     const v = try self.call(name, vals.items);
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
@@ -8034,17 +8109,18 @@ fn takesNetRef(name: []const u8) bool {
 /// path is gated by the caller (`net_ok`) and a net name elsewhere falls
 /// through to `lowerExpr`, where §4.4's "a net is not a value" E0315 says to
 /// probe it.
-fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!Mir.Value {
+fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
     if (net_ok and ex.tag(e) == .ident) {
         const name = self.file.str(ex.strOf(e));
         const is_value = self.vars.contains(name) or self.param_index.contains(name) or
             self.consts.contains(name);
         if (!is_value) {
-            if (self.node_voltages.get(name)) |idx| return self.iconst(idx);
+            if (self.node_voltages.get(name)) |idx|
+                return .{ .v = try self.iconst(idx), .ty = .integer };
         }
     }
-    return (try self.lowerExpr(e)).v;
+    return self.lowerExpr(e);
 }
 
 /// §9.15 Table 9-27 — the simulation parameters THIS engine knows, and their
