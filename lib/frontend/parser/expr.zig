@@ -308,7 +308,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
         .dot => if (self.in_paramset) {
             self.pos += 1;
             const name = try self.expectIdent();
-            const dotted = try self.file.intern(self.arena, try std.fmt.allocPrint(self.arena, ".{s}", .{self.file.str(name)}));
+            const dotted = try self.file.intern(self.arena, try self.arena.print(".{s}", .{self.file.str(name)}));
             return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = dotted });
         },
         // A.2.5 value_range_expression `inf` (only meaningful in §3.4.2).
@@ -476,7 +476,8 @@ fn hierBranchTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!
 
 /// The flat name `a.b.c` of a §6.7 hierarchical name's parts, interned: the
 /// name elaboration gives the entity (`Elaborate.sep` is the same `.`), so
-/// `Lower.flatName` and this join must change together.
+/// `Lower.flatName` and this join must change together. `parts` must be
+/// nonempty (a name has at least one part).
 pub fn joinName(self: *Parser, parts: []const Ast.StrId) Error!Ast.StrId {
     var n = parts.len - 1;
     for (parts) |part| n += self.file.str(part).len;

@@ -2,6 +2,7 @@
 //! analog block, function or discrete process in, `Ast.StmtId`s out.
 //! Digital-only statements (IEEE 1364-2005 Clause 9) parse only in the
 //! discrete grammar.
+//!
 //! LRM clauses cited: §2.6.2, §4.7.1, §4.7.2.2, §5.6, §5.7, §5.8, §5.8.3, §5.9, §5.9.1,
 //! §5.9.2, §5.10, §5.10.4, §5.11.
 

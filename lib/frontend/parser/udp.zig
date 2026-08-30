@@ -216,8 +216,8 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
     const inputs = cols[0].text[0..cols[0].len];
     var edge_count: usize = 0;
     for (inputs) |c| {
-        if (std.mem.indexOfScalar(u8, "01xX?bB", c) != null) continue;
-        if (std.mem.indexOfScalar(u8, "rRfFpPnN*()", c) != null) {
+        if (std.mem.findScalar(u8, "01xX?bB", c) != null) continue;
+        if (std.mem.findScalar(u8, "rRfFpPnN*()", c) != null) {
             if (is_seq) {
                 // IEEE 1364-2005 8.1.4/8.4: at most one input
                 // transition per row. A parenthesized pair counts once,
@@ -235,12 +235,12 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
     // `current_state ::= level_symbol` and `next_state ::= output_symbol
     // | -` close a sequential one.
     if (is_seq) for (cols[1].text[0..cols[1].len]) |c| {
-        if (std.mem.indexOfScalar(u8, "01xX?bB", c) == null)
+        if (std.mem.findScalar(u8, "01xX?bB", c) == null)
             return self.failAt(cols[1].tok, .E0233, "`{c}` is not a UDP current_state symbol", .{c});
     };
     const last = cols[n].text[0..cols[n].len];
     if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
-    const ok = std.mem.indexOfScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
+    const ok = std.mem.findScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
     if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
 
     // The columns live in a stack buffer, so `inputs` is copied out. Only

@@ -434,7 +434,7 @@ pub const Parser = struct {
         // IEEE 1364-2005 §3.7.3: a system task or function "shall not be
         // escaped", so `\$display` keeps its `\` and names no system task.
         if (text[0] == '$') return self.file.intern(self.arena, (lexer.Lexer{ .src = self.src }).tokenText(self.starts[i]));
-        if (std.mem.indexOfScalar(u8, text, '.') == null)
+        if (std.mem.findScalar(u8, text, '.') == null)
             return self.file.intern(self.arena, text);
         const buf = try self.arena.dupe(u8, text);
         std.mem.replaceScalar(u8, buf, '.', ' ');
@@ -499,6 +499,7 @@ pub const Parser = struct {
 
     /// `skipAttributes`, then binds what it read to `owner` (an operator or
     /// call suffix, or a statement prefix) instead of the next declaration.
+    /// Asserts a `.declaration` owner's token is not past the cursor.
     pub fn ownedAttributes(self: *Parser, owner: Ast.AttributeOwner) error{OutOfMemory}!void {
         std.debug.assert(owner.kind != .declaration or owner.tok <= self.pos); // `attr_at`'s invariant
         const first = self.file.attributes.items.len;

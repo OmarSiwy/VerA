@@ -358,7 +358,7 @@ fn readsSignal(self: *const Parser, b: *const parse_module.Body, e: Ast.ExprId) 
 
 /// IEEE 1364-2005 §14.2-§14.3's rules on the module's paths that need its
 /// ports and drivers, so run once the whole module is parsed. Each broken
-/// rule is reported (E0243) and the parse goes on.
+/// rule is reported (E0245) and the parse goes on; only OOM propagates.
 pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
     const ex = &self.file.exprs;
     for (b.paths.items, 0..) |p, i| {

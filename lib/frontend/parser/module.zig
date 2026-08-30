@@ -192,7 +192,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .timing_checks = b.timing_checks.items,
         // §2.9: every attr_spec seen since the last module. Attributes
         // before the `module` keyword (Syntax 2-7 puts a slot there) were
-        // collected by `parseSource` and belong to this module too, which is
+        // collected by `parseSourceFile` and belong to this module too, which is
         // why the list is cleared at the end and not at the start.
         .attrs = attrs,
         .is_connect = is_connect,
