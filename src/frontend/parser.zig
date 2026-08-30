@@ -2232,6 +2232,7 @@ pub const Parser = struct {
 
         var d: Ast.DisciplineDecl = .{ .name = name, .main_tok = main_tok };
         var overrides: std.ArrayList(Ast.DisciplineDecl.Override) = .empty;
+        var attrs: std.ArrayList(Ast.NatureAttr) = .empty;
         while (self.peek() != .kw_enddiscipline and self.peek() != .eof) {
             switch (self.peek()) {
                 // §3.6.2.1 nature_binding / §3.6.2.3 nature_attribute_override
@@ -2261,11 +2262,26 @@ pub const Parser = struct {
                     self.pos += 1;
                     _ = try self.expect(.semicolon);
                 },
+                // §3.6.2.7 "Like natures, a discipline can specify user-defined
+                // attributes." A.1.7's discipline_item omits the production —
+                // the grammar and the prose contradict — and VerA reads the
+                // explicit prose as governing and the annex as a non-exhaustive
+                // erratum: real designs and tools attach attributes to
+                // disciplines, and the sentence exists for them. Same shape as
+                // a nature's user attribute (A.1.6 nature_attribute), gated on
+                // the `=` so a stray identifier still gets E0213's "expected a
+                // discipline item" rather than a mid-production "expected '='".
+                .identifier, .escaped_identifier => {
+                    if (self.peekAt(1) != .assign_eq)
+                        return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)});
+                    try attrs.append(self.arena, try self.parseNatureAttr());
+                },
                 else => return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)}),
             }
         }
         _ = try self.expect(.kw_enddiscipline);
         d.overrides = overrides.items;
+        d.attrs = attrs.items;
         return d;
     }
 
@@ -4548,6 +4564,7 @@ test "analog functions, events, case and indirect contributions" {
         \\  potential Voltage;
         \\  potential.abstol = 1e-9;
         \\  domain continuous;
+        \\  max_voltage = 48.0;
         \\enddiscipline
         \\module m(p, n);
         \\  inout p, n;
@@ -4580,6 +4597,9 @@ test "analog functions, events, case and indirect contributions" {
     try std.testing.expectEqualStrings("Voltage", res.file.str(d.potential));
     try std.testing.expectEqual(Ast.DisciplineDecl.Domain.continuous, d.domain);
     try std.testing.expectEqual(@as(usize, 1), d.overrides.len);
+    // §3.6.2.7 a discipline's user-defined attribute, kept like a nature's.
+    try std.testing.expectEqual(@as(usize, 1), d.attrs.len);
+    try std.testing.expectEqualStrings("max_voltage", res.file.str(d.attrs[0].name));
 
     const m = res.file.modules[0];
     try std.testing.expectEqual(@as(usize, 1), m.branches.len);

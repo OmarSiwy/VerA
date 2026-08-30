@@ -4,10 +4,10 @@ Source: `docs/ch3-datatypes.html`, read in full through Section 3.13.4.
 
 HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s3-4-3` `s3-4-4` `s3-4-5` `s3-4-6` `s3-4-7` `s3-4-8` `s3-5` `s3-6` `s3-6-1` `s3-6-1-1` `s3-6-1-2` `s3-6-1-3` `s3-6-2` `s3-6-2-1` `s3-6-2-2` `s3-6-2-3` `s3-6-2-4` `s3-6-2-5` `s3-6-2-6` `s3-6-2-7` `s3-6-3` `s3-6-3-1` `s3-6-3-2` `s3-6-4` `s3-6-5` `s3-7` `s3-8` `s3-9` `s3-10` `s3-11` `s3-11-1` `s3-12` `s3-12-1` `s3-13` `s3-13-1` `s3-13-2` `s3-13-3` `s3-13-4` — 45 IDs, of which 3 (`s3-1`, `s3-6`, `s3-13`) are bare parent headings with no rule of their own.
 
-97 `.va` files: 47 run and assert, 50 are rejections, and NONE is `//! xfail`
-(grep-measured: 97 files, 50 with a `//! reject` line, 0 with a `//! xfail` line — the
-45/50 this line used to give was off by one in each direction, and the 31/23/41 before that
-was never true of the tree it described).
+105 `.va` files: 54 run and assert, 51 are rejections, and NONE is `//! xfail`
+(grep-measured: 105 files, 51 with a `//! reject` line, 0 with a `//! xfail` line — the
+47/50-of-97 this line used to give predated eight fixtures, and the counts before that
+were never true of the tree they described).
 
 Measured on the MERGE, not carried from a branch. Two parallel waves each added one fixture
 here — `81_parameter_default_over_parameter.va` and `81_from_range_without_bracket.va` — and
@@ -44,7 +44,7 @@ what it pins. The full ledger is below.
 | 3.6.2.4 Discipline of nets and undeclared nets | `34_implicit_nets.va` (green: the instance elaborates and the net bound only to a child port needs no declaration) |
 | 3.6.2.5 Overriding nature attributes from discipline | `19_discipline_override.va` — the LRM's `flow.abstol` form; the assertion is that the binding survives, not the tolerance value |
 | 3.6.2.6 Deriving natures from disciplines | `20_derived_nature_from_discipline.va` — `nature x : disc.potential`, observable through inherited `access` |
-| 3.6.2.7 User-defined attributes (discipline) | — no fixture. No `.va` here declares a user attribute inside a `discipline`; `11_discipline_declarations.va` declares three disciplines and none carries one. |
+| 3.6.2.7 User-defined attributes (discipline) | `lrm_3_6_2_7.va` — `max_voltage = 48.0;` inside a discipline, accepted and retained on the declaration exactly as a nature's user attributes are. The LRM contradicts itself here (A.1.7's discipline_item omits the production the §3.6.2.7 prose grants); the fixture's header records the decision: prose governs, the annex grammar is treated as a non-exhaustive erratum. |
 | 3.6.3 Net_discipline declaration | `12_scalar_nets.va` (undeclared-as-port internal nets), `64_flow_on_potential_only_net.va`; `32_vector_nets.va` (§3.6.3 vector nets, scalarised: `V(p[0])`…`V(p[3])` on one four-bit bus), `79_natureless_net_behavioral.va` and `80_domainless_net_behavioral.va` (green) |
 | 3.6.3.1 Net descriptions | — no fixture. `(* desc="drain terminal" *) electrical d;` is an attribute instance; none exists here, and the duplicate-on-port-and-declaration rule has no fixture either. |
 | 3.6.3.2 Net Discipline Initial (Nodeset) Values | `21_net_nodeset.va` — green: `electrical node = 5.0;` parses (A.2.4 `net_decl_assignment`) and the initializer is a solver HINT, so the fixture asserts the net carries the potential the rest of the circuit gives it and is not clamped to 5.0. VerA drops the value: it is an input to an analog solver that a compiled device does not contain, and until the contract carries it the clause's other two rules — "shall be a constant_expression" and the ban on non-continuous disciplines — have no consumer to check them. The bus form (`'{2.3,4.5,,6.0}`) has no fixture either; its null element has no A.8.3 operand. |
@@ -66,9 +66,9 @@ what it pins. The full ledger is below.
 
 ## What is not covered
 
-Eight normative sections have no fixture, and the reasons split three ways.
+Seven normative sections have no fixture, and the reasons split three ways.
 
-- **Attribute-instance clauses — 3.2.1, 3.4.3, 3.6.3.1, and 3.6.2.7 (which this bullet used to omit, making the eight above look like seven).** All four hang on `(* desc=…, units=… *)` or on a user attribute inside a `discipline`, and grep finds no `(*` anywhere in this directory. Nothing structural blocks them: Chapter 2's `11_attributes.va` already parses attribute syntax. What is missing is any fixture that attaches one to a module-scope variable, a parameter, or a net and then observes it. The observable side is operating-point reporting, which a static Zig dump does not have — but the *acceptance* of the attribute in those three positions is testable and is not tested.
+- **Attribute-instance clauses — 3.2.1, 3.4.3 and 3.6.3.1.** All three hang on `(* desc=…, units=… *)`, and grep finds no `(*` anywhere in this directory. Nothing structural blocks them: Chapter 2's `11_attributes.va` already parses attribute syntax. What is missing is any fixture that attaches one to a module-scope variable, a parameter, or a net and then observes it. The observable side is operating-point reporting, which a static Zig dump does not have — but the *acceptance* of the attribute in those three positions is testable and is not tested. (3.6.2.7, which used to sit in this bullet, closed: it is not an attribute *instance* but a bare `attr = value;` discipline item, and `lrm_3_6_2_7.va` now pins its acceptance.)
 - **Hierarchy and resolution clauses — 3.8, 3.9, 3.10.** Default discipline, primitive disciplines, and discipline precedence all decide the discipline of a net from outside the module that declares it. They need an instance tree and a resolution pass; `ch06_hierarchy` and `annex_f_resolution` are where they can live.
 - **Out of subset — 3.7.** `wreal` is a digital net type Annex C excludes from Verilog-A. The exclusion belongs in `annex_c_analog_subset`, and stating it here would duplicate it.
 
