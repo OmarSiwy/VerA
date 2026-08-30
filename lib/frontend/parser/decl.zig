@@ -297,7 +297,18 @@ pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
 pub fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
     const ex = &self.file.exprs;
     if (ex.tag(d.msb) != .int_literal or ex.tag(d.lsb) != .int_literal) return null;
-    return @abs(ex.intValue(d.msb) - ex.intValue(d.lsb)) + 1;
+    // In i128 the difference of two 64-bit values cannot overflow; a width
+    // past u64 (`[2**64-1 : -1]`) is no width a path can compare.
+    return std.math.cast(u64, @abs(literalValue(self, d.msb) - literalValue(self, d.lsb)) + 1);
+}
+
+// An `.int_literal`'s value as written. The store keeps an `i64`, so an
+// unsigned 64-bit literal with its top bit set (`64'h8000000000000000`)
+// reads back negative; reinterpreted here, it is the large positive number.
+fn literalValue(self: *const Parser, e: Ast.ExprId) i128 {
+    const lit = self.file.exprs.intLiteral(e);
+    if (!lit.signed and lit.value < 0) return @as(u64, @bitCast(lit.value));
+    return lit.value;
 }
 
 /// §9.7.3 / AMS §5.10.4: dimensions belong to each event identifier.
