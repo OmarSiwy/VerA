@@ -297,6 +297,10 @@ pub const Code = enum(u16) {
     E0361,
     /// §6.8 one identifier declares two items in one scope.
     E0362,
+    /// §3.4/A.2.4 a parameter default that reads simulation state — `$abstime`,
+    /// `$temperature`, an access function, `$random`, … — where the grammar
+    /// requires a constant_mintypmax_expression.
+    E0363,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -452,6 +456,10 @@ pub const Code = enum(u16) {
     E0817,
     /// §9.22/§9.23 a driver access function called outside a connect module.
     E0818,
+    /// §9.4.3 a format conversion whose operand has a type the display path
+    /// cannot render through it: `%s` over a number, `%c` or a real conversion
+    /// over a string.
+    E0819,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -2403,6 +2411,30 @@ fn infoOf(c: Code) Info {
             \\them, or delete it if it was a repeat of the same declaration.
             ,
         },
+        .E0363 => .{
+            .title = "parameter default is not a constant expression",
+            .lrm = "3.4",
+            .explain =
+            \\A.2.4 gives a parameter assignment a constant_mintypmax_expression,
+            \\and 3.4 explains why: "The default_value may not be changed at
+            \\runtime" — a parameter is a value fixed before the solve, settable
+            \\only per instance (6.3). An expression that reads simulation state
+            \\— $abstime, $temperature, $vt, $random, an access function like
+            \\V(a,b), an analog operator — has a different value at every point
+            \\of the solve, so there is no single number a model card could
+            \\carry for it and no moment the default could honestly be read.
+            \\
+            \\A default MAY reference other parameters (3.4/6.3.4: an update of
+            \\the base parameter automatically updates the dependent one); it is
+            \\the operating point it may not reference.
+            \\
+            \\Compute the value in the analog block instead, into a variable:
+            \\
+            \\    parameter real tj0 = 27;          // overridable constant
+            \\    real tj;
+            \\    analog tj = $temperature - `P_CELSIUS0;
+            ,
+        },
 
         // ------------------------------------------------------------ class 4
         .E0401 => .{
@@ -3827,6 +3859,35 @@ fn infoOf(c: Code) Info {
             \\When VerA grows connect modules the rule does not move: it narrows
             \\from "no module has drivers" to "this module is not a connect
             \\module", which is the same test on a wider language.
+            ,
+        },
+        .E0819 => .{
+            .title = "format conversion does not match the operand's type",
+            .lrm = "9.4.3",
+            .explain =
+            \\9.4.3 pairs each consuming conversion with the expression argument
+            \\that follows the format string. VerA's formatter renders three
+            \\operand types — real, integer, string — and most conversions have a
+            \\reading for each: %d/%b/%o/%h round a real, and a string operand
+            \\under them takes 2.7's "unsigned constant number" view, one byte
+            \\per character. Three pairings have no rendering VerA emits:
+            \\
+            \\    %s over a real or an integer. 9.4.5's reading — the value as a
+            \\    string of 8-bit ASCII codes — is not implemented; %g or %d
+            \\    prints the number.
+            \\
+            \\    %c over a string. Table 9-22's %c displays the low byte of an
+            \\    INTEGER as a character; a string is not a code. Use %s for the
+            \\    text, or index a code out of it.
+            \\
+            \\    %e/%f/%g/%r (and the %t/%u/%z/%v defaults) over a string.
+            \\    There is no numeric field to format; %s prints the text, %d
+            \\    prints 2.7's integer view.
+            \\
+            \\Formerly these compiled here and then failed the generated
+            \\device's own build, which reported an engine bug with no source
+            \\location. The mismatch is the model's, so it is reported at the
+            \\model, at the operand.
             ,
         },
         .E0817 => .{
