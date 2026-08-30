@@ -176,7 +176,7 @@ pub const Parser = struct {
         try paramsets.appendSlice(self.arena, self.file.paramsets);
 
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             const before = self.pos;
             switch (self.peek()) {
                 .eof => break,
@@ -295,7 +295,13 @@ pub const Parser = struct {
         if (self.pos == before) self.pos += 1;
         while (true) : (self.pos += 1) switch (self.peek()) {
             .eof => return,
-            .kw_module, .kw_discipline, .kw_nature => return,
+            // Everything `parseSource` dispatches a description on. A.1.2's
+            // `macromodule`/`connectmodule` are module_keyword alternatives and
+            // `paramset` starts A.1.9's declaration; leaving any of them out
+            // meant one bad description swallowed every following one of that
+            // kind. (`connectmodule` closes with `endmodule`, so the consume
+            // set below already covers it.)
+            .kw_module, .kw_macromodule, .kw_connectmodule, .kw_discipline, .kw_nature, .kw_paramset => return,
             .kw_endmodule, .kw_enddiscipline, .kw_endnature, .kw_endparamset => {
                 self.pos += 1;
                 return;
@@ -411,7 +417,7 @@ pub const Parser = struct {
         var overrides: std.ArrayList(Ast.ParamsetOverride) = .empty;
 
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             switch (self.peek()) {
                 .eof, .kw_endparamset => break,
                 .kw_parameter, .kw_localparam => {
@@ -453,18 +459,35 @@ pub const Parser = struct {
                         .main_tok = tok,
                     });
                 },
-                // The two dropped statement forms (see the doc comment). Skipped
-                // by tokens rather than parsed: the right-hand side of an output
-                // assignment may contain §6.4.3's `.module_output_variable`
-                // spelling, which is not an expression anywhere else in the
-                // language, and nothing reads the result.
-                else => while (true) : (self.pos += 1) switch (self.peek()) {
-                    .eof, .kw_endparamset => break,
-                    .semicolon => {
-                        self.pos += 1;
-                        break;
-                    },
-                    else => {},
+                // The two dropped statement forms (see the doc comment), and
+                // ONLY those. Skipped by tokens rather than parsed: the
+                // right-hand side of an output assignment may contain §6.4.3's
+                // `.module_output_variable` spelling, which is not an
+                // expression anywhere else in the language, and nothing reads
+                // the result. What the silent skip is restricted to is what
+                // A.1.9 actually admits here — a variable assignment
+                // (`ft = 3.0 * .gm;`, an identifier followed by `=` or an
+                // array element's `[`) or a §6.4.1 analog_function_statement
+                // conditional wrapping such assignments — because the skip used
+                // to take EVERYTHING, so a misspelled `paramter real rr;`
+                // compiled clean and the paramset silently lacked a parameter.
+                else => {
+                    const legal = (self.identLike(self.pos) and
+                        (self.peekAt(1) == .assign_eq or self.peekAt(1) == .lbracket)) or
+                        switch (self.peek()) {
+                            .kw_if, .kw_case, .kw_for, .kw_while, .kw_repeat, .kw_begin => true,
+                            else => false,
+                        };
+                    // (`failAt` always errors, so its result is a bare error
+                    // set — widened to a union so ParseError can be dropped
+                    // for recovery while OOM still aborts.)
+                    if (!legal) @as(Error!void, self.failAt(
+                        self.pos,
+                        .E0205,
+                        "found {s} in a paramset body",
+                        .{self.found(self.pos)},
+                    )) catch |e| try self.rethrowOom(e);
+                    self.skipParamsetStatement();
                 },
             }
         }
@@ -482,6 +505,33 @@ pub const Parser = struct {
             .vars = vars.items,
             .overrides = overrides.items,
             .main_tok = main_tok,
+        };
+    }
+
+    /// Skip ONE A.1.9 paramset statement by tokens: to the `;` that ends it,
+    /// balancing `(...)` (a `for` header holds two semicolons), `begin`/`end`
+    /// and `case`/`endcase`, and continuing over `else` — so a dropped
+    /// `if (c) begin ft = 1.0; end else ft = 2.0;` is ONE silent skip rather
+    /// than a diagnostic per fragment. A statement that IS a block ends at its
+    /// `end`/`endcase`, which carries no `;` of its own.
+    fn skipParamsetStatement(self: *Parser) void {
+        var depth: u32 = 0;
+        while (true) : (self.pos += 1) switch (self.peek()) {
+            .eof, .kw_endparamset => return,
+            .lparen, .kw_begin, .kw_case => depth += 1,
+            .rparen => depth -|= 1,
+            .kw_end, .kw_endcase => {
+                depth -|= 1;
+                if (depth == 0 and self.peekAt(1) != .kw_else) {
+                    self.pos += 1;
+                    return;
+                }
+            },
+            .semicolon => if (depth == 0 and self.peekAt(1) != .kw_else) {
+                self.pos += 1;
+                return;
+            },
+            else => {},
         };
     }
 
@@ -531,7 +581,7 @@ pub const Parser = struct {
         var disc: Ast.StrId = .none;
         var range: ?Ast.Dim = null;
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             if (token.isPortDirection(self.peek())) {
                 dir = self.portDirection(self.peek());
                 self.pos += 1;
@@ -625,7 +675,7 @@ pub const Parser = struct {
 
     fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             const t = self.peek();
             if (t == end or t == .eof or t == .kw_endmodule) return;
             const before = self.pos;
@@ -700,7 +750,10 @@ pub const Parser = struct {
                 self.pos += 1;
                 while (true) {
                     const tok = self.pos;
-                    const path = try self.parseDottedName();
+                    // `true`: A.9.3 admits `u[0].g` — the parameter of ONE
+                    // element of an instance array, which is a flat name
+                    // elaboration really mints.
+                    const path = try self.parseDottedName(true);
                     _ = try self.expect(.assign_eq);
                     const value = try self.parseExpr();
                     try b.defparams.append(self.arena, .{
@@ -953,7 +1006,7 @@ pub const Parser = struct {
                     // DISCIPLINE the attribute asks for is not read from here: see
                     // `Elaborate.primitiveAccess` for where E.3.2 is applied and
                     // why the connected net answers it.
-                    self.skipAttributes();
+                    try self.skipAttributes();
                     const tok = self.pos;
                     if (self.eat(.dot)) {
                         const pname = try self.expectIdent();
@@ -1267,7 +1320,7 @@ pub const Parser = struct {
                 });
             }
             while (self.peek() != .kw_end and self.peek() != .eof) {
-                self.skipAttributes();
+                try self.skipAttributes();
                 if (self.peek() == .kw_end) break;
                 const before = self.pos;
                 self.parseModuleItem(&gb) catch |e| {
@@ -1278,7 +1331,7 @@ pub const Parser = struct {
             }
             _ = try self.expect(.kw_end);
         } else {
-            self.skipAttributes();
+            try self.skipAttributes();
             try self.parseModuleItem(&gb);
         }
 
@@ -1453,17 +1506,78 @@ pub const Parser = struct {
     /// The parts are `expectIdent`s, so each has been through `internTok` and no
     /// longer carries a period of its own — which is what lets the join below be
     /// the whole mechanism rather than an approximation of one.
-    fn parseDottedName(self: *Parser) Error!Ast.StrId {
+    ///
+    /// `allow_index`: A.9.3 `hierarchical_identifier ::= { identifier [ [
+    /// constant_expression ] ] . } identifier` — a per-segment index naming ONE
+    /// element of a §6.2.2 instance array, legal on every segment but the last
+    /// (the production puts it inside the braces, before the `.`). The index is
+    /// folded HERE and spelled into the stored text as `[{d}]`, because
+    /// elaboration mints instance-array elements under exactly that spelling
+    /// (`Flatten.walkInstances`) and the shared representation's whole point is
+    /// that a defparam key IS the flat name. A value the fold cannot reach is
+    /// E0231 — interned text has no digits for an unevaluated expression.
+    ///
+    /// The net-declaration caller passes `false`: not because F.2.1's
+    /// out-of-context form forbids an index, but because in that position a `[`
+    /// after the name is how A.2.1.3's `ams_net_identifier` spells a vector
+    /// range, and consuming it as an index would trade one diagnostic for a
+    /// wronger one.
+    fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
         const first = try self.expectIdent();
-        if (self.peek() != .dot) return first;
+        if (self.peek() != .dot and !(allow_index and self.peek() == .lbracket)) return first;
         var joined: std.ArrayList(u8) = .empty;
         try joined.appendSlice(self.arena, self.file.str(first));
-        while (self.eat(.dot)) {
+        while (true) {
+            if (allow_index and self.peek() == .lbracket) {
+                const tok = self.pos;
+                self.pos += 1;
+                const idx = try self.parseExpr();
+                _ = try self.expect(.rbracket);
+                const k = self.constIndex(idx) orelse return self.failAt(tok, .E0231, "", .{});
+                var buf: [24]u8 = undefined;
+                try joined.appendSlice(self.arena, std.fmt.bufPrint(&buf, "[{d}]", .{k}) catch unreachable);
+                // A.9.3 an indexed segment is always followed by `.` — the
+                // final identifier of a path carries no index.
+                _ = try self.expect(.dot);
+            } else if (!self.eat(.dot)) break;
             const part = try self.expectIdent();
             try joined.append(self.arena, '.');
             try joined.appendSlice(self.arena, self.file.str(part));
         }
         return self.file.intern(self.arena, joined.items);
+    }
+
+    /// Fold A.9.3's `[ constant_expression ]`: §2.6 integer literals and the
+    /// +,-,*,/ arithmetic over them — the same set `Elaborate.constInt` folds
+    /// for the instance-array RANGE these indices select from. Not parameter
+    /// reads: the parameter table is elaboration's, and a value not in hand
+    /// here cannot be spelled into interned text.
+    fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
+        if (e == .none) return null;
+        const x = &self.file.exprs;
+        return switch (x.tag(e)) {
+            .int_literal => x.intValue(e),
+            .unary => blk: {
+                const v = self.constIndex(x.lhs(e)) orelse break :blk null;
+                break :blk switch (x.unOp(e)) {
+                    .plus => v,
+                    .minus => -v,
+                    else => null,
+                };
+            },
+            .binary => blk: {
+                const l = self.constIndex(x.lhs(e)) orelse break :blk null;
+                const r = self.constIndex(x.rhs(e)) orelse break :blk null;
+                break :blk switch (x.binOp(e)) {
+                    .add => l + r,
+                    .sub => l - r,
+                    .mul => l * r,
+                    .div => if (r == 0) null else @divTrunc(l, r),
+                    else => null,
+                };
+            },
+            else => null,
+        };
     }
 
     fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, is_ground: bool) Error!void {
@@ -1476,7 +1590,7 @@ pub const Parser = struct {
             // the module where sig was declared". The dotted name is interned
             // whole; `findPort` below cannot match it, so it lands as a net
             // declaration under its path and elaboration reads it as one.
-            const name = try self.parseDottedName();
+            const name = try self.parseDottedName(false);
             // §3.6.3.2 / Syntax 3-6 `net_decl_assignment ::= ams_net_identifier =
             // expression` — a NODESET value: "the initializer shall be a
             // constant_expression and will be used as a nodeset value for the
@@ -1809,7 +1923,7 @@ pub const Parser = struct {
         defer self.in_analog_fn = saved_in_fn;
 
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             switch (self.peek()) {
                 .eof, .kw_endfunction => break,
                 .kw_input, .kw_output, .kw_inout => {
@@ -2063,7 +2177,7 @@ pub const Parser = struct {
     /// statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
     /// C.7's own diagnostic (E0416) is what the source dies on.
     pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
-        self.skipAttributes();
+        try self.skipAttributes();
         const tok = self.pos;
         switch (self.peek()) {
             .semicolon => {
@@ -2199,7 +2313,7 @@ pub const Parser = struct {
         var params: std.ArrayList(Ast.ParamDecl) = .empty;
         var vars: std.ArrayList(Ast.VarDecl) = .empty;
         while (true) {
-            self.skipAttributes();
+            try self.skipAttributes();
             switch (self.peek()) {
                 .kw_parameter, .kw_localparam => {
                     try self.parseParamDecl(&params);
@@ -2250,7 +2364,7 @@ pub const Parser = struct {
 
         var arms: std.ArrayList(Ast.CaseArm) = .empty;
         while (self.peek() != .kw_endcase and self.peek() != .eof) {
-            self.skipAttributes();
+            try self.skipAttributes();
             var labels: std.ArrayList(Ast.ExprId) = .empty;
             if (self.eat(.kw_default)) {
                 _ = self.eat(.colon); // A.6.7: `default [ : ]`
@@ -2429,7 +2543,7 @@ pub const Parser = struct {
             if (t == .question and min_prec <= prec_ternary) {
                 const tok = self.pos;
                 self.pos += 1;
-                self.skipAttributes();
+                try self.skipAttributes();
                 const then_e = try self.parseExpr();
                 _ = try self.expect(.colon);
                 const else_e = try self.parseExprPrec(prec_ternary);
@@ -2446,7 +2560,7 @@ pub const Parser = struct {
             if (prec == 0 or prec < min_prec) return lhs;
             const tok = self.pos;
             self.pos += 1;
-            self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
+            try self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
             // §4.2.2: "All operators associate left to right with the exception
             // of the conditional operator which associates right to left."
             // There is no `**` carve-out — §4.2.12 names `?:` as the only
@@ -2486,7 +2600,7 @@ pub const Parser = struct {
             else => return self.parsePostfix(),
         };
         self.pos += 1;
-        self.skipAttributes(); // A.8.3 `unary_operator { attribute_instance }`
+        try self.skipAttributes(); // A.8.3 `unary_operator { attribute_instance }`
         const operand = try self.parseUnary();
         return self.addExpr(.{
             .tag = .unary,
@@ -2598,7 +2712,7 @@ pub const Parser = struct {
                 if (self.peek() == .attr_open) {
                     const before_attrs = self.pos;
                     const attr_mark = self.attrs.items.len;
-                    self.skipAttributes();
+                    try self.skipAttributes();
                     if (self.peek() != .lparen) {
                         self.pos = before_attrs;
                         // The specs come with the cursor: this instance belongs
@@ -3390,10 +3504,13 @@ pub const Parser = struct {
     /// the caller's cursor lands past the instance either way, and 14 call sites
     /// depend on that. The value is now a real `parseExpr`, so a malformed one is
     /// a diagnostic where it used to be silently swallowed.
-    fn skipAttributes(self: *Parser) void {
-        self.parseAttributes() catch {
-            // A parse error inside an attribute has already been reported (or is
-            // OOM, which `self.failed` will end the compile on regardless). The
+    fn skipAttributes(self: *Parser) error{OutOfMemory}!void {
+        self.parseAttributes() catch |e| {
+            // OOM is never recoverable (`rethrowOom`'s contract) — swallowing
+            // it here would resume parsing with whatever half-built state the
+            // allocator refused to finish.
+            if (e == error.OutOfMemory) return error.OutOfMemory;
+            // A parse error inside an attribute has already been reported. The
             // cursor is resynchronized to the closing `*)` so ONE bad attribute
             // does not turn the decorated declaration into a second diagnostic.
             while (true) : (self.pos += 1) switch (self.peek()) {
