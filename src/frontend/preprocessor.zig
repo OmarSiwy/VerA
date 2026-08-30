@@ -380,7 +380,14 @@ const Prelude = struct {
     files: [3]File,
 
     const Def = struct { name: []const u8, macro: Macro };
-    const File = struct { name: []const u8, raw: []const u8, stripped: []const u8 };
+    const File = struct {
+        name: []const u8,
+        raw: []const u8,
+        stripped: []const u8,
+        /// The stripped→raw offset map `stripComments` left on the bag, so a
+        /// replayed registration renders exactly like a fresh one.
+        marks: []const diag.StripMark,
+    };
 };
 
 var prelude_snapshot: std.atomic.Value(?*const Prelude) = .init(null);
@@ -555,9 +562,9 @@ fn buildPrelude() Allocator.Error!*const Prelude {
         .segs = pp.segs.items,
         .macros = macros.items,
         .files = .{
-            .{ .name = "constants.vams", .raw = constants_vams, .stripped = bag.fileText(@enumFromInt(1)) },
-            .{ .name = "disciplines.vams", .raw = disciplines_vams, .stripped = bag.fileText(@enumFromInt(2)) },
-            .{ .name = "spice_primitives.vams", .raw = spice_primitives, .stripped = bag.fileText(@enumFromInt(3)) },
+            .{ .name = "constants.vams", .raw = constants_vams, .stripped = bag.fileText(@enumFromInt(1)), .marks = bag.fileMarks(@enumFromInt(1)) },
+            .{ .name = "disciplines.vams", .raw = disciplines_vams, .stripped = bag.fileText(@enumFromInt(2)), .marks = bag.fileMarks(@enumFromInt(2)) },
+            .{ .name = "spice_primitives.vams", .raw = spice_primitives, .stripped = bag.fileText(@enumFromInt(3)), .marks = bag.fileMarks(@enumFromInt(3)) },
         },
     };
     return p;
@@ -598,6 +605,12 @@ const Pp = struct {
     conds: std.ArrayList(Cond) = .empty,
     /// Macro-expansion cycle guard (§10.4): names currently being expanded.
     expanding: std.ArrayList([]const u8) = .empty,
+    /// Every live `expand` call, argument pre-expansion included. `expanding`
+    /// only counts body rescans, and argument pre-expansion runs BEFORE the
+    /// name is pushed — so this, not `expanding.items.len`, is what E0119's
+    /// nesting ceiling has to measure or `` `M(`M(`M(... `` recurses on the
+    /// native stack unbounded.
+    expand_depth: u32 = 0,
     /// `include stack, innermost last. Its depth IS the include depth.
     includes: std.ArrayList([]const u8) = .empty,
     /// Provenance of the output so far. Appended to only, so it stays sorted
@@ -749,10 +762,11 @@ const Pp = struct {
             // `.root` and nothing else has registered a file yet. `process` is
             // the only caller and does exactly that.
             std.debug.assert(@intFromEnum(id) == want_id);
-            // Registered raw, then repointed at the stripped text, because that
-            // is the pair `runFile` leaves behind and every span cut from this
-            // file indexes the stripped half.
-            pp.opts.bag.setFileText(id, f.stripped);
+            // Registered raw, then repointed at the stripped text with its
+            // offset marks, because that is the triple `runFile` leaves behind:
+            // every span cut from this file indexes the stripped half, and the
+            // renderer maps back through the marks.
+            pp.opts.bag.setStrippedText(id, f.stripped, f.marks);
         }
         try pp.out.appendSlice(pp.arena, p.text);
         try pp.segs.appendSlice(pp.arena, p.segs);
@@ -791,9 +805,11 @@ const Pp = struct {
         pp.cur_file_id = id;
 
         // Registered RAW first so a stripComments failure resolves, then
-        // repointed: every offset after this indexes the stripped text.
-        const text = try stripComments(pp, raw);
-        pp.opts.bag.setFileText(id, text);
+        // repointed: every offset after this indexes the stripped text. The
+        // raw text and the offset marks stay behind on the bag for rendering.
+        const s = try stripComments(pp, raw);
+        pp.opts.bag.setStrippedText(id, s.text, s.marks);
+        const text = s.text;
 
         try pp.segs.append(pp.arena, .{
             .out_start = @intCast(pp.out.items.len),
@@ -820,13 +836,22 @@ const Pp = struct {
 // §2.4 comments
 // ---------------------------------------------------------------------------
 
+const Stripped = struct { text: []const u8, marks: []const diag.StripMark };
+
 /// Replace `//`- and `/* */`-comments with nothing, keeping every newline they
 /// contained so line numbers survive. String literals (§2.7) are opaque.
 /// Block comments do NOT nest (§2.4) — `/* a /* b */` ends at the first `*/`.
-fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
+///
+/// Also returns one `diag.StripMark` per comment collapsed — the stripped→
+/// original offset map the renderer needs to put a caret on the line the user
+/// WROTE. LINES already agree between the two texts (that is the newline
+/// contract above); what a comment shifts is every COLUMN after it, and every
+/// absolute offset below it, in ways only the stripper knows.
+fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
     // Fast path: most sources shrink, none grow.
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, src.len);
+    var marks: std.ArrayList(diag.StripMark) = .empty;
 
     var i: usize = 0;
     while (i < src.len) {
@@ -858,6 +883,9 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
             // §2.4: to the end of the line. `indexOfScalarPos` IS vectorized in
             // the stdlib (`std/mem.zig:1241`), unlike the set-valued `findAnyPos`.
             i = std.mem.indexOfScalarPos(u8, src, i, '\n') orelse src.len;
+            // The output stood still while the input advanced: from here the
+            // two run in lockstep again, which is exactly one mark.
+            try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '*') {
@@ -883,6 +911,9 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
                 out.appendNTimesAssumeCapacity('\n', lines);
             }
             i += 2;
+            // After the replacement bytes, so the lockstep run the mark opens
+            // starts at the first byte AFTER the comment on both sides.
+            try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
         // Ordinary text: copy the whole run up to the next byte the branches
@@ -902,7 +933,7 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
             i = end;
         }
     }
-    return out.items;
+    return .{ .text = out.items, .marks = marks.items };
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,7 +1142,11 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
     switch (kind) {
         .ifdef, .ifndef => {
             var r: Rest = .{ .s = rest };
-            const macro = r.ident() orelse
+            // The operand is a text_macro_identifier (Syntax 10-3), and A.9.3
+            // makes `identifier` simple OR escaped — the same pair of spellings
+            // `handleDefine` accepts, so `` `ifdef \M-X `` tests the macro that
+            // `` `define \M-X `` created.
+            const macro = r.escapedIdent() orelse r.ident() orelse
                 return pp.fail(sp, .E0104, "`{s}", .{@tagName(kind)});
             const parent = pp.emitting();
             const defined = pp.macros.contains(macro);
@@ -1136,7 +1171,8 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
                 top.taken = true;
             } else {
                 var r: Rest = .{ .s = rest };
-                const macro = r.ident() orelse
+                // Same A.9.3 pair as `ifdef above: the name may be escaped.
+                const macro = r.escapedIdent() orelse r.ident() orelse
                     return pp.fail(sp, .E0107, "", .{});
                 top.active = top.parent_active and !top.taken and pp.macros.contains(macro);
                 if (top.active) top.taken = true;
@@ -1216,7 +1252,11 @@ fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
 
 fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
-    const name = r.ident() orelse return pp.fail(pp.spanAt(at, off), .E0113, "", .{});
+    // Syntax 10-3: `undef's operand is a text_macro_identifier ::= identifier,
+    // simple OR escaped (A.9.3) — a name `` `define \M-X `` could create is a
+    // name `` `undef \M-X `` must be able to withdraw.
+    const name = r.escapedIdent() orelse r.ident() orelse
+        return pp.fail(pp.spanAt(at, off), .E0113, "", .{});
     // §10.4: "`undef shall have no effect on predefined Verilog-AMS macros".
     if (pp.macros.get(name)) |m| {
         if (m.predefined) return;
@@ -1322,10 +1362,36 @@ fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const
         try b.emit();
         return error.PreprocessFailed;
     }
-    if (pp.expanding.items.len >= max_expansion_depth)
+    if (pp.expand_depth >= max_expansion_depth)
         return pp.fail(sp, .E0119, "limit is {d}", .{max_expansion_depth});
+    pp.expand_depth += 1;
+    defer pp.expand_depth -= 1;
 
-    const body = if (m.is_func) try substitute(pp, m.body, m.params, args) else m.body;
+    // §10.4 defers text-macro semantics to IEEE Std 1364, whose rule is that a
+    // macro's TEXT may not refer to the macro itself, directly or indirectly —
+    // a property of the DEFINITION. A nested invocation in an ACTUAL argument
+    // (`` `MAX(`MAX(a,b),c) ``) is not that: the C-preprocessor model, which
+    // 1364's macro system transcribes, expands each argument FULLY before it is
+    // substituted into the body. Splicing the RAW argument text and rescanning
+    // it while `name` sits on `pp.expanding` turned every such use into a false
+    // E0118. Pre-expansion happens here, BEFORE the name is pushed, so the
+    // argument's own uses see the caller's stack — while a self-reference in
+    // the BODY is still rescanned with the name on the stack and still E0118s.
+    const body = if (m.is_func) blk: {
+        var actuals = args;
+        for (args, 0..) |a, first| {
+            if (std.mem.indexOfScalar(u8, a, '`') == null) continue;
+            // At least one argument invokes a macro: expand them all into a
+            // copy. Backtick-free arguments (the overwhelming case) take the
+            // branch above and are substituted verbatim, byte-identically to
+            // what the splice-and-rescan model produced.
+            const copy = try pp.arena.dupe([]const u8, args);
+            for (copy[first..]) |*slot| slot.* = try expandArg(pp, slot.*, at);
+            actuals = copy;
+            break;
+        }
+        break :blk try substitute(pp, m.body, m.params, actuals);
+    } else m.body;
 
     try pp.expanding.append(pp.arena, name);
     defer _ = pp.expanding.pop();
@@ -1367,13 +1433,40 @@ fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const
     return end;
 }
 
+/// Fully macro-expand one collected actual argument (§10.4 via IEEE 1364 —
+/// arguments are expanded BEFORE substitution, see the comment in `expand`).
+/// Runs `scan` with the output redirected into a fresh arena list; `at` is the
+/// invocation's '`', which becomes `expand_site` so that diagnostics raised
+/// inside the argument, `__LINE__`, and the no-segment rule all behave exactly
+/// as they do for a body rescan. Backtick-free text expands to itself and is
+/// returned unscanned.
+fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
+    if (std.mem.indexOfScalar(u8, arg, '`') == null) return arg;
+    const saved_out = pp.out;
+    const saved_site = pp.expand_site;
+    pp.out = .empty;
+    if (pp.expand_site == null) pp.expand_site = @intCast(at);
+    defer {
+        pp.out = saved_out;
+        pp.expand_site = saved_site;
+    }
+    try scan(pp, arg);
+    return pp.out.items;
+}
+
 const MacroArgs = struct { args: []const []const u8, end: usize };
 
 /// Splits a top-level comma list starting at the '(' at `lparen`. Nested
 /// (), [], {} and string literals are opaque.
+///
+/// The nesting is a STACK of opener kinds, not one shared counter: with a
+/// counter every one of `)]}` could close the argument list, so `` `ID(2.0] ``
+/// compiled clean and crossed nestings like `[(],)` mis-sliced the arguments.
+/// A closer that does not match its opener is E0120 — the `(` it leaves behind
+/// really is unterminated, and saying so at the mismatch is the honest place.
 fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []const u8) Error!MacroArgs {
     var args: std.ArrayList([]const u8) = .empty;
-    var depth: u32 = 0;
+    var opens: std.ArrayList(u8) = .empty;
     var i = lparen;
     var arg_start = lparen + 1;
     while (i < text.len) {
@@ -1386,15 +1479,28 @@ fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []const 
                     i += 1;
                 }
             },
-            '(', '[', '{' => depth += 1,
+            '(', '[', '{' => try opens.append(pp.arena, c),
             ')', ']', '}' => {
-                depth -= 1;
-                if (depth == 0) {
+                // Non-empty: the first iteration pushes the '(' at `lparen`,
+                // and the list returns the moment the stack empties.
+                const open = opens.pop().?;
+                const want: u8 = switch (open) {
+                    '(' => ')',
+                    '[' => ']',
+                    else => '}',
+                };
+                if (c != want) {
+                    var b = pp.failWith(pp.spanAt(i, i + 1), .E0120);
+                    b.msg("`{s}`: `{c}` cannot close `{c}`", .{ name, c, open });
+                    try b.emit();
+                    return error.PreprocessFailed;
+                }
+                if (opens.items.len == 0) {
                     try args.append(pp.arena, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
                     return .{ .args = args.items, .end = i + 1 };
                 }
             },
-            ',' => if (depth == 1) {
+            ',' => if (opens.items.len == 1) {
                 try args.append(pp.arena, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
                 arg_start = i + 1;
             },
@@ -1430,6 +1536,17 @@ fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: []con
             const start = i;
             i += 1;
             while (i < body.len and isIdentChar(body[i])) i += 1;
+            try out.appendSlice(pp.arena, body[start..i]);
+            continue;
+        }
+        if (c == '\\') {
+            // §2.8.1 escaped identifier: opaque up to the next white space,
+            // exactly as `scan` and `stripComments` treat it. A formal spelled
+            // INSIDE one is part of that identifier, not a use of the formal —
+            // `` `define M(x) real \sig-x ; `` declares `\sig-x`, not `\sig-1`.
+            const start = i;
+            i += 1;
+            while (i < body.len and !isSpace(body[i])) i += 1;
             try out.appendSlice(pp.arena, body[start..i]);
             continue;
         }
@@ -1531,8 +1648,13 @@ fn readInclude(pp: *Pp, path: []const u8) Error!?[]const u8 {
 /// record the event with the output offset it takes effect from.
 fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
-    // Both operands are optional; the bare form WITHDRAWS the default.
-    const disc = r.ident() orelse "";
+    // Both operands are optional; the bare form WITHDRAWS the default. The
+    // discipline_identifier is an A.9.3 `identifier`, simple OR escaped —
+    // annex D.1 itself declares `discipline \logic ;`, so the escaped spelling
+    // is the only way to name that one here. The qualifier stays `ident()`:
+    // Syntax 10-1 closes it over fifteen KEYWORDS, and §2.8.2 makes an escaped
+    // identifier never a keyword.
+    const disc = r.escapedIdent() orelse r.ident() orelse "";
     const qual = if (disc.len == 0) "" else r.ident() orelse "";
     if (qual.len != 0 and !qualifiers.has(qual)) {
         var b = pp.failWith(pp.spanAt(off + r.i - qual.len, off + r.i), .E0127);
@@ -2774,6 +2896,79 @@ test "§10.4 object-like and function-like macros" {
     try expectPp("\n(max(a,b))+(c)", "`define A(p,q) (p)+(q)\n`A(max(a,b), c)");
     try expectFail("`define SQ(x) x\n`SQ\n", .E0116);
     try expectFail("`define SQ(x) x\n`SQ(1,2)\n", .E0117);
+    // A formal spelled INSIDE a §2.8.1 escaped identifier is part of that
+    // identifier, not a use of the formal — `substitute` treats `\…` as opaque
+    // exactly as `scan` and `stripComments` do.
+    try expectPp("\nreal \\sig-x ;", "`define M(x) real \\sig-x ;\n`M(1)");
+}
+
+test "§10.4 macro argument brackets must match their openers" {
+    // Matched nesting of all three bracket kinds is opaque to the comma split.
+    try expectPp("\n{[(a)],b}", "`define SQ(x) x\n`SQ({[(a)],b})");
+    // One shared depth counter let ANY of `)]}` close the list — `` `SQ(2.0] ``
+    // compiled clean and crossed nestings mis-sliced the arguments. A closer
+    // that does not match its opener is E0120: the `(` it abandons really is
+    // unterminated.
+    try expectFail("`define SQ(x) x\n`SQ(2.0]\n", .E0120);
+    try expectFail("`define SQ(x) x\n`SQ({a)}\n", .E0120);
+    try expectFail("`define SQ(x) x\n`SQ([1,2)]\n", .E0120);
+}
+
+test "§10.4 a nested invocation in an actual argument is not recursion" {
+    // §10.4 hands text macros to IEEE Std 1364, whose recursion rule is about
+    // the macro's TEXT referring to itself — a property of the DEFINITION.
+    // `MAX`'s text refers only to its formals; the nested use sits in the CALL,
+    // and arguments are fully expanded before substitution (fixture ch10 49).
+    // The old splice-then-rescan model reported E0118 "MAX -> MAX" here.
+    try expectPp(
+        "\n((((1.0)>(2.0)?(1.0):(2.0)))>(3.0)?(((1.0)>(2.0)?(1.0):(2.0))):(3.0))",
+        "`define MAX(a,b) ((a)>(b)?(a):(b))\n`MAX(`MAX(1.0,2.0),3.0)",
+    );
+    // An object-like use inside an argument expands there too, and a
+    // function-like macro nested in ANOTHER macro's argument keeps working.
+    try expectPp(
+        "\n\n((7.0)>(2.0)?(7.0):(2.0))",
+        "`define A 7.0\n`define MAX(a,b) ((a)>(b)?(a):(b))\n`MAX(`A,2.0)",
+    );
+    // Genuine self-reference in the TEXT is still the E0118 the rule is about:
+    // object-like, function-like, and mutual (indirect).
+    try expectFail("`define R `R\n`R\n", .E0118);
+    try expectFail("`define F(x) `F(x)\n`F(1)\n", .E0118);
+    try expectFail("`define A(x) `B(x)\n`define B(y) `A(y)\n`A(1)\n", .E0118);
+
+    // E0119's ceiling now counts argument pre-expansion too: nested same-macro
+    // calls never repeat a name on `expanding`, so the DEPTH is what bounds
+    // the native stack.
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(testing.allocator);
+    try src.appendSlice(testing.allocator, "`define M(x) (x)\n");
+    for (0..max_expansion_depth + 1) |_| try src.appendSlice(testing.allocator, "`M(");
+    try src.appendSlice(testing.allocator, "1");
+    for (0..max_expansion_depth + 1) |_| try src.appendSlice(testing.allocator, ")");
+    try src.appendSlice(testing.allocator, "\n");
+    try expectFail(src.items, .E0119);
+}
+
+test "escaped identifiers reach `undef, the conditionals and `default_discipline" {
+    // Syntax 10-3 / A.9.3: every directive whose operand is an `identifier`
+    // takes the §2.8.1 spelling, not just `define (fixture ch10 50).
+    try expectPreserved("`define \\M-X 1\n`ifdef \\M-X\nyes\n`else\nno\n`endif\n", &.{"yes"}, &.{"no"});
+    try expectPreserved("`define \\M-X 1\n`undef \\M-X\n`ifndef \\M-X\nyes\n`endif\n", &.{"yes"}, &.{});
+    try expectPreserved("`define \\M-X 1\n`ifdef NOPE\na\n`elsif \\M-X\nb\n`else\nc\n`endif\n", &.{"b"}, &.{ "a", "c" });
+
+    // §10.2: annex D.1's `discipline \logic ;` is only nameable this way, and
+    // §2.8.1 makes the recorded name the bare bytes between `\` and the space.
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var bag: diag.Bag = .init(arena_state.allocator());
+    var defs: []const DefaultDiscipline = &.{};
+    _ = try process(arena_state.allocator(), "`default_discipline \\logic\n", .{
+        .std_defs = false,
+        .defaults = &defs,
+        .bag = &bag,
+    });
+    try testing.expectEqual(@as(usize, 1), defs.len);
+    try testing.expectEqualStrings("logic", defs[0].discipline);
 }
 
 test "§10.4 undef, and IEEE 1364 conditionals" {
@@ -3040,10 +3235,13 @@ test "the prelude snapshot replays exactly what running annex D.2/D.1/E.1 produc
         try testing.expectEqual(live.is_func, d.macro.is_func);
         try testing.expectEqual(live.params.len, d.macro.params.len);
     }
-    // And the three file registrations the segments index by position.
+    // And the three file registrations the segments index by position — the
+    // strip marks included, or a replayed file renders columns differently
+    // from a freshly run one.
     for (p.files, 1..) |f, id| {
         try testing.expectEqualStrings(f.name, bag.fileName(@enumFromInt(id)));
         try testing.expectEqualStrings(f.stripped, bag.fileText(@enumFromInt(id)));
+        try testing.expectEqualSlices(diag.StripMark, f.marks, bag.fileMarks(@enumFromInt(id)));
     }
 }
 
@@ -3294,6 +3492,39 @@ test "a span inside an `include resolves to the included file's own line" {
     const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "endmodule").?));
     try testing.expectEqual(diag.FileId.root, after.file);
     try testing.expectEqualStrings("endmodule\n", src[after.offset..]);
+}
+
+test "a diagnostic after a comment renders the ORIGINAL line at the ORIGINAL column" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+
+    // The error token sits AFTER a block comment on its line. Its span indexes
+    // the STRIPPED text (the comment is one space there, so the '`' is at
+    // stripped column 3); before the strip map, rendering printed the stripped
+    // line — a line that appears nowhere in the file — and measured the column
+    // in it. The map puts the caret on the line the user wrote, at column 25.
+    const src = "/* a leading comment */ `NOPE\n";
+    try testing.expectError(
+        error.PreprocessFailed,
+        process(arena, src, .{ .std_defs = false, .bag = &bag }),
+    );
+    try testing.expectEqual(@as(usize, 1), bag.count());
+    try testing.expectEqual(diag.Code.E0115, bag.at(0).code);
+
+    var buf: std.ArrayList(u8) = .empty;
+    var aw: std.Io.Writer.Allocating = .fromArrayList(arena, &buf);
+    defer buf = aw.toArrayList();
+    try diag.render(&bag, &aw.writer, .{ .explain_hint = false, .summary = false });
+    const out = aw.writer.buffered();
+
+    // The line drawn is the user's, comment included ...
+    try testing.expect(std.mem.indexOf(u8, out, "| /* a leading comment */ `NOPE") != null);
+    // ... the column is measured in it — the '`' is byte 24, column 25 ...
+    try testing.expect(std.mem.indexOf(u8, out, ":1:25") != null);
+    // ... and the caret row is indented to match: 24 spaces, then the span.
+    try testing.expect(std.mem.indexOf(u8, out, "|                         ^^^^^") != null);
 }
 
 test "a span inside a macro expansion resolves to the invocation site" {
