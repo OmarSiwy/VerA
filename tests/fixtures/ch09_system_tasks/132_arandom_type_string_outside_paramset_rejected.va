@@ -14,8 +14,9 @@
 //
 // Nothing is asserted: an illegal call site has no result. The LEGAL use —
 // type_string inside a paramset, "one value per Monte-Carlo trial" for "global"
-// and one per referencing instance for "instance" — needs paramset support to
-// write down at all and has no fixture yet.
+// and one per referencing instance for "instance" — is
+// 175_dist_type_string_inside_paramset.va, and the misspelled-string negative
+// is 176_dist_type_string_misspelled_rejected.va.
 //
 //! lrm 9.13.1
 //! reject E0816
