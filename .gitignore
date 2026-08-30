@@ -2,6 +2,9 @@
 zig-out/
 
 # Agent worktrees (git worktree add) — never part of the tree. Skills are
-# config, not worktrees: they ride with the repo (ref/ holds their reference).
+# config, not worktrees: they ride with the repo.
 .claude/*
 !.claude/skills/
+
+# Local reference notes
+ref/
