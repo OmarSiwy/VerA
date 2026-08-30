@@ -2718,12 +2718,17 @@ fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
 }
 
 /// The `$` (and `analysis`) names whose value belongs to a solve: time, the
-/// ambient temperature pair, the solver's own knobs, the RNG family, and the
-/// analysis type. §9.13's distributions are matched by their two prefixes.
+/// ambient temperature pair, the RNG family, and the analysis type. §9.13's
+/// distributions are matched by their two prefixes.
+///
+/// `$simparam` is deliberately NOT here: §9.15's table is the HOST's, constant
+/// for a whole run, and a default reading it is the documented W1050 contract
+/// — the field ships as 0 and the host writes it (codegen's "§3.4 a default
+/// with no compile-time value is W1050" test pins exactly that shape).
 fn simStateName(n: []const u8) bool {
     const names = [_][]const u8{
         "$abstime", "$realtime", "$temperature", "$vt",
-        "$simparam", "$random",  "$arandom",     "analysis",
+        "$random",  "$arandom",  "analysis",
     };
     for (names) |s| if (std.mem.eql(u8, n, s)) return true;
     return std.mem.startsWith(u8, n, "$dist_") or std.mem.startsWith(u8, n, "$rdist_");
