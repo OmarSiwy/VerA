@@ -5253,20 +5253,25 @@ const math_txt =
     \\}
     \\/// §4.3.1 pow with a non-constant exponent. The exp(y·ln x) composition
     \\/// this replaces was NaN on the clause's own legal domain "if x < 0, all
-    \\/// integer y". The value is libm's (std.math.pow handles the negative-base
-    \\/// integral-y sign itself); the derivatives are grafted on zero-valued
+    \\/// integer y". The value is S's own pow, which handles the negative-base
+    \\/// integral-y sign itself; the derivatives are grafted on zero-valued
     \\/// carriers:
     \\///   ∂/∂x = y·x^(y−1)  — valid for x > 0 and for integral y of either sign;
     \\///   ∂/∂y = x^y·ln(x)  — only for x > 0. For x ≤ 0 the legal y move in
     \\///   integer steps, so no continuous ∂/∂y exists and 0 is the honest slope.
     \\/// Non-finite slopes (x = 0 with y < 1, domain-error NaNs) are dropped the
     \\/// same way zHypot drops its cone tip.
+    \\/// The three transcendentals go through `S.con(x)`, not `std.math.pow`
+    \\/// and `@log`, for the reason `devSafe` exists: a unit body also compiles
+    \\/// for nvptx, which has no libm, and a raw one is "no libcall available
+    \\/// for flog/fexp" at PTX assembly. On a host S it is the same libm call,
+    \\/// bit for bit, and the zero-derivative carriers fold away.
     \\fn zPow(comptime S: type, a: S, b: S) S {
     \\    const x = a.val();
     \\    const y = b.val();
-    \\    const v = std.math.pow(f64, x, y);
-    \\    const gx = y * std.math.pow(f64, x, y - 1.0);
-    \\    const gy = if (x > 0.0) v * @log(x) else 0.0;
+    \\    const v = S.con(x).pow(y).val();
+    \\    const gx = y * S.con(x).pow(y - 1.0).val();
+    \\    const gy = if (x > 0.0) v * S.con(x).log().val() else 0.0;
     \\    var r = S.con(v);
     \\    if (std.math.isFinite(gx) and gx != 0.0) r = r.add(a.addC(-x).scale(gx));
     \\    if (std.math.isFinite(gy) and gy != 0.0) r = r.add(b.addC(-y).scale(gy));
