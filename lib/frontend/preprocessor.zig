@@ -585,6 +585,14 @@ pub const Pp = struct {
     /// The outermost invocation's offset while a macro body is rescanned.
     /// Offsets inside a body index no file, so diagnostics there report here.
     expand_site: ?u32 = null,
+    /// `out` is an actual's own buffer (`expandArg`), not the output, so no
+    /// segment may be recorded: the text is mapped when the expansion that
+    /// substitutes it is.
+    in_actual: bool = false,
+    /// Index in `segs` of the outermost expansion's `.macro` segment, valid
+    /// while that expansion set `expand_site` outside an actual. `runFile`
+    /// repeats it after an `include the expansion reached.
+    expansion_seg: u32 = 0,
 
     /// Returns whether every enclosing conditional arm is active.
     pub fn emitting(pp: *const Pp) bool {
@@ -651,8 +659,9 @@ pub const Pp = struct {
     /// newlines makes the output shorter than the file it came from.
     fn resync(pp: *Pp, at: usize) Error!void {
         // Inside a macro body there is no file offset to resync to; the
-        // enclosing `.macro` segment already covers the whole expansion.
-        if (pp.expand_site != null) return;
+        // enclosing `.macro` segment already covers the whole expansion. An
+        // actual's buffer is not the output at all.
+        if (pp.expand_site != null or pp.in_actual) return;
         try pp.segs.append(pp.scratch, .{
             .out_start = @intCast(pp.out.items.len),
             .in_start = @intCast(at),
@@ -701,6 +710,18 @@ pub const Pp = struct {
         const saved_id = pp.cur_file_id;
         defer pp.cur_file_id = saved_id;
 
+        // An `include that a macro expansion reached (IEEE 1364 §19.3.1 puts
+        // the expansion in the text stream) opens a real file whose offsets
+        // are its own: until it ends, spans and §10.7 `__LINE__` stop
+        // reporting the invocation site.
+        const saved_site = pp.expand_site;
+        const saved_seg = pp.expansion_seg;
+        pp.expand_site = null;
+        defer {
+            pp.expand_site = saved_site;
+            pp.expansion_seg = saved_seg;
+        }
+
         // §10.7: at the end of an included file "the expansions of `__FILE__
         // and `__LINE__ revert to the values they had before the `include".
         // `__LINE__` derives from a physical offset, so restoring the remap is
@@ -726,13 +747,22 @@ pub const Pp = struct {
         pp.opts.bag.setStrippedText(id, s.text, s.marks);
         const text = s.text;
 
-        try pp.segs.append(pp.scratch, .{
+        // In an actual's buffer the file's text is mapped with the expansion
+        // that substitutes it (`resync`).
+        if (!pp.in_actual) try pp.segs.append(pp.scratch, .{
             .out_start = @intCast(pp.out.items.len),
             .in_start = 0,
             .file = id,
             .kind = .verbatim,
         });
         try scan(pp, text);
+        // Back inside the expansion that reached the `include: the rest of its
+        // text maps to the invocation again.
+        if (saved_site != null and !pp.in_actual) {
+            var seg = pp.segs.items[saved_seg];
+            seg.out_start = @intCast(pp.out.items.len);
+            try pp.segs.append(pp.scratch, seg);
+        }
     }
 
     /// Returns `stack` and `last` joined as `A -> B -> C`, on `scratch`: for a

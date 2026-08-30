@@ -54,11 +54,15 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
         var params: std.ArrayList([]const u8) = .empty;
         while (true) {
             r.skipSpace();
-            if (r.peek() == ')') {
+            // `()` is an empty list, but `{ , formal_argument_identifier }`
+            // puts a formal after every comma: `M(a,)` is malformed.
+            if (params.items.len == 0 and r.peek() == ')') {
                 r.i += 1;
                 break;
             }
-            const p = r.ident() orelse
+            // formal_argument_identifier ::= simple_identifier, and §2.8 bars
+            // `$` as its first character (`ident` admits it for system names).
+            const p = (if (r.peek() == '$') null else r.ident()) orelse
                 return pp.fail(pp.spanAt(off + r.i, off + r.i + 1), .E0110, "`{s}`", .{name});
             try params.append(pp.scratch, p);
             r.skipSpace();
@@ -251,21 +255,28 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     // one resolves to the same invocation site.
     const outermost = pp.expand_site == null;
     if (outermost) {
-        const o: u32 = @intCast(pp.out.items.len);
         const site: u32 = @intCast(at);
-        const inv: u32 = @intCast(pp.segs.items.len);
-        // A zero-width verbatim segment pinning the invocation site, so
-        // `resolve` walking out of the macro lands on the use, not on
-        // wherever the enclosing segment happened to start.
-        try pp.segs.append(pp.scratch, .{ .out_start = o, .in_start = site, .file = pp.cur_file_id, .kind = .verbatim });
-        try pp.segs.append(pp.scratch, .{
-            .out_start = o,
-            .in_start = site,
-            .file = pp.cur_file_id,
-            .kind = .macro,
-            .parent = inv,
-            .macro = name,
-        });
+        // An actual's own buffer is not the output (`expandArg`): its text is
+        // mapped later, as part of the expansion that substitutes it. This
+        // use is outermost there only inside a file an `include in the actual
+        // opened.
+        if (!pp.in_actual) {
+            const o: u32 = @intCast(pp.out.items.len);
+            const inv: u32 = @intCast(pp.segs.items.len);
+            // A zero-width verbatim segment pinning the invocation site, so
+            // `resolve` walking out of the macro lands on the use, not on
+            // wherever the enclosing segment happened to start.
+            try pp.segs.append(pp.scratch, .{ .out_start = o, .in_start = site, .file = pp.cur_file_id, .kind = .verbatim });
+            try pp.segs.append(pp.scratch, .{
+                .out_start = o,
+                .in_start = site,
+                .file = pp.cur_file_id,
+                .kind = .macro,
+                .parent = inv,
+                .macro = name,
+            });
+            pp.expansion_seg = inv + 1;
+        }
         pp.expand_site = site;
     }
     defer if (outermost) {
@@ -290,11 +301,14 @@ fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
     if (std.mem.findScalar(u8, arg, '`') == null) return arg;
     const saved_out = pp.out;
     const saved_site = pp.expand_site;
+    const saved_actual = pp.in_actual;
     pp.out = .empty;
+    pp.in_actual = true;
     if (pp.expand_site == null) pp.expand_site = @intCast(at);
     defer {
         pp.out = saved_out;
         pp.expand_site = saved_site;
+        pp.in_actual = saved_actual;
     }
     try scan(pp, arg);
     return pp.out.items;
@@ -332,12 +346,12 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
                 };
                 if (c != want) return pp.fail(pp.spanAt(i, i + 1), .E0120, "`{s}`: `{c}` cannot close `{c}`", .{ name, c, open });
                 if (opens.items.len == 0) {
-                    try args.append(pp.scratch, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
+                    try args.append(pp.scratch, try oneLine(pp, std.mem.trim(u8, text[arg_start..i], " \t\r\n")));
                     return .{ .args = args.items, .end = i + 1 };
                 }
             },
             ',' => if (opens.items.len == 1) {
-                try args.append(pp.scratch, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
+                try args.append(pp.scratch, try oneLine(pp, std.mem.trim(u8, text[arg_start..i], " \t\r\n")));
                 arg_start = i + 1;
             },
             else => {},
@@ -345,6 +359,28 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
         i += 1;
     }
     return pp.fail(pp.spanAt(at, at + 1 + name.len), .E0120, "`{s}`", .{name});
+}
+
+/// Returns `arg` with each newline outside a string literal turned into a
+/// space, copied to `pp.scratch` only when there is one. `expand` emits the
+/// newlines of the invocation's whole span after the expansion, so a newline
+/// kept inside an actual would reach the output twice (once per use of the
+/// formal, plus once). Between tokens a newline and a space are the same
+/// white space, so IEEE 1364 §19.3.1's literal substitution is unchanged.
+fn oneLine(pp: *Pp, arg: []const u8) Error![]const u8 {
+    if (std.mem.findScalar(u8, arg, '\n') == null) return arg;
+    const copy = try pp.scratch.dupe(u8, arg);
+    var i: usize = 0;
+    while (i < copy.len) : (i += 1) {
+        if (copy[i] == '"') {
+            // A string keeps its bytes. One left open ends at its newline
+            // (`stringStop`), and that newline is outside it.
+            i = stringStop(copy, i);
+            if (i == copy.len or copy[i] != '\n') continue;
+        }
+        if (copy[i] == '\n') copy[i] = ' ';
+    }
+    return copy;
 }
 
 /// Returns `body` with each whole-identifier formal replaced by its actual,
