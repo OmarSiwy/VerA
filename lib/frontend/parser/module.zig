@@ -192,7 +192,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .timing_checks = b.timing_checks.items,
         // §2.9: every attr_spec seen since the last module. Attributes
         // before the `module` keyword (Syntax 2-7 puts a slot there) were
-        // collected by `parseSource` and belong to this module too, which is
+        // collected by `parseSourceFile` and belong to this module too, which is
         // why the list is cleared at the end and not at the start.
         .attrs = attrs,
         .is_connect = is_connect,
@@ -478,8 +478,13 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
             const disc = try parse_net.optDiscipline(self);
             try parse_net.parseNetNames(self, b, disc, .wire, true, .{}, false);
         },
-        // §6.5.2 non-ANSI port declarations
-        .kw_input, .kw_output, .kw_inout => try parse_net.parsePortDecl(self, b),
+        // §6.5.2 non-ANSI port declarations. §6.6: a generate block "may
+        // not contain port declarations", and a region holds only
+        // module_or_generate_items, which have none (E0229, as `parameter`).
+        .kw_input, .kw_output, .kw_inout => {
+            if (self.gen_depth > 0) return self.failAt(self.pos, .E0229, "a port declaration", .{});
+            try parse_net.parsePortDecl(self, b);
+        },
         // A.2.1.3 net_declaration with an explicit net type
         .kw_wire,
         .kw_tri,
@@ -646,12 +651,23 @@ fn parseModuleItemBody(self: *Parser, b: *Body) Error!void {
         // The spelling is therefore the dispatch.
         .kw_reserved => {
             const w = self.tokenText(self.pos);
-            if (std.mem.eql(u8, w, "specify")) return parse_specify.parseSpecifyBlock(self, b);
+            // §6.6: a generate block "may not contain ... specify blocks, or
+            // specparam declarations" (E0229). The block is reported and then
+            // parsed in full, so its own mistakes are still found and the
+            // `endspecify` is not left to resynchronize on; the paths it
+            // records die with the generate block's `Body`.
+            if (std.mem.eql(u8, w, "specify")) {
+                if (self.gen_depth > 0) try self.report(self.pos, .E0229, "a specify block", .{});
+                return parse_specify.parseSpecifyBlock(self, b);
+            }
             // A.2.1.1 `specparam_declaration ::= specparam [ range ]
             // list_of_specparam_assignments ;`, reached both as a module
             // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
             // `specify_item`. This is the module-item half.
-            if (std.mem.eql(u8, w, "specparam")) return parse_specify.parseSpecparamDecl(self, &b.params);
+            if (std.mem.eql(u8, w, "specparam")) {
+                if (self.gen_depth > 0) return self.failAt(self.pos, .E0229, "a specparam declaration", .{});
+                return parse_specify.parseSpecparamDecl(self, &b.params);
+            }
             // A.2.7 `task_declaration`, IEEE 1364-2005 §10.2: a module item
             // of every module (A.1.4), enabled only from §7.2.2's discrete
             // context (A.6.4 has no analog `task_enable`), so its body is
