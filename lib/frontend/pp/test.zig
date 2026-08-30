@@ -1,7 +1,8 @@
 //! Preprocessor tests: source in, expanded text, directive events and
-//! diagnostics checked out. Also the vector-scan differential tests and the
-//! prelude snapshot equivalence tests.
-//! LRM §2.2, §2.4, §2.6.2, §2.8, §9.15, §10; IEEE 1364 §19.
+//! diagnostics checked out. Also the vector-scan differential tests, the
+//! comment-stripping and line-contract properties, the allocation-failure
+//! sweep and the prelude snapshot equivalence tests.
+//! LRM §2.2, §2.4, §2.6.2, §2.7, §2.8, §9.15, §10; IEEE 1364 §13.4.1, §19.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
@@ -26,6 +27,8 @@ const process = Preprocessor.process;
 const Pp = Preprocessor.Pp;
 const scan_stops = Preprocessor.scan_stops;
 const findStop = Preprocessor.findStop;
+const Qualifier = Preprocessor.Qualifier;
+const pp_comments = @import("comments.zig");
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -35,6 +38,7 @@ pub const testing = std.testing;
 
 /// Preprocess without the std-def prelude, on an arena backed by the testing
 /// allocator; the result is duped so the arena can be torn down (leak-checked).
+/// Caller owns the returned text and must free it with `testing.allocator`.
 pub fn runTest(src: []const u8) ![]u8 {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
@@ -56,11 +60,11 @@ pub fn expectPreserved(src: []const u8, present: []const []const u8, absent: []c
     const got = try runTest(src);
     defer testing.allocator.free(got);
     try testing.expectEqual(
-        std.mem.count(u8, src, "\n"),
-        std.mem.count(u8, got, "\n"),
+        std.mem.countScalar(u8, src, '\n'),
+        std.mem.countScalar(u8, got, '\n'),
     );
-    for (present) |s| try testing.expect(std.mem.indexOf(u8, got, s) != null);
-    for (absent) |s| try testing.expect(std.mem.indexOf(u8, got, s) == null);
+    for (present) |s| try testing.expect(std.mem.find(u8, got, s) != null);
+    for (absent) |s| try testing.expect(std.mem.find(u8, got, s) == null);
 }
 
 /// Expects `src` to fail with exactly one `code` diagnostic whose span lies
@@ -82,7 +86,7 @@ pub fn expectFail(src: []const u8, code: diag.Code) !void {
     try testing.expect(e.file != null);
     try testing.expect(e.span.end <= bag.fileText(e.file.?).len);
     // The title carries the condition; the message may not repeat it.
-    try testing.expect(std.mem.indexOf(u8, e.message, "LRM") == null);
+    try testing.expect(std.mem.find(u8, e.message, "LRM") == null);
 }
 
 test "findStop agrees with the scalar loop it replaced, at every tail boundary" {
@@ -354,14 +358,14 @@ test "§9.15 Table 9-27 reads `timescale back, in seconds" {
     try testing.expectEqual(@as(?Timescale, null), try T.ts("module m; endmodule\n"));
     // §19.6 `resetall returns it to that state.
     try testing.expectEqual(@as(?Timescale, null), try T.ts("`timescale 1ns/1ps\n`resetall\n"));
-    // Off Table 19-1 in each of the three ways, plus §19.9's ordering rule and
+    // Off Table 19-1 in each of the three ways, plus §19.8's ordering rule and
     // the two ways of writing the wrong number of operands: all E0142.
     for ([_][]const u8{
         "`timescale 2ns/1ps\n", // magnitude
         "`timescale 1sec/1ps\n", // unit name
         "`timescale 1ns 1ps\n", // no slash
         "`timescale 1ps/1ns\n", // precision coarser than the unit
-        "`timescale 1ns/1ps junk\n", // §19.9 takes two operands and no more
+        "`timescale 1ns/1ps junk\n", // §19.8 takes two operands and no more
         "`timescale\n", // and they are not optional
     }) |src| try expectFail(src, .E0142);
     // The last one in the stream is the one in force (one elaborated module).
@@ -656,8 +660,8 @@ test "`include resolves the built-in annex D files" {
     // fixture ch10 18_include_constants
     const got = try runTest("`include \"constants.vams\"\n`P_CELSIUS0 `P_K\n");
     defer testing.allocator.free(got);
-    try testing.expect(std.mem.indexOf(u8, got, "273.15") != null);
-    try testing.expect(std.mem.indexOf(u8, got, "1.3806503e-23") != null);
+    try testing.expect(std.mem.find(u8, got, "273.15") != null);
+    try testing.expect(std.mem.find(u8, got, "1.3806503e-23") != null);
     try expectFail("`include \"no_such_file.vams\"\n", .E0126);
     try expectFail("`include nonsense\n", .E0122);
     try expectFail("`include <constants.vams>\n", .E0122);
@@ -665,7 +669,7 @@ test "`include resolves the built-in annex D files" {
     // annex D.3 is shipped too, and is not preloaded: it has to be asked for.
     const d3 = try runTest("`include \"driver_access.vams\"\n`DRIVER_WAND\n");
     defer testing.allocator.free(d3);
-    try testing.expect(std.mem.indexOf(u8, d3, "32'b10000000000") != null);
+    try testing.expect(std.mem.find(u8, d3, "32'b10000000000") != null);
 }
 
 test "IEEE 1364 §19.5 `include opens a full path name as written" {
@@ -681,7 +685,7 @@ test "IEEE 1364 §19.5 `include opens a full path name as written" {
     defer testing.allocator.free(src);
     const got = try runTest(src);
     defer testing.allocator.free(got);
-    try testing.expect(std.mem.indexOf(u8, got, "7") != null);
+    try testing.expect(std.mem.find(u8, got, "7") != null);
 }
 
 test "§10.4 the NAME may be escaped and the TEXT may not begin with __VAMS_" {
@@ -721,7 +725,7 @@ test "annex D prelude is deterministic and self-guarded" {
     );
     // The replayed prelude is the snapshot's text, byte for byte.
     const n1 = (try pp_prelude.preludeSnapshot()).text.len;
-    try testing.expect(std.mem.indexOf(u8, a[0..n1], "nature Voltage;") != null);
+    try testing.expect(std.mem.find(u8, a[0..n1], "nature Voltage;") != null);
     // The re-`include collapses to just the newlines it consumed (line numbers
     // inside an included file are preserved even when its guard empties it).
     try testing.expectEqualStrings(
@@ -968,8 +972,8 @@ test "an ABSTOL override reaches annex D.1" {
         "`define CURRENT_ABSTOL 1e-15\n`include \"disciplines.vams\"\n",
         .{ .std_defs = false, .bag = &bag },
     )).text;
-    try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-15;") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-12;") == null);
+    try testing.expect(std.mem.find(u8, text, "abstol      = 1e-15;") != null);
+    try testing.expect(std.mem.find(u8, text, "abstol      = 1e-12;") == null);
 }
 
 test "a span inside an `include resolves to the included file's own line" {
@@ -983,16 +987,16 @@ test "a span inside an `include resolves to the included file's own line" {
 
     // A byte that came from the included file.
     const needle = "discipline electrical;";
-    const at: u32 = @intCast(std.mem.indexOf(u8, out, needle).?);
+    const at: u32 = @intCast(std.mem.find(u8, out, needle).?);
     const r = bag.map.resolve(at);
     try testing.expectEqualStrings("disciplines.vams", bag.fileName(r.file));
     try testing.expect(r.file != .root);
 
     // ... at its line number, not one measured in the preprocessed text.
-    const want = std.mem.count(
+    const want = std.mem.countScalar(
         u8,
-        pp_annex_d.disciplines_vams[0..std.mem.indexOf(u8, pp_annex_d.disciplines_vams, needle).?],
-        "\n",
+        pp_annex_d.disciplines_vams[0..std.mem.find(u8, pp_annex_d.disciplines_vams, needle).?],
+        '\n',
     ) + 1;
     const idx = try diag.LineIndex.build(arena, bag.fileText(r.file));
     try testing.expectEqual(@as(u32, @intCast(want)), idx.loc(r.offset).line);
@@ -1002,11 +1006,11 @@ test "a span inside an `include resolves to the included file's own line" {
     );
 
     // ... while the top-level file still resolves to itself, at line 1.
-    const top = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "module m;").?));
+    const top = bag.map.resolve(@intCast(std.mem.find(u8, out, "module m;").?));
     try testing.expectEqual(diag.FileId.root, top.file);
     try testing.expectEqual(@as(u32, 0), top.offset);
     // ... and so does what follows the `include, despite the splice.
-    const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "endmodule").?));
+    const after = bag.map.resolve(@intCast(std.mem.find(u8, out, "endmodule").?));
     try testing.expectEqual(diag.FileId.root, after.file);
     try testing.expectEqualStrings("endmodule\n", src[after.offset..]);
 }
@@ -1035,11 +1039,11 @@ test "a diagnostic after a comment renders the ORIGINAL line at the ORIGINAL col
     const out = aw.writer.buffered();
 
     // The line drawn is the user's, comment included ...
-    try testing.expect(std.mem.indexOf(u8, out, "| /* a leading comment */ `NOPE") != null);
+    try testing.expect(std.mem.find(u8, out, "| /* a leading comment */ `NOPE") != null);
     // ... the column is measured in it: the '`' is byte 24, column 25 ...
-    try testing.expect(std.mem.indexOf(u8, out, ":1:25") != null);
+    try testing.expect(std.mem.find(u8, out, ":1:25") != null);
     // ... and the caret row is indented to match: 24 spaces, then the span.
-    try testing.expect(std.mem.indexOf(u8, out, "|                         ^^^^^") != null);
+    try testing.expect(std.mem.find(u8, out, "|                         ^^^^^") != null);
 }
 
 test "a span inside a macro expansion resolves to the invocation site" {
@@ -1053,14 +1057,14 @@ test "a span inside a macro expansion resolves to the invocation site" {
 
     // Bytes that exist only in the expansion have no counterpart in the file;
     // the honest answer is the `SQ that produced them.
-    const inside: u32 = @intCast(std.mem.indexOfScalar(u8, out, '*').?);
+    const inside: u32 = @intCast(std.mem.findScalar(u8, out, '*').?);
     const r = bag.map.resolve(inside);
     try testing.expectEqual(diag.FileId.root, r.file);
     try testing.expect(std.mem.startsWith(u8, src[r.offset..], "`SQ(v)"));
     try testing.expectEqualStrings("SQ", bag.map.segs[r.seg].macro);
 
     // ... and the text after the expansion is verbatim again.
-    const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "+ 1").?));
+    const after = bag.map.resolve(@intCast(std.mem.find(u8, out, "+ 1").?));
     try testing.expectEqualStrings("+ 1;\n", src[after.offset..]);
 }
 
@@ -1098,4 +1102,726 @@ test "§2.9 attribute owners survive a seeded parse and later attribute lists" {
     try testing.expect(whole.attributes.items.len > seed.file.attributes.items.len);
     try expectDeepEqual(@TypeOf(whole.attributes.items), whole.attributes.items, resumed.attributes.items);
     try expectDeepEqual(@TypeOf(whole.modules), whole.modules, resumed.modules);
+}
+
+// ---------------------------------------------------------------------------
+// Unit test plan. Each bug class, the oracle that sees it, and where it runs.
+//
+//   text wrong but plausible (a formal substituted into a string or a number,
+//   a comment surviving, an arm taken that should not be)
+//       -> the expected text derived by hand from the clause (`expectPp`)
+//   line contract broken (output newlines != input newlines)
+//       -> the newline counts compared, on hand cases and on every input of
+//          the snippet generator ("every successful run keeps ...")
+//   provenance corrupt (segments out of order, a span naming the wrong file)
+//       -> segments sorted by `out_start`; every preprocess span inside the
+//          file it names (`expectFail`, `expectSortedMap`)
+//   strip marks wrong (a caret in the wrong column)
+//       -> every kept byte equals the raw byte its mark maps to; stripping a
+//          stripped text changes nothing (seeded property)
+//   a refusal missing or spurious
+//       -> one case per named code, each with a legal neighbour
+//   a limit off by one (E0119, E0125)
+//       -> the case at the limit and the case one past it
+//   vector scan differs from scalar -> the scalar loop (differential, above)
+//   region lookup wrong -> a forward scan, exhaustive over small lists
+//   allocation failure swallowed or leaked -> `checkAllAllocationFailures`
+//
+// The generators are seeded `DefaultPrng` loops, so `zig build test` runs
+// them in full and a failure replays.
+// ---------------------------------------------------------------------------
+
+/// Expects the source map's segments in `out_start` order, which
+/// `SourceMap.resolve`'s binary search requires.
+fn expectSortedMap(bag: *const diag.Bag) !void {
+    const segs = bag.map.segs;
+    for (segs[0..segs.len -| 1], segs[@min(1, segs.len)..]) |a, b| {
+        try testing.expect(a.out_start <= b.out_start);
+    }
+}
+
+/// Expects every published event list in text-stream order and inside `text`.
+fn expectSortedEvents(d: Preprocessor.Directives, text: []const u8) !void {
+    inline for (@typeInfo(Preprocessor.Directives).@"struct".field_names) |name| {
+        const list = @field(d, name);
+        for (list, 0..) |e, k| {
+            try testing.expect(e.at <= text.len);
+            if (k > 0) try testing.expect(list[k - 1].at <= e.at);
+        }
+    }
+}
+
+/// The `timescale in force at the end of `src`, preprocessed without the prelude.
+fn timescaleOf(src: []const u8) !?Timescale {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var bag: diag.Bag = .init(arena_state.allocator());
+    return (try process(arena_state.allocator(), src, .{ .std_defs = false, .bag = &bag })).directives.timescale();
+}
+
+test "§2.4 comment corners: end of file, `/*/`, and markers inside opaque tokens" {
+    // A `//` comment may end the file.
+    try expectPp("a", "a// x");
+    // `/*/` opens a comment and does not close it: the `*` a close needs is
+    // the opener's own (§2.4: "begin with /* and end with */").
+    try expectFail("/*/", .E0102);
+    // The shortest block comment is four bytes and leaves its separator (§2.2).
+    try expectPp("a b", "a/**/b");
+    // §2.8.1: an escaped identifier runs to white space, so a `//` inside one
+    // is part of the name.
+    try expectPp("\\a//b c", "\\a//b c");
+    // §2.7: an escaped quote does not end a string, so the `//` after it is
+    // still inside the literal.
+    try expectPp("\"a\\\"//b\"", "\"a\\\"//b\"");
+    // A `//` comment runs to the LF, so the CR of a CRLF line goes with it.
+    try expectPp("a\nb", "a//c\r\nb");
+    // An unterminated string ends at its line (the lexer reports it), and the
+    // comment on the next line is still stripped.
+    try expectPp("\"abc\n\nx", "\"abc\n// c\nx");
+}
+
+test "stripComments: every kept byte maps back to itself, and stripping twice changes nothing" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // By hand first. `ab/*c*/d`: the comment becomes one space at stripped
+    // offset 2, and from stripped offset 3 the texts run in lockstep with the
+    // raw text from offset 7, which is one mark. `x//c\ny`: the line comment
+    // leaves nothing, and stripped 1 (the LF) is raw 4.
+    {
+        var bag: diag.Bag = .init(arena);
+        var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
+        _ = try bag.addFile("<source>", "ab/*c*/d");
+        const s = try pp_comments.stripComments(&pp, "ab/*c*/d");
+        try testing.expectEqualStrings("ab d", s.text);
+        try testing.expectEqualSlices(diag.StripMark, &.{.{ .out = 3, .src = 7 }}, s.marks);
+        const l = try pp_comments.stripComments(&pp, "x//c\ny");
+        try testing.expectEqualStrings("x\ny", l.text);
+        try testing.expectEqualSlices(diag.StripMark, &.{.{ .out = 1, .src = 4 }}, l.marks);
+    }
+
+    // Then every short text over the bytes the stripper branches on.
+    var prng: std.Random.DefaultPrng = .init(0xc0ffee);
+    const rand = prng.random();
+    const alphabet = "a /*\n\"\\";
+    var buf: [48]u8 = undefined;
+    for (0..4000) |_| {
+        const raw = buf[0..rand.uintAtMost(usize, buf.len)];
+        for (raw) |*b| b.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
+
+        var bag: diag.Bag = .init(arena);
+        var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
+        const id = try bag.addFile("<source>", raw);
+        const s = pp_comments.stripComments(&pp, raw) catch |e| switch (e) {
+            error.PreprocessFailed => continue, // E0102, an unclosed `/*`
+            error.OutOfMemory => return e,
+        };
+        bag.setStrippedText(id, s.text, s.marks);
+
+        // §2.4 keeps a comment's newlines, and nothing grows.
+        try testing.expectEqual(std.mem.countScalar(u8, raw, '\n'), std.mem.countScalar(u8, s.text, '\n'));
+        try testing.expect(s.text.len <= raw.len);
+        // A comment's replacement is a space or newlines; every other byte is a
+        // verbatim copy, found where the marks say.
+        for (s.text, 0..) |c, k| {
+            if (c == ' ' or c == '\n') continue;
+            try testing.expectEqual(c, raw[bag.toSourceOffset(id, @intCast(k))]);
+        }
+        // No comment survives, and none is made: a kept `/` was not followed by
+        // `/` or `*` (it would have opened a comment), and a replacement is
+        // white space.
+        var bag2: diag.Bag = .init(arena);
+        var pp2: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag2 } };
+        _ = try bag2.addFile("<source>", s.text);
+        const again = try pp_comments.stripComments(&pp2, s.text);
+        try testing.expectEqualStrings(s.text, again.text);
+        try testing.expectEqual(@as(usize, 0), again.marks.len);
+    }
+}
+
+test "§2.7 strings and §2.8.1 escaped identifiers are opaque to the scan" {
+    // A live unterminated string is the lexer's to report; the preprocessor
+    // passes it through.
+    try expectPp("\"abc\nx", "\"abc\nx");
+    // A backtick inside either is not a macro use.
+    try expectPp("\"`NOPE\" \\a`b c", "\"`NOPE\" \\a`b c");
+    // IEEE 1364 §19.4: an ignored group still follows the lexical rules, so an
+    // unterminated string inside one is E0138 ...
+    try expectFail("`ifdef N\n\"abc\n`endif\n", .E0138);
+    // ... and a string continued with `\`+newline is one token, whose newline
+    // the dead arm keeps.
+    try expectPreserved("`ifdef N\n\"a\\\nb\"\n`endif\n", &.{}, &.{ "a", "b" });
+}
+
+test "a grave accent needs a name, except inside an inactive arm" {
+    try expectFail("`\n", .E0103);
+    try expectFail("` x\n", .E0103);
+    // A backslash with no body is no escaped name either (§2.8.1).
+    try expectFail("`\\ x\n", .E0103);
+    try expectPp("\n\n\n", "`ifdef N\n` x\n`endif\n");
+}
+
+test "IEEE 1364 §19.4: the first true arm wins, a dead parent kills every arm, and text may follow the operand" {
+    try expectPreserved("`define A\n`define B\n`ifdef A\na\n`elsif B\nb\n`else\nc\n`endif\n", &.{"a"}, &.{ "b", "c" });
+    try expectPreserved("`ifdef N\n`ifdef M\nx\n`else\ny\n`endif\n`endif\n", &.{}, &.{ "x", "y" });
+    try expectPreserved("`ifdef N\n`elsif N\nx\n`elsif __VERA__\ny\n`endif\n", &.{"y"}, &.{"x"});
+    // Syntax 19-5 ends a conditional directive with its operand; the rest of
+    // the line is source in the arm it opens.
+    try expectPp("\n x\n\n", "`define A\n`ifdef A x\n`endif\n");
+    // `else takes no operand, so the rest of its line is source.
+    try expectPreserved("`ifdef N\n`else junk\n`endif\n", &.{"junk"}, &.{});
+    try expectFail("`else\n", .E0105);
+    try expectFail("`elsif A\n", .E0105);
+    try expectFail("`ifdef A\n`elsif\n`endif\n", .E0107);
+    try expectFail("`ifdef A\n`else\n`elsif B\n`endif\n", .E0106);
+    try expectFail("`ifndef\n", .E0104);
+    // A `define in a dead arm defines nothing.
+    try expectPreserved("`ifdef N\n`define X\n`endif\n`ifdef X\nyes\n`endif\n", &.{}, &.{"yes"});
+}
+
+test "E0101 points at the end of the file and labels the `ifdef it leaves open" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const src = "x\n`ifdef A\ny\n";
+    try testing.expectError(error.PreprocessFailed, process(arena, src, .{ .std_defs = false, .bag = &bag }));
+    const e = bag.at(0);
+    try testing.expectEqual(diag.Code.E0101, e.code);
+    try testing.expectEqual(@as(u32, src.len), e.span.start);
+    var buf: [diag.max_children]diag.Label = undefined;
+    const labels = bag.labels(e, &buf);
+    try testing.expectEqual(@as(usize, 1), labels.len);
+    try testing.expectEqualStrings("`ifdef", src[labels[0].span.start..labels[0].span.end]);
+}
+
+test "two directives with no text between them publish at one offset, and the later is in force" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try regionsOf(arena_state.allocator(), "`celldefine`endcelldefine\n");
+    try testing.expectEqual(@as(usize, 2), r.cells.len);
+    try testing.expectEqual(r.cells[0].at, r.cells[1].at);
+    try testing.expect(!CellRegion.inForce(r.cells, r.cells[0].at, false));
+}
+
+test "Region.inForce agrees with a forward scan on every small event list" {
+    // Every list of up to four events whose offsets are drawn from 0..3 in
+    // non-decreasing order, queried at every offset 0..4. The reference walks
+    // forward and keeps the last event at or before the query.
+    const values = [_]NetType{ .tri, .wand, .wor, .none };
+    var events: [4]NetTypeRegion = undefined;
+    for (0..events.len + 1) |n| {
+        for (0..std.math.pow(usize, 4, n)) |code| {
+            var c = code;
+            var sorted = true;
+            for (0..n) |k| {
+                events[k] = .{ .at = @intCast(c % 4), .value = values[k] };
+                c /= 4;
+                if (k > 0 and events[k].at < events[k - 1].at) sorted = false;
+            }
+            if (!sorted) continue;
+            for (0..5) |off| {
+                var want: NetType = .default;
+                for (events[0..n]) |e| {
+                    if (e.at <= off) want = e.value;
+                }
+                try testing.expectEqual(want, NetTypeRegion.inForce(events[0..n], @intCast(off), .default));
+            }
+        }
+    }
+}
+
+test "§10.4 definitions: redefinition, empty text, empty lists and the formal list's grammar" {
+    // §10.4: a redefinition replaces.
+    try expectPp("\n\n2", "`define A 1\n`define A 2\n`A");
+    try expectPp("\n[]", "`define E\n[`E]");
+    // `Z()` has a formal list with nothing in it: `Z()` uses it, `Z` and
+    // `Z(1)` do not.
+    try expectPp("\nz", "`define Z() z\n`Z()");
+    try expectFail("`define Z() z\n`Z\n", .E0116);
+    try expectFail("`define Z() z\n`Z(1)\n", .E0117);
+    // One formal, one empty actual.
+    try expectPp("\n[]", "`define I(x) [x]\n`I()");
+    // Syntax 10-3's list_of_formal_arguments, one code per way to break it.
+    try expectFail("`define M(\n", .E0110);
+    try expectFail("`define M(1) x\n", .E0110);
+    try expectFail("`define M(a\n", .E0111);
+    try expectFail("`define M(a b) x\n", .E0112);
+    // formal_argument_identifier is a simple_identifier, whose first character
+    // is not `$` (§2.8), and `{ , formal_argument_identifier }` needs a formal
+    // after every comma.
+    try expectFail("`define M($x) $x\n", .E0110);
+    try expectFail("`define M(a,) a\n", .E0110);
+    try expectFail("`define M(,a) a\n", .E0110);
+    // The text continues across `\`+newline as one space, the continuation's
+    // indentation and a CR before the newline included.
+    try expectPp("\n\na b", "`define P a \\\n   b\n`P");
+    try expectPp("\n\na b", "`define P a\\\r\nb\n`P");
+    // `undef of a name never defined is not an error: §10.4 sets no rule.
+    try expectPp("\nx", "`undef NOPE\nx");
+    try expectFail("`undef\n", .E0113);
+    try expectFail("`define\n", .E0109);
+}
+
+test "IEEE 1364 §19.3.1 substitution: what a formal is not" {
+    // The name after a '`' is a macro use, never a formal.
+    try expectPp("\n\n9", "`define x 9\n`define M(x) `x\n`M(1)");
+    // A number is one token, so its exponent letter is no formal.
+    try expectPp("\n1e-3+2", "`define M(e) 1e-3+e\n`M(2)");
+    // A comma or parenthesis inside a string actual does not split it.
+    try expectPp("\n\"a,b)\"|c", "`define A(p,q) p|q\n`A(\"a,b)\", c)");
+    // A directive in macro text runs when the text is rescanned.
+    try expectPp("\n\n7\n", "`define D `define X 7\n`D\n`X\n");
+}
+
+test "IEEE 1364 §19.3.1: an actual that spans lines keeps the output's line count" {
+    // The invocation re-emits the newlines of its whole span after the
+    // expansion, so a newline inside an actual is white space between tokens
+    // (a space), or it would be emitted twice.
+    try expectPp("\n[a +b]\n\nz\n", "`define M(x) [x]\n`M(a\n+b)\nz\n");
+    // The same through a nested use, whose span is inside the outer one's.
+    try expectPp("\n\n[1+2]\n\n", "`define N(a,b) a+b\n`define M(x) [x]\n`M(`N(1,\n2))\n");
+}
+
+test "§10.7 `__LINE__ in macro text and arguments is the invocation's line, `__FILE__ a string literal" {
+    try expectPp("\n\n3\n", "`define L `__LINE__\n\n`L\n");
+    try expectPp("\n2\n\n", "`define I(x) x\n`I(\n`__LINE__)\n");
+    // Neither name is in the macro table, so `undef changes nothing.
+    try expectPp("\n2", "`undef __LINE__\n`__LINE__");
+    // §2.7 escapes the two bytes a file name may hold that a string literal
+    // cannot hold bare.
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const out = try process(arena, "`__FILE__", .{ .std_defs = false, .bag = &bag, .file_name = "a\"b\\c.va" });
+    try testing.expectEqualStrings("\"a\\\"b\\\\c.va\"", out.text);
+}
+
+test "IEEE 1364 §19.7: only white space shares a `line directive's line" {
+    // "However, only white space may appear on the same line as the `line
+    // directive. Comments are not allowed on the same line as a `line
+    // directive." Legal: indentation before it, comments on the lines around.
+    try expectPp("  \n3\n", "  `line 3 \"f\" 0\n`__LINE__\n");
+    try expectPp("\n\n3\n", "// c\n`line 3 \"f\" 0\n`__LINE__\n");
+    try expectPp("\n\n\n3\n", "/* a\n b */\n`line 3 \"f\" 0\n`__LINE__\n");
+    // Refused: a comment that ends where the line starts, one that opens
+    // after the level and runs on, and other text before the directive.
+    try expectFail("/* a\n*/`line 3 \"f\" 0\n", .E0128);
+    try expectFail("`line 3 \"f\" 0 /* a\nb */\n", .E0128);
+    try expectFail("x `line 3 \"f\" 0\n", .E0128);
+    // The number is a positive integer that fits, and the name is closed.
+    try expectFail("`line 4294967296 \"f\" 0\n", .E0128);
+    try expectFail("`line 3 \"f 0\n", .E0128);
+}
+
+test "IEEE 1364 §19.5 `include operand errors, and the annex D files by basename" {
+    try expectFail("`include\n", .E0121);
+    try expectFail("`include \"abc\n", .E0123);
+    try expectFail("`include \"\"\n", .E0124);
+    // VD-091: a built-in is found by its basename wherever the name points.
+    const got = try runTest("`include \"no/such/dir/constants.vams\"\n`M_PI\n");
+    defer testing.allocator.free(got);
+    try testing.expect(std.mem.find(u8, got, "3.14159265358979323846") != null);
+
+    // VD-096: only annex D.1, under either name, is the source asking for
+    // annex D's natures.
+    const cases = [_]struct { name: []const u8, d1: bool }{
+        .{ .name = "disciplines.vams", .d1 = true },
+        .{ .name = "discipline.h", .d1 = true },
+        .{ .name = "constants.vams", .d1 = false },
+        .{ .name = "constants.h", .d1 = false },
+    };
+    for (cases) |c| {
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var bag: diag.Bag = .init(arena);
+        const src = try arena.print("`include \"{s}\"\n", .{c.name});
+        const out = try process(arena, src, .{ .std_defs = false, .bag = &bag });
+        try testing.expectEqual(c.d1, out.annex_d_included);
+    }
+}
+
+test "IEEE 1364 §19.5: 32 nested `include files are read, a 33rd is E0125" {
+    // Two chains of files, each including the next: `a` is
+    // `max_include_depth` deep, `b` one deeper. File k of a chain is read
+    // with k + 1 includes open, so the last file of `a` is read at the limit.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var name_buf: [16]u8 = undefined;
+    var data_buf: [32]u8 = undefined;
+    const chains = [_]struct { prefix: u8, files: usize }{
+        .{ .prefix = 'a', .files = Preprocessor.max_include_depth },
+        .{ .prefix = 'b', .files = Preprocessor.max_include_depth + 1 },
+    };
+    for (chains) |chain| {
+        for (0..chain.files) |k| {
+            const name = try std.mem.print(&name_buf, "{c}{d}.vh", .{ chain.prefix, k });
+            const data = if (k + 1 == chain.files)
+                "deepest\n"
+            else
+                try std.mem.print(&data_buf, "`include \"{c}{d}.vh\"\n", .{ chain.prefix, k + 1 });
+            try tmp.dir.writeFile(io, .{ .sub_path = name, .data = data });
+        }
+    }
+    const first = try tmp.dir.realPathFileAlloc(io, "a0.vh", testing.allocator);
+    defer testing.allocator.free(first);
+    const dirs: []const []const u8 = &.{std.fs.path.dirname(first).?};
+
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var ok_bag: diag.Bag = .init(arena);
+    const out = try process(arena, "`include \"a0.vh\"\n", .{ .std_defs = false, .bag = &ok_bag, .include_dirs = dirs });
+    try testing.expect(std.mem.find(u8, out.text, "deepest") != null);
+
+    var bag: diag.Bag = .init(arena);
+    try testing.expectError(error.PreprocessFailed, process(arena, "`include \"b0.vh\"\n", .{ .std_defs = false, .bag = &bag, .include_dirs = dirs }));
+    try testing.expectEqual(@as(usize, 1), bag.count());
+    try testing.expectEqual(diag.Code.E0125, bag.at(0).code);
+}
+
+test "§10.7: a file included through a macro numbers its own lines and owns its diagnostics" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "lines.vh", .data = "`define FROM_INC 5\n\n`__LINE__\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "bad.vh", .data = "\n\n`NOPE\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "word.vh", .data = "wire_from_inc\n" });
+    const any = try tmp.dir.realPathFileAlloc(io, "lines.vh", testing.allocator);
+    defer testing.allocator.free(any);
+    const dirs: []const []const u8 = &.{std.fs.path.dirname(any).?};
+
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // "An `include directive changes the expansions of `__FILE__ and `__LINE__
+    // to correspond to the included file": the `__LINE__ on line 3 of
+    // lines.vh is 3, wherever the `include was written.
+    {
+        var bag: diag.Bag = .init(arena);
+        const out = try process(arena, "`define INC `include \"lines.vh\"\n`INC\n`FROM_INC\n", .{ .std_defs = false, .bag = &bag, .include_dirs = dirs });
+        try testing.expectEqualStrings("\n\n\n3\n\n5\n", out.text);
+        try expectSortedMap(&bag);
+    }
+    // A diagnostic raised inside that file is in that file, on its own line.
+    {
+        var bag: diag.Bag = .init(arena);
+        try testing.expectError(error.PreprocessFailed, process(arena, "`define INC `include \"bad.vh\"\n`INC\n", .{ .std_defs = false, .bag = &bag, .include_dirs = dirs }));
+        const e = bag.at(0);
+        try testing.expectEqual(diag.Code.E0115, e.code);
+        try testing.expectEqualStrings("bad.vh", std.fs.path.basename(bag.fileName(e.file.?)));
+        const text = bag.fileText(e.file.?);
+        try testing.expect(e.span.end <= text.len);
+        try testing.expectEqualStrings("`NOPE", text[e.span.start..e.span.end]);
+    }
+    // Through an actual, the included text is part of the expansion: it maps
+    // to the invocation like every other expanded byte, and the map stays
+    // sorted.
+    {
+        var bag: diag.Bag = .init(arena);
+        const src = "`define INC `include \"word.vh\"\n`define ID(x) x\n`ID(`INC) tail\n";
+        const out = try process(arena, src, .{ .std_defs = false, .bag = &bag, .include_dirs = dirs });
+        try expectSortedMap(&bag);
+        const r = bag.map.resolve(@intCast(std.mem.find(u8, out.text, "wire_from_inc").?));
+        try testing.expectEqual(diag.FileId.root, r.file);
+        try testing.expect(std.mem.startsWith(u8, src[r.offset..], "`ID("));
+        const tail = bag.map.resolve(@intCast(std.mem.find(u8, out.text, "tail").?));
+        try testing.expectEqualStrings("tail\n", src[tail.offset..]);
+    }
+}
+
+test "every successful run keeps the line count and leaves sorted provenance" {
+    // Swarm-style: random sequences of whole-line snippets. Sequences that
+    // break a rule (an `else with no `ifdef, an unclosed string actual) fail
+    // with a diagnostic and are skipped. Every one that succeeds must give the
+    // output exactly the newlines of the files it read (the unit and each
+    // `include, a re-read one again) and publish sorted segments and events.
+    const snippets = [_][]const u8{
+        "`define A 1\n",
+        "`define F(x) [x]\n",
+        "`define G(y) `F(y)\n",
+        "`define B \\\n 2\n",
+        "`A\n",
+        "`B\n",
+        "`F(a)\n",
+        "`F(a\nb)\n",
+        "`G(b\nc)\n",
+        "`F(`A\n)\n",
+        "`F(`F(\nz))\n",
+        "`F(\"s\n",
+        "/* c\n */\n",
+        "// c\n",
+        "x y\n",
+        "\"s\"\n",
+        "`ifdef A\n",
+        "`ifndef A\n",
+        "`else\n",
+        "`endif\n",
+        "`undef A\n",
+        "`timescale 1ns/1ps\n",
+        "`celldefine\n",
+        "`endcelldefine\n",
+        "`default_nettype none\n",
+        "`resetall\n",
+        "`__LINE__\n",
+        "`include \"constants.vams\"\n",
+    };
+    var prng: std.Random.DefaultPrng = .init(0x11e5);
+    const rand = prng.random();
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(testing.allocator);
+    for (0..3000) |_| {
+        src.clearRetainingCapacity();
+        for (0..rand.uintAtMost(usize, 12)) |_| {
+            try src.appendSlice(testing.allocator, snippets[rand.uintLessThan(usize, snippets.len)]);
+        }
+        var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var bag: diag.Bag = .init(arena);
+        const out = process(arena, src.items, .{ .std_defs = false, .bag = &bag }) catch |e| switch (e) {
+            error.PreprocessFailed => continue,
+            error.OutOfMemory => return e,
+        };
+        var want: usize = 0;
+        for (bag.files.items) |f| want += std.mem.countScalar(u8, f.text, '\n');
+        try testing.expectEqual(want, std.mem.countScalar(u8, out.text, '\n'));
+        try expectSortedMap(&bag);
+        try expectSortedEvents(out.directives, out.text);
+    }
+}
+
+test "E0119 sits exactly at max_expansion_depth" {
+    // `M(x)` is `(x)`, so n nested uses expand to n parentheses around 1 and
+    // need n live expansions; `max_expansion_depth` of them is allowed (one
+    // more is the E0119 case above).
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(testing.allocator);
+    var want: std.ArrayList(u8) = .empty;
+    defer want.deinit(testing.allocator);
+    try src.appendSlice(testing.allocator, "`define M(x) (x)\n");
+    try want.append(testing.allocator, '\n');
+    for (0..max_expansion_depth) |_| {
+        try src.appendSlice(testing.allocator, "`M(");
+        try want.append(testing.allocator, '(');
+    }
+    try src.append(testing.allocator, '1');
+    try want.append(testing.allocator, '1');
+    for (0..max_expansion_depth) |_| {
+        try src.append(testing.allocator, ')');
+        try want.append(testing.allocator, ')');
+    }
+    try expectPp(want.items, src.items);
+}
+
+test "IEEE 1364 §19.3.1: every directive name is refused as a macro name, escaped or not" {
+    // §2.8.1: `\include` is the identifier `include`.
+    for (Preprocessor.directive_map.keys()) |name| {
+        for ([_][]const u8{ "", "\\" }) |prefix| {
+            const src = try testing.allocator.print("`define {s}{s} 1\n", .{ prefix, name });
+            defer testing.allocator.free(src);
+            try expectFail(src, .E0143);
+        }
+    }
+}
+
+test "IEEE 1364 §19.8 Table 19-1: every magnitude and unit reads back as its exact decimal" {
+    // The oracle is the literal `1e<n>` read by `std.fmt.parseFloat`, which
+    // rounds correctly; the code under test reads a table instead.
+    const mags = [_]struct { text: []const u8, exp: i32 }{
+        .{ .text = "1", .exp = 0 },
+        .{ .text = "10", .exp = 1 },
+        .{ .text = "100", .exp = 2 },
+    };
+    const units = [_]struct { text: []const u8, exp: i32 }{
+        .{ .text = "s", .exp = 0 },
+        .{ .text = "ms", .exp = -3 },
+        .{ .text = "us", .exp = -6 },
+        .{ .text = "ns", .exp = -9 },
+        .{ .text = "ps", .exp = -12 },
+        .{ .text = "fs", .exp = -15 },
+    };
+    var buf: [16]u8 = undefined;
+    for (mags) |m| {
+        for (units) |u| {
+            const want = try std.fmt.parseFloat(f64, try std.mem.print(&buf, "1e{d}", .{m.exp + u.exp}));
+            // 1 fs is the finest precision, so it is never coarser than the unit.
+            const src = try testing.allocator.print("`timescale {s}{s}/1fs\n", .{ m.text, u.text });
+            defer testing.allocator.free(src);
+            const t = (try timescaleOf(src)).?;
+            try testing.expectEqual(want, t.unit);
+            try testing.expectEqual(@as(f64, 1e-15), t.precision);
+        }
+    }
+    // Equal unit and precision is "at least as precise".
+    try testing.expectEqual(@as(f64, 1e-9), (try timescaleOf("`timescale 1ns/1ns\n")).?.precision);
+    // A leading zero is not on the grid.
+    try expectFail("`timescale 01ns/1ps\n", .E0142);
+}
+
+test "E0142's notes cite IEEE 1364-2005 §19.8, the `timescale clause" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "`timescale 2ns/1ps\n", "`timescale 1ps/1ns\n" }) |src| {
+        var bag: diag.Bag = .init(arena);
+        try testing.expectError(error.PreprocessFailed, process(arena, src, .{ .std_defs = false, .bag = &bag }));
+        var buf: [diag.max_children]diag.Note = undefined;
+        const notes = bag.notes(bag.at(0), &buf);
+        try testing.expect(notes.len != 0);
+        try testing.expect(std.mem.find(u8, notes[0].text, "§19.8") != null);
+        for (notes) |n| try testing.expect(std.mem.find(u8, n.text, "§19.9") == null);
+    }
+}
+
+test "§10.2 `default_discipline publishes its name and qualifier, and `resetall withdraws it" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const d = (try process(arena, "`default_discipline \\logic wreal\n`default_discipline\n`resetall\n", .{
+        .std_defs = false,
+        .bag = &bag,
+    })).directives.disciplines;
+    try testing.expectEqual(@as(usize, 3), d.len);
+    try testing.expectEqualStrings("logic", d[0].discipline);
+    try testing.expectEqual(@as(?Qualifier, .wreal), d[0].qualifier);
+    try testing.expectEqualStrings("", d[1].discipline);
+    try testing.expectEqual(@as(?Qualifier, null), d[1].qualifier);
+    try testing.expectEqualStrings("", d[2].discipline);
+    // Each at the output offset where its directive's text ended: the two
+    // collapsed lines leave one newline each before the next.
+    try testing.expectEqual(@as(u32, 0), d[0].at);
+    try testing.expectEqual(@as(u32, 1), d[1].at);
+    try testing.expectEqual(@as(u32, 2), d[2].at);
+}
+
+test "IEEE 1364 §19.6: `resetall writes one default event to every list" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const out = try process(arena, "`resetall\n", .{ .std_defs = false, .bag = &bag });
+    // The word itself is passed through for the parser (§19.6 refuses it
+    // inside a module).
+    try testing.expectEqualStrings("`resetall\n", out.text);
+    const d = out.directives;
+    inline for (@typeInfo(Preprocessor.Directives).@"struct".field_names) |name| {
+        try testing.expectEqual(@as(usize, 1), @field(d, name).len);
+    }
+    try testing.expectEqual(NetType.wire, d.nettypes[0].value);
+    try testing.expect(!d.cells[0].value);
+    try testing.expectEqual(Drive.float, d.drives[0].value);
+    try testing.expectEqual(@as(?f64, null), d.transitions[0].value);
+    try testing.expectEqual(@as(?Timescale, null), d.timescales[0].value);
+    try testing.expectEqualStrings("", d.disciplines[0].discipline);
+}
+
+test "§10.3: zero is a transition time, infinity and NaN are not" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const t = (try process(arena, "`default_transition 0\n", .{ .std_defs = false, .bag = &bag })).directives.transitions;
+    try testing.expectEqual(@as(?f64, 0.0), t[0].value);
+    try expectFail("`default_transition 1e400\n", .E0129);
+    try expectFail("`default_transition inf\n", .E0129);
+    try expectFail("`default_transition nan\n", .E0129);
+}
+
+test "IEEE 1364-2005 §13.4.1: files given together are one text stream" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    // A macro and an open `ifdef cross into the next file, `__FILE__ names
+    // that file, and a newline keeps `a` and `2` two tokens.
+    const out = try process(arena, "`define W 2\n`ifdef W\na", .{
+        .std_defs = false,
+        .bag = &bag,
+        .more = &.{.{ .name = "b.v", .text = "`W `__FILE__\n`endif\n" }},
+    });
+    try testing.expectEqualStrings("\n\na\n2 \"b.v\"\n\n", out.text);
+    try testing.expectEqualSlices(u32, &.{4}, out.more_starts);
+}
+
+test "E0115 suggests the nearest defined macro, backtick restored" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    const src = "`define GAIN 1\n`GAN\n";
+    try testing.expectError(error.PreprocessFailed, process(arena, src, .{ .std_defs = false, .bag = &bag }));
+    var buf: [diag.max_children]diag.Note = undefined;
+    const notes = bag.notes(bag.at(0), &buf);
+    try testing.expectEqual(@as(usize, 1), notes.len);
+    const fix = notes[0].fix.?;
+    try testing.expectEqualStrings("`GAIN", fix.replacement);
+    try testing.expectEqualStrings("`GAN", src[fix.span.start..fix.span.end]);
+}
+
+/// Preprocesses `src` with every allocation on `gpa`, for
+/// `checkAllAllocationFailures`.
+fn preprocessAll(gpa: Allocator, src: []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    _ = try process(arena, src, .{ .std_defs = false, .bag = &bag });
+}
+
+test "process reports every allocation failure as OutOfMemory and leaks nothing" {
+    // One source through every allocating path: a function-like macro with a
+    // pre-expanded actual, a built-in `include, a conditional, two event
+    // lists, a comment's strip mark, `__LINE__ and `__FILE__.
+    try testing.checkAllAllocationFailures(testing.allocator, preprocessAll, .{
+        "`define F(x) [x]\n`include \"constants.vams\"\n`ifdef M_PI\n`F(`M_PI)\n`endif\n" ++
+            "`timescale 1ns/1ps\n`default_discipline electrical\n/* c */ `__LINE__ `__FILE__\n",
+    });
+}
+
+test "isIdentStart admits exactly §2.8's letters, `_`, and `$`" {
+    for (0..256) |c| {
+        const b: u8 = @intCast(c);
+        const want = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or b == '_' or b == '$';
+        try testing.expectEqual(want, Preprocessor.isIdentStart(b));
+    }
+}
+
+test "stringStop ends at the closing quote, an unescaped newline, or the end" {
+    const cases = [_]struct { text: []const u8, want: usize }{
+        .{ .text = "\"ab\"x", .want = 3 },
+        .{ .text = "\"a\\\"b\"", .want = 5 },
+        .{ .text = "\"ab\ncd\"", .want = 3 },
+        .{ .text = "\"ab", .want = 3 },
+        .{ .text = "\"a\\", .want = 3 },
+        .{ .text = "\"a\\\nb\"", .want = 5 },
+    };
+    for (cases) |c| try testing.expectEqual(c.want, Preprocessor.stringStop(c.text, 0));
+}
+
+test "Rest reads identifiers and escaped identifiers where the lexer splits them" {
+    var r: Preprocessor.Rest = .{ .s = "  a$1_ \\b-c d" };
+    try testing.expectEqualStrings("a$1_", r.ident().?);
+    // A backslash starts no simple identifier, and a letter no escaped one.
+    try testing.expect(r.ident() == null);
+    try testing.expectEqualStrings("b-c", r.escapedIdent().?);
+    try testing.expect(r.escapedIdent() == null);
+    try testing.expectEqualStrings("d", r.ident().?);
+    try testing.expect(r.peek() == null);
+}
+
+test "joinChain spells an include or expansion chain" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+    var pp: Pp = .{ .arena = arena, .scratch = arena, .opts = .{ .bag = &bag } };
+    try testing.expectEqualStrings("A -> B -> C", try pp.joinChain(&.{ "A", "B" }, "C"));
+    try testing.expectEqualStrings("C", try pp.joinChain(&.{}, "C"));
 }
