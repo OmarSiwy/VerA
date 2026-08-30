@@ -6909,7 +6909,21 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
         const u: u16 = switch (t.access) {
             .potential => t.hi,
-            .flow => try self.flowUnknown(t.hi, t.lo),
+            // PEEK — never mint. §4.5.6's closing sentence: "If the expression
+            // does not depend explicitly on the unknown, then ddx() returns
+            // zero (0)." A flow no probe has made a system unknown CANNOT be
+            // depended on: the only way a branch current enters an expression
+            // is through an `I()` read, and every read routes through
+            // `flowUnknown` — including any inside THIS ddx's first argument,
+            // which was lowered above, so the peek runs after every mint that
+            // could matter. Minting here declared an unknown no equation ever
+            // pins (the probe-branch row only exists for a READ branch): an
+            // all-zero Jacobian row and a structurally singular system. And
+            // recording a branch READ instead would make the pair a flow-probe
+            // branch — a 0 V short §4.5.6 gives a derivative operator no
+            // license to add to the topology. Absent unknown = the plain 0.
+            .flow => self.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
+                return .{ .v = .f_zero, .ty = .real },
         };
         const d = try self.call("ddx", &.{ f, try self.iconst(u) });
         // §1.3.1.2 again: `ddx(f, I(n,p))` differentiates with respect to the
