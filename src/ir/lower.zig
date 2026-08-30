@@ -4707,6 +4707,13 @@ fn noiseKindsOf(self: *const Lower, e: Ast.ExprId) NoiseKinds {
             for (ex.args(e)) |a| out = out.unionWith(self.noiseKindsOf(a));
             return out;
         },
+        // §4.2.12 ?: — its third operand lives in `extra`, which the lhs/rhs
+        // catch-all cannot see (same shape as `containsDdt`). Both arms count:
+        // a SET of declared generators is what this walk collects, and which
+        // arm the solve takes does not undeclare the other one.
+        .ternary => return self.noiseKindsOf(ex.lhs(e))
+            .unionWith(self.noiseKindsOf(ex.rhs(e)))
+            .unionWith(self.noiseKindsOf(ex.ternaryElse(e))),
         else => return self.noiseKindsOf(ex.lhs(e)).unionWith(self.noiseKindsOf(ex.rhs(e))),
     }
 }
