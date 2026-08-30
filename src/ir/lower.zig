@@ -488,6 +488,17 @@ displays: std.ArrayList(Display) = .empty,
 /// when the model prints nothing. codegen turns it into ONE unit function whose
 /// body is the prints, in source order.
 display_root: Mir.Value = .f_zero,
+/// §9.4.1 display statements whose CALL is created at the end of the analog
+/// block (`finishDisplays`), in source order — see `queueDisplay` for the
+/// clause reading. Parallel-ish to `displays`: each entry names the
+/// placeholder `displays` row whose `.val` it fills.
+deferred_displays: std.ArrayList(DeferredDisplay) = .empty,
+/// §6.6.1/§5.9.3 genvars currently bound in `consts` — a stack, pushed and
+/// popped by `tryUnrollFor`. Exists so `queueDisplay` can SNAPSHOT the
+/// bindings a deferred operand in an unrolled body was written under;
+/// `tryUnrollFor` removes them from `consts` when the loop ends, which is
+/// before `finishDisplays` re-lowers the operand.
+active_genvars: std.ArrayList([]const u8) = .empty,
 /// §5.10 module variables assigned inside an `@(<event>)` body, in declaration
 /// order. Such a variable RETAINS its value between analog evaluations — that
 /// is the entire point of `@(cross(...)) x = V(p);`, and an ordinary SSA place
@@ -509,6 +520,15 @@ initial_state: std.StringArrayHashMapUnmanaged(struct { value: Ast.ExprId, tok: 
 /// `x = tick;` has no derivation, and putting the flag in `vars` would give it
 /// one.
 events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
+/// §5.6.6 the branch a `<+` right-hand side is CURRENTLY being lowered for,
+/// null outside one. Exists for the clause's implicit form — `I(b) <+ f(I(b))`
+/// — where the rhs occurrence of the target "may be expressed in terms of
+/// itself" and the simulator "will find the value ... that equals the sum of
+/// the contributions made to it": that read is the branch-flow UNKNOWN of the
+/// implicit equation, not the §5.6.1.2 retained accumulator (which, mid-
+/// statement, still holds the sum WITHOUT this statement — a self-reference
+/// answered with a stale prefix of itself). See `lowerBranchAccess`.
+contrib_target: ?Target = null,
 
 /// One §5.10 event-assigned module variable and its persistent slot.
 pub const HeldVar = struct {
@@ -545,6 +565,31 @@ pub const Display = struct {
     /// value would not dominate the chain root either — so it is NOT emitted.
     conditional: bool,
 };
+
+/// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
+/// every unconditional display-family statement takes this route (see
+/// `queueDisplay`). Holds what the statement position knew and the end of the
+/// block will not: the at-statement operand values and the genvar bindings.
+const DeferredDisplay = struct {
+    name: []const u8,
+    tok: u32,
+    /// The original argument list, `.none` slots included (A.6.9).
+    args: []const Ast.ExprId,
+    /// Parallel to `args`. Non-null = the operand's value, captured AT THE
+    /// STATEMENT (§5.6.1.2 sequential semantics for everything that is not
+    /// converged simulation data — a variable printed then reassigned shows
+    /// its at-statement value). Null = the operand reads a branch flow and is
+    /// lowered at the end of the block instead, against the converged
+    /// retention state (§9.4.1/§5.4.2.2).
+    pre: []const ?TypedValue,
+    /// §5.9.3 genvar bindings live at the statement, re-established around the
+    /// end-of-block lowering so `I(pair[k])` in an unrolled body still folds.
+    genvars: []const GenvarBind,
+    /// Index of the placeholder row in `displays` whose `.val` this fills.
+    display: u32,
+};
+
+const GenvarBind = struct { name: []const u8, c: Const };
 
 const VarSlot = struct { place: Ssa.Place, ty: Ty };
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot };
@@ -682,6 +727,8 @@ pub fn deinit(self: *Lower) void {
     self.loops.deinit(gpa);
     self.inlining.deinit(gpa);
     self.displays.deinit(gpa);
+    self.deferred_displays.deinit(gpa);
+    self.active_genvars.deinit(gpa);
     self.held_vars.deinit(gpa);
     self.held_names.deinit(gpa);
     self.events.deinit(gpa);
@@ -1341,8 +1388,6 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         }
     }
 
-    try self.checkProbeBranches();
-
     // §5.6.1.3 the contribution accumulators' final values, and beside each the
     // final value of its retention flag — the "is a value retained [this
     // cycle]?" question the clause's three-way rule turns on.
@@ -1361,7 +1406,13 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §9.4 display tasks. AFTER the kernel-control calls on purpose: those two
     // become naming units, and inserting anything ahead of them would renumber
     // every Instance state field. The display chain adds no unit of its own.
+    // (Deferred §9.4.1 operands are lowered inside, after the accumulator
+    // finals above — that read order is what "converged" means here.)
     try self.finishDisplays();
+
+    // AFTER `finishDisplays`: a deferred display operand appends its
+    // `branch_reads` there, and §1.3.1's probe test has to see every read.
+    try self.checkProbeBranches();
 }
 
 /// §9.17.1/§9.17.2. Turn each accumulated kernel-control place into exactly one
@@ -1389,10 +1440,14 @@ fn finishKernelCtl(self: *Lower) Oom!void {
 /// arm does not, and chaining it would be invalid SSA as well as the wrong
 /// semantics (§9.4.6). Those are reported by the driver as W0851.
 fn finishDisplays(self: *Lower) Oom!void {
+    try self.lowerDeferredDisplays();
     var root: Mir.Value = .f_zero;
     var first = true;
     for (self.displays.items) |d| {
         if (d.conditional) continue;
+        // Every unconditional entry either carried its call from the
+        // statement or was a `queueDisplay` placeholder just filled above.
+        assert(d.val != .undef);
         root = if (first) d.val else try self.emit(.fadd, &.{ root, d.val });
         first = false;
     }
@@ -3881,6 +3936,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     if (target.access == .flow) try self.checkMfactorDoubleScaling(lhs, rhs);
     const idx = try self.contribIndex(target, self.file.exprs.mainTok(lhs));
 
+    // §5.6.6: while THIS statement's right-hand side lowers, a read of its own
+    // target is the implicit form — see `contrib_target`.
+    self.contrib_target = target;
+    defer self.contrib_target = null;
     const split = try self.splitContribution(rhs);
     if (split.resist) |v| try self.checkFiniteContribution(lhs, v); // §7.3.2.1
     if (split.react) |v| try self.checkFiniteContribution(lhs, v);
@@ -4305,6 +4364,18 @@ fn branchKey(self: *Lower, buf: *[elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .ident => self.file.str(ex.strOf(e)),
+        // §5.5.5 "A module is allowed to access the potential and flow of a
+        // branch in another module instance", and §6.7.1's first bullet says it
+        // of the name: "Potential and flow access for named and unnamed
+        // branches (including port branches) can be done hierarchically." The
+        // resolution is `nodeOf`'s exactly: elaboration cloned the child's
+        // BranchDecl under `path.name` (Ruling E), so the §6.7 path IS the key
+        // `branches`/`port_branches` already hold, and `flatName` is the whole
+        // join. A miss is not an error HERE — the caller falls through to
+        // `nodeOf`, whose `.hier_ident` arm owns E0901 and, like this path,
+        // mints nothing on failure (a wrong path names no branch anywhere).
+        // Arena rather than `buf`: cold, one path per source reference.
+        .hier_ident => try self.flatName(e),
         // Into the caller's buffer, not the arena: both consumers do nothing
         // with the result but `branches.get`/`port_branches.get`, which never
         // retain a key — and this runs once per §4.4.1 ACCESS, so `br[0]` in an
@@ -5087,6 +5158,9 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
         return true;
     };
     try self.consts.put(self.arena, gv, start);
+    // Visible to `queueDisplay`'s snapshot while the body lowers.
+    try self.active_genvars.append(self.arena, gv);
+    defer _ = self.active_genvars.pop();
 
     var n: u32 = 0;
     while (n < max_unroll) : (n += 1) {
@@ -5332,6 +5406,15 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     // argument. In statement position the count is dropped, the write is not.
     if (try self.lowerFileRead(tok, name, args)) |_| return;
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
+    // §9.4.1 the display/severity/control family on the unconditional spine:
+    // its call is minted at the end of the block, and an operand that reads a
+    // branch flow is EVALUATED there — see `queueDisplay`. The conditional and
+    // restricted cases stay on the path below, whose entries the chain drops
+    // (W0851) or whose context owns the diagnostic (E0421 fires at the
+    // statement, where `restrict` is still set).
+    if ((isDisplayTask(name) or isSimCtlTask(name)) and
+        self.cond_depth == 0 and self.restrict == null)
+        return self.queueDisplay(tok, name, args);
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     var live: std.ArrayList(Ast.ExprId) = .empty;
@@ -5379,6 +5462,135 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
             .tok = tok,
             .conditional = self.cond_depth != 0,
         });
+    }
+}
+
+/// §9.4.1 sequence one unconditional display-family statement: capture its
+/// operands, mint its `call` at the END of the analog block.
+///
+/// WHY THE END. "$strobe provides the ability to display simulation data when
+/// the simulator has converged on a solution for all nodes" (§9.4.1), and
+/// §5.4.2.2 makes "both the potential and the flow of a source branch ...
+/// accessible in expressions anywhere in the module" — anywhere, not from the
+/// statement after the `<+` on. For a FLOW source the accessible value is the
+/// §5.6.1.2 retained accumulator, which §5.6.1.3 only settles at the end of
+/// the cycle's execution path — so a display operand that reads one is lowered
+/// in `finishDisplays`, where `lowerBranchAccess`'s `flowAccum` read IS the
+/// final retained value (the same end-of-block state the core exports as
+/// `Contribution.resist_val`/`wrote_val`, §5.6.1.3 retention-select phis
+/// included). A read placed above the `<+` therefore reports what the branch
+/// retained this cycle, not the 0 of a prefix of the block.
+///
+/// ONLY those operands move. An operand with no branch-flow read keeps its
+/// at-statement value (`pre`), so `x = 1; $strobe("%g", x); x = 2;` still
+/// prints 1 — §5.6.1.2's sequential semantics stay untouched for everything
+/// that is not converged simulation data, and assignments/contributions are
+/// not affected at all. The split is per OPERAND because it cannot be finer:
+/// once a tree contains the end-of-block accumulator value, SSA dominance
+/// puts the whole tree after it.
+///
+/// $display AND $strobe. §9.4.1 distinguishes their timing ("each time the
+/// simulator executes" vs converged), but VerA's printing artifact runs the
+/// display chain once per ACCEPTED point — one converged snapshot — so the
+/// two collapse onto the same phase and the rule is applied to the whole §9.4
+/// family uniformly, §9.7's control/severity tasks included since they travel
+/// the same chain. The §9.5.2 file writers do NOT take this route: §9.5.9
+/// sequences them against `$fgets`/`$ftell` side effects at statement order,
+/// and re-pointing a retained-flow read is not worth reordering a descriptor.
+///
+/// The call is minted at the end even when NO operand defers, so the §9.4
+/// prints keep source order among themselves in the emitted unit body.
+fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    const pre = try self.arena.alloc(?TypedValue, args.len);
+    var any_deferred = false;
+    for (args, pre) |a, *p| {
+        p.* = null;
+        if (a == .none) continue; // A.6.9 empty argument slot
+        if (self.containsFlowRead(a)) {
+            any_deferred = true;
+            continue;
+        }
+        p.* = try self.lowerSysArg(a, takesNetRef(name));
+    }
+    // §5.9.3 an unrolled body's genvar bindings are gone from `consts` by
+    // `finishDisplays`; a deferred operand snapshots them. Only when one
+    // exists — the common module has neither.
+    var genvars: []const GenvarBind = &.{};
+    if (any_deferred and self.active_genvars.items.len != 0) {
+        const gs = try self.arena.alloc(GenvarBind, self.active_genvars.items.len);
+        for (self.active_genvars.items, gs) |gname, *g|
+            g.* = .{ .name = gname, .c = self.consts.get(gname).? };
+        genvars = gs;
+    }
+    try self.deferred_displays.append(self.arena, .{
+        .name = name,
+        .tok = tok,
+        .args = args,
+        .pre = pre,
+        .genvars = genvars,
+        .display = @intCast(self.displays.items.len),
+    });
+    // The placeholder keeps `displays` in source order — W0850 reporting and
+    // the chain both walk it — and `lowerDeferredDisplays` fills `.val`.
+    try self.displays.append(self.arena, .{
+        .val = .undef,
+        .name = name,
+        .tok = tok,
+        .conditional = false,
+    });
+}
+
+/// Does this operand tree read a branch FLOW (§4.4.1 `I(...)` under any
+/// §3.6.1.4 spelling)? That is the one read whose value is position-dependent
+/// inside the block (§5.6.1.2 retention); potentials and §5.4.3 port flows
+/// resolve to solver unknowns and read the same value everywhere, so they do
+/// not force an operand to the end. Same walk shape as `containsDdt`.
+fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .branch_access => {
+            const kind = self.access_kind.get(self.file.str(ex.strOf(e))) orelse return false;
+            return kind == .flow;
+        },
+        .filter_call, .call, .builtin_call, .sys_call, .noise_call => {
+            for (ex.args(e)) |a| if (self.containsFlowRead(a)) return true;
+            return false;
+        },
+        .ternary => return self.containsFlowRead(ex.lhs(e)) or self.containsFlowRead(ex.rhs(e)) or
+            self.containsFlowRead(ex.ternaryElse(e)),
+        else => return self.containsFlowRead(ex.lhs(e)) or self.containsFlowRead(ex.rhs(e)),
+    }
+}
+
+/// The end-of-block half of `queueDisplay`: lower what was deferred, mint each
+/// call, fill its `displays` placeholder. Runs at the top of `finishDisplays`,
+/// with `self.cur` past the last statement and past `lowerModule`'s final
+/// accumulator reads — so a `flowAccum` read here is the §5.6.1.3 end-of-cycle
+/// retention state, phis and all.
+fn lowerDeferredDisplays(self: *Lower) Oom!void {
+    for (self.deferred_displays.items) |dd| {
+        // Provenance: instructions minted here belong to the display
+        // statement, not to whatever token the block ended on.
+        self.mir.cur_tok = dd.tok;
+        for (dd.genvars) |g| try self.consts.put(self.arena, g.name, g.c);
+        var vals: std.ArrayList(Mir.Value) = .empty;
+        defer vals.deinit(self.arena);
+        var live: std.ArrayList(Ast.ExprId) = .empty;
+        defer live.deinit(self.arena);
+        var tys: std.ArrayList(Ty) = .empty;
+        defer tys.deinit(self.arena);
+        for (dd.args, dd.pre) |a, p| {
+            if (a == .none) continue;
+            const tv = p orelse try self.lowerSysArg(a, takesNetRef(dd.name));
+            try vals.append(self.arena, tv.v);
+            try live.append(self.arena, a);
+            try tys.append(self.arena, tv.ty);
+        }
+        for (dd.genvars) |g| _ = self.consts.remove(g.name);
+        // §9.4.3 conversion-vs-type pairing, postponed with the operands.
+        try self.checkFormatTypes(live.items, tys.items);
+        self.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }
 }
 
@@ -6839,14 +7051,38 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // read of the unknown answers its initial 0 whatever was
             // contributed. What the branch flow of a flow source IS, by
             // definition, is the value retained on the branch (§5.6.1.2) — so
-            // the read is the ACCUMULATOR, read at THIS point in the block.
-            // §5.6.1.2 states retention sequentially ("adds the value of the
-            // right-hand side to any previously retained value", the assignment
-            // being made at the end of the simulation cycle), so a read placed
-            // before the first `<+` must still see nothing retained;
-            // `readVariable` at `self.cur` is exactly that, and §5.8's
-            // conditional arms come out as its phis with nothing written here.
+            // the read is the ACCUMULATOR, read at `self.cur`. WHERE `self.cur`
+            // is is the caller's statement of position semantics, and there are
+            // exactly two: an ORDINARY expression (an assignment's, a
+            // contribution's right side) reads mid-block and sees §5.6.1.2's
+            // sequential retention — a read above the first `<+` sees nothing
+            // retained — while a §9.4 display operand is lowered from
+            // `lowerDeferredDisplays` with `self.cur` past the whole block, so
+            // it sees the §9.4.1 CONVERGED end-of-cycle value, §5.6.1.3
+            // retention-select phis included (§5.8's conditional arms come out
+            // as `readVariable`'s phis with nothing written here).
             //
+            // §5.6.6 FIRST: inside a `<+`'s own right-hand side, a read of the
+            // SAME branch is the implicit form — "the value of the target may
+            // be expressed in terms of itself" — and its value is the one "the
+            // underlying implementation ... will find", i.e. the branch-flow
+            // unknown, never the retained prefix. Ahead of `flowAccum` because
+            // the statement's own entry already exists by the time its rhs
+            // lowers (`contribIndex` runs first), and the accumulator it would
+            // find is exactly the stale self-reference §5.6.6 rules out.
+            // ponytail: the unknown this mints has no defining row — no
+            // fixture `//! solve`s an implicit flow (the harness sweeps it);
+            // the day one does, codegen owes `x[u] − Σ contributions = 0`, the
+            // same shape `portFlowRead` documents for `I(<p>)`.
+            if (self.contrib_target) |ct| {
+                if (ct.access == .flow and t.access == .flow and
+                    ct.hi == t.hi and ct.lo == t.lo and ct.br == t.br)
+                {
+                    const u = try self.flowUnknown(t.hi, t.lo);
+                    const v = try self.probe(u);
+                    return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
+                }
+            }
             // Only once a flow contribution has ALREADY been lowered onto this
             // pair, which is the distinction the clause draws: an uncontributed
             // branch is a §5.4.2.1 flow PROBE — a short whose current is a
@@ -6854,7 +7090,8 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // current is pinned by the branch row codegen emits for it. Both of
             // those keep the unknown and read it.
             if (self.flowAccum(t)) |acc| {
-                // ponytail: the resistive half only. A reactive flow
+                // ponytail: the resistive half only, at BOTH read positions
+                // (mid-block and the display's end-of-block). A reactive flow
                 // contribution retains a CHARGE (§5.6.1.2 strips the `ddt`), so
                 // reading the branch flow back would have to differentiate it
                 // again; that needs a second `ddt` operator instance and no

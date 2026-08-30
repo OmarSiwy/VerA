@@ -788,6 +788,17 @@ pub const DisciplineDecl = struct {
     domain: Domain = .unspecified,
     /// §3.6.2.3 `potential.abstol = 1e-6;` style overrides.
     overrides: []const Override = &.{},
+    /// §3.6.2.7 "Like natures, a discipline can specify user-defined
+    /// attributes." A.1.7's discipline_item grammar omits the production; the
+    /// prose is read as governing and the annex as a non-exhaustive erratum
+    /// (see `Parser.parseDiscipline`). Stored exactly as a nature stores its
+    /// user attributes — a `NatureAttr` list the declaration retains.
+    /// ponytail: no read syntax reaches these yet. §5.5.3's Syntax 5-4 goes
+    /// `net.potential_or_flow.attr`, which lands on the BOUND NATURE's table,
+    /// and the LRM gives a discipline-level attribute no access spelling of
+    /// its own — the consumer today is a host reading the AST (the same
+    /// consumer a nature's `huge`/`blowup` have).
+    attrs: []const NatureAttr = &.{},
     main_tok: u32 = 0,
 
     pub const Domain = enum(u8) { unspecified, continuous, discrete };
