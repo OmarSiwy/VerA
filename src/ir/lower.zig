@@ -5300,7 +5300,7 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     defer vals.deinit(self.arena);
     for (args) |a| {
         if (a == .none) continue; // A.6.9 empty argument slot
-        try vals.append(self.arena, try self.lowerSysArg(a));
+        try vals.append(self.arena, try self.lowerSysArg(a, takesNetRef(name)));
     }
     const v = try self.call(name, vals.items);
     if (isFileOutTask(name)) {
@@ -5375,7 +5375,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
         return try self.iconst(0);
     }
-    const fd = try self.lowerSysArg(args[fd_at]);
+    const fd = try self.lowerSysArg(args[fd_at], false); // a descriptor, never a net
     // §9.5.4.2 alone has a control string, and it is an operand of every reader
     // as well as of the count.
     const fmt: ?Mir.Value = if (scan) blk: {
@@ -7479,7 +7479,8 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // convergence either way, and no fixture can see the difference
             // (a non-identity limiter would, which is why this is written down).
             return .{
-                .v = try self.call(name, &.{try self.lowerSysArg(sys_args[0])}),
+                // §9.17.3 the probe argument is an ACCESS FUNCTION, never a net.
+                .v = try self.call(name, &.{try self.lowerSysArg(sys_args[0], false)}),
                 .ty = sysFuncTy(name),
             };
         }
@@ -7507,7 +7508,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     defer vals.deinit(self.arena);
     for (sys_args) |a| {
         if (a == .none) continue;
-        try vals.append(self.arena, try self.lowerSysArg(a));
+        try vals.append(self.arena, try self.lowerSysArg(a, takesNetRef(name)));
     }
     const v = try self.call(name, vals.items);
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
@@ -8016,13 +8017,26 @@ fn constStrArg(self: *Lower, e: Ast.ExprId) ?[]const u8 {
     };
 }
 
-/// Several ch9 functions take a NET or PORT reference rather than a value —
-/// §9.19 `$port_connected`, §9.20 `$analog_node_alias`, §9.22/§9.23 driver
-/// access. A bare net name in argument position lowers to its node_order
-/// index, which is what codegen needs; anything else is an ordinary value.
-fn lowerSysArg(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
+/// The ch9 names whose argument IS a net or port reference — §9.19
+/// `$port_connected`, §9.20 `$analog_node_alias`/`$analog_port_alias`. The
+/// §9.22/§9.23 driver access family takes net references too, but
+/// `isConnectModuleOnlySysFunc` refuses those calls before an argument is ever
+/// lowered, so listing them here would gate a path they cannot reach.
+fn takesNetRef(name: []const u8) bool {
+    const fns = [_][]const u8{ "$port_connected", "$analog_node_alias", "$analog_port_alias" };
+    for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
+    return false;
+}
+
+/// A system call argument. For the `takesNetRef` names a bare net name lowers
+/// to its node_order index, which is what codegen needs. For every OTHER task
+/// the index is meaningless — `$strobe("%g", p)` printed p's INDEX — so the
+/// path is gated by the caller (`net_ok`) and a net name elsewhere falls
+/// through to `lowerExpr`, where §4.4's "a net is not a value" E0315 says to
+/// probe it.
+fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!Mir.Value {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .ident) {
+    if (net_ok and ex.tag(e) == .ident) {
         const name = self.file.str(ex.strOf(e));
         const is_value = self.vars.contains(name) or self.param_index.contains(name) or
             self.consts.contains(name);
