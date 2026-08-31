@@ -902,3 +902,320 @@ test "mir: const dedup, block chain, phi pairs, alias" {
 
     try std.testing.expectEqual(@as(u32, 2), mir.blockCount());
 }
+
+test addFloatConst {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+
+    // The six real sentinels spend no `defs` row.
+    const sentinels = [_]struct { f64, Value }{
+        .{ 0.0, .f_zero },
+        .{ 1.0, .f_one },
+        .{ -1.0, .f_neg_one },
+        .{ 2.0, .f_two },
+        .{ 10.0, .f_ten },
+        .{ std.math.inf(f64), .f_inf },
+    };
+    for (sentinels) |s| try std.testing.expectEqual(s[1], try mir.addFloatConst(gpa, s[0]));
+    try std.testing.expectEqual(@as(usize, 0), mir.defs.len);
+
+    // -inf and -0.0 are not sentinels: each gets one row and keeps its bits.
+    const neg_inf = try mir.addFloatConst(gpa, -std.math.inf(f64));
+    const neg_zero = try mir.addFloatConst(gpa, -0.0);
+    try std.testing.expect(neg_inf != neg_zero);
+    try std.testing.expectEqual(@as(u64, 0x8000_0000_0000_0000), @as(u64, @bitCast(mir.valueDef(neg_zero).float_const)));
+    try std.testing.expectEqual(neg_zero, try mir.addFloatConst(gpa, -0.0));
+
+    // Dedup is by bits, so two NaN payloads are two Values and one payload is
+    // one, and the payload survives the round trip.
+    const nan_a: f64 = @bitCast(@as(u64, 0x7ff8_0000_0000_0001));
+    const nan_b: f64 = @bitCast(@as(u64, 0x7ff8_0000_0000_0002));
+    const va = try mir.addFloatConst(gpa, nan_a);
+    const vb = try mir.addFloatConst(gpa, nan_b);
+    try std.testing.expect(va != vb);
+    try std.testing.expectEqual(va, try mir.addFloatConst(gpa, nan_a));
+    try std.testing.expectEqual(@as(u64, 0x7ff8_0000_0000_0001), @as(u64, @bitCast(mir.valueDef(va).float_const)));
+    try std.testing.expectEqual(@as(usize, 4), mir.defs.len);
+    try std.testing.expectEqual(DefKind.float_const, mir.valueKind(va));
+}
+
+test addIntConst {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+
+    try std.testing.expectEqual(Value.zero, try mir.addIntConst(gpa, 0));
+    try std.testing.expectEqual(Value.one, try mir.addIntConst(gpa, 1));
+    try std.testing.expectEqual(Value.neg_one, try mir.addIntConst(gpa, -1));
+    try std.testing.expectEqual(@as(usize, 0), mir.defs.len);
+
+    // The i64 extremes round-trip, and each is one Value however often asked.
+    for ([_]i64{ std.math.maxInt(i64), std.math.minInt(i64), 2 }) |x| {
+        const v = try mir.addIntConst(gpa, x);
+        try std.testing.expectEqual(v, try mir.addIntConst(gpa, x));
+        try std.testing.expectEqual(x, mir.valueDef(v).int_const);
+        try std.testing.expectEqual(DefKind.int_const, mir.valueKind(v));
+    }
+    try std.testing.expectEqual(@as(usize, 3), mir.defs.len);
+    // An integer 2 is not the real sentinel `f_two`.
+    try std.testing.expect(try mir.addIntConst(gpa, 2) != Value.f_two);
+}
+
+test valueDef {
+    // Every sentinel decodes without a `defs` row: an empty Mir has none.
+    const mir: Mir = .{};
+    const want = [_]struct { Value, Def }{
+        .{ .undef, .undef },
+        .{ .f_zero, .{ .float_const = 0.0 } },
+        .{ .f_one, .{ .float_const = 1.0 } },
+        .{ .f_neg_one, .{ .float_const = -1.0 } },
+        .{ .f_two, .{ .float_const = 2.0 } },
+        .{ .f_ten, .{ .float_const = 10.0 } },
+        .{ .f_inf, .{ .float_const = std.math.inf(f64) } },
+        .{ .zero, .{ .int_const = 0 } },
+        .{ .one, .{ .int_const = 1 } },
+        .{ .neg_one, .{ .int_const = -1 } },
+    };
+    try std.testing.expectEqual(@as(usize, Value.first_dynamic), want.len);
+    for (want, 0..) |w, i| {
+        try std.testing.expectEqual(@as(u32, @intCast(i)), @backingInt(w[0]));
+        try std.testing.expectEqual(w[1], mir.valueDef(w[0]));
+        try std.testing.expectEqual(std.meta.activeTag(w[1]), mir.valueKind(w[0]));
+        try std.testing.expect(!mir.hasAlias(w[0]));
+    }
+}
+
+test "mir: string, parameter and probe Values round-trip their payloads" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+
+    // The text is interned once; the Value wrapper is not deduped.
+    const a = try mir.addStrConst(gpa, "tran");
+    const b = try mir.addStrConst(gpa, "tran");
+    try std.testing.expect(a != b);
+    try std.testing.expectEqualStrings("tran", mir.valueDef(a).str_const);
+    try std.testing.expectEqual(@as(usize, 1), mir.strings.strings.items.len);
+
+    const p = try mir.addParamRef(gpa, 7);
+    const u = try mir.addBlockParam(gpa, std.math.maxInt(u32));
+    try std.testing.expectEqual(@as(u32, 7), mir.valueDef(p).param_ref);
+    try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), mir.valueDef(u).block_param);
+    try std.testing.expectEqual(DefKind.param_ref, mir.valueKind(p));
+    try std.testing.expectEqual(DefKind.block_param, mir.valueKind(u));
+    // Dynamic Values number from `first_dynamic` in creation order.
+    try std.testing.expectEqual(@as(u32, Value.first_dynamic), @backingInt(a));
+    try std.testing.expectEqual(@as(u32, Value.first_dynamic + 3), @backingInt(u));
+}
+
+test "mir: every builder encodes the operands its InstData view decodes" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    const entry = try mir.addBlock(gpa);
+    const b1 = try mir.addBlock(gpa);
+    const b2 = try mir.addBlock(gpa);
+    try std.testing.expectEqual(Block.entry, entry);
+    try std.testing.expectEqual(@as(u32, 3), mir.blockCount());
+    try std.testing.expectEqual(Inst.none, mir.blockLast(b1));
+
+    // §3.2.2 arrays: a fresh version, a cached one, a store and a load.
+    mir.cur_tok = 42;
+    const a0 = try mir.emitAnew(gpa, entry, 3);
+    mir.cur_tok = no_tok;
+    const a1 = try mir.emitAnewCached(gpa, entry, 3, 0, 5);
+    const s = try mir.emit(gpa, entry, .store, &.{ a0, .zero, .f_one });
+    const l = try mir.emit(gpa, entry, .iload, &.{ s, .one });
+    const d0 = mir.instData(mir.valueDef(a0).inst_result).anew;
+    try std.testing.expectEqual(@as(u32, 3), d0.array);
+    try std.testing.expect(d0.tp == null);
+    const d1 = mir.instData(mir.valueDef(a1).inst_result).anew;
+    try std.testing.expectEqual(@as(u32, 0), d1.tp.?.block);
+    try std.testing.expectEqual(@as(u32, 5), d1.tp.?.slot);
+    const ds = mir.instData(mir.valueDef(s).inst_result).store;
+    try std.testing.expectEqual(a0, ds.arr);
+    try std.testing.expectEqual(Value.zero, ds.index);
+    try std.testing.expectEqual(Value.f_one, ds.value);
+    const dl = mir.instData(mir.valueDef(l).inst_result).load;
+    try std.testing.expectEqual(Opcode.iload, dl.op);
+    try std.testing.expectEqual(s, dl.arr);
+    try std.testing.expectEqual(Value.one, dl.index);
+
+    // Provenance and home block are stamped, never taken from the caller.
+    const r0 = mir.instRow(mir.valueDef(a0).inst_result);
+    try std.testing.expectEqual(@as(u32, 42), r0.tok);
+    try std.testing.expectEqual(entry, r0.block);
+    try std.testing.expectEqual(no_tok, mir.instTok(mir.valueDef(a1).inst_result));
+
+    // §4.2.12 select, then the two terminators, which define no Value.
+    const sel = try mir.emit(gpa, entry, .select, &.{ .one, .f_two, .f_ten });
+    const dt = mir.instData(mir.valueDef(sel).inst_result).ternary;
+    try std.testing.expectEqual(Value.one, dt.cond);
+    try std.testing.expectEqual(Value.f_two, dt.then_val);
+    try std.testing.expectEqual(Value.f_ten, dt.else_val);
+    const br = try mir.emitBranch(gpa, entry, .one, b1, b2);
+    try std.testing.expectEqual(Value.undef, mir.instResult(br));
+    const dbr = mir.instData(br).branch;
+    try std.testing.expectEqual(Value.one, dbr.cond);
+    try std.testing.expectEqual(b1, dbr.then_block);
+    try std.testing.expectEqual(b2, dbr.else_block);
+    const j = try mir.emitJump(gpa, b1, b2);
+    try std.testing.expectEqual(Value.undef, mir.instResult(j));
+    try std.testing.expectEqual(b2, mir.instData(j).jump.target);
+    try std.testing.expectEqual(j, mir.blockLast(b1));
+    try std.testing.expectEqual(br, mir.blockLast(entry));
+
+    // A call with no arguments, a known callee, and an unlisted `$` name.
+    const t = try mir.emitCall(gpa, b2, try mir.internString(gpa, "$abstime"), &.{});
+    const dc = mir.instData(mir.valueDef(t).inst_result).call;
+    try std.testing.expectEqual(Callee.@"$abstime", dc.callee);
+    try std.testing.expectEqual(@as(usize, 0), dc.args.len);
+    const u = try mir.emitCall(gpa, b2, try mir.internString(gpa, "$my_task"), &.{ t, .one });
+    const du = mir.instData(mir.valueDef(u).inst_result).call;
+    try std.testing.expectEqual(Callee.systf, du.callee);
+    try std.testing.expectEqualStrings("$my_task", du.name);
+    try std.testing.expectEqualSlices(Value, &.{ t, .one }, du.args);
+}
+
+test "mir: block chain edits agree with a list-per-block model (seeded)" {
+    // Model-based: every chain edit is mirrored on plain lists, and the
+    // chains, `last` and the `block` column are compared after each one.
+    const gpa = std.testing.allocator;
+    const nb = 4;
+    var prng = std.Random.DefaultPrng.init(0x6d69_7263);
+    const r = prng.random();
+    const Edit = enum { value, jump, unlink, splice, move };
+    for (0..40) |round| {
+        errdefer std.debug.print("chain model: round {d}\n", .{round});
+        var mir: Mir = .{};
+        defer mir.deinit(gpa);
+        var model: [nb]std.ArrayList(Inst) = @splat(.empty);
+        defer for (&model) |*l| l.deinit(gpa);
+        var blocks: [nb]Block = undefined;
+        for (&blocks) |*b| b.* = try mir.addBlock(gpa);
+
+        for (0..60) |_| {
+            const bi = r.uintLessThan(usize, nb);
+            switch (r.enumValue(Edit)) {
+                .value => {
+                    _ = try mir.emit(gpa, blocks[bi], .fneg, &.{.f_one});
+                    try model[bi].append(gpa, mir.blockLast(blocks[bi]));
+                },
+                .jump => {
+                    const to = blocks[r.uintLessThan(usize, nb)];
+                    try model[bi].append(gpa, try mir.emitJump(gpa, blocks[bi], to));
+                },
+                .unlink => if (model[bi].items.len != 0) {
+                    const k = r.uintLessThan(usize, model[bi].items.len);
+                    mir.unlink(blocks[bi], model[bi].orderedRemove(k));
+                },
+                .splice => {
+                    const ti = r.uintLessThan(usize, nb);
+                    if (ti != bi) {
+                        mir.splice(blocks[ti], blocks[bi]);
+                        try model[ti].appendSlice(gpa, model[bi].items);
+                        model[bi].clearRetainingCapacity();
+                    }
+                },
+                .move => {
+                    const ti = r.uintLessThan(usize, nb);
+                    const from = &model[bi];
+                    // `after` is none (move every row) or one of `from`'s rows.
+                    const keep = r.uintLessThan(usize, from.items.len + 1);
+                    const after: Inst = if (keep == 0) .none else from.items[keep - 1];
+                    const tail_len = from.items.len - keep;
+                    const term_at: ?usize = for (model[ti].items, 0..) |inst, k| {
+                        if (mir.instOp(inst) == .jump) break k;
+                    } else null;
+                    // The documented order: nothing to move, then `to` is
+                    // `from`, then `to` has no terminator.
+                    const moved = if (tail_len == 0) true else if (ti == bi) false else term_at != null;
+                    try std.testing.expectEqual(moved, mir.moveTailBefore(blocks[bi], after, blocks[ti]));
+                    if (tail_len != 0 and moved) {
+                        try model[ti].insertSlice(gpa, term_at.?, from.items[keep..]);
+                        from.shrinkRetainingCapacity(keep);
+                    }
+                },
+            }
+            for (blocks, model) |b, m| {
+                var it = mir.blockInsts(b);
+                for (m.items) |linked| {
+                    try std.testing.expectEqual(linked, it.next().?);
+                    try std.testing.expectEqual(b, mir.instBlock(linked));
+                }
+                try std.testing.expect(it.next() == null);
+                const last: Inst = if (m.items.len == 0) .none else m.items[m.items.len - 1];
+                try std.testing.expectEqual(last, mir.blockLast(b));
+            }
+        }
+    }
+}
+
+test resolveAlias {
+    // Model-based: the union-find against a naive walk of the same parents.
+    // As in ssa.zig and ifconv.zig, only a root (an unaliased Value) is ever
+    // aliased, and only onto an older Value or a sentinel, so no cycle forms.
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0xa11a5);
+    const r = prng.random();
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    const n = 64;
+    var naive: [n]Value = undefined;
+    for (&naive, 0..) |*p, i| {
+        p.* = try mir.addFloatConst(gpa, @floatFromInt(i + 100));
+        try std.testing.expectEqual(@as(u32, @intCast(i + Value.first_dynamic)), @backingInt(p.*));
+    }
+    for (0..200) |_| {
+        const i = r.uintLessThan(usize, n);
+        const from: Value = @fromBackingInt(@intCast(i + Value.first_dynamic));
+        if (naive[i] != from) continue; // not a root
+        const j = r.uintLessThan(usize, i + 1);
+        const to: Value = if (j == i) .f_one else @fromBackingInt(@intCast(j + Value.first_dynamic));
+        try std.testing.expect(!mir.hasAlias(from));
+        mir.setAlias(from, to);
+        naive[i] = to;
+        try std.testing.expect(mir.hasAlias(from));
+        for (0..n) |k| {
+            const v: Value = @fromBackingInt(@intCast(k + Value.first_dynamic));
+            var root = v;
+            while (@backingInt(root) >= Value.first_dynamic) {
+                const next = naive[@backingInt(root) - Value.first_dynamic];
+                if (next == root) break;
+                root = next;
+            }
+            try std.testing.expectEqual(root, mir.resolveAlias(v));
+            // Path compression: after a resolve, the row names its root.
+            if (root != v) try std.testing.expectEqual(root, mir.alias.items[k]);
+        }
+    }
+    // A sentinel resolves to itself and is never aliased.
+    try std.testing.expectEqual(Value.f_inf, mir.resolveAlias(.f_inf));
+}
+
+test reserve {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    try mir.reserve(gpa, 10, 20, 30);
+    try std.testing.expect(mir.insts.capacity >= 10);
+    try std.testing.expect(mir.defs.capacity >= 20);
+    try std.testing.expect(mir.alias.capacity >= 20);
+    try std.testing.expect(mir.extra.capacity >= 30);
+    // A smaller request keeps what is there.
+    const cap = mir.insts.capacity;
+    try mir.reserve(gpa, 1, 1, 1);
+    try std.testing.expectEqual(cap, mir.insts.capacity);
+}
+
+test deinit {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{ .name = "kept" };
+    _ = try mir.addFloatConst(gpa, 3.5);
+    _ = try mir.addBlock(gpa);
+    mir.deinit(gpa);
+    try std.testing.expectEqualStrings("kept", mir.name);
+    try std.testing.expectEqual(@as(u32, 0), mir.blockCount());
+    try std.testing.expectEqual(@as(usize, 0), mir.defs.len);
+}

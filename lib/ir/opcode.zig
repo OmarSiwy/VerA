@@ -245,3 +245,133 @@ test "fold: an opcode's type, not its operands', decides the kernel's rule" {
 pub fn label(op: Opcode) []const u8 {
     return table.get(op).label orelse @tagName(op);
 }
+
+test "opcode: each row's flags agree with the LRM typing and its fold's shape" {
+    for (std.enums.values(Opcode)) |op| {
+        errdefer std.debug.print("opcode `{s}`\n", .{@tagName(op)});
+        const info = table.get(op);
+        // §4.2.5/§4.2.7/§4.2.8: a 0/1 result is an integer, and only a 0/1
+        // result is a predicate.
+        if (info.bool01) try std.testing.expect(info.int);
+        if (info.predicate) try std.testing.expect(info.bool01);
+        // A relation is exactly a comparison: every predicate but `!`.
+        try std.testing.expectEqual(info.predicate and op != .lognot, info.rel != null);
+        // A label exists to name a domain error.
+        if (info.label != null) try std.testing.expect(info.domain != .all);
+        // The kernel a row folds through takes as many operands as its class.
+        switch (info.fold) {
+            .unary, .identity, .to_real, .to_int => try std.testing.expectEqual(Mir.OpClass.unary, info.class),
+            .binary => try std.testing.expectEqual(Mir.OpClass.binary, info.class),
+            .math => |k| try std.testing.expectEqual(if (k.f.arity() == 1) Mir.OpClass.unary else .binary, info.class),
+            .none => {},
+        }
+        try std.testing.expectEqual(info.class, Mir.opClass(op));
+        try std.testing.expectEqual(info.int, Mir.opIsInteger(op));
+    }
+}
+
+test "fold: hand-derived values for every operator family" {
+    const t = std.testing;
+    const i = struct {
+        fn c(v: i64) Const {
+            return .{ .int = v };
+        }
+    }.c;
+    const f = struct {
+        fn c(v: f64) Const {
+            return .{ .real = v };
+        }
+    }.c;
+    const nan = std.math.nan(f64);
+    const inf = std.math.inf(f64);
+
+    // §3.2 32-bit integers: 2147483647 + 1 = -2^31, and 65536 * 65536 = 2^32 ≡ 0.
+    try t.expectEqual(@as(i64, -2147483648), fold(.iadd, &.{ i(2147483647), i(1) }).?.int);
+    try t.expectEqual(@as(i64, 0), fold(.imul, &.{ i(65536), i(65536) }).?.int);
+    try t.expectEqual(@as(i64, 2147483647), fold(.isub, &.{ i(-2147483648), i(1) }).?.int);
+    // §4.2.4: integer `/` truncates toward zero (-7 / 2 = -3), `%` takes the
+    // dividend's sign (-7 % 2 = -1), and a zero divisor has no value.
+    try t.expectEqual(@as(i64, -3), fold(.idiv, &.{ i(-7), i(2) }).?.int);
+    try t.expectEqual(@as(i64, -1), fold(.imod, &.{ i(-7), i(2) }).?.int);
+    try t.expectEqual(@as(?Const, null), fold(.imod, &.{ i(1), i(0) }));
+    // -2^31 / -1 overflows 32 bits and wraps back to -2^31.
+    try t.expectEqual(@as(i64, -2147483648), fold(.idiv, &.{ i(-2147483648), i(-1) }).?.int);
+    // Real `%`: -7.5 % 2 = -1.5; by zero has no value. Real `/` by zero is
+    // IEEE +inf: the domain table leaves `fdiv` unrestricted.
+    try t.expectEqual(@as(f64, -1.5), fold(.fmod, &.{ f(-7.5), f(2) }).?.real);
+    try t.expectEqual(@as(?Const, null), fold(.fmod, &.{ f(1), f(0) }));
+    try t.expectEqual(inf, fold(.fdiv, &.{ f(1), f(0) }).?.real);
+    try t.expectEqual(@as(f64, -0.5), fold(.fneg, &.{f(0.5)}).?.real);
+    // An integer opcode first rounds a real operand as `fi_cast` does:
+    // 2.5 → 3, so 2.5 + 2 = 5; and 1.4 → 1 < 1.5 → 2.
+    try t.expectEqual(@as(i64, 5), fold(.iadd, &.{ f(2.5), i(2) }).?.int);
+    try t.expectEqual(@as(i64, 1), fold(.ilt, &.{ f(1.4), f(1.5) }).?.int);
+    // §4.2.5/§4.2.7: comparisons are integer 0/1; NaN equals nothing.
+    try t.expectEqual(@as(i64, 1), fold(.flt, &.{ i(1), f(1.5) }).?.int);
+    try t.expectEqual(@as(i64, 0), fold(.feq, &.{ f(nan), f(nan) }).?.int);
+    try t.expectEqual(@as(i64, 1), fold(.fne, &.{ f(nan), f(nan) }).?.int);
+    try t.expectEqual(@as(i64, 1), fold(.ige, &.{ i(3), i(3) }).?.int);
+    // §4.2.8 logical operators over any nonzero operand.
+    try t.expectEqual(@as(i64, 1), fold(.logand, &.{ f(0.5), i(-3) }).?.int);
+    try t.expectEqual(@as(i64, 0), fold(.logor, &.{ f(0), i(0) }).?.int);
+    try t.expectEqual(@as(i64, 1), fold(.lognot, &.{f(0)}).?.int);
+    // §4.2.9 bitwise: 1100 ^ 1010 = 0110, and xnor is its complement.
+    try t.expectEqual(@as(i64, 0b0110), fold(.bitxor, &.{ i(0b1100), i(0b1010) }).?.int);
+    try t.expectEqual(@as(i64, -7), fold(.bitxnor, &.{ i(0b1100), i(0b1010) }).?.int);
+    try t.expectEqual(@as(i64, 0b1000), fold(.bitand, &.{ i(0b1100), i(0b1010) }).?.int);
+    try t.expectEqual(@as(i64, 0b1110), fold(.bitor, &.{ i(0b1100), i(0b1010) }).?.int);
+    // §4.2.11 at 32 bits: 1 << 31 is negative, 1 << 32 is 0, `>>` fills zeros.
+    try t.expectEqual(@as(i64, -2147483648), fold(.shl, &.{ i(1), i(31) }).?.int);
+    try t.expectEqual(@as(i64, 0), fold(.shl, &.{ i(1), i(32) }).?.int);
+    try t.expectEqual(@as(i64, 0x7fff_ffff), fold(.shr, &.{ i(-1), i(1) }).?.int);
+    // §4.3.1 "min(x,y) is equivalent to (x < y) ? x : y": a NaN x yields y,
+    // a NaN y yields the NaN.
+    try t.expectEqual(@as(f64, 1), fold(.fmin, &.{ f(nan), f(1) }).?.real);
+    try t.expect(std.math.isNan(fold(.fmin, &.{ f(1), f(nan) }).?.real));
+    try t.expectEqual(@as(f64, 1), fold(.fmax, &.{ f(nan), f(1) }).?.real);
+    // Integer forms stay integer; |-2^31| wraps to -2^31 at 32 bits.
+    try t.expectEqual(@as(i64, -2147483648), fold(.iabs, &.{i(-2147483648)}).?.int);
+    try t.expectEqual(@as(i64, -3), fold(.imin, &.{ i(-3), i(2) }).?.int);
+    try t.expectEqual(@as(i64, 2), fold(.imax, &.{ i(-3), i(2) }).?.int);
+    // §4.2.1.3 integer `**`: 2 ** 10 = 1024, and 0 ** -1 has no value.
+    try t.expectEqual(@as(i64, 1024), fold(.ipow, &.{ i(2), i(10) }).?.int);
+    try t.expectEqual(@as(?Const, null), fold(.ipow, &.{ i(0), i(-1) }));
+    // §4.3.1 math is real even over integers: sqrt(4) = 2.0 (IEEE sqrt is
+    // exact here), hypot(3, 4) = 5, and Table 4-14's `log` is decimal.
+    try t.expectEqual(@as(f64, 2), fold(.sqrt, &.{i(4)}).?.real);
+    try t.expectApproxEqAbs(@as(f64, 5), fold(.hypot, &.{ i(3), i(4) }).?.real, 1e-15);
+    try t.expectApproxEqAbs(@as(f64, 3), fold(.log10, &.{f(1000)}).?.real, 1e-15);
+    // §4.2.1.1: ties away from zero, saturating, NaN → 0 (`lossyCast`).
+    try t.expectEqual(@as(i64, 3), fold(.fi_cast, &.{f(2.5)}).?.int);
+    try t.expectEqual(@as(i64, -3), fold(.fi_cast, &.{f(-2.5)}).?.int);
+    try t.expectEqual(@as(i64, 0), fold(.fi_cast, &.{f(nan)}).?.int);
+    try t.expectEqual(@as(i64, std.math.maxInt(i64)), fold(.fi_cast, &.{f(inf)}).?.int);
+    try t.expectEqual(@as(f64, 7), fold(.if_cast, &.{i(7)}).?.real);
+    // `opt_barrier` and `dstop` are the operand's value.
+    try t.expectEqual(@as(f64, 0.25), fold(.opt_barrier, &.{f(0.25)}).?.real);
+    try t.expectEqual(@as(i64, 4), fold(.dstop, &.{i(4)}).?.int);
+    // Not values of their operands: latches, select, arrays, phis, calls.
+    for ([_]Opcode{ .path_prev, .path_acc, .select, .anew, .fload, .iload, .store, .phi, .call }) |op|
+        try t.expectEqual(@as(?Const, null), fold(op, &.{ f(1), f(1), f(1) }));
+}
+
+test "fold: a string is not an operand of any opcode" {
+    // §4.2.1.1/§4.2.1.2 convert between integer and real only; lowering
+    // converts a §2.7 string before it reaches an opcode, so a string here
+    // has no value to fold to.
+    const s: Const = .{ .str = "abc" };
+    const one: Const = .{ .real = 1 };
+    try std.testing.expectEqual(@as(?Const, null), fold(.fi_cast, &.{s}));
+    try std.testing.expectEqual(@as(?Const, null), fold(.if_cast, &.{s}));
+    try std.testing.expectEqual(@as(?Const, null), fold(.fadd, &.{ s, one }));
+    try std.testing.expectEqual(@as(?Const, null), fold(.ieq, &.{ one, s }));
+    try std.testing.expectEqual(@as(?Const, null), fold(.exp, &.{s}));
+    try std.testing.expectEqual(@as(?Const, null), fold(.lognot, &.{s}));
+}
+
+test label {
+    // Table 4-14's `log` is the decimal logarithm, MIR's `log10`.
+    try std.testing.expectEqualStrings("log()", label(.log10));
+    try std.testing.expectEqualStrings("sqrt()", label(.sqrt));
+    try std.testing.expectEqualStrings("fadd", label(.fadd));
+}
