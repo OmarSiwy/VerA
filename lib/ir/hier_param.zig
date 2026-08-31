@@ -75,10 +75,13 @@ pub const Kind = enum {
         };
     }
 
+    /// Returns the expression for an instance's value given its parent's
+    /// (Table 9-29's composition: a sum, a product, or a sum modulo 360).
     /// `parent` and `value` already refer to the flat namespace. `.none`
     /// means the table's top-level identity. Force real arithmetic: even an
     /// integer spelling of a coordinate or angle is a real-valued system
     /// parameter, so a fractional angle never passes through integer `%`.
+    /// The new nodes are appended to `file.exprs` from `arena`.
     pub fn compose(self: Kind, file: *Ast.SourceFile, arena: std.mem.Allocator, parent: Ast.ExprId, value: Ast.ExprId, tok: u32) std.mem.Allocator.Error!Ast.ExprId {
         const x = &file.exprs;
         const real_value = if (constfold.fold(file, value, constfold.literal_env)) |v|
@@ -114,4 +117,68 @@ fn binary(file: *Ast.SourceFile, arena: std.mem.Allocator, op: Ast.BinaryOp, lhs
         .rhs = rhs,
         .extra = @backingInt(op),
     });
+}
+
+test "Kind: spellings round-trip, and nothing else names a kind" {
+    for (Kind.all) |k| try std.testing.expectEqual(@as(?Kind, k), Kind.fromName(k.name()));
+    try std.testing.expectEqual(@as(usize, 6), Kind.all.len); // §6.3.6: "six system parameters"
+    for ([_][]const u8{ "", "$", "angle", "$Angle", "$mfactor2", "$$angle", "mfactor" }) |s|
+        try std.testing.expectEqual(@as(?Kind, null), Kind.fromName(s));
+}
+
+test "Kind: Table 9-29's top-level values and allowed values" {
+    const t = std.testing;
+    try t.expectEqual(@as(f64, 0), Kind.angle.initial());
+    try t.expectEqual(@as(f64, 1), Kind.hflip.initial());
+    try t.expectEqual(@as(f64, 1), Kind.vflip.initial());
+    try t.expectEqual(@as(f64, 1), Kind.mfactor.initial());
+    try t.expectEqual(@as(f64, 0), Kind.xposition.initial());
+    try t.expectEqual(@as(f64, 0), Kind.yposition.initial());
+    // Every top-level value is itself allowed.
+    for (Kind.all) |k| try t.expect(k.allows(k.initial()));
+    // "0 <= $angle < 360": both edges.
+    try t.expect(Kind.angle.allows(0) and Kind.angle.allows(359.5));
+    try t.expect(!Kind.angle.allows(360) and !Kind.angle.allows(-0.5));
+    // "$hflip = +1 or -1".
+    try t.expect(Kind.hflip.allows(-1) and !Kind.hflip.allows(0) and !Kind.vflip.allows(0.5));
+    // "$mfactor > 0".
+    try t.expect(Kind.mfactor.allows(1e-300) and !Kind.mfactor.allows(0) and !Kind.mfactor.allows(-2));
+    // A NaN is in no stated range.
+    try t.expect(!Kind.angle.allows(std.math.nan(f64)) and !Kind.mfactor.allows(std.math.nan(f64)));
+    // "Any" for the coordinates.
+    try t.expect(Kind.xposition.allows(-1e30) and !Kind.xposition.constrained());
+    for ([_]Kind{ .angle, .hflip, .vflip, .mfactor }) |k| try t.expect(k.constrained());
+}
+
+test "Kind.compose: Table 9-29's resolved value, as an expression" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const x = &file.exprs;
+    const t = std.testing;
+    const three = try x.addInt(a, 0, 3);
+    // At the top of the hierarchy the value is the specified one, as a real.
+    const top = try Kind.mfactor.compose(&file, a, .none, three, 0);
+    try t.expectEqual(Ast.ExprTag.real_literal, x.tag(top));
+    try t.expectEqual(@as(f64, 3), x.realValue(top));
+    // Below it: specified * hier for the products.
+    const parent = try x.add(a, .{ .tag = .ident, .str = try file.intern(a, "p") });
+    const m = try Kind.mfactor.compose(&file, a, parent, three, 0);
+    try t.expectEqual(Ast.BinaryOp.mul, x.binOp(m));
+    try t.expectEqual(parent, x.lhs(m));
+    try t.expectEqual(@as(f64, 3), x.realValue(x.rhs(m)));
+    // specified + hier, modulo 360 degrees, for $angle.
+    const ang = try Kind.angle.compose(&file, a, parent, three, 0);
+    try t.expectEqual(Ast.BinaryOp.mod, x.binOp(ang));
+    try t.expectEqual(@as(f64, 360), x.realValue(x.rhs(ang)));
+    try t.expectEqual(Ast.BinaryOp.add, x.binOp(x.lhs(ang)));
+    try t.expectEqual(parent, x.lhs(x.lhs(ang)));
+    // A value that does not fold is made real by adding 0.0, so integer `%`
+    // can never see a fractional angle.
+    const w = try x.add(a, .{ .tag = .ident, .str = try file.intern(a, "w") });
+    const xp = try Kind.xposition.compose(&file, a, .none, w, 0);
+    try t.expectEqual(Ast.BinaryOp.add, x.binOp(xp));
+    try t.expectEqual(w, x.lhs(xp));
+    try t.expectEqual(@as(f64, 0), x.realValue(x.rhs(xp)));
 }

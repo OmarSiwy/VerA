@@ -223,10 +223,12 @@ pub const Callee = enum(u8) {
         return by_name.get(name) orelse .systf;
     }
 
-    /// A spelling lowering mints for its own rewrites (`$held_int` to the end
-    /// of the `$rng$` family), never a §2.8.3 source name: a source call
-    /// that spells one is refused (E1014), since its facts assume lowering's
-    /// arguments.
+    /// A spelling lowering mints for its own rewrites (`$held_int` through
+    /// `$systf$out`, in declaration order), never a §2.8.3 source name: a
+    /// source call that spells one is refused (E1014), since its facts assume
+    /// lowering's arguments. The synthetic spellings before `$held_int`
+    /// (`idt$hold`, `op$static`, `absdelay$quad`) are not `$` names, so no
+    /// system call can spell them.
     pub fn synthetic(c: Callee) bool {
         return @backingInt(c) >= @backingInt(Callee.@"$held_int") and c != .systf;
     }
@@ -258,7 +260,9 @@ pub const Arity = struct {
     }
     /// Returns whether a call with `n` arguments is in range.
     pub fn admits(a: Arity, n: usize) bool {
-        return n >= a.min and n <= a.max;
+        // `max` at its type's ceiling is "no upper bound" (`unchecked`, an
+        // open display list), not a count of 255 arguments.
+        return n >= a.min and (a.max == std.math.maxInt(u8) or n <= a.max);
     }
 };
 
@@ -647,4 +651,77 @@ test "opKind: every stateful spelling maps to a kind, and the pure ones do not" 
     // §4.5.13/§4.5.14 are pure and must NOT acquire a unit.
     for ([_][]const u8{ "limexp", "ddx", "V", "" }) |n|
         try std.testing.expectEqual(op.OpKind.none, opKind(Callee.fromName(n)));
+}
+
+test "Callee.synthetic: lowering's own `$` spellings, never an LRM name" {
+    // E1014's text names these as VerA's own.
+    for ([_]Callee{ .@"$held_real", .@"$idx", .@"$limit$old", .@"$str$cat", .@"$rng$auto", .@"$rng$erlang_next", .@"$systf$out" }) |c|
+        try std.testing.expect(c.synthetic());
+    // LRM spellings, some with an inner `$`, are not reserved; nor is the
+    // catch-all, which is any name the user may register.
+    for ([_]Callee{ .@"$simparam$str", .@"$test$plusargs", .@"$value$plusargs", .@"$limit", .@"$table_model", .@"$bound_step", .@"$display", .@"$vera_reject_step", .systf }) |c|
+        try std.testing.expect(!c.synthetic());
+    // E1014 is reported for a system call, so every reserved spelling must
+    // be a `$` name or the refusal could never fire.
+    for (std.enums.values(Callee)) |c| if (c.synthetic()) try std.testing.expectEqual('$', @tagName(c)[0]);
+}
+
+test "callee: the task families agree with the descriptor, format and operator facts" {
+    for (std.enums.values(Callee)) |c| {
+        errdefer std.debug.print("callee `{s}`\n", .{@tagName(c)});
+        const info = table.get(c);
+        // §9.5.1/§9.5.2: only a file call has a descriptor argument.
+        if (info.fd != null) try std.testing.expect(isFileCall(c));
+        // §9.4.3 formats the display tasks; §9.5.2 makes the file output
+        // tasks "the same as their counterparts".
+        try std.testing.expectEqual(info.family == .display or info.family == .file_out, takesFormat(c));
+        // A §4.5 operator, §5.10.3 event or §9.17 task is a real-valued call
+        // outside every task family.
+        if (opKind(c) != .none) {
+            try std.testing.expectEqual(Ty.real, ty(c));
+            try std.testing.expectEqual(Family.none, family(c));
+        }
+        try std.testing.expect(info.args.min <= info.args.max);
+        try std.testing.expectEqual(info.args, arity(c));
+        try std.testing.expectEqual(info.fd, fdArg(c));
+    }
+}
+
+test "Arity.admits: the clause's counts, and no cap on an open list" {
+    // Syntax 9-2: `$fopen(filename [, type])`.
+    try std.testing.expect(!arity(.@"$fopen").admits(0));
+    try std.testing.expect(arity(.@"$fopen").admits(1) and arity(.@"$fopen").admits(2));
+    try std.testing.expect(!arity(.@"$fopen").admits(3));
+    // §9.5.7 `$fseek(fd, offset, operation)`.
+    try std.testing.expect(arity(.@"$fseek").admits(3) and !arity(.@"$fseek").admits(2));
+    // Syntax 9-5 `$finish [ ( n ) ]`.
+    try std.testing.expect(arity(.@"$finish").admits(0) and arity(.@"$finish").admits(1));
+    try std.testing.expect(!arity(.@"$finish").admits(2));
+    // A display or file output task takes any number of arguments (IEEE 1364
+    // §17.1 bounds none), and neither does an unlisted user system function:
+    // the u8 maximum is the "no upper bound" sentinel, not a count of 255.
+    for ([_]Callee{ .@"$display", .@"$strobe", .@"$fdisplay", .@"$fwrite", .systf }) |c| {
+        try std.testing.expect(arity(c).admits(255));
+        try std.testing.expect(arity(c).admits(256));
+        try std.testing.expect(arity(c).admits(100_000));
+    }
+    try std.testing.expect(!arity(.@"$fdisplay").admits(0)); // the descriptor is required
+}
+
+test "callee: spot facts the clauses state" {
+    // §9.5.4.1 `$fgets(str, fd)`: the descriptor is the second argument.
+    try std.testing.expectEqual(@as(?u3, 1), fdArg(.@"$fgets"));
+    try std.testing.expectEqual(@as(?u3, 0), fdArg(.@"$fscanf"));
+    try std.testing.expectEqual(@as(?u3, null), fdArg(.@"$fopen"));
+    // §9.11 Table 9-8: `$realtobits` is an integer pattern, `$bitstoreal` a real.
+    try std.testing.expectEqual(Ty.int, ty(.@"$realtobits"));
+    try std.testing.expectEqual(Ty.real, ty(.@"$bitstoreal"));
+    try std.testing.expectEqual(Ty.str, ty(.@"$sformat"));
+    // §9.7.1/§9.7.2 act on the run; `$monitoron` toggles a mode, prints nothing.
+    try std.testing.expectEqual(Family.simctl, family(.@"$finish"));
+    try std.testing.expectEqual(Family.none, family(.@"$monitoron"));
+    try std.testing.expect(!takesFormat(.@"$fopen") and isFileCall(.@"$fopen"));
+    try std.testing.expect(!isFileCall(.@"$display"));
+    // `absdelay$quad` is the same §4.5.7 operator, so it shares the unit kind.
+    try std.testing.expectEqual(op.OpKind.absdelay, opKind(.@"absdelay$quad"));
 }

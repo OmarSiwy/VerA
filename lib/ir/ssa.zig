@@ -24,7 +24,7 @@ const list_end: u32 = std.math.maxInt(u32);
 /// Not `Mir.Value.undef`, which is a legitimate stored result (a phi over only
 /// self-references collapses to it); confusing the two would re-run the
 /// recursive read and re-create the collapsed phi. Cells hold
-/// `@intFromEnum(value) + 1` so a zeroed chunk already reads as empty.
+/// `@backingInt(value) + 1` so a zeroed chunk already reads as empty.
 /// `writeVariable` asserts no overflow.
 const absent: u32 = 0;
 
@@ -62,12 +62,16 @@ const map_gpa = std.heap.page_allocator;
 /// (`Mir.addBlock`); the builder records edges, writes and reads, and emits
 /// phis into the Mir as reads require.
 pub const SsaBuilder = struct {
+    /// Allocates the phi rows the builder emits into `mir`; never the
+    /// builder's own tables (`map_gpa`).
     gpa: std.mem.Allocator,
+    /// The Mir the builder reads blocks from and emits phis into. Borrowed:
+    /// it must outlive the builder.
     mir: *Mir,
     /// (place, slot) → Value as a two-level place-major table: `dir[place *
     /// dir_stride + slot >> chunk_bits]` names a `chunk_len`-cell chunk of
     /// `cells`, and the cell is `slot`'s low bits within it. A cell holds
-    /// `absent` (= 0) where unwritten and `@intFromEnum(value) + 1` where
+    /// `absent` (= 0) where unwritten and `@backingInt(value) + 1` where
     /// written. Chunk 0 is all `absent` and never written: every directory
     /// entry starts on it, so a read needs no presence test.
     ///
@@ -207,7 +211,8 @@ pub const SsaBuilder = struct {
     }
 
     /// Marks a block's predecessors final and fills every incomplete phi.
-    /// Idempotent. Asserts that `block` exists.
+    /// Idempotent. Filling reads predecessors, which may emit phis into the
+    /// Mir and so invalidate its `InstIterator`s. Asserts that `block` exists.
     pub fn sealBlock(self: *SsaBuilder, block: Mir.Block) Error!void {
         const b = try self.ensureState(block);
         if (self.block_state.items(.sealed)[b]) return;
@@ -227,7 +232,9 @@ pub const SsaBuilder = struct {
 
     // ------------------------------------------------------- read / write --
 
-    /// Records the §5.7 assignment `place := value` in `block`.
+    /// Records the §5.7 assignment `place := value` in `block`; a later write
+    /// to the same pair overwrites it. Asserts that `block` exists and that
+    /// `value` is not one of the two highest Value indices (see `pending`).
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@backingInt(value) < std.math.maxInt(u32) - 1);
@@ -254,7 +261,10 @@ pub const SsaBuilder = struct {
 
     /// Returns the value of `place` in `block`, emitting phis as needed. A place
     /// undefined on some path yields `.undef` there; initializing declared
-    /// variables (§3.4.4) is the caller's job.
+    /// variables (§3.4.4) is the caller's job. The result may be a phi that a
+    /// later `sealBlock` collapses: pass it through `Mir.resolveAlias` before
+    /// comparing it. A minted phi invalidates the Mir's `InstIterator`s.
+    /// Asserts that `block` exists.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         _ = try self.ensureState(block);
         return self.readFrom(place, block);
@@ -769,4 +779,271 @@ test "ssa: an arm block's cells live in arm_cells and the climb finds them" {
     try std.testing.expectEqual(Mir.Value.f_inf, try b.readVariable(x, inner));
     try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(y, inner));
     try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
+}
+
+test "ssa: every read agrees with a concrete run of a random structured program" {
+    // Oracle: the generated program is also executed directly, each place
+    // holding the constant last written to it, while the SSA side keeps one
+    // value per phi, set on entry to its block from the pair of the edge
+    // taken (a parallel copy). Every read's Value, through `resolveAlias`,
+    // must evaluate to the place's concrete value at that point, on several
+    // random paths. `verify` then checks the MIR the builder left behind.
+    // Shapes are the ones lowering builds: §5.8 if/else with a join, §5.9
+    // loops whose header is sealed only after the back edge.
+    const gpa = std.testing.allocator;
+    const Ast = @import("frontend").Ast;
+    const Lowered = @import("lower.zig").Lowered;
+    const verify = @import("verify.zig");
+    var prng = std.Random.DefaultPrng.init(0x55a_b4a1);
+    const r = prng.random();
+
+    const Kind = enum { write, read, cond, loop };
+    const Stmt = struct {
+        kind: Kind,
+        place: u32 = 0,
+        /// write: the constant; read: the builder's answer.
+        value: Mir.Value = .undef,
+        /// cond: the then and else sequences; loop: the body in `seq_a`.
+        seq_a: u32 = 0,
+        seq_b: u32 = 0,
+        /// cond: then, else, join; loop: header, body, exit.
+        blk: [3]Mir.Block = @splat(.entry),
+    };
+    const Gen = struct {
+        gpa: std.mem.Allocator,
+        r: std.Random,
+        mir: *Mir,
+        b: *SsaBuilder,
+        places: []const Place,
+        stmts: std.ArrayList(Stmt) = .empty,
+        seqs: std.ArrayList(std.ArrayList(u32)) = .empty,
+        cur: Mir.Block = .entry,
+        next_const: f64 = 1000.5,
+
+        fn deinit(g: *@This()) void {
+            for (g.seqs.items) |*s| s.deinit(g.gpa);
+            g.seqs.deinit(g.gpa);
+            g.stmts.deinit(g.gpa);
+        }
+
+        // Mutually recursive with `stmt`, so the error set is spelled out.
+        fn seq(g: *@This(), depth: u32) anyerror!u32 {
+            const si: u32 = @intCast(g.seqs.items.len);
+            try g.seqs.append(g.gpa, .empty);
+            for (0..g.r.uintLessThan(u32, 5)) |_| {
+                const st = try g.stmt(depth);
+                // Indexed again: `stmt` may have grown `seqs`.
+                try g.seqs.items[si].append(g.gpa, st);
+            }
+            return si;
+        }
+
+        fn stmt(g: *@This(), depth: u32) anyerror!u32 {
+            const kind: Kind = if (depth >= 3) (if (g.r.boolean()) .write else .read) else g.r.enumValue(Kind);
+            var s: Stmt = .{ .kind = kind, .place = g.r.uintLessThan(u32, @intCast(g.places.len)) };
+            switch (kind) {
+                .write => {
+                    s.value = try g.mir.addFloatConst(g.gpa, g.next_const);
+                    g.next_const += 1;
+                    try g.b.writeVariable(g.places[s.place], g.cur, s.value);
+                },
+                .read => s.value = try g.b.readVariable(g.places[s.place], g.cur),
+                .cond => {
+                    const x = g.cur;
+                    const t = try g.mir.addBlock(g.gpa);
+                    const e = try g.mir.addBlock(g.gpa);
+                    const j = try g.mir.addBlock(g.gpa);
+                    _ = try g.mir.emitBranch(g.gpa, x, .one, t, e);
+                    try g.b.addPredecessor(t, x);
+                    try g.b.addPredecessor(e, x);
+                    try g.b.sealBlock(t);
+                    try g.b.sealBlock(e);
+                    g.cur = t;
+                    s.seq_a = try g.seq(depth + 1);
+                    const t_end = g.cur;
+                    _ = try g.mir.emitJump(g.gpa, t_end, j);
+                    g.cur = e;
+                    s.seq_b = try g.seq(depth + 1);
+                    const e_end = g.cur;
+                    _ = try g.mir.emitJump(g.gpa, e_end, j);
+                    try g.b.addPredecessor(j, t_end);
+                    try g.b.addPredecessor(j, e_end);
+                    try g.b.sealBlock(j);
+                    g.cur = j;
+                    s.blk = .{ t, e, j };
+                },
+                .loop => {
+                    const x = g.cur;
+                    const h = try g.mir.addBlock(g.gpa);
+                    const body = try g.mir.addBlock(g.gpa);
+                    const exit = try g.mir.addBlock(g.gpa);
+                    _ = try g.mir.emitJump(g.gpa, x, h);
+                    try g.b.addPredecessor(h, x);
+                    _ = try g.mir.emitBranch(g.gpa, h, .one, body, exit);
+                    try g.b.addPredecessor(body, h);
+                    try g.b.sealBlock(body);
+                    g.cur = body;
+                    s.seq_a = try g.seq(depth + 1);
+                    const b_end = g.cur;
+                    _ = try g.mir.emitJump(g.gpa, b_end, h);
+                    try g.b.addPredecessor(h, b_end);
+                    try g.b.sealBlock(h);
+                    try g.b.addPredecessor(exit, h);
+                    try g.b.sealBlock(exit);
+                    g.cur = exit;
+                    s.blk = .{ h, body, exit };
+                },
+            }
+            const si: u32 = @intCast(g.stmts.items.len);
+            try g.stmts.append(g.gpa, s);
+            return si;
+        }
+    };
+    const Run = struct {
+        mir: *Mir,
+        g: *const Gen,
+        r: std.Random,
+        /// Per place: the constant last written, `.undef` before any.
+        conc: []Mir.Value,
+        /// Per Value: a phi's value on the last entry to its block.
+        phi_val: []Mir.Value,
+        cur: Mir.Block = .entry,
+
+        fn eval(run: *@This(), v: Mir.Value) Mir.Value {
+            const x = run.mir.resolveAlias(v);
+            return if (run.mir.valueKind(x) == .inst_result) run.phi_val[@backingInt(x)] else x;
+        }
+
+        fn enter(run: *@This(), to: Mir.Block) anyerror!void {
+            var buf: [32]struct { Mir.Value, Mir.Value } = undefined;
+            var n: usize = 0;
+            var it = run.mir.blockInsts(to);
+            while (it.next()) |inst| {
+                if (run.mir.instOp(inst) != .phi) continue;
+                const res = run.mir.instResult(inst);
+                if (run.mir.resolveAlias(res) != res) continue; // collapsed
+                const d = run.mir.instData(inst).phi;
+                const incoming = for (0..d.count) |k| {
+                    const p = run.mir.phiPair(inst, @intCast(k));
+                    if (p.block == run.cur) break p.value;
+                } else return error.TestLivePhiMissesTheEdgeTaken;
+                try std.testing.expect(n < buf.len);
+                buf[n] = .{ res, run.eval(incoming) };
+                n += 1;
+            }
+            for (buf[0..n]) |e| run.phi_val[@backingInt(e[0])] = e[1];
+            run.cur = to;
+        }
+
+        fn exec(run: *@This(), si: u32) anyerror!void {
+            for (run.g.seqs.items[si].items) |sti| {
+                const s = run.g.stmts.items[sti];
+                switch (s.kind) {
+                    .write => run.conc[s.place] = s.value,
+                    .read => try std.testing.expectEqual(run.conc[s.place], run.eval(s.value)),
+                    .cond => {
+                        const then = run.r.boolean();
+                        try run.enter(if (then) s.blk[0] else s.blk[1]);
+                        try run.exec(if (then) s.seq_a else s.seq_b);
+                        try run.enter(s.blk[2]);
+                    },
+                    .loop => {
+                        try run.enter(s.blk[0]);
+                        for (0..run.r.uintLessThan(u32, 3)) |_| {
+                            try run.enter(s.blk[1]);
+                            try run.exec(s.seq_a);
+                            try run.enter(s.blk[0]);
+                        }
+                        try run.enter(s.blk[2]);
+                    },
+                }
+            }
+        }
+    };
+
+    for (0..300) |round| {
+        errdefer std.debug.print("ssa model: round {d}\n", .{round});
+        var mir: Mir = .{};
+        defer mir.deinit(gpa);
+        var b = SsaBuilder.init(gpa, &mir);
+        defer b.deinit();
+        const entry = try mir.addBlock(gpa);
+        try b.sealBlock(entry);
+        var places: [4]Place = undefined;
+        for (&places) |*p| p.* = b.newPlace();
+        var g: Gen = .{ .gpa = gpa, .r = r, .mir = &mir, .b = &b, .places = &places };
+        defer g.deinit();
+        const top = try g.seq(0);
+
+        const conc = try gpa.alloc(Mir.Value, places.len);
+        defer gpa.free(conc);
+        const phi_val = try gpa.alloc(Mir.Value, mir.defs.len + Mir.Value.first_dynamic);
+        defer gpa.free(phi_val);
+        for (0..3) |_| {
+            @memset(conc, .undef);
+            @memset(phi_val, .undef);
+            var run: Run = .{ .mir = &mir, .g = &g, .r = r, .conc = conc, .phi_val = phi_val };
+            try run.exec(top);
+        }
+
+        var file: Ast.SourceFile = .empty;
+        const lw: Lowered = .{ .file = &file };
+        if (try verify.verify(&mir, &lw)) |v| {
+            std.debug.print("verify: `{s}`: {s}\n", .{ @tagName(v.invariant), v.what });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "ssa: a sealed block with no predecessor reads undef, and sealing twice is a no-op" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    var b = SsaBuilder.init(gpa, &mir);
+    defer b.deinit();
+    const entry = try mir.addBlock(gpa);
+    const orphan = try mir.addBlock(gpa);
+    try b.sealBlock(entry);
+    try b.sealBlock(entry);
+    try b.sealBlock(orphan);
+    const x = b.newPlace();
+    try b.writeVariable(x, entry, .f_two);
+    // `orphan` is unreachable and has no edge from `entry`: nothing defines x.
+    try std.testing.expectEqual(Mir.Value.undef, try b.readVariable(x, orphan));
+    try std.testing.expectEqual(Mir.Value.f_two, try b.readVariable(x, entry));
+    // No phi row was needed for either read.
+    try std.testing.expectEqual(@as(usize, 0), mir.insts.len);
+}
+
+test "ssa: a long single-predecessor chain is climbed without memo cells" {
+    // `readFrom` climbs sealed single-predecessor blocks in a loop: a chain
+    // of 10,000 costs no stack and writes no cell on the way.
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(gpa);
+    var b = SsaBuilder.init(gpa, &mir);
+    defer b.deinit();
+    const entry = try mir.addBlock(gpa);
+    try b.sealBlock(entry);
+    const x = b.newPlace();
+    try b.writeVariable(x, entry, .f_ten);
+    const cells_before = b.cells.items.len;
+    var last = entry;
+    for (0..10_000) |_| {
+        const next = try mir.addBlock(gpa);
+        try b.addPredecessor(next, last);
+        try b.sealBlock(next);
+        last = next;
+    }
+    try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(x, last));
+    try std.testing.expectEqual(cells_before, b.cells.items.len);
+    try std.testing.expectEqual(@as(usize, 0), b.arm_cells.items.len);
+}
+
+test "SsaBuilder.newPlace: places are dense from 0" {
+    var mir: Mir = .{};
+    defer mir.deinit(std.testing.allocator);
+    var b = SsaBuilder.init(std.testing.allocator, &mir);
+    defer b.deinit();
+    for (0..3) |i| try std.testing.expectEqual(@as(u32, @intCast(i)), @backingInt(b.newPlace()));
 }
