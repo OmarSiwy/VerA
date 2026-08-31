@@ -542,6 +542,14 @@ pub fn validate(comptime D: type) void {
     // Breakpoint scheduling for piecewise sources.
     if (@hasDecl(D, "nextBreakpoint"))
         expectFn(D, "nextBreakpoint", fn (*const D.Model, f64) ?f64);
+    // §4.5.7 transport delays (absdelay sites), model-frame like
+    // nextBreakpoint: the host echoes wavefront breakpoints from these.
+    if (@hasDecl(D, "delays")) {
+        const R = @typeInfo(@TypeOf(D.delays)).@"fn".return_type.?;
+        if (@typeInfo(R) != .array or @typeInfo(R).array.child != f64)
+            @compileError(@typeName(D) ++ ".delays: must return [n]f64");
+        expectFn(D, "delays", fn (*const D.Model) R);
+    }
 
     // Pub-decl allowlist: only contract-recognized names may be pub.
     rejectStrayPubDecls(D);
@@ -655,6 +663,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "precompute", {} },
     .{ "constant", {} },
     .{ "nextBreakpoint", {} },
+    .{ "delays", {} },
 });
 
 fn rejectStrayPubDecls(comptime D: type) void {
@@ -1036,6 +1045,9 @@ const MockAll = struct {
     pub fn precompute(_: *Instance, _: *const Model) void {}
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {
         return null;
+    }
+    pub fn delays(_: *const Model) [1]f64 {
+        return .{1e-9};
     }
     /// The shape tb.zig's generated runner actually calls — `D.display(Dual,
     /// xd, model, inst, t)` — and codegen emits: `pub fn display(comptime S:
