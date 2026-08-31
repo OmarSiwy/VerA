@@ -1632,7 +1632,7 @@ pub const Gen = struct {
         // the same insert-tolerance reason: a model that gains a `$limit`
         // appends core fields, it renumbers none.
         for (self.limits) |lc| {
-            for (lc.argv) |v| {
+            for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
                 if (v == .f_zero) continue;
                 try jobs.append(self.arena, .{
                     // Only the §9.4 display job is emitted as a declaration of
@@ -7618,6 +7618,47 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     // at or above 3.5 V would answer max(0.4, 2) = 2".
     try std.testing.expectEqual(@as(f64, 14.0), k.zLimvds(100.0, 4.0));
     try std.testing.expectEqual(@as(f64, 2.0), k.zLimvds(1.0, 4.0));
+}
+
+test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
+    // The frame-sign extension: `$limit(V(a,b), "pnjlim", vt, vc, type)`.
+    // devsup.c limiters assume forward = positive; a PNP passes type = -1 and
+    // the emitted clamp must (1) run the kernel on sg·v, (2) hand back
+    // sg·result, (3) seed the junction at sign·vcrit. The unsigned spelling
+    // must stay byte-identical to what it was — no sg indirection.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module lim(p);
+        \\  inout p; electrical p; electrical mid;
+        \\  parameter real vt = 0.025852;
+        \\  parameter real vc = 0.6;
+        \\  parameter real type = -1.0;
+        \\  analog I(mid, p) <+ ($limit(V(mid), "pnjlim", vt, vc, type) - V(p)) / 1.0;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "const sg: f64 = if (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "sg * zPnjlim(sg * vn, sg * vo") != null);
+    // Seed picks the branch by the sign's runtime value.
+    try std.testing.expect(std.mem.indexOf(u8, s, "s[@intFromEnum(U.mid)] = if (") != null);
+    // Convergence verdict unchanged: pnjlim still reports through `ok`.
+    try std.testing.expect(std.mem.indexOf(u8, s, "if (vl != vn) ok = false;") != null);
+
+    // Unsigned control: no sg anywhere.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module lim(p);
+        \\  inout p; electrical p; electrical mid;
+        \\  parameter real vt = 0.025852;
+        \\  parameter real vc = 0.6;
+        \\  analog I(mid, p) <+ ($limit(V(mid), "pnjlim", vt, vc) - V(p)) / 1.0;
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const s2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "sg") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "zPnjlim(vn, vo") != null);
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {

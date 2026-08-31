@@ -69,6 +69,16 @@ pub const LimitCall = struct {
     /// The algorithm's numeric arguments as MIR values. `collect` queues these
     /// as core jobs, so by emission time each has an `lo_idx` field.
     argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
+    /// Optional trailing argument: the FRAME SIGN. All three devsup.c
+    /// limiters assume forward = positive; a PNP/PMOS model whose junction is
+    /// forward at NEGATIVE probe voltage passes its `type` parameter here and
+    /// the clamp runs on `sign·v` — exactly ngspice's habit of limiting
+    /// `type*vbe` in the load routine. `.f_zero` = unsigned (+1).
+    ///
+    /// This exists because the alternative spellings do not survive lowering:
+    /// `$limit` under `if (type > 0)` is declined (no CFG in the clamp list),
+    /// and `$limit(type*V(a,b), …)` has no node pair to correct.
+    sign: Mir.Value = .f_zero,
 };
 
 // ----------------------------------------------------------------- collect
@@ -117,6 +127,12 @@ pub fn collect(g: *Gen) Error!void {
                 // sayable, rather than emit code that does not build.
                 if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
                 lc.argv[k] = v;
+            }
+            // One argument past the algorithm's arity is the frame sign.
+            if (d.args.len > 2 + n) {
+                const v = g.an.rv(d.args[2 + n]);
+                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
+                lc.sign = v;
             }
             if (bad) {
                 try decline(g, &declined, d.args, "an algorithm argument is not real-valued");
@@ -203,6 +219,7 @@ fn writable(g: *const Gen, u: u32) bool {
 /// arguments, so a model using only that needs neither `core` nor `R`.
 pub fn usesCore(g: *const Gen) bool {
     for (g.limits) |lc| {
+        if (lc.sign != .f_zero) return true;
         for (lc.argv[0..lc.alg.arity()]) |v| {
             if (v != .f_zero) return true;
         }
@@ -254,16 +271,32 @@ pub fn emit(g: *Gen) Error!void {
 }
 
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
-    try g.w("    {{ // $limit(V({s},{s}), \"{t}\")\n", .{ uName(g, lc.hi), uName(g, lc.lo), lc.alg });
+    const signed = lc.sign != .f_zero;
+    try g.w("    {{ // $limit(V({s},{s}), \"{t}\"){s}\n", .{
+        uName(g, lc.hi), uName(g, lc.lo), lc.alg,
+        if (signed) " in the frame of its sign argument" else "",
+    });
+    if (signed) {
+        // ±1 recovered from the model value: the limiters assume forward =
+        // positive, so the clamp runs on sg·v and hands back sg·result.
+        try g.w("        const sg: f64 = if (", .{});
+        try writeArg(g, lc.sign);
+        try g.w(" < 0.0) -1.0 else 1.0;\n", .{});
+    }
     try g.w("        const vn = ", .{});
     try writeProbe(g, lc, "x");
     try g.w(";\n        const vo = ", .{});
     try writeProbe(g, lc, "old");
-    try g.w(";\n        const vl = z{s}(vn, vo", .{switch (lc.alg) {
-        .pnjlim => "Pnjlim",
-        .fetlim => "Fetlim",
-        .limvds => "Limvds",
-    }});
+    try g.w(";\n        const vl = {s}z{s}({s}vn, {s}vo", .{
+        if (signed) "sg * " else "",
+        switch (lc.alg) {
+            .pnjlim => @as([]const u8, "Pnjlim"),
+            .fetlim => "Fetlim",
+            .limvds => "Limvds",
+        },
+        if (signed) "sg * " else "",
+        if (signed) "sg * " else "",
+    });
     for (lc.argv[0..lc.alg.arity()]) |v| {
         try g.w(", ", .{});
         try writeArg(g, v);
@@ -336,13 +369,27 @@ fn emitSeed(g: *Gen) Error!void {
         // The junction sits across `V(hi, lo)`, and only the internal side is
         // ours to place. Two clamps on the same net leave the later one's
         // bias — they are the same junction seen twice, so either is right.
-        if (writable(g, lc.lo)) {
+        // A signed clamp seeds V = sign·vcrit: the junction is forward at
+        // NEGATIVE probe voltage when the sign argument is negative.
+        const on_lo = writable(g, lc.lo);
+        if (lc.sign != .f_zero) {
+            try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.u_names[if (on_lo) lc.lo else lc.hi]});
+            try writeArg(g, lc.sign);
+            try g.w(" < 0.0) {s}", .{if (on_lo) "" else "-"});
+            try writeArg(g, lc.argv[1]);
+            try g.w(" else {s}", .{if (on_lo) "-" else ""});
+            try writeArg(g, lc.argv[1]);
+        } else if (on_lo) {
             try g.w("    s[@intFromEnum(U.{s})] = -", .{g.u_names[lc.lo]});
+            try writeArg(g, lc.argv[1]);
         } else {
             try g.w("    s[@intFromEnum(U.{s})] = ", .{g.u_names[lc.hi]});
+            try writeArg(g, lc.argv[1]);
         }
-        try writeArg(g, lc.argv[1]);
-        try g.w("; // V({s},{s}) = vcrit\n", .{ uName(g, lc.hi), uName(g, lc.lo) });
+        try g.w("; // V({s},{s}) = {s}vcrit\n", .{
+            uName(g, lc.hi), uName(g, lc.lo),
+            if (lc.sign != .f_zero) "±" else "",
+        });
     }
     try g.w("    return s;\n}}\n\n", .{});
 }

@@ -129,13 +129,12 @@ requirements over seven waves. They stay green on purpose: a suite exists to
 notice change, and a permanently-red fixture notices nothing.
 
 Current, measured on this tree: **1237/1237 behave as they say they do, 0 XFAIL,
-0 FAIL** (`--strict` passes), and no fixture asserts nothing. `/TODO.md` carries
-the deliberate ceilings and the will-not-do list.
+0 FAIL** (`--strict` passes), and no fixture asserts nothing.
 
 ## VerA vs OpenVAF on the same fixtures — a wave-1 SNAPSHOT
 
 **Every number in this section is from `bb2f60c`, when the suite was 1150 files and
-VerA scored 812.** VerA's column is now 1150/1152 (above); OpenVAF's has not been
+VerA scored 812.** VerA's column is now 1237/1237 (above); OpenVAF's has not been
 re-measured, and re-measuring one column alone would break the only thing the
 table is good for, which is that both were scored by one judge on one tree. Re-run
 `nix develop .#conformance` then `zig build conformance` before quoting it.
