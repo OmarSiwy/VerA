@@ -260,7 +260,9 @@ pub const Arity = struct {
     }
     /// Returns whether a call with `n` arguments is in range.
     pub fn admits(a: Arity, n: usize) bool {
-        return n >= a.min and n <= a.max;
+        // `max` at its type's ceiling is "no upper bound" (`unchecked`, an
+        // open display list), not a count of 255 arguments.
+        return n >= a.min and (a.max == std.math.maxInt(u8) or n <= a.max);
     }
 };
 
