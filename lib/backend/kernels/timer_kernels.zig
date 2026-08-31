@@ -1,6 +1,9 @@
 //! Timer controls and observation times -> absolute event deadlines, VAMS
 //! §5.10.3.3. Embedded into devices and imported by the mixed coordinator, so
 //! both paths count from start_time rather than accumulating periods.
+//! This paragraph is the only text `kernel_text.timer_txt` drops (it cuts at
+//! the first blank line), so it must stay one paragraph; everything after it
+//! is device text. LRM: §5.10.3.3.
 
 const ztm = @import("std");
 
