@@ -4,19 +4,71 @@
 //! into every device that uses it (`codegen/kernel_text.zig`), and a test block
 //! there shipped in every device's text. They still call the kernels through
 //! the files the devices embed, so what they check is what a device runs.
-//! LRM: §4.5.11, §4.5.12, §4.5.15, §9.17.3.
+//! LRM: §2.6.2, §4.5.11, §4.5.12, §4.5.15, §5.10.3.3, §9.4.1, §9.4.3, §9.5.1,
+//! §9.5.1.1, §9.5.3, §9.5.4.2, §9.5.5, §9.5.7, §9.13, §9.17.3, §9.21;
+//! IEEE 1364-2005 §17.2.4, §17.9.3.
+//!
+//! The plan, one oracle per bug class (none recomputes a kernel's answer the
+//! way the kernel does):
+//!   limit   wrong damping       -> the branchy ngspice transcriptions below,
+//!                                  bit for bit; §9.17.3 transparency at
+//!                                  vnew == vold as a property
+//!   filter  wrong recurrence    -> difference equations and closed forms
+//!                                  worked by hand on dyadic numbers (exact)
+//!   table   wrong interpolant   -> polynomials a scheme must reproduce, and
+//!                                  end conditions worked by hand
+//!   rng     wrong seed stream   -> the listing's own structure: each routine
+//!                                  consumes a known number of `uniform` steps
+//!   timer   missed/early event  -> an integer-grid oracle on dyadic controls
+//!   str     wrong conversion    -> C11 7.21.6 / §9.5.4.2 worked by hand
+//!   file    wrong position/data -> the file's bytes, read back through `std`
+//! Tests the shipped kernels fail carry zrunner's `xfail(...)` prefix. A
+//! kernel that exits the process (E0816, E1011, a §9.21 `E` extrapolation)
+//! is a fixture's job (`tests/rng_domains.zig`, `reject-run`), not this file's.
 
 const std = @import("std");
 const gm = @import("contract").gm;
 const filt = @import("filter_kernels.zig");
 const limit = @import("limit_kernels.zig");
+const tab = @import("table_kernels.zig");
+const rng = @import("rng_kernels.zig");
+const timer = @import("timer_kernels.zig");
+const str_k = @import("str_kernels.zig");
+const file_k = @import("file_kernels.zig");
+
+/// A one-derivative stand-in for the device's scalar family: the slice of the
+/// interface the filter and table kernels call (`con`/`val`/`add`/`addC`/
+/// `scale`), enough to read the Jacobian entry a kernel hands the solver.
+const Dual = struct {
+    v: f64,
+    d: f64 = 0.0,
+
+    pub fn con(c: f64) Dual {
+        return .{ .v = c };
+    }
+    pub fn val(a: Dual) f64 {
+        return a.v;
+    }
+    pub fn add(a: Dual, b: Dual) Dual {
+        return .{ .v = a.v + b.v, .d = a.d + b.d };
+    }
+    pub fn addC(a: Dual, c: f64) Dual {
+        return .{ .v = a.v + c, .d = a.d };
+    }
+    pub fn scale(a: Dual, c: f64) Dual {
+        return .{ .v = a.v * c, .d = a.d * c };
+    }
+};
+
+/// Fails unless `got` has exactly `want`'s bit pattern (so -0.0 is not 0.0).
+fn expectSameBits(want: f64, got: f64) !void {
+    try std.testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+}
 
 // ---------------------------------------------------------------- filter
 // `zBilin` is NOT re-tested here beyond the degree below: codegen's
 // "§4.5.11 the bilinear transform is the one the emitted filter runs" already
 // pins D = 0 and D = 2 exactly and the DC/Nyquist closed forms at D = 3.
-// `zSec`/`zLaplace`/`zZiStep` remain uncovered: they need a solver scalar type
-// or a coefficient cascade, which is a fixture, not a one-liner.
 
 test "zBilin: D = 1, the degree the other rows skip" {
     // P(s) = 2 + 3s, k = 10. Clearing (1+z⁻¹) by hand:
@@ -130,6 +182,172 @@ test "zSecR: unit section is the identity, and gain is b0/a0" {
         filt.zSecR(1, 4.0, .{ 3, 0 }, .{ 6, 0 }, &uh, &yh),
         1e-12,
     );
+}
+
+test "zSecR/zSec: the history terms, and the slope is b0/a0" {
+    // y = (b0·u + Σ b_j·uh[j-1] − a_j·yh[j-1]) / a0 with b = {1,2,3},
+    // a = {2,0.5,0.25}, u = 4, uh = {1,2}, yh = {4,8}:
+    //   (4 + (2 − 2) + (6 − 2)) / 2 = 4, every term dyadic.
+    const b: [3]f64 = .{ 1, 2, 3 };
+    const a: [3]f64 = .{ 2, 0.5, 0.25 };
+    const uh: [2]f64 = .{ 1, 2 };
+    const yh: [2]f64 = .{ 4, 8 };
+    try std.testing.expectEqual(@as(f64, 4.0), filt.zSecR(2, 4.0, b, a, &uh, &yh));
+    // The solver's form: the same value, and ∂y/∂u = b0/a0 = 0.5.
+    const y = filt.zSec(Dual, 2, .{ .v = 4.0, .d = 1.0 }, b, a, &uh, &yh);
+    try std.testing.expectEqual(@as(f64, 4.0), y.v);
+    try std.testing.expectEqual(@as(f64, 0.5), y.d);
+}
+
+test "zH0/zSsForm: an all-zero denominator, and common powers of s cancelled" {
+    // No nonzero denominator coefficient: the pair divides by zero, as a
+    // zero resistance does, and the state-space form has nothing to hold.
+    try std.testing.expectEqual([2]f64{ 3.0, 0.0 }, filt.zH0(1, .{ .{ 3.0, 1.0 }, .{ 0.0, 0.0 } }));
+    try std.testing.expectEqual(@as(?filt.ZSs, null), filt.zSsForm(1, .{ .{ 1.0, 0.0 }, .{ 0.0, 0.0 } }));
+    // (s + 2s²) / (4s + 8s²): one power of s on both sides, cancelled, so a
+    // first-order section is left (off = 1, m = 1).
+    try std.testing.expectEqual(filt.ZSs{ .off = 1, .m = 1 }, filt.zSsForm(2, .{ .{ 0.0, 1.0, 2.0 }, .{ 0.0, 4.0, 8.0 } }));
+    // zLaplaceH0 is zH0 of each section.
+    const h = filt.zLaplaceH0(2, 1, .{ .{ .{ 3.0, 1.0 }, .{ 2.0, 5.0 } }, .{ .{ 0.0, 1.0 }, .{ 0.0, 4.0 } } });
+    try std.testing.expectEqual([2][2]f64{ .{ 3.0, 2.0 }, .{ 1.0, 4.0 } }, h);
+}
+
+test "zLaplace: a static point is the product of the section gains, value and slope" {
+    // (3 + s)/(2 + 5s) has H(0) = 3/2; s/(4s) cancels to 1/4. dt <= 0 (and a
+    // NaN dt, which is not > 0) is static: y = 2·(3/2)·(1/4) = 0.75 and the
+    // Jacobian entry is the gain itself, 0.375. All dyadic, so exact.
+    const sec: [2][2][2]f64 = .{ .{ .{ 3.0, 1.0 }, .{ 2.0, 5.0 } }, .{ .{ 0.0, 1.0 }, .{ 0.0, 4.0 } } };
+    const hist: [2]f64 = .{ 0.0, 0.0 };
+    for ([_]f64{ 0.0, -1.0, std.math.nan(f64) }) |dt| {
+        const y = filt.zLaplace(Dual, 2, 1, .{ .v = 2.0, .d = 1.0 }, sec, dt, &hist, &hist);
+        try std.testing.expectEqual(@as(f64, 0.75), y.v);
+        try std.testing.expectEqual(@as(f64, 0.375), y.d);
+    }
+}
+
+test "zLaplace: one trapezoidal step of 1/(1+s), and an improper section in direct form" {
+    // y' = u − y from rest (x = 0, ua = 0) to ub = 1 over dt = 0.5, c = dt/2:
+    //   (1 + c)Δ = c·(2(−x + ua) + (ub − ua)) ⇒ Δ = 0.25/1.25 = 0.2,
+    // and ∂y/∂ub = c/(1 + c) = 0.2. Both quotients are the one correctly
+    // rounded 0.2, so the comparison is exact.
+    const lag: [1][2][2]f64 = .{.{ .{ 1.0, 0.0 }, .{ 1.0, 1.0 } }};
+    const zero: [1]f64 = .{0.0};
+    const y = filt.zLaplace(Dual, 1, 1, .{ .v = 1.0, .d = 1.0 }, lag, 0.5, &zero, &zero);
+    try std.testing.expectEqual(@as(f64, 0.2), y.v);
+    try std.testing.expectEqual(@as(f64, 0.2), y.d);
+
+    // s/1 has no state-space form. Its bilinear coefficients at k = 2/dt = 4
+    // are b = {k, −k}, a = {1, 1}, so y = 4u − 4·uh − yh: from uh = 0.5,
+    // yh = 2 and u = 1 that is 0, with slope 4.
+    const diff: [1][2][2]f64 = .{.{ .{ 0.0, 1.0 }, .{ 1.0, 0.0 } }};
+    const uh: [1]f64 = .{0.5};
+    const yh: [1]f64 = .{2.0};
+    const d = filt.zLaplace(Dual, 1, 1, .{ .v = 1.0, .d = 1.0 }, diff, 0.5, &uh, &yh);
+    try std.testing.expectEqual(@as(f64, 0.0), d.v);
+    try std.testing.expectEqual(@as(f64, 4.0), d.d);
+    // The accepted step runs the same equation and pushes (u, y) newest-first.
+    var us: [1]f64 = .{0.5};
+    var ys: [1]f64 = .{2.0};
+    filt.zLaplaceStep(1, 1, 1.0, diff, 0.5, &us, &ys);
+    try std.testing.expectEqual([1]f64{1.0}, us);
+    try std.testing.expectEqual([1]f64{0.0}, ys);
+}
+
+test "zZiStep: a two-section cascade follows its difference equations" {
+    // Section 0: y = u + 0.5·y₋₁ (num {1, 0}, den {1, −0.5}); section 1: a
+    // gain of 0.5. A unit step from rest: section 0 gives 1, 1.5, 1.75 and the
+    // cascade 0.5, 0.75, 0.875. Dyadic throughout.
+    const sec: [2][2][2]f64 = .{ .{ .{ 1.0, 0.0 }, .{ 1.0, -0.5 } }, .{ .{ 0.5, 0.0 }, .{ 1.0, 0.0 } } };
+    var uh: [2]f64 = .{ 0.0, 0.0 };
+    var yh: [2]f64 = .{ 0.0, 0.0 };
+    for ([_]f64{ 0.5, 0.75, 0.875 }) |want| try std.testing.expectEqual(want, filt.zZiStep(2, 1, 1.0, sec, &uh, &yh));
+    // Each section's newest (input, output) pair is what it pushed last.
+    try std.testing.expectEqual([2]f64{ 1.0, 1.75 }, uh);
+    try std.testing.expectEqual([2]f64{ 1.75, 0.875 }, yh);
+    // The static gain is H(1) = ∏ Σnum/Σden = (1/0.5)·(0.5/1) = 1.
+    try std.testing.expectEqual(@as(f64, 1.0), filt.zZiGain(2, 1, sec));
+}
+
+test "zZiEval: static gain, the held output between samples, and the sample itself" {
+    const sec: [2][2][2]f64 = .{ .{ .{ 1.0, 0.0 }, .{ 1.0, -0.5 } }, .{ .{ 0.5, 0.0 }, .{ 1.0, 0.0 } } };
+    // Static: z = 1, the input times H(1) = 1, slope 1.
+    const none: [2]f64 = .{ 0.0, 0.0 };
+    const st = filt.zZiEval(Dual, 2, 1, .{ .v = 3.0, .d = 1.0 }, sec, 0.0, 99.0, 0.0, 0.0, 1.0, &none, &none);
+    try std.testing.expectEqual(@as(f64, 3.0), st.v);
+    try std.testing.expectEqual(@as(f64, 1.0), st.d);
+
+    // The history after one accepted unit sample (see the zZiStep test).
+    var uh: [2]f64 = .{ 0.0, 0.0 };
+    var yh: [2]f64 = .{ 0.0, 0.0 };
+    _ = filt.zZiStep(2, 1, 1.0, sec, &uh, &yh);
+    // Between samples (t = 0.5, one sample taken, T = 1): the held output,
+    // and no derivative.
+    const held = filt.zZiEval(Dual, 2, 1, .{ .v = 1.0, .d = 1.0 }, sec, 1e-3, 0.5, 0.5, 1.0, 1.0, &uh, &yh);
+    try std.testing.expectEqual(@as(f64, 0.5), held.v);
+    try std.testing.expectEqual(@as(f64, 0.0), held.d);
+    // At t = T the second sample is owed: §4.5.12 "exhibits no delay", so the
+    // output is that sample's, 0.75, with slope (1/1)·(0.5/1) = 0.5.
+    const at = filt.zZiEval(Dual, 2, 1, .{ .v = 1.0, .d = 1.0 }, sec, 1e-3, 0.5, 1.0, 1.0, 1.0, &uh, &yh);
+    try std.testing.expectEqual(@as(f64, 0.75), at.v);
+    try std.testing.expectEqual(@as(f64, 0.5), at.d);
+    // A step that jumped to t = 2T owes two: one is replayed on a copy, the
+    // last is differentiated. The third sample of the step response, 0.875.
+    const two = filt.zZiEval(Dual, 2, 1, .{ .v = 1.0, .d = 1.0 }, sec, 1e-3, 0.5, 2.0, 1.0, 1.0, &uh, &yh);
+    try std.testing.expectEqual(@as(f64, 0.875), two.v);
+    try std.testing.expectEqual(@as(f64, 0.5), two.d);
+    // The residual never moves the accepted history.
+    try std.testing.expectEqual([2]f64{ 1.0, 1.0 }, uh);
+    try std.testing.expectEqual([2]f64{ 1.0, 0.5 }, yh);
+}
+
+test "zZiDue/zZiRamp: the sample count and the transition" {
+    // n = floor(t/T + 1e-9) + 1 − nk: the k-th instant k·T is owed once t
+    // reaches it, so t = 0 owes the first.
+    try std.testing.expectEqual(@as(u32, 1), filt.zZiDue(0.0, 0.0, 1.0));
+    try std.testing.expectEqual(@as(u32, 2), filt.zZiDue(2.5, 1.0, 1.0));
+    try std.testing.expectEqual(@as(u32, 0), filt.zZiDue(0.5, 1.0, 1.0));
+    // A time 1e-12 short of an instant reaches it (the relative tolerance).
+    try std.testing.expectEqual(@as(u32, 1), filt.zZiDue(1.0 - 1e-12, 1.0, 1.0));
+    // The replay is bounded, and a period that is not positive owes nothing.
+    try std.testing.expectEqual(@as(u32, 4096), filt.zZiDue(1e12, 0.0, 1.0));
+    try std.testing.expectEqual(@as(u32, 0), filt.zZiDue(1.0, 0.0, 0.0));
+    try std.testing.expectEqual(@as(u32, 0), filt.zZiDue(1.0, 0.0, -1.0));
+    try std.testing.expectEqual(@as(u32, 0), filt.zZiDue(1.0, 0.0, std.math.nan(f64)));
+    try std.testing.expectEqual(@as(u32, 0), filt.zZiDue(std.math.nan(f64), 0.0, 1.0));
+
+    // From 0 to 4 starting at ts = 1 over tau = 2: before, halfway, after.
+    try std.testing.expectEqual(@as(f64, 0.0), filt.zZiRamp(0.0, 4.0, 1.0, 2.0, 0.5));
+    try std.testing.expectEqual(@as(f64, 2.0), filt.zZiRamp(0.0, 4.0, 1.0, 2.0, 2.0));
+    try std.testing.expectEqual(@as(f64, 4.0), filt.zZiRamp(0.0, 4.0, 1.0, 2.0, 3.0));
+    // tau = 0 is "abruptly discontinuous": the new value at once.
+    try std.testing.expectEqual(@as(f64, 4.0), filt.zZiRamp(0.0, 4.0, 1.0, 0.0, 0.5));
+}
+
+test "zZiEvalRamp: the transition weight is 0 at the sample instant and grows over tau" {
+    // A unity section (D = 0), T = 10, t0 = 0, one sample taken, the previous
+    // transition from 0 to 1 began at ts = 1 with tau = 2.
+    const unity: [1][2][1]f64 = .{.{ .{1.0}, .{1.0} }};
+    const empty: [0]f64 = .{};
+    const u: Dual = .{ .v = 5.0, .d = 1.0 };
+    // t = 2, no sample owed: the transition's value, 0.5, flat.
+    const mid = filt.zZiEvalRamp(Dual, 1, 0, u, unity, 1e-3, 1.0, 0.0, 1.0, 2.0, 1.0, 10.0, 0.0, 2.0, &empty, &empty);
+    try std.testing.expectEqual(@as(f64, 0.5), mid.v);
+    try std.testing.expectEqual(@as(f64, 0.0), mid.d);
+    // t = 10, the sample is owed but w = 0: still the previous value, 1.
+    const now = filt.zZiEvalRamp(Dual, 1, 0, u, unity, 1e-3, 1.0, 0.0, 1.0, 10.0, 1.0, 10.0, 0.0, 2.0, &empty, &empty);
+    try std.testing.expectEqual(@as(f64, 1.0), now.v);
+    try std.testing.expectEqual(@as(f64, 0.0), now.d);
+    // t = 11, w = 0.5: half the new sample (5) and half the old value (1).
+    const half = filt.zZiEvalRamp(Dual, 1, 0, u, unity, 1e-3, 1.0, 0.0, 1.0, 11.0, 1.0, 10.0, 0.0, 2.0, &empty, &empty);
+    try std.testing.expectEqual(@as(f64, 3.0), half.v);
+    try std.testing.expectEqual(@as(f64, 0.5), half.d);
+}
+
+test "zRootSecs: real s-domain roots pair in order, and a zero root is s" {
+    // (1 − s/ρ) for ρ = −2 and −4: (1 + s/2)(1 + s/4) = 1 + 0.75s + 0.125s².
+    try std.testing.expectEqual([1][3]f64{.{ 1.0, 0.75, 0.125 }}, filt.zRootSecs(2, false, .{ -2.0, 0.0, -4.0, 0.0 }));
+    // ρ = 0 alone is §4.5.11's `s` term, a degree-1 section.
+    try std.testing.expectEqual([1][3]f64{.{ 0.0, 1.0, 0.0 }}, filt.zRootSecs(1, false, .{ 0.0, 0.0 }));
 }
 
 // ------------------------------------------------------------------ oracles
@@ -292,6 +510,267 @@ test "§4.5.15 branchless limiters ≡ branchy ngspice oracles, bit for bit" {
     }
 }
 
+test "§9.17.3 a converged bias comes back unchanged from every limiter" {
+    // "When the simulator has converged, the return value of the $limit()
+    // function is the value of the access function reference": vnew == vold
+    // is that state, and cg_limit reads "the clamp fired" off any change.
+    // limvds is ngspice's DEVlimvds, which floors a bias below -0.5 V even at
+    // a fixed point (it runs only after the MOS mode swap makes vds >= 0), so
+    // its property is stated on that domain alone.
+    var prng = std.Random.DefaultPrng.init(0x9173_0003);
+    const r = prng.random();
+    for (0..100_000) |_| {
+        const v = (r.float(f64) - 0.5) * 20.0;
+        const vt = 0.001 + 0.1 * r.float(f64);
+        const vcrit = 0.1 + r.float(f64);
+        const vto = (r.float(f64) - 0.5) * 4.0;
+        const lim = 2.0 * r.float(f64);
+        try expectSameBits(v, limit.zPnjlim(v, v, vt, vcrit));
+        try expectSameBits(v, limit.zFetlim(v, v, vto));
+        try expectSameBits(v, limit.zSteplim(v, v, lim));
+        if (v >= -0.5) try expectSameBits(v, limit.zLimvds(v, v));
+    }
+}
+
+test "§4.5.15 zSteplim: |vnew − vold| ≤ lim, and a non-finite iterate stays bounded" {
+    try std.testing.expectEqual(@as(f64, 1.5), limit.zSteplim(10.0, 1.0, 0.5));
+    try std.testing.expectEqual(@as(f64, 0.5), limit.zSteplim(-10.0, 1.0, 0.5));
+    try std.testing.expectEqual(@as(f64, 1.25), limit.zSteplim(1.25, 1.0, 0.5));
+    try std.testing.expectEqual(@as(f64, 1.5), limit.zSteplim(std.math.inf(f64), 1.0, 0.5));
+    try std.testing.expectEqual(@as(f64, 0.5), limit.zSteplim(-std.math.inf(f64), 1.0, 0.5));
+    // A NaN iterate has no side to clamp to; the header promises only that the
+    // result is a bound, never the NaN.
+    const n = limit.zSteplim(std.math.nan(f64), 1.0, 0.5);
+    try std.testing.expect(n >= 0.5 and n <= 1.5);
+}
+
+// ------------------------------------------------------------------- table
+
+test "§9.21 zTabLess/zTabSort/zTabEnd: lexicographic, stable, contiguous isolines" {
+    // Rows (x, y, f), outermost column first.
+    const rows = [_]f64{ 1, 2, 10, 1, 3, 20, 0, 9, 30 };
+    try std.testing.expect(tab.zTabLess(3, 2, &rows, 0, 1)); // equal x, 2 < 3
+    try std.testing.expect(!tab.zTabLess(3, 2, &rows, 1, 0));
+    try std.testing.expect(tab.zTabLess(3, 2, &rows, 2, 0)); // 0 < 1 decides
+    try std.testing.expect(!tab.zTabLess(3, 2, &rows, 0, 0)); // strict
+    // One independent: rows 1 and 3 share x = 1, rows 0 and 2 share x = 2;
+    // the sort keeps source order within each (§9.21's duplicate rule reads
+    // the first of a run).
+    const one = [_]f64{ 2, 0, 1, 0, 2, 0, 1, 0 };
+    var order = [_]u32{ 0, 1, 2, 3 };
+    tab.zTabSort(2, 1, &one, &order);
+    try std.testing.expectEqualSlices(u32, &.{ 1, 3, 0, 2 }, &order);
+    try std.testing.expectEqual(@as(usize, 2), tab.zTabEnd(2, &one, &order, 0, 0));
+    try std.testing.expectEqual(@as(usize, 4), tab.zTabEnd(2, &one, &order, 0, 2));
+}
+
+test "§9.21.4 zTabSpline1: both splines reproduce a straight line, value and slope" {
+    // f = 2x + 1 on x = 0..3. The natural cubic's moments solve to 0 and the
+    // quadratic's knot slopes march as 2, 2, 2, so both are the line itself,
+    // and `L` extrapolates along it. Dyadic, so exact.
+    const xs = [_]f64{ 0, 1, 2, 3 };
+    const fs = [_]f64{ 1, 3, 5, 7 };
+    for ([_]u8{ '2', '3' }) |scheme| {
+        for ([_]f64{ -1.0, 0.0, 0.5, 1.5, 2.5, 3.0, 5.0 }) |t| {
+            const got = tab.zTabSpline1(4, scheme, 'L', 'L', &xs, &fs, t);
+            try std.testing.expectEqual(2.0 * t + 1.0, got.v);
+            try std.testing.expectEqual(@as(f64, 2.0), got.d);
+        }
+    }
+    // `E` has no extrapolant to meet, so it takes `L`'s end condition.
+    try std.testing.expectEqual(@as(f64, 4.0), tab.zTabSpline1(4, '3', 'E', 'E', &xs, &fs, 1.5).v);
+}
+
+test "§9.21.4 zTabSpline1: `C` ends are clamped, S' = 0, and flat beyond the table" {
+    // Cubic on (0, 1), (1, 3) clamped both ends is the Hermite cubic
+    // 1 + 2(3u² − 2u³): at u = 0.5 the value 2 and slope 12u(1 − u) = 3, and
+    // the slope at either knot is 0. Moments ±12, all dyadic.
+    const xs = [_]f64{ 0, 1 };
+    const fs = [_]f64{ 1, 3 };
+    const mid = tab.zTabSpline1(2, '3', 'C', 'C', &xs, &fs, 0.5);
+    try std.testing.expectEqual(@as(f64, 2.0), mid.v);
+    try std.testing.expectEqual(@as(f64, 3.0), mid.d);
+    try std.testing.expectEqual(@as(f64, 0.0), tab.zTabSpline1(2, '3', 'C', 'C', &xs, &fs, 0.0).d);
+    try std.testing.expectEqual(@as(f64, 0.0), tab.zTabSpline1(2, '3', 'C', 'C', &xs, &fs, 1.0).d);
+    // Table 9-31 constant extrapolation "returns the table endpoint value".
+    try std.testing.expectEqual(tab.zTabVD{ .v = 1.0, .d = 0.0 }, tab.zTabSpline1(2, '3', 'C', 'C', &xs, &fs, -1.0));
+    try std.testing.expectEqual(tab.zTabVD{ .v = 3.0, .d = 0.0 }, tab.zTabSpline1(2, '3', 'C', 'C', &xs, &fs, 2.0));
+    // The quadratic honours the low end: S'(0) = 0, then S = 1 + 2u² on the
+    // first interval of 2x + 1's samples, so 1.5 with slope 2 at u = 0.5.
+    const q = tab.zTabSpline1(4, '2', 'C', 'L', &[_]f64{ 0, 1, 2, 3 }, &[_]f64{ 1, 3, 5, 7 }, 0.5);
+    try std.testing.expectEqual(@as(f64, 1.5), q.v);
+    try std.testing.expectEqual(@as(f64, 2.0), q.d);
+}
+
+test "§9.21.4 zTabSpline1: the cubic interpolates every knot of curved data" {
+    const xs = [_]f64{ 0, 1, 3, 4 };
+    const fs = [_]f64{ 0, 1, 0, 2 };
+    for ([_]u8{ 'L', 'C' }) |end| {
+        for (xs, fs) |x, f| try std.testing.expectApproxEqAbs(f, tab.zTabSpline1(4, '3', end, end, &xs, &fs, x).v, 1e-12);
+    }
+}
+
+test "§9.21 zTable: a spline dimension carries its own slope, and `E` admits the endpoint" {
+    // One dimension, f = 2x + 1 sampled at 0..3, scheme `3`: the line, and
+    // the Jacobian entry 2.
+    const line = [_]f64{ 0, 1, 1, 3, 2, 5, 3, 7 };
+    const f = tab.zTable(Dual, 4, 2, 1, 1, "3LL", line, .{.{ .v = 1.5, .d = 1.0 }});
+    try std.testing.expectEqual(@as(f64, 4.0), f.v);
+    try std.testing.expectEqual(@as(f64, 2.0), f.d);
+    // Table 9-31 `E` reports a point BEYOND the interpolation region; the
+    // endpoints themselves are inside it, so these return rather than exit.
+    try std.testing.expectEqual(@as(f64, 1.0), tab.zTable(Dual, 4, 2, 1, 1, "1EE", line, .{.{ .v = 0.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 7.0), tab.zTable(Dual, 4, 2, 1, 1, "1EE", line, .{.{ .v = 3.0 }}).v);
+}
+
+// --------------------------------------------------------------------- rng
+
+/// A seed `zRng*Next` returned, back in the i64 the seed variable holds.
+fn seedOf(x: f64) i64 {
+    return @intFromFloat(x);
+}
+
+/// `zRngNext` applied `n` times: `n` plain `uniform()` steps.
+fn steps(seed: i64, n: usize) i64 {
+    var s = seed;
+    for (0..n) |_| s = seedOf(rng.zRngNext(s));
+    return s;
+}
+
+test "§9.13 every routine consumes the uniform steps IEEE 1364 §17.9.3 says" {
+    // The seed is an inout source variable, so the write-back must walk as far
+    // as the listing's routine did. Each relation below is a sentence of the
+    // listing: `exponential` and a one-stage `erlangian` draw one uniform,
+    // `chi_square` draws one normal for an odd df then one exponential per
+    // even pair, `t` is a chi_square then a normal, `poisson` draws one
+    // uniform plus one per count, and `rtl_dist_uniform` draws one whenever
+    // start < end.
+    for ([_]i64{ -2147483648, -7, 0, 1, 7, 42, 2147483647 }) |s| {
+        const one = rng.zRngNext(s);
+        try std.testing.expectEqual(one, rng.zRngExponentialNext(s, 3.0));
+        try std.testing.expectEqual(one, rng.zRngErlangNext(s, 1.0, 3.0));
+        try std.testing.expectEqual(@as(f64, @floatFromInt(steps(s, 3))), rng.zRngErlangNext(s, 3.0, 1.0));
+        try std.testing.expectEqual(one, rng.zRngChiSquareNext(s, 2.0));
+        try std.testing.expectEqual(@as(f64, @floatFromInt(steps(s, 2))), rng.zRngChiSquareNext(s, 4.0));
+        const nrm = rng.zRngNormalNext(s, 0.0, 1.0);
+        try std.testing.expectEqual(nrm, rng.zRngChiSquareNext(s, 1.0));
+        try std.testing.expectEqual(rng.zRngNext(seedOf(nrm)), rng.zRngChiSquareNext(s, 3.0));
+        try std.testing.expectEqual(rng.zRngNormalNext(seedOf(rng.zRngChiSquareNext(s, 5.0)), 0.0, 1.0), rng.zRngTNext(s, 5.0));
+        const k: usize = @intFromFloat(rng.zRngPoisson(s, 3.0));
+        try std.testing.expectEqual(@as(f64, @floatFromInt(steps(s, k + 1))), rng.zRngPoissonNext(s, 3.0));
+        try std.testing.expectEqual(one, rng.zRngIUniformNext(s, -5.0, 5.0));
+        try std.testing.expectEqual(one, rng.zRngIUniformNext(s, 0.0, 2147483647.0));
+        try std.testing.expectEqual(one, rng.zRngUniformNext(s, -1.0, 1.0));
+    }
+}
+
+test "§9.13 the variates are the listing's formulas over its uniform" {
+    // `exponential` is −log(u)·mean and a one-stage `erlangian` −mean·log(u)/1,
+    // u being the very `uniform(seed, 0, 1)` draw. Within an ulp, not bit for
+    // bit: an optimizing build may fold one side's log at compile time.
+    for ([_]i64{ -7, 1, 7, 42, 2147483647 }) |s| {
+        const u = rng.zRngUniform(s, 0.0, 1.0);
+        try std.testing.expect(u != 0.0);
+        try std.testing.expectApproxEqRel(-@log(u) * 3.0, rng.zRngExponential(s, 3.0), 1e-15);
+        try std.testing.expectApproxEqRel(-3.0 * @log(u), rng.zRngErlang(s, 1.0, 3.0), 1e-15);
+    }
+}
+
+test "§9.13 the seed is the low 32 bits of the integer, read as signed" {
+    try std.testing.expectEqual(rng.zRngNext(7), rng.zRngNext(7 + (1 << 32)));
+    try std.testing.expectEqual(rng.zRngNext(-1), rng.zRngNext(0xFFFF_FFFF));
+    try std.testing.expectEqual(rng.zRngRand(-2147483648), rng.zRngRand(2147483648));
+}
+
+test "IEEE 1364 §17.9.2 $dist_uniform: the closed range, its degenerate case, its extremes" {
+    var s: i64 = 1;
+    for (0..2000) |_| {
+        for ([_][2]f64{ .{ -5, 5 }, .{ 0, 1 }, .{ 100, 101 }, .{ -2147483648, 0 }, .{ 0, 2147483647 }, .{ -2147483647, 2147483647 } }) |range| {
+            const x = rng.zRngIUniform(s, range[0], range[1]);
+            try std.testing.expect(x >= range[0] and x <= range[1]);
+            try std.testing.expectEqual(@round(x), x);
+        }
+        // §9.13.2 `$rdist_uniform`: [start, end) up to the listing's own
+        // top sliver of (end − start)·2⁻²³.
+        const y = rng.zRngUniform(s, -1.0, 1.0);
+        try std.testing.expect(y >= -1.0 and y <= 1.0 + 2.0 * 0x1p-22);
+        s = seedOf(rng.zRngNext(s));
+    }
+    // `if (start >= end) return start`, before the seed is touched.
+    try std.testing.expectEqual(@as(f64, 5), rng.zRngIUniform(9, 5, 5));
+    try std.testing.expectEqual(@as(f64, 6), rng.zRngIUniform(9, 6, 5));
+    try std.testing.expectEqual(@as(f64, 9), rng.zRngIUniformNext(9, 6, 5));
+    // The full int32 range is the third branch, `$random`'s; bounds past
+    // int32 fold onto it the way the reference's C cast did.
+    for ([_]i64{ -7, 0, 7, 42 }) |seed| {
+        try std.testing.expectEqual(rng.zRngRand(seed), rng.zRngIUniform(seed, -2147483648, 2147483647));
+        try std.testing.expectEqual(rng.zRngRandNext(seed), rng.zRngIUniformNext(seed, -2147483648, 2147483647));
+        try std.testing.expectEqual(rng.zRngRand(seed), rng.zRngIUniform(seed, -1e300, 1e300));
+    }
+    // A live but unused call: every rule satisfied, nothing drawn, 0 returned.
+    try std.testing.expectEqual(@as(f64, 0), rng.zRngCheck(1.0, 0b1111, 2.0, 3.0));
+    try std.testing.expectEqual(@as(f64, 0), rng.zRngCheck(1.0, 0, -1.0, -2.0));
+}
+
+// ------------------------------------------------------------------- timer
+
+test "§5.10.3.3 zNextTimer: the first event strictly after t, against an integer oracle" {
+    // Controls on a 1/8 grid and times on a 1/16 grid: every start + k·period
+    // is exact, so the oracle is integer arithmetic in sixteenths. The kernel
+    // divides by periods like 3/8, whose quotient does round; its repair
+    // steps are what this checks.
+    var i: i64 = -8;
+    while (i <= 8) : (i += 1) {
+        var j: i64 = 1;
+        while (j <= 6) : (j += 1) {
+            var m: i64 = -40;
+            while (m <= 40) : (m += 1) {
+                const s16 = 2 * i;
+                const p16 = 2 * j;
+                const k: i64 = if (s16 > m) 0 else @divFloor(m - s16, p16) + 1;
+                const want: f64 = @as(f64, @floatFromInt(s16 + k * p16)) / 16.0;
+                const start: f64 = @as(f64, @floatFromInt(i)) / 8.0;
+                const period: f64 = @as(f64, @floatFromInt(j)) / 8.0;
+                const t: f64 = @as(f64, @floatFromInt(m)) / 16.0;
+                try std.testing.expectEqual(@as(?f64, want), timer.zNextTimer(start, period, t));
+            }
+        }
+    }
+}
+
+test "§5.10.3.3 zNextTimer: one-shots, non-finite controls, a vanishing period" {
+    // Strictly after: an event AT t is not next.
+    try std.testing.expectEqual(@as(?f64, 1.5), timer.zNextTimer(1.0, 0.5, 1.0));
+    // A non-positive period has only its start event.
+    try std.testing.expectEqual(@as(?f64, 3.0), timer.zNextTimer(3.0, 0.0, 2.0));
+    try std.testing.expectEqual(@as(?f64, null), timer.zNextTimer(1.0, 0.0, 2.0));
+    try std.testing.expectEqual(@as(?f64, null), timer.zNextTimer(1.0, -1.0, 2.0));
+    try std.testing.expectEqual(@as(?f64, null), timer.zNextTimer(std.math.nan(f64), 1.0, 0.0));
+    try std.testing.expectEqual(@as(?f64, null), timer.zNextTimer(0.0, 1.0, std.math.inf(f64)));
+    try std.testing.expectEqual(@as(?f64, null), timer.zNextTimer(0.0, std.math.inf(f64), 1.0));
+    // A period below t's spacing: consecutive times span an event, so the
+    // answer is just past t, not t itself.
+    const r = timer.zNextTimer(0.0, 1e-300, 1.0).?;
+    try std.testing.expect(r > 1.0 and r < 1.0 + 1e-15);
+}
+
+test "§5.10.3.3 zTimerPending/zTimerDue: a changed control replaces the pending event" {
+    const inf = std.math.inf(f64);
+    // Unchanged controls keep the scheduled event, even one already passed:
+    // a host that stepped just beyond it still observes it.
+    try std.testing.expectEqual(@as(f64, 2.0), timer.zTimerPending(1.0, 0.5, 2.25, 1.0, 0.5, 2.0));
+    try std.testing.expect(timer.zTimerDue(1.0, 0.5, 2.25, 1.0, 0.5, 2.0));
+    // A new start at or after now is the event.
+    try std.testing.expectEqual(@as(f64, 5.0), timer.zTimerPending(5.0, 1.0, 2.0, 0.0, 0.0, 99.0));
+    // A past one-shot is spent.
+    try std.testing.expectEqual(inf, timer.zTimerPending(1.0, 0.0, 2.0, 0.0, 0.0, 99.0));
+    // Now is on the new grid, so now is the event; off the grid, the next one.
+    try std.testing.expectEqual(@as(f64, 2.0), timer.zTimerPending(1.0, 0.5, 2.0, 0.0, 0.0, 99.0));
+    try std.testing.expect(timer.zTimerDue(1.0, 0.5, 2.0, 0.0, 0.0, 99.0));
+    try std.testing.expectEqual(@as(f64, 2.5), timer.zTimerPending(1.0, 0.5, 2.25, 0.0, 0.0, 99.0));
+    try std.testing.expect(!timer.zTimerDue(1.0, 0.5, 2.25, 0.0, 0.0, 99.0));
+}
+
 // ---------------------------------------------------------------- held string
 
 test "zStrHeld: a held string owns its bytes, so rewriting the source leaves it (#19)" {
@@ -308,4 +787,518 @@ test "zStrHeld: a held string owns its bytes, so rewriting the source leaves it 
     inst = next;
     try std.testing.expectEqualStrings("10", inst.get());
     try std.testing.expectEqualStrings("t=10", held.get());
+}
+
+test "zStrHeld: exactly one 4096-byte row fits" {
+    const full: [4096]u8 = @splat('a');
+    const h = str_k.zStrHeld(&full);
+    try std.testing.expectEqual(@as(usize, 4096), h.get().len);
+}
+
+// ------------------------------------------------------------------ string
+
+test "§9.5.4.2 zScan: %c keeps white space, %s and the radix codes take their fields" {
+    // "%c Matches a single character. The normal skip over white space is
+    // suppressed"; a width takes that many.
+    const c = str_k.zScan(" x", "%c", 0);
+    try std.testing.expectEqual(@as(i64, 1), c.n);
+    try std.testing.expectEqual(@as(i64, ' '), c.i);
+    try std.testing.expectEqual(@as(usize, 1), c.used);
+    try std.testing.expectEqualStrings("abc", str_k.zScanS("abcdef", "%3c", 0));
+    try std.testing.expectEqualStrings("ab", str_k.zScanS("ab", "%5c", 0));
+    // %s stops at white space or the width, and the next field resumes there.
+    try std.testing.expectEqualStrings("hel", str_k.zScanS("hello world", "%3s", 0));
+    try std.testing.expectEqualStrings("lo", str_k.zScanS("hello world", "%3s%s", 1));
+    // §2.7: a string read as a number is base 256.
+    try std.testing.expectEqual(@as(i64, 0x4142), str_k.zScanI("AB", "%s", 0));
+    // The radices, an optional sign, and §2.6.1's `_` separator skipped.
+    try std.testing.expectEqual(@as(i64, 511), str_k.zScanI("777", "%o", 0));
+    try std.testing.expectEqual(@as(i64, 5), str_k.zScanI("1_01", "%b", 0));
+    try std.testing.expectEqual(@as(i64, 255), str_k.zScanI("fF", "%h", 0));
+    try std.testing.expectEqual(@as(i64, -26), str_k.zScanI("-1A", "%x", 0));
+    try std.testing.expectEqual(@as(i64, 12), str_k.zScanI("+12", "%d", 0));
+    try std.testing.expectEqual(@as(f64, 12.0), str_k.zScanR("+12", "%d", 0));
+    // A digit outside the radix ends the field and is left unread.
+    const o = str_k.zScan("78", "%o", 0);
+    try std.testing.expectEqual(@as(i64, 7), o.i);
+    try std.testing.expectEqual(@as(usize, 1), o.used);
+    // A sign or a separator alone is a matching failure: 0 items, not EOF.
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanN("+", "%d"));
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanN("_", "%d"));
+}
+
+test "§9.5.4.2 zScan: the C real shape, and %r's optional Table 2-1 symbol" {
+    try std.testing.expectEqual(@as(f64, -0.5), str_k.zScanR("-.5", "%f", 0));
+    try std.testing.expectEqual(@as(f64, 25.0), str_k.zScanR("2.5e1", "%e", 0));
+    try std.testing.expectEqual(@as(f64, 300.0), str_k.zScanR("3.e2x", "%g", 0));
+    // An `e` with no digit after it is not an exponent, and is left unread.
+    const e = str_k.zScan("1e", "%f", 0);
+    try std.testing.expectEqual(@as(f64, 1.0), e.r);
+    try std.testing.expectEqual(@as(usize, 1), e.used);
+    // No digit at all is a matching failure, and so is a word, `inf` included.
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanN(".", "%f"));
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanN("inf", "%f"));
+    // The integer view of a real truncates toward zero.
+    try std.testing.expectEqual(@as(i64, -2), str_k.zScanI("-2.75", "%f", 0));
+    // §2.6.2: the symbol follows with no space, and 1e3 is spelled K or k.
+    try std.testing.expectEqual(@as(f64, 2500.0), str_k.zScanR("2.5k", "%r", 0));
+    try std.testing.expectEqual(@as(f64, 2500.0), str_k.zScanR("2.5K", "%r", 0));
+    try std.testing.expectEqual(@as(f64, 1.5), str_k.zScanR("1.5", "%r", 0));
+    const spaced = str_k.zScan("3 k", "%r", 0);
+    try std.testing.expectEqual(@as(f64, 3.0), spaced.r);
+    try std.testing.expectEqual(@as(usize, 1), spaced.used);
+}
+
+test "§9.5.4.2 zScan: white space, literals, %%, %m, and what a scan leaves unread" {
+    // Control-string white space matches any run, newlines included, or none.
+    try std.testing.expectEqual(@as(i64, 2), str_k.zScanN("1\n\t 2", "%d %d"));
+    try std.testing.expectEqual(@as(i64, 2), str_k.zScanI("1\n\t 2", "%d %d", 1));
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("12", "%d %d"));
+    // "trailing white space (including newline characters) is left unread
+    // unless matched by a directive".
+    try std.testing.expectEqual(@as(usize, 1), str_k.zScan("7  \n", "%d", -1).used);
+    try std.testing.expectEqual(@as(usize, 4), str_k.zScan("7  \n", "%d ", -1).used);
+    try std.testing.expectEqual(@as(usize, 2), str_k.zScan("12 ab", "%d", -1).used);
+    // The leading white space a conversion skips stays consumed when the
+    // conversion then fails on the character after it.
+    try std.testing.expectEqual(@as(usize, 2), str_k.zScan("  x", "%d", -1).used);
+    // Literal text must be there; `%%` is a literal percent, not an item.
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("a=5", "a=%d"));
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanN("b=5", "a=%d"));
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("5%", "%d%%"));
+    // "%m ... Does not read data": an assignment even with no input left.
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("", "%m"));
+    try std.testing.expectEqualStrings("", str_k.zScanS("", "%m", 0));
+    try std.testing.expectEqual(@as(i64, 2), str_k.zScanN("4", "%m%d"));
+    try std.testing.expectEqual(@as(i64, 4), str_k.zScanI("4", "%m%d", 1));
+    // An invalid conversion character stops the scan with the items so far,
+    // and so does a control string that ends inside a specification.
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("5 6", "%d %q"));
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("5", "%d%"));
+    try std.testing.expectEqual(@as(i64, 1), str_k.zScanN("5", "%d%5"));
+    // `want` counts ASSIGNED items, so a suppressed field has no index, and
+    // an item the scan never reached has a zero payload.
+    try std.testing.expectEqual(@as(i64, 3), str_k.zScanI("1 2 3", "%d %*d %d", 1));
+    try std.testing.expectEqual(@as(i64, 0), str_k.zScanI("1", "%d %d", 1));
+    try std.testing.expectEqual(@as(f64, 0.0), str_k.zScanR("1", "%d %d", 1));
+    try std.testing.expectEqualStrings("", str_k.zScanS("1", "%d %d", 1));
+    // EOF: the input ends before any conversion was tried.
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("   ", "%d"));
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("", "%c"));
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("a", "a%d"));
+}
+
+test "§9.5.4.2 zScan: EOF when the input ends before the first matching failure" {
+    // "This number can be EOF if the input ends before the first matching
+    // failure or conversion." A matching failure needs a conflicting
+    // character; an input that has ended offers none, so a control string
+    // that opens with literal text answers EOF on it (C11 7.21.6.2p16 calls
+    // this an input failure before the first conversion).
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("", "x%d"));
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("", "%%"));
+    try std.testing.expectEqual(@as(i64, -1), str_k.zScanN("  ", " x%d"));
+}
+
+test "§9.4.3 zCReal: special values, zero, the extremes, flags and widths (C11 7.21.6.1)" {
+    var b: [64]u8 = undefined;
+    const nan = std.math.nan(f64);
+    const inf = std.math.inf(f64);
+    const neg_zero = -@as(f64, 0.0);
+    // Flags, in `cg_display.Spec`'s order: 1 '-', 2 '+', 4 ' ', 8 '0'.
+    const rows = .{
+        .{ nan, 'f', @as(u8, 0), @as(usize, 0), @as(i64, -1), "nan" },
+        .{ nan, 'F', 0, 0, -1, "NAN" },
+        .{ -inf, 'e', 0, 0, -1, "-inf" },
+        .{ inf, 'g', 2, 0, -1, "+inf" },
+        .{ inf, 'f', 8, 6, -1, "   inf" }, // '0' never fills a non-number
+        .{ inf, 'f', 1, 6, -1, "inf   " },
+        .{ 0.0, 'e', 0, 0, -1, "0.000000e+00" },
+        .{ neg_zero, 'f', 0, 0, 2, "-0.00" },
+        .{ 0.0, 'g', 0, 0, -1, "0" },
+        .{ 5e-324, 'e', 0, 0, -1, "4.940656e-324" },
+        .{ 1.7976931348623157e308, 'e', 0, 0, -1, "1.797693e+308" },
+        .{ 2.5, 'e', 0, 0, 0, "2e+00" }, // an exact tie goes to the even digit
+        .{ 3.5, 'e', 0, 0, 0, "4e+00" },
+        .{ 9.5, 'e', 0, 0, 0, "1e+01" }, // and a carry renormalises
+        .{ 1.5, 'e', 4, 0, -1, " 1.500000e+00" },
+        .{ 1.5, 'e', 6, 0, -1, "+1.500000e+00" }, // '+' wins over ' '
+        .{ 1.0e8, 'G', 0, 0, -1, "1E+08" },
+        .{ 100000.0, 'g', 0, 0, -1, "100000" },
+        .{ 1.0e-4, 'g', 0, 0, -1, "0.0001" },
+        .{ 123456789.0, 'g', 0, 0, -1, "1.23457e+08" },
+        .{ 0.5, 'g', 0, 0, -1, "0.5" },
+        .{ 1234.5678, 'g', 0, 0, 2, "1234.57" }, // §9.4.3's fractional reading
+        .{ 12.0, 'f', 8, 6, 1, "0012.0" },
+        .{ -1.0, 'f', 9, 6, 1, "-1.0  " }, // '-' overrides '0'
+        .{ 1.0, 'e', 0, 3, -1, "1.000000e+00" }, // a width below the text
+    };
+    inline for (rows) |row| {
+        try std.testing.expectEqualStrings(row[5], str_k.zCReal(&b, row[0], row[1], row[2], row[3], row[4]));
+    }
+}
+
+test "§9.4.3 zCReal %r: §2.6.2 Table 2-1 engineering notation" {
+    var b: [64]u8 = undefined;
+    const rows = .{
+        .{ 1500.0, @as(i64, -1), "1.5K" },
+        .{ 1.0, -1, "1" },
+        .{ 999.0, -1, "999" },
+        .{ 1000.0, -1, "1K" },
+        .{ -2.5e-9, -1, "-2.5n" },
+        .{ 0.0, -1, "0" },
+        .{ 1.0e15, -1, "1000T" }, // past T, the mantissa absorbs the exponent
+        .{ 1500.0, 2, "1.50K" },
+    };
+    inline for (rows) |row| {
+        try std.testing.expectEqualStrings(row[2], str_k.zCReal(&b, row[0], 'r', 0, 0, row[1]));
+    }
+}
+
+test "§2.6.2 zCReal %r: below the table every shortest digit prints" {
+    // Below 1e-18 Table 2-1 has no symbol, so the mantissa absorbs the
+    // exponent: 1.5e-20 is 0.015a and 1e-21 is 0.001a. With no precision the
+    // kernel means to print every shortest round-trip digit, as it does above.
+    var b: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("0.015a", str_k.zCReal(&b, 1.5e-20, 'r', 0, 0, -1));
+    try std.testing.expectEqualStrings("0.001a", str_k.zCReal(&b, 1e-21, 'r', 0, 0, -1));
+}
+
+test "§2.6.2 zCReal %r: a precision keeps the rounded mantissa in [1, 1000)" {
+    // 999.96 to one fractional digit is 1000.0, which engineering notation
+    // writes 1.0K; 999999 to two is 1.00M, not 1000.00K.
+    var b: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("1.0K", str_k.zCReal(&b, 999.96, 'r', 0, 0, 1));
+    try std.testing.expectEqualStrings("1.00M", str_k.zCReal(&b, 999999.0, 'r', 0, 0, 2));
+}
+
+test "§9.5.3 zSFormatRt: a run-time format walks the §9.4.3 conversions" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("-42| 3.14|ab|ff", str_k.zSFormatRt(&b, "%d|%5.2f|%s|%x", "top", .{
+        @as(i64, -42),
+        @as(f64, 3.14159),
+        @as([]const u8, "ab"),
+        @as(i64, 255),
+    }));
+    // %m is the scope, %l its library binding, %% a percent; a field width
+    // and '-' apply to %m as to any conversion.
+    try std.testing.expectEqualStrings("[top][work.top][%][top ][7]", str_k.zSFormatRt(&b, "[%m][%l][%%][%-4m][%d]", "top", .{@as(i64, 7)}));
+    // C 7.21.6.1's flags on the integer conversions, and the radices.
+    try std.testing.expectEqualStrings("-0042|-42  |+5| 5|10|101|000000ff|ff|A|AB", str_k.zSFormatRt(&b, "%05d|%-5d|%+d|% d|%o|%b|%08x|%h|%c|%s", "m", .{
+        @as(i64, -42),
+        @as(i64, -42),
+        @as(i64, 5),
+        @as(i64, 5),
+        @as(i64, 8),
+        @as(i64, 5),
+        @as(i64, 255),
+        @as(i64, 255),
+        @as(i64, 65),
+        @as(i64, 0x4142),
+    }));
+    // §4.2.1.1 rounds a real half away from zero for an integer conversion,
+    // §2.7 reads a string as base 256, and a real conversion takes an integer.
+    try std.testing.expectEqualStrings("3 -3 16706 2.000000e+00 A", str_k.zSFormatRt(&b, "%d %d %d %e %c", "m", .{
+        @as(f64, 2.5),
+        @as(f64, -2.5),
+        @as([]const u8, "AB"),
+        @as(i64, 2),
+        @as(f64, 65.4),
+    }));
+    // A '%' that ends the string is text, and so is a specification the
+    // string ends inside.
+    try std.testing.expectEqualStrings("50%", str_k.zSFormatRt(&b, "%d%", "m", .{@as(i64, 50)}));
+    try std.testing.expectEqualStrings("1a%5", str_k.zSFormatRt(&b, "%da%5", "m", .{@as(i64, 1)}));
+    // "If not enough arguments are supplied ... issue a warning and continue
+    // execution": the specification with no argument prints nothing.
+    try std.testing.expectEqualStrings("a1bc", str_k.zSFormatRt(&b, "a%db%dc", "m", .{@as(i64, 1)}));
+}
+
+test "§3.3 zStringStore/zStrCat/zStrRepeat: NULs dropped, aliasing pieces, N <= 0 copies" {
+    var raw = "a\x00b\x00".*;
+    try std.testing.expectEqualStrings("ab", str_k.zStringStore(&raw));
+    var buf: [8]u8 = undefined;
+    @memcpy(buf[0..2], "ab");
+    // A piece may be this same site's previous result (`s = {s, "x"}`).
+    try std.testing.expectEqualStrings("abx", str_k.zStrCat(&buf, &.{ buf[0..2], "x" }));
+    try std.testing.expectEqualStrings("ababab", str_k.zStrRepeat(&buf, 3, "ab"));
+    try std.testing.expectEqualStrings("", str_k.zStrRepeat(&buf, 0, "ab"));
+    try std.testing.expectEqualStrings("", str_k.zStrRepeat(&buf, -2, "ab"));
+    try std.testing.expectEqualStrings("", str_k.zStrRepeat(&buf, 5, ""));
+}
+
+test "§9.4.1 zMonitor: nothing before the invocation, then one report per change" {
+    const site = 4242;
+    try std.testing.expect(str_k.zMonitor(site, &.{ 1, 2 }, "t") == null);
+    try std.testing.expectEqual(@as(f64, 0.0), str_k.zMonitorArm(site));
+    // The first accepted step has no "last accepted step" to equal.
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{ 1, 2 }, "t").?);
+    try std.testing.expect(str_k.zMonitor(site, &.{ 1, 2 }, "t") == null);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{ 1, 3 }, "t").?);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &.{1}, "t").?);
+    try std.testing.expect(str_k.zMonitor(site, &.{1}, "t") == null);
+    // Past 64 watched values the latch cannot hold them: every step reports.
+    const many: [65]u64 = @splat(0);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &many, "t").?);
+    try std.testing.expectEqualStrings("t", str_k.zMonitor(site, &many, "t").?);
+}
+
+test "§9.5.3 zSBuf: one 4096-byte row per call site" {
+    try std.testing.expect(str_k.zSBuf(9001).ptr != str_k.zSBuf(9002).ptr);
+    try std.testing.expect(str_k.zSBuf(9001).ptr == str_k.zSBuf(9001).ptr);
+    try std.testing.expectEqual(@as(usize, 4096), str_k.zSBuf(9001).len);
+}
+
+// The next two tests, and the $fseek overflow test below, trapped (an
+// overflow) or never returned (a pad loop) before their fix. No `xfail(...)`
+// marker can contain a trap or a hang, so they landed with the fix.
+
+test "§9.5.4.2 zScan: the most negative integer, and a width no usize holds" {
+    // The accumulation wraps, so "-9223372036854775808" arrives as minInt, and
+    // its negation must wrap as well rather than trap.
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), str_k.zScanI("-9223372036854775808", "%d", 0));
+    // A width saturates, and past the input it is the whole input.
+    try std.testing.expectEqual(@as(i64, 12), str_k.zScanI("12", "%99999999999999999999999d", 0));
+    try std.testing.expectEqualStrings("ab", str_k.zScanS("ab", "%99999999999999999999999c", 0));
+    try std.testing.expectEqualStrings("ab", str_k.zScanS("ab cd", "%18446744073709551615s", 0));
+}
+
+test "§9.4.3 zCReal: a field wider than the row returns what fits, '-' or not" {
+    // The writer drops an overrun ("1.000000" keeps four bytes), and the left
+    // pad must not wait for a width the row cannot reach.
+    var b: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("1.00", str_k.zCReal(&b, 1.0, 'f', 1, 10, -1));
+    try std.testing.expectEqualStrings("1.00", str_k.zCReal(&b, 1.0, 'f', 0, 10, -1));
+}
+
+// -------------------------------------------------------------------- file
+
+/// The path `file_kernels` opens for `name` inside `tmp`: the kernels resolve
+/// against the process cwd, where `std.testing.tmpDir` makes
+/// `.zig-cache/tmp/<sub_path>`.
+fn tmpPath(buf: []u8, tmp: *const std.testing.TmpDir, name: []const u8) []const u8 {
+    return std.mem.print(buf, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path[0..], name }) catch unreachable;
+}
+
+test "§9.5.1/§9.5.2 append writes at the end; r+ reads and writes one position" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    var pb: [256]u8 = undefined;
+    var rb: [64]u8 = undefined;
+    const p = tmpPath(&pb, &tmp, "a.txt");
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.txt", .data = "abc" });
+
+    // Table 9-24 "a": the position starts at the end, and a write goes to the
+    // end wherever $fseek left it.
+    const a = file_k.zFOpen(p, "a", false);
+    try std.testing.expect(a != 0);
+    try std.testing.expectEqual(@as(i64, 3), file_k.zFTell(a));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(a, 0, 0));
+    try std.testing.expectEqual(@as(i64, 1), file_k.zFPut(a, "d"));
+    try std.testing.expectEqual(@as(i64, 4), file_k.zFTell(a));
+    // An "a" channel cannot be read: §9.5.4.1 "if an error occurs reading
+    // from the file, then code is set to zero", and $ferror says why.
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFGets(a));
+    try std.testing.expectEqual(@as(i64, 9), file_k.zFError(a));
+    _ = file_k.zFClose(a);
+    try std.testing.expectEqualStrings("abcd", try tmp.dir.readFile(io, "a.txt", &rb));
+
+    // "r+": one position for both directions.
+    const rw = file_k.zFOpen(p, "r+", false);
+    try std.testing.expectEqual(@as(i64, 1), file_k.zFPut(rw, "X"));
+    try std.testing.expectEqual(@as(i64, 3), file_k.zFGets(rw));
+    try std.testing.expectEqualStrings("bcd", file_k.zFLine(3, rw));
+    try std.testing.expect(file_k.zFEof(rw) != 0);
+    _ = file_k.zFClose(rw);
+    try std.testing.expectEqualStrings("Xbcd", try tmp.dir.readFile(io, "a.txt", &rb));
+}
+
+test "§9.5.5 $fseek: absolute, relative, from the end, and refused before the start" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "s.txt", .data = "hello" });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "s.txt"), "r", false);
+    try std.testing.expect(r != 0);
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 2, 0));
+    try std.testing.expectEqual(@as(i64, 2), file_k.zFTell(r));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 1, 1));
+    try std.testing.expectEqual(@as(i64, 3), file_k.zFTell(r));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, -1, 2));
+    try std.testing.expectEqual(@as(i64, 4), file_k.zFTell(r));
+    // "If an error occurs repositioning the file, then code is set to -1":
+    // the position stays where it was, and $ferror names the cause.
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(r, -5, 1));
+    try std.testing.expectEqual(@as(i64, 4), file_k.zFTell(r));
+    try std.testing.expectEqual(@as(i64, 22), file_k.zFError(r));
+    try std.testing.expectEqual(@as(i64, 'o'), file_k.zFGetc(r));
+    // Past the end is a position like any other; reading there is EOF, and
+    // the next reposition clears it.
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 10, 0));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFGetc(r));
+    try std.testing.expect(file_k.zFEof(r) != 0);
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 0, 0));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFEof(r));
+    try std.testing.expectEqual(@as(i64, 'h'), file_k.zFGetc(r));
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.5 $fseek: an offset whose sum overflows is refused, not trapped" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "o.txt", .data = "hello" });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "o.txt"), "r", false);
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFSeek(r, 2, 0));
+    // 2 + maxInt and 5 + maxInt name no position: code -1, EINVAL, and the
+    // position stays.
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(r, std.math.maxInt(i64), 1));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(r, std.math.maxInt(i64), 2));
+    try std.testing.expectEqual(@as(i64, 2), file_k.zFTell(r));
+    try std.testing.expectEqual(@as(i64, 22), file_k.zFError(r));
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.1 a descriptor the table does not hold answers each call's failure value" {
+    const fd_bit: i64 = 1 << 31;
+    const nowhere = fd_bit | 40; // past the thirty channels
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFTell(nowhere));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFTell(fd_bit | 1)); // STDOUT is no table row
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFSeek(nowhere, 0, 0));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFGetc(nowhere));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFUngetc('a', nowhere));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFEof(nowhere));
+    try std.testing.expectEqualStrings("", file_k.zFLine(5, nowhere));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFClose(nowhere));
+    // An mcd bit whose channel is closed names nothing either.
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFTell(1 << 20));
+    // §9.5.1: a failed open returns 0; a call on that 0 is refused (EBADF).
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFPut(0, "x"));
+    try std.testing.expectEqual(@as(i64, 9), file_k.zFError(0));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFGets(0));
+    try std.testing.expectEqualStrings("", file_k.zFWindow(0));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFFlush(0));
+    // §9.5.7: a description for every errno the table sets, "" for none.
+    try std.testing.expectEqualStrings("", file_k.zFErrorStr(0, 0));
+    try std.testing.expectEqualStrings("no such file or directory", file_k.zFErrorStr(2, 0));
+    try std.testing.expectEqualStrings("bad file descriptor", file_k.zFErrorStr(9, 0));
+    try std.testing.expectEqualStrings("invalid argument", file_k.zFErrorStr(22, 0));
+    try std.testing.expectEqualStrings("too many open files", file_k.zFErrorStr(24, 0));
+    try std.testing.expectEqualStrings("i/o error", file_k.zFErrorStr(5, 0));
+}
+
+test "IEEE 1364 §17.2.4.1 $ungetc needs a byte to step back over, and holds 16" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "u.txt", .data = "0123456789abcdefghij" });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "u.txt"), "r", false);
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFUngetc('x', r)); // position 0
+    for (0..17) |_| _ = file_k.zFGetc(r);
+    for (0..16) |j| try std.testing.expectEqual(@as(i64, 0), file_k.zFUngetc(@as(i64, 'A') + @as(i64, @intCast(j)), r));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFUngetc('Z', r)); // a 17th
+    try std.testing.expectEqual(@as(i64, 1), file_k.zFTell(r));
+    // Last pushed, first read; then the file resumes after the bytes covered.
+    var k: usize = 16;
+    while (k > 0) {
+        k -= 1;
+        try std.testing.expectEqual(@as(i64, 'A') + @as(i64, @intCast(k)), file_k.zFGetc(r));
+    }
+    try std.testing.expectEqual(@as(i64, 'h'), file_k.zFGetc(r));
+    _ = file_k.zFClose(r);
+}
+
+test "§9.5.1 thirty channels: the next open fails with EMFILE, and a closed one is reused" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "e.txt", .data = "e" });
+    const p = tmpPath(&pb, &tmp, "e.txt");
+    var fds: [30]i64 = undefined;
+    for (&fds) |*fd| {
+        fd.* = file_k.zFOpen(p, "r", false);
+        try std.testing.expect(fd.* != 0);
+    }
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFOpen(p, "r", false));
+    try std.testing.expectEqual(@as(i64, 24), file_k.zFError(0));
+    // "The $fopen function shall reuse channels that have been closed."
+    _ = file_k.zFClose(fds[7]);
+    try std.testing.expectEqual(fds[7], file_k.zFOpen(p, "r", false));
+    for (fds) |fd| _ = file_k.zFClose(fd);
+}
+
+test "§9.5.1.1 a write-mode reopen truncates within an analysis and appends across them" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    var pb: [256]u8 = undefined;
+    var rb: [64]u8 = undefined;
+    const p = tmpPath(&pb, &tmp, "w.txt");
+    const put = struct {
+        fn f(path: []const u8, text: []const u8) void {
+            const w = file_k.zFOpen(path, "w", false);
+            _ = file_k.zFPut(w, text);
+            _ = file_k.zFClose(w);
+        }
+    }.f;
+    put(p, "ab");
+    put(p, "x"); // the same analysis: C's truncate
+    try std.testing.expectEqualStrings("x", try tmp.dir.readFile(io, "w.txt", &rb));
+    file_k.zFNewAnalysis();
+    // "Content written from the following analyses shall be appended".
+    put(p, "yz");
+    try std.testing.expectEqualStrings("xyz", try tmp.dir.readFile(io, "w.txt", &rb));
+    // Within the second analysis, a reopen truncates to what the first left.
+    put(p, "q");
+    try std.testing.expectEqualStrings("xq", try tmp.dir.readFile(io, "w.txt", &rb));
+}
+
+test "§9.5.1 an OR of mcds writes to every channel it names" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    var pb1: [256]u8 = undefined;
+    var pb2: [256]u8 = undefined;
+    var rb: [64]u8 = undefined;
+    const m1 = file_k.zFOpen(tmpPath(&pb1, &tmp, "m1.txt"), "w", true);
+    const m2 = file_k.zFOpen(tmpPath(&pb2, &tmp, "m2.txt"), "w", true);
+    try std.testing.expect(m1 != 0 and m2 != 0 and m1 & m2 == 0);
+    try std.testing.expectEqual(@as(i64, 2), file_k.zFPut(m1 | m2, "hi"));
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFClose(m1 | m2));
+    try std.testing.expectEqualStrings("hi", try tmp.dir.readFile(io, "m1.txt", &rb));
+    try std.testing.expectEqualStrings("hi", try tmp.dir.readFile(io, "m2.txt", &rb));
+    // One $fclose of the OR freed both channels.
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFTell(m1));
+    try std.testing.expectEqual(@as(i64, -1), file_k.zFTell(m2));
+}
+
+test "§9.5 zFRes/zFKeep: one latched result per call site" {
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFRes(7701).*);
+    try std.testing.expectEqual(@as(i64, 5), file_k.zFKeep(7701, 5));
+    try std.testing.expectEqual(@as(i64, 5), file_k.zFRes(7701).*);
+    try std.testing.expectEqual(@as(i64, 0), file_k.zFRes(7702).*);
+}
+
+test "§9.5.4.2 $fscanf consumes exactly what matched, and only an EOF scan sets $feof" {
+    // The composition cg_display emits: scan the unread window, then advance
+    // by `ZScan.used`.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var pb: [256]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "f.txt", .data = "12 34\n" });
+    const r = file_k.zFOpen(tmpPath(&pb, &tmp, "f.txt"), "r", false);
+    const Step = struct { n: i64, used: usize, pos: i64 };
+    for ([_]Step{
+        .{ .n = 1, .used = 2, .pos = 2 }, // "12"; the space is left unread
+        .{ .n = 1, .used = 3, .pos = 5 }, // " 34"; the newline is left unread
+        .{ .n = -1, .used = 1, .pos = 6 }, // white space to the end: EOF
+    }) |want| {
+        const sc = str_k.zScan(file_k.zFWindow(r), "%d", 0);
+        try std.testing.expectEqual(want.n, sc.n);
+        try std.testing.expectEqual(want.used, sc.used);
+        try std.testing.expectEqual(want.n, file_k.zFTake(r, sc.n, @intCast(sc.used)));
+        try std.testing.expectEqual(want.pos, file_k.zFTell(r));
+        try std.testing.expectEqual(@as(i64, @intFromBool(want.n < 0)), file_k.zFEof(r));
+    }
+    _ = file_k.zFClose(r);
 }
