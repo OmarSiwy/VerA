@@ -3661,6 +3661,14 @@ pub const Gen = struct {
                 // operating point.
                 try self.b("(inst.analysis_kind == .static or inst.analysis_kind == .ic or " ++
                     "inst.analysis_kind == .nodeset or inst.analysis_kind == .dc)", .{});
+            } else if (std.mem.eql(u8, s, "tran")) {
+                // §4.6.1 "tran" is true during "the initial DC and time-sweep
+                // phases of a transient" — the ic phase counts. This is what
+                // lets a source spell ngspice's TRANOP/DCOP split: the
+                // transient's own operating point evaluates waveform(0) while
+                // .op/.dc/.ac bias at the DC value
+                // (`analysis("static") && !analysis("tran")`).
+                try self.b("(inst.analysis_kind == .tran or inst.analysis_kind == .ic)", .{});
             } else if (isAnalysisName(s)) {
                 try self.b("inst.analysis_kind == .{s}", .{s});
             } else {
