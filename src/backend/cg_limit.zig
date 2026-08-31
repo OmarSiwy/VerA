@@ -129,9 +129,12 @@ pub fn collect(g: *Gen) Error!void {
                 lc.argv[k] = v;
             }
             // One argument past the algorithm's arity is the frame sign.
+            // Integer is fine here — the emitted uses are comparisons
+            // (`< 0.0`), never arithmetic, and `parameter integer type` is
+            // the standard polarity spelling (bjt.va).
             if (d.args.len > 2 + n) {
                 const v = g.an.rv(d.args[2 + n]);
-                if (v != .f_zero and g.an.vty[@intFromEnum(v)] != .real) bad = true;
+                if (v != .f_zero and g.an.vty[@intFromEnum(v)] == .str) bad = true;
                 lc.sign = v;
             }
             if (bad) {
@@ -244,8 +247,9 @@ pub fn emit(g: *Gen) Error!void {
         \\/// The clamps run in SOURCE ORDER and each reads the `x` the previous one
         \\/// left, because that is both the order the model wrote them in and the
         \\/// order ngspice's load routines apply them (fetlim → limvds → pnjlim on
-        \\/// a JFET). A clamp on two internal nets splits its correction between
-        \\/// them, which moves the branch and leaves their common mode alone.
+        \\/// a JFET). Each clamp has ONE writer — the second-named node — so
+        \\/// clamps that share their first-named node cannot fight (emitClamp
+        \\/// says why a split breaks a BJT).
         \\
     , .{});
     try g.w("pub fn limit({s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64) contract.LimitResult(n_u) {{\n", .{
@@ -281,7 +285,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
         // positive, so the clamp runs on sg·v and hands back sg·result.
         try g.w("        const sg: f64 = if (", .{});
         try writeArg(g, lc.sign);
-        try g.w(" < 0.0) -1.0 else 1.0;\n", .{});
+        try g.w(" < 0) -1.0 else 1.0;\n", .{});
     }
     try g.w("        const vn = ", .{});
     try writeProbe(g, lc, "x");
@@ -303,16 +307,20 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     }
     try g.w(");\n", .{});
 
-    const w_hi = writable(g, lc.hi);
+    // SINGLE WRITER, never a split. Junctions share nodes — a BJT's vbe and
+    // vbc clamps both span `bi`, and a diode-connected device gathers b and c
+    // from ONE global node — so a dv/2 split makes sequential clamps fight
+    // through the shared side and the final frame satisfies neither probe
+    // (observed: a 12 V rail's local image dragged to −43 V, junction read
+    // +72 V, e^80 residual). Anchoring the FIRST-named node and writing the
+    // whole correction to the second keeps every probe exactly its limited
+    // value: model authors put the shared side first (V(bi,ei), V(b,si)),
+    // which is also ngspice's frame (vbe state hangs off the emitter side).
     const w_lo = writable(g, lc.lo);
-    if (w_hi and w_lo) {
-        try g.w("        const dv = (vl - vn) * 0.5;\n", .{});
-        try g.w("        x[@intFromEnum(U.{s})] += dv;\n", .{g.u_names[lc.hi]});
-        try g.w("        x[@intFromEnum(U.{s})] -= dv;\n", .{g.u_names[lc.lo]});
-    } else if (w_hi) {
-        try g.w("        x[@intFromEnum(U.{s})] += vl - vn;\n", .{g.u_names[lc.hi]});
-    } else {
+    if (w_lo) {
         try g.w("        x[@intFromEnum(U.{s})] -= vl - vn;\n", .{g.u_names[lc.lo]});
+    } else {
+        try g.w("        x[@intFromEnum(U.{s})] += vl - vn;\n", .{g.u_names[lc.hi]});
     }
     // ngspice reports `icheck` from `DEVpnjlim` alone, and sets it exactly on
     // the paths where it moved `vnew` — so "the value changed" IS the flag,
@@ -331,7 +339,12 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     if (v == .f_zero) return g.w("0.0", .{});
     const k = g.lo_idx[@intFromEnum(v)];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
-    try g.w("m.f{d}.v", .{k});
+    // An integer core field (a `parameter integer` sign) is a bare i64, not
+    // a Dual — no `.v` to read.
+    if (g.an.vty[@intFromEnum(v)] == .int)
+        try g.w("m.f{d}", .{k})
+    else
+        try g.w("m.f{d}.v", .{k});
 }
 
 /// SPICE `MODEINITJCT`. Newton started at 0 V on a junction sees no current
@@ -375,7 +388,7 @@ fn emitSeed(g: *Gen) Error!void {
         if (lc.sign != .f_zero) {
             try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.u_names[if (on_lo) lc.lo else lc.hi]});
             try writeArg(g, lc.sign);
-            try g.w(" < 0.0) {s}", .{if (on_lo) "" else "-"});
+            try g.w(" < 0) {s}", .{if (on_lo) "" else "-"});
             try writeArg(g, lc.argv[1]);
             try g.w(" else {s}", .{if (on_lo) "-" else ""});
             try writeArg(g, lc.argv[1]);
