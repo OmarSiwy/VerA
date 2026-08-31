@@ -350,6 +350,16 @@ pub const Gen = struct {
     /// `<module>__common__core`, or empty for a model with no targets at all.
     common_name: []const u8 = "",
     common_mode: proof.FloatMode = .optimized,
+    /// Set while `emitFused` is emitting: the `core` call belongs to the whole
+    /// function, above both halves, so `emitStamps` must not open its own.
+    core_hoisted: bool = false,
+    /// Set by `emitStamps` when it wanted a core call. Under `core_hoisted` it
+    /// is the only record that one is needed, and `emitFused` reads it to
+    /// decide whether to insert the hoisted line.
+    core_wanted: bool = false,
+    /// Extra indent levels for body emission, so the residual stamps can be
+    /// emitted verbatim inside `evalQ`'s two nested blocks. Only `ind` reads it.
+    ind_base: u32 = 0,
     /// Float mode of the unit CURRENTLY being emitted. `.strict` is the eager
     /// `sel` license — see `renderInst`'s select case. Set by `emitUnit` and
     /// the common-core emitter, false-by-default so any other emission path
@@ -569,7 +579,7 @@ pub const Gen = struct {
     /// comptime-known, so this lowers to a memset (see `ArrayList.appendNTimes`,
     /// which is `inline` for exactly that reason).
     fn ind(self: *Gen, n: u32) Error!void {
-        try self.out.appendNTimes(self.gpa, ' ', n * 4);
+        try self.out.appendNTimes(self.gpa, ' ', (n + self.ind_base) * 4);
     }
 
     // --------------------------------------------------------------- units ----
@@ -4212,7 +4222,10 @@ pub const Gen = struct {
         for (self.lower.contributions.items) |c| {
             if (self.an.rv(c.react_val) != .f_zero) any_q = true;
         }
-        if (any_q) try self.emitResidual(true);
+        if (any_q) {
+            try self.emitResidual(true);
+            try self.emitFused();
+        }
         try self.emitDisplay();
     }
 
@@ -4241,7 +4254,6 @@ pub const Gen = struct {
         self.uses_x = false;
         self.uses_model = false;
         self.uses_inst = false;
-        var stamps: u32 = 0;
 
         // Same reserve-and-backpatch as `emitUnit`. `res` needs a fourth slot:
         // with no stamps nothing assigns to it, and Zig rejects a `var` that is
@@ -4258,6 +4270,23 @@ pub const Gen = struct {
         try self.w("inst: *const Instance, _: f64) [n_u]S {{\n    ", .{});
         const at_mut = self.out.items.len;
         try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+        const stamps = try self.emitStamps(react);
+
+        if (!self.uses_x) self.patchParam(at_x, "x".len);
+        if (!self.uses_model) self.patchParam(at_model, "model".len);
+        if (!self.uses_inst) self.patchParam(at_inst, "inst".len);
+        if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
+        try self.w("    return res;\n}}\n\n", .{});
+    }
+
+    /// The §5.6 stamp rows for one residual half, into a `res` the caller has
+    /// already declared. Accumulates `uses_x`/`uses_model`/`uses_inst` and
+    /// returns the row count, so the caller can back-patch its own signature.
+    ///
+    /// Split out of `emitResidual` so `emitFused` can emit BOTH halves against
+    /// one `core` call without restating any of this.
+    fn emitStamps(self: *Gen, react: bool) Error!u32 {
+        var stamps: u32 = 0;
         // ONE core evaluation per residual, not one per contribution. LLVM does
         // not recover this by itself — measured, see `planCommon`'s header — so
         // the number of times the model runs is decided here, in the emitter.
@@ -4316,8 +4345,11 @@ pub const Gen = struct {
                 self.uses_inst = true;
                 if (!opened) {
                     opened = true;
-                    try self.ind(1);
-                    try self.b("const m = core(S, x, model, inst);\n", .{});
+                    self.core_wanted = true;
+                    if (!self.core_hoisted) {
+                        try self.ind(1);
+                        try self.b("const m = core(S, x, model, inst);\n", .{});
+                    }
                 }
             }
             stamps += 1;
@@ -4429,11 +4461,75 @@ pub const Gen = struct {
             }
         }
 
+        return stamps;
+    }
+
+    /// §5.6 + §5.6.1.2 — both residuals from ONE model evaluation.
+    ///
+    /// `eval` and `q` are each correct alone and each opens its own `core`, so
+    /// a host that needs both — every transient step does — ran the entire
+    /// model twice. That is an artifact of the API shape, not of the physics:
+    /// `planCommon` already put every shared subexpression in one core whose
+    /// returned struct carries BOTH halves' targets (see its header), and the
+    /// two dispatchers just read different fields of it. Measured on a host
+    /// SPICE: `<module>__common__core` appeared twice per instance evaluation
+    /// with identical inclusive cost, against device evaluation that was ~90%
+    /// of a transient. Halving it needs no new analysis, only this entry point.
+    ///
+    /// Additive on purpose. `eval` and `q` are unchanged and still the §3.1
+    /// contract; DC wants the resistive half alone and should keep calling
+    /// `eval`. `evalQ` exists only when there IS a reactive half.
+    fn emitFused(self: *Gen) Error!void {
+        self.uses_x = false;
+        self.uses_model = false;
+        self.uses_inst = false;
+        self.core_wanted = false;
+        self.core_hoisted = true;
+        defer self.core_hoisted = false;
+
+        try self.w(
+            \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
+            \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
+            \\
+        , .{});
+        try self.w("pub fn evalQ(comptime S: type, ", .{});
+        const at_x = self.out.items.len;
+        try self.w("x: [n_u]S, ", .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model, ", .{});
+        const at_inst = self.out.items.len;
+        try self.w("inst: *const Instance, _: f64) struct {{ res: [n_u]S, q: [n_u]S }} {{\n", .{});
+        // Reserved: the hoisted `core` line is INSERTED here afterwards, once
+        // both halves have said whether either wants one. Every offset taken
+        // above is before this point, so none of them move.
+        const at_core = self.out.items.len;
+
+        for ([2]bool{ false, true }) |react| {
+            try self.ind(1);
+            try self.b("const {s} = blk: {{\n", .{if (react) "qq" else "rr"});
+            try self.ind(2);
+            const at_mut = self.out.items.len;
+            try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+            self.ind_base = 1;
+            const stamps = try self.emitStamps(react);
+            self.ind_base = 0;
+            if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
+            try self.ind(2);
+            try self.b("break :blk res;\n", .{});
+            try self.ind(1);
+            try self.b("}};\n", .{});
+        }
+        try self.w("    return .{{ .res = rr, .q = qq }};\n}}\n\n", .{});
+
+        // `core_wanted` implies all three are used: `emitStamps` sets `uses_x`
+        // for every live row and `uses_model`/`uses_inst` on the same branch
+        // that opens the core, so this can never reference a patched-out `_`.
+        if (self.core_wanted)
+            try self.out.insertSlice(self.gpa, at_core, "    const m = core(S, x, model, inst);\n");
+
         if (!self.uses_x) self.patchParam(at_x, "x".len);
         if (!self.uses_model) self.patchParam(at_model, "model".len);
         if (!self.uses_inst) self.patchParam(at_inst, "inst".len);
-        if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
-        try self.w("    return res;\n}}\n\n", .{});
     }
 
     /// §5.6.1.3 the runtime-selected branch row — §5.6.5's switch branch, and
@@ -6093,6 +6189,60 @@ test "codegen: §5.6.1.2 reactive split emits q(), §4.2.12 select stays lazy" {
     const guard = std.mem.indexOf(u8, body, "if (").?;
     const lg = std.mem.indexOf(u8, body, ".log()").?;
     try std.testing.expect(lg > guard);
+}
+
+test "codegen: evalQ fuses both residuals onto ONE core call" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module cap(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real c = 1e-12 from (0:inf);
+        \\  parameter real r = 1e3 from (0:inf);
+        \\  analog begin
+        \\    I(p, n) <+ c * ddt(V(p, n));
+        \\    I(p, n) <+ V(p, n) / r;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // `eval` and `q` survive untouched — the fusion is additive.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(comptime S: type") != null);
+    const at = std.mem.indexOf(u8, src, "pub fn evalQ(comptime S: type").?;
+    const fused = src[at..][0..std.mem.indexOf(u8, src[at..], "\n}\n").?];
+
+    // The whole point: ONE core call for both halves. Two would make `evalQ`
+    // exactly the `eval` + `q` it exists to replace.
+    try std.testing.expect(std.mem.count(u8, fused, "core(S, x, model, inst)") == 1);
+    // ...and it is hoisted ABOVE both blocks, not opened inside one of them.
+    try std.testing.expect(std.mem.indexOf(u8, fused, "core(S, x, model, inst)").? <
+        std.mem.indexOf(u8, fused, "blk:").?);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_u]S }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = rr, .q = qq };") != null);
+    // Both halves stamp; a fused function with an empty half is the bug where
+    // `emitStamps` wrote into the wrong block.
+    try std.testing.expect(std.mem.count(u8, fused, "var   res = [_]S{S.con(0.0)} ** n_u;") == 2);
+}
+
+test "codegen: a device with no reactive half gets no evalQ" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module res(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real r = 1e3 from (0:inf);
+        \\  analog I(p, n) <+ V(p, n) / r;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // Pairs with `q`: the contract rejects `evalQ` without one, so codegen
+    // must not emit a fused entry point there is nothing to fuse.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn evalQ(") == null);
 }
 
 test "codegen: §5.8 control flow reconstructs into structured Zig" {
