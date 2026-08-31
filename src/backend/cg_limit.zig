@@ -280,18 +280,33 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
         uName(g, lc.hi), uName(g, lc.lo), lc.alg,
         if (signed) " in the frame of its sign argument" else "",
     });
-    if (signed) {
-        // ±1 recovered from the model value: the limiters assume forward =
-        // positive, so the clamp runs on sg·v and hands back sg·result.
-        try g.w("        const sg: f64 = if (", .{});
-        try writeArg(g, lc.sign);
-        try g.w(" < 0) -1.0 else 1.0;\n", .{});
-    }
     try g.w("        const vn = ", .{});
     try writeProbe(g, lc, "x");
     try g.w(";\n        const vo = ", .{});
     try writeProbe(g, lc, "old");
-    try g.w(";\n        const vl = {s}z{s}({s}vn, {s}vo", .{
+    try g.w(";\n", .{});
+    if (signed) {
+        // ±1 recovered from the model value: the limiters assume forward =
+        // positive, so the clamp runs on sg·v and hands back sg·result.
+        //
+        // `limvds` alone frames on the OLD vds sign, not the sign argument:
+        // ngspice's loads branch on `vdsold >= 0` (mos1load: `vds =
+        // -DEVlimvds(-vds, -vdsold)` in inverse mode), which in raw node
+        // coordinates is sign(vo). Framing on device type instead pinned an
+        // inverted-mode FET at DEVlimvds's absolute -0.5 bound — a clamp
+        // that is NOT fixed-point-preserving, so it moved the converged
+        // solution, not just the trajectory (2.1x drain current at vds=-5).
+        if (lc.alg == .limvds) {
+            try g.w("        const sg: f64 = if (vo < 0) -1.0 else if (vo > 0) 1.0 else (if (", .{});
+            try writeArg(g, lc.sign);
+            try g.w(" < 0) -1.0 else 1.0);\n", .{});
+        } else {
+            try g.w("        const sg: f64 = if (", .{});
+            try writeArg(g, lc.sign);
+            try g.w(" < 0) -1.0 else 1.0;\n", .{});
+        }
+    }
+    try g.w("        const vl = {s}z{s}({s}vn, {s}vo", .{
         if (signed) "sg * " else "",
         switch (lc.alg) {
             .pnjlim => @as([]const u8, "Pnjlim"),
