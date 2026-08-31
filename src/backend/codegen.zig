@@ -1546,9 +1546,7 @@ pub const Gen = struct {
     /// contract.StateCtlOp — the engine converts by ordinal.
     fn emitStateCtl(self: *Gen) Error!void {
         try self.w(
-            \\pub const StateCtlOp = enum(u8) {{ query, commit, revert }};
-            \\
-            \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: StateCtlOp) bool {{
+            \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: contract.StateCtlOp) bool {{
             \\    if (op == .query) {{
             \\        return
         , .{});
@@ -5216,10 +5214,17 @@ fn isAnalysisName(s: []const u8) bool {
 }
 
 /// Length of the §4.5.7 absdelay history ring.
-// ponytail: fixed 32 samples with linear interpolation. A delay longer than 32
-// timesteps degrades to the oldest sample; make it a parameter of the operator
-// (or size it from `td / min_step`) if a real model needs more.
-const hist_len: usize = 32;
+// ponytail: fixed 512 samples with linear interpolation. The floor is set by
+// SPICE canon, not by the model: maxstep = min(tstep, span/50), so a fixture
+// like `T TD=2n` under `.tran 20p` legitimately runs td/dt = 100 accepted
+// steps per delay — at 32 the whole lookback fell off the ring and the line
+// transported with ZERO delay (devices/tline read its far port half an edge
+// early for the entire run). Edge-resolving LTE shrinkage pushes the worst
+// case a few times higher, hence 512. A query older than the ring clamps to
+// the OLDEST sample (see zHistAt) — bounded staleness, never a time machine.
+// Upgrade path if a fixture still underruns: host-owned growable history
+// (the engine's dormant HistoryBuffer channel), which is what ngspice does.
+const hist_len: usize = 512;
 
 fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
     if (react) return "§5.6.1.2 reactive part (charge/flux; q() differentiates it)";
@@ -5789,7 +5794,11 @@ const hist_txt =
     \\        }
     \\        newer = older;
     \\    }
-    \\    return vs[(head + n - 1) % n];
+    \\    // Query older than the whole ring: clamp to the OLDEST sample.
+    \\    // Returning the newest here (as this once did) collapses the delay
+    \\    // to zero — the output tracks the input live, which is maximally
+    \\    // wrong for a transport operator. Oldest is bounded staleness.
+    \\    return vs[head];
     \\}
     \\fn zHistPush(ts: []f64, vs: []f64, head: *u32, t: f64, v: f64) void {
     \\    ts[head.*] = t;
