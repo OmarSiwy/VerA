@@ -182,7 +182,8 @@ pub fn get(op: Opcode) Info {
 /// Returns `op` over already-folded operands, through the one constant kernel: the
 /// per-instruction step every MIR folder shares (`analysis.foldConst`,
 /// `lower/contrib.scanFinite`). Null when `op` is not a constant operation or
-/// the kernel declines (a zero integer divisor, `0 ** -1`).
+/// the kernel declines (a zero integer divisor, `0 ** -1`). `args` holds one
+/// folded operand per operand of `op` (one for a unary, two for a binary).
 pub fn fold(op: Opcode, args: []const Const) ?Const {
     return switch (table.get(op).fold) {
         .none => null,

@@ -135,8 +135,12 @@ folds: [2]FoldColumn = .{ .{}, .{} },
 /// or a string's index in `strs`. 9 bytes a Value instead of 24, in the
 /// table with one row per Value that codegen keeps for the whole emit.
 pub const FoldColumn = struct {
+    /// Which `Const` arm each Value folded to, `.none` for no fold.
     kind: []Kind = &.{},
+    /// The arm's payload: an integer's or a real's bits, or an index into
+    /// `strs`. Meaningless where `kind` is `.none`.
     bits: []u64 = &.{},
+    /// The string folds, in the order they were found; borrowed slices.
     strs: std.ArrayList([]const u8) = .empty,
 
     const Kind = enum(u8) { none, int, real, str };
@@ -173,6 +177,8 @@ pub const FoldColumn = struct {
 
 /// Builds every table above. Tables are allocated in `arena` and borrow
 /// `mir`/`lowered`, which must outlive the result and not change after.
+/// `mir` must have its entry block. Writes `mir`'s alias table (path
+/// compression) and nothing else.
 pub fn build(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -190,6 +196,7 @@ pub fn build(
 /// empty. For the prover, which runs before codegen's own `build` and needs
 /// no value types; building them twice per compile measured slower. It adds
 /// only `buildLiteralFolds` to identify provably untaken runtime-error paths.
+/// `mir` must have its entry block.
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -507,7 +514,8 @@ fn intersect(self: *const Analysis, x0: u32, y0: u32) u32 {
 }
 
 /// Returns whether block `a` dominates block `x`. O(1) via the Euler-tour
-/// interval. Unreachable blocks dominate only themselves.
+/// interval. Unreachable blocks dominate only themselves. Both must be
+/// below `nb`.
 pub fn dominates(self: *const Analysis, a: u32, x: u32) bool {
     const ia = self.dom_in[a];
     const ix = self.dom_in[x];
@@ -632,6 +640,7 @@ fn buildArrOf(self: *Analysis) Error!void {
 }
 
 /// §3.2.2 the array a Value is a version of, or null for a scalar.
+/// Requires `build`, not `buildStructure`.
 pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
     const a = self.arr_of[@backingInt(self.rv(v))];
     return if (a == none_u32) null else a;
@@ -842,6 +851,7 @@ fn defDeps(self: *const Analysis, val: Mir.Value, col: []const u64, which: DepCo
 /// Conservative: `false` is always sound. Worth knowing because
 /// `@setFloatMode(.strict)` forbids folding a multiply by a literal zero, so a
 /// dual holding `splat(0)` would pay full-width arithmetic at every use.
+/// Requires `build`; so do `xDep`, `pointDep`, `unknownDeps` and `acDynDeps`.
 pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.depsOf(v) == 0;
 }
@@ -910,7 +920,8 @@ fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
 }
 
 /// Returns the phi `inst`'s incoming value on the edge from block `from`, or
-/// `.undef` if it has none.
+/// `.undef` if it has none; the first pair wins if two name `from`. `inst`
+/// must be a phi. This operation is O(pairs).
 pub fn phiIn(self: *const Analysis, inst: Mir.Inst, from: u32) Mir.Value {
     const d = self.mir.instData(inst).phi;
     var i: u32 = 0;

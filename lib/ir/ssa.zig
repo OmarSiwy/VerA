@@ -24,7 +24,7 @@ const list_end: u32 = std.math.maxInt(u32);
 /// Not `Mir.Value.undef`, which is a legitimate stored result (a phi over only
 /// self-references collapses to it); confusing the two would re-run the
 /// recursive read and re-create the collapsed phi. Cells hold
-/// `@intFromEnum(value) + 1` so a zeroed chunk already reads as empty.
+/// `@backingInt(value) + 1` so a zeroed chunk already reads as empty.
 /// `writeVariable` asserts no overflow.
 const absent: u32 = 0;
 
@@ -62,12 +62,16 @@ const map_gpa = std.heap.page_allocator;
 /// (`Mir.addBlock`); the builder records edges, writes and reads, and emits
 /// phis into the Mir as reads require.
 pub const SsaBuilder = struct {
+    /// Allocates the phi rows the builder emits into `mir`; never the
+    /// builder's own tables (`map_gpa`).
     gpa: std.mem.Allocator,
+    /// The Mir the builder reads blocks from and emits phis into. Borrowed:
+    /// it must outlive the builder.
     mir: *Mir,
     /// (place, slot) → Value as a two-level place-major table: `dir[place *
     /// dir_stride + slot >> chunk_bits]` names a `chunk_len`-cell chunk of
     /// `cells`, and the cell is `slot`'s low bits within it. A cell holds
-    /// `absent` (= 0) where unwritten and `@intFromEnum(value) + 1` where
+    /// `absent` (= 0) where unwritten and `@backingInt(value) + 1` where
     /// written. Chunk 0 is all `absent` and never written: every directory
     /// entry starts on it, so a read needs no presence test.
     ///
@@ -207,7 +211,8 @@ pub const SsaBuilder = struct {
     }
 
     /// Marks a block's predecessors final and fills every incomplete phi.
-    /// Idempotent. Asserts that `block` exists.
+    /// Idempotent. Filling reads predecessors, which may emit phis into the
+    /// Mir and so invalidate its `InstIterator`s. Asserts that `block` exists.
     pub fn sealBlock(self: *SsaBuilder, block: Mir.Block) Error!void {
         const b = try self.ensureState(block);
         if (self.block_state.items(.sealed)[b]) return;
@@ -227,7 +232,9 @@ pub const SsaBuilder = struct {
 
     // ------------------------------------------------------- read / write --
 
-    /// Records the §5.7 assignment `place := value` in `block`.
+    /// Records the §5.7 assignment `place := value` in `block`; a later write
+    /// to the same pair overwrites it. Asserts that `block` exists and that
+    /// `value` is not one of the two highest Value indices (see `pending`).
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@backingInt(value) < std.math.maxInt(u32) - 1);
@@ -254,7 +261,10 @@ pub const SsaBuilder = struct {
 
     /// Returns the value of `place` in `block`, emitting phis as needed. A place
     /// undefined on some path yields `.undef` there; initializing declared
-    /// variables (§3.4.4) is the caller's job.
+    /// variables (§3.4.4) is the caller's job. The result may be a phi that a
+    /// later `sealBlock` collapses: pass it through `Mir.resolveAlias` before
+    /// comparing it. A minted phi invalidates the Mir's `InstIterator`s.
+    /// Asserts that `block` exists.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         _ = try self.ensureState(block);
         return self.readFrom(place, block);
