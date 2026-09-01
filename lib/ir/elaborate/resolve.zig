@@ -24,7 +24,7 @@ const PathKey = elab_names.PathKey;
 /// Returns whether a declared net name is an out-of-context one. A period can
 /// only come from a hierarchical path (see `sep`).
 pub fn isOoc(name: []const u8) bool {
-    return std.mem.indexOfScalar(u8, name, sep) != null;
+    return std.mem.findScalar(u8, name, sep) != null;
 }
 
 /// Adds `nets` to the flattened module through `addNet`, skipping
@@ -375,7 +375,7 @@ fn levelAnswer(self: *Flatten, net: Ast.StrId, tok: u32, discs: []const Ast.StrI
             continue;
         }
         // ponytail: linear membership for short lists; use a set if this scan dominates.
-        if (std.mem.indexOfScalar(Ast.StrId, cands.items, d) == null)
+        if (std.mem.findScalar(Ast.StrId, cands.items, d) == null)
             cands.appendAssumeCapacity(d);
     }
     if (cands.items.len <= 1) return if (cands.items.len == 1) cands.items[0] else null;
@@ -428,11 +428,11 @@ fn matchResolution(self: *Flatten, cands: []const Ast.StrId, report: bool) Error
         for (self.ctx.file.connectrules) |*cr| {
             rule: for (cr.resolutions) |*r| {
                 for (cands) |c| {
-                    if (std.mem.indexOfScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
+                    if (std.mem.findScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
                 }
                 var exact = true;
                 for (r.disciplines) |d| {
-                    if (std.mem.indexOfScalar(Ast.StrId, cands, d) == null) exact = false;
+                    if (std.mem.findScalar(Ast.StrId, cands, d) == null) exact = false;
                 }
                 if (exact != want_exact) continue;
                 if (first != null) {

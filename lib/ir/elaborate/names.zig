@@ -129,9 +129,9 @@ pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId 
 /// A flat name `path ++ local`, not yet joined: the key shape of
 /// `Flatten.defparams` and `Flatten.ooc`, probed with `getAdapted` and
 /// `Context` so a lookup allocates nothing.
-// A probe used to print the joined key into the compilation arena and drop
-// it, once per parameter, alias, port and net of every instance.
 pub const PathKey = struct {
+    // A probe used to print the joined key into the compilation arena and
+    // drop it, once per parameter, alias, port and net of every instance.
     path: []const u8,
     local: []const u8,
 
@@ -180,7 +180,7 @@ pub fn flat(self: *Flatten, local: Ast.StrId) Ast.StrId {
 pub fn unknownModule(self: *Flatten, inst: *const Ast.Instance) Error!void {
     const want = self.ctx.file.str(inst.module);
     for (self.ctx.file.netlist_unsupported) |card| {
-        const space = std.mem.indexOfScalar(u8, card, ' ').?; // `name type`
+        const space = std.mem.findScalar(u8, card, ' ').?; // `name type`
         if (!std.ascii.eqlIgnoreCase(card[0..space], want)) continue;
         return self.err(inst.main_tok, .E0952, "`{s}` is a SPICE `.MODEL` of type `{s}`, a primitive Table E.1 and VerA do not provide", .{ want, card[space + 1 ..] });
     }

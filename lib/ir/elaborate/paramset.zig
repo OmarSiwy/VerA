@@ -199,7 +199,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
         const name = key[path.len..];
         // A path into a descendant names that descendant's own parameters,
         // not an additional parameter of the paramset instance.
-        if (std.mem.indexOfScalar(u8, name, sep) != null) continue;
+        if (std.mem.findScalar(u8, name, sep) != null) continue;
         if (!exposes(self, ps, name)) return false;
     }
     const bindings = try self.ctx.arena.alloc(?elab_override.ParamBinding, ps.params.len);
