@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const proof = @import("../proof.zig");
-const proof_prover = @import("prover.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Lower = @import("../lower.zig");
@@ -17,14 +16,14 @@ const prove = proof.prove;
 const proveOpts = proof.proveOpts;
 
 /// The frontend preprocessor the harness runs.
-pub const Preprocessor = @import("frontend").Preprocessor;
+const Preprocessor = @import("frontend").Preprocessor;
 /// The frontend lexer the harness runs.
-pub const Lexer = @import("frontend").Lexer;
+const Lexer = @import("frontend").Lexer;
 /// The frontend parser the harness runs.
-pub const Parser = @import("frontend").Parser;
+const Parser = @import("frontend").Parser;
 
 /// Source parsed and lowered in its own arena, ready for `prove`. Free with `deinit`.
-pub const Harness = struct {
+const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
     mir: Mir,
@@ -106,9 +105,9 @@ test "W0650: a .strict unit warns, names the culprit, and still compiles" {
     const labels = h.bag.labels(e, &lbuf);
     var mentions_probe = false;
     for (labels) |l| {
-        if (std.mem.indexOf(u8, l.text, "probe") != null) mentions_probe = true;
+        if (std.mem.find(u8, l.text, "probe") != null) mentions_probe = true;
     }
-    try std.testing.expect(mentions_probe or std.mem.indexOf(u8, e.point, "probe") != null);
+    try std.testing.expect(mentions_probe or std.mem.find(u8, e.point, "probe") != null);
 }
 
 test "W0650: a fully-ranged model is provably finite and warns about nothing" {
@@ -192,7 +191,7 @@ test "W0651: a range closed on infinity is called out separately" {
     defer v.deinit(std.testing.allocator);
 
     const e = h.find(.W0651) orelse return error.NoRangeWarning;
-    try std.testing.expect(std.mem.indexOf(u8, e.message, "rs") != null);
+    try std.testing.expect(std.mem.find(u8, e.message, "rs") != null);
     // It points at the DECLARATION, which is where the fix goes.
     try std.testing.expect(!e.span.isNone());
     // ...and the closed bound really did cost the unit its proof.
@@ -494,7 +493,7 @@ test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
     // rather than the prelude.
     try std.testing.expect(!e.span.isNone());
     const src_text = h.bag.fileText(h.bag.locate(e.span, e.file).file);
-    try std.testing.expect(std.mem.indexOf(u8, src_text, "10 % d") != null);
+    try std.testing.expect(std.mem.find(u8, src_text, "10 % d") != null);
 }
 
 test "proof: unbounded voltage exp is .strict, never an error (LRM 4.3.2 'All x')" {
@@ -581,8 +580,8 @@ test "proof: a PROVABLY-violated ln domain is still an error (LRM 4.3.2 'shall r
     try std.testing.expect(!v.ok());
     try std.testing.expect(h.has(.E0602));
     const e = h.find(.E0602).?;
-    try std.testing.expect(std.mem.indexOf(u8, e.message, "ln()") != null);
-    try std.testing.expect(std.mem.indexOf(u8, e.message, "parameter `k`") != null);
+    try std.testing.expect(std.mem.find(u8, e.message, "ln()") != null);
+    try std.testing.expect(std.mem.find(u8, e.message, "parameter `k`") != null);
     // `Mir.InstRow.tok` gives finiteness diagnostics a location.
     try std.testing.expect(!e.span.isNone());
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);

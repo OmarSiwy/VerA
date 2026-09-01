@@ -14,18 +14,20 @@ const Lower = @import("../lower.zig");
 const Lowered = Lower.Lowered;
 const Analysis = @import("../analysis.zig");
 const diag = @import("diag");
-const math = proof.math;
+const math = std.math;
 const FloatMode = proof.FloatMode;
 const Verdict = proof.Verdict;
 const Options = proof.Options;
 const max_errors = proof.max_errors;
 const unitCount = proof.unitCount;
 
+const assert = std.debug.assert;
+
 /// A guard fact: "this Value is confined to this interval here".
-pub const Fact = struct { v: u32, iv: proof_lattice.Interval };
+const Fact = struct { v: u32, iv: proof_lattice.Interval };
 
 /// Where a value's select-arm guard facts live in `facts`.
-pub const GuardRef = struct { start: u32 = 0, count: u32 = 0 };
+const GuardRef = struct { start: u32 = 0, count: u32 = 0 };
 
 // Row budgets: `Fact` per guard (psp103: 2,732 select-arm facts), `GuardRef`
 // per value (psp103: 23,869), `Interval` per value (see its layout note).
@@ -36,9 +38,11 @@ comptime {
 }
 
 /// "No index" sentinel for `u32` side tables.
-pub const none_u32 = std.math.maxInt(u32);
+const none_u32 = std.math.maxInt(u32);
 
 /// The prover's state for one `proveOpts` call. Every slice lives in `arena`.
+/// The pub transforms run once each, in the order `proveOpts` calls them: `seedValues`,
+/// `buildClasses`, `markSelectArms`, `walk`, `verdict`. Each asserts that the one before it ran.
 pub const Prover = struct {
     gpa: std.mem.Allocator,
     /// Scratch arena; dies with `prove`.
@@ -126,6 +130,7 @@ pub const Prover = struct {
     /// Only `inst_result` values stay `top`; `walk` fills those. Emits W0651.
     pub fn seedValues(self: *Prover) !void {
         const n = self.an.nv;
+        assert(self.iv.len == 0); // runs once
         self.iv = try self.arena.alloc(proof_lattice.Interval, n);
         self.finite = try self.arena.alloc(bool, n);
         self.uses = try self.arena.alloc(u32, n);
@@ -296,6 +301,7 @@ pub const Prover = struct {
     /// terminators, `opt_barrier`, `anew` and `store` are never merged.
     pub fn buildClasses(self: *Prover) !void {
         const n = self.an.nv;
+        assert(self.iv.len == n and self.class_of.len == 0); // after `seedValues`, once
         self.class_of = try self.arena.alloc(u32, n);
         @memset(self.class_of, none_u32);
 
@@ -351,6 +357,7 @@ pub const Prover = struct {
     /// Codegen obligation: a guarded `select` must evaluate only the taken arm, or `ln(x)`
     /// runs with x <= 0 and the guard is false.
     pub fn markSelectArms(self: *Prover) !void {
+        assert(self.class_of.len == self.an.nv); // after `buildClasses`
         // Use counts first: the single-use test is what scopes an arm.
         self.countUses();
 
@@ -568,6 +575,7 @@ pub const Prover = struct {
     /// predecessor (a loop back edge, §5.9) is still top and not finite, so loops widen to
     /// top at once: sound and terminating.
     pub fn walk(self: *Prover) !void {
+        assert(self.uses.len == self.an.nv and self.visited_block.len == 0); // after seeding, once
         // ponytail: immediate widening loses loop-carried bounds. Upgrade path if a
         // real model needs them: an ascending-chain worklist from bottom, widening
         // after k rounds, iterating only the natural loop body (`Analysis.loop_of`).
@@ -1113,6 +1121,7 @@ pub const Prover = struct {
     /// (order: `proof.Verdict.unit_modes`), and emits W0650 for accepted `.strict` units.
     /// Caller owns `unit_modes`, allocated with `gpa`.
     pub fn verdict(self: *Prover) !Verdict {
+        assert(self.visited_block.len == self.an.nb); // after `walk`
         const n = unitCount(self.lowered);
         const modes = try self.gpa.alloc(FloatMode, n);
         errdefer self.gpa.free(modes);

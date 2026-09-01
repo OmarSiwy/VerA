@@ -2,15 +2,16 @@
 //! requires (§4.3.1/§4.3.2 Tables 4-14/4-15). Pure values: no MIR walk, no allocation,
 //! no diagnostics. LRM §3.4.2, §4.2, §4.2.4, §4.2.5, §4.2.8, §4.3.1, §4.3.2.
 
-const proof = @import("../proof.zig");
 const Mir = @import("../mir.zig");
-const math = proof.math;
+const math = @import("std").math;
 
 /// Abstract value: a real interval with open or closed ends. `top` is `(-inf, inf)` closed,
 /// which is also the "no evidence" element, so a zero-initialised pass is sound.
 /// NaN never appears as a bound: a NaN constant widens to `top`, and the transfer functions
 /// answer `top` or the wide infinity for a NaN endpoint. Empty (`lo > hi`) means unreachable
 /// and vacuously satisfies every domain, which is right for a contradictory guard.
+/// Every predicate below is sound, not exact: `true` is a proof about every member, `false`
+/// is only the absence of one (`nonzero` is consulted by `excludesZero` alone).
 pub const Interval = struct {
     // Stays AoS (24 bytes): every consumer reads a whole interval, and packing the three flags
     // only moves the padding. `seedValues`' fill, ReleaseFast, ns per fill (min of 25):
@@ -42,7 +43,8 @@ pub const Interval = struct {
         return math.isFinite(i.lo) and math.isFinite(i.hi);
     }
 
-    /// Returns whether no value satisfies the bounds (unreachable).
+    /// Returns whether no value satisfies the bounds (unreachable). A `nonzero` `[0, 0]` has
+    /// no member either but reads non-empty.
     pub fn isEmpty(i: Interval) bool {
         return i.lo > i.hi or (i.lo == i.hi and (i.lo_open or i.hi_open));
     }
