@@ -892,3 +892,259 @@ test "proof: a provably-zero divisor is still E0601, for `/` and real `%` alike"
         try std.testing.expect(h.has(.E0601));
     }
 }
+
+// ------------------------------------------------------- corner cases --
+
+/// The two-terminal module most cases below wrap their body in.
+const head = "module m(p, n);\n  inout p, n;\n  electrical p, n;\n";
+const tail = "\nendmodule\n";
+
+/// Lowers and proves `src`, leaving the harness in `h` for the caller's checks.
+/// The caller frees both: `h.deinit()` and the verdict's `deinit`.
+fn proveSrc(h: *Harness, src: []const u8, opts: Options) !Verdict {
+    Harness.run(std.testing.allocator, src, h) catch |e| {
+        h.deinit();
+        return e;
+    };
+    errdefer h.deinit();
+    return h.prove(std.testing.allocator, opts);
+}
+
+test "§3.4.2: an `exclude` clips an end only when it covers that end's own bracket" {
+    // [0:10] minus (0:5) is {0} ∪ [5:10]: the open bracket leaves 0 in, so
+    // `V/x` can divide by zero and the unit is `.strict`. A square bracket, or
+    // an end the range already leaves open, really removes it.
+    const cases = [_]struct { range: []const u8, mode: FloatMode }{
+        .{ .range = "7.0 from [0:10] exclude (0:5)", .mode = .strict },
+        .{ .range = "7.0 from [0:10] exclude [0:5)", .mode = .optimized },
+        .{ .range = "7.0 from (0:10] exclude (0:5)", .mode = .optimized },
+        .{ .range = "-7.0 from [-10:0] exclude (-5:0)", .mode = .strict },
+        .{ .range = "-7.0 from [-10:0] exclude (-5:0]", .mode = .optimized },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(head ++ "  parameter real x = {s};\n  analog I(p, n) <+ V(p, n) / x;" ++ tail, .{c.range});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, src, .{});
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        std.testing.expectEqual(c.mode, v.unit_modes[0]) catch |e| {
+            std.debug.print("range: {s}\n", .{c.range});
+            return e;
+        };
+    }
+}
+
+test "transfer: an open end stays open only where the device's rounding keeps it open" {
+    // Each divisor or atanh argument below reaches the value its open end
+    // excludes, after rounding: floor(0.7) = 0, tanh(19.9) = 1.0,
+    // exp(-799) = 0.0, and (0.5 + 1e20) - 1e20 = 0.0. Every one is legal, so
+    // accepted, and every one can produce an infinity, so `.strict`.
+    for ([_][]const u8{
+        "  parameter real x = 1.0 from (0.5:2);\n  analog I(p, n) <+ V(p, n) / floor(x);",
+        "  parameter real x = 0.0 from (-20:20);\n  analog I(p, n) <+ V(p, n) * atanh(tanh(x));",
+        "  parameter real x = -1.0 from (-800:0];\n  analog I(p, n) <+ V(p, n) / exp(x);",
+        "  parameter real x = 0.5 from (0:1];\n  analog I(p, n) <+ V(p, n) / ((x + 1e20) - 1e20);",
+    }) |body| {
+        const src = try std.testing.allocator.print(head ++ "{s}" ++ tail, .{body});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, src, .{});
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]) catch |e| {
+            std.debug.print("body: {s}\n", .{body});
+            return e;
+        };
+    }
+}
+
+test "Options: a NaN unknown_bound is no bound at all" {
+    // `--unknown-bound=nan` parses. As an interval end it would make
+    // min(V(a), 1.0) the point [1, 1] (`@min` drops the NaN) and "prove" ln.
+    const src = "module m(a);\n  inout a;\n  electrical a;\n  analog I(a) <+ ln(min(V(a), 1.0));\nendmodule\n";
+    for ([_]?f64{ null, std.math.nan(f64) }) |bound| {
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, src, .{ .unknown_bound = bound });
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+    }
+}
+
+test "§5.8: a condition that steers a phi of the unit is part of the unit" {
+    // `x` is 1 or 2, both finite, but which one is decided by comparing
+    // V/k, which is inf or NaN at k = 0: under `.optimized` that comparison
+    // is poison and the branch on it undefined. A range on k proves it.
+    const steer = "  real x;\n  analog begin\n    if (V(p, n) / k > 1.0) x = 1.0;\n    else x = 2.0;\n    I(p, n) <+ x * V(p, n);\n  end";
+    {
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, head ++ "  parameter real k = 1.0;\n" ++ steer ++ tail, .{});
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+        try std.testing.expect(h.has(.W0650));
+    }
+    {
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, head ++ "  parameter real k = 1.0 from (0:inf);\n" ++ steer ++ tail, .{});
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+        try std.testing.expect(!h.has(.W0650));
+    }
+}
+
+test "§9.19/§4.6.1: a steering $param_given or analysis() keeps the unit .optimized" {
+    // $param_given names a parameter without reading its value, and
+    // analysis() is 0 or 1: neither can be inf or NaN, so an unranged `r`
+    // costs nothing here.
+    var h: Harness = undefined;
+    const body =
+        \\  parameter real r = 1.0;
+        \\  real x;
+        \\  analog begin
+        \\    if ($param_given(r) && analysis("tran")) x = 1.0;
+        \\    else x = 2.0;
+        \\    I(p, n) <+ x * V(p, n);
+        \\  end
+    ;
+    const v = try proveSrc(&h, head ++ body ++ tail, .{});
+    defer h.deinit();
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+    try std.testing.expect(!h.has(.W0650));
+}
+
+test "§4.2.5: a false comparison with a NaN-capable operand proves nothing" {
+    // c = sin(x/y) is in [-1, 1] or NaN (x = y = 0 is a legal card, and
+    // §4.2.4 makes 0/0 no error). When c is NaN, `V >= c - 3` is false and
+    // the else arm runs with any V, so reading "V < c - 3 <= -2" off the
+    // false edge would reject ln(V), which has legal executions.
+    var h: Harness = undefined;
+    const body =
+        \\  parameter real x = 1.0 from [0:1];
+        \\  parameter real y = 1.0 from [0:1];
+        \\  real c;
+        \\  analog begin
+        \\    c = sin(x / y);
+        \\    if (V(p, n) >= c - 3.0) I(p, n) <+ V(p, n);
+        \\    else I(p, n) <+ ln(V(p, n));
+        \\  end
+    ;
+    const v = try proveSrc(&h, head ++ body ++ tail, .{});
+    defer h.deinit();
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0602));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "§3.2.1: an integer parameter is 32-bit even when a range bound names another parameter" {
+    // The bound `nmax` does not fold literally, so the range proves nothing;
+    // the type still does.
+    var h: Harness = undefined;
+    const body =
+        \\  parameter integer nmax = 4;
+        \\  parameter integer m = 1 from [0:nmax];
+        \\  analog I(p, n) <+ m * V(p, n);
+    ;
+    const v = try proveSrc(&h, head ++ body ++ tail, .{});
+    defer h.deinit();
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+    try std.testing.expect(!h.has(.W0650));
+}
+
+test "§4.3.1/§4.3.2: each provable violation has its code, and its in-domain neighbour proves" {
+    const cases = [_]struct { func: []const u8, bad: []const u8, good: []const u8, code: diag.Code }{
+        .{ .func = "ln", .bad = "-1.0 from [-10:0]", .good = "1.0 from (0:10]", .code = .E0602 },
+        .{ .func = "log", .bad = "-1.0 from [-10:0]", .good = "1.0 from (0:10]", .code = .E0602 },
+        .{ .func = "ln1p", .bad = "-2.0 from [-10:-1]", .good = "0.5 from (-1:10]", .code = .E0603 },
+        .{ .func = "sqrt", .bad = "-2.0 from [-10:-1]", .good = "1.0 from [0:10]", .code = .E0604 },
+        .{ .func = "asin", .bad = "2.5 from [2:3]", .good = "0.5 from [-1:1]", .code = .E0605 },
+        .{ .func = "acos", .bad = "-2.5 from [-3:-2]", .good = "0.5 from [-1:1]", .code = .E0605 },
+        .{ .func = "atanh", .bad = "2.0 from [1:3]", .good = "0.5 from (-1:1)", .code = .E0606 },
+        .{ .func = "acosh", .bad = "0.0 from [-3:0.5]", .good = "2.0 from [1:10]", .code = .E0607 },
+    };
+    for (cases) |c| {
+        for ([_]bool{ true, false }) |bad| {
+            const src = try std.testing.allocator.print(head ++ "  parameter real x = {s};\n  analog I(p, n) <+ {s}(x) * V(p, n);" ++ tail, .{ if (bad) c.bad else c.good, c.func });
+            defer std.testing.allocator.free(src);
+            var h: Harness = undefined;
+            const v = try proveSrc(&h, src, .{});
+            defer h.deinit();
+            defer v.deinit(std.testing.allocator);
+            errdefer std.debug.print("{s}({s})\n", .{ c.func, if (bad) c.bad else c.good });
+            try std.testing.expectEqual(bad, !v.ok());
+            try std.testing.expectEqual(bad, h.has(c.code));
+            try std.testing.expectEqual(if (bad) FloatMode.strict else FloatMode.optimized, v.unit_modes[0]);
+        }
+    }
+}
+
+test "§4.3.2: tan has no reject arm, and a pole-free cell proves only its domain" {
+    // Every double is rational and every pole irrational, so no argument is
+    // provably at a pole; tan stays `.strict` either way.
+    for ([_][]const u8{ "0.5 from [0:1]", "1.5 from [1:2]" }) |range| {
+        const src = try std.testing.allocator.print(head ++ "  parameter real x = {s};\n  analog I(p, n) <+ tan(x) * V(p, n);" ++ tail, .{range});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        const v = try proveSrc(&h, src, .{});
+        defer h.deinit();
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+    }
+}
+
+test "max_errors: violations past the cap are neither counted nor reported" {
+    // max_errors + 6 distinct provably-negative ln arguments in one unit.
+    const gpa = std.testing.allocator;
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(gpa);
+    try src.appendSlice(gpa, head ++ "  parameter real k = -2.0 from [-10:-1];\n  analog I(p, n) <+ 0.0");
+    for (1..proof.max_errors + 7) |i| try src.print(gpa, " + ln(k * {d}.0)", .{i});
+    try src.appendSlice(gpa, ";" ++ tail);
+
+    var h: Harness = undefined;
+    const v = try proveSrc(&h, src.items, .{});
+    defer h.deinit();
+    defer v.deinit(gpa);
+    try std.testing.expect(!v.ok());
+    try std.testing.expectEqual(@as(u32, proof.max_errors), v.error_count);
+    try std.testing.expectEqual(@as(usize, proof.max_errors), h.bag.count());
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "W0651: a range closed on -inf names its lower bound" {
+    var h: Harness = undefined;
+    const v = try proveSrc(&h, head ++ "  parameter real r = -1.0 from [-inf:0);\n  analog I(p, n) <+ V(p, n) / r;" ++ tail, .{});
+    defer h.deinit();
+    defer v.deinit(std.testing.allocator);
+    const e = h.find(.W0651) orelse return error.NoRangeWarning;
+    try std.testing.expect(std.mem.find(u8, e.point, "lower") != null);
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "proveOpts: proving the same lowering twice gives the same verdict" {
+    var h: Harness = undefined;
+    const body =
+        \\  parameter real k = 1.0;
+        \\  analog I(p, n) <+ ln(k) * V(p, n) + exp(V(p, n));
+    ;
+    try Harness.run(std.testing.allocator, head ++ body ++ tail, &h);
+    defer h.deinit();
+    const a = try h.prove(std.testing.allocator, .{});
+    defer a.deinit(std.testing.allocator);
+    const b = try h.prove(std.testing.allocator, .{});
+    defer b.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(FloatMode, a.unit_modes, b.unit_modes);
+    try std.testing.expectEqual(a.error_count, b.error_count);
+}
