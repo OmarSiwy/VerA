@@ -65,3 +65,42 @@ pub fn parseWithPrelude(out: *Fixture, text: []const u8) !void {
     out.file = try p.parseSourceFile();
     out.file.builtin_modules = Preprocessor.spice_module_count;
 }
+
+/// Returns a `Flatten` over `f`'s file before any walk: no table seeded, no
+/// unit entered, and an empty generate-instance list for every module, so a
+/// transform can be called on its own. Rows live in `f`'s arena.
+pub fn flatten(f: *Fixture) !elaborate.Flatten {
+    const gen = try f.arena.allocator().alloc([]const Ast.Instance, f.file.modules.len);
+    for (gen) |*g| g.* = &.{};
+    return .{ .ctx = f.ctx(), .gen_instances = gen };
+}
+
+/// Returns whether `bag` holds a diagnostic with `code`, wherever it sorts,
+/// so a test does not depend on a warning the parser reported first.
+pub fn hasCode(bag: *const diag.Bag, code: diag.Code) bool {
+    for (0..bag.count()) |i| if (bag.at(i).code == code) return true;
+    return false;
+}
+
+/// Returns the module `name` of `file` (the first so named), or null.
+pub fn moduleNamed(file: *const Ast.SourceFile, name: []const u8) ?*const Ast.ModuleDecl {
+    for (file.modules) |*m| if (std.mem.eql(u8, file.str(m.name), name)) return m;
+    return null;
+}
+
+/// Returns the flat parameter `name` of the elaborated `top`, or null.
+pub fn paramNamed(file: *const Ast.SourceFile, top: *const Ast.ModuleDecl, name: []const u8) ?Ast.ParamDecl {
+    for (top.params) |p| if (std.mem.eql(u8, file.str(p.name), name)) return p;
+    return null;
+}
+
+/// Returns the flat net `name` of the elaborated `top`, or null.
+pub fn netNamed(file: *const Ast.SourceFile, top: *const Ast.ModuleDecl, name: []const u8) ?Ast.NetDecl {
+    for (top.nets) |n| if (std.mem.eql(u8, file.str(n.name), name)) return n;
+    return null;
+}
+
+/// Returns the interned id of `s`, which a parsed source must already hold.
+pub fn id(file: *const Ast.SourceFile, s: []const u8) ?Ast.StrId {
+    return file.strings.find(s);
+}

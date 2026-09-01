@@ -827,3 +827,161 @@ fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
     const cut = std.mem.findScalarLast(u8, s, sep) orelse return name;
     return elab_names.join(self, s[0 .. cut + 1], name);
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test "§9.13.1 constIntLit reads only Syntax 9-8's `[ sign ] decimal_number` seed" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const x = &file.exprs;
+    const five = try x.addInt(a, 0, 5);
+    const neg = try x.add(a, .{ .tag = .unary, .lhs = five, .extra = @backingInt(Ast.UnaryOp.minus) });
+    const pos_neg = try x.add(a, .{ .tag = .unary, .lhs = neg, .extra = @backingInt(Ast.UnaryOp.plus) });
+    const not_five = try x.add(a, .{ .tag = .unary, .lhs = five, .extra = @backingInt(Ast.UnaryOp.logical_not) });
+    const real = try x.addReal(a, 0, 5.0);
+    try std.testing.expectEqual(@as(?i64, 5), constIntLit(x, five));
+    try std.testing.expectEqual(@as(?i64, -5), constIntLit(x, neg));
+    try std.testing.expectEqual(@as(?i64, -5), constIntLit(x, pos_neg));
+    // Any other operator, a real ("the seed argument shall be an integer",
+    // lowering's E0816) and an omitted argument decline the fold.
+    try std.testing.expectEqual(@as(?i64, null), constIntLit(x, not_five));
+    try std.testing.expectEqual(@as(?i64, null), constIntLit(x, real));
+    try std.testing.expectEqual(@as(?i64, null), constIntLit(x, .none));
+}
+
+test readsName {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const x = &file.exprs;
+    const na = try file.intern(a, "a");
+    const nb = try file.intern(a, "b");
+    const nc = try file.intern(a, "c");
+    const ea = try x.add(a, .{ .tag = .ident, .str = na });
+    const eb = try x.add(a, .{ .tag = .ident, .str = nb });
+    const prod = try x.add(a, .{ .tag = .binary, .lhs = ea, .rhs = eb, .extra = @backingInt(Ast.BinaryOp.mul) });
+    try std.testing.expect(readsName(&file, prod, na));
+    try std.testing.expect(readsName(&file, prod, nb));
+    try std.testing.expect(!readsName(&file, prod, nc));
+    try std.testing.expect(!readsName(&file, .none, na));
+}
+
+test "§6.7 a child's block label joins its own instance path, whatever else the child declares" {
+    // `kid` declares nothing but a port, bound to the top's `p`. Two
+    // instances are two scopes, so the two labels must differ: otherwise
+    // §5.3.2's static block locals of both would share one location.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u1(p); kid u2(p); endmodule
+        \\module kid(a); inout a; electrical a; analog begin : blk I(a) <+ V(a); end endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 2), d.top.analog.len);
+    try std.testing.expectEqualStrings("u1.blk", f.file.str(f.file.stmt(d.top.analog[0].body).block.name));
+    try std.testing.expectEqualStrings("u2.blk", f.file.str(f.file.stmt(d.top.analog[1].body).block.name));
+}
+
+test "§5.11 a disable inside a child names that child's flattened block" {
+    // A.6.5 `disable` names an enclosing block, so it must be spelled as the
+    // block's label is after the join, or lowering finds no such block.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter real g = 1.0;
+        \\  analog begin : blk @(initial_step) disable blk; I(a) <+ g * V(a); end
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    const blk = f.file.stmt(d.top.analog[0].body).block;
+    try std.testing.expectEqualStrings("u.blk", f.file.str(blk.name));
+    const ev = f.file.stmt(blk.body[0]).event_control;
+    try std.testing.expectEqual(blk.name, f.file.stmt(ev.body).disable.name);
+}
+
+test "§7.2.2 a child's discrete statements are copied whole: fork/join stays parallel, a repeat count is renamed" {
+    // IEEE 1364-2005 §9.8.2 `fork ... join` starts every statement at once,
+    // and §9.7.7's `repeat (n) @(...)` counts with the CHILD's `n`.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter integer n = 2; reg q, c;
+        \\  initial fork q = 0; join
+        \\  initial q = repeat (n) @(posedge c) 1;
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 2), d.top.discrete.len);
+    try std.testing.expect(f.file.stmt(d.top.discrete[0].body).block.parallel);
+    const count = f.file.stmt(d.top.discrete[1].body).assign.timing_repeat;
+    try std.testing.expectEqualStrings("u.n", f.file.str(f.file.exprs.strOf(count)));
+}
+
+test "§4.7.1 a function's formal hides a module name for the function body only" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter real x = 2.0;
+        \\  analog function real fn; input x; real x; fn = x; endfunction
+        \\  analog I(a) <+ fn(x) * V(a);
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    const ex = &f.file.exprs;
+    const func = d.top.functions[0];
+    try std.testing.expectEqualStrings("u.fn", f.file.str(func.name));
+    // Inside, `x` is the formal; the return variable is the renamed function.
+    const body = f.file.stmt(func.body).assign;
+    try std.testing.expectEqualStrings("x", f.file.str(ex.strOf(body.value)));
+    try std.testing.expectEqualStrings("u.fn", f.file.str(ex.strOf(body.target)));
+    // Outside, `x` is the instance's parameter again.
+    const call = ex.lhs(f.file.stmt(d.top.analog[0].body).contribute.rhs);
+    try std.testing.expectEqualStrings("u.fn", f.file.str(ex.strOf(call)));
+    try std.testing.expectEqualStrings("u.x", f.file.str(ex.strOf(ex.args(call)[0])));
+}
+
+test "§5.4.3 a child reading the flow into its own port is E0997; the top reading its own is not" {
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad,
+        \\module top(p); inout p; electrical p; kid u(p); endmodule
+        \\module kid(a); inout a; electrical a; analog V(a) <+ I(<a>); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0997));
+
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good,
+        \\module top(p); inout p; electrical p; kid u(p); analog V(p) <+ I(<p>); endmodule
+        \\module kid(a); inout a; electrical a; analog V(a) <+ 0.0; endmodule
+    );
+    _ = try elaborate.elaborate(good.ctx());
+}
+
+test "§3.4.4 an array override must have the parameter's size (E0921)" {
+    const src =
+        \\module top(p); inout p; electrical p; kid #(.c('{{{s}}})) u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter real c[0:1] = '{{0.0, 0.0}}; endmodule
+    ;
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad, try bad.arena.allocator().print(src, .{"1.0, 2.0, 3.0"}));
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0921));
+
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{"1.0, 2.0"}));
+    _ = try elaborate.elaborate(good.ctx());
+}

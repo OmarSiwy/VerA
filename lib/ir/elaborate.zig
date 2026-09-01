@@ -1505,6 +1505,50 @@ test "IEEE 1364 §12.3.3 two variable ports collapsed onto one net declare it on
     try std.testing.expectEqualStrings("w", f.file.str(design.top.vars[0].name));
 }
 
+test pickTop {
+    // §6.2.2: of several roots, the first in source order is the device.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module a(p); inout p; electrical p; endmodule
+        \\module b(p); inout p; electrical p; endmodule
+    );
+    try std.testing.expectEqual(&f.file.modules[0], (try elaborate(f.ctx())).top);
+
+    // §6.4: a module a paramset chain ends at is instantiated through it, so
+    // `base`, declared first and named by no instance, is not the root.
+    // The chain's near link wins the module parameter both links assign.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try parse(&g,
+        \\module base(a); inout a; electrical a; parameter real j = 0.0; analog I(a) <+ j * V(a); endmodule
+        \\paramset near far; parameter real gn = 1.0; .j = gn; endparamset
+        \\paramset far base; parameter real hf = 2.0; .j = hf; endparamset
+        \\module top(p); inout p; electrical p; near u(p); endmodule
+    );
+    const chained = try elaborate(g.ctx());
+    try std.testing.expectEqualStrings("top", g.file.str(chained.top.name));
+    const j = fixture.paramNamed(&g.file, chained.top, "u.j").?;
+    try std.testing.expectEqualStrings("u.near.gn", g.file.str(g.file.exprs.strOf(j.default)));
+
+    // Every module instantiated by another: the first is the top, and the
+    // cycle is E0905.
+    var h: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer h.deinit();
+    try parse(&h,
+        \\module a(p); inout p; electrical p; b u(p); endmodule
+        \\module b(p); inout p; electrical p; a v(p); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(h.ctx()));
+    try std.testing.expect(fixture.hasCode(&h.bag, .E0905));
+
+    // §7.6: a file of connect modules only has no device.
+    var k: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer k.deinit();
+    try parse(&k, "connectmodule c(a, d); inout a, d; endmodule");
+    try std.testing.expectError(error.NoModule, elaborate(k.ctx()));
+}
+
 test {
     _ = elab_alias;
     _ = elab_clone;
@@ -1514,4 +1558,5 @@ test {
     _ = elab_override;
     _ = elab_paramset;
     _ = elab_resolve;
+    _ = elab_segment;
 }

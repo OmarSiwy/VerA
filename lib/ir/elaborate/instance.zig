@@ -948,3 +948,292 @@ fn checkConnectionShape(self: *Flatten, inst: *const Ast.Instance, child: *const
         };
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test connectionFor {
+    const e1: Ast.ExprId = @fromBackingInt(@as(u32, 1));
+    const e2: Ast.ExprId = @fromBackingInt(@as(u32, 2));
+    const a: Ast.StrId = @fromBackingInt(@as(u32, 10));
+    const b: Ast.StrId = @fromBackingInt(@as(u32, 11));
+    const ordered: Ast.Instance = .{ .module = a, .name = a, .ports = &.{ .{ .expr = e1 }, .{ .expr = e2 } } };
+    try std.testing.expectEqual(e2, connectionFor(&ordered, .{ .name = b }, 1).?.expr);
+    try std.testing.expect(connectionFor(&ordered, .{ .name = b }, 2) == null);
+    const named: Ast.Instance = .{ .module = a, .name = a, .ports = &.{ .{ .name = b, .expr = e1 }, .{ .name = a, .expr = e2 } } };
+    try std.testing.expectEqual(e2, connectionFor(&named, .{ .name = a }, 0).?.expr);
+    try std.testing.expectEqual(e1, connectionFor(&named, .{ .name = b }, 1).?.expr);
+}
+
+test declares {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, "module m(p); inout p; electrical p; electrical w; real v; endmodule");
+    const m = &f.file.modules[0];
+    // §3.6.5: a port and a declared net are nets; a variable is not.
+    try std.testing.expect(declares(m, fixture.id(&f.file, "p").?));
+    try std.testing.expect(declares(m, fixture.id(&f.file, "w").?));
+    try std.testing.expect(!declares(m, fixture.id(&f.file, "v").?));
+}
+
+test substIdent {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, "module top; endmodule");
+    var fl = try fixture.flatten(&f);
+    const a = f.arena.allocator();
+    const x = &f.file.exprs;
+    const na = try f.file.intern(a, "a");
+    const nb = try f.file.intern(a, "b");
+    const nc = try f.file.intern(a, "c");
+    const ea = try x.add(a, .{ .tag = .ident, .str = na });
+    const eb = try x.add(a, .{ .tag = .ident, .str = nb });
+    const sum = try x.add(a, .{ .tag = .binary, .lhs = ea, .rhs = eb, .extra = @backingInt(Ast.BinaryOp.add) });
+    const seven = try x.addInt(a, 0, 7);
+    // Nothing named `c` below: the same row, and no row appended.
+    const rows = x.nodes.len;
+    try std.testing.expectEqual(sum, try substIdent(&fl, sum, nc, seven));
+    try std.testing.expectEqual(rows, x.nodes.len);
+    // A replaced operand gets a new row over the operand left alone.
+    const out = try substIdent(&fl, sum, na, seven);
+    try std.testing.expect(out != sum);
+    try std.testing.expectEqual(Ast.BinaryOp.add, x.binOp(out));
+    try std.testing.expectEqual(seven, x.lhs(out));
+    try std.testing.expectEqual(eb, x.rhs(out));
+}
+
+test "§6.6.2 bindGenLocals reads the innermost localparam, in the scope it was declared in" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, "module top; endmodule");
+    var fl = try fixture.flatten(&f);
+    const a = f.arena.allocator();
+    const x = &f.file.exprs;
+    const k = try f.file.intern(a, "k");
+    const one = try x.addInt(a, 0, 1);
+    const two = try x.addInt(a, 0, 2);
+    const ek = try x.add(a, .{ .tag = .ident, .str = k });
+    const ek_inner = try x.add(a, .{ .tag = .ident, .str = k });
+    // Two blocks each declare `k`: the inner (later) one wins.
+    const shadow = [_]Ast.ParamDecl{
+        .{ .name = k, .ty = .integer, .default = one },
+        .{ .name = k, .ty = .integer, .default = two },
+    };
+    try std.testing.expectEqual(two, try bindGenLocals(&fl, ek, &shadow));
+    // The inner `k = k` reads the outer `k`, where it was declared.
+    const nested = [_]Ast.ParamDecl{
+        .{ .name = k, .ty = .integer, .default = one },
+        .{ .name = k, .ty = .integer, .default = ek_inner },
+    };
+    try std.testing.expectEqual(one, try bindGenLocals(&fl, ek, &nested));
+    // An array localparam is no scalar value to substitute.
+    const array = [_]Ast.ParamDecl{.{ .name = k, .ty = .integer, .default = one, .dims = &.{.{ .msb = one, .lsb = one }} }};
+    try std.testing.expectEqual(ek, try bindGenLocals(&fl, ek, &array));
+}
+
+test "§6.6 conj builds a generate block's gate: the scheme alone, negated, or under an enclosing one" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, "module top; endmodule");
+    var fl = try fixture.flatten(&f);
+    const a = f.arena.allocator();
+    const x = &f.file.exprs;
+    const c = try x.add(a, .{ .tag = .ident, .str = try f.file.intern(a, "c") });
+    const g = try x.add(a, .{ .tag = .ident, .str = try f.file.intern(a, "g") });
+    try std.testing.expectEqual(c, try conj(&fl, .none, c, false));
+    const not_c = try conj(&fl, .none, c, true);
+    try std.testing.expectEqual(Ast.UnaryOp.logical_not, x.unOp(not_c));
+    try std.testing.expectEqual(c, x.lhs(not_c));
+    const both = try conj(&fl, g, c, true);
+    try std.testing.expectEqual(Ast.BinaryOp.logical_and, x.binOp(both));
+    try std.testing.expectEqual(g, x.lhs(both));
+    try std.testing.expectEqual(Ast.UnaryOp.logical_not, x.unOp(x.rhs(both)));
+}
+
+test "§6.2.2 an instance array is one instance per element, lowest index first; a range that does not fold is E0909" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u[1:0](p); endmodule
+        \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 3), d.units.len);
+    try std.testing.expectEqualStrings("u[0].", d.units[1].path);
+    try std.testing.expectEqualStrings("u[1].", d.units[2].path);
+
+    var g: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try fixture.parse(&g,
+        \\module top(p); inout p; electrical p; real r; kid u[r:0](p); endmodule
+        \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(g.ctx()));
+    try std.testing.expect(fixture.hasCode(&g.bag, .E0909));
+}
+
+test "§6.5.5 a connection list is all ordered or all named, at most as long as the ports, each port once (E0906)" {
+    const src =
+        \\module top(p); inout p; electrical p; kid u{s}; endmodule
+        \\module kid(a, b); inout a, b; electrical a, b; endmodule
+    ;
+    for ([_][]const u8{
+        "(p, p, p)", // longer than the port list
+        "(p, .b(p))", // a named connection in an ordered list
+        "(.a(p), p)", // an ordered connection in a named list
+        "(.zz(p))", // no such port
+        "(.a(p), .a(p))", // IEEE 1364 §12.3.6 connected twice
+    }) |conns| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(src, .{conns}));
+        try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+        try std.testing.expect(fixture.hasCode(&f.bag, .E0906));
+    }
+    // §6.2.2 permits a shorter list: `b` is then unconnected.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{"(.a(p))"}));
+    _ = try elaborate.elaborate(good.ctx());
+}
+
+test "§6.5 a variable cannot stand for a continuous port (E0906); a net can" {
+    const src =
+        \\discipline ca; domain continuous; enddiscipline
+        \\module top(p); inout p; ca p; {s} kid u(x); endmodule
+        \\module kid(a); inout a; ca a; endmodule
+    ;
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad, try bad.arena.allocator().print(src, .{"real x;"}));
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0906));
+
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{"ca x;"}));
+    _ = try elaborate.elaborate(good.ctx());
+}
+
+test "§6.2.2 a blank connection is an internal net and §9.19 $port_connected says so" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(p, ); endmodule
+        \\module kid(a, b); inout a; input b; electrical a, b;
+        \\  analog I(a) <+ $port_connected(a);
+        \\  analog I(a) <+ $port_connected(b);
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    // The input `b` is "not to be connected": its own net, judged later
+    // against IEEE 1364 §19.9 `unconnected_drive`.
+    try std.testing.expectEqual(@as(usize, 1), d.unconnected_inputs.len);
+    try std.testing.expectEqualStrings("u.b", d.unconnected_inputs[0].name);
+    try std.testing.expect(fixture.netNamed(&f.file, d.top, "u.b") != null);
+    const x = &f.file.exprs;
+    try std.testing.expectEqual(@as(i64, 1), x.intValue(f.file.stmt(d.top.analog[0].body).contribute.rhs));
+    try std.testing.expectEqual(@as(i64, 0), x.intValue(f.file.stmt(d.top.analog[1].body).contribute.rhs));
+}
+
+test "§3.6.5 an actual the parent never declared is an implicit net, reported and given the port's discipline" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid u(q); endmodule
+        \\module kid(a); inout a; electrical a; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 1), d.implicit_nets.len);
+    try std.testing.expectEqualStrings("q", d.implicit_nets[0].name);
+    try std.testing.expectEqualStrings("electrical", f.file.str(fixture.netNamed(&f.file, d.top, "q").?.discipline));
+}
+
+test "§6.5.7.1 a concatenation or a constant select binds a port to parts of parent nets" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\discipline electrical; domain continuous; enddiscipline
+        \\module top(a, b); inout a, b; electrical a, b; electrical [3:0] bus;
+        \\  kid u({a, b}); one w1(bus[1]); one w2(bus[3:2]); one w3(bus[1 +: 2]); one w4(bus[3 -: 2]);
+        \\endmodule
+        \\module kid(v); inout [1:0] v; electrical [1:0] v; endmodule
+        \\module one(s); inout s; electrical s; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    const NetPart = elaborate.NetPart;
+    const Want = struct { name: []const u8, vector: bool, parts: []const NetPart };
+    const want = [_]Want{
+        .{ .name = "u.v", .vector = true, .parts = &.{ .{ .net = "a" }, .{ .net = "b" } } },
+        .{ .name = "w1.s", .vector = false, .parts = &.{.{ .net = "bus", .sel = .bit, .a = 1, .b = 1 }} },
+        .{ .name = "w2.s", .vector = false, .parts = &.{.{ .net = "bus", .sel = .range, .a = 3, .b = 2 }} },
+        .{ .name = "w3.s", .vector = false, .parts = &.{.{ .net = "bus", .sel = .up, .a = 1, .b = 2 }} },
+        .{ .name = "w4.s", .vector = false, .parts = &.{.{ .net = "bus", .sel = .down, .a = 3, .b = 2 }} },
+    };
+    try std.testing.expectEqual(want.len, d.port_concats.len);
+    for (want, d.port_concats) |w, got| {
+        try std.testing.expectEqualStrings(w.name, got.name);
+        try std.testing.expectEqual(w.vector, got.range != null);
+        try std.testing.expectEqual(w.parts.len, got.parts.len);
+        for (w.parts, got.parts) |wp, gp| {
+            try std.testing.expectEqualStrings(wp.net, gp.net);
+            try std.testing.expectEqual(wp.sel, gp.sel);
+            try std.testing.expectEqual(wp.a, gp.a);
+            try std.testing.expectEqual(wp.b, gp.b);
+        }
+    }
+}
+
+test "§6.7.1 a connected port's path names the parent's net; an internal net needs no row" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\discipline electrical; domain continuous; enddiscipline
+        \\module top(p, n); inout p, n; electrical p, n; kid u(p, n); endmodule
+        \\module kid(a, b); inout a, b; electrical a, b; electrical w; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(u32, 2), d.names.count());
+    try std.testing.expectEqualStrings("p", d.names.get("u.a").?);
+    try std.testing.expectEqualStrings("n", d.names.get("u.b").?);
+    try std.testing.expect(d.names.get("u.w") == null);
+    try std.testing.expect(fixture.netNamed(&f.file, d.top, "u.w") != null);
+    // §6.5.7.1 one size check per port bound to a net.
+    try std.testing.expectEqual(@as(usize, 2), d.port_widths.len);
+    try std.testing.expectEqualStrings("p", d.port_widths[0].net);
+    try std.testing.expect(d.port_widths[0].range == null);
+}
+
+test "§6.6 a module instance with discrete behavior under a generate scheme is E0235" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; parameter integer sel = 1;
+        \\  generate if (sel) begin kid u(p); end endgenerate
+        \\endmodule
+        \\module kid(a); inout a; electrical a; reg q; initial q = 0; endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+    try std.testing.expect(fixture.hasCode(&f.bag, .E0235));
+}
+
+test "§6.4.3 a paramset variable without a description hides the module's variable of that name" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; ps u(p); endmodule
+        \\paramset ps dev; real id; .scale = 4.0; endparamset
+        \\module dev(a); inout a; electrical a; parameter real scale = 1.0; real id;
+        \\  analog begin id = scale * V(a); I(a) <+ id; end
+        \\endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(usize, 1), d.ps_hidden.len);
+    try std.testing.expectEqualStrings("u.id", d.ps_hidden[0]);
+    const scale = fixture.paramNamed(&f.file, d.top, "u.scale").?;
+    try std.testing.expect(scale.is_override);
+    try std.testing.expectEqual(@as(f64, 4.0), f.file.exprs.realValue(scale.default));
+}
