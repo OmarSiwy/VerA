@@ -2,15 +2,17 @@
 //! requires (§4.3.1/§4.3.2 Tables 4-14/4-15). Pure values: no MIR walk, no allocation,
 //! no diagnostics. LRM §3.4.2, §4.2, §4.2.4, §4.2.5, §4.2.8, §4.3.1, §4.3.2.
 
-const proof = @import("../proof.zig");
 const Mir = @import("../mir.zig");
-const math = proof.math;
+const std = @import("std");
+const math = std.math;
 
 /// Abstract value: a real interval with open or closed ends. `top` is `(-inf, inf)` closed,
 /// which is also the "no evidence" element, so a zero-initialised pass is sound.
 /// NaN never appears as a bound: a NaN constant widens to `top`, and the transfer functions
 /// answer `top` or the wide infinity for a NaN endpoint. Empty (`lo > hi`) means unreachable
 /// and vacuously satisfies every domain, which is right for a contradictory guard.
+/// Every predicate below is sound, not exact: `true` is a proof about every member, `false`
+/// is only the absence of one (`nonzero` is consulted by `excludesZero` alone).
 pub const Interval = struct {
     // Stays AoS (24 bytes): every consumer reads a whole interval, and packing the three flags
     // only moves the padding. `seedValues`' fill, ReleaseFast, ns per fill (min of 25):
@@ -42,7 +44,8 @@ pub const Interval = struct {
         return math.isFinite(i.lo) and math.isFinite(i.hi);
     }
 
-    /// Returns whether no value satisfies the bounds (unreachable).
+    /// Returns whether no value satisfies the bounds (unreachable). A `nonzero` `[0, 0]` has
+    /// no member either but reads non-empty.
     pub fn isEmpty(i: Interval) bool {
         return i.lo > i.hi or (i.lo == i.hi and (i.lo_open or i.hi_open));
     }
@@ -129,4 +132,91 @@ pub fn isPredicateValue(mir: *const Mir, v: Mir.Value) bool {
 /// Returns the LRM domain an opcode's argument must satisfy; `.all` means nothing to prove.
 pub fn domainOf(op: Mir.Opcode) Domain {
     return Mir.opcode.get(op).domain;
+}
+
+/// Membership oracle: the definition every `Interval` predicate is checked against.
+fn member(i: Interval, x: f64) bool {
+    if (i.nonzero and x == 0) return false;
+    const above = x > i.lo or (x == i.lo and !i.lo_open);
+    const below = x < i.hi or (x == i.hi and !i.hi_open);
+    return above and below;
+}
+
+test Interval {
+    // Exhaustive over a small domain: every interval whose ends are in `ends`
+    // (empty ones too), with each openness flag and the `nonzero` hole, against
+    // `member` at each end, the doubles on either side of it, and points between.
+    const inf = math.inf(f64);
+    const ends = [_]f64{ -inf, -1, 0, 1, inf };
+    var pts: [ends.len * 3 + 4]f64 = undefined;
+    for (ends, 0..) |e, i| {
+        pts[3 * i] = e;
+        pts[3 * i + 1] = math.nextAfter(f64, e, -inf);
+        pts[3 * i + 2] = math.nextAfter(f64, e, inf);
+    }
+    pts[ends.len * 3 ..][0..4].* = .{ -2, -0.5, 0.5, 2 };
+
+    var all: [ends.len * ends.len * 8]Interval = undefined;
+    var n: usize = 0;
+    for (ends) |lo| for (ends) |hi| for (0..8) |bits| {
+        all[n] = .{ .lo = lo, .hi = hi, .lo_open = (bits & 1) != 0, .hi_open = (bits & 2) != 0, .nonzero = (bits & 4) != 0 };
+        n += 1;
+    };
+
+    const ks = [_]f64{ -1, 0, 1 };
+    for (all) |a| {
+        // Sound: a `true` predicate holds for every member.
+        var any = false;
+        var all_gt: [ks.len]bool = @splat(true);
+        var all_ge: [ks.len]bool = @splat(true);
+        var all_lt: [ks.len]bool = @splat(true);
+        var all_le: [ks.len]bool = @splat(true);
+        var no_inf = true;
+        for (pts) |x| {
+            if (!member(a, x)) continue;
+            any = true;
+            if (math.isInf(x)) no_inf = false;
+            if (a.bounded()) try std.testing.expect(math.isFinite(x));
+            if (a.excludesZero()) try std.testing.expect(x != 0);
+            for (ks, 0..) |k, j| {
+                all_gt[j] = all_gt[j] and x > k;
+                all_ge[j] = all_ge[j] and x >= k;
+                all_lt[j] = all_lt[j] and x < k;
+                all_le[j] = all_le[j] and x <= k;
+            }
+        }
+        if (a.isEmpty()) try std.testing.expect(!any);
+        if (a.excludesInf()) try std.testing.expect(no_inf);
+        for (ks, 0..) |k, j| {
+            if (a.gt(k)) try std.testing.expect(all_gt[j]);
+            if (a.ge(k)) try std.testing.expect(all_ge[j]);
+            if (a.lt(k)) try std.testing.expect(all_lt[j]);
+            if (a.le(k)) try std.testing.expect(all_le[j]);
+        }
+        // Exact where no hole is involved: `false` means some member breaks it.
+        if (!a.nonzero and !a.isEmpty()) {
+            try std.testing.expect(any);
+            try std.testing.expectEqual(no_inf, a.excludesInf());
+            for (ks, 0..) |k, j| {
+                try std.testing.expectEqual(all_gt[j], a.gt(k));
+                try std.testing.expectEqual(all_ge[j], a.ge(k));
+                try std.testing.expectEqual(all_lt[j], a.lt(k));
+                try std.testing.expectEqual(all_le[j], a.le(k));
+            }
+        }
+
+        // `meet` is exactly the intersection; `join` covers the union.
+        for (all) |b| {
+            const m = a.meet(b);
+            const u = a.join(b);
+            for (pts) |x| {
+                try std.testing.expectEqual(member(a, x) and member(b, x), member(m, x));
+                if (member(a, x) or member(b, x)) try std.testing.expect(member(u, x));
+            }
+        }
+    }
+
+    // `point` is the one-member interval, and a NaN constant carries no evidence.
+    try std.testing.expect(member(Interval.point(0.5), 0.5) and !member(Interval.point(0.5), 1));
+    try std.testing.expectEqual(Interval.top, Interval.point(math.nan(f64)));
 }
