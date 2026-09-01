@@ -166,8 +166,12 @@ pub const Prover = struct {
                 // §4.4 solver unknown: finite by the host contract, magnitude
                 // unknown unless the host declares one (Options.unknown_bound).
                 .block_param => {
-                    if (self.opts.unknown_bound) |b|
-                        self.iv[i] = .{ .lo = -@abs(b), .hi = @abs(b) };
+                    // A NaN bound (`--unknown-bound=nan` parses) bounds
+                    // nothing: as an end it would read as a narrow interval
+                    // to every `@min`/`@max` below.
+                    if (self.opts.unknown_bound) |b| {
+                        if (!math.isNan(b)) self.iv[i] = .{ .lo = -@abs(b), .hi = @abs(b) };
+                    }
                     self.finite[i] = true;
                 },
                 .inst_result => {
@@ -196,20 +200,24 @@ pub const Prover = struct {
         const info = self.lowered.params.items[param];
         if (info.ty == .string) return .top;
 
-        var acc: ?proof_lattice.Interval = null;
-        for (info.ranges) |r| {
-            if (r.kind != .from or r.strings != null) continue;
-            const lo = self.foldBound(r.lo) orelse return .top;
-            const hi = if (r.hi == .none) lo else (self.foldBound(r.hi) orelse return .top);
-            const one: proof_lattice.Interval = .{
-                .lo = lo,
-                .hi = hi,
-                .lo_open = !r.lo_inclusive,
-                .hi_open = !r.hi_inclusive,
-            };
-            acc = if (acc) |a| a.join(one) else one;
-        }
-        var iv = acc orelse proof_lattice.Interval.top;
+        // A `from` bound that does not fold literally proves nothing, so the
+        // union is then `top`; the exclusions and the type below still hold.
+        var iv: proof_lattice.Interval = from: {
+            var acc: ?proof_lattice.Interval = null;
+            for (info.ranges) |r| {
+                if (r.kind != .from or r.strings != null) continue;
+                const lo = self.foldBound(r.lo) orelse break :from .top;
+                const hi = if (r.hi == .none) lo else (self.foldBound(r.hi) orelse break :from .top);
+                const one: proof_lattice.Interval = .{
+                    .lo = lo,
+                    .hi = hi,
+                    .lo_open = !r.lo_inclusive,
+                    .hi_open = !r.hi_inclusive,
+                };
+                acc = if (acc) |a| a.join(one) else one;
+            }
+            break :from acc orelse .top;
+        };
 
         for (info.ranges) |r| {
             if (r.kind != .exclude or r.strings != null) continue;
@@ -228,12 +236,19 @@ pub const Prover = struct {
                 (lo == 0 and r.lo_inclusive) or
                 (hi == 0 and r.hi_inclusive);
             if (zero_excluded) iv.nonzero = true;
-            if (lo <= iv.lo and hi >= iv.lo and hi <= iv.hi) {
+            // The same rule at the range's own ends: an exclusion clips an end
+            // only if it removes that end itself, by a square bracket or
+            // because the range already left the end open. [0:10] minus (0:5)
+            // is {0} ∪ [5:10], whose hull is still [0:10].
+            const covers_lo = lo < iv.lo or (lo == iv.lo and (r.lo_inclusive or iv.lo_open));
+            const covers_hi = hi > iv.hi or (hi == iv.hi and (r.hi_inclusive or iv.hi_open));
+            if (covers_lo and hi >= iv.lo and hi <= iv.hi) {
+                // Ending exactly on an open end keeps that end open.
+                iv.lo_open = r.hi_inclusive or (hi == iv.lo and iv.lo_open);
                 iv.lo = hi;
-                iv.lo_open = r.hi_inclusive;
-            } else if (hi >= iv.hi and lo <= iv.hi and lo >= iv.lo) {
+            } else if (covers_hi and lo <= iv.hi and lo >= iv.lo) {
+                iv.hi_open = r.lo_inclusive or (lo == iv.hi and iv.hi_open);
                 iv.hi = lo;
-                iv.hi_open = r.lo_inclusive;
             }
         }
         // §3.2.1 fixes `integer` at 32 bits, so a model-card integer never
@@ -250,7 +265,11 @@ pub const Prover = struct {
     /// `paramInterval`); `inf` (§3.4.2) folds to ±infinity.
     fn foldBound(self: *const Prover, e: Ast.ExprId) ?f64 {
         const c = constfold.fold(self.lowered.file, e, constfold.literal_env) orelse return null;
-        return if (c == .str) null else c.asReal();
+        if (c == .str) return null;
+        // A NaN bound (`0.0/0.0`) bounds nothing; as an interval end it would
+        // fail every comparison and read as evidence to `@min`/`@max`.
+        const x = c.asReal();
+        return if (math.isNan(x)) null else x;
     }
 
     // ------------------------------------------------------- guard evidence --
@@ -442,6 +461,23 @@ pub const Prover = struct {
         return (self.literalNumber(v) orelse return false) == 0.0;
     }
 
+    // Whether `v` is never NaN at run time: a number constant, a parameter or
+    // a probe (finite or ±inf by the host contract, rule 1 on
+    // `proof.FloatMode`), an integer, or a value the walk already proved
+    // finite. Before `walk` every computed real answers false.
+    // ponytail: a select arm's guard is mined before `walk`, so a false edge
+    // over a computed real gives it nothing. Mine arm guards lazily in
+    // `evalInst` if a model needs them.
+    fn nanFree(self: *const Prover, v: Mir.Value) bool {
+        const rv = self.an.rv(v);
+        return switch (self.mir.valueDef(rv)) {
+            .float_const => |c| !math.isNan(c),
+            .int_const, .str_const, .param_ref, .block_param => true,
+            .inst_result => |inst| Mir.opIsInteger(self.mir.instOp(inst)) or self.finite[@backingInt(rv)],
+            .undef => false,
+        };
+    }
+
     /// Facts implied by taking (or not taking) a branch on `cond`.
     /// LRM §4.2.5 relational / §4.2.7 equality operators; `&&`/`||` need no case
     /// because §4.2.8 short-circuit gives them real CFG (see lower.zig).
@@ -472,6 +508,11 @@ pub const Prover = struct {
                 }
                 // Normalise every comparison to `lhs REL rhs`.
                 const cmp = Mir.opcode.get(b.op).rel orelse return buf[0..0];
+                // A false `<`, `<=`, `>` or `>=` gives the reverse relation only
+                // between numbers: every ordering against NaN is false. `!=` is
+                // true against NaN, so its false edge is a real `==`.
+                const ordering = cmp != .eq and cmp != .ne;
+                if (!taken and ordering and !(self.nanFree(b.lhs) and self.nanFree(b.rhs))) return buf[0..0];
                 const Rel = enum { lt, le, eq, none };
                 var rel: Rel = .none;
                 var swap = false;
@@ -606,17 +647,19 @@ pub const Prover = struct {
         if (b != 0) {
             const parent = self.an.idom[b];
             if (parent != none_u32 and self.an.preds[b].len == 1) {
-                // ponytail: reuse the chain-order pool built by Analysis.
-                for (self.an.blockInstsFlat(parent)) |inst| {
-                    const d = self.mir.instData(inst);
-                    if (d != .branch) continue;
-                    const taken = @backingInt(d.branch.then_block) == b;
-                    if (!taken and @backingInt(d.branch.else_block) != b) continue;
-                    if (self.an.foldConst(d.branch.cond, false)) |c| {
-                        if ((c.f != 0) != taken) self.domain_active = false;
+                // The parent's terminator, as `Analysis` found it for the CFG:
+                // one load instead of a scan of the parent's instructions.
+                const term = self.an.term[parent];
+                if (term != .none and self.mir.instOp(term) == .branch) {
+                    const br = self.mir.instData(term).branch;
+                    const taken = @backingInt(br.then_block) == b;
+                    if (taken or @backingInt(br.else_block) == b) {
+                        if (self.an.foldConst(br.cond, false)) |c| {
+                            if ((c.f != 0) != taken) self.domain_active = false;
+                        }
+                        var raw: [2]Fact = undefined;
+                        try self.pushFacts(self.condFacts(br.cond, taken, &raw));
                     }
-                    var raw: [2]Fact = undefined;
-                    try self.pushFacts(self.condFacts(d.branch.cond, taken, &raw));
                 }
             }
         }
@@ -707,6 +750,10 @@ pub const Prover = struct {
             // fresh local array is all zero (§3.2); a held one holds what the
             // last accepted evaluation stored, which nothing here bounds:
             // the `$held_real` seed's ⊤. A store widens by what it stores.
+            // A `vera_timepoint` cached start (`a.tp`) holds what the miss
+            // arm stored on an earlier evaluation; it is only ever read by
+            // the join phi, which also joins that miss-arm version, and so
+            // covers every cached value.
             .anew => |a| return if (self.lowered.mem_arrays.items[a.array].held == Lower.none_u32)
                 .{ .iv = proof_lattice.Interval.point(0), .finite = true }
             else
@@ -1155,12 +1202,22 @@ pub const Prover = struct {
                 const def = self.mir.valueDef(@fromBackingInt(@intCast(i)));
                 if (def != .inst_result) continue;
                 const inst = def.inst_result;
-                if (self.mir.instOp(inst) == .phi) {
+                const op = self.mir.instOp(inst);
+                if (op == .phi) {
+                    // §5.8 the branches that pick a phi's operand are part of
+                    // the unit too: under `.optimized` a comparison on inf or
+                    // NaN is poison, and a branch on poison is undefined.
+                    const stop = self.an.idom[@backingInt(self.mir.instBlock(inst))];
                     const ph = self.mir.instData(inst).phi;
-                    for (0..ph.count) |k|
-                        try stack.append(self.arena, self.mir.phiPair(inst, @intCast(k)).value);
+                    for (0..ph.count) |k| {
+                        const pair = self.mir.phiPair(inst, @intCast(k));
+                        try stack.append(self.arena, pair.value);
+                        try self.pushSteering(&stack, @backingInt(pair.block), stop);
+                    }
                     continue;
                 }
+                // §9.19 `$param_given` names its parameter; it never reads it.
+                if (op == .call and self.mir.instData(inst).call.callee == .@"$param_given") continue;
                 var buf: [3]Mir.Value = undefined;
                 for (self.operands(inst, &buf)) |o| try stack.append(self.arena, o);
             }
@@ -1176,6 +1233,25 @@ pub const Prover = struct {
             .unit_modes = modes,
             .error_count = self.error_count,
         };
+    }
+
+    // Pushes the condition of every branch on the dominator path from block
+    // `from` up to block `stop`, both included: the decisions that choose the
+    // edge a join is entered by. Bounded by the block count; an unreachable
+    // `from` pushes nothing.
+    // ponytail: the whole idom path, not only the branches the join is
+    // control-dependent on, so a branch whose arms meet before the join is
+    // still counted. Precise is a post-dominance frontier from `Analysis`.
+    fn pushSteering(self: *Prover, stack: *std.ArrayList(Mir.Value), from: u32, stop: u32) !void {
+        var b = from;
+        for (0..self.an.nb) |_| {
+            if (b == none_u32 or self.an.rpo_num[b] == none_u32) return;
+            const term = self.an.term[b];
+            if (term != .none and self.mir.instOp(term) == .branch)
+                try stack.append(self.arena, self.mir.instData(term).branch.cond);
+            if (b == stop or b == 0) return;
+            b = self.an.idom[b];
+        }
     }
 };
 
