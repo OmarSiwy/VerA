@@ -22,7 +22,7 @@ const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
-const Const = @import("frontend").constfold.Const;
+const Const = constfold.Const;
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
 const diag = @import("diag");
@@ -689,7 +689,7 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId, plan: ?constfold.IntPlan, sized: bool
             // (E0601). A negative literal is a constant however it is spelled.
             switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
                 // §3.2 through the one constant kernel: -(-2^31) is -2^31.
-                .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, @import("frontend").constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
+                .int_const => |x| return .{ .v = try self.mir.addIntConst(self.arena, constfold.unary(.minus, .{ .int = x }).?.int), .ty = a.ty },
                 .float_const => |x| return .{ .v = try self.mir.addFloatConst(self.arena, -x), .ty = a.ty },
                 .undef, .str_const, .param_ref, .block_param, .inst_result => {},
             }

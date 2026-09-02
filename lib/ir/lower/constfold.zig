@@ -3,8 +3,11 @@
 //! In: an expression AST and the current scope. Out: a `Const`, or null when the expression
 //! is not constant. Reads the symbol tables, never writes. The operator rules are
 //! `frontend/constfold.zig`'s; this file supplies identifiers (through `consts`) and §4.2.9 signedness.
-//! LRM: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1, §4.2.9, §4.2.11, §4.3, §4.7.2, §6.6.1, §6.6.2.
-//! §9.14 / IEEE §§5.4–5.5, §17.11.1 preserve the `$clog2` operand context.
+//!
+//! LRM clauses this file's code cites: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1,
+//! §4.2.9, §4.2.11, §4.2.12, §4.3, §4.7.2, §6.6.1, §6.6.2, §9.11, §9.14;
+//! IEEE 1364-2005 §4.10.1, §5.2, §5.4, §5.5, §5.5.1, §12.2, §17.8, §17.11.1
+//! (the `$clog2` operand's width and sign).
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

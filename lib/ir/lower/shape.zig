@@ -76,8 +76,12 @@ pub fn shapeCells(dims: []const Bounds) usize {
 
 /// The subscripts of the `k`th cell of a ROW-MAJOR walk — the last dimension
 /// varies fastest, which is the order §3.4.8's nested assignment pattern lists
-/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns).
+/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns). A descending
+/// dimension (`[hi:lo]` as declared) is walked from its left bound, `hi`.
+/// `k` is below `shapeCells(dims)`; a larger one wraps in the outermost
+/// dimension. Asserts that `out` has one slot per dimension.
 pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
+    std.debug.assert(out.len == dims.len);
     var rest = k;
     var i = dims.len;
     while (i > 0) {
@@ -91,7 +95,9 @@ pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
 
 /// The flat element index of an in-range subscript tuple: row-major, each
 /// dimension counted from its left bound — `shapeSubscripts`' inverse and
-/// `lower_stmt.runtimeArrayIndex`'s order.
+/// `lower_stmt.runtimeArrayIndex`'s order. Asserts one subscript per dimension;
+/// the caller has range-checked them (`lower_stmt.checkSubscripts`), since an
+/// out-of-range subscript can alias another cell.
 pub fn flatIndex(dims: []const Bounds, idx: []const i64) i64 {
     var flat: i64 = 0;
     for (dims, idx) |d, i| flat = flat * d.count() + (if (d.descending) d.hi - i else i - d.lo);

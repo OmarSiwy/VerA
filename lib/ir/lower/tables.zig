@@ -9,6 +9,15 @@
 //! Cross-table references are indices: a `nodes` row is a `u16` (`ground` is the
 //! sentinel past the last row), every other row a `u32` (`none_u32` is "absent").
 //! The row types are also reachable as `Lower.<Name>`, the spelling most callers use.
+//!
+//! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4,
+//! §2.7, §2.8.1, §2.9, §2.9.2, §3.1, §3.2, §3.2.2, §3.4, §3.4.2, §3.4.5, §3.4.7,
+//! §3.6, §3.6.1.2, §3.6.1.4, §3.6.2, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §4.2,
+//! §4.2.12, §4.4, §4.5.2, §4.5.3, §4.5.15, §4.6.3, §4.6.4, §5.4.1, §5.4.2,
+//! §5.4.3, §5.5.3, §5.6, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.8.2, §5.10, §5.10.3.3,
+//! §5.10.4, §6.2, §6.3.4, §6.5, §6.5.2.2, §6.6, §6.7, §7.2.4, §7.3.1, §7.3.2,
+//! §7.3.6.1, §7.3.6.5, §7.8.4, §8.5, §8.5.3.6, §9.4, §9.5, §9.7.3, §9.12, §9.13,
+//! §9.15, §9.16, §9.17, §9.18, §9.19, §9.21, §10.3, §11.6.6, §11.6.7.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -133,28 +142,33 @@ pub const DeclMeta = struct {
     units: ?[]const u8 = null,
 };
 
-/// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
-/// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
-/// `[3:5]`), so nothing here assumes msb ≥ lsb.
-/// One `Lowered.system_checks` row.
+/// One `Lowered.system_checks` row: a §9.18 system parameter's name and kind,
+/// and its value lowered over the parameters.
 pub const SystemCheck = struct { kind: @import("../hier_param.zig").Kind, name: []const u8, v: Mir.Value };
 
+/// A folded `[msb:lsb]` (§3.6.3 Syntax 3-6 `range`). Both bounds are signed and
+/// either order is legal (§3.6.3 runs `[5:0]`, the vector-branch example
+/// `[3:5]`), so nothing here assumes msb ≥ lsb. Every range lowering builds
+/// has passed `lower_node.foldDim`'s E1015 cap, so its size fits a `u16`.
 pub const VecRange = struct {
     msb: i64,
     lsb: i64,
 
-    /// Returns the element count.
+    /// Returns the element count, `|msb - lsb| + 1`.
+    /// Asserts that the count fits a `u32`.
     pub fn size(v: VecRange) u32 {
         return @intCast(@abs(v.msb - v.lsb) + 1);
     }
-    /// Returns whether index `i` lies within the range.
+    /// Returns whether index `i` lies within the range, in either direction.
     pub fn has(v: VecRange, i: i64) bool {
         return i >= @min(v.msb, v.lsb) and i <= @max(v.msb, v.lsb);
     }
     /// Returns the k-th element in declaration order, msb first. That order is the
     /// host's terminal order for a vector port, and it is what §3.12 pairs
     /// "in a parallel one-to-one fashion" for a vector branch.
+    /// Asserts that `k` is below `size()`.
     pub fn at(v: VecRange, k: u32) i64 {
+        std.debug.assert(k < v.size());
         const d: i64 = @intCast(k);
         return if (v.msb <= v.lsb) v.msb + d else v.msb - d;
     }

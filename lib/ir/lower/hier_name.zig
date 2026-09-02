@@ -172,7 +172,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
         .ident => if (self.out.vectors.get(self.file.str(ex.strOf(ref)))) |r| {
             const rname = self.file.str(ex.strOf(ref));
             for (0..r.size()) |k| {
-                const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ rname, r.at(@intCast(k)) });
+                const elem = try self.arena.print("{s}[{d}]", .{ rname, r.at(@intCast(k)) });
                 const idx = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem) orelse ground;
                 if (idx == ground) {
                     try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
@@ -259,7 +259,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 /// the first element's answer is the call's.
 fn aliasVector(self: *Lower, fname: []const u8, ref_name: []const u8, r: Lower.VecRange, target: []const u8) Oom!lower_limit.AliasResult {
     for (0..r.size()) |k| {
-        const elem = try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ ref_name, r.at(@intCast(k)) });
+        const elem = try self.arena.print("{s}[{d}]", .{ ref_name, r.at(@intCast(k)) });
         const home = self.hier_name_state.alias_home.get(elem) orelse self.node_voltages.get(elem).?;
         if (!self.hier_name_state.alias_home.contains(elem)) try self.hier_name_state.alias_home.put(self.arena, elem, home);
         if (try bindAlias(self, fname, elem, home, target) != .bound) return .unresolved;
