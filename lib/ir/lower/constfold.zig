@@ -341,3 +341,126 @@ pub fn unsignedCompare(self: *const Lower, e: Ast.ExprId) ?constfold.UnsignedCom
     const ex = &self.file.exprs;
     return constfold.unsignedCompare(self.file, ex.lhs(e), ex.rhs(e), Env{ .self = self, .params = false });
 }
+
+/// Fails unless `got` is `want`: the same variant and the same value.
+fn expectConst(want: ?Const, got: ?Const) !void {
+    const w = want orelse return std.testing.expect(got == null);
+    const g = got orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(std.meta.activeTag(w), std.meta.activeTag(g));
+    switch (w) {
+        .int => |v| try std.testing.expectEqual(v, g.int),
+        .real => |v| try std.testing.expectEqual(v, g.real),
+        .str => |v| try std.testing.expectEqualStrings(v, g.str),
+    }
+}
+
+test "constEval: the conversion functions fold as IEEE 1364-2005 §17.8 and §17.11.1 define them" {
+    // Folded in an empty scope, straight off the parsed default, so the only
+    // rules in play are `conversion`'s.
+    const cases = [_]struct { expr: []const u8, want: ?Const }{
+        // §17.8 `$rtoi` converts "by truncating", toward zero either way.
+        .{ .expr = "$rtoi(2.7)", .want = .{ .int = 2 } },
+        .{ .expr = "$rtoi(-2.7)", .want = .{ .int = -2 } },
+        // §3.2's 32-bit integer is the whole range a fold may answer.
+        .{ .expr = "$rtoi(2147483647.0)", .want = .{ .int = 2147483647 } },
+        .{ .expr = "$rtoi(-2147483648.0)", .want = .{ .int = -2147483648 } },
+        .{ .expr = "$rtoi(2147483648.0)", .want = null },
+        .{ .expr = "$rtoi(1.0/0.0)", .want = null },
+        .{ .expr = "$rtoi(0.0/0.0)", .want = null },
+        // §17.8 `$itor` "converts integers to real values"; a real argument
+        // reaches it through §4.2.1.1's rounding, ties away from zero.
+        .{ .expr = "$itor(3)", .want = .{ .real = 3.0 } },
+        .{ .expr = "$itor(2.5)", .want = .{ .real = 3.0 } },
+        // §17.11.1 `$clog2`: the ceiling of log2, 0 for 0 and 1, and the
+        // argument unsigned at its 32-bit width, so -1 is 2^32 - 1.
+        .{ .expr = "$clog2(9)", .want = .{ .int = 4 } },
+        .{ .expr = "$clog2(8)", .want = .{ .int = 3 } },
+        .{ .expr = "$clog2(1)", .want = .{ .int = 0 } },
+        .{ .expr = "$clog2(0)", .want = .{ .int = 0 } },
+        .{ .expr = "$clog2(-1)", .want = .{ .int = 32 } },
+        // What the folder declines stays a run-time question.
+        .{ .expr = "$clog2(1.5)", .want = null },
+        .{ .expr = "$rtoi(1.0, 2.0)", .want = null },
+        .{ .expr = "$rtoi(\"a\")", .want = null },
+        .{ .expr = "$bitstoreal(1)", .want = null },
+        .{ .expr = "undeclared", .want = null },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print("module m; parameter real a = {s}; endmodule", .{c.expr});
+        defer std.testing.allocator.free(src);
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        const m = &h.file.modules[h.file.builtin_modules];
+        expectConst(c.want, constEval(&h.low, m.params[0].default)) catch |e| {
+            std.debug.print("{s}\n", .{c.expr});
+            return e;
+        };
+    }
+}
+
+test packedWidth {
+    // IEEE 1364-2005 §4.2.1: a packed range holds |msb - lsb| + 1 bits in
+    // either direction; a count past `u32` has no width.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m;
+        \\  reg [7:0] a;
+        \\  reg [0:7] b;
+        \\  reg [-1:1] c;
+        \\  reg [3:3] d;
+        \\  reg [4294967296:0] e;
+        \\endmodule
+    );
+    defer h.deinit();
+    const vars = h.file.modules[h.file.builtin_modules].vars;
+    const want = [_]?u32{ 8, 8, 3, 1, null };
+    try std.testing.expectEqual(want.len, vars.len);
+    for (vars, want) |v, w| try std.testing.expectEqual(w, packedWidth(&h.low, v.packed_range.?));
+}
+
+test "shapeEval: §3.4 marks a parameter a shape exactly where one is folded into a shape" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter integer w = 2;
+        \\  parameter real g = 1.0;
+        \\  real x[0:w];
+        \\  analog I(p) <+ g * V(p);
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    const params = h.low.out.params.items;
+    try std.testing.expect(params[h.low.param_index.get("w").?].shape);
+    try std.testing.expect(!params[h.low.param_index.get("g").?].shape);
+}
+
+test hostSizedParam {
+    // VD-089 over IEEE 1364-2005 §4.10.1: only a parameter with neither a
+    // type nor a range takes its width from a host card's value.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter a = 5;
+        \\  parameter integer b = 5;
+        \\  localparam c = 5;
+        \\  parameter [7:0] d = 5;
+        \\  parameter real r = 1.0;
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(h.low.param_index.get("a").?, hostSizedParam(&h.low, "a").?);
+    for ([_][]const u8{ "b", "c", "d", "r", "undeclared" }) |name|
+        try std.testing.expectEqual(null, hostSizedParam(&h.low, name));
+}

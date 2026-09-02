@@ -1085,3 +1085,69 @@ pub fn zeroOf(ty: Ty) Mir.Value {
         .string => .undef,
     };
 }
+
+test zeroOf {
+    // §3.2 "Real variables are initialized to zero (0)", an integer too; a
+    // string has no numeric zero.
+    try std.testing.expectEqual(Mir.Value.f_zero, zeroOf(.real));
+    try std.testing.expectEqual(Mir.Value.zero, zeroOf(.integer));
+    try std.testing.expectEqual(Mir.Value.undef, zeroOf(.string));
+}
+
+test "checkOneItemPerScope: §6.8 one identifier declares one item in a scope (E0362)" {
+    try Lower.expectBodyVerdict("  real x;\n  integer x;", "", .E0362);
+    try Lower.expectBodyVerdict("  parameter real x = 1.0;\n  real x;", "", .E0362);
+    // A named block is a scope of its own (§5.3.2): shadowing is no clash.
+    try Lower.expectBodyVerdict("  real x;", "    begin : b\n      real x;\n      x = 1.0;\n    end", null);
+}
+
+test "closeScope: §5.3.2 a block's declaration shadows for the block, and its name stays reachable" {
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer x;
+        \\  analog begin
+        \\    begin : b
+        \\      real x;
+        \\      x = 1.5;
+        \\    end
+        \\    x = 2;
+        \\    I(p) <+ x * V(p);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    // The block closed: `x` is the module's integer again, and the local is
+    // §5.3.2's `b.x`, "accessed outside the scope in which [it is] declared".
+    try std.testing.expectEqual(Ty.integer, h.low.vars.get("x").?.ty);
+    try std.testing.expectEqual(Ty.real, h.low.vars.get("b.x").?.ty);
+    try std.testing.expect(h.low.block_locals.contains("b.x"));
+}
+
+test "declareVarDecl: §2.9 vera_scratch values and owners" {
+    // Any string but "uninit" (E0538); "uninit" with an initializer (E0539);
+    // on anything but a variable (E0535).
+    try Lower.expectBodyVerdict("  (* vera_scratch *) real s;", "    s = 1.0;", null);
+    try Lower.expectBodyVerdict("  (* vera_scratch = \"nope\" *) real s;", "    s = 1.0;", .E0538);
+    try Lower.expectBodyVerdict("  (* vera_scratch = \"uninit\" *) real s = 1.0;", "", .E0539);
+    try Lower.expectBodyVerdict("  (* vera_scratch *) parameter real g = 1.0;", "", .E0535);
+    // §7.3.1 a `reg`'s packed range is a constant (E0352).
+    try Lower.expectBodyVerdict("  integer w;\n  reg [w:0] r;", "", .E0352);
+}
+
+test "markHeldVars: an array too large to count is judged by its declaration, not by a crash" {
+    // The read `x[i]...` makes the walk ask whether every cell is assigned,
+    // which counts the cells before `dimsBounds` has refused the shape. The
+    // count overflows a 64-bit integer in both declarations; E1016 is the
+    // answer either way.
+    const decls = [_][]const u8{
+        "  real x[0:2000000000][0:2000000000][0:2000000000];\n  integer i;\n  real y;",
+        "  real x[-9223372036854775807:9223372036854775807][0:0][0:0];\n  integer i;\n  real y;",
+    };
+    for (decls) |d| try Lower.expectBodyVerdict(d, "    i = 0;\n    y = x[i][0][0];", .E1016);
+}
