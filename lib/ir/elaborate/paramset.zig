@@ -199,7 +199,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
         const name = key[path.len..];
         // A path into a descendant names that descendant's own parameters,
         // not an additional parameter of the paramset instance.
-        if (std.mem.indexOfScalar(u8, name, sep) != null) continue;
+        if (std.mem.findScalar(u8, name, sep) != null) continue;
         if (!exposes(self, ps, name)) return false;
     }
     const bindings = try self.ctx.arena.alloc(?elab_override.ParamBinding, ps.params.len);
@@ -522,4 +522,72 @@ fn readsVar(file: *const Ast.SourceFile, ps: *const Ast.ParamsetDecl, e: Ast.Exp
     var buf: [3]Ast.ExprId = undefined;
     for (x.children(e, &buf)) |c| if (readsVar(file, ps, c)) |hit| return hit;
     return null;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test overridesParam {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; ps #(.ag(2.0)) u(p); ps #(.g()) v(p); ps #(.h(1.0)) w(p); endmodule
+        \\paramset ps base; parameter real g = 1.0; parameter real h = 1.0; aliasparam ag = g; .k = g; endparamset
+        \\module base(a); inout a; electrical a; parameter real k = 0.0; endmodule
+    );
+    const insts = f.file.modules[0].instances;
+    const ps = &f.file.paramsets[0];
+    const g = fixture.id(&f.file, "g").?;
+    const h = fixture.id(&f.file, "h").?;
+    // §3.4.7 an override through the alias lands on its target.
+    try std.testing.expect(overridesParam(&insts[0], ps, g));
+    // §6.3.3 an empty association overrides nothing.
+    try std.testing.expect(!overridesParam(&insts[1], ps, g));
+    try std.testing.expect(!overridesParam(&insts[2], ps, g));
+    try std.testing.expect(overridesParam(&insts[2], ps, h));
+}
+
+test "§6.4.2 ties: the greatest number of ranged localparams, then the fewest unconnected ports; still tied is E0914" {
+    // Rule 1 ties both pairs below (each leaves its one parameter `l` at its
+    // default). Rule 2 then picks the paramset whose localparam has a range.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; bin u(p); endmodule
+        \\paramset bin base; parameter real l = 1.0; .k = 10.0; endparamset
+        \\paramset bin base; parameter real l = 1.0; localparam real lp = 1.0 from [0:2]; .k = 20.0; endparamset
+        \\module base(a); inout a; electrical a; parameter real k = 0.0; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    try std.testing.expectEqual(@as(f64, 20.0), f.file.exprs.realValue(fixture.paramNamed(&f.file, d.top, "u.k").?.default));
+
+    // Rules 1 and 2 tie; rule 3 counts the target module's ports the
+    // instance leaves unconnected: `two`'s `b` is, `one` has no other.
+    var g: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try fixture.parse(&g,
+        \\module top(p); inout p; electrical p; bin u(p); endmodule
+        \\paramset bin two; parameter real l = 1.0; .k = 10.0; endparamset
+        \\paramset bin one; parameter real l = 1.0; .k = 20.0; endparamset
+        \\module two(a, b); inout a, b; electrical a, b; parameter real k = 0.0; endmodule
+        \\module one(a); inout a; electrical a; parameter real k = 0.0; endmodule
+    );
+    const dg = try elaborate.elaborate(g.ctx());
+    try std.testing.expectEqualStrings("one", dg.units[1].module);
+    try std.testing.expectEqual(@as(f64, 20.0), g.file.exprs.realValue(fixture.paramNamed(&g.file, dg.top, "u.k").?.default));
+
+    // Two indistinguishable paramsets survive every rule.
+    var h: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer h.deinit();
+    try fixture.parse(&h,
+        \\module top(p); inout p; electrical p; bin u(p); endmodule
+        \\paramset bin base; parameter real l = 1.0; .k = 10.0; endparamset
+        \\paramset bin base; parameter real l = 1.0; .k = 20.0; endparamset
+        \\module base(a); inout a; electrical a; parameter real k = 0.0; endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(h.ctx()));
+    try std.testing.expect(fixture.hasCode(&h.bag, .E0914));
 }

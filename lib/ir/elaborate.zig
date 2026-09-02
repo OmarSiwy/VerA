@@ -22,16 +22,21 @@
 //!
 //! Who writes which `Flatten` table: the synthesized declaration lists,
 //! `unit_paths`, `names`, `implicit_nets`, `unconnected_inputs`,
-//! `port_concats`, `port_widths`, `ps_hidden` and `prim_ports` are
-//! `instance.zig`'s (with `clone.cloneParams` appending `params`/
-//! `aliasparams`); `defparams` and `paramset_defparams` are `override.zig`'s;
-//! `nets`, `disc_of`, `segs`, `port_resolved`, `ooc` and
-//! `signal_disciplines` are `resolve.zig`'s (`addNet` is the only net
-//! append); `inserts` is `insert.zig`'s; `selection_params` and
-//! `ps_outputs` are `paramset.zig`'s (which also appends paramset
-//! variables to `vars`); `attribute_disciplines`, `pending_attributes` and
-//! `expression_aliases` are written by `clone.zig` during the clone and
-//! settled by `resolve.resolveMultiCandidates`. `unit` is not a table but the
+//! `port_concats`, `port_widths`, `ps_hidden`, `port_vars`, `prim_ports` and
+//! the dry walk's `tree` are `instance.zig`'s (with `clone.cloneParams`
+//! appending `params`/`aliasparams`); `defparams`, `seed_params`,
+//! `paramset_defparams` and `system_checks` are `override.zig`'s (`run`
+//! adds the top's card-read checks); `nets`, `disc_of`, `segs`,
+//! `port_resolved`, `ooc`, `ooc_inits` and `signal_disciplines` are
+//! `resolve.zig`'s (`addNet` is the only net append); `inserts`,
+//! `unbridged` and `seg_down` are `insert.zig`'s, and `seg_up` is
+//! `segment.zig`'s memo, which `insert.plan` clears per level;
+//! `selection_params` and `ps_outputs` are `paramset.zig`'s (which also
+//! appends paramset variables to `vars`); `attribute_disciplines`,
+//! `local_accesses`, `pending_attributes` and `expression_aliases` are
+//! written by `clone.zig` during the clone, the attribute rows settled by
+//! `resolve.resolveMultiCandidates`. `elaborate` copies the dry walk's `tree`
+//! and `ooc` into the real walk (`tree_ooc`). `unit` is not a table but the
 //! namespace in force: `inlineInstance` pushes and pops it, and a pass that
 //! clones text written in another scope (`override.collectOverrides`,
 //! `paramset.paramsetOverrides`, `clone.paramsetOomr`) swaps it and restores.
@@ -607,7 +612,7 @@ pub const Flatten = struct {
     /// once, after the walk, by `resolveMultiCandidates`. An array
     /// hash map so the post-pass visits nets in first-binding order and a
     /// design with two errors reports them deterministically.
-    segs: std.AutoArrayHashMapUnmanaged(Ast.StrId, Segs) = .empty,
+    segs: std.array_hash_map.Auto(Ast.StrId, Segs) = .empty,
 
     /// The flat nets whose discipline came from a bound port rather than a
     /// declaration: §3.6.5's implicit nets, the set §7.4.4.1's continuous-wins
@@ -875,40 +880,10 @@ pub const Flatten = struct {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Parser = @import("frontend").Parser;
-const Preprocessor = @import("frontend").Preprocessor;
-
-const Fixture = struct {
-    arena: std.heap.ArenaAllocator,
-    file: Ast.SourceFile = .empty,
-    bag: diag.Bag = undefined,
-    src: []const u8 = "",
-    starts: []const u32 = &.{},
-
-    fn deinit(self: *Fixture) void {
-        self.arena.deinit();
-    }
-
-    fn ctx(self: *Fixture) Ctx {
-        return .{
-            .arena = self.arena.allocator(),
-            .file = &self.file,
-            .src = self.src,
-            .tok_starts = self.starts,
-            .bag = &self.bag,
-        };
-    }
-};
-
-fn parse(out: *Fixture, text: []const u8) !void {
-    const arena = out.arena.allocator();
-    out.src = text;
-    out.bag = diag.Bag.init(arena);
-    var toks = try Lexer.Lexer.tokenize(arena, text);
-    out.starts = toks.items(.start);
-    var p = Parser.Parser.init(arena, text, toks.items(.tag), out.starts, &out.bag);
-    out.file = try p.parseSourceFile();
-}
+const fixture = @import("elaborate/fixture.zig");
+const Fixture = fixture.Fixture;
+const parse = fixture.parse;
+const parseWithPrelude = fixture.parseWithPrelude;
 
 test "a tree of one elaborates to that one, by pointer" {
     var f: Fixture = .{ .arena = .init(std.testing.allocator) };
@@ -954,20 +929,6 @@ test "the top is the module nothing instantiates, whatever the source order" {
     try std.testing.expectEqual(@as(usize, 2), design.top.ports.len);
     try std.testing.expectEqual(@as(usize, 0), design.top.nets.len);
     try std.testing.expectEqual(@as(usize, 1), design.top.analog.len);
-}
-
-/// Annex E: the prelude is a prefix of `modules` only if the preprocessor ran,
-/// so this fixture goes through it and sets `builtin_modules` as `root.zig`
-/// stage 3 does.
-fn parseWithPrelude(out: *Fixture, text: []const u8) !void {
-    const arena = out.arena.allocator();
-    out.bag = diag.Bag.init(arena);
-    out.src = (try Preprocessor.process(arena, text, .{ .bag = &out.bag })).text;
-    var toks = try Lexer.Lexer.tokenize(arena, out.src);
-    out.starts = toks.items(.start);
-    var p = Parser.Parser.init(arena, out.src, toks.items(.tag), out.starts, &out.bag);
-    out.file = try p.parseSourceFile();
-    out.file.builtin_modules = Preprocessor.spice_module_count;
 }
 
 test "annex E: a shipped primitive is instantiable, is never the top, and yields to a user module of the same name" {
@@ -1544,6 +1505,50 @@ test "IEEE 1364 §12.3.3 two variable ports collapsed onto one net declare it on
     try std.testing.expectEqualStrings("w", f.file.str(design.top.vars[0].name));
 }
 
+test pickTop {
+    // §6.2.2: of several roots, the first in source order is the device.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try parse(&f,
+        \\module a(p); inout p; electrical p; endmodule
+        \\module b(p); inout p; electrical p; endmodule
+    );
+    try std.testing.expectEqual(&f.file.modules[0], (try elaborate(f.ctx())).top);
+
+    // §6.4: a module a paramset chain ends at is instantiated through it, so
+    // `base`, declared first and named by no instance, is not the root.
+    // The chain's near link wins the module parameter both links assign.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try parse(&g,
+        \\module base(a); inout a; electrical a; parameter real j = 0.0; analog I(a) <+ j * V(a); endmodule
+        \\paramset near far; parameter real gn = 1.0; .j = gn; endparamset
+        \\paramset far base; parameter real hf = 2.0; .j = hf; endparamset
+        \\module top(p); inout p; electrical p; near u(p); endmodule
+    );
+    const chained = try elaborate(g.ctx());
+    try std.testing.expectEqualStrings("top", g.file.str(chained.top.name));
+    const j = fixture.paramNamed(&g.file, chained.top, "u.j").?;
+    try std.testing.expectEqualStrings("u.near.gn", g.file.str(g.file.exprs.strOf(j.default)));
+
+    // Every module instantiated by another: the first is the top, and the
+    // cycle is E0905.
+    var h: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer h.deinit();
+    try parse(&h,
+        \\module a(p); inout p; electrical p; b u(p); endmodule
+        \\module b(p); inout p; electrical p; a v(p); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(h.ctx()));
+    try std.testing.expect(fixture.hasCode(&h.bag, .E0905));
+
+    // §7.6: a file of connect modules only has no device.
+    var k: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer k.deinit();
+    try parse(&k, "connectmodule c(a, d); inout a, d; endmodule");
+    try std.testing.expectError(error.NoModule, elaborate(k.ctx()));
+}
+
 test {
     _ = elab_alias;
     _ = elab_clone;
@@ -1553,4 +1558,5 @@ test {
     _ = elab_override;
     _ = elab_paramset;
     _ = elab_resolve;
+    _ = elab_segment;
 }

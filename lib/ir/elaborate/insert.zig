@@ -489,3 +489,153 @@ fn matches(file: *const Ast.SourceFile, r: Rule, dir: Ast.Direction, upper: Ast.
     };
     return compat(file, in_side.discipline, source) and compat(file, out_side.discipline, sink);
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+
+test connIndex {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var file: Ast.SourceFile = .empty;
+    const pa = try file.intern(a, "a");
+    const pb = try file.intern(a, "b");
+    const pc = try file.intern(a, "c");
+    const ext = try file.intern(a, "ext");
+    const port_a: Ast.Port = .{ .name = pa };
+    const port_b: Ast.Port = .{ .name = pb };
+    const port_c: Ast.Port = .{ .name = pc };
+    // §6.2.2 an ordered list binds by position; a short one leaves the rest
+    // unbound, and an empty one binds nothing.
+    const ordered: Ast.Instance = .{ .module = pa, .name = pa, .ports = &.{ .{}, .{} } };
+    try std.testing.expectEqual(@as(?usize, 0), connIndex(&ordered, port_a, 0));
+    try std.testing.expectEqual(@as(?usize, 1), connIndex(&ordered, port_b, 1));
+    try std.testing.expectEqual(@as(?usize, null), connIndex(&ordered, port_c, 2));
+    const empty: Ast.Instance = .{ .module = pa, .name = pa };
+    try std.testing.expectEqual(@as(?usize, null), connIndex(&empty, port_a, 0));
+    // A named list binds by name, the first of a repeated one (the second
+    // is `checkConnectionShape`'s E0906), whatever the declaration order.
+    const named: Ast.Instance = .{ .module = pa, .name = pa, .ports = &.{ .{ .name = pb }, .{ .name = pa }, .{ .name = pa } } };
+    try std.testing.expectEqual(@as(?usize, 1), connIndex(&named, port_a, 0));
+    try std.testing.expectEqual(@as(?usize, 0), connIndex(&named, port_b, 1));
+    try std.testing.expectEqual(@as(?usize, null), connIndex(&named, port_c, 2));
+    // A.1.3 a `.ext(c)` port connects by its external name, not its net's.
+    const port_ext: Ast.Port = .{ .name = pc, .external_name = ext };
+    const by_ext: Ast.Instance = .{ .module = pa, .name = pa, .ports = &.{.{ .name = ext }} };
+    try std.testing.expectEqual(@as(?usize, 0), connIndex(&by_ext, port_ext, 0));
+    try std.testing.expectEqual(@as(?usize, null), connIndex(&by_ext, port_c, 0));
+}
+
+test matches {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\module top; endmodule
+    );
+    const file = &f.file;
+    const ca = fixture.id(file, "ca").?;
+    const dd = fixture.id(file, "dd").?;
+    const m = &file.modules[0];
+    const ins: Ast.ConnectInsertion = .{ .module = m.name };
+    // §7.6 Example 2's a2d: continuous input, discrete output. Port names
+    // are not what `matches` reads.
+    const a2d: Rule = .{
+        .ins = &ins,
+        .module = m,
+        .cont = .{ .port = m.name, .discipline = ca, .dir = .input },
+        .disc = .{ .port = m.name, .discipline = dd, .dir = .output },
+    };
+    // It "can bridge a mixed input port whose upper connection is compatible
+    // with electrical and whose lower connection is compatible with
+    // ddiscrete": the input faces the port's source, its upper connection.
+    try std.testing.expect(matches(file, a2d, .input, ca, dd));
+    // An output port's source is its lower connection, so the same
+    // disciplines the other way round match, and these do not.
+    try std.testing.expect(matches(file, a2d, .output, dd, ca));
+    try std.testing.expect(!matches(file, a2d, .output, ca, dd));
+    // A unidirectional bridge covers no inout and no undirected port.
+    try std.testing.expect(!matches(file, a2d, .inout, ca, dd));
+    try std.testing.expect(!matches(file, a2d, .unspecified, ca, dd));
+    // §3.6.2.4 a behavioral net with no discipline is discrete and natureless,
+    // compatible with every discrete discipline (§3.11.1).
+    try std.testing.expect(matches(file, a2d, .input, ca, .none));
+    // An inout/inout bridge "can bridge any mixed port", either way round.
+    var bidir = a2d;
+    bidir.cont.dir = .inout;
+    bidir.disc.dir = .inout;
+    try std.testing.expect(matches(file, bidir, .input, ca, dd));
+    try std.testing.expect(matches(file, bidir, .output, dd, ca));
+    try std.testing.expect(matches(file, bidir, .inout, dd, ca));
+    // A direction pair outside Table 7-2 bridges nothing.
+    var bad = a2d;
+    bad.disc.dir = .input;
+    try std.testing.expect(!matches(file, bad, .input, ca, dd));
+}
+
+test "§7.8.4 mixed ports on one signal share one merged bridge, and split gives each its own (§7.8.5 names)" {
+    // Two `dd` input ports of `din` on the `ca` signal `a`: each is mixed,
+    // and the a2d statement matches each once. Merged (the default, §7.8.3)
+    // they share `a__a2d__dd` (SigName__ModuleName__BottomDiscipline);
+    // split each gets `a__<inst>__d` (SigName__InstName__PortName). The
+    // bridge's discrete `cm` faces the lower connection, which is the
+    // segment `<bridge>.cm`, declared with the bottom discipline.
+    const src =
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\module top; ca a; din u1(a); din u2(a); endmodule
+        \\connectmodule a2d(el, cm); input el; output cm; ca el; dd cm; endmodule
+        \\module din(d); input d; dd d; endmodule
+        \\connectrules r; connect a2d{s}; endconnectrules
+    ;
+    const Case = struct { mode: []const u8, names: [2][]const u8, units: usize };
+    for ([_]Case{
+        .{ .mode = "", .names = .{ "a__a2d__dd", "a__a2d__dd" }, .units = 4 },
+        .{ .mode = " split", .names = .{ "a__u1__d", "a__u2__d" }, .units = 5 },
+    }) |case| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        const a = f.arena.allocator();
+        try fixture.parse(&f, try a.print(src, .{case.mode}));
+        const d = try elaborate.elaborate(f.ctx());
+        try std.testing.expectEqual(@as(usize, 2), d.inserts.len);
+        for (d.inserts, [_][]const u8{ "u1", "u2" }, case.names) |ins, inst, name| {
+            try std.testing.expectEqualStrings("", ins.path);
+            try std.testing.expectEqualStrings(inst, ins.inst);
+            try std.testing.expectEqualStrings("d", ins.port);
+            try std.testing.expectEqualStrings("a2d", ins.module);
+            try std.testing.expectEqualStrings(name, ins.name);
+            try std.testing.expectEqualStrings("el", ins.upper_port);
+            try std.testing.expectEqualStrings("cm", ins.lower_port);
+            const seg = fixture.netNamed(&f.file, d.top, try a.print("{s}.cm", .{name})).?;
+            try std.testing.expectEqualStrings("dd", f.file.str(seg.discipline));
+        }
+        // The top, the two children, then one bridge per distinct name.
+        try std.testing.expectEqual(case.units, d.units.len);
+    }
+}
+
+test "§7.6 Table 7-2: a connect module whose port directions name no scenario is E0982" {
+    const src =
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\connectmodule bridge(a, d); input a; {s} d; ca a; dd d; endmodule
+        \\module top(p); inout p; ca p; endmodule
+        \\connectrules r; connect bridge; endconnectrules
+    ;
+    var bad: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer bad.deinit();
+    try fixture.parse(&bad, try bad.arena.allocator().print(src, .{"input"}));
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(bad.ctx()));
+    try std.testing.expect(fixture.hasCode(&bad.bag, .E0982));
+
+    // input/output is the first of the table's three pairs.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{"output"}));
+    _ = try elaborate.elaborate(good.ctx());
+}

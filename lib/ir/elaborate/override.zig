@@ -79,7 +79,7 @@ pub fn collectDefparams(self: *Flatten, module: *const Ast.ModuleDecl, path: []c
 pub fn mayBindEarly(file: *const Ast.SourceFile) bool {
     for (file.userModules()) |*m| for (m.defparams) |dp| {
         const text = file.str(dp.path);
-        const dot = std.mem.indexOfScalar(u8, text, elaborate.sep) orelse return true;
+        const dot = std.mem.findScalar(u8, text, elaborate.sep) orelse return true;
         for (m.instances) |inst| {
             if (std.mem.eql(u8, file.str(inst.name), text[0..dot])) break;
         } else return true;
@@ -214,7 +214,7 @@ fn seedValueOf(self: *Flatten, name: Ast.StrId) ?Ast.ExprId {
 fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, dp: []const u8) Error![]const u8 {
     if (rootedPath(self, dp)) |r| return r;
     const downward = try self.ctx.arena.print("{s}{s}", .{ path, dp });
-    const dot = std.mem.indexOfScalar(u8, dp, elaborate.sep) orelse return downward;
+    const dot = std.mem.findScalar(u8, dp, elaborate.sep) orelse return downward;
     const first = dp[0..dot];
     for (module.instances) |inst| if (std.mem.eql(u8, self.ctx.file.str(inst.name), first)) return downward;
     var gen: std.ArrayList(Ast.Instance) = .empty;
@@ -230,14 +230,14 @@ fn defparamKey(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, 
         } else null;
         if (unit) |u| {
             const own = if (end == 0) u.module else blk: {
-                const parent_end = if (std.mem.lastIndexOfScalar(u8, prefix[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+                const parent_end = if (std.mem.findScalarLast(u8, prefix[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
                 break :blk prefix[parent_end .. end - 1];
             };
             if (std.mem.eql(u8, own, first) or std.mem.eql(u8, u.module, first))
                 return self.ctx.arena.print("{s}{s}", .{ prefix, dp[dot + 1 ..] });
         }
         if (end == 0) return downward;
-        end = if (std.mem.lastIndexOfScalar(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
+        end = if (std.mem.findScalarLast(u8, path[0 .. end - 1], elaborate.sep)) |k| k + 1 else 0;
     }
 }
 
@@ -268,7 +268,7 @@ pub fn reportUnusedDefparams(self: *Flatten) Error!void {
 /// `seedDefparams`' second walk applies every defparam the first collected,
 /// so this is reached only by one that `mayBindEarly` did not foresee.
 fn boundEarlier(self: *Flatten, key: []const u8) bool {
-    const k = (std.mem.lastIndexOfScalar(u8, key, elaborate.sep) orelse return false) + 1;
+    const k = (std.mem.findScalarLast(u8, key, elaborate.sep) orelse return false) + 1;
     for (self.unit_paths.items) |u| if (std.mem.eql(u8, u.path, key[0..k])) {
         for (u.decl.params) |p| if (!p.is_local and std.mem.eql(u8, self.ctx.file.str(p.name), key[k..])) return true;
     };
@@ -519,4 +519,115 @@ fn collectSystemDefparam(self: *Flatten, path: []const u8, kind: hier_param.Kind
     }
     specified.set(kind, dp.value);
     spellings.set(kind, name);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const fixture = @import("fixture.zig");
+const diag = @import("diag");
+
+test rootedPath {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, "module top; endmodule");
+    var fl = try fixture.flatten(&f);
+    // Before `run` records unit 0 there is no top name to strip.
+    try std.testing.expectEqualStrings("$root.top.u.g", rootedPath(&fl, "$root.top.u.g").?);
+    try fl.unit_paths.append(f.arena.allocator(), .{ .module = "top", .path = "", .decl = &f.file.modules[0] });
+    // §6.2.1: `$root.<top>.` names the device, the flat namespace's root.
+    try std.testing.expectEqualStrings("u.g", rootedPath(&fl, "$root.top.u.g").?);
+    // Only the whole first part is the top's name, and `$root.top` alone
+    // names nothing below it; both keep `$root.` and name nothing (E0907).
+    try std.testing.expectEqualStrings("$root.topx.g", rootedPath(&fl, "$root.topx.g").?);
+    try std.testing.expectEqualStrings("$root.top", rootedPath(&fl, "$root.top").?);
+    try std.testing.expectEqualStrings("$root.other.g", rootedPath(&fl, "$root.other.g").?);
+    // No `$root.`: not this rule's path.
+    try std.testing.expect(rootedPath(&fl, "top.u.g") == null);
+}
+
+test overridableCount {
+    // §3.4.5: a localparam takes no override.
+    const ps = [_]Ast.ParamDecl{
+        .{ .name = .none, .ty = .real, .default = .none, .is_local = true },
+        .{ .name = .none, .ty = .real, .default = .none },
+        .{ .name = .none, .ty = .integer, .default = .none },
+    };
+    try std.testing.expectEqual(@as(usize, 2), overridableCount(&ps));
+    try std.testing.expectEqual(@as(usize, 0), overridableCount(&.{}));
+}
+
+test mayBindEarly {
+    // A defparam into one of its own module's instances is reached before
+    // the parameter it names exists: one walk is enough.
+    var down: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer down.deinit();
+    try fixture.parse(&down,
+        \\module top(p); inout p; electrical p; kid u(p); defparam u.g = 2.0; endmodule
+        \\module kid(a); inout a; electrical a; parameter real g = 1.0; endmodule
+    );
+    try std.testing.expect(!mayBindEarly(&down.file));
+    // IEEE 1364-2005 §12.6's upward form may name a parameter bound earlier.
+    var upward: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer upward.deinit();
+    try fixture.parse(&upward,
+        \\module top(p); inout p; electrical p; kid u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter real g = 1.0; defparam top.u.g = 2.0; endmodule
+    );
+    try std.testing.expect(mayBindEarly(&upward.file));
+}
+
+test "§9.18 Table 9-29: an out-of-domain system parameter is E0890, a second value for one E0908" {
+    const src =
+        \\module top(p); inout p; electrical p; kid #({s}) u(p); endmodule
+        \\module kid(a); inout a; electrical a; analog I(a) <+ V(a); endmodule
+    ;
+    const Case = struct { over: []const u8, code: diag.Code };
+    for ([_]Case{
+        .{ .over = ".$mfactor(0.0)", .code = .E0890 }, // $mfactor > 0
+        .{ .over = ".$hflip(2.0)", .code = .E0890 }, // $hflip = +1 or -1
+        .{ .over = ".$angle(360.0)", .code = .E0890 }, // 0 <= $angle < 360
+        .{ .over = ".$mfactor(2.0), .$mfactor(3.0)", .code = .E0908 },
+    }) |case| {
+        var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer f.deinit();
+        try fixture.parse(&f, try f.arena.allocator().print(src, .{case.over}));
+        try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+        try std.testing.expect(fixture.hasCode(&f.bag, case.code));
+    }
+    // Each domain's edge from inside is legal.
+    var good: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer good.deinit();
+    try fixture.parse(&good, try good.arena.allocator().print(src, .{".$angle(0.0), .$hflip(-1.0), .$mfactor(0.5)"}));
+    _ = try elaborate.elaborate(good.ctx());
+}
+
+test "§9.18 $mfactor composes as a product down the hierarchy" {
+    // Table 9-29: an instance's $mfactor is its parent's times its own, so
+    // `k` inside `m` (2.0) inside the top reads 2.0 * 3.0.
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; mid #(.$mfactor(2.0)) m(p); endmodule
+        \\module mid(a); inout a; electrical a; kid #(.$mfactor(3.0)) k(a); endmodule
+        \\module kid(b); inout b; electrical b; analog V(b) <+ $mfactor; endmodule
+    );
+    const d = try elaborate.elaborate(f.ctx());
+    const x = &f.file.exprs;
+    const rhs = f.file.stmt(d.top.analog[0].body).contribute.rhs;
+    try std.testing.expectEqual(Ast.BinaryOp.mul, x.binOp(rhs));
+    try std.testing.expectEqual(@as(f64, 2.0), x.realValue(x.lhs(rhs)));
+    try std.testing.expectEqual(@as(f64, 3.0), x.realValue(x.rhs(rhs)));
+}
+
+test "§6.3 an ordered override list longer than the overridable parameters is E0907" {
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f,
+        \\module top(p); inout p; electrical p; kid #(1.0, 2.0) u(p); endmodule
+        \\module kid(a); inout a; electrical a; parameter real g = 0.0; endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
+    try std.testing.expect(fixture.hasCode(&f.bag, .E0907));
 }
