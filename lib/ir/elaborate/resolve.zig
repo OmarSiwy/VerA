@@ -468,8 +468,10 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
             // §7.8 "When two disciplines are specified in a connect
             // statement, one shall be discrete and the other continuous."
             if (ins.overrides) |o| {
-                const da = discipline.domainOf(discipline.declOf(self.ctx.file, o.a) orelse continue);
-                const db = discipline.domainOf(discipline.declOf(self.ctx.file, o.b) orelse continue);
+                // A name no discipline declares has no domain, so it is
+                // neither of the two: refused here, not skipped.
+                const da = if (discipline.declOf(self.ctx.file, o.a)) |d| discipline.domainOf(d) else null;
+                const db = if (discipline.declOf(self.ctx.file, o.b)) |d| discipline.domainOf(d) else null;
                 if (da == null or db == null or da == db) {
                     try self.err(ins.main_tok, .E0923, "`{s}` and `{s}`: one shall be discrete and the other continuous", .{
                         self.ctx.file.str(o.a), self.ctx.file.str(o.b),

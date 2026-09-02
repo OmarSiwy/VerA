@@ -708,11 +708,16 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
         .block => |b| blk: {
             // §5.3.2 a named block's declarations are locals, hidden for the
             // body like a function's formals.
-            var hidden: std.ArrayList(HiddenName) = try .initCapacity(self.ctx.arena, b.params.len + b.vars.len);
+            var hidden: std.ArrayList(HiddenName) = try .initCapacity(self.ctx.arena, b.params.len + b.vars.len + b.events.len);
             for (b.params) |p| hide(self, &hidden, p.name);
             for (b.vars) |v| hide(self, &hidden, v.name);
+            for (b.events) |e| hide(self, &hidden, e.name);
             const params = try cloneLocalParams(self, b.params);
             const vars = try cloneLocalVars(self, b.vars);
+            // IEEE 1364-2005 A.2.8 a named block's events are locals too:
+            // hidden above, so `cloneEvent` keeps each name and clones dims.
+            const events = try self.ctx.arena.alloc(Ast.EventDecl, b.events.len);
+            for (b.events, events) |e, *o| o.* = try cloneEvent(self, e);
             const body = try self.ctx.arena.alloc(Ast.StmtId, b.body.len);
             for (b.body, body) |src, *o| o.* = try cloneStmt(self, src);
             unhide(self, hidden.items);
@@ -722,8 +727,11 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
                     // so `disable` inside the child still finds it and two
                     // instances do not declare one name twice.
                     .name = if (b.name == .none) .none else try joinLocal(self, b.name),
+                    // IEEE 1364-2005 §9.8.2 `fork ... join` stays parallel.
+                    .parallel = b.parallel,
                     .params = params,
                     .vars = vars,
+                    .events = events,
                     .body = body,
                     // §6.6.3 an external name, relative to the unit: not renamed.
                     .gen_name = b.gen_name,
@@ -737,6 +745,8 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
             o.target = try cloneExpr(self, v.target);
             o.value = try cloneExpr(self, v.value);
             o.timing = try cloneExpr(self, v.timing);
+            // IEEE 1364-2005 §9.7.7 `repeat (count)` reads the unit's names.
+            o.timing_repeat = try cloneExpr(self, v.timing_repeat);
             break :blk .{ .assign = o };
         },
         .contribute => |v| blk: {
@@ -801,7 +811,8 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
             },
         },
         .event_trigger => |v| .{ .event_trigger = .{ .target = try cloneExpr(self, v.target) } },
-        .disable => |v| .{ .disable = .{ .name = elab_names.flat(self, v.name) } },
+        // A.6.5 a block label, spelled as the label itself was joined.
+        .disable => |v| .{ .disable = .{ .name = try joinLocal(self, v.name) } },
         .sys_task => |v| blk: {
             // `name` is a system task (`$strobe`, ...), never a name of this unit.
             const args = try self.ctx.arena.alloc(Ast.ExprId, v.args.len);
@@ -819,13 +830,12 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
 /// name of the unit.
 fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
     if (self.unit.rename.get(name)) |flat_id| return flat_id;
-    // Derive the path from any binding the unit has; a unit with no
-    // declarations at all has nothing to collide with, so the label stands.
-    var it = self.unit.rename.iterator();
-    const sample = it.next() orelse return name;
-    const s = self.ctx.file.str(sample.value_ptr.*);
-    const cut = std.mem.findScalarLast(u8, s, sep) orelse return name;
-    return elab_names.join(self, s[0 .. cut + 1], name);
+    // A dotted `disable` target (A.9.3) is a path already, not a label.
+    if (std.mem.findScalar(u8, self.ctx.file.str(name), sep) != null) return name;
+    // The unit's own path, never one read off a rename entry: a port's entry
+    // is the PARENT's net, so it named the parent's scope (or none at the
+    // top), and two instances' labels collided.
+    return elab_names.join(self, self.unit.path, name);
 }
 
 // ---------------------------------------------------------------------------
