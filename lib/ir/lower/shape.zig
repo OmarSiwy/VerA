@@ -49,8 +49,18 @@ pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u
             try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
             return null;
         };
-        const x = a.asInt();
-        const y = c.asInt();
+        // §3.2: a bound "shall evaluate to a positive integer, a negative
+        // integer, or zero", and §4.2.1.1 rounds a real to none when it is a
+        // NaN, an infinity or past i64. Saturating one instead would turn a
+        // NaN bound into a silent zero.
+        const x = a.asIntExact() orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`: {e} is no integer", .{ name, a.asReal() });
+            return null;
+        };
+        const y = c.asIntExact() orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`: {e} is no integer", .{ name, c.asReal() });
+            return null;
+        };
         b.* = .{ .lo = @min(x, y), .hi = @max(x, y), .descending = x > y };
     }
     var cells: i128 = 1;

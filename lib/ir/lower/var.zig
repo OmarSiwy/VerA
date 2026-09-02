@@ -401,7 +401,8 @@ const Exposed = struct {
             if (ex.tag(ex.rhs(i)) == .range) return null;
             // Not through a parameter: a model card may override it (§3.4).
             const c = lower_constfold.foldExpr(x.l, ex.rhs(i), false) orelse return null;
-            try idx.insert(x.l.arena, 0, c.asInt());
+            // A subscript with no integer names no element (E0310 when lowered).
+            try idx.insert(x.l.arena, 0, c.asIntExact() orelse return null);
         }
         return try lower_shape.elemName(x.l, k, idx.items);
     }
@@ -411,11 +412,16 @@ const Exposed = struct {
     fn allCells(x: *Exposed, k: []const u8, name: []const u8) bool {
         const decl = x.declOf(name) orelse return false;
         if (decl.dims.len == 0) return false;
+        // This walk runs before `dimsBounds` has refused a shape (E0308,
+        // E1016), so a bound may be anything a fold gives: one with no
+        // integer, or a count no `usize` holds, can have no cell left
+        // unassigned that the walk could name, so the answer is "not all".
         var cells: usize = 1;
         for (decl.dims) |d| {
-            const a = lower_constfold.constEval(x.l, d.msb) orelse return false;
-            const b = lower_constfold.constEval(x.l, d.lsb) orelse return false;
-            cells *= @abs(a.asInt() - b.asInt()) + 1;
+            const a = (lower_constfold.constEval(x.l, d.msb) orelse return false).asIntExact() orelse return false;
+            const b = (lower_constfold.constEval(x.l, d.lsb) orelse return false).asIntExact() orelse return false;
+            const n = std.math.cast(usize, @abs(@as(i128, a) - b) + 1) orelse return false;
+            cells = std.math.mul(usize, cells, n) catch return false;
         }
         var have: usize = 0;
         for (x.list.items) |d| have += @intFromBool(d.len > k.len and std.mem.startsWith(u8, d, k) and d[k.len] == '[');
