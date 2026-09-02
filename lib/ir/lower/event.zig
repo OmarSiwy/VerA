@@ -11,8 +11,9 @@
 //! `finishTimers` runs once, after every analog block, and replays the
 //! captured arguments against the block's final values.
 //!
-//! LRM clauses this file's code cites: §5.8, §5.9, §5.10, §5.10.1, §5.10.2, §5.10.3,
-//! §5.10.3.1, §5.10.3.2, §5.10.3.3, §5.10.3.4, §5.10.4, §7.3.1, §7.3.4, §7.3.6.2, §8.5.3.6.
+//! LRM clauses this file's code cites: §2.7, §3.3, §5.8, §5.9, §5.10, §5.10.1, §5.10.2,
+//! §5.10.3, §5.10.3.1, §5.10.3.2, §5.10.3.3, §5.10.3.4, §5.10.4, §7.3.1, §7.3.4,
+//! §7.3.6.2, §8.5.3.6.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -52,11 +53,16 @@ const CapturedExpr = struct {
     /// writes have already happened, and must not request another execution.
     effects: ?[]const TimerRead = null,
 };
+/// One variable a capture read, and the value it held at the read.
 const TimerRead = struct { slot: VarSlot, value: Mir.Value };
+/// One scalarized element of a captured array: its `vars` name and its read.
+const TimerCell = struct { name: []const u8, read: TimerRead };
+/// One array a timer argument read: scalarized (`cells`, one per element that
+/// exists) or memory-backed (`memory`, the storage version at the read).
 const TimerArray = struct {
     name: []const u8,
     info: Lower.ArrayInfo,
-    cells: []const struct { name: []const u8, read: TimerRead },
+    cells: []const TimerCell,
     memory: ?Mir.Value = null,
 };
 /// Everything one `timer` call's arguments read, keyed by expression and by
@@ -393,7 +399,7 @@ pub fn captureTimerArray(self: *Lower, name: []const u8) Oom!void {
     if (info.mem) |mem| {
         a.memory = try self.builder.readVariable(mem.place, self.cur);
     } else {
-        var cells: std.ArrayList(@typeInfo(@TypeOf(a.cells)).pointer.child) = .empty;
+        var cells: std.ArrayList(TimerCell) = .empty;
         var buf: [lower_shape.max_stack_dims]i64 = undefined;
         const idx = try lower_shape.subscriptBuf(self, &buf, info.dims.len);
         for (0..lower_shape.shapeCells(info.dims)) |k| {
@@ -439,9 +445,11 @@ fn timerStmtPure(self: *Lower, id: Ast.StmtId) Oom!bool {
     var walk = struct {
         lower: *Lower,
         pure: bool = true,
+        /// Visits one expression edge.
         pub fn expr(w: *@This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
             w.pure = (try timerExprPure(w.lower, e)) and w.pure;
         }
+        /// Visits one nested statement.
         pub fn stmt(w: *@This(), s: Ast.StmtId) Oom!void {
             w.pure = (try timerStmtPure(w.lower, s)) and w.pure;
         }
@@ -552,7 +560,9 @@ fn timerEarlyReturn(self: *Lower, id: Ast.StmtId, last: Ast.StmtId) Oom!bool {
         lower: *Lower,
         last: Ast.StmtId,
         found: bool = false,
+        /// An expression holds no `return`.
         pub fn expr(_: *@This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+        /// Visits one nested statement.
         pub fn stmt(w: *@This(), s: Ast.StmtId) Oom!void {
             w.found = (try timerEarlyReturn(w.lower, s, w.last)) or w.found;
         }
@@ -564,6 +574,8 @@ fn timerEarlyReturn(self: *Lower, id: Ast.StmtId, last: Ast.StmtId) Oom!bool {
 /// Snapshot inputs of an opaque call after it has run. Output-only formals
 /// are not inputs; an inout's post-call value prevents its own copy-out from
 /// looking like a later edit. The snapshot is narrow to this call's actuals.
+/// Null outside a capture or for a call the replay may recompute; the slice
+/// is `self.arena`'s.
 pub fn captureTimerEffects(self: *Lower, e: Ast.ExprId) Oom!?[]const TimerRead {
     if (self.event_state.timer_capture == null) return null;
     const ex = &self.file.exprs;

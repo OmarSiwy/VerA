@@ -1,9 +1,20 @@
-//! §4.5 analog operators and filters.
+//! §4.5 analog operators and filters, and the §4.6 small-signal sources.
 //!
-//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s for
-//! the stateful operators `op.OpKind` names.
+//! In: a ddt/idt/idtmod/absdelay/transition/slew/laplace_*/zi_*/last_crossing/
+//! ddx/limexp call, or a §4.6 noise or `ac_stim` call. Out: one MIR `call` per
+//! stateful operator site (§4.5.2); for `ddt` and `idt`, an operator unknown
+//! with its own row and charge site (`opDdt`, `opIdt`); for a noise call, its
+//! PSD operands in `Lower.noise_psd`/`noise_tab`/`noise_val`; and the
+//! §4.6.4.6 noise coefficients `noiseCoeff` derives from a contribution.
 //!
-//! LRM clauses this file's code cites: §2.9, §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
+//! Spine: `lowerFilter` per operator call (`checkOperatorPlace` first, always),
+//! `lowerNoise` per small-signal call; `noiseCoeff` runs when `contrib.zig`
+//! accumulates a `<+` that carries a generator.
+//!
+//! LRM clauses this file's code cites: §1.3.1.2, §2.8, §2.9, §3.2.2, §3.4.4, §3.6.1.2,
+//! §3.6.2.3, §3.13.1, §4.2.12, §4.2.13, §4.5, §4.5.1, §4.5.2, §4.5.3, §4.5.4, §4.5.5,
+//! §4.5.6, §4.5.7, §4.5.9, §4.5.10, §4.5.11, §4.5.12, §4.5.14, §4.5.15, §4.6.3, §4.6.4,
+//! §4.6.4.1, §4.6.4.2, §4.6.4.3, §4.6.4.6, §5.5.3, §5.8, §5.8.1, §5.9, §6.8, §9.21.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -212,12 +223,11 @@ pub fn opDdt(self: *Lower, tok: u32, x: Mir.Value, abstol: f64, lte: bool) Oom!M
 /// condition (ic) if specified" there, and without an ic keeps -x: "the idt
 /// operator must be contained within a negative feedback loop that forces its
 /// argument to zero". Returns the operator's value.
-///
-/// ponytail: §4.5.5 idtmod stays in the device (`zIdtmod`), wrapped every
-/// step. As a host unknown its state grows without bound, and a free-running
-/// VCO's phase drifts with the rounding of |s|. Upgrade: a host that re-bases
-/// the unknown on each wrap.
 fn opIdt(self: *Lower, e: Ast.ExprId, vals: []const Mir.Value) Oom!Mir.Value {
+    // ponytail: §4.5.5 idtmod stays in the device (`zIdtmod`), wrapped every
+    // step. As a host unknown its state grows without bound, and a free-running
+    // VCO's phase drifts with the rounding of |s|. Upgrade: a host that re-bases
+    // the unknown on each wrap.
     const x = vals[0];
     const s = try lower_node.opStateNode(self, "idt", opAbstol(self, self.file.exprs.args(e), abstolSlot("idt").?));
     const v = try lower_node.probe(self, s);
@@ -277,8 +287,7 @@ fn opAbstol(self: *Lower, args: []const Ast.ExprId, slot: usize) f64 {
 /// enclosing statement's (`interp_stack`), then §4.5.7's "linear interpolation".
 fn absdelayQuad(self: *Lower, e: Ast.ExprId) Oom!bool {
     if (self.file.exprLte(e, .vera_interp)) |a| return interpQuad(self, a);
-    const s = self.interp_stack.items;
-    return s.len != 0 and s[s.len - 1];
+    return self.interp_stack.last() orelse false;
 }
 
 /// Returns whether a `vera_interp` value selects quadratic (2) over linear (1, the
@@ -496,7 +505,8 @@ fn nullZerosOk(name: []const u8) bool {
 
 /// Appends a vector argument to `out` as `<count>, e0, e1, ...`: a §4.5.11/§4.5.12
 /// filter coefficient vector or §9.21/§4.6.4 data vector, spelled as an assignment
-/// pattern `'{a,b}` or an array name (§3.4.4). Returns false when `a` is a scalar.
+/// pattern `'{a,b}` or an array name (§3.4.4). Returns false when `a` is a scalar,
+/// appending nothing. Invalidates element pointers of `out` if it grows.
 pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
@@ -728,7 +738,7 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
 /// `gen`: off this set the walk answers `.absent` without descending, so its
 /// cost is the generator-bearing paths and not every path of the DAG. An
 /// unsealed phi (no operands yet) is kept in, since what it will carry is
-/// unknown. Indexed by `@intFromEnum(value)`; O(values) per fixpoint pass.
+/// unknown. Indexed by `@backingInt(value)`; O(values) per fixpoint pass.
 fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.bit_set.Dynamic {
     const mir = self.mir;
     const fd = Mir.Value.first_dynamic;

@@ -2,7 +2,12 @@
 //!
 //! Run on std.testing.allocator through an arena, so a leaked byte fails the test.
 //!
-//! LRM clauses this file's code cites: §2.7, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §5.6.1.3, §5.6.7, §5.6.7.2, §5.8, §5.8.1, §6.3.1, §6.4, §6.6.2.
+//! LRM clauses this file's code cites: §1.1, §2.7, §2.8, §2.8.1, §2.9, §2.9.2, §3.2,
+//! §3.2.2, §3.3, §3.4, §3.4.2, §3.6.2.2, §3.6.3.2, §4.4.2, §4.5.2, §4.5.6, §4.5.13,
+//! §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.7.1, §5.6.7.2, §5.8, §5.8.1, §5.9,
+//! §5.9.2, §5.9.3, §5.10, §5.10.3.1, §5.10.3.4, §5.10.4, §5.11, §6.3.1, §6.3.4, §6.5,
+//! §6.6.1, §6.8, §7.3, §9.17.1, §9.17.2.
+//! IEEE 1364-2005 clauses cited: §6.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -132,7 +137,7 @@ test "§6.3.1 paramset defparams follow final parameter values and freeze the se
             try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
             var found = false;
             for (0..h.bag.records.items.len) |i| if (h.code(i) == .E0926) {
-                try std.testing.expect(std.mem.indexOf(u8, h.msg(i), "`u`") != null);
+                try std.testing.expect(std.mem.find(u8, h.msg(i), "`u`") != null);
                 found = true;
             };
             try std.testing.expect(found);
@@ -557,7 +562,7 @@ test "lower: §5.4.3 port access — what is rejected, and what the unknown is" 
         try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
         try std.testing.expectEqual(c.want, h.code(0));
         if (c.msg.len != 0)
-            try std.testing.expect(std.mem.indexOf(u8, h.msg(0), c.msg) != null);
+            try std.testing.expect(std.mem.find(u8, h.msg(0), c.msg) != null);
     }
 }
 
@@ -919,7 +924,7 @@ test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never 
     defer h2.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
     try std.testing.expectEqual(diag.Code.E0327, h2.code(0));
-    try std.testing.expect(std.mem.indexOf(u8, h2.msg(0), "only sized constants") != null);
+    try std.testing.expect(std.mem.find(u8, h2.msg(0), "only sized constants") != null);
 }
 
 test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {

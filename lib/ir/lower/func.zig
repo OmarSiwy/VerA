@@ -1,8 +1,16 @@
 //! §4.7 user-defined analog functions.
 //!
-//! In: function declarations and call sites. Out: inlined MIR at each call (recursion refused).
+//! In: function declarations and call sites. Out: the function body inlined
+//! into the caller's CFG at each call (the device has no call ABI), the
+//! `output`/`inout` write-backs, and the E0510 recursion refusal.
 //!
-//! LRM clauses this file's code cites: §3.2, §4.7, §4.7.1, §4.7.2, §4.7.2.3, §4.7.2.4, §4.7.3, §5.11, §6.8, §7.3.7, §9.17.3.
+//! Spine: `checkFuncRecursion` once per module; `lowerUserCall` (or §9.17.3's
+//! `$limit`, through `inlineUserFuncPre`) per call. `scanCallSites` is the one
+//! statement walk both share.
+//!
+//! LRM clauses this file's code cites: §3.2, §3.2.2, §4.7, §4.7.1, §4.7.2, §4.7.2.3,
+//! §4.7.2.4, §4.7.3, §5.7, §5.11, §6.8, §7.3.7, §9.17.3.
+//! IEEE 1364-2005 clauses cited: §10.4.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");

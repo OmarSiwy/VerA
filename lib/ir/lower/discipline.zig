@@ -1,9 +1,17 @@
 //! §3.6 disciplines and natures, §3.11 net compatibility.
 //!
-//! In: discipline/nature declarations and net declarations. Out: `Lower.disciplines`,
-//! per-node disciplines, and the §3.11 compatibility diagnostics. The AST-only rules
-//! live in `ir/discipline_rules.zig`.
-//! LRM: §3.6, §3.6.1, §3.6.1.2-§3.6.1.4, §3.6.2.1, §3.6.2.2, §3.11, §3.11.1, §3.13.1, §3.13.2, §4.4, §5.5.1.
+//! In: the file's discipline and nature declarations, and the `nodes` table's
+//! per-node disciplines. Out: `Lowered.disciplines`, the §3.6.1.4 access-name
+//! map (`Lower.access_kind`), the declaration diagnostics, and the §3.11
+//! compatibility diagnostics. The AST-only rules live in
+//! `ir/discipline_rules.zig`.
+//!
+//! Spine: `collectDisciplines`, then `checkNatureTable`, once per module;
+//! `checkNetCompat` per access function, branch and port connection.
+//!
+//! LRM clauses this file's code cites: §1.3.1.1, §3.6, §3.6.1, §3.6.1.1, §3.6.1.2,
+//! §3.6.1.3, §3.6.1.4, §3.6.2, §3.6.2.1, §3.6.2.2, §3.6.2.3, §3.6.2.5, §3.6.2.7, §3.11,
+//! §3.11.1, §3.12, §3.13, §3.13.1, §3.13.2, §4.4, §5.5.1, §7.4.3.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
