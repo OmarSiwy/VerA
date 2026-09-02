@@ -1550,3 +1550,50 @@ pub fn addNoiseSrc(arena: std.mem.Allocator, out: *std.ArrayList(NoiseSrc), s: N
     for (out.items) |x| if (x.id == s.id) return;
     try out.append(arena, s);
 }
+
+test find {
+    // 3 -> 2 -> 1 -> 0, a chain no union ever balanced.
+    var root = [_]u32{ 0, 0, 1, 2 };
+    try std.testing.expectEqual(@as(u32, 0), find(&root, 3));
+    // Path compression: every node the walk passed now points at the root.
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &root);
+    // A root is its own answer and moves nothing.
+    try std.testing.expectEqual(@as(u32, 0), find(&root, 0));
+}
+
+test samePair {
+    // §5.6.7.2/§1.3.1.2: (a,b) and (b,a) are one pair of nets.
+    try std.testing.expect(samePair(1, 2, 2, 1));
+    try std.testing.expect(samePair(1, 2, 1, 2));
+    try std.testing.expect(!samePair(1, 2, 1, 3));
+    try std.testing.expect(samePair(4, ground, ground, 4));
+}
+
+test canonical {
+    // §1.3.1.2: `I(5,2)` is `I(2,5)` with the sign flipped.
+    const t = canonical(.flow, 5, 2, unnamed_branch, 7);
+    try std.testing.expectEqual(@as(u16, 2), t.hi);
+    try std.testing.expectEqual(@as(u16, 5), t.lo);
+    try std.testing.expect(t.neg);
+    try std.testing.expectEqual(@as(u32, 7), t.unit);
+    // `ground` is `maxInt(u16)`, so a single-net access is already canonical.
+    const v = canonical(.potential, 3, ground, unnamed_branch, 0);
+    try std.testing.expectEqual(@as(u16, 3), v.hi);
+    try std.testing.expectEqual(ground, v.lo);
+    try std.testing.expect(!v.neg);
+    // Equal terminals (two `ground` nets, §1.3.1.1) are not reversed.
+    try std.testing.expect(!canonical(.potential, ground, ground, unnamed_branch, 0).neg);
+}
+
+test addNoiseSrc {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(NoiseSrc) = .empty;
+    defer out.deinit(gpa);
+    try addNoiseSrc(gpa, &out, .{ .kind = .thermal, .id = 3 });
+    try addNoiseSrc(gpa, &out, .{ .kind = .flicker, .id = 9 });
+    // §4.6.4.6: the same generator reached twice is one source.
+    try addNoiseSrc(gpa, &out, .{ .kind = .thermal, .id = 3 });
+    try std.testing.expectEqual(@as(usize, 2), out.items.len);
+    try std.testing.expectEqual(@as(u32, 3), out.items[0].id);
+    try std.testing.expectEqual(@as(u32, 9), out.items[1].id);
+}

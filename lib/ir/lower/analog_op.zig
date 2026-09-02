@@ -992,3 +992,32 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.bit_set
             try coeffAt(self, st.value, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
     }
 }
+
+test isHistoryless {
+    // A.8.2's two analog_filter_function_call names with no state.
+    try std.testing.expect(isHistoryless("ddx"));
+    try std.testing.expect(isHistoryless("limexp"));
+    try std.testing.expect(!isHistoryless("ddt"));
+    try std.testing.expect(!isHistoryless("absdelay"));
+}
+
+test abstolSlot {
+    // §4.5.3/§4.5.4/§4.5.5's signatures, counted from 0.
+    try std.testing.expectEqual(@as(?usize, 1), abstolSlot("ddt"));
+    try std.testing.expectEqual(@as(?usize, 3), abstolSlot("idt"));
+    try std.testing.expectEqual(@as(?usize, 4), abstolSlot("idtmod"));
+    try std.testing.expectEqual(@as(?usize, null), abstolSlot("transition"));
+}
+
+test nullZerosOk {
+    // §4.5.11/§4.5.12: only the root forms read an empty zeros slot as 1.
+    for ([_][]const u8{ "laplace_zp", "laplace_zd", "zi_zp", "zi_zd" }) |n| try std.testing.expect(nullZerosOk(n));
+    for ([_][]const u8{ "laplace_nd", "laplace_np", "zi_nd", "zi_np", "ddt" }) |n| try std.testing.expect(!nullZerosOk(n));
+}
+
+test isCoefFilter {
+    try std.testing.expect(isCoefFilter("laplace_nd"));
+    try std.testing.expect(isCoefFilter("zi_zp"));
+    try std.testing.expect(!isCoefFilter("transition"));
+    try std.testing.expect(!isCoefFilter("laplace"));
+}
