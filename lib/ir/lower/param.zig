@@ -19,6 +19,7 @@ const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
 const lower_var = @import("var.zig");
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const Mir = @import("../mir.zig");
 const diag = @import("diag");
 const Oom = Lower.Oom;
@@ -135,7 +136,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // point or the simulation state, which has no value a model card could
     // carry (`parameter real bad = $abstime;` would read 0.0). Reported and
     // then lowered anyway, like E0347.
-    if (@import("frontend").constfold.firstStateRead(self.file, decl.default, if (self.out.module) |m| m.vars else &.{})) |what| {
+    if (constfold.firstStateRead(self.file, decl.default, if (self.out.module) |m| m.vars else &.{})) |what| {
         try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
     if (oomrInDefault(self, decl.default)) |h|
@@ -151,7 +152,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // the declared type, or — §3.4.1's inference — the declared default's.
     const over: ?Const = if (decl.is_local or decl.ty == .string) null else for (self.param_overrides) |o| {
         if (std.mem.eql(u8, o.name, name))
-            break @import("frontend").constfold.parameterCardValue(decl.ty, declared, o.value);
+            break constfold.parameterCardValue(decl.ty, declared, o.value);
     } else null;
     const folded = over orelse declared;
     // §4.2.1.1 converts by "rounding the real number to the nearest integer",
@@ -400,7 +401,7 @@ pub fn addParam(
 /// Apply an explicit parameter type before a later default infers its own type.
 /// Out-of-i64 real conversion retains the existing saturation policy; deciding
 /// that implementation-defined domain is separate from preserving integral bits.
-const parameterConst = @import("frontend").constfold.parameterValue;
+const parameterConst = constfold.parameterValue;
 
 /// The MIR must contain the same declared-type conversion as `folded` metadata.
 /// Later defaults and operator controls follow this MIR, not the Model field.
@@ -620,4 +621,126 @@ fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u
         try out.print(arena, "\"{s}\"", .{it});
     }
     return out.toOwnedSlice(arena);
+}
+
+test "lowerParamDecl: §3.4.1/§3.4.2 the declaration rules decidable without an instance" {
+    const cases = [_]struct { decls: []const u8, want: ?diag.Code }{
+        .{ .decls = "  parameter real r = 1.0 from [0:2];", .want = null },
+        // "The first expression in the range shall be numerically smaller
+        // than the second": equal is not smaller (E0347).
+        .{ .decls = "  parameter real r = 1.0 from [2:1];", .want = .E0347 },
+        .{ .decls = "  parameter real r = 1.0 from [1:1];", .want = .E0347 },
+        // A default reads no operating point (E0363).
+        .{ .decls = "  parameter real bad = $abstime;", .want = .E0363 },
+        // §3.4.1 "the type of a string parameter ... is mandatory" (E0346),
+        // and no conversion between a string and a number (E0345).
+        .{ .decls = "  parameter u = \"a\";", .want = .E0346 },
+        .{ .decls = "  parameter real r = \"a\";", .want = .E0345 },
+        .{ .decls = "  parameter string t = 1.0;", .want = .E0345 },
+        // §4.2.1.1 an infinity rounds to no integer (E0368).
+        .{ .decls = "  parameter integer k = 1.0/0.0;", .want = .E0368 },
+        // §3.4.4 an array parameter is typed and initialized with '{ } (E0346, E0349).
+        .{ .decls = "  parameter real c[0:1] = '{1.0, 2.0};", .want = null },
+        .{ .decls = "  parameter c[0:1] = '{1.0, 2.0};", .want = .E0346 },
+        .{ .decls = "  parameter real c[0:1] = {1.0, 2.0};", .want = .E0349 },
+        // §3.4.7 an alias names an existing parameter (E0303) and only once (E0331).
+        .{ .decls = "  parameter real r = 1.0;\n  aliasparam al = r;", .want = null },
+        .{ .decls = "  aliasparam al = nosuch;", .want = .E0303 },
+        .{ .decls = "  parameter real r = 1.0;\n  parameter real al = 2.0;\n  aliasparam al = r;", .want = .E0331 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(c.decls, "", c.want);
+}
+
+test "checkParamRange: §3.4.2 an overridden value lies in some `from` and in no `exclude` (E0361)" {
+    const src =
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter real r = 1.0 from [0:2] exclude 1.5;
+        \\  analog I(p) <+ r * V(p);
+        \\endmodule
+    ;
+    const cases = [_]struct { value: f64, refused: bool }{
+        // A closed bound is inside the range.
+        .{ .value = 0.0, .refused = false },
+        .{ .value = 2.0, .refused = false },
+        .{ .value = 2.5, .refused = true },
+        .{ .value = -0.5, .refused = true },
+        // "minus everything an exclude removes".
+        .{ .value = 1.5, .refused = true },
+    };
+    for (cases) |c| {
+        var h: Lower.Harness = undefined;
+        try h.init(std.testing.allocator, src);
+        defer h.deinit();
+        const overrides = [_]Lower.ParamOverride{.{ .name = "r", .value = c.value }};
+        h.low.param_overrides = &overrides;
+        _ = try h.lower();
+        try std.testing.expectEqual(c.refused, h.count(.E0361) != 0);
+    }
+}
+
+test addParam {
+    // §3.4.5: an integer localparam that folds is its number at every read;
+    // an overridable parameter, or a real localparam, reads the card.
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  localparam integer n = 3;
+        \\  parameter integer k = 3;
+        \\  localparam real r = 1.5;
+        \\  analog I(p) <+ (n + k + r) * V(p);
+        \\endmodule
+    );
+    defer h.deinit();
+    _ = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    const want = [_]struct { name: []const u8, kind: Mir.DefKind }{
+        .{ .name = "n", .kind = .int_const },
+        .{ .name = "k", .kind = .param_ref },
+        .{ .name = "r", .kind = .param_ref },
+    };
+    for (want) |w| {
+        const v = h.low.param_values.items[h.low.param_index.get(w.name).?];
+        try std.testing.expectEqual(w.kind, std.meta.activeTag(h.mir.valueDef(v)));
+    }
+}
+
+test collectDeclMeta {
+    // §2.9.2 `desc` and `units`, parameters then variables then nets, and
+    // no `units` on a net (§3.6.3.1).
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  (* desc = "gain", units = "V" *) parameter real g = 1.0;
+        \\  (* units = "A" *) real y;
+        \\  (* desc = "internal", units = "V" *) electrical q;
+        \\  analog begin
+        \\    y = 1.0;
+        \\    I(p) <+ g * V(p);
+        \\  end
+        \\endmodule
+    );
+    defer h.deinit();
+    const out = try h.lower() orelse {
+        h.dump();
+        return error.TestUnexpectedResult;
+    };
+    const rows = out.decl_meta.items;
+    try std.testing.expectEqual(3, rows.len);
+    try std.testing.expectEqual(.parameter, rows[0].kind);
+    try std.testing.expectEqualStrings("g", rows[0].name);
+    try std.testing.expectEqualStrings("gain", rows[0].desc.?);
+    try std.testing.expectEqualStrings("V", rows[0].units.?);
+    try std.testing.expectEqual(.variable, rows[1].kind);
+    try std.testing.expectEqualStrings("y", rows[1].name);
+    try std.testing.expect(rows[1].desc == null);
+    try std.testing.expectEqualStrings("A", rows[1].units.?);
+    try std.testing.expectEqual(.net, rows[2].kind);
+    try std.testing.expectEqualStrings("q", rows[2].name);
+    try std.testing.expectEqualStrings("internal", rows[2].desc.?);
+    try std.testing.expect(rows[2].units == null);
 }

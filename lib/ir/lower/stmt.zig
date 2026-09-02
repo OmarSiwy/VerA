@@ -829,7 +829,11 @@ pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []cons
 fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
     for (s.subs, out) |e, *o| {
         const c = lower_constfold.foldExpr(self, e, false) orelse return null;
-        o.* = c.asInt();
+        // As `resolveLvalue`: a subscript with no §4.2.1.1 integer names no row.
+        o.* = c.asIntExact() orelse {
+            try self.err(self.file.exprs.mainTok(e), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), s.name });
+            return false;
+        };
     }
     for (out, s.info.dims[0..s.subs.len], 0..) |i, d, k| {
         if (i >= d.lo and i <= d.hi) continue;
@@ -908,7 +912,14 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
                     try self.err(self.file.exprs.mainTok(e), .E0311, "indexing `{s}`", .{name});
                     return null;
                 };
-                o.* = c.asInt();
+                // `lower_expr.lowerIndex`'s rule, so a write and a read of
+                // one subscript agree: a real with no §4.2.1.1 integer (NaN,
+                // an infinity, past i64) names no element. Saturating it
+                // wrote a NaN subscript to element 0.
+                o.* = c.asIntExact() orelse {
+                    try self.err(self.file.exprs.mainTok(s), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), name });
+                    return null;
+                };
             }
             return arrayElem(self, e, name, at);
         },
@@ -1030,4 +1041,72 @@ fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId)
         },
     }
     try self.startUnreachable();
+}
+
+test "lower: A.6.4/A.6.5 a trigger or a disable is an analog_event_statement" {
+    const decls = "  event ev;\n  real y;";
+    // Outside an event control: E0434 for `->`, E0401 for `disable`.
+    try Lower.expectBodyVerdict(decls, "    -> ev;", .E0434);
+    try Lower.expectBodyVerdict(decls, "    begin : blk\n      disable blk;\n    end", .E0401);
+    // A.6.5's operand names an enclosing block (E0402).
+    try Lower.expectBodyVerdict(decls, "    @(initial_step) disable nosuch;", .E0402);
+    try Lower.expectBodyVerdict(decls, "    begin : blk\n      y = 1.0;\n      @(initial_step) disable blk;\n      y = 2.0;\n    end", null);
+}
+
+test "lowerAssign: §5.7 assignment targets and §3.2.2 subscripts" {
+    const decls =
+        \\  real x[0:3];
+        \\  real rv[3:0];
+        \\  real m2[0:1][0:2];
+        \\  real r3[0:2];
+        \\  real r2[0:1];
+        \\  integer ia[0:3];
+        \\  real s, y;
+        \\  integer j;
+        \\  parameter real g = 1.0;
+        \\  parameter real c[0:1] = '{1.0, 2.0};
+    ;
+    const cases = [_]struct { body: []const u8, want: ?@import("diag").Code }{
+        .{ .body = "    x[0] = 1.0;\n    y = x[0];", .want = null },
+        .{ .body = "    j = 1;\n    x[j] = 2.0;", .want = null },
+        .{ .body = "    x = '{1.0, 2.0, 3.0, 4.0};", .want = null },
+        // A parameter is no target, nor is an array parameter's element (E0312).
+        .{ .body = "    g = 2.0;", .want = .E0312 },
+        .{ .body = "    c[0] = 3.0;", .want = .E0312 },
+        .{ .body = "    zz = 1.0;", .want = .E0313 },
+        // A subscript on a scalar: E0309 for a constant, E0311 for a variable.
+        .{ .body = "    s[0] = 1.0;", .want = .E0309 },
+        .{ .body = "    j = 1;\n    s[j] = 1.0;", .want = .E0311 },
+        .{ .body = "    x[4] = 1.0;", .want = .E0310 },
+        .{ .body = "    x[0][0] = 1.0;", .want = .E0356 },
+        // §4.2.1.1 gives NaN no integer, so it names no element: E0310 on
+        // the write exactly as on the read.
+        .{ .body = "    y = x[0.0/0.0];", .want = .E0310 },
+        .{ .body = "    x[0.0/0.0] = 1.0;", .want = .E0310 },
+        // §5.7 whole arrays: an array on both sides, element counts equal
+        // dimension by dimension, element types equivalent (E0429).
+        .{ .body = "    rv = x;", .want = null },
+        .{ .body = "    x = 1.0;", .want = .E0429 },
+        .{ .body = "    x = r3;", .want = .E0429 },
+        .{ .body = "    x = ia;", .want = .E0429 },
+        // Slices (A.8.5): a short subscript list is a row.
+        .{ .body = "    r3 = m2[1];\n    m2[0] = r3;", .want = null },
+        .{ .body = "    j = 1;\n    r3 = m2[j];", .want = null },
+        .{ .body = "    r2 = m2[1];", .want = .E0429 },
+        .{ .body = "    r3 = m2[2];", .want = .E0310 },
+        .{ .body = "    r3 = m2[0.0/0.0];", .want = .E0310 },
+        .{ .body = "    m2[0.0/0.0] = r3;", .want = .E0310 },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(decls, c.body, c.want);
+}
+
+test "lowerStmt: §2.9 vera_nodiff and vera_timepoint refuse what they cannot hold" {
+    const decls = "  real y;\n  integer j;";
+    // A contribution under `vera_nodiff` would leave its branch without a
+    // Jacobian (E0526), and a cached one would not be re-stamped (E0530).
+    try Lower.expectBodyVerdict(decls, "    (* vera_nodiff *) I(p, n) <+ V(p, n);", .E0526);
+    try Lower.expectBodyVerdict(decls, "    (* vera_timepoint *) I(p, n) <+ V(p, n);", .E0530);
+    // Once per evaluation: not inside a loop (E0532).
+    try Lower.expectBodyVerdict(decls, "    for (j = 0; j < 2; j = j + 1) (* vera_timepoint *) y = 1.0;", .E0532);
+    try Lower.expectBodyVerdict(decls, "    (* vera_timepoint *) y = 1.0;", null);
 }

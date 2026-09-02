@@ -14,6 +14,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const Ast = @import("frontend").Ast;
+const diag = @import("diag");
 const Oom = Lower.Oom;
 /// One declared array dimension, normalized so `lo <= hi`.
 pub const Bounds = struct {
@@ -48,8 +49,18 @@ pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u
             try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
             return null;
         };
-        const x = a.asInt();
-        const y = c.asInt();
+        // §3.2: a bound "shall evaluate to a positive integer, a negative
+        // integer, or zero", and §4.2.1.1 rounds a real to none when it is a
+        // NaN, an infinity or past i64. Saturating one instead would turn a
+        // NaN bound into a silent zero.
+        const x = a.asIntExact() orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`: {e} is no integer", .{ name, a.asReal() });
+            return null;
+        };
+        const y = c.asIntExact() orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`: {e} is no integer", .{ name, c.asReal() });
+            return null;
+        };
         b.* = .{ .lo = @min(x, y), .hi = @max(x, y), .descending = x > y };
     }
     var cells: i128 = 1;
@@ -76,8 +87,12 @@ pub fn shapeCells(dims: []const Bounds) usize {
 
 /// The subscripts of the `k`th cell of a ROW-MAJOR walk — the last dimension
 /// varies fastest, which is the order §3.4.8's nested assignment pattern lists
-/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns).
+/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns). A descending
+/// dimension (`[hi:lo]` as declared) is walked from its left bound, `hi`.
+/// `k` is below `shapeCells(dims)`; a larger one wraps in the outermost
+/// dimension. Asserts that `out` has one slot per dimension.
 pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
+    std.debug.assert(out.len == dims.len);
     var rest = k;
     var i = dims.len;
     while (i > 0) {
@@ -91,7 +106,9 @@ pub fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
 
 /// The flat element index of an in-range subscript tuple: row-major, each
 /// dimension counted from its left bound — `shapeSubscripts`' inverse and
-/// `lower_stmt.runtimeArrayIndex`'s order.
+/// `lower_stmt.runtimeArrayIndex`'s order. Asserts one subscript per dimension;
+/// the caller has range-checked them (`lower_stmt.checkSubscripts`), since an
+/// out-of-range subscript can alias another cell.
 pub fn flatIndex(dims: []const Bounds, idx: []const i64) i64 {
     var flat: i64 = 0;
     for (dims, idx) |d, i| flat = flat * d.count() + (if (d.descending) d.hi - i else i - d.lo);
@@ -266,4 +283,100 @@ test "lower: §3.2 a multidimensional array is scalarized row-major" {
     try std.testing.expectEqual(@as(i64, 1), one[0]);
     shapeSubscripts(&off, 2, &one);
     try std.testing.expectEqual(@as(i64, 3), one[0]);
+}
+
+test "lower: §3.2.2 every shape of up to three small dimensions walks each cell once" {
+    // Exhaustive over a small domain: every (lo, hi) pair in [-2, 2], either
+    // declared direction, one to three dimensions. The oracle is the inverse:
+    // `flatIndex` of the k-th cell's subscripts is k, and each subscript lies
+    // in its dimension. Together they make the walk a bijection.
+    var choices: [30]Bounds = undefined;
+    var n: usize = 0;
+    var lo: i64 = -2;
+    while (lo <= 2) : (lo += 1) {
+        var hi = lo;
+        while (hi <= 2) : (hi += 1) {
+            for ([_]bool{ false, true }) |descending| {
+                choices[n] = .{ .lo = lo, .hi = hi, .descending = descending };
+                n += 1;
+            }
+        }
+    }
+    try std.testing.expectEqual(choices.len, n);
+    var dims_buf: [3]Bounds = undefined;
+    var idx_buf: [3]i64 = undefined;
+    for (1..4) |rank| {
+        for (0..std.math.pow(usize, choices.len, rank)) |combo| {
+            var c = combo;
+            for (dims_buf[0..rank]) |*d| {
+                d.* = choices[c % choices.len];
+                c /= choices.len;
+            }
+            const dims = dims_buf[0..rank];
+            const idx = idx_buf[0..rank];
+            for (0..shapeCells(dims)) |k| {
+                shapeSubscripts(dims, k, idx);
+                for (dims, idx) |d, i| try std.testing.expect(i >= d.lo and i <= d.hi);
+                try std.testing.expectEqual(@as(i64, @intCast(k)), flatIndex(dims, idx));
+            }
+        }
+    }
+}
+
+test "lower: §3.3 a pattern is positional from the declared left bound" {
+    // `real x[2:0] = '{a, b, c}` puts `a` in x[2]: a descending dimension's
+    // first cell is its left bound, `hi`.
+    const dims = [_]Bounds{.{ .lo = 0, .hi = 2, .descending = true }};
+    var one: [1]i64 = undefined;
+    for ([_]i64{ 2, 1, 0 }, 0..) |want, k| {
+        shapeSubscripts(&dims, k, &one);
+        try std.testing.expectEqual(want, one[0]);
+    }
+}
+
+test elemKey {
+    // The lookup spelling is the declaration spelling, on the stack or spilled:
+    // a key that fits, one that fills the buffer exactly (a 1024-character name
+    // and four 22-character subscripts), and both ways past it.
+    comptime std.debug.assert(elem_key_len == 1024 + 4 * "[-9223372036854775808]".len);
+    var h: Lower.Harness = undefined;
+    try h.init(std.testing.allocator, "module m; endmodule");
+    defer h.deinit();
+    const name_buf: [2000]u8 = @splat('n');
+    const min = std.math.minInt(i64);
+    const cases = [_]struct { name: []const u8, idx: []const i64 }{
+        .{ .name = "a", .idx = &.{} },
+        .{ .name = "a", .idx = &.{ -1, 0, std.math.maxInt(i64) } },
+        .{ .name = name_buf[0..1024], .idx = &.{ min, min, min, min } },
+        .{ .name = name_buf[0..1024], .idx = &.{ min, min, min, min, min } },
+        .{ .name = name_buf[0..2000], .idx = &.{0} },
+    };
+    var key_buf: [elem_key_len]u8 = undefined;
+    for (cases) |c| {
+        const want = try elemName(&h.low, c.name, c.idx);
+        try std.testing.expectEqualStrings(want, try elemKey(&h.low, &key_buf, c.name, c.idx));
+    }
+}
+
+test "lower: §3.2 array bounds are constant integers (E0308), and the cells are capped (E1016)" {
+    const cases = [_]struct { decls: []const u8, want: ?diag.Code }{
+        .{ .decls = "  real a[3:0];", .want = null },
+        .{ .decls = "  integer w;\n  real a[0:w];", .want = .E0308 },
+        // 1024 * 1025 cells is past the 2^20 E1016 cap.
+        .{ .decls = "  real a[0:1023][0:1024];", .want = .E1016 },
+        // §3.2: a bound "shall evaluate to a positive integer, a negative
+        // integer, or zero", and §4.2.1.1 gives NaN and an infinity no
+        // integer, so such a bound is no bound at all.
+        .{ .decls = "  real a[0:0.0/0.0];", .want = .E0308 },
+        .{ .decls = "  real a[0:1.0/0.0];", .want = .E0308 },
+        .{ .decls = "  real a[-1.0/0.0:0];", .want = .E0308 },
+        // §4.2.14 a pattern's replication count folds like a bound and is
+        // non-negative (§4.2.13): E0223, and past the cap E1016.
+        .{ .decls = "  parameter integer c = 2;\n  real a[0:3] = '{c{1.0, 2.0}};", .want = null },
+        .{ .decls = "  parameter integer c = -1;\n  real a[0:1] = '{c{1.0}};", .want = .E0223 },
+        .{ .decls = "  parameter integer c = 2000000;\n  real a[0:1] = '{c{1.0}};", .want = .E1016 },
+        // A pattern shorter than the array leaves the rest at §3.2's zero.
+        .{ .decls = "  real a[0:2] = '{1.0, 2.0};", .want = null },
+    };
+    for (cases) |c| try Lower.expectBodyVerdict(c.decls, "", c.want);
 }
