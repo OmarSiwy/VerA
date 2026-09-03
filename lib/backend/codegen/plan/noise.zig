@@ -323,3 +323,150 @@ test "a noise table is sorted, and a repeated frequency is refused" {
     try std.testing.expectEqual(diag.Code.E0519, n.refusals.items[0].code);
     try std.testing.expect(std.mem.startsWith(u8, n.fatal.?, "LRM 4.6.4: frequency 5 Hz appears twice"));
 }
+
+test "rows: to-ground is row == col, ground-ground is E0520, a stimulus goes to ac_rows, ids rename densely" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const pwr = try f.mir.addFloatConst(a, 1.6e-21);
+    const mag = try f.mir.addFloatConst(a, 0.5);
+    // §4.6.4.6 ids are AST expression ids: sparse, renamed 0, 1 in first-seen order.
+    const th = [_]Lower.NoiseSrc{.{ .kind = .thermal, .id = 900, .pwr = pwr }};
+    const fl = [_]Lower.NoiseSrc{
+        .{ .kind = .flicker, .id = 40, .pwr = pwr, .coeff = .f_two },
+        .{ .kind = .ac_stim, .id = 41, .pwr = mag, .exp = .f_zero, .name = "ac" },
+    };
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = Lower.ground, .noise_srcs = &th });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = Lower.ground, .lo = 0, .noise_srcs = &fl });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = Lower.ground, .lo = Lower.ground, .noise_srcs = &th });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
+    try std.testing.expectEqual(@as(usize, 2), n.rows.len);
+    // I(b) to ground: row = col = b. I(<gnd>, a): row = col = a.
+    try std.testing.expectEqual(@as(u16, 1), n.rows[0].row);
+    try std.testing.expectEqual(@as(u16, 1), n.rows[0].col);
+    try std.testing.expectEqual(@as(u32, 0), n.rows[0].source);
+    // An unclaimed coefficient reads as 1; a claimed one is kept.
+    try std.testing.expectEqual(Mir.Value.f_one, n.rows[0].coeff);
+    try std.testing.expectEqual(@as(u16, 0), n.rows[1].row);
+    try std.testing.expectEqual(@as(u16, 0), n.rows[1].col);
+    try std.testing.expectEqual(@as(u32, 1), n.rows[1].source);
+    try std.testing.expectEqual(Mir.Value.f_two, n.rows[1].coeff);
+    // §4.6.3 a stimulus is not a generator.
+    try std.testing.expectEqual(@as(usize, 1), n.ac_rows.len);
+    try std.testing.expectEqual(Lower.NoiseKind.ac_stim, n.ac_rows[0].kind);
+    try std.testing.expectEqual(mag, n.ac_rows[0].pwr);
+    try std.testing.expectEqualStrings("ac", n.ac_rows[0].name);
+    // The ground-ground generator is refused, once, and is the fatal one.
+    try std.testing.expectEqual(@as(usize, 1), n.refusals.items.len);
+    try std.testing.expectEqual(diag.Code.E0520, n.refusals.items[0].code);
+    try std.testing.expect(std.mem.startsWith(u8, n.fatal.?, "LRM 4.6.4: this small-signal source is on a ground-ground branch"));
+}
+
+test "§4.6.4.3 table checks: no vector, an odd count, a non-positive frequency, a negative power, log of zero" {
+    const Case = struct { kind: Lower.NoiseKind, knots: []const f64, msg: []const u8 };
+    const cases = [_]Case{
+        .{ .kind = .table, .knots = &.{}, .msg = "not a vector of (frequency, power) pairs" },
+        .{ .kind = .table, .knots = &.{ 1, 2, 3 }, .msg = "has 3 values" },
+        .{ .kind = .table, .knots = &.{ 0, 2 }, .msg = "frequency 0 is not a positive number of hertz" },
+        .{ .kind = .table, .knots = &.{ 10, -1 }, .msg = "power -1 is not a non-negative spectral density" },
+        .{ .kind = .table_log, .knots = &.{ 10, 0 }, .msg = "has no logarithm" },
+    };
+    for (cases) |cs| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        const a = f.alloc();
+        const vals = try a.alloc(Mir.Value, cs.knots.len);
+        for (cs.knots, vals) |k, *v| v.* = try f.mir.addFloatConst(a, k);
+        const srcs = try a.dupe(Lower.NoiseSrc, &.{.{ .kind = cs.kind, .table = vals, .id = 1 }});
+        try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lower.ground, .noise_srcs = srcs });
+        const an = try f.analysis();
+        const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
+        try std.testing.expectEqual(@as(usize, 0), n.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), n.refusals.items.len);
+        try std.testing.expectEqual(diag.Code.E0519, n.refusals.items[0].code);
+        try std.testing.expect(std.mem.find(u8, n.refusals.items[0].msg, cs.msg) != null);
+    }
+    // A zero power is legal in a linear table: §4.6.4.3 asks only for a power.
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{"a"});
+        defer f.deinit();
+        const a = f.alloc();
+        const vals = [_]Mir.Value{ try f.mir.addFloatConst(a, 10), .f_zero };
+        const srcs = [_]Lower.NoiseSrc{.{ .kind = .table, .table = &vals, .id = 1 }};
+        try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = Lower.ground, .noise_srcs = &srcs });
+        const an = try f.analysis();
+        const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
+        try std.testing.expectEqual(@as(usize, 0), n.refusals.items.len);
+        try std.testing.expectEqualSlices([2]f64, &.{.{ 10, 0 }}, n.tabs[0]);
+    }
+}
+
+test "a parameter knot keeps its MIR values beside the defaults; a literal table before it pads tab_vals" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    try f.lowered.params.append(a, .{ .name = "fc", .ty = .real, .default = try f.mir.addFloatConst(a, 5.0) });
+    const fc = try f.mir.addParamRef(a, 0);
+    const three = try f.mir.addFloatConst(a, 3.0);
+    const lit = [_]Mir.Value{ .f_one, .f_two };
+    const par = [_]Mir.Value{ fc, three };
+    const s0 = [_]Lower.NoiseSrc{.{ .kind = .table, .table = &lit, .id = 1 }};
+    const s1 = [_]Lower.NoiseSrc{.{ .kind = .table, .table = &par, .id = 2 }};
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .noise_srcs = &s0 });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = 0, .noise_srcs = &s1 });
+    const an = try f.analysis();
+
+    const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
+    try std.testing.expectEqual(@as(usize, 2), n.tabs.len);
+    // The declared default is what a comptime table can hold.
+    try std.testing.expectEqualSlices([2]f64, &.{.{ 5, 3 }}, n.tabs[1]);
+    try std.testing.expectEqual(@as(usize, 2), n.tab_vals.len);
+    try std.testing.expectEqual(@as(usize, 0), n.tab_vals[0].len);
+    try std.testing.expectEqualSlices([2]Mir.Value, &.{.{ fc, three }}, n.tab_vals[1]);
+}
+
+test "§4.6.4.6 one table call shared by two branches is one generator: one table, or one refusal" {
+    for ([_]bool{ true, false }) |valid| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "a", "b" });
+        defer f.deinit();
+        const a = f.alloc();
+        const good = [_]Mir.Value{ try f.mir.addFloatConst(a, 10), .f_one };
+        const odd = [_]Mir.Value{ try f.mir.addFloatConst(a, 10), .f_one, .f_two };
+        const srcs = [_]Lower.NoiseSrc{.{ .kind = .table, .table = if (valid) good[0..] else odd[0..], .id = 7 }};
+        try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .noise_srcs = &srcs });
+        try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = Lower.ground, .noise_srcs = &srcs });
+        const an = try f.analysis();
+
+        const n = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered });
+        if (valid) {
+            try std.testing.expectEqual(@as(usize, 2), n.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), n.tabs.len);
+            try std.testing.expectEqual(@as(?u16, 0), n.rows[1].table);
+            try std.testing.expectEqual(n.rows[0].source, n.rows[1].source);
+        } else {
+            // One call, one diagnostic: the second branch reaching it is not a
+            // second table to refuse.
+            try std.testing.expectEqual(@as(usize, 0), n.rows.len);
+            try std.testing.expectEqual(@as(usize, 1), n.refusals.items.len);
+        }
+    }
+}
+
+test psdConst {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    try std.testing.expectEqual(@as(?f64, 2.5), psdConst(&f.mir, try f.mir.addFloatConst(a, 2.5)));
+    try std.testing.expectEqual(@as(?f64, 3), psdConst(&f.mir, try f.mir.addIntConst(a, 3)));
+    // A parameter belongs to the card: only the core (or `Model`) can answer.
+    try std.testing.expectEqual(@as(?f64, null), psdConst(&f.mir, try f.mir.addParamRef(a, 0)));
+    try std.testing.expectEqual(@as(?f64, null), psdConst(&f.mir, try f.probe(0)));
+}

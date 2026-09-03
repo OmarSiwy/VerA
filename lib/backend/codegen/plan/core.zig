@@ -313,3 +313,72 @@ test "live-outs are deduplicated in job order; display stays out; held values in
     try std.testing.expectEqual(proof.FloatMode.strict, c.mode);
     try std.testing.expectEqualStrings("mymod__common__core", c.name);
 }
+
+test "no targets: an empty core with no name; a zero target stays out" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const an = try f.analysis();
+    // An operator with no input queues `.f_zero`, which renders inline.
+    const jobs = [_]Job{.{ .kind = .op_input, .target = .f_zero, .mode = .strict, .comment = "" }};
+    const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+    try std.testing.expectEqual(@as(usize, 0), c.lo_vals.len);
+    try std.testing.expectEqualStrings("", c.name);
+    try std.testing.expectEqual(@as(usize, 0), c.held_only.len);
+}
+
+test "§5.6.1.2 path latches: one latch per operand, a target's slot reused, a new operand appended" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const x = try f.mir.emit(a, .entry, .fmul, &.{ va, va });
+    const y = try f.mir.emit(a, .entry, .fadd, &.{ va, .f_one });
+    _ = try f.mir.emit(a, .entry, .path_prev, &.{x});
+    _ = try f.mir.emit(a, .entry, .path_prev, &.{x}); // CSE-shared: the same latch
+    _ = try f.mir.emit(a, .entry, .path_acc, &.{y});
+    const an = try f.analysis();
+    const jobs = [_]Job{.{ .kind = .resist, .target = x, .mode = .strict, .comment = "" }};
+
+    const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+    try std.testing.expectEqualSlices(Mir.Value, &.{ x, y }, c.lo_vals);
+    try std.testing.expectEqualSlices(Mir.Value, &.{x}, c.prev_vals);
+    try std.testing.expectEqualSlices(u32, &.{0}, c.prev_lo);
+    try std.testing.expectEqualSlices(Mir.Value, &.{y}, c.acc_vals);
+    try std.testing.expectEqualSlices(u32, &.{1}, c.acc_lo);
+}
+
+test "§5.10 a held-array store only updateState reads is held-only; one eval loads from is not" {
+    // h[0] = V(a) into a held array; eval returns V(b), or a load of h.
+    for ([_]bool{ false, true }) |eval_loads| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "a", "b" });
+        defer f.deinit();
+        const a = f.alloc();
+        const va = try f.probe(0);
+        const vb = try f.probe(1);
+        try f.lowered.mem_arrays.append(a, .{ .name = "h", .len = 2, .ty = .real, .held = 0 });
+        const h0 = try f.mir.emitAnew(a, .entry, 0);
+        const st = try f.mir.emit(a, .entry, .store, &.{ h0, .zero, va });
+        try f.lowered.held_vars.append(a, .{ .name = "h", .ty = .real, .init = .f_zero, .seed = h0, .final = st, .array = 0 });
+        const ld = try f.mir.emit(a, .entry, .fload, &.{ st, .zero });
+        const an = try f.analysis();
+        const jobs = [_]Job{
+            .{ .kind = .resist, .target = if (eval_loads) ld else vb, .mode = .strict, .comment = "" },
+            .{ .kind = .held, .target = st, .mode = .strict, .comment = "" },
+        };
+
+        const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+        try std.testing.expectEqual(@as(usize, an.nv), c.eval_need.len);
+        try std.testing.expectEqual(eval_loads, c.eval_need[@backingInt(st)]);
+        if (eval_loads) {
+            // Something eval returns reads the store, so nothing is skippable.
+            try std.testing.expectEqual(@as(usize, 0), c.held_only.len);
+        } else {
+            try std.testing.expect(c.held_only[@backingInt(st)]);
+            try std.testing.expect(c.eval_need[@backingInt(vb)]);
+        }
+    }
+}
