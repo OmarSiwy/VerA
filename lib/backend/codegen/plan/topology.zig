@@ -24,7 +24,8 @@ pub const Topology = struct {
     /// needs the membership test.
     cpairs: []const CollapsePair = &.{},
 
-    /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one.
+    /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one. The
+    /// pair is ordered: `(lo, hi)` is another branch. O(free flows).
     pub fn freeFlowOf(self: Topology, hi: u16, lo: u16) ?FreeFlow {
         for (self.free_flows) |f| if (f.hi == hi and f.lo == lo) return f;
         return null;
@@ -182,7 +183,7 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
     while (it.next()) |e| {
         const u: u32 = e.value_ptr.*;
         // A potential/indirect source already pins this current.
-        if (std.mem.indexOfScalar(u32, branch_u, u) != null) continue;
+        if (std.mem.findScalar(u32, branch_u, u) != null) continue;
         var sourced = false;
         var signal_flow = false;
         for (self.lowered.contributions.items) |c| {
@@ -387,4 +388,179 @@ test "a probed flow no source defines is free; one a potential source drives is 
     try std.testing.expectEqual(@as(?FreeFlow, null), t.freeFlowOf(1, Lower.ground));
     // No runtime-retained potential row, so nothing collapses.
     try std.testing.expectEqual(@as(usize, 0), t.cpairs.len);
+}
+
+test "free flows come out in unknown order, unsourced when only probed, and skip a signal-flow net" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b", "o", "flow(b,a)", "flow(a,b)", "flow(o)" });
+    defer f.deinit();
+    const a = f.alloc();
+    // `o` is an output port of a flow-only discipline (§1.3.4.2).
+    try f.lowered.disciplines.put(a, "current", .{ .has_flow = true });
+    f.lowered.nodes.items(.disc)[2] = "current";
+    f.lowered.nodes.items(.dir)[2] = .output;
+    // Inserted highest unknown first: the hash map's order is not the answer.
+    try f.lowered.flow_unknowns.put(a, .{ .hi = 2, .lo = Lower.ground }, 5);
+    try f.lowered.flow_unknowns.put(a, .{ .hi = 0, .lo = 1 }, 4);
+    try f.lowered.flow_unknowns.put(a, .{ .hi = 1, .lo = 0 }, 3);
+    // I(a,b) <+ … sources (a,b); (b,a) is only probed; I(o) <+ … writes o's own row.
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1 });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 2, .lo = Lower.ground });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+
+    const ff = try freeFlows(in, &.{ none_u32, none_u32 });
+    try std.testing.expectEqualSlices(FreeFlow, &.{
+        .{ .u = 3, .hi = 1, .lo = 0, .sourced = false },
+        .{ .u = 4, .hi = 0, .lo = 1, .sourced = true },
+    }, ff);
+    try std.testing.expectEqual(@as(?u16, 2), flowOnlySignalFlowNet(in, f.lowered.contributions.items[1]));
+    try std.testing.expectEqual(@as(?u16, null), flowOnlySignalFlowNet(in, f.lowered.contributions.items[0]));
+}
+
+test "isFlowUnknown answers the quantity, not the spelling" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    // A net literally named `flow(p,n)` (§2.8.1) is still a potential.
+    try f.init(&.{ "flow(p,n)", "ib", "ip", "st", "sig" });
+    defer f.deinit();
+    const a = f.alloc();
+    f.lowered.nodes.items(.kind)[1] = .{ .branch_flow = 0 };
+    f.lowered.nodes.items(.kind)[2] = .{ .port_flow = 0 };
+    f.lowered.nodes.items(.kind)[3] = .{ .op_state = 1e-6 };
+    try f.lowered.disciplines.put(a, "current", .{ .has_flow = true });
+    f.lowered.nodes.items(.disc)[4] = "current";
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    try std.testing.expect(!isFlowUnknown(in, 0));
+    try std.testing.expect(isFlowUnknown(in, 1));
+    try std.testing.expect(isFlowUnknown(in, 2));
+    try std.testing.expect(!isFlowUnknown(in, 3));
+    // §1.3.4.2 a flow-only net's one unknown is a flow.
+    try std.testing.expect(isFlowUnknown(in, 4));
+    // A branch current codegen appends past `nodes`.
+    try std.testing.expect(isFlowUnknown(in, 5));
+}
+
+test "§5.6.1.3 retention reads the folded flag; a runtime flag merges its switch partner" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const sel = try f.mir.emit(a, .entry, .fgt, &.{ try f.probe(0), .f_zero });
+    // 0: V(a,b) retained by a runtime flag; 1: I(a,b) its §5.6.5 partner;
+    // 2: I(a,b) on a named branch, not the partner.
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 0, .lo = 1, .wrote_val = sel });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .wrote_val = .f_one });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 1, .br = 5, .wrote_val = .zero });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    const cs = f.lowered.contributions.items;
+    try std.testing.expectEqual(Retention{ .runtime = sel }, retention(in, cs[0]));
+    try std.testing.expectEqual(Retention.on, retention(in, cs[1]));
+    try std.testing.expectEqual(Retention.off, retention(in, cs[2])); // integer 0 folds too
+    try std.testing.expectEqual(@as(?usize, 1), switchFlowOf(in, 0));
+    try std.testing.expect(flowIsMerged(in, 1));
+    try std.testing.expect(!flowIsMerged(in, 2));
+    try std.testing.expect(!flowIsMerged(in, 0)); // a potential entry is never merged
+}
+
+test "zeroOnEveryPath: a select or phi of zeros is zero; one nonzero arm is not" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const c = try f.mir.emit(a, .entry, .fgt, &.{ try f.probe(0), .f_zero });
+    const zz = try f.mir.emit(a, .entry, .select, &.{ c, .f_zero, .zero });
+    const z1 = try f.mir.emit(a, .entry, .select, &.{ c, .f_zero, .f_one });
+    const nested = try f.mir.emit(a, .entry, .select, &.{ c, zz, .f_zero });
+    const then_b = try f.mir.addBlock(a);
+    const join = try f.mir.addBlock(a);
+    _ = try f.mir.emitBranch(a, .entry, c, then_b, join);
+    _ = try f.mir.emitJump(a, then_b, join);
+    const phi = try f.mir.emitPhi(a, join, &.{ .{ .block = .entry, .value = .f_zero }, .{ .block = then_b, .value = zz } });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    try std.testing.expect(zeroOnEveryPath(in, zz, 0));
+    try std.testing.expect(!zeroOnEveryPath(in, z1, 0));
+    try std.testing.expect(zeroOnEveryPath(in, nested, 0));
+    try std.testing.expect(zeroOnEveryPath(in, phi, 0));
+    // The walk gives up past depth 16: unknown is not zero.
+    try std.testing.expect(!zeroOnEveryPath(in, nested, 17));
+    try std.testing.expect(!zeroOnEveryPath(in, c, 0));
+}
+
+/// A V(a,b) switch row retained under `flag`, its `<+ 0` arm, and branch
+/// current 3; nets p (a port), a, b. Returns the planned pairs.
+fn switchPairs(f: *Fixture, flag_of: enum { param, temperature, probe }, probe_flow: bool) ![]CollapsePair {
+    const a = f.alloc();
+    f.lowered.num_ports = 1;
+    try f.lowered.params.append(a, .{ .name = "rs", .ty = .real, .default = .f_zero });
+    const x = switch (flag_of) {
+        .param => try f.mir.addParamRef(a, 0),
+        .temperature => try f.call("$temperature", &.{}),
+        .probe => try f.probe(1),
+    };
+    const flag = try f.mir.emit(a, .entry, .select, &.{ try f.mir.emit(a, .entry, .fgt, &.{ x, .f_zero }), .f_one, .f_zero });
+    if (probe_flow) _ = try f.probe(3);
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = 2, .wrote_val = flag });
+    const an = try f.analysis();
+    return collapsePairs(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{3});
+}
+
+test "collapsePairs: a build-time 0 V switch collapses the higher internal net onto the lower" {
+    {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "p", "a", "b", "flow(a,b)" });
+        defer f.deinit();
+        const ps = try switchPairs(&f, .param, false);
+        try std.testing.expectEqual(@as(usize, 1), ps.len);
+        try std.testing.expectEqual(@as(u32, 2), ps[0].victim);
+        try std.testing.expectEqual(@as(u32, 1), ps[0].target);
+        try std.testing.expectEqual(@as(u32, 3), ps[0].flow_u);
+        // A function of the card alone: `derive` can publish it.
+        try std.testing.expect(ps[0].card);
+    }
+    {
+        // $temperature is fixed at build, but it is the instance's, not the card's.
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "p", "a", "b", "flow(a,b)" });
+        defer f.deinit();
+        const ps = try switchPairs(&f, .temperature, false);
+        try std.testing.expectEqual(@as(usize, 1), ps.len);
+        try std.testing.expect(!ps[0].card);
+    }
+    {
+        // A flag a probe steers changes per iterate: no build-time collapse.
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "p", "a", "b", "flow(a,b)" });
+        defer f.deinit();
+        try std.testing.expectEqual(@as(usize, 0), (try switchPairs(&f, .probe, false)).len);
+    }
+    {
+        // §5.4.2 the model reads I(a,b): collapsing would hand it a voltage.
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "p", "a", "b", "flow(a,b)" });
+        defer f.deinit();
+        try std.testing.expectEqual(@as(usize, 0), (try switchPairs(&f, .param, true)).len);
+    }
+}
+
+test "buildFree refuses a call off the allowlist and an operand chain deeper than 64" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const t = try f.call("$abstime", &.{});
+    var chain = try f.mir.addFloatConst(a, 0.5);
+    for (0..10) |_| chain = try f.mir.emit(a, .entry, .fneg, &.{chain});
+    const short = chain;
+    for (0..60) |_| chain = try f.mir.emit(a, .entry, .fneg, &.{chain});
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    // §9.15 time moves between evaluations.
+    try std.testing.expect(!buildFree(in, t, 0));
+    // Ten negations of a literal are a build-time constant; seventy are past
+    // the depth the walk follows, and unknown is not constant.
+    try std.testing.expect(buildFree(in, short, 0));
+    try std.testing.expect(!buildFree(in, chain, 0));
 }

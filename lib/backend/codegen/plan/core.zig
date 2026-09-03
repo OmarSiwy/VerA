@@ -12,6 +12,7 @@ const Job = @import("jobs.zig").Job;
 const float_mode = @import("../float/mode.zig");
 const plan_setup = @import("setup.zig");
 const callee = Mir.callee;
+const assert = std.debug.assert;
 
 /// Allocation, or a core name longer than `naming.max_name_len`.
 pub const Error = std.mem.Allocator.Error || error{NameTooLong};
@@ -35,8 +36,11 @@ pub const Core = struct {
     /// (operating-point exit and accepted transient step) latches `pb = wb`,
     /// `pq += wq` and zeroes `wq`, so a stray double commit adds 0.
     prev_vals: []Mir.Value = &.{},
+    /// `prev_vals[k]`'s slot in `lo_vals`; same length as `prev_vals`.
     prev_lo: []u32 = &.{},
+    /// The `path_acc` family, deduplicated like `prev_vals`.
     acc_vals: []Mir.Value = &.{},
+    /// `acc_vals[k]`'s slot in `lo_vals`; same length as `acc_vals`.
     acc_lo: []u32 = &.{},
     /// Core field index holding each held variable's end-of-block value, or
     /// `none_u32` when it folded to `.f_zero`.
@@ -102,14 +106,15 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
         var pl: std.ArrayList(u32) = .empty;
         var qv: std.ArrayList(Mir.Value) = .empty;
         var ql: std.ArrayList(u32) = .empty;
-        for (0..in.mir.insts.len) |ii| {
-            const row = in.mir.insts.get(ii);
-            if (row.op != .path_prev and row.op != .path_acc) continue;
-            const fam_v = if (row.op == .path_prev) &pv else &qv;
-            const fam_l = if (row.op == .path_prev) &pl else &ql;
-            const v = in.an.rv(@fromBackingInt(@intCast(row.a)));
+        // Two columns, not `insts.get` per row: the scan reads op and operand
+        // only, and a whole row is 29 bytes.
+        for (in.mir.insts.items(.op), in.mir.insts.items(.a)) |op, operand| {
+            if (op != .path_prev and op != .path_acc) continue;
+            const fam_v = if (op == .path_prev) &pv else &qv;
+            const fam_l = if (op == .path_prev) &pl else &ql;
+            const v = in.an.rv(@fromBackingInt(@intCast(operand)));
             // ponytail: keep first-seen order with the stdlib membership scan.
-            if (std.mem.indexOfScalar(Mir.Value, fam_v.items, v) != null) continue;
+            if (std.mem.findScalar(Mir.Value, fam_v.items, v) != null) continue;
             if (self.lo_idx[@backingInt(v)] == none_u32) {
                 self.lo_idx[@backingInt(v)] = @intCast(vals.items.len);
                 try vals.append(a, v);
@@ -124,6 +129,8 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
     }
     self.mode = float_mode.coreMode(jobs);
     self.lo_vals = vals.items;
+    // Exit invariant: `lo_idx` and `lo_vals` are inverse on the live-outs.
+    for (self.lo_vals, 0..) |v, k| assert(self.lo_idx[@backingInt(v)] == k);
     // §5.10 which core field each held variable's write-back reads. Done
     // here rather than by scanning `jobs` in `emitStateMachine`, because
     // `lo_idx` is only meaningful once every job has been folded in.
@@ -167,7 +174,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     const n: u32 = @intCast(in.mir.insts.len);
     var any = false;
     for (0..n) |ii| {
-        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
         if (in.mir.instOp(inst) != .store) continue;
         const id = in.an.arrOf(in.mir.instResult(inst)) orelse continue;
         if (in.lowered.mem_arrays.items[id].held != none_u32) any = true;
@@ -180,7 +187,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     @memset(m.blk, false);
     for (jobs) |job| if (evalRoot(job.kind)) try m.mark(job.target);
     for (0..n) |ii| {
-        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
         if (in.mir.instOp(inst) != .call) continue;
         const d = in.mir.instData(inst).call;
         if (callee.opKind(d.callee) != .none) continue;
@@ -192,7 +199,7 @@ fn heldOnly(in: Input, jobs: []const Job, out: *Core) Error!void {
     @memset(skip, false);
     var some = false;
     for (0..n) |ii| {
-        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
         if (in.mir.instOp(inst) != .store) continue;
         const r = in.an.rv(in.mir.instResult(inst));
         const id = in.an.arrOf(r) orelse continue;
@@ -305,4 +312,73 @@ test "live-outs are deduplicated in job order; display stays out; held values in
     // job is not a consumer.
     try std.testing.expectEqual(proof.FloatMode.strict, c.mode);
     try std.testing.expectEqualStrings("mymod__common__core", c.name);
+}
+
+test "no targets: an empty core with no name; a zero target stays out" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const an = try f.analysis();
+    // An operator with no input queues `.f_zero`, which renders inline.
+    const jobs = [_]Job{.{ .kind = .op_input, .target = .f_zero, .mode = .strict, .comment = "" }};
+    const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+    try std.testing.expectEqual(@as(usize, 0), c.lo_vals.len);
+    try std.testing.expectEqualStrings("", c.name);
+    try std.testing.expectEqual(@as(usize, 0), c.held_only.len);
+}
+
+test "§5.6.1.2 path latches: one latch per operand, a target's slot reused, a new operand appended" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const x = try f.mir.emit(a, .entry, .fmul, &.{ va, va });
+    const y = try f.mir.emit(a, .entry, .fadd, &.{ va, .f_one });
+    _ = try f.mir.emit(a, .entry, .path_prev, &.{x});
+    _ = try f.mir.emit(a, .entry, .path_prev, &.{x}); // CSE-shared: the same latch
+    _ = try f.mir.emit(a, .entry, .path_acc, &.{y});
+    const an = try f.analysis();
+    const jobs = [_]Job{.{ .kind = .resist, .target = x, .mode = .strict, .comment = "" }};
+
+    const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+    try std.testing.expectEqualSlices(Mir.Value, &.{ x, y }, c.lo_vals);
+    try std.testing.expectEqualSlices(Mir.Value, &.{x}, c.prev_vals);
+    try std.testing.expectEqualSlices(u32, &.{0}, c.prev_lo);
+    try std.testing.expectEqualSlices(Mir.Value, &.{y}, c.acc_vals);
+    try std.testing.expectEqualSlices(u32, &.{1}, c.acc_lo);
+}
+
+test "§5.10 a held-array store only updateState reads is held-only; one eval loads from is not" {
+    // h[0] = V(a) into a held array; eval returns V(b), or a load of h.
+    for ([_]bool{ false, true }) |eval_loads| {
+        var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+        try f.init(&.{ "a", "b" });
+        defer f.deinit();
+        const a = f.alloc();
+        const va = try f.probe(0);
+        const vb = try f.probe(1);
+        try f.lowered.mem_arrays.append(a, .{ .name = "h", .len = 2, .ty = .real, .held = 0 });
+        const h0 = try f.mir.emitAnew(a, .entry, 0);
+        const st = try f.mir.emit(a, .entry, .store, &.{ h0, .zero, va });
+        try f.lowered.held_vars.append(a, .{ .name = "h", .ty = .real, .init = .f_zero, .seed = h0, .final = st, .array = 0 });
+        const ld = try f.mir.emit(a, .entry, .fload, &.{ st, .zero });
+        const an = try f.analysis();
+        const jobs = [_]Job{
+            .{ .kind = .resist, .target = if (eval_loads) ld else vb, .mode = .strict, .comment = "" },
+            .{ .kind = .held, .target = st, .mode = .strict, .comment = "" },
+        };
+
+        const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+        try std.testing.expectEqual(@as(usize, an.nv), c.eval_need.len);
+        try std.testing.expectEqual(eval_loads, c.eval_need[@backingInt(st)]);
+        if (eval_loads) {
+            // Something eval returns reads the store, so nothing is skippable.
+            try std.testing.expectEqual(@as(usize, 0), c.held_only.len);
+        } else {
+            try std.testing.expect(c.held_only[@backingInt(st)]);
+            try std.testing.expect(c.eval_need[@backingInt(vb)]);
+        }
+    }
 }

@@ -2,9 +2,11 @@
 //! writing (every `x[u]` and `.ddxAt(u)` it spells, every dispatcher row's
 //! constant coefficients) -> which derivative lanes `eval`/`q` read, and the
 //! exact constant partials of every column they do not. Soundness is argued
-//! at `dispatch.emitDerivReads`, which formats the result.
+//! at `dispatch.emitDerivReads`, which formats the result. Clauses: §4.5.14
+//! (`ddx` reads a lane), §5.6.5 (a collapsible switch row's guarded stamps).
 
 const std = @import("std");
+const assert = std.debug.assert;
 
 /// One constant partial: `g` of `eval`, `c` of `q`, at (row, col). Absent is 0.
 /// `when` is a GUARDED entry's collapse pair (`plan/topology.zig`
@@ -31,6 +33,10 @@ pub const JacConst = struct {
 /// rules. A (row, col) the table would have to state twice (unguarded and
 /// guarded, or under two guards) keeps its lane instead: `contract` wants
 /// (row, col) unique.
+///
+/// Asserts, at or below 64 unknowns, that both `lin` halves hold `n_u * n_u`
+/// entries and that every guarded entry lies inside the matrix. O(n_u² ·
+/// guarded) on a matrix of at most 64².
 pub fn plan(
     arena: std.mem.Allocator,
     n_u: u32,
@@ -43,6 +49,8 @@ pub fn plan(
     if (n_u > 64) return null;
     var mask = deriv_reads | ddx_reads | limit_writes;
     const n = n_u;
+    assert(lin[0].len == n * n and lin[1].len == n * n);
+    for (guarded) |e| assert(e.row < n and e.col < n);
     for (guarded, 0..) |e, k| {
         const clash = lin[0][e.row * n + e.col] != 0 or lin[1][e.row * n + e.col] != 0 or
             for (guarded[0..k]) |p| {
@@ -108,4 +116,46 @@ test "a guarded stamp is listed with its guard; one that clashes puts its column
     const c = (try plan(arena.allocator(), 3, 0b011, 0, 0, .{ &g1, &z }, &gd)).?;
     try std.testing.expectEqual(@as(u64, 0b111), c.mask);
     try std.testing.expectEqual(@as(usize, 0), c.entries.len);
+}
+
+test "64 unknowns is the last size with a table; lane 63 and cell (63, 63) are reachable" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const z: [64 * 64]f64 = @splat(0);
+    var g: [64 * 64]f64 = @splat(0);
+    g[63 * 64 + 63] = 2;
+    g[63 * 64 + 0] = 3; // column 0 is read, so this cell is not listed
+    const j = (try plan(arena.allocator(), 64, 1, 0, 0, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual(@as(u64, 1), j.mask);
+    try std.testing.expectEqualSlices(Entry, &.{.{ .row = 63, .col = 63, .g = 2, .c = 0 }}, j.entries);
+    // A ddx of unknown 63 sets the top bit, and the column leaves the table.
+    const top = (try plan(arena.allocator(), 64, 1, @as(u64, 1) << 63, 0, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual((@as(u64, 1) << 63) | 1, top.mask);
+    try std.testing.expectEqual(@as(usize, 0), top.entries.len);
+}
+
+test "limiter writes join the mask; a guarded zero is no entry; two guards on one cell keep its lane" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const z: [9]f64 = @splat(0);
+    var g: [9]f64 = @splat(0);
+    g[2 * 3 + 2] = 4; // (2, 2): a constant the table states
+    // `limit` writes unknown 2: its column is read back, so (2, 2) leaves.
+    const lw = (try plan(arena.allocator(), 3, 0, 0, 0b100, .{ &g, &z }, &.{})).?;
+    try std.testing.expectEqual(@as(u64, 0b100), lw.mask);
+    try std.testing.expectEqual(@as(usize, 0), lw.entries.len);
+    // A guarded stamp whose coefficients are both zero states nothing.
+    const zero_gd = [_]Entry{.{ .row = 1, .col = 2, .g = 0, .c = 0, .when = 0 }};
+    const zg = (try plan(arena.allocator(), 3, 0b011, 0, 0, .{ &z, &z }, &zero_gd)).?;
+    try std.testing.expectEqual(@as(u64, 0b011), zg.mask);
+    try std.testing.expectEqual(@as(usize, 0), zg.entries.len);
+    // The same cell under two guards: `contract` wants (row, col) unique, so
+    // the column keeps its lane and neither guarded entry is listed.
+    const two = [_]Entry{
+        .{ .row = 0, .col = 2, .g = 1, .c = 0, .when = 0 },
+        .{ .row = 0, .col = 2, .g = 1, .c = 0, .when = 1 },
+    };
+    const tg = (try plan(arena.allocator(), 3, 0b011, 0, 0, .{ &z, &z }, &two)).?;
+    try std.testing.expectEqual(@as(u64, 0b111), tg.mask);
+    try std.testing.expectEqual(@as(usize, 0), tg.entries.len);
 }

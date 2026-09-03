@@ -30,11 +30,13 @@ pub const Jobs = struct {
 
 /// What `plan` reads besides the lowered module.
 pub const From = struct {
+    /// `plan/names.zig`: the canonical units, whose operators queue inputs.
     names: *const Names,
     /// `proof.Verdict.unit_modes`: the float mode of each CONTRIBUTION unit.
     unit_modes: []const proof.FloatMode,
     /// `Limits.calls`: the honoured §4.5.15 sites.
     limits: []const LimitCall,
+    /// `plan/noise.zig`: the §4.6.4 generator rows and §4.6.3 stimulus rows.
     noise: *const plan_noise.Noise,
     /// `Options.display == .emit`: the §9.4 tasks become a unit of their own.
     emit_display: bool,
@@ -73,6 +75,8 @@ pub const Job = struct {
     /// Why the target is in the core. `plan` queues the kinds in this order,
     /// which is the order of the core's fields: a model that gains a target
     /// of one kind appends fields and renumbers none of the earlier kinds.
+    /// The one interleave: each contribution's `.react` jobs follow its own
+    /// `.resist` job.
     pub const Kind = enum {
         /// §5.6 a contribution's resistive target.
         resist,
@@ -417,13 +421,14 @@ fn queueVpi(self: Input, jobs: *std.ArrayList(Job), from: From, v: Mir.Value, ro
 }
 
 /// Value -> some instruction reads it, or a job in `queued` returns it. Dead
-/// instructions count: the answer only has to be a superset.
+/// instructions count: the answer only has to be a superset. One sweep of
+/// every instruction, O(instructions).
 fn readSet(self: Input, queued: []const Job) ![]bool {
     const read = try self.arena.alloc(bool, self.an.nv);
     @memset(read, false);
     for (queued) |j| read[@backingInt(self.an.rv(j.target))] = true;
     for (0..self.mir.insts.len) |ii| {
-        const inst: Mir.Inst = @fromBackingInt(@intCast(@as(u32, @intCast(ii))));
+        const inst: Mir.Inst = @fromBackingInt(@intCast(ii));
         switch (self.mir.instData(inst)) {
             .unary => |d| read[@backingInt(self.an.rv(d.operand))] = true,
             .binary => |d| for ([_]Mir.Value{ d.lhs, d.rhs }) |v| {
@@ -524,4 +529,121 @@ test "jobs queue in insert-tolerant order: contributions, operator inputs, held 
     try std.testing.expectEqual(proof.FloatMode.strict, jobs.list[2].mode);
     try std.testing.expectEqual(va, jobs.list[2].target);
     try std.testing.expectEqualStrings("", jobs.display_name);
+}
+
+/// A `dyn` stub: every §4.5 control argument and §4.6.3 stimulus reads the solve.
+const always = struct {
+    pub fn isDynamic(_: @This(), _: Mir.Value) error{}!bool {
+        return true;
+    }
+}{};
+
+test "§4.5 Table 4-20: an absdelay's td and maxdelay are queued only when they render off the core" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const vb = try f.probe(1);
+    const maxd = try f.mir.addFloatConst(a, 1e-9);
+    // absdelay(V(a), V(b), 1n): input, then `td` and `maxdelay`.
+    _ = try f.call("absdelay", &.{ va, vb, maxd });
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    const names = try @import("names.zig").plan(in, 0);
+    const noise: plan_noise.Noise = .{};
+    const from: From = .{ .names = &names, .unit_modes = &.{}, .limits = &.{}, .noise = &noise, .emit_display = false };
+    try std.testing.expectEqualSlices(Mir.Value, &.{ va, vb, maxd }, names.opArgs(&f.mir, 0));
+
+    const dyn_jobs = try plan(in, from, always);
+    try std.testing.expectEqual(@as(usize, 3), dyn_jobs.list.len);
+    try std.testing.expectEqual(Job.Kind.op_input, dyn_jobs.list[0].kind);
+    try std.testing.expectEqual(Job.Kind.ctrl, dyn_jobs.list[1].kind);
+    try std.testing.expectEqual(vb, dyn_jobs.list[1].target);
+    try std.testing.expectEqual(maxd, dyn_jobs.list[2].target);
+
+    const never = struct {
+        pub fn isDynamic(_: @This(), _: Mir.Value) error{}!bool {
+            return false;
+        }
+    }{};
+    const host_jobs = try plan(in, from, never);
+    try std.testing.expectEqual(@as(usize, 1), host_jobs.list.len);
+}
+
+test "limit arguments, noise PSDs, the retry time, the status and the display unit queue in Kind order" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const vb = try f.probe(1);
+    const vt = try f.mir.addFloatConst(a, 0.025);
+    const lit = try f.mir.addFloatConst(a, 0.6);
+    const pwr = try f.mir.addFloatConst(a, 1.6e-21);
+    const ex = try f.mir.addFloatConst(a, 1.5);
+    const retry = try f.mir.addFloatConst(a, 1e-6);
+    const code = try f.mir.addIntConst(a, 42);
+    f.lowered.reject_step = retry;
+    f.lowered.status = vb; // a status the solve decides
+    f.lowered.status_args[0] = code; // folds: written as a constant
+    f.lowered.display_root = va;
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    const names = try @import("names.zig").plan(in, 0);
+    // A literal seed is written in place; a solve-valued one is queued. A
+    // zero vcrit or sign is not an argument at all.
+    const limits = [_]LimitCall{
+        .{ .alg = .pnjlim, .hi = 0, .lo = 1, .argv = .{ vt, .f_zero }, .seed = lit },
+        .{ .alg = .pnjlim, .hi = 0, .lo = 1, .argv = .{ vt, .f_zero }, .seed = vb },
+    };
+    // §4.6.4: the power always rides the core (a conditional generator must
+    // read back 0); a constant exponent renders inline; a bias-dependent
+    // coefficient rides the core.
+    var rows = [_]plan_noise.NoiseRow{.{ .row = 0, .col = 1, .kind = .flicker, .source = 0, .pwr = pwr, .exp = ex, .coeff = vb }};
+    const noise: plan_noise.Noise = .{ .rows = &rows };
+
+    const jobs = try plan(in, .{
+        .names = &names,
+        .unit_modes = &.{},
+        .limits = &limits,
+        .noise = &noise,
+        .emit_display = false,
+        .record_display = true,
+    }, always);
+    const kinds = try a.alloc(Job.Kind, jobs.list.len);
+    const targets = try a.alloc(Mir.Value, jobs.list.len);
+    for (jobs.list, kinds, targets) |j, *k, *t| {
+        k.* = j.kind;
+        t.* = j.target;
+    }
+    try std.testing.expectEqualSlices(Job.Kind, &.{ .limit_arg, .limit_arg, .limit_arg, .noise, .noise, .reject_step, .status, .display }, kinds);
+    try std.testing.expectEqualSlices(Mir.Value, &.{ vt, vt, vb, pwr, vb, retry, vb, va }, targets);
+    try std.testing.expectEqualStrings("mymod__display__tasks", jobs.display_name);
+    try std.testing.expectEqualStrings(jobs.display_name, jobs.list[jobs.list.len - 1].name);
+    // Every job but the contributions' is `.strict`: proof rates contributions only.
+    for (jobs.list) |j| try std.testing.expectEqual(proof.FloatMode.strict, j.mode);
+}
+
+test "a printing artifact keeps the §9.7.3 status off the core; a device that drops its prints has no display unit" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    f.lowered.status = va;
+    f.lowered.display_root = va;
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+    const names = try @import("names.zig").plan(in, 0);
+    const noise: plan_noise.Noise = .{};
+    var from: From = .{ .names = &names, .unit_modes = &.{}, .limits = &.{}, .noise = &noise, .emit_display = true };
+    const emit = try plan(in, from, always);
+    try std.testing.expectEqual(@as(usize, 1), emit.list.len);
+    try std.testing.expectEqual(Job.Kind.display, emit.list[0].kind);
+    from.emit_display = false;
+    const drop = try plan(in, from, always);
+    try std.testing.expectEqual(@as(usize, 1), drop.list.len);
+    try std.testing.expectEqual(Job.Kind.status, drop.list[0].kind);
+    try std.testing.expectEqualStrings("", drop.display_name);
 }

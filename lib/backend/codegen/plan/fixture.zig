@@ -1,6 +1,7 @@
 //! Test-only: a hand-built `Mir` + `Lowered` and the `Analysis` over them,
 //! the setup a `plan/` test needs. Every test states its MIR instruction by
 //! instruction, so what a plan is asked about sits next to what it answers.
+//! No clause of its own.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -25,6 +26,7 @@ pub const Fixture = struct {
         _ = try f.mir.addBlock(a);
     }
 
+    /// Frees everything the fixture and its tests allocated through `alloc`.
     pub fn deinit(f: *Fixture) void {
         f.arena.deinit();
     }
@@ -45,7 +47,8 @@ pub const Fixture = struct {
         return f.mir.emitCall(a, .entry, try f.mir.internString(a, name), args);
     }
 
-    /// Build the analysis over what the test has written so far.
+    /// Builds the analysis over what the test has written so far. The MIR and
+    /// `lowered` must not change afterwards (see `Input`).
     pub fn analysis(f: *Fixture) !Analysis {
         return Analysis.build(f.alloc(), &f.mir, &f.lowered);
     }
