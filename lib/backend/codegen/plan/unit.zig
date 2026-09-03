@@ -1,6 +1,7 @@
 //! Per-unit plan for one emitted declaration: a target `Mir.Value` -> its
 //! backward slice over the shared CFG, use counts, inline and dead-branch
-//! decisions, and unit-local slots (§4.2.12 lazy arms, §5.9 loops).
+//! decisions, and unit-local slots (§4.2.12 lazy arms, §5.9 loops). Clauses:
+//! §3.2.2, §4.2.12, §4.3.1, §4.5, §4.5.14, §4.6.3, §5.9, §9.4, §9.5.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -10,11 +11,13 @@ const Analysis = @import("ir").Analysis;
 // live in `args.zig` so this file imports no emitter.
 const cg = @import("args.zig");
 const Display = cg.Display;
+const assert = std.debug.assert;
 
 pub const UnitPlan = @This();
 
-/// How a CFG edge leaves its block, for the emitter's structured reconstruction.
-pub const Act = union(enum) { cont: u32, brk: u32 };
+/// How a CFG edge leaves its block once empty blocks are skipped: `continue`
+/// to a loop header or `break` to a merge label (`edgeAct`).
+const Act = union(enum) { cont: u32, brk: u32 };
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 
@@ -236,7 +239,13 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
 ///
 /// A fixpoint: a §5.9 loop the unit must re-run changes the slice, which can
 /// mark further loops. Marking only adds, so it converges.
+///
+/// Asserts `lo_idx` is wired (one entry per value, `plan/core.zig`), and
+/// `su_idx` too while `su_on`, and `sinv`/`su_home` while `setup_mode`.
 pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
+    assert(self.lo_idx.len == self.an.nv);
+    assert(!self.su_on or self.su_idx.len == self.an.nv);
+    assert(!self.setup_mode or (self.sinv.len == self.an.nv and self.su_home.len == self.an.nv));
     self.in_common = in_common;
     @memset(self.loop_recompute, false);
     while (true) {
@@ -681,7 +690,7 @@ fn foldedExponent(self: *const UnitPlan, d: anytype) bool {
 /// Returns true when the slice lives entirely in the entry block and uses no
 /// phi, so the unit emits flat `const` code. Valid after `analyze` marked the
 /// slice.
-pub fn isStraightLine(self: *const UnitPlan) bool {
+fn isStraightLine(self: *const UnitPlan) bool {
     for (self.live.items) |lv| {
         const v = @backingInt(lv);
         if (v < Mir.Value.first_dynamic) continue;
@@ -702,7 +711,7 @@ pub fn isStraightLine(self: *const UnitPlan) bool {
 /// once the empty blocks between are skipped, and neither copies a phi on the
 /// way. The unit then computes the same values and reaches the same place
 /// whichever arm runs, so the condition is unobservable and the `if` goes.
-pub fn planDeadBranches(self: *UnitPlan) void {
+fn planDeadBranches(self: *UnitPlan) void {
     @memset(self.blk_work, false);
     @memset(self.blk_phi, false);
     for (self.live.items) |lv| {
@@ -745,7 +754,7 @@ pub fn planDeadBranches(self: *UnitPlan) void {
 /// this unit observes, or nests deeper than the walk tracks. Reads
 /// `blk_work`/`blk_phi`/`dead_branch`, so it is valid only inside
 /// `planDeadBranches` or after it.
-pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
+fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     var from = from0;
     var to = to0;
     var hops: u32 = 0;
@@ -760,7 +769,7 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // is the one thing the two arms cannot share.
         if (self.blk_phi[to]) return null;
         if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };
-        if (self.an.is_merge[to] and std.mem.indexOfScalar(u32, opened[0..n_open], to) == null) return .{ .brk = to };
+        if (self.an.is_merge[to] and std.mem.findScalar(u32, opened[0..n_open], to) == null) return .{ .brk = to };
         // Otherwise `to` is emitted INLINE here, so it has to be empty and
         // end in a plain jump for the two arms to stay indistinguishable.
         //

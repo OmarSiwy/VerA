@@ -15,6 +15,8 @@ const none_u32 = std.math.maxInt(u32);
 
 /// Every identifier the device declares, and the unknowns behind them.
 pub const Names = struct {
+    /// Every source unit in the canonical order `naming.enumerateUnits`
+    /// fixes: contributions, then operators.
     units: []naming.Unit = &.{},
     /// Declaration name per `units` entry.
     unit_names: [][]const u8 = &.{},
@@ -32,16 +34,21 @@ pub const Names = struct {
     a_names: [][]const u8 = &.{},
     /// §5.10 `Instance` field name per `Lowered.held_vars` entry.
     held_names: [][]const u8 = &.{},
-    /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
+    /// Per `Lowered.params` entry: the parameter gains a `__given` flag,
+    /// because §9.19 `$param_given` queries it or because it is a `derive()`
+    /// target (a card parameter whose default does not fold).
     p_given: []bool = &.{},
 
-    /// The operator `call` unit `unit` was enumerated from (`naming` records it).
+    /// The operator `call` unit `unit` was enumerated from (`naming` records
+    /// it), or null for a contribution unit. Asserts `unit` indexes `units`.
     pub fn opInstOf(self: *const Names, unit: u32) ?Mir.Inst {
         const inst = self.units[unit].inst;
         return if (inst == .none) null else inst;
     }
 
-    /// Call arguments of the operator that owns unit `i` (empty if it has none).
+    /// Call arguments of the operator that owns unit `i` (empty for a
+    /// contribution unit). The slice borrows `mir.extra` and is invalidated
+    /// by any later append to it (`Mir.instData`).
     pub fn opArgs(self: *const Names, mir: *const Mir, i: usize) []const Mir.Value {
         const inst = self.opInstOf(@intCast(i)) orelse return &.{};
         return mir.instData(inst).call.args;
@@ -169,11 +176,12 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
 /// before `i`? Two sources in one branch need two currents.
 fn uIsDriven(branch_u: []const u32, u: u32, i: usize) bool {
     // ponytail: stdlib scans the same bounded prefix; no membership table needed.
-    return std.mem.indexOfScalar(u32, branch_u[0..i], u) != null;
+    return std.mem.findScalar(u32, branch_u[0..i], u) != null;
 }
 
 /// `nm`, or `nm#k` for the first `k` that no unknown claims yet. `sanitize`
-/// escapes `#`, so the emitted U member stays a legal, injective name.
+/// escapes `#`, so the emitted U member stays a legal, injective name. O(k ·
+/// unknowns); `k` is the number of existing spellings it collides with.
 fn freshUName(a: std.mem.Allocator, lowered: *const Lowered, nm: []const u8, extra: []const []const u8) Error![]const u8 {
     var name = nm;
     var k: u32 = 1;
@@ -183,6 +191,7 @@ fn freshUName(a: std.mem.Allocator, lowered: *const Lowered, nm: []const u8, ext
     return name;
 }
 
+/// Does any `nodes` row or already-appended unknown spell `nm`?
 fn uNameTaken(lowered: *const Lowered, nm: []const u8, extra: []const []const u8) bool {
     for (lowered.nodes.items(.name)) |n| {
         if (std.mem.eql(u8, n, nm)) return true;

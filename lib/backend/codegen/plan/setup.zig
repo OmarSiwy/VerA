@@ -34,7 +34,8 @@ pub const Sinv = struct {
     moved: []Mir.Value = &.{},
     moved_off: []u32 = &.{},
 
-    /// The values `setup` computes at the end of block `b`.
+    /// The values `setup` computes at the end of block `b`, ascending.
+    /// Asserts `b` is a block of the analysis `plan` ran over.
     pub fn movedTo(s: Sinv, b: u32) []const Mir.Value {
         if (s.moved_off.len == 0) return &.{};
         return s.moved[s.moved_off[b]..s.moved_off[b + 1]];
@@ -422,10 +423,13 @@ pub fn plan(in: Input) Error!Sinv {
     @memset(r.moved_off, 0);
     var n: u32 = 0;
     for (Mir.Value.first_dynamic..in.an.nv) |i| {
-        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const v: Mir.Value = @fromBackingInt(@intCast(i));
         const b = in.an.def_block[i];
         if (!r.val[i] or b == none_u32 or r.blk[b] or in.an.rv(v) != v) continue;
         r.home[i] = s.homeOf(b);
+        // `Scan.rule` admits a value outside a placeable block only through
+        // `speculable`, which requires a home.
+        assert(r.home[i] != none_u32);
         r.moved_off[r.home[i] + 1] += 1;
         n += 1;
     }
@@ -433,7 +437,7 @@ pub fn plan(in: Input) Error!Sinv {
     r.moved = try a.alloc(Mir.Value, n);
     const fill = try a.dupe(u32, r.moved_off[0..in.an.nb]);
     for (r.home, 0..) |h, i| if (h != none_u32) {
-        r.moved[fill[h]] = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        r.moved[fill[h]] = @fromBackingInt(@intCast(i));
         fill[h] += 1;
     };
     return r;
@@ -504,7 +508,7 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         }
         for (Mir.Value.first_dynamic..nv) |i| {
             if (!s.val[i]) continue;
-            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+            const v: Mir.Value = @fromBackingInt(@intCast(i));
             if (in.an.rv(v) != v) {
                 // An alias carries its target's answer.
                 if (!s.sv(v)) {
@@ -590,7 +594,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
         changed = false;
         for (Mir.Value.first_dynamic..nv) |i| {
             if (vary[i]) continue;
-            const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+            const v: Mir.Value = @fromBackingInt(@intCast(i));
             const r = in.an.rv(v);
             const now = if (r != v) varies(in, vary, r) else tpRule(in, vary, inside, cds, v);
             if (!now) continue;
@@ -605,7 +609,7 @@ pub fn timepointVarying(in: Input, t: Lower.TpBlock) Error!?Mir.Value {
     // An alias is the value it names, wherever that is: a pass-through phi
     // the SSA builder placed inside and then folded away reads nothing here.
     for (Mir.Value.first_dynamic..nv) |i| {
-        const v: Mir.Value = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const v: Mir.Value = @fromBackingInt(@intCast(i));
         const b = in.an.def_block[i];
         if (vary[i] and in.an.rv(v) == v and b != none_u32 and inside[b]) return v;
     }
@@ -682,7 +686,7 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
     const s = try solve(in, false);
     var merges: std.ArrayList(Mir.Inst) = .empty;
     for (0..an.nb) |bi| {
-        var it = mir.blockInsts(@fromBackingInt(@intCast(@as(u32, @intCast(bi)))));
+        var it = mir.blockInsts(@fromBackingInt(@intCast(bi)));
         while (it.next()) |inst| switch (mir.instOp(inst)) {
             .phi, .select => try merges.append(arena, inst),
             else => {}, // else: only a phi or a select merges a held value with a write
@@ -696,6 +700,9 @@ pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!v
             kept += 1;
             continue;
         }
+        // `.unless_invariant` is a scalar's reason only: `holdArray` rows
+        // are `.event`, so no `mem_arrays` row is left pointing here.
+        assert(h.array == none_u32);
         const seed = an.rv(h.seed);
         const inst = mir.valueDef(seed).inst_result;
         const b = an.def_block[@backingInt(seed)];

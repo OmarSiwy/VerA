@@ -9,6 +9,7 @@ const Mir = @import("ir").Mir;
 const Input = @import("input.zig").Input;
 const plan_topo = @import("topology.zig");
 const strArg = @import("args.zig").strArg;
+const assert = std.debug.assert;
 
 /// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
@@ -18,7 +19,11 @@ const none_u32 = std.math.maxInt(u32);
 /// one `Decline` per site it does not. `plan/jobs.zig` queues the honoured
 /// sites' algorithm arguments into the core.
 pub const Limits = struct {
+    /// The honoured sites, in source order (reverse postorder of their blocks).
     calls: []LimitCall = &.{},
+    /// One per site not honoured, in the order found: first the sites refused
+    /// on their own, then the `fetlimds`/`pnjlimds` legs no ladder or rung
+    /// completes.
     declined: []Decline = &.{},
     /// `Lowered.num_ports`, what `writable` answers from.
     num_ports: usize = 0,
@@ -36,8 +41,10 @@ pub const Limits = struct {
     /// `limvds` site spans their second-named nodes (the channel), and both
     /// channel nodes are the device's own to correct. Null otherwise. Derived
     /// on demand, so the plan and the emitter cannot disagree about it.
+    /// Asserts `calls[i]` is a `fetlimds` site. O(calls).
     pub fn ladderOf(g: Limits, i: usize) ?Ladder {
         const me = g.calls[i];
+        assert(me.alg == .fetlimds);
         var partner: usize = undefined;
         var gate_legs: usize = 0;
         for (g.calls, 0..) |lc, j| {
@@ -62,9 +69,11 @@ pub const Limits = struct {
     /// exactly two `pnjlimds` sites share its first-named node (the bulk), and
     /// one `limvds` site spans their second-named nodes (the channel). Null
     /// otherwise, or when any of the three nets is ground. Derived on demand,
-    /// for `ladderOf`'s reason.
+    /// for `ladderOf`'s reason. Asserts `calls[i]` is a `pnjlimds` site.
+    /// O(calls).
     pub fn rungOf(g: Limits, i: usize) ?Rung {
         const me = g.calls[i];
+        assert(me.alg == .pnjlimds);
         var partner: usize = undefined;
         var legs: usize = 0;
         for (g.calls, 0..) |lc, j| {
@@ -86,7 +95,7 @@ pub const Limits = struct {
     }
 
     /// Is this `limvds` site the channel rung of some ladder? Then `emitLadder`
-    /// owns it and the flat list must not clamp it a second time.
+    /// owns it and the flat list must not clamp it a second time. O(calls²).
     pub fn limvdsClaimed(g: Limits, k: usize) bool {
         for (g.calls, 0..) |lc, i| {
             if (lc.alg != .fetlimds) continue;
@@ -438,6 +447,8 @@ fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
             }
             if (root == none_u32 or (u < lim.num_ports and root >= lim.num_ports)) root = u;
         }
+        // `lc0.hi` itself is in the component, so the scan found a root.
+        assert(root != none_u32);
         placed[root] = true;
         if (root != n) try steps.append(g.arena, .{ .node = root, .from = none_u32, .site = none_u32 });
         var grew = true;
@@ -579,8 +590,8 @@ test "an honoured pnjlim, and the declines that say why" {
     try std.testing.expectEqual(@as(u32, 2), lim.calls[0].lo);
     try std.testing.expect(lim.writable(2) and !lim.writable(0));
     try std.testing.expectEqual(@as(usize, 2), lim.declined.len);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[0].msg, "§6.5 ports") != null);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[1].msg, "too few arguments") != null);
+    try std.testing.expect(std.mem.find(u8, lim.declined[0].msg, "§6.5 ports") != null);
+    try std.testing.expect(std.mem.find(u8, lim.declined[1].msg, "too few arguments") != null);
 }
 
 test "the seed tree: an explicit seed opts in, a loop edge is dropped, ground roots its component" {
@@ -606,7 +617,7 @@ test "the seed tree: an explicit seed opts in, a loop edge is dropped, ground ro
     const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "p", "a", "b", "c" });
     try std.testing.expect(lim.seed_tree);
     try std.testing.expectEqual(@as(usize, 1), lim.seed_dropped.len);
-    try std.testing.expect(std.mem.indexOf(u8, lim.seed_dropped[0].msg, "closes a loop") != null);
+    try std.testing.expect(std.mem.find(u8, lim.seed_dropped[0].msg, "closes a loop") != null);
     // Ground is the root and writes nothing; c hangs off it, b off c, a off b.
     const want = [_]SeedStep{
         .{ .node = 3, .from = none_u32, .site = 3 },

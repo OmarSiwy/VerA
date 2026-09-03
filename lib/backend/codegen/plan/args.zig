@@ -1,6 +1,7 @@
 //! Call-argument facts the slice planners (`plan/setup.zig`, `plan/unit.zig`)
 //! and the emitter share: which arguments are values, and the §9.4 display
-//! mode that decides some of them. Callee in, answer out.
+//! mode that decides some of them. Callee in, answer out. Clauses: §3.3,
+//! §4.5, §4.5.14, §5.10.3, §9.4, §9.5, §9.7.3, §9.13, §9.15.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -235,7 +236,8 @@ pub fn enableArgIdx(k: OpKind) ?usize {
     return opdb.get(k).enable_arg orelse return null;
 }
 
-/// The literal string at argument `i`, or null when it is not one.
+/// The literal string at argument `i`, or null when it is not one (or `i` is
+/// past the end). The slice borrows the MIR's string table.
 pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
     if (i >= args.len) return null;
     const def = in.mir.valueDef(in.an.rv(args[i]));
