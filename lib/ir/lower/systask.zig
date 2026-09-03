@@ -13,10 +13,11 @@
 //! runs it once per accepted point and never per Newton iteration (§9.5.9).
 //!
 //! LRM clauses this file's code cites: §2.7, §3.2, §3.3, §3.4.1, §3.6.1.4, §4.2.1.1,
-//! §4.4.1, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12, §9.2,
-//! §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4, §9.5.4.1, §9.5.4.2,
-//! §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17, §9.17.1, §9.17.2,
-//! §12.22.2, §12.30, §12.32.2.
+//! §4.4.1, §5.3.2, §5.4.2.2, §5.4.3, §5.6.1.2, §5.6.1.3, §5.6.8.1, §5.9.3, §5.10, §5.12,
+//! §7.3.1, §9.2, §9.4, §9.4.1, §9.4.3, §9.4.5, §9.4.6, §9.5, §9.5.2, §9.5.3, §9.5.4,
+//! §9.5.4.1, §9.5.4.2, §9.5.7, §9.5.9, §9.7, §9.7.1, §9.7.2, §9.7.3, §9.12, §9.13, §9.17,
+//! §9.17.1, §9.17.2, §12.22.2, §12.30, §12.32.2.
+//! IEEE 1364-2005 clauses cited: §17.1.1.2, §17.1.1.3, §17.10.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -103,8 +104,41 @@ const DeferredDisplay = struct {
     /// §9.4.1 a `$monitor`/`$fmonitor` report: the site key, prepended to the
     /// call's operands. Every operand of one is lowered at the end of the block.
     monitor: ?Mir.Value = null,
+    // §5.3.2 the names a deferred operand was written under, when the
+    // statement sits in a named block: its scope closes before
+    // `finishDisplays`, and its locals would no longer resolve there. Null at
+    // module scope, whose names are still bound at the end of the block.
+    scope: ?Scope = null,
 };
 const GenvarBind = struct { name: []const u8, c: Const };
+
+// The name bindings lowering resolves an operand against, captured at a
+// statement and reinstalled around its end-of-block lowering (`swapScope`).
+const Scope = struct {
+    vars: std.StringHashMapUnmanaged(Lower.VarSlot),
+    arrays: std.StringHashMapUnmanaged(Lower.ArrayInfo),
+    consts: std.StringHashMapUnmanaged(Const),
+    scope_path: []const u8,
+    block_path: []const u8,
+};
+
+// Installs `s` as the scope lowering resolves names in, and returns the one it
+// replaced, so a second call with that result restores it.
+fn swapScope(self: *Lower, s: Scope) Scope {
+    const old: Scope = .{
+        .vars = self.vars,
+        .arrays = self.arrays,
+        .consts = self.consts,
+        .scope_path = self.scope_path,
+        .block_path = self.block_path,
+    };
+    self.vars = s.vars;
+    self.arrays = s.arrays;
+    self.consts = s.consts;
+    self.scope_path = s.scope_path;
+    self.block_path = s.block_path;
+    return old;
+}
 
 // ---- statement position -----------------------------------------------------
 
@@ -518,6 +552,16 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
             g.* = .{ .name = gname, .c = self.consts.get(gname).? };
         genvars = gs;
     }
+    // §5.3.2 a named block's locals are unbound when it closes, which is
+    // before `finishDisplays`; a deferred operand keeps the names it was
+    // written under. Copies, so the block's later declarations stay its own.
+    const scope: ?Scope = if (any_deferred and self.block_path.len != 0) .{
+        .vars = try self.vars.clone(self.arena),
+        .arrays = try self.arrays.clone(self.arena),
+        .consts = try self.consts.clone(self.arena),
+        .scope_path = self.scope_path,
+        .block_path = self.block_path,
+    } else null;
     try self.systask_state.deferred_displays.append(self.arena, .{
         .name = name,
         .tok = tok,
@@ -527,6 +571,7 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         .unit = self.cur_unit,
         .display = @intCast(self.out.displays.items.len),
         .monitor = monitor,
+        .scope = scope,
     });
     // The placeholder keeps `displays` in source order — W0850 reporting and
     // the chain both walk it — and `lowerDeferredDisplays` fills `.val`.
@@ -618,12 +663,12 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 
     var need: usize = 0;
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+    while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
         if (i >= fmt.len) break;
         // §9.4.3 `%[flags][width][.precision]conv`; the conversion letter is
         // what decides, so everything before it is skipped unread.
-        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+        while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
             (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
         {}
         if (i >= fmt.len) break;
@@ -724,10 +769,10 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
         };
         var next = at + 1;
         var i: usize = 0;
-        while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
             i = p + 1;
             if (i >= fmt.len) break;
-            while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+            while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
                 (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
             {}
             if (i >= fmt.len) break;
@@ -948,7 +993,9 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
 /// the write is a `select` on the result over the variable's incoming value.
 /// The value is `$sscanf` of the matched plusarg against the whole user_string
 /// (the device's `zPlusarg` says why that is the clause's conversion).
+/// Asserts that `args` is the user string and the variable, both written.
 pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value {
+    assert(args.len == 2 and args[0] != .none and args[1] != .none);
     const user = (try lower_expr.lowerExpr(self, args[0])).v;
     const found = try self.call("$value$plusargs", &.{user});
     const slot = try lower_stmt.resolveLvalue(self, args[1]) orelse return found;
@@ -976,7 +1023,7 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
 /// nothing; refusing it is the useful implementation-dependent result.
 fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+    while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
         if (i >= fmt.len) break;
         if (fmt[i] == '%') { // a literal percent, matched not converted
@@ -993,7 +1040,7 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
         // factors defined in 2.6.2" and "m Returns the current hierarchical
         // path as a string. Does not read data from the input file or str
         // argument".
-        if (std.mem.indexOfScalar(u8, "dohxbcfegsrm", conv) != null) continue;
+        if (std.mem.findScalar(u8, "dohxbcfegsrm", conv) != null) continue;
         var b = self.errWith(tok, .E0813);
         b.msg("$sscanf does not support the conversion `%{c}`", .{conv});
         b.note("§9.5.4.2's codes are %d %o %h %x %b %c %f %e %g %s %r %m", .{});
@@ -1140,7 +1187,7 @@ pub fn finishKernelCtl(self: *Lower) Oom!void {
     }
 }
 
-/// §9.4 Chains every unconditional display call into one value, so codegen has
+/// Chains every unconditional §9.4 display call into one value, so codegen has
 /// a single live root to slice a unit from. `fadd` is the cheapest carrier: the
 /// sum is discarded, and rendering it walks the operands in MIR order, which is
 /// source order.
@@ -1151,10 +1198,11 @@ pub fn finishKernelCtl(self: *Lower) Oom!void {
 /// reach the root through `display_cond_place` instead — one read of a place
 /// the arms wrote, an ordinary phi. §9.4.6 is satisfied by where the call
 /// sits: it stays in the arm's block and codegen emits the arm as an `if`.
-// ponytail: print order is MIR order, so a module that prints both kinds shows
-// the guarded lines first, whatever the source order. Upgrade path: give
-// `Display` a source-order index and have codegen emit by it.
+/// Runs once, after `finishKernelCtl`; writes `Lowered.display_root`.
 pub fn finishDisplays(self: *Lower) Oom!void {
+    // ponytail: print order is MIR order, so a module that prints both kinds shows
+    // the guarded lines first, whatever the source order. Upgrade path: give
+    // `Display` a source-order index and have codegen emit by it.
     try lowerDeferredDisplays(self);
     var root: Mir.Value = .f_zero;
     var first = true;
@@ -1184,6 +1232,7 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         // statement, not to whatever token the block ended on.
         self.mir.cur_tok = dd.tok;
         self.cur_unit = dd.unit;
+        const outer: ?Scope = if (dd.scope) |s| swapScope(self, s) else null;
         for (dd.genvars) |g| try self.consts.put(self.arena, g.name, g.c);
         var vals: std.ArrayList(Mir.Value) = .empty;
         defer vals.deinit(self.arena);
@@ -1201,6 +1250,7 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         for (dd.genvars) |g| _ = self.consts.remove(g.name);
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
         try prepareFormatArgs(self, dd.tok, live.items, tys.items, vals.items);
+        if (outer) |s| _ = swapScope(self, s);
         if (dd.monitor) |k| try vals.insert(self.arena, 0, k);
         self.out.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }

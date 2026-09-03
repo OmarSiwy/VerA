@@ -1,9 +1,22 @@
 //! §5.6 contributions: `<+`, indirect contributions, switch branches.
 //!
-//! In: contribution statements. Out: `contributions` (one per access and branch; the unit
-//! order proof.zig and naming.zig index by), branch rows.
+//! In: contribution statements. Out: `Lowered.contributions` (one per access
+//! and branch; the unit order proof.zig and naming.zig index by), their
+//! accumulators (`Lower.accum`), the §5.6.1.2 charge sites, the §4.6.4 noise
+//! generators each row carries, and the module-level sweeps
+//! (`checkProbeBranches`, `checkSourceLoops`).
 //!
-//! LRM clauses this file's code cites: §1.3.1, §1.3.1.2, §4.4, §4.6.3, §4.6.4.6, §5.4.1, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.7.2, §6.3.6, §7.3.2.1.
+//! Spine: `lowerContribute` per `<+` (checks, `branchOf`, `contribIndex`,
+//! `splitContribution`, `discardOpposite`, accumulate, sites, noise);
+//! `lowerIndirect` per `V(o) : e == f;`.
+//!
+//! LRM clauses this file's code cites: §1.3.1, §1.3.1.1, §1.3.1.2, §1.3.4, §1.3.4.1,
+//! §1.3.4.2, §2.9, §3.4.7, §3.6.1.4, §3.6.2.4, §3.6.3, §3.6.5, §3.11, §3.12, §3.12.1,
+//! §4.4, §4.4.1, §4.5.2, §4.5.3, §4.5.6, §4.5.12, §4.5.14, §4.6.3, §4.6.4, §4.6.4.1,
+//! §4.6.4.2, §4.6.4.3, §4.6.4.4, §4.6.4.6, §5.4.1, §5.4.2.1, §5.4.2.2, §5.4.3, §5.5.1,
+//! §5.5.5, §5.6, §5.6.1, §5.6.1.2, §5.6.1.3, §5.6.5, §5.6.6, §5.6.7, §5.6.7.1, §5.6.7.2,
+//! §5.6.8.1, §5.6.8.2, §5.8, §5.9, §5.9.3, §5.10, §6.3.6, §6.5.2.1, §6.6.2, §6.7.1,
+//! §7.3.2.1, §9.18.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -206,12 +219,11 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
 /// $mfactor in an `if` condition. So the test is `$mfactor` as an operand of a
 /// `*` or `/` in the contributed value; dividing by it is the same misuse.
 /// Potential contributions are not scaled, so only flow is checked.
-///
-/// ponytail: misses a flattened child whose ancestor specified `.$mfactor(...)`,
-/// where elaboration (`rewriteSysCall`) has already substituted the product and
-/// no `sys_call` is left. The upgrade is to run this scan in the clone, which
-/// needs the discipline table elaboration does not have.
 fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
+    // ponytail: misses a flattened child whose ancestor specified `.$mfactor(...)`,
+    // where elaboration (`rewriteSysCall`) has already substituted the product and
+    // no `sys_call` is left. The upgrade is to run this scan in the clone, which
+    // needs the discipline table elaboration does not have.
     if (!scalesByMfactor(self, rhs)) return;
     var b = self.errWith(self.file.exprs.mainTok(lhs), .E0912);
     b.msg("this flow contribution multiplies by `$mfactor`", .{});
@@ -320,12 +332,11 @@ pub const FiniteScan = struct { r: ?Const, bad: ?f64 };
 /// Not `analysis.foldConst`: that wants a built `Analysis`, which does not
 /// exist until lowering has finished, and this rule has to be reported on the
 /// `<+` that broke it.
-///
-/// ponytail: arithmetic and sign only. `exp(1000)` overflows to +inf as well,
-/// but §7.3.2.1's examples are IEEE division and every operator added here
-/// widens the surface for a false accusation. Add transcendentals when a model
-/// needs them.
 fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
+    // ponytail: arithmetic and sign only (`accuses`). `exp(1000)` overflows to
+    // +inf as well, but §7.3.2.1's examples are IEEE division and every operator
+    // added here widens the surface for a false accusation. Add transcendentals
+    // when a model needs them.
     const root = self.mir.resolveAlias(v0);
     if (!self.finite_scan.contains(root)) {
         // Post-order with an explicit stack: a model's dependency chain is
@@ -334,7 +345,7 @@ fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
         var stack: std.ArrayList(Mir.Value) = .empty;
         try stack.append(self.arena, root);
         while (stack.items.len != 0) {
-            const v = stack.items[stack.items.len - 1];
+            const v = stack.last().?;
             if (self.finite_scan.contains(v)) {
                 _ = stack.pop();
                 continue;
@@ -420,8 +431,8 @@ fn scanOne(self: *Lower, v: Mir.Value, ops: Operands) FiniteScan {
     return .{ .r = r, .bad = sub };
 }
 
-/// The opcodes `scanFinite` folds: IEEE arithmetic and sign, the ponytail
-/// above. The operation itself is the shared kernel's (`opcode.fold`).
+/// The opcodes `scanFinite` folds: IEEE arithmetic and sign, the ponytail in
+/// its body. The operation itself is the shared kernel's (`opcode.fold`).
 fn accuses(op: Mir.Opcode) bool {
     return switch (op) {
         .fneg, .ineg, .fabs, .iabs, .if_cast, .opt_barrier, .fadd, .fsub, .fmul, .fdiv => true,
@@ -804,7 +815,7 @@ fn ownerUnit(self: *Lower, e: Ast.ExprId) Oom!u32 {
     for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |t| {
         if (t == .none or ex.tag(t) != .hier_ident) continue;
         const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, t);
-        const cut = std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse continue;
+        const cut = std.mem.findScalarLast(u8, path, Elaborate.sep) orelse continue;
         for (self.out.unit_paths, 0..) |u, i| {
             if (std.mem.eql(u8, u.path, path[0 .. cut + 1])) return @intCast(i);
         }
@@ -1208,7 +1219,7 @@ pub fn opSiteLte(self: *Lower, e: Ast.ExprId) Oom!bool {
 }
 
 fn stackLte(self: *const Lower) bool {
-    return if (self.lte_stack.items.len != 0) self.lte_stack.items[self.lte_stack.items.len - 1] else true;
+    return self.lte_stack.last() orelse true;
 }
 
 /// Writes the row of an operator unknown `s` (`lower_node.opStateNode`): a flow
@@ -1538,4 +1549,51 @@ pub fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseS
 pub fn addNoiseSrc(arena: std.mem.Allocator, out: *std.ArrayList(NoiseSrc), s: NoiseSrc) error{OutOfMemory}!void {
     for (out.items) |x| if (x.id == s.id) return;
     try out.append(arena, s);
+}
+
+test find {
+    // 3 -> 2 -> 1 -> 0, a chain no union ever balanced.
+    var root = [_]u32{ 0, 0, 1, 2 };
+    try std.testing.expectEqual(@as(u32, 0), find(&root, 3));
+    // Path compression: every node the walk passed now points at the root.
+    try std.testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &root);
+    // A root is its own answer and moves nothing.
+    try std.testing.expectEqual(@as(u32, 0), find(&root, 0));
+}
+
+test samePair {
+    // §5.6.7.2/§1.3.1.2: (a,b) and (b,a) are one pair of nets.
+    try std.testing.expect(samePair(1, 2, 2, 1));
+    try std.testing.expect(samePair(1, 2, 1, 2));
+    try std.testing.expect(!samePair(1, 2, 1, 3));
+    try std.testing.expect(samePair(4, ground, ground, 4));
+}
+
+test canonical {
+    // §1.3.1.2: `I(5,2)` is `I(2,5)` with the sign flipped.
+    const t = canonical(.flow, 5, 2, unnamed_branch, 7);
+    try std.testing.expectEqual(@as(u16, 2), t.hi);
+    try std.testing.expectEqual(@as(u16, 5), t.lo);
+    try std.testing.expect(t.neg);
+    try std.testing.expectEqual(@as(u32, 7), t.unit);
+    // `ground` is `maxInt(u16)`, so a single-net access is already canonical.
+    const v = canonical(.potential, 3, ground, unnamed_branch, 0);
+    try std.testing.expectEqual(@as(u16, 3), v.hi);
+    try std.testing.expectEqual(ground, v.lo);
+    try std.testing.expect(!v.neg);
+    // Equal terminals (two `ground` nets, §1.3.1.1) are not reversed.
+    try std.testing.expect(!canonical(.potential, ground, ground, unnamed_branch, 0).neg);
+}
+
+test addNoiseSrc {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(NoiseSrc) = .empty;
+    defer out.deinit(gpa);
+    try addNoiseSrc(gpa, &out, .{ .kind = .thermal, .id = 3 });
+    try addNoiseSrc(gpa, &out, .{ .kind = .flicker, .id = 9 });
+    // §4.6.4.6: the same generator reached twice is one source.
+    try addNoiseSrc(gpa, &out, .{ .kind = .thermal, .id = 3 });
+    try std.testing.expectEqual(@as(usize, 2), out.items.len);
+    try std.testing.expectEqual(@as(u32, 3), out.items[0].id);
+    try std.testing.expectEqual(@as(u32, 9), out.items[1].id);
 }

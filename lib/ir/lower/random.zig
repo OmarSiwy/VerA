@@ -6,6 +6,7 @@
 //! `Lowered.rng_auto_seeds` for an omitted one.
 //!
 //! LRM clauses this file's code cites: §4.2.3, §6.4, §9.13, §9.13.1, §9.13.2, §9.13.3.
+//! IEEE 1364-2005 clauses cited: §17.9.3.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -59,8 +60,7 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
     // distribution function from within a paramset". Elaboration
     // (`rewriteParamsetDist`) already handled the in-paramset calls, so any
     // string still in the last slot was written outside one.
-    if (given.items.len > 0) {
-        const last = given.items[given.items.len - 1];
+    if (given.last()) |last| {
         if (ex.tag(last) == .str_literal) {
             try self.err(self.file.exprs.mainTok(last), .E0816, "`{s}`'s `type_string` argument is only meaningful within a paramset (§6.4)", .{name});
             return poison;
@@ -213,7 +213,7 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 /// flag defers a model-card parameter's initialization until the call runs;
 /// neither an unevaluated branch nor a discarded Newton iterate consumes it.
 fn internalSeed(self: *Lower, tok: u32) Oom!InternalSeed {
-    const scope = if (self.inlining.items.len != 0) self.inlining.items[self.inlining.items.len - 1] else self.scope_path;
+    const scope = self.inlining.last() orelse self.scope_path;
     const key = try self.arena.print("{d}:{s}:{d}", .{ self.cur_unit, scope, tok });
     const entry = try self.random_state.rng_internal.getOrPut(self.arena, key);
     if (!entry.found_existing) {

@@ -2,7 +2,17 @@
 //!
 //! Run on std.testing.allocator through an arena, so a leaked byte fails the test.
 //!
-//! LRM clauses this file's code cites: §2.7, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §5.6.1.3, §5.6.7, §5.6.7.2, §5.8, §5.8.1, §6.3.1, §6.4, §6.6.2.
+//! LRM clauses this file's code cites: §1.1, §1.3.1, §1.3.1.2, §2.6.2, §2.7, §2.8,
+//! §2.8.1, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §3.4.2, §3.6, §3.6.1.2, §3.6.1.3,
+//! §3.6.2.1, §3.6.2.2, §3.6.2.5, §3.6.3.2, §3.11, §3.13.1, §3.13.2, §4.2, §4.4, §4.4.2,
+//! §4.5, §4.5.1, §4.5.2, §4.5.5, §4.5.6, §4.5.8, §4.5.9, §4.5.10, §4.5.11, §4.5.12,
+//! §4.5.13, §4.6, §4.6.1, §4.6.4.1, §4.6.4.2, §4.6.4.3, §4.7, §4.7.2.3, §4.7.3, §5.3.2,
+//! §5.4.2.2, §5.4.3, §5.6, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.7.1, §5.6.7.2, §5.8, §5.8.1,
+//! §5.9, §5.9.2, §5.9.3, §5.10, §5.10.3, §5.10.3.1, §5.10.3.2, §5.10.3.3, §5.10.3.4,
+//! §5.10.4, §5.11, §6.3.1, §6.3.4, §6.3.6, §6.5, §6.6.1, §6.8, §7.3, §7.3.2.1, §9.2,
+//! §9.4, §9.4.1, §9.4.3, §9.5.3, §9.5.4.2, §9.7, §9.7.2, §9.7.3, §9.13, §9.13.1, §9.15,
+//! §9.17, §9.17.1, §9.17.2, §9.17.3, §9.19, §9.21, §9.21.1, §9.21.2, §9.22.
+//! IEEE 1364-2005 clauses cited: §6.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -132,7 +142,7 @@ test "§6.3.1 paramset defparams follow final parameter values and freeze the se
             try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
             var found = false;
             for (0..h.bag.records.items.len) |i| if (h.code(i) == .E0926) {
-                try std.testing.expect(std.mem.indexOf(u8, h.msg(i), "`u`") != null);
+                try std.testing.expect(std.mem.find(u8, h.msg(i), "`u`") != null);
                 found = true;
             };
             try std.testing.expect(found);
@@ -557,7 +567,7 @@ test "lower: §5.4.3 port access — what is rejected, and what the unknown is" 
         try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
         try std.testing.expectEqual(c.want, h.code(0));
         if (c.msg.len != 0)
-            try std.testing.expect(std.mem.indexOf(u8, h.msg(0), c.msg) != null);
+            try std.testing.expect(std.mem.find(u8, h.msg(0), c.msg) != null);
     }
 }
 
@@ -919,7 +929,7 @@ test "lower: §3.3 Table 3-3 string concatenation folds; the integer form never 
     defer h2.deinit();
     try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
     try std.testing.expectEqual(diag.Code.E0327, h2.code(0));
-    try std.testing.expect(std.mem.indexOf(u8, h2.msg(0), "only sized constants") != null);
+    try std.testing.expect(std.mem.find(u8, h2.msg(0), "only sized constants") != null);
 }
 
 test "lower: §5.8.1 an analog operator under a runtime condition (E0514)" {
@@ -1351,4 +1361,519 @@ test "A.8.1 an empty pattern element is E0894 except in §3.6.3.2's bus nodeset;
         };
         try std.testing.expectEqual(c.code, first);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rule cases for the `ir-lower-b` files: one source, one expected verdict
+// ---------------------------------------------------------------------------
+//
+// The oracle is the LRM sentence each case cites, not VerA's own output: a
+// refusing case names the code the clause's diagnostic carries, and every
+// refusal has a legal neighbour beside it that must lower with no error, so a
+// blanket refusal fails the table.
+
+/// One rule case: a source and the code it must report, or null for a source
+/// that must lower with no error at all.
+const Case = struct { src: []const u8, code: ?diag.Code };
+
+/// Lowers `src` and checks the one fact a `Case` states: `want` among the
+/// diagnostics, or, when `want` is null, no error. A mismatch prints the
+/// source and every diagnostic, so the failing case names itself.
+fn expectRule(src: []const u8, want: ?diag.Code) !void {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator, src, &h);
+    defer h.deinit();
+    _ = h.low.lowerFile() catch |err| switch (err) {
+        error.DiagnosticsReported => {},
+        else => |e| return e,
+    };
+    var ok = h.bag.err_count == 0;
+    if (want) |w| {
+        ok = false;
+        for (0..h.bag.count()) |i| {
+            if (h.code(i) == w) ok = true;
+        }
+    }
+    if (ok) return;
+    std.debug.print("source:\n{s}\nwanted {s}, got:\n", .{ src, if (want) |w| @tagName(w) else "no error" });
+    for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.code(i)), h.msg(i) });
+    return error.TestUnexpectedResult;
+}
+
+/// `expectRule` over a module body: electrical ports `p` and `q`, a real
+/// parameter `g`, and the variables the cases read and write.
+fn expectBody(body: []const u8, want: ?diag.Code) !void {
+    const gpa = std.testing.allocator;
+    const src = try gpa.print(
+        \\module m(p, q);
+        \\  inout p, q;
+        \\  electrical p, q;
+        \\  parameter real g = 1.0;
+        \\  real x, r;
+        \\  integer iv, seed;
+        \\  string sv;
+        \\{s}
+        \\endmodule
+    , .{body});
+    defer gpa.free(src);
+    try expectRule(src, want);
+}
+
+/// `expectBody` over every case, stopping at the first that fails.
+fn expectBodies(cases: []const Case) !void {
+    for (cases) |c| try expectBody(c.src, c.code);
+}
+
+test "§9.21.2 $table_model: the control string, the dependent selector and the sample count" {
+    // One lookup input, two pattern columns (§9.21.1 "Arrays may be specified
+    // directly"): ncol = 2, so the leading columns are 1 and there is M = 1
+    // dependent. "This number runs 1 though M", so only `;1` selects one.
+    try expectBodies(&.{
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;1\");", .code = null },
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;2\");", .code = .E0815 },
+        // A selector that parses as an integer but is past every column: the
+        // same refusal, never an overflow in the column arithmetic.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL;18446744073709551615\");", .code = .E0815 },
+        // "Each sub-string ... has at most 3 characters."
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LLL\");", .code = .E0815 },
+        // `X` is in neither Table 9-30 nor Table 9-31.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1X\");", .code = .E0815 },
+        // One sub-string per independent variable; there is one.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"1LL,1LL\");", .code = .E0815 },
+        // Table 9-30's `I` ignores a column; it takes no extrapolation.
+        .{ .src = "analog I(p) <+ $table_model(V(p), '{0.0, 1.0}, '{0.0, 2.0}, \"IC;1\");", .code = .E0815 },
+        // §9.21: two dimensions need 2^2 = 4 samples; these columns hold 2.
+        .{ .src = "analog I(p) <+ $table_model(V(p), V(q), '{0.0, 1.0}, '{0.0, 1.0}, '{0.0, 1.0});", .code = .E0815 },
+        // §9.21.1: the data source "is captured on the first call", so a file
+        // that is not there is that call's error, not the compilation's.
+        .{ .src = "analog I(p) <+ $table_model(V(p), \"vera_lower_test_no_such_table.tbl\");", .code = null },
+    });
+}
+
+test "§4.5 analog operators: argument shapes and bounds" {
+    try expectBodies(&.{
+        // §4.5.1: only the laplace and Z-transform coefficient slots take an
+        // array. Anywhere else a pattern is §4.2's scalar context (E0509),
+        // never a vector flattened into the operator's other arguments.
+        .{ .src = "analog I(p) <+ transition('{1.0, 2.0});", .code = .E0509 },
+        .{ .src = "analog I(p) <+ laplace_nd(V(p), '{1.0}, '{1.0, 1.0});", .code = null },
+        // §4.5.11: a scalar in a coefficient slot is neither array spelling.
+        .{ .src = "analog I(p) <+ laplace_nd(V(p), 1.0, '{1.0, 1.0});", .code = .E0572 },
+        // §4.5.6: the second argument is one unknown; V(p, q) is two.
+        .{ .src = "analog I(p) <+ ddx(V(p), V(p, q));", .code = .E0504 },
+        .{ .src = "analog I(p) <+ ddx(V(p), V(p));", .code = null },
+        // §4.5.8 td, §4.5.9 the two rates, §4.5.5 modulus, §4.5.10 direction.
+        .{ .src = "analog I(p) <+ transition(V(p), -1.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ transition(V(p), 0.0);", .code = null },
+        .{ .src = "analog I(p) <+ slew(V(p), 1.0, 1.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ idtmod(V(p), 0.0, 0.0);", .code = .E0516 },
+        .{ .src = "analog I(p) <+ last_crossing(V(p), 2);", .code = .E0516 },
+        // Table 4-20: abstol is a constant expression argument; a probe moves.
+        .{ .src = "analog I(p) <+ ddt(V(p), V(q));", .code = .E0515 },
+        .{ .src = "analog I(p) <+ ddt(V(p), 1e-6);", .code = null },
+    });
+}
+
+test "§4.6 small-signal sources: arguments and labels" {
+    try expectBodies(&.{
+        // §4.6.4.1 `white_noise(pwr[, name])`: the power is a scalar. Only
+        // `noise_table`'s input (§4.6.4.3) is a vector.
+        .{ .src = "analog I(p) <+ white_noise('{1.0, 2.0});", .code = .E0509 },
+        .{ .src = "analog I(p) <+ white_noise(1e-20);", .code = null },
+        // Syntax 4-4: the optional last argument is a string label.
+        .{ .src = "analog I(p) <+ white_noise(1e-20, 3);", .code = .E0573 },
+        // §4.6.4.2: 1/f^exp has no default exponent.
+        .{ .src = "analog I(p) <+ flicker_noise(1e-20);", .code = .E0522 },
+        // A.8.2 puts the quotation marks inside `ac_stim`'s production.
+        .{ .src = "analog I(p) <+ ac_stim(1);", .code = .E0521 },
+    });
+}
+
+test "§5.6 contributions: the rules a `<+` is judged by" {
+    try expectBodies(&.{
+        // §6.3.6: every flow contribution is already scaled by $mfactor.
+        .{ .src = "analog I(p) <+ V(p) * $mfactor;", .code = .E0912 },
+        .{ .src = "analog I(p) <+ V(p) + 0.0 * $mfactor;", .code = null },
+        // §4.5.12: a zero-transition Z-filter "shall not be directly assigned".
+        .{ .src = "analog V(p) <+ zi_nd(V(q), '{1.0}, '{1.0}, 1n, 0);", .code = .E0518 },
+        // §7.3.2.1: an infinite value contributed to a branch.
+        .{ .src = "analog begin x = 1.0 / 0.0; I(p) <+ x + 0.0 * V(p); end", .code = .E0424 },
+        .{ .src = "analog begin x = 1.0 / 2.0; I(p) <+ x + 0.0 * V(p); end", .code = null },
+        // §1.3.1: both quantities of a probe branch; a contribution makes it a
+        // source, whose two quantities §5.4.2.2 makes accessible.
+        .{ .src = "analog begin x = V(p, q) + I(p, q); I(p) <+ x; end", .code = .E0423 },
+        .{ .src = "analog begin x = V(p, q) + I(p, q); I(p, q) <+ x * 1m; end", .code = null },
+        // §4.4 Table 4-16: `I(n1,n1)` is an error.
+        .{ .src = "analog I(p) <+ I(p, p);", .code = .E0315 },
+        // §5.9: no contribution inside a procedural `for`.
+        .{ .src = "analog for (iv = 0; iv < 2; iv = iv + 1) I(p) <+ 1.0;", .code = .E0426 },
+    });
+}
+
+test "§1.3.1.2 a reversed spelling accumulates into one source" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, q);
+        \\  inout p, q; electrical p, q;
+        \\  analog begin
+        \\    I(p, q) <+ 1.0;
+        \\    I(q, p) <+ 2.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    // `I(q,p) <+ 2` is `I(p,q) <+ -2`: one row, in canonical (p, q) order.
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.contributions.items.len);
+    try std.testing.expectEqual(@as(u16, 0), h.low.out.contributions.items[0].hi);
+    try std.testing.expectEqual(@as(u16, 1), h.low.out.contributions.items[0].lo);
+}
+
+test "§9.4/§9.7/§9.17 system tasks: arguments a task refuses, and their neighbours" {
+    try expectBodies(&.{
+        // §9.7.3 `finish_number ::= 0 | 1 | 2`.
+        .{ .src = "analog begin $fatal(3); I(p) <+ V(p); end", .code = .E0824 },
+        .{ .src = "analog begin $fatal(1, \"stop\"); I(p) <+ V(p); end", .code = null },
+        // §9.17.2 "The expression argument shall be non-negative."
+        .{ .src = "analog begin $bound_step(-1.0); I(p) <+ V(p); end", .code = .E0803 },
+        .{ .src = "analog begin $bound_step(1n); I(p) <+ V(p); end", .code = null },
+        // §9.17.1: "i must be a non-negative integer"; -1 is the special form.
+        .{ .src = "analog begin $discontinuity(-2); I(p) <+ V(p); end", .code = .E0820 },
+        .{ .src = "analog begin $discontinuity(-1); I(p) <+ V(p); end", .code = null },
+        // §9.17.1's argument is a constant_expression.
+        .{ .src = "analog begin x = V(p); $discontinuity(x); I(p) <+ V(p); end", .code = .E0805 },
+        // §9.4.3: one argument per consuming conversion; `%%` consumes none.
+        .{ .src = "analog begin $strobe(\"%d %d\", 1); I(p) <+ V(p); end", .code = .E0810 },
+        .{ .src = "analog begin $strobe(\"%d%%\", 1); I(p) <+ V(p); end", .code = null },
+        .{ .src = "analog begin $strobe(\"%s\", 1.5); I(p) <+ V(p); end", .code = .E0819 },
+        // §9.5.3: `$swrite` writes into a string variable.
+        .{ .src = "analog begin $swrite(x, \"a\"); I(p) <+ V(p); end", .code = .E0813 },
+        // §9.5.4.2's six conversion codes, and nothing else.
+        .{ .src = "analog begin iv = $sscanf(\"1\", \"%q\", r); I(p) <+ V(p); end", .code = .E0813 },
+        .{ .src = "analog begin iv = $sscanf(\"1\", \"%d\", r); I(p) <+ V(p) * r; end", .code = null },
+        // §9.7.2 "The $stop task shall not be used within an analog initial block."
+        .{ .src = "analog initial begin $stop; end\nanalog I(p) <+ V(p);", .code = .E0807 },
+    });
+}
+
+test "Clause 9 system functions: context and argument rules" {
+    try expectBodies(&.{
+        // §9.2 Table 9-7: `$time` reads No in the analog column.
+        .{ .src = "analog begin x = $time; I(p) <+ x; end", .code = .E0806 },
+        // §9.22 "Driver access functions can only be called from connect modules."
+        .{ .src = "analog begin x = $driver_count(p); I(p) <+ x; end", .code = .E0818 },
+        // Annex G: `$limexp` became §4.5.13's `limexp`.
+        .{ .src = "analog begin x = $limexp(1.0); I(p) <+ x; end", .code = .E0808 },
+        // §9.17.3: pnjlim takes vte and vcrit.
+        .{ .src = "analog I(p) <+ $limit(V(p), \"pnjlim\", 0.025);", .code = .E0809 },
+        // §9.15: an unknown name is an error only without the fallback.
+        .{ .src = "analog begin x = $simparam(\"vera_no_such\"); I(p) <+ x; end", .code = .E0811 },
+        .{ .src = "analog begin x = $simparam(\"vera_no_such\", 1.0); I(p) <+ x * V(p); end", .code = null },
+        .{ .src = "analog begin sv = $simparam$str(\"vera_no_such\"); I(p) <+ V(p); end", .code = .E0811 },
+        // §9.19: "a single argument, which must be a parameter identifier".
+        .{ .src = "analog begin x = $param_given(x); I(p) <+ x; end", .code = .E0822 },
+        .{ .src = "analog begin x = $param_given(g); I(p) <+ x * V(p); end", .code = null },
+        // §4.6.1 / A.8.2: each analysis name is a quoted string.
+        .{ .src = "analog begin x = analysis(dc); I(p) <+ x; end", .code = .E0574 },
+        .{ .src = "analog begin x = analysis(\"dc\"); I(p) <+ x * V(p); end", .code = null },
+    });
+}
+
+test "§9.13 distributions: the seed and the parameter rules" {
+    try expectBodies(&.{
+        // "For each system function, the seed argument shall be an integer."
+        .{ .src = "analog begin iv = $random(r); I(p) <+ iv; end", .code = .E0816 },
+        // Syntax 9-9: $dist_uniform takes a seed, a start and an end.
+        .{ .src = "analog begin iv = $dist_uniform(seed, 0); I(p) <+ iv; end", .code = .E0816 },
+        // "The start value shall be smaller than the end value."
+        .{ .src = "analog begin x = $rdist_uniform(seed, 2.0, 1.0); I(p) <+ x; end", .code = .E0816 },
+        .{ .src = "analog begin x = $rdist_uniform(seed, 0.0, 1.0); I(p) <+ x * V(p); end", .code = null },
+        // "mean ... shall be greater than zero (0)."
+        .{ .src = "analog begin x = $rdist_exponential(seed, -1.0); I(p) <+ x; end", .code = .E0816 },
+        // A type_string "shall only be used ... from within a paramset".
+        .{ .src = "analog begin x = $rdist_uniform(seed, 0.0, 1.0, \"global\"); I(p) <+ x; end", .code = .E0816 },
+    });
+}
+
+test "§9.13.1 omitted seeds number their sites in source order" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  integer a, b;
+        \\  analog begin
+        \\    a = $random;
+        \\    b = $random;
+        \\    I(p) <+ (a + b) * V(p);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    // "the simulator picks a seed": VerA's pick is 1 + 7919·ordinal, so the
+    // two sites start apart (`lowerRandom`).
+    try std.testing.expectEqualSlices(i64, &.{ 1, 7920 }, h.low.out.rng_auto_seeds.items);
+}
+
+test "§5.10.3 monitored events: argument rules, each beside a legal call" {
+    try expectBodies(&.{
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, 1n, 1u)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.1 the direction "shall evaluate to integers".
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 0.5)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // "If either or both tolerances are defined, then the direction shall
+        // also be defined."
+        .{ .src = "analog begin @(cross(V(p) - 0.5, , 1n)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // "If expr_tol is specified, time_tol shall also be specified."
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, , 1u)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // A.6.5: the enable is analog_expression, not `_or_null`.
+        .{ .src = "analog begin @(cross(V(p) - 0.5, 1, 1n, 1u, )) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        // §5.10.3.3 time_tol is non-negative.
+        .{ .src = "analog begin @(timer(0, 1n, -1p)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        .{ .src = "analog begin @(timer(0, 1n)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.2 the enable "shall evaluate to an integer".
+        .{ .src = "analog begin @(above(V(p) - 0.5, 1n, 1u, 0.5)) x = 1.0; I(p) <+ x; end", .code = .E0517 },
+        .{ .src = "analog begin @(above(V(p) - 0.5)) x = 1.0; I(p) <+ x; end", .code = null },
+        // §5.10.3.4 absdelta is "only allowed in an initial or always block".
+        .{ .src = "analog begin @(absdelta(V(p), 0.1)) x = 1.0; I(p) <+ x; end", .code = .E0513 },
+        // §5.10 "Nested event control statements are not allowed."
+        .{ .src = "analog begin @(initial_step) @(final_step) x = 1.0; I(p) <+ x; end", .code = .E0703 },
+    });
+}
+
+test "§3.6 natures and disciplines: the declaration rules" {
+    const cases = [_]Case{
+        // §3.6.2.1 one nature on both bindings.
+        .{ .src =
+        \\nature lb_n1; units = "V"; access = LbV1; abstol = 1u; endnature
+        \\discipline lb_d1; potential lb_n1; flow lb_n1; enddiscipline
+        \\module m; endmodule
+        , .code = .E0338 },
+        // §3.6.2.2 a discrete domain with a nature binding.
+        .{ .src =
+        \\nature lb_n2; units = "V"; access = LbV2; abstol = 1u; endnature
+        \\discipline lb_d2; potential lb_n2; domain discrete; enddiscipline
+        \\module m; endmodule
+        , .code = .E0339 },
+        // §3.6.1.2 abstol "is required for all base natures".
+        .{ .src =
+        \\nature lb_n3; units = "V"; access = LbV3; endnature
+        \\module m; endmodule
+        , .code = .E0332 },
+        // A derived nature inherits units and access; it does not restate them.
+        .{ .src =
+        \\nature lb_n4; units = "V"; access = LbV4; abstol = 1u; endnature
+        \\nature lb_n5 : lb_n4; units = "mV"; endnature
+        \\module m; endmodule
+        , .code = .E0333 },
+        .{ .src =
+        \\nature lb_n4; units = "V"; access = LbV4; abstol = 1u; endnature
+        \\nature lb_n6 : lb_n4; access = LbV6; endnature
+        \\module m; endmodule
+        , .code = .E0334 },
+        // §3.6.1.3 "The name of the attribute shall be unique".
+        .{ .src =
+        \\nature lb_n7; units = "V"; access = LbV7; abstol = 1u; abstol = 2u; endnature
+        \\module m; endmodule
+        , .code = .E0343 },
+        // §3.6.1.2 access "shall be an identifier (by name, not as a string)".
+        .{ .src =
+        \\nature lb_n8; units = "V"; access = "LbV8"; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0340 },
+        // §3.13.1 one scope for natures and disciplines.
+        .{ .src =
+        \\nature lb_x; units = "V"; access = LbX; abstol = 1u; endnature
+        \\discipline lb_x; potential lb_x; enddiscipline
+        \\module m; endmodule
+        , .code = .E0336 },
+        .{ .src =
+        \\nature lb_n9; units = "V"; access = LbV9; abstol = 1u; endnature
+        \\nature lb_n9; units = "V"; access = LbV9b; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0342 },
+        // §3.13.2 "the access function of each base nature shall be unique".
+        .{ .src =
+        \\nature lb_a; units = "V"; access = LbAcc; abstol = 1u; endnature
+        \\nature lb_b; units = "A"; access = LbAcc; abstol = 1u; endnature
+        \\module m; endmodule
+        , .code = .E0335 },
+        // §3.6.1.2 ddt_nature "shall be the name ... of a nature which is
+        // defined elsewhere".
+        .{ .src =
+        \\nature lb_n10; units = "V"; access = LbV10; abstol = 1u; ddt_nature = lb_nowhere; endnature
+        \\module m; endmodule
+        , .code = .E0374 },
+        .{ .src =
+        \\nature lb_n11; units = "Wb"; access = LbPhi11; abstol = 1u; endnature
+        \\nature lb_n12; units = "V"; access = LbV12; abstol = 1u; ddt_nature = lb_n11; endnature
+        \\module m; endmodule
+        , .code = null },
+        // §3.6.2.5 "the bound nature and attribute needs to be defined".
+        .{ .src =
+        \\nature lb_n13; units = "V"; access = LbV13; abstol = 1u; endnature
+        \\discipline lb_d13; potential lb_n13; flow.abstol = 1u; enddiscipline
+        \\module m; endmodule
+        , .code = .E0370 },
+        // §3.11 "if an access function has two nets as arguments, they must
+        // be compatible": electrical and thermal bind different natures.
+        .{ .src =
+        \\module m(a, b);
+        \\  inout a, b;
+        \\  electrical a;
+        \\  thermal b;
+        \\  analog I(a, b) <+ V(a, b);
+        \\endmodule
+        , .code = .E0355 },
+    };
+    for (cases) |c| try expectRule(c.src, c.code);
+}
+
+test "§3.6.2.5 a discipline's abstol override is the value its net reads" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\nature lb_i; units = "A"; access = LbI; abstol = 1u; endnature
+        \\nature lb_v; units = "V"; access = LbV; abstol = 100u; endnature
+        \\discipline lb_ttl; potential lb_v; flow lb_i; flow.abstol = 10u; enddiscipline
+        \\module m; endmodule
+    , &h);
+    defer h.deinit();
+    _ = try h.low.lowerFile();
+    const info = h.low.out.disciplines.get("lb_ttl").?;
+    // §2.6.2: 10u and 1e-5 are one real number, so the comparison is exact.
+    try std.testing.expectEqual(@as(f64, 1e-5), info.flow_abstol);
+    try std.testing.expectEqual(@as(f64, 1e-4), info.potential_abstol);
+    try std.testing.expectEqualStrings("LbV", info.potential_access);
+    try std.testing.expect(info.has_potential and info.has_flow and !info.is_discrete);
+}
+
+test "§9.17.3 one $limit state slot per access function, whatever the site count" {
+    const cases = [_]struct { second: []const u8, slots: usize }{
+        .{ .second = "V(p)", .slots = 1 }, // two sites, one access function
+        .{ .second = "V(q)", .slots = 2 },
+    };
+    for (cases) |c| {
+        const gpa = std.testing.allocator;
+        const src = try gpa.print(
+            \\module m(p, q);
+            \\  inout p, q; electrical p, q;
+            \\  analog function real lim;
+            \\    input vnew, vold;
+            \\    real vnew, vold;
+            \\    lim = vnew;
+            \\  endfunction
+            \\  analog begin
+            \\    I(p) <+ 1m * $limit(V(p), lim);
+            \\    I(q) <+ 1m * $limit({s}, lim);
+            \\  end
+            \\endmodule
+        , .{c.second});
+        defer gpa.free(src);
+        var h: Harness = undefined;
+        try Harness.run(gpa, src, &h);
+        defer h.deinit();
+        _ = try h.low.lowerFile();
+        try std.testing.expectEqual(c.slots, h.low.out.limit_slots.items.len);
+    }
+}
+
+test "§9.17.3 a limiter's formals are all input, and the simulator supplies two" {
+    // "The arguments of the user-defined function shall all be declared input."
+    try expectRule(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  analog function real lim;
+        \\    input vnew; output vold;
+        \\    real vnew, vold;
+        \\    lim = vnew;
+        \\  endfunction
+        \\  analog I(p) <+ 1m * $limit(V(p), lim);
+        \\endmodule
+    , .E0814);
+    // vnew and vold come from the simulator; a third formal has no actual.
+    try expectRule(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  analog function real lim;
+        \\    input vnew, vold, k;
+        \\    real vnew, vold, k;
+        \\    lim = k * vnew;
+        \\  endfunction
+        \\  analog I(p) <+ 1m * $limit(V(p), lim);
+        \\endmodule
+    , .E0511);
+}
+
+test "§4.7 analog functions: recursion on the declarations, arity at the call" {
+    // §4.7.3 "recursive functions are not permitted", called or not.
+    try expectRule(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  analog function real f;
+        \\    input a; real a;
+        \\    f = h(a);
+        \\  endfunction
+        \\  analog function real h;
+        \\    input a; real a;
+        \\    h = f(a);
+        \\  endfunction
+        \\  analog I(p) <+ V(p);
+        \\endmodule
+    , .E0510);
+    try expectRule(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  real r;
+        \\  analog function real f;
+        \\    input a; real a;
+        \\    f = 2.0 * a;
+        \\  endfunction
+        \\  analog begin r = f(1.0, 2.0); I(p) <+ r * V(p); end
+        \\endmodule
+    , .E0511);
+}
+
+test "§4.7.2.3/§6.8 an array formal's bounds are the function's own declarations" {
+    // §6.8 makes the analog function a scope, so its local `n` (2) shadows the
+    // module's (3) in the formal's declaration as it does in the body: `v` is
+    // two cells, and a two-element pattern is "of equivalent size".
+    try expectRule(
+        \\module m(p);
+        \\  inout p; electrical p;
+        \\  parameter integer n = 3;
+        \\  real r;
+        \\  analog function real sum2;
+        \\    input v;
+        \\    parameter integer n = 2;
+        \\    real v[0:n-1];
+        \\    sum2 = v[0] + v[1];
+        \\  endfunction
+        \\  analog begin r = sum2('{1.0, 2.0}); I(p) <+ r * V(p); end
+        \\endmodule
+    , null);
+}
+
+test "§9.4.1/§5.3.2 a deferred display operand keeps its named block's names" {
+    // `$strobe` reads a branch flow, so its operand is lowered at the end of
+    // the block, where §5.4.2.2's flow is converged. `x` is the named block's
+    // own variable, and the operand was written in its scope.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, q);
+        \\  inout p, q; electrical p, q;
+        \\  analog begin : blk
+        \\    real x;
+        \\    x = 2.0;
+        \\    $strobe("%g", x * I(p, q));
+        \\    I(p, q) <+ V(p, q);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = h.low.lowerFile() catch |err| switch (err) {
+        error.DiagnosticsReported => {},
+        else => |e| return e,
+    };
+    if (h.bag.err_count != 0) for (0..h.bag.count()) |i| std.debug.print("  {s}: {s}\n", .{ @tagName(h.code(i)), h.msg(i) });
+    try std.testing.expectEqual(@as(u32, 0), h.bag.err_count);
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.displays.items.len);
 }

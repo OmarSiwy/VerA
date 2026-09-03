@@ -1,8 +1,16 @@
 //! §4.7 user-defined analog functions.
 //!
-//! In: function declarations and call sites. Out: inlined MIR at each call (recursion refused).
+//! In: function declarations and call sites. Out: the function body inlined
+//! into the caller's CFG at each call (the device has no call ABI), the
+//! `output`/`inout` write-backs, and the E0510 recursion refusal.
 //!
-//! LRM clauses this file's code cites: §3.2, §4.7, §4.7.1, §4.7.2, §4.7.2.3, §4.7.2.4, §4.7.3, §5.11, §6.8, §7.3.7, §9.17.3.
+//! Spine: `checkFuncRecursion` once per module; `lowerUserCall` (or §9.17.3's
+//! `$limit`, through `inlineUserFuncPre`) per call. `scanCallSites` is the one
+//! statement walk both share.
+//!
+//! LRM clauses this file's code cites: §3.2, §3.2.2, §4.7, §4.7.1, §4.7.2, §4.7.2.3,
+//! §4.7.2.4, §4.7.3, §5.7, §5.11, §6.8, §7.3.7, §9.17.3.
+//! IEEE 1364-2005 clauses cited: §10.4.1.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -173,6 +181,34 @@ pub fn inlineUserFuncPre(
         return poison;
     }
 
+    // §4.7.1/§6.8: an array formal's bounds are the function's own
+    // declarations, so they fold in its scope (a local parameter shadows the
+    // module's of the same name, a caller's genvar is out of sight). Once, here,
+    // so the actual is measured against the very shape the body declares.
+    const formal_dims = try self.arena.alloc([]const lower_shape.Bounds, fd.args.len);
+    @memset(formal_dims, &.{});
+    const has_array = for (fd.args) |formal| {
+        if (formal.dims.len != 0) break true;
+    } else false;
+    if (has_array) {
+        const saved_fp = self.func_params;
+        self.func_params = fd.params;
+        var shadowed: std.ArrayList(Shadow) = .empty;
+        defer shadowed.deinit(self.arena);
+        try enterFuncConsts(self, fd, self.active_genvars.items, &shadowed);
+        var ok = true;
+        for (fd.args, formal_dims) |formal, *d| {
+            if (formal.dims.len == 0) continue;
+            d.* = try lower_shape.dimsBounds(self, formal.dims, formal.main_tok, self.file.str(formal.name)) orelse {
+                ok = false;
+                break;
+            };
+        }
+        try leaveFuncConsts(self, &shadowed);
+        self.func_params = saved_fp;
+        if (!ok) return poison;
+    }
+
     // Actuals are evaluated in the caller's scope, before it is swapped out.
     // An array formal (§4.7.2.3) is scalarized like any §3.2 array, so it takes
     // one Value per element in both directions.
@@ -193,10 +229,7 @@ pub fn inlineUserFuncPre(
         }
         const actual = arg_exprs[fi - pre.len];
         if (formal.dims.len != 0) {
-            // §4.7.2.3 formal bounds fold in the caller's scope: they may name
-            // a module parameter.
-            const dims = try lower_shape.dimsBounds(self, formal.dims, formal.main_tok, self.file.str(formal.name)) orelse return poison;
-            const n = lower_shape.shapeCells(dims);
+            const n = lower_shape.shapeCells(formal_dims[fi]);
             const vals = try self.arena.alloc(Mir.Value, n);
             // §4.7.2.3: "All output arguments ... are initialized, zero (0) if
             // numeric, which in turn means that the argument passed to it is
@@ -264,20 +297,11 @@ pub fn inlineUserFuncPre(
     // (a genvar is neither), and a local parameter's fold replaces a module
     // parameter's of the same name; `shadowed` records every entry touched so the
     // exit below restores it.
-    var shadowed: std.ArrayList(struct { name: []const u8, prev: ?Const }) = .empty;
+    var shadowed: std.ArrayList(Shadow) = .empty;
     defer shadowed.deinit(self.arena);
     const saved_genvars = self.active_genvars;
     self.active_genvars = .empty;
-    for (saved_genvars.items) |g| {
-        const prev = self.consts.fetchRemove(g) orelse continue;
-        try shadowed.append(self.arena, .{ .name = g, .prev = prev.value });
-    }
-    for (fd.params) |*p| {
-        const c = lower_constfold.constEval(self, p.default) orelse continue;
-        const pname = self.file.str(p.name);
-        try shadowed.append(self.arena, .{ .name = pname, .prev = self.consts.get(pname) });
-        try self.consts.put(self.arena, pname, c);
-    }
+    try enterFuncConsts(self, fd, saved_genvars.items, &shadowed);
 
     const ret_ty = astTy(fd.ret_ty);
     const ret_slot = try lower_var.declareVar(self, name, ret_ty); // §4.7.1 return variable
@@ -285,7 +309,7 @@ pub fn inlineUserFuncPre(
 
     var arg_slots: std.ArrayList([]const VarSlot) = .empty;
     defer arg_slots.deinit(self.arena);
-    for (fd.args, actuals.items) |formal, vals| {
+    for (fd.args, actuals.items, formal_dims) |formal, vals, dims| {
         const fname = self.file.str(formal.name);
         const ty = astTy(formal.ty);
         if (formal.dims.len != 0) {
@@ -293,7 +317,6 @@ pub fn inlineUserFuncPre(
             // shape comes from the formal and the values from the actual, which
             // makes `arrayadd(x, '{y,z})` (§4.7.3) legal: the two actuals have
             // different shapes and the same size.
-            const dims = try lower_shape.dimsBounds(self, formal.dims, formal.main_tok, fname) orelse continue;
             // §3.2.2 a formal some subscript in the body indexes at run time:
             // one storage, filled element by element from the actual.
             if (lower_var.isMemArray(self, formal.name, ty)) {
@@ -369,10 +392,7 @@ pub fn inlineUserFuncPre(
     self.loops.deinit(self.arena);
     self.loops = saved_loops;
     self.analog_for_base = saved_af;
-    // Undo in reverse, so a name touched twice ends at its first `prev`.
-    while (shadowed.pop()) |sh| {
-        if (sh.prev) |c| try self.consts.put(self.arena, sh.name, c) else _ = self.consts.remove(sh.name);
-    }
+    try leaveFuncConsts(self, &shadowed);
     self.active_genvars = saved_genvars;
 
     var w: usize = 0;
@@ -401,6 +421,36 @@ pub fn inlineUserFuncPre(
         try lower_stmt.writeLvalue(self, slot, vals[0]);
     }
     return result;
+}
+
+// One `consts` entry a function scope replaced or removed, and what it held.
+const Shadow = struct { name: []const u8, prev: ?Const };
+
+// Installs the constants `fd`'s body sees (§4.7.1, §6.8): the caller's
+// `genvars` taken out (a genvar is neither a local nor a module parameter),
+// and each local parameter's fold in, shadowing a module parameter of the
+// same name. Logs every entry it touches in `shadowed` for `leaveFuncConsts`.
+// `func_params` is already `fd.params`, so a local default that names an
+// earlier local folds to it.
+fn enterFuncConsts(self: *Lower, fd: *const Ast.FuncDecl, genvars: []const []const u8, shadowed: *std.ArrayList(Shadow)) Oom!void {
+    for (genvars) |g| {
+        const prev = self.consts.fetchRemove(g) orelse continue;
+        try shadowed.append(self.arena, .{ .name = g, .prev = prev.value });
+    }
+    for (fd.params) |*p| {
+        const c = lower_constfold.constEval(self, p.default) orelse continue;
+        const pname = self.file.str(p.name);
+        try shadowed.append(self.arena, .{ .name = pname, .prev = self.consts.get(pname) });
+        try self.consts.put(self.arena, pname, c);
+    }
+}
+
+// Undoes `enterFuncConsts` in reverse, so a name touched twice ends at its
+// first `prev`.
+fn leaveFuncConsts(self: *Lower, shadowed: *std.ArrayList(Shadow)) Oom!void {
+    while (shadowed.pop()) |sh| {
+        if (sh.prev) |c| try self.consts.put(self.arena, sh.name, c) else _ = self.consts.remove(sh.name);
+    }
 }
 
 /// The cell count of an array actual in one of §4.7.2.3's two shapes, "an

@@ -1,9 +1,20 @@
-//! §4.5 analog operators and filters.
+//! §4.5 analog operators and filters, and the §4.6 small-signal sources.
 //!
-//! In: ddt/idt/absdelay/transition/slew/laplace/zi/... calls. Out: MIR `call`s for
-//! the stateful operators `op.OpKind` names.
+//! In: a ddt/idt/idtmod/absdelay/transition/slew/laplace_*/zi_*/last_crossing/
+//! ddx/limexp call, or a §4.6 noise or `ac_stim` call. Out: one MIR `call` per
+//! stateful operator site (§4.5.2); for `ddt` and `idt`, an operator unknown
+//! with its own row and charge site (`opDdt`, `opIdt`); for a noise call, its
+//! PSD operands in `Lower.noise_psd`/`noise_tab`/`noise_val`; and the
+//! §4.6.4.6 noise coefficients `noiseCoeff` derives from a contribution.
 //!
-//! LRM clauses this file's code cites: §2.9, §4.5, §4.5.2, §4.5.5, §4.5.6, §4.5.10, §4.5.11, §4.5.12, §4.5.13, §4.6.4, §4.6.4.3, §5.5.3, §5.8.1.
+//! Spine: `lowerFilter` per operator call (`checkOperatorPlace` first, always),
+//! `lowerNoise` per small-signal call; `noiseCoeff` runs when `contrib.zig`
+//! accumulates a `<+` that carries a generator.
+//!
+//! LRM clauses this file's code cites: §1.3.1.2, §2.8, §2.9, §3.2.2, §3.4.4, §3.6.1.2,
+//! §3.6.2.3, §3.13.1, §4.2.12, §4.2.13, §4.5, §4.5.1, §4.5.2, §4.5.3, §4.5.4, §4.5.5,
+//! §4.5.6, §4.5.7, §4.5.9, §4.5.10, §4.5.11, §4.5.12, §4.5.14, §4.5.15, §4.6.3, §4.6.4,
+//! §4.6.4.1, §4.6.4.2, §4.6.4.3, §4.6.4.6, §5.5.3, §5.8, §5.8.1, §5.9, §6.8, §9.21.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -167,23 +178,27 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // one or a `constant_assignment_pattern_or_null`; VAMS 2.x's `{a, b}`
         // is the §4.2.13 concatenation, which annex G retired from this slot
         // ("Add apostrophe before opening { in list of values").
-        if ((i == 1 or i == 2) and isCoefFilter(name) and
+        const coef_slot = (i == 1 or i == 2) and isCoefFilter(name);
+        if (coef_slot and
             (self.file.exprs.tag(a) == .concat or self.file.exprs.tag(a) == .multi_concat))
         {
             try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a concatenation `{{...}}`: write the assignment pattern `'{{...}}`", .{ name, i + 1 });
             return poison;
         }
-        if (try appendVectorArg(self, &vals, a)) continue;
         // §4.5.1 "Certain analog operators require arrays or vectors to be
         // passed as arguments: Laplace filters, Z-transform filters ... An
         // array can either be passed as an array_identifier ... or an array
-        // assignment pattern." A scalar in a coefficient slot is neither; a
-        // part-select or multidimensional array is left to the ordinary path.
-        if ((i == 1 or i == 2) and isCoefFilter(name) and
-            !(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a))))))
-        {
-            try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
-            return poison;
+        // assignment pattern." Those two slots are the only ones: anywhere
+        // else an array or a pattern is an ordinary operand, which `lowerExpr`
+        // judges, never a vector flattened into the operator's arguments.
+        if (coef_slot) {
+            if (try appendVectorArg(self, &vals, a)) continue;
+            // A scalar in a coefficient slot is neither spelling; a
+            // part-select or multidimensional array is left to the ordinary path.
+            if (!(self.file.exprs.tag(a) == .index or (self.file.exprs.tag(a) == .ident and self.arrays.contains(self.file.str(self.file.exprs.strOf(a)))))) {
+                try self.err(self.file.exprs.mainTok(a), .E0572, "`{s}()` argument {d} is a scalar", .{ name, i + 1 });
+                return poison;
+            }
         }
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
@@ -212,12 +227,11 @@ pub fn opDdt(self: *Lower, tok: u32, x: Mir.Value, abstol: f64, lte: bool) Oom!M
 /// condition (ic) if specified" there, and without an ic keeps -x: "the idt
 /// operator must be contained within a negative feedback loop that forces its
 /// argument to zero". Returns the operator's value.
-///
-/// ponytail: §4.5.5 idtmod stays in the device (`zIdtmod`), wrapped every
-/// step. As a host unknown its state grows without bound, and a free-running
-/// VCO's phase drifts with the rounding of |s|. Upgrade: a host that re-bases
-/// the unknown on each wrap.
 fn opIdt(self: *Lower, e: Ast.ExprId, vals: []const Mir.Value) Oom!Mir.Value {
+    // ponytail: §4.5.5 idtmod stays in the device (`zIdtmod`), wrapped every
+    // step. As a host unknown its state grows without bound, and a free-running
+    // VCO's phase drifts with the rounding of |s|. Upgrade: a host that re-bases
+    // the unknown on each wrap.
     const x = vals[0];
     const s = try lower_node.opStateNode(self, "idt", opAbstol(self, self.file.exprs.args(e), abstolSlot("idt").?));
     const v = try lower_node.probe(self, s);
@@ -277,8 +291,7 @@ fn opAbstol(self: *Lower, args: []const Ast.ExprId, slot: usize) f64 {
 /// enclosing statement's (`interp_stack`), then §4.5.7's "linear interpolation".
 fn absdelayQuad(self: *Lower, e: Ast.ExprId) Oom!bool {
     if (self.file.exprLte(e, .vera_interp)) |a| return interpQuad(self, a);
-    const s = self.interp_stack.items;
-    return s.len != 0 and s[s.len - 1];
+    return self.interp_stack.last() orelse false;
 }
 
 /// Returns whether a `vera_interp` value selects quadratic (2) over linear (1, the
@@ -496,7 +509,8 @@ fn nullZerosOk(name: []const u8) bool {
 
 /// Appends a vector argument to `out` as `<count>, e0, e1, ...`: a §4.5.11/§4.5.12
 /// filter coefficient vector or §9.21/§4.6.4 data vector, spelled as an assignment
-/// pattern `'{a,b}` or an array name (§3.4.4). Returns false when `a` is a scalar.
+/// pattern `'{a,b}` or an array name (§3.4.4). Returns false when `a` is a scalar,
+/// appending nothing. Invalidates element pointers of `out` if it grows.
 pub fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
@@ -657,7 +671,9 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             }
             continue;
         };
-        if (try appendVectorArg(self, &vals, a)) {
+        // The same slot is the only one a vector belongs in: anywhere else a
+        // pattern or an array is an ordinary operand, which `lowerExpr` judges.
+        if (table_input and ai == 0 and try appendVectorArg(self, &vals, a)) {
             // Indices, not a slice: `vals` keeps growing and may reallocate.
             if (tab == null) tab = .{ at + 1, vals.items.len };
             continue;
@@ -728,7 +744,7 @@ pub fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value) Oom!Coeff {
 /// `gen`: off this set the walk answers `.absent` without descending, so its
 /// cost is the generator-bearing paths and not every path of the DAG. An
 /// unsealed phi (no operands yet) is kept in, since what it will carry is
-/// unknown. Indexed by `@intFromEnum(value)`; O(values) per fixpoint pass.
+/// unknown. Indexed by `@backingInt(value)`; O(values) per fixpoint pass.
 fn reachOf(self: *Lower, gen: Mir.Value) Oom!std.bit_set.Dynamic {
     const mir = self.mir;
     const fd = Mir.Value.first_dynamic;
@@ -981,4 +997,33 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, reach: *const std.bit_set
             try coeffAt(self, st.index, gen, reach, depth + 1, path) == .absent and
             try coeffAt(self, st.value, gen, reach, depth + 1, path) == .absent) .absent else .nonlinear,
     }
+}
+
+test isHistoryless {
+    // A.8.2's two analog_filter_function_call names with no state.
+    try std.testing.expect(isHistoryless("ddx"));
+    try std.testing.expect(isHistoryless("limexp"));
+    try std.testing.expect(!isHistoryless("ddt"));
+    try std.testing.expect(!isHistoryless("absdelay"));
+}
+
+test abstolSlot {
+    // §4.5.3/§4.5.4/§4.5.5's signatures, counted from 0.
+    try std.testing.expectEqual(@as(?usize, 1), abstolSlot("ddt"));
+    try std.testing.expectEqual(@as(?usize, 3), abstolSlot("idt"));
+    try std.testing.expectEqual(@as(?usize, 4), abstolSlot("idtmod"));
+    try std.testing.expectEqual(@as(?usize, null), abstolSlot("transition"));
+}
+
+test nullZerosOk {
+    // §4.5.11/§4.5.12: only the root forms read an empty zeros slot as 1.
+    for ([_][]const u8{ "laplace_zp", "laplace_zd", "zi_zp", "zi_zd" }) |n| try std.testing.expect(nullZerosOk(n));
+    for ([_][]const u8{ "laplace_nd", "laplace_np", "zi_nd", "zi_np", "ddt" }) |n| try std.testing.expect(!nullZerosOk(n));
+}
+
+test isCoefFilter {
+    try std.testing.expect(isCoefFilter("laplace_nd"));
+    try std.testing.expect(isCoefFilter("zi_zp"));
+    try std.testing.expect(!isCoefFilter("transition"));
+    try std.testing.expect(!isCoefFilter("laplace"));
 }
