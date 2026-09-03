@@ -116,19 +116,19 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
 
     self.u_names = try a.alloc([]const u8, self.n_u);
     for (lowered.nodes.items(.name), 0..) |n, i| {
-        self.u_names[i] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
+        self.u_names[i] = try dupeSanitized(a, &buf, n);
     }
     for (extra.items, 0..) |n, k| {
-        self.u_names[base + k] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
+        self.u_names[base + k] = try dupeSanitized(a, &buf, n);
     }
 
     self.p_names = try a.alloc([]const u8, lowered.params.items.len);
     for (lowered.params.items, 0..) |p, i| {
-        self.p_names[i] = try a.dupe(u8, naming.sanitize(&buf, p.name) catch return error.OutOfMemory);
+        self.p_names[i] = try dupeSanitized(a, &buf, p.name);
     }
     self.a_names = try a.alloc([]const u8, lowered.aliases.items.len);
     for (lowered.aliases.items, 0..) |al, i| {
-        self.a_names[i] = try a.dupe(u8, naming.sanitize(&buf, al.name) catch return error.OutOfMemory);
+        self.a_names[i] = try dupeSanitized(a, &buf, al.name);
     }
 
     // §5.10 held variables. Same `<module>__<role>__<target>` grammar
@@ -170,6 +170,13 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         }
     }
     return self;
+}
+
+// `name` sanitized into `buf`, then copied to `a`. `sanitize` fails only when
+// `buf` is too small, which is a name too long, never an allocation failure:
+// every source name goes through here so none can report it as one.
+fn dupeSanitized(a: std.mem.Allocator, buf: []u8, name: []const u8) Error![]const u8 {
+    return a.dupe(u8, naming.sanitize(buf, name) catch return error.NameTooLong);
 }
 
 /// Is unknown `u` already the current of a source from a contribution

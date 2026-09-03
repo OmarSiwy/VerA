@@ -82,6 +82,8 @@ pub fn plan(self: Input) Error!Noise {
     var rows: std.ArrayList(NoiseRow) = .empty;
     var ac: std.ArrayList(NoiseRow) = .empty;
     var ids: std.ArrayList(u32) = .empty;
+    // §4.6.4.6 the ids of table calls already refused (E0519).
+    var refused: std.ArrayList(u32) = .empty;
     var tabs: std.ArrayList([]const [2]f64) = .empty;
     var tab_vals: std.ArrayList([]const [2]Mir.Value) = .empty;
     for (self.lowered.contributions.items) |c| {
@@ -126,12 +128,20 @@ pub fn plan(self: Input) Error!Noise {
             // same points under two indices.
             const table: ?u16 = switch (s.kind) {
                 .thermal, .flicker, .ac_stim => null,
-                .table, .table_log => if (seen) |i| rows_table: {
-                    for (rows.items) |r| {
-                        if (r.source == i and r.table != null) break :rows_table r.table;
+                .table, .table_log => rows_table: {
+                    if (seen) |i| {
+                        for (rows.items) |r| {
+                            if (r.source == i and r.table != null) break :rows_table r.table;
+                        }
                     }
-                    break :rows_table (try planNoiseTable(self, &out, &tabs, &tab_vals, s)) orelse continue;
-                } else (try planNoiseTable(self, &out, &tabs, &tab_vals, s)) orelse continue,
+                    // The same holds for a refusal: a call already refused
+                    // through another branch is not refused a second time.
+                    if (std.mem.findScalar(u32, refused.items, s.id) != null) continue;
+                    break :rows_table (try planNoiseTable(self, &out, &tabs, &tab_vals, s)) orelse {
+                        try refused.append(self.arena, s.id);
+                        continue;
+                    };
+                },
             };
             const sid = seen orelse blk: {
                 try ids.append(self.arena, s.id);
