@@ -26,12 +26,18 @@ const diag = @import("diag");
 /// integer conversions share the grammar. Width and precision are numbers
 /// because the composed C-style fields need them as arithmetic.
 pub const Spec = struct {
-    left: bool = false, // '-' left-justify; C makes it override '0'
-    plus: bool = false, // '+' always spell the sign
-    space: bool = false, // ' ' a space where the sign would be; '+' wins
-    zero: bool = false, // '0' pad with zeros AFTER the sign
-    width: usize = 0, // 0 = no width given
-    prec: ?usize = null, // null = no precision given
+    /// '-' left-justify; C makes it override '0'.
+    left: bool = false,
+    /// '+' always spell the sign.
+    plus: bool = false,
+    /// ' ' a space where the sign would be; '+' wins.
+    space: bool = false,
+    /// '0' pad with zeros AFTER the sign.
+    zero: bool = false,
+    /// The field width; 0 = no width given.
+    width: usize = 0,
+    /// The precision; null = no precision given.
+    prec: ?usize = null,
 
     // The scratch for a composed field is a stack array in the emitted block,
     // so a width or precision above this is refused (E1011) rather than
@@ -340,7 +346,7 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
             }
             const start = j;
             j += 1;
-            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.indexOfScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
+            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.findScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
             if (j == s.len) {
                 try fmt.appendSlice(g.arena, s[start..]);
                 break;
@@ -1077,7 +1083,7 @@ fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
 }
 
 fn has(text: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, text, needle) != null;
+    return std.mem.find(u8, text, needle) != null;
 }
 
 test "§9.4.1 every string argument opens a format run; output concatenates" {

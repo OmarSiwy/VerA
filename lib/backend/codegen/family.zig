@@ -4,6 +4,7 @@
 //! merge (hoisted slot, lazy `if` arms, array element, kernel result, returned
 //! field, residual row); `zTo` fails to compile on a value whose lanes the mask
 //! misses, so an unsound mask cannot drop a lane silently.
+//! LRM clauses cited: none (it realises `contract.family_fns`).
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");

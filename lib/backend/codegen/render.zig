@@ -921,7 +921,7 @@ pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     const cap = comptime blk: {
         @setEvalBranchQuota(100_000);
         var m: usize = 0;
-        for (std.meta.fieldNames(Mir.Callee)) |n| m = @max(m, n.len);
+        for (@typeInfo(Mir.Callee).@"enum".field_names) |n| m = @max(m, n.len);
         break :blk "zRng".len + m;
     };
     var buf: [cap]u8 = undefined;

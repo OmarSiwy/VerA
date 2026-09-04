@@ -191,9 +191,11 @@ pub const VTy = Analysis.VTy;
 /// Hash context for `Gen.f64_cache`. The key is an f64's bit pattern, so an
 /// integer mix is enough where `AutoContext` would run Wyhash over its bytes.
 const F64Context = struct {
+    /// Mixes the bit pattern; distinct NaN payloads stay distinct keys.
     pub fn hash(_: F64Context, k: u64) u64 {
         return std.hash.int(k);
     }
+    /// Bitwise: `-0.0` and `0.0` are different keys (they render differently).
     pub fn eql(_: F64Context, a: u64, b: u64) bool {
         return a == b;
     }
@@ -386,6 +388,7 @@ pub const Gen = struct {
     /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
     const DynCtrl = struct {
         g: *Gen,
+        /// Whether `v` renders only off the core (`host_expr.ctrlIsDynamic`).
         pub fn isDynamic(d: DynCtrl, v: Mir.Value) Error!bool {
             return gen_host.ctrlIsDynamic(d.g, v);
         }
@@ -524,14 +527,19 @@ pub const Gen = struct {
 
     // Setup: the solve-invariant slice, computed once per card (codegen/setup.zig)
     const gen_setup = @import("codegen/setup.zig");
+    /// `setup.probeInstance`: the instance an auxiliary core sweep passes. May
+    /// write a `var table_probe` declaration to `out` first.
     pub const probeInstance = gen_setup.probeInstance;
+    /// `setup.rootRef`: the text reading a setup root's `Model.su` field.
     pub const rootRef = gen_setup.rootRef;
 
     // --------------------------------------------------------------- units ----
 
     // File assembly, the spine: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`), codegen/file.zig
     const gen_file = @import("codegen/file.zig");
+    /// `file.emitFile`, the codegen spine. Asserts nothing was emitted yet.
     pub const emitFile = gen_file.emitFile;
+    /// `file.fmtF64`: an f64 as Zig literal text, arena-owned and memoized.
     pub const fmtF64 = gen_file.fmtF64;
 
     // §4.5 `Instance`, its `State` twin and `stateCtl`, codegen/instance.zig
@@ -545,16 +553,23 @@ pub const Gen = struct {
 
     // Value and instruction rendering: MIR value -> Zig expression (§4.2.1 conversions), codegen/render.zig
     const gen_render = @import("codegen/render.zig");
+    /// `render.renderVal`: appends a value's Zig expression, converted to the
+    /// requested LRM type (§4.2.1.1/§4.2.1.2).
     pub const renderVal = gen_render.renderVal;
 
     // Host expressions: a parameter or control argument -> plain f64/i64 text over `model`, codegen/host_expr.zig
     const gen_host = @import("codegen/host_expr.zig");
+    /// `host_expr.f64Const`: plain-f64 text over `model`, or null.
     pub const f64Const = gen_host.f64Const;
+    /// `host_expr.f64Expr`: `f64Const`, or E0515 and a poisoned unit.
     pub const f64Expr = gen_host.f64Expr;
 
     // Calls: §4.5 analog operators, §4.6 noise, Clause 9 system functions, codegen/call.zig
     const gen_call = @import("codegen/call.zig");
+    /// `call.abort`: reports a refusal at the call being rendered and poisons
+    /// the unit.
     pub const abort = gen_call.abort;
+    /// `call.strArg`: the string literal at `args[i]`, or null.
     pub const strArg = gen_call.strArg;
 
     // Dispatchers: §5.6 residual assembly, §1.3.1.2 reference directions, codegen/dispatch.zig

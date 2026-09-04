@@ -425,7 +425,7 @@ fn emitEval(self: *Gen) Error!void {
     self.core_hoisted = false;
     // `uses.x` also counts a row that reads `x` only through the core, so ask
     // the text: every direct read is `x[@intFromEnum(U.<name>)]`.
-    if (std.mem.indexOf(u8, self.out.items[at_mut..], "x[@intFromEnum(") == null) gen_unit.patchParam(self, at_x, "x".len);
+    if (std.mem.find(u8, self.out.items[at_mut..], "x[@intFromEnum(") == null) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.core_wanted) gen_unit.patchParam(self, at_m, "m".len);
     if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
     try self.w("    return res;\n}}\n\n", .{});

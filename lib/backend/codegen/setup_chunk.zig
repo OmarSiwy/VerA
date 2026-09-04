@@ -65,11 +65,12 @@ const State = struct {
 /// `vera_setup_split = true`, and otherwise calls them directly: the body
 /// is emitted once, as the chunks. Null keeps the one function: a `zs_stop` or
 /// `zs_done` body, fewer than two chunks, or no balanced cut.
+/// `Chunked.text` is allocated in `a` (copied, so `text` may go first).
 pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
-    if (std.mem.indexOf(u8, text, "zs_stop") != null or std.mem.indexOf(u8, text, "zs_done") != null) return null;
-    const fn_at = std.mem.indexOf(u8, text, "pub fn setup(") orelse return null;
+    if (std.mem.find(u8, text, "zs_stop") != null or std.mem.find(u8, text, "zs_done") != null) return null;
+    const fn_at = std.mem.find(u8, text, "pub fn setup(") orelse return null;
     if (!std.mem.endsWith(u8, text, "\n}\n\n")) return null;
-    const head_end = (std.mem.indexOfScalarPos(u8, text, fn_at, '\n') orelse return null) + 1;
+    const head_end = (std.mem.findScalarPos(u8, text, fn_at, '\n') orelse return null) + 1;
 
     // One line per '\n' plus the last, so the table is sized before the split.
     const src = text[head_end .. text.len - 3];
@@ -101,7 +102,7 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
     // A `return` leaves only its own chunk: allowed in the last piece alone.
     var last = ps.len;
     while (last > 0 and bytesOf(ps[last - 1].lines) == ps[last - 1].lines.len) last -= 1;
-    for (ps[0..last -| 1]) |p| for (p.lines) |l| if (std.mem.indexOf(u8, l, "return;") != null) return null;
+    for (ps[0..last -| 1]) |p| for (p.lines) |l| if (std.mem.find(u8, l, "return;") != null) return null;
 
     var acc: usize = 0;
     var sizes = try a.alloc(usize, n);
@@ -180,7 +181,7 @@ pub fn chunk(a: Allocator, text: []const u8, target: usize) Error!?Chunked {
         try out.print(a, "fn zSetup{d}(comptime V: type, {s}: *Model, {s}: *zSetupZ(V)) void {{\n    @setFloatMode(.strict);\n", .{
             k,
             if (hasWord(t, "model")) "model" else "_",
-            if (std.mem.indexOf(u8, t, "z.") != null) "z" else "_",
+            if (std.mem.find(u8, t, "z.") != null) "z" else "_",
         });
         if (hasWord(t, "S")) try out.appendSlice(a, "    const S = V;\n");
         try out.appendSlice(a, t);
@@ -309,7 +310,7 @@ fn openBlock(a: Allocator, s: Lines) Error!?Lines {
     const inner = try dedentAll(a, s[1 .. s.len - 1]);
     const br = try a.print("break :{s};", .{label});
     const stripped = try stripTail(a, inner, br) orelse return null;
-    for (stripped) |l| if (std.mem.indexOf(u8, l, br) != null) return null;
+    for (stripped) |l| if (std.mem.find(u8, l, br) != null) return null;
     return stripped;
 }
 
@@ -374,10 +375,10 @@ fn selfContained(a: Allocator, lines: Lines) Error!bool {
         if (e != 0 and std.mem.startsWith(u8, t[e..], ": ")) try defs.put(a, t[0..e], {});
     }
     for (lines) |l| {
-        if (std.mem.indexOf(u8, l, "return;") != null) return false;
+        if (std.mem.find(u8, l, "return;") != null) return false;
         for ([_][]const u8{ "break :", "continue :" }) |kw| {
             var at: usize = 0;
-            while (std.mem.indexOfPos(u8, l, at, kw)) |p| {
+            while (std.mem.findPos(u8, l, at, kw)) |p| {
                 at = p + kw.len;
                 var e = at;
                 while (e < l.len and isIdent(l[e])) e += 1;
@@ -395,7 +396,7 @@ fn declOf(p: *Piece) void {
     var i = kw.len;
     while (i < l.len and isIdent(l[i])) i += 1;
     if (i == kw.len) return;
-    const eq = std.mem.indexOfPos(u8, l, i, " = ") orelse return;
+    const eq = std.mem.findPos(u8, l, i, " = ") orelse return;
     p.ty = if (l[i] == ':') std.mem.trim(u8, l[i + 1 .. eq], " ") else if (eq == i) "" else return;
     p.name = l[kw.len..i];
     p.head = eq + 3;
@@ -457,7 +458,7 @@ const Idents = struct {
             if (c == '"' or c == '\'') {
                 it.i = skipLit(t, it.i) + 1;
             } else if (c == '/' and it.i + 1 < t.len and t[it.i + 1] == '/') {
-                it.i = std.mem.indexOfScalarPos(u8, t, it.i, '\n') orelse t.len;
+                it.i = std.mem.findScalarPos(u8, t, it.i, '\n') orelse t.len;
             } else if (isIdent(c)) {
                 const s = it.i;
                 while (it.i < t.len and isIdent(t[it.i])) it.i += 1;
@@ -528,18 +529,18 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
         "z.h0[0] = S.con(0.0);",
         "model.su.r[0] = (z.h0[0]).val();",
         "/// doc\npub fn setup(",
-    }) |want| if (std.mem.indexOf(u8, c.text, want) == null) {
+    }) |want| if (std.mem.find(u8, c.text, want) == null) {
         std.debug.print("missing `{s}` in:\n{s}\n", .{ want, c.text });
         return error.TestUnexpectedResult;
     };
     // The chunks lost the tail breaks, and no copy of the body is kept.
-    try std.testing.expect(std.mem.indexOf(u8, c.text, "break :B1") == null);
-    try std.testing.expect(std.mem.indexOf(u8, c.text, ".mul(").? == std.mem.lastIndexOf(u8, c.text, ".mul(").?);
+    try std.testing.expect(std.mem.find(u8, c.text, "break :B1") == null);
+    try std.testing.expect(std.mem.find(u8, c.text, ".mul(").? == std.mem.findLast(u8, c.text, ".mul(").?);
     // A `return` before the end would leave only its chunk: one function.
     const early = try std.mem.replaceOwned(u8, a, text, "    model.su.r[0] = (h0[0]).val();\n", "    if (t2 == 2) return;\n    model.su.r[0] = (h0[0]).val();\n");
     try std.testing.expect(try chunk(a, early, 120) == null);
     // A jump out of an arm keeps that statement whole.
     const out = try std.mem.replaceOwned(u8, a, text, "            h0[0] = S.con(0.0);\n", "            h0[0] = S.con(0.0);\n            if (t2 == 1) break :B1;\n");
     const c2 = (try chunk(a, out, 120)) orelse return;
-    try std.testing.expect(std.mem.indexOf(u8, c2.text, "zg1") == null);
+    try std.testing.expect(std.mem.find(u8, c2.text, "zg1") == null);
 }

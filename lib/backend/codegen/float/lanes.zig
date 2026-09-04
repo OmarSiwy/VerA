@@ -6,6 +6,9 @@
 //! keeps `batch_ok` and adds `batch_lead`.
 //! Under `.strict`, a select with total, cheap inline arms renders as `sel`
 //! (`eagerSafe`, `eagerCostly`). The float mode half is `mode.zig`.
+//! In: the value being rendered and `Gen`'s plans. Out: `Float`'s flags,
+//! which `file.emitFile` turns into the `batch_*` decls.
+//! LRM clauses cited: §3.2.2, §4.2.12.
 
 const codegen = @import("../../codegen.zig");
 const Gen = codegen.Gen;

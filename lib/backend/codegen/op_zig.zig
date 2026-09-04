@@ -3,6 +3,8 @@
 //! current input or `dt`, and which argument is the §5.10.3 `enable`.
 //! `absdelay`, `laplace` and `zi` size their fields from the call, so they are
 //! `.from_args` and codegen computes them.
+//! LRM clauses cited: §4.5.4, §4.5.5, §4.5.7, §4.5.8, §4.5.9, §4.5.10, §4.5.11,
+//! §4.5.12, §5.10.3, §9.17.1, §9.17.2.
 
 const std = @import("std");
 const OpKind = @import("ir").op.OpKind;

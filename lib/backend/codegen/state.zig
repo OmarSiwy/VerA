@@ -136,14 +136,14 @@ pub fn inPlaceArrays(self: *Gen) Error![]const bool {
         const d = self.mir.instData(inst).anew;
         if (d.tp != null) flags[d.array] = false;
     }
-    if (std.mem.indexOfScalar(bool, flags, true) == null) return &.{};
+    if (std.mem.findScalar(bool, flags, true) == null) return &.{};
     return flags;
 }
 
 /// Returns whether `text` reads a field of the core result `m` (`m.f<k>`).
 fn readsM(text: []const u8) bool {
     var at: usize = 0;
-    while (std.mem.indexOfPos(u8, text, at, "m.f")) |i| : (at = i + 1) {
+    while (std.mem.findPos(u8, text, at, "m.f")) |i| : (at = i + 1) {
         if (i == 0 or !(std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_')) return true;
     }
     return false;
