@@ -26,12 +26,18 @@ const diag = @import("diag");
 /// integer conversions share the grammar. Width and precision are numbers
 /// because the composed C-style fields need them as arithmetic.
 pub const Spec = struct {
-    left: bool = false, // '-' left-justify; C makes it override '0'
-    plus: bool = false, // '+' always spell the sign
-    space: bool = false, // ' ' a space where the sign would be; '+' wins
-    zero: bool = false, // '0' pad with zeros AFTER the sign
-    width: usize = 0, // 0 = no width given
-    prec: ?usize = null, // null = no precision given
+    /// '-' left-justify; C makes it override '0'.
+    left: bool = false,
+    /// '+' always spell the sign.
+    plus: bool = false,
+    /// ' ' a space where the sign would be; '+' wins.
+    space: bool = false,
+    /// '0' pad with zeros AFTER the sign.
+    zero: bool = false,
+    /// The field width; 0 = no width given.
+    width: usize = 0,
+    /// The precision; null = no precision given.
+    prec: ?usize = null,
 
     // The scratch for a composed field is a stack array in the emitted block,
     // so a width or precision above this is refused (E1011) rather than
@@ -340,7 +346,7 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
             }
             const start = j;
             j += 1;
-            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.indexOfScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
+            while (j < s.len and (std.ascii.isDigit(s[j]) or std.mem.findScalar(u8, "-+ 0#.", s[j]) != null)) j += 1;
             if (j == s.len) {
                 try fmt.appendSlice(g.arena, s[start..]);
                 break;
@@ -351,6 +357,8 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
                 continue;
             }
             if (conv == 'l') {
+                // Table 9-22's library.cell, as `translateFormat` prints it.
+                try appendLiteral(g, fmt, "work.");
                 try appendLiteral(g, fmt, g.mir.name);
                 continue;
             }
@@ -1077,7 +1085,7 @@ fn emitBody(arena: std.mem.Allocator, body: []const u8) ![]const u8 {
 }
 
 fn has(text: []const u8, needle: []const u8) bool {
-    return std.mem.indexOf(u8, text, needle) != null;
+    return std.mem.find(u8, text, needle) != null;
 }
 
 test "§9.4.1 every string argument opens a format run; output concatenates" {
@@ -1334,4 +1342,51 @@ test "§9.4.5 numeric strings preserve source width through every output sink" {
     try std.testing.expect(has(out, "@as(u8, @truncate(@as(u64"));
     try std.testing.expect(has(out, "@as(u64, @truncate(@as(u64"));
     try std.testing.expect(has(out, "std.mem.trimStart(u8"));
+}
+
+test severityWord {
+    try std.testing.expectEqualStrings("FATAL", severityWord(.@"$fatal").?);
+    try std.testing.expectEqualStrings("ERROR", severityWord(.@"$error").?);
+    try std.testing.expectEqualStrings("WARNING", severityWord(.@"$warning").?);
+    try std.testing.expectEqualStrings("INFO", severityWord(.@"$info").?);
+    try std.testing.expect(severityWord(.@"$display") == null);
+    try std.testing.expect(severityWord(.@"$strobe") == null);
+}
+
+test endsLine {
+    // §9.4.1: `$write` and its radix forms, and §9.5.2's `$fwrite`, do not.
+    for ([_]Mir.Callee{ .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$fwrite" }) |c|
+        try std.testing.expect(!endsLine(c));
+    for ([_]Mir.Callee{ .@"$display", .@"$strobe", .@"$monitor", .@"$fdisplay", .@"$error" }) |c|
+        try std.testing.expect(endsLine(c));
+}
+
+test sayRecords {
+    // A printing task is a record; `$monitor` (its change detection is state
+    // a device does not keep) and `$fatal`/`$error` (the status channel) are not.
+    try std.testing.expect(sayRecords(.@"$strobe"));
+    try std.testing.expect(sayRecords(.@"$display"));
+    try std.testing.expect(!sayRecords(.@"$monitor"));
+    try std.testing.expect(!sayRecords(.@"$fatal"));
+    try std.testing.expect(!sayRecords(.@"$error"));
+}
+
+test "PrintArg.scratch sizes the stack field each composed mode needs" {
+    const at = struct {
+        fn f(how: PrintArg.Mode, spec: Spec) ?usize {
+            return (PrintArg{ .v = .f_zero, .want = .int, .how = how, .spec = spec }).scratch();
+        }
+    }.f;
+    try std.testing.expectEqual(@as(?usize, 8), at(.ascii, .{}));
+    try std.testing.expectEqual(@as(?usize, 24), at(.pad, .{}));
+    // The widest decimal, or the whole zero-filled field plus sign room.
+    try std.testing.expectEqual(@as(?usize, 24), at(.cint, .{}));
+    try std.testing.expectEqual(@as(?usize, 32), at(.cint, .{ .width = 30 }));
+    // A sign, 309 integer digits, the point and the precision, or the width.
+    try std.testing.expectEqual(@as(?usize, 6 + 320 + 8), at(.creal, .{}));
+    try std.testing.expectEqual(@as(?usize, 400 + 8), at(.creal, .{ .width = 400, .prec = 10 }));
+    // The rest render into the argument tuple.
+    try std.testing.expectEqual(@as(?usize, null), at(.plain, .{}));
+    try std.testing.expectEqual(@as(?usize, null), at(.bits, .{}));
+    try std.testing.expectEqual(@as(?usize, null), at(.chr, .{}));
 }
