@@ -651,3 +651,120 @@ fn number(raw: []const u8) Error!f64 {
     @memcpy(buf[head.len..][0..exp.len], exp);
     return std.fmt.parseFloat(f64, buf[0 .. head.len + exp.len]) catch error.BadNumber;
 }
+
+test "every keyword has a well-formed line, and its empty operand is a flag or refused" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // `good` parses on its own. `empty` is what `//! <keyword>` alone gives:
+    // null for a bare flag, else the refusal the keyword's grammar names, so
+    // a line whose operand was forgotten never checks nothing. The switch
+    // is exhaustive: a new keyword does not compile until it has both.
+    const Case = struct { good: []const u8, empty: ?Error };
+    for (std.meta.tags(Keyword)) |kw| {
+        const c: Case = switch (kw) {
+            .param => .{ .good = "//! param g = 2m, is = 1e-14", .empty = error.BadSyntax },
+            .bias => .{ .good = "//! bias V(n) = 0, I(a,b) = 0.25", .empty = error.BadSyntax },
+            .sweep => .{ .good = "//! sweep V(p) = 0, 1", .empty = error.BadSyntax },
+            .wave => .{ .good = "//! wave V(in) = 0, 1", .empty = error.BadSyntax },
+            .psweep => .{ .good = "//! psweep r = 1, 2", .empty = error.BadSyntax },
+            .temp => .{ .good = "//! temp 350", .empty = error.BadNumber },
+            .time => .{ .good = "//! time 0, 1n, 2n", .empty = error.BadSyntax },
+            .solve => .{ .good = "//! solve", .empty = null },
+            .analysis => .{ .good = "//! analysis tran mytran", .empty = error.BadSyntax },
+            .exit => .{ .good = "//! exit 2", .empty = error.BadNumber },
+            .checks => .{ .good = "//! checks 3", .empty = error.BadNumber },
+            .plusargs => .{ .good = "//! plusargs +a=1 +b", .empty = error.BadSyntax },
+            .reject => .{ .good = "//! reject E0310", .empty = error.BadSyntax },
+            .@"reject-only" => .{ .good = "//! reject-only E0310", .empty = error.BadSyntax },
+            .@"reject-run" => .{ .good = "//! reject-run E0816", .empty = error.BadSyntax },
+            .neighbour => .{ .good = "//! reject E0310\n//! neighbour legal.va", .empty = error.BadSyntax },
+            .warn => .{ .good = "//! warn W0853", .empty = error.BadSyntax },
+            .nowarn => .{ .good = "//! nowarn", .empty = null },
+            .noise => .{ .good = "//! noise thermal(a,b)#0 white=4e-18", .empty = error.BadSyntax },
+            .acstim => .{ .good = "//! acstim (p,n) mag=1", .empty = error.BadSyntax },
+            .acdyn => .{ .good = "//! acdyn (out,in) f=1k re=0 im=1", .empty = error.BadSyntax },
+            .qsite => .{ .good = "//! qsite g+ s- lte", .empty = error.BadSyntax },
+            .seed => .{ .good = "//! seed V(a) = 1", .empty = error.BadSyntax },
+            .meta => .{ .good = "//! meta net d desc=\"drain\"", .empty = error.BadSyntax },
+            .abstol => .{ .good = "//! abstol V(a) = 1e-6", .empty = error.BadSyntax },
+            .limit => .{ .good = "//! limit V(b) = 0 -> V(b) = 0.1", .empty = error.BadSyntax },
+            .spice => .{ .good = "//! spice R1 a b 1k", .empty = error.BadSyntax },
+            .lrm => .{ .good = "//! lrm 5.6.1.3:2", .empty = error.BadLrmSection },
+            .inherited => .{ .good = "//! inherited IEEE 1364-2005 18.1", .empty = error.BadLrmSection },
+            .xfail => .{ .good = "//! xfail reason", .empty = error.BadSyntax },
+            .print => .{ .good = "//! print none", .empty = error.BadSyntax },
+            .tran => .{ .good = "//! tran 1n, 10n", .empty = error.BadSyntax },
+            .onoise => .{ .good = "//! onoise V(out) = 1, 10", .empty = error.BadSyntax },
+            .@"discipline-resolution" => .{ .good = "//! discipline-resolution detail", .empty = error.BadSyntax },
+            .display => .{ .good = "//! display record", .empty = error.BadSyntax },
+            .@"fd-exempt" => .{ .good = "//! fd-exempt a vera_nodiff region", .empty = error.BadSyntax },
+        };
+        _ = try parse(arena, c.good);
+        const line = try arena.print("//! {t}\n", .{kw});
+        if (c.empty) |e| {
+            try std.testing.expectError(e, parse(arena, line));
+        } else _ = try parse(arena, line);
+    }
+}
+
+test number {
+    // §2.6 every scale factor, against the Zig literal with the same
+    // exponent: the suffix becomes an exponent before the one parse, as
+    // `Lexer.scaleExp` makes the model's lexer do.
+    const cases = [_]struct { []const u8, f64 }{
+        .{ "1T", 1e12 },
+        .{ "1G", 1e9 },
+        .{ "1M", 1e6 },
+        .{ "1K", 1e3 },
+        .{ "1k", 1e3 },
+        .{ "1m", 1e-3 },
+        .{ "1u", 1e-6 },
+        .{ "1n", 1e-9 },
+        .{ "1p", 1e-12 },
+        .{ "1f", 1e-15 },
+        .{ "1a", 1e-18 },
+        .{ "-3k", -3e3 },
+        .{ "2.5m", 2.5e-3 },
+        .{ " 7u ", 7e-6 },
+        .{ "300.15", 300.15 },
+    };
+    for (cases) |c| try std.testing.expectEqual(c[1], try number(c[0]));
+    // Every other letter is not a scale factor, and a suffix needs a mantissa.
+    for ("ABCDEFHIJLNOPQRSUVWXYZbcdeghijloqrstvwxyz") |letter| {
+        const text = [2]u8{ '1', letter };
+        try std.testing.expectError(error.BadNumber, number(&text));
+    }
+    try std.testing.expectError(error.BadNumber, number("u"));
+    try std.testing.expectError(error.BadNumber, number(""));
+    try std.testing.expectError(error.BadNumber, number("1e3k"));
+}
+
+test unknownName {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Each spelling lands on the member codegen prints: `naming.sanitize` of
+    // `flow(a,b)` or `d[1]`, and a legal identifier as written.
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "a", "a" },
+        .{ "V(a)", "a" },
+        .{ "V( a )", "a" },
+        .{ "x[a]", "a" },
+        .{ "I(a)", "flowZ28aZ2cgndZ29" },
+        .{ "I(a,b)", "flowZ28aZ2cbZ29" },
+        // Whitespace inside the access function is not part of the name.
+        .{ "I(a, b)", "flowZ28aZ2cbZ29" },
+        .{ "I(<p>)", "flowZ28Z3cpZ3eZ29" },
+        .{ "d[1]", "dZ5b1Z5d" },
+        .{ "flowZ28pZ2cnZ29", "flowZ28pZ2cnZ29" },
+    };
+    for (cases) |c| try std.testing.expectEqualStrings(c[1], try unknownName(arena, c[0]));
+    // §5.4.2 a branch potential is no unknown.
+    try std.testing.expectError(error.BadUnknownName, unknownName(arena, "V(a,b)"));
+    // An access function that names nothing is a typo, refused here rather
+    // than as a testbench that does not build.
+    for ([_][]const u8{ "V()", "V( )", "I()", "I(a,)", "I(,b)", "I(<>)", "x[]" }) |bad| {
+        try std.testing.expectError(error.BadSyntax, unknownName(arena, bad));
+    }
+}

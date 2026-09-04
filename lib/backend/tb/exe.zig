@@ -276,3 +276,76 @@ fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
     try root.appendSlice(arena, "        else => @panic(\"argv[0] names no batch member\"),\n    }\n}\n");
     return root.items;
 }
+
+test batchRoot {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const src = try batchRoot(arena_state.allocator(), 3);
+    try @import("test.zig").expectAstGen(src);
+    // One arm per member and no more.
+    try std.testing.expect(std.mem.find(u8, src, "        2 => @import(\"tb2\").main(init),\n") != null);
+    try std.testing.expect(std.mem.find(u8, src, "3 =>") == null);
+    // The member index is read after the whole of `batch_argv0`.
+    try std.testing.expect(std.mem.find(u8, src, "\"vera-batch-\"") != null);
+    try std.testing.expect(std.mem.find(u8, src, "argv[0][at + 11 ..]") != null);
+}
+
+test "batchRoot uses no name Zig 0.17 deprecates" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const src = try batchRoot(arena_state.allocator(), 1);
+    try std.testing.expect(std.mem.find(u8, src, "std.mem.lastIndexOf") == null);
+}
+
+test argvHead {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base: BuildOptions = .{ .work_dir = "w", .contract = "c.zig", .name = "m", .zig_exe = "zigx" };
+    const Case = struct { opts: BuildOptions, verb: []const u8, want: []const []const u8 };
+    var fast = base;
+    fast.optimize = .fast;
+    fast.backend = .llvm;
+    var fast_dwarf = fast;
+    fast_dwarf.debug_info = true;
+    var fast_unstripped = fast;
+    fast_unstripped.strip = false;
+    var debug_stripped = base;
+    debug_stripped.backend = .self_hosted;
+    debug_stripped.strip = true;
+    // `orchestrator.strip`: an unsafe build strips unless DWARF was asked
+    // for; `strip` overrides it either way.
+    const cases = [_]Case{
+        .{ .opts = debug_stripped, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Odebug", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fno-llvm", "-fno-lld", "-fstrip" } },
+        .{ .opts = fast, .verb = "build-lib", .want = &.{ "zigx", "build-lib", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm", "-fstrip" } },
+        .{ .opts = fast_dwarf, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm" } },
+        .{ .opts = fast_unstripped, .verb = "build-exe", .want = &.{ "zigx", "build-exe", "-femit-bin=b", "-Ofast", "--cache-dir", ".zig-cache", "-fno-emit-implib", "-fllvm" } },
+    };
+    for (cases) |c| {
+        const argv = (try argvHead(arena, c.opts, c.verb, "b")).items;
+        try std.testing.expectEqual(c.want.len, argv.len);
+        for (c.want, argv) |w, a| try std.testing.expectEqualStrings(w, a);
+    }
+}
+
+test stage {
+    const io = std.testing.io;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const work = try arena.print(".zig-cache/tmp/{s}", .{tmp.sub_path});
+
+    const s = try stage(arena, io, "DEVICE", "RUNNER", .{ .work_dir = work, .contract = "c.zig", .name = "res" });
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ work, "res.tb.zig" }), s.root);
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ work, "res.device.zig" }), s.device);
+    try std.testing.expectEqualStrings("RUNNER", try tmp.dir.readFileAlloc(io, "res.tb.zig", arena, .limited(64)));
+    try std.testing.expectEqualStrings("DEVICE", try tmp.dir.readFileAlloc(io, "res.device.zig", arena, .limited(64)));
+
+    // A second artifact in the same work root keeps its own files: an
+    // escaped module name takes a hashed stem (`orchestrator.fileStem`).
+    const t = try stage(arena, io, "D2", "R2", .{ .work_dir = work, .contract = "c.zig", .name = "res+" });
+    try std.testing.expect(!std.mem.eql(u8, s.root, t.root));
+    try std.testing.expectEqualStrings("RUNNER", try tmp.dir.readFileAlloc(io, "res.tb.zig", arena, .limited(64)));
+}
