@@ -63,8 +63,14 @@ const Keyword = enum {
 
 /// Parses the `//!` lines of RAW source, before the preprocessor deletes
 /// comments (§2.4). Other lines are ignored, so any .va is valid input.
+/// A line is a directive exactly when, trimmed of spaces, tabs and `\r`, it
+/// starts with `//!`; `tests/harness.zig`'s `hasDirective` keeps that rule.
 /// Every slice in the result is allocated in `arena`. Fails on the first
-/// malformed line, with the `tb.Error` that names what was wrong.
+/// malformed line, with the `tb.Error` that names what was wrong, and with
+/// `error.BadSyntax` when lines contradict each other: `reject` beside
+/// `reject-run`, `checks`, `warn` or `nowarn`; `warn` beside `nowarn`; a
+/// `neighbour` on a fixture that refuses nothing; a `reject-run` whose
+/// `exit` is 0.
 pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var d: Directives = .{};
     var analysis: ?Analysis = null;
@@ -97,7 +103,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         const body = std.mem.trim(u8, line[marker.len..], " \t");
         if (body.len == 0) continue;
 
-        const kw_end = std.mem.indexOfAny(u8, body, " \t") orelse body.len;
+        const kw_end = std.mem.findAny(u8, body, " \t") orelse body.len;
         const kw = std.meta.stringToEnum(Keyword, body[0..kw_end]) orelse return error.UnknownDirective;
         const rest = std.mem.trim(u8, body[kw_end..], " \t");
 
@@ -105,7 +111,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             .param => try parseBindings(arena, rest, &params),
             .bias => try parseBindings(arena, rest, &bias),
             .sweep, .wave, .psweep => {
-                const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+                const at = std.mem.findScalar(u8, rest, '=') orelse return error.BadSyntax;
                 // A parameter has no access-function spelling, so `psweep` takes the
                 // name as written; `unknownName` would only strip a `V(...)` that
                 // cannot be there.
@@ -132,10 +138,10 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // `//! analysis <kind> [<name>]`: the name is §9.15's
             // `analysis_name`, the kind's own spelling when omitted.
             .analysis => {
-                const kind_end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+                const kind_end = std.mem.findAny(u8, rest, " \t") orelse rest.len;
                 analysis = std.meta.stringToEnum(Analysis, rest[0..kind_end]) orelse return error.BadSyntax;
                 const name = std.mem.trim(u8, rest[kind_end..], " \t");
-                if (std.mem.indexOfAny(u8, name, " \t\"\\") != null) return error.BadSyntax;
+                if (std.mem.findAny(u8, name, " \t\"\\") != null) return error.BadSyntax;
                 if (name.len != 0) d.analysis_name = try arena.dupe(u8, name);
             },
             .exit => {
@@ -176,7 +182,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             .neighbour => {
                 // A path, relative to the fixture's directory; the harness
                 // checks that it names a collected positive fixture.
-                if (rest.len == 0 or std.mem.indexOfAny(u8, rest, " \t") != null) return error.BadSyntax;
+                if (rest.len == 0 or std.mem.findAny(u8, rest, " \t") != null) return error.BadSyntax;
                 try neighbours.append(arena, try arena.dupe(u8, rest));
             },
             .warn => {
@@ -227,7 +233,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try parseBindings(arena, rest, &abstols);
             },
             .limit => {
-                const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
+                const at = std.mem.find(u8, rest, "->") orelse return error.BadSyntax;
                 var old: std.ArrayList(Binding) = .empty;
                 var want: std.ArrayList(Binding) = .empty;
                 try parseBindings(arena, rest[0..at], &old);
@@ -263,7 +269,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 d.tran = .{ v[0], v[1] };
             },
             .onoise => {
-                const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+                const at = std.mem.findScalar(u8, rest, '=') orelse return error.BadSyntax;
                 const name = try unknownName(arena, std.mem.trim(u8, rest[0..at], " \t"));
                 if (name.len == 0) return error.BadSyntax;
                 d.onoise = .{ .name = try arena.dupe(u8, name), .values = try parseNumbers(arena, rest[at + 1 ..]) };
@@ -335,7 +341,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
 /// n-th normative sentence of that clause (`5.6.1.3:2`). Syntax only: a
 /// well-formed section the LRM does not have still passes.
 pub fn validSection(cite: []const u8) bool {
-    const colon = std.mem.indexOfScalar(u8, cite, ':');
+    const colon = std.mem.findScalar(u8, cite, ':');
     if (colon) |c| if (!digits(cite[c + 1 ..]) or std.mem.eql(u8, cite[c + 1 ..], "0")) return false;
     const s = cite[0 .. colon orelse cite.len];
     var it = std.mem.splitScalar(u8, s, '.');
@@ -352,7 +358,7 @@ fn validInherited(s: []const u8) bool {
     const std_name = "IEEE 1364-2005 ";
     if (!std.mem.startsWith(u8, s, std_name)) return false;
     const rest = s[std_name.len..];
-    return validSection(rest[0 .. std.mem.indexOfAny(u8, rest, " ,") orelse rest.len]);
+    return validSection(rest[0 .. std.mem.findAny(u8, rest, " ,") orelse rest.len]);
 }
 
 /// Returns whether `s` is a nonempty run of ASCII decimal digits.
@@ -366,10 +372,10 @@ fn digits(s: []const u8) bool {
 /// The kind is checked; node names are not, since directives are parsed before
 /// the unknowns exist and a misspelled node fails the assertion anyway.
 fn validNoiseEntry(s: []const u8) bool {
-    const open = std.mem.indexOfScalar(u8, s, '(') orelse return false;
+    const open = std.mem.findScalar(u8, s, '(') orelse return false;
     // `#<source>` after the branch is §4.6.4.6's correlation id; `#null` is
     // a row with no identity declared.
-    const hash = std.mem.indexOfScalarPos(u8, s, open, '#') orelse return false;
+    const hash = std.mem.findScalarPos(u8, s, open, '#') orelse return false;
     if (hash == 0 or s[hash - 1] != ')') return false;
     const src = s[hash + 1 ..];
     // ponytail: reuse the nonempty decimal check; source IDs have no numeric bound.
@@ -382,7 +388,7 @@ fn validNoiseEntry(s: []const u8) bool {
         if (std.mem.eql(u8, kind, k)) break;
     } else return false;
     const inner = s[open + 1 .. hash - 1];
-    const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
+    const comma = std.mem.findScalar(u8, inner, ',') orelse return false;
     return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
         std.mem.trim(u8, inner[comma + 1 ..], " \t").len != 0;
 }
@@ -391,7 +397,7 @@ fn validNoiseEntry(s: []const u8) bool {
 /// The topology ends at the first space after the `#`, because the branch may
 /// contain spaces (`thermal(p, n)#0`).
 fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
-    const hash = std.mem.indexOfScalar(u8, s, '#') orelse return error.BadSyntax;
+    const hash = std.mem.findScalar(u8, s, '#') orelse return error.BadSyntax;
     var end = hash + 1;
     while (end < s.len and s[end] != ' ' and s[end] != '\t') end += 1;
     const topo = s[0..end];
@@ -401,7 +407,7 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     var corrs: std.ArrayList(NoiseWant.Corr) = .empty;
     var fields = std.mem.tokenizeAny(u8, s[end..], " \t");
     while (fields.next()) |f| {
-        const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
+        const at = std.mem.findScalar(u8, f, '=') orelse return error.BadSyntax;
         const key = f[0..at];
         const val = f[at + 1 ..];
         if (std.mem.eql(u8, key, "name")) {
@@ -422,14 +428,14 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
             var pts: std.ArrayList([2]f64) = .empty;
             var it = std.mem.tokenizeScalar(u8, val, ',');
             while (it.next()) |pair| {
-                const colon = std.mem.indexOfScalar(u8, pair, ':') orelse return error.BadSyntax;
+                const colon = std.mem.findScalar(u8, pair, ':') orelse return error.BadSyntax;
                 try pts.append(arena, .{ try number(pair[0..colon]), try number(pair[colon + 1 ..]) });
             }
             if (pts.items.len == 0) return error.BadSyntax;
             if (std.mem.eql(u8, key, "points")) w.points = pts.items else w.psd = pts.items;
         } else if (std.mem.eql(u8, key, "corr")) {
             // `<j>:<rho>`: the other row by its table index, then ρ.
-            const colon = std.mem.indexOfScalar(u8, val, ':') orelse return error.BadSyntax;
+            const colon = std.mem.findScalar(u8, val, ':') orelse return error.BadSyntax;
             if (!digits(val[0..colon])) return error.BadSyntax;
             try corrs.append(arena, .{
                 .with = std.fmt.parseInt(u16, val[0..colon], 10) catch return error.BadNumber,
@@ -457,10 +463,10 @@ fn parseMetaEntry(arena: Allocator, s: []const u8) Error![]const u8 {
     var units: ?[]const u8 = null;
     var rest = std.mem.trim(u8, it.rest(), " \t");
     while (rest.len != 0) {
-        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
+        const eq = std.mem.findScalar(u8, rest, '=') orelse return error.BadSyntax;
         const key = rest[0..eq];
         if (eq + 1 >= rest.len or rest[eq + 1] != '"') return error.BadSyntax;
-        const close = std.mem.indexOfScalarPos(u8, rest, eq + 2, '"') orelse return error.BadSyntax;
+        const close = std.mem.findScalarPos(u8, rest, eq + 2, '"') orelse return error.BadSyntax;
         const val = rest[eq + 2 .. close];
         const slot = if (std.mem.eql(u8, key, "desc")) &desc else if (std.mem.eql(u8, key, "units")) &units else return error.BadSyntax;
         if (slot.* != null) return error.BadSyntax;
@@ -478,9 +484,9 @@ fn parseMetaEntry(arena: Allocator, s: []const u8) Error![]const u8 {
 /// after the `)`.
 fn parsePair(s: []const u8) Error!struct { row: []const u8, col: []const u8, rest: []const u8 } {
     if (s.len == 0 or s[0] != '(') return error.BadSyntax;
-    const close = std.mem.indexOfScalar(u8, s, ')') orelse return error.BadSyntax;
+    const close = std.mem.findScalar(u8, s, ')') orelse return error.BadSyntax;
     const inner = s[1..close];
-    const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return error.BadSyntax;
+    const comma = std.mem.findScalar(u8, inner, ',') orelse return error.BadSyntax;
     const row = std.mem.trim(u8, inner[0..comma], " \t");
     const col = std.mem.trim(u8, inner[comma + 1 ..], " \t");
     if (row.len == 0 or col.len == 0) return error.BadSyntax;
@@ -495,7 +501,7 @@ fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     var w: AcWant = .{ .topo = try arena.print("({s},{s})", .{ pr.row, pr.col }) };
     var fields = std.mem.tokenizeAny(u8, pr.rest, " \t");
     while (fields.next()) |f| {
-        const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
+        const at = std.mem.findScalar(u8, f, '=') orelse return error.BadSyntax;
         const key = f[0..at];
         const val = f[at + 1 ..];
         if (std.mem.eql(u8, key, "name")) {
@@ -521,7 +527,7 @@ fn parseAcDynEntry(arena: Allocator, s: []const u8) Error!AcDynWant {
     var tol: f64 = 1e-12;
     var fields = std.mem.tokenizeAny(u8, pr.rest, " \t");
     while (fields.next()) |fd| {
-        const at = std.mem.indexOfScalar(u8, fd, '=') orelse return error.BadSyntax;
+        const at = std.mem.findScalar(u8, fd, '=') orelse return error.BadSyntax;
         const key = fd[0..at];
         const val = try number(fd[at + 1 ..]);
         if (std.mem.eql(u8, key, "f")) {
@@ -551,8 +557,9 @@ fn parseAcDynEntry(arena: Allocator, s: []const u8) Error!AcDynWant {
 /// identifier goes through `naming.sanitize`, as codegen spells `U`; a legal
 /// identifier is taken as written, so an escaped member (`flowZ28pZ2cnZ29`)
 /// is not escaped twice. Fails with `error.BadUnknownName` for a branch
-/// potential `V(a,b)`, which is not an unknown. Result may alias `raw` or be
-/// allocated in `arena`.
+/// potential `V(a,b)`, which is not an unknown, and with `error.BadSyntax`
+/// when the access function names nothing (`V()`, `I()`, `I(a,)`, `x[]`).
+/// Result may alias `raw` or be allocated in `arena`.
 ///
 /// This is a text mapping because `ix()` resolves it against `U` at the
 /// runner's compile time. `I(a)` is ambiguous on a module with a net named
@@ -564,11 +571,11 @@ fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
         // §5.4.2's branch potential V(a,c) is derived from two nets and has
         // no row to pin. Refused here: sanitized into an identifier, it would
         // fail the testbench build, which the harness reports as an engine bug.
-        if (std.mem.indexOfScalar(u8, s, ',') != null) return error.BadUnknownName;
+        if (std.mem.findScalar(u8, s, ',') != null) return error.BadUnknownName;
     }
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
         const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
-        s = if ((inner.len != 0 and inner[0] == '<') or std.mem.indexOfScalar(u8, inner, ',') != null)
+        s = if ((inner.len != 0 and inner[0] == '<') or std.mem.findScalar(u8, inner, ',') != null)
             try arena.print("flow({s})", .{inner})
         else
             try arena.print("flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
@@ -603,7 +610,7 @@ fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding
 fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Binding)) Error!void {
     const t = std.mem.trim(u8, item, " \t");
     if (t.len == 0) return;
-    const at = std.mem.indexOfScalar(u8, t, '=') orelse return error.BadSyntax;
+    const at = std.mem.findScalar(u8, t, '=') orelse return error.BadSyntax;
     const name = std.mem.trim(u8, t[0..at], " \t");
     if (name.len == 0) return error.BadSyntax;
     try out.append(arena, .{
@@ -612,6 +619,8 @@ fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Binding)) 
     });
 }
 
+/// Parses a comma list of `number`s into `arena`. Empty items are skipped;
+/// a list with no number at all is `error.BadSyntax`.
 fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
     var out: std.ArrayList(f64) = .empty;
     var it = std.mem.splitScalar(u8, rest, ',');

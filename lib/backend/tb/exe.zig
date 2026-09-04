@@ -61,8 +61,10 @@ pub const BuildResult = union(enum) {
 
 /// Builds device.zig and the runner into one native binary under
 /// `opts.work_dir`. A null `device_zig` builds `runner_zig` alone over `sim`
-/// and `diag` (an IEEE 1364 design); `opts.mixed` must then be set.
-/// Spawns `opts.zig_exe` and blocks until it exits.
+/// and `diag` (an IEEE 1364 design). Asserts that `device_zig` is set or
+/// `opts.mixed` is. Spawns `opts.zig_exe` and blocks until it exits; an
+/// error return means it could not be spawned or a file could not be
+/// written. Caller owns the result and must free it with `deinit(gpa)`.
 ///
 /// Calls `build-exe` directly: orchestrator.zig's `.so` path serves hot
 /// reload, which a build-once testbench does not need. Debug is the default
@@ -228,29 +230,18 @@ pub const batch_argv0 = "vera-batch-";
 /// pays once. Measured with a shared warm cache, 8 Debug testbenches:
 /// 17.57 Gi built one by one, 3.53 Gi as one batch, transcripts identical.
 /// `.failed` names no member: the caller rebuilds them one by one to learn
-/// which broke.
+/// which broke. Asserts that `members` is nonempty and `opts` is neither
+/// `mixed` nor `shared_lib`. Caller owns the result and must free it with
+/// `deinit(gpa)`.
 pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOptions) !BuildResult {
     std.debug.assert(!opts.mixed and !opts.shared_lib and members.len != 0);
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var root: std.ArrayList(u8) = .empty;
-    try root.print(arena,
-        \\const std = @import("std");
-        \\pub fn main(init: std.process.Init.Minimal) void {{
-        \\    const argv = init.args.toSlice(std.heap.page_allocator) catch @panic("argv");
-        \\    const at = std.mem.lastIndexOf(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
-        \\    const i = std.fmt.parseInt(usize, argv[0][at + {d} ..], 10) catch @panic("argv[0] names no batch member");
-        \\    switch (i) {{
-        \\
-    , .{ batch_argv0, batch_argv0.len });
-    for (0..members.len) |i| try root.print(arena, "        {d} => @import(\"tb{d}\").main(init),\n", .{ i, i });
-    try root.appendSlice(arena, "        else => @panic(\"argv[0] names no batch member\"),\n    }\n}\n");
-
     var dir = try openWorkDir(io, opts);
     defer dir.close(io);
-    const root_path = try writeModule(arena, io, dir, opts, "batch", root.items);
+    const root_path = try writeModule(arena, io, dir, opts, "batch", try batchRoot(arena, members.len));
     const bin = try binPath(gpa, arena, opts);
     errdefer gpa.free(bin);
 
@@ -265,4 +256,23 @@ pub fn buildBatch(gpa: Allocator, io: Io, members: []const Staged, opts: BuildOp
     });
     try argv.append(arena, try arena.print("-Mcontract={s}", .{opts.contract}));
     return runZig(gpa, io, argv.items, bin);
+}
+
+/// Returns the root module of a `buildBatch` binary over `n` members,
+/// allocated in `arena`: its `main` runs `@import("tb<i>").main` for the `i`
+/// that `argv[0]` ends in after `batch_argv0`, and panics on any other.
+fn batchRoot(arena: Allocator, n: usize) Allocator.Error![]const u8 {
+    var root: std.ArrayList(u8) = .empty;
+    try root.print(arena,
+        \\const std = @import("std");
+        \\pub fn main(init: std.process.Init.Minimal) void {{
+        \\    const argv = init.args.toSlice(std.heap.page_allocator) catch @panic("argv");
+        \\    const at = std.mem.lastIndexOf(u8, argv[0], "{s}") orelse @panic("argv[0] names no batch member");
+        \\    const i = std.fmt.parseInt(usize, argv[0][at + {d} ..], 10) catch @panic("argv[0] names no batch member");
+        \\    switch (i) {{
+        \\
+    , .{ batch_argv0, batch_argv0.len });
+    for (0..n) |i| try root.print(arena, "        {d} => @import(\"tb{d}\").main(init),\n", .{ i, i });
+    try root.appendSlice(arena, "        else => @panic(\"argv[0] names no batch member\"),\n    }\n}\n");
+    return root.items;
 }

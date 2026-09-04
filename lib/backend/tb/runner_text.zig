@@ -1209,7 +1209,22 @@ pub const runner_body =
 
 /// `renderVpiLib`'s fixed half: the state one analysis lives in and the
 /// exports that do not depend on the directives.
-pub const vpi_lib_body =
+pub const vpi_lib_body = vpi_lib_head ++ pwl_text ++ vpi_lib_tail;
+
+/// `pwl`, which the VPI library and the mixed runner both emit, each under
+/// its own doc comment: one copy, so the two cannot drift apart.
+const pwl_text =
+    \\fn pwl(values: []const f64, t: f64) f64 {
+    \\    var k: usize = 0;
+    \\    while (k + 1 < times.len and times[k + 1] <= t) k += 1;
+    \\    const v0 = values[@min(k, values.len - 1)];
+    \\    if (k + 1 >= times.len or k + 1 >= values.len) return v0;
+    \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
+    \\}
+    \\
+;
+
+const vpi_lib_head =
     \\var g_model: D.Model = .{};
     \\var g_inst: D.Instance = .{};
     \\var g_x: [n_u]f64 = @splat(0.0);
@@ -1251,13 +1266,10 @@ pub const vpi_lib_body =
     \\
     \\/// A `//! wave` value between the declared times, as the mixed runner
     \\/// reads it: one value per `//! time` point, linear between them.
-    \\fn pwl(values: []const f64, t: f64) f64 {
-    \\    var k: usize = 0;
-    \\    while (k + 1 < times.len and times[k + 1] <= t) k += 1;
-    \\    const v0 = values[@min(k, values.len - 1)];
-    \\    if (k + 1 >= times.len or k + 1 >= values.len) return v0;
-    \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
-    \\}
+    \\
+;
+
+const vpi_lib_tail =
     \\
     \\export fn vera_vpi_systf(h: ?HostCall, o: ?HostOut) callconv(.c) void {
     \\    host_call = h;
@@ -1409,7 +1421,9 @@ pub const vpi_lib_body =
 /// The mixed-signal runner's fixed text (`renderMixed`): the digital half, the
 /// coordinator call, and the two conversions the adapter needs. Only a
 /// testbench built with `BuildOptions.mixed` imports `sim` and `diag`.
-pub const mixed_body =
+pub const mixed_body = mixed_head ++ pwl_text ++ mixed_tail;
+
+const mixed_head =
     \\const sim = @import("sim");
     \\const diag = @import("diag");
     \\const Timescale = @typeInfo(@FieldType(sim.digital.Mixed, "timescale")).optional.child;
@@ -1454,13 +1468,10 @@ pub const mixed_body =
     \\/// A `//! wave`, piecewise linear over the declared `//! time`s. At a
     \\/// declared point it is the fixed-grid runner's value, a short list holds its
     \\/// last entry, and an inserted point between two declared ones interpolates.
-    \\fn pwl(values: []const f64, t: f64) f64 {
-    \\    var k: usize = 0;
-    \\    while (k + 1 < times.len and times[k + 1] <= t) k += 1;
-    \\    const v0 = values[@min(k, values.len - 1)];
-    \\    if (k + 1 >= times.len or k + 1 >= values.len) return v0;
-    \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
-    \\}
+    \\
+;
+
+const mixed_tail =
     \\
     \\/// A digital name the device reads, and the `Model` field it arrives in;
     \\/// or an analog variable a digital expression reads, its `Instance` field,
