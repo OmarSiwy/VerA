@@ -462,7 +462,9 @@ const Idents = struct {
             } else if (isIdent(c)) {
                 const s = it.i;
                 while (it.i < t.len and isIdent(t[it.i])) it.i += 1;
-                if (std.ascii.isDigit(c) or (s > 0 and (t[s - 1] == '.' or t[s - 1] == '@'))) continue;
+                // A field follows ONE dot; after `..` the name is a range bound.
+                const field = s > 0 and t[s - 1] == '.' and !(s > 1 and t[s - 2] == '.');
+                if (std.ascii.isDigit(c) or field or (s > 0 and t[s - 1] == '@')) continue;
                 return t[s..it.i];
             } else it.i += 1;
         }
@@ -485,7 +487,7 @@ fn rename(a: Allocator, out: *std.ArrayList(u8), text: []const u8, moved: *const
 }
 
 /// Whether `text` uses `word` as an identifier.
-fn hasWord(text: []const u8, word: []const u8) bool {
+pub fn hasWord(text: []const u8, word: []const u8) bool {
     var it: Idents = .{ .text = text };
     while (it.next()) |id| if (std.mem.eql(u8, id, word)) return true;
     return false;

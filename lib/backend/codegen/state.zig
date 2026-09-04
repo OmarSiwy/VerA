@@ -806,7 +806,11 @@ pub fn emitDelays(self: *Gen) Error!void {
         const args = self.mir.instData(inst).call.args;
         if (args.len < 2) continue;
         const td = try gen_host.f64Const(self, args[1], 0, false) orelse continue;
-        try tds.append(self.arena, td);
+        // §4.5.7 "If td becomes greater than maxdelay, maxdelay will be used
+        // as a substitute for td", as `call.absdelayTd` runs it in the
+        // residual. A solve-time maxdelay is no `Model` expression: td stays.
+        const maxd = if (args.len > 2) try gen_host.f64Const(self, args[2], 0, false) else null;
+        try tds.append(self.arena, if (maxd) |m| try self.arena.print("@min({s}, {s})", .{ td, m }) else td);
     }
     if (tds.items.len == 0) return;
     try self.w(

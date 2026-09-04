@@ -357,6 +357,8 @@ fn sayFormat(g: *Gen, args: []const Mir.Value, fmt: *std.ArrayList(u8), vals: *s
                 continue;
             }
             if (conv == 'l') {
+                // Table 9-22's library.cell, as `translateFormat` prints it.
+                try appendLiteral(g, fmt, "work.");
                 try appendLiteral(g, fmt, g.mir.name);
                 continue;
             }

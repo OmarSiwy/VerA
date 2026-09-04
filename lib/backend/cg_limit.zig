@@ -38,7 +38,9 @@ const none_u32 = std.math.maxInt(u32);
 const Live = struct { reads: u64 = 0, writes: u64 = 0 };
 
 fn ubit(u: u32) u64 {
-    return if (u == none_u32) 0 else @as(u64, 1) << @intCast(u);
+    if (u == none_u32) return 0;
+    // Past bit 63 the mask has no bit for `u`; every bit keeps it a superset.
+    return if (u >= 64) std.math.maxInt(u64) else @as(u64, 1) << @intCast(u);
 }
 
 fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
