@@ -889,3 +889,22 @@ const plusarg_txt =
     \\}
     \\
 ;
+
+test depublish {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Only a leading `pub ` goes: a nested one is the kernel's own business.
+    try depublish(gpa, &out, "pub fn a() void {}\npub const b = 1;\n    pub const c = 2;\nconst d = 3;");
+    try std.testing.expectEqualStrings("fn a() void {}\nconst b = 1;\n    pub const c = 2;\nconst d = 3;", out.items);
+}
+
+test publish {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Every top-level `fn`/`const` gains `pub`; a `var`, an indented line and
+    // an already public one are left as they are.
+    try publish(gpa, &out, "fn a() void {}\nconst b = 1;\nvar c = 2;\n    const d = 3;\npub fn e() void {}");
+    try std.testing.expectEqualStrings("pub fn a() void {}\npub const b = 1;\nvar c = 2;\n    const d = 3;\npub fn e() void {}", out.items);
+}

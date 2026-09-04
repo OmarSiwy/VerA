@@ -105,14 +105,20 @@ pub const Harness = struct {
         const arena = out.arena_state.allocator();
         // One diagnostic bag threaded through every stage (diag.zig).
         out.bag = diag.Bag.init(arena);
-        const text = (try Preprocessor.process(arena, src, .{ .bag = &out.bag })).text;
+        const pp = try Preprocessor.process(arena, src, .{ .bag = &out.bag });
+        const text = pp.text;
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
         out.file = try p.parseSourceFile();
         // The annex E prelude came with `Preprocessor.process` (std_defs is on by
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
-        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{ .param_overrides = over });
+        // `directives` as `root.compile` passes them: a §10.3
+        // `default_transition` reaches §4.5.8 only through it.
+        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{
+            .param_overrides = over,
+            .directives = pp.directives,
+        });
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
@@ -140,6 +146,22 @@ pub const Harness = struct {
         // The harness bag is arena-lived and never detached, so unlike the
         // driver's it is still the right one to hand codegen.
         return generate(a, a, &self.mir, &self.lowered, v, &fatal, .{ .diags = &self.bag });
+    }
+
+    /// Proves and generates with `opts`, `.diags` set to the harness bag.
+    /// Fails the test with the bag's count when generation is fatal: every
+    /// caller asserts on a device that was meant to compile.
+    fn genWith(self: *Harness, opts: codegen.Options) !Output {
+        const gpa = std.testing.allocator;
+        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
+        defer v.deinit(gpa);
+        var fatal = false;
+        const a = self.arena_state.allocator();
+        var o = opts;
+        o.diags = &self.bag;
+        const out = try generate(a, a, &self.mir, &self.lowered, v, &fatal, o);
+        if (fatal) return error.GenerationWasFatal;
+        return out;
     }
 
     fn deinit(self: *Harness) void {
@@ -3935,4 +3957,622 @@ test "codegen: a device with laplace_nd and ddt passes AstGen" {
     var zir = try std.zig.AstGen.generate(gpa, tree);
     defer zir.deinit(gpa);
     try std.testing.expect(!zir.hasCompileErrors());
+}
+
+// ---------------------------------------------------------------------------
+// Structural oracles over a corpus of every emitter, and the defects they and
+// the LRM found. The plan (test-plan, compiler domain):
+//
+//   bug class                          oracle                         where
+//   emitted text is not Zig, or an     AstGen over device.zig, every  `expectSoundDevice`
+//   unused local or parameter          `u/<key>.zig` and `h.zig`
+//   survives a `_` back-patch
+//   nondeterministic emission          generate twice, byte-compare   `expectSoundDevice`
+//   `Output` ranges do not tile        the invariant `Output` states  `expectSoundDevice`
+//   a clause read wrong                the LRM sentence, quoted       the tests below
+//   a pure text transform wrong        hand-derived input -> output   setup_chunk.zig etc.
+// ---------------------------------------------------------------------------
+
+/// Fails, printing `text`, when AstGen reports any error. AstGen resolves
+/// every identifier a file declares and refuses an unused local or
+/// parameter, the class `patchParam` exists to prevent, so it is the
+/// cheapest oracle that an artifact is Zig at all.
+fn expectAstGen(text: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const z = try gpa.dupeSentinel(u8, text, 0);
+    defer gpa.free(z);
+    var tree = try std.zig.Ast.parse(gpa, z, .{ .mode = .zig });
+    defer tree.deinit(gpa);
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    if (zir.hasCompileErrors()) {
+        std.debug.print("AstGen refused:\n{s}\n", .{text});
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// The structural contract of one source in one display mode: generation
+/// is not fatal and is byte-identical when repeated; device.zig passes
+/// AstGen; the unit ranges tile in order, each holding the declaration it
+/// names with `unit_fn` at its keyword. For a solver device (`.drop`,
+/// `.record`: the artifacts a split build compiles) every `u/<key>.zig` the
+/// orchestrator would write, and `h.zig`, pass AstGen too.
+fn expectSoundDevice(src: []const u8, display: codegen.Display) !void {
+    const gpa = std.testing.allocator;
+    var h: Harness = undefined;
+    try Harness.run(gpa, src, &h);
+    defer h.deinit();
+    if (h.bag.failed()) {
+        std.debug.print("a corpus source failed to lower:\n{s}\n", .{src});
+        return error.TestUnexpectedResult;
+    }
+    const o = h.genWith(.{ .display = display }) catch |e| {
+        std.debug.print("{t} generation failed ({s}):\n{s}\n", .{ display, @errorName(e), src });
+        return e;
+    };
+    const again = try h.genWith(.{ .display = display });
+    try std.testing.expectEqualStrings(o.text, again.text);
+    try std.testing.expectEqualStrings(o.prelude, again.prelude);
+    try std.testing.expectEqualStrings(o.helpers, again.helpers);
+    try expectAstGen(o.text);
+    try std.testing.expectEqual(o.names.len, o.unit_lo.len);
+    try std.testing.expectEqual(o.names.len, o.unit_fn.len);
+    try std.testing.expectEqual(o.names.len, o.unit_hi.len);
+    for (o.names, o.unit_lo, o.unit_fn, o.unit_hi, 0..) |name, lo, fn_at, hi, i| {
+        if (i != 0) try std.testing.expectEqual(o.unit_hi[i - 1], lo);
+        try std.testing.expect(lo <= fn_at and fn_at < hi and hi <= o.text.len);
+        const decl = try gpa.print("fn {s}(", .{name});
+        defer gpa.free(decl);
+        try std.testing.expect(std.mem.startsWith(u8, o.text[fn_at..], decl));
+        if (display == .emit) continue;
+        // `orchestrator.writeTree`'s unit file.
+        const file = try std.mem.concat(gpa, u8, &.{ o.prelude, o.text[lo..fn_at], "pub ", o.text[fn_at..hi] });
+        defer gpa.free(file);
+        try expectAstGen(file);
+    }
+    if (display != .emit and o.names.len != 0) try expectAstGen(o.helpers);
+}
+
+/// One small module per emitter. Each is a source an earlier test in this
+/// file (or a fixture) already compiles, so a failure is the structural
+/// oracle's and not the source's.
+const corpus = [_][]const u8{
+    resistor_va,
+    shared_va,
+    // §5.6.1.2 a reactive split beside a §4.2.12 lazy guard.
+    \\module cap(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real c = 1e-12 from (0:inf);
+    \\  parameter real vmin = 1.0 from (0:inf);
+    \\  analog begin
+    \\    I(p, n) <+ c * ddt(V(p, n));
+    \\    I(p, n) <+ V(p, n) > vmin ? ln(V(p, n)) : 0.0;
+    \\  end
+    \\endmodule
+    ,
+    // §5.8 structured control flow.
+    \\module sw(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real ron = 1.0 from (0:inf);
+    \\  parameter real roff = 1e9 from (0:inf);
+    \\  analog begin : body
+    \\    real g;
+    \\    g = 0.0;
+    \\    if (V(p, n) > 0.5) g = 1.0 / ron; else g = 1.0 / roff;
+    \\    I(p, n) <+ g * V(p, n);
+    \\  end
+    \\endmodule
+    ,
+    // §5.6 a potential source, and an inductor's flux.
+    \\module vs(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real dc = 1.0;
+    \\  analog V(p, n) <+ dc;
+    \\endmodule
+    ,
+    \\module ind(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  analog V(p, n) <+ 1e-9 * ddt(I(p, n));
+    \\endmodule
+    ,
+    // §4.6.4 noise: white and flicker, a guarded source, tables, a shared
+    // generator; §4.6.3 a stimulus.
+    \\module rnoise(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real rs = 1000.0;
+    \\  analog begin
+    \\    I(p, n) <+ V(p, n) / rs;
+    \\    I(p, n) <+ white_noise(1.6e-23 / rs, "thermal");
+    \\    I(p, n) <+ flicker_noise(1e-20, 1.0, "flicker");
+    \\  end
+    \\endmodule
+    ,
+    \\module rn(p, n, m);
+    \\  inout p, n, m;
+    \\  electrical p, n, m;
+    \\  parameter real rs = 0.0;
+    \\  parameter real ich = 1e-3;
+    \\  analog begin
+    \\    I(p, n) <+ white_noise(2.0 * 1.602176634e-19 * abs(ich), "shot");
+    \\    if (rs > 0.0) begin
+    \\      I(n, m) <+ V(n, m) / rs;
+    \\      I(n, m) <+ white_noise(1.6e-23 / rs, "rs");
+    \\    end else begin
+    \\      V(n, m) <+ 0.0;
+    \\    end
+    \\  end
+    \\endmodule
+    ,
+    \\module ntab(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  analog begin
+    \\    I(p, n) <+ noise_table('{1e6, 1e-24, 1.0, 1e-18});
+    \\    I(p, n) <+ noise_table_log('{1.0, 1e-18, 1e6, 1e-24});
+    \\  end
+    \\endmodule
+    ,
+    \\module nparam(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real tbl[0:3] = '{1e6, 1e-24, 1.0, 1e-18};
+    \\  analog I(p, n) <+ noise_table(tbl);
+    \\endmodule
+    ,
+    \\module shared(a, b, c, d);
+    \\  inout a, b, c, d;
+    \\  electrical a, b, c, d;
+    \\  parameter real pwr = 1e-18;
+    \\  real nz;
+    \\  analog begin
+    \\    nz = white_noise(pwr, "shared");
+    \\    V(a, b) <+ 2.0 * nz;
+    \\    V(d, c) <+ 3.0 * nz;
+    \\  end
+    \\endmodule
+    ,
+    \\module stim(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real amp = 2.0;
+    \\  real s;
+    \\  analog begin
+    \\    s = ac_stim("xf", amp, 1.5707963267948966);
+    \\    I(p, n) <+ V(p, n) * 1e-3 + 3.0 * s;
+    \\    I(p, n) <+ white_noise(1e-18);
+    \\  end
+    \\endmodule
+    ,
+    // §5.6.7 indirect contributions.
+    \\module amp(out, pin, nin);
+    \\  inout out, pin, nin;
+    \\  electrical out, pin, nin;
+    \\  analog V(out) : V(pin, nin) == 2.0 * V(out);
+    \\endmodule
+    ,
+    \\module two(p, n, c1, c2);
+    \\  inout p, n, c1, c2;
+    \\  electrical p, n, c1, c2;
+    \\  analog begin
+    \\    V(p, n) : V(c1) == V(p, n);
+    \\    V(p, n) : V(c2) == 2.0 * V(p, n);
+    \\  end
+    \\endmodule
+    ,
+    // §4.5 operators: transition and slew, absdelay with and without a
+    // maxdelay, idt/idtmod, a nonlinear ddt, both filter families.
+    \\module tr(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real td = 1e-9 from (0:inf);
+    \\  analog I(p, n) <+ transition(V(p, n), 0.0, td, td) + slew(V(p, n), 2e8);
+    \\endmodule
+    ,
+    \\module dl(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9) + absdelay(V(p, n), 2n, 3n);
+    \\endmodule
+    ,
+    \\module l(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  analog I(p, n) <+ idtmod(V(p, n), 0.0, 1.0);
+    \\endmodule
+    ,
+    \\module c(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  analog I(p, n) <+ V(p, n) * ddt(V(p, n));
+    \\endmodule
+    ,
+    \\module m(a, n);
+    \\  inout a, n; electrical a, n;
+    \\  analog I(a, n) <+ 1e-3 * idt(1e9, 7.0, V(a, n));
+    \\endmodule
+    ,
+    \\module wmix(p, n, cp, cn);
+    \\  inout p, n, cp, cn;
+    \\  electrical p, n, cp, cn;
+    \\  parameter real num[0:2] = '{1.0, 0.0, 0.0};
+    \\  parameter real den[0:2] = '{1.0, 1e-9, 1e-19};
+    \\  analog begin
+    \\    V(p, n) <+ laplace_nd(V(cp, cn), num, den);
+    \\    I(cp, cn) <+ ddt(1e-12 * V(cp, cn));
+    \\  end
+    \\endmodule
+    ,
+    \\module zf(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  analog I(p, n) <+ 1e-3 * zi_nd(V(p, n), '{1.0}, '{1.0}, 2n, 1n);
+    \\endmodule
+    ,
+    // §5.10 events and held state: cross, timer, $prev.
+    \\module sw2(p, n, c);
+    \\  inout p, n, c; electrical p, n, c;
+    \\  integer latched;
+    \\  analog begin
+    \\    @(cross(V(c) - 0.5, +1)) latched = 1;
+    \\    @(cross(V(c) - 0.5, -1)) latched = 0;
+    \\    I(p, n) <+ ((latched > 0) ? 1.0 : 1.0e-9) * V(p, n);
+    \\  end
+    \\endmodule
+    ,
+    \\module tv(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  integer fired;
+    \\  analog begin
+    \\    @(timer(V(p, n), 1e-9)) fired = fired + 1;
+    \\    I(p, n) <+ fired;
+    \\  end
+    \\endmodule
+    ,
+    \\module avg(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  real g;
+    \\  analog begin
+    \\    g = 1.0 + 0.1 * V(p, n);
+    \\    I(p, n) <+ 0.5 * (g + $prev(g)) * V(p, n);
+    \\  end
+    \\endmodule
+    ,
+    // §5.4.3 port probes, §6.5 vector ports, §5.6.5 collapse.
+    \\module d(a, c);
+    \\  inout a, c;
+    \\  electrical a, c;
+    \\  parameter real cj = 1e-12;
+    \\  real m;
+    \\  analog begin
+    \\    I(a, c) <+ 1e-3 * V(a, c) + ddt(cj * V(a, c));
+    \\    m = I(<a>);
+    \\    I(a, c) <+ 1e-9 * m;
+    \\  end
+    \\endmodule
+    ,
+    \\module um(p, b);
+    \\  inout p;
+    \\  inout [0:1] b;
+    \\  electrical p, n;
+    \\  electrical [0:1] b;
+    \\  real x;
+    \\  analog begin
+    \\    x = I(p, n);
+    \\    I(p, n) <+ x + I(<p>);
+    \\    I(b[0], b[1]) <+ V(b[0], b[1]);
+    \\  end
+    \\endmodule
+    ,
+    \\module dz(a, c);
+    \\  inout a, c;
+    \\  electrical a, c, ai;
+    \\  parameter real rs = 0.0 from [0:inf);
+    \\  branch (a, ai) rsb;
+    \\  analog begin
+    \\    I(ai, c) <+ 1e-3 * V(ai, c);
+    \\    if (rs > 0.0) I(rsb) <+ V(rsb) / rs;
+    \\    else          V(rsb) <+ 0.0;
+    \\  end
+    \\endmodule
+    ,
+    // §5.9 a loop, §3.2.2 a memory-backed array, a §4.2.7 short circuit.
+    \\module lp(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  integer i;
+    \\  real a, b;
+    \\  analog begin
+    \\    a = 0.0;
+    \\    b = 0.0;
+    \\    for (i = 1; i <= 5; i = i + 1) begin
+    \\      a = a + i;
+    \\      b = b + i * 2;
+    \\    end
+    \\    I(p, n) <+ a * V(p, n);
+    \\    I(p) <+ b * V(p);
+    \\  end
+    \\endmodule
+    ,
+    \\module arr(p, n);
+    \\  inout p, n; electrical p, n;
+    \\  integer sp;
+    \\  real st[0:31];
+    \\  analog begin
+    \\    sp = ($abstime < 0.5) ? 1 : 2;
+    \\    st[sp] = V(p, n);
+    \\    I(p, n) <+ st[sp] + st[sp - 1];
+    \\  end
+    \\endmodule
+    ,
+    \\module wl(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  analog begin : body
+    \\    real x, y; integer i;
+    \\    x = 1e6; y = V(p, n); i = 0;
+    \\    while ((i <= 4) && (abs(y - x) > 1e-12)) begin
+    \\      x = y;
+    \\      y = 2.0 * y + 1.0;
+    \\      i = i + 1;
+    \\    end
+    \\    I(p, n) <+ y;
+    \\  end
+    \\endmodule
+    ,
+    // §3.2 integers at 32 bits; §4.6.1 analysis and time.
+    \\module w(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter integer big = 2147483647 + 1;
+    \\  parameter integer chained = big + 1;
+    \\  localparam integer sh = 1 << 31;
+    \\  analog begin
+    \\    I(p, n) <+ V(p, n) * (big + 1);
+    \\  end
+    \\endmodule
+    ,
+    \\module ak(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  analog I(p, n) <+ V(p, n) * (analysis("tran") ? 2.0 : 1.0) + 1e-3 * V(p, n) * $abstime;
+    \\endmodule
+    ,
+    // §4.5.15 a signed `$limit`.
+    \\module lim(p);
+    \\  inout p; electrical p; electrical mid;
+    \\  parameter real vt = 0.025852;
+    \\  parameter real vc = 0.6;
+    \\  parameter real type = -1.0;
+    \\  analog I(mid, p) <+ ($limit(V(mid), "pnjlim", vt, vc, type) - V(p)) / 1.0;
+    \\endmodule
+    ,
+    // §9.4/§9.7.3 display tasks, one under a branch; §9.5 a descriptor.
+    \\module disp(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  parameter real g = 2.0;
+    \\  analog begin
+    \\    $strobe("g=%g n=%5d s=%s", g, 42, "x");
+    \\    $write("no newline");
+    \\    if (V(p, n) > 0.5) $strobe("hi");
+    \\    $warning("careful");
+    \\    I(p, n) <+ g * V(p, n);
+    \\  end
+    \\endmodule
+    ,
+    \\module fdev(p, n);
+    \\  inout p, n;
+    \\  electrical p, n;
+    \\  integer fd;
+    \\  analog begin
+    \\    fd = $fopen("nope.txt");
+    \\    I(p, n) <+ V(p, n) * (fd + 1);
+    \\  end
+    \\endmodule
+    ,
+};
+
+test "codegen: every corpus device is valid Zig, deterministic and tiled, in every display mode" {
+    for (corpus) |src| {
+        try expectSoundDevice(src, .drop);
+        try expectSoundDevice(src, .emit);
+        try expectSoundDevice(src, .record);
+    }
+}
+
+test "codegen: §4.5.8 a lone rise_time sets the fall time over `default_transition" {
+    // §4.5.8: "If only a positive rise_time value is specified, the simulator
+    // uses it for both rise and fall times. If neither rise_time nor
+    // fall_time are specified or are equal to zero (0.0), the rise and fall
+    // time default to the value defined by `default_transition." §10.3 scopes
+    // the directive to the filters that "do not have rise time and fall time
+    // arguments specified".
+    //
+    // So under `default_transition 8n, transition(x, 0, 4n) rises AND falls
+    // in 4n. The residual kernel and the accepted-step bookkeeping both get 4n
+    // twice, and the directive's 8n reaches neither (`fmtF64` spells 4e-9 as
+    // 0.000000004 and 8e-9 as 0.000000008).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\`default_transition 8n
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ transition(V(p, n), 0, 4n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, src, "sim.t, sim.dt, 0.000000004, 0.000000004)") != null);
+    try std.testing.expect(std.mem.find(u8, src, ", 0.000000004, 0.000000004);\n") != null);
+    try std.testing.expect(std.mem.find(u8, src, "0.000000008") == null);
+
+    // With neither time given, the directive is both.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\`default_transition 8n
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ transition(V(p, n));
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const src2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, src2, "sim.t, sim.dt, 0.000000008, 0.000000008)") != null);
+}
+
+test "codegen: §4.2.4 an integer `/` by -1 cannot trap; any other literal stays bare" {
+    // `/` by -1 is negation, and negating minInt overflows: a bare
+    // `@divTrunc(a, -1)` panics in a safe build and traps (SIGFPE) in a
+    // ReleaseFast one at a = minInt(i64), which a saturated §4.2.1.1
+    // conversion (`zRoundI`) or a card-written integer parameter holds. The
+    // host's spelling of the same division (`i64Const`, which `derive` runs)
+    // divides in i65 and wraps; the device must give that answer, not a trap.
+    // A divisor that is neither 0 nor -1 cannot overflow and keeps the bare
+    // `@divTrunc`.
+    const cases = [_]struct { expr: []const u8, bare: bool }{
+        .{ .expr = "k / -1", .bare = false },
+        .{ .expr = "k / 3", .bare = true },
+    };
+    for (cases) |c| {
+        const src = try std.testing.allocator.print(
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  integer k, j;
+            \\  analog begin
+            \\    k = V(p, n) * 1e3;
+            \\    j = {s};
+            \\    I(p, n) <+ j * V(p, n);
+            \\  end
+            \\endmodule
+        , .{c.expr});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const out = try h.gen(std.testing.allocator);
+        try std.testing.expectEqual(c.bare, std.mem.find(u8, out, "@truncate(@divTrunc(") != null);
+        if (!c.bare) try std.testing.expect(std.mem.find(u8, out, "@divTrunc(@as(i65, zd_a), zd_b)") != null);
+    }
+}
+
+test "codegen: a setup of flags alone discards its scalar, a quoted \"S\" notwithstanding" {
+    // `setup` keeps `const S = V;` only for a body that names `S`, since an
+    // unused local is a Zig error. A §3.4.6 string comparison puts the
+    // LITERAL "S" in a body that is otherwise flags, and a literal is not a
+    // use of the identifier: the device must still be Zig.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module sf(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter string mode = "S";
+        \\  analog begin
+        \\    if (mode == "S") I(p, n) <+ V(p, n);
+        \\    else I(p, n) <+ 2.0 * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try expectAstGen(try h.gen(std.testing.allocator));
+}
+
+test "codegen: a $limit on an unknown past 63 keeps every lane in the live sets" {
+    // `limit_reads`/`limit_writes` are u64 masks, and `U` holds up to 256
+    // unknowns. Past bit 63 there is no bit to set, and the masks must stay
+    // supersets ("a missing `writes` bit silently drops a limit"), so the
+    // answer is every bit. The junction is V(a69, n): a69 is unknown
+    // 2 + 69 = 71 (ports first), and the clamp writes it, n being a port.
+    const gpa = std.testing.allocator;
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(gpa);
+    try src.appendSlice(gpa, "module big(p, n);\n  inout p, n;\n  electrical p, n;\n  electrical ");
+    for (0..70) |i| try src.print(gpa, "{s}a{d}", .{ if (i == 0) "" else ", ", i });
+    try src.appendSlice(gpa, ";\n  analog begin\n    I(p, a0) <+ V(p, a0);\n");
+    for (1..70) |i| try src.print(gpa, "    I(a{d}, a{d}) <+ V(a{d}, a{d});\n", .{ i - 1, i, i - 1, i });
+    try src.appendSlice(gpa, "    I(a69, n) <+ 1e-14 * (exp($limit(V(a69, n), \"pnjlim\", 0.025, 0.6) / 0.025) - 1.0);\n  end\nendmodule\n");
+    var h: Harness = undefined;
+    try Harness.run(gpa, src.items, &h);
+    defer h.deinit();
+    const out = try h.genWith(.{});
+    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_reads: u64 = 0xffffffffffffffff;") != null);
+    try std.testing.expect(std.mem.find(u8, out.text, "pub const limit_writes: u64 = 0xffffffffffffffff;") != null);
+}
+
+test "codegen: §4.5.7 `delays` reports the delay maxdelay leaves" {
+    // §4.5.7: "If td becomes greater than maxdelay, maxdelay will be used as
+    // a substitute for td." The residual already runs `@min(td, maxdelay)`
+    // (`absdelayTd`); the breakpoint table the host lands its echoes from
+    // must carry the same delay, or each echo lands td after a corner the
+    // device delayed by maxdelay. A two-argument site has no substitute.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module dl(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 2n, 1n) + absdelay(V(p, n), 3n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const at = std.mem.find(u8, src, "pub fn delays(").?;
+    const body = src[at..std.mem.findPos(u8, src, at, "\n}\n").?];
+    try std.testing.expect(std.mem.find(u8, body, "@min(0.000000002, 0.000000001)") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "@min("));
+    try std.testing.expect(std.mem.find(u8, body, "0.000000003") != null);
+}
+
+test "codegen: §9.4.3 a recorded `%l` is the printing artifact's library.cell" {
+    // Table 9-22's `%l` is "library.cell", which `translateFormat` writes as
+    // `work.<module>` (IEEE 1364-2005 §13.2.1's default library). A `.record`
+    // device fixes the same site's text in `say_sites`, and the host must
+    // render what the printing artifact prints.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module t(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    $strobe("in %l");
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const rec = try h.genWith(.{ .display = .record });
+    try std.testing.expect(std.mem.find(u8, rec.text, ".fmt = \"in work.t\\n\"") != null);
+    const exe = try h.genDisplay(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, exe, "\"in work.t\\n\"") != null);
+}
+
+test "codegen: fmtF64 writes every float literal as a Zig float" {
+    // `{d}` gives the shortest round-trip decimal and no point for an
+    // integral value; the `.0` keeps an integral real a float where Zig
+    // infers (`S.con(3.0)`), and a huge or tiny value stays decimal.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module f(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real a = 1e21;
+        \\  parameter real b = 1e-7;
+        \\  parameter real c = 2.5;
+        \\  parameter real d = 3;
+        \\  analog I(p, n) <+ V(p, n) * (a + b + c + d);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    for ([_][]const u8{
+        "    a: f64 = 1000000000000000000000.0,\n",
+        "    b: f64 = 0.0000001,\n",
+        "    c: f64 = 2.5,\n",
+        "    d: f64 = 3.0,\n",
+    }) |want| if (std.mem.find(u8, src, want) == null) {
+        std.debug.print("missing `{s}`\n", .{want});
+        return error.TestUnexpectedResult;
+    };
 }

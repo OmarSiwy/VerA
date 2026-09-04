@@ -1273,3 +1273,30 @@ pub const display_txt =
     \\}
     \\
 ;
+
+test appendAliases {
+    const gpa = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Top-level `z` + uppercase helpers, with or without `pub`; nothing
+    // indented, lowercase after the `z`, capitalised, one letter long, or
+    // in a comment.
+    try appendAliases(&out, gpa,
+        \\fn zFoo() void {}
+        \\pub fn zBar() void {}
+        \\const zBaz = 1;
+        \\pub const zQux = 2;
+        \\fn zlower() void {}
+        \\const ZUpper = 3;
+        \\    fn zIndented() void {}
+        \\fn z() void {}
+        \\// fn zComment() void {}
+    );
+    try std.testing.expectEqualStrings(
+        \\const zFoo = zh.zFoo;
+        \\const zBar = zh.zBar;
+        \\const zBaz = zh.zBaz;
+        \\const zQux = zh.zQux;
+        \\
+    , out.items);
+}

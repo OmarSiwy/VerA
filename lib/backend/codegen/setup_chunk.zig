@@ -544,3 +544,157 @@ test "chunk opens tail-break blocks, guards if arms, and moves shared values" {
     const c2 = (try chunk(a, out, 120)) orelse return;
     try std.testing.expect(std.mem.find(u8, c2.text, "zg1") == null);
 }
+
+test "chunk keeps one function for a small, stopping or unrecognised body" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const text =
+        \\/// doc
+        \\pub fn setup(comptime V: type, model: *Model) void {
+        \\    @setFloatMode(.strict);
+        \\    const S = V;
+        \\    const t1 = S.con(model.a);
+        \\    const t2 = t1.mul(t1);
+        \\    model.su.r[0] = (t2).val();
+        \\    return;
+        \\}
+        \\
+        \\
+    ;
+    // A target past the whole body is one chunk, which is no split.
+    try std.testing.expect(try chunk(a, text, 1 << 20) == null);
+    // `zs_stop`/`zs_done` bodies leave through labels a chunk cannot see.
+    const stop = try std.mem.replaceOwned(u8, a, text, "    return;\n", "    if (zs_stop) return;\n");
+    try std.testing.expect(try chunk(a, stop, 16) == null);
+    // Not `emitSetup`'s shape: no `pub fn setup(`, or not its closing.
+    try std.testing.expect(try chunk(a, "fn other() void {}\n", 16) == null);
+    try std.testing.expect(try chunk(a, text[0 .. text.len - 2], 16) == null);
+}
+
+test braceDelta {
+    try std.testing.expectEqual(@as(i64, 1), braceDelta("B1: {"));
+    try std.testing.expectEqual(@as(i64, 0), braceDelta("} else {"));
+    try std.testing.expectEqual(@as(i64, -1), braceDelta("}"));
+    // A brace in a string, a character literal or a comment is text.
+    try std.testing.expectEqual(@as(i64, 0), braceDelta("const s = \"{{\";"));
+    try std.testing.expectEqual(@as(i64, 0), braceDelta("const c = '{';"));
+    try std.testing.expectEqual(@as(i64, 1), braceDelta("if (a) { // }"));
+    // An escaped quote does not end the literal, so the `{` after it is text.
+    try std.testing.expectEqual(@as(i64, 0), braceDelta("const s = \"\\\"{\";"));
+    // Nor does an escaped apostrophe end a character literal.
+    try std.testing.expectEqual(@as(i64, 0), braceDelta("const c = '\\''; const d = \"{\";"));
+}
+
+test stmtEnd {
+    const body: Lines = &.{ "const a = 1;", "if (a) {", "    b();", "}", "c();" };
+    try std.testing.expectEqual(@as(?usize, 1), stmtEnd(body, 0));
+    try std.testing.expectEqual(@as(?usize, 4), stmtEnd(body, 1));
+    try std.testing.expectEqual(@as(?usize, 5), stmtEnd(body, 4));
+    // Unbalanced: a statement that never closes, or one that closes more
+    // than it opened.
+    try std.testing.expectEqual(@as(?usize, null), stmtEnd(&.{ "if (a) {", "b();" }, 0));
+    try std.testing.expectEqual(@as(?usize, null), stmtEnd(&.{"}"}, 0));
+}
+
+test splitIf {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const both = (try splitIf(a, &.{ "if (c) {", "    x();", "} else {", "    y();", "}" })).?;
+    try std.testing.expectEqualStrings("c", both.cond);
+    try std.testing.expectEqual(@as(usize, 1), both.then.len);
+    try std.testing.expectEqualStrings("x();", both.then[0]);
+    try std.testing.expectEqual(@as(usize, 1), both.@"else".len);
+    try std.testing.expectEqualStrings("y();", both.@"else"[0]);
+    try std.testing.expect(both.has_else);
+    const one = (try splitIf(a, &.{ "if (c) {", "    x();", "}" })).?;
+    try std.testing.expect(!one.has_else);
+    try std.testing.expectEqual(@as(usize, 0), one.@"else".len);
+    // An `else if` chain is not two arms, and no other statement is an `if`.
+    try std.testing.expect(try splitIf(a, &.{ "if (c) {", "    x();", "} else if (d) {", "    y();", "}" }) == null);
+    try std.testing.expect(try splitIf(a, &.{"x();"}) == null);
+}
+
+test openBlock {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Each `break :B1` is the tail of an arm, so the block opens and the
+    // breaks go: falling off the arm is leaving the block.
+    const tail = (try openBlock(a, &.{ "B1: {", "    if (c) {", "        x();", "        break :B1;", "    } else {", "        break :B1;", "    }", "}" })).?;
+    const want = [_][]const u8{ "if (c) {", "    x();", "} else {", "}" };
+    try std.testing.expectEqual(want.len, tail.len);
+    for (want, tail) |w, t| try std.testing.expectEqualStrings(w, t);
+    // A break that is not in tail position skips code after it: the block stays.
+    try std.testing.expect(try openBlock(a, &.{ "B1: {", "    if (c) break :B1;", "    x();", "}" }) == null);
+    // Not a labelled block at all.
+    try std.testing.expect(try openBlock(a, &.{"x();"}) == null);
+}
+
+test selfContained {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A jump to a label the lines define stays inside them.
+    try std.testing.expect(try selfContained(a, &.{ "L1: while (true) {", "    continue :L1;", "}" }));
+    try std.testing.expect(try selfContained(a, &.{ "B2: {", "    break :B2;", "}" }));
+    // A jump out, or a return, leaves.
+    try std.testing.expect(!try selfContained(a, &.{"break :B1;"}));
+    try std.testing.expect(!try selfContained(a, &.{"return;"}));
+}
+
+test declOf {
+    var p: Piece = .{ .guards = &.{}, .lines = &.{"const t3 = t1.mul(t1);"} };
+    declOf(&p);
+    try std.testing.expectEqualStrings("t3", p.name);
+    try std.testing.expectEqualStrings("", p.ty);
+    try std.testing.expectEqualStrings("t1.mul(t1);", p.lines[0][p.head..]);
+    var q: Piece = .{ .guards = &.{}, .lines = &.{"var h0: [2]zOf(S, 0x0) = undefined;"} };
+    declOf(&q);
+    try std.testing.expectEqualStrings("h0", q.name);
+    try std.testing.expectEqualStrings("[2]zOf(S, 0x0)", q.ty);
+    // An assignment declares nothing.
+    var r: Piece = .{ .guards = &.{}, .lines = &.{"model.su.r[0] = t3;"} };
+    declOf(&r);
+    try std.testing.expectEqualStrings("", r.name);
+}
+
+test dedent {
+    try std.testing.expectEqualStrings("    x", dedent("        x", 4));
+    try std.testing.expectEqualStrings("x", dedent("  x", 4));
+    try std.testing.expectEqualStrings("", dedent("", 4));
+}
+
+test Idents {
+    var it: Idents = .{ .text = "const t1 = S.con(model.a) + @as(f64, 2.5) // t9\n x" };
+    for ([_][]const u8{ "const", "t1", "S", "model", "f64", "x" }) |want|
+        try std.testing.expectEqualStrings(want, it.next().?);
+    try std.testing.expect(it.next() == null);
+    // A range bound is an operand, not a field: `..t5` reads `t5`.
+    var r: Idents = .{ .text = "x[0..t5]" };
+    try std.testing.expectEqualStrings("x", r.next().?);
+    try std.testing.expectEqualStrings("t5", r.next().?);
+    try std.testing.expect(r.next() == null);
+}
+
+test rename {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var moved: std.StringHashMapUnmanaged(void) = .empty;
+    try moved.put(a, "t5", {});
+    var out: std.ArrayList(u8) = .empty;
+    try rename(a, &out, "h0[0] = t5.add(t5); // t5\nS.t5 + x[0..t5]", &moved);
+    // Every read becomes `z.t5`; the comment and the field `.t5` stay.
+    try std.testing.expectEqualStrings("h0[0] = z.t5.add(z.t5); // t5\nS.t5 + x[0..z.t5]", out.items);
+}
+
+test hasWord {
+    try std.testing.expect(hasWord("const S = V;", "S"));
+    try std.testing.expect(hasWord("x[0..S]", "S"));
+    try std.testing.expect(!hasWord("model.S", "S")); // a field
+    try std.testing.expect(!hasWord("\"S\"", "S")); // a string literal
+    try std.testing.expect(!hasWord("// S", "S")); // a comment
+    try std.testing.expect(!hasWord("SS + S_", "S")); // longer names
+}

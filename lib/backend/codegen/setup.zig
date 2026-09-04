@@ -465,3 +465,14 @@ pub fn emitRoot(self: *Gen, target: Mir.Value) Error!void {
     defer self.su.merge = true;
     try emitStores(self, 1, "");
 }
+
+test namesS {
+    try std.testing.expect(namesS("    const S = V;\n"));
+    try std.testing.expect(namesS("zOf(S, 0x0)"));
+    try std.testing.expect(!namesS("model.su.b[0] = (x) != 0;"));
+    try std.testing.expect(!namesS("SS_S S2"));
+    // A literal or a comment is text, not a use: `const S = V;` beside a
+    // body that only spells "S" would be an unused local.
+    try std.testing.expect(!namesS("zStrCmp(model.mode, \"S\")"));
+    try std.testing.expect(!namesS("// S\n"));
+}
