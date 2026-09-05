@@ -64,7 +64,10 @@ pub fn deinit(self: *BigArena) void {
 /// Returns the allocator interface. Its `ptr` is `self`, so the arena must
 /// not move while anything holds an allocator taken from it. A `free` returns
 /// a large block to the backing allocator at once and a small one only when
-/// it was the arena's latest allocation.
+/// it was the arena's latest allocation. A `resize` or `remap` that would take
+/// a block across `large` fails, so the caller copies (`realloc` does).
+/// Asserts that a large block passed back to it is one it handed out and
+/// has not freed.
 pub fn allocator(self: *BigArena) Allocator {
     return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
 }
