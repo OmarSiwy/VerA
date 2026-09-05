@@ -57,9 +57,12 @@ pub const Options = struct {
     source: []const u8 = "",
 };
 
+/// `Refused`: the model is outside the abstraction (the header lists what
+/// is); `emit`'s `why` names the construct and its clause.
 pub const Error = error{ OutOfMemory, Refused };
 
-/// The largest pins-plus-nodes count the truth tables enumerate (2^n runs).
+/// The largest pins-plus-nodes count the truth tables enumerate: `emit`
+/// runs the analog block 2^n times and keeps three f64 per run and node.
 pub const max_vars = 20;
 
 const Pin = enum { digital, analog, power, ground };
@@ -86,7 +89,7 @@ const Emitter = struct {
     driven: []const bool = &.{},
 
     fn refuse(self: *Emitter, comptime fmt: []const u8, args: anytype) Error {
-        self.why.* = try std.fmt.allocPrint(self.arena, fmt, args);
+        self.why.* = try self.arena.print(fmt, args);
         return error.Refused;
     }
 
@@ -150,8 +153,16 @@ const Emitter = struct {
                 if (kinds[r] != .net) return self.refuse("`{s}` is not a net (an I() probe, or ddt/idt outside a contribution)", .{names[r]});
             }
             if (c.access == .potential) {
-                if (c.hi == Lowered.ground or self.isSupply(pins, c.hi)) continue;
-                if (c.lo != Lowered.ground and !self.isSupply(pins, c.lo)) return self.refuse("`V({s}, {s}) <+`: a potential contribution must be referred to a supply or ground", .{ names[c.hi], names[c.lo] });
+                // §5.6.1.3: a row discarded on every path is no source; the
+                // flow rows over its pair govern.
+                const kept = staticRetention(self.mir, c.wrote_val) orelse true;
+                if (!kept) continue;
+                const hi_rail = c.hi == Lowered.ground or self.isSupply(pins, c.hi);
+                const lo_rail = c.lo == Lowered.ground or self.isSupply(pins, c.lo);
+                // A rail against a rail is the supply itself.
+                if (hi_rail and lo_rail) continue;
+                if (hi_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution drives its first node; write it as `V({s}, {s})` with the value negated", .{ lw.nodeName(c.hi), names[c.lo], names[c.lo], lw.nodeName(c.hi) });
+                if (!lo_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution must be referred to a supply or ground", .{ names[c.hi], names[c.lo] });
                 potential[c.hi] = @intCast(ci);
                 driven[c.hi] = true;
             } else for ([_]u16{ c.hi, c.lo }) |r| {
@@ -176,6 +187,9 @@ const Emitter = struct {
         const S = try self.arena.alloc(f64, n_masks * states.len);
         const Q = try self.arena.alloc(f64, n_masks * states.len);
         const TD = try self.arena.alloc(f64, n_masks * states.len);
+        // Whether the node's potential row is retained (§5.6.1.3) in that run:
+        // then S is its target, else the flow residual.
+        const P = try self.arena.alloc(bool, n_masks * states.len);
         const volts = try self.arena.alloc(f64, n_nodes);
         var in: Interp = .{ .e = self, .volts = volts, .env = try self.arena.alloc(?Val, Mir.Value.first_dynamic + self.mir.defs.len) };
         for (0..n_masks) |m| {
@@ -190,8 +204,9 @@ const Emitter = struct {
                 var s: f64 = 0;
                 var q: f64 = 0;
                 var td: f64 = 0;
-                if (potential[r]) |ci| {
-                    const c = lw.contributions.items[ci];
+                const pot = if (potential[r]) |ci| (try in.get(lw.contributions.items[ci].wrote_val)).c.isTrue() else false;
+                if (pot) {
+                    const c = lw.contributions.items[potential[r].?];
                     const f = try in.get(c.resist_val);
                     s = f.c.asReal() + if (c.lo == Lowered.ground) 0 else volts[c.lo];
                     td = f.d;
@@ -207,6 +222,7 @@ const Emitter = struct {
                 S[m * states.len + si] = s;
                 Q[m * states.len + si] = q;
                 TD[m * states.len + si] = td;
+                P[m * states.len + si] = pot;
             }
         }
 
@@ -230,8 +246,11 @@ const Emitter = struct {
                 }.f;
                 var f: f64 = undefined;
                 var tau: f64 = 0;
-                if (potential[r] != null) {
+                if (P[m * states.len + si]) {
                     f = at(S, m, states.len, si);
+                } else if (P[(m & ~bit) * states.len + si] or P[(m | bit) * states.len + si]) {
+                    // The secant needs one constitutive law at both ends.
+                    return self.refuse("node `{s}`: whether its potential contribution is retained (§5.6.1.3) depends on its own value", .{names[r]});
                 } else {
                     const s0 = at(S, m & ~bit, states.len, si);
                     const s1 = at(S, m | bit, states.len, si);
@@ -364,10 +383,11 @@ const Emitter = struct {
         const name = lw.nodes.items(.name)[r];
         const pins = self.pins;
         const t: Name = .{ .prefix = "vera_t_", .text = name };
-        const sane: Name = .{ .prefix = "", .text = name };
+        const rise_name: Name = .{ .prefix = "vera_rise_", .text = name };
+        const fall_name: Name = .{ .prefix = "vera_fall_", .text = name };
         try w.print(A, "\n    // {s}\n", .{name});
-        try w.print(A, "    parameter real vera_rise_{f} = {d:.6}; // ns\n", .{ sane, rise * 1e9 });
-        try w.print(A, "    parameter real vera_fall_{f} = {d:.6}; // ns\n", .{ sane, fall * 1e9 });
+        try w.print(A, "    parameter real {f} = {d:.6}; // ns\n", .{ rise_name, rise * 1e9 });
+        try w.print(A, "    parameter real {f} = {d:.6}; // ns\n", .{ fall_name, fall * 1e9 });
         if (support.len == 0) {
             try w.print(A, "    wire {f} = 1'b{t};\n", .{ t, target[0] });
         } else {
@@ -393,22 +413,28 @@ const Emitter = struct {
             }
             try w.print(A, "            default: {f} = 1'bx;\n        endcase\n    end\n", .{t});
         }
-        try w.print(A, "    assign #(vera_rise_{f}, vera_fall_{f}) {f} = {f};\n", .{ sane, sane, self.net(pins, r), t });
+        try w.print(A, "    assign #({f}, {f}) {f} = {f};\n", .{ rise_name, fall_name, self.net(pins, r), t });
     }
 };
 
-/// A Verilog name: `prefix` then `text` with every non-identifier byte made
-/// `_`, or (no prefix) `text` itself, escaped (§3.7.1) when it is not a
-/// simple identifier.
+/// A Verilog name: `prefix` then `text`, or (no prefix) `text` itself, as one
+/// legal identifier, escaped (§3.7.1) when it is not a simple one. Distinct
+/// texts under one prefix are distinct names.
 const Name = struct {
     prefix: ?[]const u8 = null,
     text: []const u8,
 
+    /// Writes the name as an IEEE 1364-2005 §3.7 identifier.
     pub fn format(n: Name, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (n.prefix) |p| {
-            try w.writeAll(p);
-            for (n.text) |c| try w.writeByte(if (std.ascii.isAlphanumeric(c) or c == '_') c else '_');
-            return;
+            // The prefix starts the identifier, so any text of identifier
+            // bytes keeps it simple. Any other text escapes the whole name
+            // rather than map its bytes onto `_`, which two texts could share.
+            const plain = for (n.text) |c| {
+                if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) break false;
+            } else true;
+            if (plain) return w.print("{s}{s}", .{ p, n.text });
+            return w.print("\\{s}{s} ", .{ p, n.text });
         }
         const simple = n.text.len != 0 and !std.ascii.isDigit(n.text[0]) and n.text[0] != '$' and
             for (n.text) |c| {
@@ -425,12 +451,20 @@ fn ident(text: []const u8) Name {
 
 /// The supply a port's name conventionally is, or null.
 fn guessSupply(name: []const u8) ?Pin {
-    var buf: [16]u8 = undefined;
-    if (name.len > buf.len) return null;
-    const n = std.ascii.lowerString(&buf, name);
-    for ([_][]const u8{ "vdd", "vcc", "vpwr", "vpb", "avdd", "dvdd" }) |p| if (std.mem.startsWith(u8, n, p)) return .power;
-    for ([_][]const u8{ "vss", "gnd", "vgnd", "vnb", "vee", "avss", "dvss" }) |p| if (std.mem.startsWith(u8, n, p)) return .ground;
+    for ([_][]const u8{ "vdd", "vcc", "vpwr", "vpb", "avdd", "dvdd" }) |p| if (std.ascii.startsWithIgnoreCase(name, p)) return .power;
+    for ([_][]const u8{ "vss", "gnd", "vgnd", "vnb", "vee", "avss", "dvss" }) |p| if (std.ascii.startsWithIgnoreCase(name, p)) return .ground;
     return null;
+}
+
+// §5.6.1.3 a direct row's retention when it is the same on every path, or
+// null when it is decided per evaluation (`codegen/plan/topology.zig`'s
+// `retention`, read off the MIR alone).
+fn staticRetention(mir: *const Mir, v: Mir.Value) ?bool {
+    return switch (mir.valueDef(mir.resolveAlias(v))) {
+        .float_const => |x| x != 0,
+        .int_const => |x| x != 0,
+        .undef, .str_const, .param_ref, .block_param, .inst_result => null,
+    };
 }
 
 /// A MIR value under one assignment: the number, and the longest
@@ -442,6 +476,8 @@ const Interp = struct {
     e: *Emitter,
     volts: []const f64,
     env: []?Val,
+    // One block's phi results, read before any is written; reused.
+    phis: std.ArrayList(struct { res: Mir.Value, v: Val }) = .empty,
 
     fn run(self: *Interp) Error!void {
         const mir = self.e.mir;
@@ -449,43 +485,61 @@ const Interp = struct {
         var block: Mir.Block = .entry;
         var prev: ?Mir.Block = null;
         var steps: usize = 0;
-        blocks: while (true) {
+        while (true) {
             steps += 1;
             if (steps > 1 << 20) return self.e.refuse("the analog block did not finish (a loop over a node potential?)", .{});
-            // Phis read the edge just taken, all at once (they are parallel).
+            // Phis read the edge just taken, all at once (they are parallel),
+            // wherever each sits in the chain (`ssa.zig` mints them anywhere):
+            // every operand is read before any result is written.
+            self.phis.clearRetainingCapacity();
             var it = mir.blockInsts(block);
             while (it.next()) |inst| {
-                const res = mir.instResult(inst);
+                if (mir.instOp(inst) == .phi) try self.phis.append(self.e.arena, .{ .res = mir.instResult(inst), .v = try self.phi(inst, prev) });
+            }
+            for (self.phis.items) |p| {
+                if (p.res != .undef) self.env[@backingInt(p.res)] = p.v;
+            }
+            // Then every other row in chain order, and the terminator last:
+            // `Mir` allows rows after it, which codegen emits before it.
+            var term: ?Mir.Inst = null;
+            it = mir.blockInsts(block);
+            while (it.next()) |inst| {
                 const v: Val = switch (mir.instData(inst)) {
                     // §5.6.1.2 `A*ddt(B)` is charged as path_acc + A·(B - path_prev(B)):
                     // with both latches at 0 the charge is A·B, whose secant is A·ΔB.
                     .unary => |u| if (u.op == .path_prev or u.op == .path_acc) .{ .c = .{ .real = 0 } } else try self.op(u.op, &.{u.operand}),
                     .binary => |b| try self.op(b.op, &.{ b.lhs, b.rhs }),
                     .ternary => |t| try self.get(if ((try self.get(t.cond)).c.isTrue()) t.then_val else t.else_val),
-                    .phi => |p| blk: {
-                        for (0..p.count) |i| {
-                            const pair = mir.phiPair(inst, @intCast(i));
-                            if (prev != null and pair.block == prev.?) break :blk try self.get(pair.value);
-                        }
-                        return self.e.refuse("a phi with no operand for the edge taken", .{});
-                    },
-                    .branch => |b| {
-                        prev = block;
-                        block = if ((try self.get(b.cond)).c.isTrue()) b.then_block else b.else_block;
-                        continue :blocks;
-                    },
-                    .jump => |j| {
-                        prev = block;
-                        block = j.target;
-                        continue :blocks;
+                    .phi => continue,
+                    .branch, .jump => {
+                        term = inst;
+                        continue;
                     },
                     .call => |c| try self.call(c.callee, c.name, c.args),
                     .anew, .load, .store => return self.e.refuse("§3.2.2 runtime-indexed arrays are not supported", .{}),
                 };
+                const res = mir.instResult(inst);
                 if (res != .undef) self.env[@backingInt(res)] = v;
             }
-            return;
+            const last = term orelse return;
+            prev = block;
+            block = switch (mir.instData(last)) {
+                .branch => |b| if ((try self.get(b.cond)).c.isTrue()) b.then_block else b.else_block,
+                .jump => |j| j.target,
+                .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
+            };
         }
+    }
+
+    // The value phi `inst` takes on the edge from `prev`.
+    fn phi(self: *Interp, inst: Mir.Inst, prev: ?Mir.Block) Error!Val {
+        const mir = self.e.mir;
+        const from = prev orelse return self.e.refuse("a phi with no operand for the edge taken", .{});
+        for (0..mir.instData(inst).phi.count) |i| {
+            const pair = mir.phiPair(inst, @intCast(i));
+            if (pair.block == from) return self.get(pair.value);
+        }
+        return self.e.refuse("a phi with no operand for the edge taken", .{});
     }
 
     fn get(self: *Interp, value: Mir.Value) Error!Val {
@@ -551,3 +605,416 @@ const Interp = struct {
         };
     }
 };
+
+// ---- tests ------------------------------------------------------------------
+// Each model is a hand-built MIR (`Fixture`), so the test states the residual
+// it hands `emit`. The expected values follow from the header's formulas:
+// F = -S(0)·VDD/(S(VDD)-S(0)), tau = ΔQ/ΔS, delay = tau·ln2 + td.
+
+const Fixture = @import("codegen/plan/fixture.zig").Fixture;
+
+/// Pins `a`, `y`, `vdd`, `vss`, in that order, all ports.
+const four = [_][]const u8{ "a", "y", "vdd", "vss" };
+const logic: Options = .{ .digital = &.{ "a", "y" }, .source = "buf.va" };
+
+/// Appends the unconditional direct contribution `I(hi, lo) <+ resist +
+/// ddt(react)`.
+fn addFlow(f: *Fixture, hi: u16, lo: u16, resist: Mir.Value, react: Mir.Value) !void {
+    try f.lowered.contributions.append(f.alloc(), .{ .access = .flow, .hi = hi, .lo = lo, .resist_val = resist, .react_val = react, .wrote_val = .f_one });
+}
+
+/// Builds `four` with `I(y, vss) <+ V(y) - V(a)`: y settles at V(a).
+fn buffer(f: *Fixture) !void {
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const r = try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(1), try f.probe(0) });
+    try addFlow(f, 1, 3, r, .f_zero);
+}
+
+/// Runs `emit`, printing the refusal if there is one.
+fn emitOk(f: *Fixture, o: Options) ![]const u8 {
+    var why: []const u8 = "";
+    return emit(f.alloc(), &f.mir, &f.lowered, o, &why) catch |e| {
+        std.debug.print("refused: {s}\n", .{why});
+        return e;
+    };
+}
+
+/// Fails unless `emit` refuses with a reason holding `part`.
+fn expectRefused(f: *Fixture, o: Options, part: []const u8) !void {
+    var why: []const u8 = "";
+    try std.testing.expectError(error.Refused, emit(f.alloc(), &f.mir, &f.lowered, o, &why));
+    if (std.mem.find(u8, why, part) == null) {
+        std.debug.print("refused: {s}\nexpected: {s}\n", .{ why, part });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "emit: a buffer is a one-input truth table with no delay" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try buffer(&f);
+    // S(V(y)) = V(y) - V(a), so F = V(a): y copies a. No charge and no
+    // transition, so both delays are 0.
+    try std.testing.expectEqualStrings(
+        \\// GENERATED BY VerA --emit-verilog from buf.va - DO NOT EDIT.
+        \\// Behavioural model of `mymod` for digital simulation: a driven net is high
+        \\// above VDD/2 = 0.9 V; its switching delay is the model's own RC (tau*ln2) plus
+        \\// any transition()/absdelay() td, or its (* vera_delay *). Analog pins are
+        \\// undriven and read as their logic level.
+        \\`timescale 1ns/1ps
+        \\module mymod (
+        \\      a
+        \\    , y
+        \\    , vdd
+        \\    , vss
+        \\);
+        \\    input  wire a; // digital
+        \\    output wire y; // digital
+        \\    inout  wire vdd; // power
+        \\    inout  wire vss; // ground
+        \\
+        \\    // y
+        \\    parameter real vera_rise_y = 0.000000; // ns
+        \\    parameter real vera_fall_y = 0.000000; // ns
+        \\    reg vera_t_y;
+        \\    always @* begin
+        \\        case ({a})
+        \\            1'b0: vera_t_y = 1'b0;
+        \\            1'b1: vera_t_y = 1'b1;
+        \\            default: vera_t_y = 1'bx;
+        \\        endcase
+        \\    end
+        \\    assign #(vera_rise_y, vera_fall_y) y = vera_t_y;
+        \\endmodule
+        \\
+    , try emitOk(&f, logic));
+}
+
+test "emit: an RC's delay is tau·ln2, a transition's is its td" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const a = f.alloc();
+    // I(y) <+ (V(y) - V(a))/1k + ddt(1p·V(y)): tau = R·C = 1 ns, so the 50 %
+    // crossing is ln2 ns = 0.693147 ns on both edges.
+    const vy = try f.probe(1);
+    const diff = try f.mir.emit(a, .entry, .fsub, &.{ vy, try f.probe(0) });
+    const i_r = try f.mir.emit(a, .entry, .fdiv, &.{ diff, try f.mir.addFloatConst(a, 1000) });
+    const q = try f.mir.emit(a, .entry, .fmul, &.{ try f.mir.addFloatConst(a, 1e-12), vy });
+    try addFlow(&f, 1, 3, i_r, q);
+    const rc = try emitOk(&f, logic);
+    try std.testing.expect(std.mem.find(u8, rc, "parameter real vera_rise_y = 0.693147; // ns\n") != null);
+    try std.testing.expect(std.mem.find(u8, rc, "parameter real vera_fall_y = 0.693147; // ns\n") != null);
+
+    // I(y) <+ V(y) - transition(V(a), 2n): no charge, td = 2 ns.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try g.init(&four);
+    g.lowered.num_ports = 4;
+    const b = g.alloc();
+    const tr = try g.call("transition", &.{ try g.probe(0), try g.mir.addFloatConst(b, 2e-9) });
+    try addFlow(&g, 1, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(1), tr }), .f_zero);
+    const td = try emitOk(&g, logic);
+    try std.testing.expect(std.mem.find(u8, td, "parameter real vera_rise_y = 2.000000; // ns\n") != null);
+    try std.testing.expect(std.mem.find(u8, td, "parameter real vera_fall_y = 2.000000; // ns\n") != null);
+}
+
+test "emit: a node settling at exactly VDD/2 is x, and a constant needs no table" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    // I(y) <+ V(y) - 0.9: F = 0.9 = VDD/2 whatever a is.
+    const r = try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(1), try f.mir.addFloatConst(f.alloc(), 0.9) });
+    try addFlow(&f, 1, 3, r, .f_zero);
+    const text = try emitOk(&f, logic);
+    try std.testing.expect(std.mem.find(u8, text, "    wire vera_t_y = 1'bx;\n") != null);
+    try std.testing.expect(std.mem.find(u8, text, "case") == null);
+}
+
+test "emit: --power-pins puts every supply under USE_POWER_PINS, before and after the signals" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&.{ "vdd", "a", "y", "vss" });
+    f.lowered.num_ports = 4;
+    const r = try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(2), try f.probe(1) });
+    try addFlow(&f, 2, 3, r, .f_zero);
+    var o = logic;
+    o.power_pins = true;
+    const text = try emitOk(&f, o);
+    // A leading supply carries its own comma inside the `ifdef`; a trailing
+    // one, its leading comma.
+    const ports =
+        \\module mymod (
+        \\`ifdef USE_POWER_PINS
+        \\    vdd,
+        \\`endif
+        \\      a
+        \\    , y
+        \\`ifdef USE_POWER_PINS
+        \\    , vss
+        \\`endif
+        \\);
+        \\`ifdef USE_POWER_PINS
+        \\    inout  wire vdd; // power
+        \\`endif
+        \\    input  wire a; // digital
+        \\    output wire y; // digital
+        \\`ifdef USE_POWER_PINS
+        \\    inout  wire vss; // ground
+        \\`endif
+        \\
+    ;
+    try std.testing.expect(std.mem.find(u8, text, ports) != null);
+}
+
+test "emit: an internal net is declared only when a digital output reads it" {
+    const five = [_][]const u8{ "a", "y", "vdd", "vss", "n" };
+    // Live: y follows n, n follows a.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&five);
+    f.lowered.num_ports = 4;
+    const a = f.alloc();
+    try addFlow(&f, 1, 3, try f.mir.emit(a, .entry, .fsub, &.{ try f.probe(1), try f.probe(4) }), .f_zero);
+    try addFlow(&f, 4, 3, try f.mir.emit(a, .entry, .fsub, &.{ try f.probe(4), try f.probe(0) }), .f_zero);
+    const live = try emitOk(&f, logic);
+    try std.testing.expect(std.mem.find(u8, live, "    wire vera_n_n; // n\n") != null);
+    try std.testing.expect(std.mem.find(u8, live, "        case ({vera_n_n})\n") != null);
+    try std.testing.expect(std.mem.find(u8, live, "    assign #(vera_rise_n, vera_fall_n) vera_n_n = vera_t_n;\n") != null);
+
+    // Dead: y follows a, and nothing reads n.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try g.init(&five);
+    g.lowered.num_ports = 4;
+    const b = g.alloc();
+    try addFlow(&g, 1, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(1), try g.probe(0) }), .f_zero);
+    try addFlow(&g, 4, 3, try g.mir.emit(b, .entry, .fsub, &.{ try g.probe(4), try g.probe(0) }), .f_zero);
+    const dead = try emitOk(&g, logic);
+    try std.testing.expect(std.mem.find(u8, dead, "vera_n_n") == null);
+    try std.testing.expect(std.mem.find(u8, dead, "// n\n") == null);
+}
+
+test "emit refuses what it cannot abstract, naming it" {
+    const gpa = std.testing.allocator;
+    {
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&.{"y"});
+        try expectRefused(&f, .{}, "has no ports");
+    }
+    {
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try buffer(&f);
+        try f.lowered.held_vars.append(f.alloc(), .{ .name = "q", .ty = .real, .init = .f_zero, .seed = .f_zero });
+        try expectRefused(&f, logic, "`q` holds state");
+    }
+    {
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try buffer(&f);
+        try f.lowered.vectors.put(f.alloc(), "bus", .{ .msb = 1, .lsb = 0 });
+        try expectRefused(&f, logic, "vector nets");
+    }
+    {
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try buffer(&f);
+        try expectRefused(&f, .{ .digital = &.{"nope"} }, "`nope` is not a port");
+    }
+    {
+        // §5.6.7 indirect assignment.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try buffer(&f);
+        f.lowered.contributions.items[0].kind = .indirect;
+        try expectRefused(&f, logic, "indirect");
+    }
+    {
+        // V(y, a) <+ 0: referred to a signal, not a rail.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        try f.lowered.contributions.append(f.alloc(), .{ .access = .potential, .hi = 1, .lo = 0, .wrote_val = .f_one });
+        try expectRefused(&f, logic, "must be referred to a supply or ground");
+    }
+    {
+        // V(vdd, y) <+ 0.2 drives y (V(y) = VDD - 0.2), but from its second
+        // node: refused rather than silently left undriven.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        try f.lowered.contributions.append(f.alloc(), .{ .access = .potential, .hi = 2, .lo = 1, .resist_val = try f.mir.addFloatConst(f.alloc(), 0.2), .wrote_val = .f_one });
+        try expectRefused(&f, logic, "drives its first node");
+    }
+    {
+        // Every assignment enumerated: 21 undriven ports are 2^21 runs.
+        const many = comptime blk: {
+            var n: [max_vars + 1][]const u8 = undefined;
+            for (&n, 0..) |*s, i| s.* = std.fmt.comptimePrint("p{d}", .{i});
+            break :blk n;
+        };
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&many);
+        f.lowered.num_ports = many.len;
+        try expectRefused(&f, .{}, "21 pins and driven nodes; the truth tables stop at 20");
+    }
+    {
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&.{ "vdd", "vss" });
+        f.lowered.num_ports = 2;
+        try expectRefused(&f, .{ .power_pins = true }, "every port is a supply");
+    }
+    {
+        // I(y) <+ V(a): y's current does not move with V(y).
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        try addFlow(&f, 1, 3, try f.probe(0), .f_zero);
+        try expectRefused(&f, logic, "settles nowhere");
+    }
+    {
+        // `$abstime` moves with time: no one value per assignment.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&four);
+        f.lowered.num_ports = 4;
+        const t = try f.call("$abstime", &.{});
+        try addFlow(&f, 1, 3, try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(1), t }), .f_zero);
+        try expectRefused(&f, logic, "`$abstime` has no static value");
+    }
+    {
+        // An internal net nothing drives has no potential to read.
+        var f: Fixture = .{ .arena = .init(gpa) };
+        defer f.deinit();
+        try f.init(&.{ "a", "y", "vdd", "vss", "n" });
+        f.lowered.num_ports = 4;
+        try addFlow(&f, 1, 3, try f.mir.emit(f.alloc(), .entry, .fsub, &.{ try f.probe(1), try f.probe(4) }), .f_zero);
+        try expectRefused(&f, logic, "`n` is read but is neither a pin nor a driven net");
+    }
+}
+
+test guessSupply {
+    for ([_][]const u8{ "vdd", "VDD", "vdda", "vcc", "vpwr", "vpb", "avdd", "dvdd" }) |n|
+        try std.testing.expectEqual(@as(?Pin, .power), guessSupply(n));
+    for ([_][]const u8{ "vss", "gnd", "GND", "vgnd", "vnb", "vee", "avss", "dvss" }) |n|
+        try std.testing.expectEqual(@as(?Pin, .ground), guessSupply(n));
+    for ([_][]const u8{ "", "a", "vd", "out_vdd" }) |n|
+        try std.testing.expectEqual(@as(?Pin, null), guessSupply(n));
+    // The header's rule is `vdd*`, whatever the length: 17 bytes is still a
+    // supply.
+    try std.testing.expectEqual(@as(?Pin, .power), guessSupply("vdd_core_supply_1"));
+    try std.testing.expectEqual(@as(?Pin, .ground), guessSupply("gnd_of_the_analog_core"));
+}
+
+test Name {
+    // A simple identifier (IEEE 1364-2005 §3.7) is written as is, `$` inside
+    // included; anything else is escaped: `\`, the text, a space (§3.7.1).
+    try std.testing.expectFmt("a$b", "{f}", .{ident("a$b")});
+    try std.testing.expectFmt("\\1a ", "{f}", .{ident("1a")});
+    try std.testing.expectFmt("\\$a ", "{f}", .{ident("$a")});
+    try std.testing.expectFmt("\\a.b ", "{f}", .{ident("a.b")});
+    // A prefixed name keeps a simple text as it is ...
+    try std.testing.expectFmt("vera_n_a_b", "{f}", .{Name{ .prefix = "vera_n_", .text = "a_b" }});
+    // ... and two texts never meet in one name: `a.b` is not `a_b`.
+    try std.testing.expectFmt("\\vera_n_a.b ", "{f}", .{Name{ .prefix = "vera_n_", .text = "a.b" }});
+    try std.testing.expectFmt("vera_n_a$b", "{f}", .{Name{ .prefix = "vera_n_", .text = "a$b" }});
+}
+
+test "emit: a potential row §5.6.1.3 discards on every path leaves the flow in charge" {
+    // Metamorphic: the buffer plus a `V(y, vss)` row whose retention folded
+    // to 0 (its accumulators to 0 with it) is the buffer.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try buffer(&f);
+    const want = try emitOk(&f, logic);
+
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try g.init(&four);
+    g.lowered.num_ports = 4;
+    try g.lowered.contributions.append(g.alloc(), .{ .access = .potential, .hi = 1, .lo = 3, .wrote_val = .f_zero });
+    try addFlow(&g, 1, 3, try g.mir.emit(g.alloc(), .entry, .fsub, &.{ try g.probe(1), try g.probe(0) }), .f_zero);
+    try std.testing.expectEqualStrings(want, try emitOk(&g, logic));
+}
+
+test "emit: a §5.6.5 switch branch follows whichever quantity this assignment retains" {
+    // if (V(a) > 0.9) V(y) <+ 1.8; else I(y) <+ V(y);
+    // a = 1: the potential holds y at 1.8; a = 0: the flow I = V(y) settles
+    // it at 0. Either way y copies a with no delay: the buffer's text.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try buffer(&f);
+    const want = try emitOk(&f, logic);
+
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try g.init(&four);
+    g.lowered.num_ports = 4;
+    const b = g.alloc();
+    const on = try g.mir.emit(b, .entry, .fgt, &.{ try g.probe(0), try g.mir.addFloatConst(b, 0.9) });
+    try g.lowered.contributions.append(b, .{ .access = .potential, .hi = 1, .lo = 3, .resist_val = try g.mir.addFloatConst(b, 1.8), .wrote_val = on });
+    try addFlow(&g, 1, 3, try g.probe(1), .f_zero);
+    try std.testing.expectEqualStrings(want, try emitOk(&g, logic));
+}
+
+test "emit: phis read the edge taken all at once" {
+    // p, q = 0, 1; for (i = 0; i < 1; i++) p, q = q, p;  then I(y) <+ V(y) - 1.8·q.
+    // One swap leaves q = 0, so y settles at 0. Reading q's operand after p
+    // was overwritten would give q = 1 and y = 1.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const a = f.alloc();
+    const m = &f.mir;
+    const header = try m.addBlock(a);
+    const body = try m.addBlock(a);
+    const exit = try m.addBlock(a);
+    _ = try m.emitJump(a, .entry, header);
+    const p = try m.emitPhi(a, header, &.{});
+    const p_inst = m.blockLast(header);
+    const q = try m.emitPhi(a, header, &.{});
+    const q_inst = m.blockLast(header);
+    const i = try m.emitPhi(a, header, &.{});
+    const i_inst = m.blockLast(header);
+    const go = try m.emit(a, header, .flt, &.{ i, .f_one });
+    _ = try m.emitBranch(a, header, go, body, exit);
+    const i_next = try m.emit(a, body, .fadd, &.{ i, .f_one });
+    _ = try m.emitJump(a, body, header);
+    try m.setPhiPairs(a, p_inst, &.{ .{ .block = .entry, .value = .f_zero }, .{ .block = body, .value = q } });
+    try m.setPhiPairs(a, q_inst, &.{ .{ .block = .entry, .value = .f_one }, .{ .block = body, .value = p } });
+    try m.setPhiPairs(a, i_inst, &.{ .{ .block = .entry, .value = .f_zero }, .{ .block = body, .value = i_next } });
+    const scaled = try m.emit(a, exit, .fmul, &.{ try m.addFloatConst(a, 1.8), q });
+    try addFlow(&f, 1, 3, try m.emit(a, exit, .fsub, &.{ try f.probe(1), scaled }), .f_zero);
+
+    try std.testing.expect(std.mem.find(u8, try emitOk(&f, logic), "    wire vera_t_y = 1'b0;\n") != null);
+}
+
+test "emit: a row placed after its block's terminator still runs, before it" {
+    // `Mir` allows rows after a branch (`lower_var.hiddenHeldInt`); codegen
+    // runs them before the terminator, and so must the interpreter.
+    // x = 1 + 1 sits after entry's jump; I(y) <+ V(y) - 0.9·x settles at 1.8.
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try f.init(&four);
+    f.lowered.num_ports = 4;
+    const a = f.alloc();
+    const m = &f.mir;
+    const next = try m.addBlock(a);
+    _ = try m.emitJump(a, .entry, next);
+    const x = try m.emit(a, .entry, .fadd, &.{ .f_one, .f_one });
+    const scaled = try m.emit(a, next, .fmul, &.{ try m.addFloatConst(a, 0.9), x });
+    try addFlow(&f, 1, 3, try m.emit(a, next, .fsub, &.{ try f.probe(1), scaled }), .f_zero);
+
+    try std.testing.expect(std.mem.find(u8, try emitOk(&f, logic), "    wire vera_t_y = 1'b1;\n") != null);
+}
