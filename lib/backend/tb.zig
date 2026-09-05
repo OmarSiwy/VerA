@@ -22,9 +22,13 @@ pub const Error = Allocator.Error || error{
     /// A `//!` line named an unknown directive. Refused so a typo cannot
     /// silently check nothing.
     UnknownDirective,
-    /// A directive's operand was not a number.
+    /// A directive's operand was not a number, or not the plain decimal
+    /// digits a count or an exit status takes.
     BadNumber,
-    /// A directive that needs `name = value` did not get one.
+    /// A directive's operands do not have its documented form (a missing
+    /// `name = value`, an unknown field key, an empty name), or two lines
+    /// contradict each other (`reject` beside `checks`, `warn` beside
+    /// `nowarn`).
     BadSyntax,
     /// The cartesian product of the `sweep` lines exceeded `max_points`.
     TooManyPoints,
@@ -52,18 +56,23 @@ pub const Analysis = enum { static, ic, nodeset, dc, tran, ac, noise };
 /// fixture runs one point, every unknown at zero and every parameter at its
 /// §3.4 default. Slices are owned by the arena `parse` was given.
 pub const Directives = struct {
-    /// §3.4 parameter overrides, in source order.
+    /// §3.4 parameter overrides, in source order. A name is the parameter's
+    /// source name and its `Model` field at once, so a host-written field
+    /// (`gmin__`) is named as the device spells it.
     params: []const Binding = &.{},
-    /// Unknowns held at a fixed value across the whole sweep.
+    /// Unknowns held at a fixed value across the whole sweep. A name is a
+    /// `U` member, resolved by the parser's access-function rule
+    /// (`V(a)`, `I(a,b)`, `x[a]`).
     bias: []const Binding = &.{},
     /// Swept unknowns. The operating points are the cartesian product, last
     /// line varying fastest.
     sweeps: []const Sweep = &.{},
     /// §9.10 `$temperature`, in kelvin.
     temp: f64 = 300.15,
-    /// §9.10 `$abstime` values. Each operating point runs once per time, with
-    /// `dt` from the previous entry (§4.5.3) and `updateState` after each, so
-    /// §4.5 stateful operators see transient history.
+    /// §9.10 `$abstime` values, strictly increasing. Each operating point
+    /// runs once per time, with `dt` from the previous entry (§4.5.3) and
+    /// `updateState` after each, so §4.5 stateful operators see transient
+    /// history. `sim.mixed.run` takes the same list and requires the order.
     times: []const f64 = &.{0.0},
     /// Per-timepoint values for an unknown: `//! wave V(in) = 0, 1, 1, 0`, one
     /// entry per `//! time`. A short list holds its last value.
@@ -238,6 +247,7 @@ pub const Mixed = struct {
     /// The `timescale unit and precision in force, in seconds; null when the
     /// source gave none.
     unit: ?f64,
+    /// Set exactly when `unit` is.
     precision: ?f64,
     /// Digital-owned names the analog block reads, each a `Model` field.
     inputs: []const []const u8,
@@ -313,7 +323,12 @@ pub const NoiseWant = struct {
     /// since a coefficient may depend on the bias. Compared with `rtol`.
     corrs: []const Corr = &.{},
 
-    pub const Corr = struct { with: u16, rho: f64 };
+    /// One `corr=<j>:<rho>` field.
+    pub const Corr = struct {
+        /// The other row, by its index in `noise_gens`.
+        with: u16,
+        rho: f64,
+    };
 
     /// Returns whether this line asserts a bias-dependent density, which needs
     /// an operating point.

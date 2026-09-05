@@ -1,6 +1,20 @@
-//! Tests for directive parsing and runner generation.
+//! Tests for directive parsing and runner generation: fixture text in,
+//! verdicts on the parsed `tb.Directives` and the rendered runner out.
 //! LRM: §2.6, §3.4.1, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.6, §5.2.1, §5.4.2, §5.6,
-//! §5.8, §5.10.2, §6.5.2.
+//! §5.8, §5.10.2, §6.5.2, §7.3.1, §9.15.
+//!
+//! The plan, as bug class, then oracle, then where:
+//!   - a malformed line checks nothing: the grammar `tb.zig` documents;
+//!     directive.zig's per-keyword test and the refusals here.
+//!   - a number reads differently from the model's own literal: §2.6's table
+//!     and Zig's literals; directive.zig's `test number`.
+//!   - a rendered testbench does not build: AstGen, the compiler's own front
+//!     half, over generated directive sets ("every directive set ...").
+//!   - a value reaches the testbench changed: Zig's literal reader;
+//!     runner.zig's `test fmtF64`.
+//!   - the build command is wrong: argv derived by hand; exe.zig's tests.
+//! The emitted solver and gates execute only in the fixture suite (`zig
+//! build benchmark`), which builds and runs a testbench per fixture.
 
 const std = @import("std");
 const tb = @import("../tb.zig");
@@ -9,6 +23,40 @@ const tb_runner = @import("runner.zig");
 const Analysis = tb.Analysis;
 
 const testing = std.testing;
+
+/// Asserts that `src` parses and passes AstGen: every check a testbench
+/// build makes before it resolves `device` and `contract` (unused or
+/// never-mutated locals, undeclared names, shadowing). Prints `src` on
+/// failure, since a generator chose it.
+pub fn expectAstGen(src: []const u8) !void {
+    const gpa = testing.allocator;
+    const z = try gpa.dupeSentinel(u8, src, 0);
+    defer gpa.free(z);
+    var tree = try std.zig.Ast.parse(gpa, z, .{ .mode = .zig });
+    defer tree.deinit(gpa);
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    if (tree.errors.len == 0 and !zir.hasCompileErrors()) return;
+    std.debug.print("{s}\n", .{src});
+    return error.TestUnexpectedResult;
+}
+
+/// A mixed-signal plan with every naming hazard `renderMixed` escapes: a
+/// quote and a backslash in the source, an `x`/`z` input, a three-word `reg`,
+/// a `Z` (the escape marker) in a name, an event and an inserted module.
+const sample_mixed: tb.Mixed = .{
+    .source = "module m(a); \"quoted\" \\ endmodule\n",
+    .top = "m",
+    .unit = 1e-9,
+    .precision = 1e-12,
+    .inputs = &.{ "clk", "bus", "Zq" },
+    .xz = &.{"clk"},
+    .wide = &.{"bus"},
+    .words = &.{3},
+    .snaps = &.{"go"},
+    .events = &.{.{ .name = "go", .edge = .posedge, .param = "go__ev" }},
+    .inserts = &.{.{ .path = "m.i", .inst = "i", .port = "p", .module = "cm", .name = "cm0", .upper_port = "a", .lower_port = "d" }},
+};
 
 test "directives: defaults when the source has none" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -30,18 +78,18 @@ test "§5.6 `//! solve` unties the unknowns nothing else names" {
     // Default netlist: every unknown tied to the reference, so `//! bias V(p)`
     // on a two-terminal device is the potential across it.
     const tied = try tb_runner.renderRunner(arena, "065_tied", try tb_directive.parse(arena, "//! bias V(p) = 0.5\n"));
-    try testing.expect(std.mem.indexOf(u8, tied, "var forced: [n_u]?f64 = @splat(0.0);") != null);
-    try testing.expect(std.mem.indexOf(u8, tied, "set(&x, &forced, \"p\", 0.5);") != null);
+    try testing.expect(std.mem.find(u8, tied, "var forced: [n_u]?f64 = @splat(0.0);") != null);
+    try testing.expect(std.mem.find(u8, tied, "set(&x, &forced, \"p\", 0.5);") != null);
 
     // With `solve`, only what a directive names stays pinned.
     const d = try tb_directive.parse(arena, "//! bias V(ctrl) = 1.5\n//! solve\n");
     try testing.expect(d.solve_free);
     const free = try tb_runner.renderRunner(arena, "066_free", d);
-    try testing.expect(std.mem.indexOf(u8, free, "var forced: [n_u]?f64 = @splat(null);") != null);
-    try testing.expect(std.mem.indexOf(u8, free, "set(&x, &forced, \"ctrl\", 1.5);") != null);
+    try testing.expect(std.mem.find(u8, free, "var forced: [n_u]?f64 = @splat(null);") != null);
+    try testing.expect(std.mem.find(u8, free, "set(&x, &forced, \"ctrl\", 1.5);") != null);
     // The solve runs before the model prints (§5.6: semantics at a solution).
-    const solve_at = std.mem.indexOf(u8, free, "solve(&x, &forced").?;
-    try testing.expect(solve_at < std.mem.indexOf(u8, free, "point(0, &x").?);
+    const solve_at = std.mem.find(u8, free, "solve(&x, &forced").?;
+    try testing.expect(solve_at < std.mem.find(u8, free, "point(0, &x").?);
 
     // It takes no operand.
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! solve V(p)\n"));
@@ -267,8 +315,8 @@ test "renderRunner emits the meta and correlation checks as parseable Zig" {
     var ast = try std.zig.Ast.parse(testing.allocator, z, .{ .mode = .zig });
     defer ast.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), ast.errors.len);
-    try testing.expect(std.mem.indexOf(u8, src, "noise[0].corr[1] got=") != null);
-    try testing.expect(std.mem.indexOf(u8, src, "\"parameter r desc=\\\"R\\\" units=\\\"Ohm\\\"\"") != null);
+    try testing.expect(std.mem.find(u8, src, "noise[0].corr[1] got=") != null);
+    try testing.expect(std.mem.find(u8, src, "\"parameter r desc=\\\"R\\\" units=\\\"Ohm\\\"\"") != null);
 }
 
 test "§2.6 a scale factor is an exponent, not a multiplier" {
@@ -278,10 +326,11 @@ test "§2.6 a scale factor is an exponent, not a multiplier" {
 
     // Bit equality with the same spelling in the model (`Lexer.scaleExp`):
     // `200 * 1e-6` is a different double from `200e-6`.
-    const d = try tb_directive.parse(arena, "//! time 0, 200u, 1n, 2.5m, 1K\n");
+    // In increasing order, as a time grid must be.
+    const d = try tb_directive.parse(arena, "//! time 0, 1n, 200u, 2.5m, 1K\n");
     try testing.expectEqual(@as(f64, 0.0), d.times[0]);
-    try testing.expectEqual(@as(f64, 200e-6), d.times[1]);
-    try testing.expectEqual(@as(f64, 1e-9), d.times[2]);
+    try testing.expectEqual(@as(f64, 1e-9), d.times[1]);
+    try testing.expectEqual(@as(f64, 200e-6), d.times[2]);
     try testing.expectEqual(@as(f64, 2.5e-3), d.times[3]);
     try testing.expectEqual(@as(f64, 1e3), d.times[4]);
     // The product must be computed at run time: comptime float arithmetic is
@@ -289,9 +338,9 @@ test "§2.6 a scale factor is an exponent, not a multiplier" {
     var two_hundred: f64 = 200;
     _ = &two_hundred;
     const multiplied = two_hundred * 1e-6;
-    try testing.expect(d.times[1] == 200e-6);
+    try testing.expect(d.times[2] == 200e-6);
     try testing.expect(multiplied != 200e-6);
-    try testing.expect(d.times[1] != multiplied);
+    try testing.expect(d.times[2] != multiplied);
 
     // A bare suffix is not a number, and neither is a suffix on nothing.
     try testing.expectError(error.BadNumber, tb_directive.parse(arena, "//! temp u\n"));
@@ -582,6 +631,38 @@ test "sweep expansion is the cartesian product, last fastest" {
     try testing.expectEqualSlices(f64, &.{ 1, 30 }, pts[5]);
 }
 
+test "sweep expansion stops at max_points, counting the product" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const vals = try arena.alloc(f64, tb.max_points + 1);
+    for (vals, 0..) |*v, i| v.* = @floatFromInt(i);
+    const at_cap: tb.Directives = .{ .sweeps = &.{.{ .name = "a", .values = vals[0..tb.max_points] }} };
+    try testing.expectEqual(tb.max_points, (try tb_runner.expand(arena, at_cap)).len);
+    const over: tb.Directives = .{ .sweeps = &.{.{ .name = "a", .values = vals }} };
+    try testing.expectError(error.TooManyPoints, tb_runner.expand(arena, over));
+    // 64 x 65 is past the cap, though neither column is.
+    const product: tb.Directives = .{
+        .sweeps = &.{.{ .name = "a", .values = vals[0..64] }},
+        .psweeps = &.{.{ .name = "r", .values = vals[0..65] }},
+    };
+    try testing.expectError(error.TooManyPoints, tb_runner.expand(arena, product));
+    // Unknown columns first, then parameter columns, the parameter fastest.
+    const both: tb.Directives = .{
+        .sweeps = &.{.{ .name = "a", .values = vals[0..2] }},
+        .psweeps = &.{.{ .name = "r", .values = vals[5..8] }},
+    };
+    const pts = try tb_runner.expand(arena, both);
+    try testing.expectEqual(@as(usize, 6), pts.len);
+    try testing.expectEqualSlices(f64, &.{ 0, 5 }, pts[0]);
+    try testing.expectEqualSlices(f64, &.{ 0, 7 }, pts[2]);
+    try testing.expectEqualSlices(f64, &.{ 1, 5 }, pts[3]);
+    // No sweep is one point with no columns.
+    const one = try tb_runner.expand(arena, .{});
+    try testing.expectEqual(@as(usize, 1), one.len);
+    try testing.expectEqual(@as(usize, 0), one[0].len);
+}
+
 test "a wave is per-timepoint and holds its last value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -617,7 +698,7 @@ test "each sweep point starts its transient from a fresh State" {
     try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "        point("));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "= newState("));
     // Point numbers are global, so no two transcript blocks share a label.
-    try testing.expect(std.mem.indexOf(u8, src, "point(5, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(5, &x") != null);
     // §4.6.2 a dc sweep is one analysis: its points share one `State`.
     const dc = try tb_runner.renderRunner(arena, "061_dc", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, dc, "= newState("));
@@ -632,8 +713,8 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try tb_runner.renderRunner(arena, "062_sweep", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "sim_state.final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
+    try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = true;\n        sim_state.final_step = false;\n        sim_state.analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
+    try testing.expect(std.mem.find(u8, swept, "sim_state.initial_step = false;\n        sim_state.final_step = true;\n        sim_state.analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
     // §5.2.1 `analog initial` re-runs per sub-task: all three points, while
     // the global event fires at one.
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, swept, "sim_state.analog_initial = true;"));
@@ -666,9 +747,293 @@ test "renderRunner emits parseable Zig" {
     defer ast.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), ast.errors.len);
     // The sweep really did become two straight-line blocks.
-    try testing.expect(std.mem.indexOf(u8, src, "point(0, &x") != null);
-    try testing.expect(std.mem.indexOf(u8, src, "point(1, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(0, &x") != null);
+    try testing.expect(std.mem.find(u8, src, "point(1, &x") != null);
     // §3.4.1/§4.2.1.1: card values go through `cardValue`, which rounds for
     // an `integer` parameter.
-    try testing.expect(std.mem.indexOf(u8, src, "model.g = cardValue(@TypeOf(model.g), 0.002)") != null);
+    try testing.expect(std.mem.find(u8, src, "model.g = cardValue(@TypeOf(model.g), 0.002)") != null);
+}
+
+test "every directive set that parses renders to Zig that passes AstGen" {
+    // A structured generator: draws from lines that each parse alone, so
+    // most sets parse and together they reach every emitter. The compile
+    // facts a caller fills in are toggled per draw too. Seeded: a failure
+    // replays, and prints the text it rendered.
+    const pool = [_][]const u8{
+        "//! param g = 2m, is = 1e-14",
+        "//! param n = -0",
+        "//! bias V(n) = 0",
+        "//! bias I(a,b) = 0.25",
+        "//! sweep V(p) = 0, 1",
+        "//! sweep I(<c>) = 1e23, -1",
+        "//! wave V(in) = 0, 1, 0.5",
+        "//! psweep r = 1, 2",
+        "//! temp 350",
+        "//! time 0, 1n, 2n",
+        "//! solve",
+        "//! analysis tran",
+        "//! analysis dc mydc",
+        "//! analysis noise",
+        "//! noise thermal(a,b)#0 name=th white=4e-18 corr=1:-1",
+        "//! noise flicker(c, d)#1 flicker=1e-20 ef=1.25 rtol=1e-4",
+        "//! noise table(p,n)#null name=t interp=log points=1:1e-18,1e3:1e-21 psd=10:2e-18",
+        "//! noise none",
+        "//! acstim (p, n) name=ac mag=2 phase=1.5",
+        "//! acstim (q,n)",
+        "//! acstim none",
+        "//! acdyn (out, in) f=1k re=0.5 im=-0.5 tol=1e-9",
+        "//! qsite g+ s- lte",
+        "//! qsite none",
+        "//! seed V(a) = -0.7, V(b) = 1",
+        "//! seed none",
+        "//! meta parameter r desc=\"R \\ ohm\" units=\"Ohm\"",
+        "//! meta none",
+        "//! abstol V(a) = 1e-6, I(a,b) = 1e-12",
+        "//! limit V(b) = 0 -> V(b) = 0.1, converged = 0",
+        "//! limit -> V(a) = 1.5",
+        "//! print none",
+        "//! tran 1n, 10n",
+        "//! onoise V(out) = 1, 10",
+    };
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var prng = std.Random.DefaultPrng.init(0x7b0fd1);
+    const r = prng.random();
+    var rendered: usize = 0;
+    for (0..64) |_| {
+        _ = arena_state.reset(.retain_capacity);
+        const arena = arena_state.allocator();
+        var src: std.ArrayList(u8) = .empty;
+        for (0..1 + r.uintLessThan(usize, 8)) |_| {
+            try src.appendSlice(arena, pool[r.uintLessThan(usize, pool.len)]);
+            try src.append(arena, '\n');
+        }
+        var d = tb_directive.parse(arena, src.items) catch continue;
+        d.op_states = if (r.boolean()) &.{ 0, 3 } else &.{};
+        d.validate_contract = r.boolean();
+        d.certify = r.boolean();
+        d.finite_proved = r.boolean();
+        const fixed = tb_runner.renderRunner(arena, "gen \"t\" \\", d) catch |e| switch (e) {
+            error.BadSyntax, error.TooManyPoints => continue,
+            else => return e,
+        };
+        try expectAstGen(fixed);
+        try expectAstGen(try tb_runner.renderVpiLib(arena, "gen", d));
+        var dm = d;
+        dm.mixed = sample_mixed;
+        try expectAstGen(try tb_runner.renderRunner(arena, "gen", dm));
+        rendered += 1;
+    }
+    // Most draws are compatible lines; a run that renders few has stopped
+    // testing anything.
+    try testing.expect(rendered >= 16);
+}
+
+test "`//! seed none` renders a testbench that passes AstGen" {
+    // `want` stays all null, so it must not be a `var` nothing writes.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try expectAstGen(try tb_runner.renderRunner(arena, "seed_none", try tb_directive.parse(arena, "//! seed none\n")));
+}
+
+test "no rendered testbench uses a name Zig 0.17 deprecates" {
+    // Deprecated in 0.17 and removed after it. A testbench is compiled by
+    // whatever Zig the host has, so one of these breaks every fixture at once.
+    const deprecated = [_][]const u8{ "@intFromEnum(", "@enumFromInt(", "std.mem.indexOf", "std.mem.lastIndexOf" };
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, "//! noise thermal(a,b)#0\n//! acstim (a,b)\n//! seed V(a) = 1\n//! abstol V(a) = 1e-6\n");
+    var dm = d;
+    dm.mixed = sample_mixed;
+    const texts = [_][]const u8{
+        try tb_runner.renderRunner(arena, "dep", d),
+        try tb_runner.renderRunner(arena, "dep", dm),
+        try tb_runner.renderVpiLib(arena, "dep", d),
+        try tb_runner.renderRunner(arena, "dep", try tb_directive.parse(arena, "//! solve\n//! onoise V(out) = 1\n")),
+    };
+    for (texts) |src| for (deprecated) |name| {
+        if (std.mem.find(u8, src, name)) |at| {
+            std.debug.print("`{s}` at byte {d}\n", .{ name, at });
+            return error.TestUnexpectedResult;
+        }
+    };
+}
+
+test "a `//! time` grid strictly increases" {
+    // `dt` is the step from the previous time (§4.5.3), and `sim.mixed.run`
+    // takes the same list ascending: a repeated or backward time is a typo.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "0, 2n, 1n", "0, 1n, 1n", "1n, 0" }) |bad| {
+        try testing.expectError(error.BadSyntax, tb_directive.parse(arena, try arena.print("//! time {s}\n", .{bad})));
+    }
+    try testing.expectEqual(@as(usize, 1), (try tb_directive.parse(arena, "//! time 5n\n")).times.len);
+    try testing.expectEqual(@as(usize, 3), (try tb_directive.parse(arena, "//! time 0, 1n, 1.5n\n")).times.len);
+}
+
+test "an exit status is plain decimal digits, as a check count is" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "+1", "1_0", "0x1", "1 2" }) |bad| {
+        try testing.expectError(error.BadNumber, tb_directive.parse(arena, try arena.print("//! exit {s}\n", .{bad})));
+    }
+}
+
+test "a binding whose access function names nothing is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{
+        "//! bias V() = 1\n",
+        "//! bias I(a, ) = 1\n",
+        "//! seed V() = 1\n",
+        "//! abstol x[] = 1e-6\n",
+        "//! limit V() = 0 -> V(a) = 1\n",
+    }) |line| try testing.expectError(error.BadSyntax, tb_directive.parse(arena, line));
+}
+
+test "§8.2 each psweep point is its own card, derived and set up" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src = try tb_runner.renderRunner(arena, "ps", try tb_directive.parse(arena, "//! sweep V(a) = 0, 1\n//! psweep r = 1, 2, 3\n"));
+    try expectAstGen(src);
+    // 2 x 3 points, the parameter column fastest.
+    try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "        var pm = model;\n"));
+    try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n"));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "        pm.r = cardValue(@TypeOf(pm.r), 3);\n"));
+    try testing.expectEqual(@as(usize, 6), std.mem.count(u8, src, "solve(&x, &forced, &pm, &inst);"));
+}
+
+test "a SPICE deck renders one sim.spice call and leaves every unknown to it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const tran = try tb_runner.renderRunner(arena, "deck", try tb_directive.parse(arena, "//! solve\n//! tran 1n, 10n\n"));
+    try expectAstGen(tran);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, tran, "    @import(\"sim\").spice.deck.runTran(D, title, &model, &inst, 0.000000001, 0.00000001);\n"));
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, tran, "        point("));
+    const noise = try tb_runner.renderRunner(arena, "deck", try tb_directive.parse(arena, "//! solve\n//! onoise V(out) = 1, 1k\n"));
+    try expectAstGen(noise);
+    try testing.expect(std.mem.find(u8, noise, "ix(\"out\")") != null);
+    try testing.expect(std.mem.find(u8, noise, "&.{ 1, 1000 });\n") != null);
+    // `sim.spice` solves every unknown, so a deck pins, sweeps and frees none.
+    for ([_][]const u8{
+        "//! tran 1n, 10n\n",
+        "//! solve\n//! tran 1n, 10n\n//! bias V(a) = 1\n",
+        "//! solve\n//! tran 1n, 10n\n//! psweep r = 1\n",
+        "//! solve\n//! tran 1n, 10n\n//! onoise V(out) = 1\n",
+    }) |deck| try testing.expectError(error.BadSyntax, tb_runner.renderRunner(arena, "deck", try tb_directive.parse(arena, deck)));
+}
+
+test "the mixed runner hands each point to sim.mixed and refuses the device-table checks" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d = try tb_directive.parse(arena, "//! sweep V(a) = 0, 1\n//! time 0, 1n\n//! wave V(in) = 0, 1\n//! noise none\n");
+    d.mixed = sample_mixed;
+    const src = try tb_runner.renderRunner(arena, "mx", d);
+    try expectAstGen(src);
+    // A sweep point is an analysis; the time grid is `sim.mixed.run`'s.
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "        runMixed(&model, &inst, &x, &forced, &state, &n);\n"));
+    try testing.expect(std.mem.find(u8, src, "are not read by the mixed-signal runner") != null);
+    try testing.expect(std.mem.find(u8, src, "const mixed_timescale: ?Timescale = .{ .unit = 0.000000001, .precision = 0.000000000001 };\n") != null);
+    try testing.expect(std.mem.find(u8, src, "        set(a.x, a.forced, \"in\", pwl(&wave_0, t));\n") != null);
+    // §7.3.1 a three-word `reg` is three ports, words 0 to 2.
+    try testing.expect(std.mem.find(u8, src, ".word = 2 }") != null);
+    try testing.expect(std.mem.find(u8, src, ".word = 3 }") == null);
+}
+
+test "the VPI library takes the card, the bias and the waves into its exports" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, "//! param g = 2m\n//! bias V(n) = 0\n//! time 0, 1n\n//! wave V(in) = 0, 1\n");
+    const src = try tb_runner.renderVpiLib(arena, "vpi", d);
+    try expectAstGen(src);
+    for ([_][]const u8{
+        "    g_model.g = cardValue(@TypeOf(g_model.g), 0.002);\n",
+        "    set(&g_x, &g_forced, \"n\", 0);\n",
+        "    set(&g_x, &g_forced, \"in\", pwl(&wave_0, t));\n",
+        "const times = [_]f64{ 0, 0.000000001 };\n",
+        "const wave_0 = [_]f64{ 0, 1 };\n",
+    }) |want| try testing.expect(std.mem.find(u8, src, want) != null);
+    // The host owns the time walk: the library declares no operating point.
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, src, "        point("));
+}
+
+test "§4.5.2 an operator unknown is never forced, even when every other one is" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d = try tb_directive.parse(arena, "//! sweep V(a) = 0, 1\n");
+    d.op_states = &.{ 2, 5 };
+    const src = try tb_runner.renderRunner(arena, "ops", d);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "        forced[5] = null;\n"));
+    // After the tie-everything default, before the directives' own pins.
+    const untie = std.mem.find(u8, src, "forced[2] = null;").?;
+    try testing.expect(std.mem.find(u8, src, "var forced: [n_u]?f64 = @splat(0.0);").? < untie);
+    try testing.expect(untie < std.mem.find(u8, src, "set(&x, &forced, \"a\", 0);").?);
+}
+
+test "the compile facts a caller sets reach the runner's head" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const off = try tb_runner.renderRunner(arena, "f", .{});
+    const on = try tb_runner.renderRunner(arena, "f", .{ .validate_contract = true, .certify = true, .finite_proved = true });
+    try testing.expect(std.mem.find(u8, off, "pub const vera_validate_contract = false;\n") != null);
+    try testing.expect(std.mem.find(u8, off, "const fd_certify = false;\n") != null);
+    try testing.expect(std.mem.find(u8, off, "const finite_proved = false;\n") != null);
+    try testing.expect(std.mem.find(u8, on, "pub const vera_validate_contract = true;\n") != null);
+    try testing.expect(std.mem.find(u8, on, "const fd_certify = true;\n") != null);
+    try testing.expect(std.mem.find(u8, on, "const finite_proved = true;\n") != null);
+}
+
+test "§9.15 analysis_name is the kind's spelling unless the line names one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const tran = try tb_runner.renderRunner(arena, "an", try tb_directive.parse(arena, "//! time 0, 1n\n"));
+    try testing.expect(std.mem.find(u8, tran, "const analysis_name = \"tran\";\n") != null);
+    try testing.expect(std.mem.find(u8, tran, "    sim_state = .{ .kind = .tran };\n") != null);
+    const named = try tb_runner.renderRunner(arena, "an", try tb_directive.parse(arena, "//! analysis dc mydc\n"));
+    try testing.expect(std.mem.find(u8, named, "const analysis_name = \"mydc\";\n") != null);
+    try testing.expect(std.mem.find(u8, named, "    sim_state = .{ .kind = .dc };\n") != null);
+}
+
+test "`//! spice` lines join into one netlist in source order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, "//! spice R1 a b 1k\n//! spice + tc1=0\n//! lrm 5.8\n//! spice C1 b 0 1p\n");
+    try testing.expectEqualStrings("R1 a b 1k\n+ tc1=0\nC1 b 0 1p", d.spice);
+    try testing.expectEqualStrings("", (try tb_directive.parse(arena, "")).spice);
+}
+
+test "the directive line rule: indentation, CRLF and a marker with no space" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const d = try tb_directive.parse(arena, "  //! temp 310\r\n\t//!lrm 5.8\r\n// ! temp 999\n//!\n//!   \n");
+    try testing.expectEqual(@as(f64, 310), d.temp);
+    try testing.expectEqualStrings("5.8", d.lrm[0]);
+    // `//!!` opens with the word `!`, which no directive is.
+    try testing.expectError(error.UnknownDirective, tb_directive.parse(arena, "//!! lrm 5.8\n"));
+}
+
+test "an lrm cite's annex is one letter, A to H" {
+    for ("ABCDEFGH") |letter| {
+        const cite = [1]u8{letter};
+        try testing.expect(tb_directive.validSection(&cite));
+    }
+    for ("IJZah") |letter| {
+        const cite = [1]u8{letter};
+        try testing.expect(!tb_directive.validSection(&cite));
+    }
+    try testing.expect(tb_directive.validSection("H.2:3"));
 }
