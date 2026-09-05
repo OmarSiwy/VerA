@@ -153,8 +153,16 @@ const Emitter = struct {
                 if (kinds[r] != .net) return self.refuse("`{s}` is not a net (an I() probe, or ddt/idt outside a contribution)", .{names[r]});
             }
             if (c.access == .potential) {
-                if (c.hi == Lowered.ground or self.isSupply(pins, c.hi)) continue;
-                if (c.lo != Lowered.ground and !self.isSupply(pins, c.lo)) return self.refuse("`V({s}, {s}) <+`: a potential contribution must be referred to a supply or ground", .{ names[c.hi], names[c.lo] });
+                // §5.6.1.3: a row discarded on every path is no source; the
+                // flow rows over its pair govern.
+                const kept = staticRetention(self.mir, c.wrote_val) orelse true;
+                if (!kept) continue;
+                const hi_rail = c.hi == Lowered.ground or self.isSupply(pins, c.hi);
+                const lo_rail = c.lo == Lowered.ground or self.isSupply(pins, c.lo);
+                // A rail against a rail is the supply itself.
+                if (hi_rail and lo_rail) continue;
+                if (hi_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution drives its first node; write it as `V({s}, {s})` with the value negated", .{ lw.nodeName(c.hi), names[c.lo], names[c.lo], lw.nodeName(c.hi) });
+                if (!lo_rail) return self.refuse("`V({s}, {s}) <+`: a potential contribution must be referred to a supply or ground", .{ names[c.hi], names[c.lo] });
                 potential[c.hi] = @intCast(ci);
                 driven[c.hi] = true;
             } else for ([_]u16{ c.hi, c.lo }) |r| {
@@ -179,6 +187,9 @@ const Emitter = struct {
         const S = try self.arena.alloc(f64, n_masks * states.len);
         const Q = try self.arena.alloc(f64, n_masks * states.len);
         const TD = try self.arena.alloc(f64, n_masks * states.len);
+        // Whether the node's potential row is retained (§5.6.1.3) in that run:
+        // then S is its target, else the flow residual.
+        const P = try self.arena.alloc(bool, n_masks * states.len);
         const volts = try self.arena.alloc(f64, n_nodes);
         var in: Interp = .{ .e = self, .volts = volts, .env = try self.arena.alloc(?Val, Mir.Value.first_dynamic + self.mir.defs.len) };
         for (0..n_masks) |m| {
@@ -193,8 +204,9 @@ const Emitter = struct {
                 var s: f64 = 0;
                 var q: f64 = 0;
                 var td: f64 = 0;
-                if (potential[r]) |ci| {
-                    const c = lw.contributions.items[ci];
+                const pot = if (potential[r]) |ci| (try in.get(lw.contributions.items[ci].wrote_val)).c.isTrue() else false;
+                if (pot) {
+                    const c = lw.contributions.items[potential[r].?];
                     const f = try in.get(c.resist_val);
                     s = f.c.asReal() + if (c.lo == Lowered.ground) 0 else volts[c.lo];
                     td = f.d;
@@ -210,6 +222,7 @@ const Emitter = struct {
                 S[m * states.len + si] = s;
                 Q[m * states.len + si] = q;
                 TD[m * states.len + si] = td;
+                P[m * states.len + si] = pot;
             }
         }
 
@@ -233,8 +246,11 @@ const Emitter = struct {
                 }.f;
                 var f: f64 = undefined;
                 var tau: f64 = 0;
-                if (potential[r] != null) {
+                if (P[m * states.len + si]) {
                     f = at(S, m, states.len, si);
+                } else if (P[(m & ~bit) * states.len + si] or P[(m | bit) * states.len + si]) {
+                    // The secant needs one constitutive law at both ends.
+                    return self.refuse("node `{s}`: whether its potential contribution is retained (§5.6.1.3) depends on its own value", .{names[r]});
                 } else {
                     const s0 = at(S, m & ~bit, states.len, si);
                     const s1 = at(S, m | bit, states.len, si);
@@ -367,10 +383,11 @@ const Emitter = struct {
         const name = lw.nodes.items(.name)[r];
         const pins = self.pins;
         const t: Name = .{ .prefix = "vera_t_", .text = name };
-        const sane: Name = .{ .prefix = "", .text = name };
+        const rise_name: Name = .{ .prefix = "vera_rise_", .text = name };
+        const fall_name: Name = .{ .prefix = "vera_fall_", .text = name };
         try w.print(A, "\n    // {s}\n", .{name});
-        try w.print(A, "    parameter real vera_rise_{f} = {d:.6}; // ns\n", .{ sane, rise * 1e9 });
-        try w.print(A, "    parameter real vera_fall_{f} = {d:.6}; // ns\n", .{ sane, fall * 1e9 });
+        try w.print(A, "    parameter real {f} = {d:.6}; // ns\n", .{ rise_name, rise * 1e9 });
+        try w.print(A, "    parameter real {f} = {d:.6}; // ns\n", .{ fall_name, fall * 1e9 });
         if (support.len == 0) {
             try w.print(A, "    wire {f} = 1'b{t};\n", .{ t, target[0] });
         } else {
@@ -396,7 +413,7 @@ const Emitter = struct {
             }
             try w.print(A, "            default: {f} = 1'bx;\n        endcase\n    end\n", .{t});
         }
-        try w.print(A, "    assign #(vera_rise_{f}, vera_fall_{f}) {f} = {f};\n", .{ sane, sane, self.net(pins, r), t });
+        try w.print(A, "    assign #({f}, {f}) {f} = {f};\n", .{ rise_name, fall_name, self.net(pins, r), t });
     }
 };
 
@@ -410,9 +427,14 @@ const Name = struct {
     /// Writes the name as an IEEE 1364-2005 §3.7 identifier.
     pub fn format(n: Name, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (n.prefix) |p| {
-            try w.writeAll(p);
-            for (n.text) |c| try w.writeByte(if (std.ascii.isAlphanumeric(c) or c == '_') c else '_');
-            return;
+            // The prefix starts the identifier, so any text of identifier
+            // bytes keeps it simple. Any other text escapes the whole name
+            // rather than map its bytes onto `_`, which two texts could share.
+            const plain = for (n.text) |c| {
+                if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) break false;
+            } else true;
+            if (plain) return w.print("{s}{s}", .{ p, n.text });
+            return w.print("\\{s}{s} ", .{ p, n.text });
         }
         const simple = n.text.len != 0 and !std.ascii.isDigit(n.text[0]) and n.text[0] != '$' and
             for (n.text) |c| {
@@ -429,12 +451,20 @@ fn ident(text: []const u8) Name {
 
 /// The supply a port's name conventionally is, or null.
 fn guessSupply(name: []const u8) ?Pin {
-    var buf: [16]u8 = undefined;
-    if (name.len > buf.len) return null;
-    const n = std.ascii.lowerString(&buf, name);
-    for ([_][]const u8{ "vdd", "vcc", "vpwr", "vpb", "avdd", "dvdd" }) |p| if (std.mem.startsWith(u8, n, p)) return .power;
-    for ([_][]const u8{ "vss", "gnd", "vgnd", "vnb", "vee", "avss", "dvss" }) |p| if (std.mem.startsWith(u8, n, p)) return .ground;
+    for ([_][]const u8{ "vdd", "vcc", "vpwr", "vpb", "avdd", "dvdd" }) |p| if (std.ascii.startsWithIgnoreCase(name, p)) return .power;
+    for ([_][]const u8{ "vss", "gnd", "vgnd", "vnb", "vee", "avss", "dvss" }) |p| if (std.ascii.startsWithIgnoreCase(name, p)) return .ground;
     return null;
+}
+
+// §5.6.1.3 a direct row's retention when it is the same on every path, or
+// null when it is decided per evaluation (`codegen/plan/topology.zig`'s
+// `retention`, read off the MIR alone).
+fn staticRetention(mir: *const Mir, v: Mir.Value) ?bool {
+    return switch (mir.valueDef(mir.resolveAlias(v))) {
+        .float_const => |x| x != 0,
+        .int_const => |x| x != 0,
+        .undef, .str_const, .param_ref, .block_param, .inst_result => null,
+    };
 }
 
 /// A MIR value under one assignment: the number, and the longest
@@ -446,6 +476,8 @@ const Interp = struct {
     e: *Emitter,
     volts: []const f64,
     env: []?Val,
+    // One block's phi results, read before any is written; reused.
+    phis: std.ArrayList(struct { res: Mir.Value, v: Val }) = .empty,
 
     fn run(self: *Interp) Error!void {
         const mir = self.e.mir;
@@ -453,43 +485,61 @@ const Interp = struct {
         var block: Mir.Block = .entry;
         var prev: ?Mir.Block = null;
         var steps: usize = 0;
-        blocks: while (true) {
+        while (true) {
             steps += 1;
             if (steps > 1 << 20) return self.e.refuse("the analog block did not finish (a loop over a node potential?)", .{});
-            // Phis read the edge just taken, all at once (they are parallel).
+            // Phis read the edge just taken, all at once (they are parallel),
+            // wherever each sits in the chain (`ssa.zig` mints them anywhere):
+            // every operand is read before any result is written.
+            self.phis.clearRetainingCapacity();
             var it = mir.blockInsts(block);
             while (it.next()) |inst| {
-                const res = mir.instResult(inst);
+                if (mir.instOp(inst) == .phi) try self.phis.append(self.e.arena, .{ .res = mir.instResult(inst), .v = try self.phi(inst, prev) });
+            }
+            for (self.phis.items) |p| {
+                if (p.res != .undef) self.env[@backingInt(p.res)] = p.v;
+            }
+            // Then every other row in chain order, and the terminator last:
+            // `Mir` allows rows after it, which codegen emits before it.
+            var term: ?Mir.Inst = null;
+            it = mir.blockInsts(block);
+            while (it.next()) |inst| {
                 const v: Val = switch (mir.instData(inst)) {
                     // §5.6.1.2 `A*ddt(B)` is charged as path_acc + A·(B - path_prev(B)):
                     // with both latches at 0 the charge is A·B, whose secant is A·ΔB.
                     .unary => |u| if (u.op == .path_prev or u.op == .path_acc) .{ .c = .{ .real = 0 } } else try self.op(u.op, &.{u.operand}),
                     .binary => |b| try self.op(b.op, &.{ b.lhs, b.rhs }),
                     .ternary => |t| try self.get(if ((try self.get(t.cond)).c.isTrue()) t.then_val else t.else_val),
-                    .phi => |p| blk: {
-                        for (0..p.count) |i| {
-                            const pair = mir.phiPair(inst, @intCast(i));
-                            if (prev != null and pair.block == prev.?) break :blk try self.get(pair.value);
-                        }
-                        return self.e.refuse("a phi with no operand for the edge taken", .{});
-                    },
-                    .branch => |b| {
-                        prev = block;
-                        block = if ((try self.get(b.cond)).c.isTrue()) b.then_block else b.else_block;
-                        continue :blocks;
-                    },
-                    .jump => |j| {
-                        prev = block;
-                        block = j.target;
-                        continue :blocks;
+                    .phi => continue,
+                    .branch, .jump => {
+                        term = inst;
+                        continue;
                     },
                     .call => |c| try self.call(c.callee, c.name, c.args),
                     .anew, .load, .store => return self.e.refuse("§3.2.2 runtime-indexed arrays are not supported", .{}),
                 };
+                const res = mir.instResult(inst);
                 if (res != .undef) self.env[@backingInt(res)] = v;
             }
-            return;
+            const last = term orelse return;
+            prev = block;
+            block = switch (mir.instData(last)) {
+                .branch => |b| if ((try self.get(b.cond)).c.isTrue()) b.then_block else b.else_block,
+                .jump => |j| j.target,
+                .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
+            };
         }
+    }
+
+    // The value phi `inst` takes on the edge from `prev`.
+    fn phi(self: *Interp, inst: Mir.Inst, prev: ?Mir.Block) Error!Val {
+        const mir = self.e.mir;
+        const from = prev orelse return self.e.refuse("a phi with no operand for the edge taken", .{});
+        for (0..mir.instData(inst).phi.count) |i| {
+            const pair = mir.phiPair(inst, @intCast(i));
+            if (pair.block == from) return self.get(pair.value);
+        }
+        return self.e.refuse("a phi with no operand for the edge taken", .{});
     }
 
     fn get(self: *Interp, value: Mir.Value) Error!Val {
