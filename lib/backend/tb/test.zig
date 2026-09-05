@@ -326,10 +326,11 @@ test "§2.6 a scale factor is an exponent, not a multiplier" {
 
     // Bit equality with the same spelling in the model (`Lexer.scaleExp`):
     // `200 * 1e-6` is a different double from `200e-6`.
-    const d = try tb_directive.parse(arena, "//! time 0, 200u, 1n, 2.5m, 1K\n");
+    // In increasing order, as a time grid must be.
+    const d = try tb_directive.parse(arena, "//! time 0, 1n, 200u, 2.5m, 1K\n");
     try testing.expectEqual(@as(f64, 0.0), d.times[0]);
-    try testing.expectEqual(@as(f64, 200e-6), d.times[1]);
-    try testing.expectEqual(@as(f64, 1e-9), d.times[2]);
+    try testing.expectEqual(@as(f64, 1e-9), d.times[1]);
+    try testing.expectEqual(@as(f64, 200e-6), d.times[2]);
     try testing.expectEqual(@as(f64, 2.5e-3), d.times[3]);
     try testing.expectEqual(@as(f64, 1e3), d.times[4]);
     // The product must be computed at run time: comptime float arithmetic is
@@ -337,9 +338,9 @@ test "§2.6 a scale factor is an exponent, not a multiplier" {
     var two_hundred: f64 = 200;
     _ = &two_hundred;
     const multiplied = two_hundred * 1e-6;
-    try testing.expect(d.times[1] == 200e-6);
+    try testing.expect(d.times[2] == 200e-6);
     try testing.expect(multiplied != 200e-6);
-    try testing.expect(d.times[1] != multiplied);
+    try testing.expect(d.times[2] != multiplied);
 
     // A bare suffix is not a number, and neither is a suffix on nothing.
     try testing.expectError(error.BadNumber, tb_directive.parse(arena, "//! temp u\n"));
