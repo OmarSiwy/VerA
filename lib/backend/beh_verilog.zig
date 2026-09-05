@@ -57,9 +57,12 @@ pub const Options = struct {
     source: []const u8 = "",
 };
 
+/// `Refused`: the model is outside the abstraction (the header lists what
+/// is); `emit`'s `why` names the construct and its clause.
 pub const Error = error{ OutOfMemory, Refused };
 
-/// The largest pins-plus-nodes count the truth tables enumerate (2^n runs).
+/// The largest pins-plus-nodes count the truth tables enumerate: `emit`
+/// runs the analog block 2^n times and keeps three f64 per run and node.
 pub const max_vars = 20;
 
 const Pin = enum { digital, analog, power, ground };
@@ -86,7 +89,7 @@ const Emitter = struct {
     driven: []const bool = &.{},
 
     fn refuse(self: *Emitter, comptime fmt: []const u8, args: anytype) Error {
-        self.why.* = try std.fmt.allocPrint(self.arena, fmt, args);
+        self.why.* = try self.arena.print(fmt, args);
         return error.Refused;
     }
 
@@ -397,13 +400,14 @@ const Emitter = struct {
     }
 };
 
-/// A Verilog name: `prefix` then `text` with every non-identifier byte made
-/// `_`, or (no prefix) `text` itself, escaped (§3.7.1) when it is not a
-/// simple identifier.
+/// A Verilog name: `prefix` then `text`, or (no prefix) `text` itself, as one
+/// legal identifier, escaped (§3.7.1) when it is not a simple one. Distinct
+/// texts under one prefix are distinct names.
 const Name = struct {
     prefix: ?[]const u8 = null,
     text: []const u8,
 
+    /// Writes the name as an IEEE 1364-2005 §3.7 identifier.
     pub fn format(n: Name, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (n.prefix) |p| {
             try w.writeAll(p);

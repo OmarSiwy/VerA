@@ -2,8 +2,9 @@
 //! its layout hash out (§8.3 device-side ABI). VerA produces the artifact; the
 //! host owns dlopen, dlclose and state reset, and a fresh path per generation
 //! gives it a fresh inode. Each build is one cold `zig build-lib --listen=-`
-//! child (the compiler server protocol; the 0.16 build runner has no
-//! `--listen`), or for a large LLVM device one `zig build-obj` child per
+//! child (the compiler server protocol; the build runner's `--listen` serves
+//! the build server protocol instead), or for a large LLVM device one
+//! `zig build-obj` child per
 //! `Part` in parallel plus a linking `build-lib`, all reaped before
 //! `compileRelease` returns. No build.zig is generated.
 //!
@@ -51,7 +52,9 @@ pub const Module = struct {
 /// A module name as a file-name stem: the name itself when it is short and
 /// plain, else its plain prefix and a hash. §2.8 identifiers run to at least
 /// 1024 characters and §2.8.1 escaped ones hold any printable byte, neither of
-/// which a file system takes as a name.
+/// which a file system takes as a name. A hashed stem always holds a `-`,
+/// which no plain name does, so the two forms never collide. Returns `name`
+/// itself (borrowed) when it is kept, else a stem allocated in `a`.
 pub fn fileStem(a: Allocator, name: []const u8) ![]const u8 {
     const plain = for (name) |c| {
         if (!std.ascii.isAlphanumeric(c) and c != '_') break false;
@@ -407,7 +410,9 @@ pub const EngineResult = union(enum) {
 /// the compiler's own cache keys it on its version, the target and CPU, every
 /// flag, and the path and content of every source file reached, and answers
 /// an unchanged build from the cache. A stale object cannot be linked: the
-/// engine's symbol names carry its layout hash (`engine.tag`).
+/// engine's symbol names carry its layout hash (`engine.tag`). Caller owns
+/// the result and frees it with `EngineResult.deinit` and `gpa`. Fails as
+/// `compileRelease` does.
 pub fn buildEngine(gpa: Allocator, io: Io, o: Options, cache_dir: []const u8) !EngineResult {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
@@ -751,8 +756,8 @@ test "writeTree splits per unit, and a no-op regeneration writes nothing" {
     defer gpa.free(dev);
     try std.testing.expect(std.mem.startsWith(u8, dev, split_prologue));
     try std.testing.expect(std.mem.endsWith(u8, dev, split_tail));
-    try std.testing.expect(std.mem.indexOf(u8, dev, "const unit_a = @import(\"u/unit_a.zig\").unit_a;\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dev, "return y * k2;") == null);
+    try std.testing.expect(std.mem.find(u8, dev, "const unit_a = @import(\"u/unit_a.zig\").unit_a;\n") != null);
+    try std.testing.expect(std.mem.find(u8, dev, "return y * k2;") == null);
 
     // A vanished unit takes its file with it: device.zig plus the delete.
     // `u/unit_a.zig` is unchanged, so it is not rewritten.
