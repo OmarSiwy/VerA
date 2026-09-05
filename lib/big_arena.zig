@@ -128,3 +128,208 @@ test "big arena: large blocks grow, move and free through the backing allocator"
     try std.testing.expectEqual(@as(u32, 1), arena.blocks.count());
     // `kept` and the small block are freed by `deinit`.
 }
+
+test "big arena: the split is at `large` exactly" {
+    var arena: BigArena = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const below = try a.alloc(u8, large - 1);
+    try std.testing.expectEqual(@as(u32, 0), arena.blocks.count());
+    const at = try a.alloc(u8, large);
+    try std.testing.expectEqual(@as(u32, 1), arena.blocks.count());
+    try std.testing.expectEqual(large, arena.blocks.get(@intFromPtr(at.ptr)).?.len);
+    try std.testing.expect(!arena.blocks.contains(@intFromPtr(below.ptr)));
+}
+
+test "big arena: a resize or remap across `large` is refused, and realloc copies across" {
+    var arena: BigArena = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Up: a small block never becomes the backing allocator's.
+    const small = try a.alloc(u8, large - 1);
+    try std.testing.expect(!a.resize(small, large));
+    try std.testing.expect(a.remap(small, large) == null);
+    try std.testing.expectEqual(@as(u32, 0), arena.blocks.count());
+
+    // Down: a large block never becomes the arena's, and keeps its entry.
+    const big = try a.alloc(u8, large);
+    try std.testing.expect(!a.resize(big, large - 1));
+    try std.testing.expect(a.remap(big, large - 1) == null);
+    try std.testing.expectEqual(large, arena.blocks.get(@intFromPtr(big.ptr)).?.len);
+
+    // `realloc` moves the data instead: the large block is freed, so its
+    // entry goes, and the bytes arrive on the small side, then back.
+    @memset(big, 0x5a);
+    const moved_down = try a.realloc(big, large - 1);
+    try std.testing.expectEqual(@as(u32, 0), arena.blocks.count());
+    try std.testing.expect(std.mem.allEqual(u8, moved_down, 0x5a));
+    const moved_up = try a.realloc(moved_down, 2 * large);
+    try std.testing.expectEqual(2 * large, arena.blocks.get(@intFromPtr(moved_up.ptr)).?.len);
+    try std.testing.expect(std.mem.allEqual(u8, moved_up[0 .. large - 1], 0x5a));
+}
+
+test "big arena: a large resize in place records the new length" {
+    // A fixed buffer grows and shrinks its last block in place, always. The
+    // map's table is allocated first (`alloc` reserves the entry before the
+    // block), so the block is that last one.
+    var buf: [3 * large]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&buf);
+    var arena: BigArena = .init(fba.allocator());
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const m = try a.alloc(u8, large);
+    try std.testing.expect(a.resize(m, 2 * large));
+    try std.testing.expectEqual(2 * large, arena.blocks.get(@intFromPtr(m.ptr)).?.len);
+    try std.testing.expect(a.resize(m.ptr[0 .. 2 * large], large + 1));
+    try std.testing.expectEqual(large + 1, arena.blocks.get(@intFromPtr(m.ptr)).?.len);
+    try std.testing.expectEqual(@as(u32, 1), arena.blocks.count());
+}
+
+/// `std.testing.allocator` whose `remap` always moves the block, so the
+/// re-keying half of `remap` runs on every call instead of only when the
+/// address space happens to make the backing allocator move.
+const moving: Allocator = .{ .ptr = undefined, .vtable = &.{
+    .alloc = struct {
+        fn f(_: *anyopaque, n: usize, a: Alignment, ra: usize) ?[*]u8 {
+            return std.testing.allocator.rawAlloc(n, a, ra);
+        }
+    }.f,
+    .resize = struct {
+        fn f(_: *anyopaque, m: []u8, a: Alignment, n: usize, ra: usize) bool {
+            return std.testing.allocator.rawResize(m, a, n, ra);
+        }
+    }.f,
+    .remap = struct {
+        fn f(_: *anyopaque, m: []u8, a: Alignment, n: usize, ra: usize) ?[*]u8 {
+            const p = std.testing.allocator.rawAlloc(n, a, ra) orelse return null;
+            const kept = @min(m.len, n);
+            @memcpy(p[0..kept], m[0..kept]);
+            std.testing.allocator.rawFree(m, a, ra);
+            return p;
+        }
+    }.f,
+    .free = struct {
+        fn f(_: *anyopaque, m: []u8, a: Alignment, ra: usize) void {
+            std.testing.allocator.rawFree(m, a, ra);
+        }
+    }.f,
+} };
+
+test "big arena: a large remap re-keys the block under its new address" {
+    var arena: BigArena = .init(moving);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const m = try a.alloc(u8, large);
+    @memset(m, 0x3c);
+    const old = @intFromPtr(m.ptr);
+    const g = a.remap(m, 4 * large) orelse return error.TestUnexpectedResult;
+    // The new block was allocated while the old one was live: a new address.
+    try std.testing.expect(@intFromPtr(g.ptr) != old);
+    try std.testing.expectEqual(@as(u32, 1), arena.blocks.count());
+    try std.testing.expect(!arena.blocks.contains(old));
+    try std.testing.expectEqual(4 * large, arena.blocks.get(@intFromPtr(g.ptr)).?.len);
+    try std.testing.expect(std.mem.allEqual(u8, g[0..large], 0x3c));
+    // `deinit` frees the moved block by its new address and length; the
+    // testing allocator fails the test if either were stale.
+}
+
+test "big arena: a large block keeps its alignment, and deinit frees it with it" {
+    var arena: BigArena = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const page = comptime Alignment.fromByteUnits(4096);
+    const m = try a.alignedAlloc(u8, page, large);
+    try std.testing.expect(page.check(@intFromPtr(m.ptr)));
+    try std.testing.expectEqual(page, arena.blocks.get(@intFromPtr(m.ptr)).?.alignment);
+}
+
+/// Five allocations reach `child`, in this order: the map's table, three
+/// large blocks, and the small arena's first chunk.
+fn bigArenaSequence(child: Allocator) !void {
+    var arena: BigArena = .init(child);
+    defer arena.deinit();
+    const a = arena.allocator();
+    _ = try a.alloc(u8, large);
+    const y = try a.alloc(u8, 2 * large);
+    _ = try a.alloc(u8, 3 * large);
+    a.free(y);
+    _ = try a.alloc(u8, 16);
+}
+
+test "big arena: a failure of any backing allocation is OutOfMemory and leaks nothing" {
+    // Oracle: `checkAllAllocationFailures` fails the n-th backing allocation
+    // for every n, and fails the test if the failure is swallowed or the
+    // bytes allocated and freed differ. The map entry is reserved before the
+    // block, so a failure of either leaves nothing half-recorded.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, bigArenaSequence, .{});
+}
+
+test "big arena: a seeded random op sequence keeps `blocks` equal to the live large blocks" {
+    // Model: `slots`, every block the test holds, each filled with a byte of
+    // its own. After every op, `blocks` holds exactly the slots of `large`
+    // bytes or more, each under its address with its length, and an op that
+    // keeps data kept it. At the end every slot still holds its byte. The
+    // testing allocator fails the test on a leak, or on a free whose length
+    // or alignment is not the allocation's: what `deinit` hands back from
+    // `blocks`. Seeded, so a failure replays.
+    var arena: BigArena = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Both sides of the line, the line itself, and blocks several times it.
+    const sizes = [_]usize{ 1, 100, large - 1, large, large + 1, 3 * large, 5 * large + 7 };
+    var slots: [16][]u8 = undefined;
+    for (&slots) |*s| s.* = &.{};
+    var prng: std.Random.DefaultPrng = .init(0x5eed_b16a);
+    const rand = prng.random();
+
+    for (0..600) |_| {
+        const s = rand.uintLessThan(usize, slots.len);
+        const fill: u8 = @truncate(s *% 37 +% 1);
+        const m = slots[s];
+        const n = sizes[rand.uintLessThan(usize, sizes.len)];
+        if (m.len == 0) {
+            slots[s] = try a.alloc(u8, n);
+            @memset(slots[s], fill);
+        } else switch (rand.uintLessThan(u8, 4)) {
+            0 => {
+                a.free(m);
+                slots[s] = &.{};
+            },
+            1 => {
+                const r = try a.realloc(m, n);
+                try std.testing.expect(std.mem.allEqual(u8, r[0..@min(m.len, n)], fill));
+                @memset(r, fill);
+                slots[s] = r;
+            },
+            2 => if (a.resize(m, n)) {
+                try std.testing.expect((m.len < large) == (n < large));
+                slots[s] = m.ptr[0..n];
+                @memset(slots[s], fill);
+            },
+            else => if (a.remap(m, n)) |r| {
+                try std.testing.expect((m.len < large) == (n < large));
+                try std.testing.expect(std.mem.allEqual(u8, r[0..@min(m.len, n)], fill));
+                @memset(r, fill);
+                slots[s] = r;
+            },
+        }
+
+        var n_large: u32 = 0;
+        for (slots) |live| if (live.len >= large) {
+            n_large += 1;
+            const b = arena.blocks.get(@intFromPtr(live.ptr)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(live.len, b.len);
+        };
+        try std.testing.expectEqual(n_large, arena.blocks.count());
+    }
+    for (slots, 0..) |live, s| {
+        const fill: u8 = @truncate(s *% 37 +% 1);
+        try std.testing.expect(std.mem.allEqual(u8, live, fill));
+    }
+}

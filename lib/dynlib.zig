@@ -59,3 +59,43 @@ const Windows = struct {
         };
     }
 };
+
+// The positive path on every target is `tests/vdev_so_host.zig` and
+// `tests/vpi_host.zig`, which load a `.so` VerA built. These pin the
+// refusals, which those hosts never reach.
+
+test "a library that does not exist is FileNotFound on every target" {
+    // No slash: POSIX searches the system directories, Windows the cwd;
+    // neither holds this name.
+    try std.testing.expectError(error.FileNotFound, DynLib.open("vera-no-such-library.so"));
+}
+
+test "a path past every target's limit is an error, not a crash" {
+    // 40000 bytes, all ASCII, so 40000 UTF-16 code units: past Windows'
+    // PATH_MAX_WIDE (32767) and POSIX's PATH_MAX (4096 on Linux, 1024 on
+    // macOS). Windows converts into a PATH_MAX_WIDE buffer, so a missing
+    // bound there is an out-of-bounds write.
+    const long: [40000]u8 = @splat('a');
+    if (DynLib.open(&long)) |opened| {
+        var lib = opened;
+        lib.close();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+    if (builtin.target.os.tag == .windows)
+        try std.testing.expectError(error.BadPathName, DynLib.open(&long));
+}
+
+test "on Windows, a path holding a NUL is BadPathName, not the path before it" {
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
+    // Truncated at the NUL this would be a plain missing file
+    // (`FileNotFound`); the name as given is no path at all.
+    try std.testing.expectError(error.BadPathName, DynLib.open("vera-no-such\x00.dll"));
+}
+
+test "on Windows, a system DLL opens by absolute path and resolves its exports" {
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
+    var lib = try DynLib.open("C:\\Windows\\System32\\kernel32.dll");
+    defer lib.close();
+    try std.testing.expect(lib.lookup(*const fn () callconv(.winapi) u32, "GetCurrentProcessId") != null);
+    try std.testing.expect(lib.lookup(*const anyopaque, "vera_no_such_export") == null);
+}
