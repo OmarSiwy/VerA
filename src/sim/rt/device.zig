@@ -179,6 +179,7 @@ pub fn Device(comptime spec: Spec) type {
         pub const state_class: contract.StateClass = .history;
         /// Only an output pin's own voltage enters `eval` (`g · (V - level)`).
         pub const deriv_reads: M = out_mask;
+        /// No `ddx` reads any unknown.
         pub const ddx_reads: M = 0;
         /// Output row u depends on unknown u alone; an input row on nothing.
         pub const jac_pattern: [n_u]M = blk: {
