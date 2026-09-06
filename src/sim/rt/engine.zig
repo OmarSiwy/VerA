@@ -144,3 +144,13 @@ pub fn saveTo(s: *const State, buf: []u8) std.Io.Writer.Error!usize {
 pub fn restore(s: *State, b: []const u8) Error!void {
     if (decode(ext(cRestore, "restore")(s, b.ptr, b.len))) |e| return e;
 }
+
+test "code and decode are inverse over no error and every error" {
+    try std.testing.expectEqual(@as(u16, 0), code(null));
+    try std.testing.expectEqual(@as(?Error, null), decode(0));
+    const all = [_]Error{ error.Failed, error.Rerun, error.OutOfMemory, error.WriteFailed };
+    for (all, 1..) |e, c| {
+        try std.testing.expectEqual(@as(u16, @intCast(c)), code(e));
+        try std.testing.expectEqual(@as(?Error, e), decode(@intCast(c)));
+    }
+}

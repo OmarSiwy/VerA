@@ -35,6 +35,8 @@ test {
     _ = logic;
     _ = net;
     _ = snapshot;
+    _ = engine;
+    _ = evcd;
     std.testing.refAllDecls(State);
 }
 
@@ -2043,3 +2045,278 @@ pub const State = struct {
         try fmt.text(self.out, literal(&buf, w, false), char, width);
     }
 };
+
+// ---- tests: one `State` over a hand-built design, its transcript in memory ----
+
+const testing = std.testing;
+
+/// One 64-bit slot (word 0 of each plane), no process, net or node, and
+/// one subroutine for `enter`.
+const one_slot: Design = .{
+    .v = &.{0},
+    .x = &.{0},
+    .slots = 1,
+    .fan_start = &.{},
+    .fan = &.{},
+    .code_len = 0,
+    .repeats = 0,
+    .order = &.{},
+    .subs = 1,
+};
+
+/// Two 64-bit slots holding 7 and 9.
+const two_slots: Design = .{
+    .v = &.{ 7, 9 },
+    .x = &.{ 0, 0 },
+    .slots = 2,
+    .fan_start = &.{},
+    .fan = &.{},
+    .code_len = 0,
+    .repeats = 0,
+    .order = &.{},
+    .subs = 1,
+};
+
+/// A `State` over `d` as `device.zig` opens one: `quiet`, so no
+/// diagnostic and no file, and its transcript in memory
+/// (`sink.buffered()`); everything in `a`.
+fn testState(a: std.mem.Allocator, d: *const Design) !*State {
+    const s = try a.create(State);
+    try s.initIn(a, std.Io.failing, d, -9);
+    const transcript = try a.create(std.Io.Writer.Allocating);
+    transcript.* = .init(a);
+    s.quiet = true;
+    s.sink = &transcript.writer;
+    s.out = s.sink;
+    return s;
+}
+
+const no_limit = std.math.maxInt(u64);
+
+fn listed(rows: []const [2]Bit, before: Bit, after: Bit) bool {
+    for (rows) |r| if (r[0] == before and r[1] == after) return true;
+    return false;
+}
+
+test "Edge.matches is §9.7.2 Table 9-1" {
+    const bits = [_]Bit{ .zero, .one, .z, .x };
+    // Table 9-1's posedge transitions; negedge's are their mirror.
+    const pos = [_][2]Bit{ .{ .zero, .x }, .{ .zero, .z }, .{ .zero, .one }, .{ .x, .one }, .{ .z, .one } };
+    const neg = [_][2]Bit{ .{ .one, .x }, .{ .one, .z }, .{ .one, .zero }, .{ .x, .zero }, .{ .z, .zero } };
+    for (bits) |before| for (bits) |after| {
+        try testing.expect(Edge.any.matches(before, after));
+        try testing.expectEqual(listed(&pos, before, after), Edge.posedge.matches(before, after));
+        try testing.expectEqual(listed(&neg, before, after), Edge.negedge.matches(before, after));
+    };
+}
+
+test "§9.2.2 nonblocking rows land in order after the active region, a $strobe after them" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const id = try s.park(3);
+    try s.watch(id, 0, .any);
+    try s.strobe(7);
+    try s.nba(Reach.all, 0, 0, W{ .v = 1, .x = 0 }, @as(u64, 1));
+    try s.nba(Reach.all, 0, 0, W{ .v = 0, .x = 0 }, @as(u64, 1));
+    try s.run(9, null);
+    try testing.expectEqual(@as(?u32, 9), try s.next(no_limit));
+    // Both rows are performed, in order: the first wakes 3, the second
+    // leaves 0, and 3 runs after the region.
+    try testing.expectEqual(@as(?u32, 3), try s.next(no_limit));
+    try testing.expectEqual(@as(u64, 0), s.v[0]);
+    try testing.expectEqual(@as(?u32, show_base + 7), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+}
+
+test "§9.2.2 a #0 nonblocking row lands this step, a #5 one at tick 5" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    try s.nbaAfter(Reach.all, 5, 0, 0, W{ .v = 0, .x = 0 }, @as(u64, 0b10));
+    try s.nbaAfter(Reach.all, 0, 0, 0, W{ .v = 0b11, .x = 0 }, @as(u64, 0b11));
+    try testing.expectEqual(@as(?u32, null), try s.next(0));
+    try testing.expectEqual(@as(u64, 0b11), s.v[0]);
+    try testing.expectEqual(@as(u64, 0), s.sched.now);
+    // At 5 only bit 1 is cleared.
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    try testing.expectEqual(@as(u64, 0b01), s.v[0]);
+    try testing.expectEqual(@as(u64, 5), s.sched.now);
+}
+
+test "§4.8 a real store of -0.0 over 0.0 is no event but keeps its bits; NaN always is one" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const id = try s.park(4);
+    try s.watch(id, 0, .any);
+    try s.putReal(0, 0, logic.realBits(-0.0), std.math.maxInt(u64));
+    try testing.expectEqual(@as(u64, @bitCast(@as(f64, -0.0))), s.v[0]);
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    try s.putReal(0, 0, logic.realBits(std.math.nan(f64)), std.math.maxInt(u64));
+    try testing.expectEqual(@as(?u32, 4), try s.next(no_limit));
+    const again = try s.park(5);
+    try s.watch(again, 0, .any);
+    try s.putReal(0, 0, logic.realBits(std.math.nan(f64)), std.math.maxInt(u64));
+    try testing.expectEqual(@as(?u32, 5), try s.next(no_limit));
+}
+
+test "§9.7.2 a constant select term wakes on its own bits' edge, not the slot's" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const id = try s.park(6);
+    try s.watchBits(id, 0, 0, 4, 4, .posedge);
+    // A select term's edge is not of the slot's bit 0, so any change of the
+    // slot may wake it.
+    const wakes = s.wakes(0);
+    try testing.expect(wakes.contains(.any) and !wakes.contains(.posedge));
+    // Bit 0 rises, bits 4..7 hold: nothing wakes.
+    try s.put(Reach.all, 0, 0, W{ .v = 1, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    // Bit 4, the selected bits' least significant, rises.
+    try s.put(Reach.all, 0, 0, W{ .v = 0x10, .x = 0 }, @as(u64, 0xf0));
+    try testing.expectEqual(@as(?u32, 6), try s.next(no_limit));
+}
+
+test "§10.3 disable drops what waits or is queued inside its range and continues at its end" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const inside = try s.park(10);
+    try s.watch(inside, 0, .any);
+    const outside = try s.park(30);
+    try s.watch(outside, 0, .any);
+    try s.run(12, 5);
+    try s.disable(5, 15, 20);
+    try testing.expectEqual(@as(?u32, 20), try s.next(no_limit));
+    // The resumption at 5 was cancelled: no time step for it.
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    try testing.expectEqual(@as(u64, 0), s.sched.now);
+    try s.put(Reach.all, 0, 0, W{ .v = 1, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, 30), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    // A range that holds nothing continues nowhere.
+    try s.disable(40, 50, 60);
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+}
+
+test "§17.1.3 one $monitor line per time step however many watched stores" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    try s.monitor(2, &.{0});
+    try testing.expectEqual(@as(?u32, show_base + 2), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    for ([_]u64{ 1, 0, 1 }) |v| try s.put(Reach.all, 0, 0, W{ .v = v, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, show_base + 2), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    // `$monitoroff`: no line; `$monitoron` names the site to print now.
+    try testing.expectEqual(@as(?u32, null), s.monitorEnable(false));
+    try s.put(Reach.all, 0, 0, W{ .v = 0, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, 2), s.monitorEnable(true));
+}
+
+test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1024 deep at most" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &two_slots);
+    const all = std.math.maxInt(u64);
+    try s.enter(0, 0, &.{ all, all });
+    try testing.expectEqual(W{ .v = all, .x = all }, s.get(1));
+    s.leave(0, 0, 2);
+    try testing.expectEqual(W{ .v = 7, .x = 0 }, s.get(0));
+    try testing.expectEqual(W{ .v = 9, .x = 0 }, s.get(1));
+    for (0..1024) |_| try s.enter(0, 0, &.{});
+    try testing.expectError(error.Failed, s.enter(0, 0, &.{}));
+    for (0..1024) |_| s.leave(0, 0, 0);
+    try testing.expectEqual(@as(u32, 0), s.depth);
+    try testing.expectEqual(@as(u32, 0), s.active[0]);
+}
+
+test "setChars puts the last characters in the low bytes, cut to the width" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    s.x[0] = 5;
+    s.setChars(0, 16, "abc");
+    try testing.expectEqual(W{ .v = 0x6263, .x = 0 }, s.get(0));
+    // "ab" is 0x6162; 12 bits keep 0x162.
+    s.setChars(0, 12, "ab");
+    try testing.expectEqual(W{ .v = 0x162, .x = 0 }, s.get(0));
+    s.setChars(0, 24, "");
+    try testing.expectEqual(W{ .v = 0, .x = 0 }, s.get(0));
+}
+
+test "formatOf: a held format's characters, leading zero bytes dropped, none with an x" {
+    var buf: [4]u8 = undefined;
+    try testing.expectEqualStrings("Hi", State.formatOf(&buf, W{ .v = 0x4869, .x = 0 }, 32).text);
+    // An inner or trailing zero byte is a character.
+    try testing.expectEqualStrings("H\x00i\x00", State.formatOf(&buf, W{ .v = 0x4800_6900, .x = 0 }, 32).text);
+    try testing.expectEqualStrings("", State.formatOf(&buf, W{ .v = 0x4869, .x = 0x100 }, 32).text);
+}
+
+test "§17.2.3 a held format: text, %% and %m print, a conversion is returned, a broken one refused" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    var f: State.Format = .{ .text = "a%%b%5.2fc%m%" };
+    const sp = (try s.nextSpec(&f, "top.u", "work")).?;
+    try testing.expectEqual(@as(u8, 'f'), sp.conv);
+    try testing.expectEqual(@as(?u32, 5), sp.width);
+    try testing.expectEqual(@as(i64, 2), sp.precision);
+    try testing.expectEqualStrings("a%b", s.sink.buffered());
+    // The rest prints; the format ends inside a conversion (W1153).
+    try s.endFormat(&f, "top.u", "work");
+    try testing.expectEqualStrings("a%bctop.u", s.sink.buffered());
+    try testing.expect(f.bad);
+    // No conversion left for an argument: null (W1153).
+    var plain: State.Format = .{ .text = "" };
+    try testing.expect(try s.nextSpec(&plain, "", "") == null);
+    var unknown: State.Format = .{ .text = "%q" };
+    try testing.expectError(error.Failed, s.nextSpec(&unknown, "", ""));
+    var huge: State.Format = .{ .text = "%99999999999d" };
+    try testing.expectError(error.Failed, s.nextSpec(&huge, "", ""));
+}
+
+test "§9.7.1 delays: an x is no delay, a negative integer an unsigned time; §9.6 repeat counts" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    // 1 ns units at 1 ps precision: 1000 ticks per unit.
+    const scale = try Scale.init(.ns, .ps, .ps);
+    try testing.expectEqual(@as(u64, 0), try s.ticks(.{ .v = 5, .x = 1 }, false, scale));
+    try testing.expectEqual(@as(u64, 5000), try s.ticks(.{ .v = 5, .x = 0 }, false, scale));
+    // -1 is 2^64 - 1 units, which no tick count holds.
+    try testing.expectError(error.Failed, s.ticks(.{ .v = std.math.maxInt(u64), .x = 0 }, true, scale));
+    try testing.expectEqual(@as(u64, 1500), try s.realTicks(1.5, scale));
+    try testing.expectError(error.Failed, s.realTicks(-1.0, scale));
+    try testing.expectEqual(@as(u64, 0), try s.repeatCount(.{ .v = 3, .x = 2 }, 8, false));
+    try testing.expectEqual(@as(u64, 255), try s.repeatCount(.{ .v = 255, .x = 0 }, 8, false));
+    try testing.expectError(error.Failed, s.repeatCount(.{ .v = 255, .x = 0 }, 8, true));
+}
+
+test "a saved tick boundary restores the clock, the values and the suspensions" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s = try testState(arena.allocator(), &one_slot);
+    const id = try s.park(3);
+    try s.watch(id, 0, .posedge);
+    try s.run(8, 10);
+    var buf: [4096]u8 = undefined;
+    const n = try snapshot.saveTo(s, &buf);
+    try testing.expectEqual(@as(?u32, 8), try s.next(no_limit));
+    try testing.expectEqual(@as(u64, 10), s.sched.now);
+    try s.put(Reach.all, 0, 0, W{ .v = 1, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, 3), try s.next(no_limit));
+    try s.restore(buf[0..n]);
+    try testing.expectEqual(@as(u64, 0), s.sched.now);
+    try testing.expectEqual(@as(u64, 0), s.v[0]);
+    try testing.expectEqual(@as(?u32, 8), try s.next(no_limit));
+    try s.put(Reach.all, 0, 0, W{ .v = 1, .x = 0 }, @as(u64, 1));
+    try testing.expectEqual(@as(?u32, 3), try s.next(no_limit));
+    try testing.expectEqual(@as(?u32, null), try s.next(no_limit));
+    // Bytes that end early are refused, not read past.
+    try testing.expectError(error.Failed, s.restore(buf[0 .. n - 1]));
+}
