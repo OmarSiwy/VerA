@@ -98,7 +98,7 @@ fn remap(ctx: *anyopaque, m: []u8, a: Alignment, n: usize, ra: usize) ?[*]u8 {
     // is gone, and failing then would lose the block.
     self.blocks.ensureUnusedCapacity(self.child, 1) catch return null;
     const p = self.child.rawRemap(m, a, n, ra) orelse return null;
-    _ = self.blocks.remove(@intFromPtr(m.ptr));
+    std.debug.assert(self.blocks.remove(@intFromPtr(m.ptr)));
     self.blocks.putAssumeCapacity(@intFromPtr(p), .{ .len = n, .alignment = a });
     return p;
 }
@@ -106,7 +106,7 @@ fn remap(ctx: *anyopaque, m: []u8, a: Alignment, n: usize, ra: usize) ?[*]u8 {
 fn free(ctx: *anyopaque, m: []u8, a: Alignment, ra: usize) void {
     const self: *BigArena = @ptrCast(@alignCast(ctx));
     if (m.len < large) return self.small.allocator().rawFree(m, a, ra);
-    _ = self.blocks.remove(@intFromPtr(m.ptr));
+    std.debug.assert(self.blocks.remove(@intFromPtr(m.ptr)));
     self.child.rawFree(m, a, ra);
 }
 

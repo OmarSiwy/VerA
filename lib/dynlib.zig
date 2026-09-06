@@ -30,6 +30,10 @@ const Windows = struct {
     /// `error.FileNotFound` on any loader failure (no such file, not an
     /// image, an initializer that failed).
     pub fn open(path: []const u8) Error!Windows {
+        // Bounded before converting: `wtf8ToWtf16Le` writes into `rel`
+        // unchecked. A NUL would end the name early for the loader.
+        const units = std.unicode.calcWtf16LeLen(path) catch return error.BadPathName;
+        if (units >= windows.PATH_MAX_WIDE or std.mem.findScalar(u8, path, 0) != null) return error.BadPathName;
         var rel: [windows.PATH_MAX_WIDE:0]u16 = undefined;
         const n = std.unicode.wtf8ToWtf16Le(&rel, path) catch return error.BadPathName;
         rel[n] = 0;
