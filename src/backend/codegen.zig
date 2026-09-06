@@ -5264,31 +5264,67 @@ pub const Gen = struct {
             \\/// matrix build; the flags read here are the §5.6.1.3 retention flags
             \\/// `eval` selects the branch rows on, evaluated at x = 0 like `seed` —
             \\/// sound because codegen admits only build-time-constant flags.
+            \\///
+            \\/// Dead shorts form CHAINS (BSIM4's rgateMod=0 retains both V(g,gm)=0
+            \\/// and V(gm,gi)=0, sharing gm), so aliases are resolved by union-find:
+            \\/// every member of a merged set lands on ONE root and each stamp of
+            \\/// the set cancels on a single slot. Last-write-wins aliasing left the
+            \\/// chain's first link dangling — its KVL row landed on a KCL row as
+            \\/// ±1 garbage stamps and the "solution" violated the model equations.
             \\pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8 {{
             \\    var xr: [n_u]R = undefined;
             \\    for (&xr) |*p| p.* = R.con(0.0);
             \\    const m = core(R, xr, model, inst);
-            \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+            \\    var parent: [n_u]u8 = undefined;
+            \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
             \\
         , .{});
-        for (pairs) |p| {
+        for (pairs, 0..) |p, pi| {
             const fi = @intFromEnum(self.an.rv(p.flag));
             const k = self.lo_idx[fi];
             assert(k != none_u32); // `buildJobs` queues every runtime retention flag
             if (self.an.vty[fi] == .int)
-                try self.w("    if (m.f{d} != 0) {{", .{k})
+                try self.w("    const a{d} = (m.f{d} != 0);", .{ pi, k })
             else
-                try self.w("    if (m.f{d}.v != 0.0) {{", .{k});
+                try self.w("    const a{d} = (m.f{d}.v != 0.0);", .{ pi, k });
             try self.w(" // 0 V arm retained: dead short\n", .{});
-            try self.w("        out[@intFromEnum(U.{s})] = @intFromEnum(U.{s});\n", .{
-                self.u_names[p.victim], self.u_names[p.target],
+            try self.w("    if (a{d}) zCollapseUnion(&parent, @intFromEnum(U.{s}), @intFromEnum(U.{s}));\n", .{
+                pi, self.u_names[p.victim], self.u_names[p.target],
             });
-            try self.w("        out[@intFromEnum(U.{s})] = @intFromEnum(U.{s});\n", .{
-                self.u_names[p.flow_u], self.u_names[p.target],
+        }
+        try self.w(
+            \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+            \\    for (0..n_u) |u| {{
+            \\        const r = zCollapseRoot(&parent, @intCast(u));
+            \\        if (r != u) out[u] = r;
+            \\    }}
+            \\
+        , .{});
+        for (pairs, 0..) |p, pi| {
+            try self.w("    if (a{d}) out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
+                pi, self.u_names[p.flow_u], self.u_names[p.target],
             });
-            try self.w("    }}\n", .{});
         }
         try self.w("    return out;\n}}\n\n", .{});
+        try self.w(
+            \\fn zCollapseRoot(parent: *const [n_u]u8, start: u8) u8 {{
+            \\    var u = start;
+            \\    while (parent[u] != u) u = parent[u];
+            \\    return u;
+            \\}}
+            \\
+            \\/// Min-index root wins, so a set's root is always its lowest unknown —
+            \\/// the host resolves aliases in ascending order and needs the target
+            \\/// resolved before every mover.
+            \\fn zCollapseUnion(parent: *[n_u]u8, a: u8, b: u8) void {{
+            \\    const ra = zCollapseRoot(parent, a);
+            \\    const rb = zCollapseRoot(parent, b);
+            \\    if (ra == rb) return;
+            \\    if (ra < rb) parent[rb] = ra else parent[ra] = rb;
+            \\}}
+            \\
+            \\
+        , .{});
     }
 
     /// §4.5.7 the per-site transport delays, model-frame like
