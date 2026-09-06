@@ -355,6 +355,14 @@ pub const Gen = struct {
     lo_idx: []u32 = &.{},
     /// The returned values, in job order — `lo_idx` is the index into this.
     lo_vals: []Mir.Value = &.{},
+    /// §5.6.1.2 capacitance-form coefficients: rv-resolved operand of every
+    /// `freeze_grad`, deduplicated (CSE-shared coefficients share a latch —
+    /// same value, same frozen copy). `freeze_lo[k]` is the operand's slot in
+    /// `lo_vals`; the Instance latch is `frz__<k>`, written by `updateState`
+    /// once per Newton iterate (ngspice re-evaluates capacitances at the
+    /// current iterate the same way) and read back as `S.con(inst.frz__<k>)`.
+    freeze_vals: []Mir.Value = &.{},
+    freeze_lo: []u32 = &.{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -613,6 +621,33 @@ pub const Gen = struct {
             self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
             try vals.append(a, v);
         }
+        // Freeze latches ride the same live-out queue: `updateState`'s single
+        // core(R) sweep is where their values come from.
+        {
+            var fv: std.ArrayList(Mir.Value) = .empty;
+            var fl: std.ArrayList(u32) = .empty;
+            for (0..self.mir.insts.len) |ii| {
+                const row = self.mir.insts.get(ii);
+                if (row.op != .freeze_grad) continue;
+                const v = self.an.rv(@enumFromInt(row.a));
+                var seen = false;
+                for (fv.items) |old| {
+                    if (old == v) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (seen) continue;
+                if (self.lo_idx[@intFromEnum(v)] == none_u32) {
+                    self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
+                    try vals.append(a, v);
+                }
+                try fv.append(a, v);
+                try fl.append(a, self.lo_idx[@intFromEnum(v)]);
+            }
+            self.freeze_vals = fv.items;
+            self.freeze_lo = fl.items;
+        }
         self.common_mode = mode;
         self.lo_vals = vals.items;
         // §5.10 which core field each held variable's write-back reads. Done
@@ -860,7 +895,7 @@ pub const Gen = struct {
         // renders as the identity inside one. `collapse` reads the core the
         // same way, so it opens `R` too.
         const cpairs = try self.collapsePairs();
-        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0) {
+        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.freeze_lo.len != 0) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -878,7 +913,7 @@ pub const Gen = struct {
         // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
         // advance, which is the ONLY place a stream may move: a per-iteration draw
         // makes the residual non-deterministic and Newton never converges.
-        if (stateful or self.lower.rng_auto_sites != 0) try self.emitStateMachine();
+        if (stateful or self.lower.rng_auto_sites != 0 or self.freeze_lo.len != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitCollapse(cpairs);
         try self.emitNextBreakpoint();
@@ -1537,6 +1572,14 @@ pub const Gen = struct {
                 // per-unit one.
                 .none, .bound_step, .discontinuity => {},
             }
+        }
+        // §5.6.1.2 capacitance-form latches, one per deduplicated
+        // `freeze_grad` coefficient (planCommon order). Default 0.0 is safe:
+        // the C-plane goes unread in a static solve, and the per-iteration
+        // `updateState` inside the FIRST Newton loop writes the real value
+        // before any AC linearization or charge seeding reads it.
+        for (0..self.freeze_lo.len) |k| {
+            try self.w("    frz__{d}: f64 = 0.0, // freeze_grad latch\n", .{k});
         }
         // §5.10 event-assigned variables. LAST, so a model that gains one does
         // not move a single operator field, and the default is the DECLARED
@@ -3212,6 +3255,19 @@ pub const Gen = struct {
                 try self.b(").val()))", .{});
             },
             .opt_barrier => try self.renderVal(a, res_ty),
+            // §5.6.1.2 capacitance-form coefficient: read the Instance latch
+            // `updateState` wrote — value only, no derivative, and the SAME
+            // value for residual and Jacobian within one assemble (Newton-
+            // consistent; the latch advances once per iterate, which is
+            // exactly ngspice's current-iterate capacitance).
+            .freeze_grad => {
+                const v = self.an.rv(a);
+                const k = for (self.freeze_vals, 0..) |fv, fk| {
+                    if (fv == v) break fk;
+                } else unreachable; // planCommon queued every site
+                self.uses_inst = true; // the latch read keeps `inst` in the signature
+                try self.b("S.con(inst.frz__{d})", .{k});
+            },
             // §3.2 integer arithmetic, at §3.2's 32-bit 2's complement width —
             // see `Lower.wrap32`, which is the definition this and the two
             // constant folds all implement. `%` (remainder) is never wider than
@@ -3705,7 +3761,7 @@ pub const Gen = struct {
                             .atanh => .{ "std.math.atanh(", ")" },
                             // An int→real widening and a reassociation barrier
                             // are both identities in the f64 domain.
-                            .if_cast, .opt_barrier => .{ "", "" },
+                            .if_cast, .opt_barrier, .freeze_grad => .{ "", "" },
                             else => return null,
                         };
                         return try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ fix[0], a, fix[1] });
@@ -5137,6 +5193,7 @@ pub const Gen = struct {
             uses_core = uses_core or self.opInputIdx(@intCast(i)) != none_u32;
         }
         for (self.held_idx) |k| uses_core = uses_core or k != none_u32;
+        uses_core = uses_core or self.freeze_lo.len != 0;
         try self.w(
             \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
             \\pub const State = struct {{
@@ -5165,6 +5222,11 @@ pub const Gen = struct {
         // costs exactly one model evaluation however many operators there are.
         // `model` is always live because that call reads it. `dt` is not.
         if (uses_core) try self.w("    const m = core(R, xr, model, inst);\n", .{});
+        // §5.6.1.2 capacitance-form latches: the coefficient of `A*ddt(B)` at
+        // this iterate's solution, read back by eval as S.con(inst.frz__k).
+        for (self.freeze_lo, 0..) |lo, k| {
+            try self.w("    inst.frz__{d} = m.f{d}.v; // freeze_grad latch\n", .{ k, lo });
+        }
         if (uses_dt) try self.w("    const dt = inst.abstime - state.t_prev;\n", .{});
         // §9.17 reset FIRST, unconditionally: a `$bound_step` that only fired on
         // one arm of an `if` last step must not keep bounding this one, and the
@@ -5822,7 +5884,7 @@ fn devSafe(op: Mir.Opcode) bool {
         .fabs, .fmin, .fmax => true,
         // sqrt/floor/ceil are sqrt.rn.f64 and cvt.rmi/rpi.f64.f64 — instructions.
         .sqrt, .floor, .ceil => true,
-        .opt_barrier => true,
+        .opt_barrier, .freeze_grad => true,
         else => false,
     };
 }

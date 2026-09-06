@@ -826,7 +826,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         .floor => .{ .f = @floor(a.f) },
                         .ceil => .{ .f = @ceil(a.f) },
                         .fi_cast => .{ .f = @round(a.f) },
-                        .if_cast, .opt_barrier => .{ .f = a.f },
+                        .if_cast, .opt_barrier, .freeze_grad => .{ .f = a.f },
                         // §4.2.8/§4.2.9 — the two integer-valued unary forms
                         // `Lower.foldExpr`'s `.unary` arm already folds. Truth is
                         // "not zero" (§4.2.8), and `~` is the 32-bit complement

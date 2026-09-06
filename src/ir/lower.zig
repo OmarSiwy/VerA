@@ -4744,6 +4744,22 @@ fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
     }
 }
 
+/// A multiplicative coefficient riding a `ddt` factor. LRM semantics of
+/// `A*ddt(B)` is A·dB/dt — the CAPACITANCE form — so A multiplies at its
+/// current value and contributes no derivative of its own: q = freeze(A)·B
+/// puts A·∂B/∂x on the C-plane and drops the spurious B·∂A/∂x that a plain
+/// product's AD would add (measured: MESA Cgg inflated up to 2.17x, its
+/// oscillator period 21% slow; ngspice hands caps to NIintegrate at their
+/// current value the same way, mesaload.c:341-347). Values with no unknown
+/// dependence (literals, parameters) already have zero gradient — pass
+/// them through so param-only models emit byte-identical code.
+fn freezeCoeff(self: *Lower, v: Mir.Value) Oom!Mir.Value {
+    return switch (self.mir.valueKind(v)) {
+        .float_const, .int_const, .undef, .param_ref => v,
+        else => try self.emit(.freeze_grad, &.{v}),
+    };
+}
+
 /// The charge/flux of a reactive term: strip exactly one `ddt` from a
 /// multiplicative spine (§5.6.1.2).
 fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
@@ -4785,17 +4801,17 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 if (l_has and r_has) break :spine;
                 if (l_has) {
                     const a = try self.lowerReactive(ex.lhs(e)) orelse return null;
-                    const b = try self.toReal(try self.lowerExpr(ex.rhs(e)));
+                    const b = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.rhs(e))));
                     return try self.emit(.fmul, &.{ a, b });
                 }
-                const a = try self.toReal(try self.lowerExpr(ex.lhs(e)));
+                const a = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.lhs(e))));
                 const b = try self.lowerReactive(ex.rhs(e)) orelse return null;
                 return try self.emit(.fmul, &.{ a, b });
             },
             .div => {
                 if (self.containsDdt(ex.rhs(e))) break :spine; // ddt in a divisor
                 const a = try self.lowerReactive(ex.lhs(e)) orelse return null;
-                const b = try self.toReal(try self.lowerExpr(ex.rhs(e)));
+                const b = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.rhs(e))));
                 return try self.emit(.fdiv, &.{ a, b });
             },
             else => {},

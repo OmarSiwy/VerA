@@ -1125,7 +1125,7 @@ const Prover = struct {
             .floor => &mFloor,
             .ceil => &mCeil,
             .if_cast => &mId,
-            .opt_barrier => &mId,
+            .opt_barrier, .freeze_grad => &mId,
             else => null,
         };
         if (monotone) |f| {

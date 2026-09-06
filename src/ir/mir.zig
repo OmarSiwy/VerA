@@ -144,6 +144,13 @@ pub const Opcode = enum(u8) {
     /// Optimization fence (no LRM basis, engine-internal): stops
     /// codegen from folding/reassociating across it. Unary, value-preserving.
     opt_barrier,
+    /// Gradient freeze (no LRM basis, engine-internal): value-identity, but
+    /// the AD domain drops the derivative — `S.con(a.val())`. Exists for
+    /// §5.6.1.2 capacitance-form reactive terms `A*ddt(B)`: the coefficient
+    /// A multiplies dB/dt at its CURRENT value (ngspice hands caps to
+    /// NIintegrate the same way), so q = freeze(A)·B and the C-plane gets
+    /// A·∂B/∂x without the spurious B·∂A/∂x a plain product would add.
+    freeze_grad,
     // --- value-form conditional §4.2.12 (`?:` that needs no CFG split) ---
     select,
     // --- control §5.8/§5.9 ---
@@ -187,6 +194,7 @@ pub fn opClass(op: Opcode) OpClass {
         .fi_cast,
         .if_cast,
         .opt_barrier,
+        .freeze_grad,
         => .unary,
         .select => .ternary,
         .phi => .phi,
