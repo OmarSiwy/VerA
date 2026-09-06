@@ -6,9 +6,14 @@
 //!
 //! The spine is `compileInArena`: preprocess, lex, parse, the §3.7 wreal
 //! check, lower, `pruneHeld`, if-conversion (each followed by the MIR
-//! verifier under runtime safety), prove, then the §9.4 drop warnings. Codegen runs later and lazily, from `CompileResult.generateOutput`.
+//! verifier under runtime safety), prove, then the §9.4 drop warnings.
+//! Codegen runs later and lazily, from `CompileResult.generateOutput`.
 //! This file's pub declarations are the `vera` module's API (`src/main.zig`,
 //! `src/vpi`, `tests/*`), so their names and meanings are frozen.
+//!
+//! Clauses its code cites: §3.2, §3.4, §3.6.2, §3.7, §4.2.12, §4.3.2, §6.2,
+//! §6.5.3, §7.4.4, §7.6, §9.4, §9.5, §9.5.1, §9.7.3, §10, §12.32.1, annex D.1,
+//! D.2, E.1 and E.2; IEEE 1364-2005 §19.1 and §19.6.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -102,10 +107,15 @@ pub const Options = struct {
     /// successful compilation may still fill it (W0650, the finiteness
     /// warning). Detached from the compilation arena before the call returns,
     /// so it stays valid after the `CompileResult` is freed; the caller must
-    /// `deinit(gpa)` it.
+    /// `deinit(gpa)` it. The bag must own nothing on entry (fresh from
+    /// `Bag.init`, or after `deinit`): the call overwrites it without freeing
+    /// what it held. A successful result keeps the pointer, and codegen
+    /// reports into the bag (E0515), so it must outlive the result.
     diags: ?*diag.Bag = null,
     /// Per-code lint levels (`--allow=W0650`, `--deny=W0651`). An error
-    /// code cannot be allowed away; see `diag.Levels.set`.
+    /// code cannot be allowed away; see `diag.Levels.set`. Borrowed, not
+    /// copied: the bag in `diags` reads it until that bag is freed, so it
+    /// must outlive the bag.
     lint: diag.Levels = .empty,
     /// Class-6 knobs (solver compliance bound, overflow model). See proof.zig.
     proof: proof.Options = .{},
@@ -151,10 +161,10 @@ pub const Options = struct {
 ///
 /// Owns every allocation of the run. Preprocessed text, tokens, AST, MIR and
 /// lowering's tables live in `arena`, a `BigArena`: its large tables are the
-/// gpa's own blocks, grown in place and freed with it. Only `verdict.unit_modes` and
-/// `device.text` are gpa-owned (the device text can reach hundreds of
-/// megabytes, and an arena cannot grow a buffer in place). `deinit` frees all
-/// three. The value is freely movable.
+/// gpa's own blocks, grown in place and freed with it. Only
+/// `verdict.unit_modes` and `device.text` are gpa-owned (the device text can
+/// reach hundreds of megabytes, and an arena cannot grow a buffer in place).
+/// `deinit` frees all three. The value is freely movable.
 pub const CompileResult = struct {
     /// The allocator the result was compiled with; `deinit` frees with it.
     gpa: Allocator,
@@ -173,8 +183,9 @@ pub const CompileResult = struct {
     verdict: proof.Verdict,
     /// What the caller asked for; `buildArtifact` refuses a `.lint` result.
     target: Target,
-    /// Codegen output; empty until `generateOutput` runs, which `.lint` never
-    /// does. `text` is gpa-owned and freed by `deinit`; consumers borrow it.
+    /// Codegen output; empty until the first successful `generateOutput`,
+    /// which the pipeline itself never calls. `text` is gpa-owned and freed
+    /// by `deinit`; consumers borrow it.
     /// `names`, `unit_lo` and `unit_hi` are the per-unit file map the
     /// orchestrator writes (see `codegen.Output`).
     device: codegen.Output = .{ .text = "" },
@@ -194,14 +205,16 @@ pub const CompileResult = struct {
     }
 
     /// Runs codegen and returns the device text. Idempotent: the text is
-    /// cached on the result, so a second call costs nothing. The slice lives
-    /// until `deinit`.
+    /// cached on the result, so a second call costs nothing and returns the
+    /// same slice. The slice is borrowed and lives until `deinit`. A failed
+    /// call caches nothing, so the next call runs codegen again.
     pub fn generateDevice(self: *CompileResult) codegen.Error![]const u8 {
         return (try self.generateOutput()).text;
     }
 
     /// Runs codegen (once, as `generateDevice`) and returns the text with the
-    /// per-unit file map the orchestrator needs.
+    /// per-unit file map the orchestrator needs. Every slice in the returned
+    /// value is borrowed from the result and lives until `deinit`.
     pub fn generateOutput(self: *CompileResult) codegen.Error!codegen.Output {
         if (self.device.text.len == 0) {
             self.device = try codegen.generate(
@@ -229,10 +242,14 @@ pub fn compileSource(gpa: Allocator, source: []const u8, target: Target) Error!C
     return compileSourceOpts(gpa, source, target, .{});
 }
 
-/// `compileSource` with explicit settings. When `opts.diags` is set it
-/// receives every diagnostic even on failure, and the caller must
-/// `deinit(gpa)` it. Fails with `error.CompileFailed` when a `--deny`
-/// promoted a warning, even if every stage succeeded.
+/// `compileSource` with explicit settings. Caller owns the result and frees
+/// it with `deinit`. When `opts.diags` is set it receives every diagnostic
+/// even on failure, and the caller must `deinit(gpa)` it; on any failure
+/// that bag is the only thing the call leaves allocated.
+/// Fails with `error.CompileFailed` when a stage reported an error, or when a
+/// `--deny` promoted a warning even if every stage succeeded;
+/// `error.NoModule` when the source declares no module of its own (the
+/// annex D/E prelude and a SPICE netlist's modules do not count).
 pub fn compileSourceOpts(
     gpa: Allocator,
     source: []const u8,
@@ -397,23 +414,7 @@ fn compileInArena(
     // §9.4/§9.5. Reported here, not in lowering, because whether a side effect
     // is kept depends on what the caller asked to build. The model is legal
     // either way, so these are warnings.
-    if (opts.display != .emit) for (lowered.displays.items) |d| {
-        // §9.7.3 a device reports these through its status channel
-        // (`contract.StatusSite`): kept, not dropped.
-        if (std.mem.eql(u8, d.name, "$fatal") or std.mem.eql(u8, d.name, "$error")) continue;
-        // §9.4 a `.record` device's `say` records these; codegen names one
-        // it cannot (`cg_display.planSay`).
-        if (opts.display == .record and cg_display.sayRecords(.fromName(d.name))) continue;
-        const span = lowered.tokenSpan(d.tok);
-        // A §9.5 file task is kept for sequencing, not text; its answer is
-        // §9.5.1's zero descriptor rather than a dropped print.
-        if (Mir.callee.isFileCall(.fromName(d.name)))
-            try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
-        else if (opts.display == .record)
-            try bag.add(.lower, .W0850, span, "`{s}` — a device's `say` records the printing tasks, not this one", .{d.name})
-        else
-            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
-    };
+    try warnDroppedDisplays(bag, lowered, opts.display);
 
     return .{
         .gpa = gpa,
@@ -436,13 +437,39 @@ fn compileInArena(
     };
 }
 
+/// Reports a W0850 for every display or file task in `lowered.displays` that
+/// the device `display` asks for will not perform. `.emit` drops none.
+fn warnDroppedDisplays(bag: *diag.Bag, lowered: *const Lowered, display: codegen.Display) Allocator.Error!void {
+    if (display == .emit) return;
+    for (lowered.displays.items) |d| {
+        const c: Mir.Callee = .fromName(d.name);
+        // §9.7.3 a device reports these through its status channel
+        // (`contract.StatusSite`): kept, not dropped.
+        if (c == .@"$fatal" or c == .@"$error") continue;
+        // §9.4 a `.record` device's `say` records these; codegen names one
+        // it cannot (`cg_display.planSay`).
+        if (display == .record and cg_display.sayRecords(c)) continue;
+        const span = lowered.tokenSpan(d.tok);
+        // A §9.5 file task is kept for sequencing, not text; its answer is
+        // §9.5.1's zero descriptor rather than a dropped print.
+        if (Mir.callee.isFileCall(c))
+            try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
+        else if (display == .record)
+            try bag.add(.lower, .W0850, span, "`{s}` — a device's `say` records the printing tasks, not this one", .{d.name})
+        else
+            try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Artifact build
 // ---------------------------------------------------------------------------
 
 /// Generates the device and builds it cold into a shared library
-/// (`orchestrator.compileRelease`). The host owns loading it and all
-/// simulation state. Fails with `error.NoArtifact` on a `.lint` result.
+/// (`orchestrator.compileRelease`), `lib<name>.<generation>.so` in
+/// `o.work_dir`. The host owns loading it and all simulation state. Caller
+/// owns the returned `orchestrator.Result` and frees it with `deinit(gpa)`.
+/// Fails with `error.NoArtifact` on a `.lint` result, before anything runs.
 pub fn buildArtifact(
     gpa: Allocator,
     io: std.Io,
@@ -532,7 +559,7 @@ test "diagnostics outlive the compilation arena" {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     try diag.render(&bag, &aw.writer, .{});
-    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "-->") != null);
+    try std.testing.expect(std.mem.find(u8, aw.writer.buffered(), "-->") != null);
 }
 
 fn compileBadWithDiags(gpa: Allocator) !void {
@@ -631,6 +658,206 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
     var b = try compileSource(gpa, test_resistor, .build);
     defer b.deinit();
     try std.testing.expectEqualStrings(try a.generateDevice(), try b.generateDevice());
+}
+
+test "generateDevice runs codegen once and hands back the cached text" {
+    const gpa = std.testing.allocator;
+    var res = try compileSource(gpa, test_resistor, .build);
+    defer res.deinit();
+    // The pipeline itself never runs codegen.
+    try std.testing.expectEqual(@as(usize, 0), res.device.text.len);
+
+    const first = try res.generateDevice();
+    try std.testing.expect(first.len != 0);
+    try std.testing.expect(!res.device_has_compile_error);
+    // Same slice, not an equal copy: the second call did not run codegen
+    // (a second run would allocate a second gpa buffer).
+    const second = try res.generateDevice();
+    try std.testing.expect(first.ptr == second.ptr and first.len == second.len);
+    const out = try res.generateOutput();
+    try std.testing.expect(out.text.ptr == first.ptr);
+}
+
+test buildArtifact {
+    // `.lint` is refused before codegen or the orchestrator runs, so these
+    // options are never read: no directory, no child process.
+    const gpa = std.testing.allocator;
+    var res = try compileSource(gpa, test_resistor, .lint);
+    defer res.deinit();
+    try std.testing.expectError(error.NoArtifact, buildArtifact(gpa, std.testing.io, &res, .{
+        .work_dir = "",
+        .name = "res",
+        .optimize = .debug,
+        .backend = .self_hosted,
+        .modules = &.{},
+    }, 0));
+    try std.testing.expectEqual(@as(usize, 0), res.device.text.len);
+}
+
+test "a source with no module of its own is NoModule, with or without the prelude" {
+    // §6.2. `compileInArena` sets `builtin_modules` to the annex E prelude's
+    // count; were it short, a Table E.1 primitive would be taken as the top
+    // and this would compile.
+    const gpa = std.testing.allocator;
+    for ([_]bool{ true, false }) |std_defs| {
+        var bag: diag.Bag = .init(gpa);
+        defer bag.deinit(gpa);
+        try std.testing.expectError(error.NoModule, compileSourceOpts(gpa, "", .lint, .{
+            .diags = &bag,
+            .std_defs = std_defs,
+        }));
+        // Lowering finds no module and says so, once.
+        var e1001: usize = 0;
+        for (0..bag.count()) |i| {
+            if (bag.at(i).code == .E1001) e1001 += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), e1001);
+    }
+}
+
+test "a parse error is NoModule only when no module of the source's own was parsed" {
+    // `endmodule` with no `module` is E0201; the parser recovers at top level,
+    // so in the second source it still parses `res`, and the failure is the
+    // diagnosed parse, not a missing module.
+    const gpa = std.testing.allocator;
+    try std.testing.expectError(error.NoModule, compileSource(gpa, "endmodule\n", .lint));
+    try std.testing.expectError(error.CompileFailed, compileSource(gpa, "endmodule\n" ++ test_resistor, .lint));
+}
+
+test "without the prelude, a source that includes the annex D files itself compiles" {
+    // `std_defs = false` drops the prepended annex D.1/D.2 text and the
+    // Table E.1 primitives with it, so nothing is a builtin module and the
+    // user's `res` is the top.
+    const gpa = std.testing.allocator;
+    var res = try compileSourceOpts(gpa, "`include \"disciplines.vams\"\n" ++ test_resistor, .lint, .{ .std_defs = false });
+    defer res.deinit();
+    try std.testing.expectEqualStrings("res", res.mir.name);
+    try std.testing.expect(res.verdict.ok());
+}
+
+const test_netlist =
+    \\.SUBCKT RDIV IN OUT
+    \\R1 IN OUT 1K
+    \\.ENDS RDIV
+    \\
+;
+
+test "annex E.2: a SPICE netlist's modules lead the file but are never the top" {
+    // The `.SUBCKT` becomes `module rdiv`, placed before the source. Counted
+    // among the builtins it is not a candidate top: `res` is. Were it left
+    // out of the count, `rdiv` (first, and instantiated by nothing) would be
+    // the top, and an empty source would compile.
+    const gpa = std.testing.allocator;
+    {
+        var res = try compileSourceOpts(gpa, test_resistor, .lint, .{ .spice_netlist = test_netlist });
+        defer res.deinit();
+        try std.testing.expectEqualStrings("res", res.mir.name);
+    }
+    try std.testing.expectError(error.NoModule, compileSourceOpts(gpa, "", .lint, .{ .spice_netlist = test_netlist }));
+}
+
+const test_unbounded_exp =
+    \\module amp(a, c); inout a, c; electrical a, c;
+    \\  analog I(a, c) <+ exp(V(a, c));
+    \\endmodule
+    \\
+;
+
+test "a --deny fails the compilation even with no bag to report into, and frees it" {
+    // The denied W0650 lands in the arena's own bag, which is freed with the
+    // arena; the testing allocator fails the test on a leak.
+    const gpa = std.testing.allocator;
+    var levels: diag.Levels = .empty;
+    defer levels.deinit(gpa);
+    try levels.set(gpa, .W0650, .deny);
+    try std.testing.expectError(error.CompileFailed, compileSourceOpts(gpa, test_unbounded_exp, .lint, .{ .lint = levels }));
+}
+
+test "a failed compilation with no bag leaks nothing" {
+    const gpa = std.testing.allocator;
+    try std.testing.expectError(error.CompileFailed, compileSource(
+        gpa,
+        "module bad(p); inout p; electrical p; analog I(p) <+ ;\nendmodule\n",
+        .lint,
+    ));
+}
+
+/// Lints `src` with `display` and returns how many W0850 rows have a
+/// headline containing `needle` ("" counts every W0850 row).
+fn countW0850(src: []const u8, display: codegen.Display, needle: []const u8) !usize {
+    const gpa = std.testing.allocator;
+    var bag: diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    var res = try compileSourceOpts(gpa, src, .lint, .{ .diags = &bag, .display = display });
+    defer res.deinit();
+    var n: usize = 0;
+    for (0..bag.count()) |i| {
+        const e = bag.at(i);
+        if (e.code == .W0850 and std.mem.find(u8, e.message, needle) != null) n += 1;
+    }
+    return n;
+}
+
+test "§9.4 W0850 names each task the requested device drops, and no other" {
+    const strobe =
+        \\module d(p, n); inout p, n; electrical p, n;
+        \\  analog begin
+        \\    I(p, n) <+ V(p, n);
+        \\    $strobe("v=%g", V(p, n));
+        \\  end
+        \\endmodule
+        \\
+    ;
+    // §9.4.1 `$monitor` needs change detection across accepted points, state
+    // a device does not keep, so `say` does not record it
+    // (`cg_display.sayRecords`; ch09_system_tasks/say_device_records.va).
+    const monitor =
+        \\module d(p, n); inout p, n; electrical p, n;
+        \\  analog begin
+        \\    I(p, n) <+ V(p, n);
+        \\    $monitor("%g", V(p));
+        \\  end
+        \\endmodule
+        \\
+    ;
+    const severity =
+        \\module d(p, n); inout p, n; electrical p, n;
+        \\  analog begin
+        \\    if (V(p, n) > 1.0) $error("v=%g", V(p, n));
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+        \\
+    ;
+    const file =
+        \\module d(p, n); inout p, n; electrical p, n;
+        \\  integer fd;
+        \\  analog begin
+        \\    fd = $fopen("vera_never_written.dat");
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+        \\
+    ;
+    // `.drop`: the print is gone, and the warning names the task alone.
+    try std.testing.expectEqual(1, try countW0850(strobe, .drop, "`$strobe`"));
+    try std.testing.expectEqual(0, try countW0850(strobe, .drop, "records"));
+    // `.record`: `say` records `$strobe`, but not `$monitor`.
+    try std.testing.expectEqual(0, try countW0850(strobe, .record, ""));
+    try std.testing.expectEqual(1, try countW0850(monitor, .record, "records the printing tasks"));
+    // `.emit`: the executable prints; nothing is dropped.
+    try std.testing.expectEqual(0, try countW0850(strobe, .emit, ""));
+    try std.testing.expectEqual(0, try countW0850(monitor, .emit, ""));
+    // §9.7.3: `$error` reaches the host through the status channel whatever
+    // the display mode, so it is never reported as dropped.
+    try std.testing.expectEqual(0, try countW0850(severity, .drop, ""));
+    try std.testing.expectEqual(0, try countW0850(severity, .record, ""));
+    // §9.5.1: a device has no file table; `$fopen` answers the zero
+    // descriptor under `.drop` and `.record` alike (a file task is no
+    // printing task, so `say` does not take it).
+    try std.testing.expectEqual(1, try countW0850(file, .drop, "zero descriptor"));
+    try std.testing.expectEqual(1, try countW0850(file, .record, "zero descriptor"));
+    try std.testing.expectEqual(0, try countW0850(file, .emit, ""));
 }
 
 // Zig analyses lazily, so an unreferenced decl is never type-checked. This
