@@ -153,6 +153,30 @@ pub const Options = struct {
     /// runs. This is the caller's bag, and it is alive for as long as the
     /// `CompileResult` is.
     diags: ?*diag.Bag = null,
+    /// Outline a huge body into `noinline` chunk functions of ~this many
+    /// statements each (0 = never, the default). See `emitUnitBody`.
+    ///
+    /// MEASURED (bsim4va/hisimhv/bsimsoi, zig 0.16 / LLVM 21, -OReleaseFast):
+    ///   - nvptx64 (GPU kernels): the whole point. The monolithic bsim4va
+    ///     core takes the NVPTX backend 2 min 24 s and emits 1.2 GB of PTX
+    ///     (register-file spill storm — ../ARPice/docs/gpu-device-eval.md §4);
+    ///     chunked at 300 it is 1.3 s and 26 MB. Pass `--outline-chunk=300`
+    ///     when generating a model a GPU kernel root will compile.
+    ///   - host, -fstrip (how release hosts build): NEUTRAL to slightly
+    ///     negative (bsim4va 1.35 s -> 1.95 s) — the monolith's superlinear
+    ///     term was DWARF, which stripping already removes.
+    ///   - host, debug info on: 2.6-3.5x faster (6.4 s -> 2.3 s bsim4va,
+    ///     14 s -> 4.1 s hisimhv).
+    ///   - host RUNTIME of eval: 1.8-3x SLOWER chunked — cross-chunk values
+    ///     live in memory (the shared hoist arrays) where the monolith held
+    ///     them in registers; chunk-local `var`s claw back part (9.99 s ->
+    ///     7.58 s per 1e6 bsim4va evals at 300, monolith 3.18 s) and bigger
+    ///     chunks help (5.87 s at 2000), but no size meets a 2% budget.
+    ///
+    /// So: OFF unless the artifact is a GPU kernel or a build-time-bound
+    /// development loop. Emitted values are the same statements either way —
+    /// verified bit-identical (f, q, all partials) on the three models above.
+    outline_chunk: u32 = 0,
 };
 
 /// Emit the whole device.zig. LRM §5/§8.3.
@@ -198,6 +222,7 @@ pub fn generate(
         .display = opts.display,
         .jac_f32 = opts.jac_f32,
         .diags = opts.diags,
+        .outline = opts.outline_chunk,
     };
     errdefer g.out.deinit(gpa);
     try g.prepare();
@@ -430,6 +455,53 @@ pub const Gen = struct {
     sc_end: std.ArrayList(u32) = .empty,
     sc_open: std.ArrayList(u32) = .empty,
     probing: bool = false,
+
+    // ---- outlining (`Options.outline_chunk`) — all per-unit transient ----
+    /// Statements per chunk (the option). 0 disables.
+    outline: u32 = 0,
+    /// Chunking is on for the body being emitted (size gate passed, shape ok).
+    oc_on: bool = false,
+    /// Real pass is inside `emitChunkFns` — `maybeCut` closes/opens chunk fns.
+    oc_real: bool = false,
+    /// Probe saw a shape the driver layout cannot host: more than one return,
+    /// none, or executable text after it (see `probeBody`'s trailing check).
+    oc_bad: bool = false,
+    oc_returns: u32 = 0,
+    /// Probe text offset just past the first emitted return.
+    oc_ret_at: usize = 0,
+    /// Rendering the return right now — every slot it names must be readable
+    /// from the driver, so `probeUse` pins it into a hoist array.
+    oc_in_ret: bool = false,
+    /// Probe-text offset where each chunk's content starts, plus a terminal
+    /// entry at the return. A hoisted slot whose whole life
+    /// [def_off, max(max_use, max_def)] sits inside ONE such interval is
+    /// declared as that chunk's own `var` instead of in the shared arrays —
+    /// LLVM then promotes it exactly like the monolith's locals, which is
+    /// most of the outlining runtime cost (bsim4va: 799 of 1368 h slots).
+    oc_bounds: std.ArrayList(u32) = .empty,
+    /// (chunk, slot, type) rows for those chunk-local vars, in live order.
+    oc_local_chunk: std.ArrayList(u32) = .empty,
+    oc_local_slot: std.ArrayList(u32) = .empty,
+    oc_local_ty: std.ArrayList(VTy) = .empty,
+    /// Statements emitted since the open chunk began — the cut trigger.
+    oc_insts: u32 = 0,
+    /// Cuts fired so far == index of the OPEN chunk. Probe and real pass must
+    /// agree (asserted in `emitChunkFns`); both count the same walk.
+    oc_cuts: u32 = 0,
+    /// Chunk count the probe settled on; the driver call list is emitted from
+    /// this before the chunk bodies exist.
+    oc_total: u32 = 0,
+    /// Unit name + float mode for the chunk headers (`{name}__c{k}`).
+    oc_name: []const u8 = "",
+    oc_mode: []const u8 = "",
+    /// Parameter-name patch offsets of the OPEN chunk header:
+    /// x, model, inst, h, hi, hs — same trick as `emitUnit`'s signature.
+    oc_at: [6]usize = @splat(0),
+    /// Did the open chunk touch each hoist array? (x/model/inst ride the
+    /// existing `uses_*` flags.)
+    oc_use: [3]bool = @splat(false),
+    /// Hoist array lengths by VTy (0 = absent from signatures and calls).
+    oc_n: [3]u32 = @splat(0),
 
     // ------------------------------------------------------------------ setup
 
@@ -1897,6 +1969,8 @@ pub const Gen = struct {
         // explains why the join has to absorb `.strict`.
         try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
         self.cur_strict = self.common_mode == .strict;
+        self.oc_name = self.common_name;
+        self.oc_mode = @tagName(self.common_mode);
 
         const body_start = self.out.items.len;
         self.fatal = pre;
@@ -1913,6 +1987,7 @@ pub const Gen = struct {
         if (!self.uses_model) self.patchParam(at_model, "model".len);
         if (!self.uses_inst) self.patchParam(at_inst, "inst".len);
         try self.w("}}\n\n", .{});
+        try self.emitChunkFns(.undef);
         try self.recordUnitFile(self.common_name, lo, at_fn);
     }
 
@@ -1978,6 +2053,8 @@ pub const Gen = struct {
         try self.w("inst: *const Instance) S {{\n", .{});
         try self.w("    @setFloatMode(.{s});\n", .{mode});
         self.cur_strict = std.mem.eql(u8, mode, "strict");
+        self.oc_name = name;
+        self.oc_mode = mode;
 
         const body_start = self.out.items.len;
         try self.emitUnitBody(target);
@@ -1993,6 +2070,7 @@ pub const Gen = struct {
         if (!self.uses_model) self.patchParam(at_model, "model".len);
         if (!self.uses_inst) self.patchParam(at_inst, "inst".len);
         try self.w("}}\n\n", .{});
+        try self.emitChunkFns(target);
         return at_fn;
     }
 
@@ -2048,12 +2126,17 @@ pub const Gen = struct {
         return s;
     }
     fn writeSlotRef(self: *Gen, i: usize) Error!void {
-        if (self.slotArr(i)) |arr| return self.b("{s}[{d}]", .{ arr, self.slotNum(i) });
+        if (self.slotArr(i)) |arr| {
+            self.oc_use[@intFromEnum(self.an.vty[i])] = true;
+            return self.b("{s}[{d}]", .{ arr, self.slotNum(i) });
+        }
         return self.b("t{d}", .{self.slotNum(i)});
     }
     fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
-        if (self.slotArr(i)) |arr|
+        if (self.slotArr(i)) |arr| {
+            self.oc_use[@intFromEnum(self.an.vty[i])] = true;
             return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, self.slotNum(i) });
+        }
         return std.fmt.allocPrint(self.arena, "t{d}", .{self.slotNum(i)});
     }
 
@@ -2076,6 +2159,10 @@ pub const Gen = struct {
         defs: u32 = 0,
         uses: u32 = 0,
         def_off: u32 = 0,
+        /// Offset of the LAST def — a loop-carried slot's final write sits
+        /// textually after its last read, and chunk-locality (below) must
+        /// cover it too.
+        max_def: u32 = 0,
         max_use: u32 = 0,
         scope: u32 = 0,
         /// Something disqualifies this slot from `const`-at-definition: a
@@ -2110,6 +2197,7 @@ pub const Gen = struct {
             p.def_off = @intCast(self.out.items.len);
             p.scope = self.sc_open.getLast();
         }
+        p.max_def = @intCast(self.out.items.len);
         p.defs += 1;
         if (p.defs > 1 or !movable) p.pinned = true;
     }
@@ -2122,6 +2210,9 @@ pub const Gen = struct {
         // emitter never assigns at all (which is the `undefined`/zero seed the
         // hoist exists to provide).
         if (p.defs == 0) p.pinned = true;
+        // Outlining: a read from the driver's return crosses an emitted
+        // FUNCTION boundary — only a hoist array crosses one.
+        if (self.oc_in_ret) p.pinned = true;
         p.max_use = @max(p.max_use, @as(u32, @intCast(self.out.items.len)));
     }
 
@@ -2143,8 +2234,36 @@ pub const Gen = struct {
 
         const at = self.out.items.len;
         self.probing = true;
-        try self.scopeOpen(); // the function body itself
+        self.oc_insts = 0;
+        self.oc_cuts = 0;
+        self.oc_returns = 0;
+        self.oc_ret_at = 0;
+        self.oc_bad = false;
+        try self.scopeOpen(); // the function body itself (the driver, chunked)
+        // Chunked, every top-level cut ends one of these scopes and opens the
+        // next, so `at_def` below answers "def and every use inside ONE
+        // emitted function".
+        self.oc_bounds.clearRetainingCapacity();
+        if (self.oc_on) {
+            try self.scopeOpen();
+            try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
+        }
         try self.emitTree(0, 1, target);
+        if (self.oc_on) {
+            self.scopeClose(self.out.items.len); // the last chunk
+            // The driver returns AFTER the last chunk call, so the layout is
+            // only sound when the one return already was the last executable
+            // text — anything after it but closing braces (merge code the
+            // return was nested under) would become reachable in a chunk
+            // that no longer returns. Checked on the probe's own text.
+            self.oc_bad = self.oc_returns != 1;
+            if (!self.oc_bad) for (self.out.items[self.oc_ret_at..]) |ch| {
+                if (ch != ' ' and ch != '\n' and ch != '}') {
+                    self.oc_bad = true;
+                    break;
+                }
+            };
+        }
         self.scopeClose(self.out.items.len);
         self.probing = false;
         self.out.shrinkRetainingCapacity(at);
@@ -2177,7 +2296,16 @@ pub const Gen = struct {
             try self.ind(1);
             try self.b("const c = core(S, x, model, inst);\n", .{});
         }
-        if (self.plan.straight) {
+        // Outlining gate. `n_slots` IS the emitted statement count (one slot,
+        // one statement), so a body at or under the chunk size keeps today's
+        // output byte for byte. No extra floor: the option is opt-in and the
+        // caller picks the size per artifact (`Options.outline_chunk` has the
+        // measured guidance — bodies under ~2-3 k statements are better off
+        // whole). `uses_cache` bodies hold a `const c` no chunk could see;
+        // they are the post-fold unit tails and small.
+        self.oc_on = self.outline != 0 and !self.plan.uses_cache and
+            !self.emitting_display and self.plan.n_slots > self.outline;
+        if (self.plan.straight and !self.oc_on) {
             try self.emitBlockInsts(0, 1, true);
             try self.emitReturn(1, target);
             return;
@@ -2214,6 +2342,21 @@ pub const Gen = struct {
         // contribution accumulator with `.f_zero`.
         // Pinned by tests/fixtures/exhaustive/069_conditional_operator_state.va.
         try self.probeBody(target);
+        // Outlining is off the table when the probe hit a fatal (the body
+        // becomes one `@compileError`), when the return shape failed the
+        // trailing-text check (`probeBody`), or when the body never actually
+        // crossed the chunk size. The probe's per-chunk scopes only ever make
+        // at_def STRICTER, so its result is valid for the unchunked layout
+        // too — but re-probe for the exact one-scope answer; two dry runs
+        // cost less than one hoist kept.
+        if (self.oc_on) {
+            if (self.fatal != null or self.oc_bad or self.oc_cuts == 0) {
+                self.oc_on = false;
+                try self.probeBody(target);
+            } else {
+                self.oc_total = self.oc_cuts + 1;
+            }
+        }
         const ret = self.an.rv(target);
 
         // One array per type instead of one `var` per slot. Two passes: assign
@@ -2227,6 +2370,9 @@ pub const Gen = struct {
         // explicit store after the declaration instead.
         var seeded: std.ArrayList(Mir.Value) = .empty;
         defer seeded.deinit(self.arena);
+        self.oc_local_chunk.clearRetainingCapacity();
+        self.oc_local_slot.clearRetainingCapacity();
+        self.oc_local_ty.clearRetainingCapacity();
         for (self.plan.live.items) |lv| {
             const v = @intFromEnum(lv);
             if (self.plan.slot[v] == none_u32) continue;
@@ -2236,6 +2382,18 @@ pub const Gen = struct {
             // the emitted tree reaches neither end of it. Declaring it would be
             // an unused local.
             if (p.defs == 0 and p.uses == 0) continue;
+            // Chunked: a slot whose whole life sits inside one chunk becomes
+            // that chunk's own `var` — register-promotable, unlike a store
+            // through the escaped shared array. A returned slot can never
+            // classify (its return read lies past the terminal boundary).
+            if (self.oc_on and p.defs != 0) {
+                if (self.ocLocalIn(p)) |k| {
+                    try self.oc_local_chunk.append(self.arena, k);
+                    try self.oc_local_slot.append(self.arena, self.plan.slot[v]);
+                    try self.oc_local_ty.append(self.arena, self.an.vty[v]);
+                    continue;
+                }
+            }
             const ty = @intFromEnum(self.an.vty[v]);
             self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
             n_hoist[ty] += 1;
@@ -2254,7 +2412,124 @@ pub const Gen = struct {
             try self.writeSlotRef(v);
             try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
         }
+        if (!self.oc_on) {
+            try self.emitTree(0, 1, target);
+            return;
+        }
+        // Chunked: this function is now the DRIVER — the hoist arrays above,
+        // one `@call(.never_inline, ...)` per chunk, and the one return. The
+        // chunk bodies follow the driver's closing brace (`emitChunkFns`,
+        // called by `emitUnit`/`emitCommon`); Zig's decl order doesn't care,
+        // and `writeTree`'s `pub ` splice at `fn_at` publishes only the
+        // driver. `.never_inline` is the point: LLVM must see N small
+        // functions, not one body it re-inlines into the very thing outlining
+        // exists to break up.
+        self.oc_n = n_hoist;
+        for (0..self.oc_total) |k| {
+            try self.ind(1);
+            try self.b("@call(.never_inline, {s}__c{d}, .{{ S, &x, model, inst", .{ self.oc_name, k });
+            for ([_]VTy{ .real, .int, .str }) |ty| {
+                if (self.oc_n[@intFromEnum(ty)] == 0) continue;
+                try self.b(", &{s}", .{hoistArray(ty)});
+            }
+            try self.b(" }});\n", .{});
+        }
+        try self.emitReturn(1, target);
+        self.uses_x = true;
+        self.uses_model = true;
+        self.uses_inst = true;
+    }
+
+    // ---- outlining ----------------------------------------------------------
+
+    /// Cut trigger, called at the two places a chunk may end: between top-level
+    /// statements (`emitBlockInsts` at depth 1) and before a top-level subtree
+    /// (`emitTree` at depth 1). Depth 1 means no label, loop or arm is open —
+    /// the emitter's depth IS its brace count — so a `break`/`continue` can
+    /// never cross a chunk boundary, and every value that does is in a hoist
+    /// array (the probe's per-chunk scopes force exactly that).
+    fn maybeCut(self: *Gen) Error!void {
+        if (!self.oc_on or self.oc_insts < self.outline) return;
+        self.oc_insts = 0;
+        self.oc_cuts += 1;
+        if (self.probing) {
+            self.scopeClose(self.out.items.len);
+            try self.scopeOpen();
+            try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
+        } else if (self.oc_real) {
+            try self.closeChunkFn();
+            try self.openChunkFn();
+        }
+    }
+
+    /// The chunk whose probe-text interval contains this slot's whole life,
+    /// or null when it spans a boundary (or the driver's return).
+    fn ocLocalIn(self: *const Gen, p: Place) ?u32 {
+        const hi = @max(p.max_use, p.max_def);
+        const bounds = self.oc_bounds.items;
+        for (0..bounds.len - 1) |k| {
+            if (p.def_off >= bounds[k] and hi < bounds[k + 1]) return @intCast(k);
+        }
+        return null;
+    }
+
+    /// One chunk header. Uniform signature — always all three unit parameters
+    /// plus every hoist array the unit has — with the same reserve-and-patch
+    /// slots as `emitUnit`, so a chunk that reads only `h` says so.
+    fn openChunkFn(self: *Gen) Error!void {
+        try self.w("fn {s}__c{d}(comptime S: type, ", .{ self.oc_name, self.oc_cuts });
+        self.oc_at[0] = self.out.items.len;
+        try self.w("x: *const [n_u]S, ", .{});
+        self.oc_at[1] = self.out.items.len;
+        try self.w("model: *const Model, ", .{});
+        self.oc_at[2] = self.out.items.len;
+        try self.w("inst: *const Instance", .{});
+        for ([_]VTy{ .real, .int, .str }) |ty| {
+            const n = self.oc_n[@intFromEnum(ty)];
+            if (n == 0) continue;
+            try self.w(", ", .{});
+            self.oc_at[3 + @intFromEnum(ty)] = self.out.items.len;
+            try self.w("{s}: *[{d}]{s}", .{ hoistArray(ty), n, zigTy(ty) });
+        }
+        try self.w(") void {{\n", .{});
+        try self.w("    @setFloatMode(.{s});\n", .{self.oc_mode});
+        // This chunk's own share of the out-of-SSA vars (see `ocLocalIn`).
+        for (self.oc_local_chunk.items, self.oc_local_slot.items, self.oc_local_ty.items) |k, slot, ty| {
+            if (k != self.oc_cuts) continue;
+            try self.w("    var t{d}: {s} = undefined;\n", .{ slot, zigTy(ty) });
+        }
+        self.uses_x = false;
+        self.uses_model = false;
+        self.uses_inst = false;
+        self.oc_use = @splat(false);
+    }
+
+    fn closeChunkFn(self: *Gen) Error!void {
+        if (!self.uses_x) self.patchParam(self.oc_at[0], "x".len);
+        if (!self.uses_model) self.patchParam(self.oc_at[1], "model".len);
+        if (!self.uses_inst) self.patchParam(self.oc_at[2], "inst".len);
+        if (self.oc_n[0] != 0 and !self.oc_use[0]) self.patchParam(self.oc_at[3], "h".len);
+        if (self.oc_n[1] != 0 and !self.oc_use[1]) self.patchParam(self.oc_at[4], "hi".len);
+        if (self.oc_n[2] != 0 and !self.oc_use[2]) self.patchParam(self.oc_at[5], "hs".len);
+        try self.w("}}\n\n", .{});
+    }
+
+    /// The real walk, emitted as sibling `fn`s after the driver's closing
+    /// brace. Same walk the probe ran, so the cuts land on the same statements;
+    /// the driver's call list was emitted from the probe's count and the assert
+    /// is the agreement check.
+    fn emitChunkFns(self: *Gen, target: Mir.Value) Error!void {
+        if (!self.oc_on) return;
+        self.oc_real = true;
+        self.oc_insts = 0;
+        self.oc_cuts = 0;
+        self.oc_returns = 0;
+        try self.openChunkFn();
         try self.emitTree(0, 1, target);
+        try self.closeChunkFn();
+        self.oc_real = false;
+        self.oc_on = false;
+        assert(self.oc_cuts + 1 == self.oc_total);
     }
 
     /// A unit returns its one contribution value; the common declaration
@@ -2280,9 +2555,12 @@ pub const Gen = struct {
     }
 
     fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
-        for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
+        const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
+        for (stmts) |inst| {
             const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
             if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
+            if (depth == 1) try self.maybeCut();
+            self.oc_insts += 1;
             self.probeDef(self.plan.slot[i], true);
             // `or` short-circuits, so the straight-line path (`decl`, which runs
             // without a probe) never touches `place`.
@@ -2300,6 +2578,7 @@ pub const Gen = struct {
     }
 
     fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
+        if (depth == 1) try self.maybeCut();
         if (self.an.is_loop[bi]) {
             try self.ind(depth);
             try self.b("L{d}: while (true) {{\n", .{bi});
@@ -2376,6 +2655,29 @@ pub const Gen = struct {
         if (t == .none) {
             // The block lowering ended in: the contribution accumulators are
             // read here (§5.6.1.3).
+            if (self.oc_on) {
+                self.oc_returns += 1;
+                if (self.oc_real) {
+                    // The driver owns the VALUE return; the chunk still must
+                    // LEAVE here — hisimhv's exit sits inside a `while (true)`,
+                    // and falling through where the monolith returned re-runs
+                    // the loop forever.
+                    try self.ind(depth);
+                    try self.b("return;\n", .{});
+                    return;
+                }
+                // Probe: render it so its reads are counted — pinned into the
+                // hoist arrays by `probeUse` — and record where it ended for
+                // `probeBody`'s trailing-text feasibility check. The pre-
+                // return offset closes the last chunk-locality interval, so
+                // a slot the return reads can never classify chunk-local.
+                try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
+                self.oc_in_ret = true;
+                try self.emitReturn(depth, target);
+                self.oc_in_ret = false;
+                if (self.oc_returns == 1) self.oc_ret_at = self.out.items.len;
+                return;
+            }
             try self.emitReturn(depth, target);
             return;
         }
@@ -2451,6 +2753,7 @@ pub const Gen = struct {
         for (phis) |inst| {
             if (!self.slotted(inst)) continue;
             const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+            self.oc_insts += 1;
             try self.ind(d2);
             if (par) {
                 try self.b("const c{d}: {s} = ", .{ k, zigTy(self.an.vty[i]) });
@@ -6434,6 +6737,59 @@ test "codegen: one declaration even for a single contribution" {
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= core(S, x, model, inst);"));
+}
+
+test "codegen: --outline-chunk splits the core into noinline chunk fns; off by default" {
+    // ~20 slotted statements (each gN is used twice, so it keeps a slot);
+    // chunked at 6 the core must come out as a DRIVER (hoist arrays, one
+    // `@call(.never_inline, ...)` per chunk, the one return) plus sibling
+    // chunk fns. Bit-level equivalence of chunked output is pinned outside
+    // the unit tests (bsim4va/hisimhv/bsimsoi f/q/partials, commit message);
+    // here we pin the SHAPE and that the default emits none of it.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module oc(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  real g1, g2, g3, g4, g5, g6, g7, g8, g9, g10, acc;
+        \\  analog begin
+        \\    g1 = exp(V(p, n) * 1.0); g2 = exp(V(p, n) * 2.0);
+        \\    g3 = exp(V(p, n) * 3.0); g4 = exp(V(p, n) * 4.0);
+        \\    g5 = exp(V(p, n) * 5.0); g6 = exp(V(p, n) * 6.0);
+        \\    g7 = exp(V(p, n) * 7.0); g8 = exp(V(p, n) * 8.0);
+        \\    g9 = exp(V(p, n) * 9.0); g10 = exp(V(p, n) * 10.0);
+        \\    acc = g1*g1 + g2*g2 + g3*g3 + g4*g4 + g5*g5
+        \\        + g6*g6 + g7*g7 + g8*g8 + g9*g9 + g10*g10;
+        \\    I(p, n) <+ acc;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try proof.prove(std.testing.allocator, &h.mir, &h.low, &h.bag);
+    defer v.deinit(std.testing.allocator);
+    var fatal = false;
+    const a = h.arena_state.allocator();
+    const off = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{})).text;
+    const off0 = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .outline_chunk = 0 })).text;
+    const on = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .outline_chunk = 6 })).text;
+
+    // Default IS off: measured 1.8-3x slower host eval, so a host opts in
+    // per artifact (GPU kernels) rather than paying it everywhere.
+    try std.testing.expectEqualStrings(off, off0);
+    try std.testing.expect(std.mem.indexOf(u8, off, "__c0(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, off, "@call(.never_inline") == null);
+
+    // Chunked shape: driver calls every chunk in order, threading the hoist
+    // arrays; the value return stays in the driver; chunks are siblings so
+    // `writeTree`'s `pub ` splice publishes only the driver.
+    try std.testing.expect(std.mem.indexOf(u8, on, "fn oc__common__core__c0(comptime S: type, ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, on, "fn oc__common__core__c1(") != null);
+    const n_chunks = std.mem.count(u8, on, "fn oc__common__core__c");
+    try std.testing.expectEqual(n_chunks, std.mem.count(u8, on, "@call(.never_inline, oc__common__core__c"));
+    try std.testing.expect(std.mem.indexOf(u8, on, "var h: [") != null);
+    // Every chunk repeats the unit's float mode — @setFloatMode is per-fn.
+    try std.testing.expect(std.mem.count(u8, on, "@setFloatMode(") >= n_chunks);
 }
 
 test "codegen: the unit ranges tile the emission and each names its own decl" {

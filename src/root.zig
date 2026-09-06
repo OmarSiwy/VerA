@@ -202,6 +202,9 @@ pub const Options = struct {
     /// Emit `pub const jac_f32 = true` — this device tolerates a host scalar S
     /// whose DERIVATIVE half is single precision. See `codegen.Options.jac_f32`.
     jac_f32: bool = false,
+    /// Statements per outlined chunk function for huge bodies (0 = never).
+    /// Defaults to codegen's own default; see `codegen.Options.outline_chunk`.
+    outline_chunk: u32 = (codegen.Options{}).outline_chunk,
 };
 
 // ---------------------------------------------------------------------------
@@ -529,7 +532,12 @@ fn compileInArena(
         // `opts.diags`, not the compilation's own bag: codegen runs AFTER
         // `finish` detached the messages into the caller's bag, so the caller's
         // is the only one still alive when E0515 is raised.
-        .codegen_opts = .{ .display = opts.display, .jac_f32 = opts.jac_f32, .diags = opts.diags },
+        .codegen_opts = .{
+            .display = opts.display,
+            .jac_f32 = opts.jac_f32,
+            .diags = opts.diags,
+            .outline_chunk = opts.outline_chunk,
+        },
     };
 }
 
