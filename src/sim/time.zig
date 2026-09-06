@@ -106,7 +106,10 @@ pub const Scale = struct {
     pub fn unitsAt(self: Scale, ticks: u64) u64 {
         const local = ticks / self.global_per_local;
         const per: u64 = self.local_per_unit;
-        return (local + per / 2) / per;
+        // `(local + per / 2) / per` wraps within per / 2 of 2^64. The
+        // remainder decides instead: `per` is a power of ten, so 1 (never a
+        // half) or even, and twice the remainder stays below 2 * 10^17.
+        return local / per + @intFromBool(local % per * 2 >= per);
     }
 
     /// `unitsAt` without the rounding (IEEE 1364-2005 §17.7.2 `$realtime`).
@@ -129,10 +132,15 @@ pub const Scale = struct {
 /// A negative or NaN `t` is tick 0; one at or past 2^64 ticks (+inf
 /// included) is the last tick, 2^64 - 1. Asserts `tick > 0`.
 pub fn tickAtOrBefore(t: f64, tick: f64) u64 {
+    std.debug.assert(tick > 0);
     const x = t / tick;
     const r = @round(x);
-    if (@abs(x - r) <= ulps * @abs(r)) return @intFromFloat(@max(r, 0.0));
-    return @intFromFloat(@max(@floor(x), 0.0));
+    // An infinite `x` fails the first test (inf - inf is NaN) and floors to
+    // itself; a NaN one fails both comparisons below and `@max` drops it.
+    const k = if (@abs(x - r) <= ulps * @abs(r)) r else @floor(x);
+    // 2^64 is the first binary64 past the last tick.
+    if (k >= 0x1p64) return std.math.maxInt(u64);
+    return @intFromFloat(@max(k, 0.0));
 }
 
 /// The relative distance within which two times are one: rounding, never a

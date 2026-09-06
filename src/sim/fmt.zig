@@ -44,12 +44,15 @@ pub const Error = error{TooWide} || std.Io.Writer.Error;
 /// Byte `n` of `v` counting from the least significant, unknown bits read as
 /// 0 and bits at or past `v.width` absent (0).
 pub fn byteAt(v: Int.Literal, n: u32) u8 {
-    var c: u8 = 0;
-    for (0..8) |k| {
-        const at = n * 8 + @as(u32, @intCast(k));
-        if (at < v.width and v.bit(at) == .one) c |= @as(u8, 1) << @intCast(k);
-    }
-    return c;
+    const lo = @as(u64, n) * 8;
+    if (lo >= v.width) return 0;
+    // A byte never straddles a word: the known ones of its word (a 1 is
+    // value set, unknown clear), shifted down and cut at the width.
+    const word: usize = @intCast(lo / 64);
+    const known = v.values()[word] & ~v.unknowns()[word];
+    const left = v.width - lo;
+    const keep: u8 = if (left >= 8) 0xff else @intCast((@as(u16, 1) << @intCast(left)) - 1);
+    return @as(u8, @truncate(known >> @intCast(lo % 64))) & keep;
 }
 
 /// §17.1.1.7 `%s` (`char` false) or `%c`, right-justified in `width` columns:
@@ -149,16 +152,16 @@ pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
         return (v.width + per - 1) / per;
     }
     // The count of decimal digits in 2^n - 1 (unsigned) or 2^(n-1)
-    // (signed magnitude, plus one column for the sign).
+    // (signed magnitude, plus one column for the sign). 2^n is never a
+    // power of ten for n >= 1, so 2^n - 1 has 2^n's digits,
+    // floor(n log10 2) + 1, and n = 0 has one. The floor is taken with
+    // log10(2) in 64-bit fixed point: short by less than n / 2^64, which
+    // leaves it exact for every width up to `Int.max_width` (checked
+    // against an exact digit count of 2^n over that range).
     const bits: u32 = if (v.signed and v.width != 0) v.width - 1 else v.width;
-    var digits: u32 = 1;
-    var limit: u128 = 9;
-    // 2^bits - 1 > limit, written so that bits = 128 does not overflow.
-    while (bits < 127 and (@as(u128, 1) << @intCast(@min(bits, 126))) - 1 > limit) : (digits += 1) {
-        if (limit > std.math.maxInt(u128) / 10) break;
-        limit = limit * 10 + 9;
-    }
-    return digits + @intFromBool(v.signed);
+    const log10_2: u128 = 0x4d104d427de7fbcc; // floor(log10(2) * 2^64)
+    const digits: u32 = @intCast((@as(u128, bits) * log10_2) >> 64);
+    return digits + 1 + @intFromBool(v.signed);
 }
 
 /// Digit `d` of a power-of-two radix, counting from the least significant
@@ -201,13 +204,14 @@ pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
     // ponytail: 64 bits, refused rather than truncated; a bignum divide if
     // a wider `%d` is ever printed.
     if (v.hasUnknown()) {
+        // An x bit is value and unknown set, a z bit unknown alone.
         var xs: u32 = 0;
         var zs: u32 = 0;
-        for (0..v.width) |i| switch (v.bit(@intCast(i))) {
-            .x => xs += 1,
-            .z => zs += 1,
-            else => {},
-        };
+        for (v.values(), v.unknowns(), 0..) |val, unk, j| {
+            const m = widthMask(v.width, j);
+            xs += @popCount(val & unk & m);
+            zs += @popCount(~val & unk & m);
+        }
         buf[0] = if (xs == v.width) 'x' //
             else if (zs == v.width) 'z' //
             else if (xs != 0) 'X' //
@@ -220,6 +224,14 @@ pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
     // Not `asInt`: it bit-casts, so an unsigned 64-bit operand at or above
     // 2^63 would print negative. $time is exactly that operand.
     return std.mem.print(buf, "{d}", .{raw}) catch unreachable;
+}
+
+// The bits of word `j` below bit `width`.
+fn widthMask(width: u32, j: usize) u64 {
+    const lo = 64 * @as(u64, j);
+    if (lo >= width) return 0;
+    const left = width - lo;
+    return if (left >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(left)) - 1;
 }
 
 const testing = std.testing;
