@@ -13,21 +13,31 @@
 //! delay echoes (`D.delays`), the accepted-point charge re-read for devices
 //! with stateful charge, the per-device predictor and limit hooks, progress
 //! checkpoints and the `ZP_*` statistics.
+//!
+//! In: a committed operating point; out: every accepted point through the
+//! recorder. LRM: §5.10.2 (`initial_step`, `final_step`), §9.17.2
+//! `$bound_step`, §5.10.3.1/.3 (state flips and breakpoints), §4.6.1 (the
+//! analysis kind).
 const std = @import("std");
 const converger = @import("converger.zig");
 const integrator = @import("integrator.zig");
 
+/// The integration method, `integrator.Method`.
 pub const Method = integrator.Method;
 
 /// `.tran` options (ESPice `core.query.Tran` and the transient half of
 /// `Tolerances`).
 pub const Options = struct {
+    /// Seconds; the last accepted point lands on it.
     t_stop: f64,
     /// The card's tstep.
     dt_init: f64 = 1e-9,
+    /// The step below which the run gives up (`SimResult.completed`).
     dt_min: f64 = 1e-18,
     /// ngspice tmax. Null means t_stop / 50.
     dt_max: ?f64 = null,
+    /// The method after the first steps and between breakpoints; every
+    /// run starts, and restarts after a breakpoint, at backward Euler.
     method: Method = .trapezoidal,
     /// The trapezoid's weight on the previous step's derivative, [0, 0.5].
     xmu: f64 = 0.5,
@@ -44,6 +54,8 @@ pub const Options = struct {
     trtol: f64 = 7.0,
 };
 
+/// What `simulate` reports: whether it reached `t_stop`, how many points it
+/// accepted after t = 0, and the time of the last.
 pub const SimResult = struct { completed: bool, steps: u32, t_final: f64 };
 
 /// Newton hook: companion RHS from the q plane, matrix G + ag0*C.
@@ -88,7 +100,8 @@ fn predict(trial: []f64, cur: []const f64, prev: []const f64, xfact: f64) void {
 /// `op.solve`) to options.t_stop, recording every accepted point, t = 0
 /// included, through `recorder.record(t, x)`. On return `x` holds the last
 /// accepted solution. A dt underflow returns `completed = false`, not an
-/// error; the only error is the recorder's.
+/// error; the only error is the recorder's. Asserts that `x` holds n_u
+/// values.
 pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder: anytype) !SimResult {
     const C = @TypeOf(ckt.*);
     const n = C.unknowns;
@@ -343,8 +356,9 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
     return .{ .completed = t >= options.t_stop, .steps = steps, .t_final = t };
 }
 
-/// ngspice's AlmostEqualUlps (maths/misc/equality.c): `a` and `b` are at
-/// most `max_ulps` representable doubles apart, across zero included.
+/// Returns ngspice's AlmostEqualUlps (maths/misc/equality.c): whether `a`
+/// and `b` are at most `max_ulps` representable doubles apart, across zero
+/// included.
 fn almostEqualUlps(a: f64, b: f64, max_ulps: i64) bool {
     if (a == b) return true;
     const lex = struct {

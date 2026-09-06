@@ -19,6 +19,10 @@
 //! taken: the band integrals (`nintegrate`), input-referred noise, per-source
 //! columns, sampled and phase noise.
 //!
+//! In: a converged operating point and a frequency list; out: one output
+//! density per frequency. LRM: §4.6.4 (generators), §4.6.4.3/.4 (tables),
+//! §4.6.4.6 (correlation), §4.6.1 (the analysis kind).
+//!
 //! ponytail: every generator is injected as a current, which is every
 //! `I(...) <+` source; `noise_gens` does not say a row is a potential
 //! contribution, so a `V(...) <+` generator would be mis-injected.
@@ -26,8 +30,8 @@ const std = @import("std");
 const contract = @import("contract");
 const dense_lu = @import("dense_lu.zig");
 
-/// The PSD of one parametric term at `f`: white plus flicker / f^ef. At
-/// f <= 0 the flicker half has no value and only the white half counts.
+/// Returns the PSD of one parametric term at `f`: white plus flicker / f^ef.
+/// At f <= 0 the flicker half has no value and only the white half counts.
 pub inline fn sourcePsd(t: contract.PsdTerm, f: f64) f64 {
     if (t.flicker == 0 or f <= 0) return t.white;
     return t.white + t.flicker / std.math.pow(f64, f, t.ef);
@@ -43,8 +47,11 @@ fn tableAt(comptime D: type, model: *const D.Model, table: ?u16, f: f64) f64 {
 
 /// Fills `density[k]` with the output noise density at `freqs[k]`, V^2/Hz,
 /// measured at unknown `out`, linearized at `x_op` (the converged operating
-/// point; `ckt.sim` still describes it). `error.BadCorrelation`: a
-/// `corr_with` that names no other generator, or a |rho| over 1.
+/// point; `ckt.sim` still describes it). Errors: `error.BadCorrelation`, a
+/// `corr_with` that names no other generator, or a |rho| over 1 (checked
+/// before any frequency); `error.Singular`, a frequency whose admittance
+/// does not factor, with `density` partial. Asserts that
+/// `density.len == freqs.len`, `out` < n_u and `x_op` holds n_u values.
 pub fn sweep(ckt: anytype, x_op: []const f64, out: usize, freqs: []const f64, density: []f64) !void {
     const C = @TypeOf(ckt.*);
     const D = C.Device;

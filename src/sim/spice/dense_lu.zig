@@ -4,16 +4,19 @@
 //! n = 40 elimination runs in rank-8 panels; the unblocked loops are its
 //! bitwise oracle.
 //!
+//! In: an n x n matrix and a right-hand side; out: the solution, or
+//! `error.Singular`.
+//!
 //! Copied from OmarSiwy/ESPice src/solver/dense_lu.zig at
-//! 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d. Adapted: `core.numerics.scale`
-//! is the local `scale` below; nothing else changed.
+//! 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d. Adapted: the negated
+//! right-hand side is a plain loop where ESPice calls
+//! `core.numerics.scale`. Not taken: `factorizeSolve` and `solveFactored`
+//! (with `fmsSolveSimd`), which nothing here calls: the Newton step is
+//! `factorizeSolveNeg` and the noise adjoint `solveFactoredT`.
+//!
+//! LRM: none; plain numerical linear algebra.
 
 const std = @import("std");
-
-/// dst[i] = a * src[i]; ESPice's `core.numerics.scale`, as a plain loop.
-fn scale(dst: []f64, a: f64, src: []const f64) void {
-    for (dst, src[0..dst.len]) |*d, v| d.* = a * v;
-}
 
 // ponytail: rank-8 panels are the only blocking; 2-D register tiling of the
 // trailing update is next if dense solves dominate again.
@@ -26,21 +29,43 @@ const V = @Vector(W, f64);
 /// Pivot magnitudes below eps^2 (4.9e-32) count as zero.
 const singular_tol: f64 = std.math.floatEps(f64) * std.math.floatEps(f64);
 
-/// x = A^-1 b in one elimination pass. Destroys `a`; `b` and `x`
-/// must not alias.
-pub fn factorizeSolve(n: usize, a: []f64, b: []const f64, x: []f64) Error!void {
-    return factorizeSolveImpl(n, a, b, x, false);
-}
-
-/// x = -A^-1 b, the Newton step. Destroys `a`; `b` and `x` must not
-/// alias.
+/// Writes x = -A^-1 b, the Newton step, in one elimination pass. Destroys
+/// `a` (row-major n x n). `b` and `x` must not alias. Returns
+/// `error.Singular` when a pivot falls below eps^2, with `a` and `x`
+/// partial. Asserts that `a` holds n² values and `b`, `x` n each. O(n³).
 pub fn factorizeSolveNeg(n: usize, a: []f64, b: []const f64, x: []f64) Error!void {
-    return factorizeSolveImpl(n, a, b, x, true);
+    for (x[0..n], b[0..n]) |*xi, bi| xi.* = -1 * bi;
+    if (n >= blocked_min) {
+        try eliminateBlocked(n, a, &.{}, x, .solve);
+        return backSubstitute(n, a, x);
+    }
+
+    for (0..n) |k| {
+        const max_row = pivotRow(n, a, k);
+        if (@abs(a[max_row * n + k]) < singular_tol) return error.Singular;
+        if (max_row != k) {
+            swapRowsSimd(a, n, k, max_row);
+            std.mem.swap(f64, &x[k], &x[max_row]);
+        }
+        const pivot = a[k * n + k];
+        const inv_pivot = @as(f64, 1.0) / pivot;
+        const row_k = a[k * n ..][0..n];
+        for (k + 1..n) |ii| {
+            const factor = a[ii * n + k] * inv_pivot;
+            const row_i = a[ii * n ..][0..n];
+            elimRowSimd(row_i, row_k, factor, k + 1, n);
+            x[ii] -= factor * x[k];
+        }
+    }
+
+    backSubstitute(n, a, x);
 }
 
-/// PA = LU in place: unit-lower L below the diagonal, U on and above
-/// it. `piv[k]` is the row swapped with row k at step k (LAPACK
-/// convention). On error `a` and `piv` are partial.
+/// Factors PA = LU in place: unit-lower L below the diagonal, U on and
+/// above it. `piv[k]` is the row swapped with row k at step k (LAPACK
+/// convention). Returns `error.Singular` when a pivot falls below eps^2,
+/// with `a` and `piv` partial. Asserts that `a` holds n² values and `piv`
+/// n. O(n³).
 pub fn factorize(n: usize, a: []f64, piv: []u32) Error!void {
     if (n >= blocked_min) return eliminateBlocked(n, a, piv, &.{}, .factor);
     for (0..n) |k| {
@@ -61,28 +86,10 @@ pub fn factorize(n: usize, a: []f64, piv: []u32) Error!void {
     }
 }
 
-/// x = A^-1 b from `factorize` output. `b` and `x` may alias.
-pub fn solveFactored(n: usize, lu: []const f64, piv: []const u32, b: []const f64, x: []f64) void {
-    if (x.ptr != b.ptr) @memcpy(x[0..n], b[0..n]);
-
-    // All swaps first: interleaving them with the elimination is
-    // wrong when a later pivot touches a row an earlier column used.
-    for (0..n) |k| {
-        if (piv[k] != k) std.mem.swap(f64, &x[k], &x[piv[k]]);
-    }
-
-    for (0..n) |k| {
-        const xk = x[k];
-        if (xk == 0) continue; // sparse right-hand sides are common
-        fmsSolveSimd(lu, x, n, k, xk);
-    }
-
-    backSubstitute(n, lu, x);
-}
-
-/// x = A^-f64 b from `factorize` output: A^f64 = U^f64 L^f64 P, so forward
-/// through U^f64, back through L^f64, then undo the swaps. `b` and `x`
-/// may alias.
+/// Writes x = A^-T b from `factorize` output: A^T = U^T L^T P, so forward
+/// through U^T, back through L^T, then undo the swaps. `b` and `x` may
+/// alias. Asserts that `lu` holds n² values and `piv`, `b`, `x` n each.
+/// O(n²).
 pub fn solveFactoredT(n: usize, lu: []const f64, piv: []const u32, b: []const f64, x: []f64) void {
     if (x.ptr != b.ptr) @memcpy(x[0..n], b[0..n]);
 
@@ -103,8 +110,9 @@ pub fn solveFactoredT(n: usize, lu: []const f64, piv: []const u32, b: []const f6
     }
 }
 
-/// Writes the stacked-real admittance [G, -ωC; ωC, G] into `a`
-/// (row-major, stride nn = 2n) from n x n row-major G and C.
+/// Writes the stacked-real admittance [G, -ωC; ωC, G] of G + jωC into `a`
+/// (row-major, stride nn = 2n) from n x n row-major G and C. Asserts that
+/// `a` holds nn² values.
 pub fn buildComplexAdmittance(
     n: usize,
     nn: usize,
@@ -164,39 +172,6 @@ inline fn subtractColumnDot(n: usize, lu: []const f64, x: []const f64, i: usize,
     var sum = x[i] - @reduce(.Add, acc);
     while (j < end) : (j += 1) sum -= lu[j * n + i] * x[j];
     return sum;
-}
-
-/// Carries x through the elimination instead of recording pivots.
-fn factorizeSolveImpl(n: usize, a: []f64, b: []const f64, x: []f64, comptime negate: bool) Error!void {
-    if (negate) {
-        scale(x[0..n], -1, b[0..n]);
-    } else {
-        @memcpy(x[0..n], b[0..n]);
-    }
-    if (n >= blocked_min) {
-        try eliminateBlocked(n, a, &.{}, x, .solve);
-        return backSubstitute(n, a, x);
-    }
-
-    for (0..n) |k| {
-        const max_row = pivotRow(n, a, k);
-        if (@abs(a[max_row * n + k]) < singular_tol) return error.Singular;
-        if (max_row != k) {
-            swapRowsSimd(a, n, k, max_row);
-            std.mem.swap(f64, &x[k], &x[max_row]);
-        }
-        const pivot = a[k * n + k];
-        const inv_pivot = @as(f64, 1.0) / pivot;
-        const row_k = a[k * n ..][0..n];
-        for (k + 1..n) |ii| {
-            const factor = a[ii * n + k] * inv_pivot;
-            const row_i = a[ii * n ..][0..n];
-            elimRowSimd(row_i, row_k, factor, k + 1, n);
-            x[ii] -= factor * x[k];
-        }
-    }
-
-    backSubstitute(n, a, x);
 }
 
 /// Pivot columns per panel.
@@ -344,19 +319,4 @@ fn swapRowsSimd(a: []f64, n: usize, r1: usize, r2: usize) void {
         p2.* = tmp;
     }
     while (j < n) : (j += 1) std.mem.swap(f64, &a[r1 * n + j], &a[r2 * n + j]);
-}
-
-/// x[i] -= xk * lu[i*n + k] for i in (k, n), gathering column k.
-fn fmsSolveSimd(lu: []const f64, x: []f64, n: usize, k: usize, xk: f64) void {
-    const xkv: V = @splat(xk);
-    var ii = k + 1;
-    while (ii + W <= n) : (ii += W) {
-        var lv: [W]f64 = undefined;
-        inline for (0..W) |w| lv[w] = lu[(ii + w) * n + k];
-        const lvu: V = lv;
-        const p: *[W]f64 = x[ii..][0..W];
-        const cur: V = p.*;
-        p.* = cur - xkv * lvu;
-    }
-    while (ii < n) : (ii += 1) x[ii] -= xk * lu[ii * n + k];
 }
