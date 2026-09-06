@@ -128,7 +128,7 @@ fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
 /// One bit, as `Integer.Bit` encodes it: `v | x << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 
-/// The mask of a `w`-bit value; `w` is 1 to 64.
+/// The mask of a `w`-bit value. Asserts at comptime that `w` is 1 to 64.
 pub fn mask(comptime w: u32) u64 {
     comptime std.debug.assert(w >= 1 and w <= 64);
     return if (w == 64) std.math.maxInt(u64) else (@as(u64, 1) << w) - 1;

@@ -8,6 +8,7 @@
 //! `lib/backend/orchestrator.zig` and `digital/emit.zig` generate (`sim.rt`,
 //! `sim.digital`, `sim.mixed`). The generated text is why a rename here is a
 //! golden change, not only a compile error.
+//! Clauses: none here; each file's header names the ones its code cites.
 
 /// IEEE 1364-2005 elaboration and the event-driven interpreter (`Run`).
 pub const digital = @import("digital/root.zig");

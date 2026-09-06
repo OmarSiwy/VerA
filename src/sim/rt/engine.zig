@@ -18,6 +18,7 @@
 //! file and prints nothing, so the engine never calls the device's `std.Io`
 //! nor inspects an error of its `Writer`. The device's allocator crosses: its
 //! vtable returns no errors. Each process body is reached through `wrap`.
+//! Clauses: none of its own; the engine's are `root.zig`'s.
 const std = @import("std");
 const root = @import("root.zig");
 const snapshot = @import("snapshot.zig");

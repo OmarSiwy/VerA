@@ -101,7 +101,8 @@ pub const Scale = struct {
     /// Returns `ticks` in the invoking module's time unit, rounded half away
     /// from zero: IEEE 1364-2005 §17.7.1 `$time`, "scaled to the time unit of
     /// the module that invoked it and rounded". The rule is `realDelay`'s, so
-    /// a `#0.5` under `10ns/100ps` reports 1, not 0.
+    /// a `#0.5` under `10ns/100ps` reports 1, not 0. Exact for every
+    /// `ticks`, up to 2^64 - 1.
     pub fn unitsAt(self: Scale, ticks: u64) u64 {
         const local = ticks / self.global_per_local;
         const per: u64 = self.local_per_unit;
@@ -109,6 +110,8 @@ pub const Scale = struct {
     }
 
     /// `unitsAt` without the rounding (IEEE 1364-2005 §17.7.2 `$realtime`).
+    /// Ticks below the module's precision are dropped first, as `unitsAt`
+    /// drops them.
     pub fn realAt(self: Scale, ticks: u64) f64 {
         const local: f64 = @floatFromInt(ticks / self.global_per_local);
         return local / @as(f64, @floatFromInt(self.local_per_unit));
@@ -123,6 +126,8 @@ pub const Scale = struct {
 /// tick which is less than or equal to the analog time"). A `t` within a few
 /// ulps of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in
 /// binary64, and flooring it would put the analog solve one tick early.
+/// A negative or NaN `t` is tick 0; one at or past 2^64 ticks (+inf
+/// included) is the last tick, 2^64 - 1. Asserts `tick > 0`.
 pub fn tickAtOrBefore(t: f64, tick: f64) u64 {
     const x = t / tick;
     const r = @round(x);

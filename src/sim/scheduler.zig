@@ -1,6 +1,8 @@
 //! Scheduled payloads -> the VAMS-2023 §8.5 / IEEE 1364-2005 §11 order
 //! they run in: time, then region. A payload indexes a caller-owned record;
 //! this module evaluates no HDL.
+//! Clauses: VAMS-2023 §8.4.4, §8.5.1, §8.5.2, §8.5.3.6, §8.5.3.7; IEEE
+//! 1364-2005 §10.3, §11.4.1, §11.4.2, §26.6.25.
 const std = @import("std");
 
 /// Integer ticks at the design's finest time precision. Scaling/rounding belongs
@@ -112,6 +114,8 @@ pub const Scheduler = struct {
 
     /// Schedule at now. A2D notifications use ordinary active events; the caller
     /// posts analog requests when an implicit/explicit D2A dependency needs one.
+    /// May allocate one slot; invalidates no `Handle`. `MonitorMutation`
+    /// while a monitor event is dispatched, `Stopped` after `finish`.
     pub fn schedule(self: *Scheduler, region: Region, payload: u32) Error!Handle {
         try self.checkMutation();
         const handle = try self.allocate(region, payload);
@@ -121,6 +125,7 @@ pub const Scheduler = struct {
 
     /// Future work has precisely the two categories specified by §8.5.1.
     /// At the current time, inactive means #0; NBA stays in the NBA region.
+    /// `TimeInPast` for a `time` before `now`; on any error nothing is queued.
     pub fn scheduleAt(self: *Scheduler, time: Time, kind: FutureKind, payload: u32) Error!Handle {
         try self.checkMutation();
         if (time < self.now) return error.TimeInPast;
@@ -254,7 +259,9 @@ pub const Scheduler = struct {
     /// current-time event reports `now`. Read-only: the future heap is
     /// scanned, not popped. Readers: VAMS §9.23's pending-driver queries
     /// (src/sim/digital/driver.zig) and IEEE 1364 §26.6.25's `vpiTimeQueue`
-    /// iteration (src/vpi/run.zig).
+    /// iteration (src/vpi/run.zig). Appends to `out`, which the caller owns
+    /// and frees with `a`; on `OutOfMemory` it holds what was appended. A
+    /// stopped queue appends nothing. O(events ever pending at once).
     pub fn pendingPayloads(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Live)) std.mem.Allocator.Error!void {
         if (self.phase == .stopped) return;
         const state = self.slots.items(.state);
@@ -274,7 +281,9 @@ pub const Scheduler = struct {
     /// The whole queue as bytes `restore` reads back: every slot, so a
     /// `Handle` taken before `save` names the same event after `restore`;
     /// the region lists; the future heap in its array order; the clock.
-    /// Its length is O(the most events ever pending at once).
+    /// Its length is O(the most events ever pending at once). The bytes are
+    /// this build's layout of the slots and heap entries: only `restore` in
+    /// the same build reads them.
     pub fn save(self: *const Scheduler, w: *std.Io.Writer) std.Io.Writer.Error!void {
         const lens = [2]u32{ @intCast(self.slots.len), @intCast(self.future.items.len) };
         try w.writeAll(std.mem.asBytes(&lens));
@@ -283,7 +292,9 @@ pub const Scheduler = struct {
         try w.writeAll(std.mem.sliceAsBytes(self.future.items));
     }
 
-    /// The queue `save` wrote to `r`.
+    /// The queue `save` wrote to `r`, replacing every slot, region list and
+    /// heap entry; `allocator` is kept. A queue `restore` failed on is partly
+    /// overwritten: `deinit` it, never run it.
     pub fn restore(self: *Scheduler, r: *std.Io.Reader) (std.Io.Reader.Error || std.mem.Allocator.Error)!void {
         var lens: [2]u32 = undefined;
         try r.readSliceAll(std.mem.asBytes(&lens));

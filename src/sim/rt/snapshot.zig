@@ -25,7 +25,9 @@ fn bytes(p: anytype) []u8 {
 
 /// `s` at a tick boundary, appended to `w`. Its length is fixed by the
 /// design, plus O(the events, suspensions, `<= #d` updates and §17.6 queue
-/// entries pending); a fixed `w` bounds it.
+/// entries pending); a fixed `w` bounds it. Asserts `s` is at a boundary:
+/// no settle, nonblocking row, changed slot, subroutine frame, unwind or
+/// override in progress.
 pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
     std.debug.assert(s.settle == .idle and s.rows.items.len == 0 and s.changed.items.len == 0 and
         s.depth == 0 and s.unwind == null and !s.overriding);
@@ -153,7 +155,9 @@ fn list(w: *std.Io.Writer, items: anytype) std.Io.Writer.Error!void {
     try w.writeAll(std.mem.sliceAsBytes(items));
 }
 
-/// `s` as `save` wrote it to `b`, for the same design.
+/// `s` as `save` wrote it to `b`, for the same design. Bytes that end early
+/// are `error.Failed` (E1100, unless `quiet`) and leave `s` partly restored:
+/// it must not run on.
 pub fn restore(s: *State, b: []const u8) Error!void {
     if (root.prebuilt) return engine.restore(s, b);
     var r: std.Io.Reader = .fixed(b);
