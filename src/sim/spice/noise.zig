@@ -79,6 +79,13 @@ pub fn sweep(ckt: anytype, x_op: []const f64, out: usize, freqs: []const f64, de
         break :blk l;
     };
 
+    // §4.6.1 Table 4-22: the sweep is the noise analysis proper, where only
+    // analysis("noise") holds, and under `.noise` `eval` leaves every
+    // `ac_dyn_slots` partial to `acDyn` (`contract.acDynSlots`); in the
+    // operating point's kind the slot would be counted twice.
+    const op_sim = ckt.sim;
+    defer ckt.setSimState(op_sim);
+    ckt.setSimState(.{ .t = op_sim.t, .kind = .noise, .analog_initial = false });
     ckt.eval(x_op, 0);
     const c_mat: [n * n]f64 = if (C.has_charge) ckt.c_vals else @splat(0);
     const psd = D.noisePsd(C.Val, x_op[0..n].*, ckt.model, ckt.inst, ckt.sim);

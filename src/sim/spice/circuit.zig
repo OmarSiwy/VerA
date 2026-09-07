@@ -166,7 +166,21 @@ pub fn Circuit(comptime D: type) type {
         /// Writes G + alpha*C into `out` (ESPice `combineGC`), from the
         /// planes of the last `eval`. Asserts that `out` holds n_u² values.
         pub fn combineGC(self: *const Self, alpha: f64, out: []f64) void {
-            for (out[0 .. n_u * n_u], self.g_vals, self.c_vals) |*o, g, c| o.* = g + alpha * c;
+            // Hand-vectorized: Zig 0.17 ships LLVM's loop vectorizer off.
+            // Per element a multiply then an add, never fused, so the vector
+            // body and the scalar tail give the plain loop's bits.
+            const nn = n_u * n_u;
+            const W = std.simd.suggestVectorLength(f64) orelse 1;
+            const V = @Vector(W, f64);
+            const a: V = @splat(alpha);
+            const o = out[0..nn];
+            var j: usize = 0;
+            while (j + W <= nn) : (j += W) {
+                const g: V = self.g_vals[j..][0..W].*;
+                const c: V = self.c_vals[j..][0..W].*;
+                o[j..][0..W].* = g + a * c;
+            }
+            for (o[j..], self.g_vals[j..], self.c_vals[j..]) |*e, g, c| e.* = g + alpha * c;
         }
 
         /// Starts a nonlinear solve: §9.15 `$simparam("iteration")` reads 1.
@@ -515,4 +529,36 @@ test "eval fills all four planes, jac_const included, and combineGC adds them" {
     var a: [4]f64 = undefined;
     ckt.combineGC(0.5, &a);
     try testing.expectEqual([4]f64{ 4.5, 17.5, 0, 6.5 }, a);
+}
+
+/// Five unknowns, so the planes hold 25 values: whole vectors and a tail
+/// at every width up to 16.
+const MockWide = struct {
+    pub const U = enum(u8) { a, b, c, d, e };
+    pub const num_ports: usize = 5;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [5]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return contract.rows(@This(), S, contract.probes(@This(), S, x));
+    }
+};
+
+test "combineGC's vector body and tail equal g + alpha·c bit for bit" {
+    var model: MockWide.Model = .{};
+    var inst: MockWide.Instance = .{};
+    var ckt: Circuit(MockWide) = .init(&model, &inst);
+    var prng: std.Random.DefaultPrng = .init(3);
+    const rnd = prng.random();
+    for (&ckt.g_vals, &ckt.c_vals) |*g, *c| {
+        g.* = rnd.float(f64) - 0.5;
+        c.* = (rnd.float(f64) - 0.5) * 1e-12;
+    }
+    const alpha = 3.7e9;
+    var out: [25]f64 = undefined;
+    ckt.combineGC(alpha, &out);
+    for (out, ckt.g_vals, ckt.c_vals) |o, g, c| {
+        try testing.expectEqual(@as(u64, @bitCast(g + alpha * c)), @as(u64, @bitCast(o)));
+    }
 }

@@ -135,8 +135,9 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
     ckt.setSimState(.{ .t = 0, .dt = 0, .kind = .tran, .initial_step = true, .analog_initial = false });
     _ = ckt.stateCtl(.commit);
 
-    // ngspice tmax defaults to (tstop - tstart)/50.
-    const effective_dt_max = options.dt_max orelse options.t_stop / 50.0;
+    // ngspice tmax defaults to min(tstep, (tstop - tstart)/50) (traninit.c;
+    // ngspice 45 on `.tran 1e-6 1e-3` steps no wider than 1e-6).
+    const effective_dt_max = options.dt_max orelse @min(options.dt_init, options.t_stop / 50.0);
     // The analysis' own CKTminBreak: delmin = 1e-11*maxStep and minBreak =
     // 10*delmin (traninit.c:36, dctran.c:170). Breakpoints closer than this
     // to the current time or to each other merge (dctran.c:636,
@@ -247,11 +248,8 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
         }
 
         // The first accepted point skips CKTtrunc (dctran.c firsttime), so dt
-        // repeats. §9.17.2 `$bound_step` is read after the step and applies
-        // to the next one; devices only set it in `updateState`, so it cannot
-        // be folded into effective_dt_max.
+        // repeats.
         var dt_next = if (steps == 0) dt else @min(dt * 2.0, effective_dt_max);
-        if (ckt.boundStep()) |bs| dt_next = @min(dt_next, bs);
 
         if (has_charge) {
             // CKTterr reads the charge of the published point.
@@ -292,7 +290,6 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
                 const nd2 = @min(2.0 * dt, trial_del);
                 if (nd2 > 1.05 * dt) use_be = false;
                 dt_next = @min(@max(nd2, options.dt_min), effective_dt_max);
-                if (ckt.boundStep()) |bs| dt_next = @min(dt_next, bs);
             }
 
             // The dynamic current under the method actually used.
@@ -301,6 +298,11 @@ pub fn simulate(ckt: anytype, ws: anytype, x: []f64, options: Options, recorder:
             // [cur, prev, prev2, prev3] -> [stale, cur, prev, prev2].
             std.mem.rotate([]f64, &q_hist, 3);
         }
+        // §9.17.2 `$bound_step` caps the next step whichever rule chose it
+        // (the truncation error's included), after every one of them. It is
+        // read after the step, since devices set it in `updateState`, so it
+        // cannot be folded into effective_dt_max.
+        if (ckt.boundStep()) |bs| dt_next = @min(dt_next, bs);
         dt_prev2 = dt_prev;
         dt_prev = dt;
 
