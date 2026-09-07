@@ -27,7 +27,9 @@
 //! Check the path before you cite it; a pointer to a file nobody can open reads
 //! as evidence that the gap is tracked somewhere.
 //!
-//! This file only CHECKS the contract; it provides no scalar implementation.
+//! This file CHECKS the contract, plus ONE implementation: `gm`, the
+//! device-routed f64 transcendentals emitted scalar helpers call — physics
+//! still never receives a scalar type from here.
 //! Physics is written generic over an opaque scalar S:
 //!
 //!   pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) [n_u]S;
@@ -78,6 +80,193 @@
 //!     value-form conditionals.
 
 const std = @import("std");
+
+/// Device-routed f64 transcendentals for the SCALAR paths of generated code
+/// (`R`, the §4.5.15 limiters, zLimexp's clamp constant). Those helpers also
+/// compile inside GPU kernels (the engine's StateKernel runs `D.limit` /
+/// `D.updateState` on the device), and NVPTX/AMDGCN have no libm — `@exp` /
+/// `@log` on an f64 die at PTX assembly with "no libcall available for
+/// fexp". The host branch of every function IS the builtin (bit-identical to
+/// the historical emission); the device branch is a self-contained port so
+/// this file keeps zero imports (Zig's one-module-per-file rule forbids
+/// reusing gompute's copy here — same musl ancestry, same <=1 ulp f64).
+///
+/// ponytail: exp/log are ported (the only calls the admitted device class
+/// reaches — measured off the PTX libcall errors); pow/tanh/sinh/cosh are
+/// composed on them; sin/cos/expm1/log1p/atan stay on their builtins or
+/// std.math (pure Zig). A model that reaches one of those on the device
+/// fails ITS kernel compile loudly — extend `gm` then, not before.
+pub const gm = struct {
+    const dev = switch (@import("builtin").target.cpu.arch) {
+        .nvptx64, .amdgcn => true,
+        else => false,
+    };
+    const ln2hi = 6.93147180369123816490e-01;
+    const ln2lo = 1.90821492927058770002e-10;
+    const log2e = 1.44269504088896338700;
+
+    pub inline fn exp(x: f64) f64 {
+        return if (comptime dev) softExp(x) else @exp(x);
+    }
+    pub inline fn log(x: f64) f64 {
+        return if (comptime dev) softLog(x) else @log(x);
+    }
+    pub inline fn pow(x: f64, y: f64) f64 {
+        if (comptime !dev) return std.math.pow(f64, x, y);
+        // Square-and-multiply for integer |y| <= 64 (exact); exp(y ln x)
+        // otherwise. Negative base only for integer y.
+        if (y == 0 or x == 1) return 1;
+        if (x == 0) return if (y > 0) 0 else std.math.inf(f64);
+        if (y == @trunc(y) and @abs(y) <= 64) {
+            var n: u32 = @intFromFloat(@abs(y));
+            var base = x;
+            var acc: f64 = 1;
+            while (n != 0) : (n >>= 1) {
+                if (n & 1 != 0) acc *= base;
+                base *= base;
+            }
+            return if (y < 0) 1 / acc else acc;
+        }
+        if (x > 0) return softExp(y * softLog(x));
+        if (y != @trunc(y)) return std.math.nan(f64);
+        const m = softExp(y * softLog(-x));
+        return if (@rem(@abs(y), 2.0) == 1) -m else m;
+    }
+    pub inline fn tanh(x: f64) f64 {
+        if (comptime !dev) return std.math.tanh(x);
+        // Cephes rational below 0.625, else 1 - 2/(e^2|x| + 1).
+        const ax = @abs(x);
+        if (ax < 0.625) {
+            const z = x * x;
+            const p = ((-9.64399179425052238628e-1 * z +
+                -9.92877231001918586564e1) * z + -1.61468768441708447952e3) * z;
+            const q = ((z + 1.12811678491632931402e2) * z +
+                2.23548839060100448583e3) * z + 4.84406305325125486048e3;
+            return x + x * (p / q);
+        }
+        const r = 1 - 2.0 / (softExp(2 * ax) + 1);
+        return if (x < 0) -r else r;
+    }
+    pub inline fn sinh(x: f64) f64 {
+        if (comptime !dev) return std.math.sinh(x);
+        const ax = @abs(x);
+        if (ax < 0.5) {
+            const z = x * x;
+            return x * (1 + z * (1.0 / 6.0 + z * (1.0 / 120.0 +
+                z * (1.0 / 5040.0 + z * (1.0 / 362880.0 +
+                    z * (1.0 / 39916800.0 + z * (1.0 / 6227020800.0)))))));
+        }
+        const e = softExp(ax);
+        const r = 0.5 * e - 0.5 / e;
+        return if (x < 0) -r else r;
+    }
+    pub inline fn cosh(x: f64) f64 {
+        if (comptime !dev) return std.math.cosh(x);
+        const e = softExp(@abs(x));
+        return 0.5 * e + 0.5 / e;
+    }
+
+    // musl exp.c / log.c ports, via gompute src/device/math.zig (measured
+    // there: f64 <= 1 ulp on sm_89).
+    const P1 = 1.66666666666666019037e-01;
+    const P2 = -2.77777777770155933842e-03;
+    const P3 = 6.61375632143793436117e-05;
+    const P4 = -1.65339022054652515390e-06;
+    const P5 = 4.13813679705723846039e-08;
+
+    fn softExp(x: f64) f64 {
+        const bits: u64 = @bitCast(x);
+        const neg = bits >> 63 != 0;
+        const ax: u32 = @truncate((bits >> 32) & 0x7fffffff);
+        if (ax >= 0x4086232b) { // |x| >~ 708.39
+            if (std.math.isNan(x)) return x;
+            if (x > 709.782712893383973096) return std.math.inf(f64);
+            if (x < -745.13321910194110842) return 0;
+        }
+        var k: i32 = 0;
+        var hi: f64 = x;
+        var lo: f64 = 0;
+        var r = x;
+        if (ax > 0x3fd62e42) { // |x| > 0.5 ln2
+            k = if (ax >= 0x3ff0a2b2) // |x| >= 1.5 ln2
+                @intFromFloat(log2e * x + if (neg) @as(f64, -0.5) else 0.5)
+            else if (neg) -1 else 1;
+            const kf: f64 = @floatFromInt(k);
+            hi = x - kf * ln2hi;
+            lo = kf * ln2lo;
+            r = hi - lo;
+        } else if (ax <= 0x3e300000) { // |x| <= 2^-28: 1+x is already correct
+            return 1 + x;
+        }
+        const rr = r * r;
+        const c = r - rr * (P1 + rr * (P2 + rr * (P3 + rr * (P4 + rr * P5))));
+        const y = 1 + (r * c / (2 - c) - lo + hi);
+        return if (k == 0) y else std.math.scalbn(y, k);
+    }
+
+    const Lg1 = 6.666666666666735130e-01;
+    const Lg2 = 3.999999999940941908e-01;
+    const Lg3 = 2.857142874366239149e-01;
+    const Lg4 = 2.222219843214978396e-01;
+    const Lg5 = 1.818357216161805012e-01;
+    const Lg6 = 1.531383769920937332e-01;
+    const Lg7 = 1.479819860511658591e-01;
+
+    fn softLog(x: f64) f64 {
+        var u: u64 = @bitCast(x);
+        var hx: u32 = @truncate(u >> 32);
+        var k: i32 = 0;
+        if (hx < 0x00100000 or hx >> 31 != 0) {
+            if (u << 1 == 0) return -std.math.inf(f64); // log(+-0)
+            if (hx >> 31 != 0) return std.math.nan(f64); // log(negative)
+            u = @bitCast(x * 0x1p54); // subnormal: scale into range
+            hx = @truncate(u >> 32);
+            k -= 54;
+        } else if (hx >= 0x7ff00000) {
+            return x; // inf / nan
+        } else if (hx == 0x3ff00000 and u << 32 == 0) {
+            return 0; // log(1)
+        }
+        hx +%= 0x3ff00000 - 0x3fe6a09e; // reduce into [sqrt(2)/2, sqrt(2)]
+        k += @as(i32, @intCast(hx >> 20)) - 0x3ff;
+        hx = (hx & 0x000fffff) + 0x3fe6a09e;
+        u = (@as(u64, hx) << 32) | (u & 0xffffffff);
+        const f = @as(f64, @bitCast(u)) - 1.0;
+        const hfsq = 0.5 * f * f;
+        const s = f / (2.0 + f);
+        const z = s * s;
+        const w = z * z;
+        const t1 = w * (Lg2 + w * (Lg4 + w * Lg6));
+        const t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7)));
+        const dk: f64 = @floatFromInt(k);
+        return s * (hfsq + t2 + t1) + dk * ln2lo - hfsq + f + dk * ln2hi;
+    }
+
+    test "gm host branches are the builtins, device ports agree to ~1 ulp" {
+        // The host branch must be indistinguishable from the historical raw
+        // emission; the soft ports are pinned against libm on a physical
+        // range so a transcription slip fails HERE, not inside a kernel.
+        var x: f64 = -700.0;
+        while (x <= 700.0) : (x += 13.77) {
+            try std.testing.expectEqual(@exp(x), exp(x));
+            const se = softExp(x);
+            const re = @exp(x);
+            if (re != 0 and std.math.isFinite(re))
+                try std.testing.expect(@abs(se - re) <= 2 * @abs(re) * std.math.floatEps(f64));
+        }
+        var y: f64 = 1e-30;
+        while (y < 1e30) : (y *= 3.7) {
+            try std.testing.expectEqual(@log(y), log(y));
+            const sl = softLog(y);
+            const rl = @log(y);
+            try std.testing.expect(@abs(sl - rl) <= 2 * @max(@abs(rl), 1.0) * std.math.floatEps(f64));
+        }
+        try std.testing.expectEqual(-std.math.inf(f64), softLog(0.0));
+        try std.testing.expect(std.math.isNan(softLog(-1.0)));
+        try std.testing.expectEqual(std.math.inf(f64), softExp(710.0));
+        try std.testing.expectEqual(@as(f64, 0.0), softExp(-746.0));
+    }
+};
 
 pub const UpdateResult = union(enum) {
     ok,
