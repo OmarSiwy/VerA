@@ -26,6 +26,8 @@ pub const Ctx = struct {
 /// The libraries of `file`'s modules and configs: each is its source file's
 /// (`opts.lib`, then `opts.more[k].lib` from `more_starts[k]` on). Also the
 /// search order, and W1152 for each cell a later same-named one replaces.
+/// Sets `r.def_lib`, `r.cfg_lib` and `r.search`, all in `r.arena`; must run
+/// before `top` or `child`.
 pub fn libraries(r: *Run, file: *Ast.SourceFile, opts: root.Options, more_starts: []const u32) Error!void {
     const arena = r.arena;
     const libs = try arena.alloc(Ast.StrId, 1 + opts.more.len);
@@ -38,7 +40,7 @@ pub fn libraries(r: *Run, file: *Ast.SourceFile, opts: root.Options, more_starts
     var order: std.ArrayList(Ast.StrId) = try .initCapacity(arena, if (opts.search.len != 0) opts.search.len else libs.len);
     if (opts.search.len != 0) {
         for (opts.search) |s| order.appendAssumeCapacity(try file.intern(arena, s));
-    } else for (libs) |l| if (std.mem.indexOfScalar(Ast.StrId, order.items, l) == null) order.appendAssumeCapacity(l);
+    } else for (libs) |l| if (std.mem.findScalar(Ast.StrId, order.items, l) == null) order.appendAssumeCapacity(l);
     r.def_lib = def_lib;
     r.cfg_lib = cfg_lib;
     r.search = order.items;
@@ -157,7 +159,9 @@ fn isModule(r: *const Run, name: Ast.StrId) bool {
 }
 
 /// §13.3 the module `inst`, declared in instance scope `parent`, binds to,
-/// and the `Ctx` its own children bind under.
+/// and the `Ctx` its own children bind under. Fails, with the library list
+/// it searched named, when no library holds the cell; E0243 for an instance
+/// clause reaching inside another config's hierarchy (§13.3.2).
 pub fn child(r: *Run, parent: u32, inst: *const Ast.Instance) Error!struct { def: u32, ctx: Ctx } {
     const up = r.binds.get(r.instanceOf(parent)) orelse Ctx{};
     const ci = up.cfg orelse return .{ .def = try search(r, r.search, inst.module, inst.main_tok), .ctx = .{} };

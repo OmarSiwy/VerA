@@ -3,8 +3,8 @@
 //! bits), or the place an lvalue names right now and the write that lands
 //! there. Every read of a variable, net or array element goes through here.
 //! Clauses: IEEE 1364-2005 §3.5.1, §3.6, §3.9, §4.8.2, §4.9, §5.1.13,
-//! §5.1.14, §5.2.1, §5.2.2, §5.5.2, §5.5.3, §9.2, §10.4.1, §17.8,
-//! §17.11.1 `$clog2`, §17.11.2; VAMS §7.3.6.3 analog probes.
+//! §5.1.14, §5.2.1, §5.2.2, §5.5.2, §5.5.3, §9.2, §9.4, §10.4.1, §17.8,
+//! §17.11.1 `$clog2`, §17.11.2; VAMS §3.7 wreal, §7.3.6.3 analog probes.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -56,8 +56,9 @@ pub fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     return base + (elementOffset(arr, indices[0..c.depth]) orelse return null);
 }
 
-/// Address conversion preserves unsigned magnitude: the engine's signed
-/// index range cannot contain an unsigned value above maxInt(i64).
+/// `value` as an index, read by its own signedness; null when it has an x or
+/// z bit or lies outside i64. An unsigned value above maxInt(i64) is null,
+/// not wrapped negative, so it can never name an element.
 pub fn indexInt(value: Int.Literal) ?i64 {
     return std.math.cast(i64, value.asIndex() orelse return null);
 }
@@ -312,8 +313,9 @@ pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
 
 /// §4.8.2 integer-to-real: the value, read by its own signedness, "Individual
 /// bits that are x or z in the net or the variable shall be treated as zero".
-/// ponytail: the low 64 bits of a wider operand.
+/// A wider operand converts its low 64 bits, unsigned.
 fn realOfInt(v: Int.Literal) f64 {
+    // ponytail: the low 64 bits of a wider operand.
     const lo = v.values()[0] & ~v.unknowns()[0];
     if (!v.signed or v.width > 64) return @floatFromInt(lo);
     const shift: u6 = @intCast(64 - v.width);

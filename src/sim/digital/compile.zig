@@ -2,8 +2,11 @@
 //! scope, -> `Instruction` rows in `Run.code`, each expression's type in
 //! `Run.types`, and the static slot lists drivers and `@*` wait on; or E1100
 //! before any process has run.
-//! Clauses: IEEE 1364-2005 §5.5.1 Table 5-22, §5.1.14, A.6.5, §9.7.1, §9.7.5,
-//! §5.10.4, §6.1, §8.5.3.3/§8.5.3.4, §17.7; VAMS §9.14 Table 9-11 `$clog2`.
+//! Clauses: IEEE 1364-2005 §4.8.1, §5.1.1, §5.1.14, §5.2.1/§5.2.2, §5.5.1
+//! Table 5-22, §5.10.4, §6.1, §8.5.3.3/§8.5.3.4, §9.3, §9.5, §9.6, §9.7.1 to
+//! §9.7.7, §9.8.2, §10.2.2/§10.2.3, §10.4.4/§10.4.5, §12.7, §17.1 to §17.11,
+//! §20.4, A.6.5; VAMS §7.3.6.3 analog probes, §9.14 Table 9-11 `$clog2`,
+//! §9.22 driver access.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -43,12 +46,20 @@ pub const Instruction = union(enum(u5)) {
     /// §6.1 continuous assignment `n`: evaluate, drive, resolve, then suspend
     /// on its own operands, resuming at its own pc.
     continuous: u32,
+    /// §9.4 continue at the next pc when `condition` is true, else at
+    /// `otherwise`; x and z are false.
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
+    /// Continue at this pc.
     jump: u32,
+    /// §9.5 the first arm whose label matches `statement`'s scrutinee, both in
+    /// `ty`, continues at `Run.case_targets[targets + arm]`; no match continues
+    /// at `fallback` (the `default` arm, or past the statement).
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
     /// `clamp`: §9.7.7's repeat event control, where a count <= 0 is no
     /// occurrence; the §9.6 statement refuses a negative one.
     repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32, clamp: bool = false },
+    /// The end of a `repeat` body: one count spent from `Run.repeats[counter]`;
+    /// while some remain, the body runs again from `body`.
     repeat_next: struct { counter: u32, body: u32 },
     /// §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
@@ -117,6 +128,7 @@ pub const Instruction = union(enum(u5)) {
     /// §7.6 a controlled pass switch: read the control, re-resolve both
     /// sides, and wait on the control's operands.
     switch_ctrl: struct { tran: u32, slots: []const u32 },
+    /// The end of a process, a subroutine body or an out-of-line helper.
     stop,
 
     // Budget: one row per pc, read by every dispatch of `exec.execute`. The
@@ -139,6 +151,8 @@ pub const SysFn = enum {
     stime,
     /// §9.14 Table 9-11 / IEEE 1364 §17.11: ceiling of log base 2.
     clog2,
+    /// §4.2.1.4 `$signed`/`$unsigned`: the operand's bits, self-determined,
+    /// retyped; the width is unchanged.
     make_signed,
     make_unsigned,
     /// IEEE 1364-2005 §17.10.1/§17.10.2, the plusarg queries. `vera --run`
@@ -481,9 +495,9 @@ pub fn constantFunction(self: *Run, idx: u32) Error!bool {
 /// it calls may be in a constant expression. Asked of a framed function; one
 /// it calls is framed early (`earlyFrame`) if need be. A recursive call is
 /// taken as constant while it is being asked about.
-/// ponytail: a system task is refused, not ignored as §10.4.5 says, and a
-/// named block's own locals are not the function's.
 pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
+    // ponytail: a system task is refused, not ignored as §10.4.5 says, and a
+    // named block's own locals are not the function's.
     const sub = &self.subs.items[idx];
     if (sub.constant) |c| return if (c) null else "it is not a constant function";
     if (!sub.decl.is_function) return "it is a task";
@@ -891,10 +905,10 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 fn plusargFormat(self: *Run, e: Ast.ExprId) Error!void {
     const text = self.file.str(self.file.exprs.strOf(e));
     var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, text, i, '%')) |at| {
+    while (std.mem.findScalarPos(u8, text, i, '%')) |at| {
         i = at + 1;
         while (i < text.len and text[i] == '0') i += 1;
-        if (i == text.len or std.mem.indexOfScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
+        if (i == text.len or std.mem.findScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
             return self.fail(self.file.exprs.mainTok(e), "§17.10.2: a $value$plusargs format is one of %d %o %h %b %e %f %g %s, not `%{s}`", .{text[@min(i, text.len)..@min(i + 1, text.len)]});
         i += 1;
     }
@@ -1459,11 +1473,11 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
 /// Task `idx`'s body compiled once, jumped over where it is emitted, for
 /// `.call_timed`. An automatic task gets a frame of its own, which each
 /// activation fills in turn; a static one shares its one frame (§10.2.3).
-/// ponytail: `disable` of the task stops its inlined copies, not these
-/// activations; and `repeat` counters and intra-assignment cells are per
-/// site, so a body that suspends inside one of them across its own
-/// recursion shares it.
 fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
+    // ponytail: `disable` of the task stops its inlined copies, not these
+    // activations; and `repeat` counters and intra-assignment cells are per
+    // site, so a body that suspends inside one of them across its own
+    // recursion shares it.
     if (self.subs.items[idx].body != null) return;
     const decl = self.subs.items[idx].decl;
     const f = if (decl.automatic) try elab.frame(self, decl, self.subs.items[idx].inst) else self.subs.items[idx].frame;
@@ -1546,7 +1560,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
     // the last dot name instances as a §12.5 reference's do, and the task is
     // the last part, declared in the final one.
     const text = self.file.str(name);
-    if (std.mem.lastIndexOfScalar(u8, text, '.')) |dot| {
+    if (std.mem.findScalarLast(u8, text, '.')) |dot| {
         var parts = std.mem.splitScalar(u8, text[0..dot], '.');
         var k: usize = 0;
         while (parts.next()) |part| : (k += 1) {
@@ -1594,9 +1608,11 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
 /// Appends to `out`, once each, the slots `e` reads: §6.1 "a continuous
 /// assignment is evaluated whenever an operand changes". They resolve at
 /// compile time, like an event term, so a resumption cannot fail mid-dispatch.
-// ponytail: an array element operand watches every element of its array;
-// a per-array wake list if a big memory ever feeds one.
+/// An array element operand lists every element of its array. `out`'s items
+/// are in `self.arena`.
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
+    // ponytail: an array element operand watches every element of its array;
+    // a per-array wake list if a big memory ever feeds one.
     return sensitivityProbes(self, e, out, null);
 }
 

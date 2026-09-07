@@ -5,9 +5,10 @@
 //! (expressions), `waiters.zig` (the write path and what it wakes) and
 //! `resolution.zig` (nets); this file owns the payload rows, the process
 //! control and the subroutine activations.
-//! Clauses: IEEE 1364-2005 §6.1/§6.1.3, §9.5.1, §9.7.1, §9.8.2, §10.2.2,
-//! §10.2.3, §10.3, §17.1.2, §17.1.3; §8.5.3.3/§8.5.3.4 intra-assignment
-//! timing.
+//! Clauses: IEEE 1364-2005 §6.1/§6.1.3, §8.5.3.3/§8.5.3.4 intra-assignment
+//! timing, §9.3, §9.5/§9.5.1, §9.6, §9.7.1, §9.7.5 to §9.7.7, §9.8.2,
+//! §10.2.2, §10.2.3, §10.3, §10.4.2, §17.1.2, §17.1.3, §17.3.2, §17.4.1;
+//! VAMS §7.3.6.1 A2D events.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -33,10 +34,13 @@ const waiters = @import("waiters.zig");
 /// One scheduled event's payload, consumed whole by its dispatch. A `.write`
 /// value lives in its row's own planes (`Row`), never in variable storage.
 pub const Pending = union(enum) {
+    /// Run the process continuing at this pc, outside any §10.2.3 activation.
     run_process: u32,
     /// A resumption inside a §10.2.3 task activation (`Run.acts`): `pc`
     /// runs with activation `ctx`'s storage resident.
     @"resume": struct { pc: u32, ctx: u32 },
+    /// §9.2.2 a nonblocking update landing: `value` into slot `target`, or
+    /// into its `sel` bits only (merged with the slot as it is then).
     write: struct { target: u32, value: Int.Literal, sel: ?evaluate.Sel = null },
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs,
     /// not when the call executed, so it reports the settled value.
@@ -207,9 +211,9 @@ fn claim(self: *Run, item: Pending) Error!u32 {
 /// was dropped, resumes at `end`: a block nobody is suspended in has no
 /// activity, and resuming there would run the tail of a body twice. The
 /// executing process's own jump past the block is its dispatch arm's.
-// ponytail: an NBA already scheduled from inside the block still lands; it is
-// a write the block completed before it was disabled.
 fn disableRange(self: *Run, start: u32, end: u32) Error!void {
+    // ponytail: an NBA already scheduled from inside the block still lands; it
+    // is a write the block completed before it was disabled.
     if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
 }
 
@@ -283,9 +287,11 @@ const max_sync_stack = 4 << 20;
 /// reads the calling activation), copied into the formals, the body runs on a
 /// scratch arena of its own, and the outputs are copied back. An automatic
 /// subroutine's frame is saved, set to x, and restored after (§10.2.3, §10.4.2).
-// ponytail: `repeat` counters are per site, so a recursive body that loops
-// with `repeat` across its own recursion shares one.
+/// Fails past 1024 nested activations or 4 MiB of host stack. After a
+/// §10.3 `disable` of the subroutine, outputs are not copied back.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
+    // ponytail: `repeat` counters are per site, so a recursive body that loops
+    // with `repeat` across its own recursion shares one.
     // §10.4.5: a constant function call folded before pass two compiles the
     // bodies (a generate condition calling a function already framed).
     if (!self.subs.items[idx].compiled) {
@@ -972,11 +978,6 @@ test "§9.5.1 casez/casex per plane word agree with the per-bit wildcard rule" {
     };
 }
 
-// §4.8.2 rounds a real into an integer (35.5 is 36, -1.5 is -2) and $rtoi
-// truncates; an integral operand makes a real one real; a real starts at 0.0;
-// a wreal follows its driver and a -0.0 is no change from 0.0.
-// §9.3: a force outranks an assign on the same variable, and releasing it
-// hands the variable back to the assign, which is still tracking.
 test "§9.8.2 fork starts every arm at once and join waits for the last" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -1180,7 +1181,7 @@ test "disable self allows later reentry and inactive sibling stays inactive" {
 
 test "finish verbosity reports exact local precision ticks and mapped source" {
     const source = "`timescale 1ns/1ps\nmodule m; initial #1 $finish; endmodule";
-    const offset = std.mem.indexOf(u8, source, "$finish").?;
+    const offset = std.mem.find(u8, source, "$finish").?;
     var expected: [128]u8 = undefined;
     try expectRun(source, try std.mem.print(&expected, "$finish at tick 1000, <digital> byte {d}\n", .{offset}));
 }
