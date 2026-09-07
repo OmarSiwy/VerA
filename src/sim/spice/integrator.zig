@@ -1,18 +1,25 @@
 //! Integration kernels: the companion coefficients, the dynamic-current
 //! recurrence and the CKTterr LTE bound. tran.zig drives them per step.
+//! In: a step history (dt, charges, the previous dynamic current); out:
+//! coefficients, dynamic currents, and the next-step bound in seconds.
 //!
 //! Copied from OmarSiwy/ESPice src/analysis/tran/integrator.zig at
 //! 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d. Adapted: `Method` is declared
-//! here (ESPice's `core.query.Method`, the same three variants).
+//! here (ESPice's `core.query.Method`, the same three variants). Not taken:
+//! `rebaseCurrent`, the accepted-point charge re-read tran.zig leaves out.
+//!
+//! LRM: none; the formulas are ngspice's (nicomcof.c, niinteg.c,
+//! cktterr.c), cited per function.
 const std = @import("std");
+
 /// The integration method a `.tran` runs (ESPice `core.query.Method`).
 pub const Method = enum { backward_euler, trapezoidal, gear_2 };
 
 // ponytail: platform SIMD width, not hardcoded.
 const W = std.simd.suggestVectorLength(f64) orelse 8;
 
-/// Integration coefficients, ngspice `CKTag[]` (nicomcof.c). `ag0` multiplies
-/// q(x): it is the companion conductance factor (niinteg.c:77) and the
+/// The integration coefficients, ngspice `CKTag[]` (nicomcof.c). `ag0`
+/// multiplies q(x): it is the companion conductance factor (niinteg.c:77) and the
 /// Jacobian axpy weight. `ag2` multiplies q_prev2 and is nonzero for gear-2
 /// only. `ag1` weighs trap's previous current, ngspice's xmu/(1 - xmu): 1 for
 /// the plain trapezoid. Each method's dynamic residual is
@@ -21,9 +28,10 @@ const W = std.simd.suggestVectorLength(f64) orelse 8;
 ///   gear: ag0*(q - q1) - ag2*(q1 - q2)
 pub const Coeffs = struct { ag0: f64, ag2: f64, ag1: f64 = 1 };
 
-/// Coefficients for a step of `dt` seconds after one of `dt_prev`. Gear-2 is
-/// the variable-step BDF2 ngspice solves as a Vandermonde system over the
-/// real step history (nicomcof.c:60-136); with r = dt/dt_prev its closed form
+/// Returns the coefficients for a step of `dt` seconds after one of
+/// `dt_prev`; `dt_prev` is read by gear-2 only, `xmu` by the trapezoid
+/// only. Gear-2 is the variable-step BDF2 ngspice solves as a Vandermonde
+/// system over the real step history (nicomcof.c:60-136); with r = dt/dt_prev its closed form
 /// is ag0 = (1+2r)/((1+r)dt), ag2 = r^2/((1+r)dt), and r = 1 gives the
 /// uniform-step 3/(2dt), 1/(2dt). `xmu` is the trapezoid's weight
 /// (`Options.xmu`); at 0.5 its coefficients are exactly 2/dt and 1.
@@ -41,7 +49,7 @@ pub fn coeffs(method: Method, dt: f64, dt_prev: f64, xmu: f64) Coeffs {
     };
 }
 
-/// LTE divided-difference coefficient, ngspice `CKTterr` (cktterr.c:24-34)
+/// Returns the LTE divided-difference coefficient, ngspice `CKTterr` (cktterr.c:24-34)
 /// indexed by order: gearCoeff = {.5, .2222222222, ...}, trapCoeff = {.5,
 /// .08333333333}. The order here is fixed by the method (BE 1, trap and
 /// gear-2 2).
@@ -59,6 +67,8 @@ pub fn lteCoeff(method: Method) f64 {
 /// Advances the dynamic current in place, ngspice `NIintegrate` writing
 /// `CKTstate0[qcap+1]`: i <- ag0*(q0 - q1) minus the method's history term.
 /// Serves both the summed row plane (length n) and the per-state tape.
+/// Asserts that `q0`, `q1` (and `q2` for gear-2) are at least as long as
+/// `i_cur`.
 pub fn advanceCurrent(method: Method, i_cur: []f64, q0: []const f64, q1: []const f64, q2: []const f64, c: Coeffs) void {
     switch (method) {
         inline else => |m| companionAt(m, false, i_cur, q0, q1, q2, i_cur, c),
@@ -72,7 +82,8 @@ pub fn advanceCurrent(method: Method, i_cur: []f64, q0: []const f64, q1: []const
 /// `i_prev` may alias `out`. q2 is read by gear only, i_prev by trap only.
 /// With `accumulate` every element rounds (out + d) - history: the tail is
 /// the w == 1 instantiation of the vector lane, so position in the slice
-/// never changes the bits.
+/// never changes the bits. Asserts that every input the method reads is at
+/// least as long as `out`.
 pub fn companionAt(
     comptime method: Method,
     comptime accumulate: bool,
@@ -112,29 +123,12 @@ inline fn companionLane(
     };
 }
 
-/// Accepted-point charge re-read: `i_cur += alpha*(q_new - q_old)`.
-/// Elementwise, so every `w` gives the same bits; `w == 1` is the scalar
-/// oracle (tests/transient.zig).
-pub fn rebaseCurrent(comptime w: usize, i_cur: []f64, q_new: []const f64, q_old: []const f64, alpha: f64) void {
-    // Hand-vectorized: LLVM left the plain loop scalar because it cannot
-    // prove the three history slices disjoint.
-    const V = @Vector(w, f64);
-    const av: V = @splat(alpha);
-    var j: usize = 0;
-    while (j + w <= i_cur.len) : (j += w) {
-        const qn: V = q_new[j..][0..w].*;
-        const qo: V = q_old[j..][0..w].*;
-        i_cur[j..][0..w].* = @as(V, i_cur[j..][0..w].*) + av * (qn - qo);
-    }
-    if (comptime w > 1) rebaseCurrent(1, i_cur[j..], q_new[j..], q_old[j..], alpha);
-}
-
 /// Step history and tolerances for one `stepBound`: `dt` is the step just
 /// taken, `dt1`/`dt2` the two before it, all in seconds.
 pub const LteIn = struct { dt: f64, dt1: f64, dt2: f64, reltol: f64, abstol: f64, chgtol: f64, trtol: f64 };
 
-/// ngspice CKTterr: the next-step bound in seconds, min over every charge
-/// state j of
+/// Returns ngspice CKTterr's next-step bound in seconds, min over every
+/// charge state j of
 ///   i_new_j     = what `advanceCurrent` writes under `cur_method`
 ///   tol_j       = max(abstol + reltol*max(|i_new_j|, |i_prev_j|),
 ///                     reltol*max(|q0_j|, |q1_j|, chgtol)/dt)
@@ -148,7 +142,9 @@ pub const LteIn = struct { dt: f64, dt1: f64, dt2: f64, reltol: f64, abstol: f64
 /// `c` are what the step integrated with. `q` is the charge history
 /// [cur, prev, prev2, prev3] over one index space (per state or per row).
 /// Each state rounds as cktterr.c does, divisions included, so every `w`
-/// gives the same bits; `w == 1` is the scalar oracle (tests/transient.zig).
+/// gives the same bits; `w == 1` is the scalar oracle. An empty history
+/// returns infinity. Asserts that `q[1]`, `q[2]`, `i_prev` (and `q[3]` at
+/// order 2) are at least as long as `q[0]`.
 pub fn stepBound(comptime w: usize, method: Method, cur_method: Method, q: [4][]const f64, i_prev: []const f64, c: Coeffs, lte: LteIn) f64 {
     // Both methods comptime: a runtime switch stayed inside the vector loop.
     const min_del = switch (method) {
@@ -206,4 +202,145 @@ fn minDel(comptime w: usize, comptime method: Method, comptime cur_method: Metho
     if (comptime w == 1) return min_del;
     const tail: [4][]const f64 = .{ q[0][i..], q[1][i..], q[2][i..], q[3][i..] };
     return @min(min_del, minDel(1, method, cur_method, tail, i_prev[i..], c, lte));
+}
+
+// ---------------------------------------------------------------------------
+// Tests. Oracles: the methods' exactness on low-degree charge histories
+// (BDF2 and the trapezoid differentiate a quadratic exactly), hand-evaluated
+// CKTterr bounds on polynomial charges, and the `w == 1` instantiation for
+// the vector bodies, which must agree bit for bit.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+const methods = [_]Method{ .backward_euler, .trapezoidal, .gear_2 };
+
+fn expectBits(want: f64, got: f64) !void {
+    try testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+}
+
+test coeffs {
+    const dt = 1e-9;
+    const be = coeffs(.backward_euler, dt, 5e-9, 0.5);
+    try expectBits(1.0 / dt, be.ag0);
+    try testing.expectEqual(0, be.ag2);
+    // At xmu = 0.5 the trapezoid's coefficients are exactly 2/dt and 1.
+    const tr = coeffs(.trapezoidal, dt, 5e-9, 0.5);
+    try expectBits(2.0 / dt, tr.ag0);
+    try testing.expectEqual(1, tr.ag1);
+    // Uniform-step BDF2: 3/(2dt) and 1/(2dt).
+    const g2 = coeffs(.gear_2, dt, dt, 0.5);
+    try expectBits(3.0 / (2.0 * dt), g2.ag0);
+    try expectBits(1.0 / (2.0 * dt), g2.ag2);
+    // dt = 2 after 1, r = 2: (1 + 2r)/((1 + r)dt) = 5/6 and
+    // r^2/((1 + r)dt) = 2/3.
+    const v = coeffs(.gear_2, 2, 1, 0.5);
+    try testing.expectApproxEqAbs(@as(f64, 5.0 / 6.0), v.ag0, 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 2.0 / 3.0), v.ag2, 1e-15);
+}
+
+test lteCoeff {
+    try testing.expectEqual(0.5, lteCoeff(.backward_euler));
+    try testing.expectEqual(0.08333333333, lteCoeff(.trapezoidal));
+    try testing.expectEqual(0.2222222222, lteCoeff(.gear_2));
+}
+
+test "companionAt differentiates q = t^2 as each method should" {
+    // q(t) = t^2 at t = 0, 1, 3 (steps 1 then 2), so q = 0, 1, 9 and
+    // dq/dt(3) = 6, dq/dt(1) = 2. BDF2 and the trapezoid are exact on a
+    // quadratic; backward Euler gives the chord (9 - 1)/2 = 4.
+    const q0 = [_]f64{9};
+    const q1 = [_]f64{1};
+    const q2 = [_]f64{0};
+    const i_prev = [_]f64{2};
+    var out: [1]f64 = undefined;
+    companionAt(.backward_euler, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.backward_euler, 2, 1, 0.5));
+    try testing.expectEqual(4, out[0]);
+    companionAt(.trapezoidal, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(6, out[0]);
+    companionAt(.gear_2, false, &out, &q0, &q1, &q2, &i_prev, coeffs(.gear_2, 2, 1, 0.5));
+    try testing.expectApproxEqAbs(@as(f64, 6), out[0], 1e-14);
+    // Accumulating adds onto what is there: (10 + 8) - 2.
+    out = .{10};
+    companionAt(.trapezoidal, true, &out, &q0, &q1, &q2, &i_prev, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(16, out[0]);
+}
+
+test advanceCurrent {
+    // In place, the trapezoid's previous current is its own output slot:
+    // i = 2/2·(9 - 1) - 2 = 6, as above.
+    var i_cur = [_]f64{2};
+    advanceCurrent(.trapezoidal, &i_cur, &.{9}, &.{1}, &.{0}, coeffs(.trapezoidal, 2, 1, 0.5));
+    try testing.expectEqual(6, i_cur[0]);
+}
+
+test "companionAt gives each element the same bits wherever it sits" {
+    var prng: std.Random.DefaultPrng = .init(5);
+    const rnd = prng.random();
+    const len_max = 40; // past 3 vectors at every width up to 8
+    var q: [3][len_max]f64 = undefined;
+    var ip: [len_max]f64 = undefined;
+    var out: [len_max]f64 = undefined;
+    var base: [len_max]f64 = undefined;
+    for (&q) |*row| {
+        for (row) |*e| e.* = rnd.float(f64) * 1e-12;
+    }
+    for (&ip, &base) |*e, *b| {
+        e.* = rnd.float(f64) - 0.5;
+        b.* = rnd.float(f64);
+    }
+    inline for (methods) |m| inline for (.{ false, true }) |acc| {
+        const c = coeffs(m, 1e-9, 3e-9, 0.5);
+        for (0..len_max + 1) |len| {
+            @memcpy(out[0..len], base[0..len]);
+            companionAt(m, acc, out[0..len], q[0][0..len], q[1][0..len], q[2][0..len], ip[0..len], c);
+            for (0..len) |j| {
+                var one = [1]f64{base[j]};
+                companionAt(m, acc, &one, q[0][j..][0..1], q[1][j..][0..1], q[2][j..][0..1], ip[j..][0..1], c);
+                try expectBits(one[0], out[j]);
+            }
+        }
+    };
+}
+
+test stepBound {
+    const lte: LteIn = .{ .dt = 1, .dt1 = 1, .dt2 = 1, .reltol = 1e-3, .abstol = 1e-12, .chgtol = 1e-14, .trtol = 7 };
+    // Order 1 on q = t^2 at t = 2, 1, 0: the divided difference is 1.
+    // i_new = 1·(4 - 1) = 3; tol = max(1e-12 + 1e-3·3, 1e-3·4/1) = 4e-3;
+    // del = 7·4e-3 / max(1e-12, 0.5·1) = 0.056.
+    const be = coeffs(.backward_euler, 1, 1, 0.5);
+    const d1 = stepBound(1, .backward_euler, .backward_euler, .{ &.{4}, &.{1}, &.{0}, &.{0} }, &.{0}, be, lte);
+    try testing.expectApproxEqRel(@as(f64, 0.056), d1, 1e-14);
+    // Order 2 on q = t^3 at t = 3, 2, 1, 0: the third divided difference
+    // is 1. Trapezoid: i_prev = q'(2) = 12, i_new = 2·(27 - 8) - 12 = 26;
+    // tol = max(1e-12 + 1e-3·26, 1e-3·27/1) = 0.027;
+    // del = sqrt(7·0.027 / 0.08333333333) = 1.5059880477914558.
+    const tr = coeffs(.trapezoidal, 1, 1, 0.5);
+    const d2 = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{27}, &.{8}, &.{1}, &.{0} }, &.{12}, tr, lte);
+    try testing.expectApproxEqRel(@as(f64, 1.5059880477914558), d2, 1e-14);
+    // q = t^2 at t = 2, 1, 0, -1 has no third difference: only the
+    // abstol floor bounds it, sqrt(7·6e-3 / 1e-12) ≈ 2e5.
+    const flat = stepBound(1, .trapezoidal, .trapezoidal, .{ &.{4}, &.{1}, &.{0}, &.{1} }, &.{0}, tr, lte);
+    try testing.expect(flat > 1e5);
+    // No states: nothing bounds the step.
+    try testing.expectEqual(std.math.inf(f64), stepBound(W, .gear_2, .gear_2, .{ &.{}, &.{}, &.{}, &.{} }, &.{}, tr, lte));
+}
+
+test "stepBound's vector body equals its scalar instantiation bit for bit" {
+    var prng: std.Random.DefaultPrng = .init(9);
+    const rnd = prng.random();
+    const len_max = 40;
+    var q: [4][len_max]f64 = undefined;
+    var ip: [len_max]f64 = undefined;
+    for (&q) |*row| {
+        for (row) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-12;
+    }
+    for (&ip) |*e| e.* = (rnd.float(f64) - 0.5) * 1e-3;
+    const lte: LteIn = .{ .dt = 1e-9, .dt1 = 2e-9, .dt2 = 1.5e-9, .reltol = 1e-3, .abstol = 1e-12, .chgtol = 1e-14, .trtol = 7 };
+    for (1..len_max + 1) |len| {
+        const hist: [4][]const f64 = .{ q[0][0..len], q[1][0..len], q[2][0..len], q[3][0..len] };
+        for (methods) |m| for (methods) |cm| {
+            const c = coeffs(cm, lte.dt, lte.dt1, 0.5);
+            try expectBits(stepBound(1, m, cm, hist, ip[0..len], c, lte), stepBound(W, m, cm, hist, ip[0..len], c, lte));
+        };
+    }
 }

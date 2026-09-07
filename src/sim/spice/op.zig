@@ -19,6 +19,10 @@
 //! later ladder does, and restore the deck's before the solve that ends the
 //! rung. Not taken: JFNK, OPtran and the floating-node check; a deck no rung
 //! solves fails with `error.NoOperatingPoint`.
+//!
+//! In: a `Circuit` and its kind of static analysis; out: the operating point
+//! in `x`, committed. LRM: §4.6.1 (the analysis kind), §5.10.2
+//! (`initial_step`), §9.15 (the homotopy knobs), §9.17.3 (cold-start seeds).
 const std = @import("std");
 const contract = @import("contract");
 const converger = @import("converger.zig");
@@ -37,6 +41,7 @@ const gmin_start: f64 = 1e-2;
 
 /// Zeroes `x`, then applies the device's §9.17.3 cold-start seeds (SPICE
 /// MODEINITJCT) so the first iteration linearizes there instead of at 0.
+/// Asserts that `x` holds exactly n_u values when the device has `seed`.
 pub fn coldStart(ckt: anytype, x: []f64) void {
     @memset(x, 0);
     const D = @TypeOf(ckt.*).Device;
@@ -47,20 +52,26 @@ pub fn coldStart(ckt: anytype, x: []f64) void {
     };
 }
 
-/// Plain Newton (`hook.assemble` is one eval, the matrix G).
+/// The `converger.newton` hook of a static solve: `assemble` is one eval,
+/// the matrix G itself.
 pub const EvalHook = struct {
+    /// Stamps every plane of `ckt` at `x`.
     pub fn assemble(_: EvalHook, ckt: anytype, x: []const f64, t: f64) void {
         ckt.eval(x, t);
     }
+    /// Returns `ckt`'s G plane, which the solve may modify (gmin).
     pub fn vals(_: EvalHook, ckt: anytype) []f64 {
         return &ckt.g_vals;
     }
 };
 
 /// Solves the operating point into `x` from a cold start, as a static
-/// analysis of `kind` (`.dc`, or `.ic` for a transient's own: §4.6.1), and
-/// on convergence commits the device state. `initial_step` holds for this
-/// solve only (§5.10.2), so every later eval at this point does not re-latch.
+/// analysis of `kind` (`.dc`, `.static` for one that precedes a
+/// small-signal analysis, or `.ic` for a transient's own: §4.6.1), and on
+/// convergence commits the device state and returns the rung that solved
+/// it. `initial_step` holds for this solve only (§5.10.2), so every later
+/// eval at this point does not re-latch. `error.NoOperatingPoint` when no
+/// rung converges; the deck's knobs are restored either way.
 pub fn solve(ckt: anytype, ws: anytype, x: []f64, kind: contract.AnalysisKind) !Rung {
     ckt.setSimState(.{ .kind = kind, .initial_step = true });
     const rung = try ladder(ckt, ws, x);
@@ -173,8 +184,11 @@ fn ladder(ckt: anytype, ws: anytype, x: []f64) error{NoOperatingPoint}!Rung {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: two hand-written devices whose plain Newton cannot converge.
+// Tests: hand-written devices with hand-solved operating points, one per
+// rung, and one with no operating point at all.
 // ---------------------------------------------------------------------------
+
+const Circuit = @import("circuit.zig").Circuit;
 
 /// `in` -- k·v³ -- `mid` -- k·v³ -- ground, from a 1 V source on `in`
 /// (branch current `br`). Each conductance is 3k·v², so at the cold start
@@ -220,7 +234,6 @@ const MockDiode = struct {
 };
 
 test "a singular cold start is gmin stepping's, a slow one source stepping's, and the deck's knobs come back" {
-    const Circuit = @import("circuit.zig").Circuit;
     {
         var model: MockCubic.Model = .{};
         var inst: MockCubic.Instance = .{};
@@ -244,4 +257,74 @@ test "a singular cold start is gmin stepping's, a slow one source stepping's, an
         try std.testing.expectEqual(@as(f64, 1.0), model.source_scale__);
         try std.testing.expectEqual(@as(f64, 1e-12), model.gmin__);
     }
+}
+
+/// A 2 V source across 1 kOhm: V(in) = 2, and the source's branch carries
+/// -2 mA (the resistor's current leaves `in` and the branch returns it).
+/// `seed` starts V(in) at 0.7, the way a §9.17.3 `$limit` seed does.
+const MockLinear = struct {
+    pub const U = enum(u8) { in, br };
+    pub const num_ports: usize = 0;
+    pub const contract_abi = contract.abi_version;
+    pub const u_kinds = [_]contract.UnknownKind{ .voltage, .current };
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{ p[0].scale(1e-3).add(p[1]), p[0].addC(-2.0) });
+    }
+
+    pub fn seed(comptime _: type, _: *const Model, _: *const Instance, _: contract.SimState) [2]?f64 {
+        return .{ 0.7, null };
+    }
+};
+
+test coldStart {
+    var model: MockLinear.Model = .{};
+    var inst: MockLinear.Instance = .{};
+    var ckt: Circuit(MockLinear) = .init(&model, &inst);
+    var x = [_]f64{ 5, 5 };
+    coldStart(&ckt, &x);
+    try std.testing.expectEqual([2]f64{ 0.7, 0 }, x);
+}
+
+test solve {
+    var model: MockLinear.Model = .{};
+    var inst: MockLinear.Instance = .{};
+    var ckt: Circuit(MockLinear) = .init(&model, &inst);
+    var ws: converger.Workspace(2) = .{};
+    var x: [2]f64 = undefined;
+    try std.testing.expectEqual(Rung.plain, try solve(&ckt, &ws, &x, .static));
+    try std.testing.expectApproxEqAbs(@as(f64, 2), x[0], 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, -2e-3), x[1], 1e-15);
+    // §5.10.2 initial_step held for the solve only; the kind stays.
+    try std.testing.expectEqual(contract.AnalysisKind.static, ckt.sim.kind);
+    try std.testing.expect(!ckt.sim.initial_step);
+    try std.testing.expect(!ckt.sim.analog_initial);
+}
+
+/// x^2 + 1 = 0 on one node: no real root, and none with any gmin the
+/// ladder tries either (x^2 + gmin·x + 1 has one only from gmin = 2).
+/// No `source_scale__`, so the source rung is skipped.
+const MockNoRoot = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{p[0].mul(p[0]).addC(1.0)});
+    }
+};
+
+test "a device with no operating point fails every rung with error.NoOperatingPoint" {
+    var model: MockNoRoot.Model = .{};
+    var inst: MockNoRoot.Instance = .{};
+    var ckt: Circuit(MockNoRoot) = .init(&model, &inst);
+    var ws: converger.Workspace(1) = .{};
+    var x: [1]f64 = undefined;
+    try std.testing.expectError(error.NoOperatingPoint, solve(&ckt, &ws, &x, .dc));
 }

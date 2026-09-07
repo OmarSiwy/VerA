@@ -3,29 +3,29 @@
 //! direct Newton (`converger`) and dense LU (`dense_lu`). Copied from
 //! OmarSiwy/ESPice at 12b5472f88b0ca9c7c8909297dc4fae6f176ea0d, CPU paths
 //! only; each file's header names its origin and what was adapted or left
-//! out. The generated testbench calls `deck` for `//! tran` and `//! onoise`
+//! out. In: a derived and set-up device `Model`/`Instance` and a deck's
+//! analysis card; out: one stderr row per accepted point or frequency. The
+//! generated testbench calls `deck` for `//! tran` and `//! onoise`
 //! (`lib/backend/tb/runner.zig`); `zig build test-spice` grades the result.
 //! Host-side only: nothing here reaches the device text, which stays
-//! GPU-compilable.
+//! GPU-compilable. The LRM clauses each file implements are in its header.
+//!
+//! The module's API is `deck` alone; every other file is reached only from
+//! inside it.
 
-/// One device as the system the analyses solve.
-pub const Circuit = @import("circuit.zig").Circuit;
-/// Direct Newton and its acceptance gates.
-pub const converger = @import("converger.zig");
-/// The operating point: plain Newton, then gmin and source stepping.
-pub const op = @import("op.zig");
-/// Transient with LTE, breakpoint, `$bound_step` and state-flip control.
-pub const tran = @import("tran.zig");
-/// Small-signal output noise density.
-pub const noise = @import("noise.zig");
-/// Dense LU, plain and stacked-real complex.
-pub const dense_lu = @import("dense_lu.zig");
-/// Companion coefficients and the LTE bound.
-pub const integrator = @import("integrator.zig");
 /// The `//! tran` / `//! onoise` entry points a generated testbench calls.
 pub const deck = @import("deck.zig");
 
+const circuit = @import("circuit.zig");
+const converger = @import("converger.zig");
+const op = @import("op.zig");
+const tran = @import("tran.zig");
+const noise = @import("noise.zig");
+const dense_lu = @import("dense_lu.zig");
+const integrator = @import("integrator.zig");
+
 test {
+    _ = circuit;
     _ = converger;
     _ = op;
     _ = noise;
