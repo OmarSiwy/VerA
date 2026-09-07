@@ -28,6 +28,10 @@ pub const Edge = enum(u2) {
     any,
     posedge,
     negedge,
+
+    /// Whether a change of the watched bit from `before` to `after` is this
+    /// edge (§9.7.2 Table 9-1). `any` is true for every change, since the
+    /// caller has already proved the whole value changed.
     fn matches(self: Edge, before: Int.Bit, after: Int.Bit) bool {
         // A plain `@(v)` term watches the whole value, which the caller has
         // already proved changed; the other two read the LSB the table covers.
@@ -187,7 +191,9 @@ pub fn release(self: *Run, slot: u32, force: bool) Error!void {
     if (layer.*) |old| _ = try exec.stopRange(self, old.start, old.end);
     layer.* = null;
     const held = layers.assign;
-    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(slot);
+    // A forced select is a layer of its own (§9.3.2), released only by its
+    // own select: the slot stays held while one remains.
+    if (layers.force == null and layers.assign == null and layers.parts.items.len == 0) _ = self.overrides.remove(slot);
     // §9.3.2: a released net is its drivers' again; a released
     // variable keeps its value, unless an assign holds it.
     if (force) {
@@ -355,12 +361,17 @@ fn selectedEvent(self: *Run, t: Term, target: u32) Error!bool {
     return selected != null and selected.? == target;
 }
 
+/// The terms filed under `slot`, or null when nothing has ever waited on it.
+/// A slot below `Run.terms.len` keeps its list at a stable address; one
+/// above it (`driver.key`, a monitor's slot) is in `Run.far_terms`, whose
+/// rows a later `watch` of another far slot may move.
 pub fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
     return if (slot < self.terms.len) self.terms[slot] else self.far_terms.getPtr(slot);
 }
 
 /// Suspend the executing process at `pc` (§9.7). Its terms are filed with
-/// `watch` under the id returned.
+/// `watch` under the id returned. Invalidates pointers into `Run.susps`
+/// when no row is free for reuse.
 pub fn park(self: *Run, pc: u32) Error!u32 {
     const id = self.free_susps.pop() orelse blk: {
         try self.susps.append(self.arena, .{ .pc = 0, .ctx = 0, .gen = 0, .alive = false });
@@ -375,7 +386,9 @@ pub fn park(self: *Run, pc: u32) Error!u32 {
     return id;
 }
 
-/// File one term of suspension `id` under `slot`.
+/// File one term of suspension `id` under `slot`. A slot's first wait
+/// beyond `Run.terms` adds a `Run.far_terms` row, which invalidates
+/// pointers to the other far lists (`termsOf`).
 pub fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
     const list = termsOf(self, slot) orelse if (slot < self.terms.len) blk: {
         // Made on the slot's first wait, at an address that stays put.
@@ -535,4 +548,95 @@ test "a nonblocking write resumes a waiting process from the NBA region" {
         \\initial begin #5 a <= 1; #5 $finish(0); end
         \\endmodule
     , "nba 01\n");
+}
+
+test "§9.7.2 Table 9-1: which transitions are a posedge and which a negedge" {
+    // IEEE 1364-2005 §9.7.2 Table 9-1: a posedge is 0->x, 0->z, 0->1, x->1
+    // and z->1; a negedge is 1->x, 1->z, 1->0, x->0 and z->0. No other
+    // change (x and z between themselves among them) is either.
+    const B = Int.Bit;
+    const pos = [_][2]B{ .{ .zero, .x }, .{ .zero, .z }, .{ .zero, .one }, .{ .x, .one }, .{ .z, .one } };
+    const neg = [_][2]B{ .{ .one, .x }, .{ .one, .z }, .{ .one, .zero }, .{ .x, .zero }, .{ .z, .zero } };
+    const all = [_]B{ .zero, .one, .z, .x };
+    for (all) |from| for (all) |to| {
+        const want_pos = for (pos) |p| {
+            if (p[0] == from and p[1] == to) break true;
+        } else false;
+        const want_neg = for (neg) |n| {
+            if (n[0] == from and n[1] == to) break true;
+        } else false;
+        try std.testing.expectEqual(want_pos, Edge.posedge.matches(from, to));
+        try std.testing.expectEqual(want_neg, Edge.negedge.matches(from, to));
+        try std.testing.expect(Edge.any.matches(from, to));
+    };
+}
+
+test termBits {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const v = try @import("net.zig").filled(arena.allocator(), 130, false, .zero);
+    setBit(v, 60, .one);
+    setBit(v, 63, .x);
+    setBit(v, 64, .z);
+    setBit(v, 67, .one);
+    // Bits 60..67 across the word boundary: 1 at 0, x at 3, z at 4, 1 at 7.
+    // An x is set in both planes and a z in the unknown plane only.
+    try std.testing.expectEqual([2]u64{ 0x89, 0x18 }, termBits(v, 60, 8));
+    // A window that starts a word: z at 0, 1 at 3.
+    try std.testing.expectEqual([2]u64{ 0x8, 0x1 }, termBits(v, 64, 4));
+    // One bit at the top of the last word.
+    try std.testing.expectEqual([2]u64{ 0, 0 }, termBits(v, 129, 1));
+}
+
+// IEEE 1364-2005 §9.3.2 `force` of a constant select holds those bits; it
+// is a layer of its own, so `release w` releases only the whole-net force,
+// of which there is none here: bit 0 stays 1 while bit 1 follows its
+// driver. The native runtime keeps a select's layer the same way
+// (`rt.State.release` leaves `Layers.parts` alone), which makes this the
+// interpreter-against-executable oracle.
+test "§9.3.2 releasing a net whole keeps the forced select it did not force" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg a; wire [1:0] w;
+        \\assign w = {a, a};
+        \\initial begin
+        \\  a = 0; force w[0] = 1'b1;
+        \\  #1 $write("%b", w);
+        \\  release w; a = 1; #1 $write("%b", w);
+        \\  a = 0; #1 $display("%b", w);
+        \\end
+        \\endmodule
+    , "011101\n");
+}
+
+test "§9.3 an assign holds a variable against an ordinary write, and deassign keeps its value" {
+    // `assign v = a` makes `v = 1` land nowhere; the held value tracks `a`.
+    // After `deassign`, v keeps the last value the assign gave it (0) until
+    // the next ordinary write.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg a, v;
+        \\initial begin
+        \\  a = 0; assign v = a;
+        \\  #1 v = 1; #1 $write("%b", v);
+        \\  a = 1; #1 $write("%b", v);
+        \\  a = 0; #1 deassign v; a = 1; #1 $write("%b", v);
+        \\  v = 1; #1 $display("%b", v);
+        \\end
+        \\endmodule
+    , "0101\n");
+}
+
+test "§9.7 an event control on a named event resumes on each trigger and only then" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\event e; integer n;
+        \\initial n = 0;
+        \\always @(e) n = n + 1;
+        \\initial begin #1 -> e; #1 -> e; #1 $display("%0d", n); end
+        \\endmodule
+    , "2\n");
 }

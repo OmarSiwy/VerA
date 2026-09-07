@@ -42,11 +42,11 @@ const MemTokens = struct {
             }
             if (c == '/' and self.at + 1 < self.text.len) {
                 if (self.text[self.at + 1] == '/') {
-                    self.at = std.mem.indexOfScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
+                    self.at = std.mem.findScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
                     continue;
                 }
                 if (self.text[self.at + 1] == '*') {
-                    self.at = if (std.mem.indexOfPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
+                    self.at = if (std.mem.findPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
                     continue;
                 }
             }
@@ -306,8 +306,8 @@ pub const too_large = std.fmt.comptimePrint("the memory file is larger than the 
 pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) ![]const u8 {
     const limit = side_file_limit;
     const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(file_name)) |dir| {
-        const joined = try std.fs.path.join(a, &.{ dir, name });
+    if (std.Io.Dir.path.dirname(file_name)) |dir| {
+        const joined = try std.Io.Dir.path.join(a, &.{ dir, name });
         if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |e| if (e == error.StreamTooLong) return e;
     }
     return cwd.readFileAlloc(io, name, a, .limited(limit));
@@ -830,7 +830,7 @@ fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []cons
         try std.testing.expectError(error.DigitalFailed, result);
         var messages = std.Io.Writer.Allocating.init(a);
         try diag.render(&bag, &messages.writer, .{});
-        try std.testing.expect(std.mem.indexOf(u8, messages.written(), phrase) != null);
+        try std.testing.expect(std.mem.find(u8, messages.written(), phrase) != null);
     } else try result;
     try std.testing.expectEqual(warnings, bag.warn_count);
     try std.testing.expectEqualStrings(expected, output.written());
@@ -951,4 +951,115 @@ test "§17.2.3 $sformat/$swrite fill a reg with the text, §17.3.1 $printtimesca
 test "display retains escaped NUL bytes and unsized integer width" {
     try expectRun("module m; initial $display(\"A\\000B %b\",1); endmodule", "A\x00B 00000000000000000000000000000001\n");
     try expectRun("module m; initial $display(\"%b\",65'd1); endmodule", "00000000000000000000000000000000000000000000000000000000000000001\n");
+}
+
+test strength {
+    // §17.1.1.5: a Table 17-5 mnemonic and a Table 17-4 value, or for a 0
+    // or 1 spanning a range its maximum then minimum level as digits, and
+    // for an X whose sides differ its 0 level then its 1 level.
+    const cases = [_]struct { Signal, []const u8 }{
+        .{ .{}, "HiZ" },
+        .{ .of(.one, .strong, .strong), "St1" },
+        .{ .of(.zero, .pull, .pull), "Pu0" },
+        .{ .of(.one, .supply, .supply), "Su1" },
+        .{ .{ .lo = 1, .hi = 1 }, "Sm1" },
+        .{ .{ .lo = 5, .hi = 6 }, "651" },
+        .{ .{ .lo = -6, .hi = -5 }, "650" },
+        .{ .orZ(.one, .strong, .strong), "StH" },
+        .{ .orZ(.zero, .weak, .weak), "WeL" },
+        .{ .of(.x, .strong, .strong), "StX" },
+        .{ .{ .lo = -3, .hi = 5 }, "35X" },
+    };
+    var buf: [8]u8 = undefined;
+    for (cases) |c| {
+        var w: std.Io.Writer = .fixed(&buf);
+        try strength(&w, c[0]);
+        try std.testing.expectEqualStrings(c[1], w.buffered());
+    }
+}
+
+test "§17.2.9 memory-file tokens: white space and both comment forms separate them" {
+    var it: MemTokens = .{ .text = "a//x\nb/*y*/c \x0c d/* never closed" };
+    for ([_][]const u8{ "a", "b", "c", "d" }) |want| try std.testing.expectEqualStrings(want, it.next().?);
+    try std.testing.expect(it.next() == null);
+}
+
+test MemLoad {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §17.2.9 with no address arguments: lowest address up, one word each.
+    {
+        var load: MemLoad = .init("11 22 // c\n33", .hex, 8, 0, 3, 0, null, null);
+        for ([_]u32{ 0, 1, 2 }, [_]i64{ 0x11, 0x22, 0x33 }) |index, value| {
+            const w = (try load.next(a)).?;
+            try std.testing.expectEqual(index, w.index);
+            try std.testing.expectEqual(@as(?i64, value), w.value.asInt());
+        }
+        try std.testing.expect((try load.next(a)) == null);
+        // Three words for a four-word range warns (W1150).
+        const m = load.mismatch().?;
+        try std.testing.expectEqual(@as(u128, 3), m.found);
+        try std.testing.expectEqual(@as(u128, 4), m.expected);
+    }
+    // `@` relocates, a word past the last address has nowhere to go, and an
+    // addressed file is not counted.
+    {
+        var load: MemLoad = .init("@2 aa bb cc", .hex, 8, 0, 3, 0, null, null);
+        try std.testing.expectEqual(@as(u32, 2), (try load.next(a)).?.index);
+        try std.testing.expectEqual(@as(u32, 3), (try load.next(a)).?.index);
+        try std.testing.expect((try load.next(a)) == null);
+        try std.testing.expect(load.mismatch() == null);
+    }
+    // No bounds: an address outside the declaration skips its words (W1156).
+    {
+        var load: MemLoad = .init("@5 11", .hex, 8, 0, 3, 0, null, null);
+        try std.testing.expect((try load.next(a)) == null);
+        try std.testing.expectEqual(@as(?i64, 5), load.outside);
+    }
+    // A start after the finish walks downward.
+    {
+        var load: MemLoad = .init("11 22", .hex, 8, 0, 3, 2, 3, 0);
+        try std.testing.expectEqual(@as(u32, 3), (try load.next(a)).?.index);
+        try std.testing.expectEqual(@as(u32, 2), (try load.next(a)).?.index);
+    }
+    // The clause's errors: an address outside the call's range, an address
+    // that is not hex, and a word that is not a number in the radix.
+    {
+        var load: MemLoad = .init("@0 11", .hex, 8, 0, 3, 2, 1, 2);
+        try std.testing.expectError(error.AddressOutOfRange, load.next(a));
+    }
+    {
+        var load: MemLoad = .init("@g 11", .hex, 8, 0, 3, 0, null, null);
+        try std.testing.expectError(error.BadAddress, load.next(a));
+    }
+    {
+        var load: MemLoad = .init("12", .binary, 8, 0, 3, 0, null, null);
+        try std.testing.expectError(error.BadWord, load.next(a));
+    }
+    // VD-041: a trailing `_` in an address is legal.
+    {
+        var load: MemLoad = .init("@1_ 7", .hex, 8, 0, 3, 0, null, null);
+        try std.testing.expectEqual(@as(u32, 1), (try load.next(a)).?.index);
+    }
+}
+
+test "§17.1.1 %c, %s, %%, %m in a named block, %l, a real's width and precision" {
+    // `%m` names the named block around the call (§17.1.1.6), `%l` the
+    // library and cell (§13.6, the default library `work`), and `%7.3f` is
+    // C's: three decimals, padded to seven columns.
+    try expectRun(
+        \\module m; reg [15:0] s; real r; initial begin : blk
+        \\  s = "hi"; r = 2.5;
+        \\  $display("%c|%s|%%|%m|%l|%7.3f|%0d", 8'h41, s, r, 7);
+        \\end endmodule
+        \\
+    , "A|hi|%|m.blk|work.m|  2.500|7\n");
+}
+
+test "§17.1.1 a malformed format is refused before anything prints" {
+    try @import("root.zig").expectRejected("module m; initial $display(\"%\"); endmodule", "unterminated display format");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%q\", 1); endmodule", "only the §9.4.3 Table 9-22 conversions");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%d\"); endmodule", "missing display argument");
+    try @import("root.zig").expectRejected("module m; initial $display(\"%5000d\", 1); endmodule", "exceeds 4096");
 }

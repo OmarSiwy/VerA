@@ -640,3 +640,187 @@ test "§15.6: an x on a deterministic condition's signal disables the event, tho
         \\endmodule
     , "0 1\n");
 }
+
+test "§15.3.5 $period: one reference edge to the next closer than the limit" {
+    // Posedges at 10, 15 and 30: 15 - 10 = 5 < 10 violates at 15; 30 - 15 =
+    // 15 does not. The first posedge has no earlier one to measure from, and
+    // clk's x -> 0 at time 0 is no posedge.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(clk);
+        \\  input clk;
+        \\  reg n;
+        \\  initial #1 n = 1'b0;
+        \\  always @(n) $display("%0d n=%b", $time, n);
+        \\  specify
+        \\    $period(posedge clk, 10, n);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk;
+        \\  c u(clk);
+        \\  initial begin
+        \\    clk = 0;
+        \\    #10 clk = 1; #2 clk = 0;
+        \\    #3 clk = 1; #5 clk = 0;
+        \\    #10 clk = 1;
+        \\  end
+        \\endmodule
+    , "1 n=0\n15 n=1\n");
+}
+
+test "§15.3.4 $width: a pulse narrower than the limit and wider than the threshold" {
+    // The pulse from the posedge at 10 to the negedge at 13 is 3 wide, and
+    // 0 < 3 < 6 violates at 13; the one from 20 to 30 is 10 wide and does
+    // not.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(clk);
+        \\  input clk;
+        \\  reg n;
+        \\  initial #1 n = 1'b0;
+        \\  always @(n) $display("%0d n=%b", $time, n);
+        \\  specify
+        \\    $width(posedge clk, 6, 0, n);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk;
+        \\  c u(clk);
+        \\  initial begin
+        \\    clk = 0;
+        \\    #10 clk = 1; #3 clk = 0;
+        \\    #7 clk = 1; #10 clk = 0;
+        \\  end
+        \\endmodule
+    , "1 n=0\n13 n=1\n");
+}
+
+test "§15.2.5 $recovery: a data event within the limit after the reference" {
+    // Table 15-5: the reference (rst's posedge) is the timestamp and the data
+    // event (clk's posedge) the timecheck: 10 <= 12 < 10 + 4 violates at 12;
+    // the later pair, 23 and 33, is 10 apart and does not.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(rst, clk);
+        \\  input rst, clk;
+        \\  reg n;
+        \\  initial #1 n = 1'b0;
+        \\  always @(n) $display("%0d n=%b", $time, n);
+        \\  specify
+        \\    $recovery(posedge rst, posedge clk, 4, n);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg rst, clk;
+        \\  c u(rst, clk);
+        \\  initial begin
+        \\    rst = 0; clk = 0;
+        \\    #10 rst = 1; #2 clk = 1;
+        \\    #5 clk = 0; #5 rst = 0;
+        \\    #1 rst = 1; #10 clk = 1;
+        \\  end
+        \\endmodule
+    , "1 n=0\n12 n=1\n");
+}
+
+test "§15.2.4 $removal: a data event within the limit before the reference" {
+    // Table 15-4: the reference (rst's posedge) is the timecheck and the data
+    // event (clk's posedge) the timestamp: 14 - 4 < 11 < 14 violates at 14;
+    // clk's posedge at 20 against rst's at 30 is outside 26..30.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(rst, clk);
+        \\  input rst, clk;
+        \\  reg n;
+        \\  initial #1 n = 1'b0;
+        \\  always @(n) $display("%0d n=%b", $time, n);
+        \\  specify
+        \\    $removal(posedge rst, posedge clk, 4, n);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg rst, clk;
+        \\  c u(rst, clk);
+        \\  initial begin
+        \\    rst = 0; clk = 0;
+        \\    #11 clk = 1; #3 rst = 1;
+        \\    #1 clk = 0; #5 clk = 1;
+        \\    #5 rst = 0; #5 rst = 1;
+        \\  end
+        \\endmodule
+    , "1 n=0\n14 n=1\n");
+}
+
+test "Table 15-13: a violation turns a notifier's 1 to 0 and leaves its z" {
+    // Two $period checks on one clock, one violation each at 15.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(clk);
+        \\  input clk;
+        \\  reg n1, nz;
+        \\  initial begin n1 = 1'b1; nz = 1'bz; end
+        \\  specify
+        \\    $period(posedge clk, 10, n1);
+        \\    $period(posedge clk, 10, nz);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk;
+        \\  c u(clk);
+        \\  initial begin
+        \\    clk = 0;
+        \\    #10 clk = 1; #2 clk = 0; #3 clk = 1;
+        \\    #1 $display("%b %b", u.n1, u.nz);
+        \\  end
+        \\endmodule
+    , "0 z\n");
+}
+
+test "§15.6 a plain condition enables its event only while it is 1" {
+    // `&&& en` with en = 0 hides the posedge at 15, so no period is measured
+    // from 10 to 15; en = 1 from then on lets 25 against 30 violate.
+    try root.expectRun(
+        \\`timescale 1ns/1ns
+        \\module c(clk, en);
+        \\  input clk, en;
+        \\  reg n;
+        \\  initial #1 n = 1'b0;
+        \\  always @(n) $display("%0d n=%b", $time, n);
+        \\  specify
+        \\    $period(posedge clk &&& en, 10, n);
+        \\  endspecify
+        \\endmodule
+        \\module t;
+        \\  reg clk, en;
+        \\  c u(clk, en);
+        \\  initial begin
+        \\    clk = 0; en = 1;
+        \\    #10 clk = 1; #2 clk = 0;
+        \\    en = 0; #3 clk = 1; #2 clk = 0;
+        \\    en = 1; #8 clk = 1; #2 clk = 0;
+        \\    #3 clk = 1;
+        \\  end
+        \\endmodule
+    , "1 n=0\n30 n=1\n");
+}
+
+test "simultaneous: which window checks a same-time pair violates" {
+    var c: Tchk = .{ .kind = .setup, .scope = 0, .tok = 0 };
+    // "The end points of the time window are not part of the violation
+    // region" of a window before the reference.
+    try std.testing.expect(!simultaneous(&c));
+    c.kind = .removal;
+    try std.testing.expect(!simultaneous(&c));
+    // A window after the reference holds its own start.
+    c.kind = .hold;
+    c.lim = .{ 0, 3 };
+    try std.testing.expect(simultaneous(&c));
+    c.kind = .recovery;
+    try std.testing.expect(simultaneous(&c));
+    c.kind = .setuphold;
+    c.lim = .{ 0, 0 };
+    try std.testing.expect(!simultaneous(&c));
+    c.lim = .{ 2, 0 };
+    try std.testing.expect(simultaneous(&c));
+}
