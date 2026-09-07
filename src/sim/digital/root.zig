@@ -2061,3 +2061,125 @@ test "VAMS §7.3.6.4 an analog variable a continuous assign reads is declared an
 test "source concat allocation failures clean up preflight and execution arenas" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testConcatRunAllocation, .{});
 }
+
+test "VecRange.position counts from the least significant declared bit" {
+    const down: VecRange = .{ .msb = 7, .lsb = 0 };
+    const up: VecRange = .{ .msb = 0, .lsb = 7 };
+    const off: VecRange = .{ .msb = 10, .lsb = 3 };
+    try std.testing.expectEqual(@as(i64, 7), down.position(7));
+    try std.testing.expectEqual(@as(i64, 0), down.position(0));
+    try std.testing.expectEqual(@as(i64, 7), up.position(0));
+    try std.testing.expectEqual(@as(i64, 0), up.position(7));
+    try std.testing.expectEqual(@as(i64, 0), off.position(3));
+    try std.testing.expectEqual(@as(i64, 7), off.position(10));
+    // Outside the range: a position outside [0, width).
+    try std.testing.expectEqual(@as(i64, -1), off.position(2));
+    try std.testing.expectEqual(@as(i64, 8), off.position(11));
+    // §5.2.1: a distant index saturates rather than overflowing.
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), off.position(std.math.minInt(i64)));
+    try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), up.position(std.math.minInt(i64)));
+}
+
+test SlotNets {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var t: SlotNets = .{};
+    try std.testing.expectEqual(@as(?u32, null), t.get(0));
+    try t.put(a, 3, 7);
+    // The rows it grew over are variables' slots, not net 0's.
+    try std.testing.expectEqual(@as(?u32, null), t.get(0));
+    try std.testing.expectEqual(@as(?u32, null), t.get(2));
+    try std.testing.expectEqual(@as(?u32, 7), t.get(3));
+    try std.testing.expectEqual(@as(?u32, null), t.get(4));
+    try t.put(a, 1, 0);
+    try std.testing.expect(t.contains(1));
+    try std.testing.expectEqual(@as(?u32, 0), t.get(1));
+    try std.testing.expect(!t.contains(2));
+}
+
+test netRuns {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Row = struct { a: u32, b: u32 };
+    const rows = [_]Row{ .{ .a = 2, .b = 0 }, .{ .a = 0, .b = 2 }, .{ .a = 2, .b = 1 } };
+    // Grouped by `a`: net 0 holds row 1, net 1 nothing, net 2 rows 0 and 2,
+    // each run in row order.
+    const by_a = try netRuns(a, 3, rows.len, &rows, struct {
+        fn each(r: anytype, _: usize) u32 {
+            return r.a;
+        }
+    }.each, 1);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 1, 3 }, by_a.start);
+    try std.testing.expectEqualSlices(u32, &.{ 1, 0, 2 }, by_a.items);
+    // Two nets per row (a pass switch's two terminals): a row is in each
+    // net's run once.
+    const both = try netRuns(a, 3, rows.len * 2, &rows, struct {
+        fn each(r: anytype, k: usize) u32 {
+            return if (k == 0) r.a else r.b;
+        }
+    }.each, 2);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 2, 3, 6 }, both.start);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2, 0, 1, 2 }, both.items);
+}
+
+test PathKey {
+    var buf = "u.p".*;
+    const key: PathKey = .{ .scope = 1, .path = "u.p" };
+    const ctx: PathKey.Ctx = .{};
+    // The path's bytes are the key, not where they live.
+    try std.testing.expect(ctx.eql(key, .{ .scope = 1, .path = &buf }));
+    try std.testing.expectEqual(ctx.hash(key), ctx.hash(.{ .scope = 1, .path = &buf }));
+    try std.testing.expect(!ctx.eql(key, .{ .scope = 2, .path = "u.p" }));
+    try std.testing.expect(!ctx.eql(key, .{ .scope = 1, .path = "u.q" }));
+}
+
+test "§12.7 a name resolves outward through blocks and stops at the instance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    const r = try elaborate(arena.allocator(),
+        \\module m; reg a; initial begin : b reg c; c = a; end endmodule
+    , .{}, &bag, &output.writer);
+    const a_str = r.file.strings.find("a").?;
+    const b_str = r.file.strings.find("b").?;
+    const c_str = r.file.strings.find("c").?;
+    const block = r.instances.get(.{ .scope = 0, .str = b_str }).?;
+    // From the block, `a` is the instance's; from the instance, `c` is no
+    // name at all (§12.7: a block's names are not its parent's).
+    try std.testing.expectEqual(r.slotOf("a"), r.lookup(block, a_str));
+    try std.testing.expect(r.lookup(block, c_str) != null);
+    try std.testing.expectEqual(@as(?u32, null), r.lookup(0, c_str));
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("c"));
+    // A block shares its instance's parameters and is part of it.
+    try std.testing.expectEqual(@as(u32, 0), r.instanceOf(block));
+    try std.testing.expectEqual(@as(u32, 0), r.specOf(block));
+    try std.testing.expect(isRoot(&r, 0));
+}
+
+test "§12.1.1 every module nothing instantiates is a root of its own" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\module a; reg x; endmodule
+        \\module b; reg y; endmodule
+    , .{}, &bag, &output.writer);
+    try std.testing.expectEqual(@as(usize, 2), r.roots.len);
+    for (r.roots) |s| try std.testing.expect(isRoot(&r, s));
+    // From inside one root, the other is found by its module's name.
+    r.scope = r.roots[0];
+    const other = r.upward(r.scope_info.items[r.roots[1]].name).?;
+    try std.testing.expectEqual(r.roots[1], other);
+}
+
+test "§3.3 a packed range wider than u32 bits is refused, not wrapped" {
+    try expectRejected("module m; reg [4294967295:0] a; endmodule", "packed range is outside the supported u32 width");
+}
+
+test "§7.9 a uwire with two drivers is an error, not a resolution" {
+    try expectRejected("module m; uwire w; assign w = 1'b0; assign w = 1'b1; endmodule", "a uwire net accepts a single driver");
+}
