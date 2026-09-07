@@ -355,14 +355,20 @@ pub const Gen = struct {
     lo_idx: []u32 = &.{},
     /// The returned values, in job order — `lo_idx` is the index into this.
     lo_vals: []Mir.Value = &.{},
-    /// §5.6.1.2 capacitance-form coefficients: rv-resolved operand of every
-    /// `freeze_grad`, deduplicated (CSE-shared coefficients share a latch —
-    /// same value, same frozen copy). `freeze_lo[k]` is the operand's slot in
-    /// `lo_vals`; the Instance latch is `frz__<k>`, written by `updateState`
-    /// once per Newton iterate (ngspice re-evaluates capacitances at the
-    /// current iterate the same way) and read back as `S.con(inst.frz__<k>)`.
-    freeze_vals: []Mir.Value = &.{},
-    freeze_lo: []u32 = &.{},
+    /// §5.6.1.2 path-integrated reactive latches: rv-resolved operand of
+    /// every `path_prev`/`path_acc`, each family deduplicated (CSE-shared
+    /// sites share a latch — same committed value). `*_lo[k]` is the
+    /// operand's slot in `lo_vals`. `path_prev` renders `S.con(inst.pb__k)`
+    /// (operand at the last accepted solve), `path_acc` renders
+    /// `S.con(inst.pq__k)` (sum of committed operands — the charge base).
+    /// `updateState` STAGES both operands into `wb__/wq__` once per Newton
+    /// iterate; `stateCtl(.commit)` — operating-point exit and transient
+    /// accepted step — latches `pb = wb`, `pq += wq` and zeroes `wq` so a
+    /// stray double commit adds 0, not a doubled increment.
+    prev_vals: []Mir.Value = &.{},
+    prev_lo: []u32 = &.{},
+    acc_vals: []Mir.Value = &.{},
+    acc_lo: []u32 = &.{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -621,17 +627,21 @@ pub const Gen = struct {
             self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
             try vals.append(a, v);
         }
-        // Freeze latches ride the same live-out queue: `updateState`'s single
-        // core(R) sweep is where their values come from.
+        // Path-latch operands ride the same live-out queue: `updateState`'s
+        // single core(R) sweep is where their staged values come from.
         {
-            var fv: std.ArrayList(Mir.Value) = .empty;
-            var fl: std.ArrayList(u32) = .empty;
+            var pv: std.ArrayList(Mir.Value) = .empty;
+            var pl: std.ArrayList(u32) = .empty;
+            var qv: std.ArrayList(Mir.Value) = .empty;
+            var ql: std.ArrayList(u32) = .empty;
             for (0..self.mir.insts.len) |ii| {
                 const row = self.mir.insts.get(ii);
-                if (row.op != .freeze_grad) continue;
+                if (row.op != .path_prev and row.op != .path_acc) continue;
+                const fam_v = if (row.op == .path_prev) &pv else &qv;
+                const fam_l = if (row.op == .path_prev) &pl else &ql;
                 const v = self.an.rv(@enumFromInt(row.a));
                 var seen = false;
-                for (fv.items) |old| {
+                for (fam_v.items) |old| {
                     if (old == v) {
                         seen = true;
                         break;
@@ -642,11 +652,13 @@ pub const Gen = struct {
                     self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
                     try vals.append(a, v);
                 }
-                try fv.append(a, v);
-                try fl.append(a, self.lo_idx[@intFromEnum(v)]);
+                try fam_v.append(a, v);
+                try fam_l.append(a, self.lo_idx[@intFromEnum(v)]);
             }
-            self.freeze_vals = fv.items;
-            self.freeze_lo = fl.items;
+            self.prev_vals = pv.items;
+            self.prev_lo = pl.items;
+            self.acc_vals = qv.items;
+            self.acc_lo = ql.items;
         }
         self.common_mode = mode;
         self.lo_vals = vals.items;
@@ -895,7 +907,7 @@ pub const Gen = struct {
         // renders as the identity inside one. `collapse` reads the core the
         // same way, so it opens `R` too.
         const cpairs = try self.collapsePairs();
-        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.freeze_lo.len != 0) {
+        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.acc_lo.len != 0) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -913,7 +925,7 @@ pub const Gen = struct {
         // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
         // advance, which is the ONLY place a stream may move: a per-iteration draw
         // makes the residual non-deterministic and Newton never converges.
-        if (stateful or self.lower.rng_auto_sites != 0 or self.freeze_lo.len != 0) try self.emitStateMachine();
+        if (stateful or self.lower.rng_auto_sites != 0 or self.acc_lo.len != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitCollapse(cpairs);
         try self.emitNextBreakpoint();
@@ -1573,13 +1585,18 @@ pub const Gen = struct {
                 .none, .bound_step, .discontinuity => {},
             }
         }
-        // §5.6.1.2 capacitance-form latches, one per deduplicated
-        // `freeze_grad` coefficient (planCommon order). Default 0.0 is safe:
-        // the C-plane goes unread in a static solve, and the per-iteration
-        // `updateState` inside the FIRST Newton loop writes the real value
-        // before any AC linearization or charge seeding reads it.
-        for (0..self.freeze_lo.len) |k| {
-            try self.w("    frz__{d}: f64 = 0.0, // freeze_grad latch\n", .{k});
+        // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
+        // semantics, mesaload.c:341-344): pb__k = ddt operand at the last
+        // ACCEPTED solve, pq__k = Σ committed A·ΔB increments — the charge
+        // base, FIXED across one Newton attempt. wb__/wq__ stage the current
+        // iterate's values (updateState); stateCtl(.commit) latches them.
+        // Zero defaults make the first committed increment A·(B−0) = A·B —
+        // exactly ngspice MODEINITTRAN's qgs = capgs·vgs product seeding.
+        for (0..self.prev_lo.len) |k| {
+            try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n    wb__{d}: f64 = 0.0, // staged\n", .{ k, k });
+        }
+        for (0..self.acc_lo.len) |k| {
+            try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n    wq__{d}: f64 = 0.0, // staged\n", .{ k, k });
         }
         // §5.10 event-assigned variables. LAST, so a model that gains one does
         // not move a single operator field, and the default is the DECLARED
@@ -1606,9 +1623,10 @@ pub const Gen = struct {
             }
         }
         // FSM accepted/working twins — `stateCtl`'s accepted copy. Emitted
-        // only for modules that get the hook (`emitsStateCtl`), so a plain
-        // cross-observer carries no dead fields.
-        if (self.emitsStateCtl()) {
+        // only for modules whose hook has an FSM half (`fsmStateCtl`), so a
+        // plain cross-observer — or a path-latch model — carries no dead
+        // fields.
+        if (self.fsmStateCtl()) {
             for (self.lower.held_vars.items, 0..) |h, i| {
                 const init = self.an.foldConst(self.an.rv(h.init), 0, true);
                 const v: f64 = if (init) |c| c.f else 0.0;
@@ -1646,7 +1664,7 @@ pub const Gen = struct {
     /// smears across whatever dt the integrator happened to carry
     /// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
     /// everywhere else).
-    fn emitsStateCtl(self: *const Gen) bool {
+    fn fsmStateCtl(self: *const Gen) bool {
         if (self.lower.held_vars.items.len == 0) return false;
         for (self.units) |u| {
             if (u.role != .analog_op) continue;
@@ -1658,11 +1676,23 @@ pub const Gen = struct {
         return false;
     }
 
+    /// §5.6.1.2 path-integrated reactive sites also ride `stateCtl`: the
+    /// driver's existing `.commit` calls (operating-point exit, transient
+    /// accepted step) are exactly the accepted-solve boundary the latches
+    /// advance on. They contribute nothing to `query` — the base moving is
+    /// the integrator's business, not a step-reject condition.
+    fn emitsStateCtl(self: *const Gen) bool {
+        return self.fsmStateCtl() or self.acc_lo.len != 0;
+    }
+
     /// The hook body. `query` compares the HELD (discrete) state only; the
     /// continuous cross histories are committed/reverted alongside so a
     /// rejected attempt cannot leave a half-advanced edge test behind (which
-    /// would suppress the refire on the retry). Tag ORDER mirrors
-    /// contract.StateCtlOp — the engine converts by ordinal.
+    /// would suppress the refire on the retry). Path latches commit `pb = wb`,
+    /// `pq += wq` (and zero `wq` so a commit with no fresh `updateState`
+    /// adds 0); on revert they need nothing — the base was never written
+    /// speculatively. Tag ORDER mirrors contract.StateCtlOp — the engine
+    /// converts by ordinal.
     fn emitStateCtl(self: *Gen) Error!void {
         try self.w(
             \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: contract.StateCtlOp) bool {{
@@ -1671,17 +1701,22 @@ pub const Gen = struct {
         , .{});
         var first = true;
         for (self.held_names) |n| {
+            if (!self.fsmStateCtl()) break;
             try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
             first = false;
         }
+        if (first) try self.w(" false", .{});
         try self.w(
             \\;
             \\    }}
             \\    if (op == .commit) {{
             \\
         , .{});
-        for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
+        for (0..self.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
+        for (0..self.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
+        if (self.fsmStateCtl()) for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
         for (self.units, 0..) |u, i| {
+            if (!self.fsmStateCtl()) break;
             if (u.role != .analog_op) continue;
             switch (opKind(u.target)) {
                 .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.unit_names[i], self.unit_names[i] }),
@@ -1689,8 +1724,9 @@ pub const Gen = struct {
             }
         }
         try self.w("    }} else {{\n", .{});
-        for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
+        if (self.fsmStateCtl()) for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
         for (self.units, 0..) |u, i| {
+            if (!self.fsmStateCtl()) break;
             if (u.role != .analog_op) continue;
             switch (opKind(u.target)) {
                 .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.unit_names[i], self.unit_names[i] }),
@@ -3255,18 +3291,21 @@ pub const Gen = struct {
                 try self.b(").val()))", .{});
             },
             .opt_barrier => try self.renderVal(a, res_ty),
-            // §5.6.1.2 capacitance-form coefficient: read the Instance latch
-            // `updateState` wrote — value only, no derivative, and the SAME
-            // value for residual and Jacobian within one assemble (Newton-
-            // consistent; the latch advances once per iterate, which is
-            // exactly ngspice's current-iterate capacitance).
-            .freeze_grad => {
+            // §5.6.1.2 path-integrated reactive latches: value only, no
+            // derivative, FIXED across one Newton attempt (advanced by
+            // stateCtl(.commit) at the operating-point exit and per accepted
+            // transient step). The residual is one smooth function per
+            // attempt, so its AD Jacobian is exact — the coefficient's dA
+            // enters only multiplied by (B − pb), which is zero at every
+            // committed point (AC reads the pure capacitance form there).
+            .path_prev, .path_acc => {
                 const v = self.an.rv(a);
-                const k = for (self.freeze_vals, 0..) |fv, fk| {
+                const fam = if (op == .path_prev) self.prev_vals else self.acc_vals;
+                const k = for (fam, 0..) |fv, fk| {
                     if (fv == v) break fk;
                 } else unreachable; // planCommon queued every site
                 self.uses_inst = true; // the latch read keeps `inst` in the signature
-                try self.b("S.con(inst.frz__{d})", .{k});
+                try self.b("S.con(inst.{s}__{d})", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
             },
             // §3.2 integer arithmetic, at §3.2's 32-bit 2's complement width —
             // see `Lower.wrap32`, which is the definition this and the two
@@ -3761,7 +3800,7 @@ pub const Gen = struct {
                             .atanh => .{ "std.math.atanh(", ")" },
                             // An int→real widening and a reassociation barrier
                             // are both identities in the f64 domain.
-                            .if_cast, .opt_barrier, .freeze_grad => .{ "", "" },
+                            .if_cast, .opt_barrier => .{ "", "" },
                             else => return null,
                         };
                         return try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ fix[0], a, fix[1] });
@@ -5193,7 +5232,7 @@ pub const Gen = struct {
             uses_core = uses_core or self.opInputIdx(@intCast(i)) != none_u32;
         }
         for (self.held_idx) |k| uses_core = uses_core or k != none_u32;
-        uses_core = uses_core or self.freeze_lo.len != 0;
+        uses_core = uses_core or self.acc_lo.len != 0;
         try self.w(
             \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
             \\pub const State = struct {{
@@ -5222,10 +5261,15 @@ pub const Gen = struct {
         // costs exactly one model evaluation however many operators there are.
         // `model` is always live because that call reads it. `dt` is not.
         if (uses_core) try self.w("    const m = core(R, xr, model, inst);\n", .{});
-        // §5.6.1.2 capacitance-form latches: the coefficient of `A*ddt(B)` at
-        // this iterate's solution, read back by eval as S.con(inst.frz__k).
-        for (self.freeze_lo, 0..) |lo, k| {
-            try self.w("    inst.frz__{d} = m.f{d}.v; // freeze_grad latch\n", .{ k, lo });
+        // §5.6.1.2 stage this iterate's path-latch operands. They become the
+        // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
+        // pb/pq untouched, so the retry reopens on the accepted charge with a
+        // zero α·Δq residual.
+        for (self.prev_lo, 0..) |lo, k| {
+            try self.w("    inst.wb__{d} = m.f{d}.v; // path_prev staging\n", .{ k, lo });
+        }
+        for (self.acc_lo, 0..) |lo, k| {
+            try self.w("    inst.wq__{d} = m.f{d}.v; // path_acc staging\n", .{ k, lo });
         }
         if (uses_dt) try self.w("    const dt = inst.abstime - state.t_prev;\n", .{});
         // §9.17 reset FIRST, unconditionally: a `$bound_step` that only fired on
@@ -5884,7 +5928,7 @@ fn devSafe(op: Mir.Opcode) bool {
         .fabs, .fmin, .fmax => true,
         // sqrt/floor/ceil are sqrt.rn.f64 and cvt.rmi/rpi.f64.f64 — instructions.
         .sqrt, .floor, .ceil => true,
-        .opt_barrier, .freeze_grad => true,
+        .opt_barrier => true,
         else => false,
     };
 }

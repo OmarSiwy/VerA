@@ -144,13 +144,24 @@ pub const Opcode = enum(u8) {
     /// Optimization fence (no LRM basis, engine-internal): stops
     /// codegen from folding/reassociating across it. Unary, value-preserving.
     opt_barrier,
-    /// Gradient freeze (no LRM basis, engine-internal): value-identity, but
-    /// the AD domain drops the derivative — `S.con(a.val())`. Exists for
-    /// §5.6.1.2 capacitance-form reactive terms `A*ddt(B)`: the coefficient
-    /// A multiplies dB/dt at its CURRENT value (ngspice hands caps to
-    /// NIintegrate the same way), so q = freeze(A)·B and the C-plane gets
-    /// A·∂B/∂x without the spurious B·∂A/∂x a plain product would add.
-    freeze_grad,
+    /// Committed-value latch (no LRM basis, engine-internal): reads the
+    /// Instance field `pb__<k>` holding the OPERAND's value at the last
+    /// accepted solve (`stateCtl(.commit)`); gradient zero. Exists for
+    /// §5.6.1.2 path-integrated reactive terms `A*ddt(B)` (ngspice
+    /// NIintegrate semantics, mesaload.c:341-344): q = path_acc + A·(B −
+    /// path_prev(B)), so the charge increment is A·ΔB — the capacitance
+    /// form — and dA rides the Jacobian only multiplied by ΔB, which is 0
+    /// at every committed point (AC sees exactly A·∂B/∂x) and O(dt) inside
+    /// a step (the legitimate Newton term).
+    path_prev,
+    /// Committed accumulator latch: reads `pq__<k>`, the SUM of the
+    /// operand's values over all accepted solves (`stateCtl(.commit)` does
+    /// `pq += operand`); gradient zero. Carries the path-integrated charge
+    /// base Σ A·ΔB for the `path_prev` scheme above. Because the base is
+    /// FIXED across one Newton attempt, the reactive residual is one smooth
+    /// function per attempt: its opening residual at the previous accepted
+    /// point is identically zero and its AD Jacobian is exact.
+    path_acc,
     // --- value-form conditional §4.2.12 (`?:` that needs no CFG split) ---
     select,
     // --- control §5.8/§5.9 ---
@@ -194,7 +205,8 @@ pub fn opClass(op: Opcode) OpClass {
         .fi_cast,
         .if_cast,
         .opt_barrier,
-        .freeze_grad,
+        .path_prev,
+        .path_acc,
         => .unary,
         .select => .ternary,
         .phi => .phi,
