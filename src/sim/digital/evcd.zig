@@ -55,7 +55,7 @@ pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
             const last = i + 1 == given.len;
             if (last and ex.tag(a) == .str_literal) {
                 const f = ex.strOf(a);
-                if (std.mem.indexOfScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
+                if (std.mem.findScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
                     return r.exprFail(a, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls");
                 try r.ports_dump.files.append(r.arena, f);
                 continue;
@@ -68,7 +68,7 @@ pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
                 .scope => |sc| sc,
                 .slot => if (last) continue else return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance: only modules are allowed, not variables"),
             };
-            if (std.mem.indexOfScalar(u32, r.ports_dump.scopes.items, sc) != null)
+            if (std.mem.findScalar(u32, r.ports_dump.scopes.items, sc) != null)
                 return r.exprFail(a, "§18.3.1: each $dumpports scope shall be unique");
             try r.ports_dump.scopes.append(r.arena, sc);
         },
@@ -407,10 +407,10 @@ pub fn portState(dir: Ast.Direction, in: Signal, out: Signal) State {
     const c: u8 = switch (vi) {
         .zero => if (vo == .one) 'A' else 'a',
         .one => if (vo == .zero) 'B' else 'b',
-        else => switch (vo) {
+        .x, .z => switch (vo) {
             .zero => 'C',
             .one => 'c',
-            else => '?',
+            .x, .z => '?',
         },
     };
     return .{ .c = c, .s0 = both[0], .s1 = both[1] };

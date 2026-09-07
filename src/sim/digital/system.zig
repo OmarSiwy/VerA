@@ -320,8 +320,8 @@ pub fn fopen(t: contract.FileIo, a: std.mem.Allocator, file_name: []const u8, na
     if (!fileType(ty)) return 0;
     // A file read is looked for beside the source first, as `$readmemh`
     // looks (`display.readSideFile`).
-    if (ty[0] == 'r') if (std.fs.path.dirname(file_name)) |dir| {
-        const d = t.open(try std.fs.path.join(a, &.{ dir, path }), ty, mcd);
+    if (ty[0] == 'r') if (std.Io.Dir.path.dirname(file_name)) |dir| {
+        const d = t.open(try std.Io.Dir.path.join(a, &.{ dir, path }), ty, mcd);
         if (d != 0) return d;
     };
     return t.open(path, ty, mcd);
@@ -637,7 +637,7 @@ pub const Scan = struct {
             const n, const value: @FieldType(Assign, "value") = switch (conv) {
                 'c' => .{ 1, .{ .bits = .{ field[0], 0 } } },
                 's' => blk: {
-                    const len = std.mem.indexOfAny(u8, field, &std.ascii.whitespace) orelse field.len;
+                    const len = std.mem.findAny(u8, field, &std.ascii.whitespace) orelse field.len;
                     break :blk .{ len, .{ .chars = field[0..len] } };
                 },
                 'd', 'h', 'x', 'o', 'b' => number(field, conv) orelse return self.stop(false),
@@ -674,7 +674,7 @@ pub const Scan = struct {
             while (n < field.len and (std.ascii.isDigit(field[n]) or field[n] == '_')) : (n += 1) {
                 if (field[n] != '_') acc = acc *% 10 +% (field[n] - '0');
             }
-            if (std.mem.indexOfNone(u8, field[sign..n], "_") == null) return null;
+            if (std.mem.findNone(u8, field[sign..n], "_") == null) return null;
             return .{ n, .{ .bits = .{ if (neg) 0 -% acc else acc, 0 } } };
         }
         const per: u6 = switch (conv) {

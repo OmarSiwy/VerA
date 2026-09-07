@@ -228,7 +228,8 @@ fn gateIn(b: Int.Bit) Int.Bit {
 ///
 /// The n-input arms are controlling-value rules, which is what the tables
 /// encode: `and(0, x)` is 0 because the 0 controls, while `xor(0, x)` is x
-/// because xor has no controlling value.
+/// because xor has no controlling value. `ins` holds `(data, enable)` for
+/// the four enable gates and at least one input for every other kind.
 pub fn gateBit(kind: Ast.GateKind, ins: []const Int.Bit) GateOut {
     switch (kind) {
         // A.3.1 `( output_terminal , input_terminal , enable_terminal )`. Three
@@ -612,7 +613,8 @@ fn udpOut(sym: u8, state: Int.Bit) Int.Bit {
 /// edge entry on that input matches too, after every level entry, since
 /// §8.8 makes level-sensitive entries dominate edge-sensitive ones. Nothing
 /// matching is x (§8.1.6: "a combination of input values not specified ...
-/// results in x").
+/// results in x"). `ins` has one value per input field of every row (as
+/// `udpRows` made them), and `changed`, when given, indexes it.
 pub fn udpEval(rows: []const UdpRow, sequential: bool, ins: []const Int.Bit, state: Int.Bit, changed: ?u32, from: Int.Bit) Int.Bit {
     for (rows) |row| {
         if (row.edge_at != null) continue;
@@ -637,7 +639,7 @@ pub fn udpEval(rows: []const UdpRow, sequential: bool, ins: []const Int.Bit, sta
 
 /// A four-state value of `width` bits, every bit `fill`: where declared state
 /// gets its starting value, X for a variable and Z for an undriven net (§3.7).
-/// The caller owns the result, allocated from `a`.
+/// The caller owns the result, allocated from `a`. `width` must be at least 1.
 pub fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Error!Int.Literal {
     const words = (@as(usize, width) - 1) / 64 + 1;
     const planes = try a.alloc(u64, words * 2);
@@ -653,7 +655,7 @@ pub fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Err
 }
 
 /// Write one packed bit. The read side is `Int.Literal.bit`; only the §7.9
-/// resolution fold writes bit by bit.
+/// resolution fold writes bit by bit. `index` must be below `value.width`.
 pub fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
     const at = @as(u64, 1) << @truncate(index);
     const word = index / 64;
@@ -662,7 +664,8 @@ pub fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
 }
 
 /// The bits of plane word `w` that lie inside a `width`-bit value; the ones
-/// above it carry nothing and may hold anything.
+/// above it carry nothing and may hold anything. `w * 64` must not exceed
+/// `width`.
 pub fn wordMask(width: u32, w: usize) u64 {
     const rest = width - @as(u32, @intCast(w * 64));
     return if (rest >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(rest)) - 1;

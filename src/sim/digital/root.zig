@@ -6,7 +6,10 @@
 //! §6.5.7.1, §19.9), pass two (every driver, switch and process compiled
 //! and queued at time 0). `run` then drains the §11 scheduler.
 //! Siblings: elab.zig (pass one), compile.zig (AST -> bytecode), exec.zig
-//! (interpreter), net.zig (resolution tables).
+//! (interpreter), evaluate.zig (expressions), net.zig (resolution tables),
+//! resolution.zig (§7.9 resolution), waiters.zig (the write path), driver.zig
+//! (VAMS §9.22 driver access), tchk.zig (§15), display.zig and system.zig
+//! (§17), vcd.zig and evcd.zig (§18), bind.zig (§13), emit.zig (`--emit-exe`).
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -190,9 +193,9 @@ pub const SpecExpr = struct { spec: u32, e: Ast.ExprId };
 pub const TyState = enum(u8) { untyped, one, many };
 
 /// §3.9 an unpacked array is `count` consecutive element slots; the declared
-/// name maps to the first. `low`/`high` are the declared address bounds, in
-/// either order: nothing here observes element order, only which address
-/// names which element.
+/// name maps to the first. `low`/`high` are the first dimension's address
+/// bounds sorted, `low <= high`, whichever order the declaration wrote them
+/// in: element `k` of that dimension is address `low + k`.
 ///
 /// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
 /// and the others in `rest`, addressed row-major.
@@ -942,7 +945,8 @@ pub const Run = struct {
         return &self.transitions.items[d.transition];
     }
 
-    /// Net `net`'s cold row, made on first use.
+    /// Net `net`'s cold row, made on first use. Invalidates pointers to
+    /// other cold rows when it makes one.
     pub fn netColdMut(self: *Run, net: u32) Error!*NetCold {
         const n = &self.nets[net];
         if (n.cold == no_cold) {
@@ -978,7 +982,7 @@ pub const Run = struct {
             var scope: u32 = 0;
             for (parts[0 .. parts.len - 1], 0..) |part, k| {
                 const next = if (k == 0) self.upward(part) else self.instances.get(.{ .scope = scope, .str = part });
-                scope = next orelse return if (std.mem.indexOfScalar(u8, self.file.str(part), '[') != null)
+                scope = next orelse return if (std.mem.findScalar(u8, self.file.str(part), '[') != null)
                     self.fail(self.file.exprs.mainTok(e), "§12.5: `{s}`: an instance select out of range, or of no array", .{self.file.str(part)})
                 else if (self.sub_by_name.get(.{ .scope = if (k == 0) self.instanceOf(self.scope) else scope, .str = part })) |idx| if (self.subs.items[idx].decl.automatic)
                     self.fail(self.file.exprs.mainTok(e), "§10.2.1: `{s}` is automatic: its items cannot be accessed by hierarchical references", .{self.file.str(part)})
@@ -1214,6 +1218,8 @@ pub const Run = struct {
         if (span >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
         return @intCast(span + 1);
     }
+    /// Binds `name` to slot `at` in the current scope (`scope`). A second
+    /// declaration of one name in one scope fails at `tok` (E1100).
     pub fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
         const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
         if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
@@ -1920,18 +1926,6 @@ test "§12.4 a hierarchical path descends one instance per part" {
     , "1\n");
 }
 
-// IEEE 1364 §12.1.2: `u[1:0]` is two instances, each named with its index,
-// and a port expression as wide as the port reaches every one of them. One
-// twice as wide is split across them, the right-hand index taking the low
-// bits (§7.1.6); any other width is refused, not truncated.
-// IEEE 1364-2005 §10.4.5's clogb2, per instance: ceil(log2(421)) = 9 and
-// ceil(log2(256)) = 8, so `address` is 9 and 8 bits wide. The call leaves the
-// function's variables as it found them, so a second call at run time reads
-// clogb2(5) = 3 from a fresh `value`.
-// IEEE 1364-2005 §4.5 with §19.2: an implicit net takes the `default_nettype
-// in force, so an undriven `tri0` one reads 0; under `none` there is none.
-// IEEE 1364 §19.9. The directive drives at pull strength, so the level it
-// asks for is not always the level the net shows: `strong0` outranks it.
 // §10: an untimed task runs in place, a timed one suspends its caller; a
 // static task's storage outlives its activation and an automatic one's does
 // not; recursion gets a frame per activation; `disable` of a task ends every
@@ -1990,22 +1984,6 @@ test "§6.2.1 a variable declaration assignment is a time-0 write" {
     , "7 7 -5 9\n12\n");
 }
 
-// §12.2: a parameter is a constant of its value's type unless a range or a
-// type converts it, a later default may use an earlier parameter, and every
-// bound and delay is a constant expression over them.
-// §12.4.2: only the selected arm's instance exists, and §12.1.1 keeps the
-// module of the unselected one from becoming a second top.
-// §12.4.1: one block per genvar value, each a scope `g[i]` holding i as a
-// local parameter; §12.4.2: only the matching case arm exists.
-// §12.3.2/§12.3.6: a named header port whose expression concatenates internal
-// ports takes one connection, split leftmost-most-significant; a header port
-// renamed `.ext(int)` is connected by the external name.
-// §12.3.11: each side of a port reads the connected bits with its own
-// declaration's signedness: the child's `signed` port sees -1 in a parent's
-// unsigned 8'hff, and an unsigned port sees 255 in a signed parent net.
-// §7.8: a pull source drives at pull strength unless its own side's strength
-// is written, and the other side's is ignored, so `(weak0, strong1)` is a
-// strong pullup that beats a pulldown, and `(strong0, weak1)` a weak one.
 /// Test helper: expects `source` to fail before printing anything, with a
 /// rendered diagnostic containing `message`.
 pub fn expectRejected(source: []const u8, message: []const u8) !void {
@@ -2017,7 +1995,7 @@ pub fn expectRejected(source: []const u8, message: []const u8) !void {
     try std.testing.expectEqualStrings("", output.written());
     var messages = std.Io.Writer.Allocating.init(arena.allocator());
     try diag.render(&bag, &messages.writer, .{});
-    try std.testing.expect(std.mem.indexOf(u8, messages.written(), message) != null);
+    try std.testing.expect(std.mem.find(u8, messages.written(), message) != null);
 }
 
 test "§19.8 no timescale is the simulator's own unit, not an error" {

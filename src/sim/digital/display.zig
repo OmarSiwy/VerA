@@ -42,11 +42,11 @@ const MemTokens = struct {
             }
             if (c == '/' and self.at + 1 < self.text.len) {
                 if (self.text[self.at + 1] == '/') {
-                    self.at = std.mem.indexOfScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
+                    self.at = std.mem.findScalarPos(u8, self.text, self.at, '\n') orelse self.text.len;
                     continue;
                 }
                 if (self.text[self.at + 1] == '*') {
-                    self.at = if (std.mem.indexOfPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
+                    self.at = if (std.mem.findPos(u8, self.text, self.at + 2, "*/")) |e| e + 2 else self.text.len;
                     continue;
                 }
             }
@@ -306,8 +306,8 @@ pub const too_large = std.fmt.comptimePrint("the memory file is larger than the 
 pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) ![]const u8 {
     const limit = side_file_limit;
     const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(file_name)) |dir| {
-        const joined = try std.fs.path.join(a, &.{ dir, name });
+    if (std.Io.Dir.path.dirname(file_name)) |dir| {
+        const joined = try std.Io.Dir.path.join(a, &.{ dir, name });
         if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |e| if (e == error.StreamTooLong) return e;
     }
     return cwd.readFileAlloc(io, name, a, .limited(limit));
@@ -830,7 +830,7 @@ fn expectMemoryLoadDiagnostic(task: []const u8, data: []const u8, bounds: []cons
         try std.testing.expectError(error.DigitalFailed, result);
         var messages = std.Io.Writer.Allocating.init(a);
         try diag.render(&bag, &messages.writer, .{});
-        try std.testing.expect(std.mem.indexOf(u8, messages.written(), phrase) != null);
+        try std.testing.expect(std.mem.find(u8, messages.written(), phrase) != null);
     } else try result;
     try std.testing.expectEqual(warnings, bag.warn_count);
     try std.testing.expectEqualStrings(expected, output.written());

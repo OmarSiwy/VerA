@@ -144,7 +144,7 @@ fn resolveJoined(self: *Run, start: u32) Error!void {
             const n = self.nets[y.net];
             self.signals[n.signal + y.bit] = acc;
             setBit(n.resolved, y.bit, acc.collapse());
-            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
+            if (std.mem.findScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
         }
     }
     for (touched.items) |t| try waiters.store(self, self.nets[t].slot, self.nets[t].resolved.planes);
