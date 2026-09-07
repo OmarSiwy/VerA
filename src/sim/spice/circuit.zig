@@ -370,7 +370,7 @@ test "a retry request is returned, or collected at its earliest while land_rejec
     try testing.expectEqual(@as(?f64, 1), ckt.reject_at);
 }
 
-test boundStep {
+test "Circuit.boundStep" {
     var model: MockState.Model = .{};
     var inst: MockState.Instance = .{};
     var ckt: Circuit(MockState) = .init(&model, &inst);
@@ -382,7 +382,7 @@ test boundStep {
     try testing.expectEqual(@as(?f64, 1e-9), ckt.boundStep());
 }
 
-test nextBreakpoint {
+test "Circuit.nextBreakpoint" {
     var model: MockState.Model = .{};
     var inst: MockState.Instance = .{};
     var ckt: Circuit(MockState) = .init(&model, &inst);
@@ -418,7 +418,7 @@ const MockKnobs = struct {
     }
 };
 
-test setHomotopy {
+test "Circuit.setHomotopy" {
     var model: MockKnobs.Model = .{};
     var inst: MockKnobs.Instance = .{};
     var ckt: Circuit(MockKnobs) = .init(&model, &inst);
@@ -429,8 +429,8 @@ test setHomotopy {
     try testing.expectEqual(1, inst.setups);
     // A device with neither field nor cache: nothing to write, nothing runs.
     var m2: MockState.Model = .{};
-    var i2: MockState.Instance = .{};
-    var plain: Circuit(MockState) = .init(&m2, &i2);
+    var inst2: MockState.Instance = .{};
+    var plain: Circuit(MockState) = .init(&m2, &inst2);
     plain.setHomotopy(1e-3, 0.25);
     try testing.expectEqual(std.math.inf(f64), m2.bp);
 }
@@ -478,7 +478,7 @@ test "the iteration count: beginSolve sets 1, advanceIteration counts, setSimSta
     try testing.expect(!ckt.checkConvergence(&.{2.0}));
 }
 
-test applyLimits {
+test "Circuit.applyLimits" {
     var model: MockHooks.Model = .{};
     var inst: MockHooks.Instance = .{};
     var ckt: Circuit(MockHooks) = .init(&model, &inst);

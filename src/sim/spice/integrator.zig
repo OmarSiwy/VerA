@@ -219,7 +219,7 @@ fn expectBits(want: f64, got: f64) !void {
 }
 
 test coeffs {
-    const dt = 1e-9;
+    const dt: f64 = 1e-9; // f64: a comptime_float dt would divide in f128
     const be = coeffs(.backward_euler, dt, 5e-9, 0.5);
     try expectBits(1.0 / dt, be.ag0);
     try testing.expectEqual(0, be.ag2);
