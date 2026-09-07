@@ -91,11 +91,12 @@ const std = @import("std");
 /// this file keeps zero imports (Zig's one-module-per-file rule forbids
 /// reusing gompute's copy here — same musl ancestry, same <=1 ulp f64).
 ///
-/// ponytail: exp/log are ported (the only calls the admitted device class
-/// reaches — measured off the PTX libcall errors); pow/tanh/sinh/cosh are
-/// composed on them; sin/cos/expm1/log1p/atan stay on their builtins or
-/// std.math (pure Zig). A model that reaches one of those on the device
-/// fails ITS kernel compile loudly — extend `gm` then, not before.
+/// ponytail: exp/log/sin/cos are ported (the calls the admitted device class
+/// reaches — measured off the PTX libcall errors; sin/cos joined when the
+/// bjt hit tan through the StateKernel's scalar core); pow/tanh/sinh/cosh
+/// are composed on them; expm1/log1p/atan stay on std.math (pure Zig). A
+/// model that reaches another builtin on the device fails ITS kernel
+/// compile loudly — extend `gm` then, not before.
 pub const gm = struct {
     const dev = switch (@import("builtin").target.cpu.arch) {
         .nvptx64, .amdgcn => true,
@@ -164,6 +165,12 @@ pub const gm = struct {
         if (comptime !dev) return std.math.cosh(x);
         const e = softExp(@abs(x));
         return 0.5 * e + 0.5 / e;
+    }
+    pub inline fn sin(x: f64) f64 {
+        return if (comptime dev) softSin(x) else @sin(x);
+    }
+    pub inline fn cos(x: f64) f64 {
+        return if (comptime dev) softCos(x) else @cos(x);
     }
 
     // musl exp.c / log.c ports, via gompute src/device/math.zig (measured
@@ -242,6 +249,135 @@ pub const gm = struct {
         return s * (hfsq + t2 + t1) + dk * ln2lo - hfsq + f + dk * ln2hi;
     }
 
+    // musl k_sin.c / k_cos.c and the medium branch of __rem_pio2, via
+    // gompute src/device/math.zig (measured there: f64 matched glibc
+    // bit-for-bit over (0,8] on sm_89).
+    const pio4 = 0x1.921fb54442d18p-1;
+    const pio2 = 0x1.921fb54442d18p+0;
+    const invpio2 = 6.36619772367581382433e-01;
+    const pio2_1 = 1.57079632673412561417e+00;
+    const pio2_1t = 6.07710050650619224932e-11;
+    const pio2_2 = 6.07710050630396597660e-11;
+    const pio2_2t = 2.02226624879595063154e-21;
+    const pio2_3 = 2.02226624871116645580e-21;
+    const pio2_3t = 8.47842766036889956997e-32;
+    const tau_hi = 6.28318530717958623200e+00;
+    const tau_lo = 2.44929359829470635445e-16;
+
+    const S1 = -1.66666666666666324348e-01;
+    const S2 = 8.33333333332248946124e-03;
+    const S3 = -1.98412698298579493134e-04;
+    const S4 = 2.75573137070700676789e-06;
+    const S5 = -2.50507602534068634195e-08;
+    const S6 = 1.58969099521155010221e-10;
+
+    const C1 = 4.16666666666666019037e-02;
+    const C2 = -1.38888888888741095749e-03;
+    const C3 = 2.48015872894767294178e-05;
+    const C4 = -2.75573143513906633035e-07;
+    const C5 = 2.08757232129817482790e-09;
+    const C6 = -1.13596475577881948265e-11;
+
+    /// sin on [-pi/4, pi/4]; `y` is the low half of a double-double argument.
+    fn kernelSin(x: f64, y: f64, tail: bool) f64 {
+        const z = x * x;
+        const w = z * z;
+        const r = S2 + z * (S3 + z * S4) + z * w * (S5 + z * S6);
+        const v = z * x;
+        if (!tail) return x + v * (S1 + z * r);
+        return x - ((z * (0.5 * y - v * r) - y) - v * S1);
+    }
+
+    /// cos on [-pi/4, pi/4]; `y` is the low half of a double-double argument.
+    fn kernelCos(x: f64, y: f64) f64 {
+        const z = x * x;
+        const zz = z * z;
+        const r = z * (C1 + z * (C2 + z * C3)) + zz * zz * (C4 + z * (C5 + z * C6));
+        const hz = 0.5 * z;
+        const w = 1.0 - hz;
+        return w + (((1.0 - w) - hz) + (z * r - x * y));
+    }
+
+    /// x = y[0] + y[1] + n*(pi/2), with |y[0]| <= pi/4. Returns n.
+    fn remPio2(x: f64, y: *[2]f64) i32 {
+        // ponytail: no Payne-Hanek. Past 2^20*(pi/2) ~= 1.6e6 rad the
+        // Cody-Waite splits stop being exact, so pre-reduce mod 2pi in
+        // double-double instead; phase accuracy then decays ~1 bit per
+        // octave. Exact phase beyond that wants musl's __rem_pio2_large.
+        var xr = x;
+        if (@abs(xr) >= 0x1p20 * pio2) {
+            const q0 = @round(xr / (tau_hi + tau_lo));
+            xr = (xr - q0 * tau_hi) - q0 * tau_lo;
+        }
+
+        var q: f64 = @round(xr * invpio2);
+        var n: i32 = @intFromFloat(q);
+        var r = xr - q * pio2_1;
+        var w = q * pio2_1t; // 1st round, good to 85 bits
+        if (r - w < -pio4) {
+            n -= 1;
+            q -= 1;
+            r = xr - q * pio2_1;
+            w = q * pio2_1t;
+        } else if (r - w > pio4) {
+            n += 1;
+            q += 1;
+            r = xr - q * pio2_1;
+            w = q * pio2_1t;
+        }
+        y[0] = r - w;
+
+        const ex = expOf(xr);
+        if (ex - expOf(y[0]) > 16) { // 2nd round, good to 118 bits
+            const t = r;
+            w = q * pio2_2;
+            r = t - w;
+            w = q * pio2_2t - ((t - r) - w);
+            y[0] = r - w;
+            if (ex - expOf(y[0]) > 49) { // 3rd round, covers the rest
+                const t3 = r;
+                w = q * pio2_3;
+                r = t3 - w;
+                w = q * pio2_3t - ((t3 - r) - w);
+                y[0] = r - w;
+            }
+        }
+        y[1] = (r - y[0]) - w;
+        return n;
+    }
+
+    fn expOf(x: f64) i32 {
+        return @intCast(@as(u64, @bitCast(x)) >> 52 & 0x7ff);
+    }
+
+    fn softSin(x: f64) f64 {
+        const ax = @abs(x);
+        if (ax < pio4) return if (ax < 0x1p-27) x else kernelSin(x, 0.0, false);
+        if (!std.math.isFinite(x)) return std.math.nan(f64);
+        var y: [2]f64 = undefined;
+        const n = remPio2(x, &y);
+        return switch (@as(u32, @bitCast(n)) & 3) {
+            0 => kernelSin(y[0], y[1], true),
+            1 => kernelCos(y[0], y[1]),
+            2 => -kernelSin(y[0], y[1], true),
+            else => -kernelCos(y[0], y[1]),
+        };
+    }
+
+    fn softCos(x: f64) f64 {
+        const ax = @abs(x);
+        if (ax < pio4) return if (ax < 0x1p-27) 1.0 else kernelCos(x, 0.0);
+        if (!std.math.isFinite(x)) return std.math.nan(f64);
+        var y: [2]f64 = undefined;
+        const n = remPio2(x, &y);
+        return switch (@as(u32, @bitCast(n)) & 3) {
+            0 => kernelCos(y[0], y[1]),
+            1 => -kernelSin(y[0], y[1], true),
+            2 => -kernelCos(y[0], y[1]),
+            else => kernelSin(y[0], y[1], true),
+        };
+    }
+
     test "gm host branches are the builtins, device ports agree to ~1 ulp" {
         // The host branch must be indistinguishable from the historical raw
         // emission; the soft ports are pinned against libm on a physical
@@ -265,6 +401,17 @@ pub const gm = struct {
         try std.testing.expect(std.math.isNan(softLog(-1.0)));
         try std.testing.expectEqual(std.math.inf(f64), softExp(710.0));
         try std.testing.expectEqual(@as(f64, 0.0), softExp(-746.0));
+        var t: f64 = -8.0;
+        while (t <= 8.0) : (t += 0.0937) {
+            try std.testing.expectEqual(@sin(t), sin(t));
+            try std.testing.expectEqual(@cos(t), cos(t));
+            const eps = 4 * std.math.floatEps(f64); // abs bound: zeros of sin/cos
+            try std.testing.expect(@abs(softSin(t) - @sin(t)) <= eps);
+            try std.testing.expect(@abs(softCos(t) - @cos(t)) <= eps);
+        }
+        try std.testing.expectApproxEqAbs(@sin(1e9), softSin(1e9), 1e-6);
+        try std.testing.expect(std.math.isNan(softSin(std.math.inf(f64))));
+        try std.testing.expectEqual(@as(f64, 1.0), softCos(0.0));
     }
 };
 
