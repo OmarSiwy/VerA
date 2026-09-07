@@ -284,3 +284,235 @@ pub fn Circuit(comptime D: type) type {
         }
     };
 }
+
+// ---------------------------------------------------------------------------
+// Tests: one hand-written device per group of hooks, each hook observable
+// through what it writes to `Model`, `Instance` or `State`.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// Counts `updateState` calls in `State` and `Instance`, and asks for a
+/// retry at x[0] when x[0] > 0. Breakpoints at `Model.bp` and
+/// `Instance.pending`; §9.17.2 `bound_step` as the host-written field.
+const MockState = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { bp: f64 = std.math.inf(f64) };
+    pub const Instance = struct { level: u32 = 0, bound_step: f64 = 0, pending: f64 = std.math.inf(f64) };
+    pub const State = struct { updates: u32 = 0 };
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return contract.rows(@This(), S, contract.probes(@This(), S, x));
+    }
+    pub fn initState(_: *const Model, _: *Instance) State {
+        return .{};
+    }
+    pub fn updateState(comptime _: type, _: *const Model, inst: *Instance, x: [1]f64, st: *State, _: contract.SimState) contract.UpdateResult {
+        st.updates += 1;
+        inst.level += 1;
+        return if (x[0] > 0) .{ .request_reject_at = x[0] } else .ok;
+    }
+    pub fn nextBreakpoint(m: *const Model, t: f64) ?f64 {
+        return if (t < m.bp) m.bp else null;
+    }
+    pub fn pendingBreakpoint(inst: *const Instance, t: f64) ?f64 {
+        return if (t < inst.pending) inst.pending else null;
+    }
+};
+
+test "updateStates stages one update, which commit keeps and revert undoes" {
+    var model: MockState.Model = .{};
+    var inst: MockState.Instance = .{};
+    var ckt: Circuit(MockState) = .init(&model, &inst);
+    try testing.expectEqual(null, ckt.updateStates(&.{0.0}));
+    try testing.expectEqual(1, ckt.state.updates);
+    // A second update before a commit or revert reverts the first.
+    try testing.expectEqual(null, ckt.updateStates(&.{0.0}));
+    try testing.expectEqual(1, ckt.state.updates);
+    try testing.expectEqual(1, inst.level);
+    try testing.expect(!ckt.stateCtl(.commit));
+    _ = ckt.updateStates(&.{0.0});
+    try testing.expectEqual(2, ckt.state.updates);
+    try testing.expectEqual(2, inst.level);
+    try testing.expect(!ckt.stateCtl(.revert));
+    try testing.expectEqual(1, ckt.state.updates);
+    try testing.expectEqual(1, inst.level);
+    // No stateCtl hook: the query sees no flip.
+    try testing.expect(!ckt.stateCtl(.query));
+}
+
+test "a retry request is returned, or collected at its earliest while land_rejects" {
+    var model: MockState.Model = .{};
+    var inst: MockState.Instance = .{};
+    var ckt: Circuit(MockState) = .init(&model, &inst);
+    try testing.expectEqual(@as(?f64, 3), ckt.updateStates(&.{3.0}));
+    ckt.land_rejects = true;
+    try testing.expectEqual(null, ckt.updateStates(&.{2.0}));
+    try testing.expectEqual(@as(?f64, 2), ckt.reject_at);
+    try testing.expectEqual(null, ckt.updateStates(&.{1.0}));
+    try testing.expectEqual(null, ckt.updateStates(&.{5.0}));
+    try testing.expectEqual(@as(?f64, 1), ckt.reject_at);
+}
+
+test boundStep {
+    var model: MockState.Model = .{};
+    var inst: MockState.Instance = .{};
+    var ckt: Circuit(MockState) = .init(&model, &inst);
+    // §9.17.2 0 and infinity ask for no bound.
+    try testing.expectEqual(null, ckt.boundStep());
+    inst.bound_step = std.math.inf(f64);
+    try testing.expectEqual(null, ckt.boundStep());
+    inst.bound_step = 1e-9;
+    try testing.expectEqual(@as(?f64, 1e-9), ckt.boundStep());
+}
+
+test nextBreakpoint {
+    var model: MockState.Model = .{};
+    var inst: MockState.Instance = .{};
+    var ckt: Circuit(MockState) = .init(&model, &inst);
+    // Both hooks answer infinity: no breakpoint.
+    try testing.expectEqual(null, ckt.nextBreakpoint(0));
+    model.bp = 3e-9;
+    try testing.expectEqual(@as(?f64, 3e-9), ckt.nextBreakpoint(0));
+    inst.pending = 2e-9;
+    try testing.expectEqual(@as(?f64, 2e-9), ckt.nextBreakpoint(0));
+    // Past the pending one, the card's is next; past both, none.
+    try testing.expectEqual(@as(?f64, 3e-9), ckt.nextBreakpoint(2e-9));
+    try testing.expectEqual(null, ckt.nextBreakpoint(3e-9));
+}
+
+/// §9.15's two knobs, with `setup` caching `sourceScaleFactor`; `setup`
+/// and `setupInstance` count their runs.
+const MockKnobs = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { gmin__: f64 = 1e-12, source_scale__: f64 = 1, setups: u32 = 0 };
+    pub const Instance = struct { setups: u32 = 0 };
+    pub const setup_simparams = [_][]const u8{"sourceScaleFactor"};
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return contract.rows(@This(), S, contract.probes(@This(), S, x));
+    }
+    pub fn setup(comptime _: type, m: *Model) void {
+        m.setups += 1;
+    }
+    pub fn setupInstance(_: *const Model, inst: *Instance) void {
+        inst.setups += 1;
+    }
+};
+
+test setHomotopy {
+    var model: MockKnobs.Model = .{};
+    var inst: MockKnobs.Instance = .{};
+    var ckt: Circuit(MockKnobs) = .init(&model, &inst);
+    ckt.setHomotopy(1e-3, 0.25);
+    try testing.expectEqual(1e-3, model.gmin__);
+    try testing.expectEqual(0.25, model.source_scale__);
+    try testing.expectEqual(1, model.setups);
+    try testing.expectEqual(1, inst.setups);
+    // A device with neither field nor cache: nothing to write, nothing runs.
+    var m2: MockState.Model = .{};
+    var i2: MockState.Instance = .{};
+    var plain: Circuit(MockState) = .init(&m2, &i2);
+    plain.setHomotopy(1e-3, 0.25);
+    try testing.expectEqual(std.math.inf(f64), m2.bp);
+}
+
+/// The iteration hooks: `advanceIteration` keeps the iterate it is handed,
+/// `checkConvergence` refuses x[0] >= 1, `limit` caps a rise at `step`.
+const MockHooks = struct {
+    pub const U = enum(u8) { a };
+    pub const num_ports: usize = 1;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct { step: f64 = 0.5, converged: bool = true };
+    pub const Instance = struct { prev: f64 = -1 };
+
+    pub fn eval(comptime S: type, x: *const [1]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        return contract.rows(@This(), S, contract.probes(@This(), S, x));
+    }
+    pub fn advanceIteration(comptime _: type, _: *const Model, inst: *Instance, prev: [1]f64, _: contract.SimState) void {
+        inst.prev = prev[0];
+    }
+    pub fn checkConvergence(comptime _: type, _: *const Model, _: *const Instance, x: [1]f64, _: contract.SimState) bool {
+        return x[0] < 1;
+    }
+    pub fn limit(comptime _: type, m: *const Model, _: *const Instance, cur: [1]f64, old: [1]f64, _: contract.SimState) contract.LimitResult(1) {
+        return .{ .x = .{@min(cur[0], old[0] + m.step)}, .converged = m.converged };
+    }
+};
+
+test "the iteration count: beginSolve sets 1, advanceIteration counts, setSimState keeps it" {
+    var model: MockHooks.Model = .{};
+    var inst: MockHooks.Instance = .{};
+    var ckt: Circuit(MockHooks) = .init(&model, &inst);
+    ckt.beginSolve();
+    try testing.expectEqual(1, ckt.sim.iteration);
+    ckt.advanceIteration(&.{0.25});
+    try testing.expectEqual(0.25, inst.prev);
+    try testing.expectEqual(2, ckt.sim.iteration);
+    ckt.setSimState(.{ .t = 1e-9, .kind = .tran });
+    try testing.expectEqual(2, ckt.sim.iteration);
+    try testing.expectEqual(contract.AnalysisKind.tran, ckt.sim.kind);
+    // Saturating: a runaway solve does not wrap to 0.
+    ckt.sim.iteration = std.math.maxInt(u32);
+    ckt.advanceIteration(&.{0.0});
+    try testing.expectEqual(std.math.maxInt(u32), ckt.sim.iteration);
+    try testing.expect(ckt.checkConvergence(&.{0.5}));
+    try testing.expect(!ckt.checkConvergence(&.{2.0}));
+}
+
+test applyLimits {
+    var model: MockHooks.Model = .{};
+    var inst: MockHooks.Instance = .{};
+    var ckt: Circuit(MockHooks) = .init(&model, &inst);
+    // 0 -> 2 is capped at 0.5 and reported.
+    var x = [_]f64{2};
+    try testing.expect(ckt.applyLimits(&x, &.{0.0}));
+    try testing.expectEqual(0.5, x[0]);
+    // Within the cap nothing moves.
+    x = .{0.25};
+    try testing.expect(!ckt.applyLimits(&x, &.{0.0}));
+    try testing.expectEqual(0.25, x[0]);
+    // The device may refuse convergence without moving anything.
+    model.converged = false;
+    try testing.expect(ckt.applyLimits(&x, &.{0.0}));
+    try testing.expectEqual(0.25, x[0]);
+}
+
+/// Two decoupled rows, I = (2a, 3b) and Q = (5a, 7b), plus a constant
+/// partial dI_a/db = 11, dQ_a/db = 13 from `jac_const`.
+const MockJac = struct {
+    pub const U = enum(u8) { a, b };
+    pub const num_ports: usize = 2;
+    pub const contract_abi = contract.abi_version;
+    pub const Model = struct {};
+    pub const Instance = struct {};
+    pub const jac_const = [_]contract.JacConst(U){.{ .row = .a, .col = .b, .g = 11, .c = 13 }};
+
+    pub fn eval(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Rows(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.rows(@This(), S, .{ p[0].scale(2), p[1].scale(3) });
+    }
+    pub fn q(comptime S: type, x: *const [2]S.V, _: *const Model, _: *const Instance, _: contract.SimState) contract.Sites(@This(), S) {
+        const p = contract.probes(@This(), S, x);
+        return contract.sites(@This(), S, .{ p[0].scale(5), p[1].scale(7) });
+    }
+};
+
+test "eval fills all four planes, jac_const included, and combineGC adds them" {
+    var model: MockJac.Model = .{};
+    var inst: MockJac.Instance = .{};
+    var ckt: Circuit(MockJac) = .init(&model, &inst);
+    ckt.eval(&.{ 1, 2 }, 0);
+    try testing.expectEqual([2]f64{ 2, 6 }, ckt.rhs);
+    try testing.expectEqual([2]f64{ 5, 14 }, ckt.q_vec);
+    try testing.expectEqual([4]f64{ 2, 11, 0, 3 }, ckt.g_vals);
+    try testing.expectEqual([4]f64{ 5, 13, 0, 7 }, ckt.c_vals);
+    // G + 0.5·C.
+    var a: [4]f64 = undefined;
+    ckt.combineGC(0.5, &a);
+    try testing.expectEqual([4]f64{ 4.5, 17.5, 0, 6.5 }, a);
+}

@@ -210,11 +210,239 @@ fn updateAndNorm(x: []f64, dx: []const f64, x_old: []f64, current_row: []const b
     return worst;
 }
 
+// ---------------------------------------------------------------------------
+// Tests. Oracles: hand-solved linear systems (Newton on a linear residual
+// lands on the root after one solve, and the gates accept it on the next
+// iterate), a plain scalar `updateAndNorm`, and call counts of the
+// optional hooks.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
 test "updateAndNorm scores a NaN step as infinite and a small one below 1" {
     var x = [_]f64{ 1.0, 0.0, 2.0 };
     var x_old: [3]f64 = undefined;
     const cur = [_]bool{ false, true, false };
-    try std.testing.expect(updateAndNorm(&x, &.{ 1e-9, 1e-15, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6) < 1.0);
-    try std.testing.expectEqual(@as(f64, 1.0), x_old[0]);
-    try std.testing.expectEqual(inf, updateAndNorm(&x, &.{ std.math.nan(f64), 0, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6));
+    try testing.expect(updateAndNorm(&x, &.{ 1e-9, 1e-15, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6) < 1.0);
+    try testing.expectEqual(@as(f64, 1.0), x_old[0]);
+    try testing.expectEqual(inf, updateAndNorm(&x, &.{ std.math.nan(f64), 0, 0 }, &x_old, &cur, 1e-3, 1e-12, 1e-6));
+}
+
+/// The plain loop `updateAndNorm` vectorizes, as its header states it.
+fn normOracle(x: []f64, dx: []const f64, x_old: []f64, current_row: []const bool, reltol: f64, abstol: f64, vntol: f64) f64 {
+    var worst: f64 = 0;
+    for (x, dx, x_old, current_row) |*xi, d, *xo, c| {
+        const o = xi.*;
+        xo.* = o;
+        xi.* = o + d;
+        const tol = reltol * @max(@abs(xi.*), @abs(o)) + (if (c) abstol else vntol);
+        const finite = @abs(xi.*) < inf and @abs(d) < inf;
+        worst = @max(worst, if (finite) @abs(d) / tol else inf);
+    }
+    return worst;
+}
+
+test "updateAndNorm equals its scalar loop bit for bit at every length" {
+    var prng: std.Random.DefaultPrng = .init(11);
+    const rnd = prng.random();
+    const len_max = 40; // past 3 vectors at every width up to 8
+    var x: [len_max]f64 = undefined;
+    var x2: [len_max]f64 = undefined;
+    var dx: [len_max]f64 = undefined;
+    var xo: [len_max]f64 = undefined;
+    var xo2: [len_max]f64 = undefined;
+    var cur: [len_max]bool = undefined;
+    for (0..len_max + 1) |len| for (0..8) |_| {
+        for (x[0..len], dx[0..len], cur[0..len]) |*xi, *d, *c| {
+            xi.* = 4 * rnd.float(f64) - 2;
+            d.* = (rnd.float(f64) - 0.5) * std.math.pow(f64, 10, -12 * rnd.float(f64));
+            c.* = rnd.boolean();
+            // An occasional diverged entry: infinite x or NaN step.
+            switch (rnd.uintLessThan(u8, 32)) {
+                0 => xi.* = inf,
+                1 => d.* = std.math.nan(f64),
+                else => {},
+            }
+        }
+        @memcpy(x2[0..len], x[0..len]);
+        const got = updateAndNorm(x[0..len], dx[0..len], xo[0..len], cur[0..len], 1e-3, 1e-12, 1e-6);
+        const want = normOracle(x2[0..len], dx[0..len], xo2[0..len], cur[0..len], 1e-3, 1e-12, 1e-6);
+        try testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+        for (x2[0..len], x[0..len], xo2[0..len], xo[0..len]) |a, b, c, d| {
+            try testing.expectEqual(@as(u64, @bitCast(a)), @as(u64, @bitCast(b)));
+            try testing.expectEqual(@as(u64, @bitCast(c)), @as(u64, @bitCast(d)));
+        }
+    };
+}
+
+/// A linear system G·x = b with no optional hooks: `assemble` rewrites the
+/// matrix each time, as a device's eval does, since gmin adds to it.
+fn LinearSys(comptime n: usize) type {
+    return struct {
+        n: usize = n,
+        diag_slots: [n]u32 = blk: {
+            var d: [n]u32 = undefined;
+            for (&d, 0..) |*e, i| e.* = i * n + i;
+            break :blk d;
+        },
+        rhs: [n]f64 = undefined,
+        current_row: [n]bool = @splat(false),
+        jac: [n * n]f64 = undefined,
+        g: [n * n]f64,
+        b: [n]f64,
+
+        const Sys = @This();
+        const Hook = struct {
+            pub fn assemble(_: Hook, s: *Sys, x: []const f64, _: f64) void {
+                s.jac = s.g;
+                for (0..n) |i| {
+                    var r = -s.b[i];
+                    for (0..n) |j| r += s.g[i * n + j] * x[j];
+                    s.rhs[i] = r;
+                }
+            }
+            pub fn vals(_: Hook, s: *Sys) []f64 {
+                return &s.jac;
+            }
+        };
+    };
+}
+
+test newton {
+    // G = [[2, -1], [-1, 2]], b = (1, 0): x = (2/3, 1/3). The first solve
+    // lands on the root; iterate 0 is never accepted, so iterate 1 is.
+    const L = LinearSys(2);
+    var sys: L = .{ .g = .{ 2, -1, -1, 2 }, .b = .{ 1, 0 } };
+    var ws: Workspace(2) = .{};
+    var x = [_]f64{ 0, 0 };
+    const r = try newton(&sys, &ws, &x, 0, .{}, L.Hook{});
+    try testing.expect(r.converged);
+    try testing.expectEqual(2, r.iterations);
+    try testing.expect(r.max_dx < 1);
+    try testing.expectApproxEqAbs(@as(f64, 2.0 / 3.0), x[0], 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), x[1], 1e-15);
+
+    // INITFIX: the first passing iterate only re-arms, so one more runs.
+    x = .{ 0, 0 };
+    const fix = try newton(&sys, &ws, &x, 0, .{ .init_fix = true }, L.Hook{});
+    try testing.expect(fix.converged);
+    try testing.expectEqual(3, fix.iterations);
+
+    // One iteration is never enough.
+    x = .{ 0, 0 };
+    const short = try newton(&sys, &ws, &x, 0, .{ .max_iter = 1 }, L.Hook{});
+    try testing.expect(!short.converged);
+    try testing.expectEqual(1, short.iterations);
+    try testing.expectEqual(0, short.max_dx);
+
+    // max_iter = 0 runs nothing.
+    const none = try newton(&sys, &ws, &x, 0, .{ .max_iter = 0 }, L.Hook{});
+    try testing.expect(!none.converged);
+    try testing.expectEqual(0, none.iterations);
+}
+
+test "newton returns error.Singular, and a NaN residual never converges" {
+    const L = LinearSys(2);
+    var ws: Workspace(2) = .{};
+    var x = [_]f64{ 0, 0 };
+    var singular: L = .{ .g = .{ 1, 2, 2, 4 }, .b = .{ 1, 1 } };
+    try testing.expectError(error.Singular, newton(&singular, &ws, &x, 0, .{}, L.Hook{}));
+
+    var poisoned: L = .{ .g = .{ 2, -1, -1, 2 }, .b = .{ std.math.nan(f64), 0 } };
+    x = .{ 0, 0 };
+    const r = try newton(&poisoned, &ws, &x, 0, .{ .max_iter = 5 }, L.Hook{});
+    try testing.expect(!r.converged);
+    try testing.expectEqual(5, r.iterations);
+}
+
+test "Options.gmin shunts voltage rows only" {
+    // x - 1 = 0 with gmin = 1 on the diagonal and gmin·x on the residual:
+    // 2x - 1 = 0, x = 0.5 exactly. A current row takes no gmin: x = 1.
+    const L = LinearSys(1);
+    var ws: Workspace(1) = .{};
+    var sys: L = .{ .g = .{1}, .b = .{1} };
+    var x = [_]f64{0};
+    const r = try newton(&sys, &ws, &x, 0, .{ .gmin = 1 }, L.Hook{});
+    try testing.expect(r.converged);
+    try testing.expectEqual(@as(f64, 0.5), x[0]);
+
+    sys.current_row = .{true};
+    x = .{0};
+    _ = try newton(&sys, &ws, &x, 0, .{ .gmin = 1 }, L.Hook{});
+    try testing.expectEqual(@as(f64, 1), x[0]);
+}
+
+/// x - 1 = 0 with every optional hook, each counting or vetoing.
+const HookSys = struct {
+    n: usize = 1,
+    diag_slots: [1]u32 = .{0},
+    rhs: [1]f64 = undefined,
+    current_row: [1]bool = .{false},
+    jac: [1]f64 = undefined,
+    begins: u32 = 0,
+    advances: u32 = 0,
+    first_prev: ?f64 = null,
+    vetoes: u32 = 0,
+    flips: u32 = 0,
+    limit_always: bool = false,
+
+    pub fn beginSolve(s: *HookSys) void {
+        s.begins += 1;
+    }
+    pub fn advanceIteration(s: *HookSys, prev: []const f64) void {
+        s.advances += 1;
+        if (s.first_prev == null) s.first_prev = prev[0];
+    }
+    pub fn checkConvergence(s: *HookSys, _: []const f64) bool {
+        if (s.vetoes == 0) return true;
+        s.vetoes -= 1;
+        return false;
+    }
+    pub fn applyLimits(s: *HookSys, _: []f64, _: []const f64) bool {
+        return s.limit_always;
+    }
+    pub fn updateStates(s: *HookSys, _: []const f64) ?f64 {
+        if (s.flips == 0) return null;
+        s.flips -= 1;
+        return 1.0;
+    }
+
+    const Hook = struct {
+        pub fn assemble(_: Hook, s: *HookSys, x: []const f64, _: f64) void {
+            s.jac = .{1};
+            s.rhs = .{x[0] - 1};
+        }
+        pub fn vals(_: Hook, s: *HookSys) []f64 {
+            return &s.jac;
+        }
+    };
+};
+
+test "newton's optional hooks: counted, vetoing, flipping, limiting" {
+    var ws: Workspace(1) = .{};
+    var x = [_]f64{0};
+
+    var plain: HookSys = .{};
+    const r = try newton(&plain, &ws, &x, 0, .{}, HookSys.Hook{});
+    try testing.expect(r.converged);
+    try testing.expectEqual(2, r.iterations);
+    try testing.expectEqual(1, plain.begins);
+    // One advance, before iterate 1, handing over iterate 0's point.
+    try testing.expectEqual(1, plain.advances);
+    try testing.expectEqual(@as(?f64, 0), plain.first_prev);
+
+    // Each veto or state flip costs exactly one more iterate.
+    var vetoed: HookSys = .{ .vetoes = 2 };
+    x = .{0};
+    try testing.expectEqual(4, (try newton(&vetoed, &ws, &x, 0, .{}, HookSys.Hook{})).iterations);
+    var flipped: HookSys = .{ .flips = 1 };
+    x = .{0};
+    try testing.expectEqual(3, (try newton(&flipped, &ws, &x, 0, .{}, HookSys.Hook{})).iterations);
+
+    // A device that limits every iterate never converges.
+    var limited: HookSys = .{ .limit_always = true };
+    x = .{0};
+    const l = try newton(&limited, &ws, &x, 0, .{ .max_iter = 7 }, HookSys.Hook{});
+    try testing.expect(!l.converged);
+    try testing.expectEqual(7, l.iterations);
 }
