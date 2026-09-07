@@ -1037,6 +1037,14 @@ pub const Gen = struct {
         }
         self.p_given = try a.alloc(bool, self.lower.params.items.len);
         @memset(self.p_given, false);
+        // A non-local parameter whose default reads another parameter is a
+        // `derive()` target, and its guard (`if (!model.X__given)`) needs the
+        // flag whether or not the model ever queries §9.19 — same fold
+        // condition `emitDerive` selects assignments on.
+        for (self.lower.params.items, 0..) |p, i| {
+            if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
+            if (self.an.foldConst(p.default, 0, false) == null) self.p_given[i] = true;
+        }
         // §9.19 $param_given(p): the flag lives in Model, but only for the
         // parameters actually asked about.
         for (0..self.an.nb) |bi| {
@@ -1522,8 +1530,17 @@ pub const Gen = struct {
             // `f64Const` does not carry): leave the folded field initializer, as
             // before. Widening the op set there is the fix if a model asks.
             const e = try self.f64Const(p.default, 0, false) orelse continue;
+            // §6.3.4 gives the DEFAULT; an explicit host write wins. Only a
+            // localparam is overwritten unconditionally ("shall not be
+            // directly modified"). Unguarded, BSIMSOI's `VTH0 = VTHO` erased
+            // every card VTH0 back to VTHO's default. `initGiven` raised the
+            // `__given` companion for every non-local derived parameter.
+            if (!p.is_local)
+                try self.w("    if (!model.{s}__given) ", .{self.p_names[i]})
+            else
+                try self.w("    ", .{});
             switch (ty) {
-                .real => try self.w("    model.{s} = {s};\n", .{ self.p_names[i], e }),
+                .real => try self.w("model.{s} = {s};\n", .{ self.p_names[i], e }),
                 // §3.2's 32-bit result (`Lower.wrap32`) applied once, at the end.
                 // For +, - and * that is not an approximation: those three are
                 // the ring Z/2^32, so reducing after the whole expression is the
@@ -1538,7 +1555,7 @@ pub const Gen = struct {
                 // NaN default expression is then runtime UB (ReleaseFast) or a
                 // panic (Debug). Saturate-then-wrap is the fold's own rule
                 // (`Analysis.asI64` + `Lower.wrap32`), so both agree.
-                .int => try self.w("    model.{s} = @as(i32, @truncate(std.math.lossyCast(i64, @round({s}))));\n", .{ self.p_names[i], e }),
+                .int => try self.w("model.{s} = @as(i32, @truncate(std.math.lossyCast(i64, @round({s}))));\n", .{ self.p_names[i], e }),
                 .str => unreachable,
             }
         }
