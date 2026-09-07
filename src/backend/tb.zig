@@ -573,6 +573,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // exercises every device VerA emits.
     try w.raw(
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
+        \\    // Temperature/parameter-only prep: after the card and the
+        \\    // temperature write, before the first evaluation — the same
+        \\    // ordering the ARPice host keeps (finalize/reprep).
+        \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
         \\
     );
     try w.raw(
@@ -673,6 +677,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 );
             }
             try w.raw("        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            // §6.3.4 again: the hoisted prep derives from the swept card too.
+            try w.raw("        if (comptime @hasDecl(D, \"precompute\")) D.precompute(&inst, &pm);\n");
         }
         // `forced` is the other half of the operating point: which unknowns the
         // HOST drives, as opposed to which ones the device's own equations

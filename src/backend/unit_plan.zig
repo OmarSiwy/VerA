@@ -143,6 +143,19 @@ display_unit: bool = false,
 /// recomputed, unless this unit re-runs the loop that defines it.
 lo_idx: []const u32 = &.{},
 lo_vals: []const Mir.Value = &.{},
+/// Temperature/parameter-only hoist (codegen `planPrecompute`): value → the
+/// `Instance.pc__<k>` field `precompute` writes, or `none_u32`. A mapped value
+/// is a LEAF here exactly like a core-cached one — computed outside every
+/// body, read as a field — valid in ALL units including the core.
+pc_idx: []const u32 = &.{},
+/// False only while the precompute body itself is planned (there the mapped
+/// values are the targets being computed, not leaves) and before `prepare`
+/// wires `pc_idx`.
+pc_on: bool = false,
+/// Skip the branch-condition marking and the §5.9 loop fixpoint: the
+/// precompute body is emitted FLAT (pure ops in value order, no CFG), so a
+/// condition would be a slotted local nothing reads.
+flat: bool = false,
 /// Set by `analyze`: did this unit end up reading the core? Drives the one
 /// `const c = <module>__common__core(...)` line the emitter puts at the top.
 uses_cache: bool = false,
@@ -212,6 +225,14 @@ pub fn init(
     return self;
 }
 
+/// Is this Value a `precompute`d Instance field HERE? Unlike `cached` it is
+/// true inside the common declaration too — the field is written before any
+/// solve, so every body may read it.
+pub inline fn pcHoisted(self: *const UnitPlan, v: Mir.Value) bool {
+    if (!self.pc_on) return false;
+    return self.pc_idx[@intFromEnum(v)] != none_u32;
+}
+
 /// Is this Value read out of the common declaration's cache HERE? False inside
 /// the common declaration itself, where it is computed, and false for a value
 /// defined inside a loop this unit re-runs.
@@ -232,7 +253,7 @@ pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
     @memset(self.loop_recompute, false);
     while (true) {
         try self.analyzeUnitOnce(target);
-        if (!self.markRecomputedLoops()) return;
+        if (self.flat or !self.markRecomputedLoops()) return;
     }
 }
 
@@ -258,7 +279,7 @@ fn markRecomputedLoops(self: *UnitPlan) bool {
     var grew = false;
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
-        if (self.cached(lv)) continue; // computed by the core, not here
+        if (self.cached(lv) or self.pcHoisted(lv)) continue; // computed elsewhere
         const blk = self.an.def_block[v];
         if (blk == none_u32) continue;
         const l = self.an.loop_of[blk];
@@ -300,7 +321,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     // condition the unit never branches on would declare a local nothing
     // reads — a hard error in Zig).
     self.straight = self.isStraightLine();
-    if (!self.straight) {
+    if (!self.straight and !self.flat) {
         // Only the branches this unit can OBSERVE. Hoisting the shared core
         // leaves most units with a handful of private values scattered
         // through a CFG of hundreds of blocks, and reconstructing all of it
@@ -366,6 +387,9 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (v < Mir.Value.first_dynamic or self.inlined[v]) continue;
+        // An Instance-field read needs no statement, no slot, and no core
+        // call — it is valid in every body including the core itself.
+        if (self.pcHoisted(lv)) continue;
         // A cache read is a field access, as cheap as a parameter read, and
         // it is valid anywhere in the body — it needs no statement and no
         // slot. This is also what lets most units come out straight-line.
@@ -393,10 +417,11 @@ fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!v
     if (self.needed[@intFromEnum(v)]) return;
     self.needed[@intFromEnum(v)] = true;
     try self.live.append(self.arena, v);
-    // A value read out of the common declaration's cache is a LEAF here:
-    // its operands were computed there, and pulling them in is exactly the
-    // duplication the hoist removes.
-    if (self.cached(v)) return;
+    // A value read out of the common declaration's cache — or out of a
+    // `precompute`d Instance field — is a LEAF here: its operands were
+    // computed there, and pulling them in is exactly the duplication the
+    // hoist removes.
+    if (self.cached(v) or self.pcHoisted(v)) return;
     try work.append(self.arena, v);
 }
 
@@ -443,12 +468,13 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
         self.eager_use[@intFromEnum(self.an.rv(target))] += 1;
     }
     for (self.live.items) |lv| {
-        if (self.cached(lv)) continue; // a leaf: its operands are not here
+        // A leaf: its operands are not here.
+        if (self.cached(lv) or self.pcHoisted(lv)) continue;
         const def = self.mir.valueDef(lv);
         if (def != .inst_result) continue;
         self.addUses(def.inst_result, false);
     }
-    if (self.straight) return;
+    if (self.straight or self.flat) return;
     for (self.an.rpo) |bi| {
         const t = self.an.term[bi];
         if (t == .none) continue;
@@ -613,10 +639,11 @@ pub fn isStraightLine(self: *const UnitPlan) bool {
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (v < Mir.Value.first_dynamic) continue;
-        // A cache read is a field of a value the body already holds, so it
-        // has no block of its own — which is what collapses most units to a
-        // flat body once the shared core is hoisted out of them.
-        if (self.cached(lv)) continue;
+        // A cache or Instance-field read is a field of a value the body
+        // already holds, so it has no block of its own — which is what
+        // collapses most units to a flat body once the shared core is
+        // hoisted out of them.
+        if (self.cached(lv) or self.pcHoisted(lv)) continue;
         const db = self.an.def_block[v];
         if (db != none_u32 and db != 0) return false;
         const def = self.mir.valueDef(lv);
@@ -650,7 +677,8 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         const def = self.mir.valueDef(lv);
         if (def == .inst_result and self.an.i_op[@intFromEnum(def.inst_result)] == .phi)
             self.blk_phi[db] = true;
-        if (self.cached(lv)) continue; // a cache read has no block of its own
+        // A cache/Instance-field read has no block of its own.
+        if (self.cached(lv) or self.pcHoisted(lv)) continue;
         self.blk_work[db] = true;
     }
     @memset(self.dead_branch, false);
