@@ -381,14 +381,25 @@ fn toReal(b: Bits) f64 {
         const x = b.low64();
         return if (b.signed) @floatFromInt(@as(i64, @bitCast(x))) else @floatFromInt(x);
     }
-    // Wider than 64: sum the words, x/z read as 0.
+    // Wider than 64: sum the words MSB first, x/z read as 0 and bits past
+    // the width cleared. A signed value whose top bit is set is negative:
+    // sum its magnitude ~u + 1 instead and negate. The +1 carries through
+    // exactly the zero words below the lowest nonzero one (`lo`), so each
+    // magnitude word is known without a buffer.
+    const n: usize = (b.width + 63) / 64;
+    const neg = b.signed and b.bit(b.width - 1) == .one;
+    var lo: usize = 0;
+    while (lo < n and (b.val[lo] & ~b.unk[lo]) == 0) lo += 1;
     var r: f64 = 0;
-    var k = b.val.len;
+    var k = n;
     while (k > 0) {
         k -= 1;
-        r = r * 18446744073709551616.0 + @as(f64, @floatFromInt(b.val[k] & ~b.unk[k]));
+        const u = b.val[k] & ~b.unk[k];
+        var w: u64 = if (!neg) u else if (k < lo) 0 else if (k == lo) 0 -% u else ~u;
+        if (k == n - 1 and b.width % 64 != 0) w &= (@as(u64, 1) << @intCast(b.width % 64)) - 1;
+        r = r * 18446744073709551616.0 + @as(f64, @floatFromInt(w));
     }
-    return r;
+    return if (neg) -r else r;
 }
 
 /// Table 12-4's string formats. Octal and hex group from the LSB; a group
@@ -570,7 +581,7 @@ pub fn freeEvent(e: *Event) void {
     _ = live.remove(@intFromPtr(e));
 }
 
-/// Is the event still waiting to fire?
+/// Returns whether `e` is still waiting to fire; false with no run attached.
 pub fn scheduled(e: *const Event) bool {
     const r = run.attached() orelse return false;
     return r.scheduler.payloadOf(e.handle) != null;
@@ -1210,4 +1221,302 @@ test "§12.16: an analog parameter reads the value lowering folded" {
     // A node's value lives in a device this process does not run.
     vpi_get_value(handle.vpi_handle_by_name("r.p", null), &v);
     try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+// ---- the formats, over hand-built values: no design needed ----------------
+
+test "Table 12-4 vpiDecStrVal: every 8-bit value, signed and unsigned, against std.fmt" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var want_buf: [8]u8 = undefined;
+    const unk = [1]u64{0};
+    for (0..256) |x| {
+        const val = [1]u64{x};
+        for ([_]bool{ false, true }) |signed| {
+            out.clearRetainingCapacity();
+            try radixString(&out, .{ .width = 8, .val = &val, .unk = &unk, .signed = signed }, vpiDecStrVal);
+            const byte: u8 = @intCast(x);
+            const want = if (signed)
+                try std.mem.print(&want_buf, "{d}", .{@as(i8, @bitCast(byte))})
+            else
+                try std.mem.print(&want_buf, "{d}", .{byte});
+            try std.testing.expectEqualStrings(want, out.items);
+        }
+    }
+}
+
+test "Table 12-4 vpiDecStrVal: wider than 64 bits, and the most negative values" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    const two64 = [2]u64{ 0, 1 };
+    const ones = [2]u64{ std.math.maxInt(u64), std.math.maxInt(u64) };
+    const zero = [2]u64{ 0, 0 };
+    // 2^64, unsigned in 128 bits.
+    try radixString(&out, .{ .width = 128, .val = &two64, .unk = &zero, .signed = false }, vpiDecStrVal);
+    try std.testing.expectEqualStrings("18446744073709551616", out.items);
+    // Every bit one, signed: -1.
+    out.clearRetainingCapacity();
+    try radixString(&out, .{ .width = 128, .val = &ones, .unk = &zero, .signed = true }, vpiDecStrVal);
+    try std.testing.expectEqualStrings("-1", out.items);
+    // Bit 64 alone in 65 signed bits is the sign: -2^64.
+    out.clearRetainingCapacity();
+    try radixString(&out, .{ .width = 65, .val = &two64, .unk = &zero, .signed = true }, vpiDecStrVal);
+    try std.testing.expectEqualStrings("-18446744073709551616", out.items);
+}
+
+test "Table 12-4: an octal or hex group that is all x/z prints x/z, a partly unknown one X/Z" {
+    // msb..lsb 1 x 0 1 z z z z: value plane 1101_0000, unknown plane
+    // 0100_1111 (Figure 12-10: 1/1 is x, 0/1 is z).
+    const val = [1]u64{0xD0};
+    const unk = [1]u64{0x4F};
+    const b: Bits = .{ .width = 8, .val = &val, .unk = &unk, .signed = false };
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    // Hex groups [7:4] = 1x01 (partly x), [3:0] = zzzz. Octal groups [7:6] =
+    // 1x, [5:3] = 01z (partly z, no x), [2:0] = zzz. Decimal reads the whole
+    // value as one group: partly x.
+    for ([_]struct { c_int, []const u8 }{
+        .{ vpiBinStrVal, "1x01zzzz" },
+        .{ vpiHexStrVal, "Xz" },
+        .{ vpiOctStrVal, "XZz" },
+        .{ vpiDecStrVal, "X" },
+    }) |case| {
+        out.clearRetainingCapacity();
+        try radixString(&out, b, case[0]);
+        try std.testing.expectEqualStrings(case[1], out.items);
+    }
+    // All z, all x: lower case, in every radix.
+    const zeros = [1]u64{0};
+    const all = [1]u64{0xFF};
+    for ([_]struct { []const u64, u8 }{ .{ &zeros, 'z' }, .{ &all, 'x' } }) |case| {
+        for ([_]c_int{ vpiOctStrVal, vpiHexStrVal, vpiDecStrVal }) |format| {
+            out.clearRetainingCapacity();
+            try radixString(&out, .{ .width = 8, .val = case[0], .unk = &all, .signed = false }, format);
+            for (out.items) |c| try std.testing.expectEqual(case[1], c);
+        }
+    }
+}
+
+test "Table 12-4 vpiStringVal: 8-bit groups MSB first, NUL groups dropped" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    const unk = [1]u64{0};
+    // 12 bits: the top group is 4 bits of zero, a NUL.
+    const a = [1]u64{0x041};
+    try radixString(&out, .{ .width = 12, .val = &a, .unk = &unk, .signed = false }, vpiStringVal);
+    try std.testing.expectEqualStrings("A", out.items);
+    // A NUL between two characters is dropped too.
+    const ab = [1]u64{0x41_00_42};
+    out.clearRetainingCapacity();
+    try radixString(&out, .{ .width = 24, .val = &ab, .unk = &unk, .signed = false }, vpiStringVal);
+    try std.testing.expectEqualStrings("AB", out.items);
+}
+
+test "Table 12-4 vpiIntVal: x/z read as 0, a signed value sign-extends from its width" {
+    var st: Store = .{};
+    defer {
+        st.str.deinit(gpa);
+        st.vec.deinit(gpa);
+    }
+    var v: Value = std.mem.zeroes(Value);
+    v.format = vpiIntVal;
+    const val = [1]u64{0b1010};
+    const known = [1]u64{0};
+    const x1 = [1]u64{0b0010};
+    // 1010 signed is -6, unsigned 10; with bit 1 x it reads 1000: -8.
+    try formatInto(.{ .bits = .{ .width = 4, .val = &val, .unk = &known, .signed = true } }, &v, &st);
+    try std.testing.expectEqual(@as(c_int, -6), v.value.integer);
+    try formatInto(.{ .bits = .{ .width = 4, .val = &val, .unk = &known, .signed = false } }, &v, &st);
+    try std.testing.expectEqual(@as(c_int, 10), v.value.integer);
+    try formatInto(.{ .bits = .{ .width = 4, .val = &val, .unk = &x1, .signed = true } }, &v, &st);
+    try std.testing.expectEqual(@as(c_int, -8), v.value.integer);
+}
+
+test "Table 12-4 vpiVectorVal: 32-bit words, bits past the width cleared" {
+    var st: Store = .{};
+    defer {
+        st.str.deinit(gpa);
+        st.vec.deinit(gpa);
+    }
+    var v: Value = std.mem.zeroes(Value);
+    v.format = vpiVectorVal;
+    // 36 bits of ones, with garbage above them in the plane: two words, the
+    // second holding the top 4 bits.
+    const val = [1]u64{std.math.maxInt(u64)};
+    const unk = [1]u64{0};
+    try formatInto(.{ .bits = .{ .width = 36, .val = &val, .unk = &unk, .signed = false } }, &v, &st);
+    try std.testing.expectEqual(@as(usize, 2), st.vec.items.len);
+    try std.testing.expectEqual(@as(c_int, -1), v.value.vector[0].aval);
+    try std.testing.expectEqual(@as(c_int, 0xF), v.value.vector[1].aval);
+    try std.testing.expectEqual(@as(c_int, 0), v.value.vector[1].bval);
+}
+
+test "Table 12-4 vpiRealVal: a signed value wider than 64 bits keeps its sign" {
+    const zero = [2]u64{ 0, 0 };
+    // -1 in 100 bits: every bit one.
+    const ones = [2]u64{ std.math.maxInt(u64), (1 << 36) - 1 };
+    try std.testing.expectEqual(@as(f64, -1), toReal(.{ .width = 100, .val = &ones, .unk = &zero, .signed = true }));
+    // The same bits unsigned: 2^100 - 1, which rounds to 2^100 in an f64.
+    try std.testing.expectEqual(std.math.pow(f64, 2, 100), toReal(.{ .width = 100, .val = &ones, .unk = &zero, .signed = false }));
+    // -5 in 72 bits.
+    const m5 = [2]u64{ std.math.maxInt(u64) - 4, 0xff };
+    try std.testing.expectEqual(@as(f64, -5), toReal(.{ .width = 72, .val = &m5, .unk = &zero, .signed = true }));
+    // Within 64 bits: 1010 is -6 signed.
+    const v4 = [1]u64{0b1010};
+    try std.testing.expectEqual(@as(f64, -6), toReal(.{ .width = 4, .val = &v4, .unk = zero[0..1], .signed = true }));
+}
+
+test "§4.2.1.1 roundAway: nearest, ties away from zero, non-finite is 0" {
+    for ([_]struct { f64, i64 }{
+        .{ 2.5, 3 },
+        .{ -2.5, -3 },
+        .{ 0.5, 1 },
+        .{ -0.5, -1 },
+        .{ 2.4999, 2 },
+        .{ -0.0, 0 },
+        .{ std.math.nan(f64), 0 },
+        .{ std.math.inf(f64), 0 },
+        .{ -std.math.inf(f64), 0 },
+        .{ 1e300, std.math.maxInt(i64) },
+        .{ -1e300, std.math.minInt(i64) },
+    }) |case| try std.testing.expectEqual(case[1], roundAway(case[0]));
+}
+
+test "§12.30: a string a put writes reads back as the same string, every 8-bit value" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var text: [16:0]u8 = undefined;
+    for (0..256) |x| {
+        const want = [2]u64{ x, 0 };
+        for ([_]c_int{ vpiBinStrVal, vpiOctStrVal, vpiHexStrVal, vpiDecStrVal }) |format| {
+            // The spelling the get side writes for `x` is the put's input.
+            out.clearRetainingCapacity();
+            try radixString(&out, .{ .width = 8, .val = want[0..1], .unk = want[1..2], .signed = false }, format);
+            @memcpy(text[0..out.items.len], out.items);
+            text[out.items.len] = 0;
+            var v: Value = std.mem.zeroes(Value);
+            v.format = format;
+            v.value.str = &text;
+            var planes: [2]u64 = undefined;
+            try toPlanes(&v, 8, &planes);
+            try std.testing.expectEqual(want, planes);
+        }
+    }
+}
+
+test "§12.30 toPlanes: an int sign-extends across the object, a time does not" {
+    var v: Value = std.mem.zeroes(Value);
+    var planes: [4]u64 = undefined;
+    v.format = vpiIntVal;
+    v.value.integer = -2;
+    try toPlanes(&v, 72, &planes);
+    try std.testing.expectEqualSlices(u64, &.{ std.math.maxInt(u64) - 1, 0xff, 0, 0 }, &planes);
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0xffff_ffff, .low = 0, .real = 0 };
+    v.format = vpiTimeVal;
+    v.value.time = &t;
+    try toPlanes(&v, 72, &planes);
+    try std.testing.expectEqualSlices(u64, &.{ 0xffff_ffff_0000_0000, 0, 0, 0 }, &planes);
+    // A real rounds away from zero first: -2.5 is -3, 0xfd in 8 bits.
+    v.format = vpiRealVal;
+    v.value.real = -2.5;
+    try toPlanes(&v, 8, planes[0..2]);
+    try std.testing.expectEqualSlices(u64, &.{ 0xfd, 0 }, planes[0..2]);
+}
+
+test "§12.30 toPlanes: scalars, strings, and the values it refuses" {
+    var v: Value = std.mem.zeroes(Value);
+    var one_bit: [2]u64 = undefined;
+    v.format = vpiScalarVal;
+    // vpiH and vpiL are their strengthless 1 and 0.
+    for ([_]struct { c_int, [2]u64 }{
+        .{ vpi0, .{ 0, 0 } },
+        .{ vpi1, .{ 1, 0 } },
+        .{ vpiZ, .{ 0, 1 } },
+        .{ vpiX, .{ 1, 1 } },
+        .{ vpiH, .{ 1, 0 } },
+        .{ vpiL, .{ 0, 0 } },
+    }) |case| {
+        v.value.scalar = case[0];
+        try toPlanes(&v, 1, &one_bit);
+        try std.testing.expectEqual(case[1], one_bit);
+    }
+    v.value.scalar = 9;
+    try std.testing.expectError(error.BadValue, toPlanes(&v, 1, &one_bit));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+
+    // vpiStringVal: the last character is the least significant byte, and
+    // what does not fit the width is dropped.
+    var planes: [2]u64 = undefined;
+    v.format = vpiStringVal;
+    v.value.str = @constCast("AB");
+    try toPlanes(&v, 16, &planes);
+    try std.testing.expectEqual([2]u64{ 0x4142, 0 }, planes);
+    try toPlanes(&v, 8, &planes);
+    try std.testing.expectEqual([2]u64{ 0x42, 0 }, planes);
+
+    for ([_]struct { c_int, [:0]const u8 }{
+        .{ vpiBinStrVal, "102" },
+        .{ vpiOctStrVal, "8" },
+        .{ vpiHexStrVal, "g" },
+        .{ vpiDecStrVal, "12a" },
+    }) |case| {
+        v.format = case[0];
+        v.value.str = @constCast(case[1].ptr);
+        try std.testing.expectError(error.BadValue, toPlanes(&v, 8, &planes));
+    }
+    v.format = vpiHexStrVal;
+    v.value.str = null;
+    try std.testing.expectError(error.BadValue, toPlanes(&v, 8, &planes));
+    v.format = 99;
+    try std.testing.expectError(error.BadValue, toPlanes(&v, 8, &planes));
+}
+
+test "IEEE 1364-2005 §27.14: a table entry's vector is two-byte symbols, four per vecval" {
+    var st: Store = .{};
+    defer {
+        st.str.deinit(gpa);
+        st.vec.deinit(gpa);
+    }
+    var v: Value = std.mem.zeroes(Value);
+    // Symbols `(01)`, `0`, `1`: aval's high half, aval's low half, bval's
+    // high half. An edge stores both characters, a level its one in the
+    // high byte.
+    try tableVector("(01) 0 : 1", &v, &st);
+    try std.testing.expectEqual(@as(usize, 1), st.vec.items.len);
+    try std.testing.expectEqual(@as(u32, 0x3031_3000), @as(u32, @bitCast(v.value.vector[0].aval)));
+    try std.testing.expectEqual(@as(u32, 0x3100_0000), @as(u32, @bitCast(v.value.vector[0].bval)));
+    // A fifth symbol starts a second vecval.
+    try tableVector("1 1 1 1 : 0", &v, &st);
+    try std.testing.expectEqual(@as(usize, 2), st.vec.items.len);
+    try std.testing.expectEqual(@as(u32, 0x3000_0000), @as(u32, @bitCast(v.value.vector[1].aval)));
+}
+
+test "§12.30: put refusals that need no design" {
+    root.close();
+    defer root.close();
+    var v: Value = std.mem.zeroes(Value);
+    v.format = vpiIntVal;
+    // Not a handle VerA issued: a cancel needs a vpiSchedEvent, any other put
+    // an object.
+    var junk: u32 = 0;
+    try std.testing.expect(vpi_put_value(@ptrCast(&junk), null, null, vpiCancelEvent) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    try std.testing.expect(vpi_put_value(@ptrCast(&junk), &v, null, vpiNoDelay) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // cbReadOnlySynch refuses every write before looking at the handle.
+    run.read_only = true;
+    defer run.read_only = false;
+    try std.testing.expect(vpi_put_value(null, &v, null, vpiNoDelay) == null);
+    var info: root.ErrorInfo = undefined;
+    _ = root.vpi_chk_error(&info);
+    try std.testing.expectEqualStrings("READONLY", std.mem.span(info.code));
+    // §12.16: NULL value_p.
+    vpi_get_value(null, null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    // A record with no run behind it is not scheduled, and its handle is not
+    // live until a put returns it.
+    const e: Event = .{ .handle = .{ .slot = .none, .generation = 0 }, .slot = 0, .time = 0 };
+    try std.testing.expect(!scheduled(&e));
+    try std.testing.expect(asEvent(@ptrCast(@constCast(&e))) == null);
+    try std.testing.expect(asEvent(null) == null);
 }

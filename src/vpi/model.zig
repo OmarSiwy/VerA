@@ -39,12 +39,13 @@ pub const Rows = struct {
         rows.cold.deinit(rows.gpa);
     }
 
-    /// Appends row `o`, with no cold fields.
+    /// Appends row `o`, with no cold fields. Invalidates pointers into `hot`.
     pub fn append(rows: *Rows, o: Obj) Error!void {
         try rows.hot.append(rows.gpa, o);
     }
 
-    /// Appends row `o` with cold fields `c`.
+    /// Appends row `o` with cold fields `c`. Invalidates pointers into `hot`
+    /// and `cold`.
     pub fn appendCold(rows: *Rows, o: Obj, c: Cold) Error!void {
         try rows.hot.ensureUnusedCapacity(rows.gpa, 1);
         var row = o;
@@ -188,7 +189,8 @@ pub fn freeze(d: *Design, rows: *Rows, scopes: []const Building) Error!void {
 /// element is named by all its indices (`m[1][2]`) and its vpiIndex is the
 /// innermost ("the index for the reg", §26.6.7 m). The digital engine stores
 /// element k of that order in `base + k` (`digital.Run.arrays`), which is the
-/// slot given each element here.
+/// slot given each element here. Returns the array row; invalidates pointers
+/// into `objects`.
 pub fn addArray(
     arena: std.mem.Allocator,
     objects: *Rows,
@@ -255,7 +257,8 @@ pub const index_text_max = "[-9223372036854775808]".len;
 /// IEEE 1364-2005 §26.6.10: a range object over `[left:right]`, its two
 /// bounds decimal constants, its vpiSize the element count.
 ///
-/// The caller adds one row for each dimension it models.
+/// The caller adds one row for each dimension it models. Returns the range
+/// row; invalidates pointers into `objects`.
 pub fn addRange(arena: std.mem.Allocator, objects: *Rows, owner: u32, left: i64, right: i64) Error!u32 {
     const l: u32 = @intCast(objects.hot.items.len);
     try objects.append(.{ .kind = .constant, .owner = .of(owner), .name = "", .full = "", .size = 32, .value = .{ .int = left } });
@@ -271,6 +274,7 @@ pub fn addRange(arena: std.mem.Allocator, objects: *Rows, owner: u32, left: i64,
 /// elaboration names each element `u[k]`, so sibling scopes that share the
 /// identifier before `[` are one array. The array object goes in the parent
 /// scope, and every member module learns its array and its index.
+/// Invalidates pointers into `objects`.
 pub fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *Rows, scopes: []Building, top_name: []const u8) Error!void {
     for (scopes, 0..) |*parent, p| {
         var i: usize = 0;
@@ -325,13 +329,13 @@ fn scopeIndex(scopes: []Building, m: u32) i64 {
 /// `u` of `u[3]`, or null when the name is not an array element's.
 fn arrayBase(local: []const u8) ?[]const u8 {
     if (local.len < 3 or local[local.len - 1] != ']') return null;
-    const open_at = std.mem.lastIndexOfScalar(u8, local, '[') orelse return null;
+    const open_at = std.mem.findScalarLast(u8, local, '[') orelse return null;
     _ = arrayIndex(local) orelse return null;
     return local[0..open_at];
 }
 
 fn arrayIndex(local: []const u8) ?i64 {
-    const open_at = std.mem.lastIndexOfScalar(u8, local, '[') orelse return null;
+    const open_at = std.mem.findScalarLast(u8, local, '[') orelse return null;
     if (local[local.len - 1] != ']') return null;
     return std.fmt.parseInt(i64, local[open_at + 1 .. local.len - 1], 10) catch null;
 }
@@ -347,6 +351,8 @@ pub const Decls = struct {
     first: []u32,
     rows: []u32,
 
+    /// Buckets `objects` by owner in two passes, O(objects). Caller owns the
+    /// result and frees it with `deinit` and the same `gpa`.
     pub fn init(gpa: std.mem.Allocator, objects: []const Obj, n_scopes: usize) Error!Decls {
         const first = try gpa.alloc(u32, n_scopes + 1);
         errdefer gpa.free(first);
@@ -366,6 +372,7 @@ pub const Decls = struct {
         return .{ .first = first, .rows = rows };
     }
 
+    /// Frees both tables; `gpa` must be the one `init` used.
     pub fn deinit(d: *Decls, gpa: std.mem.Allocator) void {
         gpa.free(d.first);
         gpa.free(d.rows);
@@ -408,6 +415,109 @@ pub fn joinPath(arena: std.mem.Allocator, parent: []const u8, local: []const u8)
 /// The `vpiName` part of a §6.7 path: what follows the last `Elaborate.sep`,
 /// or all of `path`. A slice of `path`, not a copy.
 pub fn lastComponent(path: []const u8) []const u8 {
-    const at = std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse return path;
+    const at = std.mem.findScalarLast(u8, path, Elaborate.sep) orelse return path;
     return path[at + 1 ..];
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the shared builders over hand-made rows
+// ---------------------------------------------------------------------------
+
+test "§6.2.2 instance-array names: the base and index of `u[k]`, and nothing else" {
+    try std.testing.expectEqualStrings("u", arrayBase("u[3]") orelse "(null)");
+    try std.testing.expectEqual(@as(?i64, 3), arrayIndex("u[3]"));
+    try std.testing.expectEqual(@as(?i64, -2), arrayIndex("u[-2]"));
+    // The last bracket is the element's: `a[1][2]` is element 2 of `a[1]`.
+    try std.testing.expectEqualStrings("a[1]", arrayBase("a[1][2]") orelse "(null)");
+    for ([_][]const u8{ "u", "u[]", "u[x]", "u]", "[", "u[3", "" }) |name| {
+        try std.testing.expect(arrayBase(name) == null);
+        try std.testing.expect(arrayIndex(name) == null);
+    }
+}
+
+test "§6.7 paths: lastComponent and joinPath" {
+    try std.testing.expectEqualStrings("c", lastComponent("a.b.c"));
+    try std.testing.expectEqualStrings("abc", lastComponent("abc"));
+    try std.testing.expectEqualStrings("", lastComponent("a."));
+    try std.testing.expectEqualStrings("", lastComponent(""));
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("x", try joinPath(a, "", "x"));
+    try std.testing.expectEqualStrings("p", try joinPath(a, "p", ""));
+    try std.testing.expectEqualStrings("p.x", try joinPath(a, "p", "x"));
+    try std.testing.expectEqualStrings("", try joinPath(a, "", ""));
+}
+
+test "§11.6.11 addArray: elements row-major, named by every index, vpiIndex the innermost" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var rows: Rows = .{ .gpa = std.testing.allocator };
+    defer rows.deinit();
+    // `reg [7:0] m [1:2][0:1]`, its first element in engine slot 100.
+    const at = try addArray(arena.allocator(), &rows, .reg_array, 0, "m", "t.m", .integer, 1, 2, &.{.{ .low = 0, .high = 1 }}, 8, 100);
+    try std.testing.expectEqual(@as(u32, 4), rows.hot.items[at].size);
+    const members = rows.coldOf(at).members;
+    for (members, [_]struct { []const u8, i64, u32 }{
+        .{ "t.m[1][0]", 0, 100 },
+        .{ "t.m[1][1]", 1, 101 },
+        .{ "t.m[2][0]", 0, 102 },
+        .{ "t.m[2][1]", 1, 103 },
+    }) |m, want| {
+        const e = rows.hot.items[m];
+        try std.testing.expectEqual(Kind.word, e.kind);
+        try std.testing.expectEqual(@as(u32, 8), e.size);
+        try std.testing.expectEqualStrings(want[0], e.full);
+        try std.testing.expectEqual(@as(?u32, want[2]), e.slot.get());
+        try std.testing.expectEqual(@as(?u32, at), e.parent.get());
+        const index = e.index.get() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(want[1], rows.hot.items[index].value.?.int);
+    }
+}
+
+test "IEEE 1364-2005 §26.6.10 addRange: bounds as written, size the element count either way" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var rows: Rows = .{ .gpa = std.testing.allocator };
+    defer rows.deinit();
+    for ([_]struct { i64, i64, c_int }{ .{ 7, 0, 8 }, .{ 0, 7, 8 }, .{ -3, 4, 8 }, .{ 5, 5, 1 } }) |case| {
+        const at = try addRange(arena.allocator(), &rows, 0, case[0], case[1]);
+        const r = rows.hot.items[at];
+        try std.testing.expectEqual(code.vpiRange, r.vtype);
+        try std.testing.expectEqual(case[2], r.props[0].value);
+        try std.testing.expectEqual(case[0], rows.hot.items[r.edges[0].to].value.?.int);
+        try std.testing.expectEqual(case[1], rows.hot.items[r.edges[1].to].value.?.int);
+    }
+}
+
+/// Rows for the `Decls` tests: two scopes, and every reason a row is not a
+/// declaration.
+const decl_rows = [_]Obj{
+    .{ .kind = .module, .owner = .none, .name = "", .full = "", .src_tok = 1 },
+    .{ .kind = .net, .owner = .of(1), .name = "", .full = "", .src_tok = 2 },
+    .{ .kind = .net, .owner = .of(0), .name = "", .full = "", .src_tok = 3 },
+    // Behavioural: not a declaration.
+    .{ .kind = .code, .owner = .of(0), .name = "", .full = "", .src_tok = 4 },
+    // No source token.
+    .{ .kind = .reg, .owner = .of(0), .name = "", .full = "" },
+    .{ .kind = .reg, .owner = .of(1), .name = "", .full = "", .src_tok = 5 },
+    // No owner, and an owner past the scopes.
+    .{ .kind = .net, .owner = .none, .name = "", .full = "", .src_tok = 6 },
+    .{ .kind = .net, .owner = .of(7), .name = "", .full = "", .src_tok = 7 },
+};
+
+test "Decls: each scope's declaration rows, in object order" {
+    var decls: Decls = try .init(std.testing.allocator, &decl_rows, 2);
+    defer decls.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u32, &.{2}, decls.of(0));
+    try std.testing.expectEqualSlices(u32, &.{ 1, 5 }, decls.of(1));
+}
+
+fn declsOnce(a: std.mem.Allocator, objects: []const Obj) !void {
+    var d: Decls = try .init(a, objects, 2);
+    d.deinit(a);
+}
+
+test "Decls.init frees what it built when an allocation fails" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, declsOnce, .{@as([]const Obj, &decl_rows)});
 }

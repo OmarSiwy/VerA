@@ -134,7 +134,8 @@ pub fn failConverge() bool {
 const gpa = std.heap.smp_allocator;
 
 /// Binds the loaded library and reads its row table and system-function call
-/// names. Precondition: a design is open (`root.design`).
+/// names. Precondition: a design is open (`root.design`), and any earlier
+/// library was `detach`ed, whose tables this overwrites.
 pub fn attach(l: Lib) error{OutOfMemory}!void {
     lib = l;
     // The library names each call by its name and source token, and the
@@ -528,9 +529,10 @@ fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
 /// exponent digits. Zig's `{e}` rounds correctly and spells the exponent
 /// bare (`2.5e-3`), so only the exponent is re-spelled.
 fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
+    if (!std.math.isFinite(x)) return nonFinite(buf, x);
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
-    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const at = std.mem.findScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     const sign: u8 = if (exp < 0) '-' else '+';
     return std.mem.printSentinel(buf, "{s}e{c}{d:0>2}", .{ raw[0..at], sign, @abs(exp) }, 0) catch null;
@@ -544,14 +546,19 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
         chose.* = vpiDecStrVal;
         return std.mem.printSentinel(buf, "0", .{}, 0) catch null;
     }
+    // An infinity or NaN has no exponent to choose a style by.
+    if (!std.math.isFinite(x)) {
+        chose.* = vpiDecStrVal;
+        return nonFinite(buf, x);
+    }
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.5}", .{x}) catch return null;
-    const at = std.mem.indexOfScalar(u8, raw, 'e') orelse return null;
+    const at = std.mem.findScalar(u8, raw, 'e') orelse return null;
     const exp = std.fmt.parseInt(i32, raw[at + 1 ..], 10) catch return null;
     if (exp < -4 or exp >= 6) {
         chose.* = vpiExpStrVal;
         var m: []const u8 = raw[0..at];
-        if (std.mem.indexOfScalar(u8, m, '.') != null) {
+        if (std.mem.findScalar(u8, m, '.') != null) {
             m = std.mem.trimEnd(u8, m, "0");
             m = std.mem.trimEnd(u8, m, ".");
         }
@@ -561,11 +568,20 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     chose.* = vpiDecStrVal;
     const decimals: usize = @intCast(5 - exp);
     var fixed: []const u8 = std.mem.print(&tmp, "{d:.[1]}", .{ x, decimals }) catch return null;
-    if (std.mem.indexOfScalar(u8, fixed, '.') != null) {
+    if (std.mem.findScalar(u8, fixed, '.') != null) {
         fixed = std.mem.trimEnd(u8, fixed, "0");
         fixed = std.mem.trimEnd(u8, fixed, ".");
     }
     return std.mem.printSentinel(buf, "{s}", .{fixed}, 0) catch null;
+}
+
+// C11 7.21.6.1's spelling of an infinity or a NaN under %e and %g: `[-]inf`,
+// `[-]nan`, the sign from the sign bit. Zig's `{e}` writes the same words but
+// has no exponent for the callers above to re-spell.
+fn nonFinite(buf: *[64]u8, x: f64) ?[:0]const u8 {
+    const word: []const u8 = if (std.math.isNan(x)) "nan" else "inf";
+    const sign: []const u8 = if (std.math.signbit(x)) "-" else "";
+    return std.mem.printSentinel(buf, "{s}{s}", .{ sign, word }, 0) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,11 +677,14 @@ fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv
     // This call's outputs start over: an argument calltf does not put keeps
     // its value (`deviceOut`).
     if (call_outs[k] != 0) {
-        if (outs[k] == null) outs[k] = .{
-            .buf = gpa.alloc(f64, n * (n + 1)) catch return oom(),
-            .put = gpa.alloc(bool, n) catch return oom(),
-            .n = n,
-        };
+        if (outs[k] == null) {
+            const buf = gpa.alloc(f64, n * (n + 1)) catch return oom();
+            const put = gpa.alloc(bool, n) catch {
+                gpa.free(buf);
+                return oom();
+            };
+            outs[k] = .{ .buf = buf, .put = put, .n = n };
+        }
         const rec = outs[k].?;
         // One call site always passes the same arguments.
         std.debug.assert(rec.n == n);
@@ -851,4 +870,119 @@ pub fn putDerivative(dv: *Deriv, v: f64) bool {
     st.partials[j] = v;
     dv.value = v;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the pieces that need no device library
+// ---------------------------------------------------------------------------
+
+test "§12.10 Table 12-2: vpiExpStrVal is C's %e, two exponent digits and a sign" {
+    var buf: [64]u8 = undefined;
+    // Hand-derived as C's printf("%e") spells each.
+    for ([_]struct { f64, []const u8 }{
+        .{ 1234.5, "1.234500e+03" },
+        .{ -0.00025, "-2.500000e-04" },
+        .{ 0, "0.000000e+00" },
+        .{ 1e100, "1.000000e+100" },
+    }) |case| try std.testing.expectEqualStrings(case[1], printfE(&buf, case[0], 6) orelse "(refused)");
+}
+
+test "§12.10 Table 12-2: vpiStringVal is C's %g, and reports the form it took" {
+    var buf: [64]u8 = undefined;
+    // C11 7.21.6.1 %g at precision 6: style e when the exponent is below -4
+    // or at least 6, else style f with 5 - exponent fraction digits; then
+    // trailing zeros and a bare point go. 9999999 rounds up into 1e+07.
+    for ([_]struct { f64, []const u8, c_int }{
+        .{ 0, "0", vpiDecStrVal },
+        .{ 2.5, "2.5", vpiDecStrVal },
+        .{ -1.5, "-1.5", vpiDecStrVal },
+        .{ 100, "100", vpiDecStrVal },
+        .{ 123456, "123456", vpiDecStrVal },
+        .{ 1234567, "1.23457e+06", vpiExpStrVal },
+        .{ 9999999, "1e+07", vpiExpStrVal },
+        .{ 0.0001, "0.0001", vpiDecStrVal },
+        .{ 0.00001, "1e-05", vpiExpStrVal },
+    }) |case| {
+        var chose: c_int = 0;
+        try std.testing.expectEqualStrings(case[1], printfG(&buf, case[0], &chose) orelse "(refused)");
+        try std.testing.expectEqual(case[2], chose);
+    }
+}
+
+test "§12.10 Table 12-2: a non-finite value is C's inf, -inf or nan in the e and g forms" {
+    // C11 7.21.6.1: "A double argument representing an infinity is converted
+    // in one of the styles [-]inf or [-]infinity ... A double argument
+    // representing a NaN is converted in one of the styles [-]nan". %g of
+    // one has no exponent, so it reports vpiDecStrVal.
+    var buf: [64]u8 = undefined;
+    for ([_]struct { f64, []const u8 }{
+        .{ std.math.inf(f64), "inf" },
+        .{ -std.math.inf(f64), "-inf" },
+        .{ std.math.nan(f64), "nan" },
+    }) |case| {
+        var chose: c_int = 0;
+        try std.testing.expectEqualStrings(case[1], printfE(&buf, case[0], 6) orelse "(refused)");
+        try std.testing.expectEqualStrings(case[1], printfG(&buf, case[0], &chose) orelse "(refused)");
+        try std.testing.expectEqual(vpiDecStrVal, chose);
+    }
+}
+
+test "§12.10 analogString: vpiDecStrVal is the shortest decimal; another format is refused" {
+    var buf: [64]u8 = undefined;
+    var chose: c_int = 0;
+    const text = analogString(&buf, 0.5, vpiDecStrVal, &chose) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("0.5", std.mem.span(text));
+    try std.testing.expect(analogString(&buf, 0.5, 99, &chose) == null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
+
+test "sameTime: one instant up to rounding, symmetric, and no wider" {
+    // Relative 1e-12 of the larger magnitude, at least 1e-12 absolute.
+    try std.testing.expect(sameTime(1, 1 + 1e-13));
+    try std.testing.expect(sameTime(1 + 1e-13, 1));
+    try std.testing.expect(!sameTime(1, 1 + 1e-11));
+    try std.testing.expect(sameTime(1e9, 1e9 + 1e-4));
+    try std.testing.expect(!sameTime(1e9, 1e9 + 1e-2));
+    try std.testing.expect(sameTime(0, 1e-13));
+    try std.testing.expect(!sameTime(0, 1e-11));
+}
+
+test "asDeriv: a handle is a derivative only on a slot handed out, on its boundary" {
+    try std.testing.expect(asDeriv(null) == null);
+    const saved = n_derivs;
+    defer n_derivs = saved;
+    n_derivs = 0;
+    try std.testing.expect(asDeriv(@ptrCast(&derivs[0])) == null);
+    n_derivs = 1;
+    const first = asDeriv(@ptrCast(&derivs[0])) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first == &derivs[0]);
+    try std.testing.expect(asDeriv(@ptrFromInt(@intFromPtr(&derivs[0]) + 1)) == null);
+    try std.testing.expect(asDeriv(@ptrCast(&derivs[1])) == null);
+}
+
+test "§12.22.2 deviceOut: an argument calltf put nothing on reads back unchanged" {
+    detach();
+    const args = [3]f64{ 1.5, -2, 4 };
+    var partials: [3]f64 = undefined;
+    // No record for call 7: argument 2 is itself, its partial on itself 1.
+    try std.testing.expectEqual(@as(f64, -2), deviceOut(7, 2, &args, 3, &partials));
+    try std.testing.expectEqualSlices(f64, &.{ 0, 1, 0 }, &partials);
+    // Position 0 (the returned value) and one past the end are no argument.
+    try std.testing.expectEqual(@as(f64, 0), deviceOut(7, 0, &args, 3, &partials));
+    try std.testing.expectEqualSlices(f64, &.{ 0, 0, 0 }, &partials);
+    try std.testing.expectEqual(@as(f64, 0), deviceOut(7, 4, &args, 3, &partials));
+}
+
+test "§12.7-§12.9, §12.36 with no library: nothing to run, reject or re-solve" {
+    detach();
+    try std.testing.expectError(error.NoLibrary, run(.{ .kind = .op }));
+    try std.testing.expect(!rejectStep());
+    try std.testing.expect(!failConverge());
+    try std.testing.expect(analysis() == null);
+    try std.testing.expectEqual(@as(f64, 0), acceptedTime());
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_freq());
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_delta());
+    try std.testing.expectEqual(@as(f64, 0), vpi_get_analog_time());
+    const q: root.Obj = .{ .kind = .quantity, .owner = .none, .name = "", .full = "" };
+    try std.testing.expectError(error.NoAnalysis, quantityValue(&q));
 }
