@@ -255,7 +255,9 @@ pub fn reset() void {
     live.clearAndFree(gpa);
 }
 
-/// Every registration, in order, for `vpi_iterate(vpiUserSystf, NULL)`.
+/// Every registration's handle, in registration order, for
+/// `vpi_iterate(vpiUserSystf, NULL)`. Caller owns the slice and frees it with
+/// `a`.
 pub fn all(a: std.mem.Allocator) ![]vpiHandle {
     const out = try a.alloc(vpiHandle, regs.items.len);
     for (regs.items, out) |s, *h| h.* = @ptrCast(s);

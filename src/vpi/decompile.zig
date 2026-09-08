@@ -62,7 +62,7 @@ pub fn decompile(w: *Writer, f: *const Ast.SourceFile, id: Ast.ExprId) Writer.Er
             const t = std.mem.print(&buf, "{d}", .{ex.realValue(id)}) catch unreachable;
             try w.writeAll(t);
             // A real stays a real: `2.0`, not the integer `2`.
-            if (std.mem.indexOfAny(u8, t, ".eEni") == null) try w.writeAll(".0");
+            if (std.mem.findAny(u8, t, ".eEni") == null) try w.writeAll(".0");
         },
         .str_literal => {
             try w.writeByte('"');

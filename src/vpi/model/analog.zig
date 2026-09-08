@@ -82,7 +82,7 @@ pub fn build(model_gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design
         const at: u32 = @intCast(i);
         // Rows come parent first, so the parent is already in the table. Unit 0
         // is the top, whose path is "".
-        const parent: ?u32 = if (i == 0) null else by_path.get(path[0 .. std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse 0]).?;
+        const parent: ?u32 = if (i == 0) null else by_path.get(path[0 .. std.mem.findScalarLast(u8, path, Elaborate.sep) orelse 0]).?;
         scopes.appendAssumeCapacity(.{
             .decl = u.decl,
             .def_name = try arena.dupe(u8, u.module),
@@ -674,7 +674,7 @@ fn splitPath(
     by_path: *const std.StringHashMapUnmanaged(u32),
     flat: []const u8,
 ) Error!?struct { scope: u32, local: []const u8 } {
-    const at = std.mem.lastIndexOfScalar(u8, flat, Elaborate.sep);
+    const at = std.mem.findScalarLast(u8, flat, Elaborate.sep);
     const path = if (at) |i| flat[0..i] else "";
     const scope = by_path.get(path) orelse return null;
     return .{ .scope = scope, .local = try arena.dupe(u8, if (at) |i| flat[i + 1 ..] else flat) };

@@ -453,7 +453,7 @@ fn addBits(arena: std.mem.Allocator, objects: *model.Rows, r: *const sim.digital
 /// declarations within a gen scope are not modelled yet.
 fn addGenScopes(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *model.Rows, scopes: []Building, r: *sim.digital.Run, vpi_of: []const u32) Error!void {
     const Key = struct { scope: u32, name: Ast.StrId };
-    var groups: std.AutoArrayHashMapUnmanaged(Key, std.ArrayList(u32)) = .empty;
+    var groups: std.array_hash_map.Auto(Key, std.ArrayList(u32)) = .empty;
     defer {
         for (groups.values()) |*v| v.deinit(gpa);
         groups.deinit(gpa);
