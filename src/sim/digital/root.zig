@@ -2102,8 +2102,8 @@ test netRuns {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const Row = struct { a: u32, b: u32 };
-    const rows = [_]Row{ .{ .a = 2, .b = 0 }, .{ .a = 0, .b = 2 }, .{ .a = 2, .b = 1 } };
+    const Pair = struct { a: u32, b: u32 };
+    const rows = [_]Pair{ .{ .a = 2, .b = 0 }, .{ .a = 0, .b = 2 }, .{ .a = 2, .b = 1 } };
     // Grouped by `a`: net 0 holds row 1, net 1 nothing, net 2 rows 0 and 2,
     // each run in row order.
     const by_a = try netRuns(a, 3, rows.len, &rows, struct {
