@@ -299,3 +299,35 @@ test "§26.6.26 b) vpiDecompile adds parentheses only where precedence needs the
         std.mem.span(property.vpi_get_str(root.vpiDecompile, rhs)),
     );
 }
+
+test "§26.6.26 b): an equal-precedence right operand keeps its parentheses; literals keep their base" {
+    // IEEE 1364-2005 §5.1.2: every binary operator associates left to right,
+    // `**` included, and the conditional right to left. So `a - (b - c)` and
+    // `a ** (b ** c)` need theirs, `a - b - c` none, and a conditional as a
+    // condition needs them where one as the else-branch does not.
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module t;
+        \\  reg [7:0] a, b, c;
+        \\  wire [7:0] w1, w2, w3, w4, w5;
+        \\  assign w1 = a - (b - c);
+        \\  assign w2 = a - b - c;
+        \\  assign w3 = a ** (b ** c);
+        \\  assign w4 = (a ? b : c) ? 8'sd5 : 4'hF;
+        \\  assign w5 = a ? b : c ? 4'b1x0z : 42;
+        \\endmodule
+    );
+    defer h.deinit();
+    const itr = iterate.vpi_iterate(code.vpiContAssign, handle.vpi_handle_by_name("t", null));
+    for ([_][]const u8{
+        "a - (b - c)",
+        "a - b - c",
+        "a ** (b ** c)",
+        "(a ? b : c) ? 8'sd5 : 4'hf",
+        "a ? b : c ? 4'b1x0z : 42",
+    }) |want| {
+        const assign = iterate.vpi_scan(itr) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(want, std.mem.span(property.vpi_get_str(root.vpiDecompile, handle.vpi_handle(vpiRhs, assign))));
+    }
+    try std.testing.expect(iterate.vpi_scan(itr) == null);
+}

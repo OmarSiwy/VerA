@@ -70,6 +70,12 @@ test {
     _ = value;
     _ = systf;
     _ = code;
+    _ = analog_run;
+    _ = handle;
+    _ = iterate;
+    _ = property;
+    _ = delays;
+    _ = @import("model.zig");
     _ = @import("decompile.zig");
     _ = @import("test.zig");
 }

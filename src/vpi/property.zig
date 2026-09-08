@@ -472,3 +472,27 @@ fn copyStr(s: []const u8) [*c]u8 {
 
 /// §12.12's single shared buffer. See `name_buf_len` for the ceiling.
 var str_buf: [name_buf_len]u8 = undefined;
+
+// ---------------------------------------------------------------------------
+// Tests. Properties of design rows are test.zig's.
+// ---------------------------------------------------------------------------
+
+test "IEEE 1364-2005 §26.6.6 vpiNetType: Annex G's numbers, each once, none for wreal" {
+    var seen: u32 = 0;
+    for (std.enums.values(Ast.NetKind)) |k| {
+        const t = netType(k) orelse {
+            try std.testing.expectEqual(Ast.NetKind.wreal, k);
+            continue;
+        };
+        // Annex G numbers 1-11 and 13 (12 is vpiNone).
+        try std.testing.expect(t >= 1 and t <= 13 and t != 12);
+        const bit = @as(u32, 1) << @intCast(t);
+        try std.testing.expect((seen & bit) == 0);
+        seen |= bit;
+    }
+}
+
+test "§12.18 vpi_get_real: only inside an analog task or function" {
+    try std.testing.expectEqual(@as(f64, @floatFromInt(vpiUndefined)), vpi_get_real(vpiStartTime, null));
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}

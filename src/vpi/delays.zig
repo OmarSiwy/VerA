@@ -366,3 +366,46 @@ fn noMem() bool {
     root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
     return false;
 }
+
+// ---------------------------------------------------------------------------
+// Tests. A put onto a design's gate is test.zig's (it needs a digital run).
+// ---------------------------------------------------------------------------
+
+test "IEEE 1364 §14.3.1 Tables 14-3/14-4: a path's delays over the twelve transitions" {
+    // Order: 0->1 1->0 0->z z->1 1->z z->0, then 0->x x->1 1->x x->0 x->z
+    // z->x as min into x, max out of it.
+    var out: [12]f64 = undefined;
+    for ([_]struct { []const f64, [12]f64 }{
+        .{ &.{5}, .{ 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 } },
+        .{ &.{ 1, 2 }, .{ 1, 2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1 } },
+        .{ &.{ 1, 2, 3 }, .{ 1, 2, 3, 1, 3, 2, 1, 1, 2, 2, 3, 1 } },
+        .{ &.{ 1, 2, 3, 4, 5, 6 }, .{ 1, 2, 3, 4, 5, 6, 1, 4, 2, 6, 5, 4 } },
+        .{ &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }, .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } },
+    }) |case| try std.testing.expectEqualSlices(f64, &case[1], pathDelays(case[0], &out));
+    // Any other count is not a path's, and passes through untouched.
+    const four = [_]f64{ 1, 2, 3, 4 };
+    try std.testing.expectEqualSlices(f64, &four, pathDelays(&four, &out));
+}
+
+test "Table 12-5: the element holding a delay's typical value, reject or error limit" {
+    for (0..4) |k| {
+        try std.testing.expectEqual(k, element(k, 0, 1, 1));
+        try std.testing.expectEqual(3 * k + 1, element(k, 0, 3, 1));
+        for (0..3) |p| {
+            try std.testing.expectEqual(3 * k + p, element(k, p, 1, 3));
+            try std.testing.expectEqual(9 * k + 3 * p + 1, element(k, p, 3, 3));
+        }
+    }
+}
+
+test "§12.11/§12.29: delays of a handle that is no object, or into no structure" {
+    root.close();
+    var junk: u32 = 0;
+    var d: Delay = .{ .da = null, .no_of_delays = 1, .time_type = callback.vpiScaledRealTime, .mtm_flag = 0, .append_flag = 0, .pulsere_flag = 0 };
+    vpi_get_delays(@ptrCast(&junk), &d);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    vpi_put_delays(@ptrCast(&junk), &d);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    vpi_get_delays(null, null);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+}
