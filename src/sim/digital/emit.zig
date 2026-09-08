@@ -1202,7 +1202,13 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             if (x.clamp) {
                 try self.print("            const c = ", .{});
                 const ty = try expr.selfDetermined(self, x.count);
-                try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, {}) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.signed, ty.width });
+                // §9.7.7: only a signed count can be <= 0; an unsigned one is
+                // its 64-bit magnitude, which `asInt` would read as negative
+                // from 2^63 on.
+                if (ty.signed)
+                    try self.print(";\n            const n: u64 = if ((L.asInt(c, {d}, true) orelse 0) > 0) try s.repeatCount(c, {d}, false) else 0;\n", .{ ty.width, ty.width })
+                else
+                    try self.print(";\n            const n: u64 = try s.repeatCount(c, {d}, false);\n", .{ty.width});
                 return self.print("            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.end, next });
             }
             try self.print("            const n = try s.repeatCount(", .{});
@@ -1286,14 +1292,18 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            continue :sw {d};\n", .{next});
         },
         // §10.3: a disable inside the block it names continues after it.
-        .disable_block => |b| try self.print("            try s.disable({d}, {d}, {d});\n            continue :sw {d};\n", .{
-            b.start, b.end, b.end, if (pc >= b.start and pc < b.end) b.end else next,
-        }),
+        .disable_block => |b| {
+            if (pc >= b.start and pc < b.end and hostsOthers(r, b.start, b.end)) return self.refuse(disable_inside);
+            try self.print("            try s.disable({d}, {d}, {d});\n            continue :sw {d};\n", .{
+                b.start, b.end, b.end, if (pc >= b.start and pc < b.end) b.end else next,
+            });
+        },
         // §10.3 every activation of the task ends: each inlined copy, and
         // the synchronous ones, which unwind back to their callers.
         .disable_task => |idx| {
             var after = next;
             for (r.subs.items[idx].ranges.items) |rg| {
+                if (pc >= rg.start and pc < rg.end and hostsOthers(r, rg.start, rg.end)) return self.refuse(disable_inside);
                 try self.print("            try s.disable({d}, {d}, {d});\n", .{ rg.start, rg.end, rg.end });
                 if (pc >= rg.start and pc < rg.end) after = rg.end;
             }
@@ -1383,6 +1393,27 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            s.jump = try s.returnTimed();\n            return;\n", .{});
         },
     }
+}
+
+const disable_inside = "a §10.3 disable from inside a block other processes may still be inside";
+
+/// Can another process be suspended or queued inside pcs [start, end) when a
+/// `disable` inside them runs: a §9.8.2 fork arm, a process a `pla_start`
+/// or `override_on` starts, or a §9.7.2 expression term's tracker, whose
+/// first instruction keeps its hidden slot (`compile.exprTerm`)? Then
+/// `rt.State.disable` would resume the end besides the disabling process,
+/// which `exec.disableInside` avoids and `rt` cannot yet.
+fn hostsOthers(r: *const Run, start: u32, end: u32) bool {
+    // ponytail: a refusal; `rt` exposing `stop` lets these disables be native.
+    for (r.code.items[start..end]) |ins| switch (ins) {
+        .fork, .pla_start, .override_on => return true,
+        .init_var => |x| {
+            var it = r.term_slots.valueIterator();
+            while (it.next()) |at| if (at.* == x.slot) return true;
+        },
+        else => {}, // else: every other instruction runs in the process that reaches it
+    };
+    return false;
 }
 
 /// The cell a timed task's output formal `at` waits in between its
@@ -1602,9 +1633,12 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const scale = r.timeOf(r.scope).scale;
     const t = try expr.natural(self, amount);
     if (t.real) {
-        if (compile.constantExpression(r, amount)) {
+        // A constant no tick count holds fails at run time, as the
+        // interpreter's does, through `s.realTicks`: a `return` here would
+        // sit in the argument list of the call that schedules the delay.
+        if (compile.constantExpression(r, amount)) fold: {
             const v = evaluate.evalReal(r, self.arena, amount) catch return self.refuse("a delay the engine does not fold");
-            const ticks = scale.realDelay(v) catch |e| return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
+            const ticks = scale.realDelay(v) catch break :fold;
             return self.print("{d}", .{ticks});
         }
         try self.print("try s.realTicks(", .{});
@@ -1616,12 +1650,18 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
         const v = evaluate.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
         // `--two-state` computes an unknown constant from its 0-valued leaves.
         if (self.two_state and v.hasUnknown()) break :fold;
-        const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch |e|
-            return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
+        const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch break :fold;
         return self.print("{d}", .{ticks});
     }
+    // `s.ticks` reads the 64-bit word as a time: a narrower signed delay is
+    // sign-extended to it first, so a negative one is the §9.7.1 64-bit
+    // two's complement `exec.delayOf` takes, not its own width's.
     try self.print("try s.ticks(", .{});
-    try expr.value(self, amount, t);
+    if (t.signed and t.width < 64) {
+        try self.print("L.rs(", .{});
+        try expr.value(self, amount, t);
+        try self.print(", {d}, 64, true)", .{t.width});
+    } else try expr.value(self, amount, t);
     try self.print(", {}, .{{ .local_per_unit = {d}, .global_per_local = {d} }})", .{ t.signed, scale.local_per_unit, scale.global_per_local });
 }
 
@@ -2340,10 +2380,11 @@ test "a construct that is not native names itself and embeds the interpreter" {
     try std.testing.expectEqualStrings("a real value", real_case.fallback.?);
     try std.testing.expect(std.mem.find(u8, real_case.text, "rt.interpret(") != null);
     // §15: `rt` evaluates no timing check.
-    const tchk = try emitted(a,
+    const tchk_source =
         \\module ff(input clk, input d); specify $setup(d, posedge clk, 1); endspecify endmodule
         \\module m; reg clk, d; ff u(clk, d); initial begin clk = 0; d = 0; #1 clk = 1; end endmodule
-    , .static, .auto);
+    ;
+    const tchk = try emitted(a, tchk_source, .static, .auto);
     try std.testing.expectEqualStrings("IEEE 1364-2005 §15 timing checks", tchk.fallback.?);
 }
 
@@ -2379,10 +2420,11 @@ test "§10.3 a disable from inside a fork, whose other arms may be suspended, ru
     // the disabling arm continues there too: the interpreter resumes it once.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const p = try emitted(arena.allocator(),
+    const source =
         \\`timescale 1ns/1ns
         \\module m; initial begin fork : f #1 $display("a"); #2 disable f; join $display("after"); end endmodule
-    , .static, .auto);
+    ;
+    const p = try emitted(arena.allocator(), source, .static, .auto);
     try std.testing.expectEqualStrings("a §10.3 disable from inside a block other processes may still be inside", p.fallback.?);
 }
 
