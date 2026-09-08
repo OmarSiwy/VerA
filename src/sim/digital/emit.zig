@@ -2311,6 +2311,81 @@ fn dynamicFormat(self: *Emitter, args: []const Ast.ExprId) Error!void {
     try self.print("            try s.endFormat(&f{d}, \"{f}\", \"{f}\");\n            }}\n            }}\n", .{ lb, scope, lib });
 }
 
+/// Test helper: `source` elaborated, its transcript discarded, and emitted
+/// as `vera --emit-exe` would under `schedule` and `logic`. In `arena`.
+fn emitted(arena: std.mem.Allocator, source: []const u8, schedule: Schedule, logic: Logic) !Program {
+    var bag = @import("diag").Bag.init(arena);
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try root.elaborate(arena, source, .{}, &bag, &sink.writer);
+    return program(arena, &r, .{ .source = source, .file_name = "<digital>", .include_dirs = &.{}, .language = Front.token.default_keyword_set }, schedule, logic);
+}
+
+test program {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Every instruction native: no fallback, an `rt` main.
+    const p = try emitted(a, "module m; reg a; initial begin a = 1'b0; #1 a = 1'b1; $display(\"%b\", a); end endmodule", .static, .auto);
+    try std.testing.expectEqual(@as(?[]const u8, null), p.fallback);
+    try std.testing.expect(std.mem.find(u8, p.text, "pub fn main(") != null);
+    try std.testing.expect(std.mem.find(u8, p.text, "rt.interpret(") == null);
+}
+
+test "a construct that is not native names itself and embeds the interpreter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // §9.5 over a real: a `logic.T` holds no real.
+    const real_case = try emitted(a, "module m; real r; initial begin r = 1.0; case (r) 1.0: $display(\"one\"); endcase end endmodule", .static, .auto);
+    try std.testing.expectEqualStrings("a real value", real_case.fallback.?);
+    try std.testing.expect(std.mem.find(u8, real_case.text, "rt.interpret(") != null);
+    // §15: `rt` evaluates no timing check.
+    const tchk = try emitted(a,
+        \\module ff(input clk, input d); specify $setup(d, posedge clk, 1); endspecify endmodule
+        \\module m; reg clk, d; ff u(clk, d); initial begin clk = 0; d = 0; #1 clk = 1; end endmodule
+    , .static, .auto);
+    try std.testing.expectEqualStrings("IEEE 1364-2005 §15 timing checks", tchk.fallback.?);
+}
+
+test "--two-state refuses an x that carries meaning; auto keeps it 4-state and says why" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "module m; reg a; initial #1 if (a === 1'bx) $display(\"x\"); endmodule";
+    const why = "`===` or `!==` against an x or z, which asks whether a value is unknown";
+    const two = try emitted(a, source, .static, .two);
+    try std.testing.expectEqualStrings(why, two.fallback.?);
+    const auto = try emitted(a, source, .static, .auto);
+    try std.testing.expectEqual(@as(?[]const u8, null), auto.fallback);
+    try std.testing.expectEqualStrings(why, auto.four.?.why);
+}
+
+test device {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var bag = @import("diag").Bag.init(a);
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try root.elaborate(a, "module m(output reg q); initial assign q = 1'b1; endmodule", .{}, &bag, &sink.writer);
+    const why = switch (try device(a, &r, "<digital>", .static)) {
+        .refused => |w| w,
+        .zig => "native",
+    };
+    try std.testing.expectEqualStrings("a §9.3 procedural continuous assignment (assign or force)", why);
+}
+
+test "§10.3 a disable from inside a fork, whose other arms may be suspended, runs on the interpreter" {
+    // `rt.State.disable` resumes the block's end when it ended a sibling, and
+    // the disabling arm continues there too: the interpreter resumes it once.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const p = try emitted(arena.allocator(),
+        \\`timescale 1ns/1ns
+        \\module m; initial begin fork : f #1 $display("a"); #2 disable f; join $display("after"); end endmodule
+    , .static, .auto);
+    try std.testing.expectEqualStrings("a §10.3 disable from inside a block other processes may still be inside", p.fallback.?);
+}
+
 fn flush(self: *Emitter, text: *std.ArrayList(u8)) Error!void {
     if (text.items.len == 0) return;
     try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(text.items)});

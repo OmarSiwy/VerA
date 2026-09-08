@@ -1203,6 +1203,66 @@ test "nested expressions preserve NBA snapshot and evaluate delay at suspension"
     , "nested-nba 1000\n");
 }
 
+test "§9.6 an x count repeats nothing, a real count rounds (§4.8.2)" {
+    // n: 0 for the x count, 0 for the zero count, 3 for the count 3, and 3
+    // for 2.5 rounded away from zero.
+    try expectRun(
+        \\module m; integer n;
+        \\initial begin
+        \\  n = 0; repeat (1'bx) n = n + 1; repeat (0) n = n + 1; repeat (3) n = n + 1; $display("%0d", n);
+        \\  n = 0; repeat (2.5) n = n + 1; $display("%0d", n);
+        \\end
+        \\endmodule
+    , "3\n3\n");
+}
+
+test "§9.5 case matches x and z exactly, casez/casex take them as wildcards, the first matching arm wins" {
+    // case (2'bx1): 2'b01 differs in an x bit, 2'bx1 matches it exactly.
+    // casez: the scrutinee's z bit is a wildcard, 1?01 matches 1101.
+    // casex: its x bit is one, 1?01 matches 1001.
+    // 2'b10 matches the first label of the first arm; 2'b11 matches no arm
+    // and there is no default, so nothing runs.
+    try expectRun(
+        \\module m;
+        \\initial begin
+        \\  case (2'bx1) 2'b01: $display("no"); 2'bx1: $display("x1"); default: $display("default"); endcase
+        \\  casez (4'b1z01) 4'b1101: $display("z-wild"); default: $display("no"); endcase
+        \\  casex (4'b1x01) 4'b1001: $display("x-wild"); default: $display("no"); endcase
+        \\  case (2'b10) 2'b10, 2'b1x: $display("first"); 2'b10: $display("second"); endcase
+        \\  case (2'b11) 2'b00: $display("no"); endcase
+        \\  $display("end");
+        \\end
+        \\endmodule
+    , "x1\nz-wild\nx-wild\nfirst\nend\n");
+}
+
+test "§10.3 disabling a fork from one of its arms ends the others and resumes the parent once" {
+    // t=1 the first arm prints; t=2 the third disables f, which ends the
+    // second (due at t=3), and "execution continues with the statement
+    // following the block" once: `after 2`, a single time.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\initial begin
+        \\  fork : f
+        \\    #1 $display("a %0d", $time);
+        \\    #3 $display("b %0d", $time);
+        \\    #2 disable f;
+        \\  join
+        \\  $display("after %0d", $time);
+        \\end
+        \\endmodule
+    , "a 1\nafter 2\n");
+}
+
+test "§17.4.1 $finish reports by its argument; an x argument reports" {
+    try expectRun("module m; initial $finish(0); endmodule", "");
+    const source = "module m; initial $finish(1'bx); endmodule";
+    const offset = std.mem.find(u8, source, "$finish").?;
+    var expected: [128]u8 = undefined;
+    try expectRun(source, try std.mem.print(&expected, "$finish at tick 0, <digital> byte {d}\n", .{offset}));
+}
+
 test "repeat accepts all 64 count bits and finish stops without an iteration clamp" {
     try expectRun("module m; initial repeat(64'hffffffffffffffff) begin $display(\"first\"); $finish(0); end endmodule", "first\n");
     try expectRun("module m; integer i; initial begin i=0; while(i<70001) i=i+1; $display(\"%b\",i); end endmodule", "00000000000000010001000101110001\n");
