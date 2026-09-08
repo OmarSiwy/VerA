@@ -858,6 +858,45 @@ const StmtReads = struct {
     pub fn stmt(_: *StmtReads, _: Ast.StmtId) Error!void {}
 };
 
+/// Test helper: the `.auto` executable root of `source` under `schedule`.
+fn emitted(arena: std.mem.Allocator, source: []const u8, schedule: Schedule) ![]const u8 {
+    var bag = @import("diag").Bag.init(arena);
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try @import("root.zig").elaborate(arena, source, .{}, &bag, &sink.writer);
+    const p = try emit.program(arena, &r, .{ .source = source, .file_name = "<digital>", .include_dirs = &.{}, .language = @import("frontend").token.default_keyword_set }, schedule, .auto);
+    try std.testing.expectEqual(@as(?[]const u8, null), p.fallback);
+    return p.text;
+}
+
+test build {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A plain driver nothing waits on is a node of the settle event under
+    // `static`, and stays a queued driver under `fifo`.
+    const comb = "module m; reg a, b; wire w; assign w = a & b; initial begin a = 0; b = 1; #1 a = 1; end endmodule";
+    try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .static), "fn settle(") != null);
+    try std.testing.expect(std.mem.find(u8, try emitted(a, comb, .fifo), "fn settle(") == null);
+    // One whose output a general process's event control waits on stays
+    // queued: a settle event would change it before a process started in
+    // between ran. (`initial @(w)` stops after one pass, so it is general,
+    // not a triggered process the watcher table wakes.)
+    const waited = "module m; reg a; wire w; assign w = a; initial begin a = 0; #1 a = 1; end initial @(w) $display(\"%b\", w); endmodule";
+    try std.testing.expect(std.mem.find(u8, try emitted(a, waited, .static), "fn settle(") == null);
+}
+
+test stepLocal {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // o (slot 0, one word) is written whole before each read in its one
+    // activation, so its value at a step boundary is never read: dead.
+    try std.testing.expect(std.mem.find(u8, try emitted(a, "module m; reg [7:0] o; initial begin #1 o = 8'd3; o = o + 1; end endmodule", .static), "    .dead = &.{ .{ 0, 1 }, },\n") != null);
+    // The always reads o before writing it in every activation after its
+    // delay: live, and nothing is dead.
+    try std.testing.expect(std.mem.find(u8, try emitted(a, "module m; reg [7:0] o; initial o = 8'd0; always #1 o = o + 1; endmodule", .static), "    .dead = &.{ },\n") != null);
+}
+
 /// Append every slot `e` reads, a function call's result among them.
 fn exprReads(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!bool {
     if (e == .none) return true;

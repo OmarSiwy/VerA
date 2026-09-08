@@ -26,6 +26,8 @@ pub const Ctx = struct {
 /// The libraries of `file`'s modules and configs: each is its source file's
 /// (`opts.lib`, then `opts.more[k].lib` from `more_starts[k]` on). Also the
 /// search order, and W1152 for each cell a later same-named one replaces.
+/// Sets `r.def_lib`, `r.cfg_lib` and `r.search`, all in `r.arena`; must run
+/// before `top` or `child`.
 pub fn libraries(r: *Run, file: *Ast.SourceFile, opts: root.Options, more_starts: []const u32) Error!void {
     const arena = r.arena;
     const libs = try arena.alloc(Ast.StrId, 1 + opts.more.len);
@@ -38,7 +40,7 @@ pub fn libraries(r: *Run, file: *Ast.SourceFile, opts: root.Options, more_starts
     var order: std.ArrayList(Ast.StrId) = try .initCapacity(arena, if (opts.search.len != 0) opts.search.len else libs.len);
     if (opts.search.len != 0) {
         for (opts.search) |s| order.appendAssumeCapacity(try file.intern(arena, s));
-    } else for (libs) |l| if (std.mem.indexOfScalar(Ast.StrId, order.items, l) == null) order.appendAssumeCapacity(l);
+    } else for (libs) |l| if (std.mem.findScalar(Ast.StrId, order.items, l) == null) order.appendAssumeCapacity(l);
     r.def_lib = def_lib;
     r.cfg_lib = cfg_lib;
     r.search = order.items;
@@ -157,7 +159,9 @@ fn isModule(r: *const Run, name: Ast.StrId) bool {
 }
 
 /// §13.3 the module `inst`, declared in instance scope `parent`, binds to,
-/// and the `Ctx` its own children bind under.
+/// and the `Ctx` its own children bind under. Fails, with the library list
+/// it searched named, when no library holds the cell; E0243 for an instance
+/// clause reaching inside another config's hierarchy (§13.3.2).
 pub fn child(r: *Run, parent: u32, inst: *const Ast.Instance) Error!struct { def: u32, ctx: Ctx } {
     const up = r.binds.get(r.instanceOf(parent)) orelse Ctx{};
     const ci = up.cfg orelse return .{ .def = try search(r, r.search, inst.module, inst.main_tok), .ctx = .{} };
@@ -220,4 +224,39 @@ pub fn child(r: *Run, parent: u32, inst: *const Ast.Instance) Error!struct { def
 fn subConfig(r: *const Run, lib: Ast.StrId, name: Ast.StrId) ?u32 {
     for (r.file.configs, r.cfg_lib, 0..) |c, l, i| if (c.name == name and l == lib) return @intCast(i);
     return null;
+}
+
+const expectRun = root.expectRun;
+const expectRejected = root.expectRejected;
+
+test "§13.3.1.3/§13.3.1.4 an instance clause and a cell clause bind the cell their use names" {
+    // top.u is named by the instance clause; top.w falls to the default, the
+    // parent cell's library work, where leaf is leaf.
+    try expectRun(
+        \\config cfg; design top; instance top.u use other; endconfig
+        \\module leaf; initial $display("leaf %m"); endmodule
+        \\module other; initial $display("other %m"); endmodule
+        \\module top; leaf u(); leaf w(); endmodule
+    , "other top.u\nleaf top.w\n");
+    // A cell clause selects every instance of the cell.
+    try expectRun(
+        \\config cfg; design top; cell leaf use other; endconfig
+        \\module leaf; initial $display("leaf %m"); endmodule
+        \\module other; initial $display("other %m"); endmodule
+        \\module top; leaf u(); leaf w(); endmodule
+    , "other top.u\nother top.w\n");
+}
+
+test "§13.2.1.1 the last same-named cell of a library is the one bound" {
+    try expectRun(
+        \\module leaf; initial $display("first"); endmodule
+        \\module leaf; initial $display("second"); endmodule
+        \\module top; leaf u(); endmodule
+    , "second\n");
+}
+
+test "§13.4.4 a design names an existing cell, and one configuration is unreferenced" {
+    try expectRejected("config cfg; design nope; endconfig module top; endmodule", "holds no cell `nope`");
+    try expectRejected("config a; design top; endconfig config b; design top; endconfig module top; endmodule", "are both unreferenced");
+    try expectRejected("module top; nope u(); endmodule", "no library of the search order (work) holds cell `nope`");
 }

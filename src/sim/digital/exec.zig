@@ -5,9 +5,10 @@
 //! (expressions), `waiters.zig` (the write path and what it wakes) and
 //! `resolution.zig` (nets); this file owns the payload rows, the process
 //! control and the subroutine activations.
-//! Clauses: IEEE 1364-2005 §6.1/§6.1.3, §9.5.1, §9.7.1, §9.8.2, §10.2.2,
-//! §10.2.3, §10.3, §17.1.2, §17.1.3; §8.5.3.3/§8.5.3.4 intra-assignment
-//! timing.
+//! Clauses: IEEE 1364-2005 §6.1/§6.1.3, §8.5.3.3/§8.5.3.4 intra-assignment
+//! timing, §9.3, §9.5/§9.5.1, §9.6, §9.7.1, §9.7.5 to §9.7.7, §9.8.2,
+//! §10.2.2, §10.2.3, §10.3, §10.4.2, §17.1.2, §17.1.3, §17.3.2, §17.4.1;
+//! VAMS §7.3.6.1 A2D events.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -33,10 +34,13 @@ const waiters = @import("waiters.zig");
 /// One scheduled event's payload, consumed whole by its dispatch. A `.write`
 /// value lives in its row's own planes (`Row`), never in variable storage.
 pub const Pending = union(enum) {
+    /// Run the process continuing at this pc, outside any §10.2.3 activation.
     run_process: u32,
     /// A resumption inside a §10.2.3 task activation (`Run.acts`): `pc`
     /// runs with activation `ctx`'s storage resident.
     @"resume": struct { pc: u32, ctx: u32 },
+    /// §9.2.2 a nonblocking update landing: `value` into slot `target`, or
+    /// into its `sel` bits only (merged with the slot as it is then).
     write: struct { target: u32, value: Int.Literal, sel: ?evaluate.Sel = null },
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs,
     /// not when the call executed, so it reports the settled value.
@@ -207,10 +211,20 @@ fn claim(self: *Run, item: Pending) Error!u32 {
 /// was dropped, resumes at `end`: a block nobody is suspended in has no
 /// activity, and resuming there would run the tail of a body twice. The
 /// executing process's own jump past the block is its dispatch arm's.
-// ponytail: an NBA already scheduled from inside the block still lands; it is
-// a write the block completed before it was disabled.
 fn disableRange(self: *Run, start: u32, end: u32) Error!void {
+    // ponytail: an NBA already scheduled from inside the block still lands; it
+    // is a write the block completed before it was disabled.
     if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
+}
+
+/// `disableRange` by a process running inside [start, end) itself, which
+/// continues at `end` on its own unless another process inside was ended:
+/// then one resumption at `end` is queued and true says the caller stops,
+/// so the statement after the block runs once, not once per process.
+fn disableInside(self: *Run, start: u32, end: u32) Error!bool {
+    if (!try stopRange(self, start, end)) return false;
+    _ = try enqueue(self, .{ .run_process = end }, null, false);
+    return true;
 }
 
 /// Drop every resumption point in [start, end): the waiters parked there and
@@ -283,9 +297,11 @@ const max_sync_stack = 4 << 20;
 /// reads the calling activation), copied into the formals, the body runs on a
 /// scratch arena of its own, and the outputs are copied back. An automatic
 /// subroutine's frame is saved, set to x, and restored after (§10.2.3, §10.4.2).
-// ponytail: `repeat` counters are per site, so a recursive body that loops
-// with `repeat` across its own recursion shares one.
+/// Fails past 1024 nested activations or 4 MiB of host stack. After a
+/// §10.3 `disable` of the subroutine, outputs are not copied back.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
+    // ponytail: `repeat` counters are per site, so a recursive body that loops
+    // with `repeat` across its own recursion shares one.
     // §10.4.5: a constant function call folded before pass two compiles the
     // bodies (a generate condition calling a function already framed).
     if (!self.subs.items[idx].compiled) {
@@ -390,9 +406,10 @@ fn callTimed(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprI
         try evict(self, idx);
         for (f.first..f.first + f.count) |s| {
             const v = self.values[s];
-            const fill: u64 = if (self.reals.contains(@intCast(s))) 0 else std.math.maxInt(u64);
-            @memset(v.values(), fill);
-            @memset(v.unknowns(), fill);
+            // `filled` keeps the bits past the width 0, as every slot's are;
+            // a whole-word memset left them set.
+            const fill: Int.Bit = if (self.reals.contains(@intCast(s))) .zero else .x;
+            @memcpy(v.planes, (try filled(a, v.width, v.signed, fill)).planes);
         }
         sub.resident = id;
     }
@@ -712,7 +729,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                         if (x.slice) |sl| {
                             const whole = try evaluate.eval(self, scratch, x.e, sl.total);
                             const part = try filled(scratch, d.current.width, false, .z);
-                            for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
+                            evaluate.copyBits(part, 0, whole, sl.lo, d.current.width);
                             break :blk part;
                         }
                         break :blk try evaluate.evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
@@ -874,23 +891,32 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             .disable_task => |idx| {
                 const sub = &self.subs.items[idx];
                 var next = pc + 1;
+                var resumed = false;
                 for (sub.ranges.items) |rg| {
-                    try disableRange(self, rg.start, rg.end);
-                    if (pc >= rg.start and pc < rg.end) next = rg.end;
+                    if (pc >= rg.start and pc < rg.end) {
+                        next = rg.end;
+                        if (try disableInside(self, rg.start, rg.end)) resumed = true;
+                    } else try disableRange(self, rg.start, rg.end);
                 }
                 if (sub.active != 0) {
                     self.unwind = idx;
                     return;
                 }
+                if (resumed) return;
                 pc = next;
                 continue;
             },
             .disable_block => |b| {
-                try disableRange(self, b.start, b.end);
+                const inside = pc >= b.start and pc < b.end;
+                const resumed = if (inside) try disableInside(self, b.start, b.end) else blk: {
+                    try disableRange(self, b.start, b.end);
+                    break :blk false;
+                };
                 if (self.done_hook) |h| if (self.done_sites.contains(pc)) try h(self, pc);
+                if (resumed) return;
                 // IEEE1364 §10.3: self/ancestor disable resumes AFTER the
                 // target block, while a sibling disable continues here.
-                pc = if (pc >= b.start and pc < b.end) b.end else pc + 1;
+                pc = if (inside) b.end else pc + 1;
                 continue;
             },
             .restart => |s| {
@@ -972,11 +998,6 @@ test "§9.5.1 casez/casex per plane word agree with the per-bit wildcard rule" {
     };
 }
 
-// §4.8.2 rounds a real into an integer (35.5 is 36, -1.5 is -2) and $rtoi
-// truncates; an integral operand makes a real one real; a real starts at 0.0;
-// a wreal follows its driver and a -0.0 is no change from 0.0.
-// §9.3: a force outranks an assign on the same variable, and releasing it
-// hands the variable back to the assign, which is still tracking.
 test "§9.8.2 fork starts every arm at once and join waits for the last" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -1180,7 +1201,7 @@ test "disable self allows later reentry and inactive sibling stays inactive" {
 
 test "finish verbosity reports exact local precision ticks and mapped source" {
     const source = "`timescale 1ns/1ps\nmodule m; initial #1 $finish; endmodule";
-    const offset = std.mem.indexOf(u8, source, "$finish").?;
+    const offset = std.mem.find(u8, source, "$finish").?;
     var expected: [128]u8 = undefined;
     try expectRun(source, try std.mem.print(&expected, "$finish at tick 1000, <digital> byte {d}\n", .{offset}));
 }
@@ -1200,6 +1221,66 @@ test "nested expressions preserve NBA snapshot and evaluate delay at suspension"
         \\end
         \\endmodule
     , "nested-nba 1000\n");
+}
+
+test "§9.6 an x count repeats nothing, a real count rounds (§4.8.2)" {
+    // n: 0 for the x count, 0 for the zero count, 3 for the count 3, and 3
+    // for 2.5 rounded away from zero.
+    try expectRun(
+        \\module m; integer n;
+        \\initial begin
+        \\  n = 0; repeat (1'bx) n = n + 1; repeat (0) n = n + 1; repeat (3) n = n + 1; $display("%0d", n);
+        \\  n = 0; repeat (2.5) n = n + 1; $display("%0d", n);
+        \\end
+        \\endmodule
+    , "3\n3\n");
+}
+
+test "§9.5 case matches x and z exactly, casez/casex take them as wildcards, the first matching arm wins" {
+    // case (2'bx1): 2'b01 differs in an x bit, 2'bx1 matches it exactly.
+    // casez: the scrutinee's z bit is a wildcard, 1?01 matches 1101.
+    // casex: its x bit is one, 1?01 matches 1001.
+    // 2'b10 matches the first label of the first arm; 2'b11 matches no arm
+    // and there is no default, so nothing runs.
+    try expectRun(
+        \\module m;
+        \\initial begin
+        \\  case (2'bx1) 2'b01: $display("no"); 2'bx1: $display("x1"); default: $display("default"); endcase
+        \\  casez (4'b1z01) 4'b1101: $display("z-wild"); default: $display("no"); endcase
+        \\  casex (4'b1x01) 4'b1001: $display("x-wild"); default: $display("no"); endcase
+        \\  case (2'b10) 2'b10, 2'b1x: $display("first"); 2'b10: $display("second"); endcase
+        \\  case (2'b11) 2'b00: $display("no"); endcase
+        \\  $display("end");
+        \\end
+        \\endmodule
+    , "x1\nz-wild\nx-wild\nfirst\nend\n");
+}
+
+test "§10.3 disabling a fork from one of its arms ends the others and resumes the parent once" {
+    // t=1 the first arm prints; t=2 the third disables f, which ends the
+    // second (due at t=3), and "execution continues with the statement
+    // following the block" once: `after 2`, a single time.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\initial begin
+        \\  fork : f
+        \\    #1 $display("a %0d", $time);
+        \\    #3 $display("b %0d", $time);
+        \\    #2 disable f;
+        \\  join
+        \\  $display("after %0d", $time);
+        \\end
+        \\endmodule
+    , "a 1\nafter 2\n");
+}
+
+test "§17.4.1 $finish reports by its argument; an x argument reports" {
+    try expectRun("module m; initial $finish(0); endmodule", "");
+    const source = "module m; initial $finish(1'bx); endmodule";
+    const offset = std.mem.find(u8, source, "$finish").?;
+    var expected: [128]u8 = undefined;
+    try expectRun(source, try std.mem.print(&expected, "$finish at tick 0, <digital> byte {d}\n", .{offset}));
 }
 
 test "repeat accepts all 64 count bits and finish stops without an iteration clamp" {
