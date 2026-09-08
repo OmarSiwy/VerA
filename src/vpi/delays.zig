@@ -251,7 +251,10 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     // IEEE 1364 §7.14's derivations for the delays not given.
     if (n < 2) ticks[1] = ticks[0];
     if (n < 3) ticks[2] = @min(ticks[0], ticks[1]);
-    const scope = o.owner.get() orelse 0;
+    // Drivers are keyed by the ENGINE's instance scope, which a lexical engine
+    // scope (a generate iteration, a task frame) can set apart from the
+    // model's scope index.
+    const scope = root.design.?.scopes[o.owner.get() orelse 0].engine;
     var hit = false;
     for (r.drivers) |*drv| {
         if (drv.tok != o.src_tok or drv.scope != scope) continue;

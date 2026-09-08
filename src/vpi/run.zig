@@ -182,7 +182,10 @@ fn earliest(a: ?u64, b: ?u64) ?u64 {
 fn scale(obj: vpiHandle) ?sim.time.Scale {
     const r = engine orelse return null;
     const o = root.asObj(obj) orelse return r.scale;
-    return r.timeOf(if (o.kind == .module) o.scope else o.owner.get() orelse 0).scale;
+    // `timeOf` takes the ENGINE's scope id, which a lexical engine scope (a
+    // generate iteration, a task frame) can set apart from the model's index.
+    const sc = if (o.kind == .module) o.scope else o.owner.get() orelse 0;
+    return r.timeOf(root.design.?.scopes[sc].engine).scale;
 }
 
 /// A §12.15 time structure as engine ticks. vpiSimTime is ticks already.
@@ -200,7 +203,13 @@ pub fn ticksOf(t: Time, obj: vpiHandle) ?u64 {
         root.fail("BADTIME", "{d} cannot be represented in engine ticks", .{t.real});
         return null;
     };
-    return @intFromFloat(@round(t.real));
+    const ticks = @round(t.real);
+    // A tick count is a u64: 2^64 and past are no tick this run reaches.
+    if (ticks >= 18446744073709551616.0) {
+        root.fail("BADTIME", "{d} is past the last engine tick", .{t.real});
+        return null;
+    }
+    return @intFromFloat(ticks);
 }
 
 /// Fill `t` with the current time in the format `t.type` names: §12.15
@@ -419,8 +428,14 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
                 return e;
             };
             q.* = .{ .time = t };
+            // Interned only once it is also live: an entry `asQueue` refused
+            // would be handed out by every later iteration.
+            queue_live.put(gpa, @intFromPtr(q), q) catch |e| {
+                gpa.destroy(q);
+                _ = queues.remove(t);
+                return e;
+            };
             entry.value_ptr.* = q;
-            try queue_live.put(gpa, @intFromPtr(q), q);
         }
         out.appendAssumeCapacity(@ptrCast(entry.value_ptr.*));
     }

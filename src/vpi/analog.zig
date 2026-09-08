@@ -529,6 +529,7 @@ fn analogString(buf: *[64]u8, x: f64, format: c_int, chose: *c_int) ?[*:0]u8 {
 /// exponent digits. Zig's `{e}` rounds correctly and spells the exponent
 /// bare (`2.5e-3`), so only the exponent is re-spelled.
 fn printfE(buf: *[64]u8, x: f64, prec: usize) ?[:0]const u8 {
+    if (!std.math.isFinite(x)) return nonFinite(buf, x);
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.[1]}", .{ x, prec }) catch return null;
     const at = std.mem.findScalar(u8, raw, 'e') orelse return null;
@@ -544,6 +545,11 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
     if (x == 0) {
         chose.* = vpiDecStrVal;
         return std.mem.printSentinel(buf, "0", .{}, 0) catch null;
+    }
+    // An infinity or NaN has no exponent to choose a style by.
+    if (!std.math.isFinite(x)) {
+        chose.* = vpiDecStrVal;
+        return nonFinite(buf, x);
     }
     var tmp: [64]u8 = undefined;
     const raw = std.mem.print(&tmp, "{e:.5}", .{x}) catch return null;
@@ -567,6 +573,15 @@ fn printfG(buf: *[64]u8, x: f64, chose: *c_int) ?[:0]const u8 {
         fixed = std.mem.trimEnd(u8, fixed, ".");
     }
     return std.mem.printSentinel(buf, "{s}", .{fixed}, 0) catch null;
+}
+
+// C11 7.21.6.1's spelling of an infinity or a NaN under %e and %g: `[-]inf`,
+// `[-]nan`, the sign from the sign bit. Zig's `{e}` writes the same words but
+// has no exponent for the callers above to re-spell.
+fn nonFinite(buf: *[64]u8, x: f64) ?[:0]const u8 {
+    const word: []const u8 = if (std.math.isNan(x)) "nan" else "inf";
+    const sign: []const u8 = if (std.math.signbit(x)) "-" else "";
+    return std.mem.printSentinel(buf, "{s}{s}", .{ sign, word }, 0) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -662,11 +677,14 @@ fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv
     // This call's outputs start over: an argument calltf does not put keeps
     // its value (`deviceOut`).
     if (call_outs[k] != 0) {
-        if (outs[k] == null) outs[k] = .{
-            .buf = gpa.alloc(f64, n * (n + 1)) catch return oom(),
-            .put = gpa.alloc(bool, n) catch return oom(),
-            .n = n,
-        };
+        if (outs[k] == null) {
+            const buf = gpa.alloc(f64, n * (n + 1)) catch return oom();
+            const put = gpa.alloc(bool, n) catch {
+                gpa.free(buf);
+                return oom();
+            };
+            outs[k] = .{ .buf = buf, .put = put, .n = n };
+        }
         const rec = outs[k].?;
         // One call site always passes the same arguments.
         std.debug.assert(rec.n == n);
