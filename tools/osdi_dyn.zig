@@ -56,6 +56,11 @@
 //!
 //! Host-only: never imported by the device text, so the device stays
 //! GPU-compilable.
+//!
+//! Clauses: LRM §3.4 (parameters, shape refusal), §4.6.4 and §4.6.4.6 (noise),
+//! §5.4.2 (a switched-off branch's flow collapses), §6.3.6 (`$mfactor`),
+//! §9.15 (`$simparam`), §9.17.3 (limiting and seeds), §9.19
+//! (`$port_connected`).
 
 /// Opt into the contract's conformance checks (AGENTS.md §6).
 pub const vera_validate_contract = true;
@@ -206,10 +211,12 @@ const osdi_descriptor_size: u32 = @sizeOf(Descriptor);
 /// ngspice writes its logger here when it loads the library (INIT_CALLBACK).
 var osdi_log: ?*const fn (?*anyopaque, [*:0]const u8, u32) callconv(.c) void = null;
 
+/// Sends `msg` and a newline to the simulator's logger at level `lvl`; does
+/// nothing before the simulator installed one.
 fn log(handle: ?*anyopaque, lvl: u32, msg: []const u8) void {
     const f = osdi_log orelse return;
     var buf: [1024]u8 = undefined;
-    const z = std.fmt.bufPrintSentinel(&buf, "{s}\n", .{msg}, 0) catch return;
+    const z = std.mem.printSentinel(&buf, "{s}\n", .{msg}, 0) catch return;
     f(handle, z.ptr, lvl);
 }
 
@@ -245,6 +252,10 @@ fn cName(comptime s: []const u8) [:0]const u8 {
     }
 }
 
+/// The OSDI 0.4 host of device `D`: its descriptor (`descriptors`) and the
+/// C callbacks the descriptor names, over the `Model` and `Instance` blobs
+/// the simulator allocates (`model_size`, `instance_size`) and fills through
+/// `access` before `setup_model` and `setup_instance`.
 fn Osdi(comptime D: type, comptime name: []const u8) type {
     @setEvalBranchQuota(10_000_000);
     return struct {
@@ -283,7 +294,7 @@ fn Osdi(comptime D: type, comptime name: []const u8) type {
             var ps: []const Param = &.{};
             const s = @typeInfo(D.Model).@"struct";
             for (s.field_names, s.field_types) |f, T| {
-                if (std.mem.indexOf(u8, f, "__") != null or std.mem.eql(u8, f, "su") or std.mem.eql(u8, f, "su_ok")) continue;
+                if (std.mem.find(u8, f, "__") != null or std.mem.eql(u8, f, "su") or std.mem.eql(u8, f, "su_ok")) continue;
                 const k: Kind = switch (@typeInfo(T)) {
                     .float => .real,
                     .int => .int,

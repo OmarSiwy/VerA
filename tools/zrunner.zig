@@ -1,6 +1,9 @@
 //! zrunner: the test runner for every module's test artifact (`zig build
 //! test`); runs the tests and prints a per-module report to stdout. Set
 //! `CLICOLOR_FORCE` for colour when the build captures the output.
+//!
+//! Every test runs on a fresh `std.testing.allocator` and `std.testing.io`,
+//! as the stock 0.17 runner sets them up. Clauses: none (tooling).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -59,8 +62,8 @@ fn fuzzOne(
 /// Runs this artifact's tests (`run`). Its own allocations are leak-checked:
 /// a leak in the runner itself is `unreachable`.
 pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .{};
-    defer if (gpa.deinit() == .leak) unreachable;
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+    defer if (gpa.deinit() != 0) unreachable;
 
     var threaded: std.Io.Threaded = .init(gpa.allocator(), .{ .environ = init.environ });
     defer threaded.deinit();
@@ -152,7 +155,7 @@ fn writeTestResults(
     report: Report,
 ) !void {
     const alloc = arena.allocator();
-    var grouped_tests: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(TestResult)) = .empty;
+    var grouped_tests: std.StringHashMapUnmanaged(std.ArrayList(TestResult)) = .empty;
     for (report.test_results) |test_result| {
         const gop = try grouped_tests.getOrPut(alloc, test_result.@"test"().namespace);
         if (gop.found_existing) {
@@ -191,9 +194,9 @@ const Test = struct {
         // Possible templates of full test name are expected:
         //  - "<namespace>.test.<test name>"
         //  - "<namespace>.decltest.<test name>"
-        const names = if (std.mem.indexOf(u8, test_fn.name, ".test.")) |idx|
+        const names = if (std.mem.find(u8, test_fn.name, ".test.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 6 ..] }
-        else if (std.mem.indexOf(u8, test_fn.name, ".decltest.")) |idx|
+        else if (std.mem.find(u8, test_fn.name, ".decltest.")) |idx|
             .{ test_fn.name[0..idx], test_fn.name[idx + 10 ..] }
         else
             .{ "", test_fn.name };
