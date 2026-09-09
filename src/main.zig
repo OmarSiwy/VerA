@@ -659,3 +659,80 @@ pub fn report(bag: *diag.Bag, w: *Io.Writer, json: bool, color: bool) !void {
     }
     try w.flush();
 }
+
+// ---------------------------------------------------------------------------
+// Tests. The CLI's own files are pulled in here, the module's root.
+// ---------------------------------------------------------------------------
+
+test {
+    _ = args;
+    _ = digital_cli;
+}
+
+test engineCache {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const join = std.fs.path.join;
+    var env: std.process.Environ.Map = .init(gpa);
+    defer env.deinit();
+    // Nothing set: the work directory's own cache, `.` without one.
+    try std.testing.expectEqualStrings(try join(a, &.{ ".", ".zig-cache" }), try engineCache(a, &env, null));
+    try std.testing.expectEqualStrings(try join(a, &.{ "wd", ".zig-cache" }), try engineCache(a, &env, "wd"));
+    // Each variable outranks the ones set before it, as Zig's own lookup.
+    try env.put("LOCALAPPDATA", "/l");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/l", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("HOME", "/h");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/h", ".cache", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("XDG_CACHE_HOME", "/x");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/x", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("ZIG_GLOBAL_CACHE_DIR", "/g");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/g", "vera-engine" }), try engineCache(a, &env, "wd"));
+}
+
+test readFailed {
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    // 64 MiB is 67108864 bytes.
+    try readFailed(&w, "big.va", error.StreamTooLong);
+    try readFailed(&w, "gone.va", error.FileNotFound);
+    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 67108864 bytes; see `vera --explain E1013`\n" ++
+        "error: cannot read `gone.va`: FileNotFound\n", w.buffered());
+}
+
+test compileFailed {
+    const gpa = std.testing.allocator;
+    var bag: diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    // A diagnosed failure is the bag's to explain: no error name, still 1.
+    try std.testing.expectEqual(@as(u8, 1), try compileFailed(&bag, &w, false, false, error.CompileFailed));
+    try std.testing.expectEqual(@as(u8, 1), try compileFailed(&bag, &w, false, false, error.NoModule));
+    try std.testing.expectEqualStrings("", w.buffered());
+    try std.testing.expectEqual(@as(u8, 1), try compileFailed(&bag, &w, false, false, error.OutOfMemory));
+    try std.testing.expectEqualStrings("error: OutOfMemory\n", w.buffered());
+}
+
+test report {
+    const gpa = std.testing.allocator;
+    var bag: diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    var none: Io.Writer.Allocating = .init(gpa);
+    defer none.deinit();
+    try report(&bag, &none.writer, false, true);
+    try std.testing.expectEqualStrings("", none.written());
+
+    try bag.add(.parse, .E1104, .none, "`x.sv` is an IEEE 1800 source", .{});
+    var json: Io.Writer.Allocating = .init(gpa);
+    defer json.deinit();
+    try report(&bag, &json.writer, true, true);
+    try std.testing.expect(std.mem.startsWith(u8, json.written(), "{\"code\":\"E1104\""));
+    var text: Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try report(&bag, &text.writer, false, false);
+    try std.testing.expect(std.mem.find(u8, text.written(), "error[E1104]") != null);
+    // No colour asked for: no escape byte.
+    try std.testing.expect(std.mem.findScalar(u8, text.written(), 0x1b) == null);
+}

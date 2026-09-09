@@ -378,3 +378,130 @@ fn libraries(
     try report(&bag, err, json, use_color);
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Tests, over real files in a temporary directory: `libraries` resolves real
+// paths, and a device emit reads its source back through `libraries`.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// A temporary directory holding `files` (name, text), with each file's
+/// absolute path in `paths`, allocated in `arena`.
+const Tree = struct {
+    tmp: testing.TmpDir,
+    paths: []const []const u8,
+
+    fn init(arena: std.mem.Allocator, files: []const [2][]const u8) !Tree {
+        var tmp = testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        const paths = try arena.alloc([]const u8, files.len);
+        for (files, paths) |f, *p| {
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = f[0], .data = f[1] });
+            p.* = try tmp.dir.realPathFileAlloc(testing.io, f[0], arena);
+        }
+        return .{ .tmp = tmp, .paths = paths };
+    }
+};
+
+test "libraries: with no map every file is in `work`, the search order is `work`, the rest are units" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var t: Tree = try .init(a, &.{ .{ "top.v", "module top; endmodule\n" }, .{ "cell.v", "module cell; endmodule\n" } });
+    defer t.tmp.cleanup();
+    var err: Io.Writer.Allocating = .init(a);
+    var opts: digital.Options = .{};
+    try testing.expect(try libraries(a, testing.io, t.paths, &.{}, &.{}, &opts, &err.writer, false, false));
+    try testing.expectEqualStrings("", err.written());
+    try testing.expectEqualStrings("work", opts.lib);
+    try testing.expectEqual(@as(usize, 1), opts.more.len);
+    try testing.expectEqualStrings(t.paths[1], opts.more[0].name);
+    try testing.expectEqualStrings("module cell; endmodule\n", opts.more[0].text);
+    try testing.expectEqualStrings("work", opts.more[0].lib);
+    try testing.expectEqual(@as(usize, 1), opts.search.len);
+    try testing.expectEqualStrings("work", opts.search[0]);
+}
+
+test "libraries: -L names a declared library or `work`; anything else is E0244 (IEEE 1364-2005 §13.7.1)" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var t: Tree = try .init(a, &.{.{ "top.v", "module top; endmodule\n" }});
+    defer t.tmp.cleanup();
+    var ok_err: Io.Writer.Allocating = .init(a);
+    var opts: digital.Options = .{};
+    try testing.expect(try libraries(a, testing.io, t.paths, &.{}, &.{"work"}, &opts, &ok_err.writer, false, false));
+    try testing.expectEqualStrings("work", opts.search[0]);
+
+    var err: Io.Writer.Allocating = .init(a);
+    try testing.expect(!try libraries(a, testing.io, t.paths, &.{}, &.{"nolib"}, &opts, &err.writer, false, false));
+    try testing.expect(std.mem.find(u8, err.written(), "E0244") != null);
+    try testing.expect(std.mem.find(u8, err.written(), "-L nolib: no library map declares library `nolib`") != null);
+}
+
+test "libraries: a file that cannot be read is refused by path" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var t: Tree = try .init(a, &.{.{ "top.v", "module top; endmodule\n" }});
+    defer t.tmp.cleanup();
+    const gone = try std.fs.path.join(a, &.{ std.fs.path.dirname(t.paths[0]).?, "gone.v" });
+    var err: Io.Writer.Allocating = .init(a);
+    var opts: digital.Options = .{};
+    try testing.expect(!try libraries(a, testing.io, &.{ t.paths[0], gone }, &.{}, &.{}, &opts, &err.writer, false, false));
+    try testing.expect(std.mem.startsWith(u8, err.written(), "error: cannot read `"));
+}
+
+/// `vera --emit-zig [--deny=W1155] v_seconds.v`, in process: the exit status
+/// and what it printed on each stream.
+fn emitSeconds(arena: std.mem.Allocator, deny: bool) !struct { code: u8, out: []const u8, err: []const u8 } {
+    // tests/fixtures/ch07_mixed_signal/v_seconds.v: no `timescale, so the
+    // device's tick is 1 s and the emit warns W1155.
+    const src = "module v_seconds(a, y);\n  input a;\n  output y;\n  assign y = a;\nendmodule\n";
+    var t: Tree = try .init(arena, &.{.{ "v_seconds.v", src }});
+    defer t.tmp.cleanup();
+    var cli: args.Cli = .{ .emit_zig = true, .emit_zig_typed = true, .codegen_flag = "--emit-zig" };
+    defer cli.deinit(testing.allocator);
+    try cli.paths.append(testing.allocator, t.paths[0]);
+    if (deny) try testing.expect(try cli.levels.parseFlag(testing.allocator, "deny=W1155"));
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    var out: Io.Writer.Allocating = .init(arena);
+    var err: Io.Writer.Allocating = .init(arena);
+    const code = try run(testing.allocator, testing.io, &env, &cli, src, t.paths[0], .debug, .llvm, false, &out.writer, &err.writer);
+    return .{ .code = code, .out = out.written(), .err = err.written() };
+}
+
+test "a .v device: W1155 warns and the device prints; --deny=W1155 makes it an error, exit 1 and no device" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const warned = try emitSeconds(arena.allocator(), false);
+    try testing.expectEqual(@as(u8, 0), warned.code);
+    try testing.expect(std.mem.find(u8, warned.err, "warning[W1155]") != null);
+    try testing.expect(warned.out.len != 0);
+    // main.zig's header: "1 on a diagnosed error". A denied warning is one.
+    const denied = try emitSeconds(arena.allocator(), true);
+    try testing.expect(std.mem.find(u8, denied.err, "error[W1155]") != null);
+    try testing.expectEqual(@as(u8, 1), denied.code);
+    try testing.expectEqualStrings("", denied.out);
+}
+
+test "run: a .v source takes exactly one of a testbench or a device" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    const says = "error: digital .v source takes --run or --emit-exe, or --emit-zig, --check or --emit-so for a contract device\n";
+    for ([_]args.Cli{
+        .{}, // neither
+        .{ .exe_flag = "--emit-exe", .check = true }, // both
+        .{ .emit_zig = true, .lint_flag = true },
+    }) |cli| {
+        var out: Io.Writer.Allocating = .init(a);
+        var err: Io.Writer.Allocating = .init(a);
+        try testing.expectEqual(@as(u8, 2), try run(testing.allocator, testing.io, &env, &cli, "", "x.v", .debug, .llvm, false, &out.writer, &err.writer));
+        try testing.expectEqualStrings(says, err.written());
+    }
+}
