@@ -243,14 +243,15 @@ pub fn exportDevice(comptime D: type, comptime name: []const u8) void {
 // names and a noise generator's label are not sanitized identifiers, so
 // `cName` would misread a `Z` in them as an escape.
 fn zStr(comptime s: []const u8) [:0]const u8 {
-    comptime {
-        const z = s ++ [_]u8{0};
-        return z[0..s.len :0];
-    }
+    // Built in a comptime block and returned outside it, so a runtime call
+    // (a test) gets the comptime constant too.
+    const z = comptime s ++ [_]u8{0};
+    return z[0..s.len :0];
 }
 
 fn cName(comptime s: []const u8) [:0]const u8 {
-    comptime {
+    // Computed in a comptime block and returned outside it, as `zStr`.
+    const z = comptime blk: {
         @setEvalBranchQuota(100_000);
         var out: []const u8 = "";
         var i = 0;
@@ -260,9 +261,9 @@ fn cName(comptime s: []const u8) [:0]const u8 {
                 i += 2;
             } else if (s[i] != 'Z') out = out ++ [_]u8{s[i]};
         }
-        const z = out ++ [_]u8{0};
-        return z[0..out.len :0];
-    }
+        break :blk out ++ [_]u8{0};
+    };
+    return z[0 .. z.len - 1 :0];
 }
 
 /// The OSDI 0.4 host of device `D`: its descriptor (`descriptors`) and the
@@ -991,7 +992,7 @@ const Rc = struct {
         const v = p[0].sub(p[1]).scale(m.c);
         return contract.sites(@This(), S, .{ v, v.neg() });
     }
-    pub fn evalQ(comptime S: type, x: *const [2]S.V, m: *const Model, i: *const Instance, sim: contract.SimState) struct { res: contract.Rows(@This(), S), q: contract.Sites(@This(), S) } {
+    pub fn evalQ(comptime S: type, x: *const [2]S.V, m: *const Model, i: *const Instance, sim: contract.SimState) struct { res: contract.Rows(Rc, S), q: contract.Sites(Rc, S) } {
         return .{ .res = eval(S, x, m, i, sim), .q = q(S, x, m, i, sim) };
     }
 };
