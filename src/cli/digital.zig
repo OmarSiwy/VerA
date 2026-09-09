@@ -79,7 +79,8 @@ pub fn run(
         return 1;
     };
     try report(&digital_bag, err, json, use_color);
-    return 0;
+    // A warning the run raised and --deny made an error still fails it.
+    return if (digital_bag.failed()) 1 else 0;
 }
 
 /// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
@@ -108,6 +109,7 @@ fn emitDigital(
         return 1;
     };
     try report(bag, err, json, use_color);
+    if (bag.failed()) return 1;
     const prog = try digital.emit.program(arena, &r, .{
         .source = source,
         .file_name = opts.file_name,
@@ -202,6 +204,9 @@ fn emitDevice(
         return 1;
     };
     try report(bag, err, json, use_color);
+    // `digital.emitDevice` adds W1155 after a successful emit; --deny makes
+    // it an error, and an error writes no device.
+    if (bag.failed()) return 1;
     if (f.check) {
         const built = vera.tb.buildExe(gpa, io, dev.zig, device_check, .{
             .work_dir = ".zig-cache/vera-check",
@@ -362,8 +367,8 @@ fn libraries(
     const more = try arena.alloc(digital.Unit, paths.len - 1);
     for (paths[1..], libs[1..], more) |p, l, *u| u.* = .{
         .name = p,
-        .text = Io.Dir.cwd().readFileAlloc(io, p, arena, .limited(64 * 1024 * 1024)) catch |e| {
-            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+        .text = Io.Dir.cwd().readFileAlloc(io, p, arena, .limited(root.max_source_bytes)) catch |e| {
+            try root.readFailed(err, p, e);
             return false;
         },
         .lib = l,

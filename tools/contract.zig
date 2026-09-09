@@ -91,6 +91,7 @@ pub const StatusSite = struct {
 /// Asserts that `site + 1` fits the low 24 bits, so the code cannot spill
 /// into the severity byte.
 pub fn statusCode(sev: @FieldType(StatusSite, "severity"), site: usize) u32 {
+    std.debug.assert(site < 0xff_ffff);
     return (@as(u32, if (sev == .fatal) 1 else 2) << 24) | @as(u32, @intCast(site + 1));
 }
 
@@ -290,7 +291,7 @@ fn formatC(fmt: []const u8, args: []const f64, name: []const u8, w: *std.Io.Writ
                     try cPad(w, cSign(v < 0, f), t, f, false);
                     continue;
                 }
-                const body = cReal(&buf, @abs(v), std.ascii.toLower(conv), f.prec orelse 6, f.alt);
+                const body = cReal(&buf, @abs(v), std.ascii.toLower(conv), f.prec, f.alt);
                 // `%E`/`%G` spell the exponent marker upper case; `%R`'s scale
                 // letters keep their case (`m` is milli, `M` mega).
                 if (conv == 'E' or conv == 'G') for (@constCast(body)) |*b| {
@@ -344,22 +345,13 @@ fn cPad(w: *std.Io.Writer, sign: []const u8, body: []const u8, f: CSpec, number:
 /// `v` (finite, not negative) as C's `%e`, `%f` or `%g` at precision `p`, or
 /// §9.4.3's `%r`: a mantissa in [1, 1000) over a §2.6.2 scale factor (`T G M
 /// K k m u n p f a`; `k` for 1e3, Table 2-1's spelling).
-fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
+fn cReal(buf: *[512]u8, v: f64, conv: u8, prec: ?usize, alt: bool) []const u8 {
     const float = std.fmt.float;
+    const p = prec orelse 6;
     switch (conv) {
         'f' => return float.render(buf, v, .{ .mode = .decimal, .precision = p }) catch "?",
         'e' => return cExp(buf, float.render(buf[256..], v, .{ .mode = .scientific, .precision = p }) catch return "?"),
-        'r' => {
-            const scales = "afpnum kMGT";
-            var e: i32 = if (v == 0) 0 else @intFromFloat(@floor(@log10(v) / 3.0));
-            e = std.math.clamp(e, -6, 4);
-            const m = v / std.math.pow(f64, 1000.0, @floatFromInt(e));
-            const g = cReal(buf, m, 'g', p, alt);
-            const c = scales[@intCast(e + 6)];
-            if (c == ' ') return g;
-            buf[g.len] = c;
-            return buf[0 .. g.len + 1];
-        },
+        'r' => return cEng(buf, v, prec),
         else => {
             // C11 7.21.6.1 %g: P significant digits; X the exponent %e would
             // print; %f with P - 1 - X decimals when P > X >= -4, else %e.
@@ -383,6 +375,92 @@ fn cReal(buf: *[512]u8, v: f64, conv: u8, p: usize, alt: bool) []const u8 {
             return out;
         },
     }
+}
+
+// `cReal`'s `%r`, as `str_kernels.zCReal` prints it: the value's shortest
+// round-trip digits with the point moved to the multiple-of-three exponent
+// Table 2-1 has a letter for (clamped to a..T, the mantissa absorbing the
+// rest), rounded to `prec` fractional digits, ties to the even digit, when a
+// precision is given. Decimal digits, never a division, so 4.7e-9 is 4.7n
+// and not 4.699999999999999n. A carry out of the mantissa is not
+// renormalized: 999.996 at %.2r is 1000.00, as in the kernel. Writes at most
+// 1 + 1 + 322 + 1 bytes (a subnormal, unclamped digits) into `buf`.
+fn cEng(buf: *[512]u8, v: f64, prec: ?usize) []const u8 {
+    var ds: [24]u8 = undefined;
+    ds[0] = '0';
+    var n: usize = 1;
+    var x: i32 = 0;
+    if (v != 0) {
+        const sci = std.fmt.float.render(buf[256..], v, .{ .mode = .scientific }) catch return "?";
+        const e = std.mem.findScalar(u8, sci, 'e') orelse return "?";
+        n = 0;
+        for (sci[0..e]) |c| if (c != '.') {
+            ds[n] = c;
+            n += 1;
+        };
+        x = std.fmt.parseInt(i32, sci[e + 1 ..], 10) catch return "?";
+    }
+    const g = std.math.clamp(@divFloor(x, 3) * 3, -18, 12);
+    // Digits before the point; 0 or fewer below the `a` clamp.
+    var int_len: i32 = x - g + 1;
+    if (prec) |p| {
+        const keep = int_len + @as(i32, @intCast(p));
+        if (keep < 0) {
+            n = 0;
+        } else if (keep < @as(i32, @intCast(n))) {
+            const k: usize = @intCast(keep);
+            var up = ds[k] > '5';
+            if (ds[k] == '5') {
+                const rest = for (ds[k + 1 .. n]) |c| {
+                    if (c != '0') break true;
+                } else false;
+                up = rest or (k > 0 and (ds[k - 1] - '0') % 2 == 1);
+            }
+            n = k;
+            if (up) {
+                var i = k;
+                while (i > 0) {
+                    i -= 1;
+                    if (ds[i] != '9') {
+                        ds[i] += 1;
+                        break;
+                    }
+                    ds[i] = '0';
+                } else {
+                    // Every kept digit was a 9, or none was kept: one more
+                    // integer digit, a leading 1.
+                    std.mem.copyBackwards(u8, ds[1 .. n + 1], ds[0..n]);
+                    ds[0] = '1';
+                    n += 1;
+                    int_len += 1;
+                }
+            }
+        }
+    }
+    const frac: usize = prec orelse @intCast(@max(@as(i32, @intCast(n)) - int_len, 0));
+    var o: usize = 0;
+    if (int_len <= 0) {
+        buf[o] = '0';
+        o += 1;
+    } else for (0..@intCast(int_len)) |i| {
+        buf[o] = if (i < n) ds[i] else '0';
+        o += 1;
+    }
+    if (frac != 0) {
+        buf[o] = '.';
+        o += 1;
+        for (0..frac) |j| {
+            const at = int_len + @as(i32, @intCast(j));
+            buf[o] = if (at >= 0 and at < @as(i32, @intCast(n))) ds[@intCast(at)] else '0';
+            o += 1;
+        }
+    }
+    const letter = "afpnum kMGT"[@intCast(@divExact(g, 3) + 6)];
+    if (letter != ' ') {
+        buf[o] = letter;
+        o += 1;
+    }
+    return buf[0..o];
 }
 
 /// Zig's `1.5e-7` as C's `1.5e-07`: a signed exponent of at least two
@@ -2102,6 +2180,7 @@ pub const SystfHost = struct {
     /// Asserts that `j` is 1-based and in range (1 <= j <= `args.len`) and
     /// that `partials.len == args.len`.
     pub fn output(h: *const SystfHost, k: usize, j: usize, args: []const f64, partials: []f64) f64 {
+        std.debug.assert(j >= 1 and j <= args.len and partials.len == args.len);
         if (h.out) |f| return f(h.ctx, k, j, args, partials);
         @memset(partials, 0);
         partials[j - 1] = 1;
@@ -5219,6 +5298,7 @@ test "Say: a record that fills the buffer exactly is kept; the next is lost whol
 test "formatC: the C11 7.21.6.1 corners a model's format can reach" {
     const nan = std.math.nan(f64);
     const inf = std.math.inf(f64);
+    const zeros64: [64]u8 = @splat('0');
     const cases = [_]struct { fmt: []const u8, args: []const f64, want: []const u8 }{
         .{ .fmt = "%", .args = &.{}, .want = "%" }, // a `%` that ends the format
         .{ .fmt = "50%", .args = &.{}, .want = "50%" },
@@ -5250,7 +5330,7 @@ test "formatC: the C11 7.21.6.1 corners a model's format can reach" {
         .{ .fmt = "%t", .args = &.{0.5}, .want = "0.5" },
         .{ .fmt = "%05.1f", .args = &.{-2.3}, .want = "-02.3" }, // zeros after the sign
         .{ .fmt = "%-+4d|", .args = &.{5}, .want = "+5  |" },
-        .{ .fmt = "%.100f", .args = &.{1}, .want = "1." ++ @as([64]u8, @splat('0')) }, // precision cut to 64
+        .{ .fmt = "%.100f", .args = &.{1}, .want = "1." ++ &zeros64 }, // precision cut to 64
     };
     for (cases) |c| {
         var buf: [256]u8 = undefined;
