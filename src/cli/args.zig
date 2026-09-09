@@ -1,7 +1,7 @@
 //! `vera`'s argv -> one `Cli` value: what the user typed, flag by flag, in
 //! order. `--help` and `--explain` answer here; a malformed flag is refused
 //! here with exit status 2. Conflicts between well-formed flags are refused
-//! after the whole line is read, by `main`, whatever their order.
+//! after the whole line is read, by `resolve`, whatever their order.
 //!
 //! The flags, their spelling and every message below are user-visible and
 //! frozen. Clauses: LRM 3.4 (`--param`), Annex E.2 (`--spice`), IEEE 1364-2005
@@ -208,7 +208,12 @@ pub const Cli = struct {
 /// `--help` (usage on `out`) or `--explain CODE` (the explanation on `out`),
 /// 2 after a malformed flag (the reason on `err`). Stops at the first such
 /// flag, so the rest of the line is never read.
-pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator, out: *Io.Writer, err: *Io.Writer) !?u8 {
+/// `args` points at any iterator whose `next()` returns each argument as a
+/// `?[]const u8` (or a sentinel slice): `std.process.Args.Iterator`, or a
+/// test's fixed list. `cli` borrows every argument it keeps, so the
+/// iterator's storage must outlive `cli`. Invalidates nothing; the lists grow
+/// in `gpa`, which `Cli.deinit` takes.
+pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: anytype, out: *Io.Writer, err: *Io.Writer) !?u8 {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try out.writeAll(usage_text);
@@ -279,11 +284,12 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
             cli.contract_path = args.next() orelse return try missing(err, "--contract", "a path");
         } else if (std.mem.eql(u8, arg, "--param")) {
             const kv = args.next() orelse return try missing(err, "--param", "NAME=VALUE");
-            const eq = std.mem.indexOfScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
-            const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch {
+            const eq = std.mem.findScalar(u8, kv, '=') orelse return try missing(err, "--param", "NAME=VALUE");
+            const value = std.fmt.parseFloat(f64, kv[eq + 1 ..]) catch std.math.nan(f64);
+            if (std.math.isNan(value)) {
                 try err.print("error: --param {s}: `{s}` is not a number\n", .{ kv, kv[eq + 1 ..] });
                 return 2;
-            };
+            }
             try cli.overrides.append(gpa, .{ .name = kv[0..eq], .value = value });
         } else if (std.mem.eql(u8, arg, "--dyn")) {
             cli.dyn_path = args.next() orelse return try missing(err, "--dyn", "a path");
@@ -362,10 +368,12 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
                 return 2;
             };
         } else if (std.mem.startsWith(u8, arg, "--unknown-bound=")) {
-            cli.unknown_bound = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch {
+            const b = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch std.math.nan(f64);
+            if (std.math.isNan(b)) {
                 try err.print("error: `{s}` is not a number\n", .{arg});
                 return 2;
-            };
+            }
+            cli.unknown_bound = b;
         } else if (std.mem.startsWith(u8, arg, "--")) {
             // --allow=X / --warn=X / --deny=X / --forbid=X
             const applied = cli.levels.parseFlag(gpa, arg[2..]) catch |e| switch (e) {
@@ -392,8 +400,417 @@ pub fn parse(cli: *Cli, gpa: std.mem.Allocator, args: *std.process.Args.Iterator
     return null;
 }
 
+/// Refuses the well-formed flags that conflict, whatever order they came in,
+/// and settles what they derive: `--display=record` beside a testbench makes
+/// it print the device's records, and `--emit-osdi` makes `-o` name the
+/// `.osdi` rather than a device. Returns null to go on, or exit status 2
+/// with the reason on `err`, or the usage when the line names no input.
+/// Runs once, after `parse` returned null.
+pub fn resolve(cli: *Cli, err: *Io.Writer) !?u8 {
+    if (cli.exe_flag) |f| if (cli.display_drop_flag) {
+        try err.print(
+            "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
+                "output, and `--display=drop` discards every print\n",
+            .{f},
+        );
+        return 2;
+    };
+    // §9.4 a testbench over the device a host gets: it prints the records
+    // the device's `say` makes, whichever flag came first.
+    if (cli.exe_flag != null and cli.display_record_flag) cli.display = .record;
+    if (cli.validate_contract and cli.exe_flag == null) {
+        try err.writeAll("error: `--validate-contract` turns the checks on in an --emit-exe or --run " ++
+            "testbench; --check always runs them\n");
+        return 2;
+    }
+    if (cli.lint_flag) if (cli.codegen_flag) |f| {
+        try err.print(
+            "error: `--lint` and `{s}` conflict: --lint stops after the frontend " ++
+                "and `{s}` needs codegen\n",
+            .{ f, f },
+        );
+        return 2;
+    };
+
+    if (cli.emit_verilog) if (cli.check or cli.emit_so or cli.exe_flag != null) {
+        try err.writeAll("error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n");
+        return 2;
+    };
+
+    if (cli.emit_osdi) {
+        if (cli.dyn_path != null or cli.emit_zig_typed or cli.exe_flag != null) {
+            try err.writeAll("error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
+            return 2;
+        }
+        cli.emit_zig = false; // `-o` names the .osdi
+    }
+
+    // A testbench is its own artifact: beside it a library or a device text
+    // was silently not built. `-o` names the executable, so only a typed
+    // `--emit-zig` conflicts.
+    if (cli.exe_flag) |f| if (cli.emit_so or cli.emit_zig_typed) {
+        try err.print("error: `{s}` and `{s}` conflict: one run builds one artifact\n", .{ f, if (cli.emit_so) "--emit-so" else "--emit-zig" });
+        return 2;
+    };
+
+    if (cli.paths.items.len == 0) {
+        try err.writeAll(usage_text);
+        return 2;
+    }
+    return null;
+}
+
 /// Prints `error: <flag> needs <what>` on `w`; returns exit status 2.
 pub fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
     try w.print("error: {s} needs {s}\n", .{ flag, what });
     return 2;
+}
+
+// ---------------------------------------------------------------------------
+// Tests. Every expected message is the literal this file prints; every value
+// is what the flag's text spells.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+/// A fixed command line, the iterator shape `parse` reads.
+const Argv = struct {
+    items: []const []const u8,
+    i: usize = 0,
+
+    fn next(a: *Argv) ?[]const u8 {
+        if (a.i == a.items.len) return null;
+        defer a.i += 1;
+        return a.items[a.i];
+    }
+};
+
+/// One command line under test: the `Cli` it fills and what it printed.
+const Line = struct {
+    cli: Cli = .{},
+    out: Io.Writer.Allocating,
+    err: Io.Writer.Allocating,
+
+    fn init() Line {
+        return .{ .out = .init(testing.allocator), .err = .init(testing.allocator) };
+    }
+
+    fn deinit(l: *Line) void {
+        l.cli.deinit(testing.allocator);
+        l.out.deinit();
+        l.err.deinit();
+    }
+
+    /// `parse` over `argv` (literals, so they outlive `cli`).
+    fn read(l: *Line, argv: []const []const u8) !?u8 {
+        var it: Argv = .{ .items = argv };
+        return parse(&l.cli, testing.allocator, &it, &l.out.writer, &l.err.writer);
+    }
+
+    /// `parse`, then `resolve` when `parse` went on.
+    fn settle(l: *Line, argv: []const []const u8) !?u8 {
+        if (try l.read(argv)) |code| return code;
+        return resolve(&l.cli, &l.err.writer);
+    }
+};
+
+/// `argv` stops `parse` with exit status 2 and exactly `want` on stderr.
+fn expectRefused(argv: []const []const u8, want: []const u8) !void {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, 2), try l.read(argv));
+    try testing.expectEqualStrings(want, l.err.written());
+    try testing.expectEqualStrings("", l.out.written());
+}
+
+/// `argv` through `parse` and `resolve`: `code`, and exactly `want` on stderr.
+fn expectSettled(argv: []const []const u8, code: ?u8, want: []const u8) !void {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(code, try l.settle(argv));
+    try testing.expectEqualStrings(want, l.err.written());
+}
+
+test "parse: --help and -h print the usage on stdout, exit 0, and read no further" {
+    for ([_][]const u8{ "--help", "-h" }) |flag| {
+        var l: Line = .init();
+        defer l.deinit();
+        try testing.expectEqual(@as(?u8, 0), try l.read(&.{ flag, "--no-such-flag" }));
+        try testing.expectEqualStrings(usage_text, l.out.written());
+        try testing.expectEqualStrings("", l.err.written());
+    }
+}
+
+test "parse: --explain needs a known code, and prints it on stdout" {
+    try expectRefused(&.{"--explain"}, "error: --explain needs a code, e.g. --explain W0650\n");
+    try expectRefused(&.{ "--explain", "W9999" }, "error: unknown diagnostic code `W9999`\n");
+    var l: Line = .init();
+    defer l.deinit();
+    // `--color=never` first: plain text (docs/using/diagnostics.md).
+    try testing.expectEqual(@as(?u8, 0), try l.read(&.{ "--color=never", "--explain", "W0650" }));
+    try testing.expect(std.mem.startsWith(u8, l.out.written(), "W0650: "));
+    try testing.expect(std.mem.findScalar(u8, l.out.written(), 0x1b) == null);
+}
+
+test "parse: a flag that takes a value refuses a line that ends before it" {
+    const cases = [_][2][]const u8{
+        .{ "--digital-pins", "error: --digital-pins needs a list of ports or a file\n" },
+        .{ "--contract", "error: --contract needs a path\n" },
+        .{ "--param", "error: --param needs NAME=VALUE\n" },
+        .{ "--dyn", "error: --dyn needs a path\n" },
+        .{ "--work-dir", "error: --work-dir needs a directory\n" },
+        .{ "--zig", "error: --zig needs a path\n" },
+        .{ "-o", "error: -o needs a path\n" },
+        .{ "--spice", "error: --spice needs a path\n" },
+        .{ "--libmap", "error: --libmap needs a library map file\n" },
+        .{ "-L", "error: -L needs a library name\n" },
+        .{ "-I", "error: -I needs a directory\n" },
+    };
+    for (cases) |c| try expectRefused(&.{c[0]}, c[1]);
+}
+
+test "parse: the codegen flags set what they build and name themselves" {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, null), try l.read(&.{ "--emit-zig", "m.va" }));
+    try testing.expect(l.cli.emit_zig and l.cli.emit_zig_typed);
+    try testing.expectEqualStrings("--emit-zig", l.cli.codegen_flag.?);
+    try testing.expectEqualStrings("m.va", l.cli.paths.items[0]);
+
+    // `-o` implies the device text but is not `--emit-zig` typed.
+    var o: Line = .init();
+    defer o.deinit();
+    _ = try o.read(&.{ "-o", "dev.zig" });
+    try testing.expect(o.cli.emit_zig and !o.cli.emit_zig_typed);
+    try testing.expectEqualStrings("dev.zig", o.cli.out_path.?);
+    try testing.expectEqualStrings("-o", o.cli.codegen_flag.?);
+
+    var s: Line = .init();
+    defer s.deinit();
+    _ = try s.read(&.{"--emit-osdi"});
+    try testing.expect(s.cli.emit_so and s.cli.emit_osdi);
+    try testing.expectEqualStrings("--emit-osdi", s.cli.codegen_flag.?);
+}
+
+test "parse: --run sticks once typed; the last of --emit-exe/--run names the testbench" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "--run", "--emit-exe" });
+    try testing.expect(l.cli.run_exe);
+    try testing.expectEqualStrings("--emit-exe", l.cli.exe_flag.?);
+    try testing.expectEqual(vera.codegen.Display.emit, l.cli.display);
+
+    var e: Line = .init();
+    defer e.deinit();
+    _ = try e.read(&.{"--emit-exe"});
+    try testing.expect(!e.cli.run_exe);
+}
+
+test "parse: the last --display wins, and only drop and record are remembered as typed" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "--display=drop", "--display=emit" });
+    try testing.expectEqual(vera.codegen.Display.emit, l.cli.display);
+    try testing.expect(!l.cli.display_drop_flag and !l.cli.display_record_flag);
+    _ = try l.read(&.{"--display=record"});
+    try testing.expect(l.cli.display_record_flag and !l.cli.display_drop_flag);
+    _ = try l.read(&.{"--display=drop"});
+    try testing.expect(l.cli.display_drop_flag and !l.cli.display_record_flag);
+}
+
+test "parse: --vdd is a positive finite number" {
+    for ([_][]const u8{ "--vdd=0", "--vdd=-1", "--vdd=nan", "--vdd=inf", "--vdd=", "--vdd=1.2V" }) |flag| {
+        var buf: [64]u8 = undefined;
+        try expectRefused(&.{flag}, try std.mem.print(&buf, "error: `{s}`: not a positive number\n", .{flag}));
+    }
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{"--vdd=3.3"});
+    try testing.expectEqual(@as(f64, 3.3), l.cli.vdd);
+}
+
+test "parse: --param splits at the first `=` and reads a number" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "--param", "r=1e3", "--param", "w=-0.5" });
+    try testing.expectEqual(@as(usize, 2), l.cli.overrides.items.len);
+    try testing.expectEqualStrings("r", l.cli.overrides.items[0].name);
+    try testing.expectEqual(@as(f64, 1000), l.cli.overrides.items[0].value);
+    try testing.expectEqual(@as(f64, -0.5), l.cli.overrides.items[1].value);
+    try expectRefused(&.{ "--param", "r" }, "error: --param needs NAME=VALUE\n");
+    try expectRefused(&.{ "--param", "r=2k" }, "error: --param r=2k: `2k` is not a number\n");
+    // The first `=` splits, so the value is `1=2`.
+    try expectRefused(&.{ "--param", "r=1=2" }, "error: --param r=1=2: `1=2` is not a number\n");
+}
+
+test "parse: a NaN --param or --unknown-bound is not a number" {
+    // §3.4 a parameter's value is a number, and a NaN card makes every
+    // residual NaN; a NaN compliance limit makes `[-|B|, |B|]` an interval
+    // no comparison holds in, so the W0650 proof would rest on nothing.
+    try expectRefused(&.{ "--param", "r=nan" }, "error: --param r=nan: `nan` is not a number\n");
+    try expectRefused(&.{"--unknown-bound=nan"}, "error: `--unknown-bound=nan` is not a number\n");
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{"--unknown-bound=100"});
+    try testing.expectEqual(@as(?f64, 100), l.cli.unknown_bound);
+    try expectRefused(&.{"--unknown-bound=x"}, "error: `--unknown-bound=x` is not a number\n");
+}
+
+test "parse: --optimize takes the four Zig mode names as the flag always spelled them" {
+    var l: Line = .init();
+    defer l.deinit();
+    const modes = [_]struct { []const u8, std.lang.Optimize }{
+        .{ "--optimize=Debug", .debug },
+        .{ "--optimize=ReleaseSafe", .safe },
+        .{ "--optimize=ReleaseFast", .fast },
+        .{ "--optimize=ReleaseSmall", .small },
+    };
+    for (modes) |m| {
+        _ = try l.read(&.{m[0]});
+        try testing.expectEqual(m[1], l.cli.optimize.?);
+    }
+    // 0.17's own tag names are not the flag's.
+    try expectRefused(&.{"--optimize=fast"}, "error: `--optimize=fast`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n");
+}
+
+test "parse: --state/--two-state, --schedule and --zig-backend" {
+    const Logic = digital.emit.Logic;
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "--two-state", "--state=4" });
+    try testing.expectEqual(Logic.four, l.cli.logic);
+    try testing.expectEqualStrings("--state=4", l.cli.logic_flag.?);
+    _ = try l.read(&.{"--state=auto"});
+    try testing.expectEqual(Logic.auto, l.cli.logic);
+    _ = try l.read(&.{"--two-state"});
+    try testing.expectEqual(Logic.two, l.cli.logic);
+    try expectRefused(&.{"--state=3"}, "error: `--state=3`: not auto|2|4\n");
+
+    _ = try l.read(&.{"--schedule=fifo"});
+    try testing.expectEqual(digital.emit.Schedule.fifo, l.cli.schedule);
+    try expectRefused(&.{"--schedule=lifo"}, "error: `--schedule=lifo`: not static|fifo\n");
+
+    _ = try l.read(&.{"--zig-backend=native"});
+    try testing.expectEqual(vera.orchestrator.Backend.self_hosted, l.cli.zig_backend.?);
+    // `auto` is the default again, not a third backend.
+    _ = try l.read(&.{"--zig-backend=auto"});
+    try testing.expect(l.cli.zig_backend == null);
+    try expectRefused(&.{"--zig-backend=gcc"}, "error: `--zig-backend=gcc`: not auto|llvm|native\n");
+}
+
+test "parse: --event-budget is a positive u64" {
+    for ([_][]const u8{ "--event-budget=0", "--event-budget=-5", "--event-budget=x", "--event-budget=18446744073709551616" }) |flag| {
+        var buf: [96]u8 = undefined;
+        try expectRefused(&.{flag}, try std.mem.print(&buf, "error: `{s}`: not a positive integer\n", .{flag}));
+    }
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{"--event-budget=18446744073709551615"});
+    try testing.expectEqual(@as(u64, std.math.maxInt(u64)), l.cli.event_budget);
+}
+
+test "parse: the language, library and reporting flags" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{
+        "--std=1364-2005",
+        "--no-std-defs",
+        "--diagnostics=json",
+        "--diagnostics=text",
+        "--color=always",
+        "--discipline-resolution=detail",
+        "--libmap",
+        "a.map",
+        "--libmap",
+        "b.map",
+        "-L",
+        "lib1",
+        "-I",
+        "inc",
+        "--expect-module=",
+    });
+    try testing.expectEqual(vera.KeywordSet.v1364_2005, l.cli.language);
+    try testing.expect(!l.cli.std_defs and !l.cli.json);
+    try testing.expect(l.cli.color == .always);
+    try testing.expectEqual(vera.DisciplineResolution.detail, l.cli.discipline_resolution);
+    try testing.expectEqual(@as(usize, 2), l.cli.libmaps.items.len);
+    try testing.expectEqualStrings("b.map", l.cli.libmaps.items[1]);
+    try testing.expectEqualStrings("lib1", l.cli.search.items[0]);
+    try testing.expectEqualStrings("inc", l.cli.include_dirs.items[0]);
+    // An empty expected name is a name; no module is called that.
+    try testing.expectEqualStrings("", l.cli.expect_module.?);
+    try expectRefused(&.{"--std=1800-2017"}, "error: `--std=1800-2017`: not a `begin_keywords version specifier\n");
+    try expectRefused(&.{"--discipline-resolution=full"}, "error: `--discipline-resolution=full`: not basic|detail\n");
+}
+
+test "parse: lint levels, and what may not be allowed or un-forbidden" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{"--deny=W0650"});
+    try testing.expectEqual(diag.Level.deny, l.cli.levels.get(.W0650));
+    try expectRefused(&.{"--allow=E0310"}, "error: `--allow=E0310`: an error code cannot be allowed or warned away — " ++
+        "it is a statement about the program, not a preference\n");
+    try expectRefused(&.{ "--forbid=W0650", "--allow=W0650" }, "error: `--allow=W0650`: this code was already --forbid'd\n");
+    try expectRefused(&.{"--deny=W9999"}, "error: unknown option `--deny=W9999`\n");
+    try expectRefused(&.{"--no-such-flag"}, "error: unknown option `--no-such-flag`\n");
+}
+
+test "parse: every argument that is not a flag is an input, in order" {
+    var l: Line = .init();
+    defer l.deinit();
+    _ = try l.read(&.{ "top.v", "-", "lib.v" });
+    try testing.expectEqual(@as(usize, 3), l.cli.paths.items.len);
+    try testing.expectEqualStrings("-", l.cli.paths.items[1]);
+}
+
+test "resolve: no input prints the usage on stderr" {
+    try expectSettled(&.{"--lint"}, 2, usage_text);
+}
+
+test "resolve: each conflict is refused by name, in either order" {
+    const Case = struct { a: []const u8, b: []const u8, says: []const u8 };
+    const cases = [_]Case{
+        .{ .a = "--emit-exe", .b = "--display=drop", .says = "error: `--emit-exe` and `--display=drop` conflict: the testbench IS the display output, and `--display=drop` discards every print\n" },
+        // `--lint` names the codegen flag, whichever came last.
+        .{ .a = "--lint", .b = "--check", .says = "error: `--lint` and `--check` conflict: --lint stops after the frontend and `--check` needs codegen\n" },
+        .{ .a = "--emit-verilog", .b = "--emit-so", .says = "error: `--emit-verilog` builds no device: it takes neither --check, --emit-so, --emit-exe nor --run\n" },
+        .{ .a = "--emit-osdi", .b = "--emit-zig", .says = "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n" },
+    };
+    for (cases) |c| {
+        try expectSettled(&.{ c.a, c.b, "m.va" }, 2, c.says);
+        try expectSettled(&.{ c.b, c.a, "m.va" }, 2, c.says);
+    }
+    try expectSettled(&.{ "--validate-contract", "m.va" }, 2, "error: `--validate-contract` turns the checks on in an --emit-exe or --run testbench; --check always runs them\n");
+    try expectSettled(&.{ "--emit-osdi", "--dyn", "d.zig", "m.va" }, 2, "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
+    try expectSettled(&.{ "--run", "--emit-osdi", "m.va" }, 2, "error: `--emit-osdi` builds under this vera's own OSDI dyn: it takes neither --dyn, --emit-zig, --emit-exe nor --run\n");
+}
+
+test "resolve: a testbench prints the device's records under --display=record, whichever came first" {
+    for ([_][2][]const u8{ .{ "--display=record", "--emit-exe" }, .{ "--emit-exe", "--display=record" } }) |pair| {
+        var l: Line = .init();
+        defer l.deinit();
+        try testing.expectEqual(@as(?u8, null), try l.settle(&.{ pair[0], pair[1], "m.va" }));
+        try testing.expectEqual(vera.codegen.Display.record, l.cli.display);
+    }
+    // --validate-contract is legal beside a testbench.
+    try expectSettled(&.{ "--run", "--validate-contract", "m.va" }, null, "");
+}
+
+test "resolve: --emit-osdi makes -o name the library, not a device text" {
+    var l: Line = .init();
+    defer l.deinit();
+    try testing.expectEqual(@as(?u8, null), try l.settle(&.{ "-o", "m.osdi", "--emit-osdi", "m.va" }));
+    try testing.expect(!l.cli.emit_zig);
+    try testing.expectEqualStrings("m.osdi", l.cli.out_path.?);
+}
+
+test "resolve: one run builds one artifact: a testbench beside a library or a typed device text" {
+    // The header's rule, "conflicting flags (never last-one-wins)": before,
+    // `--emit-exe --emit-so` built the testbench and dropped the library.
+    try expectSettled(&.{ "--emit-exe", "--emit-so", "m.va" }, 2, "error: `--emit-exe` and `--emit-so` conflict: one run builds one artifact\n");
+    try expectSettled(&.{ "--emit-zig", "--run", "m.va" }, 2, "error: `--run` and `--emit-zig` conflict: one run builds one artifact\n");
+    // `-o` beside a testbench names the executable, and `--check` builds
+    // nothing, so neither conflicts.
+    try expectSettled(&.{ "--emit-exe", "-o", "tb", "m.va" }, null, "");
+    try expectSettled(&.{ "--check", "--emit-exe", "m.va" }, null, "");
 }
