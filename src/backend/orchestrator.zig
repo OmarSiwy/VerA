@@ -307,10 +307,10 @@ fn pruneUnits(io: Io, gpa: Allocator, udir: Io.Dir, names: []const []const u8) !
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
         const stem = entry.name[0 .. entry.name.len - ".zig".len];
-        var live = false;
-        for (names) |n| {
-            if (std.mem.eql(u8, n, stem)) live = true;
-        }
+        // ponytail: membership is decided by the first match; keep the small-list scan.
+        const live = for (names) |n| {
+            if (std.mem.eql(u8, n, stem)) break true;
+        } else false;
         if (!live) try stale.append(gpa, try gpa.dupe(u8, entry.name));
     }
     for (stale.items) |s| try udir.deleteFile(io, s);

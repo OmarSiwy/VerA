@@ -671,14 +671,8 @@ pub const Gen = struct {
                 const fam_v = if (row.op == .path_prev) &pv else &qv;
                 const fam_l = if (row.op == .path_prev) &pl else &ql;
                 const v = self.an.rv(@enumFromInt(row.a));
-                var seen = false;
-                for (fam_v.items) |old| {
-                    if (old == v) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (seen) continue;
+                // ponytail: keep first-seen order with the stdlib membership scan.
+                if (std.mem.indexOfScalar(Mir.Value, fam_v.items, v) != null) continue;
                 if (self.lo_idx[@intFromEnum(v)] == none_u32) {
                     self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
                     try vals.append(a, v);
@@ -805,65 +799,9 @@ pub const Gen = struct {
         };
     }
 
-    /// Does the hoistable tree under `v0` contain a libm-class op? Only called
-    /// on `.yes` values, so the walk cannot leave the region (and phis/calls
-    /// terminate it).
-    fn pcExpensive(self: *Gen, exq: []PcCls, v0: Mir.Value, depth: u32) bool {
-        const v = self.an.rv(v0);
-        const i = @intFromEnum(v);
-        switch (exq[i]) {
-            .yes => return true,
-            .no => return false,
-            .unknown => {},
-        }
-        const def = self.mir.valueDef(v);
-        const e: bool = e: {
-            if (depth > 2048) break :e false;
-            if (def != .inst_result) break :e false;
-            const row = self.mir.instRow(def.inst_result);
-            if (libmClass(row.op)) break :e true;
-            break :e switch (Mir.opClass(row.op)) {
-                .unary => self.pcExpensive(exq, @enumFromInt(row.a), depth + 1),
-                .binary => self.pcExpensive(exq, @enumFromInt(row.a), depth + 1) or
-                    self.pcExpensive(exq, @enumFromInt(row.b), depth + 1),
-                .ternary => {
-                    const d = self.mir.instData(def.inst_result).ternary;
-                    break :e self.pcExpensive(exq, d.cond, depth + 1) or
-                        self.pcExpensive(exq, d.then_val, depth + 1) or
-                        self.pcExpensive(exq, d.else_val, depth + 1);
-                },
-                else => false,
-            };
-        };
-        exq[i] = if (e) .yes else .no;
-        return e;
-    }
-
-    /// Is a `pc__` field cheaper than recomputing this value every eval?
-    ///
-    /// It was "contains a libm-class op", because libm is what the BJT profile
-    /// named. That gate reads the cost of ONE root and misses the shape SPICE
-    /// temp code actually has: a long ladder of cheap parameter arithmetic
-    /// (`cox = eps/tox`, `leff = l - 2*ld`, `vt = k*T/q`, `beta = kp*w/leff`)
-    /// where no single step is expensive and the SUM is the whole `<dev>temp`
-    /// phase. mos1 recomputed 53 of its 115 core temporaries — every one of
-    /// them parameter-only — for 65 Ir per instance per Newton iteration,
-    /// which is exactly the work ngspice does once in `mos1temp.c`.
-    ///
-    /// The honest rule is the comparison the name asks for: a field costs one
-    /// load, so hoist anything that costs more than one load to rebuild. Every
-    /// candidate here is already an `inst_result` that does NOT fold to a
-    /// literal (`pcConsider` checked both), so it is at least one arithmetic
-    /// op over at least one operand — always more than a load. The libm walk
-    /// stays as the fast accept so the memo keeps paying on deep trees.
-    fn pcWorthAField(self: *Gen, exq: []PcCls, v: Mir.Value) bool {
-        if (self.pcExpensive(exq, v, 0)) return true;
-        return self.mir.valueDef(self.an.rv(v)) == .inst_result;
-    }
-
     /// One use of `o` from outside the hoistable region: make it a root if it
     /// qualifies. Ascending value order later turns `root` into `pc_idx`.
-    fn pcConsider(self: *Gen, cls: []PcCls, exq: []PcCls, root: []bool, o: Mir.Value) void {
+    fn pcConsider(self: *Gen, cls: []PcCls, root: []bool, o: Mir.Value) void {
         const v = self.an.rv(o);
         const i = @intFromEnum(v);
         if (cls[i] != .yes) return;
@@ -871,7 +809,9 @@ pub const Gen = struct {
         if (self.an.vty[i] != .real) return;
         // A tree that folds to a literal costs nothing per eval already.
         if (self.an.foldConst(v, 0, false) != null) return;
-        if (!self.pcWorthAField(exq, v)) return;
+        // ponytail: every non-folding instruction qualifies, so a libm-cost
+        // walk cannot change the answer. Add a cost model only if this policy changes.
+        if (self.mir.valueDef(v) != .inst_result) return;
         root[i] = true;
     }
 
@@ -885,8 +825,6 @@ pub const Gen = struct {
         @memset(cls, .unknown);
         for (0..nv) |i| _ = self.pcClass(cls, @enumFromInt(@as(u32, @intCast(i))), 0);
 
-        const exq = try a.alloc(PcCls, nv);
-        @memset(exq, .unknown);
         const root = try a.alloc(bool, nv);
         @memset(root, false);
 
@@ -899,32 +837,32 @@ pub const Gen = struct {
             const res = self.mir.instResult(inst);
             if (res != .undef and cls[@intFromEnum(self.an.rv(res))] == .yes) continue;
             switch (self.mir.instData(inst)) {
-                .unary => |d| self.pcConsider(cls, exq, root, d.operand),
+                .unary => |d| self.pcConsider(cls, root, d.operand),
                 .binary => |d| {
-                    self.pcConsider(cls, exq, root, d.lhs);
-                    self.pcConsider(cls, exq, root, d.rhs);
+                    self.pcConsider(cls, root, d.lhs);
+                    self.pcConsider(cls, root, d.rhs);
                 },
                 .ternary => |d| {
-                    self.pcConsider(cls, exq, root, d.cond);
-                    self.pcConsider(cls, exq, root, d.then_val);
-                    self.pcConsider(cls, exq, root, d.else_val);
+                    self.pcConsider(cls, root, d.cond);
+                    self.pcConsider(cls, root, d.then_val);
+                    self.pcConsider(cls, root, d.else_val);
                 },
-                .branch => |d| self.pcConsider(cls, exq, root, d.cond),
+                .branch => |d| self.pcConsider(cls, root, d.cond),
                 .call => |d| for (d.args, 0..) |arg, k| {
                     // Control arguments render host-side through `f64Expr`
                     // (never a pc read), so a field for one would go unread.
                     if (callArgIsValue(d.name, k, self.display))
-                        self.pcConsider(cls, exq, root, arg);
+                        self.pcConsider(cls, root, arg);
                 },
                 .phi => |d| {
                     var k: u32 = 0;
                     while (k < d.count) : (k += 1)
-                        self.pcConsider(cls, exq, root, self.mir.phiPair(inst, k).value);
+                        self.pcConsider(cls, root, self.mir.phiPair(inst, k).value);
                 },
                 .jump => {},
             }
         }
-        for (self.jobs) |job| self.pcConsider(cls, exq, root, job.target);
+        for (self.jobs) |job| self.pcConsider(cls, root, job.target);
 
         var vals: std.ArrayList(Mir.Value) = .empty;
         for (0..nv) |i| {
@@ -987,10 +925,8 @@ pub const Gen = struct {
     /// Is unknown `u` already the current of a source from a contribution
     /// before `i`? Two sources in one branch need two currents.
     fn uIsDriven(self: *const Gen, u: u32, i: usize) bool {
-        for (self.branch_u[0..i]) |prev| {
-            if (prev == u) return true;
-        }
-        return false;
+        // ponytail: stdlib scans the same bounded prefix; no membership table needed.
+        return std.mem.indexOfScalar(u32, self.branch_u[0..i], u) != null;
     }
 
     /// `nm`, or `nm#k` for the first `k` that no unknown claims yet. `sanitize`
@@ -1749,9 +1685,8 @@ pub const Gen = struct {
         // buffer too. `{d}` on an f64 is at most ~24 bytes.
         var buf: [512]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{d}", .{x}) catch unreachable;
-        const has_point = for (s) |ch| {
-            if (ch == '.' or ch == 'e' or ch == 'E') break true;
-        } else false;
+        // ponytail: use the stdlib byte-set search; formatting stays unchanged.
+        const has_point = std.mem.indexOfAny(u8, s, ".eE") != null;
         gop.value_ptr.* = if (has_point)
             try self.arena.dupe(u8, s)
         else
@@ -2104,6 +2039,8 @@ pub const Gen = struct {
     /// speculatively. Tag ORDER mirrors contract.StateCtlOp — the engine
     /// converts by ordinal.
     fn emitStateCtl(self: *Gen) Error!void {
+        // ponytail: topology is fixed during emission; scan once for all three actions.
+        const fsm = self.fsmStateCtl();
         try self.w(
             \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: contract.StateCtlOp) bool {{
             \\    if (op == .query) {{
@@ -2111,7 +2048,7 @@ pub const Gen = struct {
         , .{});
         var first = true;
         for (self.held_names) |n| {
-            if (!self.fsmStateCtl()) break;
+            if (!fsm) break;
             try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
             first = false;
         }
@@ -2124,9 +2061,9 @@ pub const Gen = struct {
         , .{});
         for (0..self.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
         for (0..self.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
-        if (self.fsmStateCtl()) for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
+        if (fsm) for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
         for (self.units, 0..) |u, i| {
-            if (!self.fsmStateCtl()) break;
+            if (!fsm) break;
             if (u.role != .analog_op) continue;
             switch (opKind(u.target)) {
                 .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.unit_names[i], self.unit_names[i] }),
@@ -2134,9 +2071,9 @@ pub const Gen = struct {
             }
         }
         try self.w("    }} else {{\n", .{});
-        if (self.fsmStateCtl()) for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
+        if (fsm) for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
         for (self.units, 0..) |u, i| {
-            if (!self.fsmStateCtl()) break;
+            if (!fsm) break;
             if (u.role != .analog_op) continue;
             switch (opKind(u.target)) {
                 .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.unit_names[i], self.unit_names[i] }),
@@ -3310,11 +3247,8 @@ pub const Gen = struct {
         const v = self.an.rv(v0);
         const def = self.mir.valueDef(v);
         if (def == .undef) {
-            try self.b("{s}", .{switch (want) {
-                .real => "S.con(0.0)",
-                .int => "0",
-                .str => "\"\"",
-            }});
+            // ponytail: undefined operands share the slot initializer's spelling.
+            try self.b("{s}", .{zeroOf(want)});
             return;
         }
         if (self.an.tyOf(v) == want) return self.renderValueRef(v);
@@ -4106,6 +4040,7 @@ pub const Gen = struct {
         return @intCast(def.int_const);
     }
 
+    // ponytail: integer callees infer their type; add a typed variant only for a caller.
     fn intCall2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
         try self.b("{s}(", .{name});
         try self.renderVal(a, .int);
@@ -4135,14 +4070,6 @@ pub const Gen = struct {
         try self.b(")))), ", .{});
         try self.renderVal(b2, .int);
         try self.b("))", .{});
-    }
-
-    fn intCall2Ty(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
-        try self.b("{s}(i64, ", .{name});
-        try self.renderVal(a, .int);
-        try self.b(", ", .{});
-        try self.renderVal(b2, .int);
-        try self.b(")", .{});
     }
 
     fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {

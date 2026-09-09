@@ -46,7 +46,6 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
     var out: ZScan = .{};
     var si: usize = 0;
     var fi: usize = 0;
-    var idx: i64 = 0; // index among the ASSIGNED items — suppressed fields do not count
     var tried = false; // has any conversion started with input still available?
     while (fi < fmt.len) {
         const fc = fmt[fi];
@@ -185,12 +184,12 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
         if (end == si) return out; // nothing matched
         si = end;
         if (suppress) continue; // "matched and assigned": consumed, not counted
-        if (idx == want) {
+        // ponytail: count is the next assigned index; EOF is set only on return.
+        if (out.n == want) {
             out.i = item.i;
             out.r = item.r;
             out.s = item.s;
         }
-        idx += 1;
         out.n += 1;
     }
     return out;
@@ -238,16 +237,12 @@ pub fn zSBuf(comptime site: usize) []u8 {
 }
 
 fn zSpace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 11 or c == 12;
+    // ponytail: retain the emitted helper name; stdlib owns ASCII whitespace.
+    return zstd.ascii.isWhitespace(c);
 }
 
 /// The value of `c` as a digit in `radix`, or null when it is not one.
 fn zDigit(c: u8, radix: u8) ?u8 {
-    const v: u8 = switch (c) {
-        '0'...'9' => c - '0',
-        'a'...'f' => c - 'a' + 10,
-        'A'...'F' => c - 'A' + 10,
-        else => return null,
-    };
-    return if (v < radix) v else null;
+    // ponytail: keep the existing hex-digit ceiling even for a larger radix.
+    return zstd.fmt.charToDigit(c, @min(radix, 16)) catch null;
 }

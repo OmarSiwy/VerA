@@ -823,11 +823,6 @@ const Prover = struct {
         };
     }
 
-    /// Is this value already a 0/1 predicate (§4.2.5/§4.2.8)?
-    fn isPredicate(self: *const Prover, v: Mir.Value) bool {
-        return isPredicateValue(self.mir, v);
-    }
-
     /// Facts implied by taking (or not taking) a branch on `cond`.
     /// LRM §4.2.5 relational / §4.2.7 equality operators; `&&`/`||` need no case
     /// because §4.2.8 short-circuit gives them real CFG (see lower.zig).
@@ -848,7 +843,8 @@ const Prover = struct {
                     const zr = self.isZeroConst(b.rhs);
                     const other: ?Mir.Value = if (zr) b.lhs else if (zl) b.rhs else null;
                     if (other) |o| {
-                        if (self.isPredicate(o)) return self.condFacts(o, taken != flip, buf);
+                        // ponytail: share the predicate classifier with if-conversion directly.
+                        if (isPredicateValue(self.mir, o)) return self.condFacts(o, taken != flip, buf);
                         if (taken != flip) {
                             buf[0] = .{ .v = self.idxOf(o), .iv = .{ .nonzero = true } };
                             return buf[0..1];
@@ -996,8 +992,8 @@ const Prover = struct {
         if (b != 0) {
             const parent = self.an.idom[b];
             if (parent != none_u32 and self.an.preds[b].len == 1) {
-                var it = self.mir.blockInsts(@enumFromInt(parent));
-                while (it.next()) |inst| {
+                // ponytail: reuse the chain-order pool built by Analysis.
+                for (self.an.blockInstsFlat(parent)) |inst| {
                     const d = self.mir.instData(inst);
                     if (d != .branch) continue;
                     const taken = @intFromEnum(d.branch.then_block) == b;
@@ -1014,8 +1010,8 @@ const Prover = struct {
 
     fn walkBlock(self: *Prover, b: u32) !void {
         self.visited_block[b] = true;
-        var it = self.mir.blockInsts(@enumFromInt(b));
-        while (it.next()) |inst| try self.evalInst(inst);
+        // ponytail: the immutable instruction pool already preserves emission order.
+        for (self.an.blockInstsFlat(b)) |inst| try self.evalInst(inst);
     }
 
     fn evalInst(self: *Prover, inst: Mir.Inst) !void {

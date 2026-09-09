@@ -2212,24 +2212,17 @@ const NatureAttrs = struct {
 /// they do not override.
 fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     var out: NatureAttrs = .{};
-    if (self.natureAttrExpr(name, "abstol")) |v| {
+    // ponytail: share the AST's 16-hop walk; extend it there if deeper inheritance is needed.
+    if (self.file.natureAttrExpr(name, "abstol")) |v| {
         if (self.constEval(v)) |c| out.abstol = c.asReal();
     }
-    if (self.natureAttrExpr(name, "access")) |v| {
+    if (self.file.natureAttrExpr(name, "access")) |v| {
         if (self.file.exprs.tag(v) == .ident) out.access = self.file.str(self.file.exprs.strOf(v));
     }
-    if (self.natureAttrExpr(name, "units")) |v| {
+    if (self.file.natureAttrExpr(name, "units")) |v| {
         if (self.file.exprs.tag(v) == .str_literal) out.units = self.file.str(self.file.exprs.strOf(v));
     }
     return out;
-}
-
-/// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`.
-/// Lives on `Ast.SourceFile` because `ir/elaborate.zig` needs the same walk (see
-/// `Flatten.primitiveAccess`) and it is a pure query over the parsed natures and
-/// disciplines; this is the shorthand the rest of lowering was written against.
-fn natureAttrExpr(self: *Lower, name: Ast.StrId, attr: []const u8) ?Ast.ExprId {
-    return self.file.natureAttrExpr(name, attr);
 }
 
 // ---- §3.11 net compatibility -----------------------------------------------
@@ -3580,10 +3573,6 @@ fn lowerDisable(self: *Lower, tok: u32) Oom!void {
     return self.err(tok, .E0402, "", .{});
 }
 
-fn lowerStmts(self: *Lower, body: []const Ast.StmtId) Oom!void {
-    for (body) |s| try self.lowerStmt(s);
-}
-
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
 fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.openScope();
@@ -3591,7 +3580,8 @@ fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
     try self.checkOneItemPerScope(b.vars);
     for (b.vars) |*v| try self.declareVarDecl(v, .local);
-    try self.lowerStmts(b.body);
+    // ponytail: the only statement-list caller keeps its source-order loop here.
+    for (b.body) |s| try self.lowerStmt(s);
 }
 
 /// §5.7 procedural assignment. The target is an lvalue expression so array
@@ -5599,13 +5589,9 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
         try self.checkFormatTypes(live.items, tys.items);
-        try self.displays.append(self.arena, .{
-            .val = v,
-            .name = name,
-            .tok = tok,
-            .conditional = self.cond_depth != 0,
-        });
-    } else if (isSimCtlTask(name)) {
+    }
+    // ponytail: printing and simulation control share one display-chain append.
+    if (isDisplayTask(name) or isFileOutTask(name) or isSimCtlTask(name)) {
         // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
         // side-effect phase as the display tasks: both clauses tie the task to
         // the SOLVE ("during an accepted iteration"), which is exactly what the
@@ -7729,12 +7715,11 @@ fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
         const info = self.disciplines.get(dname) orelse return null;
         return .{ .value = .{ .real = if (is_potential) info.potential_abstol else info.flow_abstol } };
     }
-    const d = for (self.file.disciplines) |*x| {
-        if (std.mem.eql(u8, self.file.str(x.name), dname)) break x;
-    } else return null;
+    // ponytail: reuse compatibility's first-declaration lookup.
+    const d = self.disciplineDecl(dname) orelse return null;
     const nat = if (is_potential) d.potential else d.flow;
     if (nat == .none) return null;
-    const v = self.natureAttrExpr(nat, attr) orelse return .{ .banned = attr };
+    const v = self.file.natureAttrExpr(nat, attr) orelse return .{ .banned = attr };
     return .{ .value = self.constEval(v) orelse return .{ .banned = attr } };
 }
 
@@ -7995,7 +7980,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // arg_list)`. The second argument names a §4.7 function, so it is not a value
     // and must not be looked up as one (E0314 was the whole gap).
     if (std.mem.eql(u8, name, "$limit") and sys_args.len >= 2) {
-        if (try self.limitUserFunc(sys_args[1])) |fd| {
+        if (self.limitUserFunc(sys_args[1])) |fd| {
             // "The arguments of the user-defined function shall all be declared
             // input." The simulator supplies all of them — the probe's value for
             // this iteration, the value $limit returned on the previous one, then
@@ -8202,7 +8187,8 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.mir.addStrConst(self.arena, ext),
     });
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try self.lowerExpr(a)));
-    for (rows) |v| try vals.append(self.arena, v);
+    // ponytail: rows are already lowered; append their contiguous values in order.
+    try vals.appendSlice(self.arena, rows);
     self.uses_table_model = true;
     return .{ .v = try self.call("$table_model", vals.items), .ty = .real };
 }
@@ -8375,7 +8361,8 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
 /// The ordinary scopes are consulted FIRST, so a variable or parameter that
 /// happens to share a function's name still wins (§2.8), exactly as
 /// `natureAbstol` arranges for a nature identifier in a tolerance slot.
-fn limitUserFunc(self: *Lower, a: Ast.ExprId) Oom!?*const Ast.FuncDecl {
+// ponytail: lookup only; add an error set if resolution ever does fallible work.
+fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     const ex = &self.file.exprs;
     if (ex.tag(a) != .ident) return null;
     const name = self.file.str(ex.strOf(a));
@@ -8494,7 +8481,7 @@ fn collectLimitSlotsExpr(self: *Lower, e: Ast.ExprId) Oom!void {
     if (tag == .sys_call and std.mem.eql(u8, self.file.str(ex.strOf(e)), "$limit")) {
         const args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
         if (args.len >= 2) {
-            if (try self.limitUserFunc(args[1]) != null) try self.addLimitSlot(args[0]);
+            if (self.limitUserFunc(args[1]) != null) try self.addLimitSlot(args[0]);
         }
     }
     switch (tag) {
@@ -9063,7 +9050,7 @@ pub fn inlineUserFuncPre(
         }
         const actual = arg_exprs[fi - pre.len];
         if (formal.dims.len != 0) {
-            const n = try self.funcArrayLen(&formal, site) orelse return poison;
+            const n = try self.funcArrayLen(&formal) orelse return poison;
             const vals = try self.arena.alloc(Mir.Value, n);
             // §4.7.2.3: "All output arguments ... are initialized, zero (0) if
             // numeric, which in turn means that the argument passed to it is
@@ -9220,11 +9207,9 @@ pub fn inlineUserFuncPre(
 /// How many scalars an array FORMAL declares (§4.7.2.3). Its bounds are a
 /// `constant_expression` like any other array's, folded in the CALLER's scope
 /// because a formal's range may name a module parameter.
-fn funcArrayLen(self: *Lower, formal: *const Ast.FuncArg, site: Ast.ExprId) Oom!?usize {
-    const dims = try self.dimsBounds(formal.dims, formal.main_tok, self.file.str(formal.name)) orelse {
-        _ = site;
-        return null;
-    };
+fn funcArrayLen(self: *Lower, formal: *const Ast.FuncArg) Oom!?usize {
+    // ponytail: bounds diagnostics use the formal's token, so no call-site state is needed.
+    const dims = try self.dimsBounds(formal.dims, formal.main_tok, self.file.str(formal.name)) orelse return null;
     return shapeCells(dims);
 }
 

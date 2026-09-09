@@ -348,10 +348,8 @@ fn validNoiseEntry(s: []const u8) bool {
     const hash = std.mem.indexOfScalarPos(u8, s, open, '#') orelse return false;
     if (hash == 0 or s[hash - 1] != ')') return false;
     const src = s[hash + 1 ..];
-    if (!eq(src, "null") and
-        (src.len == 0 or for (src) |c| {
-            if (!std.ascii.isDigit(c)) break true;
-        } else false)) return false;
+    // ponytail: reuse the nonempty decimal check; source IDs have no numeric bound.
+    if (!eq(src, "null") and !digits(src)) return false;
     const kind = std.mem.trim(u8, s[0..open], " \t");
     if (!eq(kind, "thermal") and !eq(kind, "shot") and !eq(kind, "flicker")) return false;
     const inner = s[open + 1 .. hash - 1];

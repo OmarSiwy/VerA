@@ -106,14 +106,12 @@
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
 const Analysis = @import("../ir/analysis.zig");
-const Lower = @import("../ir/lower.zig");
 // The emitter owns these: `Display` is its §9.4 mode, and the two `op*`/`call*`
 // helpers classify a call the same way for the plan and for the text. Mutual
 // import with codegen.zig is fine here — nothing in the cycle is a comptime
 // dependency of the other's types.
 const cg = @import("codegen.zig");
 const Display = cg.Display;
-const assert = std.debug.assert;
 
 pub const UnitPlan = @This();
 
@@ -376,7 +374,8 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // evaluated once per step regardless of which arm is taken.
         if (op == .call or op == .phi) continue;
         self.inlined[v] = true;
-        self.reattribute(def.inst_result);
+        // ponytail: addUses already moves eager operands into lazy-arm counts.
+        self.addUses(def.inst_result, true);
     }
 
     self.fuseSingleUse();
@@ -527,10 +526,6 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
     }
 }
 
-fn reattribute(self: *UnitPlan, inst: Mir.Inst) void {
-    self.addUses(inst, true);
-}
-
 /// A value read EXACTLY ONCE, by the very next statement of its own block,
 /// is rendered inside that statement instead of getting a `const` of its
 /// own. `renderValueRef` already falls through to `renderInst` for anything
@@ -553,7 +548,7 @@ fn reattribute(self: *UnitPlan, inst: Mir.Inst) void {
 ///     hoisted into a loop body or sunk past a side effect, which is what a
 ///     general "def dominates use" rule would have to reason about.
 ///
-/// So this must NOT call `reattribute`: the operands stay eager because the
+/// So this must NOT undo eager uses: the operands stay eager because the
 /// expression is still evaluated exactly once, eagerly, one statement later.
 fn fuseSingleUse(self: *UnitPlan) void {
     for (0..self.an.nb) |bi| {

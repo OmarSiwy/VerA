@@ -858,13 +858,9 @@ fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
         const c = src[i];
         if (c == '"') {
             const start = i;
-            i += 1;
             // §2.7: an unterminated literal is the lexer's error to report; stop
             // at the newline so the rest of the file still preprocesses.
-            while (i < src.len and src[i] != '"' and src[i] != '\n') {
-                if (src[i] == '\\' and i + 1 < src.len) i += 1;
-                i += 1;
-            }
+            i = stringStop(src, i);
             if (i < src.len and src[i] == '"') i += 1;
             out.appendSliceAssumeCapacity(src[start..i]);
             continue;
@@ -997,11 +993,7 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
         // §2.7 strings are opaque to macro expansion and to directives.
         if (c == '"') {
             const start = i;
-            i += 1;
-            while (i < text.len and text[i] != '"' and text[i] != '\n') {
-                if (text[i] == '\\' and i + 1 < text.len) i += 1;
-                i += 1;
-            }
+            i = stringStop(text, i);
             if (i < text.len and text[i] == '"') i += 1;
             if (pp.emitting()) {
                 try pp.put(text[start..i]);
@@ -1472,13 +1464,7 @@ fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []const 
     while (i < text.len) {
         const c = text[i];
         switch (c) {
-            '"' => {
-                i += 1;
-                while (i < text.len and text[i] != '"' and text[i] != '\n') {
-                    if (text[i] == '\\' and i + 1 < text.len) i += 1;
-                    i += 1;
-                }
-            },
+            '"' => i = stringStop(text, i),
             '(', '[', '{' => try opens.append(pp.arena, c),
             ')', ']', '}' => {
                 // Non-empty: the first iteration pushes the '(' at `lparen`,
@@ -1816,6 +1802,18 @@ fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
 // Small helpers
 // ---------------------------------------------------------------------------
 
+/// Stop on a closing quote, an unescaped newline, or EOF; `start` is the opener.
+// ponytail: share the three identical scans. The lexer rejects escaped newlines
+// and `substitute` crosses bare ones; reuse either only if those rules converge.
+fn stringStop(text: []const u8, start: usize) usize {
+    var i = start + 1;
+    while (i < text.len and text[i] != '"' and text[i] != '\n') {
+        if (text[i] == '\\' and i + 1 < text.len) i += 1;
+        i += 1;
+    }
+    return i;
+}
+
 /// Cursor over the tail of a directive line.
 const Rest = struct {
     s: []const u8,
@@ -1883,10 +1881,11 @@ fn isSpace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == 0x0c;
 }
 fn isIdentStart(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == '$';
+    // ponytail: stdlib ASCII classes; `_` and `$` are Verilog's extensions.
+    return std.ascii.isAlphabetic(c) or c == '_' or c == '$';
 }
 fn isIdentChar(c: u8) bool {
-    return isIdentStart(c) or (c >= '0' and c <= '9');
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
 }
 
 // ---------------------------------------------------------------------------
@@ -2708,12 +2707,9 @@ pub const spice_primitives =
 /// order, and §6.2.2's top can never be a primitive.
 pub const spice_module_count = blk: {
     @setEvalBranchQuota(200_000);
-    const needle = "\nmodule ";
-    var n: u32 = 0;
-    for (0..spice_primitives.len - needle.len) |i| {
-        if (std.mem.eql(u8, spice_primitives[i..][0..needle.len], needle)) n += 1;
-    }
-    break :blk n;
+    // ponytail: count the fixed, non-overlapping header spelling with stdlib;
+    // use tokens if the embedded source ever needs a general declaration count.
+    break :blk @as(u32, @intCast(std.mem.count(u8, spice_primitives, "\nmodule ")));
 };
 
 /// annex D.3 — driver_access.vams, verbatim. Twelve masks naming the bit each

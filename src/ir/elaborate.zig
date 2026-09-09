@@ -592,14 +592,15 @@ const Flatten = struct {
         // rename map: an actual naming a net of a mid-level module has already
         // been flattened to `u.n`.
         for (child.ports, 0..) |p, i| {
-            const conn = self.connectionFor(inst, child, p, i);
+            const conn = connectionFor(inst, p, i);
             try unit.connected.put(self.a(), p.name, conn != null and conn.?.expr != .none);
             const actual: ?Ast.StrId = if (conn) |c| self.netRefName(c.expr) else null;
             if (actual) |n| {
                 // The port IS the parent's net. No new node, no new
                 // declaration: that identity is what makes the flatten a
                 // topology join rather than a copy.
-                const bound = self.renameOf(&parent, n);
+                // ponytail: the parent map already owns this lookup and fallback.
+                const bound = parent.rename.get(n) orelse n;
                 try unit.rename.put(self.a(), p.name, bound);
                 // §6.7.1 the port still HAS a hierarchical name, and probing it
                 // is legal — so the path has to resolve to the net it was joined
@@ -730,15 +731,8 @@ const Flatten = struct {
 
     /// §6.2.2 which connection binds `port` (the i'th declared port), or null
     /// for "not in the list at all".
-    fn connectionFor(
-        self: *Flatten,
-        inst: *const Ast.Instance,
-        child: *const Ast.ModuleDecl,
-        port: Ast.Port,
-        i: usize,
-    ) ?Ast.PortConn {
-        _ = child;
-        _ = self;
+    // ponytail: binding needs only the connection list and port, not flattening state.
+    fn connectionFor(inst: *const Ast.Instance, port: Ast.Port, i: usize) ?Ast.PortConn {
         const named = inst.ports.len != 0 and inst.ports[0].name != .none;
         if (!named) return if (i < inst.ports.len) inst.ports[i] else null;
         for (inst.ports) |c| if (c.name == port.name) return c;
@@ -1034,7 +1028,7 @@ const Flatten = struct {
                 const child = self.findModule(ps.target) orelse break :blk std.math.maxInt(i64);
                 var n: i64 = 0;
                 for (child.ports, 0..) |p, i| {
-                    const conn = self.connectionFor(inst, child, p, i);
+                    const conn = connectionFor(inst, p, i);
                     n += @intFromBool(conn == null or conn.?.expr == .none);
                 }
                 break :blk n;
@@ -1562,9 +1556,9 @@ const Flatten = struct {
                     mixed_port = true;
                     continue;
                 }
-                for (cands.items) |c| {
-                    if (c == d) break;
-                } else try cands.append(self.a(), d);
+                // ponytail: linear membership for short lists; use a set if this scan dominates.
+                if (std.mem.indexOfScalar(Ast.StrId, cands.items, d) == null)
+                    try cands.append(self.a(), d);
             }
             if (cands.items.len <= 1) continue; // the walk's answer stands
 
@@ -1609,17 +1603,14 @@ const Flatten = struct {
     /// "the contents of the list match"). First match across every
     /// `connectrules` block in source order, which is §7.7.2.1's tie-break.
     fn matchResolution(self: *Flatten, cands: []const Ast.StrId) ?*const Ast.ConnectResolution {
+        // ponytail: stdlib membership keeps exact-set matching; index sets if lists grow large.
         for (self.ctx.file.connectrules) |*cr| {
             rule: for (cr.resolutions) |*r| {
                 for (r.disciplines) |d| {
-                    for (cands) |c| {
-                        if (c == d) break;
-                    } else continue :rule;
+                    if (std.mem.indexOfScalar(Ast.StrId, cands, d) == null) continue :rule;
                 }
                 for (cands) |c| {
-                    for (r.disciplines) |d| {
-                        if (c == d) break;
-                    } else continue :rule;
+                    if (std.mem.indexOfScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
                 }
                 return r;
             }
@@ -1698,11 +1689,6 @@ const Flatten = struct {
     /// undeclared net §3.6.5 makes implicit — and keeps its own spelling.
     fn flat(self: *Flatten, local: Ast.StrId) Ast.StrId {
         return self.unit.rename.get(local) orelse local;
-    }
-
-    fn renameOf(self: *Flatten, unit: *const Unit, local: Ast.StrId) Ast.StrId {
-        _ = self;
-        return unit.rename.get(local) orelse local;
     }
 
     /// The net a port connection names. §6.2.2 allows an expression; VerA takes

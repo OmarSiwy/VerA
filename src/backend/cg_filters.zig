@@ -17,13 +17,10 @@
 
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
-const Analysis = @import("../ir/analysis.zig");
-const Lower = @import("../ir/lower.zig");
+// ponytail: filter planning reuses Gen's analysis and expression renderers.
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
-const VTy = Analysis.VTy;
-const assert = std.debug.assert;
 
 // =======================================================================
 // §4.5.11 / §4.5.12 filters

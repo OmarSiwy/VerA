@@ -20,7 +20,6 @@ const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
 const VTy = Analysis.VTy;
-const assert = std.debug.assert;
 
 // -------------------------------------------------------- §9.4 display ----
 //
@@ -328,7 +327,8 @@ pub fn emitFileCall(g: *Gen, name: []const u8, args: []const Mir.Value, site: us
 
 fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
     const eq = std.mem.eql;
-    if (isFileOut(name)) return emitFileWrite(g, name, args, site);
+    // ponytail: lowering owns the file-task list, including fclose/fflush.
+    if (Lower.isFileOutTask(name)) return emitFileWrite(g, name, args, site);
     // §9.5.1 Syntax 9-2: one argument is a multichannel descriptor, two are a
     // file descriptor. The presence of the type argument IS the discriminator,
     // and it is the only thing that decides which encoding comes back.
@@ -341,8 +341,6 @@ fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: u
     }
     // The one-argument descriptor operations, in clause order.
     const one = [_]struct { n: []const u8, k: []const u8 }{
-        .{ .n = "$fclose", .k = "zFClose" }, // §9.5.1
-        .{ .n = "$fflush", .k = "zFFlush" }, // §9.5.6
         .{ .n = "$fgets", .k = "zFGets" }, // §9.5.4.1 — the character count
         .{ .n = "$ftell", .k = "zFTell" }, // §9.5.5
         .{ .n = "$feof", .k = "zFEof" }, // §9.5.8
@@ -455,10 +453,6 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
     try g.b("}}) catch \"\"); }}", .{});
-}
-
-fn isFileOut(name: []const u8) bool {
-    return Lower.isFileOutTask(name);
 }
 
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
