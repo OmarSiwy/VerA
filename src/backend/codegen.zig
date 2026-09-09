@@ -376,6 +376,13 @@ pub const Gen = struct {
     /// reads them as leaves (unit_plan `pcHoisted`).
     pc_idx: []u32 = &.{},
     pc_vals: []Mir.Value = &.{},
+    /// §4.5.15 the solve-independent `$limit`/`seed` arguments, hoisted out of
+    /// the per-iterate clamp: value → `Instance.lp__<k>` field index or
+    /// `none_u32`, and the mapped values in field order. Filled by
+    /// `cg_limit.planPrep`; `precompute`'s tail writes them off ONE core
+    /// evaluation at x = 0, and `limit`/`seed` read them as leaves.
+    lp_idx: []u32 = &.{},
+    lp_vals: []Mir.Value = &.{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -437,6 +444,17 @@ pub const Gen = struct {
     /// already give a `flow(a,b)` slot. Values are node_order-space indices.
     branch_u: []u32 = &.{},
     n_u: u32 = 0,
+    /// Structural Jacobian columns per residual ROW: `pat[react][ru]` has bit
+    /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
+    /// it writes each row, so a row shape cannot be added without stating its
+    /// pattern. Empty until `emitResidual`/`emitFused` allocates it.
+    ///
+    /// The host reads the emitted constant to drop structurally-zero stamps at
+    /// COMPILE time; every bit here is a per-instance-per-iteration `+= 0.0`
+    /// into a matrix slot that the device knows can never be anything else.
+    pat: [2][]u64 = .{ &.{}, &.{} },
+    /// Which half of `pat` the current `emitStamps` writes.
+    pat_react: bool = false,
     /// Sanitized U-enum member name per unknown.
     u_names: [][]const u8 = &.{},
     /// Sanitized Model field name per `Lower.params` entry.
@@ -550,6 +568,9 @@ pub const Gen = struct {
         self.plan.lo_vals = self.lo_vals;
         self.plan.pc_idx = self.pc_idx;
         self.plan.pc_on = self.pc_vals.len != 0;
+        // LAST: §4.5.15 the clamp-argument hoist needs `lo_idx` filled, to name
+        // the core field `emitPrep` reads each argument out of.
+        try cg_limit.planPrep(self);
     }
 
     // ---------------------------------------------------- the shared core ----
@@ -736,7 +757,20 @@ pub const Gen = struct {
                 switch (row.op) {
                     .call => {
                         const d = self.mir.instData(inst).call;
+                        // §9.19's two queries answer from the model card alone:
+                        // `renderSysCall` spells `$param_given` as the Model
+                        // field `<p>__given` and `$port_connected` as the
+                        // literal 1, so both are as parameter-only as a
+                        // `param_ref` and precompute can re-spell them
+                        // character for character. Excluding them cost the
+                        // whole `<dev>temp` phase of every machine-converted
+                        // SPICE model: `if ($param_given(tox)) cox = …` guards
+                        // the ladder, an unhoistable condition makes the
+                        // select unhoistable, and one unhoistable select
+                        // strands every value downstream of it in the core.
                         break :blk std.mem.eql(u8, d.name, "$temperature") or
+                            std.mem.eql(u8, d.name, "$param_given") or
+                            std.mem.eql(u8, d.name, "$port_connected") or
                             (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
                     },
                     // A phi is not one value; the path latches read Instance
@@ -805,6 +839,28 @@ pub const Gen = struct {
         return e;
     }
 
+    /// Is a `pc__` field cheaper than recomputing this value every eval?
+    ///
+    /// It was "contains a libm-class op", because libm is what the BJT profile
+    /// named. That gate reads the cost of ONE root and misses the shape SPICE
+    /// temp code actually has: a long ladder of cheap parameter arithmetic
+    /// (`cox = eps/tox`, `leff = l - 2*ld`, `vt = k*T/q`, `beta = kp*w/leff`)
+    /// where no single step is expensive and the SUM is the whole `<dev>temp`
+    /// phase. mos1 recomputed 53 of its 115 core temporaries — every one of
+    /// them parameter-only — for 65 Ir per instance per Newton iteration,
+    /// which is exactly the work ngspice does once in `mos1temp.c`.
+    ///
+    /// The honest rule is the comparison the name asks for: a field costs one
+    /// load, so hoist anything that costs more than one load to rebuild. Every
+    /// candidate here is already an `inst_result` that does NOT fold to a
+    /// literal (`pcConsider` checked both), so it is at least one arithmetic
+    /// op over at least one operand — always more than a load. The libm walk
+    /// stays as the fast accept so the memo keeps paying on deep trees.
+    fn pcWorthAField(self: *Gen, exq: []PcCls, v: Mir.Value) bool {
+        if (self.pcExpensive(exq, v, 0)) return true;
+        return self.mir.valueDef(self.an.rv(v)) == .inst_result;
+    }
+
     /// One use of `o` from outside the hoistable region: make it a root if it
     /// qualifies. Ascending value order later turns `root` into `pc_idx`.
     fn pcConsider(self: *Gen, cls: []PcCls, exq: []PcCls, root: []bool, o: Mir.Value) void {
@@ -815,7 +871,7 @@ pub const Gen = struct {
         if (self.an.vty[i] != .real) return;
         // A tree that folds to a literal costs nothing per eval already.
         if (self.an.foldConst(v, 0, false) != null) return;
-        if (!self.pcExpensive(exq, v, 0)) return;
+        if (!self.pcWorthAField(exq, v)) return;
         root[i] = true;
     }
 
@@ -1111,7 +1167,7 @@ pub const Gen = struct {
         // renders as the identity inside one. `collapse` reads the core the
         // same way, so it opens `R` too.
         const cpairs = try self.collapsePairs();
-        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.pathLatches()) {
+        if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches()) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -1899,6 +1955,12 @@ pub const Gen = struct {
         for (0..self.pc_vals.len) |k| {
             try self.w("    pc__{d}: f64 = 0.0, // precompute\n", .{k});
         }
+        // §4.5.15 the solve-independent clamp arguments, latched by
+        // `cg_limit.emitPrep` off the same `precompute` call. After `pc__`
+        // because `emitPrep`'s core evaluation READS those fields.
+        for (0..self.lp_vals.len) |k| {
+            try self.w("    lp__{d}: f64 = 0.0, // $limit prep\n", .{k});
+        }
         try self.w("}};\n\n", .{});
     }
 
@@ -1918,24 +1980,34 @@ pub const Gen = struct {
     /// source is loop-free and total to compute, and an untaken guard's field
     /// simply goes unread (same argument as the eager `sel`).
     fn emitPrecompute(self: *Gen) Error!void {
-        if (self.pc_vals.len == 0) return;
-        try self.out.appendSlice(self.gpa, pscalar_txt);
+        // §4.5.15's clamp-argument latch rides in this same function — it is the
+        // same "once per model-card/temperature write" phase — so a model with
+        // no `pc__` roots but a hoisted clamp argument still needs the body.
+        const has_pc = self.pc_vals.len != 0;
+        const has_lp = self.lp_vals.len != 0;
+        if (!has_pc and !has_lp) return;
+        if (has_pc) try self.out.appendSlice(self.gpa, pscalar_txt);
 
         // Plan the pc slice through the common-mode path: targets = pc_vals.
+        // Skipped wholesale when there are none: `analyze` would clear the
+        // live set for an empty target list and the `defer` would hand the
+        // units back a `pc_on = true` that `planUnits` never set.
         const save_idx = self.plan.lo_idx;
         const save_vals = self.plan.lo_vals;
-        self.plan.lo_idx = self.pc_idx;
-        self.plan.lo_vals = self.pc_vals;
-        self.plan.pc_on = false; // computing the fields, not reading them
-        self.plan.flat = true;
-        self.plan.display_unit = false;
-        defer {
+        if (has_pc) {
+            self.plan.lo_idx = self.pc_idx;
+            self.plan.lo_vals = self.pc_vals;
+            self.plan.pc_on = false; // computing the fields, not reading them
+            self.plan.flat = true;
+            self.plan.display_unit = false;
+            try self.plan.analyze(.undef, true);
+        }
+        defer if (has_pc) {
             self.plan.lo_idx = save_idx;
             self.plan.lo_vals = save_vals;
             self.plan.pc_on = true;
             self.plan.flat = false;
-        }
-        try self.plan.analyze(.undef, true);
+        };
 
         self.uses_model = false;
         self.uses_x = false;
@@ -1949,29 +2021,36 @@ pub const Gen = struct {
         const at_model = self.out.items.len;
         try self.w("model: *const Model) void {{\n", .{});
         try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
-        try self.w("    const S = P;\n", .{});
+        if (has_pc) try self.w("    const S = P;\n", .{});
         self.cur_strict = self.common_mode == .strict;
 
-        self.hoist_idx.clearRetainingCapacity();
-        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
-        // RPO blocks, statement order within — the def-before-use order the
-        // structured emitter walks. Ascending VALUE order is not one: ifconv
-        // and trivial-phi aliasing can point an operand at a later index.
-        for (self.an.rpo) |bi| {
-            for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
-                const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-                if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
-                try self.w("    const t{d}: {s} = ", .{ self.plan.slot[i], zigTy(self.an.vty[i]) });
-                try self.renderInst(inst);
-                try self.w(";\n", .{});
+        if (has_pc) {
+            self.hoist_idx.clearRetainingCapacity();
+            try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
+            // RPO blocks, statement order within — the def-before-use order the
+            // structured emitter walks. Ascending VALUE order is not one: ifconv
+            // and trivial-phi aliasing can point an operand at a later index.
+            for (self.an.rpo) |bi| {
+                for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
+                    const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+                    if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
+                    try self.w("    const t{d}: {s} = ", .{ self.plan.slot[i], zigTy(self.an.vty[i]) });
+                    try self.renderInst(inst);
+                    try self.w(";\n", .{});
+                }
+            }
+            for (self.pc_vals, 0..) |v, k| {
+                const i = @intFromEnum(v);
+                assert(self.plan.slot[i] != none_u32); // a target is never inlined
+                try self.w("    inst.pc__{d} = t{d}.val();\n", .{ k, self.plan.slot[i] });
             }
         }
-        for (self.pc_vals, 0..) |v, k| {
-            const i = @intFromEnum(v);
-            assert(self.plan.slot[i] != none_u32); // a target is never inlined
-            try self.w("    inst.pc__{d} = t{d}.val();\n", .{ k, self.plan.slot[i] });
-        }
         assert(!self.uses_x); // pcClass excludes every §4.4 probe
+        // §4.5.15 AFTER the `pc__` writes: `emitPrep`'s core call reads them.
+        // It names both `model` and `inst`, so the unused-parameter patch below
+        // must not fire once it has been emitted.
+        try cg_limit.emitPrep(self);
+        if (has_lp) self.uses_model = true;
         if (!self.uses_model) self.patchParam(at_model, "model".len);
         try self.w("}}\n\n", .{});
     }
@@ -2362,9 +2441,18 @@ pub const Gen = struct {
             \\/// share one CFG, so they share one declaration and `eval`/`q` read
             \\/// their targets out of the returned struct.
             \\
-        , .{self.jobs.len});
+            \\/// `inline` because the ONLY caller shape is `eval`/`q`/`evalQ`
+            \\/// destructuring the returned struct immediately: behind a call
+            \\/// boundary the `[n_u]S` argument and the {d}-field result both go
+            \\/// to memory, the host's Dual derivative vectors spill instead of
+            \\/// staying in registers, and no live-out the caller drops can be
+            \\/// dead-coded. Measured on ARPice devices/mos6_inverter: 45.3 ms
+            \\/// inline vs 64.9 ms out-of-line (+43%), tran/fourbitadder +40%,
+            \\/// scaling/parallel_inverters_500 +51%.
+            \\
+        , .{ self.jobs.len, self.jobs.len });
         const at_fn = self.out.items.len;
-        try self.w("fn {s}(comptime S: type, ", .{self.common_name});
+        try self.w("inline fn {s}(comptime S: type, ", .{self.common_name});
         const at_x = self.out.items.len;
         try self.w("x: [n_u]S, ", .{});
         const at_model = self.out.items.len;
@@ -3598,10 +3686,31 @@ pub const Gen = struct {
                 // is solve-constant, so its derivative half is zero and the
                 // c·a^(c−1) treatment is intact. `UnitPlan.foldedExponent` is
                 // the exact mirror of this test; change both or neither.
+                // A SOLVE-CONSTANT exponent takes the same `pow(S, f64)` route
+                // as a literal one, with the f64 spelled as an expression
+                // instead of a number. `dFree` is the whole test: the exponent
+                // carries no derivative, so `zPow`'s ∂/∂y machinery has nothing
+                // to build and its `.val()` on the BASE — which is x-dependent
+                // and would pin lanes — buys nothing either. This is the case
+                // that fires for every junction grading coefficient in every
+                // SPICE model (`pow(1 - v/pj, 1 - mj)`, `pow(vgon, nc)`), so it
+                // is worth taking off the pinning path: `S.pow` is one protocol
+                // call a lane-parallel S implements per lane, where `zPow`
+                // collapses to lane 0. `UnitPlan.foldedExponent` still marks the
+                // exponent live here (it only skips a LITERAL fold), so the
+                // "change both or neither" mirror is intact.
+                const par_exp: ?[]const u8 = if (self.an.foldConst(b2, 0, false) == null and self.an.dFree(b2))
+                    try self.f64Const(b2, 1, true)
+                else
+                    null;
                 if (self.an.foldConst(b2, 0, false)) |k| {
                     try self.b("(", .{});
                     try self.renderVal(a, .real);
                     try self.b(").pow({s})", .{try self.fmtF64(k.f)});
+                } else if (par_exp) |s| {
+                    try self.b("(", .{});
+                    try self.renderVal(a, .real);
+                    try self.b(").pow({s})", .{s});
                 } else {
                     // zPow linearizes around `.val()` of BOTH operands
                     // (§4.3.1's negative-base/integer-y steering included),
@@ -3609,7 +3718,17 @@ pub const Gen = struct {
                     // gate's fixture-158 catch.
                     self.pinLanes(a);
                     self.pinLanes(b2);
-                    try self.helper2("zPow", a, b2);
+                    // ∂/∂y is dropped when the exponent cannot move with the
+                    // solve — `b.addC(-y)` is then value-0 and derivative-0, so
+                    // the term it scales contributes nothing and the `ln` that
+                    // built its coefficient is pure cost. Every junction
+                    // exponent in every SPICE model is a model PARAMETER, so
+                    // this is the case that fires.
+                    try self.b("zPow(S, ", .{});
+                    try self.renderVal(a, .real);
+                    try self.b(", ", .{});
+                    try self.renderVal(b2, .real);
+                    try self.b(", {})", .{!self.an.dFree(b2)});
                 }
             },
             // §4.2.1 conversions
@@ -4575,6 +4694,19 @@ pub const Gen = struct {
         // §4.5.15 $limit: the limiting ALGORITHM is a convergence aid the host
         // owns (contract `limit`); the LRM lets a simulator that does not apply
         // it return the access function unchanged, which is what happens here.
+        // §9.17.3 the USER-FUNCTION form. `lower.lowerLimitUser` has already
+        // inlined the function body and latched its return into the site's
+        // `LimitSlot`; what is left is the one thing only the backend can
+        // spell — the returned value carries the ACCESS FUNCTION's derivative,
+        // not the limiter's, so the clamp lands as a constant shift on the
+        // probe. args = (vnew, vlim). See `zLimitUf`.
+        if (eq(u8, name, "$limit$uf") and args.len == 2) {
+            // `.val()` on two x-dependent carriers: a vector S would collapse
+            // per lane, so this pins them for the same reason `zPow` does.
+            self.pinLanes(args[0]);
+            self.pinLanes(args[1]);
+            return self.helper2("zLimitUf", args[0], args[1]);
+        }
         if (eq(u8, name, "$limit"))
             return self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
         if (eq(u8, name, "$clog2"))
@@ -5068,6 +5200,11 @@ pub const Gen = struct {
     // =======================================================================
 
     fn emitDispatchers(self: *Gen) Error!void {
+        self.pat[0] = try self.arena.alloc(u64, self.n_u);
+        self.pat[1] = try self.arena.alloc(u64, self.n_u);
+        @memset(self.pat[0], 0);
+        @memset(self.pat[1], 0);
+
         try self.emitResidual(false);
         var any_q = false;
         for (self.lower.contributions.items) |c| {
@@ -5077,7 +5214,43 @@ pub const Gen = struct {
             try self.emitResidual(true);
             try self.emitFused();
         }
+        // AFTER the dispatchers: the pattern is what they emitted, accumulated
+        // row by row as each was written. Zig has no declaration order, so the
+        // constant reading last in the file is the one written last.
+        try self.emitPattern(any_q);
         try self.emitDisplay();
+    }
+
+    /// §5.6 structural Jacobian: which columns of each residual row can be
+    /// nonzero. The host's local Jacobian is `n_u × n_u` by construction, but a
+    /// device fills only part of it — mos1 fills 21 of 64 resistive and 16 of
+    /// 64 reactive entries — and the rest are `+= 0.0` into a matrix slot,
+    /// per instance, per Newton iteration. A comptime-visible constant lets the
+    /// host delete those stamps instead of executing them.
+    ///
+    /// OMITTED above 64 unknowns rather than widened: `Analysis.deps` is one
+    /// u64 per Value for exactly that reason, and a host that does not find
+    /// this declaration scatters densely, which is what it did before.
+    fn emitPattern(self: *Gen, any_q: bool) Error!void {
+        if (self.n_u > 64) return;
+        try self.w(
+            \\/// §5.6 structural Jacobian: bit `cu` of `jac_pattern[ru]` is set
+            \\/// when `∂eval(x)[ru]/∂x[cu]` can be nonzero. A clear bit is a
+            \\/// stamp with no physics behind it, and the host may drop it at
+            \\/// compile time. Over-approximate: a set bit costs a stamp that
+            \\/// happens to be zero, never a missing matrix entry.
+            \\
+        , .{});
+        try self.emitPatternRows("jac_pattern", self.pat[0]);
+        if (!any_q) return;
+        try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
+        try self.emitPatternRows("q_pattern", self.pat[1]);
+    }
+
+    fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
+        try self.w("pub const {s} = [n_u]u64{{\n", .{name});
+        for (rows, 0..) |m, i| try self.w("    0x{x:0>16}, // {s}\n", .{ m, self.u_names[i] });
+        try self.w("}};\n\n", .{});
     }
 
     /// §9.4 the one entry point a host calls to run the module's display tasks.
@@ -5138,6 +5311,9 @@ pub const Gen = struct {
     /// one `core` call without restating any of this.
     fn emitStamps(self: *Gen, react: bool) Error!u32 {
         var stamps: u32 = 0;
+        // Which half `patRow` accumulates into. `eval`/`q` and `evalQ` emit the
+        // same rows, so the second pass ORs in bits the first already set.
+        self.pat_react = react;
         // ONE core evaluation per residual, not one per contribution. LLVM does
         // not recover this by itself — measured, see `planCommon`'s header — so
         // the number of times the model runs is decided here, in the emitter.
@@ -5225,9 +5401,10 @@ pub const Gen = struct {
                 assert(!react); // splitContribution never runs on an indirect
                 try self.ind(2);
                 try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-                try self.stamp(2, c.hi, "add", "ib");
-                try self.stamp(2, c.lo, "sub", "ib");
+                try self.stamp(2, c.hi, "add", "ib", uBit(u));
+                try self.stamp(2, c.lo, "sub", "ib", uBit(u));
                 try self.ind(2);
+                self.patRow(@intCast(u), self.an.unknownDeps(val));
                 try self.b("res[@intFromEnum(U.{s})] = c;\n", .{self.u_names[u]});
                 try self.ind(1);
                 try self.b("}}\n", .{});
@@ -5243,15 +5420,17 @@ pub const Gen = struct {
                     // difference. See `flowOnlySignalFlowNet`.
                     if (!react) {
                         try self.ind(2);
+                        self.patRow(n, uBit(n) | self.an.unknownDeps(val));
                         try self.b("res[@intFromEnum(U.{0s})] = x[@intFromEnum(U.{0s})].sub(c);\n", .{self.u_names[n]});
                     } else {
                         try self.ind(2);
+                        self.patRow(n, self.an.unknownDeps(val));
                         try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.u_names[n]});
                     }
                 } else {
                     // §1.3.1.2: the value flows INTO hi and OUT OF lo.
-                    try self.stamp(2, c.hi, "add", "c");
-                    try self.stamp(2, c.lo, "sub", "c");
+                    try self.stamp(2, c.hi, "add", "c", self.an.unknownDeps(val));
+                    try self.stamp(2, c.lo, "sub", "c", self.an.unknownDeps(val));
                 },
                 .potential => {
                     // §5.6 branch relation: the branch current is its own
@@ -5262,9 +5441,10 @@ pub const Gen = struct {
                         const u = self.branch_u[i];
                         try self.ind(2);
                         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-                        try self.stamp(2, c.hi, "add", "ib");
-                        try self.stamp(2, c.lo, "sub", "ib");
+                        try self.stamp(2, c.hi, "add", "ib", uBit(u));
+                        try self.stamp(2, c.lo, "sub", "ib", uBit(u));
                         try self.ind(2);
+                        self.patRow(@intCast(u), nodeBit(c.hi) | nodeBit(c.lo) | self.an.unknownDeps(val));
                         try self.b("res[@intFromEnum(U.{s})] = ", .{self.u_names[u]});
                         try self.nodeVoltage(c.hi);
                         try self.b(".sub(", .{});
@@ -5275,6 +5455,7 @@ pub const Gen = struct {
                         // §5.6.1.2 the reactive part of a branch relation is a
                         // flux: v − dφ/dt = 0 ⇒ q on this row is −φ.
                         try self.ind(2);
+                        self.patRow(@intCast(u), self.an.unknownDeps(val));
                         try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.u_names[u]});
                     }
                 },
@@ -5301,6 +5482,9 @@ pub const Gen = struct {
             self.uses_x = true;
             stamps += 1;
             try self.ind(1);
+            // Reads the FINISHED res[port], so this row's columns are that
+            // row's — already accumulated by the contribution loop above.
+            self.patRow(pp.u, self.patOf(pp.port) | (if (react) 0 else uBit(pp.u)));
             if (react) {
                 try self.b("res[@intFromEnum(U.{s})] = res[@intFromEnum(U.{s})].neg();\n", .{
                     self.u_names[pp.u], self.u_names[pp.port],
@@ -5413,9 +5597,10 @@ pub const Gen = struct {
         if (!react) {
             try self.ind(2);
             try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-            try self.stamp(2, c.hi, "add", "ib");
-            try self.stamp(2, c.lo, "sub", "ib");
+            try self.stamp(2, c.hi, "add", "ib", uBit(u));
+            try self.stamp(2, c.lo, "sub", "ib", uBit(u));
             try self.ind(2);
+            self.patRow(@intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | self.switchRowDeps(i, c, react));
             try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
             try self.coreRef(flag);
             try self.b(", ", .{});
@@ -5427,6 +5612,7 @@ pub const Gen = struct {
             try self.b(");\n", .{});
         } else {
             try self.ind(2);
+            self.patRow(@intCast(u), uBit(u) | self.switchRowDeps(i, c, react));
             try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
             try self.coreRef(flag);
             try self.b(", c.neg(), ", .{});
@@ -5481,12 +5667,54 @@ pub const Gen = struct {
         try self.b("m.f{d}", .{self.lo_idx[@intFromEnum(v)]});
     }
 
-    fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8) Error!void {
+    fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8, bits: u64) Error!void {
         if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
+        self.patRow(node, bits);
         try self.ind(depth);
         try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].{1s}({2s});\n", .{
             self.u_names[node], opx, val,
         });
+    }
+
+    /// Row `node` gained a term whose derivative lives in `bits`. Ground has no
+    /// equation, so it has no row and no pattern. `pat_react` is set by the
+    /// residual half currently emitting, so every writer of `res[...]` records
+    /// its columns with one call beside the line that emits them.
+    fn patRow(self: *Gen, node: u16, bits: u64) void {
+        if (node == Lower.ground) return;
+        if (self.pat[@intFromBool(self.pat_react)].len == 0) return;
+        self.pat[@intFromBool(self.pat_react)][node] |= bits;
+    }
+
+    /// The column bit of one unknown. Out of `u64` range answers "every
+    /// column", which is the dense fallback `emitPattern` also takes.
+    fn uBit(u: u32) u64 {
+        return if (u >= 64) std.math.maxInt(u64) else @as(u64, 1) << @intCast(u);
+    }
+
+    /// Same, for a node that may be ground (no unknown, no column).
+    fn nodeBit(node: u16) u64 {
+        return if (node == Lower.ground) 0 else uBit(node);
+    }
+
+    /// The columns accumulated so far on row `u` of the half being emitted.
+    fn patOf(self: *const Gen, u: u32) u64 {
+        const half = self.pat[@intFromBool(self.pat_react)];
+        return if (half.len == 0) std.math.maxInt(u64) else half[u];
+    }
+
+    /// Columns of the row `emitSwitchRow` emits. Which arm the `S.sel` takes is
+    /// a runtime decision, so the row carries EVERY arm's columns: its own
+    /// value, the switch partner's, and `ib` — the open circuit and both flow
+    /// forms all name it.
+    fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
+        var acc = uBit(self.branch_u[i]) |
+            self.an.unknownDeps(if (react) c.react_val else c.resist_val);
+        if (self.switchFlowOf(i)) |j| {
+            const f = self.lower.contributions.items[j];
+            acc |= self.an.unknownDeps(if (react) f.react_val else f.resist_val);
+        }
+        return acc;
     }
 
     fn nodeVoltage(self: *Gen, node: u16) Error!void {
@@ -6026,11 +6254,23 @@ pub const Gen = struct {
             \\pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8 {{
             \\    var xr: [n_u]R = undefined;
             \\    for (&xr) |*p| p.* = R.con(0.0);
-            \\    const m = core(R, xr, model, inst);
+            \\    // SEEDS ITS OWN PRECOMPUTE, on a local copy. `collapse` decides
+            \\    // TOPOLOGY, so a host must call it while building the matrix —
+            \\    // before the batch exists and therefore before the batch runs
+            \\    // `precompute`. But it answers by evaluating `core` at x = 0, and
+            \\    // `core` reads `Instance.pc__*`: without this the retention flags
+            \\    // are read off unwritten zeros and a device collapses (or fails to)
+            \\    // on garbage. `precompute` is a pure function of (model, instance),
+            \\    // so computing it here is the same answer the batch will compute
+            \\    // later, and the copy keeps the caller's Instance untouched.
+            \\{s}    const m = core(R, xr, model, {s});
             \\    var parent: [n_u]u8 = undefined;
             \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
             \\
-        , .{});
+        , .{
+            if (self.pc_vals.len != 0) "    var pin = inst.*;\n    precompute(&pin, model);\n" else "",
+            if (self.pc_vals.len != 0) "&pin" else "inst",
+        });
         for (pairs, 0..) |p, pi| {
             const fi = @intFromEnum(self.an.rv(p.flag));
             const k = self.lo_idx[fi];
@@ -6514,21 +6754,52 @@ const math_txt =
     \\///   integer steps, so no continuous ∂/∂y exists and 0 is the honest slope.
     \\/// Non-finite slopes (x = 0 with y < 1, domain-error NaNs) are dropped the
     \\/// same way zHypot drops its cone tip.
-    \\/// The three transcendentals go through `S.con(x)`, not `std.math.pow`
-    \\/// and `@log`, for the reason `devSafe` exists: a unit body also compiles
+    \\/// Both transcendentals go through `S.con(x)`, not `std.math.pow` and
+    \\/// `@log`, for the reason `devSafe` exists: a unit body also compiles
     \\/// for nvptx, which has no libm, and a raw one is "no libcall available
     \\/// for flog/fexp" at PTX assembly. On a host S it is the same libm call,
     \\/// bit for bit, and the zero-derivative carriers fold away.
-    \\fn zPow(comptime S: type, a: S, b: S) S {
+    \\fn zPow(comptime S: type, a: S, b: S, comptime varying_exponent: bool) S {
     \\    const x = a.val();
     \\    const y = b.val();
     \\    const v = S.con(x).pow(y).val();
-    \\    const gx = y * S.con(x).pow(y - 1.0).val();
-    \\    const gy = if (x > 0.0) v * S.con(x).log().val() else 0.0;
+    \\    // y·x^(y−1) = y·v/x — algebraically exact for x != 0, the negative-base
+    \\    // integral-y clause included, and ONE pow instead of two. A second
+    \\    // `S.con(x).pow(y - 1.0)` was half of the 828k pow calls on
+    \\    // tran/fourbitadder and half of the 51% of instructions mos6_inverter
+    \\    // spent under pow (callgrind, 2026-09-07): every junction exponent in
+    \\    // every SPICE model is a model PARAMETER, so codegen's `.pow` arm sends
+    \\    // all of them here rather than down `Dual.pow`'s own c·p/x.
+    \\    //
+    \\    // x == 0 keeps the second pow, and is NOT a rounding concern: at y == 1
+    \\    // the true slope is 1, but v/x is 0/0 = NaN and the gate below would
+    \\    // drop the term and flatten the Jacobian row. `mjs` defaults to 0 in
+    \\    // bjt.va, so `1 - mjs` is exactly that exponent and the substrate base
+    \\    // `1 - v/ps` reaches exactly 0 at v == ps. The branch is never taken on
+    \\    // a normal bias point, so the hot path is still one pow, and where it
+    \\    // IS taken the expression is the old one character for character.
+    \\    // Elsewhere the two forms sit within 6 ulp of a 60-digit reference and
+    \\    // neither is uniformly closer; the result is a Jacobian entry, and
+    \\    // Newton converges to the accuracy of the RESIDUAL.
+    \\    const gx = if (x != 0.0) y * v / x else y * S.con(x).pow(y - 1.0).val();
+    \\    const gy: f64 = if (varying_exponent and x > 0.0) v * S.con(x).log().val() else 0.0;
     \\    var r = S.con(v);
     \\    if (std.math.isFinite(gx) and gx != 0.0) r = r.add(a.addC(-x).scale(gx));
     \\    if (std.math.isFinite(gy) and gy != 0.0) r = r.add(b.addC(-y).scale(gy));
     \\    return r;
+    \\}
+    \\/// §9.17.3 `$limit(access, user_function, args…)`: the value is what the
+    \\/// user limiter returned, the DERIVATIVE is the access function's.
+    \\///
+    \\/// SPICE evaluates the device at the limited bias and stamps
+    \\/// `I(vlim) + g(vlim)·(v − vlim)`, so the residual stays linear in the
+    \\/// true unknown past the clamp point and the Jacobian entry never
+    \\/// vanishes. Differentiating the limiter instead gives dv_lim/dv = 0
+    \\/// inside the clamped region — a device contributing no conductance,
+    \\/// which is a singular row for a floating internal node. So: shift the
+    \\/// probe by the constant the clamp moved it, rather than replace it.
+    \\fn zLimitUf(comptime S: type, vnew: S, vlim: S) S {
+    \\    return vnew.addC(vlim.val() - vnew.val());
     \\}
     \\fn zIabs(a: i64) i64 { // §4.3.1 integer abs, §3.2's 32-bit result
     \\    return @as(i32, @truncate(if (a < 0) -%a else a));
@@ -6882,6 +7153,7 @@ const helpers_head_txt =
     \\// The §4.3/§4.5 kernels, public so `u/<key>.zig` can alias them. device.zig
     \\// carries the same text privately: it must stay a valid stand-alone device.
     \\const std = @import("std");
+    \\const contract = @import("contract");
     \\
     \\
 ;
@@ -7394,7 +7666,11 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
         try std.testing.expect(std.mem.indexOf(u8, o.text[lo..hi], decl) != null);
         try std.testing.expect(lo <= o.unit_fn[i] and o.unit_fn[i] < hi);
         const at = o.text[o.unit_fn[i]..];
-        try std.testing.expect(std.mem.startsWith(u8, at, decl) or std.mem.startsWith(u8, at, "pub fn "));
+        // `inline` included: splicing `pub ` in front of it gives
+        // `pub inline fn`, which is what the merged core is emitted as.
+        try std.testing.expect(std.mem.startsWith(u8, at, decl) or
+            std.mem.startsWith(u8, at, "pub fn ") or
+            std.mem.startsWith(u8, at, "inline fn "));
     }
     // The tail after the last unit is the dispatcher, not more units.
     try std.testing.expect(std.mem.indexOf(u8, o.text[o.unit_hi[o.unit_hi.len - 1]..], "pub fn eval(") != null);
@@ -9171,7 +9447,7 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
     // steers only on lane-UNIFORM state (dt, ic, inst history — never x).
     const pinned = [_][]const u8{
         "zPow",    "zHypot", "zFmod", "zFloor", "zCeil",
-        "zAtan2",  "zLimexp", "zWrap",
+        "zAtan2",  "zLimexp", "zWrap",  "zLimitUf",
     };
     const uniform = [_][]const u8{
         "zDdt", "zIdt", "zIdtAcc", "zIdtmod", "zSlew", "zTransFrac",

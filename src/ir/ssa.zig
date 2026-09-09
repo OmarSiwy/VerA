@@ -272,9 +272,9 @@ pub const SsaBuilder = struct {
             const new_stride = @max(b + 1, @max(self.block_stride * 2, 16));
             const new_cap = @max(self.place_cap, 1);
             const grown = try mapZeroed(@as(usize, new_cap) * new_stride);
-            // Re-stride: copy each old row to the front of its wider slot.
+            // Unminted rows are zero already; copying them would fault in pages.
             var row: u32 = 0;
-            while (row < self.place_cap) : (row += 1) {
+            while (row < @min(self.place_cap, self.next_place)) : (row += 1) {
                 const src = self.defs[row * self.block_stride ..][0..self.block_stride];
                 @memcpy(grown[row * new_stride ..][0..self.block_stride], src);
             }
@@ -598,4 +598,40 @@ test "ssa: diamond phi, trivial collapse, loop phi, undefined read" {
     // Never written anywhere ⇒ undef, not a live phi.
     const z = b.newPlace();
     try std.testing.expectEqual(Mir.Value.undef, mir.resolveAlias(try b.readVariable(z, join)));
+}
+
+test "ssa: matrix growth preserves values, undefined cells and unused rows" {
+    const gpa = std.testing.allocator;
+    var mir: Mir = .{ .name = "ssa_growth" };
+    defer mir.deinit(gpa);
+    var b = SsaBuilder.init(gpa, &mir);
+    defer b.deinit();
+
+    const entry = try mir.addBlock(gpa);
+    const x = b.newPlace();
+    const y = b.newPlace();
+    try b.writeVariable(x, entry, .f_one);
+    try b.writeVariable(y, entry, .undef);
+    var last = entry;
+    for (0..16) |_| last = try mir.addBlock(gpa);
+    try b.writeVariable(x, last, .f_two); // grow the block axis with spare rows
+    try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
+    try std.testing.expectEqual(Mir.Value.undef, try b.readVariable(y, entry));
+    try std.testing.expectEqual(Mir.Value.f_two, try b.readVariable(x, last));
+    try std.testing.expectEqual(null, b.defsPeek(y, last));
+
+    const z = b.newPlace(); // this row was not copied during block growth
+    try std.testing.expectEqual(null, b.defsPeek(z, entry));
+    try std.testing.expectEqual(null, b.defsPeek(z, last));
+    try b.writeVariable(z, last, .f_neg_one);
+    const old_cap = b.place_cap;
+    while (b.next_place <= old_cap) {
+        try b.writeVariable(b.newPlace(), entry, .f_two); // grow the place axis
+    }
+    try std.testing.expectEqual(Mir.Value.f_one, try b.readVariable(x, entry));
+    try std.testing.expectEqual(Mir.Value.undef, try b.readVariable(y, entry));
+    try std.testing.expectEqual(Mir.Value.f_two, try b.readVariable(x, last));
+    try std.testing.expectEqual(Mir.Value.f_neg_one, try b.readVariable(z, last));
+    try std.testing.expectEqual(null, b.defsPeek(z, entry));
+    try std.testing.expectEqual(null, b.defsPeek(y, last));
 }

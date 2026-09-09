@@ -198,8 +198,6 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, use
     // of this diamond, or the conversion cannot rewrite it.
     const then_key: Mir.Block = then_arm orelse x;
     const else_key: Mir.Block = else_arm orelse x;
-    var phis: std.ArrayList(Mir.Inst) = .empty;
-    defer phis.deinit(gpa);
     {
         var it = mir.blockInsts(join);
         while (it.next()) |inst| {
@@ -208,7 +206,6 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, use
             if (mir.resolveAlias(r) != r) continue; // collapsed — dead row
             if (phiValueFor(mir, inst, then_key) == null) return false;
             if (phiValueFor(mir, inst, else_key) == null) return false;
-            try phis.append(gpa, inst);
         }
     }
 
@@ -228,11 +225,17 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, use
     // comparison as the select's cond, where codegen can render it as a
     // lane-true S mask instead of an i64 round-trip.
     const cond = peelToBool(mir, br.cond);
-    for (phis.items) |phi| {
+    var phis = mir.blockInsts(join);
+    while (phis.next()) |phi| {
+        if (mir.instOp(phi) != .phi) continue;
+        const result = mir.instResult(phi);
+        if (mir.resolveAlias(result) != result) continue;
         const vt = phiValueFor(mir, phi, then_key).?;
         const ve = phiValueFor(mir, phi, else_key).?;
         const sel = try mir.emit(gpa, x, .select, &.{ cond, vt, ve });
-        try rewritePhi(gpa, mir, phi, then_key, else_key, x, sel);
+        // emit may relocate the borrowed column; the cursor itself is an index.
+        phis.next_col = mir.insts.items(.next);
+        rewritePhi(mir, phi, then_key, else_key, x, sel);
     }
     _ = try mir.emitJump(gpa, x, join);
     return true;
@@ -318,24 +321,99 @@ fn appendExisting(mir: *Mir, dst: Mir.Block, inst: Mir.Inst) void {
 /// Replace this phi's diamond pairs with one `(x, sel)` pair; if that leaves a
 /// single incoming value the phi collapses to an alias, exactly like ssa.zig's
 /// trivial-phi removal.
-fn rewritePhi(gpa: std.mem.Allocator, mir: *Mir, phi: Mir.Inst, then_key: Mir.Block, else_key: Mir.Block, x: Mir.Block, sel: Mir.Value) !void {
+fn rewritePhi(mir: *Mir, phi: Mir.Inst, then_key: Mir.Block, else_key: Mir.Block, x: Mir.Block, sel: Mir.Value) void {
     const d = mir.instData(phi).phi;
-    var pairs: std.ArrayList(Mir.PhiPair) = .empty;
-    defer pairs.deinit(gpa);
+    var count: u32 = 0;
+    // Validation found both edges: replacing them by one always fits. Payload
+    // regions belong to individual instructions; compact only this phi's region.
     for (0..d.count) |k| {
         const p = mir.phiPair(phi, @intCast(k));
         if (p.block == then_key or p.block == else_key) continue;
-        try pairs.append(gpa, p);
+        mir.extra.items[d.start + count * 2] = @intFromEnum(p.block);
+        mir.extra.items[d.start + count * 2 + 1] = @intFromEnum(p.value);
+        count += 1;
     }
-    try pairs.append(gpa, .{ .block = x, .value = sel });
-    // The pairs are ALWAYS rewritten, even when the phi collapses to an alias:
-    // proof.zig evaluates dead phi rows left in the chain (ssa.zig contract 2)
-    // and counts their pairs as uses (markSelectArms), so stale pairs naming
-    // the arm values would cost the arm its single-use guard — silently
-    // dropping `x > 0 ? ln(x) : 0` from .optimized to .strict. A single
-    // `(x, sel)` pair is exactly the trivial-phi shape ssa.zig leaves behind:
-    // its join and finiteness equal the alias target's, so the prover's
-    // through-the-alias writes stay consistent.
-    try mir.setPhiPairs(gpa, phi, pairs.items);
-    if (pairs.items.len == 1) mir.setAlias(mir.instResult(phi), sel);
+    mir.extra.items[d.start + count * 2] = @intFromEnum(x);
+    mir.extra.items[d.start + count * 2 + 1] = @intFromEnum(sel);
+    mir.insts.items(.c)[@intFromEnum(phi)] = count + 1;
+    // Even dead phis must hold the new pairs: proof evaluates their operands.
+    if (count == 0) mir.setAlias(mir.instResult(phi), sel);
+}
+
+test "phi compaction preserves unrelated edges and neighboring payloads" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const entry = try mir.addBlock(a);
+    const left = try mir.addBlock(a);
+    const right = try mir.addBlock(a);
+    const join = try mir.addBlock(a);
+    const result = try mir.emitPhi(a, join, &.{
+        .{ .block = left, .value = .zero },
+        .{ .block = entry, .value = .one },
+        .{ .block = right, .value = .one },
+    });
+    const phi = mir.valueDef(result).inst_result;
+    const neighbor = try mir.addExtra(a, &.{ 17, 23 });
+    const size = mir.extra.items.len;
+    rewritePhi(&mir, phi, left, right, join, .zero);
+    try std.testing.expectEqual(size, mir.extra.items.len);
+    try std.testing.expectEqual(@as(u32, 2), mir.instData(phi).phi.count);
+    try std.testing.expectEqual(Mir.PhiPair{ .block = entry, .value = .one }, mir.phiPair(phi, 0));
+    try std.testing.expectEqual(Mir.PhiPair{ .block = join, .value = .zero }, mir.phiPair(phi, 1));
+    try std.testing.expectEqual(result, mir.resolveAlias(result));
+    rewritePhi(&mir, phi, entry, join, entry, .one);
+    try std.testing.expectEqual(Mir.Value.one, mir.resolveAlias(result));
+    try std.testing.expectEqual(Mir.PhiPair{ .block = entry, .value = .one }, mir.phiPair(phi, 0));
+    try std.testing.expectEqual(size, mir.extra.items.len);
+    try std.testing.expectEqualSlices(u32, &.{ 17, 23 }, mir.extra.items[neighbor..]);
+}
+
+test "if conversion refreshes phi iterator when select emission grows instruction columns" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const entry = try mir.addBlock(a);
+    const left = try mir.addBlock(a);
+    const right = try mir.addBlock(a);
+    const join = try mir.addBlock(a);
+    const cond = try mir.addBlockParam(a, 0);
+    _ = try mir.emitBranch(a, entry, cond, left, right);
+    const lv = try mir.emit(a, left, .fadd, &.{ .f_one, .f_two });
+    _ = try mir.emitJump(a, left, join);
+    const rv = try mir.emit(a, right, .fmul, &.{ .f_two, .f_two });
+    _ = try mir.emitJump(a, right, join);
+    const left_values = [_]Mir.Value{ lv, .f_one };
+    const right_values = [_]Mir.Value{ rv, .f_two };
+    var results: [2]Mir.Value = undefined;
+    for (&results, left_values, right_values) |*result, l, r| result.* = try mir.emitPhi(a, join, &.{
+        .{ .block = left, .value = l },
+        .{ .block = right, .value = r },
+    });
+
+    // The first select must grow the SoA allocation. A cached .next slice
+    // then points into freed/relocated columns while more join phis remain.
+    try mir.insts.setCapacity(a, mir.insts.len);
+    const old_capacity = mir.insts.capacity;
+    try std.testing.expectEqual(mir.insts.len, old_capacity);
+    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir, &.{}));
+    try std.testing.expect(mir.insts.capacity > old_capacity);
+
+    for (results, left_values, right_values) |result, l, r| {
+        const selected = mir.resolveAlias(result);
+        try std.testing.expect(selected != result);
+        const inst = mir.valueDef(selected).inst_result;
+        try std.testing.expectEqual(Mir.Opcode.select, mir.instOp(inst));
+        const select = mir.instData(inst).ternary;
+        try std.testing.expectEqual(cond, select.cond);
+        try std.testing.expectEqual(l, select.then_val);
+        try std.testing.expectEqual(r, select.else_val);
+    }
+    var selects: u32 = 0;
+    var insts = mir.blockInsts(entry);
+    while (insts.next()) |inst| if (mir.instOp(inst) == .select) {
+        selects += 1;
+    };
+    try std.testing.expectEqual(@as(u32, 2), selects);
+    try std.testing.expectEqual(join, mir.instData(lastInst(&mir, entry).?).jump.target);
 }

@@ -520,6 +520,12 @@ held_vars: std.ArrayList(HeldVar) = .empty,
 /// Source names `markHeldVars` found under an `@(...)`, collected BEFORE the
 /// module's variables are declared. Empty for a module with no event control.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
+/// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
+/// Collected by `collectLimitSlots` before the analog block is lowered.
+limit_slots: std.ArrayList(LimitSlot) = .empty,
+/// §9.15 the model reads `$simparam("iteration")` or `$simparam("iniLim")`, so
+/// codegen owes it `Instance.newton_iteration` and the two hooks that move it.
+uses_newton_iter: bool = false,
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -559,6 +565,48 @@ pub const HeldVar = struct {
     /// stores it back on the accepted solution. Filled by `finishHeldVars`.
     final: Mir.Value = .undef,
     place: Ssa.Place,
+};
+
+/// §9.17.3 one `$limit(access, user_function, …)` STATE SLOT.
+///
+/// KEYED BY THE ACCESS FUNCTION, not by the call site, and that is the whole
+/// design decision here. §9.17.3 says the second argument the simulator passes
+/// is "the appropriate internal state; GENERALLY, this is the value that was
+/// returned by the $limit() function on the previous iteration", and §9.17.3's
+/// opening sentence puts the state on the ARGUMENT ("internal state containing
+/// information about the argument on previous iterations"). Per-CALL-SITE state
+/// cannot express the accessor idiom every machine-converted SPICE model uses:
+///
+///     MOS1vgs  = type * $limit(V(g,s), DEVlimitOldGet);            // reads
+///     …model's own fetlim/limvds/pnjlim ladder in plain Verilog-A…
+///     load_vgs = type * $limit(V(g,s), DEVlimitNewSet, …, limited); // writes
+///
+/// `DEVlimitOldGet(vnew,vold) = vold`, so a per-site slot would store back the
+/// value it just read and freeze at its default forever — every DEV*lim in the
+/// model becomes a no-op and the Newton damping is lost. One slot per access
+/// function makes the reader see what the writer left, which is what the idiom
+/// means and what ngspice's `MOS1vgs` state field IS. When each site names a
+/// distinct access function the two readings coincide, so this is a strict
+/// generalisation of per-site state, never a weakening.
+pub const LimitSlot = struct {
+    /// `V(g,s)` as it reads in the source, for the `Instance` field comment.
+    label: []const u8,
+    access: Access,
+    hi: u16,
+    lo: u16,
+    neg: bool,
+    br: u32,
+    /// This evaluation's returned value. Seeded in the entry block with the
+    /// `$limit$old` read, overwritten by each site, and read back at the end of
+    /// the block — so a site under an `if` that does not run leaves the slot
+    /// holding what it held, and never an undefined SSA value.
+    place: Ssa.Place,
+    /// The `$limit$old` call seeded into the ENTRY block: the value this slot
+    /// returned on the previous Newton iterate.
+    seed: Mir.Value,
+    /// The slot's value at the END of the analog block. `updateState` stages
+    /// it; the next iterate's `updateState` promotes it into the read field.
+    final: Mir.Value = .undef,
 };
 
 /// One §9.4/§9.7.3 print site.
@@ -741,6 +789,7 @@ pub fn deinit(self: *Lower) void {
     self.deferred_displays.deinit(gpa);
     self.active_genvars.deinit(gpa);
     self.held_vars.deinit(gpa);
+    self.limit_slots.deinit(gpa);
     self.held_names.deinit(gpa);
     self.events.deinit(gpa);
 }
@@ -1368,6 +1417,12 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the continuous side is then judged against.
     try self.checkDiscreteContext(module);
 
+    // §9.17.3 the user-function `$limit` state slots. BEFORE the body, because
+    // each slot's previous-iterate read has to be seeded in the ENTRY block —
+    // a site under an `if` must still leave a value the end-of-block read can
+    // find, and a slot minted inside the arm would not dominate it.
+    for (module.analog) |blk| try self.collectLimitSlots(blk.body);
+
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
         if (blk.is_initial) {
@@ -1410,6 +1465,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
     for (self.held_vars.items) |*h| h.final = try self.builder.readVariable(h.place, self.cur);
+    // §9.17.3 and the same again for every `$limit` state slot: the value the
+    // last site on that access function returned this evaluation, or — if none
+    // of them ran — the `$limit$old` seed, unchanged.
+    for (self.limit_slots.items) |*s| s.final = try self.builder.readVariable(s.place, self.cur);
 
     // §9.17 analog kernel control. Emitted LAST and in this fixed order so the
     // unit enumeration stays a pure function of the source.
@@ -7909,7 +7968,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const args = ex.args(e);
         if (args.len == 1) {
             if (self.constEval(args[0])) |c| switch (c) {
-                .str => |s| if (self.simparamValue(s) == null) {
+                .str => |s| if (self.simparamValue(s) == null and !simparamIsRuntime(s)) {
                     var b = self.errAtWith(e, .E0811);
                     b.msg("`\"{s}\"`", .{s});
                     b.note("$simparam(\"{s}\", <expression>) supplies the value to use instead, and §9.15 makes that form legal for any name", .{s});
@@ -7919,6 +7978,12 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 else => {},
             };
         }
+        // The Newton-iterate counter costs an `Instance` field plus an
+        // `updateState`/`stateCtl` pair, so it is emitted only for a model that
+        // reads one of the two names that need it (`simparamIsRuntime`).
+        if (args.len >= 1) if (self.constStrArg(args[0])) |s| {
+            if (simparamIsRuntime(s)) self.uses_newton_iter = true;
+        };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
     // §9.20 the two alias functions: six validity rules, all of them about the
@@ -7928,8 +7993,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     // §9.17.3 Syntax 9-12's THIRD form, `$limit(access, analog_function_identifier,
     // arg_list)`. The second argument names a §4.7 function, so it is not a value
-    // and must not be looked up as one (E0314 was the whole gap): it is dropped
-    // here, along with the tail that §9.17.3 says is passed on to that function.
+    // and must not be looked up as one (E0314 was the whole gap).
     if (std.mem.eql(u8, name, "$limit") and sys_args.len >= 2) {
         if (try self.limitUserFunc(sys_args[1])) |fd| {
             // "The arguments of the user-defined function shall all be declared
@@ -7948,28 +8012,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 try b.emit();
                 return poison;
             }
-            // §4.5.15 lets the simulator decline a limiting request ("the
-            // simulator may choose to ignore the limiting request"), and §9.17.3
-            // only calls the user function "if the simulator determines that
-            // limiting is needed to improve convergence". VerA declines: the
-            // limiter is not called, and §9.17.3's converged answer — "When the
-            // simulator has converged, the return value of the $limit() function
-            // is the value of the access function reference, within appropriate
-            // tolerances" — is what is left, which is the probe. Written as the
-            // one-argument form so `cg_limit` reaches its own decline path and
-            // renders the identity of the probe.
-            //
-            // ponytail: declined, not inlined. Inlining the limiter would mean
-            // emitting it into the contract's `limit` hook with the PREVIOUS
-            // return as its second argument, i.e. one more piece of per-call
-            // solver state; the identity answer above is what §9.17.3 promises at
-            // convergence either way, and no fixture can see the difference
-            // (a non-identity limiter would, which is why this is written down).
-            return .{
-                // §9.17.3 the probe argument is an ACCESS FUNCTION, never a net.
-                .v = try self.call(name, &.{(try self.lowerSysArg(sys_args[0], false)).v}),
-                .ty = sysFuncTy(name),
-            };
+            return self.lowerLimitUser(e, fd, sys_args);
         }
     }
     // §9.21 — Syntax 9-16 is not an ordinary argument list: it carries a data
@@ -8345,6 +8388,152 @@ fn limitUserFunc(self: *Lower, a: Ast.ExprId) Oom!?*const Ast.FuncDecl {
     return null;
 }
 
+/// §9.17.3 the third form: `$limit(access, user_function, args…)` returns
+/// `user_function(vnew, vold, args…)` — the access function's value at this
+/// iterate, the value the slot returned at the previous one, then the call's
+/// own tail. The function is an ordinary §4.7 body, so it is INLINED like every
+/// other analog function; the only thing §9.17.3 adds is where `vold` comes
+/// from (`LimitSlot`) and where the return goes (the same slot).
+///
+/// THE RETURNED VALUE CARRIES THE ACCESS FUNCTION'S DERIVATIVE, not the
+/// limiter's. That is the point of limiting and not a shortcut: SPICE evaluates
+/// the device at the limited bias and stamps `I(vlim) + g(vlim)·(v − vlim)`, so
+/// the residual is LINEAR in the true unknown beyond the limit point and the
+/// Jacobian entry never vanishes. Differentiating the limiter itself instead
+/// gives dv_lim/dv = 0 inside the clamped region — a device that contributes no
+/// conductance, which is a singular row for a floating internal node. `$limit$uf`
+/// renders that as `vlim.val()` shifted onto the probe (codegen `zLimitUf`), the
+/// same relation the STRING form gets for free from the host writing its clamp
+/// back into `x` before `eval` runs (cg_limit.zig's header).
+fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args: []const Ast.ExprId) Oom!TypedValue {
+    // §9.17.3 the first argument is an ACCESS FUNCTION, never a net.
+    const vnew = try self.toReal(try self.lowerSysArg(args[0], false));
+    const slot = try self.limitSlotOf(args[0]) orelse {
+        // No access function to key state on (`$limit(x, f)` with an ordinary
+        // expression). §4.5.15 lets a simulator decline any limiting request;
+        // declining is the one answer that cannot invent state.
+        return .{ .v = try self.call("$limit", &.{vnew}), .ty = .real };
+    };
+    // The SEED, not the slot's running value: §9.17.3 says the second argument
+    // is "the value that was returned by the $limit() function on the PREVIOUS
+    // iteration", so every site on one access function reads the same number
+    // however many of them ran this time. Reading the running value instead
+    // chains them — a reader followed by a writer would limit twice per
+    // evaluation and halve the damping.
+    const old = self.limit_slots.items[slot].seed;
+    const res = try self.toReal(try self.inlineUserFuncPre(fd, &.{ vnew, old }, args[2..], e));
+    // The site's return is the slot's NEXT state. Written at the site, so the
+    // last site to run this evaluation is the one the next iterate reads —
+    // which is what makes the read-then-write accessor idiom work.
+    try self.builder.writeVariable(self.limit_slots.items[slot].place, self.cur, res);
+    return .{ .v = try self.call("$limit$uf", &.{ vnew, res }), .ty = .real };
+}
+
+/// The `limit_slots` index for this access function, minting nothing: every
+/// slot was created by `collectLimitSlots` before the body was lowered. Null
+/// when the argument is not an access function at all.
+fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
+    const t = try self.limitSlotKey(a) orelse return null;
+    for (self.limit_slots.items, 0..) |s, i| {
+        if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
+            return i;
+    }
+    return null;
+}
+
+/// The branch an access function names. `null` for anything that is not one.
+///
+/// Asked twice of the same expression — once by `collectLimitSlots`, once by
+/// the site — and that costs nothing: `branchOf`'s diagnostics are deduped by
+/// `(code, span)` in the bag, so a malformed access function is still reported
+/// exactly once.
+fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?Target {
+    if (a == .none or self.file.exprs.tag(a) != .branch_access) return null;
+    return self.branchOf(a);
+}
+
+/// §9.17.3 mint one state slot per ACCESS FUNCTION reached by a user-function
+/// `$limit`, in source order, seeded in the entry block. `LimitSlot`'s header
+/// says why the key is the access function and not the call site.
+fn collectLimitSlots(self: *Lower, id: Ast.StmtId) Oom!void {
+    if (id == .none) return;
+    switch (self.file.stmt(id)) {
+        .block => |b| for (b.body) |s| try self.collectLimitSlots(s),
+        .assign => |a| try self.collectLimitSlotsExpr(a.value),
+        .contribute => |c| try self.collectLimitSlotsExpr(c.rhs),
+        .indirect => |c| try self.collectLimitSlotsExpr(c.eqn),
+        .if_stmt => |s| {
+            try self.collectLimitSlotsExpr(s.cond);
+            try self.collectLimitSlots(s.then_s);
+            try self.collectLimitSlots(s.else_s);
+        },
+        .case_stmt => |s| {
+            try self.collectLimitSlotsExpr(s.scrutinee);
+            for (s.arms) |arm| try self.collectLimitSlots(arm.body);
+        },
+        .for_stmt => |s| {
+            try self.collectLimitSlotsExpr(s.cond);
+            try self.collectLimitSlots(s.body);
+        },
+        .while_stmt => |s| {
+            try self.collectLimitSlotsExpr(s.cond);
+            try self.collectLimitSlots(s.body);
+        },
+        .repeat_stmt => |s| try self.collectLimitSlots(s.body),
+        .event_control => |s| try self.collectLimitSlots(s.body),
+        .sys_task => |s| for (s.args) |a| try self.collectLimitSlotsExpr(a),
+        .jump => |j| try self.collectLimitSlotsExpr(j.value),
+        else => {},
+    }
+}
+
+fn collectLimitSlotsExpr(self: *Lower, e: Ast.ExprId) Oom!void {
+    if (e == .none) return;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    if (tag == .sys_call and std.mem.eql(u8, self.file.str(ex.strOf(e)), "$limit")) {
+        const args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+        if (args.len >= 2) {
+            if (try self.limitUserFunc(args[1]) != null) try self.addLimitSlot(args[0]);
+        }
+    }
+    switch (tag) {
+        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern, .event_function => {
+            for (ex.args(e)) |a| try self.collectLimitSlotsExpr(a);
+        },
+        .ternary => try self.collectLimitSlotsExpr(ex.ternaryElse(e)),
+        else => {},
+    }
+    try self.collectLimitSlotsExpr(ex.lhs(e));
+    try self.collectLimitSlotsExpr(ex.rhs(e));
+}
+
+fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
+    const t = try self.limitSlotKey(a) orelse return;
+    for (self.limit_slots.items) |s| {
+        if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
+            return;
+    }
+    const k: i64 = @intCast(self.limit_slots.items.len);
+    // A `call`, so it is opaque to `analysis.foldConst` — the previous iterate
+    // is not a constant, however constant the rest of the expression is.
+    const seed = try self.call("$limit$old", &.{try self.iconst(k)});
+    const place = self.builder.newPlace();
+    try self.builder.writeVariable(place, self.cur, seed);
+    try self.limit_slots.append(self.arena, .{
+        .label = try std.fmt.allocPrint(self.arena, "{s}({s},{s})", .{
+            if (t.access == .potential) "V" else "I", self.nodeName(t.hi), self.nodeName(t.lo),
+        }),
+        .access = t.access,
+        .hi = t.hi,
+        .lo = t.lo,
+        .neg = t.neg,
+        .br = t.br,
+        .place = place,
+        .seed = seed,
+    });
+}
+
 /// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`.
 /// True when the call was refused.
 ///
@@ -8571,9 +8760,12 @@ fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
 /// The list is short on purpose. Table 9-27 is prefaced "simulators shall accept
 /// the strings in Table 9-27 ... IF THEY SUPPORT THE PARAMETER", so a row VerA
 /// cannot answer honestly is better left unknown than answered with an invented
-/// number: "iteration" and "gdev" are properties of a solver run this compiler
-/// does not host, and "simulatorVersion" is required to increase monotonically
-/// across releases, which a constant cannot do.
+/// number: "gdev" is a property of a solver run this compiler does not host,
+/// and "simulatorVersion" is required to increase monotonically across
+/// releases, which a constant cannot do. The rows that ARE a property of the
+/// run and that the device can answer from its own state are in
+/// `simparamIsRuntime` instead — a constant is the wrong answer for those, not
+/// a missing one.
 pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
     const eq = std.mem.eql;
     // The two rows that come out of the SOURCE. Unknown when no `timescale was
@@ -8591,6 +8783,32 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
     // never being stepped or shrunk, so 1.0 is the true answer, not a stand-in.
     if (eq(u8, name, "scale") or eq(u8, name, "shrink") or eq(u8, name, "sourceScaleFactor")) return 1.0;
     return null;
+}
+
+/// §9.15 the simulation parameters this engine answers from RUNTIME state
+/// rather than from a constant. Known names — so §9.15's "if param_name is not
+/// known" error does not fire and the optional fallback is not used — but
+/// `simparamValue` cannot hold them, because their whole content is that they
+/// change during the solve. codegen renders them (`emitSysCall`).
+///
+///   iteration — Table 9-27, "the iteration number of the analog solver".
+///               Counted by the device itself: `Instance.newton_iteration`,
+///               advanced by `updateState` (once per Newton iterate) and reset
+///               to 1 by `stateCtl(.commit)` (the accepted point). Folded to a
+///               constant it made every SPICE-derived model's
+///               `initialize_limiting()` a compile-time `false`, so the
+///               MODEINITJCT cold-start seeding those models carry never ran.
+///   iniLim    — NOT in Table 9-27; the spelling the machine-converted ngspice
+///               models use to ask "does the simulator want initial junction
+///               limiting on this evaluation?", with -1 meaning "cannot say,
+///               guess from `iteration` and `analysis()`". VerA can say: it is
+///               the first iterate of a DC/static solve, i.e. exactly SPICE's
+///               MODEINITJCT. Answering -1 and leaving the model to its own
+///               heuristic does not work here — that heuristic needs
+///               `analysis("dc") && analysis("nodeset")` true together, and
+///               `Instance.analysis_kind` is one value.
+pub fn simparamIsRuntime(name: []const u8) bool {
+    return std.mem.eql(u8, name, "iteration") or std.mem.eql(u8, name, "iniLim");
 }
 
 /// ch9 return types. Everything not listed is real (§9.14/§9.15 dominate).
@@ -8796,6 +9014,20 @@ pub fn inlineUserFunc(
     arg_exprs: []const Ast.ExprId,
     site: Ast.ExprId,
 ) Oom!TypedValue {
+    return self.inlineUserFuncPre(fd, &.{}, arg_exprs, site);
+}
+
+/// The same, with the leading formals bound to values the CALLER already has
+/// rather than to source expressions. §9.17.3's `$limit` is the one caller: the
+/// simulator supplies `vnew` and `vold` itself and the source only writes the
+/// tail. `pre` fills `fd.args[0..pre.len]`, `arg_exprs` the rest.
+pub fn inlineUserFuncPre(
+    self: *Lower,
+    fd: *const Ast.FuncDecl,
+    pre: []const Mir.Value,
+    arg_exprs: []const Ast.ExprId,
+    site: Ast.ExprId,
+) Oom!TypedValue {
     const name = self.file.str(fd.name);
     for (self.inlining.items) |n| {
         if (std.mem.eql(u8, n, name)) {
@@ -8803,8 +9035,10 @@ pub fn inlineUserFunc(
             return poison;
         }
     }
-    if (arg_exprs.len != fd.args.len) {
-        try self.errAt(site, .E0511, "`{s}()` takes {d}, got {d}", .{ name, fd.args.len, arg_exprs.len });
+    if (pre.len + arg_exprs.len != fd.args.len) {
+        try self.errAt(site, .E0511, "`{s}()` takes {d}, got {d}", .{
+            name, fd.args.len, pre.len + arg_exprs.len,
+        });
         return poison;
     }
 
@@ -8814,8 +9048,20 @@ pub fn inlineUserFunc(
     // so the pass is element-wise in both directions.
     var actuals: std.ArrayList([]const Mir.Value) = .empty;
     defer actuals.deinit(self.arena);
-    for (fd.args, arg_exprs) |formal, actual| {
+    for (fd.args, 0..) |formal, fi| {
         const ty = astTy(formal.ty);
+        // §9.17.3's simulator-supplied leading formals: already a value, and
+        // already checked `input` by the caller, so neither the array nor the
+        // output arm below can apply to one.
+        if (fi < pre.len) {
+            try actuals.append(self.arena, try self.arena.dupe(Mir.Value, &.{switch (ty) {
+                .real => try self.toReal(.{ .v = pre[fi], .ty = .real }),
+                .integer => try self.toInt(.{ .v = pre[fi], .ty = .real }),
+                .string => pre[fi],
+            }}));
+            continue;
+        }
+        const actual = arg_exprs[fi - pre.len];
         if (formal.dims.len != 0) {
             const n = try self.funcArrayLen(&formal, site) orelse return poison;
             const vals = try self.arena.alloc(Mir.Value, n);
@@ -8948,9 +9194,14 @@ pub fn inlineUserFunc(
     self.loops = saved_loops;
 
     var w: usize = 0;
-    for (fd.args, arg_exprs) |formal, actual| {
+    for (fd.args, 0..) |formal, fi| {
         if (formal.direction != .output and formal.direction != .inout) continue;
         defer w += 1;
+        // A `pre` formal has no source expression to write back into. §9.17.3
+        // makes every formal of a `$limit` limiter `input` (E0814), so this is
+        // unreachable there; the guard is what keeps it unreachable.
+        if (fi < pre.len) continue;
+        const actual = arg_exprs[fi - pre.len];
         const vals = writeback.items[w];
         if (formal.dims.len != 0) {
             // §4.7.2.3: "the last value assigned to the output argument is then

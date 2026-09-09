@@ -7,11 +7,19 @@
 //! `converger.zig`'s `finalizeStep`), `seed` once before Newton iteration 1
 //! (`Circuit.zig`'s `seedJunctions`).
 //!
-//! `eval` still renders `$limit` as the IDENTITY of its probe, and that is not
-//! a gap — it is the other half of this design. The host clamps `x` BEFORE it
-//! calls `eval`, so the probe the body reads is already the limited value.
-//! Applying the clamp a second time inside `eval` would limit against the
-//! wrong `x_old` and break the Jacobian's agreement with the residual.
+//! `eval` still renders the STRING form of `$limit` as the IDENTITY of its
+//! probe, and that is not a gap — it is the other half of this design. The host
+//! clamps `x` BEFORE it calls `eval`, so the probe the body reads is already
+//! the limited value. Applying the clamp a second time inside `eval` would
+//! limit against the wrong `x_old` and break the Jacobian's agreement with the
+//! residual.
+//!
+//! §9.17.3's USER-FUNCTION form is not this file's: nothing here can honour it,
+//! because the limiter is Verilog-A the model wrote and the clamp list has no
+//! way to call it. It is lowered instead — `Lower.lowerLimitUser` inlines the
+//! function inside `eval` with a per-access-function previous-iterate slot, and
+//! restores the probe's derivative on the way out (codegen's `zLimitUf`). The
+//! two forms coexist in one module and share nothing but the spelling.
 //!
 //! WHY A WRITE-BACK INTO `x` AND NOT A CLAMPED LOCAL. SPICE limits the branch
 //! voltage inside the load routine and never touches the node voltages; the
@@ -31,6 +39,7 @@
 
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
+const Analysis = @import("../ir/analysis.zig");
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
@@ -306,8 +315,9 @@ fn algOf(g: *const Gen, args: []const Mir.Value) ?Alg {
     if (args.len < 2) return null;
     const s = switch (g.mir.valueDef(g.an.rv(args[1]))) {
         .str_const => |s| s,
-        // §4.5.15 also allows a user analog function here. That is a call, not
-        // a string, and it needs the whole body — out of scope, declined.
+        // §9.17.3 also allows a user analog function here. That is a call, not
+        // a string, and it needs the whole body — handled in lowering
+        // (`Lower.lowerLimitUser`), so it never reaches the clamp list.
         else => return null,
     };
     return std.meta.stringToEnum(Alg, s);
@@ -321,18 +331,392 @@ fn writable(g: *const Gen, u: u32) bool {
     return u != none_u32 and u >= g.lower.num_ports;
 }
 
+// ------------------------------------------------------------- the prep
+
+/// Memo for `scValue`/`scBlock`.
+///
+/// FOUR states and not three. `pcClass` gets away with three because it refuses
+/// every `phi`, so its value graph is a DAG and a plain visit mark suffices.
+/// This one admits phis, so the graph can carry a §5.9 loop — and marking a
+/// node `.no` on entry to break the cycle ALSO fails every second path into a
+/// shared node, which is the common case in an SSA DAG. MEASURED: it dropped
+/// mos1 from 6 hoisted arguments to 2 and moved the reported failure around
+/// depending on visit order. `busy` is the cycle break and is never cached.
+const ScCls = enum(u8) { unknown, busy, no, yes };
+
+/// Scratch for one `planPrep`: per-Value and per-Block answers, shared across
+/// every clamp argument because solve-constancy is a property of the MIR, not
+/// of which argument asked.
+const Sc = struct {
+    g: *Gen,
+    val: []ScCls,
+    blk: []ScCls,
+    /// `scBlock`'s backward-reachability mark. Reused per query and never held
+    /// across a recursive call — see `scBlock`.
+    seen: []bool,
+};
+
+/// Recursion cap, a sound fail-safe: `false` never hoists.
+const sc_depth_max: u32 = 2048;
+
+/// Is `v0` the SAME at every Newton iterate and every time point — so that
+/// evaluating it once, at x = 0, IS evaluating it?
+///
+/// MEASURED MOTIVE (ARPice callgrind): `limit` runs the WHOLE model core for a
+/// handful of scalars — 25.7% of scaling/parallel_inverters_100's total
+/// instructions, ~13% of tran/fourbitadder, 1 820 instructions per instance per
+/// Newton iteration. LLVM does not recover it: `core` is shared with
+/// `eval`/`q`/`updateState`, and its `h[]` hoist array is written across a CFG
+/// that dead-code elimination has to SROA through first.
+///
+/// THIS IS `pcClass` (codegen.zig) PLUS CONTROL FLOW. That one asks whether the
+/// FLAT precompute body can RE-SPELL the value, so a `phi` is fatal there — and
+/// a phi is exactly where 12 of the 16 `$limit` devices in the ARPice corpus
+/// keep their `vcrit`: mos1's `h[20]` is the js/ad/as arm of block B43, mos6's
+/// is `h[17]`, diode's is `h[9]`. Hoisting on `pcClass` alone would have
+/// covered bjt, jfet2, mesa and vdmos and left every MOS level behind.
+/// `emitPrep` runs the REAL core, so control flow costs nothing to EMIT; what
+/// it costs is a proof obligation, and that is the `.phi` arm below.
+///
+/// NOT `UnitPlan.analyze`, which was tried first and is the wrong question. It
+/// answers "what must this unit EMIT", so its fixpoint marks every branch
+/// condition the unit's CFG scaffolding reaches — MEASURED: it poisoned bjt's
+/// `$vt` with the conditions of blocks 49 and 51, the excess-phase
+/// `if (td == 0.0)` diamonds, which no dataflow connects to `$vt` at all.
+fn scValue(sc: *Sc, v0: Mir.Value, depth: u32) bool {
+    const g = sc.g;
+    const v = g.an.rv(v0);
+    const i = @intFromEnum(v);
+    switch (sc.val[i]) {
+        .yes => return true,
+        .no => return false,
+        .busy => return false, // a §5.9 loop back edge: pessimistic, not cached
+        .unknown => {},
+    }
+    if (depth > sc_depth_max) return false;
+    sc.val[i] = .busy;
+    const ok: bool = switch (g.mir.valueDef(v)) {
+        .undef, .float_const, .int_const => true,
+        // §4.4 access functions ARE the bias. A string cannot feed a clamp.
+        .str_const, .block_param => false,
+        .param_ref => |p| Analysis.tyOfParam(g.lower.params.items[p].ty) != .str,
+        .inst_result => |inst| blk: {
+            const row = g.mir.instRow(inst);
+            switch (row.op) {
+                // Every environment query `precompute` can already answer, and
+                // nothing else: it runs before `$abstime` has a value, before
+                // gmin stepping has picked a `$simparam("gmin")`, and before any
+                // §4.5 operator has state.
+                //
+                // `pcClass`'s list plus §9.19 `$param_given` — which is not a
+                // widening on the risk side. It renders as
+                // `@intFromBool(model.<p>__given)` (`renderValueRef`'s param
+                // arm), a plain `Model` field the netlist parser writes with the
+                // card, so it is exactly as constant as the parameter it reports
+                // on, and `precompute` re-runs on every card write.
+                //
+                // Leaving it out was MEASURED, not theoretical: it rejected
+                // `vt`, `vcrit` and `vto` on every MOS level, because the
+                // tox/nsub/js/ad guards that select them are spelled
+                // `$param_given` — mos1 hoisted 1 of its 6 clamp arguments.
+                //
+                // `$temperature`/`$vt` only in their zero-argument forms, so no
+                // unchecked argument can slip past the operand walk.
+                .call => {
+                    const d = g.mir.instData(inst).call;
+                    break :blk std.mem.eql(u8, d.name, "$param_given") or
+                        std.mem.eql(u8, d.name, "$temperature") or
+                        (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+                },
+                // §5.6.1.2 path latches: `updateState`/commit have not written
+                // them when `precompute` runs.
+                .path_prev, .path_acc, .branch, .jump => break :blk false,
+                // §4.2.12 the condition steers this one, so it is an operand.
+                .select => {
+                    const d = g.mir.instData(inst).ternary;
+                    break :blk scValue(sc, d.cond, depth + 1) and
+                        scValue(sc, d.then_val, depth + 1) and
+                        scValue(sc, d.else_val, depth + 1);
+                },
+                // A phi is the CFG's `select`: its arms are operands and the
+                // branches that can reach its block are its condition.
+                .phi => {
+                    const d = g.mir.instData(inst).phi;
+                    var k: u32 = 0;
+                    while (k < d.count) : (k += 1) {
+                        if (!scValue(sc, g.mir.phiPair(inst, k).value, depth + 1))
+                            break :blk false;
+                    }
+                    const b = g.an.def_block[i];
+                    break :blk b != none_u32 and scBlock(sc, b, depth + 1);
+                },
+                else => switch (Mir.opClass(row.op)) {
+                    .unary => break :blk scValue(sc, @enumFromInt(row.a), depth + 1),
+                    .binary => break :blk scValue(sc, @enumFromInt(row.a), depth + 1) and
+                        scValue(sc, @enumFromInt(row.b), depth + 1),
+                    else => break :blk false,
+                },
+            }
+        },
+    };
+    sc.val[i] = if (ok) .yes else .no;
+    return ok;
+}
+
+/// Can anything bias-dependent decide whether block `b` was entered by one
+/// predecessor rather than another?
+///
+/// A branch that CANNOT REACH `b` cannot steer a phi there, so the obligation is
+/// exactly the branches that can — a backward walk over `preds` from `b`. That
+/// is sound without a control-dependence pass (it is a superset of the control
+/// dependences of `b`) and it is tight in practice because a Verilog-A compact
+/// model puts its whole temperature/geometry prelude BEFORE the first probe:
+/// mos1's `vcrit` lives in block B43, and every bias-dependent branch in mos1 is
+/// downstream of it.
+///
+/// `b`'s OWN terminator is not one of them, which is why the walk is seeded
+/// from `preds[b]` rather than from `b`: a phi executes on ENTRY to its block,
+/// before the branch that leaves it. Harvesting `term[b]` also makes the block
+/// its own guard, so `scValue` on that condition re-enters here, reads `.busy`
+/// and fails — MEASURED, it rejected every phi in every device.
+///
+/// `seen` is scratch and must not be live across the `scValue` recursion below,
+/// which re-enters here — so the reaching conditions are collected FIRST and
+/// checked after.
+fn scBlock(sc: *Sc, b: u32, depth: u32) bool {
+    switch (sc.blk[b]) {
+        .yes => return true,
+        .no => return false,
+        .busy => return false, // re-entered through a guard's own phi
+        .unknown => {},
+    }
+    if (depth > sc_depth_max) return false;
+    sc.blk[b] = .busy;
+    const g = sc.g;
+
+    @memset(sc.seen, false);
+    var stack: std.ArrayList(u32) = .empty;
+    defer stack.deinit(g.arena);
+    sc.seen[b] = true;
+    for (g.an.preds[b]) |p0| {
+        if (sc.seen[p0]) continue;
+        sc.seen[p0] = true;
+        stack.append(g.arena, p0) catch {
+            sc.blk[b] = .no;
+            return false;
+        };
+    }
+    var conds: std.ArrayList(Mir.Value) = .empty;
+    defer conds.deinit(g.arena);
+    while (stack.pop()) |cur| {
+        const t = g.an.term[cur];
+        if (t != .none and g.mir.instOp(t) == .branch)
+            conds.append(g.arena, g.mir.instData(t).branch.cond) catch {
+                sc.blk[b] = .no; // OOM: `false` never hoists, same as the depth cap
+                return false;
+            };
+        for (g.an.preds[cur]) |p| {
+            if (sc.seen[p]) continue;
+            sc.seen[p] = true;
+            stack.append(g.arena, p) catch {
+                sc.blk[b] = .no;
+                return false;
+            };
+        }
+    }
+    for (conds.items) |c| {
+        if (!scValue(sc, c, depth + 1)) {
+            sc.blk[b] = .no;
+            return false;
+        }
+    }
+    sc.blk[b] = .yes;
+    return true;
+}
+
+/// Which clamp arguments become `Instance.lp__<k>`. Runs at the END of
+/// `prepare` — it needs `lo_idx` filled to name the core field `emitPrep` reads
+/// each one out of, and it hands `writeArg`, `usesCore` and `emitInstance`
+/// their answer.
+///
+/// It walks the raw MIR, not `plan`: a value read out of the core's cache or
+/// out of a `pc__` field is a LEAF to a unit body but not to a proof, and
+/// stopping there would prove nothing about its operands.
+///
+/// Field ORDER is the source order of the sites, argv before sign, which is the
+/// same insert-tolerance rule the `pc__` and held-variable blocks follow: a
+/// model that gains a `$limit` appends fields, it renumbers none.
+pub fn planPrep(g: *Gen) Error!void {
+    g.lp_idx = try g.arena.alloc(u32, g.an.nv);
+    @memset(g.lp_idx, none_u32);
+    if (g.limits.len == 0) return;
+
+    var sc: Sc = .{
+        .g = g,
+        .val = try g.arena.alloc(ScCls, g.an.nv),
+        .blk = try g.arena.alloc(ScCls, g.an.nb),
+        .seen = try g.arena.alloc(bool, g.an.nb),
+    };
+    @memset(sc.val, .unknown);
+    @memset(sc.blk, .unknown);
+
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    for (g.limits) |lc| {
+        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v0| {
+            if (v0 == .f_zero) continue;
+            const v = g.an.rv(v0);
+            const i = @intFromEnum(v);
+            if (g.lp_idx[i] != none_u32) continue;
+            if (!scValue(&sc, v, 0)) continue;
+            g.lp_idx[i] = @intCast(vals.items.len);
+            try vals.append(g.arena, v);
+        }
+    }
+    g.lp_vals = vals.items;
+}
+
+/// The prep body, appended to `precompute` AFTER the `pc__` writes — the core
+/// reads those fields, so they have to be there first.
+///
+/// ONE core evaluation per instance per model-card/temperature write, in place
+/// of one per instance per Newton iteration. It is `seed`'s own argument,
+/// generalised: the core at x = 0 is not an approximation of these values, it
+/// IS them (`solveConst`).
+pub fn emitPrep(g: *Gen) Error!void {
+    if (g.lp_vals.len == 0) return;
+    try g.w(
+        \\    // §4.5.15 the clamp arguments, hoisted out of the per-iterate
+        \\    // `limit`: every one is solve- and time-independent, so the core's
+        \\    // value at x = 0 is its value at every iterate.
+        \\    var xr: [n_u]R = undefined;
+        \\    for (&xr) |*p| p.* = R.con(0.0);
+        \\    const m = core(R, xr, model, inst);
+        \\
+    , .{});
+    for (g.lp_vals, 0..) |v, k| {
+        const i = @intFromEnum(v);
+        const f = g.lo_idx[i];
+        std.debug.assert(f != none_u32); // `buildJobs` queues every argv and sign
+        // An integer core field (a `parameter integer` polarity) is a bare i64.
+        // It is read ONLY through `< 0` sign tests (`emitClamp`'s `sg`,
+        // `writeSign`'s `sgt`, `emitSeed`'s arm select), and i64→f64 rounding
+        // never crosses zero, so the widening is exact where it is used.
+        if (g.an.vty[i] == .int)
+            try g.w("    inst.lp__{d} = @floatFromInt(m.f{d});\n", .{ k, f })
+        else
+            try g.w("    inst.lp__{d} = m.f{d}.v;\n", .{ k, f });
+    }
+}
+
+/// The differential case for `emitPrep`, against its own scalar oracle: the
+/// SAME clamp arguments taken live out of the core at a NON-ZERO iterate —
+/// which is the evaluation `limit` used to run for itself, per instance, per
+/// Newton iteration.
+///
+/// `scValue`'s claim is that the two are identical, so the assertion is on the
+/// BIT PATTERN and not on a tolerance. It is the same instruction sequence over
+/// the same inputs, differing only in an `x` the proof says cannot reach these
+/// values; a tolerance here would hide exactly the thing under test. Bits also
+/// compare NaN correctly, which matters because a default model card can leave
+/// a `log` of zero in an unrelated arm of the core.
+///
+/// Emitted into the device rather than into a `tb.zig` runner because that
+/// runner is fixture-directive-driven and never runs for a host's own models —
+/// this way the ARPice `test-devices` step, which compiles every generated
+/// device, runs it for all 16 devices that have a `$limit`.
+///
+/// The fill gives each unknown a DIFFERENT voltage with an alternating sign, so
+/// V(a,b) is nowhere identically zero and every bias-dependent branch in the
+/// core gets flipped across the sweep. A uniform fill would leave every probe
+/// at 0 and prove nothing.
+///
+/// The sign local is spelled `flip`, and this note lives HERE rather than in the
+/// emitted text: the unsigned half of "codegen: §4.5.15 signed $limit clamps
+/// sign*v" asserts the substring `sg` appears NOWHERE in the generated file, so
+/// a variable — or a comment — naming it fails that test from three functions
+/// away.
+fn emitPrepTest(g: *Gen) Error!void {
+    if (g.lp_vals.len == 0) return;
+    try g.w(
+        \\test "§4.5.15 `$limit` prep ≡ the live core at a non-zero iterate" {{
+        \\    var model: Model = .{{}};
+        \\    // NAMESPACED, like tb.zig's runner: `@hasDecl` gates the branch but
+        \\    // an unqualified identifier still has to resolve, so a bare
+        \\    // `derive(&model)` is a hard error on the models that have none.
+        \\    if (comptime @hasDecl(Self, "derive")) Self.derive(&model);
+        \\    var inst: Instance = .{{}};
+        \\    inst.temperature = 300.15;
+        \\    precompute(&inst, &model);
+        \\    for (0..16) |trial| {{
+        \\        var xr: [n_u]R = undefined;
+        \\        for (&xr, 0..) |*p, u| {{
+        \\            const flip: f64 = if ((trial + u) % 2 == 0) 1.0 else -1.0;
+        \\            p.* = R.con(flip * (0.25 * @as(f64, @floatFromInt(u + 1)) +
+        \\                @as(f64, @floatFromInt(trial))));
+        \\        }}
+        \\        const m = core(R, xr, &model, &inst);
+        \\
+    , .{});
+    for (g.lp_vals, 0..) |v, k| {
+        const i = @intFromEnum(v);
+        const f = g.lo_idx[i];
+        if (g.an.vty[i] == .int)
+            try g.w("        try expectPrepBits(inst.lp__{d}, @floatFromInt(m.f{d}));\n", .{ k, f })
+        else
+            try g.w("        try expectPrepBits(inst.lp__{d}, m.f{d}.v);\n", .{ k, f });
+    }
+    try g.w(
+        \\    }}
+        \\}}
+        \\
+        \\/// Bit equality, so a NaN clamp argument compares equal to itself and a
+        \\/// one-ulp drift is a failure rather than a rounding anecdote.
+        \\fn expectPrepBits(got: f64, want: f64) !void {{
+        \\    try std.testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(got)));
+        \\}}
+        \\
+        \\
+    , .{});
+}
+
 // -------------------------------------------------------------------- emit
 
-/// Does any clamp read a value out of the shared core? `limvds` takes no
-/// arguments, so a model using only that needs neither `core` nor `R`.
+/// Does any clamp read a value out of the shared core AT CLAMP TIME? Three ways
+/// not to: `limvds` takes no arguments, an unsigned site has no sign, and — the
+/// case that matters — `planPrep` proved the argument solve-constant and
+/// `precompute` already latched it into `Instance.lp__<k>`.
 pub fn usesCore(g: *const Gen) bool {
     for (g.limits) |lc| {
-        if (lc.sign != .f_zero) return true;
+        if (needsCore(g, lc.sign)) return true;
         for (lc.argv[0..lc.alg.arity()]) |v| {
-            if (v != .f_zero) return true;
+            if (needsCore(g, v)) return true;
         }
     }
     return false;
+}
+
+/// `seed`'s narrower question: it reads only each pnjlim site's `vcrit` and
+/// that site's sign.
+fn seedUsesCore(g: *const Gen) bool {
+    for (g.limits) |lc| {
+        if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
+        if (needsCore(g, lc.argv[1]) or needsCore(g, lc.sign)) return true;
+    }
+    return false;
+}
+
+/// One argument: is it still a core live-out read, rather than a prep field?
+fn needsCore(g: *const Gen, v0: Mir.Value) bool {
+    if (v0 == .f_zero) return false;
+    return g.lp_idx[@intFromEnum(g.an.rv(v0))] == none_u32;
+}
+
+/// Does the `$limit` family evaluate the core ANYWHERE — so the file needs `R`?
+/// True whenever a clamp reads it live, and true whenever `emitPrep` exists,
+/// because that is a core evaluation too (one per reprep, not one per iterate,
+/// which is the whole point).
+pub fn needsR(g: *const Gen) bool {
+    return usesCore(g) or g.lp_vals.len != 0;
 }
 
 pub fn emit(g: *Gen) Error!void {
@@ -345,6 +729,9 @@ pub fn emit(g: *Gen) Error!void {
     if (g.limits.len == 0) return;
 
     const needs_core = usesCore(g);
+    // A prep field is an `inst.lp__k` read, so `inst` stays named even when the
+    // core call is gone. `model` goes with the core.
+    const reads_inst = needs_core or g.lp_vals.len != 0;
     try g.w(
         \\/// §4.5.15 `$limit`: SPICE voltage limiting, applied by the host between
         \\/// the linear solve and the next `eval`.
@@ -362,7 +749,7 @@ pub fn emit(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn limit({s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64) contract.LimitResult(n_u) {{\n", .{
         if (needs_core) "model" else "_",
-        if (needs_core) "inst" else "_",
+        if (reads_inst) "inst" else "_",
     });
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
@@ -389,6 +776,7 @@ pub fn emit(g: *Gen) Error!void {
     try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
 
     try emitSeed(g);
+    try emitPrepTest(g);
 }
 
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
@@ -546,11 +934,15 @@ fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
 
 fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     if (v == .f_zero) return g.w("0.0", .{});
-    const k = g.lo_idx[@intFromEnum(v)];
+    const i = @intFromEnum(g.an.rv(v));
+    // Hoisted: `precompute` latched it off ONE core evaluation at x = 0, which
+    // `solveConst` proved is this value at every iterate. See `planPrep`.
+    if (g.lp_idx[i] != none_u32) return g.w("inst.lp__{d}", .{g.lp_idx[i]});
+    const k = g.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
     // a Dual — no `.v` to read.
-    if (g.an.vty[@intFromEnum(v)] == .int)
+    if (g.an.vty[i] == .int)
         try g.w("m.f{d}", .{k})
     else
         try g.w("m.f{d}.v", .{k});
@@ -570,6 +962,8 @@ fn emitSeed(g: *Gen) Error!void {
         if (lc.alg == .pnjlim and lc.argv[1] != .f_zero) any = true;
     }
     if (!any) return;
+    const needs_core = seedUsesCore(g);
+    const reads_inst = needs_core or g.lp_vals.len != 0;
     try g.w(
         \\/// SPICE `MODEINITJCT`: start every pnjlim-limited junction at its own
         \\/// `vcrit` rather than at 0 V, where the junction is invisible to Newton.
@@ -579,13 +973,19 @@ fn emitSeed(g: *Gen) Error!void {
         \\/// information there is. Unlike `limit`, these writes are NOT masked by
         \\/// the host: they happen once, pre-solve, and the first linear solve
         \\/// re-imposes every source constraint over them.
-        \\pub fn seed(model: *const Model, inst: *const Instance) [n_u]?f64 {{
+        \\
+    , .{});
+    try g.w("pub fn seed({s}: *const Model, {s}: *const Instance) [n_u]?f64 {{\n", .{
+        if (needs_core) "model" else "_",
+        if (reads_inst) "inst" else "_",
+    });
+    if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
         \\    for (&xr) |*p| p.* = R.con(0.0);
         \\    const m = core(R, xr, model, inst);
-        \\    var s: [n_u]?f64 = .{{null}} ** n_u;
         \\
     , .{});
+    try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
     for (g.limits) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
         // The junction sits across `V(hi, lo)`, and only the internal side is

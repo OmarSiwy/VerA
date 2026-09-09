@@ -152,6 +152,28 @@ alias: []Mir.Value = &.{},
 /// without further inspection.
 dfree: []bool = &.{},
 
+/// Per Value: WHICH unknowns its derivative can be nonzero in — bit `u` set
+/// means `∂value/∂x[u]` may be nonzero. `dfree` is this table's "== 0" case,
+/// kept separate because it is the only question the render path asks and a
+/// bool is one byte.
+///
+/// This is the STRUCTURAL Jacobian, and it exists for the host's scatter: a
+/// residual row's local Jacobian is `n_u` wide by construction, but the model
+/// decides which of those columns can be nonzero, and the clear ones are
+/// stamps the host can drop at COMPILE time rather than adding zero to a
+/// matrix slot. Measured on ARPice's mos1: 37 of 128 (res + q) columns are
+/// live, so 71% of the per-instance scatter was adding structural zeros.
+///
+/// Sound in one direction: a SET bit is always safe (it costs a stamp that
+/// turns out to be zero). So every rule here over-approximates — a comparison
+/// (`lt`) and `$prev` both have identically zero derivative, and both are
+/// still credited with their operands' bits.
+///
+/// EMPTY when `lower.n_unknowns > 64`: one u64 per Value is the whole reason
+/// this is cheap, and no device in the catalog is near that. `unknownDeps`
+/// answers "all bits" there, which is the dense fallback.
+deps: []u64 = &.{},
+
 /// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
 /// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
 pub fn build(
@@ -162,6 +184,7 @@ pub fn build(
     var self = try buildStructure(arena, mir, lower);
     try self.buildValueTypes();
     try self.buildDfree();
+    try self.buildDeps();
     return self;
 }
 
@@ -676,6 +699,79 @@ fn defDfree(self: *const Analysis, val: Mir.Value) bool {
 /// Does `v`'s derivative vanish structurally? See `dfree`.
 pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
     return self.dfree[@intFromEnum(self.rv(v))];
+}
+
+/// `dfree`'s refinement: WHICH unknowns, not just whether any. See `deps`.
+///
+/// Same monotone fixpoint, over `u64` instead of `bool` — the lattice only
+/// ever gains bits, so the loop terminates in at most (longest chain) sweeps
+/// exactly as `buildDfree`'s does.
+fn buildDeps(self: *Analysis) Error!void {
+    // >64 unknowns: one word per Value stops being the cheap representation,
+    // and `unknownDeps` degrades to the dense answer. Detected before the
+    // fixpoint so the loop below never has to think about it.
+    var v0: u32 = 0;
+    while (v0 < self.nv) : (v0 += 1) {
+        const d = self.mir.valueDef(@enumFromInt(v0));
+        if (d == .block_param and d.block_param >= 64) return;
+    }
+    self.deps = try self.arena.alloc(u64, self.nv);
+    @memset(self.deps, 0);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var v: u32 = 0;
+        while (v < self.nv) : (v += 1) {
+            const now = self.defDeps(@enumFromInt(v));
+            if (now == self.deps[v]) continue;
+            self.deps[v] = now;
+            changed = true;
+        }
+    }
+}
+
+/// One step of the lattice, mirroring `defDfree` arm for arm. Every rule is
+/// "union of the operands whose derivative the contract propagates".
+fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
+    switch (self.mir.valueDef(self.rv(val))) {
+        // §4.4 access function: the probe IS x[u], so its derivative is the
+        // one unit vector.
+        .block_param => |u| return @as(u64, 1) << @intCast(u),
+        .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
+        .inst_result => |inst| {
+            const row = self.mir.instRow(inst);
+            switch (Mir.opClass(row.op)) {
+                .branch, .jump => return 0, // no result to speak of
+                .call => {
+                    var acc: u64 = 0;
+                    for (self.mir.instData(inst).call.args) |arg| acc |= self.unknownDeps(arg);
+                    return acc;
+                },
+                .unary => return self.unknownDeps(@enumFromInt(row.a)),
+                .binary => return self.unknownDeps(@enumFromInt(row.a)) |
+                    self.unknownDeps(@enumFromInt(row.b)),
+                // §4.2.12, same reading as `defDfree`: the CONDITION selects an
+                // arm rather than entering the value, and `S.sel` lets the
+                // taken arm's derivative ride through unchanged.
+                .ternary => return self.unknownDeps(@enumFromInt(row.b)) |
+                    self.unknownDeps(@enumFromInt(row.c)),
+                .phi => {
+                    const d = self.mir.instData(inst).phi;
+                    var acc: u64 = 0;
+                    for (0..d.count) |k| acc |= self.unknownDeps(self.mir.phiPair(inst, @intCast(k)).value);
+                    return acc;
+                },
+            }
+        },
+    }
+}
+
+/// Which unknowns `v`'s derivative can be nonzero in. All ones when the table
+/// was not built (>64 unknowns) — the sound answer, and the one that makes
+/// every consumer fall back to a dense Jacobian without a second code path.
+pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
+    if (self.deps.len == 0) return std.math.maxInt(u64);
+    return self.deps[@intFromEnum(self.rv(v))];
 }
 
 /// Is this block inside some loop's natural body?

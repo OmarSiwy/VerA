@@ -72,6 +72,12 @@
 //! f32's ~7 digits can lose a Newton direction outright, and only the physics
 //! knows that. The permission is per DEVICE for exactly that reason.
 //!
+//! Optional scalar trait: `pub const collapse_applied: bool = true` promises
+//! the host has applied this device's `collapse()` aliases to its gather and
+//! scatter maps. Generated physics then omits the short's cancelling stamps,
+//! preserving arbitrarily small conductances already in the same matrix slot.
+//! Absent or false retains the full branch equations for standalone evaluation.
+//!
 //! RULES for physics code:
 //!   - Everything not depending on x (param prep, temperature, geometry)
 //!     stays plain f64. Only x-dependent chains use S ops.
@@ -652,6 +658,8 @@ pub const s_primitives = [_][]const u8{
 };
 
 pub fn checkScalar(comptime S: type) void {
+    if (@hasDecl(S, "collapse_applied") and @TypeOf(S.collapse_applied) != bool)
+        @compileError(@typeName(S) ++ ": scalar collapse_applied must be bool");
     inline for (s_primitives) |p| {
         if (!@hasDecl(S, p))
             @compileError(@typeName(S) ++ ": scalar S is missing contract primitive `" ++ p ++ "`");
@@ -803,6 +811,28 @@ pub fn validate(comptime D: type) void {
     // agree on what "negligible" means.
     if (@hasDecl(D, "u_abstol") and @TypeOf(D.u_abstol) != [n]f64)
         @compileError(name ++ ".u_abstol must be [|U|]f64");
+
+    // §5.6 STRUCTURAL Jacobian, one bitset per residual row: bit `cu` of
+    // `jac_pattern[ru]` is set when `∂eval(x)[ru]/∂x[cu]` can be nonzero, and
+    // `q_pattern` says the same for `q`. OPTIONAL and OVER-APPROXIMATE — a host
+    // that does not find them assumes every entry live, which is the dense
+    // n×n local Jacobian it had to assume before.
+    //
+    // It is worth declaring because the dense assumption is not free on either
+    // side of the boundary: the host reserves a sparse-matrix entry for every
+    // (row, col) a device might fill, and adds a float into every one of them
+    // per instance per Newton iteration. A MOSFET fills a third of its n×n.
+    //
+    // Above 64 unknowns a generator should emit NEITHER — the dense fallback is
+    // the correct answer and a wider bitset is not worth an ABI.
+    if (@hasDecl(D, "jac_pattern") and @TypeOf(D.jac_pattern) != [n]u64)
+        @compileError(name ++ ".jac_pattern must be [|U|]u64");
+    if (@hasDecl(D, "q_pattern")) {
+        if (@TypeOf(D.q_pattern) != [n]u64)
+            @compileError(name ++ ".q_pattern must be [|U|]u64");
+        if (!@hasDecl(D, "q"))
+            @compileError(name ++ ".q_pattern without a `q` residual to describe");
+    }
 
     // In-device noise PSDs: pure fn of ANY state vector (AC noise calls it
     // once at x_op, pnoise per PSS sample, tran-noise per step). Position k of
@@ -993,6 +1023,8 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "attempt", {} },
     .{ "u_kinds", {} },
     .{ "u_abstol", {} },
+    .{ "jac_pattern", {} },
+    .{ "q_pattern", {} },
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "ac_stamps", {} },

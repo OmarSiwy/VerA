@@ -727,11 +727,21 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // came in as a constraint row — and everything else is now the
             // number the device's own equations put there.
             try w.print("        solve(&x, &forced, &{s}, &inst);\n", .{mdl});
+            // §9.17.3 the `$limit` previous-iterate promotion, for a device that
+            // carries one — before the evaluation that reads it, exactly as a
+            // solver orders it (`stepPre`). No-op for every other device.
+            //
+            // Not before the FIRST evaluation, for the same reason the solver
+            // does not: `updateState` runs once per iterate on the iterate's
+            // own x, so before evaluation n there have been exactly n of them
+            // and the first has none. That is also what makes
+            // `$simparam("iteration")` read 1 there.
+            if (n != 0) try w.print("        stepPre(&{s}, &inst, &x, &state);\n", .{mdl});
             try w.print("        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
-            try w.print("        step(&{s}, &inst, &x, &state);\n", .{mdl});
+            try w.print("        stepPost(&{s}, &inst, &x, &state);\n", .{mdl});
             n += 1;
         }
         try w.raw("    }\n");
@@ -1065,6 +1075,30 @@ const runner_body =
     \\    }
     \\}
     \\
+    \\/// The structural-Jacobian gate. `jac_pattern`/`q_pattern` tell a host
+    \\/// which local matrix entries this device can fill, and the host DELETES
+    \\/// the stamps for the rest — it does not even reserve the matrix entry.
+    \\/// So a cleared bit with a nonzero partial behind it is a silently missing
+    \\/// Jacobian entry, and that is the one way the declaration can be wrong.
+    \\/// The converse is legal: the pattern over-approximates on purpose, and a
+    \\/// set bit that happens to be zero at this bias costs one stamp.
+    \\fn patternCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\    const xd = seed(x);
+    \\    if (comptime @hasDecl(D, "jac_pattern"))
+    \\        patAssert("res", D.jac_pattern, &D.eval(Dual, xd, model, inst, t));
+    \\    if (comptime @hasDecl(D, "q_pattern"))
+    \\        patAssert("q", D.q_pattern, &D.q(Dual, xd, model, inst, t));
+    \\}
+    \\
+    \\fn patAssert(what: []const u8, pat: [n_u]u64, r: *const [n_u]Dual) void {
+    \\    for (0..n_u) |i| for (0..n_u) |j| {
+    \\        if (r[i].d[j] == 0.0) continue;
+    \\        if ((pat[i] >> @intCast(j)) & 1 != 0) continue;
+    \\        std.debug.print("pattern_check FAIL: d{s}[{s}]/dx[{s}] = {e} is outside the declared pattern\n", .{ what, u_names[i], u_names[j], r[i].d[j] });
+    \\        std.process.exit(1);
+    \\    };
+    \\}
+    \\
     \\fn fusedAssert(what: []const u8, i: usize, a: f64, b: f64) void {
     \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
     \\    std.debug.print("fused_check FAIL: {s}[{s}]: evalQ {e} vs split {e}\n", .{ what, u_names[i], a, b });
@@ -1099,6 +1133,24 @@ const runner_body =
     \\fn step(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
     \\    if (State == void) return;
     \\    _ = D.updateState(model, inst, x.*, state);
+    \\}
+    \\
+    \\/// §9.17.3 `$limit` STATE MOVES BEFORE THE EVALUATION THAT READS IT.
+    \\///
+    \\/// A solver calls `updateState` on the new x and only THEN evaluates at it
+    \\/// (ARPice converger.zig `finalizeStep`: x += dx; applyLimits; updateStates;
+    \\/// next assemble), because that is what makes the promoted previous-iterate
+    \\/// slot hold what the previous `eval` returned. A device with no such slot
+    \\/// keeps the historical post-point call, so no existing transcript moves —
+    \\/// the §4.5 operator histories this runner was written for are latched at
+    \\/// the ACCEPTED point and read at the next one, which is the same order
+    \\/// either way.
+    \\const limit_state = @hasField(D.Instance, "lu__0");
+    \\fn stepPre(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
+    \\    if (limit_state) step(model, inst, x, state);
+    \\}
+    \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
+    \\    if (!limit_state) step(model, inst, x, state);
     \\}
     \\
     \\fn seed(x: *const [n_u]f64) [n_u]Dual {
@@ -1139,6 +1191,7 @@ const runner_body =
     \\    // Differential gates — silent on success, fail the run loudly.
     \\    laneCheck(x, t, model, inst);
     \\    fusedCheck(x, t, model, inst);
+    \\    patternCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
@@ -1775,7 +1828,12 @@ test "a wave is per-timepoint and holds its last value" {
     // one `step(...)` per point: the state has to advance or the operators
     // answer from zero history every time.
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        point("));
-    try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        step(&model"));
+    // One `stepPre` + one `stepPost` per point; exactly one of the two is live
+    // in any given device (`limit_state`), so the state still advances once.
+    try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        stepPost(&model"));
+    // `stepPre` skips the first point (the solver's first eval has no preceding
+    // `updateState`), so three of the four.
+    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "        stepPre(&model"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= newState("));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "set(&x, &forced, \"in\", 1);"));
 }
@@ -1807,7 +1865,7 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_final_step = true;"));
     try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        point(2,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        stepPre(&model, &inst, &x, &state);\n        point(2,") != null);
     // §5.2.1 the `analog initial` flag is NOT `is_initial_step`: a dc sweep is one
     // analysis with three SUB-TASKS, so the block re-executes at all three points
     // while the global event fires at one.

@@ -1,0 +1,113 @@
+// §9.15 `$simparam("iteration")` and the SPICE cold start it drives, which is
+// the other half of making §9.17.3's user-function `$limit` useful.
+//
+// A machine-converted SPICE model carries ngspice's MODEINITJCT branch:
+//
+//     if (initialize_limiting()) begin
+//         load_vbs = -1;  load_vgs = MOS1type * MOS1tVto;  load_vds = 0;
+//     end
+//     load_vgs = MOS1type * $limit(V(g,s), DEVlimitNewSet, ..., limited);
+//
+// i.e. on the FIRST iterate of a DC solve the model discards the solver's bias
+// and seeds its junctions where Newton can see them, then feeds that through
+// `$limit` so the next iterate limits against it. Every one of those models
+// asks the simulator which iterate it is on:
+//
+//     il = $simparam("iniLim", -1);
+//     if (il<0) initialize_limiting = $simparam("iteration", 10)==1 && ...;
+//     else      initialize_limiting = il;
+//
+// Answered with a build-time CONSTANT — Table 9-27's "iteration" is a property
+// of the run, not of the compilation — `10==1` is false at compile time, the
+// whole branch folds away, and the seeding never happens. So both names are
+// runtime here: `iteration` is the device's own state-generation counter, and
+// `iniLim` is the answer VerA can give directly, "the first iterate of a
+// DC-like solve", which is what MODEINITJCT means. `iniLim` has to be answered
+// and not left to the model's own fallback heuristic, because that heuristic
+// wants `analysis("dc")` and `analysis("nodeset")` true TOGETHER and this
+// engine's `analysis_kind` is one value.
+//
+// THE NUMBERS. The seeded value is 0.7 and a +/-1 V clamp then walks toward the
+// 5 V bias:
+//
+//   pt  iteration  iniLim  vold  vlim
+//    0      1        1      0    0.7   (seeded; the solver's bias is ignored)
+//    1      1        1      0    0.7   (same state generation, same answer)
+//    2      2        0     0.7   1.7   (the seed is what this limits against)
+//    3      3        0     1.7   2.7
+//
+// ITERATION 1 SPANS TWO EVALUATIONS, and that is deliberate — the emitted
+// `Instance.newton_iteration` comment has the argument. A solver runs
+// `updateState` on the iterate's own x, so the FIRST evaluation of a solve has
+// none before it: whatever it returns is never staged, and an `iteration` that
+// numbered it alone would put the MODEINITJCT seeding on the one evaluation
+// whose result is thrown away. Numbering by state GENERATION instead makes the
+// seeded 0.7 the value the next iterate limits against, which is the whole
+// point of seeding — and the second seeded evaluation costs nothing, since the
+// seed does not depend on the bias.
+//
+//! lrm 9.15
+//! time 0, 1, 2, 3
+//! bias V(p) = 5
+`include "check.vh"
+module ch09_limit_initialize_limiting(p, n);
+  inout p, n; electrical p, n;
+  real vold, vlim, it, ini;
+
+  // §4.7.1 wants at least one formal, so this takes a dummy the caller ignores.
+  // (VACASK's own `initialize_limiting` declares none, which is not legal
+  // Verilog-A — E0224 — and is the one thing that has to change in those files.)
+  analog function integer initialize_limiting;
+    input dummy;
+    real dummy;
+    integer il;
+    begin
+      il = $simparam("iniLim", -1);
+      if (il < 0)
+        initialize_limiting = ($simparam("iteration", 10) == 1) &&
+                              (analysis("dc") || analysis("static"));
+      else
+        initialize_limiting = il;
+    end
+  endfunction
+
+  analog function real getold;
+    input vnew, vold;
+    real vnew, vold;
+    begin
+      getold = vold;
+    end
+  endfunction
+
+  analog function real setnew;
+    input vnew, vold, value;
+    real vnew, vold, value;
+    begin
+      setnew = value;
+      if (abs(value - vnew) > 1e-12) $discontinuity(-1);
+    end
+  endfunction
+
+  analog begin
+    it  = $simparam("iteration", 10);
+    ini = $simparam("iniLim", -1);
+    vold = $limit(V(p,n), getold);
+    vlim = vold + max(-1.0, min(1.0, V(p,n) - vold));
+    // SPICE MODEINITJCT: on the first iterate the model, not the solver, says
+    // where the junction starts.
+    if (initialize_limiting(0.0)) vlim = 0.7;
+    vlim = $limit(V(p,n), setnew, vlim);
+
+    // Closed forms of the table above, subtracted so every want is a literal 0
+    // (the suite refuses an expression in the WANT column).
+    `CHECK("$simparam(\"iteration\") is the state generation: it - max(1,t) is 0",
+           it - max(1.0, $abstime), 0.0, 1e-12);
+    `CHECK("$simparam(\"iniLim\") is 1 on the first generation of a DC solve",
+           ini - (($abstime <= 1.0) ? 1.0 : 0.0), 0.0, 1e-12);
+    `CHECK("the SEEDED bias is what the next evaluation limits against",
+           vold - (($abstime <= 1.0) ? 0.0 : (0.7 + $abstime - 2.0)), 0.0, 1e-12);
+    `CHECK("and the clamp walks 1 V per evaluation from 0.7, not from 0",
+           vlim - (0.7 + max(0.0, $abstime - 1.0)), 0.0, 1e-12);
+    I(p,n) <+ vlim;
+  end
+endmodule
