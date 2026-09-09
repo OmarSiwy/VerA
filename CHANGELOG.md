@@ -4,6 +4,22 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Diagnostics: a label in another file prints under its own `:::` header, a fix's `~` ruler counts display columns (tabs, multi-byte characters), and a span at a CRLF newline or past the end of a file clamps to its line instead of panicking; an unregistered file no longer gives a registered one wrong line numbers (#29).
+- Preprocessor: an `` `include `` inside a macro body or argument numbers its own lines (`__LINE__`, `__FILE__`, diagnostics); a multi-line macro argument no longer emits its newlines twice; `` `define M($x) `` and an empty trailing macro argument are E0110, and `` `line `` sharing its line with other text is E0128 (IEEE 1364-2005 §19.7) (#29).
+- Parser: a specify block, specparam or port declaration inside a generate region is E0229 (a port was E0206; specify paths were silently dropped); a malformed UDP edge or current-state field is E0233; analog statement nesting past the limit is E0241; an out-of-range literal width or terminal width is refused instead of crashing (#29).
+- Literals and SPICE cards: an unsized literal past 16M bits is E1019 (it hung); a 32-bit unary reduction of a wider value folds at its operand's width; the library map's glob matcher is linear; a SPICE expression nested past 256 levels is refused, an overflowing exponent no longer panics, and an `E` card with POLY/VALUE/TABLE/LAPLACE/FREQ is E0928 instead of a silent gain (#29).
+- Lowering: a NaN, infinite or out-of-range array bound, net range or subscript is refused (E0308, E0352, E0310); `$table_model` with a selector past u64 is E0815; a vector argument to an analog operator outside `laplace`/`zi`'s coefficient slots is E0509; a `$strobe`/`$monitor` in a named block sees that block's locals; a function's array formal bounds fold in the function's own scope (#29).
+- Elaboration: a named block in a module instantiated twice gets storage per instance (they shared it); `disable` of a named block inside a child instance resolves; a §7.8 connect override that names no discipline is E0923 (it was silently skipped) (#29).
+- Device code: under `` `default_transition `` a `transition` with only a rise time takes it for its fall time (§4.5.8); integer `minInt / -1` no longer traps (§4.2.4); an `absdelay` with a constant max delay clamps its delay to it (§4.5.7); `%l` prints `work.<module>`; `$display` with 256 or more arguments compiles (it was E0887) (#29).
+- Range prover: open interval ends, `exp`/`tanh`/`atan` saturation, NaN bounds and NaN-capable compares are tracked soundly, so some devices change float mode and W0650 can appear or disappear (#29).
+- Kernels: `$sscanf`/`$fscanf` return EOF (-1) when input ends before the first conversion (§9.5.4.2); `%r` rounds into the next scale symbol and prints digits below 1e-18; `$fseek` with an overflowing offset is EINVAL instead of a crash (#29).
+- Testbench directives: an empty `//! param`/`//! bias`, a non-increasing `//! time` and a malformed probe (`V()`, `I(a,)`, `x[]`) are refused instead of ignored (#29).
+- `--emit-verilog`: a `V(rail, node) <+` that was silently skipped is refused, and names containing `$` are escaped (`vera_n_...`) (#29).
+- SPICE runner (`zig build test-spice`): `$bound_step` is no longer overwritten by the LTE step on trapezoidal steps (§9.17.2); the default maximum step is `min(tstep, tstop/50)` as in ngspice; the noise analysis evaluates its operating point as a static solve and its sweep with `analysis("noise")` true once, not twice (Table 4-22) (#29).
+- Digital engine: `$display("%d")` of a 127-bit or wider x/z value is padded to the full width; releasing a whole forced net releases its forced selects too (IEEE 1364-2005 §9.3.2); a fork in an untimed task or function, `disable` of a fork from one of its arms, a `repeat` count with its top bit set and a negative signed delay all behave as §9.7/§9.8 say (#29).
+- VPI: `vpiRealVal` of a signed value wider than 64 bits, a time past 2^64 (now `BADTIME`), analog `%e`/`%g` of inf/nan, and `vpi_put_delays` on a generate-scope object are fixed (#29).
+- CLI: a NaN `--param` or `--unknown-bound` is refused; `--emit-exe` with `--emit-so` exits 2; `--deny` on a `.v` with `--emit-zig` exits 1; `--emit-osdi` compiles devices whose names contain `Z` (`Zener`, `Zth`) and keeps their source names (#29).
+
 ## v1.1.0 — 2026-10-08
 
 | Measure | Number | Remaining to v1.0.0 | Command |
