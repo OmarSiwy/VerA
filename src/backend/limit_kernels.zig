@@ -13,22 +13,41 @@
 // bias must come back UNCHANGED. That transparency is the property the
 // `annex_e_spice/limit_*.va` fixtures assert and the one the tests below pin.
 //
-// BRANCHLESS (simd-first T7): the pub kernels compute every candidate
+// BRANCHLESS (simd-first T7): the `*Clamp` bodies compute every candidate
 // unconditionally and combine with selects, so the predictor sees constant
 // behaviour whether or not the clamp fires — the ngspice control flow survives
 // only in the `*Oracle` transcriptions below, kept as the differential-test
-// reference (T8 step 5). THREE EXCEPTIONS, all host-only, all of one shape: a
-// §9.17.3 TRANSPARENT iterate — the overwhelming majority near convergence —
-// is recognised by a short chain of predictable compares and returned as it
-// came in, skipping the ladder. `zPnjlim`'s is the biggest, because its
-// damping arm is three `@log` LIBCALLS; `zFetlim` and `zLimvds` pay ~15 and ~5
-// `sel`s instead, and a `sel` is not free either — the asm barrier below
-// deliberately blocks every fold, so each one costs two bitcasts, a mask, an
-// and, an or. Each guard is a SUFFICIENT condition for "the oracle assigns
-// nothing", so the early return IS the select chain's own `vnew0` arm, bit for
-// bit, and a guard that does not fire falls into an unchanged branchless body.
-// A GPU has no predictor to win and no libcall to save, so `k_dev` keeps all
-// three fully branchless. Two rules make the transformation exact:
+// reference (T8 step 5).
+//
+// EACH KERNEL IS A HOT/COLD PAIR, and the split is the shape, not a tweak. The
+// public name is an `inline fn` holding nothing but the §9.17.3 TRANSPARENT
+// test — the overwhelming majority of iterates near convergence — and the
+// branchless ladder lives in a separate `*Clamp` reached through
+// `@call(.never_inline, ...)`. Both halves matter:
+//
+//   * The transparent test INLINES, so the caller's hot path is a handful of
+//     compares and a return, which is what ngspice's `DEVfetlim` compiles to
+//     at its call site. Before the split `zFetlim` was one function big enough
+//     that LLVM refused to inline it at all: `-femit-asm` showed a real `call`
+//     with six caller-saved spills around it, 20 Ir per MOSFET per Newton
+//     iterate for a fast path worth ten.
+//   * The ladder stays OUT of line, so its `sel` chain and (for `zPnjlim`) its
+//     three `@log` LIBCALLS never enter the caller's register pressure. Before
+//     the split `zPnjlim` and `zLimvds` inlined *whole*, ladder included.
+//
+// Each guard is a SUFFICIENT condition for "the oracle assigns nothing", so the
+// early return IS the select chain's own `vnew0` arm, bit for bit, and a guard
+// that does not fire falls into an unchanged branchless body. A GPU has no
+// predictor to win and no libcall to save, so `k_dev` routes straight to the
+// `*Clamp` body, which then inlines into its single caller as before.
+//
+// MEASURED, mos1 at inverter-chain bias, Ir per instance per Newton iterate on
+// a standalone rig (the whole pass, gather included): 174 before, 148 after the
+// split, 143 with cg_limit's hoisted sign, 119 with the host's masked walk.
+// ngspice's own ladder on the same rig and the same data: 71. Every step is
+// bit-identical — same `chk` sum over the limited plane.
+//
+// Two rules make the branchless bodies exact:
 //
 //   * CLAMP BEFORE LOG. A branchless kernel evaluates its dead paths, so every
 //     `@log` argument is clamped with `@max(x, 0.0)` FIRST — never log a
@@ -101,23 +120,32 @@ inline fn sel(c: bool, a: f64, b: f64) f64 {
 /// junction's thermal voltage and `vcrit` the bias where its exponential
 /// starts to outrun Newton, i.e. `vt*ln(vt/(sqrt(2)*is))`. Branchless; see
 /// header. Requires the physical domain `vt > 0`, `vcrit > 0`.
-pub fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
+pub inline fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
+    if (comptime !k_dev) {
+        if (!(vnew0 > vcrit and @abs(vnew0 - vold) > vt + vt)) {
+            // The oracle's `else if` arm, BRANCHY and inline. Two `sel`s here
+            // cost four GPR round trips through the asm barrier for a pick a
+            // predictor gets right, and the arm is already behind a branch.
+            // Bit-identical: `vnew0 >= 0.0` is exactly the select's `vnew0`
+            // arm, and below zero this is `sel(vnew0 < floor, floor, vnew0)`
+            // with the same two floor formulas in the same order.
+            if (vnew0 >= 0.0) return vnew0;
+            const fl = if (vold > 0.0) -vold - 1.0 else 2.0 * vold - 1.0;
+            return if (vnew0 < fl) fl else vnew0;
+        }
+        return @call(.never_inline, zPnjlimClamp, .{ vnew0, vold, vt, vcrit });
+    }
+    return zPnjlimClamp(vnew0, vold, vt, vcrit);
+}
+
+/// The branchless ladder, ONE body for both targets. On the host it is only
+/// reached when the damping arm is live, so it is cold and stays out of line;
+/// on a GPU it is the whole kernel and inlines into its single caller.
+fn zPnjlimClamp(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
     const damp = vnew0 > vcrit and @abs(vnew0 - vold) > vt + vt;
     // The negative-excursion floor of the oracle's `else if` arm.
     const floor = sel(vold > 0.0, -vold - 1.0, 2.0 * vold - 1.0);
     const floored = sel(vnew0 < 0.0 and vnew0 < floor, floor, vnew0);
-    // HOST ONLY, and the one place branchless loses: the damping arm needs
-    // THREE `@log` libcalls, and it is dead on the overwhelming majority of
-    // iterates. Unconditional, they cost 209 Ir per MOSFET per Newton
-    // iteration on scaling/parallel_inverters_100 — 8.0% of the whole program,
-    // where ngspice's whole limiter ladder is 52. `damp` is a compare a
-    // predictor gets right, so the branch is free and the logs go away.
-    // Bit-identical: this returns exactly the `damp == false` arm of the
-    // select below. On a GPU there is no predictor and no libcall to save
-    // (`gm.log` is inline), so the device build stays branchless.
-    if (comptime !k_dev) {
-        if (!damp) return floored;
-    }
     const arg = (vnew0 - vold) / vt;
     // Damping candidates, all evaluated. Live guards: d_up needs arg ≥ 2 (so
     // arg-2 ≥ 0), d_dn needs arg ≤ -2 (so 2-arg ≥ 4), d_log needs
@@ -133,7 +161,7 @@ pub fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
 /// SPICE3 `DEVfetlim`: keep a gate bias from stepping across threshold in
 /// one Newton iteration. `vto` is the threshold voltage. Branchless; no logs,
 /// so no domain caveat — exact on all finite inputs.
-pub fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
+pub inline fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
     // HOST ONLY, the transparent arm (see header). `vtsthi >= 2` and
     // `vtstlo = vtsthi/2 + 2 >= 3` for every (vold, vto), so a step of at most
     // 2 V cannot trip EITHER step bound and only the four absolute bounds are
@@ -158,7 +186,13 @@ pub fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
                 if (vnew0 > vto - 0.5 and vnew0 < vto + 4.0) return vnew0;
             } else if (d <= 0.0 or vnew0 <= vto + 0.5) return vnew0;
         }
+        return @call(.never_inline, zFetlimClamp, .{ vnew0, vold, vto });
     }
+    return zFetlimClamp(vnew0, vold, vto);
+}
+
+/// The branchless ladder, ONE body for both targets — see `zPnjlimClamp`.
+fn zFetlimClamp(vnew0: f64, vold: f64, vto: f64) f64 {
     const vtsthi = @abs(2.0 * (vold - vto)) + 2.0;
     const vtstlo = vtsthi * 0.5 + 2.0;
     const vtox = vto + 3.5;
@@ -185,7 +219,7 @@ pub fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
 
 /// SPICE3 `DEVlimvds`: bound a drain-source step. Takes no model data —
 /// the numbers are the algorithm. Branchless; exact on all finite inputs.
-pub fn zLimvds(vnew0: f64, vold: f64) f64 {
+pub inline fn zLimvds(vnew0: f64, vold: f64) f64 {
     // HOST ONLY, the transparent arm (see header). Below 3.5 V the oracle's
     // only bounds are the constants 4.0 and -0.5. At or above it the upper
     // bound is `3*vold + 2`, which exceeds `vold` for every `vold >= 3.5`, so
@@ -196,7 +230,13 @@ pub fn zLimvds(vnew0: f64, vold: f64) f64 {
         if (vold < 3.5) {
             if (vnew0 >= -0.5 and vnew0 <= 4.0) return vnew0;
         } else if (vnew0 >= 2.0 and vnew0 <= 3.0 * vold + 2.0) return vnew0;
+        return @call(.never_inline, zLimvdsClamp, .{ vnew0, vold });
     }
+    return zLimvdsClamp(vnew0, vold);
+}
+
+/// The branchless ladder, ONE body for both targets — see `zPnjlimClamp`.
+fn zLimvdsClamp(vnew0: f64, vold: f64) f64 {
     const r_hi = sel(vnew0 > vold, @min(vnew0, 3.0 * vold + 2.0), sel(vnew0 < 3.5, @max(vnew0, 2.0), vnew0));
     const r_lo = sel(vnew0 > vold, @min(vnew0, 4.0), @max(vnew0, -0.5));
     return sel(vold >= 3.5, r_hi, r_lo);
