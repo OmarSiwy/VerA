@@ -638,12 +638,15 @@ pub const Prover = struct {
     /// The dominator-tree preorder from block 0, on a heap stack: a chain of
     /// 10,000 sequential `if`s is a tree that deep, which the native stack
     /// does not hold. Each row restores the facts and `domain_active` its
-    /// block's edge set once its subtree is done.
+    /// block's edge set once its subtree is done. The stack is on `gpa`, not
+    /// the arena: growing there beside `saved` stopped `saved` growing in
+    /// place, and the copies it left behind doubled a deep chain's peak
+    /// (5,000 else-ifs in Debug: 2.6 GB, 4.8 GB on the arena).
     fn walkDom(self: *Prover, root: u32) !void {
         const Frame = struct { b: u32, mark: usize, active: bool, kid: u32 = 0 };
         var stack: std.ArrayList(Frame) = .empty;
-        defer stack.deinit(self.arena);
-        try stack.append(self.arena, .{ .b = root, .mark = self.saved.items.len, .active = self.domain_active });
+        defer stack.deinit(self.gpa);
+        try stack.append(self.gpa, .{ .b = root, .mark = self.saved.items.len, .active = self.domain_active });
         try self.enterDom(root);
         while (stack.items.len != 0) {
             const top = &stack.items[stack.items.len - 1];
@@ -651,7 +654,7 @@ pub const Prover = struct {
             if (top.kid < kids.len) {
                 const c = kids[top.kid];
                 top.kid += 1;
-                try stack.append(self.arena, .{ .b = c, .mark = self.saved.items.len, .active = self.domain_active });
+                try stack.append(self.gpa, .{ .b = c, .mark = self.saved.items.len, .active = self.domain_active });
                 try self.enterDom(c);
                 continue;
             }
