@@ -446,7 +446,7 @@ fn binds(d: *const Cold, at: u32) bool {
     return d.flow == at or d.pot == at;
 }
 
-const UnnamedKey = struct { scope: u32, hi: u16, lo: u16 };
+const UnnamedKey = struct { scope: u32, hi: u32, lo: u32 };
 
 /// The §5.4.2 unnamed branch instance `unit` declares over row `idx`'s pair,
 /// made on first sight and bound to the row.
@@ -528,7 +528,7 @@ fn bindRow(objects: *model.Rows, at: u32, c: Lower.Contribution, k: u32, share: 
 /// The node object whose solver row is `row` (`node_of_row`, built in
 /// `addAnalog`); null for ground (§1.3.1.1 has no node row for it) and for a
 /// row no node object carries.
-fn nodeOfRow(node_of_row: []const ?u32, row: u16) ?u32 {
+fn nodeOfRow(node_of_row: []const ?u32, row: u32) ?u32 {
     if (row == Lower.ground or row >= node_of_row.len) return null;
     return node_of_row[row];
 }
@@ -536,9 +536,9 @@ fn nodeOfRow(node_of_row: []const ?u32, row: u16) ?u32 {
 /// Does named branch `o` join rows `hi` and `lo`, in either order? §5.4.2's
 /// reference direction is the declaration's, and contributions are
 /// canonicalised to one spelling of the pair, so both orders are the branch.
-fn branchSpans(objects: *const model.Rows, o: *const Cold, hi: u16, lo: u16) bool {
-    const p: u16 = if (o.pos) |n| objects.coldOf(n).row orelse return false else Lower.ground;
-    const n: u16 = if (o.neg) |m| objects.coldOf(m).row orelse return false else Lower.ground;
+fn branchSpans(objects: *const model.Rows, o: *const Cold, hi: u32, lo: u32) bool {
+    const p: u32 = if (o.pos) |n| objects.coldOf(n).row orelse return false else Lower.ground;
+    const n: u32 = if (o.neg) |m| objects.coldOf(m).row orelse return false else Lower.ground;
     return (p == hi and n == lo) or (p == lo and n == hi);
 }
 

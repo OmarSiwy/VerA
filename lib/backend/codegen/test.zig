@@ -4482,8 +4482,37 @@ test "codegen: a setup of flags alone discards its scalar, a quoted \"S\" notwit
     try expectAstGen(try h.gen(std.testing.allocator));
 }
 
+test "codegen: §6.5.2.2 `U` is enum(u8) to 256 unknowns and as wide as the count past them" {
+    // #29: 256 unknowns was a ceiling (E1003) below §6.5.2.2's "shall
+    // support a minimum of 256 ports". A vector port of n elements and one
+    // internal net is n + 1 unknowns.
+    const gpa = std.testing.allocator;
+    for ([_]struct { n: u32, tag: []const u8 }{
+        .{ .n = 255, .tag = "pub const U = enum(u8) {" },
+        .{ .n = 256, .tag = "pub const U = enum(u9) {" },
+        .{ .n = 600, .tag = "pub const U = enum(u10) {" },
+        .{ .n = 70000, .tag = "pub const U = enum(u17) {" },
+    }) |c| {
+        const src = try std.fmt.allocPrint(gpa,
+            \\module big(b);
+            \\  inout [0:{d}] b;
+            \\  electrical [0:{d}] b;
+            \\  electrical m;
+            \\  analog I(b[{d}], m) <+ V(b[{d}], m);
+            \\endmodule
+            \\
+        , .{ c.n - 1, c.n - 1, c.n - 1, c.n - 1 });
+        defer gpa.free(src);
+        var h: Harness = undefined;
+        try Harness.run(gpa, src, &h);
+        defer h.deinit();
+        const out = try h.genWith(.{});
+        try std.testing.expect(std.mem.find(u8, out.text, c.tag) != null);
+    }
+}
+
 test "codegen: a $limit on an unknown past 63 keeps every lane in the live sets" {
-    // `limit_reads`/`limit_writes` are u64 masks, and `U` holds up to 256
+    // `limit_reads`/`limit_writes` are u64 masks, and `U` holds any number of
     // unknowns. Past bit 63 there is no bit to set, and the masks must stay
     // supersets ("a missing `writes` bit silently drops a limit"), so the
     // answer is every bit. The junction is V(a69, n): a69 is unknown

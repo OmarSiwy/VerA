@@ -506,7 +506,7 @@ pub const Cold = struct {
     /// `.node` of the analog model: its `Lowered.nodes` row — the solver
     /// unknown whose value §12.10 reads for a potential. Null for a node the
     /// lowering never gave a row (declared, never reached by analog code).
-    row: ?u16 = null,
+    row: ?u32 = null,
     /// `.branch` of the analog model: the §5.6 contribution rows carrying its
     /// two values, by `Lowered.contributions` index — the potential source
     /// (whose branch-flow unknown IS the flow) and the flow source (whose
@@ -518,8 +518,8 @@ pub const Cold = struct {
     /// flow §12.10 reads (§5.4.1).
     contrib_share: ?u32 = null,
     /// `.branch`: the terminal rows, `Lower.ground` for the reference node.
-    hi_row: u16 = Lower.ground,
-    lo_row: u16 = Lower.ground,
+    hi_row: u32 = Lower.ground,
+    lo_row: u32 = Lower.ground,
     /// `.branch`: its flow row absorbed another instance's `<+`
     /// (`Contribution.shared`) and holds no share of this instance's (it
     /// drives the pair only through another's branch, §5.6.8.2), or a named

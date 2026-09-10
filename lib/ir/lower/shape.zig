@@ -74,9 +74,11 @@ pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u
     return out;
 }
 
-/// E1016's bound on an array's or a pattern's cells: each becomes its own
-/// scalar, so this is an unrolling guard, not a language rule.
-const max_cells = 1 << 20;
+/// E1016's bound on an array's or a pattern's cells: a cell is indexed by a
+/// `u32` (`MemArray.len`). Not a design limit: each cell is at least a
+/// scalar of lowering state, so an array reaching it has run out of memory
+/// first (#29; the bound was 2^20 cells).
+const max_cells = std.math.maxInt(u32);
 
 /// How many scalars a declared shape becomes.
 pub fn shapeCells(dims: []const Bounds) usize {
@@ -358,12 +360,14 @@ test elemKey {
     }
 }
 
-test "lower: §3.2 array bounds are constant integers (E0308), and the cells are capped (E1016)" {
+test "lower: §3.2 array bounds are constant integers (E0308), and the cells fit a u32 index (E1016)" {
     const cases = [_]struct { decls: []const u8, want: ?diag.Code }{
         .{ .decls = "  real a[3:0];", .want = null },
         .{ .decls = "  integer w;\n  real a[0:w];", .want = .E0308 },
-        // 1024 * 1025 cells is past the 2^20 E1016 cap.
-        .{ .decls = "  real a[0:1023][0:1024];", .want = .E1016 },
+        // 1024 * 1025 cells was past the old 2^20 E1016 cap (#29).
+        .{ .decls = "  real a[0:1023][0:1024];", .want = null },
+        // Past the u32 cell index is E1016, before a cell is allocated.
+        .{ .decls = "  real a[0:65535][0:65536];", .want = .E1016 },
         // §3.2: a bound "shall evaluate to a positive integer, a negative
         // integer, or zero", and §4.2.1.1 gives NaN and an infinity no
         // integer, so such a bound is no bound at all.
@@ -371,10 +375,12 @@ test "lower: §3.2 array bounds are constant integers (E0308), and the cells are
         .{ .decls = "  real a[0:1.0/0.0];", .want = .E0308 },
         .{ .decls = "  real a[-1.0/0.0:0];", .want = .E0308 },
         // §4.2.14 a pattern's replication count folds like a bound and is
-        // non-negative (§4.2.13): E0223, and past the cap E1016.
+        // non-negative (§4.2.13): E0223, and past the u32 cell index E1016.
         .{ .decls = "  parameter integer c = 2;\n  real a[0:3] = '{c{1.0, 2.0}};", .want = null },
         .{ .decls = "  parameter integer c = -1;\n  real a[0:1] = '{c{1.0}};", .want = .E0223 },
-        .{ .decls = "  parameter integer c = 2000000;\n  real a[0:1] = '{c{1.0}};", .want = .E1016 },
+        .{ .decls = "  parameter integer c = 2000000;\n  real a[0:1] = '{c{1.0}};", .want = null },
+        // 2000000000 copies of three elements: 6e9, past the u32 index.
+        .{ .decls = "  parameter integer c = 2000000000;\n  real a[0:1] = '{c{1.0, 2.0, 3.0}};", .want = .E1016 },
         // A pattern shorter than the array leaves the rest at §3.2's zero.
         .{ .decls = "  real a[0:2] = '{1.0, 2.0};", .want = null },
     };

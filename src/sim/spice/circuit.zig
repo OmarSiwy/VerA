@@ -35,7 +35,7 @@ pub fn Circuit(comptime D: type) type {
         /// `eval`'s family: unknown `u` on lane `u`.
         pub const Dual = contract.RefFamily(f64, &lane_of, .{ .dense = true });
         const lane_of = blk: {
-            var l: [n_u]u8 = undefined;
+            var l: [n_u]u32 = undefined;
             for (&l, 0..) |*e, u| e.* = u;
             break :blk l;
         };

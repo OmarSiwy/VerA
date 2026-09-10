@@ -42,12 +42,6 @@ pub const Error = std.mem.Allocator.Error || error{
     /// proof.zig rejected the model. `generate` returns this before emitting
     /// a byte.
     DomainErrors,
-    /// A source identifier whose structural key exceeds `naming.max_name_len`.
-    /// Never truncated: two distinct units rely on the names staying distinct.
-    NameTooLong,
-    /// More than 256 solver unknowns, which `U`'s `enum(u8)` tag cannot spell.
-    /// Reported as E1003 by `emitTopology`.
-    TooManyUnknowns,
     /// A numeric parameter default cannot follow host-written dependencies.
     UnsupportedParameterDefault,
 };
