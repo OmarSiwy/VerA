@@ -43,11 +43,9 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     const name = try self.expectIdent();
     _ = try self.expect(.lparen);
     // A.5.2 puts the output port first in both header arms, so
-    // `ports[0]` is the output and `ports[1..]` the inputs.
-    // E1017 refuses past `max_udp_inputs` inputs once the list is read, so
-    // the ports past the array are counted, not kept.
-    var ports: [max_udp_inputs + 1]Ast.StrId = undefined;
-    var n_ports: usize = 0;
+    // `ports[0]` is the output and `ports[1..]` the inputs. §8.1.2 lets a
+    // tool cap the count; VerA does not.
+    var ports: std.ArrayList(Ast.StrId) = .empty;
     var outputs: u8 = 0;
     var output: Ast.StrId = .none;
     var has_reg = false;
@@ -67,8 +65,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
             if (self.eat(.kw_reg)) has_reg = true;
         }
         const port = try self.expectIdent();
-        if (n_ports < ports.len) ports[n_ports] = port;
-        n_ports += 1;
+        try ports.append(self.arena, port);
         if (dir == .kw_output) {
             outputs +|= 1;
             output = port;
@@ -83,9 +80,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
-    if (n_ports - 1 > max_udp_inputs)
-        return self.failAt(main_tok, .E1017, "`{s}` has {d} inputs", .{ self.file.str(name), n_ports - 1 });
-    const port_ids = try self.arena.dupe(Ast.StrId, ports[0..n_ports]);
+    const port_ids = ports.items;
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
     while (true) {
@@ -118,7 +113,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     var rows: std.ArrayList(Ast.UdpRow) = .empty;
     const sequential = try parseUdpTable(self, &rows);
-    try checkUdpConflicts(self, name, rows.items, n_ports - 1, sequential, main_tok);
+    try checkUdpConflicts(self, name, rows.items, port_ids.len - 1, sequential, main_tok);
     if (!self.reservedIs(self.pos, "endprimitive"))
         return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
     self.pos += 1;
@@ -168,20 +163,17 @@ fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool {
     return sequential orelse false;
 }
 
-/// E1017's bound: IEEE 1364-2005 §8.1.2 requires at least 9 sequential and
-/// 10 combinational inputs and lets a tool cap the count.
-pub const max_udp_inputs = 64;
-
 /// Parses one `combinational_entry` or `sequential_entry`, checks it column
 /// by column (E0233 bad symbol, E0234 wrong shape) and appends it to `rows`.
 /// `sequential` is null before the table's first entry, which sets it; each
-/// later entry must agree. A column holds `max_udp_inputs` symbols, one of
-/// them at most an edge `(vw)` of four characters.
+/// later entry must agree. A column holds any number of symbols.
 fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.UdpRow)) Error!void {
     const tok = self.pos;
     // Column 0 is the input list; a colon opens each of the 1 or 2 that
     // follow, so the colon count is the entry's `udp_body` alternative.
-    var cols: [3]struct { text: [max_udp_inputs + 3]u8 = undefined, len: usize = 0, tok: u32 = 0 } = .{ .{}, .{}, .{} };
+    // The input column is copied into the row, so it grows on the arena; the
+    // other two are one character each when well formed.
+    var cols: [3]struct { text: std.ArrayList(u8) = .empty, tok: u32 = 0 } = .{ .{}, .{}, .{} };
     var n: usize = 0;
     cols[0].tok = tok;
     while (!self.eat(.semicolon)) {
@@ -193,11 +185,7 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
             cols[n].tok = self.pos;
             continue;
         }
-        const t = self.tokenText(self.pos);
-        if (cols[n].len + t.len > cols[n].text.len)
-            return self.failAt(self.pos, .E0234, "a UDP table entry of more than {d} input symbols", .{max_udp_inputs});
-        @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
-        cols[n].len += t.len;
+        try cols[n].text.appendSlice(self.arena, self.tokenText(self.pos));
         self.pos += 1;
     }
     if (n == 0) return self.failAt(tok, .E0234, "a UDP table entry has one colon (combinational) or two (sequential), not 0", .{});
@@ -213,7 +201,7 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
 
     // `level_input_list` in a combinational body; `seq_input_list`, which
     // adds `edge_input_list`, in a sequential one.
-    const inputs = cols[0].text[0..cols[0].len];
+    const inputs = cols[0].text.items;
     var edge_count: usize = 0;
     for (inputs) |c| {
         if (std.mem.findScalar(u8, "01xX?bB", c) != null) continue;
@@ -246,23 +234,21 @@ fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast.Udp
     // `output_symbol ::= 0 | 1 | x | X` closes a combinational entry;
     // `current_state ::= level_symbol` and `next_state ::= output_symbol
     // | -` close a sequential one.
-    if (is_seq) for (cols[1].text[0..cols[1].len]) |c| {
+    if (is_seq) for (cols[1].text.items) |c| {
         if (!isLevelSymbol(c))
             return self.failAt(cols[1].tok, .E0233, "`{c}` is not a UDP current_state symbol", .{c});
     };
-    if (is_seq and cols[1].len != 1)
-        return self.failAt(cols[1].tok, .E0233, "a UDP current_state is one level symbol, not {d}", .{cols[1].len});
-    const last = cols[n].text[0..cols[n].len];
+    if (is_seq and cols[1].text.items.len != 1)
+        return self.failAt(cols[1].tok, .E0233, "a UDP current_state is one level symbol, not {d}", .{cols[1].text.items.len});
+    const last = cols[n].text.items;
     if (last.len != 1) return self.failAt(cols[n].tok, .E0233, "a UDP output symbol is one character, not {d}", .{last.len});
     const ok = std.mem.findScalar(u8, "01xX", last[0]) != null or (is_seq and last[0] == '-');
     if (!ok) return self.failAt(cols[n].tok, .E0233, "`{c}` is not a UDP output symbol", .{last[0]});
 
-    // The columns live in a stack buffer, so `inputs` is copied out. Only
-    // the input list needs it: the other two columns are one character.
     try rows.append(self.arena, .{
-        .inputs = try self.arena.dupe(u8, inputs),
+        .inputs = inputs,
         // A.5.3 `current_state ::= level_symbol`: exactly one, checked above.
-        .state = if (is_seq) cols[1].text[0] else 0,
+        .state = if (is_seq) cols[1].text.items[0] else 0,
         .output = last[0],
     });
 }
@@ -328,12 +314,12 @@ fn udpFields(inputs: []const u8, out: []UdpField) usize {
 /// edge entry never conflict: §8.8 lets the level entry dominate. Neither
 /// do edge entries on different inputs, which one event cannot both match.
 fn checkUdpConflicts(self: *Parser, name: Ast.StrId, rows: []const Ast.UdpRow, inputs: usize, sequential: bool, main_tok: u32) Error!void {
-    var a_buf: [max_udp_inputs]UdpField = undefined;
-    var b_buf: [max_udp_inputs]UdpField = undefined;
+    const a_buf = try self.arena.alloc(UdpField, inputs);
+    const b_buf = try self.arena.alloc(UdpField, inputs);
     for (rows, 0..) |a, i| {
-        if (udpFields(a.inputs, &a_buf) != inputs) continue;
+        if (udpFields(a.inputs, a_buf) != inputs) continue;
         for (rows[i + 1 ..], i + 1..) |b, j| {
-            if (udpFields(b.inputs, &b_buf) != inputs) continue;
+            if (udpFields(b.inputs, b_buf) != inputs) continue;
             const overlap = for (a_buf[0..inputs], b_buf[0..inputs]) |fa, fb| {
                 const meet = switch (fa) {
                     .level => |la| switch (fb) {

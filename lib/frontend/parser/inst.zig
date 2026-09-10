@@ -226,7 +226,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
             .g_buf, .g_not => terms.items.len -| 1,
             .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => @min(terms.items.len, 1),
         };
-        for (terms.items[0..n_out]) |out| if (!isNetLvalue(self, out)) return self.failAt(
+        for (terms.items[0..n_out]) |out| if (!try self.walk(self.pos, isNetLvalue, .{ self, out })) return self.failAt(
             self.file.exprs.mainTok(out),
             .E0207,
             "found {s}: a gate's output terminal is a net_lvalue (A.3.3), a net the gate can drive",

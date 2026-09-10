@@ -7,8 +7,6 @@ const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
 const diag = @import("diag");
 const Error = Preprocessor.Error;
-const max_expansion_depth = Preprocessor.max_expansion_depth;
-const max_expanded_bytes = Preprocessor.max_expanded_bytes;
 const Macro = Preprocessor.Macro;
 const Pp = Preprocessor.Pp;
 const scan = Preprocessor.scan;
@@ -100,7 +98,7 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     // §10.4: a redefinition silently replaces. Predefined macros keep their flag
     // so `undef still has no effect on them.
     if (pp.macros.get(name)) |old| m.predefined = old.predefined;
-    try pp.macros.put(pp.scratch, name, m);
+    try pp.putMacro(name, m);
 }
 
 /// Parses a §10.4 `undef and removes the macro; a §10.5 predefined macro is
@@ -116,7 +114,7 @@ pub fn removeDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     if (pp.macros.get(name)) |m| {
         if (m.predefined) return;
     }
-    _ = pp.macros.remove(name);
+    pp.removeMacro(name);
 }
 
 /// A macro body is one logical line: `\`+newline collapses to a space. The
@@ -154,9 +152,9 @@ fn joinContinuations(pp: *Pp, body: []const u8) Error![]const u8 {
 /// name, into `pp.out`. Handles §10.7 `__LINE__` and `__FILE__`. Returns the
 /// offset to resume scanning from; inside an inactive arm that is
 /// `after_name`, with nothing emitted. Fails with E0115 (undefined),
-/// E0116/E0117 (argument list), E0118 (recursion), E0119 (depth) or E0120
-/// (unbalanced arguments), and with E0150 once
-/// `Preprocessor.max_expanded_bytes` of bodies have been substituted.
+/// E0116/E0117 (argument list), E0118 (recursion) or E0120 (unbalanced
+/// arguments), with E0150 once the text passes `Options.text_limit`, and
+/// with E0119 when no stack can be reserved for the nesting.
 pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const u8) Error!usize {
     if (!pp.emitting()) return after_name;
     // The whole use, backtick included: `FOO.
@@ -210,18 +208,13 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
             return pp.fail(sp, .E0117, "expected {d}, found {d}", .{ m.params.len, args.len });
     }
 
-    for (pp.expanding[0..pp.n_expanding]) |active| {
-        if (!std.mem.eql(u8, active, name)) continue;
+    if (pp.expanding_set.contains(name)) {
         var b = pp.failWith(sp, .E0118);
         b.msg("`{s}`", .{name});
-        b.note("expansion chain: {s}", .{try pp.joinChain(pp.expanding[0..pp.n_expanding], name)});
+        b.note("expansion chain: {s}", .{try pp.joinChain(pp.expanding.items, name)});
         try b.emit();
         return error.PreprocessFailed;
     }
-    if (pp.expand_depth >= max_expansion_depth)
-        return pp.fail(sp, .E0119, "limit is {d}", .{max_expansion_depth});
-    pp.expand_depth += 1;
-    defer pp.expand_depth -= 1;
 
     // IEEE 1364 forbids a macro's text from referring to the macro itself, a
     // property of the definition. A nested use in an actual argument
@@ -236,20 +229,18 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
             // Some argument invokes a macro: expand from here on into a copy.
             // Backtick-free arguments are substituted verbatim.
             const copy = try pp.scratch.dupe([]const u8, args);
-            for (copy[first..]) |*slot| slot.* = try expandArg(pp, slot.*, at);
+            for (copy[first..]) |*slot| try pp.nested(sp, expandArg, .{ pp, slot, at });
             actuals = copy;
             break;
         }
         break :blk try substitute(pp, m.body, m.params, actuals);
     } else m.body;
-    pp.expanded_bytes += body.len;
-    if (pp.expanded_bytes > max_expanded_bytes)
-        return pp.fail(sp, .E0150, "limit is {d} bytes", .{max_expanded_bytes});
-
-    // Fits: `expand_depth` was checked and bumped above.
-    pp.expanding[pp.n_expanding] = name;
-    pp.n_expanding += 1;
-    defer pp.n_expanding -= 1;
+    try pp.expanding.append(pp.scratch, name);
+    try pp.expanding_set.put(pp.scratch, name, {});
+    defer {
+        _ = pp.expanding.pop();
+        _ = pp.expanding_set.remove(name);
+    }
 
     // Provenance: only the outermost expansion gets segments, since a nested
     // one resolves to the same invocation site.
@@ -284,8 +275,10 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     };
 
     // Rescan the expansion so nested macro uses (§10.4) expand too. The cycle
-    // guard above is what makes this terminate.
-    try scan(pp, body);
+    // guard above is what makes this terminate; the text bound stops a finite
+    // expansion too large to address (a macro doubling its text 40 times).
+    try pp.nested(sp, scan, .{ pp, body });
+    try pp.checkTextSize(sp);
 
     // The invocation may have spanned lines; keep the count.
     try pp.putNewlines(text[at..end]);
@@ -293,12 +286,12 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
     return end;
 }
 
-/// Returns one actual argument fully macro-expanded, on `pp.scratch`. Scans
-/// into a fresh output list with `expand_site` set to `at`, the invocation's
-/// '`', so diagnostics and `__LINE__` behave as in a body rescan.
-/// Backtick-free text is returned as is.
-fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
-    if (std.mem.findScalar(u8, arg, '`') == null) return arg;
+/// Replaces `arg.*` with that actual argument fully macro-expanded, on
+/// `pp.scratch`. Scans into a fresh output list with `expand_site` set to
+/// `at`, the invocation's '`', so diagnostics and `__LINE__` behave as in a
+/// body rescan. Backtick-free text is kept as is.
+fn expandArg(pp: *Pp, arg: *[]const u8, at: usize) Error!void {
+    if (std.mem.findScalar(u8, arg.*, '`') == null) return;
     const saved_out = pp.out;
     const saved_site = pp.expand_site;
     const saved_actual = pp.in_actual;
@@ -310,8 +303,8 @@ fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
         pp.expand_site = saved_site;
         pp.in_actual = saved_actual;
     }
-    try scan(pp, arg);
-    return pp.out.items;
+    try scan(pp, arg.*);
+    arg.* = pp.out.items;
 }
 
 /// A macro use's trimmed actual arguments and the offset just past its `)`.

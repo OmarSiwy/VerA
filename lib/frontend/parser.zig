@@ -18,14 +18,21 @@ const token = @import("token.zig");
 const lexer = @import("lexer.zig");
 const Ast = @import("ast.zig");
 const diag = @import("diag");
+const deep_stack = @import("deep_stack.zig");
 
 /// `ParseError` unwinds to the nearest recovery point (module item, statement or
 /// top-level declaration); its diagnostic is already in the bag.
 pub const Error = error{ OutOfMemory, ParseError };
 
-/// E0241's nesting limit. A Debug build overflows an 8 MB stack somewhere
-/// between 3000 and 5000 nested parentheses, and later tree walks recurse too.
-pub const max_depth = 1024;
+/// Native recursion levels one stack segment holds. Past them the next level
+/// runs on a fresh `deep_stack` segment, so nesting is bounded by memory, not
+/// by the calling thread's stack (`Parser.segment`).
+pub const segment_levels = 4096;
+/// Levels the caller's own stack holds before the first segment: half the
+/// 1024 the parser ran on any caller's stack before segments existed.
+pub const caller_levels = 512;
+/// `segment_levels` in `deep_stack.bytes_per_level` units.
+const segment_hint = segment_levels;
 
 /// Parser state for one token stream. Every allocation comes from `arena`;
 /// `src`, `tags` and `starts` are borrowed and must outlive the produced
@@ -36,8 +43,17 @@ pub const Parser = struct {
     tags: []const token.Tag,
     starts: []const u32,
     pos: u32 = 0,
-    /// Open `enter` calls: expression, statement and generate-block nesting.
-    depth: u16 = 0,
+    /// AST nesting at the cursor: expression, statement and generate-block
+    /// levels (`enter`), plus one per operator folded into a chain, whose
+    /// tree every later walk recurses down.
+    depth: u32 = 0,
+    /// The largest `depth` this parse reached: the nesting hint later stages
+    /// size their `deep_stack` by.
+    deepest: u32 = 0,
+    /// Native recursion levels open (`enter`), and their count when the
+    /// current stack segment began (`segment`).
+    frames: u32 = 0,
+    seg_base: u32 = 0,
     file: Ast.SourceFile = .empty,
     /// Shared collector. The cap, the dedupe and the rendering all live there.
     bag: *diag.Bag,
@@ -667,12 +683,63 @@ pub const Parser = struct {
         }
     }
 
-    /// Opens one level of nesting; the caller pairs it with
-    /// `defer self.depth -= 1`. Fails with E0241 past `max_depth`, so nested
-    /// source is refused before it overflows the native stack.
-    pub fn enter(self: *Parser) Error!void {
-        if (self.depth == max_depth) return self.failAt(self.pos, .E0241, "", .{});
+    /// Counts one level of AST nesting toward `deepest`; the caller restores
+    /// `depth`. A recursive grammar function calls `enter` instead.
+    pub fn nest(self: *Parser) void {
         self.depth += 1;
+        self.deepest = @max(self.deepest, self.depth);
+    }
+
+    /// Opens one level of recursion: `nest` plus a native frame. The caller
+    /// pairs it with `defer self.leave()`, and first asks `segmentDue`.
+    pub fn enter(self: *Parser) void {
+        self.nest();
+        self.frames += 1;
+    }
+
+    pub fn leave(self: *Parser) void {
+        self.depth -= 1;
+        self.frames -= 1;
+    }
+
+    /// Whether the current stack segment is full (`caller_levels` frames on
+    /// the caller's stack, `segment_levels` on a segment), so the next
+    /// recursion must run through `segment`.
+    pub fn segmentDue(self: *const Parser) bool {
+        const cap: u32 = if (self.seg_base == 0) caller_levels else segment_levels;
+        return self.frames - self.seg_base >= cap;
+    }
+
+    /// Calls the grammar function `f(args)` as one more native level: on a
+    /// fresh segment when this one is full. For a recursion that reaches no
+    /// `enter` site (the right-associative `?:` arm).
+    pub fn descend(self: *Parser, comptime f: anytype, args: anytype) @typeInfo(@TypeOf(f)).@"fn".return_type.? {
+        if (self.segmentDue()) return self.segment(f, args);
+        self.frames += 1;
+        defer self.frames -= 1;
+        return @call(.auto, f, args);
+    }
+
+    /// Runs the parse-time AST walk `f(args)`, which recurses once per level
+    /// of a subtree this parse built, on a `deep_stack` reserved for
+    /// `deepest` (in place while that is shallow). E0241 at `tok` when that
+    /// stack cannot be reserved.
+    pub fn walk(self: *Parser, tok: u32, comptime f: anytype, args: anytype) Error!@typeInfo(@TypeOf(f)).@"fn".return_type.? {
+        return deep_stack.run(self.deepest, f, args) catch
+            self.failAt(tok, .E0241, "{d} levels deep", .{self.deepest});
+    }
+
+    /// Runs the grammar function `f(args)` on a fresh stack segment of
+    /// `segment_levels` levels (`deep_stack.run`). A segment that cannot be
+    /// reserved is E0241, naming the depth reached.
+    pub fn segment(self: *Parser, comptime f: anytype, args: anytype) @typeInfo(@TypeOf(f)).@"fn".return_type.? {
+        const saved = self.seg_base;
+        self.seg_base = self.frames;
+        defer self.seg_base = saved;
+        return deep_stack.run(segment_hint, f, args) catch |e| switch (e) {
+            error.DeepStackUnavailable => self.failAt(self.pos, .E0241, "{d} levels deep", .{self.depth}),
+            else => |other| other,
+        };
     }
 
     /// Marks the parse failed, adds `code` at token `tok` to the bag, and returns
