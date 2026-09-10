@@ -520,11 +520,37 @@ fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
     return 2;
 }
 
+/// How long one device's `zig build-obj` gets before it is killed.
+///
+/// Three orders of magnitude of slack: the check costs 0.03–0.28 s per device
+/// and the whole 39-device ARPice catalog runs in about five seconds
+/// (measured 2026-09-10, cold and warm cache alike). Nothing that trips 120 s
+/// is slow — it is wedged. This bound exists because three of these were once
+/// found at 99% CPU for 82 minutes with the parent `zig build` waiting on them
+/// and not one line of diagnostic anywhere; an unbounded child is a hang the
+/// build cannot report, whatever the cause turns out to be.
+const check_budget_s = 120;
+
+/// Kills `child` once the budget is up. Returns whether it had to — a cancel
+/// (the check finished first) short-circuits the sleep and answers false.
+fn killAfter(io: Io, child: *std.process.Child, seconds: i64) bool {
+    io.sleep(.fromSeconds(seconds), .awake) catch return false;
+    child.kill(io);
+    return true;
+}
+
 /// Run `zig build-obj` over the generated device with the `contract` module on
 /// the command line. Returns null when it type-checks, or the exit code to use.
 ///
 /// `build-obj`, not `build-lib`: this only has to prove the code is valid, and
 /// object emission skips linking entirely.
+///
+/// NOTE: this proves the FILE parses and its two `comptime` blocks hold, and
+/// nothing more. `-fno-emit-bin` analyses lazily and `contract.validate` is
+/// pure reflection — it says so itself, "a generic return cannot be checked
+/// without instantiating" — so no `eval`/`q` body is ever reached and a type
+/// error inside one exits 0 here. See docs/perf/veracheck-hang-2026-09-10.md
+/// in ARPice for the measurement and the fix.
 fn typeCheck(
     gpa: std.mem.Allocator,
     io: Io,
@@ -564,11 +590,32 @@ fn typeCheck(
         .stderr = .pipe,
     });
 
+    // `concurrent`, not `async`: `async` is permitted to run the watchdog
+    // inline on this thread, which would sleep out the whole budget before the
+    // child was ever read from. An Io that cannot spare a second thread gets
+    // the old unbounded wait rather than a wrong one.
+    var watchdog = io.concurrent(killAfter, .{ io, &child, check_budget_s }) catch null;
+
     var buf: [1 << 16]u8 = undefined;
     var reader = child.stderr.?.readerStreaming(io, &buf);
     var aw: Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     _ = reader.interface.streamRemaining(&aw.writer) catch {};
+
+    // Retired BEFORE `wait` reaps, because after the reap this pid belongs to
+    // whoever the OS hands it to next and a watchdog still holding it would
+    // signal a stranger. `killAfter` reaps what it kills, so the timed-out
+    // path must not `wait` again — that is an assert in Child.wait.
+    const timed_out = if (watchdog) |*w| w.cancel(io) else false;
+    if (timed_out) {
+        try err.print(
+            "error: {s}: type check did not finish in {d}s and was killed. " ++
+                "The generated Zig is at .zig-cache/vera-check/{s}; run the " ++
+                "`zig build-obj` from typeCheck() by hand to see where it sticks.\n",
+            .{ in_path, check_budget_s, dev_name },
+        );
+        return 1;
+    }
 
     const term = try child.wait(io);
     const failed = switch (term) {
