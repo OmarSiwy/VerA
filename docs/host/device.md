@@ -31,7 +31,7 @@ declarations and checks the shape of every optional one it knows:
 
 | Declaration | What it is |
 |---|---|
-| `U` | the unknowns, a dense enum `0..n-1` with an unsigned tag (`enum(u8)` up to 256 unknowns). Ports come first (LRM §6.5), then internal nodes, then branch-flow unknowns. `contract.nU(D)` is its length |
+| `U` | the unknowns, a dense enum `0..n-1` with an unsigned tag (`enum(u8)` up to 256 unknowns, as wide as the count needs past them). Ports come first (LRM §6.5), then internal nodes, then branch-flow unknowns. `contract.nU(D)` is its length |
 | `num_ports` | how many members of `U` are ports, in port-list order. 0 is legal |
 | `Model` | the card: one field per parameter (LRM §3.4) with its default, plus host-written fields ending in `__` |
 | `Instance` | per-instance values `eval` reads (`mfactor`, held variables, `bound_step`, ...) |

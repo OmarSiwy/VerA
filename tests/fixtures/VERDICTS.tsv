@@ -701,7 +701,7 @@ pass	ch03_data_types/aliasparam_target_must_be_a_parameter_rejected.va
 pass	ch03_data_types/annex_d_access_v_included_rejected.va
 pass	ch03_data_types/annex_d_access_v_without_include.va
 pass	ch03_data_types/array_extra_subscript_rejected.va
-pass	ch03_data_types/array_over_2_20_elements_rejected.va
+pass	ch03_data_types/array_past_2_20_elements.va
 pass	ch03_data_types/audit_compatible_flow_units.va
 pass	ch03_data_types/audit_genvar_static_dependencies.va
 pass	ch03_data_types/audit_ground_reference_solution.va
@@ -752,7 +752,6 @@ pass	ch03_data_types/lrm_3_9.va
 pass	ch03_data_types/nature_parent_access_must_be_potential_or_flow_rejected.va
 pass	ch03_data_types/net_declared_with_nature_name_rejected.va
 pass	ch03_data_types/net_desc_attribute_numeric_rejected.va
-pass	ch03_data_types/nets_over_65535_rows_rejected.va
 pass	ch03_data_types/nodeset_hierarchical_declaration.va
 pass	ch03_data_types/nodeset_hierarchical_not_constant_rejected.va
 pass	ch03_data_types/output_variable_access_from_sibling.va
@@ -788,7 +787,7 @@ pass	ch03_data_types/string_variable_bitwise_rejected.va
 pass	ch03_data_types/string_variable_compared_with_number_rejected.va
 pass	ch03_data_types/vector_branch_on_part_select.va
 pass	ch03_data_types/vector_branch_part_select_reversed_rejected.va
-pass	ch03_data_types/vector_net_over_65535_elements_rejected.va
+pass	ch03_data_types/vector_range_past_65535_elements.va
 pass	ch03_data_types/vera_scratch_starts_each_evaluation.va
 pass	ch03_data_types/vera_scratch_uninit_reads_nan_when_safe.va
 pass	ch03_data_types/vera_scratch_uninit_tape.va
@@ -1706,7 +1705,7 @@ pass	ch06_hierarchy/unnamed_generate_block_external_names.va
 pass	ch06_hierarchy/unnamed_generate_instance_reference_rejected.va
 pass	ch06_hierarchy/unnamed_generate_reference_from_within.va
 pass	ch06_hierarchy/untyped_port_behavioral_use_rejected.va
-pass	ch06_hierarchy/vector_port_unknown_ceiling_rejected.va
+pass	ch06_hierarchy/vector_port_past_256_unknowns.va
 pass	ch06_hierarchy/vector_ports.va
 pass	ch06_hierarchy/vector_ports_range_equal.va
 pass	ch06_hierarchy/wreal_net_with_two_drivers_rejected.va

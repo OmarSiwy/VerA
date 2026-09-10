@@ -80,18 +80,21 @@ needs: lanes on the `deriv_reads` columns, constants on the rest.
 the SPICE deck runner (`src/sim/spice/`) and the examples use:
 
 ```zig
-pub fn RefFamily(comptime L: type, comptime lane: []const u8, comptime opts: RefOptions) type
+pub fn RefFamily(comptime L: type, comptime lane: anytype, comptime opts: RefOptions) type
 ```
 
 - `L` is the lane float: `f64`, or `f32` for a device that declares
   `jac_f32` (the value stays `f64`).
-- `lane[u]` is the lane unknown `u` occupies, or `contract.no_lane` for an
+- `lane` is a table (a slice, or a pointer to an array or vector) of any
+  unsigned element type. `lane[u]` is the lane unknown `u` occupies, or the
+  element type's maximum (`contract.no_lane` in a `u8` table) for an
   unknown the family does not carry. `std.simd.iota(u8, n)` is one lane per
-  unknown; all `no_lane` is the value-only family the card-time hooks
-  (`setup`, `derive`) and the value-only state hooks take.
+  unknown up to 255 of them, `std.simd.iota(u32, n)` past them; all
+  `no_lane` is the value-only family the card-time hooks (`setup`,
+  `derive`) and the value-only state hooks take.
 - `.dense = true`: every `Of(m)` is one type, the value and an array of
-  every lane, so a scatter loop may index `d` at run time. At most 255 lanes.
-  Masks only document intent.
+  every lane, so a scatter loop may index `d` at run time. Masks only
+  document intent.
 - `.dense = false` (sparse): `Of(m)` carries exactly `m`'s lanes as a
   `@Vector(@popCount(m), L)`, so a row with three live columns does three
   lanes of arithmetic. It serves any number of unknowns, and refuses at

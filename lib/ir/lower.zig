@@ -92,8 +92,8 @@ pub const ParamOverride = Elaborate.ParamOverride;
 
 /// A §3.12 named branch: a node pair carrying a flow and a potential.
 pub const BranchInfo = struct {
-    hi: u16, // `nodes` row
-    lo: u16, // `nodes` row (`ground` if implicit, §1.3.1.1)
+    hi: u32, // `nodes` row
+    lo: u32, // `nodes` row (`ground` if implicit, §1.3.1.1)
     /// §5.4.1 "There can be any number of named branches between any two
     /// signals", so the node pair does not identify the branch, and everything
     /// that retains a value per branch (§5.6.1.2/§5.6.1.3) has to key on this
@@ -103,7 +103,7 @@ pub const BranchInfo = struct {
 };
 
 /// §5.4.2.1 one access function read, kept for the end-of-module probe sweep.
-pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
+pub const BranchRead = struct { access: Access, hi: u32, lo: u32, tok: u32 };
 
 /// A lowered expression: its Value plus the LRM type that governs which opcode
 /// family the *consumer* must use (§4.2.1.1–§4.2.1.3 implicit conversions).
@@ -155,7 +155,7 @@ pub const Accum = struct { resist: Ssa.Place, react: Ssa.Place, wrote: Ssa.Place
 comptime {
     assert(@sizeOf(TypedValue) == 8);
     assert(@sizeOf(VarSlot) == 16);
-    assert(@sizeOf(BranchRead) == 12);
+    assert(@sizeOf(BranchRead) == 16);
     assert(@sizeOf(Accum) == 12);
 }
 
@@ -195,10 +195,10 @@ branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branc
 /// §3.12.1 port branches: branch name → the port's `nodes` row. A table
 /// of its own, not a flag on `BranchInfo`, because a port branch is not a node
 /// pair: it is the §5.4.3 port flow under a second name.
-port_branches: std.StringHashMapUnmanaged(u16) = .empty,
+port_branches: std.StringHashMapUnmanaged(u32) = .empty,
 /// §1.3.1 net name → `nodes` row. Nets only: a §5.4.2/§5.4.3 flow unknown is
 /// not reachable by name (`flow_unknowns` and `port_probes` are its identity).
-node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
+node_voltages: std.StringHashMapUnmanaged(u32) = .empty,
 
 // ---- internal lowering state (not part of the codegen contract) ----
 /// Sub-file-private state: each is read and written by that one file only.

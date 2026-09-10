@@ -9,8 +9,8 @@ const Lowered = @import("ir").Lowered;
 const naming = @import("../../naming.zig");
 const Input = @import("input.zig").Input;
 
-/// Allocation, or a name longer than `naming.max_name_len`.
-pub const Error = std.mem.Allocator.Error || error{NameTooLong};
+/// Allocation only: a name has no length bound (VAMS 2.8, VD-054).
+pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
 /// Every identifier the device declares, and the unknowns behind them.
@@ -58,27 +58,19 @@ pub const Names = struct {
 /// Returns every declared name and the unknowns behind them; slices are owned
 /// by `in.arena`. `n_unit_modes` is `Verdict.unit_modes.len`: the
 /// canonical-order contract `unitMode` depends on is asserted here, where all
-/// three tables are in hand. Fails on allocation or a name over
-/// `naming.max_name_len`.
+/// three tables are in hand. Fails only on allocation.
 pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     const a = in.arena;
     const mir = in.mir;
     const an = in.an;
     const lowered = in.lowered;
     var self: Names = .{};
-    self.units = naming.enumerateUnits(a, mir, lowered) catch |e| switch (e) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoSpaceLeft => return error.NameTooLong,
-    };
+    self.units = try naming.enumerateUnits(a, mir, lowered);
     // The contract `unitMode` below depends on, checked once where all
     // three tables are in hand for the only time.
     naming.assertCanonicalOrder(self.units, lowered, n_unit_modes);
     self.unit_names = try a.alloc([]const u8, self.units.len);
-    var buf: [naming.max_name_len]u8 = undefined;
-    for (self.units, 0..) |u, i| {
-        const n = naming.unitName(&buf, mir.name, u) catch return error.NameTooLong;
-        self.unit_names[i] = try a.dupe(u8, n);
-    }
+    for (self.units, 0..) |u, i| self.unit_names[i] = try naming.unitNameAlloc(a, mir.name, u);
 
     // §5.6 potential contributions need a branch-current unknown. Lowering
     // allocates a `flow(a,b)` slot only where the model probes I(a,b), so
@@ -116,19 +108,19 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
 
     self.u_names = try a.alloc([]const u8, self.n_u);
     for (lowered.nodes.items(.name), 0..) |n, i| {
-        self.u_names[i] = try dupeSanitized(a, &buf, n);
+        self.u_names[i] = try naming.sanitizeAlloc(a, n);
     }
     for (extra.items, 0..) |n, k| {
-        self.u_names[base + k] = try dupeSanitized(a, &buf, n);
+        self.u_names[base + k] = try naming.sanitizeAlloc(a, n);
     }
 
     self.p_names = try a.alloc([]const u8, lowered.params.items.len);
     for (lowered.params.items, 0..) |p, i| {
-        self.p_names[i] = try dupeSanitized(a, &buf, p.name);
+        self.p_names[i] = try naming.sanitizeAlloc(a, p.name);
     }
     self.a_names = try a.alloc([]const u8, lowered.aliases.items.len);
     for (lowered.aliases.items, 0..) |al, i| {
-        self.a_names[i] = try dupeSanitized(a, &buf, al.name);
+        self.a_names[i] = try naming.sanitizeAlloc(a, al.name);
     }
 
     // §5.10 held variables. Same `<module>__<role>__<target>` grammar
@@ -140,10 +132,9 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
     // scope, so the whole key is.
     self.held_names = try a.alloc([]const u8, lowered.held_vars.items.len);
     if (self.held_names.len != 0) {
-        var mod_buf: [naming.max_name_len]u8 = undefined;
-        const mod = naming.sanitize(&mod_buf, mir.name) catch return error.NameTooLong;
+        const mod = try naming.sanitizeAlloc(a, mir.name);
         for (lowered.held_vars.items, 0..) |h, i| {
-            const leaf = naming.sanitize(&buf, h.name) catch return error.NameTooLong;
+            const leaf = try naming.sanitizeAlloc(a, h.name);
             self.held_names[i] = try a.print("{s}__held__{s}", .{ mod, leaf });
         }
     }
@@ -170,13 +161,6 @@ pub fn plan(in: Input, n_unit_modes: usize) Error!Names {
         }
     }
     return self;
-}
-
-// `name` sanitized into `buf`, then copied to `a`. `sanitize` fails only when
-// `buf` is too small, which is a name too long, never an allocation failure:
-// every source name goes through here so none can report it as one.
-fn dupeSanitized(a: std.mem.Allocator, buf: []u8, name: []const u8) Error![]const u8 {
-    return a.dupe(u8, naming.sanitize(buf, name) catch return error.NameTooLong);
 }
 
 /// Is unknown `u` already the current of a source from a contribution
@@ -286,17 +270,18 @@ test "held names, given flags: §9.19 queries and derive() targets" {
     try std.testing.expectEqual(@as(usize, 0), n.units.len);
 }
 
-test "a source name too long to sanitize is NameTooLong, not OutOfMemory" {
-    // `naming.sanitize` needs up to 3n+1 bytes of an 8192-byte buffer, so a
-    // 9000-character net (or parameter) overflows it. The CLI prints the
-    // error's name, and `NameTooLong` is the one diag_code documents.
+test "a source name of any length plans (VAMS 2.8, VD-054)" {
+    // #29: `naming.sanitize` wrote into an 8192-byte buffer, so a
+    // 9000-character net (or parameter) was NameTooLong. The buffers are
+    // sized per name now; both plan, and the long name survives whole.
     const long: [9000]u8 = @splat('q');
     {
         var f: Fixture = .{ .arena = .init(std.testing.allocator) };
         try f.init(&.{&long});
         defer f.deinit();
         const an = try f.analysis();
-        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+        const n = try plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0);
+        try std.testing.expectEqualStrings(&long, n.u_names[0]);
     }
     {
         var f: Fixture = .{ .arena = .init(std.testing.allocator) };
@@ -304,6 +289,7 @@ test "a source name too long to sanitize is NameTooLong, not OutOfMemory" {
         defer f.deinit();
         try f.lowered.params.append(f.alloc(), .{ .name = &long, .ty = .real, .default = .f_one });
         const an = try f.analysis();
-        try std.testing.expectError(error.NameTooLong, plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0));
+        const n = try plan(.{ .arena = f.alloc(), .mir = &f.mir, .an = &an, .lowered = &f.lowered }, 0);
+        try std.testing.expectEqualStrings(&long, n.p_names[0]);
     }
 }

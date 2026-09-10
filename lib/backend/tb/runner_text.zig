@@ -147,9 +147,9 @@ pub const runner_body =
     \\fn DualC(comptime collapsed: bool) type {
     \\    return contract.RefFamily(f64, &lane_of, .{ .dense = true, .collapse_applied = collapsed });
     \\}
-    \\/// Unknown `u` on lane `u`.
+    \\/// Unknown `u` on lane `u`; `u32`, so past 255 unknowns too.
     \\const lane_of = blk: {
-    \\    var l: [n_u]u8 = undefined;
+    \\    var l: [n_u]u32 = undefined;
     \\    for (&l, 0..) |*e, u| e.* = u;
     \\    break :blk l;
     \\};
@@ -1541,6 +1541,30 @@ const mixed_tail =
     \\    const tick = if (mixed_timescale) |ts| ts.precision else 1.0;
     \\    sim.mixed.run(Analog, &a, &dig, .{ .times = &times, .tick = tick }) catch |e| mixedFail(&bag, e);
     \\    a.flush();
+    \\}
+    \\
+    \\
+;
+
+/// The analog and mixed runners' `main` runs `run` on a big-stack thread
+/// when the device needs one. Not in `runner_body`: the VPI library has no
+/// `main`.
+pub const big_stack_text =
+    \\/// Past 256 unknowns a `Dual` is n_u lanes wide and a Debug `eval` frame
+    \\/// holds one per temporary; a large §3.2.2 array is a frame local, and
+    \\/// a large held one is in `Instance`, which the runner copies. Either
+    \\/// outgrows the main thread's 8 MiB, so `main` runs the testbench (`run`)
+    \\/// on a thread whose stack grows with them (#29). Virtual size only: a
+    \\/// stack is touched as deep as it is used.
+    \\/// ponytail: about 128 lane-wide temporaries per unknown and sixteen
+    \\/// copies of each array (a Debug frame copies by value; measured on
+    \\/// array_past_2_20_elements.va); a device far past that needs more.
+    \\const big_stack_bytes = @sizeOf(Dual) * n_u * 128 + 16 * (@sizeOf(D.Instance) + mem_bytes);
+    \\const big_stack = n_u > 256 or big_stack_bytes > (1 << 20);
+    \\fn bigStack(init: std.process.Init.Minimal) void {
+    \\    const t = std.Thread.spawn(.{ .stack_size = (8 << 20) + big_stack_bytes }, run, .{init}) catch |e|
+    \\        std.debug.panic("testbench: no thread for {d} unknowns: {t}", .{ n_u, e });
+    \\    t.join();
     \\}
     \\
     \\

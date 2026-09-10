@@ -215,7 +215,11 @@ pub const Directives = struct {
     /// Not a directive: the `U` indices of the §4.5.2 operator unknowns
     /// (`opStates`). Never forced, even without `//! solve`: each row is its
     /// operator's own equation, and a tied one would pin the operator at 0.
-    op_states: []const u16 = &.{},
+    op_states: []const u32 = &.{},
+    /// Not a directive: the bytes of the module's §3.2.2 memory-backed
+    /// arrays (`memBytes`), which an `eval` frame holds, so the runner can
+    /// size its stack for them.
+    mem_bytes: u64 = 0,
     /// Not a directive: the runner's root declares `vera_validate_contract`,
     /// so `contract`'s conformance checks run on the device and this host
     /// (`vera --validate-contract`; the fixture suite always sets it).
@@ -394,6 +398,7 @@ pub const opStates = tb_runner.opStates;
 pub const mixedPlan = tb_runner.mixedPlan;
 pub const warnGridEvents = tb_runner.warnGridEvents;
 pub const renderRunner = tb_runner.renderRunner;
+pub const memBytes = tb_runner.memBytes;
 pub const renderVpiLib = tb_runner.renderVpiLib;
 
 const tb_runner_text = @import("tb/runner_text.zig");

@@ -372,7 +372,7 @@ fn refreshRows(l: Lib) void {
 // §12.10 values
 // ---------------------------------------------------------------------------
 
-fn unknownU16(x: [*]const f64, row: u16) f64 {
+fn unknownAt(x: [*]const f64, row: u32) f64 {
     return if (row == @import("ir").Lower.ground) 0 else x[row];
 }
 
@@ -402,8 +402,8 @@ pub fn quantityValue(q: *const root.Obj) ValueError!Value {
     const xi = ac_x[ac_x.len / 2 ..].ptr;
     const is_flow = b.flow != null and &d.objects[b.flow.?] == q;
     if (!is_flow) return .{
-        .re = unknownU16(x, b.hi_row) - unknownU16(x, b.lo_row),
-        .im = if (ac) unknownU16(xi, b.hi_row) - unknownU16(xi, b.lo_row) else 0,
+        .re = unknownAt(x, b.hi_row) - unknownAt(x, b.lo_row),
+        .im = if (ac) unknownAt(xi, b.hi_row) - unknownAt(xi, b.lo_row) else 0,
     };
     if (b.flow_unknowable) return error.Unknowable;
     const sign: f64 = if (b.flow_neg) -1 else 1;

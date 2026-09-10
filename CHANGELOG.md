@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Analog limits lifted: a module may have more than 256 solver unknowns (§6.5.2.2 requires 256 ports; E1003 is retired, `U` is `enum(u9)` and wider past 256), a vector range or net table past 65535 elements, an array past 2^20 elements, and identifiers of any length in generated names (no `NameTooLong`); `contract.RefFamily` takes a lane table of any unsigned element type. Devices with 256 or fewer unknowns are byte-identical (#29).
 - Diagnostics: a label in another file prints under its own `:::` header, a fix's `~` ruler counts display columns (tabs, multi-byte characters), and a span at a CRLF newline or past the end of a file clamps to its line instead of panicking; an unregistered file no longer gives a registered one wrong line numbers (#29).
 - Preprocessor: an `` `include `` inside a macro body or argument numbers its own lines (`__LINE__`, `__FILE__`, diagnostics); a multi-line macro argument no longer emits its newlines twice; `` `define M($x) `` and an empty trailing macro argument are E0110, and `` `line `` sharing its line with other text is E0128 (IEEE 1364-2005 §19.7) (#29).
 - Parser: a specify block, specparam or port declaration inside a generate region is E0229 (a port was E0206; specify paths were silently dropped); a malformed UDP edge or current-state field is E0233; analog statement nesting past the limit is E0241; an out-of-range literal width or terminal width is refused instead of crashing (#29).

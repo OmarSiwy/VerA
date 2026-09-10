@@ -103,7 +103,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // direction is the direction of its one quantity, so an `input` is supplied
     // from outside and driving it has no meaning. Only `input`: an `output` is
     // meant to be driven, and E0360 already refuses an `inout` signal-flow port.
-    for ([_]u16{ target.hi, target.lo }) |n| {
+    for ([_]u32{ target.hi, target.lo }) |n| {
         if (n >= self.out.nodes.len or self.out.nodes.items(.dir)[n] != .input) continue;
         if (!lower_node.isSignalFlow(self, self.out.nodes.items(.disc)[n])) continue;
         try self.err(self.file.exprs.mainTok(lhs), .E0425, "`{s}` is an `input` port of discipline `{s}`", .{ self.out.nodes.items(.name)[n], self.out.nodes.items(.disc)[n] });
@@ -531,7 +531,7 @@ pub fn checkProbeBranches(self: *Lower) Oom!void {
 }
 
 /// §5.6.8.1 one potential `<+` written through hierarchical net references.
-pub const HierPotential = struct { hi: u16, lo: u16, unit: u32, tok: u32 };
+pub const HierPotential = struct { hi: u32, lo: u32, unit: u32, tok: u32 };
 
 /// Does the left-hand side reach another instance's nets by §5.6.8.1's spelling
 /// — a hierarchical NET reference — rather than §5.6.8.2's `inst.branch(...)`?
@@ -601,7 +601,7 @@ pub fn checkSourceLoops(self: *Lower) Oom!void {
     const n_nodes: u32 = @intCast(self.out.nodes.len + 1); // the last row is ground
     const Ix = struct {
         n: u32,
-        fn of(ix: @This(), node: u16) u32 {
+        fn of(ix: @This(), node: u32) u32 {
             return if (node == ground) ix.n - 1 else node;
         }
     };
@@ -679,7 +679,7 @@ fn find(root: []u32, x: u32) u32 {
 
 /// Is anything contributed to this node pair — directly (§5.6.1) or indirectly
 /// (§5.6.7)? That is exactly §1.3.1's test for "not a probe".
-fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
+fn contributedOn(self: *const Lower, hi: u32, lo: u32) bool {
     for (self.out.contributions.items) |c| {
         if (samePair(c.hi, c.lo, hi, lo)) return true;
     }
@@ -689,11 +689,11 @@ fn contributedOn(self: *const Lower, hi: u16, lo: u16) bool {
 /// §5.6.7.2 "the same pair of analog nets (or any of its parallel branches)" —
 /// unordered, since (a,b) and (b,a) are the same pair with opposite reference
 /// directions (§1.3.1.2).
-fn samePair(a_hi: u16, a_lo: u16, b_hi: u16, b_lo: u16) bool {
+fn samePair(a_hi: u32, a_lo: u32, b_hi: u32, b_lo: u32) bool {
     return (a_hi == b_hi and a_lo == b_lo) or (a_hi == b_lo and a_lo == b_hi);
 }
 
-fn indirectOn(self: *const Lower, hi: u16, lo: u16) bool {
+fn indirectOn(self: *const Lower, hi: u32, lo: u32) bool {
     for (self.out.contributions.items) |c| {
         if (c.kind == .indirect and samePair(c.hi, c.lo, hi, lo)) return true;
     }
@@ -725,7 +725,7 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
 }
 
 /// A resolved access. `hi`/`lo` are in CANONICAL order (`hi < lo` as `nodes`
-/// indices, which puts `ground` — `maxInt(u16)` — last, so `V(n)` is untouched);
+/// indices, which puts `ground` — above every row — last, so `V(n)` is untouched);
 /// `neg` says the source wrote the terminals the other way round.
 ///
 /// §1.3.1.2 associated reference directions: "A positive flow enters a branch
@@ -739,8 +739,8 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
 /// (which rebuilds the `flow(a,b)` name from `hi`/`lo`) sees one spelling.
 pub const Target = struct {
     access: Access,
-    hi: u16,
-    lo: u16,
+    hi: u32,
+    lo: u32,
     neg: bool = false,
     /// §5.4.1 the branch this reference names — a `BranchInfo.id` for a declared
     /// name, `unnamed_branch` for the pair's one implicit branch. Carried beside
@@ -789,14 +789,14 @@ fn branchKey(self: *Lower, buf: *[lower_shape.elem_key_len]u8, e: Ast.ExprId) Oo
 /// The port a §3.12.1 port branch names, when the single argument of an access
 /// function is one. `null` for everything else, including a two-argument
 /// access — a port branch is a name, never a pair.
-pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u16 {
+pub fn portBranchOf(self: *Lower, e: Ast.ExprId) Oom!?u32 {
     if (self.file.exprs.rhs(e) != .none) return null;
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
     const key = try branchKey(self, &key_buf, self.file.exprs.lhs(e)) orelse return null;
     return self.port_branches.get(key);
 }
 
-fn canonical(access: Access, hi: u16, lo: u16, br: u32, unit: u32) Target {
+fn canonical(access: Access, hi: u32, lo: u32, br: u32, unit: u32) Target {
     return if (hi <= lo)
         .{ .access = access, .hi = hi, .lo = lo, .br = br, .unit = unit }
     else
@@ -918,7 +918,7 @@ pub const generic_flow = "flow";
 ///  - E0501 with no suggestion: the discipline binds no nature for this half
 ///    (natureless, or `I` on a signal-flow `voltage`; §1.3.4).
 ///  - E0501 with a suggestion: the §3.6.1.4 name mismatch.
-pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
+pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u32) Oom!void {
     if (node == ground or self.local_accesses.contains(e)) return;
     const dname = self.out.nodes.items(.disc)[node];
     if (dname.len == 0) {
@@ -1227,7 +1227,7 @@ fn stackLte(self: *const Lower) bool {
 /// stamped with sign -1 when `q_neg`. The resistive half starts as V(s) and
 /// the site ASSIGNS it, so a card-conditional arm that is off leaves the row
 /// `s = 0`, not an empty one that makes the system singular.
-pub fn stampOpRow(self: *Lower, tok: u32, s: u16, f: Mir.Value, q: Mir.Value, q_neg: bool, lte: bool) Oom!void {
+pub fn stampOpRow(self: *Lower, tok: u32, s: u32, f: Mir.Value, q: Mir.Value, q_neg: bool, lte: bool) Oom!void {
     const idx = try contribIndex(self, .{ .access = .flow, .hi = s, .lo = ground }, tok);
     const acc = self.accum.items[idx];
     try self.builder.writeVariable(acc.resist, .entry, try lower_node.probe(self, s));
@@ -1572,13 +1572,13 @@ test samePair {
 test canonical {
     // §1.3.1.2: `I(5,2)` is `I(2,5)` with the sign flipped.
     const t = canonical(.flow, 5, 2, unnamed_branch, 7);
-    try std.testing.expectEqual(@as(u16, 2), t.hi);
-    try std.testing.expectEqual(@as(u16, 5), t.lo);
+    try std.testing.expectEqual(@as(u32, 2), t.hi);
+    try std.testing.expectEqual(@as(u32, 5), t.lo);
     try std.testing.expect(t.neg);
     try std.testing.expectEqual(@as(u32, 7), t.unit);
-    // `ground` is `maxInt(u16)`, so a single-net access is already canonical.
+    // `ground` is above every row, so a single-net access is already canonical.
     const v = canonical(.potential, 3, ground, unnamed_branch, 0);
-    try std.testing.expectEqual(@as(u16, 3), v.hi);
+    try std.testing.expectEqual(@as(u32, 3), v.hi);
     try std.testing.expectEqual(ground, v.lo);
     try std.testing.expect(!v.neg);
     // Equal terminals (two `ground` nets, §1.3.1.1) are not reversed.
