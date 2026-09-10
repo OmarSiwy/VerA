@@ -14,8 +14,6 @@ const directive_map = Preprocessor.directive_map;
 const isIdentChar = Preprocessor.isIdentChar;
 const escapedEnd = Preprocessor.escapedEnd;
 const Error = Preprocessor.Error;
-const max_include_depth = Preprocessor.max_include_depth;
-const max_include_bytes = Preprocessor.max_include_bytes;
 const Qualifier = Preprocessor.Qualifier;
 const NetType = Preprocessor.NetType;
 const Drive = Preprocessor.Drive;
@@ -229,9 +227,8 @@ fn logicalLineEnd(text: []const u8, i: usize) usize {
 
 /// Reads and scans the file an IEEE 1364 §19.5 `include names. `rest` is the
 /// line after the word, starting at offset `off`; `at` is the '`'. Fails with
-/// E0121-E0124 (the name), E0144 (text after it), E0125 (nesting past
-/// `Preprocessor.max_include_depth`), E0126 (not found) or E1013 (larger
-/// than `Preprocessor.max_include_bytes`).
+/// E0121-E0124 (the name), E0144 (text after it), E0125 (an include cycle),
+/// E0126 (not found) or E1013 (larger than `Preprocessor.max_text_bytes`).
 pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     // The directive word, for the errors that have nothing better to point at.
     const sp = pp.spanAt(at, off);
@@ -257,14 +254,6 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
     if (r.i < r.s.len)
         return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0144, "`{s}`", .{std.mem.trim(u8, r.s[r.i..], " \t\r\n")});
 
-    if (pp.n_includes >= max_include_depth) {
-        var b = pp.failWith(name_span, .E0125);
-        b.msg("limit is {d}", .{max_include_depth});
-        b.note("include chain: {s}", .{try pp.joinChain(pp.includes[0..pp.n_includes], path)});
-        try b.emit();
-        return error.PreprocessFailed;
-    }
-
     const inc = (try readInclude(pp, path, name_span)) orelse {
         var b = pp.failWith(name_span, .E0126);
         b.msg("\"{s}\"", .{path});
@@ -275,12 +264,37 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         return error.PreprocessFailed;
     };
 
-    pp.includes[pp.n_includes] = path;
-    pp.n_includes += 1;
-    defer pp.n_includes -= 1;
+    // IEEE 1364-2005 §19.5: "The number of nesting levels for include files
+    // shall be finite", and VerA sets no number. What makes nesting infinite
+    // is a file opened again inside itself in the state it was first opened
+    // in: the preprocessor's control flow reads only the macro table and the
+    // open conditionals, so from there it repeats forever. Any other chain
+    // ends (a file may include itself under a guard that changes), so only
+    // that repetition is refused, naming the cycle. The state is compared by
+    // a 64-bit hash of the macro table; two different tables share one with
+    // probability 2^-64.
+    const opened: Pp.Open = .{
+        .key = try std.fs.path.resolve(pp.scratch, &.{inc.path}),
+        .path = path,
+        .macro_hash = pp.macro_hash,
+        .conds = pp.conds.items.len,
+    };
+    for (pp.includes.items, 0..) |o, k| {
+        if (o.macro_hash != opened.macro_hash or o.conds != opened.conds or !std.mem.eql(u8, o.key, opened.key)) continue;
+        var chain: std.ArrayList([]const u8) = .empty;
+        for (pp.includes.items[k..]) |c| try chain.append(pp.scratch, c.path);
+        var b = pp.failWith(name_span, .E0125);
+        b.msg("\"{s}\" includes itself with every macro as it was", .{path});
+        b.note("include cycle: {s}", .{try pp.joinChain(chain.items, path)});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    try pp.includes.append(pp.scratch, opened);
+    defer _ = pp.includes.pop();
     // Registered under the opened path, so `__FILE__` and every diagnostic
     // inside the file name the file that was read (§10.7).
-    try pp.runFile(inc.text, inc.path, null);
+    try pp.nested(name_span, Pp.runFile, .{ pp, inc.text, inc.path, null });
+    try pp.checkTextSize(name_span);
     // `scan` resyncs the map back to the parent file when `directive` returns.
 }
 
@@ -295,7 +309,7 @@ pub const Included = struct { text: []const u8, path: []const u8 };
 /// basename. Null if nothing matched; a file that exists but cannot be read
 /// counts as no match. The bytes and the path are on `pp.arena`, since the
 /// bag keeps both. Fails with E1013 for a file past
-/// `Preprocessor.max_include_bytes`.
+/// `Preprocessor.max_text_bytes`.
 pub fn readInclude(pp: *Pp, path: []const u8, span: diag.Span) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
@@ -317,11 +331,11 @@ fn includerDir(pp: *const Pp) ?[]const u8 {
 fn readAt(pp: *Pp, base: []const u8, path: []const u8, span: diag.Span) Error!?Included {
     const io = std.Io.Threaded.global_single_threaded.io();
     const full = try std.fs.path.join(pp.arena, &.{ base, path });
-    if (std.Io.Dir.cwd().readFileAlloc(io, full, pp.arena, .limited(max_include_bytes))) |bytes| {
+    if (Preprocessor.readText(io, .cwd(), full, pp.arena)) |bytes| {
         return .{ .text = bytes, .path = full };
     } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.StreamTooLong => return pp.fail(span, .E1013, "\"{s}\" is larger than {d} bytes", .{ full, max_include_bytes }),
+        error.StreamTooLong => return pp.fail(span, .E1013, "\"{s}\" is larger than {d} bytes", .{ full, Preprocessor.max_text_bytes }),
         else => return null, // try the next dir
     }
 }
@@ -392,7 +406,8 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
         try b.emit();
         return error.PreprocessFailed;
     }
-    const t = Lexer.parseReal(text) catch {
+    const t = Lexer.parseReal(pp.scratch, text) catch |e| {
+        if (e == error.OutOfMemory) return error.OutOfMemory;
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "`{s}` is not a transition time", .{text});
     };
     // §4.5.8 gives the value straight to rise_time and fall_time, and both are

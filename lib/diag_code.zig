@@ -737,13 +737,19 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0119 => .{
-            .title = "macro expansion nested too deeply",
+            .title = "macro or `include nesting deeper than memory allows",
             .lrm = "10.4",
             .explain =
-            \\Expansion exceeded the engine's nesting limit. This is an
-            \\implementation bound, not a language rule: it exists so that a
-            \\mutually recursive pair of macros terminates even when neither
-            \\macro is directly self-referential.
+            \\Out of memory, not a language rule: VerA sets no bound on how
+            \\deep macro expansions (argument pre-expansion included) or
+            \\`include files nest. Each level past the caller's stack runs on
+            \\a stack reserved from memory, and this error says the operating
+            \\system refused that reservation; the message names the depth.
+            \\
+            \\A macro that expands itself, directly or through others, is
+            \\E0118, and a file that includes itself unchanged is E0125: those
+            \\never end, at any depth. Until 2026-10 this code was a fixed cap
+            \\of 128 nested expansions.
             ,
         },
         .E0120 => .{
@@ -789,19 +795,26 @@ fn infoOf(c: Code) Info {
             .explain = "`include \"\" names no file.",
         },
         .E0125 => .{
-            .title = "`include nested too deeply",
+            .title = "`include cycle",
             .lrm = "10.3",
             .explain =
-            \\Include nesting exceeded the engine's limit, which almost always
-            \\means a cycle: a file that includes itself, directly or through
-            \\a chain. The include chain is listed in the attached notes.
+            \\A file includes itself, directly or through a chain, at a point
+            \\where every macro is defined exactly as it was when the file was
+            \\opened before (and as many conditionals are open). The
+            \\preprocessor's control flow reads nothing else, so the nesting
+            \\would repeat forever; IEEE 1364-2005 19.5 requires it to be
+            \\finite. The cycle is listed in the attached notes.
             \\
+            \\Any finite nesting is read, however deep, including a file that
+            \\includes itself under a guard that changes a macro each time.
             \\Guard headers with the usual idiom:
             \\
             \\    `ifndef MY_HEADER
             \\    `define MY_HEADER
             \\    ...
             \\    `endif
+            \\
+            \\Until 2026-10 this code was a fixed cap of 32 nested files.
             ,
         },
         .E0126 => .{
@@ -935,16 +948,12 @@ fn infoOf(c: Code) Info {
             \\    reals only
             ,
         },
-        .E0134 => .{
-            .title = "number literal is too long",
-            .lrm = "2.6",
-            .explain =
-            \\The literal exceeds the engine's decoding buffer. An analog
-            \\model has no use for a value that long: a Verilog-A integer is
-            \\32 bits (LRM 3.2.1) and a real is an IEEE double, which holds
-            \\about 17 significant decimal digits.
-            ,
-        },
+        .E0134 => retiredInfo(
+            \\"number literal is too long". Retired 2026-10: a real literal of
+            \\any length decodes (2.6.2 writes its digits with no length
+            \\bound); the 512-byte decode buffer it named is gone. The number
+            \\is not reused.
+        ),
         .E0135 => .{
             .title = "unsupported keyword set",
             .lrm = "10.6",
@@ -1138,15 +1147,18 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0150 => .{
-            .title = "macro expansion too large",
+            .title = "preprocessed text larger than 4294967295 bytes",
             .lrm = "10.4",
             .explain =
-            \\The macro bodies substituted over this compilation exceeded the
-            \\engine's total size limit. This is an implementation bound, not a
-            \\language rule: depth alone does not bound a macro that doubles its
-            \\argument at every level, and such a source would otherwise run the
-            \\compiler out of memory with no diagnostic. Expand less, or split the
-            \\generated text into a file and `include it.
+            \\Macro expansion produced more text than the lexer can address:
+            \\every later stage locates a token by a 32-bit offset into the
+            \\preprocessed text, so it holds at most 2^32 - 1 bytes. This is a
+            \\bound of VerA's representation, not a language rule. A macro
+            \\that doubles its text at each of 40 levels (2^40 tokens) is the
+            \\usual way to reach it. Expand less, or split the design into
+            \\files compiled separately.
+            \\
+            \\Until 2026-10 the bound was 64 MiB of substituted macro bodies.
             ,
         },
         .E0147 => .{
@@ -2046,20 +2058,23 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0241 => .{
-            .title = "nested too deeply",
+            .title = "nested deeper than memory allows",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. The parser reads nested
-            \\parentheses, unary operators, conditional operators, statements
-            \\and generate blocks by recursion, and past 1024 open levels it
-            \\stops with this error rather than overflow its stack and crash
-            \\with no location. A chain of binary operators counts one level
-            \\per operator: `a + b + c` is two levels deep, because every
-            \\later stage walks the tree it builds.
+            \\Out of memory, not a language rule: VerA sets no nesting limit.
+            \\The parser and every later stage read nested parentheses, unary
+            \\and conditional operators, operator chains, statements and
+            \\generate blocks by recursion, on a stack reserved for the depth
+            \\the source reaches (`deep_stack`). A chain of binary operators
+            \\counts one level per operator: `a + b + c` is two levels deep,
+            \\because every later stage walks the tree it builds.
             \\
-            \\No model needs that depth. Machine-generated source can reach it:
-            \\split the expression through intermediate variables, or flatten
-            \\the nested `begin` blocks.
+            \\This error says the operating system refused that reservation
+            \\(or, on Windows, the depth needs a stack of 4 GiB or more,
+            \\which one thread there cannot have); the message names the
+            \\depth. Split the expression through intermediate variables, or
+            \\flatten the nested `begin` blocks, or give the process more
+            \\memory.
             ,
         },
         .E0243 => .{
@@ -7233,15 +7248,18 @@ fn infoOf(c: Code) Info {
             .title = "a file is larger than VerA reads",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. VerA reads a file whole
-            \\before it uses it, and stops at a fixed size: 16 MiB for an
-            \\`include file (LRM 10.3) and for the data file of a
-            \\`$table_model` (LRM 9.21) or `noise_table` (LRM 4.6.4.3) call,
-            \\and 64 MiB for the source file named on the command line and
-            \\for a `--spice` netlist. The LRM bounds none of these.
+            \\A source file named on the command line, an `include file (LRM
+            \\10.3), a `--spice` netlist or a file its `.INCLUDE` or `.LIB`
+            \\card names holds more than 2^32 - 1 bytes. Every later stage
+            \\locates a token by a 32-bit offset into the text, so this is a
+            \\bound of VerA's representation, not a language rule. A regular
+            \\file is refused from its size before it is read; a stream with
+            \\no size (a pipe) is read until it passes the bound.
             \\
-            \\The message names the file. A table file this large is usually
-            \\better resampled: the device searches it on every evaluation.
+            \\The data file of a `$table_model` (LRM 9.21) or `noise_table`
+            \\(LRM 4.6.4.3) call has no bound but memory. Until 2026-10 the
+            \\bounds were 16 MiB (`include and data files) and 64 MiB (the
+            \\source and a netlist).
             ,
         },
         .E1014 => .{
@@ -7286,20 +7304,12 @@ fn infoOf(c: Code) Info {
             \\(`real a[0:65535][0:65536]`). Until #29 the bound was 2^20.
             ,
         },
-        .E1017 => .{
-            .title = "a UDP has more than 64 inputs",
-            .lrm = "",
-            .explain =
-            \\An implementation limit the language allows. IEEE 1364-2005 8.1.2:
-            \\"Implementations may limit the maximum number of inputs to a UDP,
-            \\but they shall allow at least 9 inputs for sequential UDPs and 10
-            \\inputs for combinational UDPs." VerA's limit is 64 inputs, for
-            \\both kinds.
-            \\
-            \\Split the table: two UDPs whose outputs feed a third compute the
-            \\same function.
-            ,
-        },
+        .E1017 => retiredInfo(
+            \\"a UDP has more than 64 inputs". Retired 2026-10: IEEE 1364-2005
+            \\8.1.2 lets an implementation limit a UDP's inputs, and VerA no
+            \\longer does; a table of any width parses and runs. The number
+            \\is not reused.
+        ),
         .E1018 => .{
             .title = "the instance tree is more than 64 instances deep",
             .lrm = "",
@@ -7316,17 +7326,18 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E1019 => .{
-            .title = "a number literal's size exceeds 16777216 bits",
+            .title = "a number literal's size exceeds 4294967295 bits",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. LRM 2.6.1 lets a based
-            \\number give its size in bits and bounds nothing about it, and
-            \\IEEE 1364-2005 4.3.1 asks a tool for vectors of at least 65536
-            \\bits. VerA takes a size up to 2^24 = 16777216 bits and refuses a
-            \\larger one here, before it allocates the value.
+            \\LRM 2.6.1 lets a based number give its size in bits and bounds
+            \\nothing about it, and IEEE 1364-2005 4.3.1 asks a tool for
+            \\vectors of at least 65536 bits. VerA carries every width as a
+            \\32-bit unsigned count, so a size (or the width an unsized
+            \\literal's digits need) of 2^32 bits or more cannot be
+            \\represented. Any smaller size is taken; memory is the bound
+            \\(a literal allocates two bits of value per bit of size).
             \\
-            \\A literal that size has nothing to be assigned to: split it, or
-            \\build the value with a replication.
+            \\Until 2026-10 the bound was 2^24 bits.
             ,
         },
         .E1020 => .{

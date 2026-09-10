@@ -2,7 +2,8 @@
 //! climbing (§4.1, §4.2.2), with A.8.4 primaries: names and §6.7
 //! hierarchical names, A.8.2 calls, §4.4 branch probes and selects. A literal
 //! is decoded by `literal.zig` and a brace form by `concat.zig`. Every
-//! nesting level counts against `max_depth` (E0241).
+//! nesting level counts toward `Parser.deepest`; deep recursion continues on
+//! a fresh stack segment (`Parser.segment`).
 //!
 //! LRM clauses cited: §2.7, §2.9, §3.2.2, §4.1, §4.2, §4.2.2, §4.2.10,
 //! §4.2.12, §4.3, §4.4, §4.5, §4.6, §4.7, §5.6.8.2, §5.10.2, §6.7, §6.7.1.
@@ -23,7 +24,6 @@ const Error = parser.Error;
 // -----------------------------------------------------------------------
 
 /// Parses a full expression, conditional operator included (§4.1, §4.2).
-/// Fails with E0241 past `max_depth` nesting.
 pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
     return parseExprPrec(self, prec_ternary);
 }
@@ -32,7 +32,7 @@ pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
 fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
     var lhs = try parseUnary(self);
     // Each operator folded into `lhs` makes its tree one level deeper, and
-    // every later walk recurses down that spine: it counts against E0241.
+    // every later walk recurses down that spine: it counts toward `deepest`.
     const base = self.depth;
     defer self.depth = base;
     while (true) {
@@ -40,12 +40,12 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         // §4.2.12 conditional: lowest precedence, right associative.
         if (t == .question and min_prec <= prec_ternary) {
             const tok = self.pos;
-            try self.enter();
+            self.nest();
             self.pos += 1;
             try self.ownedAttributes(.{ .kind = .expression, .tok = tok });
             const then_e = try parseExpr(self);
             _ = try self.expect(.colon);
-            const else_e = try parseExprPrec(self, prec_ternary);
+            const else_e = try self.descend(parseExprPrec, .{ self, prec_ternary });
             lhs = try self.file.exprs.add(self.arena, .{
                 .tag = .ternary,
                 .main_tok = tok,
@@ -61,7 +61,7 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         const prec = binopPrec(op);
         if (prec < min_prec) return lhs;
         const tok = self.pos;
-        try self.enter();
+        self.nest();
         self.pos += 1;
         try self.ownedAttributes(.{ .kind = .expression, .tok = tok }); // A.8.3 binary suffix
         // §4.2.2: "All operators associate left to right with the exception
@@ -81,8 +81,9 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
 /// every binary operator (Table 4-3, top row).
 fn parseUnary(self: *Parser) Error!Ast.ExprId {
     // Every expression recursion (parentheses, unary chains, `?:`) passes here.
-    try self.enter();
-    defer self.depth -= 1;
+    if (self.segmentDue()) return self.segment(parseUnary, .{self});
+    self.enter();
+    defer self.leave();
     const tok = self.pos;
     const op: Ast.UnaryOp = switch (self.peek()) {
         .plus => .plus,

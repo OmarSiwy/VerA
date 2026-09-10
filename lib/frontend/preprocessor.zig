@@ -10,6 +10,7 @@ const std = @import("std");
 /// need not import `std` for it.
 pub const Allocator = std.mem.Allocator;
 const diag = @import("diag");
+const deep_stack = @import("deep_stack.zig");
 /// Annex E.2 `.MODEL`/`.SUBCKT` reader; its modules follow the prelude.
 const spice_cards = @import("spice_cards.zig");
 
@@ -35,6 +36,9 @@ pub const Options = struct {
     more: []const File = &.{},
     /// Receives diagnostics, the file table and the source map.
     bag: *diag.Bag,
+    /// E0150's bound on the preprocessed text. Only tests lower it, to reach
+    /// the diagnostic without 4 GiB of text.
+    text_limit: usize = max_text_bytes,
 };
 
 /// One of `Options.more`: the name it registers under in the bag (and
@@ -97,18 +101,37 @@ pub const Directives = struct {
     }
 };
 
-/// Deepest `include nesting; one more is E0125, not a panic.
-pub const max_include_depth = 32;
-/// Deepest nesting of live macro expansions, argument pre-expansion
-/// included; one more is E0119, not a panic.
-pub const max_expansion_depth = 128;
-/// Total bytes of macro bodies substituted over one compilation; one more is
-/// E0150, not an out-of-memory. Depth alone does not bound a macro that
-/// doubles its argument at each of 40 levels (2^40 tokens,
-/// tests/fixtures/ADVERSARIAL.tsv).
-pub const max_expanded_bytes = 64 << 20;
-/// Largest `include file read, in bytes.
-pub const max_include_bytes = 1 << 24;
+/// The longest text the lexer and every later stage can address: offsets
+/// are u32 (`Lexer.TokenList.start`, `diag.Span`). A source file, an
+/// `include file, a `--spice` netlist and the preprocessed text past it are
+/// E1013 (a file) or E0150 (the text macros expand to). Not a policy bound:
+/// widening every offset to 64 bits would double the token table of every
+/// compilation for files no tool writes.
+pub const max_text_bytes: usize = std.math.maxInt(u32);
+
+/// Native recursion levels (`include and macro-expansion nesting) one stack
+/// segment holds; past them the next level runs on a fresh `deep_stack`
+/// segment (`Pp.nested`), so nesting is bounded by memory.
+pub const segment_levels = 1024;
+/// Levels the caller's own stack holds before the first segment: the old
+/// macro-expansion cap, which every caller's stack held.
+pub const caller_levels = 128;
+
+/// Reads the whole file at `path` (relative to `dir`) into `gpa` memory.
+/// `error.StreamTooLong` for a file past `max_text_bytes`, known from its
+/// size before anything is read; a stream with no size (a pipe, /dev/zero)
+/// is read until it passes the bound.
+pub fn readText(io: std.Io, dir: std.Io.Dir, path: []const u8, gpa: Allocator) ![]u8 {
+    var file = try dir.openFile(io, path, .{});
+    defer file.close(io);
+    const st = try file.stat(io);
+    if (st.kind == .file and st.size > max_text_bytes) return error.StreamTooLong;
+    var r = file.reader(io, &.{});
+    return r.interface.allocRemaining(gpa, .limited(max_text_bytes + 1)) catch |e| switch (e) {
+        error.ReadFailed => return r.err.?,
+        else => |other| return other,
+    };
+}
 
 /// Directives handled here. LRM §10 Table 10-1.
 pub const Directive = enum {
@@ -355,7 +378,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
     const root = try opts.bag.addFile(opts.file_name, source);
 
     for (predefined_macros) |name| {
-        try pp.macros.put(pp.scratch, name, .{ .body = "1", .predefined = true });
+        try pp.putMacro(name, .{ .body = "1", .predefined = true });
     }
 
     var netlist_modules: u32 = 0;
@@ -412,7 +435,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output
     // user's and E.3.3 selects them by name.
     for (hdl) |path| {
         const io = std.Io.Threaded.global_single_threaded.io();
-        const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_include_bytes)) catch |e| switch (e) {
+        const text = readText(io, .cwd(), path, arena) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 var b = opts.bag.build(.preprocess, .E0126, .{ .start = 0, .end = 0 });
@@ -556,20 +579,22 @@ pub const Pp = struct {
     macros: std.StringHashMapUnmanaged(Macro) = .empty,
     conds: std.ArrayList(Cond) = .empty,
     /// Macro-expansion cycle guard (§10.4): names currently being expanded,
-    /// `expanding[0..n_expanding]`. A name is pushed only inside a live
-    /// `expand` call, so `n_expanding <= expand_depth <= max_expansion_depth`.
-    expanding: [max_expansion_depth][]const u8 = undefined,
-    n_expanding: u8 = 0,
-    /// Live `expand` calls, argument pre-expansion included. E0119 bounds this
-    /// and not `expanding.items.len`, because pre-expansion runs before the
-    /// name is pushed and `` `M(`M(`M(... `` would otherwise recurse unbounded.
-    expand_depth: u32 = 0,
-    /// Bytes of substituted macro bodies so far; E0150 bounds it.
-    expanded_bytes: usize = 0,
-    /// `include stack, innermost last: `includes[0..n_includes]`, whose
-    /// length is the include depth. E0125 refuses one past the array.
-    includes: [max_include_depth][]const u8 = undefined,
-    n_includes: u8 = 0,
+    /// outermost first, and the same names as a set, so a chain of n distinct
+    /// macros costs O(n), not O(n^2). A name is pushed only inside a live
+    /// `expand` call. A cycle is E0118; any finite chain is legal.
+    expanding: std.ArrayList([]const u8) = .empty,
+    expanding_set: std.StringHashMapUnmanaged(void) = .empty,
+    /// `include stack, innermost last: each open file and the macro state it
+    /// was opened in. E0125 refuses an `include that repeats an entry, the
+    /// one thing that makes the nesting never end (`directive.handleInclude`).
+    includes: std.ArrayList(Open) = .empty,
+    /// Order-free hash of the macro table (`macroHash` of every entry,
+    /// XORed), kept by `putMacro` and `removeMacro`.
+    macro_hash: u64 = 0,
+    /// Open `nested` levels, and their count when the current stack
+    /// segment began.
+    frames: u32 = 0,
+    seg_base: u32 = 0,
     /// IEEE 1364 §19.7 `line remap for §10.7 `__LINE__`; `line_to` is null when
     /// the current file is numbered naturally. `line_from` is the physical
     /// 1-based line after the directive and `line_to` the number §19.7 gives
@@ -593,6 +618,66 @@ pub const Pp = struct {
     /// while that expansion set `expand_site` outside an actual. `runFile`
     /// repeats it after an `include the expansion reached.
     expansion_seg: u32 = 0,
+
+    /// One open `include: its path with `.` and `..` resolved (the cycle
+    /// key), the path it was opened by (`joinChain`), and the macro state and
+    /// conditional depth at the `include. The preprocessor's control flow
+    /// (which arms are live, which files open) reads only those, so two opens
+    /// on one stack that agree on all three repeat forever.
+    pub const Open = struct { key: []const u8, path: []const u8, macro_hash: u64, conds: usize };
+
+    /// Defines (or redefines) `name`, keeping `macro_hash`.
+    pub fn putMacro(pp: *Pp, name: []const u8, m: Macro) Allocator.Error!void {
+        const gop = try pp.macros.getOrPut(pp.scratch, name);
+        if (gop.found_existing) pp.macro_hash ^= macroHash(name, gop.value_ptr.*);
+        gop.value_ptr.* = m;
+        pp.macro_hash ^= macroHash(name, m);
+    }
+
+    /// Removes `name` if defined, keeping `macro_hash`.
+    pub fn removeMacro(pp: *Pp, name: []const u8) void {
+        const kv = pp.macros.fetchRemove(name) orelse return;
+        pp.macro_hash ^= macroHash(kv.key, kv.value);
+    }
+
+    fn macroHash(name: []const u8, m: Macro) u64 {
+        var h: std.hash.Wyhash = .init(0);
+        h.update(name);
+        h.update(&.{ 0, @intFromBool(m.is_func), @intFromBool(m.predefined) });
+        for (m.params) |p| {
+            h.update(p);
+            h.update(&.{0});
+        }
+        h.update(&.{1});
+        h.update(m.body);
+        return h.final();
+    }
+
+    /// Calls `f(args)` as one more level of `include or macro-expansion
+    /// nesting: on a fresh `deep_stack` segment when this one is full. A
+    /// segment that cannot be reserved is E0119 at `span`.
+    pub fn nested(pp: *Pp, span: diag.Span, comptime f: anytype, args: anytype) Error!void {
+        const cap: u32 = if (pp.seg_base == 0) caller_levels else segment_levels;
+        if (pp.frames - pp.seg_base < cap) {
+            pp.frames += 1;
+            defer pp.frames -= 1;
+            return @call(.auto, f, args);
+        }
+        const saved = pp.seg_base;
+        pp.seg_base = pp.frames;
+        defer pp.seg_base = saved;
+        return deep_stack.run(segment_levels, f, args) catch |e| switch (e) {
+            error.DeepStackUnavailable => pp.fail(span, .E0119, "{d} levels deep", .{pp.frames}),
+            else => |other| other,
+        };
+    }
+
+    /// E0150 when the text built so far (`out`, or an actual's own buffer
+    /// while one is expanded) has passed `Options.text_limit`.
+    pub fn checkTextSize(pp: *Pp, span: diag.Span) Error!void {
+        if (pp.out.items.len > pp.opts.text_limit)
+            return pp.fail(span, .E0150, "past {d} bytes", .{pp.opts.text_limit});
+    }
 
     /// Returns whether every enclosing conditional arm is active.
     pub fn emitting(pp: *const Pp) bool {
@@ -699,7 +784,7 @@ pub const Pp = struct {
         }
         try pp.out.appendSlice(pp.scratch, p.text);
         try pp.segs.appendSlice(pp.scratch, p.segs);
-        for (p.macros) |d| try pp.macros.put(pp.scratch, d.name, d.macro);
+        for (p.macros) |d| try pp.putMacro(d.name, d.macro);
     }
 
     /// Registers `raw`, strips its comments and scans it. Saves and restores

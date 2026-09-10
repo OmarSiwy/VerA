@@ -89,7 +89,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     }
 
-    const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(max_source_bytes)) catch |e| {
+    const source = vera.Preprocessor.readText(io, .cwd(), in_path, gpa) catch |e| {
         try readFailed(err, in_path, e);
         return 2;
     };
@@ -176,7 +176,7 @@ fn compileAnalog(
     // `spice_cards.synthesize` works on the text and a `+` continuation makes a
     // card longer than a line.
     const netlist: []const u8 = if (cli.spice_path) |p|
-        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(max_source_bytes)) catch |e| {
+        vera.Preprocessor.readText(io, .cwd(), p, gpa) catch |e| {
             try readFailed(err, p, e);
             return 2;
         }
@@ -439,8 +439,8 @@ fn emitVerilog(io: Io, cli: *const args.Cli, result: *const vera.CompileResult, 
     // `--digital-pins` names a file of pins when one exists, else is the list.
     var digital: std.ArrayList([]const u8) = .empty;
     if (cli.digital_pins) |spec| {
-        // `readFailed`'s E1013 names `max_source_bytes`, so that is the limit.
-        const text = Io.Dir.cwd().readFileAlloc(io, spec, arena, .limited(max_source_bytes)) catch |e| switch (e) {
+        // `readFailed`'s E1013 names `max_text_bytes`, so that is the limit.
+        const text = vera.Preprocessor.readText(io, .cwd(), spec, arena) catch |e| switch (e) {
             error.FileNotFound => spec,
             else => {
                 try readFailed(err, spec, e);
@@ -519,14 +519,12 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
     return 1;
 }
 
-/// The largest source file or `--spice` netlist read (E1013).
-pub const max_source_bytes = 64 * 1024 * 1024;
-
 /// Reports that `path` could not be read: E1013 for a file past
-/// `max_source_bytes`, else the error's name.
+/// `Preprocessor.max_text_bytes` (the u32 offsets the lexer uses), else the
+/// error's name.
 pub fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
     if (e == error.StreamTooLong)
-        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, max_source_bytes })
+        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, vera.Preprocessor.max_text_bytes })
     else
         try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
 }
@@ -696,10 +694,10 @@ test engineCache {
 test readFailed {
     var buf: [256]u8 = undefined;
     var w: Io.Writer = .fixed(&buf);
-    // 64 MiB is 67108864 bytes.
+    // 2^32 - 1 is 4294967295 bytes.
     try readFailed(&w, "big.va", error.StreamTooLong);
     try readFailed(&w, "gone.va", error.FileNotFound);
-    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 67108864 bytes; see `vera --explain E1013`\n" ++
+    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 4294967295 bytes; see `vera --explain E1013`\n" ++
         "error: cannot read `gone.va`: FileNotFound\n", w.buffered());
 }
 

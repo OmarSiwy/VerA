@@ -103,7 +103,7 @@ pass	annex_a_syntax/mintypmax_constant_takes_typical.va
 pass	annex_a_syntax/mintypmax_delay_takes_typical.va
 pass	annex_a_syntax/module_instance_named.va
 pass	annex_a_syntax/named_block_declares.va
-pass	annex_a_syntax/nesting_past_the_parser_limit_rejected.va
+pass	annex_a_syntax/nesting_past_the_old_parser_limit.va
 pass	annex_a_syntax/null_port_connects_nothing.va
 pass	annex_a_syntax/null_statement_in_analog_event_block.va
 pass	annex_a_syntax/pattern_empty_element_rejected.va
@@ -158,7 +158,7 @@ pass	annex_a_syntax/reject_A_9_2_nested_block_comment.va
 pass	annex_a_syntax/reject_A_9_3_identifier_starting_with_digit.va
 pass	annex_a_syntax/reject_A_9_4_vertical_tab_is_not_white_space.va
 pass	annex_a_syntax/root_anchored_paths.va
-pass	annex_a_syntax/sum_chain_past_the_parser_limit_rejected.va
+pass	annex_a_syntax/sum_chain_past_the_old_parser_limit.va
 pass	annex_a_syntax/udp_named_instance_delay2.va
 pass	annex_b_keywords/01_escaped_keyword.va
 pass	annex_b_keywords/02_keyword_case.va
@@ -542,7 +542,7 @@ pass	ch02_lexical/digital_scaled_udp_delay_rejected.va
 pass	ch02_lexical/identifier_1024_char_module_name.va
 pass	ch02_lexical/octal_escape_377_largest_byte.va
 pass	ch02_lexical/octal_escape_above_377_rejected.va
-pass	ch02_lexical/real_literal_over_512_bytes_rejected.va
+pass	ch02_lexical/real_literal_over_512_bytes.va
 pass	ch02_lexical/reject_2_5_unary_operator_after_operand.va
 pass	ch02_lexical/reject_2_6_space_between_apostrophe_and_base.va
 pass	ch02_lexical/reject_2_8_4_macro_used_before_its_define.va
@@ -2332,7 +2332,6 @@ pass	ch09_system_tasks/string_concat_overrun_is_fatal.va
 pass	ch09_system_tasks/strobe_flow_read_inside_array_pattern_argument.va
 pass	ch09_system_tasks/table_capture_rejected_step_recaptures.va
 pass	ch09_system_tasks/table_model_columns_of_unequal_length_rejected.va
-pass	ch09_system_tasks/table_model_file_over_16mib_rejected.va
 pass	ch09_system_tasks/write_mode_path_65_fails_open.va
 pass	ch10_directives/01_default_discipline.va
 pass	ch10_directives/02_default_discipline_qualified.va
@@ -2451,14 +2450,13 @@ pass	ch10_directives/include_file_name_empty_rejected.va
 pass	ch10_directives/include_file_name_must_be_quoted_rejected.va
 pass	ch10_directives/include_file_name_unterminated_rejected.va
 pass	ch10_directives/include_file_not_found_rejected.va
-pass	ch10_directives/include_file_over_16mib_rejected.va
 pass	ch10_directives/include_including_dir_is_per_file_rejected.va
 pass	ch10_directives/include_requires_a_file_name_rejected.va
 pass	ch10_directives/include_searches_the_including_files_directory.va
+pass	ch10_directives/include_self_guarded_past_the_old_limit.va
 pass	ch10_directives/line_macro_past_32_bits.va
 pass	ch10_directives/macro_doubling_expands.va
-pass	ch10_directives/macro_expansion_past_128_rejected.va
-pass	ch10_directives/macro_expansion_too_large_rejected.va
+pass	ch10_directives/macro_expansion_past_the_old_128_limit.va
 pass	ch10_directives/undef_requires_a_name_rejected.va
 pass	ch11_vpi/01_module_port_node.va
 pass	ch11_vpi/02_branch_quantity.va

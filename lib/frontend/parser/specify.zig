@@ -216,7 +216,7 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
         if (ifnone) try self.report(main_tok, .E0245, "ifnone takes a simple path (Syntax 14-5), not an edge-sensitive one", .{});
         if (polarity != .none) try self.report(main_tok, .E0245, "an edge-sensitive path writes its polarity after the destination (Syntax 14-4), not before the arrow", .{});
     }
-    if (cond != .none) if (badOperator(self, cond)) |at|
+    if (cond != .none) if (try self.walk(self.pos, badOperator, .{ self, cond })) |at|
         try self.report(self.file.exprs.mainTok(at), .E0245, "a state-dependent path's condition uses only Table 14-1's operators (§14.2.4.1)", .{});
     const outputs = if (self.eat(.lparen)) edge: {
         // The edge-sensitive arms: the outputs, a polarity and the
@@ -392,7 +392,7 @@ pub fn checkPaths(self: *Parser, b: *const parse_module.Body) Error!void {
             } else if (terminalWidth(self, b, src)) |ws| if (terminalWidth(self, b, dst)) |wd| if (ws != wd)
                 try self.report(p.main_tok, .E0245, "a parallel path joins terminals of the same number of bits (§14.2.5), not {d} and {d}", .{ ws, wd });
         }
-        for (p.delays) |d| if (readsSignal(self, b, d)) |at|
+        for (p.delays) |d| if (try self.walk(self.pos, readsSignal, .{ self, b, d })) |at|
             try self.report(ex.mainTok(at), .E0245, "a module path delay is a constant expression (§14.3); `{s}` is a signal", .{self.file.str(ex.strOf(at))});
         for (b.paths.items[0..i]) |q| {
             // §14.2.4.3: the declarations of one edge-sensitive path name
