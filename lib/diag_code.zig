@@ -3791,18 +3791,14 @@ fn infoOf(c: Code) Info {
             \\genvar".
             ,
         },
-        .E0485 => .{
-            .title = "genvar loop exceeds the unroll limit",
-            .lrm = "6.6.1",
-            .explain =
-            \\The loop terminates, but after more iterations than the engine
-            \\unrolls (4096). This is an implementation bound, not a language
-            \\rule: each iteration is a copy of the generate block, and a design
-            \\that needs more copies than that is refused by name rather than
-            \\expanded until memory runs out. A loop that never terminates is
-            \\E0420, the language's own error.
-            ,
-        },
+        .E0485 => retiredInfo(
+            \\"genvar loop exceeds the unroll limit". Retired: a loop that ends
+            \\after more than 4096 iterations was refused as an engine bound.
+            \\Every loop generate that ends is now unrolled in full, however
+            \\long; one that never ends is still E0420, found by following the
+            \\scheme until it ends or repeats a genvar value, not by a count.
+            \\The number is not reused.
+        ),
         .E0486 => .{
             .title = "genvar set to x or z",
             .lrm = "6.6.1",
@@ -3818,11 +3814,19 @@ fn infoOf(c: Code) Info {
             .title = "genvar loop did not terminate",
             .lrm = "6.6.1",
             .explain =
-            \\LRM 6.6.1: "It shall be an error if the loop does not terminate."
-            \\Unrolling hit the engine's iteration cap, which means the step
-            \\never drives the condition false.
+            \\LRM 6.6.1: "It shall be an error if the loop does not terminate"
+            \\and "if a genvar value is repeated during evaluation". The genvar
+            \\is the scheme's whole state, and a 3.2 integer, so a scheme either
+            \\ends or comes back to a value it had with its condition still
+            \\true, and from there runs the same way forever. VerA follows the
+            \\condition and step alone, before any copy of the body is made,
+            \\until one or the other happens (Brent's cycle detection), and
+            \\names the value that repeats. A loop that ends is unrolled in
+            \\full however many iterations it takes; there is no count.
             \\
-            \\LRM 6.6.1 also forbids a repeated genvar value across iterations.
+            \\Integer arithmetic wraps at 32 bits (3.2), so `i = i - 1` under
+            \\`i < 3` ends after 2^31 + 1 iterations rather than repeating:
+            \\write the condition the loop means.
             ,
         },
         .E0421 => .{
@@ -6214,8 +6218,11 @@ fn infoOf(c: Code) Info {
             \\elaboration builds a finite instance TREE, so a cycle has no
             \\elaboration: each level would create another level forever.
             \\
-            \\This is not a depth limit being hit by a deep design — the cycle is
-            \\reported by name, with the instance path that closes it.
+            \\This is not a depth limit being hit by a deep design (there is
+            \\none): the cycle is reported by name, module by module
+            \\(`a` → `b` → `a`), with the instance path that closes it. A
+            \\generate scheme that would end the recursion (6.6.2) is not
+            \\folded on this walk, so any self-instantiation is refused.
             ,
         },
         .E0906 => .{
@@ -6244,6 +6251,13 @@ fn infoOf(c: Code) Info {
             \\
             \\A `localparam` (3.4.5) is deliberately not overridable, so naming
             \\one here is this error too.
+            \\
+            \\A `defparam` applied before its declaring instance is elaborated
+            \\(IEEE 1364-2005 12.8.1) has each parameter its value reads replaced
+            \\by that parameter's final value, as far down as the chain goes.
+            \\One whose chain comes back to a parameter already in it (its own
+            \\target, read through the declaring module's parameters) has no
+            \\value, and is this error too, naming the cycle.
             ,
         },
         .E0908 => .{
@@ -7316,21 +7330,13 @@ fn infoOf(c: Code) Info {
             \\same function.
             ,
         },
-        .E1018 => .{
-            .title = "the instance tree is more than 64 instances deep",
-            .lrm = "",
-            .explain =
-            \\An engine limit, not a language rule. LRM 6.2.2 elaborates a
-            \\finite instance tree and bounds nothing about its depth. VerA
-            \\elaborates at most 64 nested instances below the top module and
-            \\stops at the 65th with this error rather than recurse without
-            \\bound. A cycle, which no depth
-            \\would finish, is E0905 instead.
-            \\
-            \\Flatten a level: a module that only passes its ports to one child
-            \\can be replaced by that child.
-            ,
-        },
+        .E1018 => retiredInfo(
+            \\"the instance tree is more than 64 instances deep". Retired: LRM
+            \\6.2.2 bounds nothing about the depth of a finite instance tree,
+            \\and VerA now elaborates any depth. A cycle, which no depth would
+            \\finish, is still E0905, named module by module. The number is
+            \\not reused.
+        ),
         .E1019 => .{
             .title = "a number literal's size exceeds 16777216 bits",
             .lrm = "",

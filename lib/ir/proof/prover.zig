@@ -635,12 +635,34 @@ pub const Prover = struct {
         self.domain_active = true;
     }
 
-    fn walkDom(self: *Prover, b: u32) !void {
-        const mark = self.saved.items.len;
-        defer self.popFacts(mark);
-        const active = self.domain_active;
-        defer self.domain_active = active;
+    /// The dominator-tree preorder from block 0, on a heap stack: a chain of
+    /// 10,000 sequential `if`s is a tree that deep, which the native stack
+    /// does not hold. Each row restores the facts and `domain_active` its
+    /// block's edge set once its subtree is done.
+    fn walkDom(self: *Prover, root: u32) !void {
+        const Frame = struct { b: u32, mark: usize, active: bool, kid: u32 = 0 };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(self.arena);
+        try stack.append(self.arena, .{ .b = root, .mark = self.saved.items.len, .active = self.domain_active });
+        try self.enterDom(root);
+        while (stack.items.len != 0) {
+            const top = &stack.items[stack.items.len - 1];
+            const kids = self.an.domKids(top.b);
+            if (top.kid < kids.len) {
+                const c = kids[top.kid];
+                top.kid += 1;
+                try stack.append(self.arena, .{ .b = c, .mark = self.saved.items.len, .active = self.domain_active });
+                try self.enterDom(c);
+                continue;
+            }
+            const done = stack.pop().?;
+            self.popFacts(done.mark);
+            self.domain_active = done.active;
+        }
+    }
 
+    /// Pushes the facts of the edge into `b` and walks `b`'s own instructions.
+    fn enterDom(self: *Prover, b: u32) !void {
         // Evidence from the edge idom(b) → b. Requiring b's ONLY predecessor to
         // be the branching block is what makes "dominated by b" imply "the
         // branch went this way".
@@ -665,7 +687,6 @@ pub const Prover = struct {
         }
 
         try self.walkBlock(b);
-        for (self.an.domKids(b)) |c| try self.walkDom(c);
     }
 
     fn walkBlock(self: *Prover, b: u32) !void {
