@@ -414,9 +414,23 @@ pub const Gen = struct {
         return if (held) ", true" else ", false";
     }
 
-    /// Writes `n` levels of four-space indentation.
+    /// Writes `n` levels of four-space indentation, at most `max_indent`.
     pub fn ind(self: *Gen, n: u32) Error!void {
-        try self.out.appendNTimes(self.gpa, ' ', n * 4);
+        try self.out.appendNTimes(self.gpa, ' ', indWidth(n));
+    }
+
+    /// The deepest level `ind` indents to. Nesting has no bound (an
+    /// `if`/`?:` chain the source nests 100,000 deep is a block that deep),
+    /// and indenting each level further would make the text quadratic in
+    /// it: 8000 nested `?:` were 2.4 GB of device. Past this the lines stay
+    /// at one column, so the text is linear; Zig does not read indentation,
+    /// and the emitted device is never `zig fmt`-checked. No fixture nests
+    /// this deep, so every device that fits is byte-identical.
+    pub const max_indent = 32;
+
+    /// The spaces `ind(n)` writes.
+    pub fn indWidth(n: u32) u32 {
+        return @as(u32, @min(n, max_indent)) * 4;
     }
 
     // ------------------------------------------------------------------ setup

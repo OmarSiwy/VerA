@@ -762,12 +762,12 @@ fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     var hops: u32 = 0;
     // Merge blocks whose labels a block walked through here opened: the walk
     // reaching one continues into it, because it is emitted INLINE right
-    // after its label closes (`emitCode`), not broken to from outside.
+    // after its label closes (`cfg.emitTree`), not broken to from outside.
     // ponytail: a fixed 32; a deeper nest answers null, the safe side.
     var opened: [32]u32 = undefined;
     var n_open: usize = 0;
     while (hops <= self.an.nb) : (hops += 1) {
-        // A phi in `to` means `emitEdge` copies a value on this edge, which
+        // A phi in `to` means `emitPhiCopies` copies a value on this edge, which
         // is the one thing the two arms cannot share.
         if (self.blk_phi[to]) return null;
         if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };

@@ -761,6 +761,78 @@ test "a later stage whose stack cannot be reserved is E0241, naming the depth" {
     try std.testing.expect(std.mem.indexOf(u8, bag.at(0).message, "levels deep") != null);
 }
 
+test "10,000 sequential ifs compile: SSA, the prover and codegen walk them on no native stack per if" {
+    // Each `if` is a join the next one's block is dominated by, so the
+    // dominator tree, the SSA read of `x` and the emitted chain are all
+    // 10,000 deep. `sqrt` keeps every diamond out of if-conversion (its
+    // domain needs the guard, which the prover reads off the edge); `+ 1.0`
+    // is converted to selects, which leaves a chain of jumps instead.
+    const gpa = std.testing.allocator;
+    for ([_]bool{ true, false }) |guarded| {
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(gpa);
+        try src.appendSlice(gpa, "module seq(p); inout p; electrical p; real x;\nanalog begin\nx = 0.0;\n");
+        for (1..10_001) |i| {
+            if (guarded)
+                try src.print(gpa, "if (V(p) > -{d}.0) x = x + sqrt(V(p) + {d}.0);\n", .{ i, i })
+            else
+                try src.print(gpa, "if (V(p) > -{d}.0) x = x + 1.0;\n", .{i});
+        }
+        try src.appendSlice(gpa, "I(p) <+ x;\nend\nendmodule\n");
+        var res = try compileSource(gpa, src.items, .build);
+        defer res.deinit();
+        const text = try res.generateDevice();
+        try std.testing.expect(!res.device_has_compile_error);
+        const branches = std.mem.count(u8, text, "} else {");
+        try std.testing.expectEqual(@as(usize, if (guarded) 10_000 else 0), branches);
+    }
+}
+
+test "100,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
+    // KNOWN: needs limits/frontend. The parser (E0241 at 1024 levels) and
+    // lowering's AST walks recurse per level on this branch; codegen does not
+    // (`cfg.emitTree`'s heap stack, `Gen.max_indent`). Live once the two
+    // branches merge.
+    if (true) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const n = 100_000;
+    for ([_]enum { ternary, else_if, nested }{ .ternary, .else_if, .nested }) |shape| {
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(gpa);
+        try src.appendSlice(gpa, "module deep(p); inout p; electrical p; real x;\nanalog begin\nx = 0.0;\n");
+        switch (shape) {
+            .ternary => {
+                try src.appendSlice(gpa, "x = ");
+                for (1..n + 1) |i| try src.print(gpa, "V(p) > -{d}.0 ? ", .{i});
+                try src.appendSlice(gpa, "1.0");
+                for (1..n + 1) |i| try src.print(gpa, " : {d}.0", .{n + 1 - i});
+                try src.appendSlice(gpa, ";\n");
+            },
+            .else_if => {
+                for (1..n + 1) |i| try src.print(gpa, "{s}if (V(p) > {d}.0) x = {d}.0;\n", .{ if (i > 1) "else " else "", i, i });
+                try src.appendSlice(gpa, "else x = 0.5;\n");
+            },
+            .nested => {
+                for (1..n + 1) |i| try src.print(gpa, "if (V(p) > -{d}.0) begin x = x + 1.0;\n", .{i});
+                for (0..n) |_| try src.appendSlice(gpa, "end\n");
+            },
+        }
+        try src.appendSlice(gpa, "I(p) <+ x * V(p);\nend\nendmodule\n");
+        var res = try compileSource(gpa, src.items, .build);
+        defer res.deinit();
+        const text = try res.generateDevice();
+        try std.testing.expect(!res.device_has_compile_error);
+        // 1000 levels measured 0.6-1.6 KB a level; quadratic indentation
+        // alone would be 200 KB a level at this depth.
+        try std.testing.expect(text.len < 4096 * n);
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |l| {
+            const lead = l.len - std.mem.trimStart(u8, l, " ").len;
+            try std.testing.expect(lead <= codegen.Gen.indWidth(std.math.maxInt(u32)));
+        }
+    }
+}
+
 test "generateDevice runs codegen once and hands back the cached text" {
     const gpa = std.testing.allocator;
     var res = try compileSource(gpa, test_resistor, .build);

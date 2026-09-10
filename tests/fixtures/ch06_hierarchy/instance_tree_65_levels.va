@@ -1,13 +1,19 @@
-// An engine limit, not a language rule: §6.2.2 builds a finite instance tree
-// and bounds nothing about its depth. VerA elaborates at most 64 nested
-// instances below the top module (specification/Vague_Decisions.md). Here d0
-// instantiates d1, d1 instantiates d2, and so on to d65: 65 nested instances,
-// no module repeated, so no cycle (E0905) exists. The 65th is refused with
-// E1018, which names the limit. instance_tree_64_levels.va is the legal
-// neighbour at the limit.
+// §6.2.2 builds a finite instance tree and bounds nothing about its depth.
+// d0 instantiates d1 and so on to d65, which holds the only analog block: 65
+// nested instances, no module repeated, so no cycle (E0905) exists. Until
+// 2026-10-15 VerA elaborated at most 64 nested instances and refused the 65th
+// (E1018, retired); the walk now keeps its levels on a heap stack, so any
+// finite depth elaborates (`lib/ir/elaborate/instance.zig` tests 10,000).
+// instance_tree_64_levels.va is the old bound itself;
+// recursive_instantiation_rejected.va is the cycle that is still refused.
 //
-//! reject-only E1018
-//! neighbour instance_tree_64_levels.va
+// HAND DERIVATION. The bias pins V(p) = 0.5 and V(n) = 0 at the top, and d65
+// reads them through 65 levels of port connections: V(p, n) = 0.5.
+//
+//! lrm 6.2.2
+//! bias V(p) = 0.5, V(n) = 0
+//! checks 1
+`include "check.vh"
 module d0(p, n);
   inout p, n; electrical p, n;
   d1 u(p, n);
@@ -270,5 +276,8 @@ module d64(p, n);
 endmodule
 module d65(p, n);
   inout p, n; electrical p, n;
-  analog I(p,n) <+ V(p,n);
+  analog begin
+    `CHECK("a 65-level instance tree elaborates and runs", V(p, n), 0.5, 1e-15);
+    I(p,n) <+ V(p,n);
+  end
 endmodule

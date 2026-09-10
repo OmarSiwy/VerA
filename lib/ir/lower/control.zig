@@ -14,6 +14,8 @@ const lower_stmt = @import("stmt.zig");
 const lower_shape = @import("shape.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
+const Elaborate = @import("../elaborate.zig");
+const Const = Lower.Const;
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
 
@@ -551,10 +553,6 @@ pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     self.cur = exit;
 }
 
-/// Bound on §6.6.1 unrolling: a runaway genvar loop is a source bug, not a
-/// reason to emit a million instructions.
-const max_unroll: u32 = 4096;
-
 /// §3.5/§6.6.1 genvar loop-generate. Returns false when this is an ordinary
 /// procedural `for` (which `lowerFor` then lowers as a CFG loop). The bounds
 /// fold with `shapeEval`: a parameter in them fixes how many copies of the body
@@ -580,6 +578,40 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
             try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
         return true;
     };
+    // §6.6.1 a scheme that never ends is refused before any body is
+    // lowered; one that ends is unrolled in full, however long.
+    const Scheme = struct {
+        self: *Lower,
+        gv: []const u8,
+        cond: Ast.ExprId,
+        step: Ast.ExprId,
+        pub fn holds(sc: @This(), v: Const) Oom!?bool {
+            try sc.self.consts.put(sc.self.arena, sc.gv, v);
+            const c = lower_constfold.shapeEval(sc.self, sc.cond) orelse return null;
+            return c.isTrue();
+        }
+        pub fn next(sc: @This(), v: Const) Oom!?Const {
+            try sc.self.consts.put(sc.self.arena, sc.gv, v);
+            return lower_constfold.shapeEval(sc.self, sc.step);
+        }
+        pub fn same(a: Const, b: Const) bool {
+            return switch (a) {
+                .int => |x| b == .int and b.int == x,
+                .real => |x| b == .real and @as(u64, @bitCast(b.real)) == @as(u64, @bitCast(x)),
+                .str => |x| b == .str and std.mem.eql(u8, b.str, x),
+            };
+        }
+    };
+    const scheme: Scheme = .{ .self = self, .gv = gv, .cond = cond, .step = assignValueOf(self, step) orelse .none };
+    switch (try Elaborate.genvarLoop(Const, scheme, start)) {
+        .repeats => |v| {
+            _ = self.consts.remove(gv);
+            try self.err(self.file.exprs.mainTok(cond), .E0420, "`{s}` repeats the value {d}, so the loop never ends", .{ gv, v.asInt() });
+            return true;
+        },
+        // The unroll meets the same unfolded value and reports it.
+        .ends, .unfolded => {},
+    }
     try self.consts.put(self.arena, gv, start);
     // Visible to `queueDisplay`'s snapshot while the body lowers.
     try self.active_genvars.append(self.arena, gv);
@@ -589,8 +621,7 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     self.analog_for_base = self.loops.items.len;
     defer self.analog_for_base = saved_base;
 
-    var n: u32 = 0;
-    while (n < max_unroll) : (n += 1) {
+    while (true) {
         const c = lower_constfold.shapeEval(self, cond) orelse {
             try self.err(self.file.exprs.mainTok(cond), .E0418, "", .{});
             break;
@@ -610,41 +641,8 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
         };
         try self.consts.put(self.arena, gv, next);
     }
-    if (n == max_unroll) try loopBeyondCap(self, gv, cond, step);
     _ = self.consts.remove(gv);
     return true;
-}
-
-/// Iterations `loopBeyondCap` follows a loop's scheme alone, body unlowered,
-/// to tell a long loop from one that never ends.
-const max_probe: u32 = 1 << 20;
-
-/// The body has been unrolled `max_unroll` times. The scheme alone (§6.6.1's
-/// condition and step, which fold without the body) decides what that means:
-/// it may end right here (exactly `max_unroll` iterations, legal); end later
-/// (E0485, the engine's limit and not a language rule); or never end, which
-/// a genvar value that repeats proves outright and a scheme still running
-/// after `max_probe` iterations is taken to mean (E0420, §6.6.1's error).
-fn loopBeyondCap(self: *Lower, gv: []const u8, cond: Ast.ExprId, step: Ast.StmtId) Oom!void {
-    const tok = self.file.exprs.mainTok(cond);
-    var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
-    var k: u32 = max_unroll;
-    while (k < max_unroll + max_probe) : (k += 1) {
-        const c = lower_constfold.shapeEval(self, cond) orelse return;
-        if (!c.isTrue()) {
-            if (k != max_unroll)
-                try self.err(tok, .E0485, "it runs {d} iterations; at most {d} are unrolled", .{ k, max_unroll });
-            return;
-        }
-        const v = (self.consts.get(gv) orelse return).asInt();
-        if ((try seen.getOrPut(self.arena, v)).found_existing) {
-            try self.err(tok, .E0420, "`{s}` repeats the value {d}", .{ gv, v });
-            return;
-        }
-        const next = lower_constfold.shapeEval(self, assignValueOf(self, step) orelse .none) orelse return;
-        try self.consts.put(self.arena, gv, next);
-    }
-    try self.err(tok, .E0420, "still running after {d} iterations", .{max_unroll + max_probe});
 }
 
 /// Returns the genvar a `for` init statement assigns, or null (LRM §3.5).

@@ -1,7 +1,8 @@
 // §6.6.1: a genvar loop is unrolled at elaboration; "It shall be an error if
 // the loop does not terminate." This loop terminates after exactly 4096
-// iterations, the engine's unroll limit (lib/ir/lower/control.zig
-// `max_unroll`), so it is legal and must unroll in full.
+// iterations, what was the engine's unroll limit until 2026-10-15
+// (genvar_loop_4097_iterations.va is one past it; no limit remains), so it
+// is legal and must unroll in full.
 //
 // Derivation: x starts at 0.0 and each of the 4096 unrolled bodies adds 1.0,
 // so x = 4096.0 exactly (integers below 2^53 are exact in IEEE double).
