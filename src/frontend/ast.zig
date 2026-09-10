@@ -274,10 +274,6 @@ pub const ExprStore = struct {
         return self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
     }
 
-    pub fn len(self: *const ExprStore) u32 {
-        return @intCast(self.nodes.len);
-    }
-
     pub fn get(self: *const ExprStore, id: ExprId) Node {
         return self.nodes.get(@intFromEnum(id));
     }
@@ -346,23 +342,17 @@ pub const ExprStore = struct {
         const n = self.pool.items[off];
         return self.pool.items[off + 1 ..][0..n];
     }
-    pub fn exprList(self: *const ExprStore, off: u32) []const ExprId {
-        return @ptrCast(self.list(off));
-    }
-    pub fn strList(self: *const ExprStore, off: u32) []const StrId {
-        return @ptrCast(self.list(off));
-    }
 
     /// Arguments of any call-shaped tag (`call`, `builtin_call`, `sys_call`,
     /// `filter_call`, `noise_call`, `event_function`) and the elements of
     /// `concat` / `assign_pattern`.
     pub fn args(self: *const ExprStore, id: ExprId) []const ExprId {
-        return self.exprList(self.extraOf(id));
+        return @ptrCast(self.list(self.extraOf(id)));
     }
     /// Parts of a `.hier_ident`, and the analysis names of
     /// `.event_initial_step` / `.event_final_step`.
     pub fn nameParts(self: *const ExprStore, id: ExprId) []const StrId {
-        return self.strList(self.extraOf(id));
+        return @ptrCast(self.list(self.extraOf(id)));
     }
 };
 
@@ -722,8 +712,7 @@ pub const ModuleDecl = struct {
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
     /// A.6.2 `initial`/`always` constructs in source order — §7.2.2's discrete
-    /// context. Read ONLY by `Lower.checkDiscreteContext`; nothing is lowered
-    /// from it, and the parser has already refused each one.
+    /// context.
     discrete: []const DiscreteBlock = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
@@ -1211,19 +1200,9 @@ pub const SourceFile = struct {
 //     covers `msb:lsb`, which is all the analog subset uses.
 //   · `min:typ:max` (A.8.3 mintypmax_expression) — the parser keeps the typ
 //     value; add a `.mintypmax` tag if a fixture ever needs the triple.
-//   · generic `(* attr = val *)` attribute_instances (§2.9) — the parser skips
-//     them. Add `attrs: []const NatureAttr` to ParamDecl/ModuleDecl when the
-//     host needs `units`/`desc` metadata; NatureAttr is already the right shape.
 //   · digital-only statements (fork/join, blocking vs nonblocking,
-//     event_trigger `->`, wait, task/UDP/specify/config declarations) —
+//     wait, task/UDP/specify/config declarations) —
 //     rejected in the lexer/parser, never AST.
-//     `initial`/`always` came OFF this list: they are `DiscreteBlock` now,
-//     because four rules the LRM states about a discrete context are rules
-//     about the body and were unreachable while the keyword was an error.
-//     `connectrules` came OFF it too: A.1.2 makes it a description and annex
-//     F.2 step 4.b consumes its resolution statements — see ConnectRulesDecl.
-//     `connectmodule` was never on it — A.1.2 makes it a `module_keyword`, so
-//     it is an ordinary `ModuleDecl` with `is_connect` set.
 
 // ---------------------------------------------------------------------------
 // Self-check: the store round-trips handles, lists and the §3.4.2 ranges that

@@ -103,7 +103,6 @@ const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Analysis = @import("analysis.zig");
 const diag = @import("../diag.zig");
-const assert = std.debug.assert;
 const math = std.math;
 
 /// Per-unit float-mode decision. LRM §4.3 domains + finiteness.
@@ -382,15 +381,6 @@ pub fn proveOpts(
     // copy computing `idom`/`rpo_num` and nothing else; `Analysis` computes
     // those PLUS `is_loop`/`loop_of`, which is the missing input for the
     // loop-carried widening ceiling `walk` records.
-    //
-    // Two differences between the two builders were real, and both were
-    // MEASURED to be empty on this tree (all 1162 fixtures, instrumented
-    // `buildCfg`): (a) the old copy collected successors from EVERY
-    // branch/jump in a block, `Analysis` from the last one — **0** blocks
-    // carry two terminators; (b) the old copy's predecessor lists included
-    // unreachable blocks, `Analysis`'s do not — **0** blocks are unreachable
-    // from entry. Both are properties of what lowering emits (a block is
-    // closed at its terminator), so this is a re-derivation, not a relaxation.
     p.an = try Analysis.buildStructure(p.arena, mir, lower);
 
     try p.seedValues(); // §3.4.2 param ranges, §4.2 constants, §4.4 probes
@@ -414,8 +404,7 @@ const none_u32 = std.math.maxInt(u32);
 
 const Prover = struct {
     gpa: std.mem.Allocator,
-    /// Scratch arena — every field below except `errors` lives here and dies
-    /// with `prove`. Nothing in this file needs a per-op allocation.
+    /// Scratch arena — dies with `prove`.
     arena: std.mem.Allocator,
     mir: *const Mir,
     lower: *const Lower,
@@ -489,14 +478,6 @@ const Prover = struct {
         }
     }
 
-    fn nVals(self: *const Prover) u32 {
-        return @intCast(self.mir.defs.len + Mir.Value.first_dynamic);
-    }
-
-    fn nBlocks(self: *const Prover) u32 {
-        return self.mir.blockCount();
-    }
-
     /// Every read of a Value goes through the alias map (ssa.zig contract).
     fn idxOf(self: *const Prover, v: Mir.Value) u32 {
         return @intFromEnum(self.mir.resolveAlias(v));
@@ -515,7 +496,7 @@ const Prover = struct {
     /// Initial abstract state for every Value. Only `inst_result` is left at ⊤;
     /// the pass fills those in dominator order.
     fn seedValues(self: *Prover) !void {
-        const n = self.nVals();
+        const n = self.an.nv;
         self.iv = try self.arena.alloc(Interval, n);
         self.finite = try self.arena.alloc(bool, n);
         self.uses = try self.arena.alloc(u32, n);
@@ -697,7 +678,7 @@ const Prover = struct {
     /// Group structurally identical pure instructions. Impure classes (phi,
     /// call, terminators, and the `opt_barrier` fence) are never merged.
     fn buildClasses(self: *Prover) !void {
-        const n = self.nVals();
+        const n = self.an.nv;
         self.class_of = try self.arena.alloc(u32, n);
         @memset(self.class_of, none_u32);
 
@@ -898,40 +879,34 @@ const Prover = struct {
                 const hi = self.idxOf(hi_v);
                 const a_iv = self.iv[li];
                 const b_iv = self.iv[hi];
-                var n: usize = 0;
                 switch (rel) {
                     .eq => {
-                        buf[n] = .{ .v = li, .iv = b_iv };
-                        n += 1;
-                        buf[n] = .{ .v = hi, .iv = a_iv };
-                        n += 1;
+                        buf[0] = .{ .v = li, .iv = b_iv };
+                        buf[1] = .{ .v = hi, .iv = a_iv };
                     },
                     .lt, .le => {
                         // a < b  ⇒  a < b.hi  and  b > a.lo
                         const strict = rel == .lt;
-                        buf[n] = .{ .v = li, .iv = .{
+                        buf[0] = .{ .v = li, .iv = .{
                             .hi = b_iv.hi,
                             .hi_open = strict or b_iv.hi_open,
                         } };
-                        n += 1;
-                        buf[n] = .{ .v = hi, .iv = .{
+                        buf[1] = .{ .v = hi, .iv = .{
                             .lo = a_iv.lo,
                             .lo_open = strict or a_iv.lo_open,
                         } };
-                        n += 1;
                     },
                     .none => unreachable,
                 }
-                return buf[0..n];
+                return buf[0..2];
             },
             else => {},
         }
         return buf[0..0];
     }
 
-    /// Apply facts, remembering the previous intervals. Returns the undo mark.
-    fn pushFacts(self: *Prover, facts: []const Fact) !usize {
-        const mark = self.saved.items.len;
+    /// Apply facts, remembering the previous intervals.
+    fn pushFacts(self: *Prover, facts: []const Fact) !void {
         for (facts) |f| {
             const c = self.class_of[f.v];
             const members: []const u32 = if (c == none_u32)
@@ -943,7 +918,6 @@ const Prover = struct {
                 self.iv[m] = self.iv[m].meet(f.iv);
             }
         }
-        return mark;
     }
 
     fn popFacts(self: *Prover, mark: usize) void {
@@ -970,7 +944,7 @@ const Prover = struct {
     /// body (`Analysis.loop_of`) instead of the whole CFG. Genvar loops
     /// (§6.6.1) unroll, so this bites `while` only.
     fn walk(self: *Prover) !void {
-        const nb = self.nBlocks();
+        const nb = self.an.nb;
         if (nb == 0) return;
         self.visited_block = try self.arena.alloc(bool, nb);
         @memset(self.visited_block, false);
@@ -999,7 +973,7 @@ const Prover = struct {
                     const taken = @intFromEnum(d.branch.then_block) == b;
                     if (!taken and @intFromEnum(d.branch.else_block) != b) continue;
                     var raw: [2]Fact = undefined;
-                    _ = try self.pushFacts(self.condFacts(d.branch.cond, taken, &raw));
+                    try self.pushFacts(self.condFacts(d.branch.cond, taken, &raw));
                 }
             }
         }
@@ -1023,7 +997,7 @@ const Prover = struct {
         defer self.popFacts(mark);
         if (result != .undef) {
             const g = self.guard[ri];
-            if (g.count != 0) _ = try self.pushFacts(self.facts.items[g.start..][0..g.count]);
+            if (g.count != 0) try self.pushFacts(self.facts.items[g.start..][0..g.count]);
         }
 
         // An unprovable domain is not an error (LRM §4.3.2, see checkDomain) —
@@ -1032,7 +1006,7 @@ const Prover = struct {
         const domain_proven = try self.checkDomain(inst);
         if (result == .undef) return; // terminator
 
-        const out = try self.transfer(inst);
+        const out = self.transfer(inst);
         // MEET, not assign: a guard pushed on this value's congruence class
         // before its definition (the `if (V>0) … ln(V)` shape) must survive its
         // own transfer. `pushFacts` saved the pre-guard interval, so nothing
@@ -1045,18 +1019,18 @@ const Prover = struct {
 
     /// Transfer function. Intervals are computed for the DOMAIN proof; `finite`
     /// is the separate SOUNDNESS MODEL fact that drives the float mode.
-    fn transfer(self: *Prover, inst: Mir.Inst) !Abstract {
+    fn transfer(self: *Prover, inst: Mir.Inst) Abstract {
         const op = self.mir.instOp(inst);
 
         // §4.2.5/§4.2.8: integer-valued results are finite by construction and
         // never pollute the float mode.
-        if (Mir.opIsInteger(op)) return .{ .iv = self.integerIv(inst, op), .finite = true };
+        if (Mir.opIsInteger(op)) return .{ .iv = integerIv(op), .finite = true };
 
         switch (self.mir.instData(inst)) {
             .unary => |u| {
                 const a = self.ivOf(u.operand);
                 const af = self.isFinite(u.operand);
-                return self.unaryTransfer(op, a, af);
+                return unaryTransfer(op, a, af);
             },
             .binary => |b| {
                 const x = self.ivOf(b.lhs);
@@ -1093,43 +1067,39 @@ const Prover = struct {
 
     /// Integer results (§3.2): clamp to the i64 range so an integer expression
     /// can never make a unit `.strict`. Relational/logical results are 0/1.
-    fn integerIv(self: *Prover, inst: Mir.Inst, op: Mir.Opcode) Interval {
-        _ = self;
-        _ = inst;
+    fn integerIv(op: Mir.Opcode) Interval {
         return switch (op) {
             .flt, .fgt, .fle, .fge, .feq, .fne, .ilt, .igt, .ile, .ige, .ieq, .ine, .logand, .logor, .lognot => .{ .lo = 0, .hi = 1 },
             else => .{ .lo = -9.223372036854776e18, .hi = 9.223372036854776e18 },
         };
     }
 
-    fn unaryTransfer(self: *Prover, op: Mir.Opcode, a: Interval, af: bool) Abstract {
-        _ = self;
-        const monotone: ?*const fn (f64) f64 = switch (op) {
-            .exp => &mExp,
-            .expm1 => &mExpm1,
-            .ln => &mLn,
-            .ln1p => &mLn1p,
-            .log10 => &mLog10,
-            .sqrt => &mSqrt,
-            .sinh => &mSinh,
-            .tanh => &mTanh,
-            .asinh => &mAsinh,
-            .atan => &mAtan,
-            .asin => &mAsin,
-            .atanh => &mAtanh,
-            .acosh => &mAcosh,
-            .floor => &mFloor,
-            .ceil => &mCeil,
-            .if_cast => &mId,
+    fn unaryTransfer(op: Mir.Opcode, a: Interval, af: bool) Abstract {
+        const monotone: ?[2]f64 = switch (op) {
+            .exp => .{ @exp(a.lo), @exp(a.hi) },
+            .expm1 => .{ math.expm1(a.lo), math.expm1(a.hi) },
+            .ln => .{ @log(a.lo), @log(a.hi) },
+            .ln1p => .{ math.log1p(a.lo), math.log1p(a.hi) },
+            .log10 => .{ @log10(a.lo), @log10(a.hi) },
+            .sqrt => .{ @sqrt(a.lo), @sqrt(a.hi) },
+            .sinh => .{ math.sinh(a.lo), math.sinh(a.hi) },
+            .tanh => .{ math.tanh(a.lo), math.tanh(a.hi) },
+            .asinh => .{ math.asinh(a.lo), math.asinh(a.hi) },
+            .atan => .{ math.atan(a.lo), math.atan(a.hi) },
+            .asin => .{ math.asin(a.lo), math.asin(a.hi) },
+            .atanh => .{ math.atanh(a.lo), math.atanh(a.hi) },
+            .acosh => .{ math.acosh(a.lo), math.acosh(a.hi) },
+            .floor => .{ @floor(a.lo), @floor(a.hi) },
+            .ceil => .{ @ceil(a.lo), @ceil(a.hi) },
             // .path_prev/.path_acc take `else` (unbounded): the latch holds a
             // value from an EARLIER solve, which current branch guards do not
-            // constrain — an mId interval here would be wrong-narrow.
-            .opt_barrier => &mId,
+            // constrain — an identity interval here would be wrong-narrow.
+            .if_cast, .opt_barrier => .{ a.lo, a.hi },
             else => null,
         };
-        if (monotone) |f| {
-            const lo = f(a.lo);
-            const hi = f(a.hi);
+        if (monotone) |bounds| {
+            const lo = bounds[0];
+            const hi = bounds[1];
             // AUDIT (same class as the pow/fdiv corner holes): a NaN endpoint
             // here means the operand STRADDLES the function's domain edge —
             // ln(-1), sqrt(-4), asin(2), acosh(0.5)… — and the in-domain
@@ -1163,15 +1133,15 @@ const Prover = struct {
             // EMPTY interval (lo=+inf > hi) for a high-straddling operand,
             // which vacuously "proved" every downstream domain.
             .acos => blk: {
-                const lo = mAcos(a.hi);
-                const hi = mAcos(a.lo);
+                const lo = math.acos(a.hi);
+                const hi = math.acos(a.lo);
                 if (math.isNan(lo) or math.isNan(hi)) break :blk .{ .iv = .top, .finite = false };
                 break :blk .{ .iv = .{ .lo = lo, .hi = hi }, .finite = af };
             },
             // §4.3.2 cosh: even, grows — bounded only if |x| is bounded.
             .cosh => blk: {
                 const m = absIv(a);
-                const iv: Interval = .{ .lo = 1, .hi = mCosh(m.hi) };
+                const iv: Interval = .{ .lo = 1, .hi = math.cosh(m.hi) };
                 break :blk .{ .iv = iv, .finite = af and iv.bounded() };
             },
             .sin, .cos => .{ .iv = .{ .lo = -1, .hi = 1 }, .finite = af },
@@ -1294,8 +1264,8 @@ const Prover = struct {
                 const d = self.mir.instData(inst).binary;
                 const y = self.ivOf(d.rhs);
                 if (y.excludesZero() or y.isEmpty()) return true;
-                try self.reportDivisor(inst, op, d.rhs, y);
-                return false;
+                const what = if (op == .fmod or op == .imod) "`%` divisor" else "`/` divisor";
+                return self.violated(inst, .E0601, what, d.rhs, y, "cannot be proven non-zero", "constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division");
             },
             .pow_sign => { // §4.3.1 Table 4-14
                 const d = self.mir.instData(inst).binary;
@@ -1423,14 +1393,6 @@ const Prover = struct {
 
     // ------------------------------------------------------------- messages --
 
-    fn reportDivisor(self: *Prover, inst: Mir.Inst, op: Mir.Opcode, v: Mir.Value, iv: Interval) !void {
-        const what = if (op == .fmod or op == .imod) "`%` divisor" else "`/` divisor";
-        var b = try self.violation(inst, .E0601, v, iv, what);
-        b.point("cannot be proven non-zero", .{});
-        b.help("constrain the divisor with `exclude 0` or `from (0:inf)`, or guard the division", .{});
-        try self.emit(&b);
-    }
-
     /// Provably-outside-the-domain: report it (LRM §4.3.2) and forfeit
     /// finiteness. Always returns false so the caller clears `finite`.
     ///
@@ -1447,7 +1409,7 @@ const Prover = struct {
         requirement: []const u8,
         fix: []const u8,
     ) !bool {
-        var b = try self.violation(inst, code, operand, iv, what);
+        var b = self.violation(inst, code, operand, iv, what);
         b.point("{s}", .{requirement});
         b.help("{s}", .{fix});
         try self.emit(&b);
@@ -1464,10 +1426,10 @@ const Prover = struct {
         operand: Mir.Value,
         iv: Interval,
         what: []const u8,
-    ) !diag.Builder {
+    ) diag.Builder {
         var buf: [96]u8 = undefined;
         var b = self.bag.build(.proof, code, self.span(inst));
-        b.msg("{s} is {s}{s}", .{ what, self.describe(operand), self.ivText(&buf, iv) });
+        b.msg("{s} is {s}{s}", .{ what, self.describe(operand), ivText(&buf, iv) });
         const def = self.valueSpan(operand);
         if (!def.isNone() and def.start != self.span(inst).start)
             b.label(def, "{s} originates here", .{self.describe(operand)});
@@ -1621,8 +1583,7 @@ const Prover = struct {
         return null;
     }
 
-    fn ivText(self: *const Prover, buf: []u8, iv: Interval) []const u8 {
-        _ = self;
+    fn ivText(buf: []u8, iv: Interval) []const u8 {
         if (iv.lo == -math.inf(f64) and iv.hi == math.inf(f64)) return " with no known bounds";
         return std.fmt.bufPrint(buf, " with known range {c}{d}:{d}{c}", .{
             @as(u8, if (iv.lo_open) '(' else '['),
@@ -1646,7 +1607,7 @@ const Prover = struct {
         // `seen[i] == u` and the array is cleared exactly once instead of once
         // per contribution. `none_u32` is the pre-first stamp, because `u == 0`
         // is a real generation.
-        const seen = try self.arena.alloc(u32, self.nVals());
+        const seen = try self.arena.alloc(u32, self.an.nv);
         @memset(seen, none_u32);
         var stack: std.ArrayList(Mir.Value) = .empty;
         defer stack.deinit(self.arena);
@@ -1698,9 +1659,7 @@ const Prover = struct {
 };
 
 /// The handful of `call`s whose range the LRM fixes. Everything else is ⊤ —
-/// unmodelled costs `.strict`, never a wrong `.optimized`. Without this table
-/// the ubiquitous `V/$vt` idiom would be rejected as a possible division by
-/// zero, which no conformant compiler should do.
+/// unmodelled costs `.strict`, never a wrong `.optimized`.
 fn callAbstract(name: []const u8) Prover.Abstract {
     const positive: Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: Interval = .{ .lo = 0 };
@@ -1853,62 +1812,6 @@ fn absIv(a: Interval) Interval {
     if (a.ge(0)) return a;
     if (a.le(0)) return .{ .lo = -a.hi, .hi = -a.lo, .lo_open = a.hi_open, .hi_open = a.lo_open };
     return .{ .lo = 0, .hi = @max(@abs(a.lo), @abs(a.hi)) };
-}
-
-// LRM Table 4-14 / 4-15 scalar forms, as function pointers for the monotone path.
-fn mId(x: f64) f64 {
-    return x;
-}
-fn mExp(x: f64) f64 {
-    return @exp(x);
-}
-fn mExpm1(x: f64) f64 {
-    return math.expm1(x);
-}
-fn mLn(x: f64) f64 {
-    return @log(x);
-}
-fn mLn1p(x: f64) f64 {
-    return math.log1p(x);
-}
-fn mLog10(x: f64) f64 {
-    return @log10(x);
-}
-fn mSqrt(x: f64) f64 {
-    return @sqrt(x);
-}
-fn mSinh(x: f64) f64 {
-    return math.sinh(x);
-}
-fn mCosh(x: f64) f64 {
-    return math.cosh(x);
-}
-fn mTanh(x: f64) f64 {
-    return math.tanh(x);
-}
-fn mAsinh(x: f64) f64 {
-    return math.asinh(x);
-}
-fn mAcosh(x: f64) f64 {
-    return math.acosh(x);
-}
-fn mAtanh(x: f64) f64 {
-    return math.atanh(x);
-}
-fn mAtan(x: f64) f64 {
-    return math.atan(x);
-}
-fn mAsin(x: f64) f64 {
-    return math.asin(x);
-}
-fn mAcos(x: f64) f64 {
-    return math.acos(x);
-}
-fn mFloor(x: f64) f64 {
-    return @floor(x);
-}
-fn mCeil(x: f64) f64 {
-    return @ceil(x);
 }
 
 // ---------------------------------------------------------------------------

@@ -897,16 +897,14 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
     try g.w("            const vo = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ ngate, nw });
     if (leg.sign == .f_zero) {
         try g.w("            const vl = zFetlim(vn, vo, ", .{});
-        try writeArg(g, leg.argv[0]);
-        try g.w(");\n", .{});
     } else {
         try g.w("            const sg: f64 = if (", .{});
         try writeArg(g, leg.sign);
         try g.w(" < 0) -1.0 else 1.0;\n", .{});
         try g.w("            const vl = sg * zFetlim(sg * vn, sg * vo, ", .{});
-        try writeArg(g, leg.argv[0]);
-        try g.w(");\n", .{});
     }
+    try writeArg(g, leg.argv[0]);
+    try g.w(");\n", .{});
     try g.w("            x[@intFromEnum(U.{s})] -= vl - vn;\n", .{nw});
     const neg: []const u8 = if (inv) "-" else "";
     try g.w("            const dn = x[@intFromEnum(U.{s})] - x[@intFromEnum(U.{s})];\n", .{ nd, ns });

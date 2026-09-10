@@ -204,7 +204,6 @@ pub fn init(
 ) Error!UnitPlan {
     var self: UnitPlan = .{ .arena = arena, .mir = mir, .an = an, .display = display };
     self.loop_recompute = try arena.alloc(bool, an.nb);
-    @memset(self.loop_recompute, false);
     self.needed = try arena.alloc(bool, an.nv);
     self.eager_use = try arena.alloc(u32, an.nv);
     self.arm_use = try arena.alloc(u32, an.nv);

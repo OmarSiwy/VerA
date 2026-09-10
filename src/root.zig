@@ -70,23 +70,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// THE PUBLIC SURFACE IS THE FIVE NAMES BELOW MARKED `pub`, AND NOTHING ELSE.
-//
-// A stage that is `pub` here is a promise to whoever links `vera`: its decls
-// cannot be renamed without breaking them. The other sixteen were `pub` for no
-// reason anyone recorded, and MEASURED across every `@import("vera")` in this
-// tree (`src/cli.zig`, `tests/`) the only module names actually referenced are
-// these five — `Preprocessor` (tests/bench.zig times stage 1 on its own),
-// `diag`, `codegen`, `orchestrator`, `tb`. Everything else is reachable through
-// `compileSource` / `CompileResult` / `buildArtifact`, which is the intended
-// door.
-//
-// A private `const` is still a full module: it is imported, analysed, tested
-// (see the two tests at the bottom, which name these consts directly) and freely
-// usable by every driver in this file. The only thing it is not is nameable as
-// `vera.Lower` from outside. If an out-of-tree embedder ever needs one, the
-// compile error is loud and the revert is one keyword — which is exactly why
-// this is a `const`/`pub const` question and not an architecture question.
 const token = @import("frontend/token.zig");
 pub const Preprocessor = @import("frontend/preprocessor.zig");
 const Lexer = @import("frontend/lexer.zig");
@@ -120,17 +103,6 @@ pub const Target = enum {
     debug,
     /// LLVM backend, no incremental, per-unit float mode, CPU .so + GPU kernels.
     release_fast,
-
-    /// `null` for `.lint` — it produces no artifact. Incremental (in-place
-    /// patching) is a self-hosted feature and GPU codegen is LLVM-only, so the
-    /// backend choice falls out of the target with no further switch.
-    pub fn backend(self: Target) ?orchestrator.Backend {
-        return switch (self) {
-            .lint => null,
-            .debug => .self_hosted,
-            .release_fast => .llvm,
-        };
-    }
 };
 
 pub const Error = codegen.Error || error{
@@ -145,26 +117,6 @@ pub const Error = codegen.Error || error{
     /// child; cross-process -fincremental does not exist on ELF 0.16.
     NoResidentChild,
 };
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
-//
-// There is no diagnostic type here any more. Every stage reports into one
-// `diag.Bag` (diag.zig) keyed by a stable code from diag_code.zig, and
-// the driver's only job is to create it, hand it to each stage, and detach it
-// from the compilation arena on the way out.
-//
-// What that replaced: five private diagnostic structs, five caps, five
-// allocators, and five conversion sites in this file that each turned a
-// different currency (a line, a byte, a token index, a MIR instruction) into a
-// line/col — one of which could not, and reported proof errors at 0:0.
-//
-// There is no `pub const Bag = diag.Bag;` here either. Four such aliases stood
-// where `diag` itself is already `pub`, and MEASURED across every
-// `@import("vera")` in this tree nothing spelled any of them — including this
-// file, which says `diag.Bag` throughout. A second spelling of one type is a
-// second thing to keep in step; `vera.diag.Bag` is the one door.
 
 // ---------------------------------------------------------------------------
 // Options
@@ -223,7 +175,6 @@ pub const CompileResult = struct {
     arena: *std.heap.ArenaAllocator,
     /// Preprocessed source (arena). Every AST/MIR string borrows from it.
     source: []const u8,
-    file: *Ast.SourceFile,
     mir: *Mir,
     lower: *Lower,
     /// gpa-owned (its `unit_modes` slice is).
@@ -246,7 +197,6 @@ pub const CompileResult = struct {
     pub fn deinit(self: *CompileResult) void {
         self.gpa.free(self.device.text);
         self.verdict.deinit(self.gpa);
-        // ponytail: one teardown for the heap-stable compilation arena.
         freeArena(self.gpa, self.arena);
         self.* = undefined;
     }
@@ -297,16 +247,17 @@ pub fn compileSourceOpts(
     target: Target,
     opts: Options,
 ) Error!CompileResult {
-    const arena_state = try newArena(gpa);
+    const arena_state = try gpa.create(std.heap.ArenaAllocator);
+    arena_state.* = .init(gpa);
 
     // ONE bag for the whole run, on the compilation arena.
     var bag = diag.Bag.init(arena_state.allocator());
     bag.levels = opts.lint;
 
-    const result = pipeline(gpa, arena_state, source, target, opts, &bag);
+    const result = compileInArena(gpa, arena_state, source, target, opts, &bag);
 
     // A `--deny=`d warning is an error by the user's own instruction, so a
-    // compilation that only tripped one must still FAIL. Read before `finish`,
+    // compilation that only tripped one must still FAIL. Read before detaching,
     // which moves the bag out.
     const denied = bag.failed();
 
@@ -315,7 +266,10 @@ pub fn compileSourceOpts(
     // freed. This is why no stage frees the arena on error any more — the
     // errdefers that used to do it ran first and left `detach` reading freed
     // memory.
-    try finish(gpa, opts, &bag);
+    if (opts.diags) |out| {
+        out.* = bag;
+        try out.detach(gpa);
+    }
 
     var ok = result catch |err| {
         freeArena(gpa, arena_state);
@@ -330,7 +284,7 @@ pub fn compileSourceOpts(
 
 /// Stages 1–5. Never frees `arena_state`: on success it goes to the
 /// `CompileResult`, on failure the caller frees it once the bag is detached.
-fn pipeline(
+fn compileInArena(
     gpa: Allocator,
     arena_state: *std.heap.ArenaAllocator,
     source: []const u8,
@@ -338,80 +292,30 @@ fn pipeline(
     opts: Options,
     bag: *diag.Bag,
 ) Error!CompileResult {
+    const arena = arena_state.allocator();
     var defaults: []const Preprocessor.DefaultDiscipline = &.{};
     var transitions: []const Preprocessor.DefaultTransition = &.{};
     var timescale: ?Preprocessor.Timescale = null;
     // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
     // prelude. Zero unless the caller supplied netlist text.
     var netlist_modules: u32 = 0;
-    const text = try preprocess(arena_state, source, opts, bag, &defaults, &transitions, &timescale, &netlist_modules);
-    return compileInArena(gpa, arena_state, text, target, opts, bag, defaults, transitions, timescale, netlist_modules);
-}
-
-/// Hand the bag to the caller, detached from the compilation arena. Called on
-/// EVERY exit path, including the successful one — a clean compilation can
-/// still carry warnings (W0650), and a caller that asked for diagnostics wants
-/// them either way.
-fn finish(gpa: Allocator, opts: Options, bag: *diag.Bag) Allocator.Error!void {
-    const out = opts.diags orelse return;
-    out.* = bag.*;
-    try out.detach(gpa);
-}
-
-/// Stage 1. The returned bytes live in the compilation arena and everything
-/// downstream borrows them. TAKES OWNERSHIP of `arena_state`: it is freed here
-/// on failure, so no caller may add an errdefer of its own (each stage frees
-/// the arena exactly once, at the point ownership stops).
-fn preprocess(
-    arena_state: *std.heap.ArenaAllocator,
-    source: []const u8,
-    opts: Options,
-    bag: *diag.Bag,
-    defaults: *[]const Preprocessor.DefaultDiscipline,
-    transitions: *[]const Preprocessor.DefaultTransition,
-    timescale: *?Preprocessor.Timescale,
-    netlist_modules: *u32,
-) Error![]const u8 {
-    const arena = arena_state.allocator();
-    return Preprocessor.process(arena, source, .{
+    const text = Preprocessor.process(arena, source, .{
         .include_dirs = opts.include_dirs,
         .file_name = opts.file_name,
         .std_defs = opts.std_defs,
         .spice_netlist = opts.spice_netlist,
-        .spice_netlist_modules = netlist_modules,
-        .defaults = defaults,
-        .transitions = transitions,
-        .timescale = timescale,
+        .spice_netlist_modules = &netlist_modules,
+        .defaults = &defaults,
+        .transitions = &transitions,
+        .timescale = &timescale,
         .bag = bag,
     }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
+        error.OutOfMemory => return error.OutOfMemory,
         // The message is already in the bag, with its own file and span — the
         // preprocessor registers every file it opens, so a failure inside an
         // `include names that header rather than the top-level unit.
-        error.PreprocessFailed => error.CompileFailed,
+        error.PreprocessFailed => return error.CompileFailed,
     };
-}
-
-/// Stages 2–5. Takes ownership of `arena_state`: it is freed on any error and
-/// handed to the returned `CompileResult` on success.
-///
-/// Every stage now reports into `bag` in ONE currency — a byte range in the
-/// preprocessed text — so this function no longer converts anything. It just
-/// runs the stages and translates the aggregate outcome into an `Error`.
-fn compileInArena(
-    gpa: Allocator,
-    arena_state: *std.heap.ArenaAllocator,
-    text: []const u8,
-    target: Target,
-    opts: Options,
-    bag: *diag.Bag,
-    defaults: []const Preprocessor.DefaultDiscipline,
-    transitions: []const Preprocessor.DefaultTransition,
-    timescale: ?Preprocessor.Timescale,
-    /// Annex E.2 — trailing prelude modules synthesized from SPICE cards.
-    netlist_modules: u32,
-) Error!CompileResult {
-    const arena = arena_state.allocator();
 
     // --- stage 2: lex (class 1) ---------------------------------------------
     // The annex D.2/D.1/E.1 prelude is a fixed byte prefix of `text` whenever
@@ -528,13 +432,12 @@ fn compileInArena(
         .gpa = gpa,
         .arena = arena_state,
         .source = text,
-        .file = file,
         .mir = mir,
         .lower = lower,
         .verdict = verdict,
         .target = target,
         // `opts.diags`, not the compilation's own bag: codegen runs AFTER
-        // `finish` detached the messages into the caller's bag, so the caller's
+        // compileSourceOpts detached the messages into the caller's bag, so the caller's
         // is the only one still alive when E0515 is raised.
         .codegen_opts = .{
             .display = opts.display,
@@ -567,7 +470,6 @@ pub fn buildArtifact(
 ) !orchestrator.Result {
     if (result.target == .lint) return error.NoArtifact;
     const device = try result.generateOutput();
-    // ponytail: orchestrator errors already have the names callers receive.
     return switch (result.target) {
         .lint => unreachable,
         .debug => (resident orelse return error.NoResidentChild).rebuild(gpa, device, generation),
@@ -579,23 +481,10 @@ pub fn buildArtifact(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn newArena(gpa: Allocator) Allocator.Error!*std.heap.ArenaAllocator {
-    const a = try gpa.create(std.heap.ArenaAllocator);
-    a.* = .init(gpa);
-    return a;
-}
-
 fn freeArena(gpa: Allocator, a: *std.heap.ArenaAllocator) void {
     a.deinit();
     gpa.destroy(a);
 }
-
-// `preludeLines` and `userLine` used to live here: the prelude's newline count
-// was subtracted from every reported line, and the file comment admitted that
-// `include shifted lines the same way and was NOT corrected, so an error inside
-// an included header pointed at the wrong line of the wrong file. That upgrade
-// path is now taken — the preprocessor emits a real `diag.SourceMap` (offset →
-// file, offset) and `diag.render` resolves through it.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -663,10 +552,8 @@ test "diagnostics outlive the compilation arena" {
     for (bag.messages()) |mi| try std.testing.expect(diag.info(bag.get(mi).code).title.len != 0);
 
     // And so must rendering, which reads the FILE TEXT the bag detached.
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(gpa);
-    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &buf);
-    defer buf = aw.toArrayList();
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
     try diag.render(&bag, &aw.writer, .{});
     try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "-->") != null);
 }
@@ -759,13 +646,6 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // integration guard: it forces semantic analysis of every top-level pub decl of
 // every stage, so `zig build` (which depends on compiling the test roots) means
 // "the whole engine type-checks", not just "the files parse".
-//
-// `@This()` is in the list, and is the reason there is no separate
-// "buildArtifact is analyzed" test: THIS file's pub decls need the guard as much
-// as any stage's. It went unguarded for two waves, and in that time
-// `compilePreprocessed` came to pass 7 arguments to a 10-parameter
-// `compileInArena` without anything noticing. A pub fn with no caller is not
-// type-checked; this is what keeps that from being discovered by an embedder.
 test "every top-level pub decl of every stage type-checks" {
     inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);

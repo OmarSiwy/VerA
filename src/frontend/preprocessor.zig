@@ -47,7 +47,6 @@ const spice_cards = @import("spice_cards.zig");
 pub const Options = struct {
     /// Searched in order for `include, before the built-in annex D files.
     include_dirs: []const []const u8 = &.{},
-    /// Used in diagnostics only.
     file_name: []const u8 = "<source>",
     /// Prepend annex D.2 constants.vams + annex D.1 disciplines.vams.
     std_defs: bool = true,
@@ -204,7 +203,6 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
 
     .{ "default_transition", .default_transition }, // §10.3 — read by §4.5.8
 
-    // Accepted but intentionally ignored (consumed to end of line).
     .{ "timescale", .timescale }, // IEEE 1364 §19.9 — §9.15 reads it back
     .{ "default_nettype", .ignored }, // IEEE 1364
     .{ "celldefine", .ignored }, // IEEE 1364
@@ -402,12 +400,6 @@ var prelude_snapshot: std.atomic.Value(?*const Prelude) = .init(null);
 /// E.2's netlist tail and the user's source both land AFTER it and are lexed
 /// normally. `Lexer.next` reads no state but the cursor, so resuming at
 /// `text.len` is the same scan the whole-buffer call would have done from there.
-///
-/// MEASURED, ReleaseFast, min of 500, the 6-line resistor in root.zig's tests:
-/// lexing 11,512 bytes of prelude was **47.6 µs of the 155 µs** that a whole
-/// `.lint` compilation cost, against 8.9 µs for the same model with
-/// `--no-std-defs`. Parsing the same bytes is a further 91.9 µs and is NOT
-/// cached here — see TODO.md §3.
 ///
 /// LIFETIME and THREAD SAFETY: `Prelude`'s, unchanged. The two columns live in
 /// the process-lifetime arena, are immutable after publication, and the
@@ -654,10 +646,6 @@ const Pp = struct {
         return n == 0 or pp.conds.items[n - 1].active;
     }
 
-    fn put(pp: *Pp, bytes: []const u8) Error!void {
-        try pp.out.appendSlice(pp.arena, bytes);
-    }
-
     /// Drop `span`'s text but keep its line count, so a dead `ifdef arm and a
     /// collapsed directive both leave the output as long, in LINES, as the
     /// input they replaced. Every diagnostic location downstream depends on it.
@@ -697,13 +685,6 @@ const Pp = struct {
         // Saturating: a `line whose operand is smaller than the offset it
         // corrects for cannot produce a line 0, let alone a negative one.
         return if (phys >= pp.line_from) to + (phys - pp.line_from) else to;
-    }
-
-    /// §10.7 `__FILE__`: "the name of the current input file". The clause makes
-    /// the spelling "implementation dependent" and says a `line directive may
-    /// replace it, so the override wins when there is one.
-    fn currentFileName(pp: *const Pp) []const u8 {
-        return pp.file_override orelse pp.opts.bag.fileName(pp.cur_file_id);
     }
 
     /// Start a diagnostic. Preprocessor offsets are FILE-LOCAL — this stage
@@ -996,7 +977,7 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
             i = stringStop(text, i);
             if (i < text.len and text[i] == '"') i += 1;
             if (pp.emitting()) {
-                try pp.put(text[start..i]);
+                try pp.out.appendSlice(pp.arena, text[start..i]);
             } else {
                 try pp.putNewlines(text[start..i]);
             }
@@ -1008,7 +989,7 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
             const start = i;
             i += 1;
             while (i < text.len and !isSpace(text[i])) i += 1;
-            if (pp.emitting()) try pp.put(text[start..i]);
+            if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[start..i]);
             continue;
         }
 
@@ -1031,7 +1012,7 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
         // again with a vectorized count. '/' is not interesting either — this
         // text is post-`stripComments`, so no comment survives to be found.
         const end = findStop(text, i, scan_stops);
-        if (pp.emitting()) try pp.put(text[i..end]) else try pp.putNewlines(text[i..end]);
+        if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[i..end]) else try pp.putNewlines(text[i..end]);
         // `text[i]` is none of the three, so `end > i`: the loop always moves.
         i = end;
     }
@@ -1084,8 +1065,6 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         .define => try handleDefine(pp, text[j..end], at, j),
         .undef => try removeDefine(pp, text[j..end], at, j),
         .include => try handleInclude(pp, text[j..end], at, j),
-        // IEEE 1364 `resetall: back to the initial directive state. Only macros
-        // are stateful here, and §10.5 predefined ones are not user state.
         .resetall => {
             var it = pp.macros.iterator();
             var dead: std.ArrayList([]const u8) = .empty;
@@ -1115,7 +1094,7 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         // parser see it. The slice carries its own newlines, so the
         // line-number contract in the file header holds unchanged.
         .keywords => {
-            try pp.put(text[at..end]);
+            try pp.out.appendSlice(pp.arena, text[at..end]);
             return end;
         },
         else => unreachable,
@@ -1303,19 +1282,22 @@ fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const
             // "in the form of a simple decimal number" — an integer token, not
             // a string, so it is usable as `ln = `__LINE__;`.
             var buf: [16]u8 = undefined;
-            try pp.put(std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
+            try pp.out.appendSlice(pp.arena, std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
             return after_name;
         }
         if (std.mem.eql(u8, name, "__FILE__")) {
             // "in the form of a string literal" — §2.7, so the quotes are part
             // of the expansion and a '"' or '\' in the path has to be escaped
             // or the literal ends early (Windows paths are full of the latter).
-            try pp.put("\"");
-            for (pp.currentFileName()) |c| {
-                if (c == '"' or c == '\\') try pp.put("\\");
+            try pp.out.appendSlice(pp.arena, "\"");
+            // §10.7 `__FILE__`: "the name of the current input file". The clause makes
+            // the spelling "implementation dependent" and says a `line directive may
+            // replace it, so the override wins when there is one.
+            for (pp.file_override orelse pp.opts.bag.fileName(pp.cur_file_id)) |c| {
+                if (c == '"' or c == '\\') try pp.out.appendSlice(pp.arena, "\\");
                 try pp.out.append(pp.arena, c);
             }
-            try pp.put("\"");
+            try pp.out.appendSlice(pp.arena, "\"");
             return after_name;
         }
         var b = pp.failWith(sp, .E0115);
@@ -1825,8 +1807,7 @@ const Rest = struct {
     fn skipSpace(r: *Rest) void {
         while (r.i < r.s.len and isSpace(r.s[r.i])) r.i += 1;
     }
-    /// Next §2.8.1 escaped identifier, skipping leading whitespace. Null (and
-    /// the cursor untouched) if the next character is not a backslash. Neither
+    /// Next §2.8.1 escaped identifier, skipping leading whitespace. Neither
     /// the backslash nor the terminating white space is part of the name, so
     /// the macro is keyed on the same bytes a `` `\name `` use produces.
     fn escapedIdent(r: *Rest) ?[]const u8 {
@@ -1861,10 +1842,7 @@ fn logicalLineEnd(text: []const u8, i: usize) usize {
                 k = n + 1;
                 continue;
             }
-            k += 1;
-            continue;
-        }
-        if (text[k] == '\n') return k;
+        } else if (text[k] == '\n') return k;
         k += 1;
     }
     return text.len;

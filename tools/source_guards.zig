@@ -72,15 +72,6 @@ fn resolves(arena: Allocator, io: Io, rel: []const u8) bool {
     return true;
 }
 
-/// Repo-root-relative path of `target` as `@import`ed from the file at `from`.
-fn importPath(arena: Allocator, from: []const u8, target: []const u8) ![]const u8 {
-    const dir = std.fs.path.dirname(from) orelse ".";
-    // `resolve` against a fake absolute root collapses `..` for us; strip the
-    // leading `/` to get back to a repo-relative path.
-    const abs = try std.fs.path.resolve(arena, &.{ "/", dir, target });
-    return abs[1..];
-}
-
 // ---------------------------------------------------------------------------
 // (a) every cited path resolves on disk
 // ---------------------------------------------------------------------------
@@ -157,7 +148,11 @@ fn reachable(arena: Allocator, io: Io) !std.StringHashMapUnmanaged(void) {
             // `std`, `builtin`, `contract`, `build_options`, … are module names,
             // not paths, and none of them can be an orphan of ours.
             if (!std.mem.endsWith(u8, target, ".zig")) continue;
-            const next = try importPath(arena, rel, target);
+            const dir = std.fs.path.dirname(rel) orelse ".";
+            // `resolve` against a fake absolute root collapses `..` for us; strip the
+            // leading `/` to get back to a repo-relative path.
+            const abs = try std.fs.path.resolve(arena, &.{ "/", dir, target });
+            const next = abs[1..];
             // codegen.zig and orchestrator.zig hold `@import("…zig")` inside the
             // text they EMIT (`u/<unit>.zig` importing `../h.zig`), which names
             // a file in the device work tree, not in this repo. A real import

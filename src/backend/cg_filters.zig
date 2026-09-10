@@ -62,10 +62,6 @@ pub const FilterPlan = struct {
     }
 };
 
-pub fn planErr(msg: []const u8) FilterPlan {
-    return .{ .err = msg };
-}
-
 /// Decode one `laplace_*`/`zi_*` call into its cascade. Lowering flattened
 /// each vector argument as `<count>, e0, e1, …` (see `lower.appendVectorArg`),
 /// so the argument list is g-describing.
@@ -83,14 +79,14 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
     defer g.uses_model = saved;
 
     const nv = readVec(g, args, 1) orelse
-        return planErr("LRM 4.5.11/4.5.12: the numerator argument of a filter must be a vector");
+        return .{ .err = "LRM 4.5.11/4.5.12: the numerator argument of a filter must be a vector" };
     const dv = readVec(g, args, nv.next) orelse
-        return planErr("LRM 4.5.11/4.5.12: the denominator argument of a filter must be a vector");
+        return .{ .err = "LRM 4.5.11/4.5.12: the denominator argument of a filter must be a vector" };
 
     var num: std.ArrayList(Poly) = .empty;
     var den: std.ArrayList(Poly) = .empty;
-    if (try filterSide(g, &num, nv.elems, num_roots, z, false)) |m| return planErr(m);
-    if (try filterSide(g, &den, dv.elems, den_roots, z, true)) |m| return planErr(m);
+    if (try filterSide(g, &num, nv.elems, num_roots, z, false)) |m| return .{ .err = m };
+    if (try filterSide(g, &den, dv.elems, den_roots, z, true)) |m| return .{ .err = m };
 
     var p: FilterPlan = .{
         .num = num.items,
@@ -105,13 +101,13 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
     if (z) {
         // §4.5.12 "T specifies the period of the filter, is mandatory, and
         // shall be positive."
-        if (dv.next >= args.len) return planErr(
-            "LRM 4.5.12: the sampling period T of a zi_* filter is mandatory",
-        );
+        if (dv.next >= args.len) return .{
+            .err = "LRM 4.5.12: the sampling period T of a zi_* filter is mandatory",
+        };
         if (g.an.foldConst(args[dv.next], 0, true)) |c| {
-            if (!(c.f > 0.0)) return planErr(
-                "LRM 4.5.12: the sampling period T of a zi_* filter shall be positive",
-            );
+            if (!(c.f > 0.0)) return .{
+                .err = "LRM 4.5.12: the sampling period T of a zi_* filter shall be positive",
+            };
         }
         p.period = try g.f64Expr(args[dv.next]);
         p.uses_model = g.uses_model;
@@ -128,16 +124,16 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         // the other half of the clause, and it is a property of the STATEMENT
         // rather than of the call — `lower.checkZeroTransitionZFilter` (E0518).
         for (args[@min(dv.next + 1, args.len)..]) |a| {
-            const c = g.an.foldConst(a, 0, true) orelse return planErr(
-                "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
-            );
-            if (c.f < 0.0) return planErr(
-                "LRM 4.5.12: the transition time τ of a zi_* filter shall be nonnegative",
-            );
-            if (c.f != 0.0) return planErr(
-                "VerA implements only the τ = 0 / t0 = 0 form of a zi_* filter, whose output " ++
+            const c = g.an.foldConst(a, 0, true) orelse return .{
+                .err = "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
+            };
+            if (c.f < 0.0) return .{
+                .err = "LRM 4.5.12: the transition time τ of a zi_* filter shall be nonnegative",
+            };
+            if (c.f != 0.0) return .{
+                .err = "VerA implements only the τ = 0 / t0 = 0 form of a zi_* filter, whose output " ++
                     "is abruptly discontinuous at the sample (LRM 4.5.12)",
-            );
+            };
         }
     }
     // §4.5.11 the optional ε argument only "deriv[es] an absolute
@@ -220,13 +216,14 @@ pub fn filterSide(
                 try out.append(g.arena, &.{ "0.0", "1.0" });
             } else if (z) {
                 // §4.5.12 (1 − z⁻¹ρ)
-                try out.append(g.arena, try polyOf(g, &.{ "1.0", try neg(g, re) }));
+                const negative = try std.fmt.allocPrint(g.arena, "-({s})", .{re});
+                try out.append(g.arena, try g.arena.dupe([]const u8, &.{ "1.0", negative }));
             } else {
                 // §4.5.11 (1 − s/ρ). A model card that sets ρ to 0 at run
                 // time divides by zero — the same class of defect as a
                 // zero-valued resistance, and LRM 4.2.4 makes only `%` by
                 // zero an error.
-                try out.append(g.arena, try polyOf(g, &.{
+                try out.append(g.arena, try g.arena.dupe([]const u8, &.{
                     "1.0", try std.fmt.allocPrint(g.arena, "-1.0 / ({s})", .{re}),
                 }));
             }
@@ -248,11 +245,11 @@ pub fn filterSide(
         // model asked for, not a defect of this realisation.
         const bb = try g.fmtF64(im.f * im.f);
         const mag = try std.fmt.allocPrint(g.arena, "(({0s}) * ({0s}) + {1s})", .{ re, bb });
-        try out.append(g.arena, if (z) try polyOf(g, &.{
+        try out.append(g.arena, if (z) try g.arena.dupe([]const u8, &.{
             "1.0",
             try std.fmt.allocPrint(g.arena, "-2.0 * ({s})", .{re}),
             mag,
-        }) else try polyOf(g, &.{
+        }) else try g.arena.dupe([]const u8, &.{
             "1.0",
             try std.fmt.allocPrint(g.arena, "-2.0 * ({s}) / {s}", .{ re, mag }),
             try std.fmt.allocPrint(g.arena, "1.0 / {s}", .{mag}),
@@ -276,14 +273,6 @@ pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []
         if (std.mem.eql(u8, jre, re)) return j;
     }
     return null;
-}
-
-pub fn polyOf(g: *Gen, items: []const []const u8) Error!Poly {
-    return g.arena.dupe([]const u8, items);
-}
-
-pub fn neg(g: *Gen, e: []const u8) Error![]const u8 {
-    return std.fmt.allocPrint(g.arena, "-({s})", .{e});
 }
 
 /// `<unit>__sec(model)` — the cascade's CONTINUOUS coefficients, rebuilt

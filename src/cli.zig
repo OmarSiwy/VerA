@@ -128,7 +128,6 @@ pub fn main(init: std.process.Init) !u8 {
     defer include_dirs.deinit(gpa);
 
     var path: ?[]const u8 = null;
-    var target: vera.Target = .lint;
     var emit_zig = false;
     var json = false;
     var color: enum { auto, always, never } = .auto;
@@ -138,7 +137,6 @@ pub fn main(init: std.process.Init) !u8 {
     var expect_module: ?[]const u8 = null;
     var check = false;
     var emit_so = false;
-    var emit_exe = false;
     var run_exe = false;
     var display: vera.codegen.Display = .drop;
     var jac_f32 = false;
@@ -171,27 +169,21 @@ pub fn main(init: std.process.Init) !u8 {
             try diag.explain(code, out, if (color == .never) .off else .on);
             return 0;
         } else if (std.mem.eql(u8, arg, "--lint")) {
-            target = .lint;
             lint_flag = true;
         } else if (std.mem.eql(u8, arg, "--emit-zig")) {
             emit_zig = true;
-            target = .release_fast;
             codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--check")) {
             check = true;
-            target = .release_fast;
             codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-so")) {
             emit_so = true;
-            target = .release_fast;
             codegen_flag = arg;
         } else if (std.mem.eql(u8, arg, "--emit-exe") or std.mem.eql(u8, arg, "--run")) {
             // The testbench IS the display output, so asking for one and then
             // dropping the prints would build an artifact with nothing to say.
-            emit_exe = true;
             run_exe = run_exe or std.mem.eql(u8, arg, "--run");
             display = .emit;
-            target = .release_fast;
             codegen_flag = arg;
             exe_flag = arg;
         } else if (std.mem.eql(u8, arg, "--display=emit")) {
@@ -213,7 +205,6 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "-o")) {
             out_path = args.next() orelse return missing(err, "-o", "a path");
             emit_zig = true;
-            target = .release_fast;
             codegen_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--expect-module=")) {
             expect_module = arg["--expect-module=".len..];
@@ -337,7 +328,7 @@ pub fn main(init: std.process.Init) !u8 {
         .auto => (stderr.file.isTty(io) catch false),
     };
 
-    var result = vera.compileSourceOpts(gpa, source, target, .{
+    var result = vera.compileSourceOpts(gpa, source, if (codegen_flag == null) .lint else .release_fast, .{
         .file_name = in_path,
         .include_dirs = include_dirs.items,
         .std_defs = std_defs,
@@ -347,18 +338,15 @@ pub fn main(init: std.process.Init) !u8 {
         .display = display,
         .jac_f32 = jac_f32,
         .outline_chunk = outline_chunk,
-    }) catch |e| switch (e) {
+    }) catch |e| {
+        try report(&bag, err, json, use_color);
         // A diagnosed failure has already said everything useful; the Zig error
         // name would only add noise.
-        error.CompileFailed, error.NoModule => {
-            try report(&bag, err, json, use_color);
-            return 1;
-        },
-        else => {
-            try report(&bag, err, json, use_color);
-            try err.print("error: {t}\n", .{e});
-            return 1;
-        },
+        switch (e) {
+            error.CompileFailed, error.NoModule => {},
+            else => try err.print("error: {t}\n", .{e}),
+        }
+        return 1;
     };
     defer result.deinit();
 
@@ -370,7 +358,7 @@ pub fn main(init: std.process.Init) !u8 {
     // exit below rather than one per return path.
     defer report(&bag, err, json, use_color) catch {};
 
-    if (!emit_zig and !check and !emit_so and !emit_exe) return 0;
+    if (codegen_flag == null) return 0;
 
     // The catalogue that consumes the generated file keys devices by the name
     // the BUILD chose, while the netlist dispatch and the generated type name
@@ -424,7 +412,7 @@ pub fn main(init: std.process.Init) !u8 {
     // --emit-exe: the OTHER artifact. Same frontend, same device.zig; what
     // changes is that the display tasks are real and a generated runner drives
     // the module over the operating points its `//!` lines declare.
-    if (emit_exe) {
+    if (exe_flag != null) {
         const contract = contract_path orelse {
             try err.writeAll(
                 "error: --emit-exe needs --contract PATH (the root of the `contract` " ++
@@ -528,7 +516,6 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
-    // ponytail: missing operands share one message shape and usage status.
     try w.print("error: {s} needs {s}\n", .{ flag, what });
     return 2;
 }
@@ -557,11 +544,9 @@ fn typeCheck(
     defer gpa.free(dev_name);
     try tmp.writeFile(io, .{ .sub_path = dev_name, .data = device_zig });
 
-    const dev_path = try std.fmt.allocPrint(gpa, ".zig-cache/vera-check/{s}", .{dev_name});
-    defer gpa.free(dev_path);
     const contract_arg = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{contract});
     defer gpa.free(contract_arg);
-    const root_arg = try std.fmt.allocPrint(gpa, "-Mroot={s}", .{dev_path});
+    const root_arg = try std.fmt.allocPrint(gpa, "-Mroot=.zig-cache/vera-check/{s}", .{dev_name});
     defer gpa.free(root_arg);
 
     // `--dep` applies to the NEXT `-M`, and the FIRST `-M` is the root module —
@@ -581,10 +566,8 @@ fn typeCheck(
 
     var buf: [1 << 16]u8 = undefined;
     var reader = child.stderr.?.readerStreaming(io, &buf);
-    var out_text: std.ArrayList(u8) = .empty;
-    defer out_text.deinit(gpa);
-    var aw: Io.Writer.Allocating = .fromArrayList(gpa, &out_text);
-    defer out_text = aw.toArrayList();
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
     _ = reader.interface.streamRemaining(&aw.writer) catch {};
 
     const term = try child.wait(io);

@@ -34,9 +34,6 @@
 // that scans a file carries both blocks in the same file scope.
 const zfstd = @import("std");
 
-/// `std.Io.File`, under a name that cannot collide with a device's own decls.
-const ZFile = zfstd.Io.File;
-
 /// One open channel. `pos` is §9.5.5's own quantity — "the offset from the
 /// beginning of the file of the current byte of the file fd, which shall be read
 /// or written by a subsequent operation" — and it is kept HERE rather than left
@@ -45,7 +42,7 @@ const ZFile = zfstd.Io.File;
 /// ahead of the newline and reported a position no clause allows.
 const ZFSlot = struct {
     open: bool = false,
-    f: ZFile = undefined,
+    f: zfstd.Io.File = undefined,
     pos: u64 = 0,
     /// §9.5.8 "EOF has previously been detected reading fd".
     eof: bool = false,
@@ -84,15 +81,6 @@ fn zfIo() zfstd.Io {
     return zfstd.Io.Threaded.global_single_threaded.io();
 }
 
-/// §9.5.1 Table 9-24's type argument, reduced to the three things that decide
-/// which syscall opens the file. "b" is ignored: it distinguishes binary from
-/// text on hosts that translate line endings, and nothing here translates.
-fn zfMode(ty: []const u8) struct { c: u8, plus: bool } {
-    // ponytail: the grammar is three mode letters; stdlib finds the first one.
-    const c: u8 = if (zfstd.mem.indexOfAny(u8, ty, "rwa")) |k| ty[k] else 'w';
-    return .{ .c = c, .plus = zfstd.mem.indexOfScalar(u8, ty, '+') != null };
-}
-
 /// §9.5.1 `$fopen`. `mcd` selects Syntax 9-2's first line (one argument, a
 /// multichannel descriptor) over its second (two arguments, a file descriptor).
 ///
@@ -112,18 +100,20 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
         return 0;
     }
     const io = zfIo();
-    const m = zfMode(ty);
+    // §9.5.1 Table 9-24: "b" only distinguishes hosts that translate line
+    // endings; nothing here translates. Omitted type defaults to writing.
+    const mode: u8 = if (zfstd.mem.indexOfAny(u8, ty, "rwa")) |at| ty[at] else 'w';
+    const plus = zfstd.mem.indexOfScalar(u8, ty, '+') != null;
     const cwd: zfstd.Io.Dir = .cwd();
-    const f: ZFile = switch (m.c) {
+    const f: zfstd.Io.File = switch (mode) {
         // Table 9-24 "r"/"r+": open an EXISTING file. §9.5.1's failure case is
         // exactly this one — "the file does not exist and the type specified is
         // r, rb, r+, r+b, or rb+" — and 0 is what it asks for, not C's -1.
-        'r' => cwd.openFile(io, path, .{ .mode = if (m.plus) .read_write else .read_only }) catch |e| {
+        'r' => cwd.openFile(io, path, .{ .mode = if (plus) .read_write else .read_only }) catch |e| {
             zf_last_err = zfErrno(e);
             return 0;
         },
-        // ponytail: append and write share creation; only write truncates.
-        else => cwd.createFile(io, path, .{ .read = m.plus, .truncate = m.c != 'a' }) catch |e| {
+        else => cwd.createFile(io, path, .{ .read = plus, .truncate = mode != 'a' }) catch |e| {
             zf_last_err = zfErrno(e);
             return 0;
         },
@@ -131,11 +121,11 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
     zf_slots[k] = .{
         .open = true,
         .f = f,
-        .can_read = m.c == 'r' or m.plus,
-        .can_write = m.c != 'r' or m.plus,
+        .can_read = mode == 'r' or plus,
+        .can_write = mode != 'r' or plus,
     };
     // "at end of file" is a POSITION, and the position is ours to keep.
-    if (m.c == 'a') zf_slots[k].pos = f.length(io) catch 0;
+    if (mode == 'a') zf_slots[k].pos = f.length(io) catch 0;
     zf_last_err = 0;
     return if (mcd)
         @as(i64, 1) << @intCast(k + 1) // bit 0 is standard output
@@ -396,8 +386,7 @@ pub fn zFErrorStr(e: i64, _: i64) []const u8 {
 /// there is never buffered output to flush and this is a no-op with nothing
 /// hidden behind it. `$fflush` with no argument "writes any buffered output to
 /// all open files", which is the same nothing.
-pub fn zFFlush(d: i64) i64 {
-    _ = d;
+pub fn zFFlush(_: i64) i64 {
     return 0;
 }
 
@@ -420,5 +409,4 @@ pub fn zFClose(d: i64) i64 {
 fn zfClose1(k: usize) void {
     zf_slots[k].f.close(zfIo());
     zf_slots[k].open = false;
-    zf_slots[k].line_len = 0;
 }

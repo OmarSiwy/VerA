@@ -209,8 +209,6 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList([]const u8) = .empty;
-    var saw_time = false;
-    var saw_noise = false;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -223,73 +221,70 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         const kw = body[0..kw_end];
         const rest = std.mem.trim(u8, body[kw_end..], " \t");
 
-        if (eq(kw, "param")) {
+        if (std.mem.eql(u8, kw, "param")) {
             try parseBindings(arena, rest, &params);
-        } else if (eq(kw, "bias")) {
+        } else if (std.mem.eql(u8, kw, "bias")) {
             try parseBindings(arena, rest, &bias);
-        } else if (eq(kw, "sweep") or eq(kw, "wave") or eq(kw, "psweep")) {
+        } else if (std.mem.eql(u8, kw, "sweep") or std.mem.eql(u8, kw, "wave") or std.mem.eql(u8, kw, "psweep")) {
             const at = std.mem.indexOfScalar(u8, rest, '=') orelse return error.BadSyntax;
             // A parameter has no access-function spelling, so `psweep` takes the
             // name as written; `unknownName` would only strip a `V(...)` that
             // cannot be there.
             const raw_name = std.mem.trim(u8, rest[0..at], " \t");
-            const name = if (eq(kw, "psweep")) raw_name else try unknownName(arena, raw_name);
+            const name = if (std.mem.eql(u8, kw, "psweep")) raw_name else try unknownName(arena, raw_name);
             if (name.len == 0) return error.BadSyntax;
             const entry: Sweep = .{
                 .name = try arena.dupe(u8, name),
                 .values = try parseNumbers(arena, rest[at + 1 ..]),
             };
-            try (if (eq(kw, "sweep")) &sweeps else if (eq(kw, "psweep")) &psweeps else &waves)
+            try (if (std.mem.eql(u8, kw, "sweep")) &sweeps else if (std.mem.eql(u8, kw, "psweep")) &psweeps else &waves)
                 .append(arena, entry);
-        } else if (eq(kw, "temp")) {
+        } else if (std.mem.eql(u8, kw, "temp")) {
             d.temp = try number(rest);
-        } else if (eq(kw, "time")) {
+        } else if (std.mem.eql(u8, kw, "time")) {
             d.times = try parseNumbers(arena, rest);
-            saw_time = true;
-        } else if (eq(kw, "solve")) {
+        } else if (std.mem.eql(u8, kw, "solve")) {
             // A bare flag, and it composes with `bias`: `bias` still pins what
             // it names, `solve` frees only the rest. So a fixture that needs one
             // terminal grounded and another solved writes both lines, and no
             // per-unknown list is needed to say it.
             if (rest.len != 0) return error.BadSyntax;
             d.solve_free = true;
-        } else if (eq(kw, "analysis")) {
+        } else if (std.mem.eql(u8, kw, "analysis")) {
             d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
-        } else if (eq(kw, "reject")) {
+        } else if (std.mem.eql(u8, kw, "reject")) {
             // The whole rest of the line is ONE substring, verbatim: the
             // expectations being migrated are message fragments like
             // `module instantiation is not supported`, which contain spaces and
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
-        } else if (eq(kw, "noise")) {
+        } else if (std.mem.eql(u8, kw, "noise")) {
             // `none` is the empty table, spelled rather than left as an absent
             // directive: "this model declares no generator" is a claim, and a
             // missing line is not one.
-            if (eq(rest, "none")) {
-                saw_noise = true;
-            } else {
+            if (!std.mem.eql(u8, rest, "none")) {
                 if (!validNoiseEntry(rest)) return error.BadSyntax;
-                saw_noise = true;
                 try noise.append(arena, try arena.dupe(u8, rest));
             }
-        } else if (eq(kw, "spice")) {
+            d.asserts_noise = true;
+        } else if (std.mem.eql(u8, kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
             if (rest.len == 0) return error.BadSyntax;
             try spice.append(arena, try arena.dupe(u8, rest));
-        } else if (eq(kw, "lrm")) {
+        } else if (std.mem.eql(u8, kw, "lrm")) {
             if (!validSection(rest)) return error.BadLrmSection;
             try lrm.append(arena, try arena.dupe(u8, rest));
-        } else if (eq(kw, "xfail")) {
+        } else if (std.mem.eql(u8, kw, "xfail")) {
             // The whole rest of the line is the reason, verbatim — it is prose
             // a human reads out of a failing run, not an operand.
             if (rest.len == 0) return error.BadSyntax;
             d.xfail = try arena.dupe(u8, rest);
-        } else if (eq(kw, "print")) {
-            if (eq(rest, "none")) {
+        } else if (std.mem.eql(u8, kw, "print")) {
+            if (std.mem.eql(u8, rest, "none")) {
                 d.print_residual = false;
-            } else if (eq(rest, "residual")) {
+            } else if (std.mem.eql(u8, rest, "residual")) {
                 d.print_residual = true;
             } else return error.BadSyntax;
         } else {
@@ -297,7 +292,6 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         }
     }
 
-    if (saw_time and d.times.len == 0) return error.BadSyntax;
     d.params = params.items;
     d.bias = bias.items;
     d.sweeps = sweeps.items;
@@ -306,7 +300,6 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.reject = reject.items;
     d.lrm = lrm.items;
     d.noise = noise.items;
-    d.asserts_noise = saw_noise;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
@@ -349,9 +342,9 @@ fn validNoiseEntry(s: []const u8) bool {
     if (hash == 0 or s[hash - 1] != ')') return false;
     const src = s[hash + 1 ..];
     // ponytail: reuse the nonempty decimal check; source IDs have no numeric bound.
-    if (!eq(src, "null") and !digits(src)) return false;
+    if (!std.mem.eql(u8, src, "null") and !digits(src)) return false;
     const kind = std.mem.trim(u8, s[0..open], " \t");
-    if (!eq(kind, "thermal") and !eq(kind, "shot") and !eq(kind, "flicker")) return false;
+    if (!std.mem.eql(u8, kind, "thermal") and !std.mem.eql(u8, kind, "shot") and !std.mem.eql(u8, kind, "flicker")) return false;
     const inner = s[open + 1 .. hash - 1];
     const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
     return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
@@ -420,9 +413,7 @@ fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     }
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
         const inner = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
-        s = if (inner.len != 0 and inner[0] == '<')
-            try std.fmt.allocPrint(arena, "flow({s})", .{inner}) // §5.4.3 I(<p>)
-        else if (std.mem.indexOfScalar(u8, inner, ',') != null)
+        s = if ((inner.len != 0 and inner[0] == '<') or std.mem.indexOfScalar(u8, inner, ',') != null)
             try std.fmt.allocPrint(arena, "flow({s})", .{inner})
         else
             try std.fmt.allocPrint(arena, "flow({s},gnd)", .{inner}); // §5.4.2 I(a) ≡ I(a,gnd)
@@ -513,9 +504,6 @@ fn number(raw: []const u8) Error!f64 {
     return std.fmt.parseFloat(f64, buf[0 .. head.len + exp.len]) catch error.BadNumber;
 }
 
-fn eq(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
-}
 
 // ---------------------------------------------------------------------------
 // Runner generation
@@ -530,24 +518,23 @@ fn eq(a: []const u8, b: []const u8) bool {
 /// alone for a caller that wants to pipe something else.
 pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    const w = Writer{ .arena = arena, .out = &out };
 
-    try w.raw(runner_head);
-    try w.print("const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
-    try w.raw(runner_body);
+    try out.appendSlice(arena, runner_head);
+    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.appendSlice(arena, runner_body);
 
     // --- main -------------------------------------------------------------
-    try w.raw(
+    try out.appendSlice(arena,
         \\pub fn main() void {
         \\    var model: D.Model = .{};
         \\
     );
     for (d.params) |p| {
-        try w.print("    model.{f} = {f};\n", .{ std.zig.fmtId(p.name), fmtF64(p.value) });
+        try print(&out, arena, "    model.{f} = {f};\n", .{ std.zig.fmtId(p.name), fmtF64(p.value) });
         // §9.19 `$param_given` is answered from a companion field when codegen
         // emitted one. Setting the value without it would make an explicit
         // override read as "not given".
-        try w.print(
+        try print(&out, arena,
             "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n",
             .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
         );
@@ -556,20 +543,20 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // defined over another one gets its value. It runs unconditionally — a
     // §3.4.5 localparam is re-derived even with no `//! param` line, since the
     // point of `derive` is also that a localparam is not overridable.
-    try w.raw(
+    try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
         \\
         \\    var inst: D.Instance = .{};
         \\
     );
-    try w.print("    inst.temperature = {f};\n", .{fmtF64(d.temp)});
-    try w.print("    inst.analysis_kind = .{t};\n", .{d.analysis});
+    try print(&out, arena, "    inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try print(&out, arena, "    inst.analysis_kind = .{t};\n", .{d.analysis});
     // §2.8.3/§12.32: this testbench IS a host, so it answers for the device's
     // unresolved `$name`s like any other. It binds `no_vpi_app` rather than
     // being exempt from `validateHost` — an exemption for the tool's own host is
     // how a seam stops being tested, and it is the one host that certainly
     // exercises every device VerA emits.
-    try w.raw(
+    try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    // Temperature/parameter-only prep: after the card and the
         \\    // temperature write, before the first evaluation — the same
@@ -577,7 +564,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
         \\
     );
-    try w.raw(
+    try out.appendSlice(arena,
         \\
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\
@@ -590,7 +577,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // repeat one fact N times and make a sweep's transcript say N times as much
     // as it knows.
     if (d.asserts_noise) {
-        try w.raw(
+        try out.appendSlice(arena,
             \\
             \\    // §4.6.4: what this device tells a host about its noise
             \\    // generators. Nothing in the model's own text can see this —
@@ -601,8 +588,8 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\        const want = [_][]const u8{
             \\
         );
-        for (d.noise) |e| try w.print("            \"{f}\",\n", .{std.zig.fmtString(e)});
-        try w.raw(
+        for (d.noise) |e| try print(&out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+        try out.appendSlice(arena,
             \\        };
             \\        if (comptime @hasDecl(D, "noise_gens")) {
             \\            std.debug.print("noise count got={d} want={d} ok={d}\n", .{
@@ -664,51 +651,51 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // built above is passed straight through, as it always was.
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points) |pt| {
-        try w.raw("    {\n");
+        try out.appendSlice(arena, "    {\n");
         if (d.psweeps.len != 0) {
-            try w.raw("        var pm = model;\n");
+            try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try w.print("        pm.{f} = {f};\n", .{ std.zig.fmtId(s.name), fmtF64(v) });
-                try w.print(
+                try print(&out, arena, "        pm.{f} = {f};\n", .{ std.zig.fmtId(s.name), fmtF64(v) });
+                try print(&out, arena,
                     "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n",
                     .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
                 );
             }
-            try w.raw("        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
             // §6.3.4 again: the hoisted prep derives from the swept card too.
-            try w.raw("        if (comptime @hasDecl(D, \"precompute\")) D.precompute(&inst, &pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"precompute\")) D.precompute(&inst, &pm);\n");
         }
         // `forced` is the other half of the operating point: which unknowns the
         // HOST drives, as opposed to which ones the device's own equations
         // determine. Newton needs the distinction; a bare evaluation did not.
         // Its DEFAULT is the harness's netlist — every unknown tied to the
         // reference — and `//! solve` is what unties the ones no line names.
-        try w.print(
+        try print(&out, arena,
             "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n        var state = newState(&{s}, &inst);\n",
             .{ if (d.solve_free) "null" else "0.0", mdl },
         );
         for (d.bias) |b|
-            try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
         for (d.sweeps, pt[0..d.sweeps.len]) |s, v|
-            try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
+            try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(s.name), fmtF64(v) });
         for (d.times, 0..) |t, k| {
             for (d.waves) |wv| {
                 // A short `wave` HOLDS its last value — that is how a step is
                 // written without repeating the level once per remaining time.
                 const v = wv.values[@min(k, wv.values.len - 1)];
-                try w.print("        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
+                try print(&out, arena, "        set(&x, &forced, \"{f}\", {f});\n", .{ std.zig.fmtString(wv.name), fmtF64(v) });
             }
             // §4.5.3 `ddt` divides by `dt`; the FIRST time is the DC point, so
             // it gets dt = 0 — which every operator kernel reads as "no history"
             // and answers with its DC form (§4.5.4 the initial condition,
             // §4.5.11 the filter's DC gain).
             const dt: f64 = if (k == 0) 0.0 else d.times[k] - d.times[k - 1];
-            try w.print("        inst.abstime = {f};\n        inst.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
+            try print(&out, arena, "        inst.abstime = {f};\n        inst.dt = {f};\n", .{ fmtF64(t), fmtF64(dt) });
             // Both are written at every point, never left over from the last
             // one: the guard codegen emits reads the field as it stands when
             // `eval`/`display` runs, so a stale `true` would fire the body a
             // second time.
-            try w.print("        inst.is_initial_step = {};\n        inst.is_final_step = {};\n", .{
+            try print(&out, arena, "        inst.is_initial_step = {};\n        inst.is_final_step = {};\n", .{
                 k == 0 and (per_block or n == 0),
                 k + 1 == d.times.len and (per_block or n + 1 == points.len),
             });
@@ -719,12 +706,12 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // the difference is only visible under `//! psweep` — where the
             // clause's "if a parameter ... is changed during a sub-task ... the
             // analog initial block shall be re-executed" is exactly the case.
-            try w.print("        inst.is_analog_initial = {};\n", .{k == 0});
+            try print(&out, arena, "        inst.is_analog_initial = {};\n", .{k == 0});
             // §5.6 the model is evaluated AT A SOLUTION: solve first, then let
             // the model print. Every `//!` value is still exactly itself — it
             // came in as a constraint row — and everything else is now the
             // number the device's own equations put there.
-            try w.print("        solve(&x, &forced, &{s}, &inst);\n", .{mdl});
+            try print(&out, arena, "        solve(&x, &forced, &{s}, &inst);\n", .{mdl});
             // §9.17.3 the `$limit` previous-iterate promotion, for a device that
             // carries one — before the evaluation that reads it, exactly as a
             // solver orders it (`stepPre`). No-op for every other device.
@@ -734,18 +721,18 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // own x, so before evaluation n there have been exactly n of them
             // and the first has none. That is also what makes
             // `$simparam("iteration")` read 1 there.
-            if (n != 0) try w.print("        stepPre(&{s}, &inst, &x, &state);\n", .{mdl});
-            try w.print("        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
+            if (n != 0) try print(&out, arena, "        stepPre(&{s}, &inst, &x, &state);\n", .{mdl});
+            try print(&out, arena, "        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
-            try w.print("        stepPost(&{s}, &inst, &x, &state);\n", .{mdl});
+            try print(&out, arena, "        stepPost(&{s}, &inst, &x, &state);\n", .{mdl});
             n += 1;
         }
-        try w.raw("    }\n");
+        try out.appendSlice(arena, "    }\n");
     }
 
-    try w.raw(if (d.print_residual)
+    try out.appendSlice(arena, if (d.print_residual)
         \\}
         \\
         \\const print_residual = true;
@@ -760,7 +747,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 }
 
 /// The cartesian product of the sweep lines, last varying fastest. One
-/// allocation per point; a point is `sweeps.len` wide.
+/// allocation per point.
 /// A point is `sweeps.len + psweeps.len` wide: the unknown columns first, then
 /// the parameter columns, so `psweep` varies fastest and a parameter sweep reads
 /// as the inner loop it is.
@@ -805,22 +792,11 @@ fn formatF64(x: f64, w: *Io.Writer) Io.Writer.Error!void {
     try w.print("{d}", .{x});
 }
 
-/// Thin bundle so the emitter reads as `w.print(...)` without threading two
-/// values through every call.
-const Writer = struct {
-    arena: Allocator,
-    out: *std.ArrayList(u8),
-
-    fn raw(self: Writer, text: []const u8) Error!void {
-        try self.out.appendSlice(self.arena, text);
-    }
-
-    fn print(self: Writer, comptime fmt: []const u8, args: anytype) Error!void {
-        var aw: Io.Writer.Allocating = .fromArrayList(self.arena, self.out);
-        defer self.out.* = aw.toArrayList();
-        aw.writer.print(fmt, args) catch return error.OutOfMemory;
-    }
-};
+fn print(out: *std.ArrayList(u8), arena: Allocator, comptime fmt: []const u8, args: anytype) Error!void {
+    var aw: Io.Writer.Allocating = .fromArrayList(arena, out);
+    defer out.* = aw.toArrayList();
+    aw.writer.print(fmt, args) catch return error.OutOfMemory;
+}
 
 // ---------------------------------------------------------------------------
 // The runner's fixed text
@@ -1448,8 +1424,7 @@ pub const BuildResult = union(enum) {
 
     pub fn deinit(self: BuildResult, gpa: Allocator) void {
         switch (self) {
-            .ok => |p| gpa.free(p),
-            .failed => |t| gpa.free(t),
+            .ok, .failed => |p| gpa.free(p),
         }
     }
 };

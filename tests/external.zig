@@ -54,9 +54,11 @@ pub fn main(init: std.process.Init) !u8 {
     var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
     defer arena_state.deinit();
 
-    var cc: External = .{
-        .argv = try splitCommand(arena_state.allocator(), options.cc),
-    };
+    // The compiler and its fixed flags; the fixture path is appended.
+    // Set once, from `-Dconformance-cc`, and NOT also from a run-time flag:
+    // the compiler's name goes into the report header, which is built before
+    // the arguments are walked, so a late `--cc=` would relabel nothing.
+    var compiler_argv = try splitCommand(arena_state.allocator(), options.cc);
     return harness.run(init, .{
         // The command AS WRITTEN, not `argv[0]`: with `-Dconformance-cc="timeout
         // 30 openvaf-r --dry-run"` the first word is `timeout`, and a report
@@ -66,116 +68,114 @@ pub fn main(init: std.process.Init) !u8 {
         // `//! xfail` is VerA's debt, and honouring it here would excuse this
         // compiler for VerA's gaps and FAIL it for closing them.
         .owns_xfail = false,
-        .ctx = &cc,
-        .check = External.check,
+        .ctx = &compiler_argv,
+        .check = check,
     });
 }
 
-const External = struct {
-    /// The compiler and its fixed flags; the fixture path is appended.
-    ///
-    /// Set once, from `-Dconformance-cc`, and NOT also from a run-time flag:
-    /// the compiler's name goes into the report header, which is built before
-    /// the arguments are walked, so a late `--cc=` would relabel nothing.
-    argv: []const []const u8,
+fn check(
+    ctx: *anyopaque,
+    gpa: std.mem.Allocator,
+    io: Io,
+    arena: std.mem.Allocator,
+    f: Fixture,
+    source: []const u8,
+    d: vera.tb.Directives,
+    w: *Io.Writer,
+) anyerror!Result {
+    const compiler_argv: *const []const []const u8 = @ptrCast(@alignCast(ctx));
+    const root = try wrap(io, arena, f, source);
 
-    fn check(
-        ctx: *anyopaque,
-        gpa: std.mem.Allocator,
-        io: Io,
-        arena: std.mem.Allocator,
-        f: Fixture,
-        source: []const u8,
-        d: vera.tb.Directives,
-        w: *Io.Writer,
-    ) anyerror!Result {
-        const self: *External = @ptrCast(@alignCast(ctx));
-        const root = try wrap(io, arena, f, source);
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, compiler_argv.*);
+    // Both dirs, so `check.vh` resolves whether the compiler looks beside
+    // the wrapper or beside the fixture.
+    try argv.appendSlice(arena, &.{ "-I", suite.fixture_root, "-I", f.dir, root });
 
-        var argv: std.ArrayList([]const u8) = .empty;
-        try argv.appendSlice(arena, self.argv);
-        // Both dirs, so `check.vh` resolves whether the compiler looks beside
-        // the wrapper or beside the fixture.
-        try argv.appendSlice(arena, &.{ "-I", suite.fixture_root, "-I", f.dir, root });
+    // stdout and stderr share one report buffer; a foreign compiler may use either.
+    var child = try std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    var obuf: [1 << 16]u8 = undefined;
+    var ebuf: [1 << 16]u8 = undefined;
+    var out = child.stdout.?.readerStreaming(io, &obuf);
+    _ = out.interface.streamRemaining(&aw.writer) catch {};
+    var err = child.stderr.?.readerStreaming(io, &ebuf);
+    _ = err.interface.streamRemaining(&aw.writer) catch {};
+    const term = try child.wait(io);
+    var how_buf: [64]u8 = undefined;
 
-        const run = try capture(gpa, io, argv.items);
-        defer gpa.free(run.output);
-        defer gpa.free(run.how);
-
-        const must_reject = d.reject.len != 0;
-        // A CRASH IS NOT A DIAGNOSTIC. It exits nonzero like a refusal does, so
-        // without this a compiler that segfaults on a `//! reject` fixture scores
-        // a pass for it — the one way this runner could report a defect as
-        // conformance. Reported unmet in both directions, because "it must not
-        // compile" is a claim about the compiler saying so, not about it dying.
-        if (run.crashed) {
-            try w.print(
-                "FAIL {s}: {s} did not survive the file — {s}.\n{s}\n",
-                .{ f.path, options.cc, run.how, run.output },
-            );
-            return .unmet;
-        }
-        if (run.accepted == !must_reject) return .met;
-
-        if (must_reject) {
-            try w.print(
-                "FAIL {s}: the LRM says this must not compile, and {s} accepted it.\n",
-                .{ f.path, options.cc },
-            );
-            for (d.reject) |pattern| try w.print("  expected a diagnostic like: \"{s}\"\n", .{pattern});
-        } else {
-            try w.print("FAIL {s}: must compile, and {s} refused it:\n", .{ f.path, options.cc });
-            try w.print("{s}\n", .{run.output});
-        }
+    const must_reject = d.reject.len != 0;
+    // A CRASH IS NOT A DIAGNOSTIC. It exits nonzero like a refusal does, so
+    // without this a compiler that segfaults on a `//! reject` fixture scores
+    // a pass for it — the one way this runner could report a defect as
+    // conformance. Reported unmet in both directions, because "it must not
+    // compile" is a claim about the compiler saying so, not about it dying.
+    if (died(term, &how_buf)) |how| {
+        try w.print(
+            "FAIL {s}: {s} did not survive the file — {s}.\n{s}\n",
+            .{ f.path, options.cc, how, aw.written() },
+        );
         return .unmet;
     }
+    const accepted = switch (term) {
+        .exited => |c| c == 0,
+        else => false,
+    };
+    if (accepted == !must_reject) return .met;
 
-    /// Write the prelude wrapper and return its path — or the fixture's own path
-    /// when a prelude would collide with what the fixture declares itself.
-    // ponytail: wrapper contents depend only on the fixture, so no compiler receiver.
-    fn wrap(
-        io: Io,
-        arena: std.mem.Allocator,
-        f: Fixture,
-        source: []const u8,
-    ) ![]const u8 {
-        // A fixture that defines a nature or a discipline IS the Annex D
-        // material; including Annex D on top of it is a redefinition, and the
-        // error would be the harness's, not the compiler's.
-        if (std.mem.indexOf(u8, source, "\nnature ") != null or
-            std.mem.indexOf(u8, source, "\ndiscipline ") != null or
-            std.mem.startsWith(u8, source, "nature ") or
-            std.mem.startsWith(u8, source, "discipline ")) return f.path;
-
-        const work = try std.fs.path.join(arena, &.{ options.work_root, f.slug });
-        const cwd = Io.Dir.cwd();
-        try cwd.createDirPath(io, work);
-        // `f.path` is already absolute — both roots come from `b.pathFromRoot`
-        // — and it has to be, because the include is resolved relative to the
-        // WRAPPER, which lives in the scratch tree and not beside the fixture.
-        const wrapper = try std.fs.path.join(arena, &.{ work, "wrapped.va" });
-        try cwd.writeFile(io, .{
-            .sub_path = wrapper,
-            .data = try std.fmt.allocPrint(arena,
-                \\`include "disciplines.vams"
-                \\`include "constants.vams"
-                \\`include "{s}"
-                \\
-            , .{f.path}),
-        });
-        return wrapper;
+    if (must_reject) {
+        try w.print(
+            "FAIL {s}: the LRM says this must not compile, and {s} accepted it.\n",
+            .{ f.path, options.cc },
+        );
+        for (d.reject) |pattern| try w.print("  expected a diagnostic like: \"{s}\"\n", .{pattern});
+    } else {
+        try w.print("FAIL {s}: must compile, and {s} refused it:\n", .{ f.path, options.cc });
+        try w.print("{s}\n", .{aw.written()});
     }
-};
+    return .unmet;
+}
 
-const Run = struct {
-    accepted: bool,
-    /// Died rather than answered: a signal, or the exit status `timeout` uses to
-    /// report one. See `died`.
-    crashed: bool,
-    /// `signal 11`, `status 139` — the short form, for the report.
-    how: []const u8,
-    output: []const u8,
-};
+/// Write the prelude wrapper and return its path — or the fixture's own path
+/// when a prelude would collide with what the fixture declares itself.
+fn wrap(
+    io: Io,
+    arena: std.mem.Allocator,
+    f: Fixture,
+    source: []const u8,
+) ![]const u8 {
+    // A fixture that defines a nature or a discipline IS the Annex D
+    // material; including Annex D on top of it is a redefinition, and the
+    // error would be the harness's, not the compiler's.
+    if (std.mem.indexOf(u8, source, "\nnature ") != null or
+        std.mem.indexOf(u8, source, "\ndiscipline ") != null or
+        std.mem.startsWith(u8, source, "nature ") or
+        std.mem.startsWith(u8, source, "discipline ")) return f.path;
+
+    const work = try std.fs.path.join(arena, &.{ options.work_root, f.slug });
+    const cwd = Io.Dir.cwd();
+    try cwd.createDirPath(io, work);
+    // `f.path` is already absolute — both roots come from `b.pathFromRoot`
+    // — and it has to be, because the include is resolved relative to the
+    // WRAPPER, which lives in the scratch tree and not beside the fixture.
+    const wrapper = try std.fs.path.join(arena, &.{ work, "wrapped.va" });
+    try cwd.writeFile(io, .{
+        .sub_path = wrapper,
+        .data = try std.fmt.allocPrint(arena,
+            \\`include "disciplines.vams"
+            \\`include "constants.vams"
+            \\`include "{s}"
+            \\
+        , .{f.path}),
+    });
+    return wrapper;
+}
 
 /// Did the compiler die instead of answering?
 ///
@@ -195,44 +195,6 @@ fn died(term: std.process.Child.Term, buf: []u8) ?[]const u8 {
             null,
         .signal => |s| std.fmt.bufPrint(buf, "signal {d}", .{s}) catch "killed",
         else => std.fmt.bufPrint(buf, "{t}", .{term}) catch "killed",
-    };
-}
-
-/// Everything the compiler said, and whether it took the file. stdout and stderr
-/// are both piped because a foreign compiler may use either; they are read into
-/// one buffer since only a human reads the result.
-fn capture(gpa: std.mem.Allocator, io: Io, argv: []const []const u8) !Run {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .ignore,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    });
-
-    var text: std.ArrayList(u8) = .empty;
-    errdefer text.deinit(gpa);
-    var aw: Io.Writer.Allocating = .fromArrayList(gpa, &text);
-    var obuf: [1 << 16]u8 = undefined;
-    var ebuf: [1 << 16]u8 = undefined;
-    var out = child.stdout.?.readerStreaming(io, &obuf);
-    _ = out.interface.streamRemaining(&aw.writer) catch {};
-    var err = child.stderr.?.readerStreaming(io, &ebuf);
-    _ = err.interface.streamRemaining(&aw.writer) catch {};
-    text = aw.toArrayList();
-
-    const term = try child.wait(io);
-    var how_buf: [64]u8 = undefined;
-    const how = died(term, &how_buf);
-    return .{
-        .accepted = switch (term) {
-            .exited => |c| c == 0,
-            else => false,
-        },
-        .crashed = how != null,
-        // The buffer is this frame's, so the caller gets a copy. It is one short
-        // line and only on the path where something already went wrong.
-        .how = try gpa.dupe(u8, how orelse ""),
-        .output = try text.toOwnedSlice(gpa),
     };
 }
 

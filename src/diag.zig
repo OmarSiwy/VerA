@@ -44,7 +44,6 @@ const Allocator = std.mem.Allocator;
 const code_table = @import("diag_code.zig");
 
 pub const Code = code_table.Code;
-pub const Info = code_table.Info;
 pub const info = code_table.info;
 
 // ---------------------------------------------------------------------------
@@ -83,21 +82,7 @@ pub const Level = enum(u8) {
     /// Like `deny`, and a later `--allow`/`--warn` for the same code is
     /// refused rather than silently honoured.
     forbid,
-
-    pub fn fromName(s: []const u8) ?Level {
-        return std.meta.stringToEnum(Level, s);
-    }
 };
-
-/// Default level of a code with no override. Errors are `deny` and stay there:
-/// `--allow` on an `E` code is refused by `set`, because an error is a
-/// statement about the program, not about our taste.
-pub fn defaultLevel(c: Code) Level {
-    return switch (severityOf(c)) {
-        .err => .deny,
-        .warning => .warn,
-    };
-}
 
 /// Per-code level overrides from the command line. A sorted-by-nothing array
 /// with a linear scan: this is consulted once per diagnostic on a path that is
@@ -129,18 +114,24 @@ pub const Levels = struct {
         try self.items.append(gpa, .{ .code = c, .level = level });
     }
 
+    /// Default level of a code with no override. Errors are `deny` and stay there:
+    /// `--allow` on an `E` code is refused by `set`, because an error is a
+    /// statement about the program, not about our taste.
     pub fn get(self: *const Levels, c: Code) Level {
         for (self.items.items) |it| {
             if (it.code == c) return it.level;
         }
-        return defaultLevel(c);
+        return switch (severityOf(c)) {
+            .err => .deny,
+            .warning => .warn,
+        };
     }
 
     /// Parse `allow=W0650` / `deny=W0650`. Returns null if the text is not a
     /// level directive at all, so a caller can fall through to other flags.
     pub fn parseFlag(self: *Levels, gpa: Allocator, text: []const u8) SetError!bool {
         const eq = std.mem.indexOfScalar(u8, text, '=') orelse return false;
-        const level = Level.fromName(text[0..eq]) orelse return false;
+        const level = std.meta.stringToEnum(Level, text[0..eq]) orelse return false;
         const c = std.meta.stringToEnum(Code, text[eq + 1 ..]) orelse return false;
         try self.set(gpa, c, level);
         return true;
@@ -232,8 +223,6 @@ pub const File = struct {
 /// binary search `SourceMap.resolve` runs.
 pub const StripMark = struct { out: u32, src: u32 };
 
-/// Preprocessed offset → (file, original offset, expansion chain).
-///
 /// An EMPTY map is legal and means "the preprocessed text is the source": every
 /// offset resolves to `root` unchanged. That is exactly right for the unit
 /// tests and for `compilePreprocessed`, and it means no stage needs a null
@@ -249,7 +238,6 @@ pub const SourceMap = struct {
 
     pub const Resolved = struct {
         file: FileId,
-        /// Offset within that file's ORIGINAL text.
         offset: u32,
         /// Index into `segs`, or `Segment.no_parent` when the map is empty.
         seg: u32,
@@ -328,10 +316,6 @@ pub const LineIndex = struct {
         if (slice.len > 0 and slice[slice.len - 1] == '\n') slice = slice[0 .. slice.len - 1];
         if (slice.len > 0 and slice[slice.len - 1] == '\r') slice = slice[0 .. slice.len - 1];
         return slice;
-    }
-
-    pub fn lineCount(self: LineIndex) u32 {
-        return @intCast(self.starts.len);
     }
 };
 
@@ -413,9 +397,6 @@ const Message = struct {
 /// A secondary span drawn INSIDE the primary snippet. Zig has no equivalent:
 /// its nearest thing is a note with its own `SourceLocation`, which renders as
 /// a separate message on its own line.
-///
-/// The file is the message's — a label never points into a different file than
-/// the diagnostic that owns it — so the record is the span and its text.
 const LabelRec = struct {
     span_start: u32,
     span_end: u32,
@@ -945,10 +926,6 @@ pub const Bag = struct {
         if (x.span_end != y.span_end) return x.span_end < y.span_end;
         return @intFromEnum(x.head.code) < @intFromEnum(y.head.code);
     }
-
-    fn dedupeKey(c: Code, span: Span) u64 {
-        return (@as(u64, @intFromEnum(c)) << 32) | span.start;
-    }
 };
 
 /// Accumulates one diagnostic's parts, then commits.
@@ -1093,7 +1070,7 @@ pub const Builder = struct {
             return;
         }
 
-        const key = Bag.dedupeKey(self.code, self.span);
+        const key = (@as(u64, @intFromEnum(self.code)) << 32) | self.span.start;
         const gop = try bag.seen.getOrPut(bag.arena, key);
         if (gop.found_existing) {
             bag.deduped += 1;
@@ -1323,7 +1300,6 @@ const Placed = struct {
     file: FileId,
     /// 1-based line in the ORIGINAL file.
     line: u32,
-    /// 1-based display column (tabs already expanded).
     col: u32,
     /// Display width of the underline, at least 1.
     width: u32,

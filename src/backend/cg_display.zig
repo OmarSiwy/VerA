@@ -126,13 +126,9 @@ pub const PrintArg = struct {
 ///     integers — nobody wants that in a transcript);
 ///   - a bare REAL prints shortest-round-trip decimal, VerA's documented `%g`
 ///     rendering (see `appendConv`), where 1364 gives reals `%g` proper.
-///
-/// `radix` is the default conversion a `$displayb`/`$displayh`/`$displayo`
-/// suffix imposes on unconsumed expressions, 0 for the plain spellings.
 fn buildArgs(
     g: *Gen,
     args: []const Mir.Value,
-    radix: u8,
     fmt: *std.ArrayList(u8),
     ops: *std.ArrayList(PrintArg),
 ) Error!void {
@@ -142,26 +138,10 @@ fn buildArgs(
             i += 1;
             i += try translateFormat(g, s, args[i..], fmt, ops);
         } else {
-            try appendConv(g, fmt, ops, args[i], radix, .{});
+            try appendConv(g, fmt, ops, args[i], 0, .{});
             i += 1;
         }
     }
-}
-
-/// IEEE 1364-2005 §17.1.1.1 (the heritage §9.4.1 extends): only the nine
-/// suffixed display spellings change the DEFAULT radix. Matching by exact name
-/// rather than last letter, because `$info` ends in 'o' and is not an octal
-/// task. Verilog-AMS Table 9-1 withdraws all nine from the analog context, so
-/// lowering rejects them before they reach here — this stays only so the
-/// emitter does not silently depend on that list.
-fn radixSuffix(name: []const u8) u8 {
-    const suffixed = [_]struct { n: []const u8, c: u8 }{
-        .{ .n = "$displayb", .c = 'b' }, .{ .n = "$displayo", .c = 'o' }, .{ .n = "$displayh", .c = 'h' },
-        .{ .n = "$writeb", .c = 'b' },   .{ .n = "$writeo", .c = 'o' },   .{ .n = "$writeh", .c = 'h' },
-        .{ .n = "$strobeb", .c = 'b' },  .{ .n = "$strobeo", .c = 'o' },  .{ .n = "$strobeh", .c = 'h' },
-    };
-    for (suffixed) |s| if (std.mem.eql(u8, name, s.n)) return s.c;
-    return 0;
 }
 
 /// The per-op scratch declarations of one emitted display block.
@@ -199,7 +179,7 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
         args[1..]
     else
         args;
-    try buildArgs(g, body, radixSuffix(name), &fmt, &ops);
+    try buildArgs(g, body, &fmt, &ops);
     // §9.4.1: `$write` is the family member that does NOT end the line.
     if (!std.mem.startsWith(u8, name, "$write")) try fmt.append(g.arena, '\n');
 
@@ -224,8 +204,7 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
     // `zHalt` is f64-typed so the statements after it — §9.7's legal dead code
     // — still compile; `break :zd` is statically reachable, never taken.
     if (std.mem.eql(u8, name, "$fatal")) {
-        const has_num = args.len > 0 and g.strArg(args, 0) == null;
-        const lvl = if (has_num) finishLevel(g, args, 1) else 1;
+        const lvl = finishLevel(g, args);
         try g.b("_ = zHalt({d}); ", .{std.math.clamp(lvl, 1, 255)});
     }
     try g.b("break :zd S.con(0.0); }}", .{});
@@ -233,14 +212,14 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
 
 /// §9.7.1's diagnostic argument, folded. Syntax 9-5/9-7 make it the literal
 /// 0 | 1 | 2, so a fold is the grammar and not an optimisation; anything that
-/// does not fold takes `dflt` — §9.7.1: "One (1) is the default if no argument
+/// does not fold takes 1 — §9.7.1: "One (1) is the default if no argument
 /// is supplied."
-fn finishLevel(g: *Gen, args: []const Mir.Value, dflt: i64) i64 {
-    if (args.len == 0) return dflt;
+fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {
+    if (args.len == 0) return 1;
     return switch (g.mir.valueDef(g.an.rv(args[0]))) {
         .int_const => |x| x,
         .float_const => |x| std.math.lossyCast(i64, x),
-        else => dflt,
+        else => 1,
     };
 }
 
@@ -265,7 +244,7 @@ fn finishLevel(g: *Gen, args: []const Mir.Value, dflt: i64) i64 {
 /// to print the diagnostic and exit 0 — the upgrade path is a debugger hook in
 /// the runner, when something interactive exists to resume from.
 pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
-    const level = finishLevel(g, args, 1);
+    const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
     if (level >= 1) {
         g.uses_inst = true;
@@ -289,7 +268,7 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    try buildArgs(g, args, 0, &fmt, &ops);
+    try buildArgs(g, args, &fmt, &ops);
     try g.b("zs: {{ ", .{});
     try emitScratch(g, ops.items);
     // An overrun formats to the empty string: §9.5.3 states no truncation rule,
@@ -380,13 +359,7 @@ fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: u
     // The synthetic readers, all of which take the count first — see
     // `file_kernels.zFLine` for why that operand is there and why it is read.
     if (eq(u8, name, "$fgets$str")) return emitLine(g, args, "zFLine");
-    if (eq(u8, name, "$ferror$str")) {
-        try g.b("zFErrorStr(", .{});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-        try g.b(", ", .{});
-        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
-        return g.b(")", .{});
-    }
+    if (eq(u8, name, "$ferror$str")) return emitLine(g, args, "zFErrorStr");
     // §9.5.4.2's items: the same three flavours `$sscanf` has, over the line the
     // count's read latched. `(count, fd, format, item)`.
     const scan: ?[]const u8 = if (eq(u8, name, "$fscanf$int"))
@@ -406,10 +379,9 @@ fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: u
     return g.abort("VerA: unhandled §9.5 call `{s}`", .{name});
 }
 
-/// `zFLine(count, fd)` — the latched line, over the first two operands every
-/// synthetic reader carries.
-fn emitLine(g: *Gen, args: []const Mir.Value, kernel: []const u8) Error!void {
-    try g.b("{s}(", .{kernel});
+/// The first two operands every synthetic reader carries: count, then fd.
+inline fn emitLine(g: *Gen, args: []const Mir.Value, comptime kernel: []const u8) Error!void {
+    try g.b(kernel ++ "(", .{});
     try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
     try g.b(", ", .{});
     try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
@@ -439,7 +411,7 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     const rest = if (args.len > 0) args[1..] else args;
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    try buildArgs(g, rest, 0, &fmt, &ops);
+    try buildArgs(g, rest, &fmt, &ops);
     if (!std.mem.startsWith(u8, base, "write")) try fmt.append(g.arena, '\n');
 
     // The text is formatted into this call site's own scratch row and then

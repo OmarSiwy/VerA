@@ -255,13 +255,6 @@ const Footprint = struct {
         };
     }
 
-    fn add(self: *Footprint, o: Footprint) void {
-        self.insts += o.insts;
-        self.defs += o.defs;
-        self.blocks += o.blocks;
-        self.extra += o.extra;
-    }
-
     fn bytes(self: Footprint) u64 {
         return self.insts * inst_b + self.defs * def_b +
             self.blocks * block_b + self.extra * @sizeOf(u32);
@@ -483,7 +476,10 @@ pub fn main(init: std.process.Init) !u8 {
             var r = vera.compileSourceOpts(gpa, in.source, .lint, in.opts(&dirs)) catch continue;
             defer r.deinit();
             const f: Footprint = .of(r.mir);
-            total.add(f);
+            total.insts += f.insts;
+            total.defs += f.defs;
+            total.blocks += f.blocks;
+            total.extra += f.extra;
             max_bytes = @max(max_bytes, f.bytes());
         }
         try emitFootprint(w, "fixtures", @intCast(fixture_inputs.len), total);
@@ -502,9 +498,9 @@ pub fn main(init: std.process.Init) !u8 {
             for (sweep) |n| {
                 const src = try genSource(arena, axis, n);
                 const inputs = [_]Input{.{ .source = src }};
-                const work = try std.fmt.allocPrint(arena, "{s}/gen", .{options.work_root});
                 for (std.enums.values(Phase)) |p| {
-                    try emit(w, @tagName(axis), n, p, try measure(gpa, io, p, &inputs, work));
+                    const s = try measure(gpa, io, p, &inputs, options.work_root ++ "/gen");
+                    try emit(w, @tagName(axis), n, p, s);
                 }
                 try w.flush();
             }
@@ -512,9 +508,8 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (do_fixtures) {
-        const work = try std.fmt.allocPrint(arena, "{s}/fixtures", .{options.work_root});
         for (std.enums.values(Phase)) |p| {
-            const s = try measure(gpa, io, p, fixture_inputs, work);
+            const s = try measure(gpa, io, p, fixture_inputs, options.work_root ++ "/fixtures");
             try emit(w, "fixtures", @intCast(fixture_inputs.len), p, s);
         }
     }
