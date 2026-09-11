@@ -427,6 +427,7 @@ test "%d: one unknown bit poisons the number, and the field fits the largest val
         try testing.expectEqualStrings(c.want, w.buffered());
     }
     // 65 bits: an x pads to the 20 columns of 2^65 - 1.
+    w.end = 0;
     var unknown = [4]u64{ std.math.maxInt(u64), 1, std.math.maxInt(u64), 1 };
     try value(&w, testing.allocator, lit(&unknown, 65, false), .decimal, null);
     try testing.expectEqualStrings("                   x", w.buffered());
