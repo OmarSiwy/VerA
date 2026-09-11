@@ -496,12 +496,21 @@ fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
-/// The widest field width or precision a format gives (E1011).
-pub const max_field = 4096;
-/// One real conversion's text: the longest %f of an f64 is a sign, 309
-/// integer digits and the point, then `max_field` fractional digits; a field
-/// width is padded outside it.
-pub const real_buf = 512 + max_field;
+/// §17.1.1.2 one real conversion (`%e %f %g`, §9.4.7 `%r`): C's text,
+/// padded on the left to `width`, for both engines. No width or precision
+/// is too large: the padding is written, not buffered, and the text goes
+/// through a buffer sized for this precision (from `gpa` past a small one on
+/// the stack). The longest %f of an f64 is a sign, 309 integer digits and the
+/// point, then `precision` fractional digits, inside 512 + precision.
+pub fn real(out: *std.Io.Writer, gpa: std.mem.Allocator, r: f64, conv: u8, precision: i64, width: ?u64) (std.mem.Allocator.Error || std.Io.Writer.Error)!void {
+    var stack: [1024]u8 = undefined;
+    const need = 512 + @as(usize, @intCast(@max(precision, 0)));
+    const buf = if (need <= stack.len) &stack else try gpa.alloc(u8, need);
+    defer if (buf.ptr != &stack) gpa.free(buf);
+    const text = zCReal(buf, r, conv, 0, 0, precision);
+    if (width) |w| if (text.len < w) try out.splatByteAll(' ', w - text.len);
+    try out.writeAll(text);
+}
 
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
@@ -553,7 +562,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             // source writes and means "minimum width"; a non-zero width is
             // an explicit column count. Absent means §17.1.1.3's automatic
             // sizing, which is `null` here and computed from the operand.
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1) {
                 const d = format[i] - '0';
                 width = (width orelse 0) *| 10 +| d;
@@ -567,9 +576,6 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     precision = precision *| 10 +| (format[i] - '0');
             }
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
-            // The analog side's bound (E1011): a field is composed whole.
-            if ((width orelse 0) > max_field or precision > max_field)
-                return self.failWith(.E1011, ex.mainTok(e), "a field width or precision here exceeds {d}", .{max_field});
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -642,13 +648,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                 if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, args[arg], 0), r, width);
             } else {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| {
-                    const real = try evaluate.evalReal(self, a, args[arg]);
-                    var buf: [real_buf]u8 = undefined;
-                    const text = zCReal(&buf, real, format[i], 0, 0, precision);
-                    if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
-                    try self.out.writeAll(text);
-                }
+                if (allocator) |a| try real(self.out, a, try evaluate.evalReal(self, a, args[arg]), format[i], precision, width);
             }
         }
     }
@@ -708,7 +708,7 @@ pub fn strength(out: *std.Io.Writer, s: Signal) std.Io.Writer.Error!void {
 
 /// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
 /// minimum field width.
-fn emitTime(self: *Run, v: Int.Literal, width: ?u32) Error!void {
+fn emitTime(self: *Run, v: Int.Literal, width: ?u64) Error!void {
     var f = self.time_format;
     if (width) |w| f.width = w;
     try fmt.time(self.out, v, f, self.timeOf(self.scope).unit_exp);
@@ -1097,5 +1097,18 @@ test "§17.1.1 a malformed format is refused before anything prints" {
     try @import("root.zig").expectRejected("module m; initial $display(\"%\"); endmodule", "unterminated display format");
     try @import("root.zig").expectRejected("module m; initial $display(\"%q\", 1); endmodule", "only the §9.4.3 Table 9-22 conversions");
     try @import("root.zig").expectRejected("module m; initial $display(\"%d\"); endmodule", "missing display argument");
-    try @import("root.zig").expectRejected("module m; initial $display(\"%5000d\", 1); endmodule", "exceeds 4096");
+}
+
+test "§17.1.1.2 no field width or precision is too large" {
+    // One past the old 4096 bound and well past it; `%.5000f` of 0.5 is
+    // "0." and 5000 digits, a 5 then 4999 zeros.
+    var want: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer want.deinit();
+    try want.writer.splatByteAll(' ', 4096);
+    try want.writer.writeAll("1|");
+    try want.writer.splatByteAll(' ', 19999);
+    try want.writer.writeAll("x|0.5");
+    try want.writer.splatByteAll('0', 4999);
+    try want.writer.writeAll("\n");
+    try @import("root.zig").expectRun("module m; initial $display(\"%4097d|%20000s|%.5000f\", 1, \"x\", 0.5); endmodule", want.written());
 }
