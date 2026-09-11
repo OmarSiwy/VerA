@@ -2022,7 +2022,6 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
                 try self.print("            try s.gate({d}, .{t}, &b);\n", .{ k, g.kind });
             },
             .udp => |u| {
-                if (u.ins.len > 64) return self.refuse("a UDP of more than 64 inputs");
                 try bits(self, u.ins, u.lane);
                 try self.print("            try s.udp({d}, &b);\n", .{k});
             },

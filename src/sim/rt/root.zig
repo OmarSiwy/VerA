@@ -2215,6 +2215,43 @@ test "§17.1.3 one $monitor line per time step however many watched stores" {
     try testing.expectEqual(@as(?u32, 2), s.monitorEnable(true));
 }
 
+test "§8 a UDP of any number of inputs: 65, one past the old 64, and 300" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const D = @import("../digital/net.zig");
+    for ([_]u32{ 65, 300 }) |n| {
+        // A wide AND: every input 1 is 1; a 0 anywhere, whatever the rest
+        // (`?`), is 0; anything else matches no row and is x (§8.1.6).
+        const ones = try a.alloc(D.UdpSym, n);
+        @memset(ones, .{ .level = '1' });
+        const rows = try a.alloc(D.UdpRow, n + 1);
+        rows[0] = .{ .ins = ones, .state = 0, .out = '1', .edge_at = null };
+        for (rows[1..], 0..) |*r, k| {
+            const syms = try a.alloc(D.UdpSym, n);
+            @memset(syms, .{ .level = '?' });
+            syms[k] = .{ .level = '0' };
+            r.* = .{ .ins = syms, .state = 0, .out = '0', .edge_at = null };
+        }
+        var d = one_slot;
+        d.nets = &.{.{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{0}, .strong = true }};
+        d.drivers = &.{.{ .net = 0, .source = .{ .udp = 0 } }};
+        const udps = [_]net.Udp{.{ .rows = rows, .sequential = false, .ins = n, .state = .x }};
+        d.udps = &udps;
+        const s = try testState(a, &d);
+        const ins = try a.alloc(Bit, n);
+        @memset(ins, .one);
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 1), s.v[0] & 1);
+        ins[n - 1] = .zero;
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 0), s.v[0] & 1);
+        ins[n - 1] = .z;
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 1), s.x[0] & 1);
+    }
+}
+
 test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1024 deep at most" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

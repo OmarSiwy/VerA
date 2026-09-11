@@ -125,6 +125,8 @@ pub const Nets = struct {
     pat: []u32,
     prev: []Int.Bit,
     state: []Int.Bit,
+    /// One UDP's inputs read as §8.1.6 levels, as long as the widest UDP's.
+    udp_bits: []Int.Bit = &.{},
     /// All ones, as wide as the widest net: `store`'s mask.
     ones: []u64,
     /// A driver value under construction.
@@ -224,11 +226,14 @@ pub const Nets = struct {
         t.pat = try gpa.alloc(u32, udps.len);
         t.state = try gpa.alloc(Int.Bit, udps.len);
         n = 0;
+        var most: u32 = 0;
         for (udps, t.pat, t.state) |u, *at, *st| {
             at.* = n;
             n += u.ins;
+            most = @max(most, u.ins);
             st.* = int(u.state);
         }
+        t.udp_bits = try gpa.alloc(Int.Bit, most);
         t.prev = try gpa.alloc(Int.Bit, n);
         @memset(t.prev, .x);
         t.ones = try gpa.alloc(u64, words(widest));
@@ -317,15 +322,13 @@ pub fn gate(s: *State, i: u32, comptime kind: Ast.GateKind, ins: []const Bit) Er
     return driveBit(s, i, s.nets.drivers[i].source.gate, o.bit, o.or_z);
 }
 
-/// §8 UDP driver `i` over its input bits (`resolution.udpValue`). Asserts
-/// the UDP has at most 64 inputs.
+/// §8 UDP driver `i` over its input bits (`resolution.udpValue`), any
+/// number of them.
 pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const t = &s.nets;
     const k = t.drivers[i].source.udp;
     const u = t.udps[k];
-    var buf: [64]Int.Bit = undefined;
-    std.debug.assert(ins.len <= buf.len);
-    const bits = buf[0..ins.len];
+    const bits = t.udp_bits[0..ins.len];
     // §8.1.6: a z input is read as x.
     for (ins, bits) |b, *o| o.* = if (b == .z) .x else int(b);
     const out = if (!u.sequential) dnet.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
