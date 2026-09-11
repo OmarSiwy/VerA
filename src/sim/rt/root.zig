@@ -119,6 +119,10 @@ pub const Design = struct {
     /// whose out-of-line automatic activations each own this named event,
     /// else 0 (`waiters.eventContext`).
     act_events: []const u32 = &.{},
+    /// §9.3.2 per slot, where its forced selects start in `State.parts`
+    /// (`parts[part_start[slot]..part_start[slot + 1]]`); empty when no
+    /// `force` names a select.
+    part_start: []const u32 = &.{},
 };
 
 /// The dispatch of one phase: `Code(k).dispatch` of the emitted root.
@@ -322,16 +326,13 @@ const late_base: u32 = 3 << 30;
 /// `resume_base + k`: process continuation `resumes[k]`, in an activation.
 const resume_base: u32 = 5 << 29;
 
-/// `root.Overrides`: the process ranges of a slot's `assign` and `force`,
-/// and of the forces of constant selects of a net (§9.3.2), each holding
-/// bits [lo, lo + width); `emit` numbers a net's distinct selects.
-/// ponytail: at most `max_parts` forced selects per net (`emit` refuses
-/// more); a list per slot if a design forces more of one net.
-const Layers = struct { assign: ?Range = null, force: ?Range = null, parts: [max_parts]Part = @splat(.{}) };
+/// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
+const Layers = struct { assign: ?Range = null, force: ?Range = null };
 const Range = struct { start: u32, end: u32 };
+/// The force of one constant select of a net (§9.3.2), holding bits
+/// [lo, lo + width) while `range` is set; `emit` numbers the distinct
+/// selects (`Design.part_start`).
 const Part = struct { lo: u32 = 0, width: u32 = 0, range: ?Range = null };
-/// Forced selects per net a native design may hold (`emit` refuses more).
-pub const max_parts = 4;
 
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
 /// declares `vera_overrides`.
@@ -617,6 +618,9 @@ pub const State = struct {
     /// the pc ranges of the procedural continuous assignments holding it.
     /// While one does, only its own process (`overriding`) writes the slot.
     layers: []Layers,
+    /// `Design.part_start` and one `Part` per forced select it numbers.
+    part_start: []const u32 = &.{},
+    parts: []Part,
     overriding: bool = false,
     /// §18 the dump, the design's catalog, and per slot (empty without a
     /// catalog) whether a change is dumped.
@@ -693,6 +697,8 @@ pub const State = struct {
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
             .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
+            .part_start = d.part_start,
+            .parts = try gpa.alloc(Part, if (d.part_start.len == 0) 0 else d.part_start[d.part_start.len - 1]),
             .catalog = d.vcd,
             .port_files = d.ports_dump,
             .port_live = try gpa.alloc(evcd.Live, d.ports_dump.len),
@@ -722,6 +728,7 @@ pub const State = struct {
         @memset(self.resident, 0);
         @memset(self.monitored, false);
         @memset(self.layers, .{});
+        @memset(self.parts, .{});
         @memset(self.dumped, false);
         @memset(self.port_live, .{});
         for (d.order) |pc| try self.runPlain(pc, null);
@@ -1136,7 +1143,8 @@ pub const State = struct {
     inline fn forcedBits(self: *const State, slot: u32, j: usize) u64 {
         if (!overrides or self.overriding) return 0;
         var m: u64 = 0;
-        for (self.layers[slot].parts) |p| if (p.range != null) {
+        if (slot + 1 >= self.part_start.len) return 0;
+        for (self.parts[self.part_start[slot]..self.part_start[slot + 1]]) |p| if (p.range != null) {
             const lo: i64 = @as(i64, p.lo) - 64 * @as(i64, @intCast(j));
             const hi = lo + p.width;
             if (hi <= 0 or lo >= 64) continue;
@@ -1147,20 +1155,22 @@ pub const State = struct {
         return m;
     }
 
-    /// `exec` `.override_on` of a forced select: part `k` of `slot`, bits
-    /// [lo, lo + width), is held by the force whose process is pcs
+    /// `exec` `.override_on` of a forced select: `parts[k]`, bits
+    /// [lo, lo + width) of `slot`, is held by the force whose process is pcs
     /// [start, end), replacing the force of the same select before it.
     pub fn overrideBits(self: *State, slot: u32, k: u32, lo: u32, width: u32, start: u32, end: u32) Error!void {
-        const p = &self.layers[slot].parts[k];
+        std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
+        const p = &self.parts[k];
         if (p.range) |old| _ = try self.stop(old.start, old.end);
         p.* = .{ .lo = lo, .width = width, .range = .{ .start = start, .end = end } };
         try self.runPlain(start, null);
     }
 
-    /// `waiters.releaseBits`: part `k` of `slot` is its drivers' again; the
-    /// design re-resolves the net.
+    /// `waiters.releaseBits`: `parts[k]`, a select of `slot`, is its
+    /// drivers' again; the design re-resolves the net.
     pub fn releaseBits(self: *State, slot: u32, k: u32) Error!void {
-        const p = &self.layers[slot].parts[k];
+        std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
+        const p = &self.parts[k];
         if (p.range) |old| _ = try self.stop(old.start, old.end);
         p.range = null;
     }
