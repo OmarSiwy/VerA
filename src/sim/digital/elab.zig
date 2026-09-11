@@ -959,12 +959,14 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 .block => |b| b.name == .none,
                 else => true, // else: a lone item is an unnamed generate block
             };
-            var seen: std.ArrayList(i64) = .empty;
+            // §12.4.1: "It shall be an error if a genvar value is repeated".
+            // A genvar holds 32 bits, so a loop that does not terminate
+            // repeats one within 2^32 iterations: this set is the loop's
+            // non-termination test, and no count bounds a loop that ends.
+            var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
             while ((try r.constant(f.cond, tok)).truth() == .one) {
-                if (seen.items.len == 65536) return r.fail(tok, "§12.4.1: this loop generate does not terminate within 65536 iterations", .{});
                 const value = e.values.items[at].asInt() orelse return r.fail(tok, "§12.4.1: a genvar shall not be x or z", .{});
-                if (std.mem.findScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
-                try seen.append(r.arena, value);
+                if ((try seen.fetchPut(r.arena, value, {})) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated, so this loop generate does not terminate", .{});
                 const iter = try newScope(r, tok);
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value, .implicit = implicit });
                 try selectable(r, scope, name, value, iter);
