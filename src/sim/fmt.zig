@@ -38,8 +38,9 @@ pub const TimeFormat = struct {
     width: u32 = 20,
 };
 
-/// A `%d` of an operand wider than 64 bits (see `decimalText`).
-pub const Error = error{TooWide} || std.Io.Writer.Error;
+/// A `%d` of a known operand wider than 64 bits takes scratch from the
+/// caller's allocator (`wideDecimal`).
+pub const Error = std.mem.Allocator.Error || std.Io.Writer.Error;
 
 /// Byte `n` of `v` counting from the least significant, unknown bits read as
 /// 0 and bits at or past `v.width` absent (0).
@@ -106,8 +107,8 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 }
 
 /// One operand, in one radix, sized by IEEE 1364-2005 §17.1.1.3 unless the
-/// format gave an explicit width. `error.TooWide` for a decimal operand
-/// wider than 64 bits with no x or z bit (`decimalText`).
+/// format gave an explicit width. A decimal operand wider than 64 bits with
+/// no x or z bit is divided out with scratch from `gpa` (`wideDecimal`).
 ///
 /// The three power-of-two radices are a GROUP walk and decimal is not, and
 /// that is the whole split: a hex digit is four bits of this operand and
@@ -115,11 +116,12 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 /// prints as unknown while its neighbours print normally. A decimal
 /// rendering has no such locality (one unknown bit makes the whole number
 /// unknown), which is why §17.1.1.4 gives it its own rule.
-pub fn value(out: *std.Io.Writer, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
+pub fn value(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
     const field = width orelse autoWidth(v, radix);
     if (radix == .decimal) {
+        if (v.width > 64 and !v.hasUnknown()) return wideDecimal(out, gpa, v, field);
         var buf: [24]u8 = undefined;
-        const t = try decimalText(&buf, v);
+        const t = decimalText(&buf, v);
         if (t.len < field) try out.splatByteAll(' ', field - t.len);
         return out.writeAll(t);
     }
@@ -198,11 +200,9 @@ pub fn groupDigit(v: Int.Literal, radix: Radix, d: u32) u8 {
 }
 
 /// Decimal, where one unknown bit poisons the whole number (§17.1.1.4), as
-/// a slice of `buf`. Returns error.TooWide for a known operand wider than 64
-/// bits. Asserts `buf` holds 20 bytes, the longest i64 or u64.
-pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
-    // ponytail: 64 bits, refused rather than truncated; a bignum divide if
-    // a wider `%d` is ever printed.
+/// a slice of `buf`. Asserts `buf` holds 20 bytes, the longest i64 or u64,
+/// and that a known `v` is at most 64 bits wide (`wideDecimal` is the rest).
+pub fn decimalText(buf: []u8, v: Int.Literal) []const u8 {
     if (v.hasUnknown()) {
         // An x bit is value and unknown set, a z bit unknown alone.
         var xs: u32 = 0;
@@ -218,12 +218,65 @@ pub fn decimalText(buf: []u8, v: Int.Literal) error{TooWide}![]const u8 {
             else 'Z';
         return buf[0..1];
     }
-    if (v.width > 64) return error.TooWide;
+    std.debug.assert(v.width <= 64);
     const raw = v.values()[0];
     if (v.signed) return std.mem.print(buf, "{d}", .{v.asInt().?}) catch unreachable;
     // Not `asInt`: it bit-casts, so an unsigned 64-bit operand at or above
     // 2^63 would print negative. $time is exactly that operand.
     return std.mem.print(buf, "{d}", .{raw}) catch unreachable;
+}
+
+/// §17.1.1.3 `%d` of a known operand of any width, right-justified in
+/// `field` columns. The magnitude (negated over the width when `v` is signed
+/// and its top bit is set) is divided by 10^19 until it is zero, each
+/// remainder one 19-digit group, and the groups print most significant
+/// first. The scratch comes from `gpa` and is freed before returning.
+fn wideDecimal(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, field: u32) Error!void {
+    // ponytail: schoolbook division, quadratic in the word count; a
+    // divide-and-conquer radix conversion if multi-megabit %d ever matters.
+    const words = (v.width + 63) / 64;
+    const mag = try gpa.alloc(u64, words);
+    defer gpa.free(mag);
+    for (mag, v.values()[0..words], 0..) |*m, val, j| m.* = val & widthMask(v.width, j);
+    const negative = v.signed and v.bit(v.width - 1) == .one;
+    if (negative) {
+        // -v over `v.width` bits: invert, add one, cut at the width.
+        var carry: u1 = 1;
+        for (mag, 0..) |*m, j| {
+            const sum = @addWithOverflow(~m.*, @as(u64, carry));
+            m.* = sum[0] & widthMask(v.width, j);
+            carry = sum[1];
+        }
+    }
+    const base: u64 = 10_000_000_000_000_000_000;
+    // 10^19 > 2^63, so each group takes more than 63 bits off the magnitude.
+    const groups = try gpa.alloc(u64, words + words / 63 + 1);
+    defer gpa.free(groups);
+    var n: usize = 0;
+    var top = words;
+    while (true) {
+        while (top != 0 and mag[top - 1] == 0) top -= 1;
+        if (top == 0 and n != 0) break;
+        var rem: u128 = 0;
+        var j = top;
+        while (j != 0) {
+            j -= 1;
+            const cur = (rem << 64) | mag[j];
+            mag[j] = @intCast(cur / base);
+            rem = cur % base;
+        }
+        groups[n] = @intCast(rem);
+        n += 1;
+    }
+    const len = std.fmt.count("{d}", .{groups[n - 1]}) + 19 * (n - 1) + @intFromBool(negative);
+    if (len < field) try out.splatByteAll(' ', field - len);
+    if (negative) try out.writeByte('-');
+    try out.print("{d}", .{groups[n - 1]});
+    var k = n - 1;
+    while (k != 0) {
+        k -= 1;
+        try out.print("{d:0>19}", .{groups[k]});
+    }
 }
 
 // The bits of word `j` below bit `width`.
@@ -344,7 +397,7 @@ test "a group radix prints x and z per digit, lowercase when the whole group is 
     }) |c| {
         w.end = 0;
         var p = [2]u64{ c.v, c.x };
-        try value(&w, lit(&p, c.width, false), c.radix, c.field);
+        try value(&w, testing.allocator, lit(&p, c.width, false), c.radix, c.field);
         try testing.expectEqualStrings(c.want, w.buffered());
     }
 }
@@ -370,21 +423,52 @@ test "%d: one unknown bit poisons the number, and the field fits the largest val
     }) |c| {
         w.end = 0;
         var p = [2]u64{ c.v, c.x };
-        try value(&w, lit(&p, c.width, c.signed), .decimal, c.field);
+        try value(&w, testing.allocator, lit(&p, c.width, c.signed), .decimal, c.field);
         try testing.expectEqualStrings(c.want, w.buffered());
     }
-    // 65 bits: refused when known; an x pads to the 20 columns of 2^65 - 1.
-    var known = [4]u64{ 1, 1, 0, 0 };
-    try testing.expectError(error.TooWide, value(&w, lit(&known, 65, false), .decimal, null));
-    w.end = 0;
+    // 65 bits: an x pads to the 20 columns of 2^65 - 1.
     var unknown = [4]u64{ std.math.maxInt(u64), 1, std.math.maxInt(u64), 1 };
-    try value(&w, lit(&unknown, 65, false), .decimal, null);
+    try value(&w, testing.allocator, lit(&unknown, 65, false), .decimal, null);
     try testing.expectEqualStrings("                   x", w.buffered());
     w.end = 0;
     // 128 bits: 2^128 - 1 is 340282366920938463463374607431768211455, 39 digits.
     var wide = [4]u64{ std.math.maxInt(u64), std.math.maxInt(u64), std.math.maxInt(u64), std.math.maxInt(u64) };
-    try value(&w, lit(&wide, 128, false), .decimal, null);
+    try value(&w, testing.allocator, lit(&wide, 128, false), .decimal, null);
     try testing.expectEqualStrings("                                      x", w.buffered());
+}
+
+test "%d of a known operand past 64 bits is its whole decimal value (§17.1.1.3)" {
+    var out_buf: [128]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&out_buf);
+    const max = std.math.maxInt(u64);
+    const Case = struct { lo: u64, hi: u64, width: u32, signed: bool = false, field: ?u32 = null, want: []const u8 };
+    for ([_]Case{
+        // 2^64, the first value past the old boundary, in the 20 columns of 2^65 - 1.
+        .{ .lo = 0, .hi = 1, .width = 65, .want = "18446744073709551616" },
+        // 2^65 - 1 as a signed 65-bit value is -1; -2^64 is the most negative.
+        .{ .lo = max, .hi = 1, .width = 65, .signed = true, .field = 0, .want = "-1" },
+        .{ .lo = 0, .hi = 1, .width = 65, .signed = true, .want = "-18446744073709551616" },
+        // 2^128 - 1: 39 digits.
+        .{ .lo = max, .hi = max, .width = 128, .want = "340282366920938463463374607431768211455" },
+        // 10^19 exactly: the zero low group still prints all 19 of its zeros.
+        .{ .lo = 10_000_000_000_000_000_000, .hi = 0, .width = 100, .field = 0, .want = "10000000000000000000" },
+        // A small value in a 100-bit operand pads to 2^100 - 1's 31 columns.
+        .{ .lo = 5, .hi = 0, .width = 100, .want = "                              5" },
+        // Bits past the width are not read: 66 bits of all ones is 2^66 - 1.
+        .{ .lo = max, .hi = max, .width = 66, .field = 0, .want = "73786976294838206463" },
+    }) |c| {
+        w.end = 0;
+        var p = [4]u64{ c.lo, c.hi, 0, 0 };
+        try value(&w, testing.allocator, lit(&p, c.width, c.signed), .decimal, c.field);
+        try testing.expectEqualStrings(c.want, w.buffered());
+    }
+    // Well past it: 2^1000 in 1001 bits, 302 digits.
+    var planes: [32]u64 = @splat(0);
+    planes[15] = 1 << 40;
+    var long_buf: [400]u8 = undefined;
+    var lw: std.Io.Writer = .fixed(&long_buf);
+    try value(&lw, testing.allocator, lit(&planes, 1001, false), .decimal, 0);
+    try testing.expectEqualStrings("10715086071862673209484250490600018105614048117055336074437503883703510511249361224931983788156958581275946729175531468251871452856923140435984577574698574803934567774824230985421074605062371141877954182153046474983581941267398767559165543946077062914571196477686542167660429831652624386837205668069376", lw.buffered());
 }
 
 /// The decimal digits of 2^n, by doubling a digit string: an oracle that

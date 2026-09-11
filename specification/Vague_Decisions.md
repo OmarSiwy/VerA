@@ -1538,7 +1538,6 @@ truncation rule, so a shorter answer would be a wrong one.
 | UDP inputs | 64 | E1017 | `lib/frontend/parser/udp.zig` `max_udp_inputs` | `ieee1364/08_udp/b_8_1_2_udp_more_than_64_inputs_rejected.v` |
 | digital: `$readmemb`/`$readmemh` file | 4 MiB | E1100, naming the bound | `src/sim/digital/display.zig` `side_file_limit` | `ieee1364/17_system_tasks/b_17_2_9_readmem_file_over_4mib_rejected.v` |
 | digital: field width or precision | 4096 | E1011 | `src/sim/digital/display.zig` `max_field` | `ieee1364/17_system_tasks/b_17_1_1_2_real_precision_100.v`, `b_17_1_1_2_field_width_over_4096_rejected.v` |
-| digital: `%d` of a known value | 64 bits | E1100 | `src/sim/digital/display.zig` `emitValue` | `ieee1364/17_system_tasks/b_17_1_1_4_decimal_over_64_bits_rejected.v` |
 | digital: expression and statement depth | 256 levels | E1100 | `src/sim/digital/compile.zig` `infer`, `compileStmt` | `ieee1364/05_expressions/b_5_expression_deeper_than_256_rejected.v` |
 | digital: hierarchy depth | 64 levels | E1100 | `src/sim/digital/elab.zig` `declare` | `ieee1364/12_hierarchy/b_12_hierarchy_deeper_than_64_rejected.v` |
 | digital: loop generate | 65536 iterations | E1100 | `src/sim/digital/elab.zig` `generate` | `ieee1364/12_hierarchy/b_12_generate_past_65536_iterations_rejected.v` |

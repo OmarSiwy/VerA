@@ -502,7 +502,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
         // the default of this task, so $displayh's bare argument is hex.
         if (ex.tag(e) != .str_literal and !dynamic) {
             try compile.checkExpr(self, e);
-            if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, e, 0), show.radix, null);
+            if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, e, 0), show.radix, null);
             continue;
         }
         if (dynamic and allocator == null) {
@@ -612,7 +612,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
             if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
             if (radix) |r| {
                 try compile.checkExpr(self, args[arg]);
-                if (allocator) |a| try emitValue(self, try evaluate.eval(self, a, args[arg], 0), r, width);
+                if (allocator) |a| try fmt.value(self.out, a, try evaluate.eval(self, a, args[arg], 0), r, width);
             } else {
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| {
@@ -713,13 +713,6 @@ pub fn timescaleScope(self: *Run, e: Ast.ExprId) Error!u32 {
     return switch (try @import("vcd.zig").target(self, e)) {
         .scope => |sc| sc,
         .slot => self.exprFail(e, "§17.3.1: $printtimescale names a module instance"),
-    };
-}
-
-fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
-    fmt.value(self.out, v, radix, width) catch |e| return switch (e) {
-        error.TooWide => self.fail(0, "decimal display of an operand wider than 64 bits is not implemented", .{}),
-        error.WriteFailed => error.WriteFailed,
     };
 }
 
