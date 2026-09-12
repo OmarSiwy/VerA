@@ -20,6 +20,8 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 - VPI: `vpiRealVal` of a signed value wider than 64 bits, a time past 2^64 (now `BADTIME`), analog `%e`/`%g` of inf/nan, and `vpi_put_delays` on a generate-scope object are fixed (#29).
 - CLI: a NaN `--param` or `--unknown-bound` is refused; `--emit-exe` with `--emit-so` exits 2; `--deny` on a `.v` with `--emit-zig` exits 1; `--emit-osdi` compiles devices whose names contain `Z` (`Zener`, `Zth`) and keeps their source names (#29).
 - Contract: `contract.laneMasks` called at run time on a device without `lane_masks` returned a slice into a stack temporary; it now returns a constant (#29).
+- Device strings and files: a display, file-output or `$sformat` call takes any number of conversions (E1010 retired); field widths and precisions above 4096, string replications and concatenations past 4096 bytes and long held strings compile and run, each in a row the compiler sizes from what the model can produce; `$fgets` lines, `$fscanf` look-ahead, open file descriptors and paths opened for writing grow with the run instead of failing at 4096 bytes, 30 channels and 64 paths (the mcd keeps §9.5.1's 30); a `$monitor` watching more than 64 values compares them; VPI derivative handles and analog value strings are no longer capped at 64 (#29).
+- `absdelay`: a history ring that fills while its delay still needs the oldest sample thins its older half instead of ending the run (E1012 retired; W1051 warns once per site); a run whose ring never fills answers exactly as before (#29).
 
 ## v1.1.0 — 2026-10-08
 

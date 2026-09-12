@@ -11,10 +11,11 @@
 // then 1 .. 100. Every query lands on a grid point, so linear interpolation is
 // exact. At t = 1600ps the query t - td = 100ps is 1500 accepted samples old.
 //
-// THE LEGAL NEIGHBOUR is the refusal: the same delay WITHOUT maxdelay keeps
-// the 1024-sample ring and ends the run with E1012 at the 1025th point
-// (absdelay_history_underrun_is_fatal.va pins that exit on a 1ns grid). A ring
-// that did not grow would do that here too, before t = 1600ps.
+// THE NEIGHBOUR: the same delay WITHOUT maxdelay keeps the 1024-sample ring,
+// which fills inside its window and is thinned (W1051;
+// absdelay_history_past_capacity.va pins that on a 1ns grid). Here the ring is
+// sized from maxdelay, so it never fills inside the window and every sample
+// keeps its full 1ps resolution.
 //
 //! lrm 4.5.7
 //! bias V(n) = 0
