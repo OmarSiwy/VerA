@@ -19,7 +19,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 /// Scheduler ticks. `Time` below is the timescale module, not this.
 pub const Tick = @import("../scheduler.zig").Time;
 const Time = @import("../time.zig");
-const deep = @import("../deep.zig");
+const deep = @import("frontend").deep_stack;
 const compile = @import("compile.zig");
 /// Public for the VPI (src/vpi/value.zig), which writes a value the way a
 /// process does (`waiters.store` now, `exec.enqueue` of a `.write` later), so a
@@ -965,7 +965,7 @@ pub const Run = struct {
         return error.DigitalFailed;
     }
     /// `fail` at expression `e`'s main token, with a fixed message.
-    /// A walk ran out of the stack `deep.run` reserved, at token `tok`.
+    /// A walk ran out of the stack `deep.runGuarded` reserved, at token `tok`.
     pub fn deepFail(self: *Run, tok: u32) Error {
         return self.fail(tok, deep.message, .{deep.mib()});
     }
@@ -1401,7 +1401,7 @@ const default_quantum: Time.Quantum = .s;
 /// Runs `source` to completion: `elaborate`, then every event. `arena` and
 /// `bag` must outlive the call; the transcript goes to `out`.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
-    return deep.run(0, runDeep, .{ arena, source, opts, bag, out });
+    return deep.runGuarded(0, runDeep, .{ arena, source, opts, bag, out });
 }
 
 fn runDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
@@ -1423,7 +1423,7 @@ pub const DeviceZig = struct {
 /// under `schedule`. A design that cannot be one is E1103 in `bag` and
 /// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
 pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
-    return deep.run(0, emitDeviceDeep, .{ arena, source, opts, schedule, bag });
+    return deep.runGuarded(0, emitDeviceDeep, .{ arena, source, opts, schedule, bag });
 }
 
 fn emitDeviceDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
@@ -1449,7 +1449,7 @@ fn emitDeviceDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, s
 /// caller that holds it may step it with `runUntil` for as long as the arena
 /// lives, as a mixed-signal coordinator does.
 pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
-    return deep.run(0, elaborateDeep, .{ arena, source, opts, bag, out });
+    return deep.runGuarded(0, elaborateDeep, .{ arena, source, opts, bag, out });
 }
 
 fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {

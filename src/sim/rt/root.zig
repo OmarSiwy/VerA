@@ -21,7 +21,7 @@ pub const vcd = @import("../digital/vcd.zig");
 /// §18.3 the extended (ports) dump.
 pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
-const deep = @import("../deep.zig");
+const deep = @import("frontend").deep_stack;
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
@@ -45,7 +45,7 @@ test {
 /// the transcript on stdout and diagnostics on stderr; returns `vera --run`'s
 /// exit status. The names in `opts` resolve against the working directory.
 pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
-    return deep.run(0, interpretDeep, .{ init, opts, source });
+    return deep.runGuarded(0, interpretDeep, .{ init, opts, source });
 }
 
 fn interpretDeep(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
@@ -140,7 +140,7 @@ pub const Dispatch = fn (*State, u32) Error!void;
 /// rerun's output past it is printed. Run with the argument
 /// `--vera-state`, it says which ran in one `vera-state:` line on stderr.
 pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
-    return deep.run(0, struct {
+    return deep.runGuarded(0, struct {
         fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
             return autoDeep(i, dd, u, four, two_);
         }
@@ -178,7 +178,7 @@ fn autoDeep(init_: std.process.Init, d: *const Design, units: i32, comptime four
 
 /// The `main` of a 4-state or `--two-state` executable.
 pub fn main(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch) u8 {
-    return deep.run(0, struct {
+    return deep.runGuarded(0, struct {
         fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
             var s: State = undefined;
             s.init(i, dd, u) catch |e| return s.exit(e);
@@ -1233,7 +1233,7 @@ pub const State = struct {
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
     /// automatic one (§10.2.3) sets its frame, `fill.len` words from `lo`,
     /// aside and makes it x (`fill`, the x of each word); `leave` puts it back.
-    /// `error.Failed` once the activations exhaust the stack `deep.run`
+    /// `error.Failed` once the activations exhaust the stack `deep.runGuarded`
     /// reserved; `error.Rerun` for an automatic frame in the 2-state phase.
     pub fn enter(self: *State, sub: u32, lo: u32, fill: []const u64) Error!void {
         if (deep.exhausted()) return self.fail(deep.message, .{deep.mib()});

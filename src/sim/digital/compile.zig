@@ -12,7 +12,7 @@ const Front = @import("frontend");
 const Ast = Front.Ast;
 const exec = @import("exec.zig");
 const evaluate = @import("evaluate.zig");
-const deep = @import("../deep.zig");
+const deep = @import("frontend").deep_stack;
 const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
@@ -587,7 +587,7 @@ fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
 }
 
 // IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up. Its
-// depth is bounded by the stack `deep.run` reserved (`deep.exhausted`).
+// depth is bounded by the stack `deep.runGuarded` reserved (`deep.exhausted`).
 fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
     if (e == .none) return self.fail(0, "omitted expressions are not implemented", .{});
     if (deep.exhausted()) return self.deepFail(self.file.exprs.mainTok(e));
@@ -946,7 +946,7 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
 
 /// Appends statement `id`'s bytecode, compiled in the executing scope, at
 /// the end of `Run.code`. `depth` is the statement nesting so far, bounded
-/// by the stack `deep.run` reserved. Every expression is type-checked here,
+/// by the stack `deep.runGuarded` reserved. Every expression is type-checked here,
 /// so nothing a process runs can fail to type at run time.
 pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
     const tok = self.file.stmtTok(id);
