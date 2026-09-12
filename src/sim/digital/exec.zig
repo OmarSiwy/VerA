@@ -14,6 +14,7 @@ const Front = @import("frontend");
 const Ast = Front.Ast;
 const Int = Front.Integer;
 const compile = @import("compile.zig");
+const deep = @import("../deep.zig");
 const display = @import("display.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
@@ -287,18 +288,14 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
 
 // ---- synchronous subroutines (IEEE 1364-2005 §10) ----------------------------
 
-/// The stack `callSync`'s nested activations may use: half of the smallest
-/// main-thread stack VerA runs on (8 MiB on Linux and macOS).
-const max_sync_stack = 4 << 20;
-
 /// Runs subroutine `idx` to completion as one activation (§10.2.2, §10.4) and
 /// returns a function's result, in `a`. The arguments are evaluated in the
 /// caller before anything of the callee's changes (a recursive call's argument
 /// reads the calling activation), copied into the formals, the body runs on a
 /// scratch arena of its own, and the outputs are copied back. An automatic
 /// subroutine's frame is saved, set to x, and restored after (§10.2.3, §10.4.2).
-/// Fails past 1024 nested activations or 4 MiB of host stack. After a
-/// §10.3 `disable` of the subroutine, outputs are not copied back.
+/// Nests as deep as the stack `deep.run` reserved (`deep.exhausted`). After
+/// a §10.3 `disable` of the subroutine, outputs are not copied back.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
     // ponytail: `repeat` counters are per site, so a recursive body that loops
     // with `repeat` across its own recursion shares one.
@@ -312,11 +309,8 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     const sub = &self.subs.items[idx];
     const decl = sub.decl;
     const f = sub.frame;
-    // An activation's frames are large and the stack is the host thread's,
-    // so the bound is on the stack used as well as the depth.
-    if (self.sync_depth == 0) self.sync_stack = @frameAddress();
-    if (self.sync_depth == 1024 or self.sync_stack -| @frameAddress() > max_sync_stack)
-        return self.fail(decl.main_tok, "task and function calls nested deeper than 1024, or past 4 MiB of stack, are not implemented", .{});
+    // An activation's frames are large: the bound is the stack itself.
+    if (deep.exhausted()) return self.deepFail(decl.main_tok);
     const inputs = try a.alloc(?Int.Literal, args.len);
     for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
         in.* = null;
@@ -341,7 +335,6 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     for (inputs, f.ports) |in, slot| if (in) |v| @memcpy(self.values[slot].planes, v.planes);
     const caller_scope = self.scope;
     const caller_pc = self.pc;
-    self.sync_depth += 1;
     sub.active += 1;
     {
         var body = std.heap.ArenaAllocator.init(self.arena);
@@ -349,7 +342,6 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
         try execute(self, &body, sub.entry);
     }
     sub.active -= 1;
-    self.sync_depth -= 1;
     self.scope = caller_scope;
     self.pc = caller_pc;
     const result = if (decl.is_function) try copyLiteral(a, self.values[f.result]) else try filled(a, 1, false, .x);

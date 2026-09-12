@@ -21,6 +21,7 @@ pub const vcd = @import("../digital/vcd.zig");
 /// §18.3 the extended (ports) dump.
 pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
+const deep = @import("../deep.zig");
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
@@ -44,6 +45,10 @@ test {
 /// the transcript on stdout and diagnostics on stderr; returns `vera --run`'s
 /// exit status. The names in `opts` resolve against the working directory.
 pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
+    return deep.run(0, interpretDeep, .{ init, opts, source });
+}
+
+fn interpretDeep(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
     const io = init.io;
     var out_buf: [1 << 16]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &out_buf);
@@ -135,6 +140,14 @@ pub const Dispatch = fn (*State, u32) Error!void;
 /// rerun's output past it is printed. Run with the argument
 /// `--vera-state`, it says which ran in one `vera-state:` line on stderr.
 pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
+    return deep.run(0, struct {
+        fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
+            return autoDeep(i, dd, u, four, two_);
+        }
+    }.go, .{ init_, d, units });
+}
+
+fn autoDeep(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
     var s: State = undefined;
     s.init(init_, d, units) catch |e| return s.exit(e);
     s.live = s.gpa.alloc(u64, d.x.len) catch |e| return s.exit(e);
@@ -165,9 +178,13 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
 
 /// The `main` of a 4-state or `--two-state` executable.
 pub fn main(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch) u8 {
-    var s: State = undefined;
-    s.init(init_, d, units) catch |e| return s.exit(e);
-    return s.exit(run(init_, &s, four, null));
+    return deep.run(0, struct {
+        fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
+            var s: State = undefined;
+            s.init(i, dd, u) catch |e| return s.exit(e);
+            return s.exit(run(i, &s, four, null));
+        }
+    }.go, .{ init_, d, units });
 }
 
 /// `loop` over the whole run. With the argument `--vera-snapshot`, every
@@ -1216,10 +1233,10 @@ pub const State = struct {
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
     /// automatic one (§10.2.3) sets its frame, `fill.len` words from `lo`,
     /// aside and makes it x (`fill`, the x of each word); `leave` puts it back.
-    /// `error.Failed` past 1024 nested activations; `error.Rerun` for an
-    /// automatic frame in the 2-state phase.
+    /// `error.Failed` once the activations exhaust the stack `deep.run`
+    /// reserved; `error.Rerun` for an automatic frame in the 2-state phase.
     pub fn enter(self: *State, sub: u32, lo: u32, fill: []const u64) Error!void {
-        if (self.depth == 1024) return self.fail("task and function calls nested deeper than 1024 are not implemented", .{});
+        if (deep.exhausted()) return self.fail(deep.message, .{deep.mib()});
         self.depth += 1;
         self.active[sub] += 1;
         if (fill.len == 0) return;
@@ -2252,7 +2269,7 @@ test "§8 a UDP of any number of inputs: 65, one past the old 64, and 300" {
     }
 }
 
-test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1024 deep at most" {
+test "§10.2.3 enter sets an automatic frame aside as x and leave restores it, at any depth" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const s = try testState(arena.allocator(), &two_slots);
@@ -2262,9 +2279,10 @@ test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1
     s.leave(0, 0, 2);
     try testing.expectEqual(W{ .v = 7, .x = 0 }, s.get(0));
     try testing.expectEqual(W{ .v = 9, .x = 0 }, s.get(1));
-    for (0..1024) |_| try s.enter(0, 0, &.{});
-    try testing.expectError(error.Failed, s.enter(0, 0, &.{}));
-    for (0..1024) |_| s.leave(0, 0, 0);
+    // One past the old 1024 and well past it: no count bounds the depth,
+    // only the stack (`deep.exhausted`), which these calls do not grow.
+    for (0..100000) |_| try s.enter(0, 0, &.{});
+    for (0..100000) |_| s.leave(0, 0, 0);
     try testing.expectEqual(@as(u32, 0), s.depth);
     try testing.expectEqual(@as(u32, 0), s.active[0]);
 }

@@ -26,6 +26,7 @@ const expectRun = root.expectRun;
 const expectRejected = root.expectRejected;
 const compile = @import("compile.zig");
 const evaluate = @import("evaluate.zig");
+const deep = @import("../deep.zig");
 const binding = @import("bind.zig");
 const Type = compile.Type;
 const net_mod = @import("net.zig");
@@ -227,9 +228,9 @@ pub fn defOf(r: *const Run, m: *const Ast.ModuleDecl) u32 {
 /// driver rows its continuous assignments and port connections contribute.
 /// Recurses into child instances AFTER its own nets exist, so a port connection
 /// always resolves against a parent that is fully declared.
-pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u16) Error!void {
+pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u32) Error!void {
     const arena = r.arena;
-    if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
+    if (deep.exhausted()) return r.deepFail(m.main_tok);
     if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.functions.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     // A digital parse makes each generate construct an `analog` block over
@@ -904,7 +905,7 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
 /// ponytail: the parser hoists a generate block's nets to the module, so they
 /// are the enclosing instance's names. A part-select bound written with a genvar is folded once, with
 /// the first iteration's value; a bit-select is read per iteration.
-fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
+fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u32) Error!void {
     if (s == .none) return;
     const tok = r.file.stmtTok(s);
     switch (r.file.stmt(s)) {
@@ -1194,7 +1195,7 @@ fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
 /// §6.2.2 one module or UDP instance, declared in `scope`, or IEEE 1364
 /// §12.1.2's array of them, one instance per element from the lower index
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
-fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
+fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32) Error!void {
     r.scope = scope;
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
@@ -1237,7 +1238,7 @@ fn arrayConn(r: *Run, e: *Elab, inst: *const Ast.Instance, port: Ast.Port, conn:
     };
 }
 
-fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16, index: ?i64) Error!void {
+fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u32, index: ?i64) Error!void {
     const arena = r.arena;
     r.scope = scope;
     {

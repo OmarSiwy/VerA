@@ -663,9 +663,9 @@ pub fn emitScope(self: *Run) Error!void {
     // The named blocks enclosing `pc` in this scope nest, so each is one
     // statement level deeper than the last: printed shallowest first, with no
     // bound on how many.
-    var last: i32 = -1;
+    var last: i64 = -1;
     while (true) {
-        var next: ?struct { depth: u16, name: Ast.StrId } = null;
+        var next: ?struct { depth: u32, name: Ast.StrId } = null;
         var it = self.blocks.iterator();
         while (it.next()) |b| {
             if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end) continue;
