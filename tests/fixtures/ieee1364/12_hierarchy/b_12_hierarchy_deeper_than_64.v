@@ -1,10 +1,12 @@
-// An engine limit, not a language rule. IEEE 1364-2005 §12.1.1 builds a
-// finite hierarchy and bounds nothing about its depth. The digital runner
-// elaborates at most 64 levels (specification/Vague_Decisions.md) and refuses a deeper
-// tree with E1100. m0 instantiates m1 and so on to m66.
-// digital-runner: reject
-//! reject E1100
-//! reject hierarchies deeper than 64 levels
+// IEEE 1364-2005 §12.1.1 builds a finite hierarchy and bounds nothing about
+// its depth. VerA refused one deeper than 64 levels (E1100) until 2026-10
+// (#29); it now elaborates as deep as the stack reserved for it allows.
+//
+// HAND DERIVATION. m0 instantiates m1 and so on to m66: 66 levels below the
+// top, past the old 64. Only m66 has a process, and it prints its own
+// hierarchical name (§17.1.1.6 %m): m0 then 66 instance names u.
+//! inherited IEEE 1364-2005 12.1.1
+//! expect stdout b_12_hierarchy_deeper_than_64.expected.txt
 module m0; m1 u(); endmodule
 module m1; m2 u(); endmodule
 module m2; m3 u(); endmodule
@@ -71,4 +73,4 @@ module m62; m63 u(); endmodule
 module m63; m64 u(); endmodule
 module m64; m65 u(); endmodule
 module m65; m66 u(); endmodule
-module m66; initial $display("accepted"); endmodule
+module m66; initial $display("%m"); endmodule

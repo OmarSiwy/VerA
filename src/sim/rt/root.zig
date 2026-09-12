@@ -21,10 +21,10 @@ pub const vcd = @import("../digital/vcd.zig");
 /// §18.3 the extended (ports) dump.
 pub const evcd = @import("evcd.zig");
 const snapshot = @import("snapshot.zig");
+const deep = @import("../deep.zig");
 /// A native design as a contract device an analog host loads.
 pub const Device = @import("device.zig").Device;
 const Int = @import("frontend").Integer;
-const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
 const display = @import("../digital/display.zig");
 const W = logic.W;
@@ -45,6 +45,10 @@ test {
 /// the transcript on stdout and diagnostics on stderr; returns `vera --run`'s
 /// exit status. The names in `opts` resolve against the working directory.
 pub fn interpret(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
+    return deep.run(0, interpretDeep, .{ init, opts, source });
+}
+
+fn interpretDeep(init: std.process.Init, opts: digital.Options, source: []const u8) u8 {
     const io = init.io;
     var out_buf: [1 << 16]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &out_buf);
@@ -119,6 +123,10 @@ pub const Design = struct {
     /// whose out-of-line automatic activations each own this named event,
     /// else 0 (`waiters.eventContext`).
     act_events: []const u32 = &.{},
+    /// §9.3.2 per slot, where its forced selects start in `State.parts`
+    /// (`parts[part_start[slot]..part_start[slot + 1]]`); empty when no
+    /// `force` names a select.
+    part_start: []const u32 = &.{},
 };
 
 /// The dispatch of one phase: `Code(k).dispatch` of the emitted root.
@@ -132,6 +140,14 @@ pub const Dispatch = fn (*State, u32) Error!void;
 /// rerun's output past it is printed. Run with the argument
 /// `--vera-state`, it says which ran in one `vera-state:` line on stderr.
 pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
+    return deep.run(0, struct {
+        fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
+            return autoDeep(i, dd, u, four, two_);
+        }
+    }.go, .{ init_, d, units });
+}
+
+fn autoDeep(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch, comptime two_: Dispatch) u8 {
     var s: State = undefined;
     s.init(init_, d, units) catch |e| return s.exit(e);
     s.live = s.gpa.alloc(u64, d.x.len) catch |e| return s.exit(e);
@@ -162,9 +178,13 @@ pub fn auto(init_: std.process.Init, d: *const Design, units: i32, comptime four
 
 /// The `main` of a 4-state or `--two-state` executable.
 pub fn main(init_: std.process.Init, d: *const Design, units: i32, comptime four: Dispatch) u8 {
-    var s: State = undefined;
-    s.init(init_, d, units) catch |e| return s.exit(e);
-    return s.exit(run(init_, &s, four, null));
+    return deep.run(0, struct {
+        fn go(i: std.process.Init, dd: *const Design, u: i32) u8 {
+            var s: State = undefined;
+            s.init(i, dd, u) catch |e| return s.exit(e);
+            return s.exit(run(i, &s, four, null));
+        }
+    }.go, .{ init_, d, units });
 }
 
 /// `loop` over the whole run. With the argument `--vera-snapshot`, every
@@ -322,16 +342,13 @@ const late_base: u32 = 3 << 30;
 /// `resume_base + k`: process continuation `resumes[k]`, in an activation.
 const resume_base: u32 = 5 << 29;
 
-/// `root.Overrides`: the process ranges of a slot's `assign` and `force`,
-/// and of the forces of constant selects of a net (§9.3.2), each holding
-/// bits [lo, lo + width); `emit` numbers a net's distinct selects.
-/// ponytail: at most `max_parts` forced selects per net (`emit` refuses
-/// more); a list per slot if a design forces more of one net.
-const Layers = struct { assign: ?Range = null, force: ?Range = null, parts: [max_parts]Part = @splat(.{}) };
+/// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
+const Layers = struct { assign: ?Range = null, force: ?Range = null };
 const Range = struct { start: u32, end: u32 };
+/// The force of one constant select of a net (§9.3.2), holding bits
+/// [lo, lo + width) while `range` is set; `emit` numbers the distinct
+/// selects (`Design.part_start`).
 const Part = struct { lo: u32 = 0, width: u32 = 0, range: ?Range = null };
-/// Forced selects per net a native design may hold (`emit` refuses more).
-pub const max_parts = 4;
 
 /// Some `assign` or `force` (§9.3) can hold a slot: the executable's root
 /// declares `vera_overrides`.
@@ -617,6 +634,9 @@ pub const State = struct {
     /// the pc ranges of the procedural continuous assignments holding it.
     /// While one does, only its own process (`overriding`) writes the slot.
     layers: []Layers,
+    /// `Design.part_start` and one `Part` per forced select it numbers.
+    part_start: []const u32 = &.{},
+    parts: []Part,
     overriding: bool = false,
     /// §18 the dump, the design's catalog, and per slot (empty without a
     /// catalog) whether a change is dumped.
@@ -693,6 +713,8 @@ pub const State = struct {
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
             .layers = try gpa.alloc(Layers, if (overrides) d.slots else 0),
+            .part_start = d.part_start,
+            .parts = try gpa.alloc(Part, if (d.part_start.len == 0) 0 else d.part_start[d.part_start.len - 1]),
             .catalog = d.vcd,
             .port_files = d.ports_dump,
             .port_live = try gpa.alloc(evcd.Live, d.ports_dump.len),
@@ -722,6 +744,7 @@ pub const State = struct {
         @memset(self.resident, 0);
         @memset(self.monitored, false);
         @memset(self.layers, .{});
+        @memset(self.parts, .{});
         @memset(self.dumped, false);
         @memset(self.port_live, .{});
         for (d.order) |pc| try self.runPlain(pc, null);
@@ -1136,7 +1159,8 @@ pub const State = struct {
     inline fn forcedBits(self: *const State, slot: u32, j: usize) u64 {
         if (!overrides or self.overriding) return 0;
         var m: u64 = 0;
-        for (self.layers[slot].parts) |p| if (p.range != null) {
+        if (slot + 1 >= self.part_start.len) return 0;
+        for (self.parts[self.part_start[slot]..self.part_start[slot + 1]]) |p| if (p.range != null) {
             const lo: i64 = @as(i64, p.lo) - 64 * @as(i64, @intCast(j));
             const hi = lo + p.width;
             if (hi <= 0 or lo >= 64) continue;
@@ -1147,20 +1171,22 @@ pub const State = struct {
         return m;
     }
 
-    /// `exec` `.override_on` of a forced select: part `k` of `slot`, bits
-    /// [lo, lo + width), is held by the force whose process is pcs
+    /// `exec` `.override_on` of a forced select: `parts[k]`, bits
+    /// [lo, lo + width) of `slot`, is held by the force whose process is pcs
     /// [start, end), replacing the force of the same select before it.
     pub fn overrideBits(self: *State, slot: u32, k: u32, lo: u32, width: u32, start: u32, end: u32) Error!void {
-        const p = &self.layers[slot].parts[k];
+        std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
+        const p = &self.parts[k];
         if (p.range) |old| _ = try self.stop(old.start, old.end);
         p.* = .{ .lo = lo, .width = width, .range = .{ .start = start, .end = end } };
         try self.runPlain(start, null);
     }
 
-    /// `waiters.releaseBits`: part `k` of `slot` is its drivers' again; the
-    /// design re-resolves the net.
+    /// `waiters.releaseBits`: `parts[k]`, a select of `slot`, is its
+    /// drivers' again; the design re-resolves the net.
     pub fn releaseBits(self: *State, slot: u32, k: u32) Error!void {
-        const p = &self.layers[slot].parts[k];
+        std.debug.assert(k >= self.part_start[slot] and k < self.part_start[slot + 1]);
+        const p = &self.parts[k];
         if (p.range) |old| _ = try self.stop(old.start, old.end);
         p.range = null;
     }
@@ -1207,10 +1233,10 @@ pub const State = struct {
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
     /// automatic one (§10.2.3) sets its frame, `fill.len` words from `lo`,
     /// aside and makes it x (`fill`, the x of each word); `leave` puts it back.
-    /// `error.Failed` past 1024 nested activations; `error.Rerun` for an
-    /// automatic frame in the 2-state phase.
+    /// `error.Failed` once the activations exhaust the stack `deep.run`
+    /// reserved; `error.Rerun` for an automatic frame in the 2-state phase.
     pub fn enter(self: *State, sub: u32, lo: u32, fill: []const u64) Error!void {
-        if (self.depth == 1024) return self.fail("task and function calls nested deeper than 1024 are not implemented", .{});
+        if (deep.exhausted()) return self.fail(deep.message, .{deep.mib()});
         self.depth += 1;
         self.active[sub] += 1;
         if (fill.len == 0) return;
@@ -1842,11 +1868,11 @@ pub const State = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const file = display.sideFile(self.io, a, source, name) catch |e| return if (e == error.StreamTooLong)
-            self.fail(display.too_large, .{})
-        else
-            self.fail("the memory file cannot be read", .{});
-        var load: display.MemLoad = .init(file, radix, width, low, high, given, first, last);
+        const file = display.sideFile(self.io, a, source, name) catch return self.fail(display.cannot_read, .{});
+        defer file.close(self.io);
+        var buf: [4096]u8 = undefined;
+        var in = file.reader(self.io, &buf);
+        var load: display.MemLoad = .init(&in.interface, radix, width, low, high, given, first, last);
         const n = (width + 63) / 64;
         const m = try a.alloc(u64, n);
         @memset(m, std.math.maxInt(u64));
@@ -1913,16 +1939,13 @@ pub const State = struct {
     }
 
     /// One `%b`/`%o`/`%h`/`%d` operand (§17.1.1.3).
-    pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u32) Error!void {
+    pub fn value(self: *State, a: anytype, w: u32, signed: bool, radix: fmt.Radix, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
-        fmt.value(self.out, literal(&buf, w, signed), radix, width) catch |e| return switch (e) {
-            error.TooWide => self.fail("decimal display of an operand wider than 64 bits is not implemented", .{}),
-            error.WriteFailed => error.WriteFailed,
-        };
+        return fmt.value(self.out, self.gpa, literal(&buf, w, signed), radix, width);
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
-    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u32) Error!void {
+    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
         var f = self.time_format;
         if (width) |fw| f.width = fw;
@@ -1931,11 +1954,8 @@ pub const State = struct {
 
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
     /// padded on the left to `width`.
-    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u32) Error!void {
-        var buf: [display.real_buf]u8 = undefined;
-        const out = zCReal(&buf, r, conv, 0, 0, precision);
-        if (width) |w| if (out.len < w) try self.out.splatByteAll(' ', w - out.len);
-        try self.out.writeAll(out);
+    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u64) Error!void {
+        return display.real(self.out, self.gpa, r, conv, precision, width);
     }
 
     /// §17.1.1.5 `%v` of the native net `k` (`Nets.sig0`, kept by the fold
@@ -1956,7 +1976,7 @@ pub const State = struct {
     pub const Format = struct { text: []const u8, i: usize = 0, bad: bool = false };
 
     /// One argument-taking conversion of a `Format`.
-    pub const Spec = struct { conv: u8, width: ?u32, precision: i64 };
+    pub const Spec = struct { conv: u8, width: ?u64, precision: i64 };
 
     /// The characters of the `w`-bit format `a` (`system.text`) in `buf`,
     /// `w / 8` bytes rounded up, most significant first and its leading zero
@@ -2007,7 +2027,7 @@ pub const State = struct {
                 try self.out.writeByte('%');
                 continue;
             }
-            var width: ?u32 = null;
+            var width: ?u64 = null;
             while (f.i < t.len and t[f.i] >= '0' and t[f.i] <= '9') : (f.i += 1)
                 width = (width orelse 0) *| 10 +| (t[f.i] - '0');
             var precision: i64 = -1;
@@ -2021,8 +2041,6 @@ pub const State = struct {
                 f.bad = true;
                 return null;
             }
-            if ((width orelse 0) > display.max_field or precision > display.max_field)
-                return self.fail("a field width or precision here exceeds {d}", .{display.max_field});
             const conv = t[f.i];
             f.i += 1;
             switch (conv) {
@@ -2036,7 +2054,7 @@ pub const State = struct {
     }
 
     /// One `%s` or `%c` operand (§17.1.1.7).
-    pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u32) Error!void {
+    pub fn text(self: *State, a: anytype, w: u32, char: bool, width: ?u64) Error!void {
         var buf = logic.planesOf(a);
         try fmt.text(self.out, literal(&buf, w, false), char, width);
     }
@@ -2214,7 +2232,44 @@ test "§17.1.3 one $monitor line per time step however many watched stores" {
     try testing.expectEqual(@as(?u32, 2), s.monitorEnable(true));
 }
 
-test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1024 deep at most" {
+test "§8 a UDP of any number of inputs: 65, one past the old 64, and 300" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const D = @import("../digital/net.zig");
+    for ([_]u32{ 65, 300 }) |n| {
+        // A wide AND: every input 1 is 1; a 0 anywhere, whatever the rest
+        // (`?`), is 0; anything else matches no row and is x (§8.1.6).
+        const ones = try a.alloc(D.UdpSym, n);
+        @memset(ones, .{ .level = '1' });
+        const rows = try a.alloc(D.UdpRow, n + 1);
+        rows[0] = .{ .ins = ones, .state = 0, .out = '1', .edge_at = null };
+        for (rows[1..], 0..) |*r, k| {
+            const syms = try a.alloc(D.UdpSym, n);
+            @memset(syms, .{ .level = '?' });
+            syms[k] = .{ .level = '0' };
+            r.* = .{ .ins = syms, .state = 0, .out = '0', .edge_at = null };
+        }
+        var d = one_slot;
+        d.nets = &.{.{ .kind = .wire, .slot = 0, .off = 0, .width = 1, .drivers = &.{0}, .strong = true }};
+        d.drivers = &.{.{ .net = 0, .source = .{ .udp = 0 } }};
+        const udps = [_]net.Udp{.{ .rows = rows, .sequential = false, .ins = n, .state = .x }};
+        d.udps = &udps;
+        const s = try testState(a, &d);
+        const ins = try a.alloc(Bit, n);
+        @memset(ins, .one);
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 1), s.v[0] & 1);
+        ins[n - 1] = .zero;
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 0), s.v[0] & 1);
+        ins[n - 1] = .z;
+        try net.udp(s, 0, ins);
+        try testing.expectEqual(@as(u64, 1), s.x[0] & 1);
+    }
+}
+
+test "§10.2.3 enter sets an automatic frame aside as x and leave restores it, at any depth" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const s = try testState(arena.allocator(), &two_slots);
@@ -2224,9 +2279,10 @@ test "§10.2.3 enter sets an automatic frame aside as x and leave restores it; 1
     s.leave(0, 0, 2);
     try testing.expectEqual(W{ .v = 7, .x = 0 }, s.get(0));
     try testing.expectEqual(W{ .v = 9, .x = 0 }, s.get(1));
-    for (0..1024) |_| try s.enter(0, 0, &.{});
-    try testing.expectError(error.Failed, s.enter(0, 0, &.{}));
-    for (0..1024) |_| s.leave(0, 0, 0);
+    // One past the old 1024 and well past it: no count bounds the depth,
+    // only the stack (`deep.exhausted`), which these calls do not grow.
+    for (0..100000) |_| try s.enter(0, 0, &.{});
+    for (0..100000) |_| s.leave(0, 0, 0);
     try testing.expectEqual(@as(u32, 0), s.depth);
     try testing.expectEqual(@as(u32, 0), s.active[0]);
 }
@@ -2260,7 +2316,7 @@ test "§17.2.3 a held format: text, %% and %m print, a conversion is returned, a
     var f: State.Format = .{ .text = "a%%b%5.2fc%m%" };
     const sp = (try s.nextSpec(&f, "top.u", "work")).?;
     try testing.expectEqual(@as(u8, 'f'), sp.conv);
-    try testing.expectEqual(@as(?u32, 5), sp.width);
+    try testing.expectEqual(@as(?u64, 5), sp.width);
     try testing.expectEqual(@as(i64, 2), sp.precision);
     try testing.expectEqualStrings("a%b", s.sink.buffered());
     // The rest prints; the format ends inside a conversion (W1153).
@@ -2272,8 +2328,9 @@ test "§17.2.3 a held format: text, %% and %m print, a conversion is returned, a
     try testing.expect(try s.nextSpec(&plain, "", "") == null);
     var unknown: State.Format = .{ .text = "%q" };
     try testing.expectError(error.Failed, s.nextSpec(&unknown, "", ""));
+    // No width is too large: past the old 4096 and past a u32.
     var huge: State.Format = .{ .text = "%99999999999d" };
-    try testing.expectError(error.Failed, s.nextSpec(&huge, "", ""));
+    try testing.expectEqual(@as(?u64, 99999999999), (try s.nextSpec(&huge, "", "")).?.width);
 }
 
 test "§9.7.1 delays: an x is no delay, a negative integer an unsigned time; §9.6 repeat counts" {

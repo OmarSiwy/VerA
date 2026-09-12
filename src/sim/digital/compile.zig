@@ -12,6 +12,7 @@ const Front = @import("frontend");
 const Ast = Front.Ast;
 const exec = @import("exec.zig");
 const evaluate = @import("evaluate.zig");
+const deep = @import("../deep.zig");
 const display = @import("display.zig");
 const driver = @import("driver.zig");
 const system = @import("system.zig");
@@ -421,15 +422,15 @@ fn rememberVpiScope(self: *Run, e: Ast.ExprId) Error!void {
     try self.vpi_expr_scopes.put(self.arena, .{ self.instanceOf(self.scope), @backingInt(e) }, self.scope);
 }
 
-fn rememberVpiArgument(self: *Run, e: Ast.ExprId, depth: u16) Error!void {
+fn rememberVpiArgument(self: *Run, e: Ast.ExprId, depth: u32) Error!void {
     if (e == .none) return;
-    if (depth >= 256) return self.exprFail(e, "digital expressions deeper than 256 AST levels are not implemented");
+    if (deep.exhausted()) return self.deepFail(self.file.exprs.mainTok(e));
     try rememberVpiScope(self, e);
     var buf: [3]Ast.ExprId = undefined;
     for (self.file.exprs.children(e, &buf)) |arg| try rememberVpiArgument(self, arg, depth + 1);
 }
 
-fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
+fn inferValue(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
     const ty = try infer(self, e, depth);
     if (ty.width == 0) return self.exprFail(e, "zero replication requires an immediately enclosing concatenation with a positive-width operand");
     return ty;
@@ -585,12 +586,11 @@ fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
     return evaluate.indexInt(v) orelse self.exprFail(e, "a part-select bound is outside the supported i64 range");
 }
 
-// IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up.
-// ponytail: recursive evaluation is bounded to 256 AST levels; an explicit
-// stack can remove this ceiling when deeper expressions are needed.
-fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
+// IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up. Its
+// depth is bounded by the stack `deep.run` reserved (`deep.exhausted`).
+fn infer(self: *Run, e: Ast.ExprId, depth: u32) Error!Type {
     if (e == .none) return self.fail(0, "omitted expressions are not implemented", .{});
-    if (depth == 256) return self.exprFail(e, "digital expressions deeper than 256 AST levels are not implemented");
+    if (deep.exhausted()) return self.deepFail(self.file.exprs.mainTok(e));
     if (self.systf != null) try rememberVpiScope(self, e);
     const key: SpecExpr = .{ .spec = self.specOf(self.scope), .e = e };
     if (self.spec_types.get(key)) |ty| return ty;
@@ -945,12 +945,12 @@ pub fn append(self: *Run, instruction: Instruction) Error!u32 {
 }
 
 /// Appends statement `id`'s bytecode, compiled in the executing scope, at
-/// the end of `Run.code`. `depth` is the statement nesting so far; 256 is
-/// refused rather than recursed into. Every expression is type-checked here,
+/// the end of `Run.code`. `depth` is the statement nesting so far, bounded
+/// by the stack `deep.run` reserved. Every expression is type-checked here,
 /// so nothing a process runs can fail to type at run time.
-pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
+pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u32) Error!void {
     const tok = self.file.stmtTok(id);
-    if (depth == 256) return self.fail(tok, "digital statements deeper than 256 AST levels are not implemented", .{});
+    if (deep.exhausted()) return self.deepFail(tok);
     try site(self, id);
     switch (self.file.stmt(id)) {
         .empty => {},
@@ -1436,7 +1436,7 @@ fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcCon
 /// IEEE 1364-2005 §9.8.2 a parallel block: each statement is compiled as an
 /// arm ending in `.join_arm`; `.fork` starts them all and suspends the parent
 /// until the last one is back, which resumes it at the end of the block.
-fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u16) Error!void {
+fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u32) Error!void {
     const join: u32 = @intCast(self.joins.items.len);
     try self.joins.append(self.arena, 0);
     const arms = try self.arena.alloc(u32, body.len);
@@ -1477,7 +1477,7 @@ pub fn compileSub(self: *Run, idx: u32) Error!void {
 /// Task `idx`'s body compiled once, jumped over where it is emitted, for
 /// `.call_timed`. An automatic task gets a frame of its own, which each
 /// activation fills in turn; a static one shares its one frame (§10.2.3).
-fn outOfLine(self: *Run, idx: u32, depth: u16) Error!void {
+fn outOfLine(self: *Run, idx: u32, depth: u32) Error!void {
     // ponytail: `disable` of the task stops its inlined copies, not these
     // activations; and `repeat` counters and intra-assignment cells are per
     // site, so a body that suspends inside one of them across its own
@@ -1559,7 +1559,7 @@ fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, 
 /// between every such copy (§10.2.3); an automatic one gets a frame per call
 /// site, which is per activation because a site cannot be re-entered while
 /// its process is suspended inside it.
-fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32, depth: u16) Error!void {
+fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32, depth: u32) Error!void {
     if (self.in_function) return self.fail(tok, "§10.4.4: a function cannot enable a task", .{});
     var inst = self.instanceOf(self.scope);
     var leaf = name;
@@ -1671,9 +1671,9 @@ pub fn sensitivityProbes(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32), pr
 /// reads. An assignment target is written, not read, but its subscripts are
 /// read. Requires `compileStmt` to have accepted the statement, so every
 /// expression in it is type-checked.
-fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) Error!void {
+fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u32) Error!void {
     if (id == .none) return;
-    if (depth == 256) return self.fail(self.file.stmtTok(id), "digital statements deeper than 256 AST levels are not implemented", .{});
+    if (deep.exhausted()) return self.deepFail(self.file.stmtTok(id));
     const ex = &self.file.exprs;
     switch (self.file.stmt(id)) {
         .block => |b| for (b.body) |s| try readSlots(self, s, out, depth + 1),
@@ -1780,7 +1780,7 @@ fn intraTimed(s: @FieldType(Ast.Stmt, "assign")) bool {
 /// expression, or for `@*` (`timing_implicit`) the slots the assignment reads,
 /// IEEE 1364-2005 §9.7.5's list as `event_control`'s `@*` builds it from a
 /// statement.
-fn waitIntra(self: *Run, id: Ast.StmtId, s: @FieldType(Ast.Stmt, "assign"), depth: u16) Error!void {
+fn waitIntra(self: *Run, id: Ast.StmtId, s: @FieldType(Ast.Stmt, "assign"), depth: u32) Error!void {
     if (!s.timing_implicit) {
         _ = try append(self, .{ .wait_event = s.timing });
         return;
@@ -2003,13 +2003,22 @@ test "nested unsupported forms fail preflight even in unselected conditional arm
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=1'b0 && $bogus(1); end endmodule", "expression form");
 }
 
-test "deep left-associated source expression fails before output" {
-    var source = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer source.deinit();
-    try source.writer.writeAll("module m; reg a; initial begin $display(\"before\"); a=0");
-    for (0..256) |_| try source.writer.writeAll("+0");
-    try source.writer.writeAll("; end endmodule");
-    try expectRejected(source.written(), "deeper than 256 AST levels");
+test "an expression or statement of any depth: 256, one past the old bound, and 900" {
+    // The parser still bounds nesting at 1024 (`max_depth`, the frontend's).
+    for ([_]usize{ 256, 900 }) |n| {
+        var source = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer source.deinit();
+        try source.writer.writeAll("module m; integer a; initial begin a=0");
+        for (0..n) |_| try source.writer.writeAll("+1");
+        try source.writer.writeAll("; $display(\"%0d\", a); end endmodule");
+        var want: [16]u8 = undefined;
+        try @import("root.zig").expectRun(source.written(), try std.fmt.bufPrint(&want, "{d}\n", .{n}));
+        source.clearRetainingCapacity();
+        try source.writer.writeAll("module m; initial ");
+        for (0..n) |_| try source.writer.writeAll("if(1) ");
+        try source.writer.writeAll("$display(\"deep\"); endmodule");
+        try @import("root.zig").expectRun(source.written(), "deep\n");
+    }
 }
 
 test "control flow validates unselected bodies and every case label" {
@@ -2020,15 +2029,6 @@ test "control flow validates unselected bodies and every case label" {
     try expectRejected("module m; initial case(1) endcase endmodule", "at least one item");
     try expectRejected("module m; initial repeat(65'd1); endmodule", "wider than 64");
     try expectRejected("module m; initial repeat(-1); endmodule", "negative repeat counts");
-}
-
-test "statement depth is explicit and diagnosed before execution" {
-    var source = std.Io.Writer.Allocating.init(std.testing.allocator);
-    defer source.deinit();
-    try source.writer.writeAll("module m; initial $display(\"before\"); initial ");
-    for (0..256) |_| try source.writer.writeAll("if(1) ");
-    try source.writer.writeAll("; endmodule");
-    try expectRejected(source.written(), "statements deeper than 256");
 }
 
 test "concatenation validates zero replication structure and constant counts" {

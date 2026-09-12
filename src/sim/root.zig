@@ -33,4 +33,5 @@ test {
     _ = fmt;
     _ = rt;
     _ = spice;
+    _ = @import("deep.zig");
 }
