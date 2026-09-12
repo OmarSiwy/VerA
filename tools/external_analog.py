@@ -140,7 +140,7 @@ def fetch_zip(cache, suite, url, sha256):
 def digest(va, extra):
     h = hashlib.sha256(extra.encode())
     for f in sorted(va.parent.rglob("*")):
-        if f.is_file() and f.suffix.lower() in (".va", ".vams", ".h", ".include", ".inc"):
+        if f.is_file() and f.suffix.lower() in (".va", ".v", ".vams", ".h", ".include", ".inc"):
             h.update(f.name.encode() + f.read_bytes())
     return h.hexdigest()[:16]
 
@@ -153,10 +153,11 @@ class Compiler:
         self.vera_id = f"{st.st_mtime_ns}:{st.st_size}" if st else ""
 
     def osdi(self, tool, va, includes=()):
-        """`va` compiled by `tool` ("vera" or "openvaf"), cached; (path, error)."""
+        """`va` (a .va, or for vera a .v) compiled by `tool` ("vera" or
+        "openvaf"), cached; (path, error)."""
         va = Path(va).resolve()
         key = digest(va, f"{tool}:{self.vera_id if tool == 'vera' else ''}:{includes}")
-        out = self.cache / "osdi" / f"{va.stem}.{tool}.{key}.osdi"
+        out = self.cache / "osdi" / f"{va.stem}{va.suffix}.{tool}.{key}.osdi"
         if out.exists():
             return out, None
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -687,13 +688,17 @@ def run_qaspec(prefix, spec, model, defined, sims, refdir=None, skip=(), src=Non
 def suite_osdi(ctx):
     """Hand-derived decks: each `<name>.sp` beside `<name>.va` carries
     `*! expect <vector> <value> <reltol>` lines, checked against ngspice's
-    `print` of that vector with `{osdi}` replaced by VerA's library."""
+    `print` of that vector with `{osdi}` replaced by VerA's library, and
+    `{osdi_v}` by its library of a `<name>.v` beside it."""
     d = EXT / "osdi"
     with tempfile.TemporaryDirectory(prefix="vera-osdi-") as tmp:
         for sp in sorted(d.glob("*.sp")):
             name = f"osdi/{sp.stem}"
             osdi, err = ctx.cc.osdi("vera", sp.with_suffix(".va"))
             text = sp.read_text()
+            if not err and sp.with_suffix(".v").exists():
+                osdi_v, err = ctx.cc.osdi("vera", sp.with_suffix(".v"))
+                text = text.replace("{osdi_v}", str(osdi_v))
             expects = re.findall(r"(?m)^\*! expect (\S+) (\S+) (\S+)", text)
             if err:
                 for v, _, _ in expects:

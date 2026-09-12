@@ -8,7 +8,7 @@ followed by more `.v` files holding the library cells it instantiates.
 ```text
 vera [options] FILE.va
 vera --run|--emit-exe [options] FILE.v [MORE.v ...]
-vera --emit-zig|--check|--emit-so [options] FILE.v [MORE.v ...]
+vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
 vera --explain CODE
 ```
 
@@ -35,7 +35,7 @@ flag never silently wins over an earlier one of another kind.
 | `--emit-exe` | build a self-checking testbench from the source's `//!` directives (or a `.v` design's executable) and print its path | yes |
 | `--run` | `--emit-exe`, then run it; the testbench's exit status is `vera`'s | yes |
 | `--emit-so` | build the device as a shared library for your simulator, through your `--dyn` module | yes |
-| `--emit-osdi` | build the device as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `tools/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
+| `--emit-osdi` | build the device (of a `.va`, or a `.v` design's top module) as an OSDI 0.4 library that ngspice loads with `pre_osdi` (`--emit-so` under the `tools/osdi_dyn.zig` built into `vera`); `-o PATH` names it, default `<module>.osdi`, and its path is printed | yes |
 | `--explain CODE` | print the long explanation of a diagnostic code | no |
 
 With no mode flag, `vera FILE.va` is `vera --lint FILE.va`.

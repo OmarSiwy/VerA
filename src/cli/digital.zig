@@ -1,6 +1,6 @@
 //! `vera` over a `.v` design: the parsed command line and the source -> a
 //! `--run` transcript, an `--emit-exe` executable's path, or a contract
-//! device (`--emit-zig`, `--check`, `--emit-so`), with the digital engine's
+//! device (`--emit-zig`, `--check`, `--emit-so`, `--emit-osdi`), with the digital engine's
 //! diagnostics on stderr. `main` dispatches here once the source is read and
 //! the flags that conflict whatever the language have been refused.
 //!
@@ -37,7 +37,7 @@ pub fn run(
 ) !u8 {
     const json = cli.json;
     const device = cli.emit_zig or cli.check or cli.emit_so;
-    if ((cli.exe_flag == null) == !device or cli.lint_flag or (cli.out_path != null and !cli.emit_zig)) {
+    if ((cli.exe_flag == null) == !device or cli.lint_flag or (cli.out_path != null and !cli.emit_zig and !cli.emit_osdi)) {
         try err.writeAll("error: digital .v source takes --run or --emit-exe, or --emit-zig, --check or --emit-so for a contract device\n");
         return 2;
     }
@@ -52,6 +52,7 @@ pub fn run(
         .zig = cli.emit_zig,
         .check = cli.check,
         .so = cli.emit_so,
+        .osdi = cli.emit_osdi,
         .out_path = cli.out_path,
         .contract = cli.contract_path,
         .dyn = cli.dyn_path,
@@ -159,6 +160,9 @@ const DeviceFlags = struct {
     zig: bool,
     check: bool,
     so: bool,
+    /// `--emit-osdi`: `so` under `tools/osdi_dyn.zig` (`dyn`), copied to
+    /// `out_path` or `<module>.osdi`.
+    osdi: bool,
     out_path: ?[]const u8,
     contract: ?[]const u8,
     dyn: ?[]const u8,
@@ -171,10 +175,11 @@ const DeviceFlags = struct {
     engine_cache: []const u8,
 };
 
-/// `vera --emit-zig|--check|--emit-so design.v`: the top module as a contract
-/// device (`digital.emitDevice`). `--check` builds it beside a root that
-/// validates it and calls every hook; `--emit-so` builds it over the VerA
-/// tree `--contract` sits in.
+/// `vera --emit-zig|--check|--emit-so|--emit-osdi design.v`: the top module
+/// as a contract device (`digital.emitDevice`). `--check` builds it beside a
+/// root that validates it and calls every hook; `--emit-so` builds it over
+/// the VerA tree `--contract` sits in, and `--emit-osdi` is `--emit-so`
+/// under that tree's `tools/osdi_dyn.zig`.
 fn emitDevice(
     gpa: std.mem.Allocator,
     io: Io,
@@ -226,7 +231,7 @@ fn emitDevice(
         }
     }
     if (f.so) {
-        const wd = f.work_dir orelse return missing(err, "--emit-so", "--work-dir DIR");
+        const wd = f.work_dir orelse if (f.osdi) ".zig-cache/vera-tb" else return missing(err, "--emit-so", "--work-dir DIR");
         const dyn = f.dyn orelse return missing(err, "--emit-so", "--dyn PATH");
         const tree = std.fs.path.dirname(std.fs.path.dirname(f.contract.?) orelse ".") orelse ".";
         const at = struct {
@@ -277,7 +282,14 @@ fn emitDevice(
         };
         defer r.deinit(gpa);
         switch (r) {
-            .ok => |a| try out.print("{s}\n", .{a.so_path}),
+            .ok => |a| if (f.osdi) {
+                const dest = f.out_path orelse try std.fmt.allocPrint(arena, "{s}.osdi", .{dev.name});
+                Io.Dir.cwd().copyFile(a.so_path, Io.Dir.cwd(), dest, io, .{}) catch |e| {
+                    try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
+                    return 1;
+                };
+                try out.print("{s}\n", .{dest});
+            } else try out.print("{s}\n", .{a.so_path}),
             .failed => |b| {
                 try err.print("error: {s}: the generated device did not compile:\n", .{opts.file_name});
                 try b.renderToWriter(.{}, err);

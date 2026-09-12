@@ -29,7 +29,7 @@ const optimize_names = std.StaticStringMap(std.lang.Optimize).initComptime(.{
 pub const usage_text =
     \\usage: vera [options] FILE.va
     \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
-    \\       vera --emit-zig|--check|--emit-so [options] FILE.v [MORE.v ...]
+    \\       vera --emit-zig|--check|--emit-so|--emit-osdi [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
@@ -47,12 +47,13 @@ pub const usage_text =
     \\                          the contract's conformance checks
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
     \\  --emit-osdi             build an OSDI 0.4 library (ngspice `pre_osdi`) of a
-    \\                          .va: --emit-so under this vera's tools/osdi_dyn.zig,
+    \\                          .va or .v: --emit-so under this vera's osdi_dyn.zig,
     \\                          copied to -o PATH (default <module>.osdi); print it
     \\  --emit-exe              build a runnable Verilog-A testbench,
     \\                          or a .v design's executable; print its path
-    \\                          (--emit-zig, --check and --emit-so of a .v build its
-    \\                          top module as a contract device, 4-state, E1103)
+    \\                          (--emit-zig, --check, --emit-so and --emit-osdi of
+    \\                          a .v build its top module as a contract device,
+    \\                          4-state, E1103)
     \\  --schedule=static|fifo  a .v executable's order of same-time events:
     \\                          combinational logic levelized (static, the
     \\                          default; IEEE 1364 §11.4.1), or the interpreter's
