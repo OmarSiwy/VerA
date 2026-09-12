@@ -698,14 +698,18 @@ pub fn zCReal(buf: []u8, v: f64, conv: u8, flags: u8, width: usize, prec: i64) [
 /// many are supplied, then the application shall issue a warning and continue
 /// execution": a specifier with no argument left prints nothing, a surplus
 /// argument is not printed, and either draws one warning on stderr. Returns the
-/// text, in `buf`; an overrun is E1011 (`zSOver`).
+/// text, in `buf` (a pointer to the site's row); an overrun is E1011
+/// (`zSOver`), and so is a width or precision wider than the row's room.
 ///
 /// ponytail: a radix conversion shows the 64-bit pattern (no §17.1.1.3
 /// automatic width, which needs the operand's declared width); an unknown
 /// letter is copied through with a warning. Thread the widths in if a model
 /// formats a sized vector through a variable format.
-pub fn zSFormatRt(buf: []u8, fmt: []const u8, scope: []const u8, args: anytype) []u8 {
+pub fn zSFormatRt(buf: anytype, fmt: []const u8, scope: []const u8, args: anytype) []u8 {
     var o: ZRtOut = .{ .b = buf };
+    // A real field's scratch: the row plus `zCReal`'s widest body past a
+    // precision, so every field that fits the row fits here.
+    const tmp = zSTmp(buf.len + 512);
     var next: usize = 0;
     var short = false;
     var i: usize = 0;
@@ -731,12 +735,12 @@ pub fn zSFormatRt(buf: []u8, fmt: []const u8, scope: []const u8, args: anytype) 
             else => break,
         };
         var width: usize = 0;
-        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) width = @min(width * 10 + (fmt[i] - '0'), 4096);
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) width = width *| 10 +| (fmt[i] - '0');
         var prec: i64 = -1;
         if (i < fmt.len and fmt[i] == '.') {
             i += 1;
             prec = 0;
-            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) prec = @min(prec * 10 + (fmt[i] - '0'), 4096);
+            while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') : (i += 1) prec = prec *| 10 +| (fmt[i] - '0');
         }
         if (i >= fmt.len) {
             o.str(fmt[at..]);
@@ -744,16 +748,22 @@ pub fn zSFormatRt(buf: []u8, fmt: []const u8, scope: []const u8, args: anytype) 
         }
         const conv = fmt[i];
         i += 1;
-        var tmp: [4096 + 512]u8 = undefined;
         switch (conv | 0x20) {
             'm' => zRtField(&o, scope, flags, width),
-            'l' => zRtField(&o, zstd.mem.print(&tmp, "work.{s}", .{scope}) catch zSOver(), flags, width),
+            'l' => {
+                // "work." then the cell, padded as one field.
+                const pad = width -| (5 + scope.len);
+                if (flags & zc_left == 0) for (0..pad) |_| o.put(' ');
+                o.str("work.");
+                o.str(scope);
+                if (flags & zc_left != 0) for (0..pad) |_| o.put(' ');
+            },
             'd', 'h', 'x', 'o', 'b', 'c', 's', 'e', 'f', 'g', 'r' => {
                 if (next >= args.len) {
                     short = true;
                     continue;
                 }
-                inline for (args, 0..) |a, k| if (k == next) zRtConv(&o, &tmp, a, conv, flags, width, prec);
+                inline for (args, 0..) |a, k| if (k == next) zRtConv(&o, tmp, a, conv, flags, width, prec);
                 next += 1;
             },
             else => {
@@ -800,7 +810,13 @@ fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize,
         break :blk @bitCast(acc);
     };
     switch (conv | 0x20) {
-        'e', 'f', 'g', 'r' => o.str(zCReal(tmp, if (T == f64) a else @floatFromInt(int), conv, flags, width, prec)),
+        'e', 'f', 'g', 'r' => {
+            // A field or a precision past the row's room cannot fit; below
+            // that, `tmp` holds the whole field (`zSFormatRt`).
+            const room = o.b.len - o.n;
+            if (width > room or prec > @as(i64, @intCast(room))) zSOver();
+            o.str(zCReal(tmp, if (T == f64) a else @floatFromInt(int), conv, flags, width, prec));
+        },
         'c' => zRtField(o, &.{@as(u8, @truncate(@as(u64, @bitCast(int))))}, flags, width),
         's' => if (T == []const u8) zRtField(o, a, flags, width) else {
             var be: [8]u8 = undefined;
@@ -873,19 +889,17 @@ fn zRtConv(o: *ZRtOut, tmp: []u8, a: anytype, conv: u8, flags: u8, width: usize,
 /// exists only once "a $monitor task is invoked" (`zMonitorArm`). `site` is
 /// `Lower.armMonitor`'s key.
 //
-// ponytail: one 64-value latch per call site, file scope, on `zSBuf`'s terms
-// and for `zSBuf`'s reason — the comparison has to outlive the step that made
-// it. A monitor watching more than 64 arguments reports every step rather than
-// compares; per-instance latches are the upgrade the day a host runs two
-// instances of a model that monitors.
-pub fn zMonitor(comptime site: usize, vals: []const u64, text: []const u8) ?[]const u8 {
+// ponytail: one latch per call site, as wide as the site watches (`vals` is
+// `*const [n]u64`), file scope, on `zSBuf`'s terms and for `zSBuf`'s reason —
+// the comparison has to outlive the step that made it. Per-instance latches
+// are the upgrade the day a host runs two instances of a model that monitors.
+pub fn zMonitor(comptime site: usize, vals: anytype, text: []const u8) ?[]const u8 {
     const Last = zMonitorLatch(site);
     if (!Last.armed) return null;
-    if (vals.len > Last.v.len) return text;
-    if (Last.seen and Last.cnt == vals.len and zstd.mem.eql(u64, Last.v[0..vals.len], vals)) return null;
-    @memcpy(Last.v[0..vals.len], vals);
-    Last.cnt = vals.len;
-    Last.seen = true;
+    const V = zMonitorVals(site, vals.len);
+    if (V.seen and zstd.mem.eql(u64, &V.v, vals)) return null;
+    V.v = vals.*;
+    V.seen = true;
     return text;
 }
 
@@ -900,17 +914,23 @@ pub fn zMonitorArm(comptime site: usize) f64 {
 fn zMonitorLatch(comptime site: usize) type {
     return struct {
         const n = site;
-        var v: [64]u64 = undefined;
-        var cnt: usize = 0;
-        var seen: bool = false;
         var armed: bool = false;
+    };
+}
+
+/// The values site `site` last reported, `len` of them.
+fn zMonitorVals(comptime site: usize, comptime len: usize) type {
+    return struct {
+        const n = site;
+        var v: [len]u64 = undefined;
+        var seen: bool = false;
     };
 }
 
 /// §3.3 string storage excludes NUL bytes. Compact the completed formatter
 /// output in its existing call-site scratch; padding counted the original bytes.
-/// ponytail: scalar compaction is bounded by the 4096-byte formatter row;
-/// consider mask-based compaction if that ceiling is removed and measured hot.
+/// ponytail: scalar compaction, one pass over the site's row; consider
+/// mask-based compaction if a model formats long text and it measures hot.
 pub fn zStringStore(bytes: []u8) []const u8 {
     var used: usize = 0;
     for (bytes) |byte| {
@@ -930,16 +950,15 @@ pub fn zStringStore(bytes: []u8) []const u8 {
 /// array: that is what keeps two `$sformat` calls in one module from writing
 /// over each other, which §9.5.3 requires (each names its own string variable).
 ///
-// ponytail: 4096 bytes per site, file-scope. Two threads evaluating the SAME
-// call site on different instances would interleave; per-instance scratch is
-// the upgrade the day a host runs a device's units concurrently. An overrun
-// ends the run (`zSOver`, E1011): §9.5.3 gives no truncation rule, so neither
-// a cut nor an empty string is an answer the clause allows.
+// ponytail: file-scope rows. Two threads evaluating the SAME call site on
+// different instances would interleave; per-instance scratch is the upgrade
+// the day a host runs a device's units concurrently. An overrun ends the run
+// (`zSOver`, E1011): §9.5.3 gives no truncation rule, so neither a cut nor an
+// empty string is an answer the clause allows.
 //
-// 4096 is `cg_display.Spec.max_field` and `file_kernels.ZFSlot.line`, so what
-// this can compose is what a §9.5.2 write can emit and a §9.5.4.1 `$fgets` can
-// read back in one call.
-pub fn zSBuf(comptime site: usize) []u8 {
+// This is the 4096-byte row; a site whose text can be longer gets a row of
+// its own size (`zSRow`, sized by `cg_strcap`).
+pub fn zSBuf(comptime site: usize) *[4096]u8 {
     const Buf = struct {
         const n = site;
         var b: [4096]u8 = undefined;
@@ -947,31 +966,58 @@ pub fn zSBuf(comptime site: usize) []u8 {
     return &Buf.b;
 }
 
+/// Call site `site`'s row of `len` bytes: slot 0 is its text, slot k + 1 the
+/// scratch of its operand k's composed field when that is too wide for the
+/// stack (`cg_display.Spec.max_stack`). `zSBuf`'s terms otherwise.
+pub fn zSRow(comptime site: usize, comptime slot: usize, comptime len: usize) *[len]u8 {
+    const Row = struct {
+        const n = site;
+        const k = slot;
+        var b: [len]u8 = undefined;
+    };
+    return &Row.b;
+}
+
+/// Scratch of `len` bytes that lives for one kernel call (`zStrCat`,
+/// `zStrRepeat`, `zSFormatRt`): static, so a long row makes no long frame.
+fn zSTmp(comptime len: usize) *[len]u8 {
+    const Tmp = struct {
+        var b: [len]u8 = undefined;
+    };
+    return &Tmp.b;
+}
+
 /// §5.10/§3.3 a held string variable's own bytes, an `Instance` field (#19).
 /// Not a slice: a `$sformat` result lives in its site's `zSBuf`, which the
 /// site rewrites the next time it runs (a Newton iterate, a rejected step, a
 /// second instance), so a held slice of it changed under the device's feet.
 /// `stateCtl` copies the whole value, so a revert restores the text.
-// ponytail: 4096 bytes per held string, the `zSBuf` row every run-time
-// string is composed in; `stateCtl` copies all of it per commit and revert.
-// Copy `n` bytes there if a model holds many strings and it measures hot.
-pub const ZStrHeld = struct {
-    n: u16 = 0,
-    b: [4096]u8 = @splat(0),
+// ponytail: `len` bytes per held string, the longest text the model can put
+// there (`cg_strcap.heldCap`); `stateCtl` copies all of it per commit and
+// revert. Copy `n` bytes there if a model holds many strings and it measures
+// hot.
+pub fn ZStrHeldN(comptime len: usize) type {
+    return struct {
+        n: zstd.math.IntFittingRange(0, len) = 0,
+        b: [len]u8 = @splat(0),
 
-    /// The held text.
-    pub fn get(h: *const ZStrHeld) []const u8 {
-        return h.b[0..h.n];
-    }
-};
+        /// The held text.
+        pub fn get(h: *const @This()) []const u8 {
+            return h.b[0..h.n];
+        }
+    };
+}
 
-/// Returns a `ZStrHeld` holding a copy of `s`: a fresh value, so `s` may be
-/// a slice of the field the result is stored into. Longer than 4096 bytes is
-/// E1011, at compile time for an initializer.
-pub fn zStrHeld(s: []const u8) ZStrHeld {
-    var h: ZStrHeld = .{};
-    if (s.len > h.b.len) {
-        if (@inComptime()) @compileError("error[E1011]: a held string initializer exceeds 4096 bytes");
+/// The held string of the 4096-byte row.
+pub const ZStrHeld = ZStrHeldN(4096);
+
+/// Returns a `ZStrHeldN(len)` holding a copy of `s`: a fresh value, so `s`
+/// may be a slice of the field the result is stored into. Text longer than
+/// the field is E1011, at compile time for an initializer.
+pub fn zStrHeldN(comptime len: usize, s: []const u8) ZStrHeldN(len) {
+    var h: ZStrHeldN(len) = .{};
+    if (s.len > len) {
+        if (@inComptime()) @compileError("error[E1011]: a held string initializer exceeds its field");
         zSOver();
     }
     @memcpy(h.b[0..s.len], s);
@@ -979,19 +1025,26 @@ pub fn zStrHeld(s: []const u8) ZStrHeld {
     return h;
 }
 
-/// E1011: formatted text outgrew its call site's `zSBuf` row. Fatal, like
-/// `$fatal`, because the run cannot continue with the value it was asked for.
+/// `zStrHeldN` for the 4096-byte `ZStrHeld`.
+pub fn zStrHeld(s: []const u8) ZStrHeld {
+    return zStrHeldN(4096, s);
+}
+
+/// E1011: run-time text outgrew the row its call site or held string was
+/// sized for. Fatal, like `$fatal`, because the run cannot continue with the
+/// value it was asked for.
 pub fn zSOver() noreturn {
-    zstd.debug.print("error[E1011]: formatted text exceeds the 4096-byte buffer of one call; see `vera --explain E1011`\n", .{});
+    zstd.debug.print("error[E1011]: run-time text exceeds the row the compiler sized for it; see `vera --explain E1011`\n", .{});
     zstd.process.exit(1);
 }
 
 /// §3.3 Table 3-3 "Concatenation of Str1,…,Strn" when a piece is a string
-/// known only at run time, into its call site's `zSBuf`. A piece may be this
-/// same site's previous result (`s = {s, "x"}`), so the bytes are built in a
-/// local first and copied once; an overrun is `$sformat`'s E1011 (`zSOver`).
-pub fn zStrCat(buf: []u8, parts: []const []const u8) []const u8 {
-    var tmp: [4096]u8 = undefined;
+/// known only at run time, into its call site's row (`buf`, a pointer to
+/// it). A piece may be this same site's previous result (`s = {s, "x"}`), so
+/// the bytes are built in scratch first and copied once; an overrun is
+/// `$sformat`'s E1011 (`zSOver`).
+pub fn zStrCat(buf: anytype, parts: []const []const u8) []const u8 {
+    const tmp = zSTmp(buf.len);
     var n: usize = 0;
     for (parts) |p| {
         if (p.len > tmp.len - n) zSOver();
@@ -1007,10 +1060,10 @@ pub fn zStrCat(buf: []u8, parts: []const []const u8) []const u8 {
 /// containing N concatenated copies of Str". The row fixes no result for a
 /// negative N (§4.2.13's "non-negative" governs a constant), so N <= 0 is the
 /// empty string, as zero copies are. Same local and overrun rule as `zStrCat`.
-pub fn zStrRepeat(buf: []u8, count: i64, s: []const u8) []const u8 {
+pub fn zStrRepeat(buf: anytype, count: i64, s: []const u8) []const u8 {
     if (count <= 0 or s.len == 0) return "";
-    var tmp: [4096]u8 = undefined;
-    if (count > tmp.len / s.len or s.len * @as(usize, @intCast(count)) > buf.len) zSOver();
+    const tmp = zSTmp(buf.len);
+    if (count > tmp.len / s.len) zSOver();
     const k: usize = @intCast(count);
     for (0..k) |j| @memcpy(tmp[j * s.len ..][0..s.len], s);
     @memcpy(buf[0 .. k * s.len], tmp[0 .. k * s.len]);

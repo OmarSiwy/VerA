@@ -510,6 +510,9 @@ pub const Code = enum(u16) {
     /// `--emit-osdi` of a device whose §4.6.4.6 noise generator feeds two
     /// rows: OSDI 0.4 reports them as independent sources (VD-102).
     W1098,
+    /// LRM 4.5.7: an absdelay history ring that filled while its window was
+    /// still needed now keeps older samples at a coarser spacing.
+    W1051,
 
     /// The rendered spelling, `"E0313"`: a static string, one letter and four
     /// digits (the catalogue test pins the shape).
@@ -7200,64 +7203,50 @@ fn infoOf(c: Code) Info {
             \\beyond the renderer's recursion limit remain implementation gaps.
             ,
         },
-        .E1010 => .{
-            .title = "a display or format call has more than 32 conversions",
-            .lrm = "",
-            .explain =
-            \\An engine limit, not a language rule. VerA compiles each display,
-            \\file-output or `$sformat`/`$swrite` call into one Zig format
-            \\call, and Zig's formatter accepts at most 32 arguments per call.
-            \\LRM 9.4 states no bound on the argument list, so a longer call is
-            \\legal source that VerA refuses here, at the call, rather than as
-            \\an error in generated Zig.
-            \\
-            \\Split the call: two `$fwrite` calls to one descriptor write the
-            \\same bytes as one, and `$sformat` results concatenate with `{a, b}`.
-            ,
-        },
+        .E1010 => retiredInfo(
+            \\"a display or format call has more than 32 conversions". Retired:
+            \\a call with more operands than one Zig format call takes (32) is
+            \\now emitted as consecutive calls of at most 32 each, so LRM 9.4.1's
+            \\argument list has no bound and the condition does not exist to
+            \\report (#29). The number is not reused.
+        ),
         .E1011 => .{
-            .title = "text exceeds the 4096-byte buffer of one call",
+            .title = "text exceeds the buffer sized for it",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. Each `$sformat`, `$swrite`,
-            \\file-output, `$monitor` or run-time string concatenation site
-            \\composes its text in its own 4096-byte buffer, and each file
-            \\descriptor reads through one: `$fgets` returns at most one
-            \\4096-byte line, and one `$fscanf` sees at most 4096 bytes ahead.
+            \\An engine limit on what a model computes while it runs, not a
+            \\language rule. A device has no allocator, so every string it builds
+            \\while it runs lives in a row the compiler sized when the model
+            \\compiled: each `$sformat`, `$swrite`, file-output, `$monitor` or
+            \\string-concatenation site, and each held (LRM 5.10) string. The
+            \\size is the longest text the model can put there: the format's own
+            \\text, each conversion's widest rendering at its written width and
+            \\precision, and each string operand's own size, never below 4096
+            \\bytes. No field width, precision, replication or concatenation the
+            \\source writes is refused.
             \\
-            \\A field width or precision above 4096 written in a format string,
-            \\or a string replication (LRM 3.3 Table 3-3) whose count and text
-            \\fold to more than 4096 bytes, is refused when the model compiles. Text that only grows past
-            \\4096 bytes while the model runs (a long `%s` operand, a
-            \\concatenation of long strings, a longer line in a file read by
-            \\`$fgets` or `$fscanf`) ends the run with this code and exit
-            \\status 1. LRM 9.5.3 and 9.5.4 give no truncation rule, so a cut,
-            \\empty or split string would be a wrong value, not a shorter
-            \\right one.
+            \\What the compiler cannot know is a string's length that only the
+            \\run decides: a string parameter the card sets, a `$fgets` line, a
+            \\`$value$plusargs` value, an array element, a width spelled in a
+            \\run-time format string, or a held string that grows by itself every
+            \\step. Each counts 4096 bytes. Text that outgrows its row ends the
+            \\run with this code and exit status 1: LRM 9.5.3 gives no truncation
+            \\rule, so a cut or empty string would be a wrong value, not a
+            \\shorter right one. A line read from a file has no row of its own;
+            \\it grows to fit, and only running out of memory reports this code.
             \\
-            \\Split the text over several calls. Two `$fwrite` calls to one
-            \\descriptor write the same bytes as one call.
+            \\Format such a string with a literal format, whose widths the
+            \\compiler reads, or split the text over several calls: two `$fwrite`
+            \\calls to one descriptor write the same bytes as one.
             ,
         },
-        .E1012 => .{
-            .title = "absdelay needs a sample older than its history holds",
-            .lrm = "",
-            .explain =
-            \\An engine limit, not a language rule. LRM 4.5.7 defines absdelay
-            \\over all past time, Output(t) = Input(max(t - td, 0)), and bounds
-            \\no lookback. VerA keeps the last 1024 accepted samples of each
-            \\absdelay site; a site with a constant maxdelay keeps enough for
-            \\that delay at a 1 ps step, ceil(maxdelay / 1ps) + 2, up to 16384.
-            \\When the delay reaches past the oldest sample, the run ends with
-            \\this code and exit status 1: answering from a newer sample would
-            \\be a shorter delay reported as this one.
-            \\
-            \\The count is of accepted timepoints, not of time. Give the call
-            \\its maxdelay, absdelay(x, td, td_max), take fewer, larger steps
-            \\across the delay (a larger maximum step in the host), or shorten
-            \\td.
-            ,
-        },
+        .E1012 => retiredInfo(
+            \\"absdelay needs a sample older than its history holds". Retired:
+            \\a full absdelay ring now thins its older samples instead of
+            \\dropping them, so the window (maxdelay, or td) is always covered
+            \\and no lookback runs past the history (W1051 reports the first
+            \\thinning) (#29). The number is not reused.
+        ),
         .E1013 => .{
             .title = "a file is larger than VerA reads",
             .lrm = "",
@@ -7476,6 +7465,30 @@ fn infoOf(c: Code) Info {
             \\  - it closes a loop: the other branches already fix both its nets.
             \\
             \\A junction with no seed joins the tree at its vcrit.
+            ,
+        },
+        .W1051 => .{
+            .title = "absdelay history thinned to cover its delay",
+            .lrm = "4.5.7",
+            .explain =
+            \\LRM 4.5.7 defines absdelay over all past time, Output(t) =
+            \\Input(max(t - td, 0)), and states no history rule. A device has
+            \\no allocator, so each absdelay site keeps its accepted samples in
+            \\a fixed ring inside `Instance`: ceil(maxdelay / 1ps) + 2 samples
+            \\when maxdelay folds, clamped to [1024, 16384], else 1024.
+            \\
+            \\A ring whose oldest sample is still inside the window (maxdelay,
+            \\or td when there is none) when it fills is thinned, not cut: the
+            \\older half keeps every other sample, the newer half stays whole,
+            \\and a lookback interpolates over what is left. The window is
+            \\always covered, so the delay is never shortened; what changes is
+            \\the resolution of the oldest part of the history. Each thinning
+            \\doubles the spacing of the samples it touches. This warning prints
+            \\once per site, the first time, with the widest spacing left.
+            \\
+            \\A run that never fills its ring answers exactly as before. To keep
+            \\full resolution, give the call its maxdelay (absdelay(x, td,
+            \\td_max)) or take fewer, larger steps across the delay.
             ,
         },
     };

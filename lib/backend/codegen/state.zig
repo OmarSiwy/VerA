@@ -10,6 +10,7 @@ const CollapsePair = @import("plan/topology.zig").CollapsePair;
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const cg_strcap = @import("../cg_strcap.zig");
 const gen_host = @import("host_expr.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
@@ -430,7 +431,19 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 try gen_call.ctrlStep(self, args, 3, "0.0"),
             }),
             .absdelay => {
+                // §4.5.7 a full ring keeps its window (`zHistThin`); a revert
+                // undoes a thinning push (`zHistRevert`).
+                try self.w("        zHistThin(\"{s}.{s}\", &inst.{s}__t, &inst.{s}__v, &inst.{s}__head, sim.t, inst.{s}__w);\n", .{ self.mir.name, n, n, n, n, n });
                 try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, sim.t, in);\n", .{ n, n, n });
+                // §4.5.7 the window a full ring keeps (`zHistThin`): maxdelay
+                // bounds every lookback; without one, td is the lookback.
+                try self.w("        inst.{s}__w = {s};\n", .{ n, if (args.len >= 3)
+                    (if (try gen_call.absdelayMaxdSampled(self, args))
+                        try self.arena.print("inst.{s}__maxd", .{n})
+                    else
+                        try gen_host.argF64(self, args, 2, "0.0"))
+                else
+                    try gen_call.absdelayTd(self, n, args, true) });
                 // §4.5.7 "the value of td when the absdelay() is first
                 // evaluated shall be used": the static point is that first
                 // evaluation, and `zAbsdelay` passes its input through there.
@@ -589,8 +602,11 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     // before any is stored (#19).
     for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.core.held_idx[i];
-        if (h.ty == .string and h.array == none_u32 and k != none_u32)
-            try self.w("    const zs{d} = zStrHeld(m.f{d});\n", .{ i, k });
+        if (h.ty == .string and h.array == none_u32 and k != none_u32) {
+            try self.w("    const zs{d} = ", .{i});
+            try cg_strcap.emitHeldCopy(self, i);
+            try self.w("m.f{d});\n", .{k});
+        }
     }
     for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.core.held_idx[i];

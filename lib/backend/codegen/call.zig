@@ -20,6 +20,7 @@ const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const cg_display = @import("../cg_display.zig");
 const cg_filters = @import("../cg_filters.zig");
+const cg_strcap = @import("../cg_strcap.zig");
 const Lower = @import("ir").Lower;
 const Preprocessor = @import("frontend").Preprocessor;
 const Error = codegen.Error;
@@ -803,7 +804,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §3.3 Table 3-3 a string built while the device runs, into this call
         // site's own scratch row, keyed like `$sformat`'s.
         .@"$str$cat" => {
-            try self.b("zStrCat(zSBuf({d}), &.{{", .{@backingInt(inst)});
+            try self.b("zStrCat(", .{});
+            try cg_display.emitRow(self, @backingInt(inst), try cg_strcap.cap(self, self.mir.instResult(inst)));
+            try self.b(", &.{{", .{});
             for (args, 0..) |a, i| {
                 if (i != 0) try self.b(", ", .{});
                 try gen_render.renderVal(self, a, .str);
@@ -811,7 +814,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b("}})", .{});
         },
         .@"$str$repeat" => {
-            try self.b("zStrRepeat(zSBuf({d}), ", .{@backingInt(inst)});
+            try self.b("zStrRepeat(", .{});
+            try cg_display.emitRow(self, @backingInt(inst), try cg_strcap.cap(self, self.mir.instResult(inst)));
+            try self.b(", ", .{});
             try gen_render.renderVal(self, args[0], .int);
             try self.b(", ", .{});
             try gen_render.renderVal(self, args[1], .str);
