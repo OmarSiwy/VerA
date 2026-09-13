@@ -1768,6 +1768,14 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .empty);
+    // §7.11 "a supply strength shall be reduced to a strong strength" across a
+    // pass switch, and §3.7 a net type's own pull, hold from the start: a
+    // switch group with no driver event (a supply net through an uncontrolled
+    // `tran`) is resolved nowhere else. Every driver is still z here, so this
+    // settles only what the net types assert, before anything watches a slot
+    // (no event, which the native emitter would refuse). `rt.State.initIn`
+    // does the same for its `%v` signals.
+    for (r.nets, 0..) |n, k| if (r.netCold(n).trans.len != 0) try resolution.resolve(&r, @intCast(k));
     try tchk.arm(&r);
     try waiters.buildFanout(&r);
     try driver.arm(&r);

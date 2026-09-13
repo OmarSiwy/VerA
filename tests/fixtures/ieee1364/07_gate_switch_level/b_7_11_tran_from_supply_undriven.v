@@ -11,7 +11,6 @@
 // Printed at #1. Line: "St1 1".
 //! inherited IEEE 1364-2005 7.11
 //! inherited IEEE 1364-2005 17.1.1.5
-//! xfail VerA resolves a pass-switch group only when a driver in it or a switch control changes; an uncontrolled tran whose group has no driver event (a supply net onto an undriven net) is never resolved, so c keeps its undriven z (%v printed HiZ on 2026-10-08). Fix: resolve each uncontrolled tran's group once at time 0 in src/sim/digital/root.zig, without a .tran_switch event, which the native emitter refuses at elaboration
 `timescale 1ns/1ns
 module b_7_11_tran_from_supply_undriven;
   supply1 vdd;
