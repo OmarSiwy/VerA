@@ -791,6 +791,22 @@ pub fn validate(comptime D: type) void {
     // null to keep a private node. Consulted once at build time.
     if (@hasDecl(D, "collapse"))
         expectFn(D, "collapse", fn (*const D.Model, *const D.Instance) [n]?u8);
+    // The same map with every retention flag set, comptime. A host uses it to
+    // size a reduced derivative basis for the instances whose per-instance
+    // `collapse` equals it, so the two invariants it relies on are checked
+    // here rather than assumed: entries are fully resolved (an alias points at
+    // a root, never at another alias) and point DOWNWARD (min-index root), so
+    // `root[u] = collapse_full[u] orelse u` is one lookup and not a walk.
+    if (@hasDecl(D, "collapse_full")) {
+        if (!@hasDecl(D, "collapse"))
+            @compileError(name ++ ": collapse_full without a `collapse`");
+        if (@TypeOf(D.collapse_full) != [n]?u8)
+            @compileError(name ++ ".collapse_full must be [n_u]?u8");
+        for (D.collapse_full, 0..) |e, u| if (e) |r| {
+            if (r >= u) @compileError(name ++ ".collapse_full must alias downward");
+            if (D.collapse_full[r] != null) @compileError(name ++ ".collapse_full must be fully resolved");
+        };
+    }
 
     // State machine: eval reads Instance, so updateState gets a MUTABLE
     // Instance — switch position etc. must live in Instance fields.
@@ -1002,6 +1018,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "limit_writes", {} },
     .{ "seed", {} },
     .{ "collapse", {} },
+    // The same alias map with every retention flag set, at comptime — see the
+    // `collapse_full` block in `validate`.
+    .{ "collapse_full", {} },
     .{ "initState", {} },
     .{ "updateState", {} },
     .{ "stateCtl", {} },
@@ -1445,6 +1464,7 @@ const MockAll = struct {
     pub fn collapse(_: *const Model, _: *const Instance) [n_u]?u8 {
         return .{ null, null };
     }
+    pub const collapse_full: [n_u]?u8 = .{ null, 0 };
     pub fn initState(_: *const Model, _: *Instance) State {
         return .{};
     }
