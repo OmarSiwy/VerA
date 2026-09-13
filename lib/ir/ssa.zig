@@ -38,7 +38,7 @@ const pending: u32 = std.math.maxInt(u32);
 /// cells (256 B) against the 1024 of a 4 KiB page. A place's cells cluster
 /// along the slots between its definition and its last read, so finer
 /// chunks keep the map near its written cells and coarser ones only add
-/// zeros; a narrower one makes the directory, which is dense, grow instead.
+/// zeros; a narrower one makes the directory grow instead.
 /// Measured on the memo cells psp103 and hisimhv_va leave behind: 64 cells
 /// fill 70-77%, 16 fill 89-92% but double the directory, which costs more
 /// than the zeros it saves.
@@ -67,8 +67,9 @@ pub const SsaBuilder = struct {
     /// The Mir the builder reads blocks from and emits phis into. Borrowed:
     /// it must outlive the builder.
     mir: *Mir,
-    /// (place, slot) → Value as a two-level place-major table: `dir[place *
-    /// dir_stride + slot >> chunk_bits]` names a `chunk_len`-cell chunk of
+    /// (place, slot) → Value as a two-level place-major table: the place's
+    /// `rows` entry names a run of `dir` covering the columns (`slot >>
+    /// chunk_bits`) it has cells in, each entry a `chunk_len`-cell chunk of
     /// `cells`, and the cell is `slot`'s low bits within it. A cell holds
     /// `absent` (= 0) where unwritten and `@backingInt(value) + 1` where
     /// written. Chunk 0 is all `absent` and never written: every directory
@@ -87,12 +88,13 @@ pub const SsaBuilder = struct {
     /// included, while the old copy was still mapped: a 100 MB transient on
     /// psp103. A hash map cost more in both time and memory. Place-major
     /// because a read climbs predecessor blocks for one fixed place, so
-    /// consecutive probes land in one chunk.
-    dir: []u32 = &.{},
-    /// Directory row length: chunks per place, capacity along the slot axis.
-    dir_stride: u32 = 0,
-    /// Directory rows: capacity along the place axis.
-    place_cap: u32 = 0,
+    /// consecutive probes land in one chunk. A run per place, not a dense
+    /// directory row of every column: n flattened instances each own places
+    /// whose cells sit in their own few columns, and dense rows were
+    /// O(places * columns): 6.8 GB peak at 10^5 instances.
+    dir: std.ArrayList(u32) = .empty,
+    /// Per place, its run of `dir`; a place past the end has none.
+    rows: std.ArrayList(Row) = .empty,
     /// The chunks, `chunk_len` cells each, appended as first written.
     cells: std.ArrayList(u32) = .empty,
     /// Slots handed out so far; the next block to need one gets this.
@@ -121,9 +123,23 @@ pub const SsaBuilder = struct {
     phi_work: std.ArrayList(Mir.Value) = .empty,
     /// `readFrom`'s explicit stack of joins being read, same discipline.
     joins: std.ArrayList(JoinRead) = .empty,
-    /// Places handed out so far (`newPlace`); directory rows past it are
-    /// all chunk 0.
+    /// Places handed out so far (`newPlace`).
     next_place: u32 = 0,
+    /// Per block, parallel to `block_state`: its node in the dominator
+    /// tree `skipUp` climbs.
+    dom: std.ArrayList(Dom) = .empty,
+    /// Per place: the `Dom.born` span of the blocks `writeVariable` wrote it
+    /// in, but for a sealed block with no predecessor (the entry, where
+    /// lowering seeds every place), which no span between two blocks holds.
+    written: std.ArrayList(Span) = .empty,
+    /// Ticks once per `ensureState` that adds blocks; saturating only
+    /// stops the skipping.
+    clock: u32 = 0,
+    /// Loop headers (blocks that got a successor while unsealed) not sealed
+    /// yet: a block sealed meanwhile is inside a loop.
+    open_loops: u32 = 0,
+    /// Off: Braun's walk alone, which the skip is tested against.
+    skip: bool = true,
 
     /// Per-block SSA state, one row per `Mir.Block`.
     pub const BlockState = struct {
@@ -145,6 +161,72 @@ pub const SsaBuilder = struct {
         /// a climb through an arm skips the list for a place it never wrote.
         arm_mask: u32 = 0,
     };
+
+    /// A block's node in the dominator tree, filled when it is sealed.
+    ///
+    /// A read that reaches a sealed block with no cell for its place reads
+    /// back to the block's immediate dominator: its one predecessor, or
+    /// every predecessor of a join. Where nothing wrote the place in
+    /// between, that is the dominator's value, so `climb` goes straight
+    /// there, and on up while that holds. Without it a place read at the
+    /// end of a module climbs every block after its last write, and
+    /// memoizes a cell in each join: 10^4 instances, each with an `if`, a
+    /// named generate block's exit and its own branch share, took 5.5 s and
+    /// 865 MB.
+    ///
+    /// "Nothing wrote it" compares when blocks got their rows (`born`): a
+    /// place whose written blocks were all born before, or all after, every
+    /// block between the dominator and this one (`span`) was written in none
+    /// of them. A block inside a loop (sealed while a header is open), a
+    /// loop header and a block that held an incomplete phi get the span
+    /// that holds everything, never skipped: a read there can mint a phi,
+    /// and the skip must leave the MIR exactly as Braun's walk does.
+    const Dom = struct {
+        /// The immediate dominator, or `no_dom` for a root: the entry, or
+        /// a block with an unsealed predecessor or predecessors in
+        /// different trees (a loop header).
+        parent: u32 = no_dom,
+        /// An ancestor up to twice as far as the last one (Myers' skew
+        /// binary jump pointers): a climb is O(log depth).
+        jump: u32 = no_dom,
+        depth: u32 = 0,
+        /// `clock` when the block got its row.
+        born: u32 = 0,
+        /// `born` over this block and every block between `parent` and it:
+        /// a place written in no block of it ends this block with the value
+        /// it ended `parent` with.
+        span: Span = .all,
+        /// `span` over this block up to, not including, `jump`.
+        jspan: Span = .all,
+        /// Got a successor while unsealed (`open_loops`).
+        header: bool = false,
+        /// Held an incomplete phi.
+        phi: bool = false,
+        /// Has two or more predecessors.
+        join: bool = false,
+        /// A block from this one up to, not including, `jump` has two or
+        /// more predecessors.
+        jjoin: bool = false,
+    };
+    const no_dom: u32 = std.math.maxInt(u32);
+
+    /// An interval of `born` clocks.
+    const Span = struct {
+        lo: u32,
+        hi: u32,
+        const all: Span = .{ .lo = 0, .hi = std.math.maxInt(u32) };
+        const none: Span = .{ .lo = std.math.maxInt(u32), .hi = 0 };
+        fn join(a: Span, b: Span) Span {
+            return .{ .lo = @min(a.lo, b.lo), .hi = @max(a.hi, b.hi) };
+        }
+        /// Every block born in `w` is outside `self`.
+        fn misses(self: Span, w: Span) bool {
+            return w.hi < self.lo or w.lo > self.hi;
+        }
+    };
+
+    /// `dir[off..][0..len]` holds columns `base .. base + len`.
+    const Row = struct { base: u32 = 0, off: u32 = 0, len: u32 = 0 };
 
     const PredNode = struct { block: Mir.Block, next: u32 };
     /// One memo cell of an arm block (`raw` as in `cells`).
@@ -170,8 +252,9 @@ pub const SsaBuilder = struct {
 
     /// Frees builder scratch only; the MIR it wrote into is untouched.
     pub fn deinit(self: *SsaBuilder) void {
-        map_gpa.free(self.dir);
+        self.dir.deinit(map_gpa);
         self.cells.deinit(map_gpa);
+        self.rows.deinit(map_gpa);
         self.arm_cells.deinit(map_gpa);
         self.block_state.deinit(map_gpa);
         self.pred_pool.deinit(map_gpa);
@@ -181,6 +264,8 @@ pub const SsaBuilder = struct {
         self.scratch.deinit(map_gpa);
         self.phi_work.deinit(map_gpa);
         self.joins.deinit(map_gpa);
+        self.dom.deinit(map_gpa);
+        self.written.deinit(map_gpa);
         self.* = .{ .gpa = self.gpa, .mir = self.mir };
     }
 
@@ -198,7 +283,11 @@ pub const SsaBuilder = struct {
     pub fn addPredecessor(self: *SsaBuilder, block: Mir.Block, pred: Mir.Block) Error!void {
         const b = try self.ensureState(block);
         assert(!self.block_state.items(.sealed)[b]); // preds are final once sealed
-        _ = try self.ensureState(pred);
+        const p = try self.ensureState(pred);
+        if (!self.block_state.items(.sealed)[p] and !self.dom.items[p].header) {
+            self.dom.items[p].header = true;
+            self.open_loops += 1;
+        }
 
         const node: u32 = @intCast(self.pred_pool.items.len);
         try self.pred_pool.append(map_gpa, .{ .block = pred, .next = list_end });
@@ -222,6 +311,8 @@ pub const SsaBuilder = struct {
         // take the (now final) predecessor path instead of queueing another
         // incomplete phi onto the list we are walking.
         self.block_state.items(.sealed)[b] = true;
+        if (self.dom.items[b].header) self.open_loops -= 1;
+        self.placeInTree(b);
 
         var node = self.block_state.items(.phis_head)[b];
         self.block_state.items(.phis_head)[b] = list_end;
@@ -238,6 +329,19 @@ pub const SsaBuilder = struct {
     /// to the same pair overwrites it. Asserts that `block` exists and that
     /// `value` is not one of the two highest Value indices (see `pending`).
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
+        const b = try self.ensureState(block);
+        const p = @backingInt(place);
+        if (p >= self.written.items.len) try self.written.appendNTimes(map_gpa, .none, p + 1 - self.written.items.len);
+        if (!self.block_state.items(.sealed)[b] or self.block_state.items(.preds_len)[b] != 0) {
+            const born = self.dom.items[b].born;
+            self.written.items[p] = self.written.items[p].join(.{ .lo = born, .hi = born });
+        }
+        return self.writeCell(place, block, value);
+    }
+
+    /// `writeVariable` off the clock: a phi the builder mints names the
+    /// value already there, it writes nothing new.
+    fn writeCell(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@backingInt(value) < std.math.maxInt(u32) - 1);
         const b = try self.ensureState(block);
@@ -329,6 +433,12 @@ pub const SsaBuilder = struct {
         const preds_len = self.block_state.items(.preds_len);
         const preds_head = self.block_state.items(.preds_head);
         const slots = self.block_state.items(.slot);
+        const p = @backingInt(place);
+        const w: Span = if (p < self.written.items.len) self.written.items[p] else .none;
+        // Set once a skip passed a join, whose `finishJoin` would have
+        // returned the value through `resolveAlias`; past single-predecessor
+        // blocks alone Braun returns the cell as it is.
+        var resolve = false;
         var b = block;
         while (true) {
             const raw = self.cellRaw(place, @backingInt(b), slots[@backingInt(b)]);
@@ -338,11 +448,22 @@ pub const SsaBuilder = struct {
                 // phi after all. Mint it empty; that join's `finishJoin`
                 // fills it.
                 const phi = try self.mir.emitPhi(self.gpa, b, &.{});
-                try self.writeVariable(place, b, phi);
+                try self.writeCell(place, b, phi);
                 return phi;
             }
-            if (raw != absent) return @fromBackingInt(@intCast(raw - 1));
+            if (raw != absent) {
+                const v: Mir.Value = @fromBackingInt(@intCast(raw - 1));
+                return if (resolve) self.mir.resolveAlias(v) else v;
+            }
             const i = @backingInt(b);
+            if (self.skip and sealed[i]) {
+                const up = self.skipUp(w, i);
+                if (up.to != i) {
+                    resolve = resolve or up.join;
+                    b = @fromBackingInt(up.to);
+                    continue;
+                }
+            }
             if (!sealed[i] or preds_len[i] != 1) return self.readJoin(place, b);
             b = self.pred_pool.items[preds_head[i]].block;
         }
@@ -366,7 +487,8 @@ pub const SsaBuilder = struct {
                 .next = self.block_state.items(.phis_head)[b],
             });
             self.block_state.items(.phis_head)[b] = node;
-            try self.writeVariable(place, block, phi);
+            self.dom.items[b].phi = true;
+            try self.writeCell(place, block, phi);
             return phi;
         }
         assert(self.block_state.items(.preds_len)[b] != 1); // `climb` climbs those
@@ -434,8 +556,11 @@ pub const SsaBuilder = struct {
             }
             return absent;
         }
-        if (p >= self.place_cap or slot >> chunk_bits >= self.dir_stride) return absent;
-        const chunk: usize = self.dir[@as(usize, p) * self.dir_stride + (slot >> chunk_bits)];
+        if (p >= self.rows.items.len) return absent;
+        const r = self.rows.items[p];
+        const at = (slot >> chunk_bits) -% r.base; // wraps past `len` below `base`
+        if (at >= r.len) return absent;
+        const chunk: usize = self.dir.items[r.off + at];
         return self.cells.items[chunk << chunk_bits | (slot & (chunk_len - 1))];
     }
 
@@ -459,41 +584,38 @@ pub const SsaBuilder = struct {
         return slots[b];
     }
 
-    /// Index into `cells` of (place, slot), growing the directory to cover it
-    /// and giving the pair's chunk its own cells on first write. Both axes
-    /// grow geometrically: exact growth on either axis is quadratic. The
-    /// index stays valid for the builder's life (chunks are only appended and
-    /// keep their numbers when the directory regrows); a pointer into `cells`
-    /// does not survive the next new chunk.
+    /// Index into `cells` of (place, slot), growing the place's run to cover
+    /// it and giving the pair's chunk its own cells on first write. A run
+    /// grows geometrically toward the column that missed, into a fresh
+    /// stretch at the end of `dir` (the old one is left behind: at most the
+    /// size of the live runs again). The index stays valid for the builder's
+    /// life (chunks are only appended and keep their numbers when a run
+    /// moves); a pointer into `cells` does not survive the next new chunk.
     fn cellIndex(self: *SsaBuilder, place: Place, slot: u32) Error!usize {
         assert(slot < arm_slot);
         const p = @backingInt(place);
         const col = slot >> chunk_bits;
-
-        if (col >= self.dir_stride or p >= self.place_cap) {
-            const stride = if (col < self.dir_stride) self.dir_stride else @max(col + 1, self.dir_stride * 2, 1);
-            const cap = if (p < self.place_cap) self.place_cap else @max(p + 1, self.place_cap * 2, 16);
-            const grown = try map_gpa.alloc(u32, @as(usize, cap) * stride);
-            @memset(grown, 0);
-            // Rows past `next_place` are still all chunk 0.
-            for (0..@min(self.place_cap, self.next_place)) |row| {
-                const src = self.dir[row * self.dir_stride ..][0..self.dir_stride];
-                @memcpy(grown[row * stride ..][0..self.dir_stride], src);
-            }
-            map_gpa.free(self.dir);
-            self.dir = grown;
-            self.dir_stride = stride;
-            self.place_cap = cap;
-            if (self.cells.items.len == 0) try self.cells.appendNTimes(map_gpa, absent, chunk_len); // chunk 0
+        if (self.cells.items.len == 0) try self.cells.appendNTimes(map_gpa, absent, chunk_len); // chunk 0
+        if (p >= self.rows.items.len) try self.rows.appendNTimes(map_gpa, .{}, p + 1 - self.rows.items.len);
+        var r = self.rows.items[p];
+        if (col -% r.base >= r.len) {
+            const base = if (r.len == 0) col else if (col < r.base) @min(col, r.base -| r.len) else r.base;
+            const end = if (r.len == 0) col + 1 else if (col < r.base) r.base + r.len else @max(col + 1, r.base + 2 * r.len);
+            const off = self.dir.items.len;
+            if (off + (end - base) > std.math.maxInt(u32)) return error.OutOfMemory;
+            try self.dir.appendNTimes(map_gpa, 0, end - base);
+            if (r.len != 0) @memcpy(self.dir.items[off + (r.base - base) ..][0..r.len], self.dir.items[r.off..][0..r.len]);
+            r = .{ .base = base, .off = @intCast(off), .len = end - base };
+            self.rows.items[p] = r;
         }
-        const d = @as(usize, p) * self.dir_stride + col;
-        if (self.dir[d] == 0) {
+        const d = r.off + (col - r.base);
+        if (self.dir.items[d] == 0) {
             const chunk = self.cells.items.len >> chunk_bits;
             if (chunk > std.math.maxInt(u32)) return error.OutOfMemory;
             try self.cells.appendNTimes(map_gpa, absent, chunk_len);
-            self.dir[d] = @intCast(chunk);
+            self.dir.items[d] = @intCast(chunk);
         }
-        return @as(usize, self.dir[d]) << chunk_bits | (slot & (chunk_len - 1));
+        return @as(usize, self.dir.items[d]) << chunk_bits | (slot & (chunk_len - 1));
     }
 
     /// Braun §addPhiOperands: one operand per predecessor edge, then collapse.
@@ -610,8 +732,82 @@ pub const SsaBuilder = struct {
     fn ensureState(self: *SsaBuilder, block: Mir.Block) Error!u32 {
         const i = @backingInt(block);
         assert(i < self.mir.blockCount());
-        while (self.block_state.len <= i) try self.block_state.append(map_gpa, .{});
+        if (self.block_state.len <= i) {
+            const born = self.tick();
+            while (self.block_state.len <= i) try self.block_state.append(map_gpa, .{});
+            while (self.dom.items.len <= i) try self.dom.append(map_gpa, .{ .born = born });
+        }
         return i;
+    }
+
+    fn tick(self: *SsaBuilder) u32 {
+        if (self.clock < std.math.maxInt(u32)) self.clock += 1;
+        return self.clock;
+    }
+
+    /// Fills sealed block `b`'s `Dom`. Its immediate dominator is the
+    /// nearest common ancestor of its predecessors, and `span` joins the
+    /// spans of the blocks the walks there leave behind, each covering the
+    /// blocks below it. A predecessor without a tree (unsealed) or in
+    /// another tree leaves `b` a root.
+    fn placeInTree(self: *SsaBuilder, b: u32) void {
+        const sealed = self.block_state.items(.sealed);
+        const dom = self.dom.items;
+        dom[b].jump = b;
+        dom[b].jspan = .none;
+        var node = self.block_state.items(.preds_head)[b];
+        if (node == list_end) return;
+        var a = @backingInt(self.pred_pool.items[node].block);
+        if (!sealed[a]) return;
+        var span: Span = .{ .lo = dom[b].born, .hi = dom[b].born };
+        node = self.pred_pool.items[node].next;
+        while (node != list_end) : (node = self.pred_pool.items[node].next) {
+            var c = @backingInt(self.pred_pool.items[node].block);
+            if (!sealed[c]) return;
+            // Level the depths, then climb in step.
+            while (a != c) {
+                const up_a = dom[a].depth >= dom[c].depth;
+                const x = if (up_a) a else c;
+                if (dom[x].parent == no_dom) return; // different trees
+                span = span.join(dom[x].span);
+                if (up_a) a = dom[x].parent else c = dom[x].parent;
+            }
+        }
+        dom[b].parent = a;
+        dom[b].depth = dom[a].depth + 1;
+        dom[b].join = self.block_state.items(.preds_len)[b] >= 2;
+        dom[b].span = if (self.open_loops > 0 or dom[b].header or dom[b].phi) .all else span;
+        const j = dom[a].jump;
+        const jj = dom[j].jump;
+        if (j != a and dom[a].depth - dom[j].depth == dom[j].depth - dom[jj].depth) {
+            dom[b].jump = jj;
+            dom[b].jspan = dom[b].span.join(dom[a].jspan).join(dom[j].jspan);
+            dom[b].jjoin = dom[b].join or dom[a].jjoin or dom[j].jjoin;
+        } else {
+            dom[b].jump = a;
+            dom[b].jspan = dom[b].span;
+            dom[b].jjoin = dom[b].join;
+        }
+    }
+
+    /// The highest ancestor of `b` (itself included) where a place written
+    /// in blocks born in `w` ends with the value it has at the end of `b`:
+    /// up the tree while each block passed has a `span` `w` misses.
+    /// `join`: a block passed has two or more predecessors.
+    fn skipUp(self: *const SsaBuilder, w: Span, b: u32) struct { to: u32, join: bool } {
+        const dom = self.dom.items;
+        var x = b;
+        var join = false;
+        while (dom[x].parent != no_dom and dom[x].span.misses(w)) {
+            if (dom[x].jspan.misses(w)) {
+                join = join or dom[x].jjoin;
+                x = dom[x].jump;
+            } else {
+                join = join or dom[x].join;
+                x = dom[x].parent;
+            }
+        }
+        return .{ .to = x, .join = join };
     }
 
     /// Record "`user` (a phi) reads `value`". Sentinels never collapse, so they
@@ -785,7 +981,7 @@ test "ssa: map growth preserves values, undefined cells and unused rows" {
     try std.testing.expectEqual(null, b.defsPeek(z, entry));
     try std.testing.expectEqual(null, b.defsPeek(z, last));
     try b.writeVariable(z, last, .f_neg_one);
-    const old_cap = b.place_cap;
+    const old_cap = b.rows.items.len + 16;
     while (b.next_place <= old_cap) {
         try b.writeVariable(b.newPlace(), entry, .f_two); // grow the place axis
     }
@@ -1016,9 +1212,33 @@ test "ssa: every read agrees with a concrete run of a random structured program"
         try b.sealBlock(entry);
         var places: [4]Place = undefined;
         for (&places) |*p| p.* = b.newPlace();
-        var g: Gen = .{ .gpa = gpa, .r = r, .mir = &mir, .b = &b, .places = &places };
+        const seed = r.int(u64);
+        var prog = std.Random.DefaultPrng.init(seed);
+        var g: Gen = .{ .gpa = gpa, .r = prog.random(), .mir = &mir, .b = &b, .places = &places };
         defer g.deinit();
         const top = try g.seq(0);
+
+        // The same program on Braun's walk alone (`skip` off) leaves the
+        // same MIR and reads the same raw Values: the dominator skip only
+        // shortens the walk.
+        {
+            var mir2: Mir = .{};
+            defer mir2.deinit(gpa);
+            var b2 = SsaBuilder.init(gpa, &mir2);
+            b2.skip = false;
+            defer b2.deinit();
+            try b2.sealBlock(try mir2.addBlock(gpa));
+            var places2: [4]Place = undefined;
+            for (&places2) |*p| p.* = b2.newPlace();
+            var prog2 = std.Random.DefaultPrng.init(seed);
+            var g2: Gen = .{ .gpa = gpa, .r = prog2.random(), .mir = &mir2, .b = &b2, .places = &places2 };
+            defer g2.deinit();
+            _ = try g2.seq(0);
+            try std.testing.expectEqual(mir2.insts.len, mir.insts.len);
+            try std.testing.expectEqualSlices(u32, mir2.extra.items, mir.extra.items);
+            try std.testing.expectEqualSlices(Mir.Value, mir2.alias.items, mir.alias.items);
+            for (g2.stmts.items, g.stmts.items) |s2, s| try std.testing.expectEqual(s2.value, s.value);
+        }
 
         const conc = try gpa.alloc(Mir.Value, places.len);
         defer gpa.free(conc);

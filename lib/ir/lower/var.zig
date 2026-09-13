@@ -591,28 +591,38 @@ fn runtimeSub(self: *const Lower, vars: *const std.AutoHashMapUnmanaged(Ast.StrI
 /// item), and so is a discipline against a variable (§7's `reg out; ddiscrete
 /// out;`); only a discipline-less net (`wire x;`) clashes with a variable.
 ///
-/// ponytail: O(n²) over one scope's names. A set per scope if a model makes
-/// that show.
+/// One set per kind, so a scope of n names is O(n): a flattened instance
+/// array puts every instance's parameters in the top module's scope.
 pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: []const Ast.VarDecl, nets: []const Ast.NetDecl) Oom!void {
-    for (params, 0..) |p, i| {
-        if (declares(params[0..i], p.name)) try dupItem(self, p.main_tok, p.name);
+    const Set = std.AutoHashMapUnmanaged(Ast.StrId, void);
+    var param_names: Set = .empty;
+    defer param_names.deinit(self.arena);
+    for (params) |p| {
+        if ((try param_names.getOrPut(self.arena, p.name)).found_existing) try dupItem(self, p.main_tok, p.name);
     }
-    for (vars, 0..) |v, i| {
-        if (declares(vars[0..i], v.name) or declares(params, v.name))
+    // A discipline-less net (`wire x;`) clashes with a variable of its name.
+    var plain_nets: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
+    defer plain_nets.deinit(self.arena);
+    for (nets) |n| if (n.discipline == .none) {
+        const gop = try plain_nets.getOrPut(self.arena, n.name);
+        gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+    };
+    var port_vars: Set = .empty;
+    defer port_vars.deinit(self.arena);
+    for (self.port_vars) |name| try port_vars.put(self.arena, name, {});
+    var var_names: Set = .empty;
+    defer var_names.deinit(self.arena);
+    for (vars) |v| {
+        if ((try var_names.getOrPut(self.arena, v.name)).found_existing or param_names.contains(v.name))
             try dupItem(self, v.main_tok, v.name);
         // A child's output-port variable renamed onto this net is the
         // child's declaration, not a second one here (`Design.port_vars`).
-        if (std.mem.indexOfScalar(Ast.StrId, self.port_vars, v.name) != null) continue;
-        for (nets) |n| if (n.name == v.name and n.discipline == .none) try dupItem(self, v.main_tok, v.name);
+        if (port_vars.contains(v.name)) continue;
+        for (0..plain_nets.get(v.name) orelse 0) |_| try dupItem(self, v.main_tok, v.name);
     }
     for (nets) |n| {
-        if (declares(params, n.name)) try dupItem(self, n.main_tok, n.name);
+        if (param_names.contains(n.name)) try dupItem(self, n.main_tok, n.name);
     }
-}
-
-fn declares(decls: anytype, name: Ast.StrId) bool {
-    for (decls) |d| if (d.name == name) return true;
-    return false;
 }
 
 fn dupItem(self: *Lower, tok: u32, name: Ast.StrId) Oom!void {
