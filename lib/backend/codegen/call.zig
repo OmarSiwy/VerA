@@ -552,7 +552,11 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$warning",
         .@"$info",
         => return switch (self.display) {
-            .emit => cg_display.emitDisplayTask(self, c, args, @backingInt(inst)),
+            .emit => {
+                const gated = try gateOpen(self, c, inst);
+                try cg_display.emitDisplayTask(self, c, args, @backingInt(inst));
+                return if (gated) gateClose(self) else {};
+            },
             // A device's `say` records the task (`contract.SaySite`); a task
             // it does not record, and every other unit, renders it void.
             .record => if (self.emitting_display) cg_display.emitSay(self, inst) else voidTask(self),
@@ -560,13 +564,20 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         },
         // §9.7.1/§9.7.2 same gate: in a printing artifact the run ends at the
         // call's position among the prints; in a device the call is dead.
-        .@"$finish", .@"$stop" => return if (self.display == .emit)
-            cg_display.emitSimCtl(self, name, args)
-        else
-            voidTask(self),
+        .@"$finish", .@"$stop" => {
+            if (self.display != .emit) return voidTask(self);
+            const gated = try gateOpen(self, c, inst);
+            try cg_display.emitSimCtl(self, name, args);
+            return if (gated) gateClose(self) else {};
+        },
         // §9.4.1 a monitor's registration is a side effect, performed only by
         // the display unit.
-        .@"$monitor$arm" => return if (self.emitting_display and self.display == .emit) cg_display.emitMonitorArm(self, args) else voidTask(self),
+        .@"$monitor$arm" => {
+            if (!self.emitting_display or self.display != .emit) return voidTask(self);
+            const gated = try gateOpen(self, c, inst);
+            try cg_display.emitMonitorArm(self, args);
+            return if (gated) gateClose(self) else {};
+        },
         .@"$monitoron", .@"$monitoroff" => return voidTask(self),
         // §9.5 the descriptor family runs only in the display unit. Everywhere
         // else, including every `.drop` build, `emitFileCallDropped` answers
@@ -591,10 +602,15 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$fscanf$int",
         .@"$fscanf$real",
         .@"$fscanf$str",
-        => return if (self.emitting_display and self.display == .emit)
-            cg_display.emitFileCall(self, c, args, @backingInt(inst))
-        else
-            emitFileCallDropped(self, c, args, @backingInt(inst)),
+        => {
+            if (!self.emitting_display or self.display != .emit) return emitFileCallDropped(self, c, args, @backingInt(inst));
+            const gated = try gateOpen(self, c, inst);
+            try cg_display.emitFileCall(self, c, args, @backingInt(inst));
+            if (!gated) return;
+            try self.b(" else ", .{});
+            try emitFileCallDropped(self, c, args, @backingInt(inst));
+            return self.b(")", .{});
+        },
         // §9.10 environment.
         .@"$temperature" => {
             self.uses.model = true;
@@ -1109,6 +1125,45 @@ pub fn emitSystfTable(self: *Gen) Error!void {
         try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});
+}
+
+/// §9.4.6/§9.5.9 opens `(if (<cond>) ` around call `inst` in a printing
+/// display unit that runs in passes (`Gen.passes`), where `<cond>` names the
+/// passes of `contract.SayPass` that perform it; the caller writes the call,
+/// then ` else ` and what the call answers when it is not performed, then
+/// `)`. Returns false, writing nothing, outside such a unit and for a
+/// §9.5.4 reader, which only reads what its count's call latched.
+///   `$debug`, `$fdebug`: every pass but `.accepted` (§9.4.1 "for each
+///     iteration of the analog solver"; §9.5.9 "the write operation shall
+///     occur even if the evaluation occurred during an iteration that was
+///     rejected").
+///   one of those or a §9.5 call in `analog initial`: `.all`, and `.iteration`
+///     at the first iterate, since §5.2.1 executes the block once per
+///     analysis, "before a matrix solution is available".
+///   every other task: every pass but `.iteration` (§9.4.6, §9.5.9).
+/// `pass` is comptime, so a pass that does not perform the call compiles
+/// only its other answer.
+fn gateOpen(self: *Gen, c: Mir.Callee, inst: Mir.Inst) Error!bool {
+    if (!self.passes or !self.emitting_display or Mir.callee.family(c) == .file_read) return false;
+    self.uses.pass = true;
+    const every = c == .@"$debug" or c == .@"$fdebug";
+    const init = std.mem.findScalar(Mir.Inst, self.init_calls, inst) != null and (every or Mir.callee.isFileCall(c));
+    if (init) self.uses.sim = true;
+    try self.b("(if ({s}) ", .{if (init)
+        "pass == .all or (pass == .iteration and sim.iteration == 1)"
+    else if (every)
+        "pass != .accepted"
+    else
+        "pass != .iteration"});
+    return true;
+}
+
+/// Closes `gateOpen`'s `if` for a void task: not performed, it is the
+/// `S.con(0.0)` every void call renders.
+fn gateClose(self: *Gen) Error!void {
+    try self.b(" else ", .{});
+    try voidTask(self);
+    return self.b(")", .{});
 }
 
 /// Writes a §9.5 call outside the display unit (every §9.5 call in a

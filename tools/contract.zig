@@ -182,7 +182,11 @@ pub const Say = struct {
     }
 };
 
-/// §9.4.6 which display tasks one `say` call records. "All the display
+/// §9.4.6 which display tasks one `say` call records, or one call of a
+/// printing device's optional `displayPass` (the same parameters as
+/// `display`, then `comptime pass: SayPass`; `display` is its `.all`) runs,
+/// `$fdebug` with `$debug` (§9.5.9) and an `analog initial` block's §9.5 calls
+/// at the first iterate's `.iteration` pass (§5.2.1). "All the display
 /// tasks, except $debug, shall not display output unless an iteration has
 /// been accepted", and §9.4.1's `$debug` "displays its arguments for each
 /// iteration of the analog solver".
@@ -3608,6 +3612,12 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "display")) {
         if (genericFnError(D, "display", "void")) |m| @compileError(m);
     }
+    // §9.4.1/§9.5.9 the display phase by pass (`SayPass`): `display` is its
+    // `.all`, so it comes with one.
+    if (@hasDecl(D, "displayPass")) {
+        if (!@hasDecl(D, "display")) @compileError(name ++ ": displayPass comes with display");
+        expectGeneric(D, "displayPass", 6, "fn (comptime S: type, *const [n_u]S.V, *const Model, InstancePtr, SimState, comptime SayPass) void");
+    }
     if (@hasDecl(D, "file_io") and @TypeOf(D.file_io) != FileIo)
         @compileError(@typeName(D) ++ ".file_io must be a contract.FileIo");
     // §9.4 the output channel: the site table and the entry point that
@@ -4033,6 +4043,9 @@ const AllowedPubDecl = enum {
     // the residual stays a pure function of x. A device built for a solver has
     // no display phase, and its `$fopen` returns §9.5.1's failure value 0.
     display,
+    // §9.4.1/§9.5.9 the same phase by `SayPass`, for `$debug`/`$fdebug`,
+    // which show output at every iteration.
+    displayPass,
     file_io,
     attempt,
     u_kinds,

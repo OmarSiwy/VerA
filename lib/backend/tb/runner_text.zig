@@ -698,23 +698,30 @@ pub const runner_body =
     \\    if (stepPost(model, inst, x, state, solved_t)) |r3| retry(r3, n, x, forced, model, inst, state, depth + 1);
     \\}
     \\
-    \\/// §9.4 a device built `--display=record` prints nothing itself: what its
-    \\/// `say` records at this accepted point, rendered by `contract.formatSay`.
-    \\/// Its `$debug` records were printed per iteration (`sayIteration`) when
-    \\/// the point took any; a point `solve` returned at once shows them here.
+    \\/// §9.4 the model's display tasks at this accepted point: a printing
+    \\/// device's own `display`, or what a device built `--display=record`
+    \\/// records (`say`), rendered by `contract.formatSay`. Its `$debug` and
+    \\/// `$fdebug` ran per iteration (`sayIteration`) when the point took any,
+    \\/// so this is their `.accepted` pass; a point `solve` returned at once
+    \\/// runs them here (`.all`).
     \\fn sayPoint(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime !@hasDecl(D, "say")) return;
     \\    defer say_iterations = 0;
+    \\    if (@hasDecl(D, "displayPass")) {
+    \\        if (say_iterations != 0) D.displayPass(Dual, x, model, inst, sim_state, .accepted) else D.display(Dual, x, model, inst, sim_state);
+    \\    } else if (@hasDecl(D, "display")) D.display(Dual, x, model, inst, sim_state);
+    \\    if (comptime !@hasDecl(D, "say")) return;
     \\    sayPass(x, model, inst, if (say_iterations != 0) .accepted else .all);
     \\}
     \\
     \\/// §9.4.1 `$debug` "displays its arguments for each iteration of the analog
-    \\/// solver": a `--display=record` device's iteration pass at the iterate
-    \\/// `x` (`contract.SayPass`), after each Newton iteration of `solve`.
+    \\/// solver", and §9.5.9 `$fdebug` writes "even if the evaluation occurred
+    \\/// during an iteration that was rejected": the iteration pass at the
+    \\/// iterate `x` (`contract.SayPass`), after each Newton iteration of `solve`.
     \\var say_iterations: usize = 0;
     \\fn sayIteration(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime !@hasDecl(D, "say")) return;
     \\    say_iterations += 1;
+    \\    if (@hasDecl(D, "displayPass")) D.displayPass(Dual, x, model, inst, sim_state, .iteration);
+    \\    if (comptime !@hasDecl(D, "say")) return;
     \\    sayPass(x, model, inst, .iteration);
     \\}
     \\
@@ -766,7 +773,6 @@ pub const runner_body =
     \\
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
     \\    // fixture's `$strobe` lines sit next to the bias that produced them.
-    \\    if (@hasDecl(D, "display")) D.display(Dual, x, model, inst, sim_state);
     \\    sayPoint(x, model, inst);
     \\    if (!print_residual) return;
     \\
@@ -1292,7 +1298,6 @@ const vpi_lib_tail =
     \\/// output for it, then the accepted-step bookkeeping every §4.5 operator
     \\/// reads its history from.
     \\export fn vera_vpi_accept() callconv(.c) void {
-    \\    if (@hasDecl(D, "display")) D.display(Dual, &g_x, &g_model, &g_inst, sim_state);
     \\    sayPoint(&g_x, &g_model, &g_inst);
     \\    if (stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved)) |r| retryUnsupported(r);
     \\}

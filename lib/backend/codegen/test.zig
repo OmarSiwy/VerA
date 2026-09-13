@@ -1792,6 +1792,43 @@ test "codegen: §9.4 display tasks are void by default and print on request" {
     try std.testing.expect(std.mem.find(u8, exe, "\"no newline\"") != null);
     // §9.7.3 the severity is a prefix, not something a reader must infer.
     try std.testing.expect(std.mem.find(u8, exe, "ERROR: bad") != null);
+    // No `$debug`/`$fdebug`: one pass, no `pass` parameter.
+    try std.testing.expect(std.mem.find(u8, exe, "SayPass") == null);
+}
+
+test "codegen: §9.5.9 `$fdebug` and `$debug` run on every pass but the accepted one" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module fd(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  integer f, g;
+        \\  analog initial f = $fopen("a.log", "w");
+        \\  analog begin
+        \\    $fdebug(f, "x=%g", V(p, n));
+        \\    $debug("x=%g", V(p, n));
+        \\    $fwrite(f, "y");
+        \\    g = $fopen("b.log", "r");
+        \\    $strobe("s");
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const exe = try h.genDisplay(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, exe, "pub fn displayPass(") != null);
+    try std.testing.expect(std.mem.find(u8, exe, "displayPass(S, x, model, inst, sim, .all);") != null);
+    try std.testing.expect(std.mem.find(u8, exe, ", comptime pass: contract.SayPass)") != null);
+    // §5.2.1 the analog initial block's open runs once, at the first iterate.
+    try std.testing.expect(std.mem.find(u8, exe, "(if (pass == .all or (pass == .iteration and sim.iteration == 1)) zFKeep(") != null);
+    // `$fdebug` and `$debug`, then `$fwrite`, the main block's `$fopen` (its
+    // latch otherwise) and `$strobe`.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, exe, "(if (pass != .accepted) "));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, exe, "(if (pass != .iteration) "));
+    try std.testing.expect(std.mem.find(u8, exe, " else zFRes(") != null);
+    // A device drops every §9.5 call: no passes.
+    const dev = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.find(u8, dev, "displayPass") == null);
 }
 
 test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
