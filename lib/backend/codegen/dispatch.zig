@@ -396,6 +396,23 @@ pub fn emitDisplay(self: *Gen) Error!void {
         , .{self.jobs.display_name});
         return;
     }
+    if (self.passes) return self.w(
+        \\/// §9.4 run this module's display tasks once, in source order.
+        \\pub fn display(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
+        \\    displayPass(S, x, model, inst, sim, .all);
+        \\}}
+        \\
+        \\/// §9.4.1/§9.5.9 run the tasks `pass` performs at `x`: `.iteration`
+        \\/// after each iteration of the solver, at its iterate (`$debug`,
+        \\/// `$fdebug`, and at the first iterate the §9.5 calls of `analog
+        \\/// initial`); `.accepted` at the accepted point of a solve that ran
+        \\/// those passes; `.all` (`display`) at one that ran none.
+        \\pub fn displayPass(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState, comptime pass: contract.SayPass) void {{
+        \\    _ = {s}(S, zProbe(S, x), model, inst, sim, pass);
+        \\}}
+        \\
+        \\
+    , .{self.jobs.display_name});
     try self.w(
         \\/// §9.4 run this module's display tasks once, in source order.
         \\pub fn display(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{

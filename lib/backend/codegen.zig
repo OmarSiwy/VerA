@@ -331,6 +331,13 @@ pub const Gen = struct {
     /// §9.4 the display tasks a `.record` device's `say` records
     /// (`cg_display.planSay`), in `say_sites` order. Empty otherwise.
     say: []const cg_display.SaySite = &.{},
+    /// §9.4.1/§9.5.9 a printing artifact's display unit runs in passes
+    /// (`contract.SayPass`): set when it has a `$debug` or `$fdebug`, the
+    /// tasks that show output at every iteration (`cg_display.planPasses`).
+    passes: bool = false,
+    /// §5.2.1 the §9.5 and `$debug`/`$fdebug` calls an `analog initial` block
+    /// makes, which a pass performs once per analysis. Set with `passes`.
+    init_calls: []const Mir.Inst = &.{},
     /// Set while the caller owns the `core` call (`zResidual`'s `m`, `acceptQ`'s
     /// hoisted line), so `emitStamps` must not open its own.
     core_hoisted: bool = false,
@@ -493,6 +500,7 @@ pub const Gen = struct {
         self.sinv = try plan_setup.plan(self.input());
         self.qs = try plan_qsite.plan(self.input(), self.names.branch_u, self.topo, self.sinv.val);
         if (self.display == .record) self.say = try cg_display.planSay(self);
+        if (self.display == .emit) try cg_display.planPasses(self);
         self.jobs = try plan_jobs.plan(self.input(), .{
             .names = &self.names,
             .unit_modes = self.verdict.unit_modes,

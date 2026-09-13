@@ -511,6 +511,11 @@ pub const Display = struct {
     /// does not dominate the root). `finishDisplays` is the one reader: it
     /// leaves these out of the unconditional chain.
     conditional: bool,
+    /// The call is in an `analog initial` block, which §5.2.1 executes once
+    /// per analysis "before a matrix solution is available": a printing
+    /// artifact's iteration pass performs it at the first iterate
+    /// (`codegen.Gen.init_calls`).
+    analog_initial: bool = false,
 };
 
 /// One §9.7.3 `$fatal`/`$error` call in the analog context (`status_sites`).

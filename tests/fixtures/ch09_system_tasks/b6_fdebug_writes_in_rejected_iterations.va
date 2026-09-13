@@ -31,7 +31,6 @@
 //! solve
 //! bias V(n) = 0
 //! checks 2
-//! xfail every §9.5 call runs in the display unit, once per accepted solution, so $fdebug never writes in a rejected iteration; a per-iteration write needs §9.5 calls in the core, with an analog-initial $fopen descriptor available during the first point's iterations (the core reads the previous point's latched result, file_kernels.zFRes)
 `include "check.vh"
 module b6_fdebug_writes_in_rejected_iterations(p, n);
   inout p, n; electrical p, n;
