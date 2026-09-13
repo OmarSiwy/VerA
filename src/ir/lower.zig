@@ -6518,8 +6518,9 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 }
 
 /// §3.2.2 array element read. A constant index selects one scalarized
-/// element; a runtime index becomes a `select` chain over them (the array is
-/// scalarized, so there is no memory to index).
+/// element; a runtime index becomes a `$idx` call carrying every element, which
+/// codegen renders as ONE `switch` — a jump table, so the read is O(1) in the
+/// array's extent (the array is scalarized, so there is no memory to index).
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = self.indexChain(e, &subs) orelse {
@@ -6538,7 +6539,14 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const at = idx[0..chain.subs.len];
     var all_const = true;
     for (chain.subs, at) |s, *o| {
-        if (self.constEval(s)) |c| o.* = c.asInt() else all_const = false;
+        // `foldExpr(.., false)`, NOT `constEval`: a §3.4 parameter is
+        // overridable by the model card, so folding `a[n-1]` through `n`'s
+        // DEFAULT bakes one element into the device and answers every other
+        // card with it. The same rule `foldExpr`'s own header states for a
+        // procedural `if (p > 0)`; a subscript is no different, and it fails
+        // louder — `parameter integer pwl_len = 0` folded `a[pwl_len-1]` to
+        // `a[-1]` and reported E0310 on legal source.
+        if (self.foldExpr(s, false)) |c| o.* = c.asInt() else all_const = false;
     }
     if (!try self.checkSubscriptCount(e, name, info, at.len)) return poison;
     if (all_const) {
@@ -6546,36 +6554,51 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return (try self.arrayElemValue(name, at)) orelse poison;
     }
 
-    // Runtime index: fold from the top down so element `lo` is the fallback.
-    // An out-of-range index yields element `lo` (§3.2.2 leaves it undefined).
+    // Runtime index: `$idx(lo, i, e_lo … e_hi)`, which codegen turns into a
+    // Zig `switch` on `i` — ONE dispatch and ONE element read, whatever the
+    // extent. Element `lo` is the `else` arm, so an out-of-range index yields
+    // it (§3.2.2 leaves that undefined) exactly as the select chain this
+    // replaced did.
     //
-    // ponytail: one dimension only. A multidimensional runtime index would fold
-    // a select chain over the whole cartesian product — every cell tested with a
-    // conjunction of subscript comparisons — and no fixture writes one; §3.2's
-    // own examples index a multidimensional array with literals. `for (i…) a[i]`
-    // (§4.7.1's `arrayadd`) is the shape that needs the chain, and it is flat.
+    // WHY THIS MATTERS ENOUGH TO BE A CALL. A select chain over N scalarized
+    // elements evaluates ALL N comparisons and all N `sel`s on every read,
+    // because `sel` is a mask primitive and not a branch — so `for (k…) a[k]`
+    // (§4.7.1's `arrayadd` shape, and every table-lookup model) is O(N²) per
+    // evaluation in the DECLARED extent, not in the part of the table anyone
+    // filled. Measured on devices/models/vsource.va's `pwl_times[0:63]`:
+    // 26,134 → 416 instructions per device evaluation.
+    //
+    // ponytail: one dimension only. A multidimensional runtime index would need
+    // a switch over the whole cartesian product — and no fixture writes one;
+    // §3.2's own examples index a multidimensional array with literals.
+    // `for (i…) a[i]` is the shape that needs the dispatch, and it is flat.
     if (info.dims.len != 1) {
         try self.err(self.file.exprs.mainTok(e), .E0311, "indexing the multidimensional array `{s}`", .{name});
         return poison;
     }
     const d = info.dims[0];
     const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
-    var acc: ?TypedValue = null;
-    var i = d.hi;
-    while (true) : (i -= 1) {
+    // The DECLARED type, not a unification over the elements: every element of
+    // a scalarized array is declared by that one declaration, so
+    // `arrayElemValue` hands back `info.ty` for all of them.
+    const ty = info.ty;
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    defer vals.deinit(self.arena);
+    try vals.append(self.arena, try self.mir.addIntConst(self.arena, d.lo));
+    try vals.append(self.arena, iv);
+    var i = d.lo;
+    while (i <= d.hi) : (i += 1) {
         const el = (try self.arrayElemValue(name, &.{i})) orelse return poison;
-        if (acc) |a| {
-            const ty = unify(el.ty, a.ty);
-            const c = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, i) });
-            const ev = if (ty == .real) try self.toReal(el) else el.v;
-            const av = if (ty == .real) try self.toReal(a) else a.v;
-            acc = .{ .v = try self.emit(.select, &.{ c, ev, av }), .ty = ty };
-        } else {
-            acc = el;
-        }
-        if (i == d.lo) break;
+        try vals.append(self.arena, if (ty == .real) try self.toReal(el) else el.v);
     }
-    return acc orelse poison;
+    // The callee name IS the result type — `analysis.callTy` and `sysFuncTy`
+    // agree by construction, the `$sscanf$int` rule.
+    const callee: []const u8 = switch (ty) {
+        .real => "$idx",
+        .integer => "$idx$int",
+        .string => "$idx$str",
+    };
+    return .{ .v = try self.call(callee, vals.items), .ty = ty };
 }
 
 /// `{a, b, ...}` in a value position. The INTEGER form (§4.2.13) needs each
@@ -8604,6 +8627,9 @@ pub fn sysFuncTy(name: []const u8) Ty {
         // IS the type, so this and `analysis.callTy` agree by construction.
          "$sscanf",
         "$sscanf$int",
+        // §3.2.2 the runtime array index `lowerIndex` builds, on an `integer`
+        // array. Same rule: the flavour name is the declared element type.
+        "$idx$int",
         // §9.5.1/§9.5.4/§9.5.5/§9.5.7/§9.5.8 — every descriptor function is
         // integer-valued, and each digit is one the LRM writes down: a 32-bit
         // mcd or fd, a character count, an item count, a byte offset, a -1/0
@@ -8617,8 +8643,10 @@ pub fn sysFuncTy(name: []const u8) Ty {
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .integer;
     if (std.mem.eql(u8, name, "$simparam$str")) return .string; // §9.15
-    // §9.5.3 the formatted text itself, and §9.5.4.2's string-valued item.
-    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .string;
+    // §9.5.3 the formatted text itself, §9.5.4.2's string-valued item, and
+    // §3.2.2's runtime index into a `string` array.
+    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str") or
+        std.mem.eql(u8, name, "$idx$str")) return .string;
     // §9.5.4.1's string, §9.5.4.2's string-valued item and §9.5.7's description.
     if (std.mem.eql(u8, name, "$fgets$str") or std.mem.eql(u8, name, "$fscanf$str") or
         std.mem.eql(u8, name, "$ferror$str")) return .string;
