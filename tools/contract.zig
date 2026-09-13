@@ -4716,6 +4716,7 @@ const MockAll = struct {
     }
     /// The shape tb.zig's generated runner calls and codegen emits.
     pub fn display(comptime _: type, _: *const [n_u]f64, _: *const Model, _: *const Instance, _: SimState) void {}
+    pub fn displayPass(comptime _: type, _: *const [n_u]f64, _: *const Model, _: *const Instance, _: SimState, comptime _: SayPass) void {}
     /// `codegen.Options.vpi_contribs`: one flow row from p to n.
     pub const vpi_contrib_access = [_]u8{1};
     pub const vpi_contrib_hi = [_]i32{0};
