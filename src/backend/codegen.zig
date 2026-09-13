@@ -4390,6 +4390,46 @@ pub const Gen = struct {
         try self.b("}})", .{});
     }
 
+    /// §3.2.2 runtime array index, in the shape `Lower.lowerIndex` rewrote it:
+    ///
+    ///     (lo, i, e_lo … e_hi)
+    ///
+    /// One `switch`, so the read is ONE dispatch and ONE element evaluation
+    /// however wide the array is. A `sel` chain would evaluate every element
+    /// and every comparison on every read — `sel` is a mask primitive, not a
+    /// branch — which made `for (k…) a[k]` quadratic in the DECLARED extent.
+    ///
+    /// The `else` arm is element `lo`, which is what the chain's fallback was:
+    /// §3.2.2 leaves an out-of-range index undefined, and reproducing the old
+    /// answer keeps every existing device bit-identical.
+    ///
+    /// Each arm is rendered lazily by the switch, so an element that is an
+    /// inline expression is evaluated only when it is the one selected. That is
+    /// sound because a MIR value is pure; the ones with side effects (`$fopen`,
+    /// `$display`) are statements and never reach an array initializer.
+    fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
+        // The dispatch is on one integer, so the CHOICE is lane-uniform — the
+        // same reason `emitTable` pins: a lane wanting a different element has
+        // no spelling here.
+        self.pinLanes(args[1]);
+        const lo: i64 = blk: {
+            const def = self.mir.valueDef(self.an.rv(args[0]));
+            break :blk if (def == .int_const) def.int_const else 0;
+        };
+        if (args.len < 3) return self.abort("malformed `$idx` call reached codegen", .{});
+        try self.b("switch (", .{});
+        try self.renderVal(args[1], .int);
+        try self.b(") {{", .{});
+        for (args[2..], 0..) |v, k| {
+            try self.b(" {d} => ", .{lo + @as(i64, @intCast(k))});
+            try self.renderVal(v, want);
+            try self.b(",", .{});
+        }
+        try self.b(" else => ", .{});
+        try self.renderVal(args[2], want);
+        try self.b(" }}", .{});
+    }
+
     /// A structural count lowering put in an argument list as a literal.
     fn intArg(self: *const Gen, args: []const Mir.Value, i: usize) ?usize {
         if (i >= args.len) return null;
@@ -5083,6 +5123,10 @@ pub const Gen = struct {
         // per-item `found` flag. Reading a destination past the returned count is
         // the only way to observe the difference.
         if (eq(u8, name, "$table_model")) return self.emitTable(args); // §9.21
+        // §3.2.2 runtime array index — one switch, see `emitIdx`.
+        if (eq(u8, name, "$idx")) return self.emitIdx(args, .real);
+        if (eq(u8, name, "$idx$int")) return self.emitIdx(args, .int);
+        if (eq(u8, name, "$idx$str")) return self.emitIdx(args, .str);
         // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
         // seed's incoming value, then the distribution's parameters. Every one is
         // a pure function of that seed and carries no derivative — a variate is a
