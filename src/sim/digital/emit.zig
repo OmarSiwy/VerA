@@ -2316,7 +2316,9 @@ fn strengthOf(self: *Emitter, e: Ast.ExprId) Error!void {
     const r = self.r;
     const net = if (r.file.exprs.tag(e) == .ident) r.net_of.get(try self.slot(e)) else null;
     if (net) |k| {
-        if (r.netDrivers(k).len == 0) {
+        // §7.6: a pass switch drives a net with no driver of its own
+        // (`display.walk`'s test, which the interpreter prints by).
+        if (r.netDrivers(k).len == 0 and r.netCold(r.nets[k]).trans.len == 0) {
             var buf: std.Io.Writer.Allocating = .init(self.arena);
             display.strength(&buf.writer, @import("net.zig").netPull(r.nets[k].kind)) catch return error.OutOfMemory;
             return self.print("            try s.out.writeAll(\"{s}\");\n", .{buf.written()});
