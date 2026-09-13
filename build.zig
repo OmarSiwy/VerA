@@ -1207,7 +1207,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: 77 of Annex G's 441 constant names are not defined\np02: b_G_vpi_user checks=367\n",
+        .stdout = "p02: b_G_vpi_user checks=444\n",
     },
     // VAMS-2023 ch12 ledger rows (tests/fixtures/OBLIGATIONS.tsv). Each `.xfail`
     // is a requirement VerA does not meet yet; its fixture's header says why.
@@ -1244,7 +1244,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_intermod_path.c",
         .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .xfail = "12.22: vpi_handle_multi(vpiInterModPath, output port u1.y, input port u2.a) returned no inter-module path",
+        .stdout = "p02: b7_intermod_path checks=39\n",
     },
     .{
         .c = "tests/fixtures/ch12_vpi_routines/b7_tchk_violation.c",

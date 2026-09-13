@@ -91,6 +91,8 @@ pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
 pub const cbError: c_int = 13;
 pub const cbTchkViolation: c_int = 14;
+pub const cbStartOfReset: c_int = 19;
+pub const cbEndOfReset: c_int = 20;
 pub const cbInteractiveScopeChange: c_int = 23;
 pub const cbAssign: c_int = 25;
 pub const cbDeassign: c_int = 26;
@@ -190,6 +192,26 @@ fn destroy(cb: *Cb) void {
     gpa.destroy(cb);
 }
 
+const no_save = "VerA has no save or restart (IEEE 1364-2005 C.8)";
+const no_interactive = "a VerA run has no interactive mode (§12.36: vpiStop ends the run)";
+
+/// The callback reasons of Annex G no registration here is ever delivered
+/// for (vpi_user.h's "Annex G names VerA does not answer"), refused by name
+/// at any time, the startup phase included.
+fn unansweredReason(r: c_int) ?root.Unanswered {
+    return switch (r) {
+        15 => .{ .name = "cbStartOfSave", .why = no_save },
+        16 => .{ .name = "cbEndOfSave", .why = no_save },
+        17 => .{ .name = "cbStartOfRestart", .why = no_save },
+        18 => .{ .name = "cbEndOfRestart", .why = no_save },
+        21 => .{ .name = "cbEnterInteractive", .why = no_interactive },
+        22 => .{ .name = "cbExitInteractive", .why = no_interactive },
+        24 => .{ .name = "cbUnresolvedSystf", .why = "VerA delivers no callback for an unresolved system task or function name" },
+        29 => .{ .name = "cbSignal", .why = "a VerA run traps no signal" },
+        else => null, // else: every other number is delivered, or is no Annex G reason and gets NOREASON
+    };
+}
+
 /// IEEE 1364-2005 §26.2.4: at startup "vpi_register_cb() routine can only be
 /// called for the following reasons": these five, and cbUnresolvedSystf,
 /// which VerA refuses at any time (no such callback is ever delivered).
@@ -253,6 +275,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         root.fail("BADCB", "vpi_register_cb: cb_rtn is NULL", .{});
         return null;
     };
+    if (unansweredReason(d.reason)) |u| {
+        root.failUnanswered("vpi_register_cb", u);
+        return null;
+    }
     if (root.starting and !startupReason(d.reason)) {
         root.fail("STARTUP", "vpi_register_cb: IEEE 1364-2005 §26.2.4 allows reason {d} only after vlog_startup_routines; register it from a cbEndOfCompile callback", .{d.reason});
         return null;
@@ -279,7 +305,10 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // IEEE 1364-2005 §27.33.3 and VAMS 12.31.4's action reason
         // cbTchkViolation, "Timing check error occurred": the digital
         // engine's timing checks (`digital.Run.tchk_hook`, `onTchk`).
-        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError, cbInteractiveScopeChange, cbTchkViolation => {},
+        // IEEE 1364-2005 §27.33.3's feature reasons cbStartOfReset and
+        // cbEndOfReset, "Simulation reset begin" and "end": §12.36's
+        // vpiReset (`run.simulate`).
+        cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation, cbError, cbPLIError, cbInteractiveScopeChange, cbTchkViolation, cbStartOfReset, cbEndOfReset => {},
         // §12.31.1: "For force and release callbacks, if this is set to NULL,
         // every force and release shall generate a callback." A non-NULL obj
         // must be one VerA issued. cbAssign/cbDeassign take the same: the
@@ -582,6 +611,18 @@ pub fn startOfSimulation() void {
 /// §12.31.4 cbEndOfSimulation — "e.g., $finish system task executed".
 pub fn endOfSimulation() void {
     fireAll(cbEndOfSimulation);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbStartOfReset: a §12.36 vpiReset is about to
+/// take the run back to time 0 (`run.simulate`).
+pub fn startOfReset() void {
+    fireAll(cbStartOfReset);
+}
+
+/// IEEE 1364-2005 §27.33.3 cbEndOfReset: the run is back at time 0, before
+/// it goes on (or ends, for a stop_value of 0).
+pub fn endOfReset() void {
+    fireAll(cbEndOfReset);
 }
 
 /// IEEE 1364-2005 §27.33.3 cbInteractiveScopeChange: "obj shall be a handle

@@ -9,6 +9,7 @@ const std = @import("std");
 const sim = @import("sim");
 const callback = @import("callback.zig");
 const code = @import("code.zig");
+const delays = @import("delays.zig");
 const property = @import("property.zig");
 const root = @import("root.zig");
 const coldOf = root.coldOf;
@@ -75,6 +76,10 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
 
 fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_iterate") orelse return null;
+    if (root.unansweredType(obj_type)) |u| {
+        root.failUnanswered("vpi_iterate", u);
+        return null;
+    }
     // IEEE 1364-2005 §26.6.39: object and time-queue associations, or a
     // NULL reference for global callbacks. Time queues are not Design rows.
     if (obj_type == callback.vpiCallback) {
@@ -128,6 +133,13 @@ fn iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
             return null;
         }
         return newIter(d, d.top_modules);
+    }
+    // IEEE 1364-2005 §26.6.16: inter-module path ->> its two ports, the
+    // output port first.
+    if (delays.asPath(ref)) |m| {
+        if (obj_type == vpiPort) return newIter(d, &m.ports);
+        fail("NOTRAVERSE", "vpi_iterate: an inter-module path is the reference object of vpiPort only, not {d}", .{obj_type});
+        return null;
     }
     const o = object("vpi_iterate", ref) orelse return null;
     if (obj_type == code.vpiAttribute and @import("attributes.zig").supports(o))
