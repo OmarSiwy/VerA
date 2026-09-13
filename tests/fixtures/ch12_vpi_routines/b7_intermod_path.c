@@ -22,16 +22,34 @@
  *     put 2 (1, 2)       -> get 2: 1, 2
  *     put 3 (1, 2, 3)    -> get 3: 1, 2, 3
  *
- * KNOWN GAP: src/vpi/vpi_user.h says "vpi_handle_multi(vpiInterModPath,
- * port, port) is always NULL": VerA reads no SDF and makes no inter-module
- * path. build.zig's vpi_runs pins that failure as `.xfail`. Only the ledger
- * rows are cited, not the bare clauses, because a vpi_runs entry counts for
- * --coverage whether or not it is an xfail.
+ * THE REFUSALS, each NULL or no change plus an error (12.2):
+ *   vpi_handle_multi(vpiInterModPath, u2.a, u1.y): the list is "output port
+ *     and input port", and u2.a is an input: no path.
+ *   vpi_get_delays and vpi_put_delays with no_of_delays 1 and 4 on the path:
+ *     12.11 and 12.29 allow 2 or 3. The 3-delay put stands after the refused
+ *     put, so a get of 3 still reads 1, 2, 3.
+ * Their legal neighbours are the calls above.
+ *
+ * This asserts the handle and the delays the object holds, not timing: like
+ * a module path's, VerA's inter-module path delays reach no simulation, and
+ * a put warns W0251 (specification/Vague_Decisions.md VD-114). Only the
+ * ledger rows are cited, not the bare clauses.
+ *
+ * CHECKS (p02_check.h: an expect_error is 3, its state and code included):
+ * 1 registration; 2 lookups by name, a CHECK and a no-error each (4); 2 port
+ * shapes; the path, its no-error and its type (3); per round trip a put's
+ * and a get's no-error and n values (2 + 2, 2 + 3: 9); the reversed pair
+ * and its error (1 + 3); four refused counts, an error each (12); the 3
+ * values read after them, with a get's no-error (4).
+ * 1 + 4 + 2 + 3 + 9 + 4 + 12 + 4 = 39.
  */
 
 //! lrm 12.22:1
 //! lrm 12.11:11
 //! lrm 12.29:11
+//! lrm-reject 12.22:1
+//! lrm-reject 12.11:11
+//! lrm-reject 12.29:11
 
 #include "../ch11_vpi/p02_check.h"
 
@@ -90,6 +108,26 @@ static PLI_INT32 walk(p_cb_data cb)
 
   round_trip(path, 2);
   round_trip(path, 3);
+
+  CHECK(vpi_handle_multi(vpiInterModPath, a2, y1) == NULL, "12.22: an input port first is no inter-module path");
+  expect_error("vpi_handle_multi(vpiInterModPath, u2.a, u1.y)");
+  {
+    static const int bad[2] = { 1, 4 };
+    int k;
+    for (k = 0; k < 2; k++) {
+      delays(bad[k]);
+      vpi_get_delays(path, &dl);
+      expect_error("12.11: vpi_get_delays(inter-module path) of a count other than 2 or 3");
+      vpi_put_delays(path, &dl);
+      expect_error("12.29: vpi_put_delays(inter-module path) of a count other than 2 or 3");
+    }
+    for (k = 0; k < 3; k++) da[k].real = -1.0;
+    delays(3);
+    vpi_get_delays(path, &dl);
+    expect_no_error("vpi_get_delays(inter-module path) after the refusals");
+    for (k = 0; k < 3; k++)
+      CHECK(da[k].real == k + 1, "12.29: a refused put changes nothing: da[%d] is %.17g, want %d", k, da[k].real, k + 1);
+  }
 
   p02_done("b7_intermod_path");
   return 0;

@@ -7,17 +7,15 @@
  * below are IEEE 1364-2005 Annex G's and the relationships they are used in are
  * §11.6's.
  *
- * WHAT THIS FILE IS NOT. It is not the standard header truncated. Every
- * constant here is one VerA answers, and a constant VerA does not answer is
- * ABSENT rather than declared-and-unimplemented — an application that compiles
- * against this header cannot ask a question that silently returns garbage,
- * because the question does not compile. The cost of that choice is that
- * dropping in the full Annex G header is NOT a no-op: it makes names available
- * that `vpi_get` will answer with `vpiUndefined` and a `vpiError`, which is the
- * standard error indication and is safe, just less informative than a compile
- * error. The numbering is Annex G's throughout, so the two headers agree on
- * every name they share and an application built against either links against
- * this implementation.
+ * EVERY ANNEX G NAME IS HERE (IEEE 1364-2005 §1.7: the listing is normative,
+ * and "All compliant software tools should use the same ... constant
+ * definitions"), with Annex G's value; an application written against the
+ * standard header compiles against this one. A name VerA does not answer is
+ * in the block "Annex G names VerA does not answer" near the end, and the
+ * routine asked it is refused BY NAME: its documented failure value (NULL,
+ * vpiUndefined) and a vpiError whose message names the constant and says
+ * why (§12.2; IEEE 1364-2005 §27.1). The VAMS-only names carry VerA's
+ * numbers, which Annex G does not use.
  *
  * WHAT IS HERE (plan item P01): the object model over an elaborated design and
  * the handle/traversal/property routines over it.
@@ -237,6 +235,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiRegBit              49
 #define vpiRelease             50
 #define vpiRepeat              51
+#define vpiRepeatControl       52   /* IEEE 1364-2005 §26.6.31 assignment -> repeat control (-> vpiExpr, vpiEventControl) */
 #define vpiSysFuncCall         56
 #define vpiSysTaskCall         57
 #define vpiTask                59
@@ -363,6 +362,7 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiBitOrOp             29
 #define vpiBitXorOp            30
 #define vpiBitXNorOp           31
+#define vpiBitXnorOp           31   /* Annex G's other spelling of the same operator */
 #define vpiConditionOp         32
 #define vpiConcatOp            33
 #define vpiMultiConcatOp       34
@@ -600,6 +600,7 @@ typedef struct t_vpi_value {
 #define vpiX                    3
 #define vpiH                    4
 #define vpiL                    5
+#define vpiDontCare             6   /* never read back: no value here is a don't-care */
 
 /* s_vpi_strengthval.s0/s1, IEEE 1364-2005 Annex G. */
 #define vpiSupplyDrive       0x80
@@ -664,6 +665,9 @@ typedef struct t_cb_data {
  *   §27.33.3 feature cbInteractiveScopeChange  vpi_sim_control
  *                                          (vpiSetInteractiveScope); obj is
  *                                          the new scope
+ *   §27.33.3 feature cbStartOfReset,     a vpiReset (§12.36): just before
+ *                    cbEndOfReset         the run goes back to time 0, and
+ *                                          just after
  *   §12.31.4 action  cbTchkViolation      a digital run's timing check
  *                                          reported a violation; obj is the
  *                                          check (vpiTchk)
@@ -674,7 +678,8 @@ typedef struct t_cb_data {
  * callback, and a cbReadWriteSynch of delay zero at read-only synch. Every
  * callback is ONE-SHOT except cbValueChange, cbStmt, cbForce, cbRelease,
  * cbAssign, cbDeassign, cbDisable, cbError, cbPLIError,
- * cbInteractiveScopeChange and cbTchkViolation, which stand until removed. */
+ * cbInteractiveScopeChange, cbTchkViolation, cbStartOfReset and
+ * cbEndOfReset, which stand until removed. */
 #define cbValueChange           1
 #define cbStmt                  2
 #define cbForce                 3
@@ -689,6 +694,8 @@ typedef struct t_cb_data {
 #define cbEndOfSimulation      12
 #define cbError                13
 #define cbTchkViolation        14
+#define cbStartOfReset         19
+#define cbEndOfReset           20
 #define cbInteractiveScopeChange 23
 #define cbAssign               25
 #define cbDeassign             26
@@ -697,6 +704,90 @@ typedef struct t_cb_data {
 
 #define vpiCallback           107   /* §11.6.25 vpi_get(vpiType, callback) */
 #define vpiTimeQueue           64   /* §11.6.25 a pending time; vpi_iterate(vpiTimeQueue, NULL) */
+
+/* --------------------------------------------------------------------------
+ * Annex G names VerA does not answer.
+ *
+ * Defined with Annex G's values so an application written against the
+ * standard header compiles; asking one is refused by name (vpiError, and
+ * the message names the constant and why). The values are IEEE 1364-2005
+ * Annex G's, as tests/fixtures/ieee_pli/b_G_vpi_user.c transcribes them
+ * (VAMS 2023 prints no vpi_user.h listing; §11.6.1, §11.6.4 and §11.6.8
+ * name the module, port and net properties among them and §12.31.4 the
+ * callback reasons, with no numbers).
+ * -------------------------------------------------------------------------- */
+/* Objects and relationships: vpi_handle() and vpi_iterate() refuse them. */
+#define vpiDefParam            10   /* the model keeps no defparam: elaboration applied it */
+#define vpiPortBit             45   /* no port is expanded into bits */
+#define vpiSpecParam           54   /* the model keeps no specparam object */
+#define vpiBitSelect          106   /* a bit-select is a vpiNetBit or vpiRegBit here */
+#define vpiDelayTerm          108   /* delay terminals and devices: no SDF is read */
+#define vpiDelayDevice        109
+#define vpiFrame              110   /* no task or function frame is modelled */
+#define vpiGateArray          111   /* no primitive array object is modelled */
+#define vpiPrimitiveArray     113
+#define vpiSwitchArray        117
+#define vpiUdpArray           118
+#define vpiContAssignBit      128   /* no continuous assignment is expanded into bits */
+#define vpiGenVar             135   /* a genvar is no object here */
+#define vpiLowConn             80   /* a port's lower connection is not modelled (vpiHighConn is) */
+#define vpiPortInst            98   /* a net's ports on lower instances are not modelled */
+#define vpiInTerm             120   /* delay terminals: no SDF is read */
+#define vpiInstanceArray      121   /* an instance array is reached as vpiModuleArray */
+#define vpiOutTerm            124
+#define vpiPorts              125   /* no port is expanded into bits */
+#define vpiSimNet             126   /* a collapsed net's simulated net is not modelled */
+#define vpiTaskFunc           127   /* iterate vpiTask and vpiFunction */
+/* Properties: vpi_get() and vpi_get_str() refuse them. */
+#define vpiCellInstance         8   /* bool: `celldefine is not recorded */
+#define vpiDefNetType          13   /* int: `default_nettype is not recorded */
+#define vpiUnconnDrive         14   /* int: `unconnected_drive is not recorded */
+#define vpiHighZ                1   /* ...its values */
+#define vpiPull1                2
+#define vpiPull0                3
+#define vpiDefFile             15   /* str: a definition's location is not recorded */
+#define vpiDefLineNo           16   /* int */
+#define vpiDefDelayMode        47   /* int: no delay mode is recorded */
+#define vpiDelayModeNone        1   /* ...its values */
+#define vpiDelayModePath        2
+#define vpiDelayModeDistrib     3
+#define vpiDelayModeUnit        4
+#define vpiDelayModeZero        5
+#define vpiDelayModeMTM         6
+#define vpiDefDecayTime        48   /* int: `default_decay_time is not recorded */
+#define vpiExplicitName        19   /* bool: how a port was named is not recorded */
+#define vpiNone                12   /* vpiDefNetType's `default_nettype none */
+#define vpiExplicitScalared    23   /* bool: scalared/vectored is not recorded */
+#define vpiExplicitVectored    24
+#define vpiExpanded            25   /* bool: no vector is expanded */
+#define vpiChargeStrength      27   /* int: a trireg's charge strength is not modelled */
+#define vpiActive              49   /* bool: frames are not modelled */
+#define vpiConstantSelect      53   /* bool: not recorded for a select */
+#define vpiDelayType           56   /* int: delay devices: no SDF is read */
+#define vpiModPathDelay         1   /* ...its values */
+#define vpiInterModPathDelay    2
+#define vpiMIPDelay             3
+#define vpiMultiArray          59   /* bool: not recorded */
+#define vpiOffset              60   /* int: not recorded */
+#define vpiResolvedNetType     61   /* int: each net keeps its declared vpiNetType */
+#define vpiSaveRestartID       62   /* int: no save or restart (1364 Annex C.8) */
+#define vpiSaveRestartLocation 63   /* str */
+#define vpiValid               64   /* int: frames are not modelled */
+#define vpiValidFalse           0   /* ...its values */
+#define vpiValidTrue            1
+/* Values no property here returns. */
+#define vpiNullOp              36   /* vpiOpType */
+#define vpiMinTypMaxOp         38   /* vpiOpType: no min:typ:max reaches the model */
+#define vpiTimeConst            8   /* vpiConstType */
+/* Callback reasons: vpi_register_cb() refuses them. */
+#define cbStartOfSave          15   /* no save or restart (1364 Annex C.8) */
+#define cbEndOfSave            16
+#define cbStartOfRestart       17
+#define cbEndOfRestart         18
+#define cbEnterInteractive     21   /* a run has no interactive mode (§12.36) */
+#define cbExitInteractive      22
+#define cbUnresolvedSystf      24   /* never delivered */
+#define cbSignal               29   /* no signal is trapped */
 
 /* --------------------------------------------------------------------------
  * The routines.
@@ -830,11 +921,13 @@ extern double     vpi_get_analog_time(void);
 #define vpiStartFrequency     745
 #define vpiEndFrequency       746
 extern double     vpi_get_real(PLI_INT32 prop, vpiHandle obj);
-/* §12.11 the delays of a primitive, continuous assignment or delay control. */
+/* §12.11 the delays of a primitive, continuous assignment, delay control,
+ * module path, timing check or inter-module path. */
 extern void       vpi_get_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* §12.29 set the delays of a primitive (2 or 3) or a continuous assignment
  * (1..3), in vpi_get_delays()'s order; the engine applies them from the next
- * transition it schedules. */
+ * transition it schedules. A module path's, a timing check's and an
+ * inter-module path's are described with their objects above. */
 extern void       vpi_put_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* --------------------------------------------------------------------------
  * §12.32/§12.33 user system tasks and functions.
@@ -862,6 +955,11 @@ extern void       vpi_put_delays(vpiHandle obj, p_vpi_delay delay_p);
 #define vpiTimeFunc             3
 #define vpiSizedFunc            4
 #define vpiSizedSignedFunc      5
+/* Annex G aliases the 1364-1995 system function subtypes to these. */
+#define vpiSysFuncInt          vpiIntFunc
+#define vpiSysFuncReal         vpiRealFunc
+#define vpiSysFuncTime         vpiTimeFunc
+#define vpiSysFuncSized        vpiSizedFunc
 
 /* §12.32.1. Verilog-AMS names these and numbers none: VerA's numbers.
  * §12.22.2's listing spells the task vpiSysAnalogTask and Figure 12-18 the
@@ -929,8 +1027,15 @@ extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHand
  * a check's limits is the limit its later events are judged by.
  * vpi_get_delays() and vpi_put_delays() take a path's 1, 2, 3, 6 or 12
  * delays (IEEE 1364 §14.3.1 derives the rest) and a timing check's limits.
- * vpi_handle_multi(vpiInterModPath, port, port) is always NULL: an
- * inter-module path is an SDF interconnect annotation, and none is read.
+ * vpi_handle_multi(vpiInterModPath, output port, input port) (§12.22; IEEE
+ * 1364-2005 §26.6.16) is the interconnect between two one-direction ports of
+ * the same size, inouts allowed on either side: one object per ordered pair,
+ * the same handle each time, of vpiType vpiInterModPath, ->> vpiPort its two
+ * ports. Its delays (§12.11/§12.29: 2 or 3, rise, fall, turn-off) start at 0
+ * and are put as vpiScaledRealTime in the first port's time unit; like a
+ * module path's they are the model's, and no simulation applies one. A put
+ * needs a digital run and warns W0251 there, so the design's diagnostics
+ * say so (specification/Vague_Decisions.md VD-114).
  * -------------------------------------------------------------------------- */
 #define vpiInterModPath        26
 #define vpiModPath             31
