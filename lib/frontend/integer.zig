@@ -801,17 +801,17 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         @memset(literal.unknowns(), std.math.maxInt(u64));
         if (std.ascii.toLower(digits[0]) == 'x') @memset(literal.values(), std.math.maxInt(u64));
     } else if (radix == 10) {
-        // ponytail: multiply-accumulate is O(digits * words); a decimal
-        // literal of millions of digits is slow. Divide and conquer if one
-        // ever matters.
-        for (digits) |c| {
-            if (c == '_') continue;
-            var carry: u128 = std.fmt.charToDigit(c, radix) catch unreachable;
-            for (literal.values()) |*word| {
-                carry += @as(u128, word.*) * radix;
-                word.* = @truncate(carry);
-                carry >>= 64;
-            }
+        if (std.mem.findScalar(u8, digits, '_') == null) {
+            try decimalWords(arena, literal.values(), digits);
+        } else {
+            const plain = try arena.alloc(u8, count);
+            defer arena.free(plain);
+            var n: usize = 0;
+            for (digits) |c| if (c != '_') {
+                plain[n] = c;
+                n += 1;
+            };
+            try decimalWords(arena, literal.values(), plain);
         }
     } else {
         // A power-of-two radix places each digit's `shift` bits directly,
@@ -866,6 +866,122 @@ pub fn parse(arena: std.mem.Allocator, text: []const u8) (Error || std.mem.Alloc
         if (literal.width > max_width) return error.Overflow;
     }
     return literal;
+}
+
+/// Digits up to which `decimalWords` multiply-accumulates, and the leaf size
+/// of its divide and conquer.
+const dc_digits: usize = 1024;
+
+/// The decimal digits `ds` (no `_`) into `out`, little-endian 64-bit words,
+/// reduced mod 2^(64 * out.len): the left truncation a sized literal gets.
+/// Up to `dc_digits` digits a multiply-accumulate over the words written so
+/// far; past it divide and conquer, value = hi * 10^n + lo with n a
+/// power-of-two multiple of `dc_digits`, whose products std multiplies by
+/// Karatsuba: O(digits^1.59 log digits), where the multiply-accumulate alone
+/// is O(digits^2). Temporaries come from `gpa` and are freed.
+fn decimalWords(gpa: std.mem.Allocator, out: []u64, ds: []const u8) std.mem.Allocator.Error!void {
+    @memset(out, 0);
+    if (ds.len <= dc_digits) {
+        var used: usize = 0;
+        for (ds) |c| {
+            var carry: u128 = c - '0';
+            for (out[0..used]) |*word| {
+                carry += @as(u128, word.*) * 10;
+                word.* = @truncate(carry);
+                carry >>= 64;
+            }
+            if (carry != 0 and used < out.len) {
+                out[used] = @intCast(carry);
+                used += 1;
+            }
+        }
+        return;
+    }
+    const Big = std.math.big.int.Managed;
+    // pows[k] = 10^(dc_digits * 2^k), every k a split of `ds` uses.
+    var levels: usize = 0;
+    while (dc_digits << @intCast(levels + 1) < ds.len) levels += 1;
+    const pows = try gpa.alloc(Big, levels + 1);
+    defer gpa.free(pows);
+    var made: usize = 0;
+    defer for (pows[0..made]) |*p| p.deinit();
+    var ten = try Big.initSet(gpa, 10);
+    defer ten.deinit();
+    pows[0] = try Big.init(gpa);
+    made = 1;
+    try pows[0].pow(&ten, dc_digits);
+    while (made <= levels) : (made += 1) {
+        pows[made] = try Big.init(gpa);
+        pows[made].mul(&pows[made - 1], &pows[made - 1]) catch |e| {
+            pows[made].deinit();
+            return e;
+        };
+    }
+    var value = try decimalBig(gpa, ds, pows);
+    defer value.deinit();
+    const limb_bits = @bitSizeOf(std.math.big.Limb);
+    for (value.limbs[0..value.len()], 0..) |limb, i| {
+        const bit = i * limb_bits;
+        if (bit / 64 >= out.len) break;
+        out[bit / 64] |= @as(u64, limb) << @intCast(bit % 64);
+    }
+}
+
+/// `decimalWords`' divide and conquer: split `ds` above its largest
+/// `dc_digits * 2^k` low digits, so `pows[k]` is the shift.
+fn decimalBig(gpa: std.mem.Allocator, ds: []const u8, pows: []const std.math.big.int.Managed) std.mem.Allocator.Error!std.math.big.int.Managed {
+    var r = try std.math.big.int.Managed.init(gpa);
+    errdefer r.deinit();
+    if (ds.len <= dc_digits) {
+        r.setString(10, ds) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidBase, error.InvalidCharacter => unreachable, // `parse` checked every digit
+        };
+        return r;
+    }
+    var k: usize = 0;
+    while (dc_digits << @intCast(k + 1) < ds.len) k += 1;
+    const n = dc_digits << @intCast(k);
+    var hi = try decimalBig(gpa, ds[0 .. ds.len - n], pows);
+    defer hi.deinit();
+    var lo = try decimalBig(gpa, ds[ds.len - n ..], pows);
+    defer lo.deinit();
+    try r.mul(&hi, &pows[k]);
+    try r.add(&r, &lo);
+    return r;
+}
+
+test "decimal literals past the multiply-accumulate size divide and conquer to the same value" {
+    // Oracle: the multiply-accumulate path, which `dc_digits` digits or
+    // fewer take, over the same words. Lengths straddle the leaf and two
+    // split levels; the 1-word output is a sized literal's left truncation.
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x2611);
+    const random = prng.random();
+    for ([_]usize{ dc_digits + 1, 2 * dc_digits, 2 * dc_digits + 7, 5 * dc_digits + 3 }) |len| {
+        const ds = try gpa.alloc(u8, len);
+        defer gpa.free(ds);
+        for (ds) |*c| c.* = '0' + random.uintLessThan(u8, 10);
+        ds[0] = '7';
+        for ([_]usize{ 1, len / 19 + 2 }) |words| {
+            const got = try gpa.alloc(u64, words);
+            defer gpa.free(got);
+            try decimalWords(gpa, got, ds);
+            const want = try gpa.alloc(u64, words);
+            defer gpa.free(want);
+            @memset(want, 0);
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                var carry: u128 = ds[i] - '0';
+                for (want) |*word| {
+                    carry += @as(u128, word.*) * 10;
+                    word.* = @truncate(carry);
+                    carry >>= 64;
+                }
+            }
+            try std.testing.expectEqualSlices(u64, want, got);
+        }
+    }
 }
 
 test "§2.6.1 radixOf reads the base format, and 10 without one" {

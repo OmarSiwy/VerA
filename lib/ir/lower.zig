@@ -202,6 +202,7 @@ node_voltages: std.StringHashMapUnmanaged(u32) = .empty,
 
 // ---- internal lowering state (not part of the codegen contract) ----
 /// Sub-file-private state: each is read and written by that one file only.
+contrib_state: lower_contrib.State = .{},
 node_state: lower_node.State = .{},
 event_state: lower_event.State = .{},
 systask_state: lower_systask.State = .{},
@@ -544,7 +545,7 @@ pub fn lower(
     self.int_systfs = opts.int_systfs;
     defer {
         self.deinit();
-        assert(self.builder.dir.len == 0);
+        assert(self.builder.dir.items.len == 0);
     }
     return self.lowerFile();
 }
