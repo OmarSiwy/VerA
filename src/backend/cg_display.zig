@@ -742,7 +742,7 @@ const Preprocessor = @import("../frontend/preprocessor.zig");
 const Lexer = @import("../frontend/lexer.zig");
 const Parser = @import("../frontend/parser.zig");
 const proof = @import("../ir/proof.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 
 /// The pipeline through `cg.generate` with §9.4 display ON, arena-lived — the
 /// same stages codegen.zig's private Harness runs, kept local so this file's

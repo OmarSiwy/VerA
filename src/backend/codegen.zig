@@ -44,7 +44,7 @@ const cg_filters = @import("cg_filters.zig");
 const cg_limit = @import("cg_limit.zig");
 const Lower = @import("../ir/lower.zig");
 const proof = @import("../ir/proof.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 const naming = @import("naming.zig");
 const assert = std.debug.assert;
 

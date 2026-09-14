@@ -330,7 +330,7 @@ fn assignDisambig(units: []Unit) void {
 // ---------------------------------------------------------------------------
 
 const Ast = @import("../frontend/ast.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,
