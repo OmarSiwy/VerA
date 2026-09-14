@@ -6826,6 +6826,55 @@ pub const Gen = struct {
             \\
             \\
         , .{});
+        try self.emitCollapseFull(pairs);
+    }
+
+    /// `collapse` with EVERY retention flag set — the maximal collapse, at
+    /// comptime.
+    ///
+    /// `collapse` itself can only answer per instance, because the flags are
+    /// parameters. A host that wants to SPECIALISE the fully collapsed
+    /// instances needs the alias map before any instance exists: it sizes a
+    /// reduced derivative basis (the merged set is ONE unknown, so it needs
+    /// one seed lane and one Jacobian column, not |set| of each) and that is a
+    /// type, not a value. So the two halves are split — this const is the
+    /// shape, `collapse` is the per-instance test, and an instance qualifies
+    /// for the narrow basis exactly when the two arrays are equal.
+    ///
+    /// Every union below is unconditional here, which is the only difference
+    /// from `collapse`: a flag that is clear at runtime merges strictly less,
+    /// so `collapse(m, i) == collapse_full` is the honest "maximal" predicate
+    /// and every other outcome falls back to the full width.
+    fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
+        try self.w(
+            \\/// The MAXIMAL collapse: `collapse` with every §5.6.1.3 retention
+            \\/// flag set. Comptime, so a host can size a reduced derivative
+            \\/// basis for the instances whose runtime `collapse` equals this;
+            \\/// any other outcome merges strictly less and must use full width.
+            \\pub const collapse_full: [n_u]?u8 = blk: {{
+            \\    var parent: [n_u]u8 = undefined;
+            \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
+            \\
+        , .{});
+        for (pairs) |p| {
+            try self.w("    zCollapseUnion(&parent, @intFromEnum(U.{s}), @intFromEnum(U.{s}));\n", .{
+                self.u_names[p.victim], self.u_names[p.target],
+            });
+        }
+        try self.w(
+            \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+            \\    for (0..n_u) |u| {{
+            \\        const r = zCollapseRoot(&parent, @intCast(u));
+            \\        if (r != u) out[u] = r;
+            \\    }}
+            \\
+        , .{});
+        for (pairs) |p| {
+            try self.w("    out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
+                self.u_names[p.flow_u], self.u_names[p.target],
+            });
+        }
+        try self.w("    break :blk out;\n}};\n\n", .{});
     }
 
     /// §4.5.7 the per-site transport delays, model-frame like
