@@ -190,8 +190,27 @@ pub const NoiseKind = enum(u8) { thermal, flicker }; // §4.6.4.1/.2
 /// (`combined/13_noise_temperature_analysis.va` is that shape). A single
 /// `?NoiseKind` once made the second statement overwrite the first, which
 /// silently deleted a generator from the emitted `noise_gens` table — and with
-/// it the only one the documented Jacobian fallback can compute.
-pub const NoiseSrc = struct { kind: NoiseKind, id: u32 };
+/// it a PSD the host cannot know it should have asked for.
+///
+/// `pwr`/`exp` are §4.6.4.1/.2's OWN ARGUMENTS, as MIR values: the whole PSD
+/// of a Verilog-A generator is the argument, not the tag. `white_noise(pwr)`
+/// is `S(f) = pwr` and `flicker_noise(pwr, exp)` is `S(f) = pwr/f^exp`, both
+/// in the contributed nature's units² per Hz — so `white_noise(2·q·|I|)` is
+/// shot noise and `white_noise(4·k·T/R)` is thermal, and NOTHING in the call
+/// distinguishes them. `kind` stays as topology metadata — it says which of
+/// the two CALLS this row came from, which is all it ever knew — and codegen
+/// exports `pwr`/`exp` through `noisePsd`, so the host never has to guess a
+/// PSD off a Jacobian.
+pub const NoiseSrc = struct {
+    kind: NoiseKind,
+    id: u32,
+    /// §4.6.4.1/.2 arg 0. `.f_zero` only for a generator whose call never
+    /// lowered, which cannot happen through `lowerNoise`.
+    pwr: Mir.Value = .f_zero,
+    /// §4.6.4.2 arg 1, the frequency exponent. Unread on a `.thermal` row, and
+    /// 1 for a one-argument `flicker_noise` — the same default either way.
+    exp: Mir.Value = .f_one,
+};
 
 /// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
 /// and for codegen's per-node abstol; nothing here consumes it.
@@ -387,6 +406,11 @@ arrays: std.StringHashMapUnmanaged(ArrayInfo) = .empty,
 /// in a table describing topology; the under-report it replaces was a missing
 /// generator, which is a PSD a host cannot know it should have asked for.
 var_noise: std.StringHashMapUnmanaged([]const NoiseSrc) = .empty,
+/// §4.6.4 the `(pwr, exp)` MIR values of every lowered noise call, by
+/// `Ast.ExprId`. `lowerNoise` fills it, `noiseSrcsOf` reads it back onto the
+/// `NoiseSrc` it appends — the walk runs on the AST, so this map is the only
+/// thing that still knows what the arguments lowered to.
+noise_psd: std.AutoHashMapUnmanaged(u32, [2]Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
@@ -4826,7 +4850,13 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
             if (std.mem.eql(u8, n, "white_noise") or std.mem.eql(u8, n, "flicker_noise")) {
                 // §4.6.4.2 flicker_noise; white_noise is §4.6.4.1's kind.
                 const kind: NoiseKind = if (n[0] == 'f') .flicker else .thermal;
-                try addNoiseSrc(self.arena, out, .{ .kind = kind, .id = @intFromEnum(e) });
+                const psd = self.noise_psd.get(@intFromEnum(e)) orelse [2]Mir.Value{ .f_zero, .f_one };
+                try addNoiseSrc(self.arena, out, .{
+                    .kind = kind,
+                    .id = @intFromEnum(e),
+                    .pwr = psd[0],
+                    .exp = psd[1],
+                });
             }
         },
         // §4.6.4.6's own spelling: the source was assigned to a variable and
@@ -7713,12 +7743,29 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const name = self.file.str(ex.strOf(e));
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
+    // §4.6.4 the PSD arguments, positionally: arg 0 is the power, arg 1 of
+    // `flicker_noise` is the exponent. Recorded HERE — this is the only place
+    // the call's arguments are lowered, and `noiseSrcsOf` walks the AST after
+    // the fact, where the MIR values are no longer reachable from the id.
+    var psd: [2]Mir.Value = .{ .f_zero, .f_one };
+    var reals: usize = 0;
     for (ex.args(e)) |a| {
         if (a == .none) continue;
         if (try self.appendVectorArg(&vals, a)) continue;
         const tv = try self.lowerExpr(a);
-        try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
+        if (tv.ty == .string) {
+            try vals.append(self.arena, tv.v);
+            continue;
+        }
+        const rv = try self.toReal(tv);
+        if (reals < 2) psd[reals] = rv;
+        reals += 1;
+        try vals.append(self.arena, rv);
     }
+    // §4.6.4.1 `white_noise(pwr[, name])` has one real argument and §4.6.4.2's
+    // `flicker_noise(pwr[, exp[, name]])` defaults `exp` to 1, so the `.f_one`
+    // seed is the answer whenever the loop above did not overwrite it.
+    try self.noise_psd.put(self.arena, @intFromEnum(e), psd);
     return .{ .v = try self.call(name, vals.items), .ty = .real };
 }
 
