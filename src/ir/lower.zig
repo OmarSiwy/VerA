@@ -526,6 +526,11 @@ limit_slots: std.ArrayList(LimitSlot) = .empty,
 /// §9.15 the model reads `$simparam("iteration")` or `$simparam("iniLim")`, so
 /// codegen owes it `Instance.newton_iteration` and the two hooks that move it.
 uses_newton_iter: bool = false,
+/// §9.15 the model reads a `$simparam` whose value is the HOST's
+/// (`simparamHostField`), so codegen owes its Model the reserved field. Set at
+/// the call because a §3.4 parameter default is lowered outside the block
+/// stream, and `parameter real tnom = $simparam("tnom")` is the whole use.
+uses_host_simparam: bool = false,
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -7825,6 +7830,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // reads one of the two names that need it (`simparamIsRuntime`).
         if (args.len >= 1) if (self.constStrArg(args[0])) |s| {
             if (simparamIsRuntime(s)) self.uses_newton_iter = true;
+            if (simparamHostField(s) != null) self.uses_host_simparam = true;
         };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
@@ -8562,6 +8568,11 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
     // 27, not the 300.15 it once answered — the right temperature in the wrong
     // unit, which a model forming `$vt($simparam("tnom") + 273.15)` then read as
     // 300 K too hot.
+    //
+    // 27 is the DECLARED default only. `tnom` is also in `simparamHostField`,
+    // so codegen renders the READ from the host's Model field and uses this
+    // number for exactly one thing: the field initializer, i.e. what `Model{}`
+    // means to a host that never writes the field (`paramDefault`).
     if (eq(u8, name, "tnom")) return 27.0;
     // Three unit-valued homotopy/geometry factors: a device compiled here is
     // never being stepped or shrunk, so 1.0 is the true answer, not a stand-in.
@@ -8593,6 +8604,26 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
 ///               `Instance.analysis_kind` is one value.
 pub fn simparamIsRuntime(name: []const u8) bool {
     return std.mem.eql(u8, name, "iteration") or std.mem.eql(u8, name, "iniLim");
+}
+
+/// §9.15 the simulation parameters whose value is the HOST's, published into a
+/// reserved `Model` field the host writes before `derive()`. Returns the field
+/// name, or null for a name that is a compile-time constant here.
+///
+///   tnom — Table 9-27, degrees Celsius. SPICE's `.options tnom` (ngspice
+///          `CKTnomTemp`, default 27), which is the temperature a model card
+///          that gives no `TNOM`/`TREF` of its own was extracted at. A
+///          Verilog-A module cannot read it any other way: `$temperature` is
+///          the OPERATING temperature and a `parameter` default is the
+///          module's own text. Folding it to 27 made every `.options tnom`
+///          in a deck a silent no-op, because a compact model derives its
+///          whole parameter set from the nominal temperature.
+///
+/// The `__` suffix is VerA's namespace and cannot collide: `naming.sanitize`
+/// escapes a trailing `_` and a `__` run (`Z5f`), so no Verilog-A identifier
+/// reaches a field name of this shape. Same rule as `<p>__given`.
+pub fn simparamHostField(name: []const u8) ?[]const u8 {
+    return if (std.mem.eql(u8, name, "tnom")) "nom_temp__" else null;
 }
 
 /// ch9 return types. Everything not listed is real (§9.14/§9.15 dominate).

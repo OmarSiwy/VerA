@@ -506,6 +506,9 @@ pub const Gen = struct {
     held_idx: []u32 = &.{},
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
+    /// Does the module read §9.15 `$simparam("tnom")`? Its Model then carries
+    /// the host-written `Lower.simparamHostField("tnom")` field.
+    uses_nom_temp: bool = false,
     /// §4.5.15 the `$limit` call sites this device honours, in source order,
     /// and one line per site it does not. Filled by `cg_limit.collect` before
     /// `buildJobs`, which queues their algorithm arguments into the core.
@@ -1344,6 +1347,10 @@ pub const Gen = struct {
             if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
             if (self.an.foldConst(p.default, 0, false) == null) self.p_given[i] = true;
         }
+        // §9.15's host-published `$simparam` is recorded at the CALL, not by
+        // this walk: a parameter default is lowered outside the block stream,
+        // and `parameter real tnom = $simparam("tnom")` is the whole point.
+        self.uses_nom_temp = self.lower.uses_host_simparam;
         // §9.19 $param_given(p): the flag lives in Model, but only for the
         // parameters actually asked about.
         for (0..self.an.nb) |bi| {
@@ -1807,7 +1814,17 @@ pub const Gen = struct {
             });
             try self.w("    {s}__given: bool = false,\n", .{self.a_names[i]});
         }
-        if (self.lower.params.items.len == 0) {
+        // §9.15 the host-published nominal temperature this module reads.
+        // Model, not Instance: `.options tnom` is one number per RUN, so an
+        // Instance copy would replicate a global across every instance of
+        // every batch for a value `derive()` reads once at build. The
+        // initializer is Table 9-27's default, so `Model{}` is unchanged for a
+        // host that never writes it.
+        if (self.uses_nom_temp) try self.w(
+            "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
+            .{ Lower.simparamHostField("tnom").?, try self.fmtF64(self.lower.simparamValue("tnom").?) },
+        );
+        if (self.lower.params.items.len == 0 and !self.uses_nom_temp) {
             try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
         }
         try self.w("}};\n\n", .{});
@@ -4635,6 +4652,17 @@ pub const Gen = struct {
             .inst_result => |inst| {
                 const row = self.mir.instRow(inst);
                 if (in_unit and !devSafe(row.op)) return null;
+                // §9.15 a host-published `$simparam` IS a Model field, so a
+                // §3.4 parameter default written over it renders here and
+                // `emitDerive` picks it up. Without this the default folded to
+                // nothing, `paramDefault` wrote 0 and W1050 fired.
+                if (row.op == .call) {
+                    const d = self.mir.instData(inst).call;
+                    if (!std.mem.eql(u8, d.name, "$simparam")) return null;
+                    const f = Lower.simparamHostField(self.strArg(d.args, 0) orelse "") orelse return null;
+                    self.uses_model = true;
+                    return try std.fmt.allocPrint(self.arena, "model.{s}", .{f});
+                }
                 switch (Mir.opClass(row.op)) {
                     // Rendered as open/close (and separator) fragments rather
                     // than as a format string per opcode: `allocPrint` wants a
@@ -5039,6 +5067,12 @@ pub const Gen = struct {
         // here answered is the same set that escaped E0811 at lowering.
         if (eq(u8, name, "$simparam")) {
             const nm = self.strArg(args, 0) orelse "";
+            // Host-published first: `simparamValue` also answers `tnom`, but
+            // only as the DECLARED default (`Lower.simparamHostField`).
+            if (Lower.simparamHostField(nm)) |f| {
+                self.uses_model = true;
+                return self.b("S.con(model.{s})", .{f});
+            }
             if (self.lower.simparamValue(nm)) |v| return self.b("S.con({s})", .{try self.fmtF64(v)});
             if (args.len > 1) return self.b("S.con({s})", .{try self.f64Expr(args[1])});
             // Unknown, no fallback: E0811 already refused this compile unless
@@ -9478,6 +9512,67 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
     // And `warm` is the derived half of the claim: initializer 0.0, `derive`
     // writing the §6.3.4 value over it.
     try std.testing.expect(std.mem.indexOf(u8, src, "model.warm = (2.0) * (model.base);") != null);
+}
+
+test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
+    // The defect this fixes: `tnom` folded to the constant 27, so a SPICE deck
+    // setting `.options tnom` was silently ignored by every model — and a
+    // compact model derives its whole parameter set from the nominal
+    // temperature, so 2 K of error moves the I-V curve by percent.
+    //
+    // ngspice's shape, per model setup (b4set.c:1950): `if (!tnomGiven) tnom =
+    // CKTnomTemp`. Here that is the `__given` guard `emitDerive` already writes
+    // for every derived parameter, over a Model field the host writes once.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module tn(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real tnom  = $simparam("tnom");
+        \\  parameter real tnomk = $simparam("tnom") + 273.15;
+        \\  analog I(p, n) <+ V(p, n) * (tnom + tnomk);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // ONE host-written field, on Model — `.options tnom` is one number per RUN,
+    // so an Instance copy would replicate a global per instance, and two reads
+    // of the same simparam must not become two fields.
+    try std.testing.expect(std.mem.count(u8, src, "nom_temp__: f64 = 27.0,") == 1);
+
+    // Table 9-27's declared default still IS the field initializer, in Celsius,
+    // so `Model{}` — a host that writes nothing — is bit-identical to the old
+    // folded constant. That is what keeps every existing fixture unmoved, and
+    // `tnomk` pins that `27.0 + 273.15` folds to the literal `300.15` exactly.
+    try std.testing.expect(std.mem.indexOf(u8, src, "tnom: f64 = 27.0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "tnomk: f64 = 300.15,") != null);
+
+    // Precedence: the card wins. `__given` is the same flag §9.19 uses, raised
+    // by the host's `applyKv` when the model card named the parameter.
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (!model.tnom__given) model.tnom = model.nom_temp__;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "if (!model.tnomk__given) model.tnomk = (model.nom_temp__) + (273.15);") != null);
+
+    // A default that reads the host's table is no longer W1050: `derive()`
+    // overwrites the field, which is that warning's own silence condition.
+    for (h.bag.messages()) |mi| try std.testing.expect(h.bag.get(mi).code != .W1050);
+}
+
+test "codegen: §9.15 $simparam(\"tnom\") read from the body is the same field" {
+    // Not only the §3.4 default position: a model that asks mid-body gets the
+    // host's value too, or the two spellings of one question would disagree.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module tb(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ V(p, n) * $simparam("tnom");
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "nom_temp__: f64 = 27.0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "S.con(model.nom_temp__)") != null);
 }
 
 test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digit" {
