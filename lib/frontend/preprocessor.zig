@@ -185,6 +185,25 @@ pub const DefaultDiscipline = struct {
     /// discipline resolution will not use a default discipline for nets
     /// declared after this directive is encountered in the text stream."
     discipline: []const u8,
+
+    /// The default in force at offset `at` of `events`, or null. The most
+    /// recent directive wins, and a wire-qualified one wins over an
+    /// unqualified one however old it is ("the more specific directives have
+    /// higher precedence").
+    pub fn inForce(events: []const DefaultDiscipline, at: u32) ?[]const u8 {
+        var fallback: ?[]const u8 = null;
+        var i = events.len;
+        return while (i > 0) {
+            i -= 1;
+            const e = events[i];
+            if (e.at > at) continue;
+            // §10.2: the bare form and `resetall withdraw the default outright,
+            // so nothing older than one of those is still in force.
+            if (e.discipline.len == 0) break fallback;
+            if (e.qualifier == .wire) break e.discipline;
+            if (e.qualifier == null and fallback == null) fallback = e.discipline;
+        } else fallback;
+    }
 };
 
 /// One §10.3 `` `default_transition ``. `value` is the transition time in

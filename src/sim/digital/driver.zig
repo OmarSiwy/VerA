@@ -70,11 +70,18 @@ pub fn key(net: u32) u32 {
 /// ponytail: an ordinary `inout` port stays on the drivers' net; §7.9's
 /// Figure 7-11 bidirectional split is the upgrade.
 pub fn segregate(r: *Run, e: *elab.Elab) Error!void {
+    // VAMS §7.8.5.1 a gate's terminal reads the segment by its name in the
+    // parent, so a gate's input is one more receiver. Re-pointed after the
+    // loop, which finds each segment by that name.
+    const GateRead = struct { scope: u32, str: Ast.StrId, net: u32 };
+    var gate_reads: std.ArrayList(GateRead) = .empty;
     for (r.inserts, r.insert_segs) |row, seg| {
         const parent = scopeAt(r, row.path) orelse continue;
         // A continuous lower port minted no segment: nothing digital to split.
         const slot = r.names.get(.{ .scope = parent, .str = r.file.exprs.strOf(seg) }) orelse continue;
         const d = r.net_of.get(slot) orelse continue;
+        const is_gate = if (r.file.strings.find(row.inst)) |n| r.instances.get(.{ .scope = parent, .str = n }) == null else true;
+        if (is_gate) try gate_reads.append(r.arena, .{ .scope = parent, .str = r.file.exprs.strOf(seg), .net = d });
         if (r.drv.receivers.contains(d)) continue; // a merged group's later port
         var driven = false;
         for (e.wires.items) |w| driven = driven or (w.net == d and isConnect(r, w.scope));
@@ -98,6 +105,9 @@ pub fn segregate(r: *Run, e: *elab.Elab) Error!void {
         }
         try r.drv.receivers.put(r.arena, d, rx);
     }
+    for (gate_reads.items) |g| if (r.drv.receivers.get(g.net)) |rx| {
+        r.names.getPtr(.{ .scope = g.scope, .str = g.str }).?.* = e.nets.items[rx].slot;
+    };
 }
 
 /// The instance scope at a `Mixed.Insert` path (`a.b.`, empty at the root).

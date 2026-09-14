@@ -1,8 +1,8 @@
 //! §7.8 automatic insertion of connect modules: one module's instance list →
-//! the same list with every mixed port re-pointed at a new segment, plus one
-//! synthetic instance of the selected connect module per segment for the
-//! flatten to inline like any other child. LRM §3.11.1, §7.6, §7.7.1, §7.7.3,
-//! §7.8.1 to §7.8.5.
+//! the same list with every mixed port (and gate terminal, §7.8.5.1)
+//! re-pointed at a new segment, plus one synthetic instance of the selected
+//! connect module per segment for the flatten to inline like any other
+//! child. LRM §3.9, §3.11.1, §7.6, §7.7.1, §7.7.3, §7.8.1 to §7.8.5.1.
 
 const std = @import("std");
 const hier_param = @import("../hier_param.zig");
@@ -14,6 +14,7 @@ const elab_paramset = @import("paramset.zig");
 const elab_segment = @import("segment.zig");
 const discipline = @import("../discipline_rules.zig");
 const Ast = @import("frontend").Ast;
+const Preprocessor = @import("frontend").Preprocessor;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
 
@@ -31,8 +32,14 @@ const Rule = struct {
 
 /// One mixed port that matched exactly one rule.
 const Hit = struct {
+    /// The instance's index in `src`, and its connection's index; or, for a
+    /// `gate` terminal, the gate's index in `Flatten.gates` and the
+    /// terminal's (0 the output, k its k'th input).
     inst: usize,
     conn: usize,
+    gate: bool = false,
+    /// §7.8.5's InstName.
+    name: Ast.StrId,
     rule: usize,
     /// The upper connection, a name in THIS module (§7.8.5's SigName).
     sig: Ast.StrId,
@@ -127,6 +134,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
             try hits.append(self.ctx.arena, .{
                 .inst = ii,
                 .conn = ci,
+                .name = inst.name,
                 .rule = found orelse {
                     // Judged with the rest after the walk, so the order of
                     // diagnostics stays §7.4's before §7.8's.
@@ -136,6 +144,59 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
                 .sig = sig,
                 .bottom = lower.disc,
                 .port = p.name,
+            });
+        }
+    }
+    // §3.9 "For digital primitives the domain is discrete and thus the
+    // discipline is set via the default_discipline directive": a gate's
+    // terminal is a port whose lower connection has the discipline in force
+    // at the gate, named for §7.8.5 by §7.8.5.1. Its rows are the tail of
+    // `Flatten.gates`, which `inlineInstance` (or `run`, at the top) has just
+    // appended in source order.
+    const gate_base = self.gates.items.len - module.gates.len;
+    for (module.gates, 0..) |g, gi| {
+        // ponytail: an unnamed gate has no §7.8.5 InstName for a split
+        // bridge, nor a name the mixed runner finds it by; it inserts nothing.
+        if (g.name == .none or g.main_tok >= self.ctx.tok_starts.len) continue;
+        const dname = Preprocessor.DefaultDiscipline.inForce(self.ctx.default_disciplines, self.ctx.tok_starts[g.main_tok]) orelse continue;
+        const bottom = file.strings.find(dname) orelse continue;
+        if (domain(file, bottom) != .discrete) continue;
+        for (0..1 + g.ins.len) |t| {
+            // ponytail: an enable gate (no §7.8.5.1 names), a gate array,
+            // and pull sources and switches insert nothing (Vague_Decisions
+            // §10).
+            var buf: [24]u8 = undefined;
+            const pname = Ast.GateInst.connectPortName(module.gates, gi, t, &buf) orelse continue;
+            const sig = elab_names.netRefName(self, if (t == 0) g.out else g.ins[t - 1]) orelse continue;
+            const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
+            if (upper.domain != .continuous) continue;
+            const port = try file.intern(self.ctx.arena, try self.ctx.arena.dupe(u8, pname));
+            const dir: Ast.Direction = if (t == 0) .output else .input;
+            var found: ?usize = null;
+            var count: usize = 0;
+            for (rules.items, 0..) |r, ri| if (matches(file, r, dir, upper.disc, bottom)) {
+                count += 1;
+                if (found == null) found = ri;
+            };
+            if (count > 1) {
+                try self.err(g.main_tok, .E0922, "port `{s}` of `{s}` matches more than one connect statement ({d})", .{
+                    file.str(port), file.str(g.name), count,
+                });
+                continue;
+            }
+            try hits.append(self.ctx.arena, .{
+                .inst = gate_base + gi,
+                .conn = t,
+                .gate = true,
+                .name = g.name,
+                .rule = found orelse {
+                    const bound = self.unit.rename.get(sig) orelse sig;
+                    try self.unbridged.append(self.ctx.arena, .{ .tok = g.main_tok, .net = bound, .lower = bottom, .port = port, .inst = g.name, .dir = dir, .upper = upper });
+                    continue;
+                },
+                .sig = sig,
+                .bottom = bottom,
+                .port = port,
             });
         }
     }
@@ -168,13 +229,25 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
         const first = if (merged) for (hits.items[0..hi]) |g| {
             if (g.sig == h.sig and g.rule == h.rule and g.bottom == h.bottom) break g;
         } else null else null;
-        const conn = &conns[h.inst][h.conn];
+        const name = try segmentName(self, path, r, merged, lower_port, h, if (first) |g| g else h);
+        const conn: Ast.PortConn = if (!h.gate) conns[h.inst][h.conn] else gate: {
+            // The flat row takes the segment; the bridge takes the source's
+            // terminal, which inlining renames like any instance's actual.
+            const g = &self.gates.items[h.inst];
+            const src_g = module.gates[h.inst - gate_base];
+            const seg = try ident(self, name.segment, g.main_tok);
+            if (h.conn == 0) g.out = seg else {
+                const ins = try self.ctx.arena.dupe(Ast.ExprId, g.ins);
+                ins[h.conn - 1] = seg;
+                g.ins = ins;
+            }
+            break :gate .{ .expr = if (h.conn == 0) src_g.out else src_g.ins[h.conn - 1], .main_tok = g.main_tok };
+        };
         const up_expr = conn.expr;
-        const name = try segmentName(self, path, r, merged, lower_port, h, if (first) |g| g else h, out.items);
-        conn.expr = try ident(self, name.segment, conn.main_tok);
+        if (!h.gate) conns[h.inst][h.conn].expr = try ident(self, name.segment, conn.main_tok);
         try self.inserts.append(self.ctx.arena, .{
             .path = path,
-            .inst = file.str(out.items[h.inst].name),
+            .inst = file.str(h.name),
             .port = file.str(h.port),
             .module = file.str(r.module.name),
             .name = file.str(name.instance),
@@ -316,12 +389,11 @@ fn segmentName(
     lower_port: Ast.StrId,
     h: Hit,
     owner: Hit,
-    insts: []const Ast.Instance,
 ) Error!struct { instance: Ast.StrId, segment: Ast.StrId } {
     const file = self.ctx.file;
     const a = self.ctx.arena;
     const leaf = if (!merged)
-        try a.print("{s}__{s}__{s}", .{ file.str(h.sig), file.str(insts[h.inst].name), file.str(h.port) })
+        try a.print("{s}__{s}__{s}", .{ file.str(h.sig), file.str(h.name), file.str(h.port) })
     else
         try a.print("{s}__{s}__{s}", .{ file.str(owner.sig), file.str(r.module.name), file.str(owner.bottom) });
     return .{
@@ -617,6 +689,50 @@ test "§7.8.4 mixed ports on one signal share one merged bridge, and split gives
         // The top, the two children, then one bridge per distinct name.
         try std.testing.expectEqual(case.units, d.units.len);
     }
+}
+
+test "§7.8.5.1 a gate's mixed terminals get split bridges named by the primitive port names" {
+    // §3.9: under `default_discipline dd every gate terminal is a `dd`
+    // lower connection. In `blk`, `p` and `q` are `ca`, so and g1's in1/in2
+    // are mixed inputs (a2d) and buf g2's out1/out2 mixed outputs (d2a); `y`
+    // has no domain and is bridged by nothing.
+    const src =
+        \\discipline ca; domain continuous; enddiscipline
+        \\discipline dd; domain discrete; enddiscipline
+        \\module top; ca a, b; blk u(a, b); endmodule
+        \\module blk(p, q); inout p, q; ca p, q; wire y; and g1(y, p, q); buf g2(p, q, y); endmodule
+        \\connectmodule a2d(el, cm); input el; output cm; ca el; dd cm; endmodule
+        \\connectmodule d2a(cm, el); input cm; output el; dd cm; ca el; endmodule
+        \\connectrules r; connect a2d split; connect d2a split; endconnectrules
+    ;
+    var f: fixture.Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+    try fixture.parse(&f, src);
+    var c = f.ctx();
+    c.default_disciplines = &.{.{ .at = 0, .qualifier = null, .discipline = "dd" }};
+    const d = try elaborate.elaborate(c);
+    const want = [_][4][]const u8{
+        .{ "g1", "in1", "a2d", "p__g1__in1" },
+        .{ "g1", "in2", "a2d", "q__g1__in2" },
+        .{ "g2", "out1", "d2a", "p__g2__out1" },
+        .{ "g2", "out2", "d2a", "q__g2__out2" },
+    };
+    try std.testing.expectEqual(want.len, d.inserts.len);
+    for (d.inserts, want) |ins, w| {
+        try std.testing.expectEqualStrings("u.", ins.path);
+        try std.testing.expectEqualStrings(w[0], ins.inst);
+        try std.testing.expectEqualStrings(w[1], ins.port);
+        try std.testing.expectEqualStrings(w[2], ins.module);
+        try std.testing.expectEqualStrings(w[3], ins.name);
+    }
+    // The flat gate rows read and drive the segments, `y` untouched.
+    const ex = &f.file.exprs;
+    const g1 = d.top.gates[0];
+    try std.testing.expectEqualStrings("u.p__g1__in1.cm", f.file.str(ex.strOf(g1.ins[0])));
+    try std.testing.expectEqualStrings("u.q__g1__in2.cm", f.file.str(ex.strOf(g1.ins[1])));
+    try std.testing.expectEqualStrings("u.y", f.file.str(ex.strOf(g1.out)));
+    try std.testing.expectEqualStrings("u.p__g2__out1.cm", f.file.str(ex.strOf(d.top.gates[1].out)));
+    try std.testing.expectEqualStrings("u.q__g2__out2.cm", f.file.str(ex.strOf(d.top.gates[2].out)));
 }
 
 test "§7.6 Table 7-2: a connect module whose port directions name no scenario is E0982" {

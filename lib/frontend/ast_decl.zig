@@ -437,6 +437,35 @@ pub const GateInst = struct {
     strength1: Strength = .strong,
     delay: Delay3 = .{},
     main_tok: u32 = 0,
+
+    /// VAMS §7.8.5.1 "built-in digital primitives ports will be provided with
+    /// predictable names", for naming the connect modules §7.8.4 inserts:
+    /// terminal `t` (0 `out`, k the k'th of `ins`) of row `gi` of one
+    /// module's `gates`, written into `buf`. "For N-input gates (and, nand,
+    /// nor, or, xnor, xor) the output will be named out, and the inputs
+    /// reading from left to right will be named in1, in2, in3, and so forth.
+    /// For N-output gates (buf, not) The input will be named in, and the
+    /// outputs reading from left to right will be named out1, out2, out3":
+    /// such a gate is one row per output, so an output's number is its row's
+    /// place among its instance's rows (one `main_tok`).
+    ///
+    /// Null for the four enable gates, which the clause names no ports for,
+    /// and for a §7.1.5 instance array, whose lanes would each need a name.
+    pub fn connectPortName(gates: []const GateInst, gi: usize, t: usize, buf: *[24]u8) ?[]const u8 {
+        const g = gates[gi];
+        if (g.range != null) return null;
+        return switch (g.kind) {
+            .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => if (t == 0) "out" else std.fmt.bufPrint(buf, "in{d}", .{t}) catch unreachable,
+            .g_buf, .g_not => if (t != 0) "in" else out: {
+                var k: usize = 1;
+                for (gates[0..gi]) |o| if (o.main_tok == g.main_tok) {
+                    k += 1;
+                };
+                break :out std.fmt.bufPrint(buf, "out{d}", .{k}) catch unreachable;
+            },
+            .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => null,
+        };
+    }
 };
 
 /// A.7.4 `edge_identifier` / A.7.5.3 `timing_check_event_control`.
