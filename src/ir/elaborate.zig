@@ -65,7 +65,7 @@ const diag = @import("diag");
 // an in-paramset draw with the SAME code a device embeds, so the two cannot
 // disagree on the stream.
 const Lower = @import("lower.zig");
-const rng = @import("../backend/rng_kernels.zig");
+const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
 /// (a file of `discipline`/`nature` declarations is legal), but a device needs

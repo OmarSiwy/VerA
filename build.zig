@@ -46,6 +46,27 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "diag", .module = diag_mod }},
     });
 
+    // The emitted device-runtime kernels, as a DEPENDENCY (its test-root half
+    // is wired separately below). `ir` takes it for rng only.
+    const kernels_mod = b.addModule("kernels", .{
+        .root_source_file = b.path("src/backend/kernels.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // AST -> proven MIR. One module around the lower/elaborate cycle, which is
+    // deliberate: the two are halves of one transformation.
+    const ir_mod = b.addModule("ir", .{
+        .root_source_file = b.path("src/ir/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diag", .module = diag_mod },
+            .{ .name = "frontend", .module = frontend_mod },
+            .{ .name = "kernels", .module = kernels_mod },
+        },
+    });
+
     const vera_mod = b.addModule("vera", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -53,6 +74,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "diag", .module = diag_mod },
             .{ .name = "frontend", .module = frontend_mod },
+            .{ .name = "ir", .module = ir_mod },
+            .{ .name = "kernels", .module = kernels_mod },
         },
     });
 
@@ -99,16 +122,17 @@ pub fn build(b: *std.Build) void {
     b.step("test-frontend", "Run preprocessor/lexer/parser tests").dependOn(&run_frontend_test.step);
     test_step.dependOn(&run_frontend_test.step);
 
+    // ir's 66 tests leave `test-va` the moment it is a module.
+    const run_ir_test = b.addRunArtifact(b.addTest(.{ .root_module = ir_mod }));
+    b.step("test-ir", "Run elaborate/lower/ssa/proof tests").dependOn(&run_ir_test.step);
+    test_step.dependOn(&run_ir_test.step);
+
     // The emitted device-runtime kernels. `test-va` does reach them, but only
     // through codegen.zig's `@import`s — so touching a kernel meant compiling
     // codegen and the whole IR to run its tests. Their own root makes that a
     // few seconds, which is the difference between tests that get written for
     // 1796 lines of hot arithmetic and tests that do not.
-    const kernels_mod = b.createModule(.{
-        .root_source_file = b.path("src/backend/kernels.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // Same module `ir` depends on, not a second copy of the file.
     const run_kernels_test = b.addRunArtifact(b.addTest(.{ .root_module = kernels_mod }));
     b.step("test-kernels", "Run the emitted device-runtime kernel tests")
         .dependOn(&run_kernels_test.step);

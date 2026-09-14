@@ -126,13 +126,25 @@ test "every .html and tests/*.zig citation under src/ resolves on disk" {
 /// unreachable file is still an orphan, and that is the shape a half-deleted
 /// module leaves behind.
 ///
-/// TWO roots, because there are two: `src/root.zig` is the engine module and
-/// `src/cli.zig` is the binary's, and the binary imports the engine rather than
-/// the other way round.
+/// ONE ROOT PER MODULE. It used to be two — the engine facade and the binary —
+/// but the walk follows PATH imports only (a module-name import is skipped
+/// below), so the moment a layer became its own module its files stopped being
+/// reachable from `src/root.zig`. Left at two roots this guard would have gone
+/// quietly blind to precisely the orphans it exists to catch, which is the
+/// same class of failure as the ORPHAN register it backs.
+///
+/// Adding a module to build.zig means adding its root here.
 fn reachable(arena: Allocator, io: Io) !std.StringHashMapUnmanaged(void) {
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     var work: std.ArrayList([]const u8) = .empty;
-    for ([_][]const u8{ "src/root.zig", "src/cli.zig" }) |root| {
+    for ([_][]const u8{
+        "src/root.zig",
+        "src/cli.zig",
+        "src/diag.zig",
+        "src/frontend/root.zig",
+        "src/ir/root.zig",
+        "src/backend/kernels.zig",
+    }) |root| {
         try seen.put(arena, root, {});
         try work.append(arena, root);
     }

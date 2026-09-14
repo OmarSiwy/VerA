@@ -36,14 +36,14 @@
 //! trivial-phi removal) never gets one — every Value is `resolveAlias`d first.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
-const Analysis = @import("../ir/analysis.zig");
+const Mir = @import("ir").Mir;
+const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("unit_plan.zig");
 const cg_display = @import("cg_display.zig");
 const cg_filters = @import("cg_filters.zig");
 const cg_limit = @import("cg_limit.zig");
-const Lower = @import("../ir/lower.zig");
-const proof = @import("../ir/proof.zig");
+const Lower = @import("ir").Lower;
+const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("naming.zig");
 const assert = std.debug.assert;
@@ -8134,7 +8134,7 @@ const Ast = @import("frontend").Ast;
 const Preprocessor = @import("frontend").Preprocessor;
 const Lexer = @import("frontend").Lexer;
 const Parser = @import("frontend").Parser;
-const ifconv = @import("../ir/ifconv.zig");
+const ifconv = @import("ir").ifconv;
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -9814,7 +9814,7 @@ test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digi
     // reproduce the C bit for bit. The transcendental rows allow libm-vs-@log
     // ulp drift and nothing more — their SEEDS are still exact, because the
     // seed path is integer arithmetic and admits no drift at all.
-    const k = @import("rng_kernels.zig");
+    const k = @import("kernels").rng_kernels;
     const eps = std.testing.expectApproxEqRel;
     // $random from seed 7 = rtl_dist_uniform(&s, INT_MIN, INT_MAX), twice — the
     // second pair proves the write-back rejoined the reference stream.
@@ -9884,7 +9884,7 @@ test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     //
     // Every row below is a sentence of §9.5.4.2, and the numbers are the ones
     // tests/fixtures/ch09_system_tasks/{048,162,09,06} hold VerA to.
-    const k = @import("str_kernels.zig");
+    const k = @import("kernels").str_kernels;
     // "the number of successfully matched and assigned input items is returned"
     try std.testing.expectEqual(@as(i64, 1), k.zScanN("42", "%d"));
     try std.testing.expectEqual(@as(i64, 42), k.zScanI("42", "%d", 0));
@@ -9921,7 +9921,7 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     // Every claim below is a sentence of §9.5.1/§9.5.4/§9.5.5/§9.5.7/§9.5.8, and
     // the digits are the ones tests/fixtures/ch09_system_tasks/{07,046,049,050,
     // 051,053,054,158,11} hold VerA to.
-    const k = @import("file_kernels.zig");
+    const k = @import("kernels").file_kernels;
     // The kernels resolve a path relative to the process cwd — which is exactly
     // what makes `ch09_047_missing.dat` a claim about a DIRECTORY, and why
     // tests/torture.zig runs each fixture in its own — so the name is what has to
@@ -9993,7 +9993,7 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
 }
 
 test "codegen: §9.21 the emitted table interpolator is the one the fixtures assert" {
-    const k = @import("table_kernels.zig");
+    const k = @import("kernels").table_kernels;
     // A one-derivative stand-in for the device's scalar: enough of the interface
     // `zTable` uses (`con`/`val`/`add`/`addC`/`scale`) to see the Jacobian, which
     // is the half of the answer no fixture can read.
@@ -10079,7 +10079,7 @@ test "codegen: §4.5.11 the bilinear transform is the one the emitted filter run
     // tree's one file reachable by neither import graph AND by no test, which is
     // why this is characterization: a reviewer hand-checked D=2 and D=3 and found
     // the kernel correct, and these rows are that check made runnable.
-    const k = @import("filter_kernels.zig");
+    const k = @import("kernels").filter_kernels;
     // §4.5.11's trapezoidal substitution `s = k(1−z⁻¹)/(1+z⁻¹)`, cleared by
     // `(1+z⁻¹)ᴰ`. Multiplied out for D = 2 that is
     //   q₀ = p₀ + p₁k + p₂k², q₁ = 2p₀ − 2p₂k², q₂ = p₀ − p₁k + p₂k²,
@@ -10124,7 +10124,7 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     // TRANSPARENCY row below is that sentence, and it is also what makes
     // `cg_limit.emitClamp`'s `if (vl != vn) ok = false;` a truthful convergence
     // flag rather than a permanent `false`. The rest are ngspice `devsup.c`.
-    const k = @import("limit_kernels.zig");
+    const k = @import("kernels").limit_kernels;
     const vt = 0.025852; // kT/q at 300 K, the `$vt` every junction model passes
     const vcrit = 0.6;
 

@@ -19,8 +19,8 @@
 //! downstream declaration re-Semas. Do not reintroduce it.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
-const Lower = @import("../ir/lower.zig");
+const Mir = @import("ir").Mir;
+const Lower = @import("ir").Lower;
 const token = @import("frontend").token;
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.

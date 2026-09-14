@@ -16,7 +16,7 @@
 //! numerics the tests check are the numerics the device runs.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
+const Mir = @import("ir").Mir;
 // ponytail: filter planning reuses Gen's analysis and expression renderers.
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
