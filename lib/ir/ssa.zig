@@ -101,9 +101,10 @@ pub const SsaBuilder = struct {
     next_slot: u32 = 0,
     /// The cells of arm blocks (sealed, one predecessor; `arm_slot`): a
     /// short list per block, headed by `BlockState.arm_head`. Only lowering
-    /// writes there (an assignment inside an `if` arm), so a slot each would
-    /// put back the gaps the slot numbering removes: psp103 has 3396 such
-    /// cells, hisimhv_va 6955, a few per arm.
+    /// writes there (an assignment inside an `if` arm), and `climb` after a
+    /// climb past `memo_climb` arms, so a slot each would put back the gaps
+    /// the slot numbering removes: psp103 has 3396 such cells, hisimhv_va
+    /// 6955, a few per arm.
     arm_cells: std.ArrayList(ArmCell) = .empty,
     /// Row per Mir.Block, grown lazily (lower.zig owns block creation).
     block_state: std.MultiArrayList(BlockState) = .empty,
@@ -424,9 +425,12 @@ pub const SsaBuilder = struct {
     /// Climbs from `block` through sealed single-predecessor blocks, which
     /// memoize nothing there: two thirds of Braun's memo writes landed in such
     /// blocks (the arms of every `if`), and skipping them is 4-5% of a compact
-    /// model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). Returns
-    /// the value found, or null after pushing a `JoinRead` for a sealed join
-    /// whose predecessors must be read first.
+    /// model's whole compile (callgrind, psp103/bsim4va/hisimhv_va). Except
+    /// after a climb past `memo_climb` blocks: then the value is memoized in
+    /// every block it crossed, as Braun would, so the arms of n nested `?:`s,
+    /// else-ifs or `if`s, each climbing the chain above it, read in O(n), not
+    /// O(n^2) (#29). Returns the value found, or null after pushing a
+    /// `JoinRead` for a sealed join whose predecessors must be read first.
     fn climb(self: *SsaBuilder, place: Place, block: Mir.Block) Error!?Mir.Value {
         assert(@backingInt(block) < self.block_state.len);
         const sealed = self.block_state.items(.sealed);
@@ -439,8 +443,10 @@ pub const SsaBuilder = struct {
         // returned the value through `resolveAlias`; past single-predecessor
         // blocks alone Braun returns the cell as it is.
         var resolve = false;
+        var jumped = false;
         var b = block;
-        while (true) {
+        var steps: u32 = 0;
+        while (true) : (steps += 1) {
             const raw = self.cellRaw(place, @backingInt(b), slots[@backingInt(b)]);
             if (raw == pending) {
                 // The read came round a cycle (§5.9) into a join whose
@@ -453,6 +459,16 @@ pub const SsaBuilder = struct {
             }
             if (raw != absent) {
                 const v: Mir.Value = @fromBackingInt(@intCast(raw - 1));
+                // A climb that took a `skipUp` jump is already short; one
+                // that walked `memo_climb` single-predecessor blocks memoizes
+                // in each of them, so nested arms read in O(n) (#29).
+                if (!jumped and steps >= memo_climb) {
+                    var m = block;
+                    for (0..steps) |_| {
+                        try self.writeVariable(place, m, v);
+                        m = self.pred_pool.items[preds_head[@backingInt(m)]].block;
+                    }
+                }
                 return if (resolve) self.mir.resolveAlias(v) else v;
             }
             const i = @backingInt(b);
@@ -460,6 +476,7 @@ pub const SsaBuilder = struct {
                 const up = self.skipUp(w, i);
                 if (up.to != i) {
                     resolve = resolve or up.join;
+                    jumped = true;
                     b = @fromBackingInt(up.to);
                     continue;
                 }
@@ -538,6 +555,10 @@ pub const SsaBuilder = struct {
         if (b >= self.block_state.len) return absent;
         return self.cellRaw(place, b, self.block_state.items(.slot)[b]);
     }
+
+    /// Arms a climb crosses before it memoizes what it found (`climb`). A
+    /// shorter climb keeps skipping the memo write, the saving measured above.
+    const memo_climb = 64;
 
     fn armBit(place: Place) u32 {
         return @as(u32, 1) << @truncate(@backingInt(place));
@@ -1280,29 +1301,40 @@ test "ssa: a sealed block with no predecessor reads undef, and sealing twice is 
     try std.testing.expectEqual(@as(usize, 0), mir.insts.len);
 }
 
-test "ssa: a long single-predecessor chain is climbed without memo cells" {
-    // `readFrom` climbs sealed single-predecessor blocks in a loop: a chain
-    // of 10,000 costs no stack and writes no cell on the way.
+test "ssa: a short single-predecessor chain is climbed without memo cells, a long one memoizes its path" {
+    // `readFrom` climbs sealed single-predecessor blocks in a loop, so a
+    // chain costs no stack. One shorter than `memo_climb` writes no cell on
+    // the way; a longer one memoizes every block it crossed, so the next
+    // read below it climbs one block, not the chain again (#29).
     const gpa = std.testing.allocator;
-    var mir: Mir = .{};
-    defer mir.deinit(gpa);
-    var b = SsaBuilder.init(gpa, &mir);
-    defer b.deinit();
-    const entry = try mir.addBlock(gpa);
-    try b.sealBlock(entry);
-    const x = b.newPlace();
-    try b.writeVariable(x, entry, .f_ten);
-    const cells_before = b.cells.items.len;
-    var last = entry;
-    for (0..10_000) |_| {
-        const next = try mir.addBlock(gpa);
-        try b.addPredecessor(next, last);
-        try b.sealBlock(next);
-        last = next;
+    for ([_]usize{ SsaBuilder.memo_climb - 1, 10_000 }) |n| {
+        var mir: Mir = .{};
+        defer mir.deinit(gpa);
+        var b = SsaBuilder.init(gpa, &mir);
+        defer b.deinit();
+        const entry = try mir.addBlock(gpa);
+        try b.sealBlock(entry);
+        const x = b.newPlace();
+        try b.writeVariable(x, entry, .f_ten);
+        const cells_before = b.cells.items.len;
+        var last = entry;
+        for (0..n) |_| {
+            const next = try mir.addBlock(gpa);
+            try b.addPredecessor(next, last);
+            try b.sealBlock(next);
+            last = next;
+        }
+        try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(x, last));
+        try std.testing.expectEqual(cells_before, b.cells.items.len);
+        try std.testing.expectEqual(if (n < SsaBuilder.memo_climb) 0 else n, b.arm_cells.items.len);
+        if (n < SsaBuilder.memo_climb) continue;
+        // One more block reads its parent's memo: no new cell.
+        const tail = try mir.addBlock(gpa);
+        try b.addPredecessor(tail, last);
+        try b.sealBlock(tail);
+        try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(x, tail));
+        try std.testing.expectEqual(n, b.arm_cells.items.len);
     }
-    try std.testing.expectEqual(Mir.Value.f_ten, try b.readVariable(x, last));
-    try std.testing.expectEqual(cells_before, b.cells.items.len);
-    try std.testing.expectEqual(@as(usize, 0), b.arm_cells.items.len);
 }
 
 test "SsaBuilder.newPlace: places are dense from 0" {
