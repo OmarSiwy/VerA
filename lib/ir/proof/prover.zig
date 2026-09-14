@@ -29,12 +29,18 @@ const Fact = struct { v: u32, iv: proof_lattice.Interval };
 /// Where a value's select-arm guard facts live in `facts`.
 const GuardRef = struct { start: u32 = 0, count: u32 = 0 };
 
+/// What one `pushFacts` row overwrote: class `cls`'s fact interval and its
+/// newest active fact (a `saved` index). `seq` names the row, since a popped
+/// row's index is reused by the next push.
+const Saved = struct { prev: proof_lattice.Interval, cls: u32, prev_top: u32, seq: u64 };
+
 // Row budgets: `Fact` per guard (psp103: 2,732 select-arm facts), `GuardRef`
 // per value (psp103: 23,869), `Interval` per value (see its layout note).
 comptime {
     std.debug.assert(@sizeOf(Fact) == 32);
     std.debug.assert(@sizeOf(GuardRef) == 8);
     std.debug.assert(@sizeOf(proof_lattice.Interval) == 24);
+    std.debug.assert(@sizeOf(Saved) == 40);
 }
 
 /// "No index" sentinel for `u32` side tables.
@@ -52,7 +58,17 @@ pub const Prover = struct {
     opts: Options,
 
     // --- SoA, indexed by @intFromEnum(Mir.Value) ---
+    /// The value's own interval: its seed (`seedValues`), met with its
+    /// transfer once `walk` defines it. Guard facts live per class in `civ`;
+    /// read the two together through `ivAt`.
     iv: []proof_lattice.Interval = &.{},
+    /// The seed alone: what a value reads again once a guard fact that was
+    /// active at its definition is popped (`ivAt`).
+    seed: []proof_lattice.Interval = &.{},
+    /// The class's newest active fact (a `saved` index, `none_u32` = none)
+    /// when the value was defined, and that row's `seq`.
+    def_pos: []u32 = &.{},
+    def_seq: []u64 = &.{},
     /// "Is a finite IEEE double" (the rules on `proof.FloatMode`), recorded at definition time.
     // `[]bool`, not a bit set: every access is a random probe by value index, and value
     // counts are small, so a bit set saves a few bytes and costs a shift and a mask.
@@ -67,12 +83,23 @@ pub const Prover = struct {
     /// ponytail: structural key on already-resolved operands only (no
     /// transitive numbering). Upgrade to a real GVN if a fixture needs it.
     class_of: []u32 = &.{},
-    class_member: []u32 = &.{},
-    class_start: []u32 = &.{},
+    /// Classes `buildClasses` found; `civ` rows past them belong to lone values.
+    n_classes: u32 = 0,
 
     facts: std.ArrayList(Fact) = .empty,
-    /// Save stack for guard application (dominator-tree DFS + select arms).
-    saved: std.ArrayList(Fact) = .empty,
+
+    // --- the fact environment, indexed by `clsOf` (#29) ---
+    /// The meet of the active guard facts on each class: one row per
+    /// congruence class, then one per value outside every class.
+    civ: []proof_lattice.Interval = &.{},
+    /// Each class's newest active fact, a `saved` index (`none_u32` = none).
+    ctop: []u32 = &.{},
+    /// Undo log for guard application (dominator-tree DFS + select arms):
+    /// one row per fact, whatever the size of its class, so a chain of n
+    /// nested guards on one class costs O(n), not O(n * class size).
+    saved: std.ArrayList(Saved) = .empty,
+    /// Rows pushed so far: each row's `seq`.
+    push_seq: u64 = 0,
 
     /// The CFG, dominator tree and natural loops, owned by `analysis.zig`. Read-only here.
     an: Analysis = undefined,
@@ -117,7 +144,28 @@ pub const Prover = struct {
     }
 
     fn ivOf(self: *const Prover, v: Mir.Value) proof_lattice.Interval {
-        return self.iv[self.idxOf(v)];
+        return self.ivAt(self.idxOf(v));
+    }
+
+    /// The interval of value `i` here: its own, met with its class's active
+    /// facts. A guard fact once wrote into every member's interval and popping
+    /// restored what it overwrote, so a value defined under a fact that has
+    /// since been popped reads its seed again, not its transfer; `def_pos`
+    /// keeps that. The meet order (definition, seed, facts in push order) is
+    /// the order the per-member writes ran in, so every end, its openness and
+    /// the sign of a zero end come out as they did.
+    fn ivAt(self: *const Prover, i: u32) proof_lattice.Interval {
+        const p = self.def_pos[i];
+        const defined = p == none_u32 or
+            (p < self.saved.items.len and self.saved.items[p].seq == self.def_seq[i]);
+        const own = if (defined) self.iv[i] else self.seed[i];
+        return own.meet(self.civ[self.clsOf(i)]);
+    }
+
+    /// The `civ` row of value `i`: its congruence class, or a row of its own.
+    fn clsOf(self: *const Prover, i: u32) u32 {
+        const c = self.class_of[i];
+        return if (c != none_u32) c else self.n_classes + i;
     }
 
     fn isFinite(self: *const Prover, v: Mir.Value) bool {
@@ -353,20 +401,17 @@ pub const Prover = struct {
             self.class_of[self.idxOf(result)] = gop.value_ptr.*;
         }
 
-        // CSR of members, in value order (determinism).
-        self.class_start = try self.arena.alloc(u32, n_classes + 1);
-        @memset(self.class_start, 0);
-        for (self.class_of) |c| if (c != none_u32) {
-            self.class_start[c + 1] += 1;
-        };
-        for (1..n_classes + 1) |i| self.class_start[i] += self.class_start[i - 1];
-        self.class_member = try self.arena.alloc(u32, self.class_start[n_classes]);
-        const fill = try self.arena.alloc(u32, n_classes);
-        @memcpy(fill, self.class_start[0..n_classes]);
-        for (self.class_of, 0..) |c, v| if (c != none_u32) {
-            self.class_member[fill[c]] = @intCast(v);
-            fill[c] += 1;
-        };
+        self.n_classes = n_classes;
+
+        // The fact environment `ivAt` reads, empty: no fact is active yet.
+        self.seed = try self.arena.dupe(proof_lattice.Interval, self.iv);
+        self.def_pos = try self.arena.alloc(u32, n);
+        @memset(self.def_pos, none_u32);
+        self.def_seq = try self.arena.alloc(u64, n);
+        self.civ = try self.arena.alloc(proof_lattice.Interval, n_classes + n);
+        @memset(self.civ, proof_lattice.Interval.top);
+        self.ctop = try self.arena.alloc(u32, n_classes + n);
+        @memset(self.ctop, none_u32);
     }
 
     /// Marks each `select` arm's exclusively-owned backward slice (use count 1) as guarded by
@@ -555,8 +600,8 @@ pub const Prover = struct {
                 const hi_v = if (swap) b.lhs else b.rhs;
                 const li = self.idxOf(lo_v);
                 const hi = self.idxOf(hi_v);
-                const a_iv = self.iv[li];
-                const b_iv = self.iv[hi];
+                const a_iv = self.ivAt(li);
+                const b_iv = self.ivAt(hi);
                 switch (rel) {
                     .eq => {
                         buf[0] = .{ .v = li, .iv = b_iv };
@@ -583,25 +628,23 @@ pub const Prover = struct {
         return buf[0..0];
     }
 
-    /// Apply facts, remembering the previous intervals.
+    /// Apply facts to their classes (a fact about one member holds for every
+    /// member), remembering what each overwrote. O(1) per fact (#29).
     fn pushFacts(self: *Prover, facts: []const Fact) !void {
         for (facts) |f| {
-            const c = self.class_of[f.v];
-            const members: []const u32 = if (c == none_u32)
-                (&[_]u32{f.v})[0..1]
-            else
-                self.class_member[self.class_start[c]..self.class_start[c + 1]];
-            for (members) |m| {
-                try self.saved.append(self.arena, .{ .v = m, .iv = self.iv[m] });
-                self.iv[m] = self.iv[m].meet(f.iv);
-            }
+            const c = self.clsOf(f.v);
+            self.push_seq += 1;
+            try self.saved.append(self.arena, .{ .prev = self.civ[c], .cls = c, .prev_top = self.ctop[c], .seq = self.push_seq });
+            self.ctop[c] = @intCast(self.saved.items.len - 1);
+            self.civ[c] = self.civ[c].meet(f.iv);
         }
     }
 
     fn popFacts(self: *Prover, mark: usize) void {
         while (self.saved.items.len > mark) {
             const f = self.saved.pop().?;
-            self.iv[f.v] = f.iv;
+            self.civ[f.cls] = f.prev;
+            self.ctop[f.cls] = f.prev_top;
         }
     }
 
@@ -719,9 +762,13 @@ pub const Prover = struct {
         const out = self.transfer(inst);
         // MEET, not assign: a guard pushed on this value's congruence class
         // before its definition (the `if (V>0) … ln(V)` shape) must survive its
-        // own transfer. `pushFacts` saved the pre-guard interval, so nothing
-        // leaks out of the scope.
+        // own transfer, which `ivAt` does by meeting `civ`. Once that guard is
+        // popped the value reads its seed again (`def_pos`), so nothing leaks
+        // out of the scope.
         self.iv[ri] = out.iv.meet(self.iv[ri]);
+        const top = self.ctop[self.clsOf(ri)];
+        self.def_pos[ri] = top;
+        if (top != none_u32) self.def_seq[ri] = self.saved.items[top].seq;
         self.finite[ri] = out.finite and domain_proven;
     }
 
@@ -1160,7 +1207,7 @@ pub const Prover = struct {
             const v = stack[n];
             const i = self.idxOf(v);
             switch (self.mir.valueDef(@fromBackingInt(@intCast(i)))) {
-                .param_ref, .block_param => if (!self.iv[i].bounded()) return v,
+                .param_ref, .block_param => if (!self.ivAt(i).bounded()) return v,
                 .inst_result => |inst| {
                     if (self.mir.instOp(inst) == .phi) continue;
                     var buf: [3]Mir.Value = undefined;
