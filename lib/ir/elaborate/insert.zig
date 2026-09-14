@@ -693,14 +693,14 @@ test "§7.8.4 mixed ports on one signal share one merged bridge, and split gives
 
 test "§7.8.5.1 a gate's mixed terminals get split bridges named by the primitive port names" {
     // §3.9: under `default_discipline dd every gate terminal is a `dd`
-    // lower connection. In `cell`, `p` and `q` are `ca`, so and g1's in1/in2
+    // lower connection. In `blk`, `p` and `q` are `ca`, so and g1's in1/in2
     // are mixed inputs (a2d) and buf g2's out1/out2 mixed outputs (d2a); `y`
     // has no domain and is bridged by nothing.
     const src =
         \\discipline ca; domain continuous; enddiscipline
         \\discipline dd; domain discrete; enddiscipline
-        \\module top; ca a, b; cell u(a, b); endmodule
-        \\module cell(p, q); inout p, q; ca p, q; wire y; and g1(y, p, q); buf g2(p, q, y); endmodule
+        \\module top; ca a, b; blk u(a, b); endmodule
+        \\module blk(p, q); inout p, q; ca p, q; wire y; and g1(y, p, q); buf g2(p, q, y); endmodule
         \\connectmodule a2d(el, cm); input el; output cm; ca el; dd cm; endmodule
         \\connectmodule d2a(cm, el); input cm; output el; dd cm; ca el; endmodule
         \\connectrules r; connect a2d split; connect d2a split; endconnectrules
