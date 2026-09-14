@@ -143,6 +143,7 @@ fn reachable(arena: Allocator, io: Io) !std.StringHashMapUnmanaged(void) {
         "src/diag.zig",
         "src/frontend/root.zig",
         "src/ir/root.zig",
+        "src/backend/root.zig",
         "src/backend/kernels.zig",
     }) |root| {
         try seen.put(arena, root, {});
