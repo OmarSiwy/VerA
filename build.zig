@@ -37,11 +37,23 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Text -> AST. Depends on `diag` and nothing else in the engine; `ir/` and
+    // `backend/` import it and never the reverse.
+    const frontend_mod = b.addModule("frontend", .{
+        .root_source_file = b.path("src/frontend/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "diag", .module = diag_mod }},
+    });
+
     const vera_mod = b.addModule("vera", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "diag", .module = diag_mod }},
+        .imports = &.{
+            .{ .name = "diag", .module = diag_mod },
+            .{ .name = "frontend", .module = frontend_mod },
+        },
     });
 
     const cli_mod = b.createModule(.{
@@ -80,6 +92,12 @@ pub fn build(b: *std.Build) void {
     const run_diag_test = b.addRunArtifact(b.addTest(.{ .root_module = diag_mod }));
     b.step("test-diag", "Run diagnostic rendering tests").dependOn(&run_diag_test.step);
     test_step.dependOn(&run_diag_test.step);
+
+    // Same reason as `diag`: once frontend is a module its 72 tests leave
+    // `test-va`'s root and only this step runs them.
+    const run_frontend_test = b.addRunArtifact(b.addTest(.{ .root_module = frontend_mod }));
+    b.step("test-frontend", "Run preprocessor/lexer/parser tests").dependOn(&run_frontend_test.step);
+    test_step.dependOn(&run_frontend_test.step);
 
     // The emitted device-runtime kernels. `test-va` does reach them, but only
     // through codegen.zig's `@import`s — so touching a kernel meant compiling

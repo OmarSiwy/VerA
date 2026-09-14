@@ -36,7 +36,7 @@
 const std = @import("std");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
-const Ast = @import("../frontend/ast.zig");
+const Ast = @import("frontend").Ast;
 
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
 pub const Analysis = @This();

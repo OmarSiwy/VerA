@@ -27,7 +27,7 @@
 
 const std = @import("std");
 const naming = @import("naming.zig");
-const Lexer = @import("../frontend/lexer.zig");
+const Lexer = @import("frontend").Lexer;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 

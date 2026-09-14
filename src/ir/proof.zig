@@ -98,7 +98,7 @@
 //!      functions) is non-finite. It costs `.strict`, never a wrong `.optimized`.
 
 const std = @import("std");
-const Ast = @import("../frontend/ast.zig");
+const Ast = @import("frontend").Ast;
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Analysis = @import("analysis.zig");
@@ -1818,9 +1818,9 @@ fn absIv(a: Interval) Interval {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("../frontend/preprocessor.zig");
-const Lexer = @import("../frontend/lexer.zig");
-const Parser = @import("../frontend/parser.zig");
+const Preprocessor = @import("frontend").Preprocessor;
+const Lexer = @import("frontend").Lexer;
+const Parser = @import("frontend").Parser;
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,

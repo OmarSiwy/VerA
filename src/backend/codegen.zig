@@ -8130,10 +8130,10 @@ const rscalar_txt =
 // Tests
 // ---------------------------------------------------------------------------
 
-const Ast = @import("../frontend/ast.zig");
-const Preprocessor = @import("../frontend/preprocessor.zig");
-const Lexer = @import("../frontend/lexer.zig");
-const Parser = @import("../frontend/parser.zig");
+const Ast = @import("frontend").Ast;
+const Preprocessor = @import("frontend").Preprocessor;
+const Lexer = @import("frontend").Lexer;
+const Parser = @import("frontend").Parser;
 const ifconv = @import("../ir/ifconv.zig");
 
 const Harness = struct {
