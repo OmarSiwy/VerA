@@ -107,9 +107,18 @@ const std = @import("std");
 /// ponytail: exp/log/sin/cos are ported (the calls the admitted device class
 /// reaches — measured off the PTX libcall errors; sin/cos joined when the
 /// bjt hit tan through the StateKernel's scalar core); pow/tanh/sinh/cosh
-/// are composed on them; expm1/log1p/atan stay on std.math (pure Zig). A
-/// model that reaches another builtin on the device fails ITS kernel
-/// compile loudly — extend `gm` then, not before.
+/// are composed on them; log1p stays on std.math (pure Zig). A model that
+/// reaches another builtin on the device fails ITS kernel compile loudly —
+/// extend `gm` then, not before.
+///
+/// expm1/atan were on that "pure Zig, leave them" list and should not have
+/// been. They need no libcall, so NVPTX takes them — but both raise the
+/// subnormal underflow flag through `std.mem.doNotOptimizeAway`, which for a
+/// float is `asm volatile ("" :: "rm" (v))`, and AMDGPU cannot match the `m`
+/// alternative. So the loud failure the paragraph above relies on is
+/// AMD-only, and reads `Could not match memory address. Inline asm failure!`
+/// rather than naming a function. A CUDA-only test matrix says nothing about
+/// it. Both are here now.
 pub const gm = struct {
     const dev = switch (@import("builtin").target.cpu.arch) {
         .nvptx64, .amdgcn => true,
@@ -185,6 +194,30 @@ pub const gm = struct {
     pub inline fn cos(x: f64) f64 {
         return if (comptime dev) softCos(x) else @cos(x);
     }
+    /// Needs no libcall, and STILL does not compile for AMDGCN: std's port
+    /// raises the subnormal underflow flag through `std.mem.doNotOptimizeAway`,
+    /// which for a float is `asm volatile ("" :: "rm" (v))`, and the AMDGPU
+    /// backend cannot match the `m` alternative. It assembles to PTX without
+    /// complaint, so the hole is AMD-only and an NVIDIA box never sees it.
+    ///
+    /// The device branch is std's own algorithm with that one line dropped. It
+    /// set a flag no GPU exposes to read, so every returned value is identical.
+    pub inline fn expm1(x: f64) f64 {
+        return if (comptime dev) softExpm1(x) else std.math.expm1(x);
+    }
+    /// Same AMDGCN hole as `expm1`, cheaper dodge: `std.math.atan` carries a
+    /// vector path that never reaches the idiom.
+    ///
+    /// TWO lanes, and the width is the point — `@Vector(1, f64)` does not fail
+    /// to select, it SEGVs the compiler. The second result is discarded, so
+    /// device `atan` costs twice what it should; port std's `atanBinary64`
+    /// minus its one bad line if that ever reaches a profile. The host branch
+    /// stays the scalar body, so host emission is bit-identical to before.
+    pub inline fn atan(x: f64) f64 {
+        if (comptime !dev) return std.math.atan(x);
+        const v: @Vector(2, f64) = @splat(x);
+        return std.math.atan(v)[0];
+    }
 
     // musl exp.c / log.c ports, via gompute src/device/math.zig (measured
     // there: f64 <= 1 ulp on sm_89).
@@ -222,6 +255,91 @@ pub const gm = struct {
         const c = r - rr * (P1 + rr * (P2 + rr * (P3 + rr * (P4 + rr * P5))));
         const y = 1 + (r * c / (2 - c) - lo + hi);
         return if (k == 0) y else std.math.scalbn(y, k);
+    }
+
+    /// musl expm1.c, by way of `std.math.expm1`, minus its one
+    /// `doNotOptimizeAway` — see `expm1` above.
+    ///
+    /// Not `softExp(x) - 1`: the whole point is that the `-1` happens INSIDE
+    /// the reduced-argument polynomial, where the subtraction would otherwise
+    /// cancel away most of the significand for small x.
+    fn softExpm1(x_: f64) f64 {
+        if (std.math.isNan(x_)) return std.math.nan(f64);
+        const Q1 = -3.33333333333331316428e-02;
+        const Q2 = 1.58730158725481460165e-03;
+        const Q3 = -7.93650757867487942473e-05;
+        const Q4 = 4.00821782732936239552e-06;
+        const Q5 = -2.01099218183624371326e-07;
+
+        var x = x_;
+        const ux: u64 = @bitCast(x);
+        const hx: u32 = @as(u32, @intCast(ux >> 32)) & 0x7FFFFFFF;
+        const sign = ux >> 63;
+
+        if (std.math.isNegativeInf(x)) return -1.0;
+        if (hx >= 0x4043687A) { // |x| >= 56 ln2
+            if (hx > 0x7FF00000) return x; // nan
+            if (sign != 0) return -1;
+            if (x > 7.09782712893383973096e+02) return std.math.inf(f64);
+        }
+
+        var hi: f64 = undefined;
+        var lo: f64 = undefined;
+        var c: f64 = undefined;
+        var k: i32 = undefined;
+        if (hx > 0x3FD62E42) { // |x| > 0.5 ln2
+            if (hx < 0x3FF0A2B2) { // |x| < 1.5 ln2
+                if (sign == 0) {
+                    hi = x - ln2hi;
+                    lo = ln2lo;
+                    k = 1;
+                } else {
+                    hi = x + ln2hi;
+                    lo = -ln2lo;
+                    k = -1;
+                }
+            } else {
+                var kf = log2e * x;
+                if (sign != 0) kf -= 0.5 else kf += 0.5;
+                k = @intFromFloat(kf);
+                const t = @as(f64, @floatFromInt(k));
+                hi = x - t * ln2hi;
+                lo = t * ln2lo;
+            }
+            x = hi - lo;
+            c = (hi - x) - lo;
+        } else if (hx < 0x3C900000) {
+            // |x| < 2^-54, where expm1(x) == x. std raises the underflow flag
+            // for a subnormal here; that is the line this port drops.
+            return x;
+        } else {
+            k = 0;
+        }
+
+        const hfx = 0.5 * x;
+        const hxs = x * hfx;
+        const r1 = 1.0 + hxs * (Q1 + hxs * (Q2 + hxs * (Q3 + hxs * (Q4 + hxs * Q5))));
+        const t = 3.0 - r1 * hfx;
+        var e = hxs * ((r1 - t) / (6.0 - x * t));
+
+        if (k == 0) return x - (x * e - hxs);
+        e = x * (e - c) - c;
+        e -= hxs;
+        if (k == -1) return 0.5 * (x - e) - 0.5;
+        if (k == 1) {
+            if (x < -0.25) return -2.0 * (e - (x + 0.5));
+            return 1.0 + 2.0 * (x - e);
+        }
+
+        const twopk: f64 = @bitCast(@as(u64, @intCast(0x3FF +% k)) << 52);
+        if (k < 0 or k > 56) {
+            var y = x - e + 1.0;
+            if (k == 1024) y = y * 2.0 * 0x1.0p1023 else y = y * twopk;
+            return y - 1.0;
+        }
+        const uf: f64 = @bitCast(@as(u64, @intCast(0x3FF -% k)) << 52);
+        if (k < 20) return (x - e + (1 - uf)) * twopk;
+        return (x - (e + uf) + 1) * twopk;
     }
 
     const Lg1 = 6.666666666666735130e-01;
@@ -425,6 +543,46 @@ pub const gm = struct {
         try std.testing.expectApproxEqAbs(@sin(1e9), softSin(1e9), 1e-6);
         try std.testing.expect(std.math.isNan(softSin(std.math.inf(f64))));
         try std.testing.expectEqual(@as(f64, 1.0), softCos(0.0));
+
+        // expm1: the port drops a line that touched only the FP flag register,
+        // so every VALUE must equal std's. Bit equality, not a tolerance --
+        // anything looser would hide a transcription slip in a branch the
+        // sweep happens to straddle. The edges are the reduction boundaries
+        // the algorithm actually switches on.
+        for ([_]f64{
+            0,       -0.0,   0x1p-60, -0x1p-60, 0x1p-54, -0x1p-54, 1e-300,
+            0.3465,  -0.3465, 0.3466, -0.3466,  1.0397,  -1.0397,  1.0398,
+            -1.0398, 1,      -1,      0.25,     -0.25,   -0.2501,  2,
+            -2,      38.8,   -38.8,   38.9,     709.78,  710,      -745,
+        }) |v| {
+            try std.testing.expectEqual(
+                @as(u64, @bitCast(std.math.expm1(v))),
+                @as(u64, @bitCast(softExpm1(v))),
+            );
+        }
+        var m: f64 = -40.0;
+        while (m <= 40.0) : (m += 0.00731) {
+            try std.testing.expectEqual(
+                @as(u64, @bitCast(std.math.expm1(m))),
+                @as(u64, @bitCast(softExpm1(m))),
+            );
+        }
+        try std.testing.expectEqual(@as(f64, -1), softExpm1(-std.math.inf(f64)));
+        try std.testing.expectEqual(std.math.inf(f64), softExpm1(std.math.inf(f64)));
+        try std.testing.expect(std.math.isNan(softExpm1(std.math.nan(f64))));
+        // The host branch must still BE std's, so expm1/atan are unchanged
+        // for every build that is not a GPU kernel.
+        try std.testing.expectEqual(std.math.expm1(0.7), expm1(0.7));
+        try std.testing.expectEqual(std.math.atan(0.7), atan(0.7));
+
+        // atan's device branch is std's own vector body, so it is not
+        // bit-identical to the scalar one -- pin the gap at an ulp.
+        var a: f64 = -20.0;
+        while (a <= 20.0) : (a += 0.0137) {
+            const want = std.math.atan(a);
+            const got = std.math.atan(@as(@Vector(2, f64), @splat(a)))[0];
+            try std.testing.expect(@abs(got - want) <= 2 * @abs(want) * std.math.floatEps(f64));
+        }
     }
 };
 
