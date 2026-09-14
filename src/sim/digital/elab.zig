@@ -414,8 +414,9 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
     for (r.subs.items[r.sub_base.get(scope).?..]) |sub| if (r.names.contains(.{ .scope = scope, .str = sub.decl.name }))
         return r.fail(sub.decl.main_tok, "§10.4.2: duplicate declaration of `{s}`, a task or function name in this scope", .{r.file.str(sub.decl.name)});
     try implicitNets(r, e, scope, m);
-    try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
-    for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
+    const b = try bridged(r, e, m, scope);
+    try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = b.gates, .pulls = m.pulls, .switches = m.switches });
+    for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
 }
 
@@ -760,46 +761,70 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
     }
 }
 
-/// VAMS §7.8.4 `m`'s instances at `scope` as the analog compile's connect
-/// module insertion left them (`Mixed.inserts`): every re-pointed port bound
-/// to its segment (a net of this scope, when the bridge's side of it is
-/// discrete), and one instance of each bridge appended, taking the port's
-/// upper connection. The source's own list where nothing was inserted.
+/// `bridged`'s answer: `m`'s instances and gates as insertion left them.
+const Bridged = struct { instances: []const Ast.Instance, gates: []const Ast.GateInst };
+
+/// VAMS §7.8.4 `m`'s instances and gates at `scope` as the analog compile's
+/// connect module insertion left them (`Mixed.inserts`): every re-pointed
+/// port or gate terminal (§7.8.5.1's names) bound to its segment (a net of
+/// this scope, when the bridge's side of it is discrete), and one instance of
+/// each bridge appended, taking the port's upper connection. The source's
+/// own lists where nothing was inserted.
 // ponytail: the bridge takes no parameter override (a mixed module's
 // parameters are the analog block's), and a generate scope's path is not
 // matched: insertion under a generate block reaches only the analog half.
-fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]const Ast.Instance {
-    if (r.inserts.len == 0) return m.instances;
+fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error!Bridged {
+    if (r.inserts.len == 0) return .{ .instances = m.instances, .gates = m.gates };
     const arena = r.arena;
     const path = try scopePath(r, scope);
     // The source's instances and at most one bridge per inserted row.
     var out: std.ArrayList(Ast.Instance) = try .initCapacity(arena, m.instances.len + r.inserts.len);
     out.appendSliceAssumeCapacity(m.instances);
+    var gates: []Ast.GateInst = &.{};
     for (r.inserts, r.insert_segs) |row, seg| {
         if (!std.mem.eql(u8, row.path, path)) continue;
-        const inst = for (out.items[0..m.instances.len]) |*it| {
+        // The port's upper connection, and the width of the segment.
+        const up: Ast.PortConn, const width: u32 = if (for (out.items[0..m.instances.len]) |*it| {
             if (std.mem.eql(u8, r.file.str(it.name), row.inst)) break it;
-        } else return r.fail(m.main_tok, "the connect module inserted on `{s}{s}` names an instance the source does not hold", .{ path, row.inst });
-        const child = try findModule(r, inst.module, inst.main_tok);
-        const pi = for (child.ports, 0..) |p, k| {
-            if (std.mem.eql(u8, r.file.str(p.name), row.port)) break k;
-        } else return r.fail(inst.main_tok, "the connect module inserted on `{s}{s}` names a port the module does not have", .{ path, row.inst });
-        const named = inst.ports.len != 0 and inst.ports[0].name != .none;
-        const ci = if (!named) pi else for (inst.ports, 0..) |c, k| {
-            if (c.name == child.ports[pi].name) break k;
-        } else continue;
-        if (ci >= inst.ports.len) continue;
-        const ports = try arena.dupe(Ast.PortConn, inst.ports);
-        const up = ports[ci];
-        ports[ci].expr = seg;
-        inst.ports = ports;
+        } else null) |inst| conn: {
+            const child = try findModule(r, inst.module, inst.main_tok);
+            const pi = for (child.ports, 0..) |p, k| {
+                if (std.mem.eql(u8, r.file.str(p.name), row.port)) break k;
+            } else return r.fail(inst.main_tok, "the connect module inserted on `{s}{s}` names a port the module does not have", .{ path, row.inst });
+            const named = inst.ports.len != 0 and inst.ports[0].name != .none;
+            const ci = if (!named) pi else for (inst.ports, 0..) |c, k| {
+                if (c.name == child.ports[pi].name) break k;
+            } else continue;
+            if (ci >= inst.ports.len) continue;
+            const ports = try arena.dupe(Ast.PortConn, inst.ports);
+            const up = ports[ci];
+            ports[ci].expr = seg;
+            inst.ports = ports;
+            break :conn .{ up, try portWidth(r, child.ports[pi]) };
+        } else gate: {
+            if (gates.len == 0) gates = try arena.dupe(Ast.GateInst, m.gates);
+            for (gates, 0..) |*g, gi| if (g.name != .none and std.mem.eql(u8, r.file.str(g.name), row.inst)) for (0..1 + g.ins.len) |t| {
+                var buf: [24]u8 = undefined;
+                const name = Ast.GateInst.connectPortName(m.gates, gi, t, &buf) orelse continue;
+                if (!std.mem.eql(u8, name, row.port)) continue;
+                const x = if (t == 0) g.out else g.ins[t - 1];
+                if (t == 0) g.out = seg else {
+                    const ins = try arena.dupe(Ast.ExprId, g.ins);
+                    ins[t - 1] = seg;
+                    g.ins = ins;
+                }
+                // A gate terminal is one bit (no array has a name here).
+                break :gate .{ .{ .expr = x, .main_tok = g.main_tok }, 1 };
+            };
+            return r.fail(m.main_tok, "the connect module inserted on `{s}{s}` names an instance the source does not hold", .{ path, row.inst });
+        };
         for (out.items[m.instances.len..]) |b| {
             if (std.mem.eql(u8, r.file.str(b.name), row.name)) break;
         } else {
             const bridge = try findModule(r, try interned(r, row.module), up.main_tok);
             const lower = try interned(r, row.lower_port);
             for (bridge.ports) |p| if (p.name == lower and !continuous(r.file, p.discipline)) {
-                _ = try mintNet(r, e, .wire, try portWidth(r, child.ports[pi]), false, r.file.exprs.strOf(seg), up.main_tok);
+                _ = try mintNet(r, e, .wire, width, false, r.file.exprs.strOf(seg), up.main_tok);
             };
             const conns = try arena.alloc(Ast.PortConn, 2);
             conns[0] = .{ .name = try interned(r, row.upper_port), .expr = up.expr, .main_tok = up.main_tok };
@@ -807,7 +832,7 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error![]cons
             out.appendAssumeCapacity(.{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
         }
     }
-    return out.items;
+    return .{ .instances = out.items, .gates = if (gates.len == 0) m.gates else gates };
 }
 
 /// A name `elaborate` made sure the file holds.

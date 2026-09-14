@@ -578,6 +578,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .bag = self.bag,
         .param_overrides = self.param_overrides,
         .discipline_resolution = self.discipline_resolution,
+        .default_disciplines = self.directives.disciplines,
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope

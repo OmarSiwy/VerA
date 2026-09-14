@@ -299,6 +299,9 @@ pub const Ctx = struct {
     bag: *diag.Bag,
     param_overrides: []const ParamOverride = &.{},
     discipline_resolution: DisciplineResolution = .basic,
+    /// §10.2's directives: §3.9 names a digital primitive's side of a net
+    /// with the one in force at the primitive (`insert.plan`).
+    default_disciplines: []const @import("frontend").Preprocessor.DefaultDiscipline = &.{},
 };
 
 /// §7.4.4 "There are two modes for this method of resolution, basic (the
@@ -348,7 +351,10 @@ pub fn elaborate(ctx: Ctx) Error!Design {
     // A tree of one goes to lowering by pointer, untouched. A `defparam` with
     // no instance still takes the flatten: §6.3.1's path then names nothing,
     // and the flatten is where that E0907 is reported.
-    if (top.instances.len == 0 and top.defparams.len == 0 and f.genInstancesOf(top).len == 0) {
+    // A gate with connect rules takes it too: §7.8.4 may bridge its ports.
+    if (top.instances.len == 0 and top.defparams.len == 0 and f.genInstancesOf(top).len == 0 and
+        (top.gates.len == 0 or ctx.file.connectrules.len == 0))
+    {
         if (f.had_error) return error.DiagnosticsReported;
         try elab_alias.checkFlat(ctx, top, top.aliasparams);
         return .{ .top = top };
