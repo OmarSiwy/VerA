@@ -921,8 +921,11 @@ pub fn validate(comptime D: type) void {
 
     // In-device noise PSDs: pure fn of ANY state vector (AC noise calls it
     // once at x_op, pnoise per PSS sample, tran-noise per step). Position k of
-    // the result describes generator k. Devices without it keep the
-    // thermal-off-the-Jacobian collectNoise fallback.
+    // the result describes generator k. `requireWith` is the weak direction
+    // (a PSD needs a generator to belong to); the strong one — a generator
+    // needs a PSD, because nothing outside the device can state one — is the
+    // HOST's to enforce, since only a host knows whether it has a fallback.
+    // ARPice has none and `@compileError`s (devices/engine.zig collectNoise).
     expectArray(D, "noise_gens", NoiseGen(D));
     requireWith(D, "noisePsd", "noise_gens");
     if (@hasDecl(D, "noisePsd"))
