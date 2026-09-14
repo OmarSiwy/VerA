@@ -63,6 +63,21 @@ pub fn build(b: *std.Build) void {
     b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
     test_step.dependOn(&run_va_test.step);
 
+    // The emitted device-runtime kernels. `test-va` does reach them, but only
+    // through codegen.zig's `@import`s — so touching a kernel meant compiling
+    // codegen and the whole IR to run its tests. Their own root makes that a
+    // few seconds, which is the difference between tests that get written for
+    // 1796 lines of hot arithmetic and tests that do not.
+    const kernels_mod = b.createModule(.{
+        .root_source_file = b.path("src/backend/kernels.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_kernels_test = b.addRunArtifact(b.addTest(.{ .root_module = kernels_mod }));
+    b.step("test-kernels", "Run the emitted device-runtime kernel tests")
+        .dependOn(&run_kernels_test.step);
+    test_step.dependOn(&run_kernels_test.step);
+
     // `contract` is a module root of its own and NOTHING in this build imports it
     // — generated device code does, at its own build time — so `test-va` collects
     // zero of its tests. They ran nowhere until this step existed, which is how a

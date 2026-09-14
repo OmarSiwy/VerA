@@ -37,8 +37,16 @@
 //! the device. `filter_kernels.zig` was registered here as the one exception
 //! until wave 10 gave `zBilin` its test.
 //!
-//! That register is THIS block, it is machine-read, and it is EMPTY. An
-//! exception is one `//! ORPHAN: <path under src/> — <why>` line here;
+//! ORPHAN: backend/kernels.zig — a test ROOT, not a pipeline stage. Reaching
+//! the six kernel files meant compiling codegen.zig and the IR behind it, which
+//! is why five of them had no tests at all; `zig build test-kernels` mounts
+//! this root and runs them in 306 ms instead. Nothing imports it ON PURPOSE:
+//! putting it in a device's import graph would pull test code into generated
+//! source. It cannot rot into another `eval_batch.zig` — it holds no logic, only
+//! a `test {}` of `@import`s, so an unreachable kernel still fails the guard.
+//!
+//! That register is THIS block, it is machine-read, and it holds exactly the
+//! line above. An exception is one `//! ORPHAN: <path under src/> — <why>` line;
 //! `tools/source_guards.zig` parses them as the allowlist for its "every
 //! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
 //! backend file that is neither reachable nor listed. Do not add a line to
