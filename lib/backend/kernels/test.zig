@@ -1555,3 +1555,208 @@ test "§4.5.7 zHistRevert undoes a thinning push exactly, at every ring size and
         try std.testing.expectEqualSlices(f64, saved_v[0..n], vs);
     };
 }
+
+// ---- IEEE 1364 §5 wide integers (`wide_kernels.zig`) --------------------------
+// Two oracles. Up to `zw_native_max + 64` bits, the limb algorithms (`zwL`,
+// what a device runs past the threshold) against the native `uN` operators
+// (what it runs below): every width, every operation, random operands and the
+// edge patterns (0, 1, all ones, the sign bit alone). Past that, the `zw*`
+// entry points against `std.math.big`'s exact integers.
+
+const wide = @import("wide_kernels.zig");
+
+/// A random `n`-bit pattern, or one of the edge patterns.
+fn wideOperand(comptime n: u32, r: std.Random) @Int(.unsigned, n) {
+    const U = @Int(.unsigned, n);
+    var bytes: [(n + 7) / 8 + 8]u8 = undefined;
+    r.bytes(&bytes);
+    var x: U = 0;
+    for (bytes[0 .. (n + 7) / 8]) |b| x = if (n > 8) (x << 8) | b else @truncate(b);
+    return switch (r.uintLessThan(u8, 8)) {
+        0 => 0,
+        1 => 1,
+        2 => std.math.maxInt(U),
+        3 => @as(U, 1) << (n - 1),
+        // Short operands, so a division has a nonzero quotient and the
+        // single-digit path runs.
+        4 => x >> @intCast(n - @min(n, r.uintLessThan(u32, 40) + 1)),
+        else => x,
+    };
+}
+
+fn limbsOf(comptime n: u32, x: @Int(.unsigned, n)) [wide.zwLimbs(n)]u32 {
+    var r: [wide.zwLimbs(n)]u32 = undefined;
+    for (&r, 0..) |*d, i| d.* = @truncate(@as(@Int(.unsigned, 32 * wide.zwLimbs(n)), x) >> @intCast(32 * i));
+    return r;
+}
+
+fn expectLimbs(comptime n: u32, what: []const u8, want: @Int(.unsigned, n), got: [wide.zwLimbs(n)]u32) !void {
+    if (std.mem.eql(u32, &limbsOf(n, want), &got)) return;
+    std.debug.print("n={d} {s}: want 0x{x} got {any}\n", .{ n, what, want, got });
+    return error.TestExpectedEqual;
+}
+
+/// IEEE 1364 §5.1.5 `/` and `%` on native `n`-bit patterns, with the analog
+/// context's 0 for a zero divisor (wide_kernels.zig's header).
+fn nativeDivRem(comptime n: u32, comptime signed: bool, comptime rem: bool, a: @Int(.unsigned, n), b: @Int(.unsigned, n)) @Int(.unsigned, n) {
+    const S = @Int(.signed, n);
+    if (b == 0) return 0;
+    if (!signed) return if (rem) a % b else a / b;
+    if (b == std.math.maxInt(@Int(.unsigned, n))) return if (rem) 0 else 0 -% a;
+    const x: S = @bitCast(a);
+    const y: S = @bitCast(b);
+    return @bitCast(if (rem) @rem(x, y) else @divTrunc(x, y));
+}
+
+fn wideNativeVsLimbs(comptime n: u32, r: std.Random) !void {
+    const U = @Int(.unsigned, n);
+    const S = @Int(.signed, n);
+    const L = wide.zwL;
+    for (0..24) |_| {
+        const a = wideOperand(n, r);
+        const b = wideOperand(n, r);
+        const la = limbsOf(n, a);
+        const lb = limbsOf(n, b);
+        try expectLimbs(n, "+", a +% b, L.add(n, la, lb));
+        try expectLimbs(n, "-", a -% b, L.sub(n, la, lb));
+        try expectLimbs(n, "*", a *% b, L.mul(n, la, lb));
+        try expectLimbs(n, "~", ~a, L.not(n, la));
+        try expectLimbs(n, "&", a & b, L.bit(n, .@"and", la, lb));
+        try expectLimbs(n, "|", a | b, L.bit(n, .@"or", la, lb));
+        try expectLimbs(n, "^", a ^ b, L.bit(n, .xor, la, lb));
+        inline for (.{ false, true }) |signed| inline for (.{ false, true }) |rem| {
+            try expectLimbs(n, if (rem) "%" else "/", nativeDivRem(n, signed, rem, a, b), L.divRem(n, signed, rem, la, lb));
+        };
+        const counts = [_]u64{ 0, 1, 31, 32, 33, n - 1, n, n + 1, r.uintLessThan(u64, n + 8), std.math.maxInt(u64) };
+        for (counts) |c| {
+            try expectLimbs(n, "<<", std.math.shl(U, a, c), L.shl(n, la, c));
+            try expectLimbs(n, ">>", std.math.shr(U, a, c), L.shr(n, false, la, c));
+            try expectLimbs(n, ">>>", @bitCast(std.math.shr(S, @bitCast(a), c)), L.shr(n, true, la, c));
+        }
+        try std.testing.expectEqual(a < b, blk: {
+            var i: usize = wide.zwLimbs(n);
+            while (i > 0) {
+                i -= 1;
+                if (la[i] != lb[i]) break :blk la[i] < lb[i];
+            }
+            break :blk false;
+        });
+        try std.testing.expectEqual(@as(f64, @floatFromInt(a)), L.toReal(n, la));
+        inline for (.{ 1, n + 7, n + 64 }) |to| for ([_]bool{ false, true }) |signed| {
+            const want: @Int(.unsigned, to) = if (to <= n) @truncate(a) else if (signed) @bitCast(@as(@Int(.signed, to), @as(S, @bitCast(a)))) else a;
+            try expectLimbs(to, "resize", want, L.resize(to, n, signed, la));
+        };
+    }
+}
+
+test "IEEE 1364 §5 wide integers: the limb algorithms equal native uN at every width to the threshold + 64" {
+    var prng = std.Random.DefaultPrng.init(0x1364_0504);
+    inline for (1..wide.zw_native_max + 65) |n| try wideNativeVsLimbs(n, prng.random());
+}
+
+/// `x` as an exact integer: the `n`-bit pattern, read signed when `signed`.
+fn wideBig(gpa: std.mem.Allocator, comptime n: u32, x: wide.ZW(n), signed: bool) !std.math.big.int.Managed {
+    const l = wide.zwToLimbs(n, x);
+    var m = try std.math.big.int.Managed.init(gpa);
+    try m.set(0);
+    var i: usize = l.len;
+    while (i > 0) {
+        i -= 1;
+        try m.shiftLeft(&m, 32);
+        var d = try std.math.big.int.Managed.initSet(gpa, l[i]);
+        defer d.deinit();
+        try m.add(&m, &d);
+    }
+    if (signed and wide.zwBit(n, x, n - 1)) {
+        var p = try std.math.big.int.Managed.initSet(gpa, 1);
+        defer p.deinit();
+        try p.shiftLeft(&p, n);
+        try m.sub(&m, &p);
+    }
+    return m;
+}
+
+fn expectBig(gpa: std.mem.Allocator, comptime n: u32, what: []const u8, want: *std.math.big.int.Managed, got: wide.ZW(n)) !void {
+    try want.truncate(want, .unsigned, n);
+    var g = try wideBig(gpa, n, got, false);
+    defer g.deinit();
+    if (want.eql(g)) return;
+    std.debug.print("n={d} {s}: want {f} got {f}\n", .{ n, what, want.*, g });
+    return error.TestExpectedEqual;
+}
+
+fn wideAgainstBig(comptime n: u32, r: std.Random) !void {
+    const gpa = std.testing.allocator;
+    const Big = std.math.big.int.Managed;
+    for (0..6) |_| {
+        var la: [wide.zwLimbs(n)]u32 = undefined;
+        var lb: [wide.zwLimbs(n)]u32 = undefined;
+        for (&la, &lb) |*x, *y| {
+            x.* = r.int(u32);
+            y.* = r.int(u32);
+        }
+        // A short divisor half the time: the single-digit and early-exit paths.
+        if (r.boolean()) @memset(lb[r.uintLessThan(usize, lb.len) + 1 ..], 0);
+        const a = wide.zwFromLimbs(n, wide.zwL.norm(n, la));
+        const b = wide.zwFromLimbs(n, wide.zwL.norm(n, lb));
+        inline for (.{ false, true }) |signed| {
+            var x = try wideBig(gpa, n, a, signed);
+            defer x.deinit();
+            var y = try wideBig(gpa, n, b, signed);
+            defer y.deinit();
+            var t = try Big.init(gpa);
+            defer t.deinit();
+            try t.add(&x, &y);
+            try expectBig(gpa, n, "+", &t, wide.zwAdd(n, a, b));
+            try t.sub(&x, &y);
+            try expectBig(gpa, n, "-", &t, wide.zwSub(n, a, b));
+            try t.mul(&x, &y);
+            try expectBig(gpa, n, "*", &t, wide.zwMul(n, a, b));
+            if (!wide.zwIsZero(n, b)) {
+                var q = try Big.init(gpa);
+                defer q.deinit();
+                try q.divTrunc(&t, &x, &y);
+                try expectBig(gpa, n, "/", &q, wide.zwDiv(n, signed, a, b));
+                try expectBig(gpa, n, "%", &t, wide.zwRem(n, signed, a, b));
+            }
+            const e: u64 = r.uintLessThan(u64, 70);
+            try t.pow(&x, @intCast(e));
+            try expectBig(gpa, n, "**", &t, wide.zwPow(n, signed, a, 64, false, e));
+            try std.testing.expectEqual(x.order(y) == .lt, wide.zwLt(n, signed, a, b));
+            const f = x.toConst().toFloat(f64, .nearest_even);
+            try std.testing.expectEqual(f[0], wide.zwToReal(n, signed, a));
+        }
+    }
+}
+
+test "IEEE 1364 §5 wide integers: the zw entry points equal std.math.big past the threshold" {
+    var prng = std.Random.DefaultPrng.init(0x1364_0505);
+    inline for (.{ wide.zw_native_max + 1, 300, 1000, 4100 }) |n| try wideAgainstBig(n, prng.random());
+}
+
+test "IEEE 1364 §4.8.2 wide integers: a real rounds half away from zero to its low n bits" {
+    inline for (.{ 8, 40, 64, 72, 300 }) |n| {
+        const W = wide.ZW(n);
+        try std.testing.expect(wide.zwEq(n, wide.zwFromReal(n, 2.5), wide.zwLeaf(n, 3)));
+        try std.testing.expect(wide.zwEq(n, wide.zwFromReal(n, -2.5), wide.zwResize(n, 64, true, wide.zwLeaf(64, -3))));
+        try std.testing.expect(wide.zwEq(n, wide.zwFromReal(n, std.math.nan(f64)), wide.zwZero(n)));
+        // 2^70 + 2^18 as a double, then its low n bits.
+        const x: f64 = 0x1p70 + 0x1p18;
+        const want: W = wide.zwAdd(n, wide.zwShl(n, wide.zwLeaf(n, 1), 32, 70), wide.zwShl(n, wide.zwLeaf(n, 1), 32, 18));
+        try std.testing.expect(wide.zwEq(n, wide.zwFromReal(n, x), want));
+        try std.testing.expect(wide.zwEq(n, wide.zwFromReal(n, -x), wide.zwNeg(n, want)));
+        try std.testing.expectEqual(@as(f64, -3), wide.zwToReal(n, true, wide.zwResize(n, 64, true, wide.zwLeaf(64, -3))));
+    }
+}
+
+test "IEEE 1364 Table 5-6 wide integers: the power edge cases" {
+    inline for (.{ 40, 300 }) |n| {
+        const one = wide.zwLeaf(n, 1);
+        const m1 = wide.zwNot(n, wide.zwZero(n));
+        try std.testing.expect(wide.zwEq(n, wide.zwPow(n, true, wide.zwZero(n), 8, false, 0), one));
+        try std.testing.expect(wide.zwEq(n, wide.zwPow(n, true, m1, 8, true, @as(u8, @bitCast(@as(i8, -3)))), m1));
+        try std.testing.expect(wide.zwEq(n, wide.zwPow(n, true, m1, 8, true, @as(u8, @bitCast(@as(i8, -4)))), one));
+        try std.testing.expect(wide.zwEq(n, wide.zwPow(n, true, wide.zwLeaf(n, 3), 8, true, @as(u8, @bitCast(@as(i8, -1)))), wide.zwZero(n)));
+        try std.testing.expect(wide.zwEq(n, wide.zwPow(n, false, wide.zwLeaf(n, 3), 8, false, 4), wide.zwLeaf(n, 81)));
+    }
+}
