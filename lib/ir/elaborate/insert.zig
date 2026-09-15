@@ -32,12 +32,11 @@ const Rule = struct {
 
 /// One mixed port that matched exactly one rule.
 const Hit = struct {
-    /// The instance's index in `src`, and its connection's index; or, for a
-    /// `gate` terminal, the gate's index in `Flatten.gates` and the
-    /// terminal's (0 the output, k its k'th input).
+    /// The instance's index in `src`, and its connection's index.
     inst: usize,
     conn: usize,
-    gate: bool = false,
+    /// Or a primitive's terminal (`Ast.PrimTerm`).
+    prim: ?Prim = null,
     /// §7.8.5's InstName.
     name: Ast.StrId,
     rule: usize,
@@ -47,6 +46,17 @@ const Hit = struct {
     bottom: Ast.StrId,
     port: Ast.StrId,
 };
+
+/// A primitive terminal `plan` bridges, and its row in the flat list
+/// (`Flatten.gates`, `pulls` or `switches`).
+const Prim = struct { term: Ast.PrimTerm, flat: usize };
+
+/// Whether `module` declares `name` with a range (§6.5.2, §3.6.3).
+fn isVector(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (module.nets) |n| if (n.name == name and n.range != null) return true;
+    for (module.ports) |p| if (p.name == name and (p.range != null or p.type_range != null)) return true;
+    return false;
+}
 
 /// The instances of `module` as §7.8.4 leaves them: `src` is its source
 /// instances, then its §6.6 generate instances, whose schemes `gates` holds
@@ -148,50 +158,84 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
         }
     }
     // §3.9 "For digital primitives the domain is discrete and thus the
-    // discipline is set via the default_discipline directive": a gate's
+    // discipline is set via the default_discipline directive": a primitive's
     // terminal is a port whose lower connection has the discipline in force
-    // at the gate, named for §7.8.5 by §7.8.5.1. Its rows are the tail of
-    // `Flatten.gates`, which `inlineInstance` (or `run`, at the top) has just
-    // appended in source order.
-    const gate_base = self.gates.items.len - module.gates.len;
-    for (module.gates, 0..) |g, gi| {
-        // ponytail: an unnamed gate has no §7.8.5 InstName for a split
-        // bridge, nor a name the mixed runner finds it by; it inserts nothing.
-        if (g.name == .none or g.main_tok >= self.ctx.tok_starts.len) continue;
-        const dname = Preprocessor.DefaultDiscipline.inForce(self.ctx.default_disciplines, self.ctx.tok_starts[g.main_tok]) orelse continue;
+    // at the primitive, named for §7.8.5 by §7.8.5.1 (`Ast.primTerms`). Its
+    // rows are the tails of `Flatten.gates`, `pulls` and `switches`, which
+    // `inlineInstance` (or `run`, at the top) has just appended in source
+    // order.
+    const bases = [3]usize{
+        self.gates.items.len - module.gates.len,
+        self.pulls.items.len - module.pulls.len,
+        self.switches.items.len - module.switches.len,
+    };
+    for (try Ast.primTerms(self.ctx.arena, file, module)) |pt| {
+        if (pt.main_tok >= self.ctx.tok_starts.len) continue;
+        const dname = Preprocessor.DefaultDiscipline.inForce(self.ctx.default_disciplines, self.ctx.tok_starts[pt.main_tok]) orelse continue;
         const bottom = file.strings.find(dname) orelse continue;
         if (domain(file, bottom) != .discrete) continue;
-        for (0..1 + g.ins.len) |t| {
-            // ponytail: an enable gate (no §7.8.5.1 names), a gate array,
-            // and pull sources and switches insert nothing (Vague_Decisions
-            // §10).
-            var buf: [24]u8 = undefined;
-            const pname = Ast.GateInst.connectPortName(module.gates, gi, t, &buf) orelse continue;
-            const sig = elab_names.netRefName(self, if (t == 0) g.out else g.ins[t - 1]) orelse continue;
-            const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
-            if (upper.domain != .continuous) continue;
-            const port = try file.intern(self.ctx.arena, try self.ctx.arena.dupe(u8, pname));
-            const dir: Ast.Direction = if (t == 0) .output else .input;
+        const base = file.lvalueBase(pt.expr);
+        if (base == .none) continue;
+        const sig = file.exprs.strOf(base);
+        const upper = self.seg_down.get(try segKey(self, path, sig)) orelse try elab_segment.up(self, module, path, sig, 0);
+        if (upper.domain != .continuous) continue;
+        // A mixed terminal no bridge can take whole is refused, never left
+        // joined to the analog node.
+        const why: ?[]const u8 = if (pt.generated)
+            "the primitive is in a generate block"
+        else if (base != pt.expr)
+            "the terminal selects part of the net"
+        else if (isVector(module, sig))
+            "the net is a vector"
+        else if (pt.list == .switch_ and pt.range != null)
+            "the switch is an instance array"
+        else
+            null;
+        if (why) |w| {
+            try self.err(pt.main_tok, .E0929, "terminal `{s}` of `{s}` is on `{s}` (`{s}`) and gets no connect module: {s}", .{
+                pt.port, pt.inst, file.str(sig), file.str(upper.disc), w,
+            });
+            continue;
+        }
+        const port = try file.intern(self.ctx.arena, pt.port);
+        // IEEE 1364-2005 §7.1.5 an instance array is one gate per index, and
+        // a scalar terminal is every one's, so each lane is a port of its own
+        // whose InstName is the lane's, `g[3]` (as `expandInstanceArrays`
+        // names a module array's).
+        var lo: i64, var hi: i64 = .{ 0, 0 };
+        if (pt.range) |rg| {
+            const msb = elab_names.constInt(self, rg.msb);
+            const lsb = elab_names.constInt(self, rg.lsb);
+            if (msb == null or lsb == null) {
+                try self.err(pt.main_tok, .E0909, "`{s}`", .{pt.inst});
+                continue;
+            }
+            lo = @min(msb.?, lsb.?);
+            hi = @max(msb.?, lsb.?);
+        }
+        var k = lo;
+        while (k <= hi) : (k += 1) {
+            const inst = try file.intern(self.ctx.arena, if (pt.range == null) pt.inst else try self.ctx.arena.print("{s}[{d}]", .{ pt.inst, k }));
             var found: ?usize = null;
             var count: usize = 0;
-            for (rules.items, 0..) |r, ri| if (matches(file, r, dir, upper.disc, bottom)) {
+            for (rules.items, 0..) |r, ri| if (matches(file, r, pt.dir, upper.disc, bottom)) {
                 count += 1;
                 if (found == null) found = ri;
             };
             if (count > 1) {
-                try self.err(g.main_tok, .E0922, "port `{s}` of `{s}` matches more than one connect statement ({d})", .{
-                    file.str(port), file.str(g.name), count,
+                try self.err(pt.main_tok, .E0922, "port `{s}` of `{s}` matches more than one connect statement ({d})", .{
+                    pt.port, file.str(inst), count,
                 });
                 continue;
             }
             try hits.append(self.ctx.arena, .{
-                .inst = gate_base + gi,
-                .conn = t,
-                .gate = true,
-                .name = g.name,
+                .inst = 0,
+                .conn = 0,
+                .prim = .{ .term = pt, .flat = bases[@intFromEnum(pt.list)] + pt.row },
+                .name = inst,
                 .rule = found orelse {
                     const bound = self.unit.rename.get(sig) orelse sig;
-                    try self.unbridged.append(self.ctx.arena, .{ .tok = g.main_tok, .net = bound, .lower = bottom, .port = port, .inst = g.name, .dir = dir, .upper = upper });
+                    try self.unbridged.append(self.ctx.arena, .{ .tok = pt.main_tok, .net = bound, .lower = bottom, .port = port, .inst = inst, .dir = pt.dir, .upper = upper });
                     continue;
                 },
                 .sig = sig,
@@ -230,21 +274,18 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
             if (g.sig == h.sig and g.rule == h.rule and g.bottom == h.bottom) break g;
         } else null else null;
         const name = try segmentName(self, path, r, merged, lower_port, h, if (first) |g| g else h);
-        const conn: Ast.PortConn = if (!h.gate) conns[h.inst][h.conn] else gate: {
-            // The flat row takes the segment; the bridge takes the source's
-            // terminal, which inlining renames like any instance's actual.
-            const g = &self.gates.items[h.inst];
-            const src_g = module.gates[h.inst - gate_base];
-            const seg = try ident(self, name.segment, g.main_tok);
-            if (h.conn == 0) g.out = seg else {
-                const ins = try self.ctx.arena.dupe(Ast.ExprId, g.ins);
-                ins[h.conn - 1] = seg;
-                g.ins = ins;
-            }
-            break :gate .{ .expr = if (h.conn == 0) src_g.out else src_g.ins[h.conn - 1], .main_tok = g.main_tok };
-        };
+        // A primitive's flat row takes the segment; the bridge takes the
+        // source's terminal, which inlining renames like any instance's
+        // actual.
+        const conn: Ast.PortConn = if (h.prim) |p| prim: {
+            const t = p.term;
+            // ponytail: an array's flat row keeps its terminals; lowering
+            // reads none of a gate's, and the mixed runner re-points the lane.
+            if (t.range == null) try Ast.setPrimTerm(self.ctx.arena, self.gates.items, self.pulls.items, self.switches.items, t, p.flat, try ident(self, name.segment, t.main_tok));
+            break :prim .{ .expr = t.expr, .main_tok = t.main_tok };
+        } else conns[h.inst][h.conn];
         const up_expr = conn.expr;
-        if (!h.gate) conns[h.inst][h.conn].expr = try ident(self, name.segment, conn.main_tok);
+        if (h.prim == null) conns[h.inst][h.conn].expr = try ident(self, name.segment, conn.main_tok);
         try self.inserts.append(self.ctx.arena, .{
             .path = path,
             .inst = file.str(h.name),

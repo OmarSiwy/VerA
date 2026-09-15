@@ -415,7 +415,7 @@ pub fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: [
         return r.fail(sub.decl.main_tok, "§10.4.2: duplicate declaration of `{s}`, a task or function name in this scope", .{r.file.str(sub.decl.name)});
     try implicitNets(r, e, scope, m);
     const b = try bridged(r, e, m, scope);
-    try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = b.gates, .pulls = m.pulls, .switches = m.switches });
+    try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = b.gates, .pulls = b.pulls, .switches = b.switches }, b.lanes);
     for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
 }
@@ -660,8 +660,9 @@ pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
 
 /// The driver rows of `items`' continuous assignments, gates, switches and
 /// pull sources, their names resolved in `scope`. `items.events` and
-/// `items.discrete` are not read.
-fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
+/// `items.discrete` are not read. `lanes` re-points single lanes of
+/// `items.gates`' instance arrays (`bridged`).
+fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems, lanes_at: []const LaneSeg) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
         const net = try drivenNet(r, e, scope, a.target, a.main_tok, .assign);
@@ -670,7 +671,7 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
     var gate_names: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
-    for (items.gates) |g| {
+    for (items.gates, 0..) |g, gi| {
         // A `buf`/`not` with several outputs is one instance of several rows.
         if (g.name != .none) {
             const seen = try gate_names.getOrPut(r.arena, g.name);
@@ -689,10 +690,25 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
         if (width != 1 and width != lanes) return r.fail(g.main_tok, "a gate's output terminal is one bit, or one per instance of an array", .{});
         for (0..lanes) |j| {
             const lane: ?u32 = if (g.range == null) null else @intCast(lanes - 1 - j);
+            // A lane VAMS §7.8.4 bridged reads or drives its own segment, one
+            // bit, where the others share the row's terminal.
+            var ins = g.ins;
+            var lane_net = net;
+            var out_bit = if (width == 1) null else lane;
+            for (lanes_at) |ls| if (ls.row == gi and ls.j == j) {
+                if (ls.term == 0) {
+                    lane_net = try drivenNet(r, e, scope, ls.seg, g.main_tok, .gate);
+                    out_bit = null;
+                } else {
+                    const copy = try r.arena.dupe(Ast.ExprId, ins);
+                    copy[ls.term - 1] = ls.seg;
+                    ins = copy;
+                }
+            };
             try e.wires.append(r.arena, .{
-                .net = net,
+                .net = lane_net,
                 .scope = scope,
-                .source = .{ .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane } },
+                .source = .{ .gate = .{ .kind = g.kind, .ins = ins, .lane = lane, .lanes = lanes, .out_bit = out_bit } },
                 .s0 = g.strength0,
                 .s1 = g.strength1,
                 .delay = g.delay,
@@ -761,26 +777,44 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
     }
 }
 
-/// `bridged`'s answer: `m`'s instances and gates as insertion left them.
-const Bridged = struct { instances: []const Ast.Instance, gates: []const Ast.GateInst };
+/// `bridged`'s answer: `m`'s instances and primitives as insertion left
+/// them.
+const Bridged = struct {
+    instances: []const Ast.Instance,
+    gates: []const Ast.GateInst,
+    pulls: []const Ast.PullInst,
+    switches: []const Ast.SwitchInst,
+    lanes: []const LaneSeg = &.{},
+};
 
-/// VAMS §7.8.4 `m`'s instances and gates at `scope` as the analog compile's
-/// connect module insertion left them (`Mixed.inserts`): every re-pointed
-/// port or gate terminal (§7.8.5.1's names) bound to its segment (a net of
-/// this scope, when the bridge's side of it is discrete), and one instance of
-/// each bridge appended, taking the port's upper connection. The source's
-/// own lists where nothing was inserted.
+/// Terminal `term` (`Ast.PrimTerm.term`) of lane `j` (0 the leftmost index,
+/// IEEE 1364-2005 §7.1.6) of row `row` of a module's gates is `seg`: a
+/// bridged lane of an instance array, which shares one row with the others.
+const LaneSeg = struct { row: usize, j: usize, term: u32, seg: Ast.ExprId };
+
+/// VAMS §7.8.4 `m`'s instances and primitives at `scope` as the analog
+/// compile's connect module insertion left them (`Mixed.inserts`): every
+/// re-pointed port or primitive terminal (§7.8.5.1's names, `Ast.primTerms`)
+/// bound to its segment (a net of this scope, when the bridge's side of it is
+/// discrete), and one instance of each bridge appended, taking the port's
+/// upper connection. The source's own lists where nothing was inserted.
 // ponytail: the bridge takes no parameter override (a mixed module's
 // parameters are the analog block's), and a generate scope's path is not
 // matched: insertion under a generate block reaches only the analog half.
 fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error!Bridged {
-    if (r.inserts.len == 0) return .{ .instances = m.instances, .gates = m.gates };
+    var b: Bridged = .{ .instances = m.instances, .gates = m.gates, .pulls = m.pulls, .switches = m.switches };
+    if (r.inserts.len == 0) return b;
     const arena = r.arena;
     const path = try scopePath(r, scope);
     // The source's instances and at most one bridge per inserted row.
     var out: std.ArrayList(Ast.Instance) = try .initCapacity(arena, m.instances.len + r.inserts.len);
     out.appendSliceAssumeCapacity(m.instances);
+    // The primitives' terminals and copies of their rows, once one is bridged.
+    var prims: ?[]const Ast.PrimTerm = null;
     var gates: []Ast.GateInst = &.{};
+    var pulls: []Ast.PullInst = &.{};
+    var switches: []Ast.SwitchInst = &.{};
+    var lanes: std.ArrayList(LaneSeg) = .empty;
     for (r.inserts, r.insert_segs) |row, seg| {
         if (!std.mem.eql(u8, row.path, path)) continue;
         // The port's upper connection, and the width of the segment.
@@ -801,25 +835,33 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error!Bridge
             ports[ci].expr = seg;
             inst.ports = ports;
             break :conn .{ up, try portWidth(r, child.ports[pi]) };
-        } else gate: {
-            if (gates.len == 0) gates = try arena.dupe(Ast.GateInst, m.gates);
-            for (gates, 0..) |*g, gi| if (g.name != .none and std.mem.eql(u8, r.file.str(g.name), row.inst)) for (0..1 + g.ins.len) |t| {
-                var buf: [24]u8 = undefined;
-                const name = Ast.GateInst.connectPortName(m.gates, gi, t, &buf) orelse continue;
-                if (!std.mem.eql(u8, name, row.port)) continue;
-                const x = if (t == 0) g.out else g.ins[t - 1];
-                if (t == 0) g.out = seg else {
-                    const ins = try arena.dupe(Ast.ExprId, g.ins);
-                    ins[t - 1] = seg;
-                    g.ins = ins;
+        } else prim: {
+            if (prims == null) {
+                prims = try Ast.primTerms(arena, r.file, m);
+                gates = try arena.dupe(Ast.GateInst, m.gates);
+                pulls = try arena.dupe(Ast.PullInst, m.pulls);
+                switches = try arena.dupe(Ast.SwitchInst, m.switches);
+            }
+            for (prims.?) |t| {
+                if (!std.mem.eql(u8, t.port, row.port)) continue;
+                // An instance array's lane is `inst[k]` (`insert.plan`).
+                if (t.range) |rg| {
+                    const k = laneIndex(row.inst, t.inst) orelse continue;
+                    const msb = try r.declaredBound(rg.msb, t.main_tok);
+                    const lsb = try r.declaredBound(rg.lsb, t.main_tok);
+                    if (k < @min(msb, lsb) or k > @max(msb, lsb)) continue;
+                    try lanes.append(arena, .{ .row = t.row, .j = @intCast(@abs(k - msb)), .term = t.term, .seg = seg });
+                } else {
+                    if (!std.mem.eql(u8, t.inst, row.inst)) continue;
+                    try Ast.setPrimTerm(arena, gates, pulls, switches, t, t.row, seg);
                 }
-                // A gate terminal is one bit (no array has a name here).
-                break :gate .{ .{ .expr = x, .main_tok = g.main_tok }, 1 };
-            };
+                // A primitive's terminal is one bit (a vector is refused).
+                break :prim .{ .{ .expr = t.expr, .main_tok = t.main_tok }, 1 };
+            }
             return r.fail(m.main_tok, "the connect module inserted on `{s}{s}` names an instance the source does not hold", .{ path, row.inst });
         };
-        for (out.items[m.instances.len..]) |b| {
-            if (std.mem.eql(u8, r.file.str(b.name), row.name)) break;
+        for (out.items[m.instances.len..]) |o| {
+            if (std.mem.eql(u8, r.file.str(o.name), row.name)) break;
         } else {
             const bridge = try findModule(r, try interned(r, row.module), up.main_tok);
             const lower = try interned(r, row.lower_port);
@@ -832,7 +874,20 @@ fn bridged(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32) Error!Bridge
             out.appendAssumeCapacity(.{ .module = bridge.name, .name = try interned(r, row.name), .ports = conns, .main_tok = up.main_tok });
         }
     }
-    return .{ .instances = out.items, .gates = if (gates.len == 0) m.gates else gates };
+    b.instances = out.items;
+    if (prims != null) {
+        b.gates = gates;
+        b.pulls = pulls;
+        b.switches = switches;
+        b.lanes = lanes.items;
+    }
+    return b;
+}
+
+/// The index `k` of an instance-array lane's name `base[k]`, or null.
+fn laneIndex(name: []const u8, base: []const u8) ?i64 {
+    if (name.len < base.len + 3 or !std.mem.startsWith(u8, name, base) or name[base.len] != '[' or name[name.len - 1] != ']') return null;
+    return std.fmt.parseInt(i64, name[base.len + 1 .. name.len - 1], 10) catch null;
 }
 
 /// A name `elaborate` made sure the file holds.
@@ -1011,7 +1066,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             if (b.gen.nets.len != 0) try r.gen_nets.put(r.arena, scope, b.gen.nets);
             for (b.gen.defparams) |d| try bindDefparam(r, scope, d, b.instances);
             try declareEvents(r, b.gen.events);
-            try declareDrivers(r, e, scope, b.gen.*);
+            try declareDrivers(r, e, scope, b.gen.*, &.{});
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
             for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
