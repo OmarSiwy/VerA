@@ -447,7 +447,12 @@ pub fn build(b: *std.Build) void {
         // backend refuses (a host rewrites the IR first, as Gompute does).
         const gpu_root: ?[]const u8 = if (std.mem.eql(u8, h.host, "tests/status_host.zig"))
             "tests/status_gpu.zig"
-        else if (std.mem.eql(u8, h.host, "tests/say_host.zig")) "tests/say_gpu.zig" else null;
+        else if (std.mem.eql(u8, h.host, "tests/say_host.zig"))
+            "tests/say_gpu.zig"
+        else if (std.mem.eql(u8, h.host, "tests/wide_host.zig")) "tests/wide_gpu.zig" else null;
+        // IEEE 1364 §5.4 the wide kernels: NVPTX to PTX assembly (a plain
+        // export, `wide_gpu.zig`), so the backend's own lowering is checked.
+        const wide_gpu = gpu_root != null and std.mem.eql(u8, gpu_root.?, "tests/wide_gpu.zig");
         if (gpu_root) |gpu_src| for ([_][2][]const u8{
             .{ "nvptx64-cuda", "sm_70" },
             .{ "amdgcn-amdhsa", "gfx906" },
@@ -469,8 +474,8 @@ pub fn build(b: *std.Build) void {
                     }) },
                 },
             }) });
-            const out = if (gt.result.cpu.arch == .nvptx64) obj.getEmittedLlvmIr() else obj.getEmittedBin();
-            const kernel = if (std.mem.eql(u8, gpu_src, "tests/say_gpu.zig")) "say_ops_kernel" else "status_ops_kernel";
+            const out = if (gt.result.cpu.arch == .nvptx64) (if (wide_gpu) obj.getEmittedAsm() else obj.getEmittedLlvmIr()) else obj.getEmittedBin();
+            const kernel = if (std.mem.eql(u8, gpu_src, "tests/say_gpu.zig")) "say_ops_kernel" else if (wide_gpu) "wide_ops_kernel" else "status_ops_kernel";
             test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{kernel} }).step);
         };
     }
@@ -697,6 +702,7 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch09_system_tasks/bound_step_smallest_host.zig", .va = "tests/fixtures/ch09_system_tasks/bound_step_smallest_active_wins.va" },
     .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
     .{ .host = "tests/say_host.zig", .va = "tests/fixtures/ch09_system_tasks/say_ops.va" },
+    .{ .host = "tests/wide_host.zig", .va = "tests/fixtures/ch07_mixed_signal/wide_reg_held_across_evaluations.va" },
     .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
     .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
     .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_fixed.va" },

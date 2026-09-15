@@ -679,6 +679,12 @@ pub const table_txt = "// ---- §9.21 table model kernels (lib/backend/kernels/t
 pub const file_txt = "// ---- §9.5 file descriptor I/O kernels (lib/backend/kernels/file_kernels.zig) ----\n\n" ++
     @embedFile("../kernels/file_kernels.zig");
 
+/// IEEE 1364-2005 §5.4 integers wider than 32 bits, embedded verbatim from
+/// `wide_kernels.zig`. Carried only by a device whose analog context
+/// computes a `reg` wider than 32 bits (`Lowered.wide_nodes`).
+pub const wide_txt = "// ---- IEEE 1364 §5.4 wide integer kernels (lib/backend/kernels/wide_kernels.zig) ----\n\n" ++
+    @embedFile("../kernels/wide_kernels.zig");
+
 /// §4.5.15 the SPICE limiters, embedded verbatim from `limit_kernels.zig`.
 /// Carried only by a device with an honoured `$limit` call; no unit body
 /// reaches them, since `$limit` renders as its probe there (`cg_limit.zig`).

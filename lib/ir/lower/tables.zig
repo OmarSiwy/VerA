@@ -364,7 +364,15 @@ pub const ChargeSite = struct {
 
 /// Value type of a lowered expression (§3.1). `Ast.Type.unspecified` is
 /// resolved before it reaches here.
-pub const Ty = enum(u8) { real, integer, string };
+pub const Ty = enum(u8) {
+    real,
+    integer,
+    string,
+    /// IEEE 1364-2005 §5.4 a `reg` wider than §3.2's 32 bits that the analog
+    /// context assigns: every bit of it (`lower/wide.zig`). Its width is the
+    /// `VarSlot.reg_width`, `HeldVar.width` or `TpSlot.width` beside it.
+    wide,
+};
 
 /// Absent-index sentinel for the `u32` index fields here.
 pub const none_u32 = std.math.maxInt(u32);
@@ -376,6 +384,8 @@ pub const HeldVar = struct {
     /// name is injective after `naming.sanitize`.
     name: []const u8,
     ty: Ty,
+    /// A `.wide` variable's bits; 0 for every other type.
+    width: u32 = 0,
     /// The declared initializer. Only reachable on the first evaluation, so
     /// codegen renders it as the `Instance` field's default and nowhere else.
     init: Mir.Value,
@@ -491,9 +501,84 @@ pub const TpSlot = struct {
     /// Source spelling, for the field comment.
     name: []const u8,
     ty: Ty,
+    /// A `.wide` variable's bits; 0 for every other type.
+    width: u32 = 0,
     final: Mir.Value = .undef,
     /// §3.2.2 a memory-backed array's `out.mem_arrays` row, or `none_u32`.
     array: u32 = none_u32,
+};
+
+/// IEEE 1364-2005 §5.4/§5.5 one node of an expression a `$wide`/`$wide$int`
+/// call computes (`Lowered.wide_nodes`): `lower/wide.zig` sized it, and
+/// `codegen/wide.zig` renders it over `wide_kernels.zig`. Every operand is
+/// already of the type its operator computes in, so a node needs no context.
+pub const WideNode = struct {
+    op: WideOp,
+    /// The node's bits; 0 for a real.
+    width: u32,
+    /// Its IEEE 1364 §5.5.1 type. The operators that read a sign (`div`,
+    /// `rem`, `ashr`, `pow`, `resize`) read their own; `lt`, `le` and
+    /// `to_real` read their operand's.
+    signed: bool = false,
+    a: u32 = none_u32,
+    b: u32 = none_u32,
+    c: u32 = none_u32,
+    /// `leaf_*`: the call's argument it reads (after the root's), the first
+    /// of `zwLimbs(width)` for `leaf_words`; `lit`: its first `wide_lits` word.
+    arg: u32 = none_u32,
+};
+
+/// What one `WideNode` computes. Integer nodes are `width` bits; a node of
+/// width 0 is a real, and its operator the real one (`add`, `sub`, `mul`,
+/// `div`, `rem`, `pow`, `neg`, `cond`).
+pub const WideOp = enum(u8) {
+    /// An analog integer argument's low `width` bits.
+    leaf_int,
+    /// A discrete input's `Model` words (`Lowered.discrete_words`).
+    leaf_words,
+    /// A `.wide` argument of this width.
+    leaf_wide,
+    /// A real argument's value.
+    leaf_real,
+    /// A literal's `width` bits.
+    lit,
+    /// `a` converted to this width, sign-extended when `signed` (§5.5.2).
+    resize,
+    /// `a` (an integer) to a real, and a real to this width (§4.8.2).
+    to_real,
+    from_real,
+    neg,
+    not,
+    add,
+    sub,
+    mul,
+    div,
+    rem,
+    @"and",
+    @"or",
+    xor,
+    xnor,
+    /// `a` shifted by the unsigned count `b` (§5.1.12); `ashr` fills with
+    /// the sign of a signed `a`.
+    shl,
+    shr,
+    ashr,
+    /// `a ** b` (§5.1.5 Table 5-6).
+    pow,
+    /// One-bit comparisons of `a` and `b`, which share a type (§5.1.7, §5.1.8).
+    eq,
+    lt,
+    le,
+    /// One-bit logical operators over the truth of `a` and `b` (§5.1.9).
+    land,
+    lor,
+    lnot,
+    /// One-bit reductions of `a` (§5.1.11).
+    red_and,
+    red_or,
+    red_xor,
+    /// `a ? b : c`; `a` is any type, `b` and `c` the node's (§5.1.13).
+    cond,
 };
 
 /// One §9.4/§9.7.3 print site.
@@ -757,6 +842,10 @@ discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// or a `case` subject: their unknown plane arrives in a `<name>__xz` `Model`
 /// field beside the value plane, and an x or z there is not an error.
 discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// IEEE 1364-2005 §5.4 every `WideNode` the `$wide`/`$wide$int` call
+/// roots reach, and the 32-bit words of their literals (`WideNode.arg`).
+wide_nodes: std.ArrayList(WideNode) = .empty,
+wide_lits: std.ArrayList(u32) = .empty,
 /// §7.3.1 the `discrete_inputs` that are a `reg` wider than 32 bits, name →
 /// its number of 32-bit words: word 0 (bits 0 to 31) arrives in the `<name>`
 /// `Model` field, word k in `<name>__w<k>`, so a part-select anywhere in the

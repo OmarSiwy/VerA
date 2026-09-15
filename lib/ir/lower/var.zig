@@ -25,6 +25,7 @@ const lower_context = @import("context.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_expr = @import("expr.zig");
 const lower_shape = @import("shape.zig");
+const lower_wide = @import("wide.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -733,26 +734,55 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
         return;
     }
 
-    const slot = try declareVar(self, name, ty);
+    // IEEE 1364-2005 §5.4: a `reg` past 32 bits that the analog context
+    // computes holds every bit of it (`lower_wide`); one it never assigns
+    // keeps its literal for the whole analysis (`Lower.reg_consts`).
+    const wide_w: ?u32 = if (reg_width) |w| (if (w > 32 and !literalReg(self, decl, scope)) w else null) else null;
+    const vty: Ty = if (wide_w != null) .wide else ty;
+    // §7.3.6.4 the mixed runner copies a held 64-bit integer to the digital
+    // engine (`tb/runner.zig` `a2d_ports`), which a wide `reg` is not.
+    if (wide_w != null and scope == .module and self.out.discrete_reads.contains(name))
+        try self.err(decl.main_tok, .E0329, "a digital process reads `{s}`, a `reg` wider than 32 bits the analog context computes; its bits do not reach the digital engine", .{name});
+    const slot = try declareVar(self, name, vty);
     self.vars.getPtr(name).?.reg_width = reg_width;
+    self.vars.getPtr(name).?.reg_signed = decl.storage == .reg and decl.is_signed;
     if (decl.storage == .reg) if (decl.packed_range) |range| if (lower_constfold.constEval(self, range.msb)) |m| if (lower_constfold.constEval(self, range.lsb)) |l| {
         const right = l.asIntExact() orelse 0;
-        try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = reg_width.? });
+        try self.reg_ranges.put(self.arena, name, .{ .right = right, .asc = (m.asIntExact() orelse 0) < right, .width = reg_width.?, .signed = decl.is_signed });
     };
-    const init_val: Mir.Value = if (decl.init == .none)
+    const init_val: Mir.Value = if (wide_w) |w|
+        (if (decl.init == .none) try lower_wide.zero(self, w) else try lower_wide.rhs(self, w, decl.init))
+    else if (decl.init == .none)
         zeroOf(ty)
+    else if (reg_width != null and reg_width.? > 32 and self.file.exprs.tag(decl.init) == .logic_literal)
+        // §7.3.1 a wide `reg` holding its literal (`Lower.reg_consts`): the
+        // slot is its low 64 bits; a select above them reads the literal.
+        try self.mir.addIntConst(self.arena, lower_wide.literalLow64(self, decl.init))
     else
         try self.coerceTo(decl.init, ty, try lower_expr.lowerExpr(self, decl.init));
-    try self.builder.writeVariable(slot.place, self.cur, if (hold)
-        try holdSlot(self, held_key, ty, init_val, slot.place, why.?, d2a)
-    else
-        init_val);
+    try self.builder.writeVariable(slot.place, self.cur, if (hold) blk: {
+        const seed = try holdSlot(self, held_key, vty, init_val, slot.place, why.?, d2a);
+        if (wide_w) |w| self.out.held_vars.items[self.out.held_vars.items.len - 1].width = w;
+        break :blk seed;
+    } else init_val);
     // §7.3.6.1 "An event occurs whenever a value is assigned to the variable,
     // regardless of whether the variable changes value or not": the host
     // tells an assignment from no assignment by this count.
     if (hold and why.? == .event and prefix.len == 0 and self.out.discrete_reads.contains(name))
         try self.var_state.assign_counts.put(self.arena, slot.place, try hiddenHeldInt(self, try self.arena.print("{s}{s}", .{ Lower.HeldVar.assign_count_prefix, name })));
     try lower_contrib.noteVarNoise(self, name, decl.init);
+}
+
+/// §7.3.1 a module `reg` the analog context never assigns, whose initializer
+/// is a literal or absent: it holds that literal for the whole analysis
+/// (`Lower.reg_consts`, filled after the declaration by `lowerModule`).
+pub fn literalReg(self: *const Lower, decl: *const Ast.VarDecl, scope: VarScope) bool {
+    if (scope != .module or self.analog_writes.contains(decl.name)) return false;
+    if (decl.init == .none) return true;
+    return switch (self.file.exprs.tag(decl.init)) {
+        .int_literal, .logic_literal => true,
+        else => false, // else: any other initializer is computed (`lower_wide.rhs`)
+    };
 }
 
 /// §7.3.6.1 counts one assignment of `place`, when it has a count.
@@ -835,6 +865,7 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
         .integer => "$held_int",
         .real => "$held_real",
         .string => "$held_str",
+        .wide => "$held_wide",
     }, &.{try self.mir.addIntConst(self.arena, idx)});
     try self.out.held_vars.append(self.arena, .{
         .name = try uniqueHeld(self, name, @intCast(idx)),
@@ -1089,6 +1120,7 @@ pub fn zeroOf(ty: Ty) Mir.Value {
         .real => .f_zero,
         .integer => .zero,
         .string => .undef,
+        .wide => unreachable, // its zero has a width (`lower_wide.zero`)
     };
 }
 

@@ -614,7 +614,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         if (k == none_u32) {
             // Folded away: never assigned outside the §5.10 body, whose
             // value is a literal zero.
-            try self.w("    inst.{s} = 0;\n", .{n});
+            if (h.ty == .wide)
+                try self.w("    inst.{s} = zwZero({d});\n", .{ n, h.width })
+            else
+                try self.w("    inst.{s} = 0;\n", .{n});
         } else if (h.array != none_u32) {
             // §3.2.2 a held array's core field is already its plain values;
             // an in-place one is already in `inst`.
@@ -633,6 +636,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 else
                     try self.w("    inst.{s} = std.math.lossyCast(i64, @round(m.f{d}{s}));\n", .{ n, k, val }),
                 .string => try self.w("    inst.{s} = zs{d};\n", .{ n, i }),
+                .wide => try self.w("    inst.{s} = m.f{d};\n", .{ n, k }),
                 .real => if (core_int)
                     try self.w("    inst.{s} = @floatFromInt(m.f{d});\n", .{ n, k })
                 else

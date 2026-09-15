@@ -218,7 +218,9 @@ pub fn callAbstract(c: Mir.Callee) Abstract {
     // §2.7 a string never reaches a float operation: neither is inf or NaN.
     switch (Mir.callee.ty(c)) {
         .int => return .{ .iv = int_range, .finite = true },
-        .str => return .{ .iv = .top, .finite = true },
+        // A string, and an IEEE 1364 §5.4 wide integer, never reach a float
+        // operation either; neither has an interval.
+        .str, .wide => return .{ .iv = .top, .finite = true },
         .real => {},
     }
     return switch (c) {

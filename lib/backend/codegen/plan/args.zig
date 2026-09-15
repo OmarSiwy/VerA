@@ -130,6 +130,9 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$rng$erlang_next",
         => true,
         .@"$idx", .@"$idx$int", .@"$idx$str" => i > 0, // index and selectable cells
+        // IEEE 1364 §5.4 the operands; argument 0 is the tree's root, which
+        // the emitter reads (`codegen/wide.zig`).
+        .@"$wide", .@"$wide$int" => i > 0,
         // §3.3 Table 3-3: every piece, and the count.
         .@"$str$cat", .@"$str$repeat" => true,
         .@"$limit$uf" => i < 2,
@@ -212,9 +215,11 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$held_int",
         .@"$held_real",
         .@"$held_str",
+        .@"$held_wide",
         .@"$tp_hit",
         .@"$tp_int",
         .@"$tp_real",
+        .@"$tp_wide",
         .@"$limit$old",
         .@"$display$width",
         .@"$monitor$arm",

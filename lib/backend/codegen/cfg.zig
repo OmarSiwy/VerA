@@ -82,7 +82,7 @@ fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!v
             // Zig types it from the expression; `lane_masks` counts it.
             try family.note(self, family.mask(self, @fromBackingInt(@intCast(i))));
             try self.b("const t{d} = ", .{self.plan.slot[i]});
-        } else try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
+        } else try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], try gen_unit.slotTy(self, i) });
     } else {
         try gen_unit.writeSlotRef(self, i);
         try self.b(" = ", .{});
@@ -395,7 +395,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
             if (self.an.vty[i] == .real)
                 try self.b("const c{d} = ", .{k})
             else
-                try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
+                try self.b("const c{d}: {s} = ", .{ k, try gen_unit.slotTy(self, i) });
         } else {
             gen_unit.probeDef(self, self.plan.slot[i], false);
             try gen_unit.writeSlotRef(self, i);

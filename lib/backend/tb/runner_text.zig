@@ -1532,7 +1532,7 @@ const mixed_tail =
     \\    // the promoted digital time, so the analog steps to each digital event.
     \\    if (has_free_reads) dig.has_probes = true;
     \\    // §8.4.3.2: an unguarded read makes the block implicitly sensitive.
-    \\    inline for (input_ports, 0..) |p, i| {
+    \\    for (input_ports, 0..) |p, i| {
     \\        a.slots[i] = mixedSlot(&dig, p.name);
     \\        dig.watchAnalog(a.slots[i]);
     \\    }

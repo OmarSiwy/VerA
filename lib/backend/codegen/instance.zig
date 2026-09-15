@@ -16,6 +16,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
+const gen_wide = @import("wide.zig");
 const opdb = @import("op_zig.zig");
 const cg_filters = @import("../cg_filters.zig");
 const cg_strcap = @import("../cg_strcap.zig");
@@ -272,6 +273,14 @@ pub fn emitInstance(self: *Gen) Error!void {
             try self.w("\"{f}\"), // §5.10 held across evaluations\n", .{std.zig.fmtString(s)});
             continue;
         }
+        if (h.ty == .wide) {
+            // IEEE 1364 §5.4 a wide `reg`: its literal initializer's bits
+            // (`gen_wide.emitConstInit`), else zero.
+            try self.w("    {s}: {s} = ", .{ self.names.held_names[i], try gen_wide.zigTy(self, h.width) });
+            if (!try gen_wide.emitConstInit(self, h.init)) try self.w("zwZero({d})", .{h.width});
+            try self.w(", // §5.10 held across evaluations\n", .{});
+            continue;
+        }
         const init = self.an.foldConst(self.an.rv(h.init), true);
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
@@ -404,7 +413,10 @@ fn emitTpFields(self: *Gen) Error!void {
                 const m = self.lowered.mem_arrays.items[sl.array];
                 try self.w("    tp{d}_s{d}: [{d}]{s} = @splat(0), // {s}\n", .{ b, k, m.len, if (m.ty == .integer) "i64" else "f64", sl.name });
             } else {
-                try self.w("    tp{d}_s{d}: {s} = 0, // {s}\n", .{ b, k, if (sl.ty == .integer) "i64" else "f64", sl.name });
+                if (sl.ty == .wide)
+                    try self.w("    tp{d}_s{d}: ZW({d}) = zwZero({d}), // {s}\n", .{ b, k, sl.width, sl.width, sl.name })
+                else
+                    try self.w("    tp{d}_s{d}: {s} = 0, // {s}\n", .{ b, k, if (sl.ty == .integer) "i64" else "f64", sl.name });
             }
         }
     }
@@ -428,7 +440,7 @@ fn emitTpHelpers(self: *Gen) Error!void {
         try self.w("!zTpHit(inst.tp{d}_t, inst.tp{d}_k, sim)) {{\n", .{ b, b });
         for (t.slots, 0..) |sl, k| {
             const fk = gen_dispatch.coreIdx(self, self.an.rv(sl.final)) orelse continue;
-            const val = sl.array == none_u32 and sl.ty != .integer;
+            const val = sl.array == none_u32 and sl.ty == .real;
             try self.w("        inst.tp{d}_s{d} = m.f{d}{s};\n", .{ b, k, fk, if (val) ".val()" else "" });
         }
         try self.w("        inst.tp{d}_t = sim.t;\n        inst.tp{d}_k = zTpKey(sim);\n    }}\n", .{ b, b });
@@ -619,6 +631,8 @@ pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
             try self.w("{s}!std.meta.eql(inst.{s}, state.{s})", .{ if (first) " " else "\n            or ", n, n })
         else if (h.ty == .string)
             try self.w("{s}!std.mem.eql(u8, inst.{s}.get(), state.{s}.get())", .{ if (first) " " else "\n            or ", n, n })
+        else if (h.ty == .wide)
+            try self.w("{s}!std.meta.eql(inst.{s}, state.{s})", .{ if (first) " " else "\n            or ", n, n })
         else
             try self.w("{s}(inst.{s} != state.{s})", .{ if (first) " " else "\n            or ", n, n });
         first = false;
