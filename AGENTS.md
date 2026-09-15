@@ -45,7 +45,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `CHANGELOG.md` | every change since v1.0.0, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
+| `CHANGELOG.md` | every change since v0.0.1, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `specification/*.html`, `specification/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
@@ -137,7 +137,7 @@ sweep and the audit-tool self-tests report without gating.
 
 **Nix.** `flake.nix` exports `packages.<system>.default` (`vera`, built from
 this tree in ReleaseFast with `-Dcpu=baseline`, as `publish.yaml` builds the
-release), one package per release binary (`."1.0.0"`, `latest`),
+release), one package per release binary (`."0.9.0"`, `latest`),
 `overlays.default` (`pkgs.vera`, `pkgs.veraPackages.<version>`),
 `apps.default`, `checks` (each package plus a resistor through `vera --check`
 in the sandbox) and `formatter` (`nix fmt`), on x86_64/aarch64 Linux and
@@ -557,8 +557,8 @@ Learned expensively, and none of it is style preference:
 
 ### `CHANGELOG.md`
 
-It starts after v1.0.0 (that release's numbers are its GitHub release notes
-and `git show v1.0.0:CHANGELOG.md`). Every change adds one bullet under
+Releases run v0.9.0 to v1.0.0, the conformance journey: v1.0.0 is the
+release that meets the four measures of §2. Every change adds one bullet under
 `## Unreleased`, in the same commit as the change. Keep it light: one line
 saying what a user of VerA would notice. A fix always names the GitHub issue
 it closes, as `(#123)`; open the issue first if there isn't one. At a
