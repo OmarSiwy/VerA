@@ -6621,6 +6621,14 @@ fn infoOf(c: Code) Info {
             \\This is a limit of VerA, not of the design: declare the upper
             \\connection's discipline at the level of the port, or instantiate
             \\the connect module by hand (7.8).
+            \\
+            \\A built-in primitive's terminal (7.8.5.1) is refused the same way
+            \\when it is mixed and no bridge can take it whole: it selects a bit
+            \\or part of the net, its net is a vector (an instance array's
+            \\element on its bit), the primitive sits in a generate block, or it
+            \\is a switch instance array. Leaving it on the analog node would
+            \\let the primitive read or drive a node no connect module converts.
+            \\Connect the primitive to a scalar net, or out of the generate block.
             ,
         },
         .E0930 => retiredInfo(
