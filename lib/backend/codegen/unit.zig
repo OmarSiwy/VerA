@@ -15,6 +15,7 @@ const gen_cfg = @import("cfg.zig");
 const gen_setup = @import("setup.zig");
 const gen_state = @import("state.zig");
 const gen_render = @import("render.zig");
+const gen_wide = @import("wide.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
@@ -265,7 +266,7 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
         } else if (self.an.vty[@backingInt(v)] == .real) {
             try family.note(self, family.mask(self, v));
             try self.w("    f{d}: {s},\n", .{ k, try family.ofText(self, family.mask(self, v)) });
-        } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@backingInt(v)]) });
+        } else try self.w("    f{d}: {s},\n", .{ k, try slotTy(self, @backingInt(v)) });
     }
     try self.w("}} {{\n", .{});
     // §4.3: the strictest mode of every consumer (`proof.FloatMode.strictest`
@@ -454,21 +455,37 @@ fn isIdent(c: u8) bool {
 
 // ---- body emission ------------------------------------------------------
 
-/// Returns the Zig type a value of type `t` is emitted as.
+/// Returns the Zig type a value of type `t` is emitted as. A `.wide` value's
+/// type is its width's (`slotTy`).
 pub fn zigTy(t: VTy) []const u8 {
     return switch (t) {
         .real => "S",
         .int => "i64",
         .str => "[]const u8",
+        .wide => unreachable, // `slotTy` spells it from the value's width
     };
 }
 
+/// Returns the Zig type value `i` is emitted as.
+pub fn slotTy(self: *Gen, i: usize) Error![]const u8 {
+    if (self.an.vty[i] == .wide) return gen_wide.zigTy(self, self.an.wide_w[i]);
+    return zigTy(self.an.vty[i]);
+}
+
+/// Returns the zero value `i`'s slot starts at (`zeroOf`).
+pub fn slotZero(self: *Gen, i: usize) Error![]const u8 {
+    if (self.an.vty[i] == .wide) return self.arena.print("zwZero({d})", .{self.an.wide_w[i]});
+    return zeroOf(self.an.vty[i]);
+}
+
 /// Returns the name of the hoist array a slot of type `t` lives in (`Hoist.idx`).
+/// A `.wide` slot keeps its own `var tN`: its type is its width's.
 fn hoistArray(t: VTy) []const u8 {
     return switch (t) {
         .real => "h",
         .int => "hi",
         .str => "hs",
+        .wide => unreachable, // never hoisted (`emitUnitBody`)
     };
 }
 
@@ -557,6 +574,7 @@ pub fn zeroOf(t: VTy) []const u8 {
         .real => "S.con(0.0)",
         .int => "0",
         .str => "\"\"",
+        .wide => unreachable, // its zero has its width (`slotZero`)
     };
 }
 
@@ -749,7 +767,10 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // One array per type instead of one `var` per slot. Two passes: assign
     // every survivor its index, so the lengths are known, then emit the
     // declarations.
-    var n_hoist: [3]u32 = @splat(0);
+    var n_hoist: [std.enums.values(VTy).len]u32 = @splat(0);
+    // IEEE 1364 §5.4 a `.wide` slot: its own `var tN`, of its width's type.
+    var own: std.ArrayList(Mir.Value) = .empty;
+    defer own.deinit(self.arena);
     // A returned slot cannot be seeded `undefined` (see above), and an array
     // is declared once for all its elements, so those get an explicit store
     // after the declaration.
@@ -763,11 +784,15 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         // Never assigned and never read: `mark` kept the value alive but the
         // emitted tree reaches neither end. Declaring it would be an unused local.
         if (p.defs == 0 and p.uses == 0) continue;
+        const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
+        if (returned) try seeded.append(self.arena, lv);
+        if (self.an.vty[v] == .wide) {
+            try own.append(self.arena, lv);
+            continue;
+        }
         const ty = @backingInt(self.an.vty[v]);
         self.hoist.idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
-        const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
-        if (returned) try seeded.append(self.arena, lv);
     }
     try hoistMasks(self, n_hoist[@backingInt(VTy.real)]);
     for ([_]VTy{ .real, .int, .str }) |ty| {
@@ -783,6 +808,10 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         }
         try self.b("var {s}: [{d}]{s} = undefined;\n", .{ hoistArray(ty), n, zigTy(ty) });
     }
+    for (own.items) |lv| {
+        try self.ind(1);
+        try self.b("var t{d}: {s} = undefined;\n", .{ self.plan.slot[@backingInt(lv)], try slotTy(self, @backingInt(lv)) });
+    }
     for (seeded.items) |lv| {
         const v = @backingInt(lv);
         try self.ind(1);
@@ -790,7 +819,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.b(" = ", .{});
         const m = slotMask(self, v);
         if (m) |k| try family.openTo(self, k);
-        try self.b("{s}", .{zeroOf(self.an.vty[v])});
+        try self.b("{s}", .{try slotZero(self, v)});
         if (m != null) try self.b(")", .{});
         try self.b(";\n", .{});
     }

@@ -162,6 +162,15 @@ pub const Callee = enum(u8) {
     @"$tp_hit",
     @"$tp_int",
     @"$tp_real",
+    // IEEE 1364-2005 §5.4/§5.5 a `reg` wider than 32 bits the analog context
+    // computes (`Lower.WideNode`, `lower/wide.zig`): the value of a sized
+    // expression tree `(root, operands...)`, as the `reg`'s bits or (`$int`)
+    // as the §7.3.1 integer a select reads; a held one's seed; and slot k of
+    // `vera_timepoint` cache b.
+    @"$wide",
+    @"$wide$int",
+    @"$held_wide",
+    @"$tp_wide",
     @"$limit$old",
     @"$limit$uf",
     @"$idx",
@@ -244,7 +253,15 @@ const by_name = std.StaticStringMap(Callee).initComptime(blk: {
 
 /// A call's value type, read by both lowering and analysis.
 /// `analysis.VTy` is this type.
-pub const Ty = enum(u8) { real, int, str };
+pub const Ty = enum(u8) {
+    real,
+    int,
+    str,
+    /// IEEE 1364-2005 §5.4 an integer of a width wider than §3.2's 32 bits:
+    /// a `reg` the analog context computes (`Lower.WideNode`). Its width is
+    /// the defining call's (`Analysis.wideWidth`).
+    wide,
+};
 
 /// How many arguments a source call may carry, as its clause's syntax prints
 /// them. `unchecked` is every row not listed: its arity is judged elsewhere
@@ -391,6 +408,10 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$vera_reject_step" = .{ .args = one },
     .@"$tp_hit" = .{ .ty = .int },
     .@"$tp_int" = .{ .ty = .int },
+    .@"$wide" = .{ .ty = .wide },
+    .@"$wide$int" = .{ .ty = .int },
+    .@"$held_wide" = .{ .ty = .wide },
+    .@"$tp_wide" = .{ .ty = .wide },
     // §9.5: every descriptor function is integer-valued. The arities are
     // Syntax 9-2 (`$fopen(filename [, type])`) and the call shapes §9.5.4.1,
     // §9.5.4.2, §9.5.5, §9.5.7 and §9.5.8 print.
@@ -582,6 +603,10 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$tp_hit",
         .@"$tp_int",
         .@"$tp_real",
+        .@"$wide",
+        .@"$wide$int",
+        .@"$held_wide",
+        .@"$tp_wide",
         .@"$limit$old",
         .@"$limit$uf",
         .@"$idx",

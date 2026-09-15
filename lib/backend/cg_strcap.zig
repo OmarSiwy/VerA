@@ -106,6 +106,7 @@ pub fn rtFormatCap(g: *Gen, args: []const Mir.Value) Error!u64 {
         .str => try cap(g, a),
         // %e/%f/%g/%r of f64 (`zCReal`'s body), or 64 binary digits.
         .real, .int => 512,
+        .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
     };
     return @max(n, row);
 }

@@ -224,6 +224,7 @@ pub fn inlineUserFuncPre(
                 .real => try self.toReal(.{ .v = pre[fi], .ty = .real }),
                 .integer => try self.toInt(.{ .v = pre[fi], .ty = .real }),
                 .string => pre[fi],
+                .wide => unreachable, // `astTy` types no formal `.wide`
             }}));
             continue;
         }
@@ -258,6 +259,7 @@ pub fn inlineUserFuncPre(
             .real => try self.toReal(tv),
             .integer => try self.toInt(tv),
             .string => tv.v,
+            .wide => unreachable, // `astTy` types no formal `.wide`
         }}));
     }
 

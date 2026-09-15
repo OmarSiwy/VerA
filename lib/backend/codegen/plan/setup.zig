@@ -279,7 +279,7 @@ const Scan = struct {
         if (def != .inst_result or in.mir.instOp(def.inst_result) != .call) return false;
         const d = in.mir.instData(def.inst_result).call;
         switch (d.callee) {
-            .@"$held_real", .@"$held_int", .@"$held_str" => {},
+            .@"$held_real", .@"$held_int", .@"$held_str", .@"$held_wide" => {},
             else => return false, // else: only the §5.10 held reads name a held variable
         }
         const held = in.lowered.held_vars.items;
@@ -554,7 +554,8 @@ pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     const i = @backingInt(v);
     if (i < Mir.Value.first_dynamic or !sinv[i]) return false;
     if (in.mir.valueDef(v) != .inst_result) return false;
-    if (in.an.vty[i] == .str) return false;
+    // A string or a wide integer has no `Setup` field type.
+    if (in.an.vty[i] == .str or in.an.vty[i] == .wide) return false;
     const b = in.an.def_block[i];
     if (b == none_u32 or in.an.loop_of[b] != none_u32) return false;
     return in.an.foldConst(v, false) == null;
@@ -571,8 +572,8 @@ fn callTimepoint(in: Input, d: anytype) bool {
         .@"$abstime", .@"$realtime", .analysis, .analog_initial, .initial_step, .final_step => true,
         // §9.15 `dt` moves with the timepoint, never within one; `iteration` does.
         .@"$simparam" => std.mem.eql(u8, plan_args.strArg(in, d.args, 0) orelse return false, "dt"),
-        .@"$held_real", .@"$held_int", .@"$held_str", .@"$tp_hit", .@"$tp_int", .@"$tp_real" => true,
-        .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat" => true,
+        .@"$held_real", .@"$held_int", .@"$held_str", .@"$held_wide", .@"$tp_hit", .@"$tp_int", .@"$tp_real", .@"$tp_wide" => true,
+        .@"$idx", .@"$idx$int", .@"$idx$str", .limexp, .@"$str$cat", .@"$str$repeat", .@"$wide", .@"$wide$int" => true,
         else => false, // else: an ALLOWLIST — every other callee may read the iterate or state an iteration moves
     };
 }

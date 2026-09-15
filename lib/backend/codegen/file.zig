@@ -117,6 +117,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .err = zFError, .new_analysis = zFNewAnalysis };\n\n");
     if (f.tbl) try depublish(self.gpa, &self.out, kt.table_txt);
     if (f.rng) try depublish(self.gpa, &self.out, kt.rng_txt);
+    if (self.lowered.wide_nodes.items.len != 0) try depublish(self.gpa, &self.out, kt.wide_txt);
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, kt.limit_txt);
     if (self.lowered.uses.contains(.plusargs)) try self.out.appendSlice(self.gpa, plusarg_txt);
     try self.out.appendSlice(self.gpa, "\n");
@@ -505,6 +506,7 @@ fn emitModel(self: *Gen) Error!void {
             .real => "f64",
             .int => "i64",
             .str => "[]const u8",
+            .wide => unreachable, // `tyOfParam` types no parameter wide
         };
         try checkParamDefault(self, p);
         try self.w("    {s}: {s} = {s},\n", .{ self.names.p_names[i], ty, try paramDefault(self, p, Analysis.tyOfParam(p.ty)) });
@@ -527,6 +529,7 @@ fn emitModel(self: *Gen) Error!void {
                 .real => "f64",
                 .int => "i64",
                 .str => "[]const u8",
+                .wide => unreachable, // `tyOfParam` types no parameter wide
             },
             try paramDefault(self, p, ty),
             p.name,
@@ -663,6 +666,7 @@ pub fn emitDerive(self: *Gen) Error!void {
             else
                 try self.w("model.{s} = {s};\n", .{ self.names.p_names[i], e }),
             .str => unreachable,
+            .wide => unreachable, // `tyOfParam` types no parameter wide
         }
     }
     if (!try deriveFlags(self)) gen_unit.patchParam(self, at_s, "S".len);
@@ -819,6 +823,7 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
             .str => |s| try self.arena.print("\"{f}\"", .{std.zig.fmtString(s)}),
             else => "\"\"",
         },
+        .wide => unreachable, // `tyOfParam` types no parameter wide
     };
     return switch (want) {
         .real => try fmtF64(self, if (c) |k| k.f else 0.0),
@@ -836,6 +841,7 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
             else
                 "\"\"";
         },
+        .wide => unreachable, // `tyOfParam` types no parameter wide
     };
 }
 

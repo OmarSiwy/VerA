@@ -139,6 +139,7 @@ pub const PrintArg = struct {
                 .int => 20,
                 .real => std.fmt.float.bufferSize(.decimal, f64),
                 .str => try strcap.cap(g, self.v),
+                .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
             },
         };
         return @max(body, self.spec.w());
@@ -601,6 +602,7 @@ pub fn emitStringFormatRt(g: *Gen, args: []const Mir.Value, site: usize) Error!v
                 try g.renderVal(a, .str);
                 try g.b(")", .{});
             },
+            .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
         }
     }
     try g.b("}}))", .{});
@@ -813,6 +815,7 @@ fn monitorValues(g: *Gen, ops: []const PrintArg) Error!void {
                 try g.renderVal(v, .str);
                 try g.b(")", .{});
             },
+            .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
         }
     }
     if (first) try g.b("}}", .{}) else try g.b(" }}", .{});
@@ -1166,6 +1169,7 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
             },
             .int => try g.renderVal(p.v, .int),
             .str => try g.renderVal(p.v, .str),
+            .wide => unreachable, // lowering hands a task no wide value: a whole wide `reg` read is E0222
         },
     }
 }

@@ -975,6 +975,7 @@ pub fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value
             .integer => "$sscanf$int",
             .string => "$sscanf$str",
             .real => "$sscanf$real",
+            .wide => unreachable, // `resolveLvalue` types a wide `reg` `.integer` (`Lvalue.at.wide`)
         };
         const index = try self.mir.addIntConst(self.arena, item);
         const v = try self.call(callee, &.{ src, fmt, index });
@@ -1005,6 +1006,7 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
         .integer => "$sscanf$int",
         .string => "$sscanf$str",
         .real => "$sscanf$real",
+        .wide => unreachable, // `resolveLvalue` types a wide `reg` `.integer` (`Lvalue.at.wide`)
     };
     const zero = try self.mir.addIntConst(self.arena, 0);
     const v = try self.call(callee, &.{ try self.call("$plusarg$str", &.{user}), user, zero });
@@ -1153,6 +1155,7 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
             .integer => "$fscanf$int",
             .string => "$fscanf$str",
             .real => "$fscanf$real",
+            .wide => unreachable, // `resolveLvalue` types a wide `reg` `.integer` (`Lvalue.at.wide`)
         };
         const index = try self.mir.addIntConst(self.arena, item);
         const v = try self.call(callee, &.{ n, fd, fmt.?, index });

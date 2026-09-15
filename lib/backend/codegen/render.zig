@@ -71,6 +71,9 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
     const v = self.an.rv(v0);
     const def = self.mir.valueDef(v);
     if (def == .undef) {
+        // Lowering starts every wide `reg` at its declaration, so no `.wide`
+        // operand is undefined.
+        if (want == .wide) return gen_call.abort(self, .E1020, "VerA: an undefined wide integer operand", .{});
         // ponytail: undefined operands share the slot initializer's spelling.
         try self.b("{s}", .{gen_unit.zeroOf(want)});
         return;
@@ -111,6 +114,8 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
             try self.b(")", .{});
         },
         .str => try self.b("\"\"", .{}),
+        // Lowering hands a wide operand only a wide value (`lower/wide.zig`).
+        .wide => return gen_call.abort(self, .E1020, "VerA: a {t} value where a wide integer is wanted", .{self.an.tyOf(v)}),
     }
 }
 
@@ -141,6 +146,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
             switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
                 .real => try self.b("S.con(model.{s})", .{self.names.p_names[p]}),
                 .int, .str => try self.b("model.{s}", .{self.names.p_names[p]}),
+                .wide => unreachable, // `tyOfParam` types no parameter wide
             }
         },
         .block_param => |u| {
