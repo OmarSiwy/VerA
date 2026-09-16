@@ -1,0 +1,11 @@
+module rng_default_domain(p,n);
+  inout p,n; electrical p,n;
+  parameter real mean = 0;
+  integer seed;
+  real unused;
+  analog begin
+    seed = 7;
+    unused = $rdist_exponential(seed,mean);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

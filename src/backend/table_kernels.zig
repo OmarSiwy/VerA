@@ -20,9 +20,9 @@
 // are structural constants of the call, so the row-index permutation is a
 // comptime-sized stack array.
 //
-// Only LINEAR interpolation reaches here. Table 9-30's `D`/`2`/`3` and Table
-// 9-31's `E` are refused at the call (E0815) rather than approximated, so a
-// substring that got this far is `1` plus two of `C`/`L`.
+// Linear interpolation and discrete closest-point lookup reach here. Each
+// dimension's control is three bytes: interpolation, low extrapolation, high
+// extrapolation. Unsupported spline and fatal-extrapolation modes reject in IR.
 
 /// One level's answer: the interpolated value and its exact gradient in the ND
 /// lookup coordinates.
@@ -37,7 +37,7 @@ pub fn zTabRes(comptime ND: usize) type {
     return struct { v: f64, g: [ND]f64 };
 }
 
-/// Exclusive end of the run of rows in `sel` sharing row `sel[start]`'s value in
+/// Exclusive end of the run of rows in `order` sharing row `order[start]`'s value in
 /// column `dim` — i.e. one isoline of the current dimension.
 ///
 /// §9.21.1: "Whether the data is sorted or not, the system determines the
@@ -45,10 +45,10 @@ pub fn zTabRes(comptime ND: usize) type {
 /// comparison is `==` with no tolerance. The clause's own next sentence is the
 /// consequence: "Any noise on the isoline ordinate may cause the system to
 /// incorrectly generate multiple isolines where the user intended a single one."
-pub fn zTabEnd(comptime NCOL: usize, data: []const f64, sel: []const usize, dim: usize, start: usize) usize {
-    const key = data[sel[start] * NCOL + dim];
+pub fn zTabEnd(comptime NCOL: usize, data: []const f64, order: []const usize, dim: usize, start: usize) usize {
+    const key = data[order[start] * NCOL + dim];
     var i = start + 1;
-    while (i < sel.len and data[sel[i] * NCOL + dim] == key) i += 1;
+    while (i < order.len and data[order[i] * NCOL + dim] == key) i += 1;
     return i;
 }
 
@@ -66,30 +66,27 @@ pub fn zTabLess(comptime NCOL: usize, comptime ND: usize, data: []const f64, a: 
 /// sorted order (one isoline following another in all dimensions); if the user
 /// provides the data in random order the system will sort the data into isolines
 /// in each dimension." That sort is what makes every isoline a CONTIGUOUS run of
-/// `sel`, which is the whole representation `zTabEnd` and `zTabAt` rely on.
+/// `order`, which is the whole representation `zTabEnd` and `zTabAt` rely on.
 ///
 /// Insertion sort over the index permutation: it is O(n) on the sorted input the
 /// clause tells users to write, it is stable (so §9.21's duplicate-point rule
 /// keeps source order), and the block is comptime-sized with nowhere to
 /// allocate.
 ///
-/// ponytail: O(n²) on adversarial order, and it runs on every residual
-/// evaluation — §9.21.1's "The state of the data source is captured on the first
-/// call to the table model function. Any change after this point is ignored."
-/// licenses doing it exactly once, but VerA has no per-instance table cache to
-/// hold the permutation in. Hoist it into `Instance` the day a model carries a
-/// table big enough to measure.
-pub fn zTabSort(comptime NCOL: usize, comptime ND: usize, data: []const f64, sel: []usize) void {
+/// ponytail: O(n²) on adversarial order, recomputed per lookup. Samples are
+/// already fixed by the generated first-call snapshot. Cache the permutation
+/// alongside them if table sizes make the repeated sort measurable.
+pub fn zTabSort(comptime NCOL: usize, comptime ND: usize, data: []const f64, order: []usize) void {
     var i: usize = 1;
-    while (i < sel.len) : (i += 1) {
-        const v = sel[i];
+    while (i < order.len) : (i += 1) {
+        const v = order[i];
         var j = i;
-        while (j > 0 and zTabLess(NCOL, ND, data, v, sel[j - 1])) : (j -= 1) sel[j] = sel[j - 1];
-        sel[j] = v;
+        while (j > 0 and zTabLess(NCOL, ND, data, v, order[j - 1])) : (j -= 1) order[j] = order[j - 1];
+        order[j] = v;
     }
 }
 
-/// §9.21's recursive scheme at one level. `sel` is the sorted row-index block of
+/// §9.21's recursive scheme at one level. `order` is the sorted row-index block of
 /// the isoline selected by the dimensions already consumed; `dim` is the
 /// dimension to bracket next.
 pub fn zTabAt(
@@ -98,52 +95,63 @@ pub fn zTabAt(
     comptime dep: usize,
     comptime ext: []const u8,
     data: []const f64,
-    sel: []const usize,
+    order: []const usize,
     dim: usize,
     x: [ND]f64,
 ) zTabRes(ND) {
     // Every independent consumed: this block is one sample point, and its
     // dependent column is the answer. Zero gradient — the value of a sample
     // does not move with the lookup coordinates.
-    if (dim == ND) return .{ .v = data[sel[0] * NCOL + dep], .g = @splat(0.0) };
+    if (dim == ND) return .{ .v = data[order[0] * NCOL + dep], .g = @splat(0.0) };
 
     var a_s: usize = 0;
-    var a_e = zTabEnd(NCOL, data, sel, dim, 0);
+    var a_e = zTabEnd(NCOL, data, order, dim, 0);
     // ONE isoline in this dimension. §9.21 requires "at least two points per
     // dimension" and that "the result of the bracketing to produce intermediate
     // points must also produce at least two points per subsequent lower
     // dimension", so this is degenerate data; VerA reports the shape it can see
     // at the call (E0815). Treating it as constant in this dimension is the only
     // other option that is not a division by a zero span.
-    if (a_e == sel.len) return zTabAt(ND, NCOL, dep, ext, data, sel[a_s..a_e], dim + 1, x);
+    if (a_e == order.len) return zTabAt(ND, NCOL, dep, ext, data, order[a_s..a_e], dim + 1, x);
 
     var b_s = a_e;
-    var b_e = zTabEnd(NCOL, data, sel, dim, b_s);
+    var b_e = zTabEnd(NCOL, data, order, dim, b_s);
     // Slide the pair up while the upper isoline is still below the lookup
     // ordinate and another isoline follows it. What is left is the bracketing
     // pair when one exists, and the nearest pair at whichever end it does not.
-    while (b_e < sel.len and data[sel[b_s] * NCOL + dim] < x[dim]) {
+    while (b_e < order.len and data[order[b_s] * NCOL + dim] < x[dim]) {
         a_s = b_s;
         a_e = b_e;
         b_s = b_e;
-        b_e = zTabEnd(NCOL, data, sel, dim, b_s);
+        b_e = zTabEnd(NCOL, data, order, dim, b_s);
     }
-    const xa = data[sel[a_s] * NCOL + dim];
-    const xb = data[sel[b_s] * NCOL + dim];
+    const xa = data[order[a_s] * NCOL + dim];
+    const xb = data[order[b_s] * NCOL + dim];
+
+    if (ext[3 * dim] == 'D') {
+        // §9.21.4 ties choose the sample farther from zero. Discrete lookup
+        // has zero slope in this dimension, including at either exterior end.
+        const da = @abs(x[dim] - xa);
+        const db = @abs(x[dim] - xb);
+        const upper = x[dim] >= xb or (x[dim] > xa and
+            (db < da or (db == da and @abs(xb) >= @abs(xa))));
+        const selected = if (upper) order[b_s..b_e] else order[a_s..a_e];
+        return zTabAt(ND, NCOL, dep, ext, data, selected, dim + 1, x);
+    }
 
     // Table 9-31 constant extrapolation "returns the table endpoint value" —
     // the isoline at the end evaluated with THIS coordinate clamped into range,
     // which is what dropping to the endpoint isoline with a zero slope in `dim`
-    // means. `ext[2*dim]` is the low end and `ext[2*dim+1]` the high end;
+    // means. `ext[3*dim+1]` is the low end and `ext[3*dim+2]` the high end;
     // §9.21.2 fixes that order ("the first character specifies the
     // extrapolation method used for the end with the lower coordinate value").
-    if (x[dim] < xa and ext[2 * dim] == 'C')
-        return zTabAt(ND, NCOL, dep, ext, data, sel[a_s..a_e], dim + 1, x);
-    if (x[dim] > xb and ext[2 * dim + 1] == 'C')
-        return zTabAt(ND, NCOL, dep, ext, data, sel[b_s..b_e], dim + 1, x);
+    if (x[dim] < xa and ext[3 * dim + 1] == 'C')
+        return zTabAt(ND, NCOL, dep, ext, data, order[a_s..a_e], dim + 1, x);
+    if (x[dim] > xb and ext[3 * dim + 2] == 'C')
+        return zTabAt(ND, NCOL, dep, ext, data, order[b_s..b_e], dim + 1, x);
 
-    const ra = zTabAt(ND, NCOL, dep, ext, data, sel[a_s..a_e], dim + 1, x);
-    const rb = zTabAt(ND, NCOL, dep, ext, data, sel[b_s..b_e], dim + 1, x);
+    const ra = zTabAt(ND, NCOL, dep, ext, data, order[a_s..a_e], dim + 1, x);
+    const rb = zTabAt(ND, NCOL, dep, ext, data, order[b_s..b_e], dim + 1, x);
     // Linear interpolation and LINEAR extrapolation are the same affine segment
     // — Table 9-31: linear extrapolation "extends linearly to the requested
     // point from the endpoint using a slope consistent with the selected
@@ -166,13 +174,13 @@ pub fn zTable(
     rows: [NP * NCOL]f64,
     pt: [ND]S,
 ) S {
-    var sel: [NP]usize = undefined;
-    for (0..NP) |i| sel[i] = i;
-    zTabSort(NCOL, ND, &rows, &sel);
+    var order: [NP]usize = undefined;
+    for (0..NP) |i| order[i] = i;
+    zTabSort(NCOL, ND, &rows, &order);
 
     var x: [ND]f64 = undefined;
     for (0..ND) |d| x[d] = pt[d].val();
-    const r = zTabAt(ND, NCOL, dep, ext, &rows, &sel, 0, x);
+    const r = zTabAt(ND, NCOL, dep, ext, &rows, &order, 0, x);
 
     // The scheme is piecewise linear, so ONE affine reconstruction carries both
     // the value and the exact Jacobian row: `pt[d].addC(-x[d])` is the zero at

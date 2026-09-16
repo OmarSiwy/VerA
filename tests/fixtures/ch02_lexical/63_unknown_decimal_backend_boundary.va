@@ -1,0 +1,8 @@
+// One decimal unknown digit is legal syntax and expands to the declared
+// width. The analog execution backend cannot represent the resulting value.
+//! lrm 2.6.1
+//! reject E0130
+module ch02_unknown_decimal_backend_boundary;
+    integer value;
+    analog value = 80'sd?__;
+endmodule

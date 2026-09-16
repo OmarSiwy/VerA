@@ -1,11 +1,16 @@
 # Chapter 7 coverage
 
+Full-AMS status: a boundary rejection below documents a limitation, not support
+for a legal mixed-signal feature. Execution, synchronization and insertion rows
+remain open until behavioral host tests establish them.
+
 Source: `docs/ch7-mixed-signal.html`, read section by section.
 
 HTML section-ID audit: `s7-1` `s7-2` `s7-2-1` `s7-2-2` `s7-2-3` `s7-2-4` `s7-3` `s7-3-1` `s7-3-2` `s7-3-2-1` `s7-3-3` `s7-3-4` `s7-3-5` `s7-3-6` `s7-3-6-1` `s7-3-6-2` `s7-3-6-3` `s7-3-6-4` `s7-3-6-5` `s7-3-7` `s7-4` `s7-4-1` `s7-4-2` `s7-4-3` `s7-4-4` `s7-4-4-1` `s7-4-4-2` `s7-4-4-3` `s7-4-5` `s7-5` `s7-6` `s7-7` `s7-7-1` `s7-7-2` `s7-7-2-1` `s7-7-3` `s7-7-4` `s7-8` `s7-8-1` `s7-8-2` `s7-8-3` `s7-8-3-1` `s7-8-3-2` `s7-8-4` `s7-8-5` `s7-8-5-1` `s7-8-6` `s7-9`. Forty-eight ids.
 
-Thirteen of the forty-eight carry a fixture whose verdict turns on that section's
-own rule. The others do not, and the table says so with a leading `—`
+The historical inventory associates thirteen of the forty-eight sections with
+a fixture verdict. Unsupported-feature rejections in that inventory do not prove
+the required behavior. Uncovered rows use a leading `—`
 rather than a plausible file name. This was the chapter Annex C.9 deleted
 outright — "Clause 7 only applies to Verilog-AMS HDL" — while VerA was a
 Verilog-A compiler; under the AMS direction the 7.7 family is parsed and
@@ -44,7 +49,7 @@ Every diagnostic quoted in this file was produced by running
 | `s7-3-2` | four features that carry x/z into the analog context | The strongest coverage in the chapter, because half of it is an error in AMS too. `x_literal_unsupported.va`, `z_literal_unsupported.va`, `xz_contribution_rejected.va` and `xz_ordinary_equality_rejected.va` reproduce the four lines the clause's own `converter` example annotates `// error`; all four land on E0130, "x/z digit in a number literal", on the literal itself. `case_equality.va` pins the operator alone as E0323 with no literal to mask it. `x_case_equality_unsupported.va` and `z_case_inequality_unsupported.va` pin `===`/`!==` over an x and a z, where the lexer wins the race and E0323 never appears. `xz_case_statement_unsupported.va` is the `case` form. `xz_casex_statement_unsupported.va` and `xz_casez_statement_unsupported.va` are refused, but only as ``E0209: expected an expression: found `casex` `` — see the code gaps below |
 | `s7-3-2-1` | inf and NaN may not reach a branch through contribution | — `inf_contribution.va`, `neg_inf_contribution_rejected.va`, `nan_contribution_rejected.va` are all three green: each pins the message of the rule (`contribution of an infinite value`, `contribution of a NaN`) rather than a code, so the check landing needed no fixture edit. The clause is stated three times and met three times |
 | `s7-3-3` | continuous nets probed from a discrete context; interpolation | — no fixture cites it. `digital_probe_unsupported.va` is the clause's `sampler` shape (`always @(p) sampled = V(p);`) but cites 7.3.6.3. The `always` block parses now and its body is judged for the four rules §7.2.2/§4.5.15/§4.7.3/§5.2.1 state, but not against this clause: nothing checks a probe read from a discrete statement, and the block is still refused as an item (E0205) |
-| `s7-3-4` | discrete events detected in a continuous context (Syntax 7-2) | `digital_event_unsupported.va` — `@(posedge d)` inside an `analog` block is the discrete-event-in-continuous-context construct, and the parser refuses the `posedge` token itself: `E0209: expected an expression: found posedge`. On-construct, so credited, but the fixture cites 7.3.6.2 and the diagnostic names no rule — see the code gaps |
+| `s7-3-4` | discrete events detected in a continuous context (Syntax 7-2) | `digital_event_unsupported.va` — `@(posedge d)` inside an `analog` block is the discrete-event-in-continuous-context construct, and the parser refuses the `posedge` token itself: `E0209: expected an expression: found posedge`. This records an unsupported legal AMS construct, not coverage of its behavior; the fixture cites 7.3.6.2 and the diagnostic names no rule — see the code gaps |
 | `s7-3-5` | continuous events detected in a discrete context (Syntax 7-3) | — `digital_cross_unsupported.va` has the clause's exact `always @(cross(...))` shape but cites 7.3.6.1. The event expression is parsed now; nothing judges it against this clause, and the block is still refused as an item (E0205) |
 | `s7-3-6` | parent: synchronization across the digital tick | — host/kernel property, and 8.2 is where the algorithm lives |
 | `s7-3-6-1` | analog event in a digital event control, scheduled at the nearest tick | — `digital_cross_unsupported.va`. The `always @(cross(...))` parses and is refused as an item (E0205); the SCHEDULING rule is what is missing, and no digital tick exists in this dialect to schedule onto |
@@ -67,7 +72,7 @@ Every diagnostic quoted in this file was produced by running
 | `s7-7` | connect specification statements | `connectrules_accepted.va` (`//! lrm 7.7`, `7.7.1`) — **green and INVERTED from the E0201 wall this row used to be** (see below): the block parses (A.1.8), its insertion is validated against a real connect module, and the `V(p)` assertion exists only if the whole file elaborated |
 | `s7-7-1` | `connect <module>;` auto-insertion statement | `connectrules_accepted.va` — the form in its bare shape, plus elaboration's name check: an insertion naming a non-`connectmodule` is E0915 (unit-tested in `src/ir/elaborate.zig`; no fixture pins the code because the check is VerA hygiene — 7.7.1 states the identifier's kind, not a diagnostic). The overrides shapes are `connect_mode_accepted.va` |
 | `s7-7-2` | `connect a, b resolveto c;` | `resolution_connect_accepted.va` — the form over annex D disciplines, accepted (an unknown discipline in the list is E0916). The SEMANTICS — a two-candidate net resolved by its matching statement, and the `exclude` refusal — are `annex_f_resolution/resolveto_resolution.va` and `exclude_resolution.va`, where the topology exists to exercise them |
-| `s7-7-2-1` | connect rule resolution mechanism | — partly, from `annex_f_resolution/`: exact-set match and "the resolved discipline need not be one of the disciplines specified" are `resolveto_resolution.va`. The subset fallback and the multi-match warning are not implemented (`Elaborate.matchResolution`) and have no fixture |
+| `s7-7-2-1` | connect rule resolution mechanism | — partly, from `annex_f_resolution/`: exact-set match and "the resolved discipline need not be one of the disciplines specified" are `resolveto_resolution.va`. Subset fallback, exact-match precedence and ambiguous exact/subset warnings are implemented in `Elaborate.matchResolution` and exercised by the elaboration unit tests (W0950) |
 | `s7-7-3` | parameter passing attribute, `connect m #(.p(v));` | `connect_parameter_accepted.va` (numeric override) and `connect_supply_accepted.va` (string override) — accepted in the A.1.8 grammar slot, parsed by the same A.4.1 production an instance's `#(...)` is, and never APPLIED: they parameterize the insertion phase VerA does not have, and both headers say so |
 | `s7-7-4` | `connect_mode` | `connect_mode_accepted.va` — both spellings in their grammar position, with the directed override shapes. Segregation itself is uncredited (no insertion) |
 | `s7-8` | automatic insertion at mixed ports | — post-elaboration; no fixture. Its converse now has a diagnostic and DELIBERATELY no fixture: naming a connect module in an instantiation is E0913, because the flatten carries analog blocks and drops `discrete` ones, so inlining a bridge would stamp its continuous half with its digital half silently absent. No clause says instantiating one is an error — 7.7/7.8 only say the tool chooses and inserts it — so the refusal is an implementation choice and pinning it here would pin VerA rather than the LRM. It is covered by a unit test in `src/ir/elaborate.zig` instead |
@@ -121,11 +126,10 @@ semantics pinned in `annex_f_resolution/`, not here.
 
 ## Code gaps this chapter exposes
 
-Distinct from the xfail ledger: these are rejections with the right verdict and
-the wrong message. None fails a test, so none appears above as a debt, but each
-is a diagnostic that names no rule.
+Distinct from the xfail ledger: passing rejection fixtures can record missing
+full-AMS behavior. More specific diagnostics alone do not close the gaps below.
 
-- `casex`/`casez` (C.7 removes them by name) get three cascading
+- `casex`/`casez` (required by full AMS; C.7 only excludes them from Verilog-A) get three cascading
   `E0209: expected an expression` errors apiece, because the parser has no such
   keyword. `===` has a proper E0323; `casex` has nothing of the shape.
 - `posedge` inside an analog event control gets `E0209: expected an expression`.
@@ -165,6 +169,7 @@ validated and — for resolution statements — consumed. What remains empty is
 exactly the INSERTION half: 7.8's selection/segmentation/auto-insertion and
 7.9's driver-receiver segregation need a discrete kernel for the bridge's
 digital side to run on, and VerA's artifact is one analog device. Those rows
-are still boundary, not debt; the connect-statement fields with no consumer
-(`mode`, `#(...)`, port overrides) are the parsed edge of that boundary and
-say so where they are declared.
+remain full-AMS implementation and validation debt. The connect-statement
+fields with no consumer (`mode`, `#(...)`, port overrides) likewise remain
+unimplemented behavior. The standalone scheduler core does not supply bridge
+execution, insertion or driver-receiver segregation.

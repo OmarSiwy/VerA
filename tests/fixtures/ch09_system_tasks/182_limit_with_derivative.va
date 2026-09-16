@@ -1,0 +1,27 @@
+// Iteration history must not advance ddt's accepted-time history before eval.
+//! lrm 9.17.3
+//! lrm 4.5.3
+//! time 0, 1, 2
+//! wave V(p) = 0, 2, 4
+`include "check.vh"
+module ch09_limit_with_derivative(p, n);
+  inout p, n; electrical p, n;
+  real limited, dependent;
+  analog function real clamp_limit;
+    input vnew, vold, step;
+    real vnew, vold, step;
+    begin
+      clamp_limit = vold + max(-step, min(step, vnew-vold));
+      if (abs(clamp_limit-vnew) > 1e-12) $discontinuity(-1);
+    end
+  endfunction
+  analog begin
+    limited = $limit(V(p,n), clamp_limit, 0.5);
+    dependent = $limit(V(n,p), clamp_limit, abs(ddt(V(p,n)))/4.0);
+    `CHECK("derivative reads the evaluated limiter history",
+           ddt(limited) - (($abstime == 0.0) ? 0.0 : 0.5), 0.0, 1e-12);
+    `CHECK("limiter arguments read the evaluated derivative history",
+           dependent + 0.5*$abstime, 0.0, 1e-12);
+    I(p,n) <+ limited;
+  end
+endmodule

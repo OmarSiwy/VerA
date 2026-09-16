@@ -50,7 +50,7 @@ on purpose.
 | `s11-6-18` | `21_simple_expression_object.va` (`//! lrm 11.6.18`) — the leaf, name-bearing operand, here a parameter. Its header is explicit that `gain + 1.0` is *not* a simple expr but §11.6.19's operation above it, correcting an earlier revision that labelled it so. `net`/`reg`/`memory`/`var select`/`memory word` leaves and the `vpiUse` edge are all absent. |
 | `s11-6-19` | `21_simple_expression_object.va` (`//! lrm 11.6.19`) for `operation` over a `simple expr` and a `constant`; `22_operation_access_objects.va` (`//! lrm 11.6.19`) for `accessfunc` operands under `abs()` and multiplication, at a negative bias so `abs` is separable from identity. `part select` and `analog oper` are not exercised here. |
 | `s11-6-20` | `23_contribution_object.va` (`//! lrm 11.6.20`) is the `flow` contribution; `27_potential_contribution_object.va` (`//! lrm 11.6.20`) is the `potential` one and is the only fixture that discriminates `vpiFlow`, via the §5.4.2.2 consequence that a potential source leaves its flow a free unknown (0.125 A) where a flow source would fix it at the source value (1.25 A). The class's `ind flow`/`ind potential` members — indirect contribution — appear in no fixture here. |
-| `s11-6-21` | `24_named_process_object.va` (`//! lrm 11.6.21`) for `analog` process + `named begin`; `07_process_statement_objects.va` (`//! lrm 11.6.21`) for a named block containing `for`, `if else` and `case` from the `atomic stmt` list. `08_callback_call_site.va`'s `@(initial_step)` is the only `event control` in the folder. `initial`, `always`, `fork`, and the section's `event stmt ->` object are outside the analog subset and absent. |
+| `s11-6-21` | `24_named_process_object.va` (`//! lrm 11.6.21`) for `analog` process + `named begin`; `07_process_statement_objects.va` (`//! lrm 11.6.21`) for a named block containing `for`, `if else` and `case` from the `atomic stmt` list. `08_callback_call_site.va`'s `@(initial_step)` is the only `event control` in the folder. `initial`, `always`, `fork`, and the section's `event stmt ->` object are absent here and remain required full-AMS object-model coverage. |
 | `s11-6-22` | `25_assignment_loop_objects.va` (`//! lrm 11.6.22`) — `assignment` plus the §5.9.2 `for`, pinning both the trip count and the value `k` is left at. `07` repeats the same shape. `delay control` (`#`) and `repeat control` never appear; `event control` (`@`) appears only in `08`, which cites §11.6.25. |
 | `s11-6-23` | `26_conditional_case_objects.va` (`//! lrm 11.6.23`) is the thorough one: `if else` on a false relation (§4.2.5's integer 0), `case` falling to `default`, and a second `case` whose item `1, 2, 3:` pins NOTE 1's one-to-many case-item-to-expr edge — a compiler reading only an item's first expression lands on a different number. `07_process_statement_objects.va` (`//! lrm 11.6.23`) covers the matching-item path. No `casex`/`casez`. |
 | `s11-6-24` | |
@@ -62,7 +62,8 @@ No fixture in this folder carries `//! xfail`. All 25 positive fixtures are
 expected to pass today, and the two negative ones —
 `09_c_vpi_get_not_va.va` and `10_c_vpi_register_cb_not_va.va`, both
 `//! reject E0512` plus a `//! reject` on the routine name — are expected to be
-diagnosed. So this chapter states no rule the compiler currently fails.
+diagnosed. These results do not assess conformity of the standard C API,
+its object model or callbacks.
 
 That is not the same as the chapter being clean. The debt here is
 *uncovered*, not *failing*: eight object-model sections have no fixture at all
@@ -73,8 +74,8 @@ Verilog-A source can reach.
 ## What is not covered
 
 Eight object-model sections are empty above, and all eight are empty for the
-same reason — the objects are discrete-Verilog constructs outside the
-Verilog-A subset these fixtures are written in:
+same reason — these fixtures omit the discrete-Verilog constructs. This is
+a full-AMS coverage gap, not a target exclusion:
 
 - `s11-6-8` **Nets** — no fixture declares a `wire`. The old file credited
   `01_module_port_node.va` here; `01` declares `electrical p, n`, which are

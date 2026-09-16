@@ -794,7 +794,7 @@ const Flatten = struct {
                     const n = overridableCount(child.params);
                     try self.err(o.main_tok, .E0907, "`{s}` declares {d} overridable parameter{s}, and this instance overrides {d}", .{
                         self.ctx.file.str(child.name), n,
-                        if (n == 1) "" else "s", inst.params.len,
+                        if (n == 1) "" else "s",       inst.params.len,
                     });
                     continue;
                 }
@@ -1457,14 +1457,6 @@ const Flatten = struct {
     /// absence always gave — so unknown-and-legal is exactly the old behaviour,
     /// stated instead of implied.
     ///
-    /// ponytail: set equality is the whole matching rule, per F.2.1 4.b's "the
-    /// contents of the list match the discipline list of a resolution connect
-    /// statement". §7.7.2.1's tie-break (two exact matches → warn, take the
-    /// first) is first-match without the warning, and its SUBSET fallback
-    /// ("when there is no exact fit ... based on the subset of the rules
-    /// specified") is not implemented — add it in `matchResolution` if a
-    /// design ever needs partial matches, the annex arm itself only states
-    /// exact matching.
     fn resolveMultiCandidates(self: *Flatten) Error!void {
         var it = self.segs.iterator();
         while (it.next()) |entry| {
@@ -1497,7 +1489,7 @@ const Flatten = struct {
             }
             if (cands.items.len <= 1) continue; // the walk's answer stands
 
-            if (self.matchResolution(cands.items)) |r| {
+            if (try self.matchResolution(cands.items)) |r| {
                 if (r.exclude) {
                     // §7.7.2: "deemed to be incompatible and an error is
                     // indicated if they are found on the same net."
@@ -1537,18 +1529,31 @@ const Flatten = struct {
     /// `cands` as a SET (order-free, duplicate-free on both sides — 4.b's
     /// "the contents of the list match"). First match across every
     /// `connectrules` block in source order, which is §7.7.2.1's tie-break.
-    fn matchResolution(self: *Flatten, cands: []const Ast.StrId) ?*const Ast.ConnectResolution {
-        // ponytail: stdlib membership keeps exact-set matching; index sets if lists grow large.
-        for (self.ctx.file.connectrules) |*cr| {
-            rule: for (cr.resolutions) |*r| {
-                for (r.disciplines) |d| {
-                    if (std.mem.indexOfScalar(Ast.StrId, cands, d) == null) continue :rule;
+    fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const Ast.ConnectResolution {
+        // §7.7.2.1: an exact set wins even over an earlier subset match.
+        // In the fallback, the candidate set is a subset of the rule's list.
+        for ([_]bool{ true, false }) |want_exact| {
+            var first: ?*const Ast.ConnectResolution = null;
+            for (self.ctx.file.connectrules) |*cr| {
+                rule: for (cr.resolutions) |*r| {
+                    for (cands) |c| {
+                        if (std.mem.indexOfScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
+                    }
+                    var exact = true;
+                    for (r.disciplines) |d| {
+                        if (std.mem.indexOfScalar(Ast.StrId, cands, d) == null) exact = false;
+                    }
+                    if (exact != want_exact) continue;
+                    if (first != null) {
+                        try self.ctx.bag.add(.lower, .W0950, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, r.main_tok), "multiple {s} resolution rules apply; using the first", .{
+                            if (want_exact) "exact" else "subset",
+                        });
+                        return first;
+                    }
+                    first = r;
                 }
-                for (cands) |c| {
-                    if (std.mem.indexOfScalar(Ast.StrId, r.disciplines, c) == null) continue :rule;
-                }
-                return r;
             }
+            if (first != null) return first;
         }
         return null;
     }
@@ -1911,7 +1916,7 @@ const Flatten = struct {
             // Literals and the two infinities carry no reference; the side-table
             // index in `extra` is shared, which is safe because `reals`/`ints`
             // are append-only too.
-            .int_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => {},
+            .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => {},
             .ident => n.str = self.flat(n.str),
             .hier_ident => {
                 // §6.7 a dotted name. Only the FIRST part can be a local of this
@@ -2065,12 +2070,18 @@ const Flatten = struct {
             var p = [2]f64{ 0, 0 };
             for (eff[1..], 0..) |arg, i| {
                 p[i] = self.constReal(arg) orelse break :fold;
-                if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and p[i] <= 0) {
+                if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
                     try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, Lower.distParamName(d, i), p[i] });
                     bad = true;
                 }
+                if (d.count and i == 0 and p[i] > 0 and
+                    (!(p[i] <= 2147483647.0) or p[i] != @trunc(p[i])))
+                {
+                    try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, Lower.distParamName(d, i) });
+                    bad = true;
+                }
             }
-            if (d.ordered and p[0] >= p[1]) {
+            if (d.ordered and d.ty == .real and !(p[0] < p[1])) {
                 try self.err(x.mainTok(eff[1]), .E0816, "the start value shall be smaller than the end value, got {d} and {d}", .{ p[0], p[1] });
                 bad = true;
             }
@@ -2095,6 +2106,12 @@ const Flatten = struct {
                 rng.zRngErlang(seed, p[0], p[1])
             else
                 break :fold;
+            if (d.ty == .integer and (!std.math.isFinite(v) or
+                @round(v) < -2147483648.0 or @round(v) > 2147483647.0))
+            {
+                try self.err(tok, .E0816, "`{s}`'s reference result cannot be represented as a signed 32-bit integer", .{name});
+                break :fold;
+            }
             // §9.13.2 "$dist_ ... return integer values" — §4.2.1.1's rounding,
             // the same conversion the runtime path's `toInt` performs.
             return if (d.ty == .integer)
@@ -2147,15 +2164,17 @@ const Flatten = struct {
                 const body = try self.ctx.arena.alloc(Ast.StmtId, b.body.len);
                 for (b.body, body) |src, *o| o.* = try self.cloneStmt(src);
                 self.unhide(hidden.items);
-                break :blk .{ .block = .{
-                    // §6.7 a block label is a scope name. Renamed with the rest,
-                    // so `disable` inside the child still finds it and two
-                    // instances do not declare one name twice.
-                    .name = if (b.name == .none) .none else try self.joinLocal(b.name),
-                    .params = params,
-                    .vars = vars,
-                    .body = body,
-                } };
+                break :blk .{
+                    .block = .{
+                        // §6.7 a block label is a scope name. Renamed with the rest,
+                        // so `disable` inside the child still finds it and two
+                        // instances do not declare one name twice.
+                        .name = if (b.name == .none) .none else try self.joinLocal(b.name),
+                        .params = params,
+                        .vars = vars,
+                        .body = body,
+                    },
+                };
             },
             .assign => |v| .{ .assign = .{
                 .target = try self.cloneExpr(v.target),
@@ -2524,6 +2543,36 @@ test "Annex F.2.1 step 4.b: resolveto resolves the multi-candidate net, no rule 
     const design = try elaborate(f.ctx());
     try std.testing.expectEqual(@as(usize, 1), design.top.nets.len);
     try std.testing.expectEqualStrings("fc", f.file.str(design.top.nets[0].discipline));
+
+    // §7.7.2.1: the candidate set {fa,fb} is a subset of {fa,fb,fc}.
+    var subset: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer subset.deinit();
+    try S.build(&subset, "connectrules r; connect fa, fb, fc resolveto fc; endconnectrules", "");
+    const sub = try elaborate(subset.ctx());
+    try std.testing.expectEqualStrings("fc", subset.file.str(sub.top.nets[0].discipline));
+    try std.testing.expectEqual(0, subset.bag.count());
+
+    // A later exact match wins without warning about the discarded subset.
+    var exact: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer exact.deinit();
+    try S.build(&exact, "connectrules r; connect fa, fb, fc resolveto fc; connect fa, fb resolveto fb; endconnectrules", "");
+    const ex = try elaborate(exact.ctx());
+    try std.testing.expectEqualStrings("fb", exact.file.str(ex.top.nets[0].discipline));
+    try std.testing.expectEqual(0, exact.bag.count());
+
+    // Duplicate exact and subset rules both warn and retain source order.
+    for ([_][]const u8{
+        "connectrules r; connect fa, fb resolveto fb; connect fb, fa resolveto fc; endconnectrules",
+        "connectrules r; connect fa, fb, fc resolveto fb; connect fc, fb, fa resolveto fc; endconnectrules",
+    }) |rules| {
+        var ambiguous: Fixture = .{ .arena = .init(std.testing.allocator) };
+        defer ambiguous.deinit();
+        try S.build(&ambiguous, rules, "");
+        const amb = try elaborate(ambiguous.ctx());
+        try std.testing.expectEqualStrings("fb", ambiguous.file.str(amb.top.nets[0].discipline));
+        try std.testing.expectEqual(1, ambiguous.bag.count());
+        try std.testing.expectEqual(diag.Code.W0950, ambiguous.bag.at(0).code);
+    }
 
     // Bullet 4, error half: no statement matches, the discipline is unknown,
     // and the discrete segment is the mixed-port connection.

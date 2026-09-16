@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// VerA builds one binary and exposes two modules.
+/// VerA builds one binary and exposes compiler and runtime modules.
 ///
 /// The binary is `vera`: the Verilog-A compiler (src/cli.zig).
 /// The modules are for an embedder — a simulator that wants to compile Verilog-A
@@ -8,6 +8,7 @@ const std = @import("std");
 ///
 ///   vera       the Verilog-A engine — `.va` in, device Zig out
 ///   contract   the ABI that generated device code imports
+///   sim        event scheduler infrastructure (no HDL process execution yet)
 ///
 /// `contract` is public as a MODULE and reachable as a PATH
 /// (`dep.path("tools/contract.zig")`), because the CLI hands it to
@@ -126,6 +127,164 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run every test suite");
 
+    // Scheduler infrastructure is independently testable without the compiler.
+    const sim_mod = b.addModule("sim", .{
+        .root_source_file = b.path("src/sim/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "frontend", .module = frontend_mod }, .{ .name = "diag", .module = diag_mod } },
+    });
+    cli_mod.addImport("sim", sim_mod);
+    const sim_tests = b.addRunArtifact(b.addTest(.{ .root_module = sim_mod }));
+    b.step("test-sim", "Run event scheduler tests").dependOn(&sim_tests.step);
+    test_step.dependOn(&sim_tests.step);
+    const digital_cli = b.addRunArtifact(exe);
+    digital_cli.addArg("--run");
+    digital_cli.addFileArg(b.path("tests/digital/scheduling.v"));
+    digital_cli.expectStdOutEqual(@embedFile("tests/digital/scheduling.expected.txt"));
+    const digital_step = b.step("test-digital", "Run shared-frontend digital source execution tests");
+    digital_step.dependOn(&digital_cli.step);
+    test_step.dependOn(&digital_cli.step);
+    const expression_cli = b.addRunArtifact(exe);
+    expression_cli.addArg("--run");
+    expression_cli.addFileArg(b.path("tests/digital/expressions.v"));
+    expression_cli.expectStdOutEqual(@embedFile("tests/digital/expressions.expected.txt"));
+    digital_step.dependOn(&expression_cli.step);
+    test_step.dependOn(&expression_cli.step);
+    const control_cli = b.addRunArtifact(exe);
+    control_cli.addArg("--run");
+    control_cli.addFileArg(b.path("tests/digital/control.v"));
+    control_cli.expectStdOutEqual(@embedFile("tests/digital/control.expected.txt"));
+    digital_step.dependOn(&control_cli.step);
+    test_step.dependOn(&control_cli.step);
+    const concatenation_cli = b.addRunArtifact(exe);
+    concatenation_cli.addArg("--run");
+    concatenation_cli.addFileArg(b.path("tests/digital/concatenation.v"));
+    concatenation_cli.expectStdOutEqual(@embedFile("tests/digital/concatenation.expected.txt"));
+    digital_step.dependOn(&concatenation_cli.step);
+    test_step.dependOn(&concatenation_cli.step);
+
+    // Exercise generated state hooks against a host, not just emitted text.
+    const limiter_gen = b.addRunArtifact(exe);
+    limiter_gen.addArgs(&.{ "--emit-zig", "--allow=W0850", "-I" });
+    limiter_gen.addDirectoryArg(b.path("tests/fixtures"));
+    limiter_gen.addFileArg(b.path("tests/fixtures/ch09_system_tasks/179_limit_initialize_limiting.va"));
+    limiter_gen.addArg("-o");
+    const limiter_src = limiter_gen.addOutputFileArg("limiter.zig");
+    const limiter_mod = b.createModule(.{
+        .root_source_file = limiter_src,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract_mod }},
+    });
+    const limiter_test = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/limiter_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "device", .module = limiter_mod }},
+    }) }));
+    b.step("test-limiter-host", "Check generated limiter state against host calls").dependOn(&limiter_test.step);
+    test_step.dependOn(&limiter_test.step);
+
+    const table_snapshot_gen = b.addRunArtifact(exe);
+    table_snapshot_gen.addArgs(&.{ "--emit-zig", "--allow=W0850", "-I" });
+    table_snapshot_gen.addDirectoryArg(b.path("tests/fixtures"));
+    table_snapshot_gen.addFileArg(b.path("tests/fixtures/ch09_system_tasks/187_table_snapshot.va"));
+    table_snapshot_gen.addArg("-o");
+    const table_snapshot_src = table_snapshot_gen.addOutputFileArg("table_snapshot.zig");
+    const table_snapshot_mod = b.createModule(.{
+        .root_source_file = table_snapshot_src,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract_mod }},
+    });
+    const table_snapshot_test = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/table_snapshot_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "device", .module = table_snapshot_mod }},
+    }) }));
+    b.step("test-table-snapshot-host", "Check first-call table snapshots across instances and rejected trials").dependOn(&table_snapshot_test.step);
+    test_step.dependOn(&table_snapshot_test.step);
+
+    const rng_effects_gen = b.addRunArtifact(exe);
+    rng_effects_gen.addArg("--emit-zig");
+    rng_effects_gen.addFileArg(b.path("tests/rng_effects.va"));
+    rng_effects_gen.addArg("-o");
+    const rng_effects_src = rng_effects_gen.addOutputFileArg("rng_effects.zig");
+    const rng_effects_mod = b.createModule(.{
+        .root_source_file = rng_effects_src,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract_mod }},
+    });
+    const rng_default_gen = b.addRunArtifact(exe);
+    rng_default_gen.addArg("--emit-zig");
+    rng_default_gen.addFileArg(b.path("tests/rng_default_domain.va"));
+    rng_default_gen.addArg("-o");
+    const rng_default_src = rng_default_gen.addOutputFileArg("rng_default_domain.zig");
+    const rng_default_mod = b.createModule(.{
+        .root_source_file = rng_default_src,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract_mod }},
+    });
+    const rng_effects = b.addExecutable(.{
+        .name = "rng-effects",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/rng_effects_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "device", .module = rng_effects_mod },
+                .{ .name = "default_device", .module = rng_default_mod },
+            },
+        }),
+    });
+    const rng_effects_step = b.step("test-rng-effects", "Check generated RNG domain errors retain conditional source effects");
+    for (0..34) |case| {
+        const rng_effect_test = b.addRunArtifact(rng_effects);
+        rng_effect_test.addArg(b.fmt("{d}", .{case}));
+        rng_effect_test.expectExitCode(0);
+        rng_effects_step.dependOn(&rng_effect_test.step);
+        test_step.dependOn(&rng_effect_test.step);
+    }
+
+    const literal_gen = b.addRunArtifact(exe);
+    literal_gen.addArgs(&.{ "--emit-zig", "--display=emit", "-I" });
+    literal_gen.addDirectoryArg(b.path("tests"));
+    literal_gen.addFileArg(b.path("tests/literal_nul.va"));
+    literal_gen.addArg("-o");
+    const literal_src = literal_gen.addOutputFileArg("literal_nul.zig");
+    const literal_mod = b.createModule(.{
+        .root_source_file = literal_src,
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract_mod }},
+    });
+    const literal_test = b.addRunArtifact(b.addExecutable(.{
+        .name = "literal-nul",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/literal_nul_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "device", .module = literal_mod }},
+        }),
+    }));
+    literal_test.expectStdErrEqual(
+        "literal=[A\x00B] direct=[A\x00B] stored=[AB] assigned=[CD] parameter=[PQ]\n" ++
+            "edges=[\x00A\x00B\x00] octal=[ABC]\n" ++
+            "raw=[\x00A\x00] conversion=[A\x00] numeric=[A\x00] padded=[  A\x00]\n" ++
+            "packed=[410042] decimal=[4259906]\n" ++
+            "macro-format=[M\x00N]\n" ++
+            "macro-operand=[M\x00N]\n" ++
+            "macro-stored=[MN]\n" ++
+            "stored-format=[AB] numeric=[AB] width=[   AB] packed=[410042]\n" ++
+            "stored-write=[ABCD]\n",
+    );
+    b.step("test-literal-output", "Check literal output bytes and string storage conversion").dependOn(&literal_test.step);
+    test_step.dependOn(&literal_test.step);
+
     const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = vera_mod }));
     b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
     test_step.dependOn(&run_va_test.step);
@@ -159,6 +318,39 @@ pub fn build(b: *std.Build) void {
     // few seconds, which is the difference between tests that get written for
     // 1796 lines of hot arithmetic and tests that do not.
     // Same module `ir` depends on, not a second copy of the file.
+    // Compile the independent IEEE C listing alongside the emitted RNG kernels.
+    const rng_reference_mod = b.createModule(.{
+        .root_source_file = b.path("tests/rng_reference.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "kernels", .module = kernels_mod }},
+    });
+    rng_reference_mod.addCSourceFile(.{
+        .file = b.path("tests/rng_reference.c"),
+        .flags = &.{"-ffp-contract=off"},
+    });
+    const rng_reference_test = b.addRunArtifact(b.addTest(.{ .root_module = rng_reference_mod }));
+    const rng_step = b.step("test-rng-reference", "Compare RNG values and seeds with compiled IEEE C, and check runtime domains");
+    rng_step.dependOn(&rng_reference_test.step);
+    test_step.dependOn(&rng_reference_test.step);
+    const rng_domains = b.addExecutable(.{
+        .name = "rng-domains",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/rng_domains.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "kernels", .module = kernels_mod }},
+        }),
+    });
+    for (0..40) |case| {
+        const domain_test = b.addRunArtifact(rng_domains);
+        domain_test.addArg(b.fmt("{d}", .{case}));
+        domain_test.expectExitCode(0);
+        rng_step.dependOn(&domain_test.step);
+        test_step.dependOn(&domain_test.step);
+    }
+
     const run_kernels_test = b.addRunArtifact(b.addTest(.{ .root_module = kernels_mod }));
     b.step("test-kernels", "Run the emitted device-runtime kernel tests")
         .dependOn(&run_kernels_test.step);

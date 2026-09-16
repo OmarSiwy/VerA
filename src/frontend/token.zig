@@ -244,6 +244,10 @@ pub const Tag = enum(u8) {
     // analog block; §9.22.4 defines it, and §9.22 paragraph 3 confines the
     // whole family to a connect module.
     kw_driver_update,
+    // §5.10.1 digital edges. Like `driver_update` above, they are legal only
+    // inside an `event_expression`, so they are not `isEventFunction` members.
+    kw_posedge,
+    kw_negedge,
 
     // analog operators & filters §4.5
     kw_ddt,
@@ -762,9 +766,11 @@ const reserved_keywords = [_][]const u8{
     "endprimitive",       "endspecify",    "endtable",     "endtask",
     "force",              "fork",          "highz0",       "highz1",
     "ifnone",             "join",          "large",        "medium",
-    "nand",               "negedge",       "nmos",         "nor",
+    // `posedge`/`negedge` are no longer here: §5.10.1 gives them their own
+    // tags, because an event expression has to tell the two apart.
+    "nand",               "nmos",          "nor",
     "noshowcancelled",    "not",           "notif0",       "notif1",
-    "pmos",               "posedge",       "primitive",    "pull0",
+    "pmos",               "primitive",     "pull0",
     "pull1",              "pulldown",      "pullup",       "pulsestyle_ondetect",
     "pulsestyle_onevent", "rcmos",         "release",      "rnmos",
     // The `tranif`/`rtranif` spellings below stay here — a pass ENABLE switch
@@ -894,7 +900,8 @@ test "keyword_map: spelling round-trips through lexeme" {
     }
     try std.testing.expectEqual(Tag.kw_module, keyword_map.get("module").?);
     try std.testing.expectEqual(Tag.kw_initial_step, keyword_map.get("initial_step").?);
-    try std.testing.expectEqual(Tag.kw_reserved, keyword_map.get("posedge").?);
+    try std.testing.expectEqual(Tag.kw_posedge, keyword_map.get("posedge").?);
+    try std.testing.expectEqual(Tag.kw_reserved, keyword_map.get("primitive").?);
     // Not keywords: system function names (§2.8.3) and ordinary identifiers.
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("temperature"));
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("V"));

@@ -28,6 +28,8 @@
 //! (`std.ArrayListUnmanaged` is a deprecated alias for it). Hence
 //! `= .empty` + `append(gpa, x)`.
 
+const Integer = @import("integer.zig");
+const IntLiteral = @import("lexer.zig").IntLiteral;
 const std = @import("std");
 
 // ---------------------------------------------------------------------------
@@ -121,6 +123,8 @@ pub const ExprTag = enum(u8) {
     // ---- literals & names — §2.6, §2.7, §2.8, A.8.7 ----
     /// `extra` = index into `ExprStore.ints`. LRM §2.6.1.
     int_literal,
+    /// Exact four-state or wide constant; rejected by the analog integer boundary.
+    logic_literal,
     /// `extra` = index into `ExprStore.reals`. LRM §2.6.2 (incl. SI suffixes).
     real_literal,
     /// `str` = interned, escape-processed contents. LRM §2.7.
@@ -235,12 +239,10 @@ pub const ExprStore = struct {
     /// Side table for `.real_literal` values (`extra` indexes it). Kept out of
     /// the row so the common integer/ident rows stay narrow.
     reals: std.ArrayList(f64) = .empty,
-    /// §2.6.1 decoded integer literals. Parked here for the same reason `reals`
-    /// is: a row's `extra` is ONE u32, and an integer is 64 bits wide
-    /// everywhere below this point — MIR `int_const`, codegen's `i64` slots and
-    /// the device contract. Truncating to 32 to fit `extra` is what made
-    /// `4294967296` lower to 0.
-    ints: std.ArrayList(i64) = .empty,
+    /// Known literals fitting the analog i64 ABI retain source width/sign for
+    /// expression sizing. Wider and four-state literals have their own pool.
+    ints: std.ArrayList(IntLiteral) = .empty,
+    logic: std.ArrayList(Integer.Literal) = .empty,
 
     pub const empty: ExprStore = .{};
 
@@ -249,6 +251,8 @@ pub const ExprStore = struct {
         self.pool.deinit(gpa);
         self.reals.deinit(gpa);
         self.ints.deinit(gpa);
+        for (self.logic.items) |literal| gpa.free(literal.planes);
+        self.logic.deinit(gpa);
         self.* = .empty;
     }
 
@@ -267,11 +271,26 @@ pub const ExprStore = struct {
         return self.add(gpa, .{ .tag = .real_literal, .main_tok = main_tok, .extra = idx });
     }
 
-    /// Convenience for `.int_literal`: parks the value in `ints`.
+    /// Synthetic integer constants have the implementation integer width.
     pub fn addInt(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, value: i64) !ExprId {
+        return self.addIntLiteral(gpa, main_tok, .{ .value = value, .width = 0, .signed = true });
+    }
+
+    pub fn addIntLiteral(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: IntLiteral) !ExprId {
         const idx: u32 = @intCast(self.ints.items.len);
-        try self.ints.append(gpa, value);
+        try self.ints.append(gpa, literal);
         return self.add(gpa, .{ .tag = .int_literal, .main_tok = main_tok, .extra = idx });
+    }
+
+    pub fn addLogic(self: *ExprStore, gpa: std.mem.Allocator, main_tok: u32, literal: Integer.Literal) !ExprId {
+        const idx: u32 = @intCast(self.logic.items.len);
+        try self.logic.append(gpa, literal);
+        return self.add(gpa, .{ .tag = .logic_literal, .main_tok = main_tok, .extra = idx });
+    }
+
+    pub fn logicValue(self: *const ExprStore, id: ExprId) Integer.Literal {
+        std.debug.assert(self.tag(id) == .logic_literal);
+        return self.logic.items[self.extraOf(id)];
     }
 
     pub fn get(self: *const ExprStore, id: ExprId) Node {
@@ -313,6 +332,10 @@ pub const ExprStore = struct {
     }
     /// §2.6.1 decoded integer literal.
     pub fn intValue(self: *const ExprStore, id: ExprId) i64 {
+        std.debug.assert(self.tag(id) == .int_literal);
+        return self.intLiteral(id).value;
+    }
+    pub fn intLiteral(self: *const ExprStore, id: ExprId) IntLiteral {
         std.debug.assert(self.tag(id) == .int_literal);
         return self.ints.items[self.extraOf(id)];
     }
@@ -491,6 +514,11 @@ pub const VarDecl = struct {
     /// A.2.2.1 `variable_identifier = constant_expression`; `.none` if absent.
     init: ExprId = .none,
     main_tok: u32 = 0,
+    /// Digital declaration metadata retained for source execution. Analog lowering
+    /// continues to use ty/dims; a packed reg range is not an unpacked array.
+    storage: enum { variable, reg, time } = .variable,
+    packed_range: ?Dim = null,
+    is_signed: bool = true,
 };
 
 /// Net declaration. LRM §3.6.3 (A.2.1.3 net_declaration). One per declared
@@ -595,19 +623,10 @@ pub const AnalogBlock = struct {
 /// One `initial` or `always` construct (A.6.2 initial_construct /
 /// always_construct) — §7.2.2's DISCRETE context.
 ///
-/// Recorded, not executed. `always` is refused (E0205: its value would be a
-/// function of §8.5's simulation cycle, which VerA has no kernel for), and the
-/// refusal is REPORTED AND THE BODY IS STILL PARSED, because rules the LRM states
-/// about a discrete context are rules about the BODY and are unreachable while the
-/// keyword is a syntax error: §4.5.15's analog-operator ban, §4.7.3/§7.3.7's
-/// calling-context rule, §5.2.1's digital-value read and §7.2.2's both-contexts
-/// rule. See `Lower.checkDiscreteContext`.
-///
-/// `initial` is ACCEPTED, in one shape: a body of constant assignments, which
-/// `Lower.collectInitialState` turns into the initial value of each target (E0433
-/// for anything else). §7.2.2's "the domain of a variable is that of the context
-/// from which its value is assigned" is what makes that reading exact without a
-/// discrete kernel.
+/// The analog device pipeline accepts only constant initial assignments and
+/// diagnoses other scheduling requirements. The opt-in digital source executor
+/// executes supported initial bodies through the event scheduler; its validation
+/// rejects unimplemented process forms before execution.
 pub const DiscreteBlock = struct {
     /// `always` rather than `initial`. §7.2.2 puts both blocks in the same
     /// context, so the §7.2.2/§4.5.15/§4.7.3/§5.2.1 scans do not read this at all
@@ -911,7 +930,7 @@ pub const Stmt = union(enum) {
     /// §5.7 procedural assignment (A.6.2 analog_variable_assignment). `target`
     /// is an lvalue *expression* (`.ident` or `.index`) so array element
     /// assignment (§3.2.2) is representable.
-    assign: struct { target: ExprId, value: ExprId },
+    assign: struct { target: ExprId, value: ExprId, nonblocking: bool = false },
     /// §5.6 contribution `V(a,b) <+ expr;` — `lhs` is a `.branch_access` or
     /// `.port_access` node (A.8.5 branch_lvalue).
     contribute: struct { lhs: ExprId, rhs: ExprId },
@@ -953,7 +972,7 @@ pub const Stmt = union(enum) {
     repeat_stmt: struct { count: ExprId, body: StmtId },
     /// §5.10 `@(event) body` (A.6.5 analog_event_control_statement). `event` is
     /// one of the `event_*` expression tags, or an `.ident` naming an event.
-    event_control: struct { event: ExprId, body: StmtId },
+    event_control: struct { event: ExprId, body: StmtId, is_delay: bool = false },
     /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
     /// `hierarchical_event_identifier`, so only its last (and, in a flat
     /// elaboration, only) component is kept.
@@ -1110,6 +1129,12 @@ pub const SourceFile = struct {
         self.exprs.pool = try src.exprs.pool.clone(gpa);
         self.exprs.reals = try src.exprs.reals.clone(gpa);
         self.exprs.ints = try src.exprs.ints.clone(gpa);
+        for (src.exprs.logic.items) |literal| {
+            var copy = literal;
+            copy.planes = try gpa.dupe(u64, literal.planes);
+            errdefer gpa.free(copy.planes);
+            try self.exprs.logic.append(gpa, copy);
+        }
         self.stmts = try src.stmts.clone(gpa);
         self.stmt_toks = try src.stmt_toks.clone(gpa);
         self.modules = src.modules;

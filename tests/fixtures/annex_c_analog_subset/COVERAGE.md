@@ -10,6 +10,11 @@ Verilog-A keeps and the handful of constructs it drops. So most of this director
 down. Nine of the twenty sections have a fixture here; the other eleven are listed
 below with what they actually have, which for six of them is nothing anywhere.
 
+Annex C defines the optional Verilog-A subset, not VerA’s full-AMS target.
+Rejection of a legal AMS construct records an implementation gap, not conformance.
+Invalid analog-context uses and reserved words used as identifiers still require
+rejection under the applicable AMS grammar.
+
 Every entry was checked against the file's `//! lrm` cites and its source, not against
 its filename. Sections with no fixture in this directory say so.
 
@@ -18,15 +23,15 @@ its filename. Sections with no fixture in this directory say so.
 | C.1 Verilog-A overview | descriptive: conservative and signal-flow systems, KPL/KFL, nodes/branches/terminals | none — no fixture cites C.1, and the section states no rule a source can violate. `01`/`02` happen to be conservative electrical devices, which is illustration, not proof |
 | C.2 Verilog-A language features | the nine features the subset provides | `01_analog_only_device.va` (analog block, range limit, contribution), `02_named_branch.va` (named branch), `03_parameter_range.va` (inclusive range bound), `04_analog_operators.va` (`limexp`, `ddt`), `05_analog_event.va` (`initial_step`, `cross`), `19_named_event_in_subset.va` (§5.10.4 named event, declared, triggered and detected inside the analog block). Three of the nine bullets have no fixture here — see below |
 | C.3 Lexical conventions | Clause 2 applies; x/z and `?` limited to the mixed-signal context | `06_xz_rejected.va` (`4'b0x1z` and `4'b01?1`, one `//! reject` arm each). Clause 2 proper is `ch02_lexical`, which cites C.3 from `05_xz_integer_rejected.va` and `24_question_digit_rejected.va` |
-| C.4 Data types | Clause 3 applies except: discrete domain binding, `wreal`, `` `default_discipline `` | `08_wreal_rejected.va` (passes). Bullets 1 and 3 both had their verdicts INVERTED once the project settled that VerA targets Verilog-AMS and not the subset: `07_discrete_domain_binding_accepted.va` (was `07_..._rejected`, now the §7.2.1 rule) and `09_default_discipline_accepted.va` (was `09_..._rejected`, now §10.2's own binding — the directive is the module's only source of a discipline, so a tool that parses and discards it reaches E0337 and asserts nothing). What survives of bullet 3 is `18_no_discipline_rejected.va` — green, `//! reject discipline`: a module that declares *no* discipline anywhere has no potential to probe under any dialect |
+| C.4 Data types | Clause 3 applies except: discrete domain binding, `wreal`, `` `default_discipline `` | `08_wreal_rejected.va` (passing unsupported-feature diagnostic; full-AMS `wreal` remains open). Bullets 1 and 3 both had their verdicts INVERTED once the project settled that VerA targets Verilog-AMS and not the subset: `07_discrete_domain_binding_accepted.va` (was `07_..._rejected`, now the §7.2.1 rule) and `09_default_discipline_accepted.va` (was `09_..._rejected`, now §10.2's own binding — the directive is the module's only source of a discipline, so a tool that parses and discards it reaches E0337 and asserts nothing). What survives of bullet 3 is `18_no_discipline_rejected.va` — green, `//! reject discipline`: a module that declares *no* discipline anywhere has no potential to probe under any dialect |
 | C.5 Expressions | Clause 4 applies except `===` and `!==` | `10_case_equality_rejected.va` (`===`), `17_case_inequality.va` (`!==`). Both operands integer on purpose, so §4.2.1's real-operand rule cannot satisfy the arm instead |
 | C.6 Analog signals | §5.4 applies, no exception | `01_analog_only_device.va` — an inclusion with no carve-out can only be stated as a §5.4.1 access that must work, so the two-argument probe `V(p, n)` is the fixture |
-| C.7 Analog behavior | Clause 5 applies except digital behavior/events and `casex`/`casez` | `11_casex_rejected.va` and `12_casez_rejected.va` (both green, `//! reject E0416` — the C.7-specific code, reachable now). Bullet 1's `initial` half was INVERTED and has been re-verdicted, for the reason bullets C.4/1 and C.4/3 were: `13_digital_initial_accepted.va` (was `13_..._rejected`) now asserts §7.2.2's own first sentence instead of demanding a diagnostic no conforming AMS compiler may emit. Its `always` half stays a rejection but no longer on C.7's authority — `14_digital_always_rejected.va` pins VerA's ceiling, an `always` block whose value would be a function of §8.5's simulation cycle. Then `21_digital_event_control_rejected.va` (`posedge`, `negedge`), `22_nonblocking_assign_rejected.va` (`<=`), `23_continuous_assign_rejected.va` (`assign`), `25_digital_procedural_rejected.va` (`fork`, `join`, `wait`). Positive side: `05_analog_event.va` and `19_named_event_in_subset.va` — the §5.10.4 named event is on the analog side of the C.7 line and now works |
+| C.7 Analog behavior | Clause 5 applies except digital behavior/events and `casex`/`casez` | `11_casex_rejected.va` and `12_casez_rejected.va` (both green, `//! reject E0416` — historical subset diagnostics, not full-AMS behavioral coverage). Bullet 1's `initial` half was INVERTED and has been re-verdicted, for the reason bullets C.4/1 and C.4/3 were: `13_digital_initial_accepted.va` (was `13_..._rejected`) now asserts §7.2.2's own first sentence instead of demanding a diagnostic no conforming AMS compiler may emit. Its `always` half stays a rejection but no longer on C.7's authority — `14_digital_always_rejected.va` pins VerA's ceiling, an `always` block whose value would be a function of §8.5's simulation cycle. Then `21_digital_event_control_rejected.va` (`posedge`, `negedge`), `22_nonblocking_assign_rejected.va` (`<=`), `23_continuous_assign_rejected.va` (`assign`), `25_digital_procedural_rejected.va` (`fork`, `join`, `wait`). Positive side: `05_analog_event.va` and `19_named_event_in_subset.va` — the §5.10.4 named event is on the analog side of the C.7 line and now works |
 | C.8 Hierarchical structures | Clause 6 applies except real value ports (§6.5.3) | `15_real_value_port_rejected.va` (`input wreal`), `28_real_value_output_port_rejected.va`, `29_real_value_inout_port_rejected.va`. One file per direction because the diagnostic reads "found wreal" and cannot tell them apart. The hierarchy C.8 *keeps* has no fixture here; `annex_a_syntax/11_module_instantiation.va` and `ch07_mixed_signal/hierarchy_unsupported.va` cite C.8 for it |
 | C.9 Mixed signal | Clause 7 applies to Verilog-AMS HDL only | `24_connectrules_is_not_a_device.va` (was `24_connectrules_rejected.va`) **no longer cites C.9 at all**: the settlement that rewrote `26` reached it — the `connectrules` declaration PARSES now (A.1.8, §7.7; its resolution statements feed annex F.2 step 4.b in `ir/elaborate.zig`), so the E0201-on-the-keyword verdict had no clause left behind it. What is left of that file is the same §6.2 verdict as `26`: a source_text whose only description is configuration for the insertion phase declares no device, E1001. `26_connectmodule_is_not_a_device.va` (was `26_connectmodule_rejected.va`) is that argument for the construct one level down: A.1.2's `module_keyword ::= module | macromodule | connectmodule` binds VerA and the declaration is ACCEPTED. The rest of Clause 7 is `ch07_mixed_signal`, where the five old E0201-wall fixtures were inverted into `*_accepted.va` acceptance fixtures for the same reason |
 | C.10 Scheduling semantics | analog simulation cycle applies; §8.2 mixed-signal cycle does not | none here. `ch08_scheduling/analog_digital_initial_order.va` (was `_unsupported`) is the only fixture in the tree that cites C.10, and it is green and positive now: both initial constructs run, the analog block reads 1.0 + 1 |
 | C.11 System tasks and functions | Clause 9 tasks applicable in the analog context apply | none here, and no fixture anywhere cites C.11. No `$`-task appears in this directory outside a comment |
-| C.12 Compiler directives | Clause 10 applies to both | none here, and no fixture anywhere cites C.12. The only directive in this directory is the *forbidden* `` `default_discipline `` of `09` |
+| C.12 Compiler directives | Clause 10 applies to both | none here, and no fixture anywhere cites C.12. The `` `default_discipline `` in `09` is accepted under the full-AMS §10.2 rule |
 | C.13 Using VPI routines | Clause 11 applies to both | none, and no fixture anywhere cites C.13 |
 | C.14 VPI routine definitions | Clause 12 applies to both | none, and no fixture anywhere cites C.14 |
 | C.15 Analog language subset | self-reference: this annex is the AMS/Verilog-A diff, Annex A is the BNF | none, and no fixture cites C.15. The section states no testable rule of its own |
@@ -59,16 +64,17 @@ integrals, and derivatives" is represented by `04_analog_operators.va`, which ex
 covered exhaustively in `ch04_expressions`; the point is that C.2's own row does not
 prove them.
 
-## The debt ledger
+## The fixture xfail ledger
 
 EMPTY — grep finds no `//! xfail` in this directory: 31 files, 22 with a `//! reject`
-arm, 9 that run and assert. The five rows it held closed three different ways, and the
-distinction matters more than the count, because two of them closed by being WRONG:
+arm, 9 that run and assert. This is a fixture inventory, not an empty full-AMS
+implementation backlog. The five historical fixture changes below include diagnostic
+changes that do not implement the rejected constructs:
 
-| Fixture | Rule stated | How it closed |
+| Fixture | Rule stated | Historical fixture change |
 |---|---|---|
-| `11_casex_rejected.va` | C.7 bullet 2 — `casex` is not supported | The gap was real and was mis-described: `casex` never reached E0416 because `parseStmt` had no arm for the token at all, so the file died in parser recovery on E0209. E0416 — the C.7 code that already existed for this rule — fires now, and the fixture pins it by code |
-| `12_casez_rejected.va` | C.7 bullet 2 — `casez` is not supported | Same shape, same close |
+| `11_casex_rejected.va` | C.7 bullet 2 — `casex` is not supported | The gap was real and was mis-described: `casex` never reached E0416 because `parseStmt` had no arm for the token at all, so the file died in parser recovery on E0209. E0416 now fires and the fixture pins it by code; legal AMS `casex` execution remains open |
+| `12_casez_rejected.va` | C.7 bullet 2 — `casez` is not supported | E0416 now fires; legal AMS `casez` execution remains open |
 | `18_no_discipline_rejected.va` | C.4 bullet 3 / §3.8 — every Verilog-A module shall have a discipline | Green: a net with no discipline referenced from behavioral code is E0337 (§3.6.2.4), which is a rule of Verilog-AMS too and needs no subset gate. The fixture asserts nothing on purpose — with no nature there is no `V` to probe, so the only conforming outcome is a diagnostic |
 | `20_net_resolution_reserved.va` | C.16 + Annex B — `net_resolution` is a reserved word | Green: the spelling is in `reserved_keywords` (`src/frontend/token.zig`) with the other nine, so `real net_resolution;` is E0208 |
 | `09_default_discipline_rejected.va` | C.4 bullet 3 — `` `default_discipline `` is not supported | **The fixture was wrong, not the compiler.** VerA targets Verilog-AMS, where §10.2 makes the directive legal; demanding the diagnostic made the file passable only by a subset-only tool. Rewritten as `09_default_discipline_accepted.va`, which asserts the directive's own effect |
@@ -114,13 +120,11 @@ the position VerA is in. Both files now pin the E1001 no-device verdict instead.
 **E0209 arms are recovery artifacts, not subset gates.** `21` and `25` pin E0209
 ("expected an expression", `.lrm A.8.3`), which names no C.7 rule — VerA simply does not
 parse `posedge`, `fork` or `wait` there. Those arms record what VerA emits today; the
-keyword arms alongside them are the load-bearing ones. Both headers say that if VerA ever
-learns to parse these constructs the cite must move to E0201 ("construct is not in the
-supported subset", `.lrm C`), which already exists, rather than be deleted. `11`/`12` were
-the same situation and are the precedent for that move: E0416 existed all along and was
-merely unreachable, and closing the gap meant giving `casex`/`casez` a parser arm so the
-C.7 code could fire instead of the recovery code. `21`/`25` are the two that have not had
-that done yet.
+keyword arms alongside them identify the unsupported forms. Historical headers
+propose replacing recovery errors with subset diagnostics; that is not the full-AMS
+completion criterion. Legal AMS uses need acceptance and behavioral tests. Illegal
+analog-context uses must still be rejected by their grammar/context rule. The
+E0416 changes in `11`/`12` improved diagnostics but did not implement `casex`/`casez`.
 
 **C.4 bullet 1 has no fixture, on purpose.** `07` used to demand the rejection that C.4
 requires of a Verilog-A tool. VerA targets Verilog-AMS, where §7.2.1 makes a discrete

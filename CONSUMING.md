@@ -8,7 +8,9 @@ contract in [`tools/contract.zig`](tools/contract.zig), which your simulator
 instantiates, stamps and solves. It owns the frontend, the IR, the finiteness
 proof and codegen. It does not own the simulation.
 
-**What is yours, not VerA's**, and none of it is a gap:
+**Host responsibilities.** Delegating these services to a host does not remove
+them from the full Verilog-AMS conformance target. The combined compiler and host
+must implement and test them; see [the open requirements](docs/CONFORMANCE-GAPS.md).
 
 | yours | why |
 |---|---|
@@ -130,7 +132,7 @@ pub const U: enum(u8)          // solver unknowns, DENSE, values 0..n-1
 pub const num_ports: usize     // ports are a PREFIX of U; 0 is legal (§6.2)
 pub const Model: struct        // every field defaulted
 pub const Instance: struct     // every field defaulted
-pub fn eval(comptime S: type, x: [n]S, m: *const Model, i: *const Instance, t: f64) [n]S
+pub fn eval(comptime S: type, x: [n]S, m: *const Model, i: contract.InstancePtr(Self), t: f64) [n]S
 ```
 
 `U` must be `enum(u8)` with values `0..n-1` — that is what makes the residual
@@ -186,6 +188,7 @@ table with no values or values with no table is a hook nobody can call.
 | `derive` | §6.3.4/§3.4.5 params defined over params | — |
 | `precompute` | instance-mutating parameter prep | — |
 | `constant` | constant-Jacobian declaration | — |
+| `mutable_eval` | exclusive mutable access during evaluation | host `mutable_eval = true` |
 | `nextBreakpoint` | §9.17 breakpoint scheduling | — |
 | `AnalysisKind` | §4.6.1 `analysis()`, ordinals pinned to `contract.AnalysisKind` | — |
 | `display` | §9.4 + §9.5, the side-effect phase | `--display=emit` only |
@@ -235,6 +238,50 @@ measured that you want it, and expect the shape to move.
 solver does not have it, and that is deliberate — §9.5.9 puts every file write
 at the accepted point, and text inside `eval` would fire once per Newton
 iteration.
+
+### First-call table snapshots
+
+A device with array-source `$table_model` calls declares `mutable_eval = true`.
+`contract.InstancePtr(D)` is then `*D.Instance`; otherwise it remains
+`*const D.Instance`. Use this type for evaluation entry points, including `q`,
+`evalQ` and `display`. The host capability type must declare
+`pub const mutable_eval = true` before `validateHost` accepts these devices.
+
+The host must provide exclusive access to each instance during evaluation.
+The first executed table call captures its source arrays; later calls use those
+stored values. The capture survives rejected timesteps and is distinct from
+accepted-time state. Allocate a fresh instance for a fresh simulation lifetime.
+Auxiliary preparation hooks evaluate with a copy and do not initialize the live
+snapshot. The generated-host tests exercise this separation and rollback.
+
+ARPice supplies mutable access and keeps these devices on the CPU. Its evaluation
+test checks independent instance ownership and GPU exclusion. Other hosts must
+supply the same lifetime and ownership behavior before advertising support.
+
+### Newton iteration hooks
+
+Devices using user-function `$limit`, `$simparam("iteration")`, or
+`$discontinuity(-1)` expose iteration hooks separately from `updateState`.
+A host must implement their call order and declare `pub const iteration_hooks = true`
+in its host capability type before `contract.validateHost` accepts these devices.
+This declaration acknowledges implementation; it does not install a scheduler.
+
+- Call optional `beginSolve(inst)` before the first evaluation of each new solve.
+- Call optional `advanceIteration(model, inst, previous_x)` once between evaluated
+  Newton iterates, with the previous iterate's vector. Do not call it for finite
+  difference/Jacobian probes or after the accepted final evaluation.
+- A false return from optional `checkConvergence(model, inst, x)` vetoes
+  convergence. Call it on every acceptance path, including zero-step exits.
+- `updateState` remains accepted-time bookkeeping. `stateCtl(.commit/.revert)`
+  saves/restores iteration history; commit does not reset the iteration counter.
+
+The standalone testbench and ARPice's direct Newton/JFNK host implement these
+hooks. ARPice keeps such devices on the CPU, including in mixed GPU circuits.
+Its `test-iteration` target exercises generated-device failure, rollback and
+retry through Circuit and both solvers. Auxiliary analysis drivers still need
+accepted/rejected-time lifecycle coverage. Native transmission-line migration
+and full VPI support remain separate open work in
+[CONFORMANCE-GAPS.md](docs/CONFORMANCE-GAPS.md).
 
 ### 3.4 What YOU write
 

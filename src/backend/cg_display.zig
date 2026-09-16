@@ -69,6 +69,8 @@ pub const PrintArg = struct {
     spec: Spec = .{},
     /// `%E`: C prints the exponent marker in the case the source wrote.
     upper: bool = false,
+    /// Original integer width, before SSA and the i64 storage carrier.
+    bits: u7 = 64,
 
     pub const Mode = enum {
         /// Straight through the Zig verb the conversion mapped to.
@@ -93,12 +95,15 @@ pub const PrintArg = struct {
         /// Zig's radix verbs on an i64 print `-2a` instead, hence a u64
         /// bitcast around the rendered integer.
         bits,
+        /// §9.4.5: most-significant byte first, with leading zero bytes removed.
+        ascii,
     };
 
     /// Bytes of per-op scratch the emitted block declares, or null for the
     /// modes that render straight into the print's argument tuple.
     fn scratch(self: PrintArg) ?usize {
         return switch (self.how) {
+            .ascii => @sizeOf(i64),
             .pad => 24, // i64's widest decimal (20 chars) plus slack
             .cint => @max(24, self.spec.w() + 2), // the full zero-filled field
             // two halves: the raw `{e:.P}` text, then the C-ified copy which
@@ -264,7 +269,8 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 /// gives to `$display` and not to the writers.
 ///
 /// The value of the emitted block is the formatted slice, which lowering
-/// assigns to the string variable the source named.
+/// assigns to the string variable the source named. §3.3 removes NUL bytes
+/// only AFTER formatting, so field widths still count the original bytes.
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
@@ -273,9 +279,9 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
     try emitScratch(g, ops.items);
     // An overrun formats to the empty string: §9.5.3 states no truncation rule,
     // and half a number is a worse answer than none. See `zSBuf`'s size note.
-    try g.b("break :zs std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
+    try g.b("break :zs zStringStore(std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
-    try g.b("}}) catch \"\"; }}", .{});
+    try g.b("}}) catch \"\"); }}", .{});
 }
 
 // ------------------------------------------------------- §9.5 file I/O ----
@@ -564,11 +570,20 @@ pub fn appendConv(
     g: *Gen,
     fmt: *std.ArrayList(u8),
     ops: *std.ArrayList(PrintArg),
-    v: Mir.Value,
+    operand: Mir.Value,
     conv_raw: u8,
     spec: Spec,
 ) Error!void {
     const a = g.arena;
+    const v = operand;
+    var bits: u7 = 64;
+    if (g.mir.valueDef(g.an.rv(v)) == .inst_result) {
+        const inst = g.mir.valueDef(g.an.rv(v)).inst_result;
+        const data = g.mir.instData(inst);
+        if (data == .call and std.mem.eql(u8, data.call.name, "$display$width")) {
+            bits = @intCast(g.mir.valueDef(data.call.args[1]).int_const);
+        }
+    }
     const conv = std.ascii.toLower(conv_raw);
     const ty = g.an.tyOf(g.an.rv(v));
     switch (conv) {
@@ -608,6 +623,16 @@ pub fn appendConv(
             try appendZigSpec(g, fmt, spec, null);
             try fmt.append(a, '}');
             try ops.append(a, .{ .v = v, .want = .int, .how = .chr, .spec = spec });
+        },
+        's' => {
+            if (ty == .int) {
+                try appendStrField(g, fmt, spec, false);
+            } else {
+                try fmt.appendSlice(a, "{s");
+                try appendZigSpec(g, fmt, spec, null);
+                try fmt.append(a, '}');
+            }
+            try ops.append(a, .{ .v = v, .want = ty, .how = if (ty == .int) .ascii else .plain, .spec = spec, .bits = bits });
         },
         'd' => {
             // §2.7 makes a string literal an unsigned base-256 integer
@@ -665,6 +690,15 @@ pub fn appendConv(
 /// array `emitScratch` declared in the enclosing display block.
 pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
     switch (p.how) {
+        .ascii => {
+            // The carrier is i64; mask to the source width before extracting
+            // bytes so sign-extension cannot add characters. Only leading
+            // zero BYTES vanish.
+            // Interior/trailing NUL bytes are data, never string terminators.
+            try g.b("zs{d}: {{ std.mem.writeInt(u64, &zb{d}, @as(u{d}, @truncate(@as(u64, @bitCast(@as(i64, ", .{ i, i, p.bits });
+            try g.renderVal(p.v, .int);
+            try g.b("))))), .big); break :zs{d} std.mem.trimStart(u8, &zb{d}, &.{{0}}); }}", .{ i, i });
+        },
         .pad => {
             try g.b("zPadInt(&zb{d}, ", .{i});
             try g.renderVal(p.v, .int);
@@ -870,8 +904,7 @@ test "§9.7 simulation control: the run ends at the call, with the pinned status
 
     // §9.7.3: $fatal prints its message, then exits with the finish_number as
     // the errorcode. The torture fixture 173_fatal_terminates.va proves the
-    // run ends; THIS pins the code itself, which the harness cannot (it has no
-    // expected-exit mechanism, and a nonzero status is recorded, not judged).
+    // run ends with its declared `//! exit 1`; this also pins the level-2 code.
     const fat = try emitBody(a, "$fatal(2, \"died %d\", 7);");
     try std.testing.expect(has(fat, "\"FATAL: died {d}\\n\""));
     try std.testing.expect(has(fat, "_ = zHalt(2); "));
@@ -914,4 +947,15 @@ test "§9.4.3 Table 9-22: %h shows the operand's two's-complement bit pattern" {
     const out = try emitBody(a, "$strobe(\"%h %o %b\", -42, -42, -42);");
     try std.testing.expect(has(out, "\"{x} {o} {b}\\n\""));
     try std.testing.expect(has(out, "@as(u64, @bitCast(@as(i64, "));
+}
+
+test "§9.4.5 numeric strings preserve source width through every output sink" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const out = try emitBody(a, "$display(\"%s\", 8'shff); $write(\"%S\", 64'h4142434445464748);");
+    try std.testing.expect(has(out, "std.mem.writeInt(u64"));
+    try std.testing.expect(has(out, "@as(u8, @truncate(@as(u64"));
+    try std.testing.expect(has(out, "@as(u64, @truncate(@as(u64"));
+    try std.testing.expect(has(out, "std.mem.trimStart(u8"));
 }

@@ -132,8 +132,8 @@ could fail a fixture. Each is argued in a fixture header rather than assumed:
   itself. `21` stops at "it expands, and it is a string literal a `%s` consumes",
   and its header names the one case a compile cannot catch: expansion to `""`.
 - **§10.2's own example** uses `always`/`reg` and the `ddiscrete` discipline,
-  which Annex C.7 puts outside Verilog-A. The rule is tested on analog nets
-  instead.
+  and remains untested in its digital context. Analog-net tests do not
+  establish this required full-AMS behavior.
 - **Qualifier coverage is a sample, not the alternation.** Syntax 10-1 lists
   fifteen; `02` uses `real`, `42` uses `wire` and `reg`. `45` pins that the slot
   is closed at all, which is the rule that matters, and is green (`//! reject qualifier`).

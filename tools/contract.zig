@@ -550,10 +550,10 @@ pub const gm = struct {
         // sweep happens to straddle. The edges are the reduction boundaries
         // the algorithm actually switches on.
         for ([_]f64{
-            0,       -0.0,   0x1p-60, -0x1p-60, 0x1p-54, -0x1p-54, 1e-300,
-            0.3465,  -0.3465, 0.3466, -0.3466,  1.0397,  -1.0397,  1.0398,
-            -1.0398, 1,      -1,      0.25,     -0.25,   -0.2501,  2,
-            -2,      38.8,   -38.8,   38.9,     709.78,  710,      -745,
+            0,       -0.0,    0x1p-60, -0x1p-60, 0x1p-54, -0x1p-54, 1e-300,
+            0.3465,  -0.3465, 0.3466,  -0.3466,  1.0397,  -1.0397,  1.0398,
+            -1.0398, 1,       -1,      0.25,     -0.25,   -0.2501,  2,
+            -2,      38.8,    -38.8,   38.9,     709.78,  710,      -745,
         }) |v| {
             try std.testing.expectEqual(
                 @as(u64, @bitCast(std.math.expm1(v))),
@@ -839,9 +839,9 @@ pub fn nU(comptime D: type) comptime_int {
 /// spellings exist today: R in codegen's rscalar_txt, Dual and Vec in tb.zig,
 /// and whatever the embedding host brings).
 pub const s_primitives = [_][]const u8{
-    "con",  "addC", "scale", "add",   "sub",  "neg",  "mul",  "div",
-    "exp",  "log",  "expm1", "log1p", "sqrt", "pow",  "sin",  "cos",
-    "tanh", "sinh", "cosh",  "atan",  "abs",  "minC", "maxC", "min",
+    "con",  "addC", "scale", "add",   "sub",  "neg",  "mul",   "div",
+    "exp",  "log",  "expm1", "log1p", "sqrt", "pow",  "sin",   "cos",
+    "tanh", "sinh", "cosh",  "atan",  "abs",  "minC", "maxC",  "min",
     "max",  "lt",   "le",    "eq",    "sel",  "val",  "ddxAt",
 };
 
@@ -852,6 +852,12 @@ pub fn checkScalar(comptime S: type) void {
         if (!@hasDecl(S, p))
             @compileError(@typeName(S) ++ ": scalar S is missing contract primitive `" ++ p ++ "`");
     }
+}
+
+/// Devices with first-call table state require exclusively owned mutable evaluation.
+/// Initialization is permanent for the instance and is not timestep rollback state.
+pub fn InstancePtr(comptime D: type) type {
+    return if (@hasDecl(D, "mutable_eval") and D.mutable_eval) *D.Instance else *const D.Instance;
 }
 
 pub fn validate(comptime D: type) void {
@@ -884,6 +890,8 @@ pub fn validate(comptime D: type) void {
 
     validateDefaultedStruct(D, "Model");
     validateDefaultedStruct(D, "Instance");
+    if (@hasDecl(D, "mutable_eval") and @TypeOf(D.mutable_eval) != bool)
+        @compileError(name ++ ".mutable_eval must be bool");
     validateSimState(D);
 
     // Physics: generic over S, so only shape-checkable. eval/q take
@@ -1012,6 +1020,13 @@ pub fn validate(comptime D: type) void {
         if (@hasDecl(D, "stateCtl"))
             expectFn(D, "stateCtl", fn (*const D.Model, *D.Instance, *D.State, StateCtlOp) bool);
     }
+
+    if (@hasDecl(D, "beginSolve")) expectFn(D, "beginSolve", fn (*D.Instance) void);
+    // §9.15/§9.17.3 iteration state is separate from accepted-time history.
+    if (@hasDecl(D, "advanceIteration"))
+        expectFn(D, "advanceIteration", fn (*const D.Model, *D.Instance, [n]f64) void);
+    if (@hasDecl(D, "checkConvergence"))
+        expectFn(D, "checkConvergence", fn (*const D.Model, *const D.Instance, [n]f64) bool);
 
     // Convergence aids. Only the 2-arg attempt form exists — batch.zig:616
     // calls it unconditionally; a 3-arg variant would never be invoked.
@@ -1188,6 +1203,16 @@ pub fn validate(comptime D: type) void {
 /// `src/backend/tb.zig`. An exemption for the tool's own host is how a seam
 /// stops being tested.
 pub fn validateHost(comptime H: type, comptime D: type) void {
+    if (@hasDecl(D, "mutable_eval") and D.mutable_eval) {
+        if (!@hasDecl(H, "mutable_eval") or !H.mutable_eval)
+            @compileError("this device requires exclusive mutable evaluation; declare mutable_eval = true");
+    }
+    if (@hasDecl(D, "advanceIteration") or @hasDecl(D, "checkConvergence") or @hasDecl(D, "beginSolve")) {
+        if (!@hasDecl(H, "iteration_hooks")) @compileError(@typeName(H) ++
+            " must implement the Newton iteration hooks and declare iteration_hooks = true; " ++
+            "updateState alone cannot execute this device. See CONSUMING.md.");
+        if (!H.iteration_hooks) @compileError("this device requires Newton iteration hooks");
+    }
     if (!@hasDecl(D, "systf_calls") or D.systf_calls.len == 0) return;
     const d = @typeName(D);
     const h = @typeName(H);
@@ -1221,6 +1246,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "collapse_full", {} },
     .{ "initState", {} },
     .{ "updateState", {} },
+    .{ "advanceIteration", {} },
+    .{ "checkConvergence", {} },
+    .{ "beginSolve", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
     // Single-precision-Jacobian permission — checked inline in `validate` (the
@@ -1246,6 +1274,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // `state.t_prev = inst.abstime` latch does not count — nothing in the
     // core reads it back.
     .{ "core_reads_simstate", {} },
+    .{ "mutable_eval", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
@@ -1662,6 +1691,7 @@ const MockAll = struct {
     pub const jac_f32_host = true;
     pub const lane_clean = true;
     pub const core_reads_simstate = true;
+    pub const mutable_eval = false;
 
     pub const Model = struct { g: f32 = 1e-3 };
     pub const Instance = struct {
@@ -1733,6 +1763,14 @@ const MockAll = struct {
         s.flips += 1;
         return .ok;
     }
+    pub fn beginSolve(_: *Instance) void {}
+
+    pub fn advanceIteration(_: *const Model, _: *Instance, _: [n_u]f64) void {}
+
+    pub fn checkConvergence(_: *const Model, _: *const Instance, _: [n_u]f64) bool {
+        return true;
+    }
+
     pub fn stateCtl(_: *const Model, _: *Instance, _: *State, _: StateCtlOp) bool {
         return false;
     }
@@ -1853,6 +1891,7 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
 
     // MockAll calls `$sampnhold`, so a host linking it must answer for it.
     const Sim = struct {
+        pub const iteration_hooks = true;
         var app: SystfHost = .{ .ctx = undefined, .call = zero };
         fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
             @memset(partials, 0);

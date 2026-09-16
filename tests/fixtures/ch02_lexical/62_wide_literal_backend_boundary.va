@@ -1,0 +1,8 @@
+// This legal literal survives the frontend exactly. The current analog
+// backend explicitly rejects it; this is tracked implementation debt.
+//! lrm 2.6.1
+//! reject E0130
+module ch02_wide_literal_backend_boundary;
+    integer value;
+    analog value = 128'h1;
+endmodule

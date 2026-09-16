@@ -1,18 +1,93 @@
 # Chapter 3 coverage
 
+Runtime multidimensional element reads and writes are covered by
+`89_dynamic_multidim_numeric.va`, `89_dynamic_multidim_scope.va`,
+`89_dynamic_multidim_parameter_index.va`, `89_dynamic_multidim_order.va`, and
+`89_dynamic_multidim_guards.va`. They exercise independent 2D/3D
+indices, mixed literal/parameter/runtime subscripts, signed descending ranges,
+initialization order, real-cell derivatives, string elements, scope restoration,
+parameter-index overrides, a nine-dimensional array, whole-array assignment,
+opposite-direction `$table_model` columns, and guarded invalid indices in
+conditionals and loops. Invalid writes do not alias neighboring cells. Constant invalid reads still reject with E0310; runtime invalid
+reads terminate with `VerA: out-of-range array read is not implemented`. Their
+complete inherited Verilog value semantics remain unimplemented, including
+four-state integer results; no real-array zero/NaN fallback is claimed. These
+tests cover scalar elements, not partial-array slices or dynamic scalar
+output/inout arguments.
+
+String value-set validation for constant instance overrides is covered by
+`84_string_range_overrides.va`, `85_string_range_outside_rejected.va`,
+`86_string_range_excluded_rejected.va` and `87_string_range_empty_excluded.va`.
+These test unions, case-sensitive membership, exclusion precedence and the empty
+string. Host-written values and string-aware paramset selection remain open.
+
+Exact integral parameter initialization and derivation are exercised by
+`88_integer_parameter_precision.va`, `88_integer_parameter_precision_override.va`
+`88_integer_parameter_precision_host.va` and `88_integer_parameter_precision_derive.va`.
+They cover bits beyond f64's exact
+range, high-bit patterns, dependent copies and masks, HDL instance overrides,
+host model-card writes, and declared `integer` wrapping before division.
+`88_integer_parameter_precision_real_dependents.va` and
+`88_integer_parameter_precision_real_dependents_host.va` also cover real
+parameters derived from converted integer scalars and descending array elements.
+Declared-type conversions are retained in MIR as well as folded metadata;
+integer arithmetic completes before a dependent value converts to real. A
+codegen unit test checks the Model field initializers before `derive()` runs.
+`88_integer_parameter_precision_control.va` also covers integer Model references
+in host-rendered delay controls and alternating real/integer conversions.
+The existing i64 carrier preserves up to 64 bits; complete expression width and
+signedness propagation, wider integral values, and changing an untyped
+parameter's width through the host card ABI remain open. Parameter derivation
+supports dynamic nonzero integer divisors. A selected zero divisor terminates
+with an explicit unsupported-value diagnostic; a guarded untaken division or
+remainder is never evaluated. Their i65 intermediate
+prevents host integer-division overflow before applying the MIR result width.
+The AST and MIR constant folds use the same widened division/remainder
+intermediate; typed 32-bit assignments from the minimum i64 literal are tested.
+`88_integer_parameter_precision_conditional.va` checks all eight bytes of an
+equal-width conditional localparam after a host override, including numeric `%s`.
+Nonfinite/out-of-i64-range real-to-integer conversion retains
+the existing saturation policy and still needs a separate consistency audit.
+
+`90_dependent_control_host.va`, `90_dependent_control_guarded.va`,
+`90_dependent_control_divisor.va`, `90_dependent_control_operators.va`, and
+`90_dependent_control_rg.va` exercise
+host derivation of `?:`, `&&` and `||`: nested branches, real comparisons before
+integer conversion, selected-arm integer arithmetic, declared-type rounding,
+descending parameter arrays, dependency order, explicit override precedence and
+skipped unsafe arms. The RG fixture uses the transmission-line model's actual
+`wave` and `ok` expressions. Codegen unit coverage also reconstructs unconverted
+pure two-way phi merges, whose branch need not be the last instruction.
+The operator fixture covers dependent logical shifts (`<<`, `>>`) with signed operands and negative
+or oversized counts, exact real remainder, and HiSIMHV's version-dependent
+conditional defaults after an override. Selected zero-divisor real remainders
+fail explicitly; guarded untaken remainders are skipped.
+`90_dependent_control_mixed_guard.va` checks select-arm proof evidence when a
+real comparison widens an integer literal, including untaken remainder by zero.
+`90_dependent_control_shift_sign.va` preserves signed and unsigned zero-shift
+identity in folded defaults, host derivation and runtime real/comparison uses.
+The two `shift_mixed` fixtures diagnose E0364 for known mixed-signedness shift
+comparisons, including constant expressions. General expression context typing
+is still missing: the analogous direct comparison `a > 32'h1` with signed
+integer `a = -1` also needs unsigned conversion, and the narrow diagnostic does
+not cover every compound expression. Wider shifts and arithmetic shifts remain
+separate gaps.
+Unsupported known numeric defaults and unsupported numeric localparams diagnose
+E1004; `90_dependent_control_unsupported.va` and
+`90_dependent_control_unknown_local.va` pin that limitation. Loop-carried or
+multiway constant-function control flow, unhandled system functions such as
+host-rendered `$clog2`, string derivation and complete expression sizing remain
+open. Non-local defaults with no compile-time value retain W1050's explicit
+host-supplied-value contract.
+
 Source: `docs/ch3-datatypes.html`, read in full through Section 3.13.4.
 
 HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s3-4-3` `s3-4-4` `s3-4-5` `s3-4-6` `s3-4-7` `s3-4-8` `s3-5` `s3-6` `s3-6-1` `s3-6-1-1` `s3-6-1-2` `s3-6-1-3` `s3-6-2` `s3-6-2-1` `s3-6-2-2` `s3-6-2-3` `s3-6-2-4` `s3-6-2-5` `s3-6-2-6` `s3-6-2-7` `s3-6-3` `s3-6-3-1` `s3-6-3-2` `s3-6-4` `s3-6-5` `s3-7` `s3-8` `s3-9` `s3-10` `s3-11` `s3-11-1` `s3-12` `s3-12-1` `s3-13` `s3-13-1` `s3-13-2` `s3-13-3` `s3-13-4` — 45 IDs, of which 3 (`s3-1`, `s3-6`, `s3-13`) are bare parent headings with no rule of their own.
 
-105 `.va` files: 54 run and assert, 51 are rejections, and NONE is `//! xfail`
-(grep-measured: 105 files, 51 with a `//! reject` line, 0 with a `//! xfail` line — the
-47/50-of-97 this line used to give predated eight fixtures, and the counts before that
-were never true of the tree they described).
-
-Measured on the MERGE, not carried from a branch. Two parallel waves each added one fixture
-here — `81_parameter_default_over_parameter.va` and `81_from_range_without_bracket.va` — and
-each correctly wrote 96 against its own tree, so git kept one edit and the count silently
-lost a file. Re-grep after any merge touching this directory.
+133 `.va` files: 75 execution fixtures, 58 rejection fixtures, and no `//! xfail`.
+Counts were measured after integrating the dependent-parameter fixtures; recount
+after adding or removing files. Rejection of a legal unsupported feature is not
+positive conformance coverage.
 No `xf:` marker is left in the table: every row that carried one is green, and each says
 what it pins. The full ledger is below.
 
@@ -50,7 +125,7 @@ what it pins. The full ledger is below.
 | 3.6.3.2 Net Discipline Initial (Nodeset) Values | `21_net_nodeset.va` — green: `electrical node = 5.0;` parses (A.2.4 `net_decl_assignment`) and the initializer is a solver HINT, so the fixture asserts the net carries the potential the rest of the circuit gives it and is not clamped to 5.0. VerA drops the value: it is an input to an analog solver that a compiled device does not contain, and until the contract carries it the clause's other two rules — "shall be a constant_expression" and the ban on non-continuous disciplines — have no consumer to check them. The bus form (`'{2.3,4.5,,6.0}`) has no fixture either; its null element has no A.8.3 operand. |
 | 3.6.4 Ground declaration | `13_ground_declaration.va`; `62_ground_non_continuous.va` (green, `DiagnosticsReported` — was: `ground` does not check the discipline's domain) |
 | 3.6.5 Implicit nets | `34_implicit_nets.va` (green, as above). It cites §3.6.2.4; §3.6.5 restates the same rule for the structural case, which is exactly the shape the file writes — an undeclared net appearing only as an instance actual. |
-| 3.7 Real net declarations (`wreal`) | — no fixture. No `.va` here contains `wreal`. Annex C puts it outside the Verilog-A subset, and the exclusion is stated in `annex_c_analog_subset`, not here. |
+| 3.7 Real net declarations (`wreal`) | — no fixture. No `.va` here contains `wreal`. It remains an open full-AMS requirement; rejection fixtures in `annex_c_analog_subset` do not establish its behavior. |
 | 3.8 Default discipline | — no fixture. No `.va` here contains `` `default_discipline ``. Directive handling belongs to Chapter 10 and discipline resolution to Annex F. |
 | 3.9 Disciplines of primitives | — no fixture. Needs `vpiLoConn`, simulator primitives and a mixed-signal resolution pass; nothing a single generated device can state. |
 | 3.10 Discipline precedence | — no fixture. Needs an out-of-module reference declaring another module's net, which requires hierarchy. |
@@ -70,7 +145,7 @@ Seven normative sections have no fixture, and the reasons split three ways.
 
 - **Attribute-instance clauses — 3.2.1, 3.4.3 and 3.6.3.1.** All three hang on `(* desc=…, units=… *)`, and grep finds no `(*` anywhere in this directory. Nothing structural blocks them: Chapter 2's `11_attributes.va` already parses attribute syntax. What is missing is any fixture that attaches one to a module-scope variable, a parameter, or a net and then observes it. The observable side is operating-point reporting, which a static Zig dump does not have — but the *acceptance* of the attribute in those three positions is testable and is not tested. (3.6.2.7, which used to sit in this bullet, closed: it is not an attribute *instance* but a bare `attr = value;` discipline item, and `lrm_3_6_2_7.va` now pins its acceptance.)
 - **Hierarchy and resolution clauses — 3.8, 3.9, 3.10.** Default discipline, primitive disciplines, and discipline precedence all decide the discipline of a net from outside the module that declares it. They need an instance tree and a resolution pass; `ch06_hierarchy` and `annex_f_resolution` are where they can live.
-- **Out of subset — 3.7.** `wreal` is a digital net type Annex C excludes from Verilog-A. The exclusion belongs in `annex_c_analog_subset`, and stating it here would duplicate it.
+- **Open full-AMS requirement — 3.7.** `wreal` needs implementation and behavioral coverage. Annex C’s Verilog-A exclusion does not remove it from VerA’s target.
 
 Two smaller holes inside covered sections, recorded so they are not read as covered: §3.4.1's derived-type-then-string-override case needs a string `//! param`, which `src/backend/tb.zig` does not support; §3.6.3.2's "nets of non-continuous disciplines are not [allowed initializers]" has no fixture and no check — see its row above, where the reason (nothing consumes the initializer) is stated.
 

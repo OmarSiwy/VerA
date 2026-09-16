@@ -12,9 +12,8 @@
 //!   - Runs on EVERY target (lint/debug/release). Debug and Release accept the
 //!     exact same set of models — no mode-specific semantics. Nothing in this
 //!     file reads a target.
-//!   - NO runtime domain checks are emitted anywhere. Proof-or-error only. This
-//!     is what keeps the emitted `eval` branch-free, and therefore what lets the
-//!     host's compiler vectorize it across instances.
+//!   - This pass does not synthesize runtime math-domain checks. System
+//!     functions can validate their own argument domains in emitted kernels.
 //!   - VerA is SPEC-FAITHFUL: `exp` (domain "All x", §4.3.2) is NEVER
 //!     rejected — the LRM permits inf and makes `limexp` (§4.5.13) optional.
 //!     Unprovable-finite units simply get `.strict` (below), not a rejection.
@@ -536,7 +535,16 @@ const Prover = struct {
                         self.iv[i] = .{ .lo = -@abs(b), .hi = @abs(b) };
                     self.finite[i] = true;
                 },
-                .undef, .inst_result => {},
+                .inst_result => {
+                    // if-conversion collects select-arm guards before the
+                    // transfer walk. A widened literal in `real_value > 0`
+                    // already has the same bound as the source integer zero.
+                    if (self.literalNumber(v)) |c| {
+                        self.iv[i] = Interval.point(c);
+                        self.finite[i] = math.isFinite(c);
+                    }
+                },
+                .undef => {},
             }
         }
     }
@@ -796,12 +804,22 @@ const Prover = struct {
         }
     }
 
-    fn isZeroConst(self: *const Prover, v: Mir.Value) bool {
+    fn literalNumber(self: *const Prover, v: Mir.Value) ?f64 {
         return switch (self.mir.valueDef(self.mir.resolveAlias(v))) {
-            .int_const => |c| c == 0,
-            .float_const => |c| c == 0.0,
-            else => false,
+            .int_const => |c| @floatFromInt(c),
+            .float_const => |c| c,
+            .inst_result => |inst| blk: {
+                const row = self.mir.instRow(inst);
+                if (row.op != .if_cast) break :blk null;
+                const def = self.mir.valueDef(self.mir.resolveAlias(@enumFromInt(row.a)));
+                break :blk if (def == .int_const) @as(f64, @floatFromInt(def.int_const)) else null;
+            },
+            else => null,
         };
+    }
+
+    fn isZeroConst(self: *const Prover, v: Mir.Value) bool {
+        return (self.literalNumber(v) orelse return false) == 0.0;
     }
 
     /// Facts implied by taking (or not taking) a branch on `cond`.
@@ -1671,19 +1689,9 @@ fn callAbstract(name: []const u8) Prover.Abstract {
         return .{ .iv = positive, .finite = true };
     if (std.mem.eql(u8, name, "$abstime") or std.mem.eql(u8, name, "$realtime"))
         return .{ .iv = non_negative, .finite = true };
-    // §9.13's draws, in the `$rng$*` shape `Lower.lowerRandom` rewrote them to.
-    // FINITE by construction, and this is a claim about `rng_kernels.zig` rather
-    // than about the LRM: every kernel there is a bounded arithmetic expression
-    // over a uniform on [0,1) whose logarithm arguments are held in (0,1], and
-    // `zRngT`'s divisor is guarded away from zero. Without this line every model
-    // drawing a variate compiled `.strict` — a speed cost, but also a diagnostic
-    // pointing at a call the prover COULD model.
-    //
-    // No interval, because §9.13 fixes none worth writing: `$random` spans the
-    // signed 32-bit range and a normal is unbounded in principle. The value
-    // proved here is finiteness.
-    if (std.mem.startsWith(u8, name, "$rng$"))
-        return .{ .iv = .top, .finite = true };
+    // §9.13 reference algorithms can overflow or underflow (Erlang's product,
+    // Student-t's divisor, and unbounded real scale parameters). A distribution
+    // name alone proves no finite value; retain strict floating-point mode.
     // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
     // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
     // unit — the only kind `proof` rates — the emitter renders it as the literal 0
@@ -2525,4 +2533,9 @@ test "proof: Options.unknown_bound is the calibration knob for a real solver" {
     defer tight.deinit(std.testing.allocator);
     try std.testing.expect(tight.ok());
     try std.testing.expectEqual(FloatMode.optimized, tight.unit_modes[0]);
+}
+
+test "proof: random distribution names do not prove finite results" {
+    for ([_][]const u8{ "$rng$uniform", "$rng$normal", "$rng$exponential", "$rng$poisson", "$rng$chi_square", "$rng$t", "$rng$erlang" }) |name|
+        try std.testing.expect(!callAbstract(name).finite);
 }

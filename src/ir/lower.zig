@@ -36,6 +36,9 @@ pub const ParamInfo = struct {
     /// "`k` declared here" and hang a `from (0:inf)` suggestion off it.
     tok: u32 = Mir.no_tok,
     ty: Ast.Type,
+    /// An explicit `integer` declaration converts to signed 32 bits; an
+    /// inferred integral parameter retains its initializer's bit pattern.
+    integer32: bool = true,
     default: Mir.Value,
     /// LRM §3.4.2. CRITICAL: carry ranges here from Ast.ParamDecl.ranges.
     /// proof.zig (class 6) uses these as the bound evidence. Historically this
@@ -451,6 +454,14 @@ uses_file_tasks: bool = false,
 /// to decide whether `table_kernels.zig` is emitted, exactly as
 /// `uses_str_tasks` gates the string kernels.
 uses_table_model: bool = false,
+/// First-call sample counts, one entry per array-source call site.
+table_samples: std.ArrayList(u32) = .empty,
+/// Source identity survives repeated analog-function inlining.
+table_sources: std.ArrayList(Ast.ExprId) = .empty,
+/// Guard-aware source-order chain for table captures and distribution checks;
+/// its final value is a core live-out.
+table_effect_place: ?Ssa.Place = null,
+table_effect: Mir.Value = .f_zero,
 /// §9.13 — does the module call one of Table 9-10's 17 probabilistic
 /// distributions? Gates `rng_kernels.zig` exactly as `uses_str_tasks` gates the
 /// string kernels.
@@ -514,6 +525,9 @@ module: ?*const Ast.ModuleDecl = null,
 /// called the task, so no unit and no state write.
 bound_step_place: ?Ssa.Place = null,
 disc_place: ?Ssa.Place = null,
+/// §9.17.1 rejection belongs to the Newton iteration, not timestep history.
+reject_iteration_place: ?Ssa.Place = null,
+reject_iteration: Mir.Value = .zero,
 /// §9.4 display tasks, in source order. A display call's RESULT is never read,
 /// so it is dead code the moment codegen slices a unit out of the MIR — and the
 /// print vanishes with it. `display_root` is the one live root that keeps them
@@ -547,8 +561,7 @@ held_names: std.StringHashMapUnmanaged(void) = .empty,
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(LimitSlot) = .empty,
-/// §9.15 the model reads `$simparam("iteration")` or `$simparam("iniLim")`, so
-/// codegen owes it `Instance.newton_iteration` and the two hooks that move it.
+/// §9.15 the model queries the runtime Newton iteration number.
 uses_newton_iter: bool = false,
 /// §9.15 the model reads a `$simparam` whose value is the HOST's
 /// (`simparamHostField`), so codegen owes its Model the reserved field. Set at
@@ -680,7 +693,7 @@ const DeferredDisplay = struct {
 const GenvarBind = struct { name: []const u8, c: Const };
 
 const VarSlot = struct { place: Ssa.Place, ty: Ty };
-const ScopeEntry = struct { name: []const u8, prev: ?VarSlot };
+const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
 /// first. `dims.len` is the number of subscripts a reference must supply.
 const ArrayInfo = struct {
@@ -1087,6 +1100,16 @@ fn astTy(t: Ast.Type) Ty {
 /// input is the AST and its only consumer is the next line: a `Lower` field set
 /// by root.zig would buy a second entry path and nothing else.
 pub fn lowerFile(self: *Lower) Error!void {
+    // The current backend only executes two-state analog equations. Preserve
+    // full source literals in the AST, but never silently coerce them here.
+    for (self.file.exprs.nodes.items(.tag), 0..) |tag, i| {
+        if (tag != .logic_literal) continue;
+        const e: Ast.ExprId = @enumFromInt(i);
+        const literal = self.file.exprs.logicValue(e);
+        const span = self.tokenSpan(self.file.exprs.mainTok(e));
+        try self.err(self.file.exprs.mainTok(e), .E0130, "`{s}`: the analog backend cannot execute this {d}-bit {s} literal", .{ self.src[span.start..span.end], literal.width, if (literal.hasUnknown()) "four-state" else "wide" });
+    }
+    if (self.had_error) return error.DiagnosticsReported;
     const design = try Elaborate.elaborate(.{
         .arena = self.arena,
         .file = self.file,
@@ -1483,6 +1506,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // (Deferred §9.4.1 operands are lowered inside, after the accumulator
     // finals above — that read order is what "converged" means here.)
     try self.finishDisplays();
+    if (self.table_effect_place) |p| self.table_effect = try self.builder.readVariable(p, self.cur);
 
     // AFTER `finishDisplays`: a deferred display operand appends its
     // `branch_reads` there, and §1.3.1's probe test has to see every read.
@@ -1494,6 +1518,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
 /// evaluates the unit once per accepted step and stores it into `Instance`.
 fn finishKernelCtl(self: *Lower) Oom!void {
+    if (self.reject_iteration_place) |p| self.reject_iteration = try self.builder.readVariable(p, self.cur);
     if (self.bound_step_place) |p| {
         const v = try self.builder.readVariable(p, self.cur);
         _ = try self.call("$bound_step", &.{v});
@@ -2709,7 +2734,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return self.lowerParamArray(decl, name);
 
-    const folded = self.constEval(decl.default);
+    const folded = if (self.constEval(decl.default)) |c| parameterConst(decl.ty, c) else null;
     try self.checkParamType(decl, name, folded);
     // §3.4.2's OTHER half: "the parameter value shall be within the range". It
     // needs a value somebody supplied, and `is_override` is the only marker that
@@ -2738,20 +2763,10 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // the fold that refuses to look through a parameter, so it is the "may this
     // be baked into the model card?" test; `folded` above cannot be, for the
     // §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
-    const frozen = self.foldExpr(decl.default, false);
-
-    const default: Mir.Value = if (frozen) |c| switch (c) {
-        .int => try self.mir.addIntConst(self.arena, c.asInt()),
-        .real => try self.mir.addFloatConst(self.arena, c.asReal()),
-        .str => |s| try self.mir.addStrConst(self.arena, s),
-    } else blk: {
-        // `parameter real b = a*2;` where `a` is itself overridable: keep it as
-        // an expression over other params.
-        const tv = try self.lowerExpr(decl.default);
-        break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
-    };
+    const default = try self.parameterDefault(decl.default, decl.ty);
 
     try self.addParam(name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+    self.params.items[self.params.items.len - 1].integer32 = decl.ty == .integer;
 }
 
 /// §3.4/A.2.4: the spelling of the first simulation-state reference in a
@@ -2815,10 +2830,29 @@ fn simStateName(n: []const u8) bool {
 /// no single value at compile time.
 fn checkParamRange(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, folded: ?Const) Oom!void {
     const c = folded orelse return;
-    // A.2.5's string form is a SET, not an interval; §3.4.2 gives it its own
-    // sentence and it needs string equality, not ordering. Unimplemented, and
-    // silent rather than wrong.
-    if (c == .str) return;
+    if (c == .str) {
+        var has_from = false;
+        var in_from = false;
+        for (decl.ranges) |r| {
+            const off = r.strings orelse continue;
+            const contains = for (self.file.exprs.list(off)) |id| {
+                if (std.mem.eql(u8, c.str, self.file.str(@enumFromInt(id)))) break true;
+            } else false;
+            switch (r.kind) {
+                .from => {
+                    has_from = true;
+                    in_from = in_from or contains;
+                },
+                .exclude => if (contains) {
+                    try self.err(decl.main_tok, .E0361, "`{s}` is \"{s}\", which the declared range excludes", .{ name, c.str });
+                    return;
+                },
+            }
+        }
+        if (has_from and !in_from)
+            try self.err(decl.main_tok, .E0361, "`{s}` is \"{s}\", outside the declared range", .{ name, c.str });
+        return;
+    }
     const v = c.asReal();
 
     var has_from = false;
@@ -2947,6 +2981,47 @@ fn addParam(
     try self.param_index.put(self.arena, name, idx);
 }
 
+/// Apply an explicit parameter type before a later default infers its own type.
+/// Out-of-i64 real conversion retains the existing saturation policy; deciding
+/// that implementation-defined domain is separate from preserving integral bits.
+fn parameterConst(ty: Ast.Type, value: Const) Const {
+    return switch (ty) {
+        .real => if (value == .str) value else .{ .real = value.asReal() },
+        .integer => switch (value) {
+            .int => |n| .{ .int = wrap32(n) },
+            .real => |n| blk: {
+                const rounded = @round(n);
+                if (rounded >= -9223372036854775808.0 and rounded < 9223372036854775808.0)
+                    break :blk .{ .int = wrap32(@intFromFloat(rounded)) };
+                break :blk value;
+            },
+            .str => value,
+        },
+        .string, .unspecified => value,
+    };
+}
+
+/// The MIR must contain the same declared-type conversion as `folded` metadata.
+/// Later defaults and operator controls follow this MIR, not the Model field.
+fn parameterDefault(self: *Lower, e: Ast.ExprId, ty: Ast.Type) Oom!Mir.Value {
+    if (e == .none) return zeroOf(astTy(ty));
+    if (self.foldExpr(e, false)) |raw| {
+        return switch (parameterConst(ty, raw)) {
+            .int => |n| self.mir.addIntConst(self.arena, n),
+            .real => |n| self.mir.addFloatConst(self.arena, n),
+            .str => |s| self.mir.addStrConst(self.arena, s),
+        };
+    }
+    const value = try self.lowerExpr(e);
+    return switch (ty) {
+        .real => self.toReal(value),
+        // MIR integer arithmetic truncates to signed 32 bits. Adding zero
+        // expresses that conversion without changing the mathematical value.
+        .integer => self.emit(.iadd, &.{ try self.toInt(value), .zero }),
+        .string, .unspecified => value.v,
+    };
+}
+
 /// §3.4.4 `parameter real c[0:2] = '{1,2,3};` → three scalar parameters named
 /// `c[0]`, `c[1]`, `c[2]`. Codegen emits one Model field each.
 fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
@@ -2977,28 +3052,19 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
     }
     const elems = try self.flattenPattern(decl.default, dims);
 
-    try self.arrays.put(self.arena, name, .{ .dims = dims, .ty = astTy(ty) });
+    try self.declareArray(name, .{ .dims = dims, .ty = astTy(ty) });
     var sub: [max_stack_dims]i64 = undefined;
     const idx = try self.subscriptBuf(&sub, dims.len);
     for (elems, 0..) |elem, k| {
         shapeSubscripts(dims, k, idx);
-        const default: Mir.Value = if (elem == .none)
-            (if (astTy(ty) == .real) Mir.Value.f_zero else Mir.Value.zero)
-            // §6.3.4 again: `foldExpr(..., false)`, not `constEval` — an element written
-            // over another parameter tracks it exactly like a scalar default.
-        else if (self.foldExpr(elem, false)) |c|
-            (if (astTy(ty) == .real) try self.mir.addFloatConst(self.arena, c.asReal()) else try self.mir.addIntConst(self.arena, c.asInt()))
-        else blk: {
-            const tv = try self.lowerExpr(elem);
-            break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
-        };
+        const default = try self.parameterDefault(elem, ty);
         // §3.4.4 an omitted element is the type's zero; anything else folds
         // through the declared defaults exactly as a scalar's does.
         const folded: ?Const = if (elem == .none)
             (if (astTy(ty) == .real) Const{ .real = 0 } else Const{ .int = 0 })
         else
             self.constEval(elem);
-        try self.addParam(try self.elemName(name, idx), ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+        try self.addParam(try self.elemName(name, idx), ty, default, if (folded) |c| parameterConst(ty, c) else null, decl.ranges, decl.is_local, decl.main_tok);
     }
 }
 
@@ -3113,6 +3179,7 @@ fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.Exp
 const Bounds = struct {
     lo: i64,
     hi: i64,
+    descending: bool = false,
 
     fn count(b: Bounds) i64 {
         return b.hi - b.lo + 1;
@@ -3143,7 +3210,7 @@ fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u8) O
         };
         const x = a.asInt();
         const y = c.asInt();
-        b.* = .{ .lo = @min(x, y), .hi = @max(x, y) };
+        b.* = .{ .lo = @min(x, y), .hi = @max(x, y), .descending = x > y };
     }
     return out;
 }
@@ -3164,7 +3231,8 @@ fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
     while (i > 0) {
         i -= 1;
         const n: usize = @intCast(dims[i].count());
-        out[i] = dims[i].lo + @as(i64, @intCast(rest % n));
+        const offset: i64 = @intCast(rest % n);
+        out[i] = if (dims[i].descending) dims[i].hi - offset else dims[i].lo + offset;
         rest /= n;
     }
 }
@@ -3172,8 +3240,7 @@ fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
 /// How many subscripts fit on the stack. NOT a proved bound — §3.2 puts no limit
 /// on a declaration's dimension count, though its own examples go two deep — so
 /// this is the spill shape and not a fixed buffer: eight covers everything real
-/// and anything wider allocates. `indexChain` shares the constant, which is what
-/// makes ITS spill unreachable (see `resolveLvalue`).
+/// and anything wider allocates. `indexChain` uses the same spill threshold.
 const max_stack_dims = 8;
 
 /// Scratch for ONE cell's subscripts, sized once for a whole `shapeSubscripts`
@@ -3241,13 +3308,33 @@ fn closeScope(self: *Lower, mark: usize) void {
         } else {
             _ = self.vars.remove(e.name);
         }
+        if (e.prev_array) |a| {
+            self.arrays.putAssumeCapacity(e.name, a);
+        } else {
+            _ = self.arrays.remove(e.name);
+        }
     }
+}
+
+fn shadowName(self: *Lower, name: []const u8) Oom!void {
+    try self.scope_log.append(self.arena, .{
+        .name = name,
+        .prev = self.vars.get(name),
+        .prev_array = self.arrays.get(name),
+    });
+    _ = self.vars.remove(name);
+    _ = self.arrays.remove(name);
+}
+
+fn declareArray(self: *Lower, name: []const u8, info: ArrayInfo) Oom!void {
+    try self.shadowName(name);
+    try self.arrays.put(self.arena, name, info);
 }
 
 /// Bind `name` to a fresh SSA place, remembering what it shadowed (§5.3.2).
 fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
     const slot: VarSlot = .{ .place = self.builder.newPlace(), .ty = ty };
-    try self.scope_log.append(self.arena, .{ .name = name, .prev = self.vars.get(name) });
+    try self.shadowName(name);
     try self.vars.put(self.arena, name, slot);
     return slot;
 }
@@ -3299,12 +3386,12 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
 
     if (decl.dims.len != 0) {
         const dims = try self.dimsBounds(decl.dims, decl.main_tok, name) orelse return;
-        try self.arrays.put(self.arena, name, .{ .dims = dims, .ty = ty });
+        try self.declareArray(name, .{ .dims = dims, .ty = ty });
         // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
         // the declaration takes an initializer exactly like the §3.4.4 array
         // PARAMETER does, and dropping it silently zeroed every element. The
         // pattern is positional over the declared range, so element k lands at
-        // `dims[0].lo + k` — a 1:3 range puts "first" at index 1, not 0 — and
+        // its left bound first, following the declared direction, and
         // one list per dimension for a multidimensional array (§3.3, §3.4.8).
         const elems = try self.flattenPattern(decl.init, dims);
         var sub: [max_stack_dims]i64 = undefined;
@@ -3575,40 +3662,67 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     }
 }
 
-/// `a[i] = v` for a non-constant `i` over a one-dimensional array. True when it
-/// was handled; false leaves the ordinary `resolveLvalue` path and its
-/// diagnostics (a constant index, a multidimensional array, a non-array name).
-///
-/// Every element is rewritten as `select(i == k, v, a[k])`, so an index outside
-/// the declared range writes nothing at all — §3.2.2 leaves that case undefined,
-/// and dropping the write is the one answer that cannot corrupt a neighbour.
-///
-/// ponytail: N selects per assignment, so a loop over an N-element array is
-/// O(N²) instructions. Fine at the sizes §3.2 arrays are written at (the LRM's
-/// own examples are 2 and 4 elements) and the alternative is real memory in the
-/// emitted device, which is the whole thing scalarization exists to avoid.
+/// Runtime scalar-element assignment. Each cell receives `select(index == k,
+/// value, old)`, leaving all other cells unchanged, including on an invalid index.
+/// ponytail: N masked writes per assignment; replace scalarization with explicit
+/// array storage if large mutable arrays make this compile-time expansion costly.
 fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
-    const chain = self.indexChain(target, &subs) orelse return false;
-    if (chain.subs.len != 1) return false;
-    if (self.constEval(chain.subs[0]) != null) return false;
+    const chain = (try self.indexChain(target, &subs)) orelse return false;
+    var dynamic = false;
+    for (chain.subs) |s| dynamic = dynamic or self.foldExpr(s, false) == null;
+    if (!dynamic) return false;
     const name = self.file.str(chain.name);
     const info = self.arrays.get(name) orelse return false;
-    if (info.dims.len != 1) return false;
+    if (!try self.checkSubscriptCount(target, name, info, chain.subs.len)) return true;
 
-    const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
+    const iv = try self.runtimeArrayIndex(chain.subs, info.dims);
     const tv = try self.lowerExpr(value);
-    const d = info.dims[0];
+    const new = try self.coerceTo(value, info.ty, tv);
     var key_buf: [elem_key_len]u8 = undefined;
-    var i = d.lo;
-    while (i <= d.hi) : (i += 1) {
-        const slot = self.vars.get(try self.elemKey(&key_buf, name, &.{i})) orelse continue;
+    var sub: [max_stack_dims]i64 = undefined;
+    const at = try self.subscriptBuf(&sub, info.dims.len);
+    for (0..shapeCells(info.dims)) |k| {
+        shapeSubscripts(info.dims, k, at);
+        const key = try self.elemKey(&key_buf, name, at);
+        const slot = self.vars.get(key) orelse {
+            try self.err(self.file.exprs.mainTok(target), .E0312, "`{s}`", .{name});
+            return true;
+        };
         const old = try self.builder.readVariable(slot.place, self.cur);
-        const new = try self.coerceTo(value, slot.ty, tv);
-        const c = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, i) });
+        const c = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(k)) });
         try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ c, new, old }));
     }
     return true;
+}
+
+/// Flatten a full subscript tuple in declaration order. Check EACH dimension:
+/// flattening unchecked `[i][j]` would let `j == columns` alias `[i+1][0]`.
+/// Invalid tuples use -1; masked writes then preserve every element.
+fn runtimeArrayIndex(self: *Lower, subs: []const Ast.ExprId, dims: []const Bounds) Oom!Mir.Value {
+    var flat = Mir.Value.zero;
+    var valid = Mir.Value.one;
+    for (subs, dims) |s, d| {
+        const index = try self.toInt(try self.lowerExpr(s));
+        const lo = try self.mir.addIntConst(self.arena, d.lo);
+        const hi = try self.mir.addIntConst(self.arena, d.hi);
+        const in_range = try self.emit(.logand, &.{
+            try self.emit(.ige, &.{ index, lo }),
+            try self.emit(.ile, &.{ index, hi }),
+        });
+        valid = try self.emit(.logand, &.{ valid, in_range });
+        // Keep invalid index arithmetic bounded too, even before the final mask.
+        const bounded = try self.emit(.select, &.{ in_range, index, lo });
+        const offset = if (d.descending)
+            try self.emit(.isub, &.{ hi, bounded })
+        else
+            try self.emit(.isub, &.{ bounded, lo });
+        flat = try self.emit(.iadd, &.{
+            try self.emit(.imul, &.{ flat, try self.mir.addIntConst(self.arena, d.count()) }),
+            offset,
+        });
+    }
+    return self.emit(.select, &.{ valid, flat, try self.mir.addIntConst(self.arena, -1) });
 }
 
 /// §5.7 unpacked array assignment, `A = B`: "Array assignments shall only be
@@ -3710,16 +3824,13 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
         },
         .index => {
             var subs: [max_stack_dims]Ast.ExprId = undefined;
-            const chain = self.indexChain(e, &subs) orelse {
+            const chain = (try self.indexChain(e, &subs)) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
                 return null;
             };
             const name = self.file.str(chain.name);
-            // No spill: `indexChain` refuses a chain deeper than the buffer it
-            // was handed, and that buffer is `max_stack_dims` wide too, so
-            // `chain.subs.len <= idx.len` holds by construction.
             var idx: [max_stack_dims]i64 = undefined;
-            const at = idx[0..chain.subs.len];
+            const at = try self.subscriptBuf(&idx, chain.subs.len);
             for (chain.subs, at) |s, *o| {
                 const c = self.constEval(s) orelse {
                     try self.err(self.file.exprs.mainTok(e), .E0311, "indexing `{s}`", .{name});
@@ -3769,22 +3880,25 @@ fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oo
 /// first. `null` when the base is not a plain name — `f(x)[0]` has no
 /// scalarized element to resolve to.
 ///
-/// The chain is walked from the OUTSIDE in (`.index` nests to the left), so the
-/// subscripts come out reversed and are flipped once, in place.
+/// Count the nested indices, then fill their slots from the end so the result
+/// follows source order. Deep chains spill into the compilation arena.
 const IndexChain = struct { name: Ast.StrId, subs: []const Ast.ExprId };
-fn indexChain(self: *const Lower, e: Ast.ExprId, buf: []Ast.ExprId) ?IndexChain {
+fn indexChain(self: *Lower, e: Ast.ExprId, buf: []Ast.ExprId) Oom!?IndexChain {
     const ex = &self.file.exprs;
     var n: usize = 0;
     var cur = e;
-    while (ex.tag(cur) == .index) {
-        if (n == buf.len) return null; // deeper than any legal declaration here
-        buf[n] = ex.rhs(cur);
-        n += 1;
+    while (ex.tag(cur) == .index) : (cur = ex.lhs(cur)) n += 1;
+    if (ex.tag(cur) != .ident or ex.strOf(cur) == .none) return null;
+    const subs = if (n <= buf.len) buf[0..n] else try self.arena.alloc(Ast.ExprId, n);
+    const name = ex.strOf(cur);
+    cur = e;
+    var i = n;
+    while (i > 0) {
+        i -= 1;
+        subs[i] = ex.rhs(cur);
         cur = ex.lhs(cur);
     }
-    if (ex.tag(cur) != .ident or ex.strOf(cur) == .none) return null;
-    std.mem.reverse(Ast.ExprId, buf[0..n]);
-    return .{ .name = ex.strOf(cur), .subs = buf[0..n] };
+    return .{ .name = name, .subs = subs };
 }
 
 /// §3.2: a reference supplies one subscript per declared dimension. Separate
@@ -5472,12 +5586,11 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     defer tys.deinit(self.arena);
     for (args) |a| {
         if (a == .none) continue; // A.6.9 empty argument slot
-        const tv = try self.lowerSysArg(a, takesNetRef(name));
+        const tv = try self.lowerTaskArg(a, name);
         try vals.append(self.arena, tv.v);
         try live.append(self.arena, a);
         try tys.append(self.arena, tv.ty);
     }
-    const v = try self.call(name, vals.items);
     if (isFileOutTask(name)) {
         self.uses_file_tasks = true;
         // The §9.4.3 formatter renders into a scratch row before the write, so a
@@ -5487,8 +5600,9 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     if (isDisplayTask(name) or isFileOutTask(name)) {
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
-        try self.checkFormatTypes(live.items, tys.items);
+        try self.prepareFormatArgs(live.items, tys.items, vals.items);
     }
+    const v = try self.call(name, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
     if (isDisplayTask(name) or isFileOutTask(name) or isSimCtlTask(name)) {
         // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
@@ -5555,7 +5669,7 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
             any_deferred = true;
             continue;
         }
-        p.* = try self.lowerSysArg(a, takesNetRef(name));
+        p.* = try self.lowerTaskArg(a, name);
     }
     // §5.9.3 an unrolled body's genvar bindings are gone from `consts` by
     // `finishDisplays`; a deferred operand snapshots them. Only when one
@@ -5627,14 +5741,14 @@ fn lowerDeferredDisplays(self: *Lower) Oom!void {
         defer tys.deinit(self.arena);
         for (dd.args, dd.pre) |a, p| {
             if (a == .none) continue;
-            const tv = p orelse try self.lowerSysArg(a, takesNetRef(dd.name));
+            const tv = p orelse try self.lowerTaskArg(a, dd.name);
             try vals.append(self.arena, tv.v);
             try live.append(self.arena, a);
             try tys.append(self.arena, tv.ty);
         }
         for (dd.genvars) |g| _ = self.consts.remove(g.name);
         // §9.4.3 conversion-vs-type pairing, postponed with the operands.
-        try self.checkFormatTypes(live.items, tys.items);
+        try self.prepareFormatArgs(live.items, tys.items, vals.items);
         self.displays.items[dd.display].val = try self.call(dd.name, vals.items);
     }
 }
@@ -5784,7 +5898,7 @@ pub fn isFileOutTask(name: []const u8) bool {
 /// and then asserts the position that read moved to.
 pub fn isFileFunc(name: []const u8) bool {
     const fns = [_][]const u8{
-        "$fopen", "$fgets", "$fscanf", "$ftell",
+        "$fopen", "$fgets",  "$fscanf", "$ftell",
         "$fseek", "$rewind", "$ferror", "$feof",
     };
     for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
@@ -5834,6 +5948,7 @@ pub fn isDisplayTask(name: []const u8) bool {
 /// A format built at run time folds to null and nothing is said.
 fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void {
     const at, const fmt = for (args, 0..) |a, i| {
+        if (try self.outputLiteral(a)) |text| break .{ i, text };
         if (self.constEval(a)) |c| switch (c) {
             .str => |s| break .{ i, s },
             else => {},
@@ -5866,66 +5981,144 @@ fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void
     try b.emit();
 }
 
+/// Preserve the source integer width before SSA replaces variables with their
+/// values. The synthetic identity is consumed by the display formatter only;
+/// other conversions still see the same numeric value.
+fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
+    const bits = self.formatBits(e) orelse {
+        try self.err(self.file.exprs.mainTok(e), .E0819, "numeric `%s` needs a preserved integral width; this expression's sizing is not implemented", .{});
+        return tv.v;
+    };
+    return self.call("$display$width", &.{ tv.v, try self.mir.addIntConst(self.arena, bits) });
+}
+
+/// Only return widths the current analog IR preserves. A guessed carrier width
+/// can silently truncate a wide conditional or sign-extend a small operand.
+fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .int_literal => @intCast(if (ex.intLiteral(e).width == 0) 64 else ex.intLiteral(e).width),
+        .unary => switch (ex.unOp(e)) {
+            .plus => self.formatBits(ex.lhs(e)),
+            .minus, .bit_not => if ((self.formatBits(ex.lhs(e)) orelse return null) <= 32) self.formatBits(ex.lhs(e)) else null,
+            else => 1,
+        },
+        .ternary => blk: {
+            const lhs = self.formatBits(ex.rhs(e)) orelse return null;
+            const rhs = self.formatBits(ex.ternaryElse(e)) orelse return null;
+            // Mixed-width branches also need signedness propagation before
+            // selection. The current IR carries neither fact across a phi.
+            break :blk if (lhs == rhs) lhs else null;
+        },
+        .ident => blk: {
+            const name = self.file.str(ex.strOf(e));
+            if (self.vars.contains(name)) break :blk 32; // §3.2 integer variable
+            const pi = self.param_index.get(name) orelse return null;
+            const module = self.module orelse return null;
+            for (module.params) |decl| {
+                if (!std.mem.eql(u8, self.file.str(decl.name), self.params.items[pi].name)) continue;
+                if (decl.ty == .integer) break :blk 32;
+                // §3.4.1: an untyped parameter derives its type from the FINAL
+                // override. The host's numeric parameter ABI has no width.
+                if (!decl.is_local) break :blk null;
+                // Host derivation preserves equal-width conditional arms;
+                // unsupported dependent expressions diagnose at code generation.
+                break :blk self.formatBits(decl.default);
+            }
+            break :blk null;
+        },
+        .sys_call => if (std.mem.eql(u8, self.file.str(ex.strOf(e)), "$realtobits")) 64 else 32,
+        .binary => switch (ex.binOp(e)) {
+            .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => 1,
+            // General arithmetic needs expression-width propagation, not the
+            // analog arithmetic emitter's current unconditional wrap32.
+            else => null,
+        },
+        else => null,
+    };
+}
+
 /// §9.4.3's OTHER pairing rule: each conversion against its operand's TYPE.
 /// `checkFormatPairing` counts; this one checks that the pairs it counted can
-/// be RENDERED — three cannot (see E0819), and each used to sail through here
+/// be RENDERED (see E0819), and each used to sail through here
 /// and fail the generated device's own build as an "engine bug".
 ///
-/// The walk mirrors `cg_display.translateFormat` exactly — same format pick
-/// (first argument that folds to a string), same flag/width skipping, same
-/// operand consumption over the LOWERED argument list (`live`/`tys` are the
-/// non-null slots, which is what the emitter receives) — because "would the
-/// emitted Zig compile" is a question about that pairing and no other. A
-/// shortfall stops the check where the operands stop; E0810 already owns it.
-fn checkFormatTypes(self: *Lower, live: []const Ast.ExprId, tys: []const Ty) Oom!void {
+/// Walk every format run as `cg_display.buildArgs` does, skipping consumed
+/// operands so a string used by `%s` does not become a new format. Numeric
+/// `%s` operands also retain their source width through an identity call.
+/// A shortfall stops where the operands stop; E0810 already owns it.
+fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
     std.debug.assert(live.len == tys.len);
-    const at, const fmt = for (live, 0..) |a, i| {
-        if (self.constEval(a)) |c| switch (c) {
-            .str => |s| break .{ i, s },
-            else => {},
-        };
-    } else return;
-
-    var next: usize = at + 1;
-    var i: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
-        i = p + 1;
-        if (i >= fmt.len) break;
-        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
-            (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
-        {}
-        if (i >= fmt.len) break;
-        const conv = std.ascii.toLower(fmt[i]);
-        i += 1;
-        if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
-        if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
-        const ty = tys[next];
-        const arg = live[next];
-        next += 1;
-        // What `cg_display.appendConv` renders per (conversion, type):
-        //   %d/%b/%o/%h/%x — any type; a string takes §2.7's integer view.
-        //   %c             — an integer's low byte (Table 9-22); a real rounds.
-        //   %s             — the text; §9.4.5's ASCII-codes view of a NUMBER
-        //                    is not implemented.
-        //   %e/%f/%g/%r and the %t/%u/%z/%v decimal defaults — numbers only.
-        //   anything else  — the operand's natural form, every type.
-        const bad = switch (conv) {
-            's' => ty != .string,
-            'c' => ty == .string,
-            'e', 'f', 'g', 'r', 't', 'u', 'z', 'v' => ty == .string,
-            else => false,
-        };
-        if (!bad) continue;
-        var b = self.errWith(self.file.exprs.mainTok(arg), .E0819);
-        b.msg("`%{c}` on a {s} operand", .{ conv, @tagName(ty) });
-        if (conv == 's') {
-            b.help("print the number with `%g` or `%d`", .{});
-        } else if (conv == 'c') {
-            b.help("`%c` takes a character code; use `%s` for the text", .{});
+    var at: usize = 0;
+    while (at < live.len) {
+        // Use the actual lowered bytes, including direct literal NUL escapes,
+        // so validation and emission inspect the same format.
+        const lowered = self.mir.valueDef(vals[at]);
+        const fmt = if (lowered == .str_const) lowered.str_const else if (self.constEval(live[at])) |c| switch (c) {
+            .str => |str| str,
+            else => {
+                at += 1;
+                continue;
+            },
         } else {
-            b.help("use `%s` for the text, or `%d` for the string's integer value", .{});
+            at += 1;
+            continue;
+        };
+        var next = at + 1;
+        var i: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+            i = p + 1;
+            if (i >= fmt.len) break;
+            while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+                (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
+            {}
+            if (i >= fmt.len) break;
+            const conv = std.ascii.toLower(fmt[i]);
+            i += 1;
+            if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
+            if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
+            const ty = tys[next];
+            const arg = live[next];
+            next += 1;
+            // What `cg_display.appendConv` renders per (conversion, type):
+            //   %d/%b/%o/%h/%x — any type; a string takes §2.7's integer view.
+            //   %c             — an integer's low byte (Table 9-22); a real rounds.
+            //   %s             — text, or §9.4.5's integer ASCII byte sequence.
+            //                    Real operands still need a defined conversion.
+            //   %e/%f/%g/%r and the %t/%u/%z/%v decimal defaults — numbers only.
+            //   anything else  — the operand's natural form, every type.
+            const bad = switch (conv) {
+                's' => ty != .string and ty != .integer,
+                'c' => ty == .string,
+                'e', 'f', 'g', 'r', 't', 'u', 'z', 'v' => ty == .string,
+                else => false,
+            };
+            if (!bad) {
+                if (conv == 's') {
+                    if (ty == .integer) {
+                        vals[next - 1] = try self.formatOperand(arg, .{ .v = vals[next - 1], .ty = ty });
+                    } else if (self.mir.valueDef(vals[next - 1]) == .str_const) {
+                        // §9.4.5 suppresses leading zero bytes of a literal's
+                        // packed byte sequence, before field padding. Stored
+                        // strings already exclude every NUL (§3.3).
+                        const bytes = self.mir.valueDef(vals[next - 1]).str_const;
+                        vals[next - 1] = try self.mir.addStrConst(self.arena, std.mem.trimStart(u8, bytes, &.{0}));
+                    }
+                }
+                continue;
+            }
+            var b = self.errWith(self.file.exprs.mainTok(arg), .E0819);
+            b.msg("`%{c}` on a {s} operand", .{ conv, @tagName(ty) });
+            if (conv == 's') {
+                b.help("print the number with `%g` or `%d`", .{});
+            } else if (conv == 'c') {
+                b.help("`%c` takes a character code; use `%s` for the text", .{});
+            } else {
+                b.help("use `%s` for the text, or `%d` for the string's integer value", .{});
+            }
+            try b.emit();
         }
-        try b.emit();
+        at = next;
     }
 }
 
@@ -5951,13 +6144,22 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
+    var live: std.ArrayList(Ast.ExprId) = .empty;
+    defer live.deinit(self.arena);
+    var tys: std.ArrayList(Ty) = .empty;
+    defer tys.deinit(self.arena);
     // Types are preserved, not coerced: the conversion `cg_display.appendConv`
     // picks depends on the operand's own type (§9.4.3 `%d` on a real is a
     // §4.2.1.1 conversion, `%s` on a string is the text).
     for (args[1..]) |a| {
         if (a == .none) continue;
-        try vals.append(self.arena, (try self.lowerExpr(a)).v);
+        const tv = try self.lowerFormatArg(a);
+        try vals.append(self.arena, tv.v);
+        try live.append(self.arena, a);
+        try tys.append(self.arena, tv.ty);
     }
+    try self.checkFormatPairing(tok, args[1..]);
+    try self.prepareFormatArgs(live.items, tys.items, vals.items);
     self.uses_str_tasks = true;
     const v = try self.call("$sformat", vals.items);
     try self.builder.writeVariable(slot.place, self.cur, v);
@@ -6030,6 +6232,8 @@ pub const Dist = struct {
     /// error shall be reported." (§9.13.2 for the $rdist_ family; IEEE 1364
     /// §17.9.2 states the same domain for the integer twins.)
     positive: u8 = 0,
+    /// First parameter is df/stages, whose reference algorithm uses a count.
+    count: bool = false,
     /// §9.13.2 "The start value shall be smaller than the end value." Only the
     /// uniform pair, and it is a relation between two arguments rather than a
     /// domain on one, which is why it is a separate flag.
@@ -6047,17 +6251,17 @@ const dists = [_]Dist{
     .{ .name = "$dist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .integer },
     .{ .name = "$dist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .integer, .positive = 0b01 },
     .{ .name = "$dist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .integer, .positive = 0b01 },
-    .{ .name = "$dist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .integer, .positive = 0b01 },
-    .{ .name = "$dist_t", .kernel = "$rng$t", .nparam = 1, .ty = .integer, .positive = 0b01 },
-    .{ .name = "$dist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .integer, .positive = 0b11 },
+    .{ .name = "$dist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .integer, .positive = 0b01, .count = true },
+    .{ .name = "$dist_t", .kernel = "$rng$t", .nparam = 1, .ty = .integer, .positive = 0b01, .count = true },
+    .{ .name = "$dist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .integer, .positive = 0b11, .count = true },
     // §9.13.2, the real family.
     .{ .name = "$rdist_uniform", .kernel = "$rng$uniform", .nparam = 2, .ty = .real, .ordered = true },
     .{ .name = "$rdist_normal", .kernel = "$rng$normal", .nparam = 2, .ty = .real },
     .{ .name = "$rdist_exponential", .kernel = "$rng$exponential", .nparam = 1, .ty = .real, .positive = 0b01 },
     .{ .name = "$rdist_poisson", .kernel = "$rng$poisson", .nparam = 1, .ty = .real, .positive = 0b01 },
-    .{ .name = "$rdist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .real, .positive = 0b01 },
-    .{ .name = "$rdist_t", .kernel = "$rng$t", .nparam = 1, .ty = .real, .positive = 0b01 },
-    .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11 },
+    .{ .name = "$rdist_chi_square", .kernel = "$rng$chi_square", .nparam = 1, .ty = .real, .positive = 0b01, .count = true },
+    .{ .name = "$rdist_t", .kernel = "$rng$t", .nparam = 1, .ty = .real, .positive = 0b01, .count = true },
+    .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11, .count = true },
 };
 
 pub fn distOf(name: []const u8) ?*const Dist {
@@ -6175,32 +6379,65 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
     }
 
     // ---- the parameters, and the rules §9.13.2 states about them ------------
+    // §4.2.3 suppresses errors in skipped operands. Entry is a conservative
+    // proof that the call executes unconditionally; later blocks keep runtime
+    // checks even when they would also be safe to diagnose here. Function-local
+    // constants can depend on host parameters, so they also stay runtime.
+    const eager = self.cur == .entry and self.inlining.items.len == 0;
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.append(self.arena, seed);
     for (given.items[@min(1, given.items.len)..], 0..) |a, i| {
         const tv = try self.lowerExpr(a);
         try vals.append(self.arena, try self.toReal(tv));
-        // Only a folded argument can be judged; a runtime one is the host's
-        // problem, and §9.13.2 gives the kernels a defined answer either way.
-        const c = self.constEval(a) orelse continue;
+        // A declared parameter default is not the final host-supplied value.
+        // Keep static signature/type checks above, and defer numeric checks
+        // unless both execution and the argument value are known here.
+        if (!eager) continue;
+        const c = self.foldExpr(a, false) orelse continue;
         if (c == .str) continue;
-        if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and c.asReal() <= 0)
+        if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(c.asReal() > 0))
             try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{
                 name, distParamName(d, i), c.asReal(),
             });
+        if (d.count and i == 0 and c.asReal() > 0 and
+            (!(c.asReal() <= 2147483647.0) or c.asReal() != @trunc(c.asReal())))
+            try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, distParamName(d, i) });
     }
-    if (d.ordered and vals.items.len == 3) {
-        const lo = self.constEval(given.items[1]);
-        const hi = self.constEval(given.items[2]);
+    if (eager and d.ordered and d.ty == .real and vals.items.len == 3) {
+        const lo = self.foldExpr(given.items[1], false);
+        const hi = self.foldExpr(given.items[2], false);
         if (lo != null and hi != null and lo.? != .str and hi.? != .str and
-            lo.?.asReal() >= hi.?.asReal())
+            !(lo.?.asReal() < hi.?.asReal()))
         {
             var b = self.errWith(self.file.exprs.mainTok(given.items[1]), .E0816);
             b.msg("the start value shall be smaller than the end value, got {d} and {d}", .{ lo.?.asReal(), hi.?.asReal() });
             b.note("§9.13.2: start and end \"bound the values returned\", and an interval with start above end is empty", .{});
             try b.emit();
         }
+    }
+
+    // A required runtime error remains observable even when neither the value
+    // nor final seed is used. Share the guarded source-order effect chain with
+    // table captures, but do not force an unused distribution's draw loop.
+    const rules: u4 = @as(u4, @intCast(d.positive)) |
+        (if (d.count) @as(u4, 4) else 0) |
+        (if (d.ordered and d.ty == .real) @as(u4, 8) else 0);
+    if (rules != 0) {
+        if (self.table_effect_place == null) {
+            const place = self.builder.newPlace();
+            try self.builder.writeVariable(place, .entry, .f_zero);
+            self.table_effect_place = place;
+        }
+        const place = self.table_effect_place.?;
+        const previous = try self.builder.readVariable(place, self.cur);
+        const checked = try self.call("$rng$check", &.{
+            previous,
+            try self.mir.addIntConst(self.arena, rules),
+            vals.items[1],
+            if (d.nparam > 1) vals.items[2] else .f_zero,
+        });
+        try self.builder.writeVariable(place, self.cur, checked);
     }
 
     // ---- the two calls ------------------------------------------------------
@@ -6311,12 +6548,19 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
             };
             degree = c.asInt();
         }
-        // §9.17.1 "A special form of the $discontinuity task, $discontinuity(-1),
-        // is used with the $limit() function". VerA leaves the limiting
-        // ALGORITHM to the host (codegen renders `$limit` as its own argument),
-        // so there is no -1 announcement to make and dropping it here is exact —
-        // it is not a substitute value, it is the whole content of the request.
-        if (degree < 0) return true;
+        if (degree == -1) {
+            if (self.reject_iteration_place == null) {
+                const p = self.builder.newPlace();
+                try self.builder.writeVariable(p, .entry, .zero);
+                self.reject_iteration_place = p;
+            }
+            try self.builder.writeVariable(self.reject_iteration_place.?, self.cur, .one);
+            return true;
+        }
+        if (degree < -1) {
+            try self.err(tok, .E0820, "got {d}", .{degree});
+            return true;
+        }
         const p = try self.kernelCtlPlace(&self.disc_place);
         const cur = try self.builder.readVariable(p, self.cur);
         const v = try self.mir.addFloatConst(self.arena, @floatFromInt(degree));
@@ -6422,10 +6666,10 @@ fn isDigitalOnlySysFunc(name: []const u8) bool {
 fn isConnectModuleOnlySysFunc(name: []const u8) bool {
     const cm_only = [_][]const u8{
         // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.
-        "$driver_count",      "$receiver_count",       "$driver_state",
+        "$driver_count",         "$receiver_count", "$driver_state",
         "$driver_strength",
         // §9.23.1–§9.23.4, the supplementary pending-event queries.
-        "$driver_delay",      "$driver_next_state",
+             "$driver_delay",   "$driver_next_state",
         "$driver_next_strength", "$driver_type",
     };
     for (cm_only) |d| if (std.mem.eql(u8, name, d)) return true;
@@ -6451,6 +6695,10 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     self.mir.cur_tok = ex.mainTok(e);
     switch (ex.tag(e)) {
         .int_literal => return .{ .v = try self.mir.addIntConst(self.arena, ex.intValue(e)), .ty = .integer }, // §2.6.1
+        .logic_literal => {
+            try self.err(ex.mainTok(e), .E0130, "digital literal requires a four-state execution backend", .{});
+            return poison;
+        },
         .real_literal => return .{ .v = try self.mir.addFloatConst(self.arena, ex.realValue(e)), .ty = .real }, // §2.6.2
         .str_literal => return .{
             .v = try self.mir.addStrConst(self.arena, self.file.str(ex.strOf(e))),
@@ -6558,7 +6806,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// array's extent (the array is scalarized, so there is no memory to index).
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
-    const chain = self.indexChain(e, &subs) orelse {
+    const chain = (try self.indexChain(e, &subs)) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0330, "only `name[<index>]` is supported", .{});
         return poison;
     };
@@ -6568,10 +6816,8 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     };
 
-    // Bounded by `indexChain`, as in `resolveLvalue`: both buffers are
-    // `max_stack_dims` wide and a deeper chain never gets past it.
     var idx: [max_stack_dims]i64 = undefined;
-    const at = idx[0..chain.subs.len];
+    const at = try self.subscriptBuf(&idx, chain.subs.len);
     var all_const = true;
     for (chain.subs, at) |s, *o| {
         // `foldExpr(.., false)`, NOT `constEval`: a §3.4 parameter is
@@ -6589,41 +6835,17 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return (try self.arrayElemValue(name, at)) orelse poison;
     }
 
-    // Runtime index: `$idx(lo, i, e_lo … e_hi)`, which codegen turns into a
-    // Zig `switch` on `i` — ONE dispatch and ONE element read, whatever the
-    // extent. Element `lo` is the `else` arm, so an out-of-range index yields
-    // it (§3.2.2 leaves that undefined) exactly as the select chain this
-    // replaced did.
-    //
-    // WHY THIS MATTERS ENOUGH TO BE A CALL. A select chain over N scalarized
-    // elements evaluates ALL N comparisons and all N `sel`s on every read,
-    // because `sel` is a mask primitive and not a branch — so `for (k…) a[k]`
-    // (§4.7.1's `arrayadd` shape, and every table-lookup model) is O(N²) per
-    // evaluation in the DECLARED extent, not in the part of the table anyone
-    // filled. Measured on devices/models/vsource.va's `pwl_times[0:63]`:
-    // 26,134 → 416 instructions per device evaluation.
-    //
-    // ponytail: one dimension only. A multidimensional runtime index would need
-    // a switch over the whole cartesian product — and no fixture writes one;
-    // §3.2's own examples index a multidimensional array with literals.
-    // `for (i…) a[i]` is the shape that needs the dispatch, and it is flat.
-    if (info.dims.len != 1) {
-        try self.err(self.file.exprs.mainTok(e), .E0311, "indexing the multidimensional array `{s}`", .{name});
-        return poison;
-    }
-    const d = info.dims[0];
-    const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
-    // The DECLARED type, not a unification over the elements: every element of
-    // a scalarized array is declared by that one declaration, so
-    // `arrayElemValue` hands back `info.ty` for all of them.
+    // `$idx` emits one switch over the scalarized elements. Both reads and
+    // writes use the same declared-order flattening and per-dimension bounds.
+    const iv = try self.runtimeArrayIndex(chain.subs, info.dims);
     const ty = info.ty;
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
-    try vals.append(self.arena, try self.mir.addIntConst(self.arena, d.lo));
+    try vals.append(self.arena, .zero);
     try vals.append(self.arena, iv);
-    var i = d.lo;
-    while (i <= d.hi) : (i += 1) {
-        const el = (try self.arrayElemValue(name, &.{i})) orelse return poison;
+    for (0..shapeCells(info.dims)) |k| {
+        shapeSubscripts(info.dims, k, at);
+        const el = (try self.arrayElemValue(name, at)) orelse return poison;
         try vals.append(self.arena, if (ty == .real) try self.toReal(el) else el.v);
     }
     // The callee name IS the result type — `analysis.callTy` and `sysFuncTy`
@@ -6871,6 +7093,10 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const op = ex.binOp(e);
+    if (self.mixedShiftComparison(e)) {
+        try self.err(ex.mainTok(e), .E0364, "comparison mixes signed and unsigned operands around a logical shift", .{});
+        return poison;
+    }
 
     // §4.2.7 && and || SHORT-CIRCUIT: the rhs must not be evaluated when the
     // lhs already decides the result, so this needs real control flow.
@@ -7730,9 +7956,10 @@ fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) 
             if (info.dims.len != 1) return false;
             const d = info.dims[0];
             try out.append(self.arena, try self.mir.addIntConst(self.arena, d.count()));
-            var i = d.lo;
-            while (i <= d.hi) : (i += 1) {
-                const el = (try self.arrayElemValue(name, &.{i})) orelse return true;
+            var index: [1]i64 = undefined;
+            for (0..@intCast(d.count())) |k| {
+                shapeSubscripts(info.dims, k, &index);
+                const el = (try self.arrayElemValue(name, &index)) orelse return true;
                 try out.append(self.arena, try self.toReal(el));
             }
             return true;
@@ -7970,10 +8197,10 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
 /// §9.21 Syntax 9-16, rewritten into ONE self-describing call:
 ///
-///     $table_model(ND, NP, NCOL, dep, "<extrap>", in₀…in_{ND-1}, row₀…row_{NP-1})
+///     $table_model(ND, NP, NCOL, dep, "<interp/extrap>", snapshot_site, previous_call, in₀…in_{ND-1}, row₀…row_{NP-1})
 ///
 /// — the dimensionality, the sample count, the column count, the dependent
-/// COLUMN the selector picked, two Table 9-31 extrapolation characters per
+/// COLUMN the selector picked, one interpolation and two extrapolation control characters per
 /// dimension, then the lookup point and the flat row-major sample block.
 ///
 /// Everything §9.21.2 and §9.21.1 decide is decided HERE, and the reason is the
@@ -7983,11 +8210,10 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// IDENTIFIERS or a file name, neither of which survives into MIR. What reaches
 /// codegen is a call whose every operand is a number, a string or a probe.
 ///
-/// A FILE data source is read at compile time and its rows emitted as constants.
-/// That is not a shortcut around run-time I/O, it is what §9.21.1 says the
-/// semantics are: "The state of the data source is captured on the first call to
-/// the table model function. Any change after this point is ignored." A residual
-/// re-read per Newton iteration would be both slower and less faithful.
+/// A FILE data source is currently read at compile time. Runtime file capture
+/// remains a conformance gap when the file changes before the first call.
+/// Array-source calls carry a unique snapshot site; codegen captures their
+/// rows at the first executed call, including conditionally reached calls.
 fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -8084,9 +8310,21 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return poison;
     }
 
-    const ext = try self.arena.alloc(u8, 2 * nd);
+    const ext = try self.arena.alloc(u8, 3 * nd);
     const dep = (try self.parseTableCtl(e, ctl, nd, ncol, ext)) orelse return poison;
 
+    const site = if (cols.items.len == 0) 0 else blk: {
+        if (std.mem.indexOfScalar(Ast.ExprId, self.table_sources.items, e)) |existing| break :blk existing + 1;
+        try self.table_sources.append(self.arena, e);
+        try self.table_samples.append(self.arena, @intCast(rows.len));
+        break :blk self.table_samples.items.len;
+    };
+    if (site != 0 and self.table_effect_place == null) {
+        const place = self.builder.newPlace();
+        try self.builder.writeVariable(place, .entry, .f_zero);
+        self.table_effect_place = place;
+    }
+    const previous = if (site == 0) .f_zero else try self.builder.readVariable(self.table_effect_place.?, self.cur);
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.appendSlice(self.arena, &.{
@@ -8095,12 +8333,16 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.mir.addIntConst(self.arena, @intCast(ncol)),
         try self.mir.addIntConst(self.arena, @intCast(dep)),
         try self.mir.addStrConst(self.arena, ext),
+        try self.mir.addIntConst(self.arena, @intCast(site)),
+        previous,
     });
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try self.lowerExpr(a)));
     // ponytail: rows are already lowered; append their contiguous values in order.
     try vals.appendSlice(self.arena, rows);
     self.uses_table_model = true;
-    return .{ .v = try self.call("$table_model", vals.items), .ty = .real };
+    const result = try self.call("$table_model", vals.items);
+    if (site != 0) try self.builder.writeVariable(self.table_effect_place.?, self.cur, result);
+    return .{ .v = result, .ty = .real };
 }
 
 /// Is this argument part of `table_data_source` rather than a lookup input?
@@ -8186,25 +8428,22 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
     return .{ .vals = vals.items, .cols = cols };
 }
 
-/// §9.21.2 the control string. Writes `2*nd` Table 9-31 extrapolation characters
-/// into `ext` (low end then high end, per dimension) and returns the dependent
+/// §9.21.2 the control string. Writes `3*nd` control bytes into `ext`
+/// (interpolation, low extrapolation, high extrapolation) and returns the dependent
 /// COLUMN index, or null when the string asks for something VerA does not
 /// implement.
 ///
-/// The interpolation character is validated and then DROPPED, because only one
-/// value of it survives: Table 9-30's `1`. `D`, `2` and `3` (closest point,
-/// quadratic and cubic splines) and `I` (ignore this column) are refused at the
-/// call. So is Table 9-31's `E` — "an extrapolation error is reported if the
-/// $table_model function is requested to evaluate a point beyond the
-/// interpolation region", and a device residual has no channel to report one on;
-/// silently extrapolating instead is exactly the wrong-number failure the refusal
-/// exists to prevent.
+/// Table 9-30's `1` and `D` select linear interpolation and closest-point
+/// lookup. Each dimension retains its interpolation character and two
+/// extrapolation characters. Spline/ignored-column modes and fatal extrapolation
+/// still require implementation; rejecting them avoids substituting a result.
 fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8) Oom!?usize {
     // "the function defaults to performing linear interpolation and linear
     // extrapolation in both dimensions" (§9.21.5), which Table 9-32's first row
     // states for every dimension: `""` is "default linear interpolation and
     // extrapolation".
     @memset(ext, 'L');
+    for (0..nd) |dim| ext[3 * dim] = '1';
     const semi = std.mem.indexOfScalar(u8, ctl, ';');
     const head = if (semi) |s| ctl[0..s] else ctl;
 
@@ -8235,10 +8474,11 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         defer d += 1;
         var j: usize = 0;
         if (s.len != 0 and std.mem.indexOfScalar(u8, "ID123", s[0]) != null) {
-            if (s[0] != '1') {
-                try self.err(self.file.exprs.mainTok(e), .E0815, "VerA implements Table 9-30's `1` (linear interpolation) only; `{c}` is not implemented", .{s[0]});
+            if (s[0] != '1' and s[0] != 'D') {
+                try self.err(self.file.exprs.mainTok(e), .E0815, "VerA implements Table 9-30's `1` and `D`; `{c}` is not implemented", .{s[0]});
                 return null;
             }
+            ext[3 * d] = s[0];
             j = 1;
         }
         const xs = s[j..];
@@ -8255,11 +8495,11 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         // first character specifies the extrapolation method used for the end
         // with the lower coordinate value."
         if (xs.len == 1) {
-            ext[2 * d] = xs[0];
-            ext[2 * d + 1] = xs[0];
+            ext[3 * d + 1] = xs[0];
+            ext[3 * d + 2] = xs[0];
         } else if (xs.len == 2) {
-            ext[2 * d] = xs[0];
-            ext[2 * d + 1] = xs[1];
+            ext[3 * d + 1] = xs[0];
+            ext[3 * d + 2] = xs[1];
         }
     }
     return nd + sel - 1;
@@ -8564,6 +8804,30 @@ fn takesNetRef(name: []const u8) bool {
     return false;
 }
 
+/// Direct output literals retain their lexical bytes (§9.4.2), unlike a
+/// literal converted to string storage (§3.3). Reuse the lexer decoder only
+/// when the AST node still points to a genuine quoted source token; synthesized
+/// constants and identifier operands keep their existing conversion semantics.
+fn outputLiteral(self: *Lower, e: Ast.ExprId) Oom!?[]const u8 {
+    if (e == .none or self.file.exprs.tag(e) != .str_literal) return null;
+    const span = self.tokenSpan(self.file.exprs.mainTok(e));
+    const raw = self.src[span.start..span.end];
+    if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"' or
+        std.mem.indexOfScalar(u8, raw, '\\') == null) return null;
+    return try Lexer.stringContents(self.arena, raw);
+}
+
+fn lowerFormatArg(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    if (try self.outputLiteral(e)) |bytes|
+        return .{ .v = try self.mir.addStrConst(self.arena, bytes), .ty = .string };
+    return self.lowerExpr(e);
+}
+
+fn lowerTaskArg(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
+    if (isDisplayTask(name) or isFileOutTask(name)) return self.lowerFormatArg(e);
+    return self.lowerSysArg(e, takesNetRef(name));
+}
+
 /// A system call argument. For the `takesNetRef` names a bare net name lowers
 /// to its node_order index, which is what codegen needs. For every OTHER task
 /// the index is meaningless — `$strobe("%g", p)` printed p's INDEX — so the
@@ -8627,30 +8891,11 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
     return null;
 }
 
-/// §9.15 the simulation parameters this engine answers from RUNTIME state
-/// rather than from a constant. Known names — so §9.15's "if param_name is not
-/// known" error does not fire and the optional fallback is not used — but
-/// `simparamValue` cannot hold them, because their whole content is that they
-/// change during the solve. codegen renders them (`emitSysCall`).
-///
-///   iteration — Table 9-27, "the iteration number of the analog solver".
-///               Counted by the device itself: `Instance.newton_iteration`,
-///               advanced by `updateState` (once per Newton iterate) and reset
-///               to 1 by `stateCtl(.commit)` (the accepted point). Folded to a
-///               constant it made every SPICE-derived model's
-///               `initialize_limiting()` a compile-time `false`, so the
-///               MODEINITJCT cold-start seeding those models carry never ran.
-///   iniLim    — NOT in Table 9-27; the spelling the machine-converted ngspice
-///               models use to ask "does the simulator want initial junction
-///               limiting on this evaluation?", with -1 meaning "cannot say,
-///               guess from `iteration` and `analysis()`". VerA can say: it is
-///               the first iterate of a DC/static solve, i.e. exactly SPICE's
-///               MODEINITJCT. Answering -1 and leaving the model to its own
-///               heuristic does not work here — that heuristic needs
-///               `analysis("dc") && analysis("nodeset")` true together, and
-///               `Instance.analysis_kind` is one value.
+/// §9.15 runtime simulation parameters. The host advances this counter once
+/// per evaluated Newton iteration via `advanceIteration`; accepted-step
+/// updates do not change it. Unknown vendor names use the standard fallback.
 pub fn simparamIsRuntime(name: []const u8) bool {
-    return std.mem.eql(u8, name, "iteration") or std.mem.eql(u8, name, "iniLim");
+    return std.mem.eql(u8, name, "iteration");
 }
 
 /// §9.15 the simulation parameters whose value is the HOST's, published into a
@@ -8680,55 +8925,41 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
 /// have said MUST AGREE since both were written; the test is what turns that
 /// into something a build can fail on.
 pub fn sysFuncTy(name: []const u8) Ty {
-    const ints = [_][]const u8{
-        "$param_given", "$port_connected", // §9.19
-        "$test$plusargs", "$value$plusargs", // §9.12
-        // §9.11 Table 9-8. `$bitstoreal` is deliberately NOT here: it maps a
-        // bit pattern TO a real, so its result is a real. Typing it as an
-        // integer made codegen assign an `S` expression to an `i64` slot, which
-        // does not even compile — see tests/fixtures/exhaustive/122.
-        "$rtoi",          "$clog2",
-        "$realtobits",
-        // The §9.22/§9.23 driver access family is NOT here, and neither is it in
-        // `analysis.callTy`: `isConnectModuleOnlySysFunc` refuses every one of
-        // those calls before it becomes a `call`, so no MIR node carries the name
-        // and there is nothing left to type. A row here would be a type for an
-        // expression that cannot exist.
-        // §9.20 "The return value for both system functions shall be one (1) if
-        // the alias was successfully created and zero (0) otherwise" — a status,
-        // not a measurement. Typed real, the §4.1.9 status assignment forced an
-        // int→real→int round trip through the `integer` slot and `status << 1`
-        // collected a false E0322 on legal code.
-        "$analog_node_alias", "$analog_port_alias",
-        // §9.5.4.2 the scan count, and the item flavour whose destination is an
-        // integer variable. Synthetic names `lowerScan` builds; the flavour name
-        // IS the type, so this and `analysis.callTy` agree by construction.
-         "$sscanf",
-        "$sscanf$int",
-        // §3.2.2 the runtime array index `lowerIndex` builds, on an `integer`
-        // array. Same rule: the flavour name is the declared element type.
-        "$idx$int",
-        // §9.5.1/§9.5.4/§9.5.5/§9.5.7/§9.5.8 — every descriptor function is
-        // integer-valued, and each digit is one the LRM writes down: a 32-bit
-        // mcd or fd, a character count, an item count, a byte offset, a -1/0
-        // status, an errno, a nonzero-or-zero EOF flag. They read `.real` until
-        // this list existed, so `integer fd = $fopen(…)` rounded a float 0.0.
-        "$fopen",         "$fgets",
-        "$fscanf",        "$fscanf$int",
-        "$ftell",         "$fseek",
-        "$rewind",        "$ferror",
-        "$feof",
-    };
-    for (ints) |i| if (std.mem.eql(u8, name, i)) return .integer;
-    if (std.mem.eql(u8, name, "$simparam$str")) return .string; // §9.15
-    // §9.5.3 the formatted text itself, §9.5.4.2's string-valued item, and
-    // §3.2.2's runtime index into a `string` array.
-    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str") or
-        std.mem.eql(u8, name, "$idx$str")) return .string;
-    // §9.5.4.1's string, §9.5.4.2's string-valued item and §9.5.7's description.
-    if (std.mem.eql(u8, name, "$fgets$str") or std.mem.eql(u8, name, "$fscanf$str") or
-        std.mem.eql(u8, name, "$ferror$str")) return .string;
-    return .real;
+    // Data: fixed system-call names -> MIR type, one lookup per lowered call.
+    // The keys and enum values are static; no instance storage or allocation.
+    // Calls are independent, but this cold lookup needs no lane kernel.
+    const types = std.StaticStringMap(Ty).initComptime(.{
+        .{ "$param_given", .integer },
+        .{ "$port_connected", .integer },
+        .{ "$test$plusargs", .integer },
+        .{ "$value$plusargs", .integer },
+        .{ "$rtoi", .integer },
+        .{ "$clog2", .integer },
+        .{ "$realtobits", .integer },
+        .{ "$analog_node_alias", .integer },
+        .{ "$analog_port_alias", .integer },
+        .{ "$sscanf", .integer },
+        .{ "$sscanf$int", .integer },
+        .{ "$display$width", .integer },
+        .{ "$idx$int", .integer },
+        .{ "$fopen", .integer },
+        .{ "$fgets", .integer },
+        .{ "$fscanf", .integer },
+        .{ "$fscanf$int", .integer },
+        .{ "$ftell", .integer },
+        .{ "$fseek", .integer },
+        .{ "$rewind", .integer },
+        .{ "$ferror", .integer },
+        .{ "$feof", .integer },
+        .{ "$simparam$str", .string },
+        .{ "$sformat", .string },
+        .{ "$sscanf$str", .string },
+        .{ "$idx$str", .string },
+        .{ "$fgets$str", .string },
+        .{ "$fscanf$str", .string },
+        .{ "$ferror$str", .string },
+    });
+    return types.get(name) orelse .real;
 }
 
 // ---------------------------------------------------------------------------
@@ -9022,7 +9253,7 @@ pub fn inlineUserFuncPre(
             // is what makes `arrayadd(x, '{y,z})` (§4.7.3) legal — the two
             // actuals have different shapes and the same size.
             const dims = try self.dimsBounds(formal.dims, formal.main_tok, fname) orelse continue;
-            try self.arrays.put(self.arena, fname, .{ .dims = dims, .ty = ty });
+            try self.declareArray(fname, .{ .dims = dims, .ty = ty });
             const slots = try self.arena.alloc(VarSlot, vals.len);
             var sub: [max_stack_dims]i64 = undefined;
             const idx = try self.subscriptBuf(&sub, dims.len);
@@ -9266,6 +9497,7 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 
 fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     const ex = &self.file.exprs;
+    if (self.mixedShiftComparison(e)) return null;
     const a = self.foldExpr(ex.lhs(e), params) orelse return null;
     const b = self.foldExpr(ex.rhs(e), params) orelse return null;
     const op = ex.binOp(e);
@@ -9279,23 +9511,23 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
         .add => if (int) Const{ .int = wrap32(a.asInt() +% b.asInt()) } else Const{ .real = x + y },
         .sub => if (int) Const{ .int = wrap32(a.asInt() -% b.asInt()) } else Const{ .real = x - y },
         .mul => if (int) Const{ .int = wrap32(a.asInt() *% b.asInt()) } else Const{ .real = x * y },
-        // The one overflowing division is -2^31 / -1, whose 2's complement
-        // answer is -2^31 again.
+        // A literal can occupy the full i64 carrier before assignment. Its
+        // minInt/-1 quotient needs 65 bits before the current MIR's wrap32.
         .div => if (int)
-            (if (b.asInt() == 0) null else Const{ .int = wrap32(@divTrunc(a.asInt(), b.asInt())) })
+            (if (b.asInt() == 0) null else Const{ .int = @as(i32, @truncate(@divTrunc(@as(i65, a.asInt()), @as(i65, b.asInt())))) })
         else
             Const{ .real = x / y },
         .mod => if (int)
-            (if (b.asInt() == 0) null else Const{ .int = @rem(a.asInt(), b.asInt()) })
+            (if (b.asInt() == 0) null else Const{ .int = @intCast(@rem(@as(i65, a.asInt()), @as(i65, b.asInt()))) })
         else
             Const{ .real = @rem(x, y) },
         .pow => .{ .real = std.math.pow(f64, x, y) },
-        .eq => .{ .int = @intFromBool(x == y) },
-        .neq => .{ .int = @intFromBool(x != y) },
-        .lt => .{ .int = @intFromBool(x < y) },
-        .le => .{ .int = @intFromBool(x <= y) },
-        .gt => .{ .int = @intFromBool(x > y) },
-        .ge => .{ .int = @intFromBool(x >= y) },
+        .eq => .{ .int = @intFromBool(if (int) a.int == b.int else x == y) },
+        .neq => .{ .int = @intFromBool(if (int) a.int != b.int else x != y) },
+        .lt => .{ .int = @intFromBool(if (int) a.int < b.int else x < y) },
+        .le => .{ .int = @intFromBool(if (int) a.int <= b.int else x <= y) },
+        .gt => .{ .int = @intFromBool(if (int) a.int > b.int else x > y) },
+        .ge => .{ .int = @intFromBool(if (int) a.int >= b.int else x >= y) },
         .logical_and => .{ .int = @intFromBool(a.isTrue() and b.isTrue()) },
         .logical_or => .{ .int = @intFromBool(a.isTrue() or b.isTrue()) },
         .bit_and => .{ .int = a.asInt() & b.asInt() },
@@ -9312,12 +9544,77 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
             // §3.2.1's 32-bit `integer` — same rule codegen's `shrLogical`
             // emits, and the fold has to agree with it or a constant and a
             // computed operand give different answers.
+            if (sh == 0) break :blk a;
             if (sh > 31) break :blk Const{ .int = 0 };
             const lo: u32 = @bitCast(@as(i32, @truncate(a.asInt())));
             break :blk Const{ .int = lo >> @as(u5, @intCast(sh)) };
         },
         else => null,
     };
+}
+
+/// Only provenance present in the AST/declarations is evidence of signedness.
+/// This is a refusal guard, not general expression context/type propagation.
+fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
+    if (e == .none or depth > 32) return null;
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .int_literal => ex.intLiteral(e).signed,
+        .ident => blk: {
+            const name = self.file.str(ex.strOf(e));
+            if (self.vars.get(name)) |v| break :blk if (v.ty == .integer) true else null;
+            if (self.arrays.get(name)) |a| break :blk if (a.ty == .integer) true else null;
+            for (self.func_params) |p| {
+                if (!self.file.strings.eql(p.name, name)) continue;
+                break :blk if (p.ty == .integer) true else if (p.ty == .unspecified) self.integerSourceSigned(p.default, depth + 1) else null;
+            }
+            const pi = self.param_index.get(name) orelse break :blk null;
+            const p = self.params.items[pi];
+            if (p.ty != .integer) break :blk null;
+            if (p.integer32) break :blk true;
+            if (!p.is_local) break :blk null; // host overrides carry no signedness
+            const module = self.module orelse break :blk null;
+            for (module.params) |decl| {
+                if (std.mem.eql(u8, self.file.str(decl.name), p.name))
+                    break :blk self.integerSourceSigned(decl.default, depth + 1);
+            }
+            break :blk null;
+        },
+        .unary => switch (ex.unOp(e)) {
+            .plus, .minus, .bit_not => self.integerSourceSigned(ex.lhs(e), depth + 1),
+            else => null,
+        },
+        .binary => switch (ex.binOp(e)) {
+            .shl, .shr => self.integerSourceSigned(ex.lhs(e), depth + 1),
+            else => null,
+        },
+        .index => self.integerSourceSigned(ex.lhs(e), depth + 1),
+        else => null,
+    };
+}
+
+fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
+    if (e == .none or depth > 32) return false;
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .binary => ex.binOp(e) == .shl or ex.binOp(e) == .shr,
+        .unary => self.isShiftOperand(ex.lhs(e), depth + 1),
+        else => false,
+    };
+}
+
+fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    switch (ex.binOp(e)) {
+        .eq, .neq, .lt, .le, .gt, .ge => {},
+        else => return false,
+    }
+    const a = ex.lhs(e);
+    const b = ex.rhs(e);
+    if (!self.isShiftOperand(a, 0) and !self.isShiftOperand(b, 0)) return false;
+    const sa = self.integerSourceSigned(a, 0) orelse return false;
+    const sb = self.integerSourceSigned(b, 0) orelse return false;
+    return sa != sb;
 }
 
 // ponytail: §4.7.2 function-local `parameter` declarations fold into `consts` and
@@ -9843,7 +10140,7 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
     try std.testing.expect(h.low.disc_place == null);
 }
 
-test "lower: §9.17.1 $discontinuity folds its degree; the $limit form (-1) emits nothing" {
+test "lower: §9.17.1 $discontinuity separates iteration rejection from degree" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module d(p, n);
@@ -9857,8 +10154,8 @@ test "lower: §9.17.1 $discontinuity folds its degree; the $limit form (-1) emit
     defer h.deinit();
     try h.low.lowerFile();
     try std.testing.expect(h.bag.isEmpty());
-    // §9.17.1's `-1` exists only for `$limit`; there is no announcement to make,
-    // so no place, no synthetic call, and therefore no unit.
+    try std.testing.expectEqual(Mir.Value.one, h.low.reject_iteration);
+    // Iteration rejection must not become a timestep discontinuity.
     try std.testing.expect(h.low.disc_place == null);
     try std.testing.expect(h.low.bound_step_place == null);
 

@@ -46,18 +46,18 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | `a-1-9` | `paramset_declaration`, `paramset_item_declaration`, `paramset_statement` | `10_paramset.va` — a full `paramset … endparamset` with a `parameter` item and a `.gain = 2.0 * scale;` override statement, applied by instantiating it. green: the declaration is parsed, so both the ITEM production (a `parameter` with a `from` range) and the STATEMENT production (`.gain = 2.0 * scale;`) are checked by the value the module reads back, 3.0. A.1.9's two other statement forms — an output-variable assignment and an analog_function_statement — are read and dropped; `ch06_hierarchy/paramset_output_unsupported.va` is where that is recorded |
 | `a-2` | heading | parent; `03_declarations.va` cites the bare `A.2` |
 | `a-2-1` | heading | parent of A.2.1.1–A.2.1.3 |
-| `a-2-1-1` | `parameter_declaration`, `local_parameter_declaration`, `aliasparam_declaration`, `specparam_declaration` | `03_declarations.va` carries three of the four in one module: `parameter real gain = 2.0 from (0:inf)`, `localparam real offset = 1.0`, `aliasparam amplification = gain`, and reads the alias back through an override. Also `parameter real coefficients[0:1]` in `07`, `parameter integer` in `14`/`15`. `specparam` has no fixture and is not in Verilog-A |
+| `a-2-1-1` | `parameter_declaration`, `local_parameter_declaration`, `aliasparam_declaration`, `specparam_declaration` | `03_declarations.va` carries three of the four in one module: `parameter real gain = 2.0 from (0:inf)`, `localparam real offset = 1.0`, `aliasparam amplification = gain`, and reads the alias back through an override. Also `parameter real coefficients[0:1]` in `07`, `parameter integer` in `14`/`15`. `specparam` has no fixture and remains required full-AMS coverage |
 | `a-2-1-2` | `inout_declaration`, `input_declaration`, `output_declaration` | `01`, `03` and nearly everything else for the bare `inout`; `02_module_ports.va` for all three directions carrying a `discipline_identifier`; `04`/`23`/`37`/`38` for `input` inside an analog function |
-| `a-2-1-3` | `branch_declaration`, `event_declaration`, `integer_declaration`, `real_declaration`, `net_declaration`, `reg`/`time`/`realtime` | `03_declarations.va` (the `discipline_identifier list_of_net_identifiers` arm of `net_declaration`, plus `integer`, `real`, and a named `branch (p, n) path;`), `23_expression_primaries.va` (branch plus `real array[0:1]`), `05` (`integer`, `real`). `event_declaration` is `17_named_event_trigger.va` (`event tick;`, one identifier — the comma list has no fixture). `reg`, `time`, `realtime` and the eleven digital `net_type` spellings: nothing, and nothing should — see A.2.2.1 |
+| `a-2-1-3` | `branch_declaration`, `event_declaration`, `integer_declaration`, `real_declaration`, `net_declaration`, `reg`/`time`/`realtime` | `03_declarations.va` (the `discipline_identifier list_of_net_identifiers` arm of `net_declaration`, plus `integer`, `real`, and a named `branch (p, n) path;`), `23_expression_primaries.va` (branch plus `real array[0:1]`), `05` (`integer`, `real`). `event_declaration` is `17_named_event_trigger.va` (`event tick;`, one identifier — the comma list has no fixture). `reg`, `time`, `realtime` and the eleven digital `net_type` spellings: no fixture here; these remain required full-AMS coverage — see A.2.2.1 |
 | `a-2-2` | heading | parent |
-| `a-2-2-1` | `net_type`, `output_variable_type`, `real_type`, `variable_type` | `real_type` and `variable_type` with a `dimension`: `07_expressions.va` (`coefficients[0:1] = '{1.0, 2.0}`) and `23_expression_primaries.va` (`real array[0:1]`). The `net_type` list (`supply0 … wor`) and `output_variable_type` have no fixture: they are the digital half, withdrawn from Verilog-A by Annex C |
+| `a-2-2-1` | `net_type`, `output_variable_type`, `real_type`, `variable_type` | `real_type` and `variable_type` with a `dimension`: `07_expressions.va` (`coefficients[0:1] = '{1.0, 2.0}`) and `23_expression_primaries.va` (`real array[0:1]`). The `net_type` list (`supply0 … wor`) and `output_variable_type` have no fixture: these digital forms remain required full-AMS coverage |
 | `a-2-2-2` | `drive_strength`, `strength0`, `strength1`, `charge_strength` | — no fixture. Digital-only; `grep -l 'strong0\|pull1\|supply0' *.va` is empty |
 | `a-2-2-3` | `delay3`, `delay2`, `delay_value` | — no fixture. Net delays are digital. `34_delay_control_in_analog_rejected.va` looks adjacent but is not: `#5` there is A.6.5 `delay_control`, a statement prefix, not a declaration delay |
 | `a-2-3` | `list_of_branch_identifiers`, `list_of_param_assignments`, `list_of_port_identifiers`, `list_of_real_identifiers`, `list_of_variable_identifiers`, `list_of_net_identifiers` | `03_declarations.va` — `electrical p, n, internal;` is a three-element `list_of_net_identifiers`, `inout p, n;` a two-element `list_of_port_identifiers`. `39_branch_array.va` cites A.2.3 for the `branch_identifier [ range ]` arm (`pair[0:1]`) and is green: the range folds in lowering and the elements are registered under `pair[0]`/`pair[1]`, the same scalarised keying a §3.12 vector branch uses. The other seven list productions have no fixture; each belongs to a construct that has none either |
 | `a-2-4` | `param_assignment` (both arms), `net_decl_assignment`, `defparam_assignment`, `specparam_assignment` | Arm one of `param_assignment` with a trailing `{ value_range }`: `03_declarations.va`. Arm two, `parameter_identifier range = constant_assignment_pattern`: `07_expressions.va` (`parameter real coefficients[0:1] = '{1.0, 2.0}`) — the only file in the suite that takes it, and it runs green. `defparam_assignment ::= hierarchical_parameter_identifier = …`: `12_defparam.va` (`child.gain`), the directory's only hierarchical identifier — green, and the path is interned as ONE dotted string, which is the flat name elaboration gives the parameter. `net_decl_assignment` and `specparam_assignment`: nothing |
 | `a-2-5` | `dimension`, `range`, `value_range`, `value_range_type`, `value_range_expression` | `03_declarations.va` cites A.2.5 and takes three of the six `value_range` arms — `from (0:inf)` (open/open) and `from (-inf:0]` (open/closed), including both `inf` and `-inf` as `value_range_expression`, and it checks the negative default survives. `dimension`: `07`, `23`. `range`: `39` (green — `branch id[range]` parses). The `'{ string { , string } }` arm and the `exclude` arm of `value_range_type` have no fixture here |
-| `a-2-6` | `analog_function_declaration`, `analog_function_type`, `analog_function_item_declaration` | `04_analog_function.va` (explicit `real` type, `input`/`real` item declarations, assignment to the function's own name), `37_analog_function_default_type.va` (the `[ analog_function_type ]` bracket *omitted* — the other half of the same production), `38_analog_function_integer_string.va` (the `integer` and `string` arms of `analog_function_type`, both of the two spellings nothing else reaches), `23_expression_primaries.va` (a function declared alongside a branch and called from a word select). The digital `function_declaration` and its `function_port_list` have no fixture and are not Verilog-A |
-| `a-2-7` | `task_declaration`, `task_item_declaration`, `tf_input_declaration`, `task_port_type` | `20_task_enable.va` declares `task record; input real x; … endtask` and calls it — `//! reject E0214`. A user task is legal Verilog-AMS grammar and outside the analog subset, so the reject is the conforming answer, not debt |
+| `a-2-6` | `analog_function_declaration`, `analog_function_type`, `analog_function_item_declaration` | `04_analog_function.va` (explicit `real` type, `input`/`real` item declarations, assignment to the function's own name), `37_analog_function_default_type.va` (the `[ analog_function_type ]` bracket *omitted* — the other half of the same production), `38_analog_function_integer_string.va` (the `integer` and `string` arms of `analog_function_type`, both of the two spellings nothing else reaches), `23_expression_primaries.va` (a function declared alongside a branch and called from a word select). The digital `function_declaration` and its `function_port_list` have no fixture and remain required full-AMS coverage |
+| `a-2-7` | `task_declaration`, `task_item_declaration`, `tf_input_declaration`, `task_port_type` | `20_task_enable.va` declares `task record; input real x; … endtask` and calls it — `//! reject E0214`. E0214 diagnoses the invalid analog-context task enable. The additional E0205 at the legal task declaration records missing AMS support; legal declarations and digital calls still need positive tests |
 | `a-2-8` | `analog_block_item_declaration`, `block_item_declaration` | — **no fixture**. Two files open a named block (`05_behavioral_statements.va`'s `begin : behavior`, `14_if_generate.va`'s `begin : on` / `: off`) and neither declares anything inside it. A.2.8 is the only place in all of Annex A where `string_declaration` appears — see the prose below |
 | `a-3` | heading | parent; nothing under it has a fixture |
 | `a-3-1` | `gate_instantiation`, `n_input_gate_instance`, `pass_switch_instance`, … | — no fixture |
@@ -160,34 +160,35 @@ all six are closed:
 `43` (macromodule) was deliberately left out of that list as a one-keyword alias for
 `module` whose fix was one token in the dispatch. It was.
 
-## Reject is not debt
+## Rejection evidence depends on context
 
-Fourteen files carry `//! reject`, and none of them is a bug ledger entry. Eleven pin
+Fourteen files carry `//! reject`. Their passing status alone does not establish
+full-AMS conformance. Eleven exercise
 A.6.4's boundary between `statement` and `analog_statement` — `force`, `<=`, `fork…join`,
 `wait`, `#5`, `disable`, `break`/`continue`/`return`, a user task enable, a contribution
 inside an event statement, an indirect contribution inside one, and a nested event
-control. Every one of those is legal Verilog-AMS grammar that Annex C withdraws from
-Verilog-A or that 5.10 forbids in event context; a compiler that accepted them would be
-wrong. The remaining three are `29` (`<+` to a variable, which `branch_lvalue` forbids
+control. An invalid analog or event-context use must be rejected by its grammar
+or §5.10 rule. Annex C’s exclusion of a construct from Verilog-A, however, does
+not justify rejecting its legal full-AMS use; those uses need positive coverage. The remaining three are `29` (`<+` to a variable, which `branch_lvalue` forbids
 outright), `35` (`\$vt`, where 2.8.1 makes the escaped form an ordinary name), and `36`
 (`1.5 e3`, A.10's embedded-space sentence).
 
 Four of the eleven collapse to the same E0209 — `force`, `fork`, `wait` and `#5`. That is
 the parser's generic "expected an expression" and not a considered diagnosis of what the
-construct is. The fixtures pin the code that fires today; if VerA ever grows a "not in the
-analog subset" diagnosis for these, four expected codes change together.
+construct is. The fixtures pin the code that fires today. A better diagnostic
+should identify the invalid context, while legal digital uses need implementation
+and behavioral tests rather than a subset rejection.
 
 ## What is not covered
 
 Twenty-seven ids have no fixture. By group:
 
-**Digital-only, correctly absent (twenty-two).** All of A.3 (`a-3`, `a-3-1` … `a-3-4`), all
+**Uncovered digital requirements (twenty-two).** All of A.3 (`a-3`, `a-3-1` … `a-3-4`), all
 of A.5 (`a-5`, `a-5-1` … `a-5-4`), all of A.7 (`a-7`, `a-7-1` … `a-7-5-3`), plus `a-2-2-2`
 (strengths), `a-2-2-3` (net delays) and `a-6-1` (`assign`). Gate and switch primitives,
-UDPs, specify blocks, drive strengths and continuous assignment are withdrawn from
-Verilog-A by Annex C and are not in VerA's subset. A fixture for any of them would test
-that a reject happens, which the A.6.4 reject files already do for the statement-level
-cases; for the rest there is nothing a device dump could assert.
+UDPs, specify blocks, drive strengths and continuous assignment remain required
+by the full-AMS target. They need legal-source acceptance and digital execution
+tests; invalid analog-context rejection fixtures do not establish that behavior.
 
 **Compilation-unit constructs (three).** `a-1-1` (library source text), `a-1-5`
 (configurations), `a-1-8` (connectrules). Libraries and configurations select which cell

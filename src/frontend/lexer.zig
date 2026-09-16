@@ -574,89 +574,17 @@ pub const IntLiteral = struct {
     signed: bool,
 };
 
-/// Decode an `.int_literal`'s text — THE decoder for §2.6.1. Handles the plain
-/// decimal form and the based form (`16'b0011_0101`, `4'shf`, `'h837ff`), with
-/// `_` ignored everywhere.
-///
-/// §2.6.1 in order: the digits are read in the given base, then truncated from
-/// the left to `size` bits ("if the size … is smaller, … the leftmost bits …
-/// are truncated"), and only then does the `s`/`S` designator decide how the
-/// remaining bits are read — as a two's-complement signed value, which is what
-/// makes `4'shf` equal -1 rather than 15.
-// ponytail: left padding with x/z is unrepresentable here (see FourStateDigit),
-// so a short digit string zero-extends, which is §2.6.1's rule for 0/1 fills.
+/// Legacy two-state consumer. The parser itself preserves the full literal;
+/// concatenation width checks use this bounded conversion.
 pub fn parseInt(text: []const u8) ValueError!IntLiteral {
-    var digits = text;
-    var radix: u8 = 10;
-    var width: u32 = 0; // 0 == unsized
-    var signed = false;
-
-    if (std.mem.indexOfScalar(u8, text, '\'')) |q| {
-        var i = q + 1;
-        if (i >= text.len) return error.MissingBase;
-        if (text[i] == 's' or text[i] == 'S') {
-            signed = true;
-            i += 1;
-        }
-        if (i >= text.len) return error.MissingBase;
-        radix = switch (std.ascii.toLower(text[i])) {
-            'b' => 2,
-            'o' => 8,
-            'd' => 10,
-            'h' => 16,
-            else => return error.MissingBase,
-        };
-        // §2.6.1: white space may sit between the base format and the digits
-        // and nowhere else, so it is trimmed here and not skipped in the loop.
-        digits = std.mem.trimStart(u8, text[i + 1 ..], " \t\r\n\x0c");
-        const size_text = std.mem.trim(u8, text[0..q], " \t\r\n\x0c");
-        for (size_text) |c| { // size constant, `_` ignored
-            if (c == '_') continue;
-            width = @min(width * 10 + (c - '0'), 64);
-        }
-        // Syntax 2-2 `size ::= non_zero_unsigned_number`, restated in prose:
-        // the size "shall be specified as a non-zero unsigned decimal number".
-        // Width 0 is this decoder's UNSIZED sentinel, so without this an
-        // explicit `0'b1` would silently read as the unsized `'b1`.
-        if (size_text.len != 0 and width == 0) return error.ZeroSize;
-    }
-
-    var v: u64 = 0;
-    var any = false;
-    for (digits) |c| {
-        if (c == '_') continue;
-        const d: u64 = switch (c) {
-            '0'...'9' => c - '0',
-            'a'...'f' => c - 'a' + 10,
-            'A'...'F' => c - 'A' + 10,
-            else => return error.FourStateDigit, // x/X/z/Z/?
-        };
-        if (d >= radix) return error.DigitOutOfRange;
-        v = try std.math.mul(u64, v, radix);
-        v = try std.math.add(u64, v, d);
-        any = true;
-    }
-    if (!any) return error.MissingDigits;
-
-    // §2.6.1 truncation to the constant's SIZE. A sized constant says its own
-    // width; an UNSIZED one is "at least 32 bits" (§2.5.1) and takes the width
-    // of the implementation's `integer`, which here is 64 — every integer in the
-    // MIR, in codegen and in the device contract is an `i64`.
-    //
-    // 32 would be the other legal reading, and it is wrong for this engine: it
-    // makes `4294967296` lower to 0 and `2147483648` lower to a negative number,
-    // while the arithmetic around them stays 64-bit. It also puts the documented
-    // result of §9.11 `$realtobits` — a 64-bit IEEE-754 pattern — permanently out
-    // of reach of any literal the source could compare it with.
-    // Pinned by tests/fixtures/exhaustive/122_bit_conversions.va.
-    const bits: u7 = if (width == 0) 64 else @intCast(@min(width, 64));
-    if (bits < 64) v &= (@as(u64, 1) << @intCast(bits)) - 1;
-
-    var value: i64 = @bitCast(v);
-    if (signed and bits < 64 and (v >> @intCast(bits - 1)) & 1 == 1) {
-        value = @bitCast(v | ~((@as(u64, 1) << @intCast(bits)) - 1)); // sign-extend
-    }
-    return .{ .value = value, .width = width, .signed = signed };
+    var storage: [256]u8 align(@alignOf(u64)) = undefined;
+    var buffer = std.heap.FixedBufferAllocator.init(&storage);
+    const lit = @import("integer.zig").parse(buffer.allocator(), text) catch |err| return switch (err) {
+        error.OutOfMemory => error.Overflow,
+        else => |e| e,
+    };
+    if (lit.hasUnknown()) return error.FourStateDigit;
+    return .{ .value = lit.asInt() orelse return error.Overflow, .width = if (lit.sized) lit.width else 0, .signed = lit.signed };
 }
 
 /// Decode a `.real_literal`'s text. LRM §2.6.2. Strips `_` and rewrites a
@@ -795,7 +723,9 @@ test "identifiers, keywords, escaped and system names (§2.8)" {
     // §2.8.3: `$` must be followed immediately by a name character.
     try expectTags("$ temperature", &.{ .invalid, .identifier, .eof });
     // Annex B out-of-scope keywords still lex as reserved, never identifiers.
-    try expectTags("posedge wreal", &.{ .kw_reserved, .kw_reserved, .eof });
+    try expectTags("primitive wreal", &.{ .kw_reserved, .kw_reserved, .eof });
+    // §5.10.1 edges carry their own tags: an event expression tells them apart.
+    try expectTags("posedge negedge", &.{ .kw_posedge, .kw_negedge, .eof });
 }
 
 test "numbers: bases, reals, scale factors (§2.6)" {
