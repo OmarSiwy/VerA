@@ -21,8 +21,8 @@ These are implemented pieces; the remaining work below still applies.
 
 | Area | Work still needed |
 |---|---|
-| Digital execution | Implicit sensitivity (`@*`), named events, remaining control forms, intra-assignment controls, tasks/functions, continuous assignments, gates, switches, UDPs and timing checks. |
-| Digital values and hierarchy | Remaining expression forms/conversions, nets/drivers/strength resolution, memories, ports, elaboration and directive semantics. |
+| Digital execution | Implicit sensitivity (`@*`), named events, remaining control forms, intra-assignment controls, tasks/functions, net delays, gates, switches, UDPs and timing checks. |
+| Digital values and hierarchy | Remaining expression forms/conversions, drive strengths and strength resolution, bit/part selects, multidimensional arrays, ports, elaboration and directive semantics. |
 | Mixed-signal simulation | Connect processes to the scheduler and analog solver; implement synchronization, time conversion, discipline resolution and connectmodule insertion. |
 | VPI | Standard C API, object handles/traversal, values, callbacks, analog derivatives and accepted-point notifications. |
 | Analog operators | Remaining table modes and runtime file loading, tabulated noise, complete delay/timer histories, and stateful-operator validation. |

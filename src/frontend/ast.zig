@@ -521,11 +521,19 @@ pub const VarDecl = struct {
     is_signed: bool = true,
 };
 
+/// A.2.2.1 `net_type` — the wired-logic function a net's drivers resolve
+/// through (IEEE 1364-2005 §7.9, Verilog-AMS §3.7). A declaration that names
+/// no net type (`electrical a;`, `ground gnd;`) is `.wire`, which is also the
+/// §7.9 default resolution.
+pub const NetKind = enum(u8) { wire, tri, tri0, tri1, triand, trior, trireg, wand, wor, uwire, supply0, supply1 };
+
 /// Net declaration. LRM §3.6.3 (A.2.1.3 net_declaration). One per declared
 /// name. In the Verilog-A subset (annex C) the only forms that matter are
 /// `<discipline> a, b;` and `ground <discipline> g;`.
 pub const NetDecl = struct {
     name: StrId,
+    /// A.2.2.1 net type; `.wire` when the declaration names none.
+    kind: NetKind = .wire,
     /// §3.6.2 discipline identifier; `.none` when the net is untyped (§3.9
     /// discipline resolution then assigns it).
     discipline: StrId = .none,
@@ -637,6 +645,14 @@ pub const DiscreteBlock = struct {
     main_tok: u32 = 0,
 };
 
+/// A.6.1 `net_assignment ::= net_lvalue = expression` — one driver of one net
+/// (IEEE 1364-2005 §6.1). `assign a = b, c = d;` is two of these.
+pub const ContAssign = struct {
+    target: ExprId,
+    value: ExprId,
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -733,6 +749,10 @@ pub const ModuleDecl = struct {
     /// A.6.2 `initial`/`always` constructs in source order — §7.2.2's discrete
     /// context.
     discrete: []const DiscreteBlock = &.{},
+    /// A.6.1 continuous assignments in source order. One entry per
+    /// net_assignment, because each is a separate DRIVER of its net
+    /// (IEEE 1364-2005 §6.1).
+    assigns: []const ContAssign = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
