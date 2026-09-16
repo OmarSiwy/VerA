@@ -123,7 +123,32 @@ pub const Design = struct {
     /// Empty for a tree of one: with nothing renamed there is no path but the
     /// module's own names, and those resolve without it.
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// §3.6.5's STRUCTURAL implicit nets: "Nets can be used in structural
+    /// descriptions without being declared." One entry per instance port actual
+    /// naming a net the instantiating module never declared.
+    ///
+    /// Reported rather than acted on. The flatten's own answer to one of these
+    /// is already right — the child's declaration supplies the discipline, which
+    /// is what §7.4 resolution would have done — and the only open question is
+    /// whether the implicit net is LEGAL, which IEEE 1364 §19.2
+    /// `default_nettype decides. That is a text-stream fact positioned by byte
+    /// offset, and this pass sees neither the directives nor the offsets, so the
+    /// call belongs to the stage that holds both (`Lower.rejectImplicitNet`).
+    implicit_nets: []const NameSite = &.{},
+    /// §6.2.2 "a blank port connection shall represent the situation where the
+    /// port is not to be connected", for an `input` port. One entry per such
+    /// port, naming the internal net the flatten gave it.
+    ///
+    /// Same division of labour: IEEE 1364 §19.10 `unconnected_drive is what
+    /// decides whether the port arrives driven or floating, and it is positional
+    /// text (`Lower.applyUnconnectedDrive`).
+    unconnected_inputs: []const NameSite = &.{},
 };
+
+/// A name the flatten wants a later stage to judge, and the token it was
+/// written at. The token is what a positional compiler directive is looked up
+/// by, and what a diagnostic points at.
+pub const NameSite = struct { name: []const u8, main_tok: u32 };
 
 /// Everything elaboration needs from the compilation. `file` is MUTABLE because
 /// flattening appends: new interned names (§6.7 paths), cloned expression rows
@@ -297,6 +322,12 @@ const Flatten = struct {
     /// without also being able to overrule a real declaration.
     port_resolved: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 
+    /// `Design.implicit_nets` / `Design.unconnected_inputs`, collected on the
+    /// way through and published unchanged. Both are pure observations — see
+    /// their doc comments for why the judging happens a stage later.
+    implicit_nets: std.ArrayList(NameSite) = .empty,
+    unconnected_inputs: std.ArrayList(NameSite) = .empty,
+
     /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
     /// the parameter it overrides — the declaring module's own path joined with
     /// the path the source wrote, which is the same string the flattened
@@ -430,7 +461,12 @@ const Flatten = struct {
             // children in would make lowering elaborate them a second time.
             .instances = &.{},
         };
-        return .{ .top = out, .names = self.names };
+        return .{
+            .top = out,
+            .names = self.names,
+            .implicit_nets = self.implicit_nets.items,
+            .unconnected_inputs = self.unconnected_inputs.items,
+        };
     }
 
     /// §6.2.2 every instance of one unit, in source order, depth first. `path`
@@ -474,6 +510,23 @@ const Flatten = struct {
         }
 
         for (module.instances) |inst| {
+            // §3.6.5, the structural half: an actual that names nothing `module`
+            // declared is an implicit net. Collected HERE and not in
+            // `inlineInstance`, which is the only other place a connection list
+            // is read, because the question is "did THIS module declare it" and
+            // this is the only loop that still has `module` in hand — one level
+            // down the names have been flattened and the answer is unrecoverable.
+            //
+            // Not an error and not a declaration: see `Design.implicit_nets`.
+            for (inst.ports) |c| {
+                const n = self.netRefName(c.expr) orelse continue;
+                if (declares(module, n)) continue;
+                try self.implicit_nets.append(self.ctx.arena, .{
+                    .name = self.ctx.file.str(n),
+                    .main_tok = c.main_tok,
+                });
+            }
+
             // A.4.1 `module_instantiation ::= module_or_paramset_identifier ...`
             // — one production, two things it can name, and §6.4 says a paramset
             // "can be instantiated exactly like a module". A module first: §6.4.2
@@ -607,6 +660,15 @@ const Flatten = struct {
                     .discipline = (try self.oocDiscipline(path, p.name)) orelse p.discipline,
                     .main_tok = p.main_tok,
                 });
+                // IEEE 1364 §19.10's subject, exactly: an UNCONNECTED INPUT
+                // port. `p.main_tok` is the port's own declaration, inside the
+                // child's module definition, which is the position the directive
+                // is looked up at — §19.10 pulls the unconnected inputs of the
+                // modules DECLARED between the pair, not of the instances.
+                if (p.direction == .input) try self.unconnected_inputs.append(self.ctx.arena, .{
+                    .name = self.ctx.file.str(internal),
+                    .main_tok = p.main_tok,
+                });
             }
             if (conn) |c| if (c.expr != .none and actual == null)
                 try self.err(c.main_tok, .E0906, "a port connection must be a net reference", .{});
@@ -694,6 +756,23 @@ const Flatten = struct {
         if (!named) return if (i < inst.ports.len) inst.ports[i] else null;
         for (inst.ports) |c| if (c.name == port.name) return c;
         return null;
+    }
+
+    /// Did `module` declare a net called `name`? §3.6.5's test, and the whole of
+    /// it: a net reference resolves to a §6.5 port of this module or to a §3.6.3
+    /// net declaration in its body, and anything else the name could be — a
+    /// parameter, a variable, a genvar — is not a net, so an actual that names
+    /// one is a different error (E0906) and not an implicit net.
+    ///
+    /// ponytail: a linear scan per connection, so quadratic in a module's own
+    /// declaration count. The bound is one module's source text and the constant
+    /// is an integer compare; a hash set here would be built and thrown away for
+    /// every instance. Build one per module the day a generated netlist puts
+    /// thousands of nets and thousands of instances in one file.
+    fn declares(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+        for (module.ports) |p| if (p.name == name) return true;
+        for (module.nets) |n| if (n.name == name) return true;
+        return false;
     }
 
     /// The ways a connection list can be malformed: longer than the port list,

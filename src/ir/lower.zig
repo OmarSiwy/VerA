@@ -379,6 +379,25 @@ default_transitions: []const Preprocessor.DefaultTransition = &.{},
 /// "timeUnit" as "the time unit AS SPECIFIED IN `timescale", so with nothing
 /// specified the parameter is not known and §9.15's fallback rule applies.
 timescale: ?Preprocessor.Timescale = null,
+/// IEEE 1364 §19.2 `default_nettype regions, in text-stream order, set by the
+/// same caller for the same reason. Read wherever a §3.6.5 implicit net would be
+/// made: `nodeOf` for a behavioral reference, and `rejectImplicitNet` over
+/// `Design.implicit_nets` for the structural one elaboration spotted.
+nettypes: []const Preprocessor.NetTypeRegion = &.{},
+/// IEEE 1364 §19.1 `celldefine regions, in text-stream order. Read once, by
+/// `lowerModule`, to tag `Mir.is_cell`.
+cells: []const Preprocessor.CellRegion = &.{},
+/// IEEE 1364 §19.10 `unconnected_drive regions, in text-stream order. Read by
+/// `applyUnconnectedDrive`, over the ports `Design.unconnected_inputs` names.
+drives: []const Preprocessor.DriveRegion = &.{},
+/// `Elaborate.Design.unconnected_inputs`, held between `lowerFile` (which has
+/// the design) and `lowerModule` (which has the nodes `drives` applies to).
+///
+/// This is the whole of the split: elaboration knows WHICH ports were left
+/// blank and nothing about the directives, this file knows the directives and
+/// their byte offsets and nothing about port binding. Neither half is a
+/// judgement, so neither pass had to learn the other's subject.
+unconnected_inputs: []const Elaborate.NameSite = &.{},
 /// Where every diagnostic of this compilation goes. Shared with the other
 /// stages, so the cap, the dedupe and the source order are global.
 bag: *diag.Bag = undefined,
@@ -873,6 +892,14 @@ pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
     return Lexer.tokenSpan(self.src, self.tok_starts, tok);
 }
 
+/// Where `tok` starts in the PREPROCESSED text — the currency §10.1's
+/// positional directives are published in, so this is what a `Region` lookup
+/// takes. Zero for a token index the caller never lexed, which puts the query
+/// before every directive and so answers with the directive's default.
+fn tokStart(self: *const Lower, tok: u32) u32 {
+    return if (tok < self.tok_starts.len) self.tok_starts[tok] else 0;
+}
+
 /// Record an error and keep going. Callers substitute a poison value; nothing
 /// downstream runs because `lowerFile` fails at the end.
 fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
@@ -1152,6 +1179,12 @@ pub fn lowerFile(self: *Lower) Error!void {
         .bag = self.bag,
     });
     self.hier_names = design.names;
+    // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
+    // elaboration made but could not judge. Before `lowerModule`, so a design
+    // built on a mistyped instance terminal fails at the mistype instead of at
+    // the E0337 the invented floating node would cause three phases later.
+    for (design.implicit_nets) |n| try self.rejectImplicitNet(n.name, n.main_tok);
+    self.unconnected_inputs = design.unconnected_inputs;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
 }
@@ -1162,6 +1195,10 @@ pub fn lowerFile(self: *Lower) Error!void {
 pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     self.module = module;
     self.mir.name = self.file.str(module.name);
+    // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
+    // own position, which is what "modules between `celldefine and
+    // `endcelldefine" means once the directives are positional regions.
+    self.mir.is_cell = Preprocessor.CellRegion.inForce(self.cells, self.tokStart(module.main_tok), false);
 
     const entry = try self.mir.addBlock(self.arena);
     assert(entry == .entry);
@@ -1516,6 +1553,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // a site under an `if` must still leave a value the end-of-block read can
     // find, and a slot minted inside the arm would not dominate it.
     for (module.analog) |blk| try self.scanCallSites(blk.body, true, {}, {});
+
+    // IEEE 1364 §19.10, also before the body and for a related reason: the pull
+    // on an unconnected `input` is the OUTSIDE driving the port, so it is there
+    // when the child's equations read it, not added after them.
+    try self.applyUnconnectedDrive();
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
@@ -2429,6 +2471,75 @@ fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!voi
     self.node_disciplines.items[idx] = dname;
 }
 
+/// IEEE 1364 §19.2 `` `default_nettype none ``, on a name that is about to
+/// become a §3.6.5 implicit net. A no-op under every other net type: the
+/// directive picks the TYPE an implicit net has, and VerA's analog nets have no
+/// type to pick — §3.6 gives a net a DISCIPLINE, which is §10.2's directive and
+/// a different question. `none` is the member that says something this engine
+/// can act on, because it says the implicit net may not exist at all.
+///
+/// ponytail: the other ten values are accepted and dropped. The ceiling is real
+/// and it is the digital kernel's — `wand`/`wor`/`trireg`/`tri0` differ only in
+/// how MULTIPLE DRIVERS resolve, and VerA has no driver-resolution model to
+/// differ in. Upgrade path is the discrete net type on `Ast.NetDecl`, at which
+/// point this function stops discarding the value and starts stamping it.
+fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+    if (Preprocessor.NetTypeRegion.inForce(self.nettypes, self.tokStart(main_tok), .default) != .none) return;
+    var b = self.errWith(main_tok, .E0367);
+    b.msg("`{s}` was never declared, and `default_nettype none is in force", .{name});
+    b.note("§3.6.5 would make it an implicit net; IEEE 1364 §19.2's `none` is what withdraws that", .{});
+    b.help("declare it — `electrical {s};` — or go back to `default_nettype wire", .{name});
+    try b.emit();
+}
+
+/// IEEE 1364 §19.10 on the internal nets §6.2.2 gave the unconnected `input`
+/// ports. Run after the declarations are interned and before the analog blocks
+/// lower, which is the order the rule reads in: the port arrives already driven,
+/// and the child's equations then see whatever the drive put there.
+///
+/// WHAT A PULL IS HERE. §19.10 pulls a digital net to a logic level through a
+/// `pull`-strength driver. The analog kernel has neither logic levels nor
+/// strengths, and it has exactly one way of saying "driven to a level": a
+/// potential source between the node and the reference. So `pull0` holds the
+/// port at 0 and `pull1` at 1, in the units of its discipline's potential
+/// nature — and the half that DISCRIMINATES is not the number, it is the
+/// source: an unconnected input under `nounconnected_drive is a floating
+/// unknown that KCL gives zero current, and under either pull it is a driven
+/// node that current flows into.
+///
+/// ponytail: 1.0 is the ceiling. §19.10's `pull1` is strength Pu1 on a
+/// four-state net, not one volt, and a discipline whose potential is a
+/// temperature or a pressure has no reason for its logic 1 to be 1. The upgrade
+/// path is the discrete kernel's net resolution, where a pull is a driver among
+/// drivers and this stops being a potential at all; until there is one, a
+/// number that is right for `logic` and honest about being a number beats
+/// recording the directive and doing nothing with it.
+///
+/// Skipped on a net whose discipline binds no potential (§3.6.2.2 discrete, or
+/// none at all): there is nothing to hold it at, and inventing a source would
+/// turn a directive into an E0501 about an access function the model never
+/// wrote.
+fn applyUnconnectedDrive(self: *Lower) Oom!void {
+    if (self.drives.len == 0) return;
+    for (self.unconnected_inputs) |site| {
+        const drive = Preprocessor.DriveRegion.inForce(self.drives, self.tokStart(site.main_tok), .default);
+        if (drive == .float) continue;
+        const idx = self.node_voltages.get(site.name) orelse continue;
+        if (idx == ground) continue;
+        const info = self.disciplines.get(self.node_disciplines.items[idx]) orelse continue;
+        if (!info.has_potential) continue;
+        const target: Target = .{ .access = .potential, .hi = idx, .lo = ground };
+        const acc = self.accum.items[try self.contribIndex(target, site.main_tok)];
+        const old = try self.builder.readVariable(acc.resist, self.cur);
+        const level: Mir.Value = if (drive == .pull1) .f_one else .f_zero;
+        try self.builder.writeVariable(acc.resist, self.cur, try self.emit(.fadd, &.{ old, level }));
+        // §5.6.1.3: the source is retained on every path, the same as an
+        // unconditional `<+` — there is no path on which an unconnected port
+        // stops being unconnected.
+        try self.builder.writeVariable(acc.wrote, self.cur, .f_one);
+    }
+}
+
 /// Register (or find) a node. Undeclared names are implicit nets (§3.6.5), so
 /// this never fails; registration order is source order ⇒ deterministic.
 fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
@@ -2549,6 +2660,14 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
             }
+            // IEEE 1364 §19.2's `none`, on the other half of §3.6.5: `internNode`
+            // below is the one call in this file that MAKES a net out of a name
+            // nobody declared, so this is the one place the directive can act.
+            // Checked before the intern and not inside it — `lowerModule` interns
+            // every declared port and net through the same function, and those
+            // are declarations, not implicit nets.
+            if (!self.node_voltages.contains(name))
+                try self.rejectImplicitNet(name, self.file.exprs.mainTok(e));
             return self.internNode(name, "");
         },
         // §6.7.1 a hierarchical terminal, `V(u.a)`. `flatName` is the whole
