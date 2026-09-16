@@ -103,8 +103,10 @@ pub fn usage(io: Io, why: []const u8) !u8 {
 
 /// N per fixture, smaller than `harness/sweep.zig`'s `reps` because every fixture is timed. The min
 /// is still the estimator; the report's distribution is over fixtures, the
-/// variation that is about the compiler.
-const fixture_reps = 5;
+/// variation that is about the compiler. One outside ReleaseFast: those
+/// numbers are not the shipping ones (the report says so), and the CI gate
+/// runs Debug, where four more passes over every fixture time nothing.
+const fixture_reps = if (@import("builtin").mode == .fast) 5 else 1;
 
 /// Nanoseconds since `t0` on the monotonic (`.awake`) clock.
 pub fn elapsed(io: Io, t0: Io.Timestamp) u64 {

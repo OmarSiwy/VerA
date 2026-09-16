@@ -711,14 +711,15 @@ fn deepSource(gpa: Allocator, n: usize, c: DeepCase) ![]u8 {
     return src.toOwnedSlice(gpa);
 }
 
-/// `device = false`: lint only, because the "100,000-level ?: chain" test
+/// `device = false`: lint only, because the "10,000-level ?: chain" test
 /// below takes that shape through codegen at the same depth.
 const DeepCase = struct { pre: []const u8 = "", open: []const u8, mid: []const u8, close: []const u8 = "", post: []const u8 = "", device: bool = true };
 
-test "nesting has no bound: 100,000 levels lint and generate a device" {
+test "nesting has no bound: 10,000 levels lint and generate a device" {
     // Every stage after the parse recurses per AST level and runs on a
-    // `deep_stack` sized from `Parser.deepest`; 100,000 levels is far past
-    // the 8 MiB stack the pipeline had (it overflowed near 3,000). The if
+    // `deep_stack` sized from `Parser.deepest`; 10,000 levels is past the
+    // 8 MiB stack the pipeline had (it overflowed near 3,000). 100,000 took
+    // 70 s in Debug, half of `zig build test`'s critical path. The if
     // and ?: chains are the worst case of the per-branch walks: every level
     // pushes a prover guard fact on one congruence class (`V(p) > 1`), climbs
     // the SSA arms above it and the setup plan's dominators, each quadratic
@@ -737,7 +738,7 @@ test "nesting has no bound: 100,000 levels lint and generate a device" {
     }) |c| {
         for ([_]Target{ .lint, .build }) |target| {
             if (target == .build and !c.device) continue;
-            const src = try deepSource(gpa, 100_000, c);
+            const src = try deepSource(gpa, 10_000, c);
             defer gpa.free(src);
             var res = try compileSource(gpa, src, target);
             defer res.deinit();
@@ -790,12 +791,15 @@ test "10,000 sequential ifs compile: SSA, the prover and codegen walk them on no
     }
 }
 
-test "100,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
+test "10,000-level ?: chain, else-if chain and nested ifs: device text is linear in the nesting" {
     // The parser and lowering run on a `deep_stack`, codegen on heap stacks
     // (`cfg.emitTree`, `Gen.max_indent`), and the prover, the SSA reads and
     // the setup plan are linear in it (#29), so none of them bounds the depth.
     const gpa = std.testing.allocator;
-    const n = 100_000;
+    // ponytail: 10,000 levels, not 100,000 (72 s in Debug): the indentation
+    // cap and the size bound hold at any depth; a quadratic pass shows as a
+    // slow test only at the larger one.
+    const n = 10_000;
     for ([_]enum { ternary, else_if, nested }{ .ternary, .else_if, .nested }) |shape| {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(gpa);
@@ -822,8 +826,8 @@ test "100,000-level ?: chain, else-if chain and nested ifs: device text is linea
         defer res.deinit();
         const text = try res.generateDevice();
         try std.testing.expect(!res.device_has_compile_error);
-        // 1000 levels measured 0.6-1.6 KB a level; quadratic indentation
-        // alone would average 10 KB a level at this depth.
+        // 1000 levels measured 0.6-1.6 KB a level. Indentation that grew
+        // with the depth is what the per-line check below catches.
         try std.testing.expect(text.len < 4096 * n);
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |l| {
