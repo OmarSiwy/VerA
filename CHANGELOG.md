@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `build.zig` builds without a `tests/` directory again (the Nix package and a fetched dependency ship none; `nix flake check` failed), and re-reads the fixture globs on every `zig build` (0.16 s) instead of registering the fixture directories, which made the build runner abort on Windows after a cached-configuration build (#29).
 - External digital suites: ivtest, sv-tests and iverilog-diff each have a `TRIAGE.md` that judges every disagreement against IEEE 1364-2005, one row per root cause listing the exact names it covers (a row may now name several patterns). The `external-digital` job passes for the first time. The harness creates upstream's `work/` directory, gives vera the same `-I .` that iverilog gets, and drops iverilog's warning continuation lines from gold files (#25).
 - `zig build fuzz --fuzz` fuzzes again: its test is built with LLVM, since the self-hosted backend emits no coverage PCs and the fuzzer stopped at "pcs_len was zero"; the nightly's report-only steps now show their real exit status (#29).
 - `build.zig` globs its fixture lists instead of naming files (1428 lines to 897): every `.c` under `tests/fixtures/` with a `//! design` line runs under `zig build test`, its expected output in `//! stdout`/`//! stderr`/`//! refuse`/`//! xfail` lines, and every `*_host.zig` under `tests/` names its devices with `//! device` lines; adding a fixture needs no build.zig edit. `tools/conformance.py` and `tools/report.py` read the same lines (#29).

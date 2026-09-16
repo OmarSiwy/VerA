@@ -811,23 +811,26 @@ fn vpiRuns(b: *std.Build) []const VpiRun {
 }
 
 /// Every file under `dir` whose name ends in `suffix`, `/`-separated and
-/// sorted. The configuration re-runs when one is added, removed or renamed.
+/// sorted. A tree without `dir` has none: the Nix package and a fetched
+/// dependency ship no tests/. The walk poisons the configure cache, so every
+/// `zig build` re-reads the fixtures (0.16 s): `dependOnDirectoryContents`
+/// over the fixture tree made Zig 0.17's build runner abort (exit 3) after a
+/// cached-configuration build on Windows.
 fn globFiles(b: *std.Build, dir: []const u8, suffix: []const u8) []const []const u8 {
     const io = b.graph.io;
-    var d = b.root.root_dir.handle.openDir(io, dir, .{ .iterate = true }) catch |e| std.debug.panic("{s}: {t}", .{ dir, e });
+    var d = b.root.root_dir.handle.openDir(io, dir, .{ .iterate = true }) catch |e| switch (e) {
+        error.FileNotFound => return &.{},
+        else => std.debug.panic("{s}: {t}", .{ dir, e }),
+    };
     defer d.close(io);
-    b.dependOnDirectoryContents(b.path(dir));
+    b.graph.poisonCache();
     var walker = d.walk(b.allocator) catch @panic("OOM");
     defer walker.deinit();
     var found: std.ArrayList([]const u8) = .empty;
     while (walker.next(io) catch |e| std.debug.panic("{s}: {t}", .{ dir, e })) |e| {
         const rel = b.fmt("{s}/{s}", .{ dir, e.path });
         std.mem.replaceScalar(u8, rel, '\\', '/');
-        switch (e.kind) {
-            .directory => b.dependOnDirectoryContents(b.path(rel)),
-            .file => if (std.mem.endsWith(u8, rel, suffix)) found.append(b.allocator, rel) catch @panic("OOM"),
-            else => {},
-        }
+        if (e.kind == .file and std.mem.endsWith(u8, rel, suffix)) found.append(b.allocator, rel) catch @panic("OOM");
     }
     std.mem.sort([]const u8, found.items, {}, struct {
         fn lt(_: void, x: []const u8, y: []const u8) bool {
@@ -837,9 +840,8 @@ fn globFiles(b: *std.Build, dir: []const u8, suffix: []const u8) []const []const
     return found.items;
 }
 
-/// `path`'s bytes, read at configure time; an edit re-runs the configuration.
+/// `path`'s bytes, read at configure time (re-read every run: `globFiles`).
 fn configText(b: *std.Build, path: []const u8) []const u8 {
-    b.dependOnFileContents(b.path(path));
     return b.root.root_dir.handle.readFileAlloc(b.graph.io, path, b.allocator, .unlimited) catch |e| std.debug.panic("{s}: {t}", .{ path, e });
 }
 
