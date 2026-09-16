@@ -560,4 +560,68 @@ pub fn build(b: *std.Build) void {
 
     const run_bench_test = b.addRunArtifact(b.addTest(.{ .root_module = bench_mod }));
     test_step.dependOn(&run_bench_test.step);
+
+    // =======================================================================
+    // The VPI (LRM clauses 11 and 12).
+    //
+    // A MODULE, like every other stage, because an embedder that wants the
+    // object model wants it without the CLI. It takes `frontend` and `ir`
+    // directly — its input is `Lower.module`, the elaborated top, and
+    // `Lower.hier_names`, the §6.7 path table — and `vera` only so its own
+    // tests can compile a design to hand itself.
+    const vpi_mod = b.addModule("vpi", .{
+        .root_source_file = b.path("src/vpi/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "frontend", .module = frontend_mod },
+            .{ .name = "ir", .module = ir_mod },
+            .{ .name = "vera", .module = vera_mod },
+        },
+    });
+    const run_vpi_test = b.addRunArtifact(b.addTest(.{ .root_module = vpi_mod }));
+    const vpi_step = b.step("test-vpi", "Run the VPI object model tests and the compiled C application against them");
+    vpi_step.dependOn(&run_vpi_test.step);
+    test_step.dependOn(&run_vpi_test.step);
+
+    // The acceptance test, and the reason this step is not just another
+    // `addTest`: a VPI implementation is only tested from C. `tests/vpi_app.c`
+    // is compiled against `src/vpi/vpi_user.h` — so every constant it names is
+    // the HEADER's number rather than the implementation's, and an assertion
+    // like `vpi_get(vpiType, m) == vpiModule` is what keeps the two in step —
+    // and linked against the `export fn`s in `src/vpi/root.zig`.
+    //
+    // `tests/vpi_host.zig` is the SIMULATOR half: it elaborates
+    // `tests/vpi_design.va`, installs the object model, and calls §12.33.2's
+    // `vlog_startup_routines`, which is the application's only entry point.
+    // The census line is asserted as well as the exit code, because an exit
+    // code alone cannot tell "every check passed" from "the startup table was
+    // never called".
+    const vpi_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/vpi_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "vera", .module = vera_mod },
+            .{ .name = "vpi", .module = vpi_mod },
+        },
+    });
+    vpi_host_mod.addCSourceFile(.{
+        .file = b.path("tests/vpi_app.c"),
+        .flags = &.{ "-std=c99", "-Wall", "-Werror" },
+    });
+    vpi_host_mod.addIncludePath(b.path("src/vpi"));
+    const vpi_app = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-vpi-app",
+        .root_module = vpi_host_mod,
+    }));
+    vpi_app.expectExitCode(0);
+    // The counts are the design's own shape (tests/vpi_design.va: three levels,
+    // two instances of one definition), and `checks` is how many assertions the
+    // application reached — a walk that returned early counts fewer of them and
+    // still exits 0, which is the failure this number is here to catch.
+    vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
+    vpi_step.dependOn(&vpi_app.step);
+    test_step.dependOn(&vpi_app.step);
 }
