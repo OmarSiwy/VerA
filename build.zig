@@ -144,12 +144,19 @@ pub fn build(b: *std.Build) void {
     // tests/fuzz.zig again, on the stock runner: `zig build fuzz --fuzz[=N]` is
     // the coverage-guided run (zrunner replays the corpus and seeded inputs
     // under `test`, but cannot drive the fuzzer).
-    const fuzz_test = b.addTest(.{ .name = "fuzz", .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/fuzz.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "vera", .module = byName(mods, "vera") }},
-    }) });
+    const fuzz_test = b.addTest(.{
+        .name = "fuzz",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/fuzz.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "vera", .module = byName(mods, "vera") }},
+        }),
+        // The self-hosted backend (Debug's default on x86_64) emits no
+        // coverage instrumentation: the fuzzer then reads a coverage file
+        // with no PCs ("pcs_len was zero") and stops.
+        .use_llvm = true,
+    });
     b.step("fuzz", "The in-process fuzz targets on the stock runner (`zig build fuzz --fuzz[=N]`: coverage-guided)")
         .dependOn(&b.addRunArtifact(fuzz_test).step);
     b.step("test-all", "Run tests/test_all.zig, the cross-module claims, only").dependOn(&all_run.step);

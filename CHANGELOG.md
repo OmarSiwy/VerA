@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `zig build fuzz --fuzz` fuzzes again: its test is built with LLVM, since the self-hosted backend emits no coverage PCs and the fuzzer stopped at "pcs_len was zero"; the nightly's report-only steps now show their real exit status (#29).
 - `build.zig` globs its fixture lists instead of naming files (1428 lines to 897): every `.c` under `tests/fixtures/` with a `//! design` line runs under `zig build test`, its expected output in `//! stdout`/`//! stderr`/`//! refuse`/`//! xfail` lines, and every `*_host.zig` under `tests/` names its devices with `//! device` lines; adding a fixture needs no build.zig edit. `tools/conformance.py` and `tools/report.py` read the same lines (#29).
 - `zig build test` is about 2 minutes shorter: the two nesting stress tests in `lib/root.zig` run 10,000 levels, still past the old 3,000-level stack limit, instead of 100,000 (they were 142 of the `vera` module's 147 s, the critical path); the fixture suite times each compile once outside ReleaseFast instead of five times (#29).
 - Fix: an `absdelay` ring's window (`__w`) is restored by `stateCtl(.revert)` like the rest of its state, so a rejected step leaves the instance as it found it; the nightly `--certify` state check failed on every `absdelay` device (#29).

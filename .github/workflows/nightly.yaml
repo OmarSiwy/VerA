@@ -25,23 +25,31 @@ jobs:
 
       - name: Strict suite, with verdicts
         continue-on-error: true
-        run: zig build -Doptimize=ReleaseFast test-ams -- --verdicts=/tmp/verdicts.tsv 2>&1 | tail -5
+        run: |
+          zig build -Doptimize=ReleaseFast test-ams -- --verdicts=/tmp/verdicts.tsv 2>&1 | tail -5
+          exit "${PIPESTATUS[0]}"
 
       - name: Perturbed run (L2b)
         continue-on-error: true
         run: |
           zig build -Doptimize=ReleaseFast benchmark -- --perturb --verdicts=/tmp/perturbed.tsv 2> /tmp/perturb.txt | tail -3
+          status="${PIPESTATUS[0]}"
           grep '^LOOSE ' /tmp/perturb.txt | sed 's|^LOOSE .*/tests/fixtures/|LOOSE |' | sort > /tmp/loose.txt || true
+          exit "$status"
 
       - name: Derivative certificate (L4a)
         continue-on-error: true
         run: |
           zig build -Doptimize=ReleaseFast benchmark -- --certify --verdicts=/tmp/certified.tsv 2> /tmp/certify.txt | tail -3
+          status="${PIPESTATUS[0]}"
           grep -E '^fd_check FAIL|^FAIL ' /tmp/certify.txt > /tmp/fd-failures.txt || true
+          exit "$status"
 
       - name: Coverage-guided fuzzing, bounded (L6)
         continue-on-error: true
-        run: zig build fuzz --fuzz=200K 2>&1 | tail -20
+        run: |
+          zig build fuzz --fuzz=200K 2>&1 | tail -20
+          exit "${PIPESTATUS[0]}"
 
       - name: Conformance metric and level ratchet (gate)
         run: |
