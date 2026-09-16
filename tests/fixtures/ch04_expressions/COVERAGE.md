@@ -1,7 +1,7 @@
 # Chapter 4 coverage
 
 Source: `docs/ch4-expressions.html`, read in full through Section 4.7.3.
-149 `.va` fixtures, of which 52 are `//! reject`, 97 run and assert, and NONE is
+176 `.va` fixtures, of which 59 are `//! reject`, 117 run and assert, and NONE is
 `//! xfail` (grep-measured over the directory; the "31 xfail, 19 of them also rejects"
 this line used to give was measured before waves 1–6).
 
@@ -16,7 +16,7 @@ HTML section-ID audit: `s4-1` `s4-2` `s4-2-1` `s4-2-1-1` `s4-2-1-2` `s4-2-1-3`
 `s4-7` `s4-7-1` `s4-7-2` `s4-7-2-1` `s4-7-2-2` `s4-7-2-3` `s4-7-2-4` `s4-7-3`.
 Sixty-seven anchors for sixty-seven printed subsections — this chapter's
 extraction kept its anchors, so the audit is exact and needs no recovery from
-body text. **Forty-three have a fixture that cites them, twenty-four do not.**
+body text. **Forty-five have a fixture that cites them, twenty-two do not.**
 
 Every row below is a `//! lrm` cite grepped out of the fixtures themselves, not
 a judgement about what a fixture is "really" testing. A file that runs a
@@ -80,8 +80,8 @@ the prose, never silently promoted.
 | 4.6.4 Noise | `27_noise_sources.va` (all four functions, with and without the optional name) |
 | 4.6.4.1 white_noise | — no fixture cites it; run by `27_noise_sources.va`, `38_correlated_noise.va` and `136_filter_null_zeros_argument.va` under other cites |
 | 4.6.4.2 flicker_noise | — as 4.6.4.1, run by `27_noise_sources.va` |
-| 4.6.4.3 noise_table | — as 4.6.4.1 |
-| 4.6.4.4 noise_table_log | — as 4.6.4.1 |
+| 4.6.4.3 noise_table | `181_noise_table_topology.va` (the `table` row in the §4.6.4 export, and the clause's own "the simulator shall internally sort the pairs into ascending frequency" — the pairs are written descending), `183_noise_table_duplicate_frequency_rejected.va` (E0519, "Each frequency value must be unique"). The interpolation itself is graded in `tools/contract.zig`, where `noiseTableAt` is evaluated between the knots against hand-computed values; a dc fixture cannot see a PSD (§4.6.2). VerA takes the assignment-pattern form only — the file form and an array parameter are E0519, not comptime data. `lrm_4_6_4_3.va` writes the file form and still compiles, which is NOT that rule being lenient: its source reaches the branch through a variable DECLARATION initializer, a path `var_noise` does not track, so the generator never reaches the export to be refused |
+| 4.6.4.4 noise_table_log | `182_noise_table_log_topology.va` — the clause's own `'{1,1, 1e6,1e-6}` example, exported as a `.log` table beside a `white_noise` generator on the same branch. Figure 4-14's difference from 4.6.4.3 is the table's `interp` field and nothing else, and is graded by the log-log line tests in `tools/contract.zig` |
 | 4.6.4.5 Noise model for diode | — **no fixture.** The clause's diode expression — a `white_noise` of the port flow plus a `flicker_noise` of its power, both on an exponential branch — is written nowhere here; `25_limexp.va` has the diode without the noise and `27_noise_sources.va` the noise without the diode |
 | 4.6.4.6 Correlated noise | `38_correlated_noise.va` (one `white_noise` result reused by two sources, which is the clause's own Example 1) |
 | 4.7 User-defined functions | — no fixture cites the parent; two sentences of introduction |
@@ -154,15 +154,16 @@ this list earlier.
 
 ## Where a fixture is credited, and where it is not
 
-Twelve rows above are empty because a fixture runs the construct but cites the
+Ten rows above are empty because a fixture runs the construct but cites the
 *parent* clause, and a row is credited on the cite the file actually carries,
 not on what it can be argued to test. `23_laplace_filters.va` exercises all four
 Laplace forms and `24_z_transform_filters.va` all four Z forms, but each cites
 its parent (4.5.11, 4.5.12), so 4.5.11.2–.5 and 4.5.12.1–.4 show empty above.
 `27_noise_sources.va` runs `white_noise`, `flicker_noise`, `noise_table` and
-`noise_table_log` under a 4.6.4 cite, so 4.6.4.1–.4 show empty. This is a
-bookkeeping gap, not a testing one; splitting the cites would close twelve rows
-without writing a line of Verilog-A. A thirteenth, 4.2.1.3, is the same story:
+`noise_table_log` under a 4.6.4 cite, so 4.6.4.1 and .2 show empty (.3 and .4
+have fixtures of their own). This is a bookkeeping gap, not a testing one;
+splitting the cites would close ten rows without writing a line of Verilog-A.
+An eleventh, 4.2.1.3, is the same story:
 `02_numeric_conversions.va` runs that clause's printed examples under a 4.2.4
 cite. (4.3's two-syntax-styles rule is likewise satisfied by
 `10_standard_math_traditional.va` and `11_standard_math_system.va` under 4.3.1

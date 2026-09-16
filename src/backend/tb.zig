@@ -348,7 +348,12 @@ fn validNoiseEntry(s: []const u8) bool {
     // ponytail: reuse the nonempty decimal check; source IDs have no numeric bound.
     if (!std.mem.eql(u8, src, "null") and !digits(src)) return false;
     const kind = std.mem.trim(u8, s[0..open], " \t");
-    if (!std.mem.eql(u8, kind, "thermal") and !std.mem.eql(u8, kind, "shot") and !std.mem.eql(u8, kind, "flicker")) return false;
+    // `table` is §4.6.4.3 AND §4.6.4.4: both export one kind, and which
+    // interpolation applies is `noise_tables[k].interp`, not the row's tag.
+    const kinds = [_][]const u8{ "thermal", "shot", "flicker", "table" };
+    for (kinds) |k| {
+        if (std.mem.eql(u8, kind, k)) break;
+    } else return false;
     const inner = s[open + 1 .. hash - 1];
     const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
     return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
