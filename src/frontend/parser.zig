@@ -1651,19 +1651,21 @@ pub const Parser = struct {
             // expression` — a NODESET value: "the initializer shall be a
             // constant_expression and will be used as a nodeset value for the
             // potential of the net BY THE ANALOG SOLVER". Not an assignment and
-            // not a clamp, so dropping it changes no answer the device computes;
-            // it only withholds an initial guess from the host. `ground` has no
-            // such form (Syntax 3-7 gives it `list_of_net_identifiers`), so the
-            // `=` there is still E0207.
+            // not a clamp, so it changes no answer the device computes; it is an
+            // initial guess handed to the host's solver. `ground` has no such
+            // form (Syntax 3-7 gives it `list_of_net_identifiers`), so the `=`
+            // there is still E0207.
             //
-            // ponytail: parsed and dropped, because there is nowhere to put it —
-            // the solver is the HOST's, and a nodeset is an input to it. The
-            // upgrade path is the optional-contract-decl shape (`display`,
-            // `u_abstol`): one `nodeset` decl the host may read. Until then two
-            // rules of this clause have no consumer to check them and are
-            // deliberately unchecked here: "shall be a constant_expression", and
-            // "nets of non-continuous disciplines" may not have one at all.
-            if (!is_ground and self.eat(.assign_eq)) _ = try self.parseExpr();
+            // Carried on `NetDecl.init` and folded by lowering, which is where
+            // both of the clause's rules can be judged: "shall be a
+            // constant_expression" is E0365 (lowering owns the folder) and
+            // "nets of non-continuous disciplines are not [allowed one]" is
+            // E0366 (lowering owns the discipline table, and §10.2's default
+            // has not been applied yet at this point in the parse).
+            const nodeset: Ast.ExprId = if (!is_ground and self.eat(.assign_eq))
+                try self.parseExpr()
+            else
+                .none;
             // Only the FIRST declaration binds. A port that already carries a
             // discipline gets a net entry instead, so lowering sees BOTH
             // declarations and can apply §7.4.4 (E0902) — overwriting here is
@@ -1676,12 +1678,25 @@ pub const Parser = struct {
                 // the direction declaration's range rather than over it — see
                 // Ast.Port.type_range.
                 port.?.type_range = range;
+                // `electrical p = 5.0;` on a header port lands here, and the
+                // discipline is all this branch can carry: a Port has no
+                // initializer slot. The nodeset gets a net entry of its own
+                // with NO discipline — `.none` is what keeps it out of §7.4.4
+                // (E0902), and `internNode` with an empty discipline finds the
+                // port's slot without overwriting what this branch just bound.
+                if (nodeset != .none) try b.nets.append(self.arena, .{
+                    .name = name,
+                    .range = range,
+                    .init = nodeset,
+                    .main_tok = tok,
+                });
             } else {
                 try b.nets.append(self.arena, .{
                     .name = name,
                     .discipline = disc,
                     .is_ground = is_ground,
                     .range = range,
+                    .init = nodeset,
                     .main_tok = tok,
                 });
             }

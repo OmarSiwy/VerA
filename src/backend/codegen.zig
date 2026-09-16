@@ -1709,12 +1709,49 @@ pub const Gen = struct {
             try self.w("    {d},\n", .{self.abstolOf(@intCast(i))});
         }
         try self.w("}};\n\n", .{});
+        try self.emitNodesets();
         try self.w(
             \\/// §4.6.1 analysis() / §5.10.2 global events. The host sets this per pass.
             \\pub const AnalysisKind = enum(u8) {{ static, ic, nodeset, dc, tran, ac, noise }};
             \\
             \\
         , .{});
+    }
+
+    /// §3.6.3.2 net discipline initial (nodeset) values, as one optional table
+    /// over `U` — the `u_abstol` shape, for the `u_abstol` reason: it is a
+    /// number per unknown that only the DECLARATION knows and only the SOLVER
+    /// can use, and the solver belongs to the host.
+    ///
+    /// Emitted only when the module declares at least one, so a device that
+    /// has no nodeset is byte-identical to what it was before this existed and
+    /// a host reads "no opinion" off the decl's absence rather than off a table
+    /// of nulls.
+    ///
+    /// `?f64` and not `f64`: "a null value ... indicates that no nodeset value
+    /// is being specified", and zero is a perfectly ordinary nodeset. Every
+    /// unknown that is not a declared net is null too — a §5.4.2 branch flow
+    /// has no net_decl_assignment to carry one, since the clause gives the
+    /// value to "the potential of the net".
+    fn emitNodesets(self: *Gen) Error!void {
+        if (self.lower.nodesets.items.len == 0) return;
+        try self.w("/// §3.6.3.2 nodeset: the initial guess the source states for each\n", .{});
+        try self.w("/// unknown's potential. A HINT to the solver — not an initial\n", .{});
+        try self.w("/// condition and not a clamp; the solved answer is unchanged by it.\n", .{});
+        try self.w("pub const u_nodeset = [n_u]?f64{{\n", .{});
+        for (0..self.n_u) |i| {
+            // §3.6.3.2: "If different nets of a node have conflicting
+            // initializers ... it is a race condition for which the initializer
+            // wins." Two declarations of one net inside one module are the
+            // non-hierarchical case of that sentence, so LAST wins here and the
+            // clause permits either.
+            var v: ?f64 = null;
+            for (self.lower.nodesets.items) |ns| {
+                if (ns.node == i) v = ns.value;
+            }
+            if (v) |x| try self.w("    {s},\n", .{try self.fmtF64(x)}) else try self.w("    null,\n", .{});
+        }
+        try self.w("}};\n\n", .{});
     }
 
     /// §1.3.4/§3.6.2.2. Returns the name of the contribution's net when that
@@ -10868,4 +10905,53 @@ test "codegen: unused distributions retain validation without forcing draw loops
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "zRngChiSquare("));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "zRngChiSquareNext("));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "zRngCheck("));
+}
+
+test "codegen: §3.6.3.2 a net initializer is exported as a nodeset, not as a value" {
+    // The clause's own first example, `electrical a = 5.0;`, plus the two
+    // spellings it does not print: the initializer on a net that is also a
+    // module PORT, and one written over a parameter (§3.4 makes a parameter
+    // reference a constant_expression, so `= vstart` is legal).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ns(p, n);
+        \\  inout p, n;
+        \\  electrical p = 1.5, n;
+        \\  parameter real vstart = 2.25;
+        \\  electrical mid = vstart;
+        \\  analog begin
+        \\    I(p, mid) <+ V(p, mid);
+        \\    I(mid, n) <+ V(mid, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // One optional table over U, in U's order: port `p`, port `n`, net `mid`.
+    // `n` is null and not 0.0 — "a null value ... indicates that no nodeset
+    // value is being specified", and a host must be able to tell the two apart.
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_nodeset = [n_u]?f64{\n    1.5,\n    null,\n    2.25,\n};") != null);
+
+    // A NODESET, so nothing in the residual may read it: `eval` is a function
+    // of x alone, and a starting point that leaked into it would be a clamp.
+    const at = std.mem.indexOf(u8, src, "pub fn eval(").?;
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], "u_nodeset") == null);
+}
+
+test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset table" {
+    // The decl is OPTIONAL and its absence is the answer "this module states no
+    // opinion" — a table of nulls would say the same thing in more bytes and
+    // would move every existing device's emitted source.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module plain(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ V(p, n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "u_nodeset") == null);
 }

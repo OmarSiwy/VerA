@@ -301,6 +301,14 @@ pub const Code = enum(u16) {
     E0363,
     /// Known mixed-signedness shift comparison needs missing context typing.
     E0364,
+    /// §3.6.3.2 a net_decl_assignment whose initializer is not a constant
+    /// expression. The nodeset sibling of E0363, which rules on a parameter
+    /// default: both are "the grammar said constant and this is not one".
+    E0365,
+    /// §3.6.3.2 a net_decl_assignment on a net of non-continuous discipline.
+    /// The nodeset sibling of E0344, which refuses `ground` on the same nets
+    /// for the same reason: no nature bound, so no potential to guess.
+    E0366,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2451,6 +2459,40 @@ fn infoOf(c: Code) Info {
             \\would silently give the wrong result. VerA rejects this known
             \\mixed case until context typing is implemented. This is an
             \\implementation limitation, not an illegal Verilog-AMS expression.
+            ,
+        },
+
+        .E0365 => .{
+            .title = "net initializer is not a constant expression",
+            .lrm = "3.6.3.2",
+            .explain =
+            \\LRM 3.6.3.2: "The initializer shall be a constant_expression and
+            \\will be used as a nodeset value for the potential of the net by
+            \\the analog solver."
+            \\
+            \\A nodeset is the solver's STARTING POINT, chosen before the first
+            \\iteration runs. An expression that reads a net potential, a
+            \\variable or the simulation state has no value at that moment, so
+            \\there is nothing for the initializer to be.
+            \\
+            \\A parameter reference IS a constant expression (LRM 3.4) and is
+            \\accepted: `electrical n = vstart;` is the form a model card tunes.
+            ,
+        },
+        .E0366 => .{
+            .title = "net of a non-continuous discipline has an initializer",
+            .lrm = "3.6.3.2",
+            .explain =
+            \\LRM 3.6.3.2: "Nets with continuous disciplines are allowed to have
+            \\initializers on their net discipline declarations; however, nets
+            \\of non-continuous disciplines are not."
+            \\
+            \\The initializer is "a nodeset value for the POTENTIAL of the net".
+            \\A discrete discipline binds no nature (LRM 3.6.2.2), so the net
+            \\has no potential for the value to be a guess at.
+            \\
+            \\E0344 is the same sentence about `ground`, which needs a
+            \\continuous discipline for the same reason.
             ,
         },
 
