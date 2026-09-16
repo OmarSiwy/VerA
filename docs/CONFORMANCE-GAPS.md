@@ -22,7 +22,7 @@ These are implemented pieces; the remaining work below still applies.
 | Area | Work still needed |
 |---|---|
 | Digital execution | Implicit sensitivity (`@*`), named events, remaining control forms, intra-assignment controls, tasks/functions, continuous assignments, gates, switches, UDPs and timing checks. |
-| Digital values and hierarchy | Remaining expression forms/conversions, nets/drivers/strength resolution, memories, ports, elaboration and directive semantics. |
+| Digital values and hierarchy | Remaining expression forms/conversions, nets/drivers/strength resolution, memories, ports and elaboration. §10.1's IEEE 1364 carry-overs are no longer accepted-and-ignored: `default_nettype` reaches implicit-net creation, `celldefine` tags modules, `unconnected_drive` drives unconnected inputs. What stays missing under this row is the driver/strength model those directives are stated over. |
 | Mixed-signal simulation | Connect processes to the scheduler and analog solver; implement synchronization, time conversion, discipline resolution and connectmodule insertion. |
 | VPI | Standard C API, object handles/traversal, values, callbacks, analog derivatives and accepted-point notifications. |
 | Analog operators | Remaining table modes and runtime file loading, tabulated noise, complete delay/timer histories, and stateful-operator validation. |
@@ -33,7 +33,7 @@ These are implemented pieces; the remaining work below still applies.
 
 ## Verified so far
 
-- VerA build, **370 unit tests** and **1,301/1,301 strict fixtures pass**.
+- VerA build, **375 unit tests** and **1,313/1,313 strict fixtures pass**.
 - Scheduler/time/source execution: **44 tests**, plus four CLI transcripts, pass in Debug/ReleaseFast. General digital execution remains incomplete.
 - An edge-triggered D flip-flop with a clock generator simulates through `vera --run`, with correct NBA sampling.
 - Host build and **295 unit tests pass**; full circuit suite: **494/616 pass, 122 fail**. Six focused JFNK circuits also pass.

@@ -305,6 +305,11 @@ fn compileInArena(
     var defaults: []const Preprocessor.DefaultDiscipline = &.{};
     var transitions: []const Preprocessor.DefaultTransition = &.{};
     var timescale: ?Preprocessor.Timescale = null;
+    // The three IEEE 1364 directives §10.1 carries over that scope FORWARD:
+    // §19.2 `default_nettype, §19.1 `celldefine, §19.10 `unconnected_drive.
+    var nettypes: []const Preprocessor.NetTypeRegion = &.{};
+    var cells: []const Preprocessor.CellRegion = &.{};
+    var drives: []const Preprocessor.DriveRegion = &.{};
     // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
     // prelude. Zero unless the caller supplied netlist text.
     var netlist_modules: u32 = 0;
@@ -317,6 +322,9 @@ fn compileInArena(
         .defaults = &defaults,
         .transitions = &transitions,
         .timescale = &timescale,
+        .nettypes = &nettypes,
+        .cells = &cells,
+        .drives = &drives,
         .bag = bag,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -389,6 +397,9 @@ fn compileInArena(
     lower.default_disciplines = defaults;
     lower.default_transitions = transitions;
     lower.timescale = timescale;
+    lower.nettypes = nettypes;
+    lower.cells = cells;
+    lower.drives = drives;
     lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
     {
         // SSA maps its matrix directly; the compilation arena cannot free it.
@@ -534,6 +545,32 @@ test "lint: source → MIR, arena freed clean" {
     try std.testing.expectEqual(res.unitCount(), res.verdict.unit_modes.len);
     // Direct OS mappings must be gone before returning the arena-owned MIR.
     try std.testing.expectEqual(@as(usize, 0), res.lower.builder.defs.len);
+}
+
+test "IEEE 1364 §19.1 cell membership survives the preprocessor" {
+    // The one end-to-end claim `celldefine` makes: the module's tag is still
+    // answerable after the directives themselves are gone from the text. It has
+    // no fixture because it changes NO value a model can print — §19.1 tags a
+    // module and changes nothing else — so the compilation result is the only
+    // place the answer can be read, and this is the read.
+    const gpa = std.testing.allocator;
+    {
+        var res = try compileSource(gpa, "`celldefine\n" ++ test_resistor ++ "\n`endcelldefine\n", .lint);
+        defer res.deinit();
+        try std.testing.expect(res.mir.is_cell);
+    }
+    {
+        var res = try compileSource(gpa, test_resistor, .lint);
+        defer res.deinit();
+        try std.testing.expect(!res.mir.is_cell);
+    }
+    {
+        // §10.1's scope sentence, on the tag: the region ENDS where the closing
+        // directive is, so a module below `endcelldefine is not a cell.
+        var res = try compileSource(gpa, "`celldefine\n`endcelldefine\n" ++ test_resistor, .lint);
+        defer res.deinit();
+        try std.testing.expect(!res.mir.is_cell);
+    }
 }
 
 test "diagnostics outlive the compilation arena" {
