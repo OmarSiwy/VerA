@@ -2,6 +2,8 @@
 
 - reference: Icarus Verilog 13.0 (`iverilog -g2005`, then `vvp -n`), from
   `nix develop .#benchmarking`
+- both tools get `-I .` from the case's directory, and the case's
+  `--std`/`// digital-runner:` flags go to vera only
 - second opinion: Verilator 5 `--lint-only --timing -Wno-fatal -Wno-lint
   -Wno-style` and Yosys `read_verilog`, consulted only where iverilog and VerA
   disagree on accepting a source; their answers are printed, never scored

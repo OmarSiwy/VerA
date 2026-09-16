@@ -22,10 +22,10 @@ Upstream sources are fetched at the pinned commit into $VERA_EXTERNAL_CACHE
 ivtest is GPL-2.0.
 
 Every disagreement prints as `FAIL <suite>/<name>: why`, or `KNOWN` when a row
-of the suite's TRIAGE.md (`| `pattern` | verdict | ... |`, an fnmatch pattern
-over the name, so one root cause is one row) covers it; `ivtest-native`'s rows
-are ivtest/TRIAGE-native.md. A row that covers no disagreement of a suite that
-ran is `STALE`. Exit 1 while any FAIL is untriaged or any row is STALE. Needs
+of the suite's TRIAGE.md (`| `pattern` `pattern` ... | verdict | ... |`, fnmatch
+patterns over the name, so one root cause is one row) covers it; `ivtest-native`'s
+rows are ivtest/TRIAGE-native.md. A pattern that covers no disagreement of a
+suite that ran is `STALE`. Exit 1 while any FAIL is untriaged or any row is STALE. Needs
 python3, git; iverilog/vvp for iverilog-diff, verilator/yosys for its second
 opinion (`nix develop .#external`). A suite whose tool is missing is reported
 as skipped.
@@ -151,10 +151,15 @@ TRIAGE = {"ivtest-native": "ivtest/TRIAGE-native.md"}
 
 
 def triage(suite):
-    """pattern -> verdict, from TRIAGE.md's `| `pattern` | verdict | ... |` rows."""
+    """pattern -> verdict, from TRIAGE.md's `| `pattern` `pattern` ... | verdict | ... |`
+    rows: one row per root cause, naming every pattern it covers."""
     p = EXT / TRIAGE.get(suite, f"{suite}/TRIAGE.md")
-    rows = re.findall(r"(?m)^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|", p.read_text()) if p.is_file() else []
-    return dict(rows)
+    return triage_rows(p.read_text()) if p.is_file() else {}
+
+
+def triage_rows(text):
+    rows = re.findall(r"(?m)^\|\s*((?:`[^`]+`[\s,]*)+)\|\s*([^|]+?)\s*\|", text)
+    return {pat: verdict for pats, verdict in rows for pat in re.findall(r"`([^`]+)`", pats)}
 
 
 def judge(results, rows):
@@ -186,9 +191,9 @@ def run(argv, cwd, timeout=TIMEOUT):
 # warnings in a gold file, and vvp's VCD banner. Line endings normalise to \n.
 TOOL_LINE = re.compile(
     r"^(\$finish at tick .*|\$stop at tick .*"
-    r"|\S+:\d+: \$(finish|stop) called at .*"
-    r"|\S+:\d+: (warning|sorry|error): .*"
-    r"|VCD (info|warning): .*|WARNING: .*|\*\* VVP Stop\(0\) \*\*|\*\* Flushing output streams\.|\*\* Current simulation time is .*"
+    r"|\S+:\d+: \$(finish|stop)(\(\d\))? called at .*"
+    r"|\S+:\d+: (warning|sorry|error): .*|\S+:\d+: +: .*"
+    r"|VCD (info|warning): .*|\s+using existing file \(.*\)\.|WARNING: .*|\*\* VVP Stop\(0\) \*\*|\*\* Flushing output streams\.|\*\* Current simulation time is .*"
     r"|\*\* Continue with \$stop\.|\*\*\* This is .*)$")
 
 
@@ -272,6 +277,8 @@ def ivtest_lists(iv):
 
 def ivtest_select(iv):
     """(selected cases, {excluded name: reason})."""
+    # Upstream's runner (vvp_reg.pl) creates `work/`, where tests write files.
+    (iv / "work").mkdir(exist_ok=True)
     cases, skipped = [], {}
     for name, entry in sorted(ivtest_lists(iv).items()):
         ty, args, d, gold = entry[:4]
@@ -488,7 +495,8 @@ def iverilog_diff(vera, report, iv_cases, sv_cases):
             ivl = ("accepts", irc, normalise(iout))
         else:
             ivl = ("refuses", irc, "")
-        vrc, vout, verr = vera.run(files, c["cwd"], c["flags"])
+        # The same include path as iverilog's `-I .`.
+        vrc, vout, verr = vera.run(files, c["cwd"], [*c["flags"], "-I", "."])
         if vrc == "timeout":
             return c["name"], "vera times out", verr
         ver = ("accepts", vrc, normalise(vout)) if "could not compile" not in verr else ("refuses", vrc, "")
@@ -511,7 +519,10 @@ def selftest():
     rows = {"ivtest/br*": "VerA bug: fixture x", "gone": "fixed"}
     assert judge([("ivtest/br1", "a"), ("sv-tests/x.v", "b")], rows) == (
         [("ivtest/br1", "a", "ivtest/br*")], [("sv-tests/x.v", "b")], ["gone"])
+    assert triage_rows("| pattern | verdict |\n|---|---|\n| `a` `b*`, `c` | v1 | r |\n| `d` | v2 | r |\n") == {
+        "a": "v1", "b*": "v1", "c": "v1", "d": "v2"}
     assert normalise("a\r\n$finish at tick 5\nb\n") == "a\nb"
+    assert normalise("./t.v:7: warning: w\n./t.v:7:        : more\nt.v:6: $finish(1) called at 0 (1s)\nc") == "c"
     assert sv_reasons(strip("logic a; // int\ni++;")) == ["logic", "++"]
     assert non_1364_systf(strip('$display("$foo"); $sformatf(x);')) == ["sformatf"]
     print("selftest: ok")

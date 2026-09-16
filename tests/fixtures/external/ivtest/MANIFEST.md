@@ -44,7 +44,8 @@ A test is selected when all of these hold:
 ## Verdict
 
 `vera --run --std=1364-2005 -I ivltests ./ivltests/<name>.v`, run from
-`ivtest/` as upstream runs iverilog (relative `$readmem`/`$fopen` paths):
+`ivtest/` as upstream runs iverilog (relative `$readmem`/`$fopen` paths), with
+the `work/` directory upstream's `vvp_reg.pl` creates for the files tests write:
 
 - `normal`: exit 0, and the stdout equals the gold file after normalisation
   when the entry names one (`gold=` or JSON `gold`, whose
@@ -56,7 +57,8 @@ A test is selected when all of these hold:
 
 Normalisation drops what IEEE 1364-2005 leaves to the tool: the simulator's
 own `$finish`/`$stop` report (17.4.1: "a diagnostic message"), iverilog's
-compile warnings recorded in a gold file, and vvp's VCD banners. The rule is
+compile warnings recorded in a gold file (with their `file:N:   : ...`
+continuation lines and `$finish(N) called at` reports), and vvp's VCD banners. The rule is
 `TOOL_LINE` in the script.
 
 `--native` repeats every `normal` test VerA's interpreter accepts through
