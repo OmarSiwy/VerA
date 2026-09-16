@@ -2547,7 +2547,7 @@ fn infoOf(c: Code) Info {
             \\implementation limitation, not an illegal Verilog-AMS expression.
             ,
         },
-        .E0365 => .{
+        .E0367 => .{
             .title = "implicit net under `default_nettype none",
             .lrm = "3.6.5",
             .explain =
