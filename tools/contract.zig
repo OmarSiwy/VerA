@@ -665,14 +665,83 @@ const sim_state_fields = [_]SimStateField{
 /// Still not expressible: the per-use scaling coefficient (`c1*n` vs `c2*n`) —
 /// a `coeff` lands with the `noisePsd` hook, which is the first thing that
 /// could evaluate it.
+///
+/// §4.6.4.3/.4 `noise_table`/`noise_table_log` are the `table` kind, and their
+/// PSD is `noise_tables[table.?]` rather than anything `noisePsd` can return —
+/// see `NoiseTable`. The tag is APPENDED, so every existing ordinal and every
+/// existing row is unchanged, and a host that switches on `kind` gets a
+/// compile error at the new tag rather than a silent mis-read: a table
+/// generator answered as `.thermal` would be handed to a 4kT·g fallback whose
+/// answer has nothing to do with the table.
 pub fn NoiseGen(comptime D: type) type {
     const n = nU(D);
     return struct {
         row: std.math.IntFittingRange(0, n - 1),
         col: std.math.IntFittingRange(0, n - 1),
-        kind: enum { thermal, shot, flicker },
+        kind: enum { thermal, shot, flicker, table },
         /// §4.6.4.6 shared-generator identity; null = independent.
         source: ?u16 = null,
+        /// §4.6.4.3/.4 index into the device's `noise_tables`. Non-null exactly
+        /// when `kind == .table`; `validate` checks both halves.
+        table: ?u16 = null,
+    };
+}
+
+/// §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log`: one generator's PSD as
+/// a piecewise (frequency, power) table instead of a parametric term. Position
+/// k of the device's optional `noise_tables` is what `NoiseGen.table == k`
+/// names.
+///
+/// A COMPTIME table beside `noise_gens`, not a field of `PsdTerm`: the clause's
+/// input is "an array parameter or an array assignment pattern", i.e. data the
+/// model states once and not per bias, and a host that integrates a spectrum
+/// wants the KNOTS — a segment of a log-log line has a closed-form integral and
+/// a sampled evaluator does not. `noisePsd` still answers position k, and for a
+/// table row it answers all-zero, so a host that has not learned about tables
+/// yet reads no noise from one rather than the wrong noise.
+///
+/// The invariants `validate` enforces, so a consumer may assume them:
+/// `points.len >= 1`, frequencies strictly ascending (§4.6.4.3: "the simulator
+/// shall internally sort the pairs into ascending frequency … Each frequency
+/// value must be unique" — VerA sorts at compile time, so the host never has
+/// to), every frequency > 0, every power >= 0, and > 0 throughout a `.log`
+/// table because its own interpolation takes their logarithm.
+pub const NoiseTable = struct {
+    /// §4.6.4.3 linear in (f, p); §4.6.4.4 linear in (log f, log p) — a
+    /// straight line on a log-log plot, which is the whole difference between
+    /// the two functions (LRM Figure 4-14).
+    interp: enum(u8) { linear, log },
+    /// (frequency [Hz], power [units²/Hz]) pairs, ascending in frequency.
+    points: []const [2]f64,
+};
+
+/// §4.6.4.3/.4 the tabulated PSD at `f`. Lives here rather than in each host
+/// because the two clauses state one formula each and both are easy to get
+/// subtly wrong — §4.6.4.4 is `pow(10, log(p1) + (log(p2)-log(p1)) *
+/// (log(f)-log(f1)) / (log(f2)-log(f1)))`, written below with the natural
+/// logarithm, which is the same line: the base cancels in the ratio.
+///
+/// Outside the table both clauses clamp, in the same words: "for frequencies
+/// lower than the lowest frequency in the value set, noise_table() returns the
+/// power specified for the lowest frequency, and for frequencies higher than
+/// the highest frequency, noise_table() returns the power specified for the
+/// highest frequency." No extrapolation, in either mode — which is also what
+/// makes a one-point table legal and constant.
+pub fn noiseTableAt(t: NoiseTable, f: f64) f64 {
+    const p = t.points;
+    if (f <= p[0][0]) return p[0][1];
+    const top = p[p.len - 1];
+    if (f >= top[0]) return top[1];
+    // ponytail: linear scan. A noise table is a handful of points (the LRM's
+    // own example is seven); a binary search is worth it at hundreds.
+    var i: usize = 1;
+    while (p[i][0] <= f) i += 1;
+    const a = p[i - 1];
+    const b = p[i];
+    return switch (t.interp) {
+        .linear => a[1] + (b[1] - a[1]) * (f - a[0]) / (b[0] - a[0]),
+        .log => @exp(@log(a[1]) + (@log(b[1]) - @log(a[1])) *
+            (@log(f) - @log(a[0])) / (@log(b[0]) - @log(a[0]))),
     };
 }
 
@@ -683,10 +752,16 @@ pub fn NoiseGen(comptime D: type) type {
 /// currents/conductances. corr_with pairs correlated generators (BSIM4
 /// tnoiMod, PSP igid); real coefficient until a reference demands complex.
 ///
-/// NOTE: this parametric form cannot express
-/// §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log`, which are piecewise
-/// PSD-vs-frequency. It is superseded by `noisePsd(x, m, i, f) -> [k]f64`
-/// once codegen emits it; the two changes land together.
+/// NOTE: this parametric form cannot express §4.6.4.3 `noise_table` /
+/// §4.6.4.4 `noise_table_log`, which are piecewise PSD-vs-frequency; those are
+/// `NoiseGen.kind == .table` and `noise_tables`, and their `PsdTerm` reads
+/// all-zero. So the full spectrum of generator k is
+///
+///     S_k(f) = white + flicker/f^ef        (parametric rows)
+///     S_k(f) = noiseTableAt(noise_tables[noise_gens[k].table.?], f)
+///
+/// and a host that simply ADDS the two is right for both, because each shape
+/// is zero where the other one speaks.
 pub const PsdTerm = struct {
     white: f64,
     flicker: f64 = 0,
@@ -1104,6 +1179,34 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "noisePsd"))
         expectFn(D, "noisePsd", fn ([n]f64, *const D.Model, *const D.Instance) [D.noise_gens.len]PsdTerm);
 
+    // §4.6.4.3/.4 the tabulated PSDs, and the `kind`/`table` pairing that says
+    // which generator reads one. Checked HERE and not left to the host: the
+    // invariants `noiseTableAt` assumes (non-empty, ascending, unique, and
+    // logarithmable in a `.log` table) are exactly the ones whose violation
+    // reads as a NaN spectrum three analyses later.
+    expectArray(D, "noise_tables", NoiseTable);
+    requireWith(D, "noise_tables", "noise_gens");
+    if (@hasDecl(D, "noise_gens")) {
+        const tables: []const NoiseTable = if (@hasDecl(D, "noise_tables")) &D.noise_tables else &.{};
+        for (D.noise_gens) |g| {
+            if ((g.kind == .table) != (g.table != null))
+                @compileError(name ++ ".noise_gens: `.table` is set exactly on a `.table` generator");
+            if (g.table) |k| if (k >= tables.len)
+                @compileError(name ++ ".noise_gens: `.table` index is out of range of `noise_tables`");
+        }
+        for (tables) |t| {
+            if (t.points.len == 0) @compileError(name ++ ".noise_tables: an empty table has no PSD to state");
+            for (t.points, 0..) |p, i| {
+                if (!(p[0] > 0)) @compileError(name ++ ".noise_tables: frequency must be positive");
+                if (!(p[1] >= 0)) @compileError(name ++ ".noise_tables: power must be non-negative");
+                if (t.interp == .log and !(p[1] > 0))
+                    @compileError(name ++ ".noise_tables: a log table interpolates log(power), so power must be positive");
+                if (i != 0 and !(p[0] > t.points[i - 1][0]))
+                    @compileError(name ++ ".noise_tables: frequencies must be sorted and unique");
+            }
+        }
+    }
+
     // Small-signal stamp: the complex contribution `G + jwC` cannot carry.
     // Sparse — `ac_stamps` is the comptime pattern, `acStamp` the values at a
     // frequency, same idiom as noise_gens/noisePsd.
@@ -1318,6 +1421,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "q_rows", {} },
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
+    .{ "noise_tables", {} },
     .{ "ac_stamps", {} },
     .{ "acStamp", {} },
     .{ "op_vars", {} },
@@ -1711,7 +1815,16 @@ const MockAll = struct {
     pub const u_abstol = [n_u]f64{ 1e-6, 1e-6 };
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
-    pub const noise_gens = [_]NoiseGen(Self){.{ .row = 0, .col = 1, .kind = .thermal }};
+    // §4.6.4: a parametric generator and a §4.6.4.4 tabulated one, so the
+    // `kind`/`table` pairing and the all-zero `PsdTerm` of a table row are both
+    // declared somewhere that `validate` sees them.
+    pub const noise_gens = [_]NoiseGen(Self){
+        .{ .row = 0, .col = 1, .kind = .thermal },
+        .{ .row = 0, .col = 1, .kind = .table, .table = 0 },
+    };
+    pub const noise_tables = [_]NoiseTable{
+        .{ .interp = .log, .points = &.{ .{ 1, 1e-18 }, .{ 1e6, 1e-24 } } },
+    };
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
@@ -1780,7 +1893,9 @@ const MockAll = struct {
         return out;
     }
     pub fn noisePsd(_: [n_u]f64, m: *const Model, _: *const Instance) [noise_gens.len]PsdTerm {
-        return .{.{ .white = 4 * 1.38e-23 * 300.15 * @as(f64, m.g) }};
+        // Row 1 is the table's, and its parametric part is zero: the table IS
+        // its spectrum, so anything else here would be added to it.
+        return .{ .{ .white = 4 * 1.38e-23 * 300.15 * @as(f64, m.g) }, .{ .white = 0 } };
     }
     pub fn acStamp(_: [n_u]f64, _: *const Model, _: *const Instance, _: f64) [ac_stamps.len]Complex {
         return .{ .{}, .{} };
@@ -1973,4 +2088,66 @@ test "acStamp carries the delay phase G+jwC cannot" {
 
 test "nU" {
     try testing.expectEqual(@as(comptime_int, 2), comptime nU(MockR));
+}
+
+test "§4.6.4.3 noise_table interpolates linearly BETWEEN the pairs" {
+    // Every `want` below is the clause's own arithmetic done by hand, not
+    // whatever the evaluator returns: the segment [100, 200] rises 4 -> 10, so
+    // a quarter of the way along it is 4 + 6/4 and half of it is 4 + 3.
+    const t: NoiseTable = .{ .interp = .linear, .points = &.{ .{ 100, 4.0 }, .{ 200, 10.0 } } };
+    try testing.expectApproxEqAbs(@as(f64, 5.5), noiseTableAt(t, 125), 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 7.0), noiseTableAt(t, 150), 1e-15);
+    // The knots themselves, which no interpolation may move.
+    try testing.expectEqual(@as(f64, 4.0), noiseTableAt(t, 100));
+    try testing.expectEqual(@as(f64, 10.0), noiseTableAt(t, 200));
+    // "for frequencies lower than the lowest frequency … returns the power
+    // specified for the lowest frequency", and the same for the highest: a
+    // clamp, never an extrapolated 1.0 below or 16.0 above.
+    try testing.expectEqual(@as(f64, 4.0), noiseTableAt(t, 50));
+    try testing.expectEqual(@as(f64, 4.0), noiseTableAt(t, 1e-9));
+    try testing.expectEqual(@as(f64, 10.0), noiseTableAt(t, 1000));
+
+    // Three points: the SECOND segment has to be the one that answers f = 3.
+    const u: NoiseTable = .{ .interp = .linear, .points = &.{ .{ 1, 1.0 }, .{ 2, 4.0 }, .{ 4, 8.0 } } };
+    try testing.expectApproxEqAbs(@as(f64, 2.5), noiseTableAt(u, 1.5), 1e-15);
+    try testing.expectEqual(@as(f64, 4.0), noiseTableAt(u, 2));
+    try testing.expectApproxEqAbs(@as(f64, 6.0), noiseTableAt(u, 3), 1e-15);
+
+    // One pair is a legal table and a constant PSD — both clamps answer it.
+    const one: NoiseTable = .{ .interp = .linear, .points = &.{.{ 5, 3.0 }} };
+    try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 1));
+    try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 5));
+    try testing.expectEqual(@as(f64, 3.0), noiseTableAt(one, 1e9));
+}
+
+test "§4.6.4.4 noise_table_log is a straight line on a log-log plot" {
+    // §4.6.4.4's own worked example: `noise_table_log('{1,1, 1e6,1e-6})`.
+    // log10(p) falls 0 -> -6 while log10(f) rises 0 -> 6, so the line is
+    // p = 1/f and every interior decade is exactly a decade down.
+    const t: NoiseTable = .{ .interp = .log, .points = &.{ .{ 1, 1.0 }, .{ 1e6, 1e-6 } } };
+    for ([_]f64{ 1e1, 1e2, 1e3, 1e4, 1e5 }) |f|
+        try testing.expectApproxEqRel(1.0 / f, noiseTableAt(t, f), 1e-12);
+
+    // Figure 4-14 is this difference: on the SAME two points the linear form
+    // bows, and at 1 kHz it reads 1 + (1e-6 - 1)*(999/999999) — nowhere near
+    // the 1e-3 the log form gives.
+    const lin: NoiseTable = .{ .interp = .linear, .points = t.points };
+    const want = 1.0 + (1e-6 - 1.0) * (1e3 - 1.0) / (1e6 - 1.0);
+    try testing.expectApproxEqRel(want, noiseTableAt(lin, 1e3), 1e-12);
+    try testing.expect(noiseTableAt(lin, 1e3) > 0.9);
+
+    // A slope that is not -1, and a knot that is not a decade boundary: the
+    // line through (10, 1e-2) and (1000, 1e-6) is p = f^-2.
+    const s: NoiseTable = .{ .interp = .log, .points = &.{ .{ 10, 1e-2 }, .{ 1000, 1e-6 } } };
+    try testing.expectApproxEqRel(@as(f64, 1e-4), noiseTableAt(s, 100), 1e-12);
+    try testing.expectApproxEqRel(@as(f64, 1.0 / (31.62277660168379 * 31.62277660168379)), noiseTableAt(s, 31.62277660168379), 1e-12);
+    // Knots and clamps behave as in the linear mode.
+    try testing.expectEqual(@as(f64, 1e-2), noiseTableAt(s, 10));
+    try testing.expectEqual(@as(f64, 1e-6), noiseTableAt(s, 1000));
+    try testing.expectEqual(@as(f64, 1e-2), noiseTableAt(s, 1));
+    try testing.expectEqual(@as(f64, 1e-6), noiseTableAt(s, 1e9));
+
+    // A flat log table is flat, not NaN: log(p2) - log(p1) = 0 is a legal line.
+    const flat: NoiseTable = .{ .interp = .log, .points = &.{ .{ 1, 2e-9 }, .{ 100, 2e-9 } } };
+    try testing.expectApproxEqRel(@as(f64, 2e-9), noiseTableAt(flat, 7), 1e-12);
 }
