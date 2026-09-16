@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- CI green again: the aarch64 cross build no longer aborts LLVM (a kernels test converted a >128-bit integer to `f64`, which LLVM cannot lower there), `b5_prim_connect_gate_array.va` writes its want as digits, the SSA memo test runs with the dominator skip off, `tests/fixtures/LEVELS.tsv` (the nightly ratchet's level list) is committed, and the conformance summary's `tail` call is portable (#29).
 - Fixture `m02_17_kcl_node_solved_at_every_mixed_point.va`: a node that only current contributions set reads its KFL value on the mixed-signal path, at declared and D2A-inserted points (§8.3.1, §8.4.3.2). A reported V = 0 there was a probe without `//! solve`, the testbench's documented default netlist, not a solve bug (#29).
 - Digital engine and native executable: a supply net joined through an uncontrolled `tran` to a net nothing drives now carries its value there from the start, reduced to strong (IEEE 1364-2005 §7.11: `St1`, was `HiZ`); a switch group is settled when elaboration ends (#29).
 - Native executable: `%v` of a net whose only source is a pass switch prints the strength the switch carries (`Pu1`), as the interpreter does, instead of `HiZ`; CI now runs the 1364 and digital transcript suites natively too (`-- --native`), so the two engines cannot drift apart unseen (#30).

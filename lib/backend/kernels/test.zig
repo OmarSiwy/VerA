@@ -1641,7 +1641,15 @@ fn wideNativeVsLimbs(comptime n: u32, r: std.Random) !void {
             }
             break :blk false;
         });
-        try std.testing.expectEqual(@as(f64, @floatFromInt(a)), L.toReal(n, la));
+        // LLVM cannot lower `@floatFromInt` past 128 bits for aarch64
+        // ("unsupported library call operation"), so wider widths take the
+        // big-integer oracle's rounding.
+        const real: f64 = if (n <= 128) @floatFromInt(a) else blk: {
+            var m = try wideBig(std.testing.allocator, n, la, false);
+            defer m.deinit();
+            break :blk m.toConst().toFloat(f64, .nearest_even)[0];
+        };
+        try std.testing.expectEqual(real, L.toReal(n, la));
         inline for (.{ 1, n + 7, n + 64 }) |to| for ([_]bool{ false, true }) |signed| {
             const want: @Int(.unsigned, to) = if (to <= n) @truncate(a) else if (signed) @bitCast(@as(@Int(.signed, to), @as(S, @bitCast(a)))) else a;
             try expectLimbs(to, "resize", want, L.resize(to, n, signed, la));

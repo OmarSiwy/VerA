@@ -1312,6 +1312,9 @@ test "ssa: a short single-predecessor chain is climbed without memo cells, a lon
         defer mir.deinit(gpa);
         var b = SsaBuilder.init(gpa, &mir);
         defer b.deinit();
+        // The dominator skip would jump the whole chain in one step, which
+        // memoizes nothing; the memo is for a climb that cannot jump.
+        b.skip = false;
         const entry = try mir.addBlock(gpa);
         try b.sealBlock(entry);
         const x = b.newPlace();

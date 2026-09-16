@@ -231,7 +231,7 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8, src
             try hits.append(self.ctx.arena, .{
                 .inst = 0,
                 .conn = 0,
-                .prim = .{ .term = pt, .flat = bases[@intFromEnum(pt.list)] + pt.row },
+                .prim = .{ .term = pt, .flat = bases[@backingInt(pt.list)] + pt.row },
                 .name = inst,
                 .rule = found orelse {
                     const bound = self.unit.rename.get(sig) orelse sig;

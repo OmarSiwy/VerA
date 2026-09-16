@@ -70,7 +70,7 @@ module b5_prim_connect_gate_array;
   analog begin
     I(a) <+ V(a) / 1000.0;
     I(a) <+ -1.0e-3;
-    `CHECK("one a2d per element, a__g[1]__in1 at 3 kohm: V = 3/7", V(a), 3.0 / 7.0, 1e-12);
+    `CHECK("one a2d per element, a__g[1]__in1 at 3 kohm: V = 3/7", V(a), 0.42857142857142855, 1e-12);
     `CHECKI("each element reads its own bridge: y = {1 & b[1], 1 & b[0]} = 2", yr, 2);
   end
 endmodule
