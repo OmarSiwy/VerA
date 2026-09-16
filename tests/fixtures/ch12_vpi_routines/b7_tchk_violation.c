@@ -31,6 +31,8 @@
 //! lrm 12.31.4:2
 //! lrm 12.31.4:5
 //! inherited IEEE 1364-2005 15.2.1
+//! design ch12_vpi_routines/b7_specify.v
+//! stdout p02: b7_tchk_violation checks=12
 
 #include "../ch11_vpi/p02_check.h"
 

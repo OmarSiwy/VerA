@@ -84,6 +84,8 @@
 //! lrm 12.33.1:2
 //! lrm 12.33.1:4
 //! lrm 12.33.1:5
+//! design ch11_vpi/p04_analog.va
+//! stdout p02: p04_09_systf_build checks=58
 
 #include "p02_check.h"
 

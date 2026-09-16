@@ -264,6 +264,8 @@
 //! inherited-reject IEEE 1364-2005 26.6.43
 //! inherited IEEE 1364-2005 26.6.44
 //! inherited-reject IEEE 1364-2005 26.6.44
+//! design ieee_pli/b_26_6_structure.v
+//! stdout p02: b_26_6_structure checks=313
 
 #include "b_check.h"
 

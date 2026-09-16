@@ -10,6 +10,9 @@
 //!    lane with what the scalar call at that lane's ω returns, bit for bit.
 //!
 //! The device is evaluated at its operating point V(in) = 0.5.
+//! device ch04_expressions/absdelay_ac_phase.va
+//! device ch04_expressions/laplace_ac_response.va
+//! device ch04_expressions/zi_ac_response.va
 
 const std = @import("std");
 const contract = @import("contract");

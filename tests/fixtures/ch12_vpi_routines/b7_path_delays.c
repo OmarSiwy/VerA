@@ -47,6 +47,8 @@
 //! lrm 12.29:9
 //! lrm 12.29:10
 //! lrm 12.29:13
+//! design ch12_vpi_routines/b7_specify.v
+//! stdout p02: b7_path_delays checks=60
 
 #include "../ch11_vpi/p02_check.h"
 

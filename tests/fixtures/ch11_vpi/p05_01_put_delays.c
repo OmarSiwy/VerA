@@ -38,6 +38,9 @@
 //! lrm 12.29:7
 //! lrm 12.29:8
 //! lrm 12.29:12
+//! design ch11_vpi/p05_delays.v
+//! stdout p05-01: w=2/12/32 y=3/11/33
+//! stdout p02: p05_01_put_delays checks=27
 
 #include "p02_check.h"
 

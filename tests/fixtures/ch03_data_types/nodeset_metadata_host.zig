@@ -5,6 +5,7 @@
 //! These are exact binary values. The host runs the compiler's output,
 //! rather than inspecting generated text. Invalid constant initializers
 //! are covered by the neighbouring 91_nodeset_not_constant.va fixture.
+//! device ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va
 
 const std = @import("std");
 const contract = @import("contract");

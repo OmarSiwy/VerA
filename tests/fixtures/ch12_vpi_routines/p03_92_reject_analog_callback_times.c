@@ -34,6 +34,8 @@
 
 //! lrm 12.31.3
 //! lrm-reject 12.31.3
+//! design ch12_vpi_routines/p03_dc_divider.va
+//! stdout p03-92: control_hits=1 control_t=0.0005 refused=4 errs=4
 
 #include <string.h>
 #include "p03_vpi_analog.h"

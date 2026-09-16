@@ -20,6 +20,8 @@
  */
 
 //! lrm 12.16:4
+//! design ieee_pli/b_27_values.v
+//! stdout p02: b7_objtype_time checks=18
 
 #include "../ch11_vpi/p02_check.h"
 

@@ -34,6 +34,8 @@
 //! lrm-reject 12.36
 //! lrm 12.36:2
 //! lrm-reject 12.36:2
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout p03-12: rejected=1 backed_up=1 t_final=0.005
 
 #include "p03_vpi_analog.h"
 

@@ -140,6 +140,8 @@
 //! inherited-reject IEEE 1364-2005 27.21
 //! inherited IEEE 1364-2005 27.36
 //! inherited-reject IEEE 1364-2005 27.36
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: b_27_objects checks=83
 
 #include "b_check.h"
 

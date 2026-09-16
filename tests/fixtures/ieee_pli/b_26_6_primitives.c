@@ -70,6 +70,8 @@
 //! inherited-reject IEEE 1364-2005 26.6.22
 //! inherited IEEE 1364-2005 26.6.23
 //! inherited-reject IEEE 1364-2005 26.6.23
+//! design ch11_vpi/p04_prims.v
+//! stdout p02: b_26_6_primitives checks=65
 
 #include "b_check.h"
 

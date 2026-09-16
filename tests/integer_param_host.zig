@@ -2,6 +2,7 @@
 //! The Model carries `word` as i64; `derive` must reduce it to its low 32
 //! bits. At V(p) = 1/2 the residual is word/2: 0.5 for 4294967297 (2^32 + 1)
 //! and -0.5 for 4294967295 (0xFFFFFFFF), never the raw carrier over 2.
+//! device ch03_data_types/integer_param_low32.va
 
 const std = @import("std");
 const contract = @import("contract");

@@ -43,6 +43,8 @@
 //! lrm 12.30
 //! lrm 12.30:1001
 //! lrm-reject 12.30
+//! design ch12_vpi_routines/p03_cube_solve.va
+//! stdout p03-95: v=1 dcube=12 refused=1
 
 #include "p03_vpi_analog.h"
 

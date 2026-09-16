@@ -20,6 +20,9 @@
  */
 
 //! lrm 12.28:1
+//! design ch12_vpi_routines/b7_digital.v
+//! stdout b7-printf-log: marker
+//! stdout p02: b7_printf_log checks=5
 
 #include "../ch11_vpi/p02_check.h"
 

@@ -3,6 +3,7 @@
 //! 300-bit one (ten 32-bit limbs). `updateState` keeps both whole in
 //! `Instance` for the next evaluation (`wide_kernels.zig`, `lower/wide.zig`).
 //! `wide_gpu.zig` compiles the same entry points for NVPTX and AMDGCN.
+//! device ch07_mixed_signal/wide_reg_held_across_evaluations.va
 
 const std = @import("std");
 const contract = @import("contract");

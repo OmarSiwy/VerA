@@ -17,6 +17,9 @@
 //! lrm 12.35
 //! lrm 12.33.1:7
 //! lrm 12.33.1:11
+//! design ieee_pli/audit_builtin_override.v
+//! stdout first=8000000001 second=8000000001
+//! stderr pli-override calls=2 size=40
 
 #include "vpi_user.h"
 #include <stdio.h>

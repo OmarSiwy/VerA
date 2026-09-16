@@ -499,7 +499,7 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
 /// does its stem end at? `null` means "not this walk's business".
 ///
 /// `.va` is a fixture when it carries a directive: a `.va` with none is a
-/// design a host test loads (`build.zig`'s `host_tests`, the VPI walk's
+/// design a host test loads (a `//! device` line of a `*_host.zig`, the VPI walk's
 /// `vpi_design.va`), the same rule as item 3 below. `.v` is the awkward one,
 /// because three different things share that extension in
 /// `tests/fixtures/{ieee1364,digital}/`:

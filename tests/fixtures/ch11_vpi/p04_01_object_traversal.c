@@ -93,6 +93,8 @@
 //! lrm 12.23:1
 //! lrm 12.23:2
 //! lrm 12.35:1
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: p04_01_object_traversal checks=98
 
 #include "p02_check.h"
 

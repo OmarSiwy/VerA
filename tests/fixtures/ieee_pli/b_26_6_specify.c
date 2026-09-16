@@ -56,6 +56,8 @@
 //! inherited-reject IEEE 1364-2005 26.6.15
 //! inherited IEEE 1364-2005 26.6.17
 //! inherited-reject IEEE 1364-2005 26.6.17
+//! design ch11_vpi/p06_specify.v
+//! stdout p02: b_26_6_specify checks=58
 
 #include "b_check.h"
 

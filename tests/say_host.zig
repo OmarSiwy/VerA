@@ -4,6 +4,7 @@
 //! `contract.formatSay`. The device is
 //! tests/fixtures/ch09_system_tasks/say_ops.va (its header lists the sites);
 //! `zig build test` emits it and runs this file.
+//! device ch09_system_tasks/say_ops.va
 
 const std = @import("std");
 const contract = @import("contract");

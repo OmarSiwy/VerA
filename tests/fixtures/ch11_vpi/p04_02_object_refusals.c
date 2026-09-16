@@ -115,6 +115,8 @@
 //! lrm 12.2:5
 //! lrm-reject 12.4:4
 //! lrm-reject 12.5:6
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: p04_02_object_refusals checks=118
 
 #include "p02_check.h"
 

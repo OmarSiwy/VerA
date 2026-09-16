@@ -37,6 +37,8 @@
 //! lrm 12.17:1
 //! lrm 12.17:2
 //! lrm-reject 12.17:2
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: p04_05_vlog_info checks=30
 
 #include "p02_check.h"
 

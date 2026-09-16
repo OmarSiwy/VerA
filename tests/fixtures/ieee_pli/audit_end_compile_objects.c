@@ -9,6 +9,8 @@
 //! lrm 12.21
 //! lrm 12.31.4
 //! lrm 12.33.2
+//! design ieee_pli/audit_end_compile_objects.v
+//! stderr pli-end-compile type=vpiModule
 
 #include "vpi_user.h"
 #include <stdio.h>

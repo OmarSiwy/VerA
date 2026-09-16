@@ -16,6 +16,8 @@
  */
 
 //! lrm 12.30:16
+//! design ch12_vpi_routines/b7_udp.v
+//! stdout p02: b7_seq_udp checks=11
 
 #include "../ch11_vpi/p02_check.h"
 

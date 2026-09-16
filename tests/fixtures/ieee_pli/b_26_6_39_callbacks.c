@@ -37,6 +37,8 @@
 //! inherited IEEE 1364-2005 27.33.1
 //! inherited IEEE 1364-2005 27.33.2
 //! inherited IEEE 1364-2005 27.35
+//! design ieee_pli/b_26_6_39_callbacks.v
+//! stdout b26_callbacks: traversal and delivery ok
 
 #include "b_check.h"
 #include <stdint.h>

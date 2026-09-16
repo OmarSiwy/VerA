@@ -56,6 +56,8 @@
 //! lrm 12.10
 //! lrm 12.10:1
 //! lrm 12.31.3
+//! design ch12_vpi_routines/p03_rc_ac.va
+//! stdout p03-09: f_dc=0 f_ac=1000 re=500 im=-500 dc_re=0
 
 #include "p03_vpi_analog.h"
 

@@ -8,6 +8,20 @@
 //! followed by 8 and 12 ns when the period becomes 4 ns at 4 ns. Its rejection
 //! test makes the same change on a discarded trial: retrying with 2 ns must
 //! restore the old grid, including all hidden scheduling state.
+//! device ch05_analog_behavior/timer_fixed.va
+//! device ch05_analog_behavior/timer_dynamic.va
+//! device ch05_analog_behavior/timer_controls.va
+//! device ch05_analog_behavior/timer_body_controls.va
+//! device ch05_analog_behavior/timer_body_reg_controls.va
+//! device ch05_analog_behavior/timer_body_clog2_controls.va
+//! device ch05_analog_behavior/timer_body_array_controls.va
+//! device ch05_analog_behavior/timer_body_index_controls.va
+//! device ch05_analog_behavior/timer_body_function_controls.va
+//! device ch05_analog_behavior/timer_body_context_controls.va
+//! device ch05_analog_behavior/timer_body_array_function_controls.va
+//! device ch05_analog_behavior/timer_body_effect_controls.va
+//! device ch05_analog_behavior/timer_body_constant_effect_controls.va
+//! device ch05_analog_behavior/timer_body_precomputed_controls.va
 
 const std = @import("std");
 const contract = @import("contract");

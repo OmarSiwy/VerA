@@ -46,6 +46,8 @@
 
 //! inherited IEEE 1364-2005 26.3.5
 //! inherited-reject IEEE 1364-2005 26.3.5
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: b_26_3_5_protected checks=43
 
 #include "b_check.h"
 

@@ -58,6 +58,8 @@
 //! lrm 12.13:3
 //! lrm-reject 12.32:3
 //! lrm 12.32:4
+//! design ch12_vpi_routines/p03_dc_divider.va
+//! stdout p03-11: systf_roundtrip=1 cb_roundtrip=1 dup_rejected=1 probe_hits=1 probe_t=0.0025
 
 #include "p03_vpi_analog.h"
 #include <string.h>

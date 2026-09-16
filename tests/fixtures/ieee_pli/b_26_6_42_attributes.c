@@ -38,6 +38,8 @@
 //! inherited IEEE 1364-2005 27.16
 //! inherited IEEE 1364-2005 27.21
 //! inherited-reject IEEE 1364-2005 27.32
+//! design ieee_pli/b_26_6_42_attributes.v
+//! stdout p02: b_26_6_42_attributes checks=630
 
 #include "b_check.h"
 

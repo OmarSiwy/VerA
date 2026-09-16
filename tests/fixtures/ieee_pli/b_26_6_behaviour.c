@@ -244,6 +244,9 @@
 //! inherited-reject IEEE 1364-2005 26.6.40
 //! inherited IEEE 1364-2005 26.6.41
 //! inherited-reject IEEE 1364-2005 26.6.41
+//! design ieee_pli/b_26_6_behaviour.v
+//! stdout p02: b_26_6_behaviour checks=298
+//! stdout d=12 c=1 q=9 p2=0101
 
 #include "b_check.h"
 

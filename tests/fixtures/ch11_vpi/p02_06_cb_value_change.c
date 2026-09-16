@@ -71,6 +71,9 @@
 //! lrm 12.31.1:7
 //! lrm 12.31.1:8
 //! lrm 12.31.1:9
+//! design digital/p02_design.v
+//! stdout p02: 06_cb_value_change checks=62
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

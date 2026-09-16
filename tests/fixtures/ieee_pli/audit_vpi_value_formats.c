@@ -9,6 +9,8 @@
 //! lrm 12.30
 //! lrm 12.31.4
 //! lrm 12.33.2
+//! design ieee_pli/audit_vpi_value_formats.v
+//! stdout vpi-value-formats=ok
 
 #include "vpi_user.h"
 #include <stdint.h>

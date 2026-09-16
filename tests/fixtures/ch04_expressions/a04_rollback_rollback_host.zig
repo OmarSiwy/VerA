@@ -53,6 +53,7 @@
 //! would make the retry's dt negative. tests/revert_host.zig asserts the same
 //! for every other device-held history. `zig build test` emits the device from
 //! a04_rollback_a04_rollback_ops.va and runs this file.
+//! device ch04_expressions/a04_rollback_a04_rollback_ops.va
 
 const std = @import("std");
 const contract = @import("contract");

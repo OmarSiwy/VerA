@@ -35,6 +35,8 @@
 //! lrm 12.21
 //! lrm 11.2.2:1000
 //! lrm 12.21:1
+//! design ch11_vpi/p04_scopes.v
+//! stdout p02: p04_11_instance_scopes checks=23
 
 #include "p02_check.h"
 

@@ -28,6 +28,8 @@
 //! inherited IEEE 1364-2005 26.6.41
 //! inherited-reject IEEE 1364-2005 26.6.41
 //! inherited IEEE 1364-2005 26.6.19
+//! design ieee_pli/b_26_6_41_timeformat.v
+//! stdout b26_timeformat: active call follows execution ok
 
 #include "b_check.h"
 

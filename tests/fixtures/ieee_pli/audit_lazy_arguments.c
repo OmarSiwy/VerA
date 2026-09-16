@@ -10,6 +10,10 @@
 //! lrm 12.33
 //! lrm 12.35
 //! inherited IEEE 1364-2005 26.6.19
+//! design ieee_pli/audit_lazy_arguments.v
+//! stdout unread=0
+//! stdout read=1
+//! stderr pli-lazy-arguments calls=2 reads=1
 
 #include "vpi_user.h"
 #include <stdio.h>

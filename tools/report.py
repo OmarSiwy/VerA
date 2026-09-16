@@ -285,15 +285,15 @@ def open_defects():
 
 
 def vpi_xfails():
-    """build.zig `vpi_runs` rows carrying `.xfail`: a known gap that must exit 1 saying so."""
-    text = (ROOT / "build.zig").read_text()
-    block = text[text.index("const vpi_runs = "):]
-    block = block[:block.index("\n};")]
-    return [{"path": c, "reason": x} for c, x in VPI_XFAIL.findall(block)]
-
-
-# One `VpiRun` row's `.c` path and its `.xfail`, never reaching into the next row.
-VPI_XFAIL = re.compile(r'\.c = "([^"]+)"(?:(?!\.c = ).)*?\.xfail = "([^"]*)"', re.S)
+    """`.c` fixtures build.zig runs (`//! design`) carrying `//! xfail`: a known gap that must exit 1 saying so."""
+    root = ROOT / "tests/fixtures"
+    out = []
+    for path in sorted(root.rglob("*.c")):
+        text = path.read_text(errors="replace")
+        m = re.search(r"(?m)^//! xfail (.*)$", text)
+        if m and re.search(r"(?m)^//! design ", text):
+            out.append({"path": str(path.relative_to(ROOT).as_posix()), "reason": m.group(1)})
+    return out
 
 
 def vague_open():
@@ -699,7 +699,7 @@ def render(d):
                        f"<td>{E(c['kind'])}</td></tr>" for c in g["classified_normative"]) + "</table></div></details>")
     o.append(f"<h3>XFAIL fixtures ({len(g['xfail'])})</h3>"
              + ("<ul>" + "".join(f"<li class=mono>{E(x['path'])}: {E(x['reason'])}</li>" for x in g["xfail"]) + "</ul>"
-                if g["xfail"] else "<p>None: no fixture carries <code>//! xfail</code> and no <code>vpi_runs</code> row an <code>.xfail</code>.</p>"))
+                if g["xfail"] else "<p>None: no fixture carries <code>//! xfail</code> and no running <code>.c</code> fixture a <code>//! xfail</code>.</p>"))
     o.append(f"<h3>Open defects ({len(g['defects'])})</h3>"
              + ("<ul>" + "".join(f"<li><b>{E(x['title'])}</b> {E(x['text'])} <span class=note>({E(x['source'])})</span></li>"
                                  for x in g["defects"]) + "</ul>" if g["defects"] else "<p>None named.</p>"))
@@ -796,8 +796,6 @@ def selftest():
     assert buckets("POSITIVE CITATIONS ONLY — x:\n§17.1 Display tasks\n") == {"17.1": ("positive-only", "Display tasks")}
     assert tsv("a\tb\n1\t2\n3\t4\n\nx", "a\tb") == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
     assert quantile([1, 2, 3, 4], 50) == 3
-    assert VPI_XFAIL.findall('.{ .c = "a.c", .xfail = "why" }, .{ .c = "b.c" }, .{ .c = "d.c", .xfail = "" }') \
-        == [("a.c", "why"), ("d.c", "")]
     assert isinstance(open_defects(), list) and isinstance(vpi_xfails(), list)
     print("report.py: selftest ok", file=sys.stderr)
     return 0

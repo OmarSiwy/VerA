@@ -50,6 +50,8 @@
 //! lrm-reject 12.22
 //! lrm-reject 12.11
 //! lrm-reject 12.29
+//! design ch12_vpi_routines/b7_specify.v
+//! stdout p02: b7_intermod_path checks=39
 
 #include "../ch11_vpi/p02_check.h"
 

@@ -44,6 +44,8 @@
 
 //! lrm 12.9
 //! lrm 12.31.3
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout p03-10: initial=2 final=2 t0=0 v_final=2 late_t=0.0015 late_v=1.5 late_hits=1
 
 #include "p03_vpi_analog.h"
 

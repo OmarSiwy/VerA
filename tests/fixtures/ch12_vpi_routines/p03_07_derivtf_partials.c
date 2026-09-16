@@ -85,6 +85,8 @@
 //! lrm 12.32
 //! lrm 12.32.1
 //! lrm 12.32.2
+//! design ch12_vpi_routines/p03_systf_devices.va
+//! stdout p03-07: vres=1 ires=0.001 dres=0.001 vcube=1 icube=7 dcube=12
 
 #include "p03_vpi_analog.h"
 

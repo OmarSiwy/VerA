@@ -51,6 +51,8 @@
 //! lrm 12.18:1
 //! lrm 12.18:2
 //! lrm 12.30:1
+//! design ch12_vpi_routines/p03_env_probe.va
+//! stdout p03-93: start=0 end=0.001 max_step=0.0001 refused_per_call=2 v_b=1
 
 #include "p03_vpi_analog.h"
 

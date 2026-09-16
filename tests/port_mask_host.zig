@@ -1,5 +1,6 @@
 //! §9.19 `$port_connected` on a top-level device reads the host-written
 //! `Model.port_connected__` mask (tests/fixtures/ch09_system_tasks/port_mask.va).
+//! device ch09_system_tasks/port_mask.va
 
 const std = @import("std");
 const contract = @import("contract");

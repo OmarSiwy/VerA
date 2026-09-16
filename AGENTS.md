@@ -434,13 +434,18 @@ result and a refusal):
 //! lrm-reject 12.34   <- the routine refusing invalid input is CHECKed
 //!                       (error return, vpi_chk_error).
 //! inherited IEEE 1364-2005 27.14         <- the same two polarities, for
-//! inherited-reject IEEE 1364-2005 27.14  <- measure B. No other key exists.
+//! inherited-reject IEEE 1364-2005 27.14  <- measure B.
+//! design ch12_vpi_routines/p03_rc_ac.va  <- RUN it under `zig build test`
+//!                       against this design (path under tests/fixtures),
+//! stdout p03-09: f_dc=0 ...  <- one line of its exact stdout, in order
+//! stderr [<line>]       <- its exact stderr (bare: must be empty)
+//! refuse <stderr text>  <- the host must refuse the design: exit 1 saying so
+//! xfail <stderr text>   <- a known gap: it must exit 1 saying so
 ```
 
-`--coverage` (both `benchmark` and `test-1364`) counts them only for fixtures
-in `build.zig`'s `vpi_runs` (they run in-process under `zig build test`). A
-`vpi_runs` row with `.xfail = "<stderr text>"` is a known gap: it must exit 1
-saying so. A compile-only `.c` is listed as `~`
+`build.zig` globs every `.c` with a `//! design` line into its runs
+(`vpiRuns`); no other key exists. `--coverage` (both `benchmark` and
+`test-1364`) counts the cites only for fixtures that run. A compile-only `.c` is listed as `~`
 and moves no number. Tag a clause only where an assertion stands behind it.
 
 ### The trap that produces confidently wrong work
@@ -495,9 +500,9 @@ Checked against the code on 2026-09-27.
   Both are for generated decks.
 - **VPI.** Every `.c` fixture compiles against `src/vpi/vpi_user.h`
   (`zig build test-vpi-fixtures`), and every one runs in-process under
-  `zig build test` (`build.zig`'s `vpi_runs`, and `vpi_app.c` under
+  `zig build test` (its `//! design` line, and `vpi_app.c` under
   `test-vpi`), analog routines, analog task output arguments and `ac` sweeps
-  included. The `.xfail` rows of `vpi_runs` are the known gaps.
+  included. Its `//! xfail` lines are the known gaps.
 - **Setup split** (`codegen/plan/setup.zig`) computes solve-invariant values
   once. Array operations are classified per evaluation, so an array filled
   once in `analog initial` is still recomputed every eval. A per-timepoint

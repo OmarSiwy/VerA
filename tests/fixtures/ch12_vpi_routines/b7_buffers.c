@@ -43,6 +43,8 @@
 //! lrm 12.12:2
 //! lrm 12.12:3
 //! lrm 12.25:3
+//! design ch12_vpi_routines/b7_digital.v
+//! stdout p02: b7_buffers checks=37
 
 #include "../ch11_vpi/p02_check.h"
 

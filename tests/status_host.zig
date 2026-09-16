@@ -5,6 +5,7 @@
 //! and charges, value and every derivative lane, and `updateState` leaves the
 //! state alone, until `initState` clears it. The device is tests/fixtures/ch09_system_tasks/status_ops.va
 //! (its header lists the sites); `zig build test` emits it and runs this file.
+//! device ch09_system_tasks/status_ops.va
 
 const std = @import("std");
 const contract = @import("contract");

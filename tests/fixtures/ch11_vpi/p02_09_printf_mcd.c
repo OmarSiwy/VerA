@@ -85,6 +85,10 @@
 //! lrm 12.27:2
 //! lrm 12.28:2
 //! lrm 12.28:3
+//! design digital/p02_design.v
+//! stdout p02 printf 7 ok
+//! stdout p02: 09_printf_mcd checks=29
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

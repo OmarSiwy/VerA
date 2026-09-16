@@ -13,6 +13,8 @@
  */
 //! lrm 2.9
 //! inherited IEEE 1364-2005 26.6.42
+//! design ieee_pli/b_26_6_42_analog_attributes.va
+//! stdout p02: b_26_6_42_analog_attributes checks=132
 
 #include "b_check.h"
 

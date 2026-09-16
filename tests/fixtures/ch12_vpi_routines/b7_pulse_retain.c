@@ -17,6 +17,8 @@
  */
 
 //! lrm 12.29:3
+//! design ch12_vpi_routines/b7_specify.v
+//! stdout p02: b7_pulse_retain checks=14
 
 #include "../ch11_vpi/p02_check.h"
 

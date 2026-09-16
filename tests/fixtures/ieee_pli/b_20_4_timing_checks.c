@@ -22,6 +22,8 @@
  */
 
 //! inherited-reject IEEE 1364-2005 20.4
+//! design ch11_vpi/p06_specify.v
+//! stdout p02: b_20_4_timing_checks checks=7
 
 #include "b_check.h"
 

@@ -171,6 +171,9 @@
 //! inherited-reject IEEE 1364-2005 27.33.3
 //! inherited IEEE 1364-2005 27.35
 //! inherited-reject IEEE 1364-2005 27.35
+//! design digital/p02_design.v
+//! stdout p02: b_27_33_callbacks checks=82
+//! stdout p02_design: t=20 reached
 
 #include "b_check.h"
 

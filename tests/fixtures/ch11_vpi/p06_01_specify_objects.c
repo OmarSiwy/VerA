@@ -46,6 +46,8 @@
 //! lrm 11.6.15:1000
 //! lrm 12.11:7
 //! lrm 12.11:10
+//! design ch11_vpi/p06_specify.v
+//! stdout p02: p06_01_specify_objects checks=59
 
 #include "p02_check.h"
 

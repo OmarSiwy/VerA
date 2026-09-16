@@ -98,6 +98,9 @@
 //! lrm 12.30:13
 //! lrm 12.30:15
 //! lrm 12.31.2:7
+//! design digital/p02_design.v
+//! stdout p02: 03_put_value_delays checks=64
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

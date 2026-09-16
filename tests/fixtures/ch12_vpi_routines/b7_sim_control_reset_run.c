@@ -39,6 +39,8 @@
 //! lrm 12.36
 //! lrm 12.36:5
 //! lrm 12.36:6
+//! design ch12_vpi_routines/b7_digital.v
+//! stdout p02: b7_sim_control_reset_run checks=15
 
 #include "../ch11_vpi/p02_check.h"
 

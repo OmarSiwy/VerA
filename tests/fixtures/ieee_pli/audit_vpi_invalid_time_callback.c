@@ -5,6 +5,8 @@
 //! lrm-reject 12.31.2
 //! lrm 12.31.4
 //! lrm 12.33.2
+//! design ieee_pli/audit_vpi_invalid_time_callback.v
+//! stdout vpi-invalid-time-callback=ok
 
 #include "vpi_user.h"
 #include <stdio.h>

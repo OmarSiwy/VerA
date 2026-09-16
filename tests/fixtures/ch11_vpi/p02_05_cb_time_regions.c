@@ -159,6 +159,9 @@
 //! lrm-reject 12.31.2:2
 //! lrm 12.31.2:3
 //! lrm 12.31.2:6
+//! design digital/p02_design.v
+//! stdout p02: 05_cb_time_regions checks=82
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

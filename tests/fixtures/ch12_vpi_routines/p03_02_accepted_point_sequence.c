@@ -48,6 +48,8 @@
 //! lrm 12.7:1
 //! lrm 12.9:1
 //! lrm 12.31.3:1
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout p03-02: initial=1 final=1 t_final=0.005 monotone=1 delta_ok=1
 
 #include "p03_vpi_analog.h"
 

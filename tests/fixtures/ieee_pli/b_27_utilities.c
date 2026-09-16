@@ -84,6 +84,9 @@
 //! inherited-reject IEEE 1364-2005 27.29
 //! inherited-reject IEEE 1364-2005 27.31
 //! inherited IEEE 1364-2005 27.37
+//! design ch11_vpi/p04_objects.v
+//! stdout b27v 5
+//! stdout p02: b_27_utilities checks=33
 
 #include <stdarg.h>
 #include "b_check.h"

@@ -391,7 +391,7 @@ fn cFixtures(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]cons
 }
 
 /// Does `build.zig` RUN this `.c` fixture in-process and assert its output?
-/// `options.vpi_runs` is that file's own `vpi_runs` table, not a copy of it.
+/// `options.vpi_runs` is build.zig's `vpiRuns`: the `.c` files with `//! design`.
 fn cFixtureRuns(path: []const u8) bool {
     for (options.vpi_runs) |r| {
         if (std.mem.endsWith(u8, path, r)) return true;
@@ -409,8 +409,9 @@ fn cFixtureRuns(path: []const u8) bool {
 /// Neither counts unless the fixture runs (`runs`): a compile-only fixture's
 /// cites become `.compiled`, listed and never counted. `inherited` and
 /// `inherited-reject` cite IEEE 1364-2005 and are `tests/ieee1364.zig`'s, so
-/// they are skipped here. Any other `//!` key is a malformed tag, reported
-/// rather than skipped.
+/// they are skipped here, as are build.zig's run lines (`design`, `stdout`,
+/// `stderr`, `xfail`, `refuse`; `VpiRun`). Any other `//!` key is a
+/// malformed tag, reported rather than skipped.
 fn cCites(
     arena: std.mem.Allocator,
     out: *std.ArrayList(Cite),
@@ -425,6 +426,9 @@ fn cCites(
         var words = std.mem.tokenizeAny(u8, line["//!".len..], " \t");
         const key = words.next() orelse return error.BadCTag;
         if (std.mem.eql(u8, key, "inherited") or std.mem.eql(u8, key, "inherited-reject")) continue;
+        if (for ([_][]const u8{ "design", "stdout", "stderr", "xfail", "refuse" }) |k| {
+            if (std.mem.eql(u8, key, k)) break true;
+        } else false) continue;
         const reject = if (std.mem.eql(u8, key, "lrm"))
             false
         else if (std.mem.eql(u8, key, "lrm-reject"))
@@ -449,7 +453,8 @@ test "a .c fixture's polarity is per line, and only a running one counts" {
     const arena = arena_state.allocator();
     const src = "/* 12.34 in prose is not a tag */\n//! lrm 12.6\n  //! lrm-reject 12.34\n" ++
         "//! inherited IEEE 1364-2005 27.14\n//! inherited-reject IEEE 1364-2005 27.14\n" ++
-        "//! lrm 12.16:3\nint x;\n"; // a sentence cite is the ledger's, not counted here
+        "//! lrm 12.16:3\n" ++ // a sentence cite is the ledger's, not counted here
+        "//! design ch12/d.va\n//! stdout p03: checks=1\n//! stderr\nint x;\n"; // build.zig's, not tags
     var cites: std.ArrayList(Cite) = .empty;
     try cCites(arena, &cites, "a.c", src, true);
     try std.testing.expectEqual(@as(usize, 2), cites.items.len);

@@ -85,6 +85,8 @@
 //! lrm 12.31.4:3
 //! lrm 12.31.4:4
 //! lrm 12.36:2
+//! design digital/p02_design.v
+//! stdout p02: 08_cb_action_sim_control checks=24
 
 #include "p02_check.h"
 

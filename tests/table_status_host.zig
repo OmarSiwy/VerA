@@ -3,6 +3,7 @@
 //! and `acStim` run the core on a copy (`codegen/setup.zig` `probeInstance`),
 //! compile against a const instance, and leave the caller's untouched.
 //! The device is tests/fixtures/ch09_system_tasks/table_status.va; `zig build test` emits it and runs this.
+//! device ch09_system_tasks/table_status.va
 
 const std = @import("std");
 const contract = @import("contract");

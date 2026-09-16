@@ -71,6 +71,9 @@
 //! lrm 12.31.2
 //! lrm 12.33.2
 //! lrm 12.16:5
+//! design digital/p02_design.v
+//! stdout p02: 02_get_value_unknown checks=21
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

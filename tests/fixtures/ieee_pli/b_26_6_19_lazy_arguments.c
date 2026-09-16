@@ -23,6 +23,9 @@
 //! inherited IEEE 1364-2005 26.6.19
 //! inherited IEEE 1364-2005 27.14
 //! inherited-reject IEEE 1364-2005 27.14
+//! design ieee_pli/b_26_6_19_lazy_arguments.v
+//! stdout root_calls=10
+//! stderr pli-lazy-scopes calls=3 nested=2 retained=2
 
 #include "vpi_user.h"
 #include <stdio.h>

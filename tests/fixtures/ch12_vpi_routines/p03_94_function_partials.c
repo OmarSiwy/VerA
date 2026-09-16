@@ -53,6 +53,8 @@
 //! lrm 11.3.2:1000
 //! lrm 12.22.1:1
 //! lrm 12.32.2:1000
+//! design ch12_vpi_routines/p03_square_law.va
+//! stdout p03-94: v_q=1.732050808 dfdx=3.464101615 refused_per_call=2
 
 #include "p03_vpi_analog.h"
 

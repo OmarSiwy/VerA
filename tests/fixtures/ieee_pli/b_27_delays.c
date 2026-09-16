@@ -55,6 +55,8 @@
 //! inherited-reject IEEE 1364-2005 27.9
 //! inherited IEEE 1364-2005 27.30
 //! inherited-reject IEEE 1364-2005 27.30
+//! design ch11_vpi/p05_delays.v
+//! stdout p02: b_27_delays checks=25
 
 #include "b_check.h"
 

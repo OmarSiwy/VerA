@@ -129,6 +129,8 @@
 //! lrm 12.32
 //! lrm 12.32.1
 //! lrm 12.32.2
+//! design ch11_vpi/p02_analog.va
+//! stdout p02: 11_systf_analog checks=35
 
 #include "p02_check.h"
 

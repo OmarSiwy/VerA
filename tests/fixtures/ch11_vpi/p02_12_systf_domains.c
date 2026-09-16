@@ -75,6 +75,8 @@
 //! lrm 12.13:1
 //! lrm 12.32:3
 //! lrm-reject 12.32:3
+//! design ch11_vpi/p02_analog.va
+//! stdout p02: 12_systf_domains checks=26
 
 #include "p02_check.h"
 

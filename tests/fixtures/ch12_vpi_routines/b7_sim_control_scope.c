@@ -16,6 +16,8 @@
 
 //! lrm 12.36:6
 //! lrm 12.36:7
+//! design ch12_vpi_routines/b7_digital.v
+//! stdout p02: b7_sim_control_scope checks=8
 
 #include "../ch11_vpi/p02_check.h"
 

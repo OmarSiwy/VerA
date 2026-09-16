@@ -43,6 +43,8 @@
 //! lrm 12.7:2
 //! lrm 12.8:2
 //! lrm 12.9:2
+//! design ch12_vpi_routines/p03_dc_divider.va
+//! stdout p03-01: t0=0 dt0=0 f0=0 initial=1 final=1 later_pos=1
 
 #include "p03_vpi_analog.h"
 

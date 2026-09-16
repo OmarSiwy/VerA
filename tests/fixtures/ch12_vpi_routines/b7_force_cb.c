@@ -16,6 +16,9 @@
  */
 
 //! lrm 12.31.1:10
+//! design ch11_vpi/p04_behaviour.v
+//! stdout p02: b7_force_cb checks=10
+//! stdout p04_behaviour: d=12
 
 #include "../ch11_vpi/p02_check.h"
 

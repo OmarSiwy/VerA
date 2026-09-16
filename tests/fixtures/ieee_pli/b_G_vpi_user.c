@@ -44,6 +44,8 @@
 
 //! inherited IEEE 1364-2005 G
 //! inherited IEEE 1364-2005 20.8
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: b_G_vpi_user checks=444
 
 #include <stdarg.h>
 #include "b_check.h"

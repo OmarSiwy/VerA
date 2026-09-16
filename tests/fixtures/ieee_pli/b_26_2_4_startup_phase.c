@@ -53,6 +53,9 @@
 //! inherited-reject IEEE 1364-2005 26.2.4
 //! lrm 12.33.2
 //! lrm-reject 12.33.2
+//! design ch11_vpi/p04_objects.v
+//! stdout b264 eoc
+//! stdout p02: b_26_2_4_startup_phase checks=27
 
 #include "b_check.h"
 

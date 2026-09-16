@@ -34,6 +34,8 @@
 //! inherited IEEE 1364-2005 26.6.20
 //! inherited-reject IEEE 1364-2005 26.6.20
 //! inherited IEEE 1364-2005 26.5.1
+//! design ieee_pli/b_26_6_20_frames.v
+//! stdout p02: b_26_6_20_frames checks=14
 
 #include "b_check.h"
 

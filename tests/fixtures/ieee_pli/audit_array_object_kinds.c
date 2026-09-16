@@ -14,6 +14,8 @@
 //! lrm 12.31.4
 //! lrm 12.33.2
 //! lrm 12.35
+//! design ieee_pli/audit_array_object_kinds.v
+//! stderr pli-array-kinds reg-words=2 real-selects=2
 
 #include "vpi_user.h"
 #include <stdio.h>

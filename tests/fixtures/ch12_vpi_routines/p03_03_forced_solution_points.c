@@ -50,6 +50,8 @@
 //! lrm 12.9:1
 //! lrm 12.10:1
 //! lrm 12.31.3:1
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout p03-03: abs_t=0.0025 abs_v=2.5 el1=0.0015 v1=1.5 el2=0.003 v2=3 accepted=3
 
 #include "p03_vpi_analog.h"
 

@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `build.zig` globs its fixture lists instead of naming files (1428 lines to 897): every `.c` under `tests/fixtures/` with a `//! design` line runs under `zig build test`, its expected output in `//! stdout`/`//! stderr`/`//! refuse`/`//! xfail` lines, and every `*_host.zig` under `tests/` names its devices with `//! device` lines; adding a fixture needs no build.zig edit. `tools/conformance.py` and `tools/report.py` read the same lines (#29).
 - `zig build test` is about 2 minutes shorter: the two nesting stress tests in `lib/root.zig` run 10,000 levels, still past the old 3,000-level stack limit, instead of 100,000 (they were 142 of the `vera` module's 147 s, the critical path); the fixture suite times each compile once outside ReleaseFast instead of five times (#29).
 - Fix: an `absdelay` ring's window (`__w`) is restored by `stateCtl(.revert)` like the rest of its state, so a rejected step leaves the instance as it found it; the nightly `--certify` state check failed on every `absdelay` device (#29).
 - CI green again: the aarch64 cross build no longer aborts LLVM (a kernels test converted a >128-bit integer to `f64`, which LLVM cannot lower there), `b5_prim_connect_gate_array.va` writes its want as digits, the SSA memo test runs with the dominator skip off, `tests/fixtures/LEVELS.tsv` (the nightly ratchet's level list) is committed, and the conformance summary's `tail` call is portable (#29).

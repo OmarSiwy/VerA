@@ -32,6 +32,8 @@
 //! lrm 12.31.2
 //! lrm 12.31.2:4
 //! lrm 12.31.2:5
+//! design ch12_vpi_routines/b7_scales.v
+//! stdout p02: b7_time_scaling checks=25
 
 #include "../ch11_vpi/p02_check.h"
 

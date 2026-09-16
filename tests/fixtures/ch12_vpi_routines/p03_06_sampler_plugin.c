@@ -59,6 +59,8 @@
 //! lrm 12.32:1
 //! lrm 12.32.1
 //! lrm 12.32.1:9
+//! design ch12_vpi_routines/p03_sampnhold.va
+//! stdout p03-06: samples=6 first=0 last=5 hold_2p5=2 hold_4p25=4
 
 #include "p03_vpi_analog.h"
 

@@ -154,6 +154,8 @@
 //! inherited IEEE 1364-2005 27.34.1
 //! inherited IEEE 1364-2005 27.34.2
 //! inherited IEEE 1364-2005 27.34.3
+//! design ieee_pli/b_26_1_systf.v
+//! stdout p02: b_26_1_systf checks=45
 
 #include "b_check.h"
 

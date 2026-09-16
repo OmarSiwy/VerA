@@ -16,12 +16,14 @@
  * where only an expression can stand; a task returns no value, so the design
  * is refused before time 0: the host exits 1, naming $random, and neither
  * this application's cbStartOfSimulation nor the design's $display runs.
- * build.zig's vpi_runs row pins the refusal (`.refuse`). Legal neighbour:
+ * Its `//! refuse` line pins the refusal. Legal neighbour:
  * b_26_1_systf.c, whose $unsigned override is registered as a vpiSysFunc and
  * called as a function.
  */
 
 //! inherited-reject IEEE 1364-2005 20.3
+//! design ieee_pli/b_20_3_task_as_function.v
+//! refuse vpi_host: `$random` is registered as a system task and called as a function (IEEE 1364-2005 §20.3)
 
 #include "b_check.h"
 

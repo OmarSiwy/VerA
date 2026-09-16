@@ -44,6 +44,8 @@
 //! lrm-reject 12.34
 //! lrm 12.34:1
 //! lrm-reject 12.34:3
+//! design ch12_vpi_routines/p03_dc_divider.va
+//! stdout p03-91: first=1 second=0 null=0 wrongtype=0 info_err=1 errs=4 fired=0
 
 #include "p03_vpi_analog.h"
 

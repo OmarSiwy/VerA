@@ -47,6 +47,8 @@
 //! lrm-reject 12.11
 //! lrm-reject 12.30
 //! lrm 12.11:8
+//! design ch11_vpi/p04_prims.v
+//! stdout p02: p04_10_primitives checks=96
 
 #include "p02_check.h"
 

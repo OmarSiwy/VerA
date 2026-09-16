@@ -113,6 +113,8 @@
 //! inherited-reject IEEE 1364-2005 27.14
 //! inherited IEEE 1364-2005 27.32
 //! inherited-reject IEEE 1364-2005 27.32
+//! design ieee_pli/b_27_values.v
+//! stdout p02: b_27_values checks=140
 
 #include "b_check.h"
 

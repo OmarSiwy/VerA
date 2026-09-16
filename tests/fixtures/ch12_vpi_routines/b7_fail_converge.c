@@ -24,6 +24,8 @@
  */
 
 //! lrm 12.36:8
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout b7-fail-converge: retested=1 t_final=0.005
 
 #include "p03_vpi_analog.h"
 

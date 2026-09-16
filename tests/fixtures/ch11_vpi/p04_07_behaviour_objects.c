@@ -132,6 +132,9 @@
 //! lrm 12.11:12
 //! lrm 12.11:13
 //! lrm 12.11:14
+//! design ch11_vpi/p04_behaviour.v
+//! stdout p02: p04_07_behaviour_objects checks=240
+//! stdout p04_behaviour: d=12
 
 #include "p02_check.h"
 

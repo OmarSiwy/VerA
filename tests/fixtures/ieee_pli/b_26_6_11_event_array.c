@@ -38,6 +38,8 @@
 //! inherited-reject IEEE 1364-2005 27.18
 //! inherited IEEE 1364-2005 27.32
 //! lrm 5.10.4
+//! design ieee_pli/b_26_6_11_event_array.v
+//! stdout p02: b_26_6_11_event_array checks=271
 #include "b_check.h"
 
 static vpiHandle e1, de3, me03, scalar, selected_ref, task_ref, automatic_ref;

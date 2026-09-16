@@ -15,6 +15,8 @@
 //! inherited-reject IEEE 1364-2005 27.33.1.1
 //! inherited IEEE 1364-2005 26.6.39
 //! inherited IEEE 1364-2005 26.6.43
+//! design ieee_pli/audit_stmt_registration_during_call.v
+//! stdout stmt-registration: before=0,1,3 final=4
 
 #include "vpi_user.h"
 #include <stdio.h>

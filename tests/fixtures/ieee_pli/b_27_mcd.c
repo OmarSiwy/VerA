@@ -90,6 +90,11 @@
 //! inherited IEEE 1364-2005 27.26
 //! inherited-reject IEEE 1364-2005 27.26
 //! inherited IEEE 1364-2005 27.28
+//! design ieee_pli/b_27_mcd.v
+//! stdout b27 printf 7 ok
+//! stdout b27 mcd1
+//! stdout p02: b_27_mcd checks=34
+//! stderr
 
 #include "b_check.h"
 

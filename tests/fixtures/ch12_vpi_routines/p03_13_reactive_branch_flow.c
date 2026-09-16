@@ -34,6 +34,8 @@
 
 //! lrm 12.10
 //! lrm 12.10:1
+//! design ch12_vpi_routines/p03_cap_ramp.va
+//! stdout p03-13: v=5 i0=0.001 i1=0.001 i2=0.003
 
 #include "p03_vpi_analog.h"
 

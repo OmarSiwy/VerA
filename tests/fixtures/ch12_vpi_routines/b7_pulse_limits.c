@@ -23,6 +23,8 @@
  */
 
 //! lrm 12.29:14
+//! design ch12_vpi_routines/b7_specify.v
+//! stdout p02: b7_pulse_limits checks=25
 
 #include "../ch11_vpi/p02_check.h"
 

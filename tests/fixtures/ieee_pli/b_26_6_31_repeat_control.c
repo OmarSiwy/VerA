@@ -19,6 +19,8 @@
 
 //! inherited IEEE 1364-2005 26.6.31
 //! inherited-reject IEEE 1364-2005 26.6.31
+//! design ieee_pli/b_26_6_31_repeat_control.v
+//! stdout p02: b_26_6_31_repeat_control checks=13
 
 #include "b_check.h"
 

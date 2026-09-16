@@ -115,6 +115,9 @@
 //! lrm 12.33.2:1
 //! lrm 12.33.2:2
 //! lrm 12.33.2:4
+//! design digital/p02_design.v
+//! stdout p02: 01_get_value_formats checks=50
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

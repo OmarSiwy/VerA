@@ -12,6 +12,7 @@
 //! sampling instants, steps the filters, integrators and ramps, pushes a delay
 //! sample, and draws from the seed. `zig build test` emits the device and runs
 //! this file.
+//! device ch04_expressions/revert_ops.va
 
 const std = @import("std");
 const contract = @import("contract");

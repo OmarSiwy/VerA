@@ -55,6 +55,8 @@
 //! lrm 12.31.2
 //! lrm 12.33.2
 //! lrm 12.15:1
+//! design digital/p02_scales.v
+//! stdout p02: 13_get_time_scaling checks=15
 
 #include "p02_check.h"
 

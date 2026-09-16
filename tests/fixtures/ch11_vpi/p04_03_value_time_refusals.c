@@ -57,6 +57,8 @@
 //! lrm-reject 12.27:2
 //! lrm-reject 12.28:3
 //! lrm-reject 12.36:2
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: p04_03_value_time_refusals checks=70
 
 #include "p02_check.h"
 

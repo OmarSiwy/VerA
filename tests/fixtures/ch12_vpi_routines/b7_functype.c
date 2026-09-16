@@ -28,6 +28,8 @@
  */
 
 //! lrm 12.32.1:3
+//! design ch12_vpi_routines/b7_functype.va
+//! stdout b7-functype: a=1 b=1.25
 
 #include <string.h>
 #include "p03_vpi_analog.h"

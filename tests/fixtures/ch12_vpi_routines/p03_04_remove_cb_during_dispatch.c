@@ -48,6 +48,8 @@
 //! lrm 12.9
 //! lrm 12.31.3
 //! lrm 12.34
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout p03-04: at1=1 at2=1 at3=0 at4=1 rm_future=1 rm_self=1 rm_same=1
 
 #include "p03_vpi_analog.h"
 

@@ -72,6 +72,9 @@
 //! lrm 12.34:1
 //! lrm 12.34:3
 //! lrm-reject 12.34:3
+//! design digital/p02_design.v
+//! stdout p02: 07_cb_remove_and_info checks=38
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

@@ -45,6 +45,8 @@
 //! inherited IEEE 1364-2005 26.6.23
 //! inherited IEEE 1364-2005 27.14
 //! inherited-reject IEEE 1364-2005 27.14
+//! design ieee_pli/b_26_6_prim_review.v
+//! stdout b26_prim_review: active drivers, UDP symbols and strengths ok
 
 #include "b_check.h"
 #include <stdint.h>

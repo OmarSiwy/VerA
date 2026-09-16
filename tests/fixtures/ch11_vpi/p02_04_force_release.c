@@ -63,6 +63,9 @@
 //! lrm 12.31.1:3
 //! lrm 12.31.1:11
 //! lrm 12.31.1:12
+//! design digital/p02_design.v
+//! stdout p02: 04_force_release checks=39
+//! stdout p02_design: t=20 reached
 
 #include "p02_check.h"
 

@@ -113,6 +113,8 @@
 //! lrm 12.33:2
 //! lrm 12.33.2
 //! lrm 12.33.2:5
+//! design digital/p02_systf.v
+//! stdout p02: 10_systf_digital checks=92
 
 #include "p02_check.h"
 

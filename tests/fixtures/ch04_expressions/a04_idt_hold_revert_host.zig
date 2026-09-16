@@ -23,6 +23,7 @@
 //! A revert that leaves the trial's offset reads 8.5 - 1 = 7.5 at the retry.
 //!
 //! `zig build test` emits the device and runs this file.
+//! device ch04_expressions/a04_idt_hold_revert.va
 
 const std = @import("std");
 const contract = @import("contract");

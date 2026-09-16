@@ -13,6 +13,7 @@
 //! A[d, in] = jω·1n·e^(−jπ/4) = (π/4)(sin θ + j·cos θ). A device that kept
 //! the transparent partial in G under `.ac` would read 3 + e^(−jπ/4): the
 //! delay counted twice. `zig build test` emits the device and runs this file.
+//! device ch04_expressions/absdelay_ac_phase.va
 
 const std = @import("std");
 const contract = @import("contract");

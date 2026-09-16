@@ -3,6 +3,7 @@
 //! 2*drive gives total current (9+2*drive)/2: 7.5 A at drive=3 and 8.5 A at 4.
 //! Changing a selection input requires re-elaboration; changing drive alone
 //! preserves the selected module and must continue to execute through derive.
+//! device ch06_hierarchy/paramset_outer_defparam_shape.va
 
 const std = @import("std");
 const contract = @import("contract");

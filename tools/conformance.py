@@ -980,9 +980,9 @@ def fixture_cites():
     """{(standard, clause): {"pos": [paths], "neg": [paths]}} from the
     fixtures' tags, the polarity rules `--coverage` and `test-1364 --coverage`
     use: a file with a `//! reject` (or `// digital-runner: reject`) cites
-    negatively; a `.c` application counts only if `build.zig`'s `vpi_runs`
-    runs it, and polarity is per line (`lrm-reject`, `inherited-reject`)."""
-    runs = set(re.findall(r'\.c = "([^"]+\.c)"', (ROOT / "build.zig").read_text()))
+    negatively; a `.c` application counts only if `build.zig` runs it (its
+    `//! design` line), and polarity is per line (`lrm-reject`, `inherited-reject`)."""
+    runs = {f"tests/fixtures/{c}" for c in vpi_runs()}
     cites = {}
 
     def add(std, clause, side, path):
@@ -2210,16 +2210,15 @@ def fixture_tags(path):
 
 def vpi_runs():
     """{c path under tests/fixtures: 'pass' | 'xfail'} for build.zig's
-    `vpi_runs`, the `.c` fixtures `zig build test` runs in-process. A `.c`
-    that only compiles is not evidence (AGENTS.md §2) and is absent here."""
-    text = (ROOT / "build.zig").read_text()
-    block = text[text.index("const vpi_runs = [_]VpiRun{"):]
-    block = block[:block.index("\n};")]
+    `vpiRuns`, the `.c` fixtures `zig build test` runs in-process: those with
+    a `//! design` line. A `.c` that only compiles is not evidence
+    (AGENTS.md §2) and is absent here."""
+    root = ROOT / "tests/fixtures"
     out = {}
-    for entry in re.split(r"\n    \.\{", block)[1:]:
-        m = re.search(r'\.c = "tests/fixtures/([^"]+)"', entry)
-        if m:
-            out[m.group(1)] = "xfail" if re.search(r"\.(xfail|refuse) =", entry) else "pass"
+    for path in sorted(root.rglob("*.c")):
+        text = path.read_text(errors="replace")
+        if re.search(r"(?m)^//! design ", text):
+            out[path.relative_to(root).as_posix()] = "xfail" if re.search(r"(?m)^//! (xfail|refuse) ", text) else "pass"
     return out
 
 

@@ -19,6 +19,8 @@
  */
 
 //! lrm 12.15:2
+//! design ch12_vpi_routines/p03_ramp_load.va
+//! stdout b7-analog-time: t=0.0025
 
 #include "p03_vpi_analog.h"
 

@@ -81,6 +81,8 @@
 //! lrm 11.6.2:1000
 //! lrm 11.6.7:1000
 //! lrm 12.23:3
+//! design ch11_vpi/p04_analog.va
+//! stdout p02: p04_06_analog_objects checks=139
 
 #include "p02_check.h"
 

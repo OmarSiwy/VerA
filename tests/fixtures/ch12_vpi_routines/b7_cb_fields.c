@@ -38,6 +38,8 @@
 //! lrm 12.31.1
 //! lrm 12.16:12
 //! lrm 12.31.1:4
+//! design ch12_vpi_routines/b7_digital.v
+//! stdout p02: b7_cb_fields checks=30
 
 #include "../ch11_vpi/p02_check.h"
 

@@ -10,7 +10,7 @@
 #include "../ch11_vpi/p02_check.h"
 
 /* A requirement VerA does not meet yet: prints `xfail <clause>: <what>` on
- * stdout instead of exiting. build.zig's vpi_runs pins that line, so the fix
+ * stdout instead of exiting. The fixture's `//! stdout` pins that line, so the fix
  * changes the transcript and fails the run until the marker is removed. */
 #define XFAIL(cond, clause, what)                                             \
   do {                                                                        \

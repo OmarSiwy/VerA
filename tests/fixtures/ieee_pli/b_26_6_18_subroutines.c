@@ -44,6 +44,8 @@
 //! inherited IEEE 1364-2005 26.6.20
 //! inherited IEEE 1364-2005 26.6.26
 //! inherited IEEE 1364-2005 26.6.28
+//! design ieee_pli/b_26_6_18_subroutines.v
+//! stdout b26_subroutines: metadata and runtime ok
 
 #include "b_check.h"
 

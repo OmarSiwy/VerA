@@ -4,7 +4,8 @@
 //!
 //! Anything whose input is `vera`'s output (generated devices, transcripts,
 //! VPI applications) is spawned by the suite runner, not modelled as artifacts,
-//! except the `host_tests` devices, which a test artifact imports.
+//! except the `hostTests` devices, which a test artifact imports. The fixture
+//! lists (`vpiRuns`, `hostTests`) are globs read from the fixtures' `//!` lines.
 
 const std = @import("std");
 
@@ -219,9 +220,12 @@ pub fn build(b: *std.Build) void {
     o.addOption([]const u8, "contract", pathFromRoot(b, "tools/contract.zig"));
     // The `.c` fixtures compile against the shipped header, not a copy.
     o.addOption([]const u8, "vpi_include", pathFromRoot(b, "src/vpi"));
-    // `--coverage` counts a `.c` fixture's `//! lrm` tags only for those in
-    // `vpi_runs`, since compiling is not runtime evidence.
-    o.addOption([]const []const u8, "vpi_runs", &vpi_run_paths);
+    // `--coverage` counts a `.c` fixture's `//! lrm` tags only for those
+    // that run (`vpiRuns`), since compiling is not runtime evidence.
+    const vpi_runs = vpiRuns(b);
+    const vpi_run_paths = b.allocator.alloc([]const u8, vpi_runs.len) catch @panic("OOM");
+    for (vpi_runs, vpi_run_paths) |r, *path| path.* = r.c;
+    o.addOption([]const []const u8, "vpi_runs", vpi_run_paths);
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
 
     const suite_mod = b.createModule(.{
@@ -244,82 +248,41 @@ pub fn build(b: *std.Build) void {
     // Compiles the runner itself: `test` does not analyse every path of it.
     b.step("suite-exe", "Build the suite runner (tests/bench.zig)").dependOn(&suite_exe.step);
 
-    // The suite step: the runner takes the `vera` path, then whatever follows
-    // `--`.
-    const bench = b.addRunArtifact(suite_exe);
-    bench.addArtifactArg2(exe, .{});
-    bench.addPassthruArgs();
-    b.step(
-        "benchmark",
-        "Run every fixture through VerA — compile, build, run, judge — and time it " ++
-            "(USE -Doptimize=ReleaseFast: " ++
-            "that is the shipping number, and the default Debug is several times slower)",
-    ).dependOn(&bench.step);
-
-    // `vera --run` over every `.v` under `tests/fixtures/ieee1364/` and
-    // `tests/fixtures/digital/` with a committed transcript beside it.
-    // `addArtifactArg2` makes the built `vera` a dependency of this run.
-    //
-    // Not on `test`: `test` is the fast gate that must be green, and the suite
-    // is where unimplemented behaviour is counted.
-    //
-    // No `expectExitCode`: a Run step with a stdio check becomes cacheable, and
-    // its real inputs (the `.v` sources and transcripts) are read at run time,
-    // invisible to the build graph, so a cached pass would compare nothing.
-    const dev = b.addRunArtifact(suite_exe);
-    dev.addArtifactArg2(exe, .{});
-    dev.addArg("devices");
-    dev.addPassthruArgs();
-    b.step("test-devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts")
-        .dependOn(&dev.step);
-
-    // The two suites by language. `test-1364` is `tests/fixtures/ieee1364/`
-    // alone (`-- --coverage` prints its clause inventory instead); `test-ams`
-    // is `benchmark -- --strict`.
-    const v1364 = b.addRunArtifact(suite_exe);
-    v1364.addArtifactArg2(exe, .{});
-    v1364.addArg("ieee1364");
-    v1364.addPassthruArgs();
-    b.step("test-1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory; `-- --native`: through `vera --emit-exe`)")
-        .dependOn(&v1364.step);
-    const ams = b.addRunArtifact(suite_exe);
-    ams.addArtifactArg2(exe, .{});
-    ams.addArg("--strict");
-    ams.addPassthruArgs();
-    b.step("test-ams", "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)")
-        .dependOn(&ams.step);
-
-    // Every `.c` VPI fixture, compiled by a C compiler against
-    // `src/vpi/vpi_user.h` (LRM clauses 11 and 12) with a census reported; the
-    // ones that also run are `vpi_runs`, under `test`. No `expectExitCode`,
-    // for the cacheability reason `test-devices` gives.
-    const vpi_fx = b.addRunArtifact(suite_exe);
-    vpi_fx.addArtifactArg2(exe, .{});
-    vpi_fx.addArg("vpi");
-    b.step("test-vpi-fixtures", "Compile the .c VPI fixtures against src/vpi/vpi_user.h")
-        .dependOn(&vpi_fx.step);
-
-    // The `.sp` decks: SPICE netlists naming models through `.hdl`, each
-    // paired with an `.expected.json` analytic oracle. The step checks the
-    // oracle exists and every named model resolves and compiles, then runs
-    // each deck on `sim.spice`, ESPice's solver (`//! tran`, `//! onoise`), and grades
-    // it against the oracle; a deck needing what the runner lacks is NOT RUN.
-    const spice = b.addRunArtifact(suite_exe);
-    spice.addArtifactArg2(exe, .{});
-    spice.addArg("spice");
-    b.step("test-spice", "Run the .sp decks on sim.spice and grade each against its oracle")
-        .dependOn(&spice.step);
-
-    // What vera says about every fixture, snapshotted so a refactor phase can
-    // prove it changed nothing (AGENTS.md §4): `-- before`, `-- after`, then
-    // `-- diff`. No check on the step, for the cacheability reason
-    // `test-devices` gives: the fixtures are read at run time.
-    const golden = b.addRunArtifact(suite_exe);
-    golden.addArtifactArg2(exe, .{});
-    golden.addArg("golden");
-    golden.addPassthruArgs();
-    b.step("golden", "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)")
-        .dependOn(&golden.step);
+    // The suite steps: the runner takes the `vera` path, a mode, then
+    // whatever follows `--`. None has an `expectExitCode`: a Run step with a
+    // stdio check becomes cacheable, and the real inputs (fixtures,
+    // transcripts) are read at run time, invisible to the build graph, so a
+    // cached pass would compare nothing. None is on `test`, the fast gate
+    // that must be green; the suites are where unimplemented behaviour is
+    // counted.
+    for ([_]struct { name: []const u8, mode: ?[]const u8, desc: []const u8 }{
+        .{ .name = "benchmark", .mode = null, .desc = "Run every fixture through VerA — compile, build, run, judge — and time it " ++
+            "(USE -Doptimize=ReleaseFast: that is the shipping number, and the default Debug is several times slower)" },
+        // `vera --run` over every `.v` under ieee1364/ and digital/ with a
+        // committed transcript beside it.
+        .{ .name = "test-devices", .mode = "devices", .desc = "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts" },
+        .{ .name = "test-1364", .mode = "ieee1364", .desc = "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory; `-- --native`: through `vera --emit-exe`)" },
+        .{ .name = "test-ams", .mode = "--strict", .desc = "Run the Verilog-AMS fixture suite strictly (= `benchmark -- --strict`)" },
+        // Every `.c` VPI fixture, compiled against src/vpi/vpi_user.h (LRM
+        // clauses 11 and 12) with a census reported; the ones that also run
+        // are `vpiRuns`, under `test`.
+        .{ .name = "test-vpi-fixtures", .mode = "vpi", .desc = "Compile the .c VPI fixtures against src/vpi/vpi_user.h" },
+        // The `.sp` decks, each paired with an `.expected.json` analytic
+        // oracle, run on `sim.spice`, ESPice's solver (`//! tran`,
+        // `//! onoise`); a deck needing what the runner lacks is NOT RUN.
+        .{ .name = "test-spice", .mode = "spice", .desc = "Run the .sp decks on sim.spice and grade each against its oracle" },
+        // What vera says about every fixture, snapshotted so a refactor phase
+        // can prove it changed nothing (AGENTS.md §4).
+        .{ .name = "golden", .mode = "golden", .desc = "Snapshot `vera --emit-zig` on every fixture (`-- <tag>`), or compare two (`-- diff [a b]`)" },
+        // specification/UNITS.md and the architecture map in AGENTS.md, read from the code.
+        .{ .name = "archmap", .mode = "archmap", .desc = "Regenerate specification/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)" },
+    }) |s| {
+        const run = b.addRunArtifact(suite_exe);
+        run.addArtifactArg2(exe, .{});
+        if (s.mode) |m| run.addArg(m);
+        run.addPassthruArgs();
+        b.step(s.name, s.desc).dependOn(&run.step);
+    }
 
     // The judge judged: `tests/canary/` holds fixtures wrong on purpose, and
     // each must get the verdict `tests/canary/EXPECT.tsv` names. On `test`,
@@ -331,14 +294,6 @@ pub fn build(b: *std.Build) void {
     canary.has_side_effects = true; // reads tests/canary/ at run time, invisible to the graph
     b.step("test-canary", "Check the harness FAILs every wrong-on-purpose fixture in tests/canary/").dependOn(&canary.step);
     test_step.dependOn(&canary.step);
-
-    // specification/UNITS.md and the architecture map in AGENTS.md, read from the code.
-    const map = b.addRunArtifact(suite_exe);
-    map.addArtifactArg2(exe, .{});
-    map.addArg("archmap");
-    map.addPassthruArgs();
-    b.step("archmap", "Regenerate specification/UNITS.md and the AGENTS.md architecture map (`-- <file.md>`: another file)")
-        .dependOn(&map.step);
 
     // The VPI acceptance test. A VPI implementation is only tested from C:
     // `tests/fixtures/ch11_vpi/vpi_app.c` compiles against `src/vpi/vpi_user.h`, so every constant
@@ -415,7 +370,7 @@ pub fn build(b: *std.Build) void {
     const contract = byName(mods, "contract");
     const test_timers = b.step("test-timers", "Run emitted-device timer scheduling tests");
     const test_paramsets = b.step("test-paramsets", "Run emitted-device paramset binding and host shape tests");
-    for (host_tests) |h| {
+    for (hostTests(b)) |h| {
         const gen = b.addRunArtifact(gen_exe);
         gen.addArgs(&.{ "--emit-zig", "-I" });
         gen.addDirectoryArg2(b.path("tests/fixtures"), .{});
@@ -441,18 +396,18 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/timer_host.zig")) test_timers.dependOn(run_host);
         if (std.mem.eql(u8, h.host, "tests/paramset_host.zig")) test_paramsets.dependOn(run_host);
-        // §9.7.3 the status channel and §9.4 `say` on the GPU targets a device also builds
-        // for: AMDGCN to an object; NVPTX to LLVM IR only, because `@export`
-        // of a `callconv(.kernel)` function is an LLVM alias the NVPTX
-        // backend refuses (a host rewrites the IR first, as Gompute does).
-        const gpu_root: ?[]const u8 = if (std.mem.eql(u8, h.host, "tests/status_host.zig"))
-            "tests/status_gpu.zig"
-        else if (std.mem.eql(u8, h.host, "tests/say_host.zig"))
-            "tests/say_gpu.zig"
-        else if (std.mem.eql(u8, h.host, "tests/wide_host.zig")) "tests/wide_gpu.zig" else null;
-        // IEEE 1364 §5.4 the wide kernels: NVPTX to PTX assembly (a plain
-        // export, `wide_gpu.zig`), so the backend's own lowering is checked.
-        const wide_gpu = gpu_root != null and std.mem.eql(u8, gpu_root.?, "tests/wide_gpu.zig");
+        // A `<x>_gpu.zig` beside `<x>_host.zig` (§9.7.3 the status channel,
+        // §9.4 `say`, IEEE 1364 §5.4 the wide kernels) builds the device for
+        // the GPU targets, and must export `<x>_ops_kernel`: AMDGCN to an
+        // object; NVPTX to LLVM IR, because `@export` of a `callconv(.kernel)`
+        // function is an LLVM alias the NVPTX backend refuses (a host
+        // rewrites the IR first, as Gompute does). `wide_gpu.zig` is a plain
+        // export, so it goes to PTX assembly and the backend's own lowering
+        // is checked.
+        const stem = h.host[0 .. h.host.len - "_host.zig".len];
+        const gpu_path = b.fmt("{s}_gpu.zig", .{stem});
+        const gpu_root: ?[]const u8 = if (b.root.root_dir.handle.access(b.graph.io, gpu_path, .{})) |_| gpu_path else |_| null;
+        const wide_gpu = std.mem.eql(u8, std.fs.path.basename(stem), "wide");
         if (gpu_root) |gpu_src| for ([_][2][]const u8{
             .{ "nvptx64-cuda", "sm_70" },
             .{ "amdgcn-amdhsa", "gfx906" },
@@ -475,7 +430,7 @@ pub fn build(b: *std.Build) void {
                 },
             }) });
             const out = if (gt.result.cpu.arch == .nvptx64) (if (wide_gpu) obj.getEmittedAsm() else obj.getEmittedLlvmIr()) else obj.getEmittedBin();
-            const kernel = if (std.mem.eql(u8, gpu_src, "tests/say_gpu.zig")) "say_ops_kernel" else if (wide_gpu) "wide_ops_kernel" else "status_ops_kernel";
+            const kernel = b.fmt("{s}_ops_kernel", .{std.fs.path.basename(stem)});
             test_step.dependOn(&b.addCheckFile(out, .{ .expected_matches = &.{kernel} }).step);
         };
     }
@@ -690,40 +645,22 @@ pub fn build(b: *std.Build) void {
 }
 
 /// A host driver and the `.va` its `device` import is emitted from: device
-/// hooks called in an order the fixture directives cannot express.
-const host_tests = [_]struct { host: []const u8, va: []const u8 }{
-    .{ .host = "tests/paramset_host.zig", .va = "tests/fixtures/ch06_hierarchy/paramset_outer_defparam_shape.va" },
-    .{ .host = "tests/integer_param_host.zig", .va = "tests/fixtures/ch03_data_types/integer_param_low32.va" },
-    .{ .host = "tests/fixtures/ch09_system_tasks/bound_step_infinite_host.zig", .va = "tests/fixtures/ch09_system_tasks/bound_step_infinite_is_no_bound.va" },
-    .{ .host = "tests/fixtures/ch03_data_types/nodeset_metadata_host.zig", .va = "tests/fixtures/ch03_data_types/a08_nodeset_02_nodeset_bus_null_element.va" },
-    .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
-    .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
-    .{ .host = "tests/revert_host.zig", .va = "tests/fixtures/ch04_expressions/revert_ops.va" },
-    .{ .host = "tests/fixtures/ch09_system_tasks/bound_step_smallest_host.zig", .va = "tests/fixtures/ch09_system_tasks/bound_step_smallest_active_wins.va" },
-    .{ .host = "tests/status_host.zig", .va = "tests/fixtures/ch09_system_tasks/status_ops.va" },
-    .{ .host = "tests/say_host.zig", .va = "tests/fixtures/ch09_system_tasks/say_ops.va" },
-    .{ .host = "tests/wide_host.zig", .va = "tests/fixtures/ch07_mixed_signal/wide_reg_held_across_evaluations.va" },
-    .{ .host = "tests/port_mask_host.zig", .va = "tests/fixtures/ch09_system_tasks/port_mask.va" },
-    .{ .host = "tests/table_status_host.zig", .va = "tests/fixtures/ch09_system_tasks/table_status.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_fixed.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_dynamic.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_reg_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_clog2_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_index_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_context_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_array_function_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_constant_effect_controls.va" },
-    .{ .host = "tests/timer_host.zig", .va = "tests/fixtures/ch05_analog_behavior/timer_body_precomputed_controls.va" },
-    .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
-    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
-    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },
-    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/zi_ac_response.va" },
-};
+/// hooks called in an order the fixture directives cannot express. Every
+/// `*_host.zig` under tests/ names its devices as `//! device <path under
+/// tests/fixtures>` lines, one test artifact each.
+const HostTest = struct { host: []const u8, va: []const u8 };
+
+fn hostTests(b: *std.Build) []const HostTest {
+    var found: std.ArrayList(HostTest) = .empty;
+    for (globFiles(b, "tests", "_host.zig")) |host| {
+        var lines = std.mem.splitScalar(u8, configText(b, host), '\n');
+        while (lines.next()) |raw| {
+            const va = std.mem.cutPrefix(u8, std.mem.trimEnd(u8, raw, "\r"), "//! device ") orelse continue;
+            found.append(b.allocator, .{ .host = host, .va = b.fmt("tests/fixtures/{s}", .{va}) }) catch @panic("OOM");
+        }
+    }
+    return found.items;
+}
 
 /// The `vera` CLI. It imports the engine as modules; an `@import` by path
 /// would compile the engine a second time into its file set.
@@ -815,556 +752,89 @@ fn vpiApp(
     return b.addRunArtifact(app);
 }
 
-/// One runnable VPI application: its C file, the design it runs against, and
-/// the exact output it must produce. The `checks=N` count catches a run that
-/// returns early and still exits 0. `xfail` is a known VerA gap instead: the
-/// run exits 1 with this text in its stderr, so the run that stops failing
-/// fails the step until the marker is removed. `refuse` is the same check
-/// for a design the host must refuse (a rejection the application itself
-/// cannot observe).
+/// One runnable VPI application, read from its `.c` fixture's `//!` lines:
+///
+///   //! design <path under tests/fixtures>   the design it runs against (required)
+///   //! stdout <line>                        one line of the exact stdout, in order
+///   //! stderr [<line>]                      the exact stderr (bare: empty)
+///   //! xfail <text>                         a known VerA gap: exits 1 saying <text>
+///   //! refuse <text>                        a design the host must refuse, likewise
+///
+/// The `checks=N` count in a stdout line catches a run that returns early and
+/// still exits 0. A `.c` without `//! design` only compiles (`test-vpi-fixtures`).
 const VpiRun = struct {
     c: []const u8,
-    design: []const u8,
+    design: []const u8 = "",
     stdout: []const u8 = "",
     stderr: ?[]const u8 = null,
     xfail: ?[]const u8 = null,
     refuse: ?[]const u8 = null,
 };
 
-/// Every `.c` fixture under tests/fixtures runs here except
-/// ch11_vpi/vpi_app.c, the acceptance test `test-vpi` runs above.
-const vpi_runs = [_]VpiRun{
-    .{
-        .c = "tests/fixtures/ch11_vpi/p06_01_specify_objects.c",
-        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
-        .stdout = "p02: p06_01_specify_objects checks=59\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p05_01_put_delays.c",
-        .design = "tests/fixtures/ch11_vpi/p05_delays.v",
-        .stdout = "p05-01: w=2/12/32 y=3/11/33\np02: p05_01_put_delays checks=27\n",
-    },
-    // §12.31.3's analyses: the host builds the design's analog library and
-    // runs the `*! analysis` lines of the application's banner.
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_01_time_delta_freq_at_zero.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
-        .stdout = "p03-01: t0=0 dt0=0 f0=0 initial=1 final=1 later_pos=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_02_accepted_point_sequence.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-02: initial=1 final=1 t_final=0.005 monotone=1 delta_ok=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_03_forced_solution_points.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-03: abs_t=0.0025 abs_v=2.5 el1=0.0015 v1=1.5 el2=0.003 v2=3 accepted=3\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_04_remove_cb_during_dispatch.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-04: at1=1 at2=1 at3=0 at4=1 rm_future=1 rm_self=1 rm_same=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_05_convergence_test_rejection.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-05: rejected=1 backed_up=1 ct_before_ap=1 t_final=0.005\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_12_sim_control_reject_step.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-12: rejected=1 backed_up=1 t_final=0.005\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_08_analog_value_formats.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
-        .stdout = "p03-08: v=1.25 i=0.0025 vexp=1.250000e+00 vdec=1.25 vg=1.25 fmt_reset=1 sep_buf=1 overwritten=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_10_repeated_analyses.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "p03-10: initial=2 final=2 t0=0 v_final=2 late_t=0.0015 late_v=1.5 late_hits=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_11_registration_roundtrip.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
-        .stdout = "p03-11: systf_roundtrip=1 cb_roundtrip=1 dup_rejected=1 probe_hits=1 probe_t=0.0025\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_06_sampler_plugin.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_sampnhold.va",
-        .stdout = "p03-06: samples=6 first=0 last=5 hold_2p5=2 hold_4p25=4\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_93_get_real_in_calltf.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_env_probe.va",
-        .stdout = "p03-93: start=0 end=0.001 max_step=0.0001 refused_per_call=2 v_b=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_94_function_partials.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_square_law.va",
-        .stdout = "p03-94: v_q=1.732050808 dfdx=3.464101615 refused_per_call=2\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_92_reject_analog_callback_times.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
-        .stdout = "p03-92: control_hits=1 control_t=0.0005 refused=4 errs=4\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_91_reject_stale_callback_handle.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
-        .stdout = "p03-91: first=1 second=0 null=0 wrongtype=0 info_err=1 errs=4 fired=0\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.c",
-        .design = "tests/fixtures/ieee_pli/audit_vpi_invalid_time_callback.v",
-        .stdout = "vpi-invalid-time-callback=ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_12_systf_domains.c",
-        .design = "tests/fixtures/ch11_vpi/p02_analog.va",
-        .stdout = "p02: 12_systf_domains checks=26\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=29\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_06_cb_value_change.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 06_cb_value_change checks=62\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_end_compile_objects.c",
-        .design = "tests/fixtures/ieee_pli/audit_end_compile_objects.v",
-        .stdout = "",
-        .stderr = "pli-end-compile type=vpiModule\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_01_get_value_formats.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 01_get_value_formats checks=50\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_02_get_value_unknown.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 02_get_value_unknown checks=21\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_03_put_value_delays.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 03_put_value_delays checks=64\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_04_force_release.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 04_force_release checks=39\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_05_cb_time_regions.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 05_cb_time_regions checks=82\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_07_cb_remove_and_info.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 07_cb_remove_and_info checks=38\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_08_cb_action_sim_control.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: 08_cb_action_sim_control checks=24\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_array_object_kinds.c",
-        .design = "tests/fixtures/ieee_pli/audit_array_object_kinds.v",
-        .stdout = "",
-        .stderr = "pli-array-kinds reg-words=2 real-selects=2\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_13_get_time_scaling.c",
-        .design = "tests/fixtures/digital/p02_scales.v",
-        .stdout = "p02: 13_get_time_scaling checks=15\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_module_array.c",
-        .design = "tests/fixtures/ieee_pli/audit_module_array.v",
-        .stdout = "",
-        .stderr = "pli-module-array members=2 indices=0,1\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_vpi_value_formats.c",
-        .design = "tests/fixtures/ieee_pli/audit_vpi_value_formats.v",
-        .stdout = "vpi-value-formats=ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_vpi_event_handles.c",
-        .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
-        .stdout = "vpi-event-handles=ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_01_object_traversal.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_01_object_traversal checks=98\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_02_object_refusals.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_02_object_refusals checks=118\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_03_value_time_refusals.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_03_value_time_refusals checks=70\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_04_callback_systf_refusals.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_04_callback_systf_refusals checks=83\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_05_vlog_info.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: p04_05_vlog_info checks=30\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_06_analog_objects.c",
-        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
-        .stdout = "p02: p04_06_analog_objects checks=139\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_07_behaviour_objects.c",
-        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
-        .stdout = "p02: p04_07_behaviour_objects checks=240\np04_behaviour: d=12\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_08_analog_behaviour.c",
-        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
-        .stdout = "p02: p04_08_analog_behaviour checks=76\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_09_systf_build.c",
-        .design = "tests/fixtures/ch11_vpi/p04_analog.va",
-        .stdout = "p02: p04_09_systf_build checks=58\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_10_primitives.c",
-        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
-        .stdout = "p02: p04_10_primitives checks=96\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p04_11_instance_scopes.c",
-        .design = "tests/fixtures/ch11_vpi/p04_scopes.v",
-        .stdout = "p02: p04_11_instance_scopes checks=23\n",
-    },
-    // IEEE 1364-2005 §20, §26, §27 and Annex G (measure B). An `xfail N.N:`
-    // line in `stdout` is a requirement VerA does not meet yet (b_check.h).
-    .{
-        .c = "tests/fixtures/ieee_pli/b_20_4_timing_checks.c",
-        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
-        .stdout = "p02: b_20_4_timing_checks checks=7\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_20_3_task_as_function.c",
-        .design = "tests/fixtures/ieee_pli/b_20_3_task_as_function.v",
-        .refuse = "vpi_host: `$random` is registered as a system task and called as a function (IEEE 1364-2005 §20.3)",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
-        .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
-        .stdout = "p02: b_26_1_systf checks=45\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_2_4_startup_phase.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "b264 eoc\np02: b_26_2_4_startup_phase checks=27\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_3_5_protected.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: b_26_3_5_protected checks=43\n",
-    },
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_10_systf_digital.c",
-        .design = "tests/fixtures/digital/p02_systf.v",
-        .stdout = "p02: 10_systf_digital checks=92\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_builtin_override.c",
-        .design = "tests/fixtures/ieee_pli/audit_builtin_override.v",
-        .stdout = "first=8000000001 second=8000000001\n",
-        .stderr = "pli-override calls=2 size=40\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_lazy_arguments.c",
-        .design = "tests/fixtures/ieee_pli/audit_lazy_arguments.v",
-        .stdout = "unread=0\nread=1\n",
-        .stderr = "pli-lazy-arguments calls=2 reads=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_19_lazy_arguments.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_19_lazy_arguments.v",
-        .stdout = "root_calls=10\n",
-        .stderr = "pli-lazy-scopes calls=3 nested=2 retained=2\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
-        .stdout = "p02: b_26_6_structure checks=313\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
-        .stdout = "p02: b_26_6_behaviour checks=298\nd=12 c=1 q=9 p2=0101\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_prim_review.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_prim_review.v",
-        .stdout = "b26_prim_review: active drivers, UDP symbols and strengths ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
-        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
-        .stdout = "p02: b_26_6_primitives checks=65\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
-        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
-        .stdout = "p02: b_26_6_specify checks=58\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_41_timeformat.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_41_timeformat.v",
-        .stdout = "b26_timeformat: active call follows execution ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_39_callbacks.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_39_callbacks.v",
-        .stdout = "b26_callbacks: traversal and delivery ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_18_subroutines.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_18_subroutines.v",
-        .stdout = "b26_subroutines: metadata and runtime ok\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_20_frames.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_20_frames.v",
-        .stdout = "p02: b_26_6_20_frames checks=14\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_11_event_array.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_11_event_array.v",
-        .stdout = "p02: b_26_6_11_event_array checks=271\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.v",
-        .stdout = "p02: b_26_6_31_repeat_control checks=13\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
-        .stdout = "p02: b_26_6_42_attributes checks=630\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_26_6_42_analog_attributes.c",
-        .design = "tests/fixtures/ieee_pli/b_26_6_42_analog_attributes.va",
-        .stdout = "p02: b_26_6_42_analog_attributes checks=132\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_objects.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: b_27_objects checks=83\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_values.c",
-        .design = "tests/fixtures/ieee_pli/b_27_values.v",
-        .stdout = "p02: b_27_values checks=140\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
-        .design = "tests/fixtures/digital/p02_design.v",
-        .stdout = "p02: b_27_33_callbacks checks=82\np02_design: t=20 reached\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/audit_stmt_registration_during_call.c",
-        .design = "tests/fixtures/ieee_pli/audit_stmt_registration_during_call.v",
-        .stdout = "stmt-registration: before=0,1,3 final=4\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
-        .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
-        .stdout = "b27 printf 7 ok\nb27 mcd1\np02: b_27_mcd checks=34\n",
-        .stderr = "",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_delays.c",
-        .design = "tests/fixtures/ch11_vpi/p05_delays.v",
-        .stdout = "p02: b_27_delays checks=25\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_27_utilities.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "b27v 5\np02: b_27_utilities checks=33\n",
-    },
-    .{
-        .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
-        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "p02: b_G_vpi_user checks=444\n",
-    },
-    // VAMS-2023 ch12 ledger rows (tests/fixtures/OBLIGATIONS.tsv). Each `.xfail`
-    // is a requirement VerA does not meet yet; its fixture's header says why.
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_path_delays.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .stdout = "p02: b7_path_delays checks=60\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_buffers.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_buffers checks=37\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_cb_fields.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_cb_fields checks=30\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_time_scaling.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_scales.v",
-        .stdout = "p02: b7_time_scaling checks=25\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_pulse_limits.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .stdout = "p02: b7_pulse_limits checks=25\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_pulse_retain.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .stdout = "p02: b7_pulse_retain checks=14\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_intermod_path.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .stdout = "p02: b7_intermod_path checks=39\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_tchk_violation.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_specify.v",
-        .stdout = "p02: b7_tchk_violation checks=12\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_objtype_time.c",
-        .design = "tests/fixtures/ieee_pli/b_27_values.v",
-        .stdout = "p02: b7_objtype_time checks=18\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_seq_udp.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_udp.v",
-        .stdout = "p02: b7_seq_udp checks=11\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_force_cb.c",
-        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
-        .stdout = "p02: b7_force_cb checks=10\np04_behaviour: d=12\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_assign_cb.c",
-        .design = "tests/fixtures/ch11_vpi/p04_behaviour.v",
-        .stdout = "p02: b7_assign_cb checks=19\np04_behaviour: d=12\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_printf_log.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "b7-printf-log: marker\np02: b7_printf_log checks=5\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_stop.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_sim_control_stop checks=6\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_reset.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_sim_control_reset checks=6\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_reset_run.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_sim_control_reset_run checks=15\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_sim_control_scope.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_digital.v",
-        .stdout = "p02: b7_sim_control_scope checks=8\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_analog_time.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "b7-analog-time: t=0.0025\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_fail_converge.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
-        .stdout = "b7-fail-converge: retested=1 t_final=0.005\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_functype.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_functype.va",
-        .stdout = "b7-functype: a=1 b=1.25\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/b7_calltf_sites.c",
-        .design = "tests/fixtures/ch12_vpi_routines/b7_two_sites.va",
-        .stdout = "b7-calltf-sites: sites=2 v=2\n",
-    },
-    // §12.22.2 an analog system task's output arguments (#20).
-    .{
-        .c = "tests/fixtures/ch11_vpi/p02_11_systf_analog.c",
-        .design = "tests/fixtures/ch11_vpi/p02_analog.va",
-        .stdout = "p02: 11_systf_analog checks=35\n",
-    },
-    // c1's own flow is its share of the row it shares with i1 (`vpiShares`).
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_07_derivtf_partials.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_systf_devices.va",
-        .stdout = "p03-07: vres=1 ires=0.001 dres=0.001 vcube=1 icube=7 dcube=12\n",
-    },
-    // §12.10 a capacitor's flow in a transient: its row's reactive half, and
-    // each instance's share of a row two capacitors share.
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_13_reactive_branch_flow.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_cap_ramp.va",
-        .stdout = "p03-13: v=5 i0=0.001 i1=0.001 i2=0.003\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_90_reject_underivative_handle.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_systf_devices.va",
-        .stdout = "p03-90: declared=1 undeclared=0 undeclared_wrt_param=0 put_null=0 errs=3 vres=1\n",
-    },
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_95_task_output_jacobian.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_cube_solve.va",
-        .stdout = "p03-95: v=1 dcube=12 refused=1\n",
-    },
-    // §12.8/§12.10 an `ac` sweep (#20).
-    .{
-        .c = "tests/fixtures/ch12_vpi_routines/p03_09_ac_freq_and_imaginary.c",
-        .design = "tests/fixtures/ch12_vpi_routines/p03_rc_ac.va",
-        .stdout = "p03-09: f_dc=0 f_ac=1000 re=500 im=-500 dc_re=0\n",
-    },
-};
+/// Every `.c` fixture under tests/fixtures carrying `//! design`.
+fn vpiRuns(b: *std.Build) []const VpiRun {
+    var runs: std.ArrayList(VpiRun) = .empty;
+    for (globFiles(b, "tests/fixtures", ".c")) |c| {
+        var r: VpiRun = .{ .c = c };
+        var out: std.ArrayList(u8) = .empty;
+        var err: ?std.ArrayList(u8) = null;
+        var lines = std.mem.splitScalar(u8, configText(b, c), '\n');
+        while (lines.next()) |raw| {
+            const line = std.mem.cutPrefix(u8, std.mem.trimEnd(u8, raw, "\r"), "//! ") orelse continue;
+            const key, const val = std.mem.cutScalar(u8, line, ' ') orelse .{ line, "" };
+            if (std.mem.eql(u8, key, "design")) {
+                r.design = b.fmt("tests/fixtures/{s}", .{val});
+            } else if (std.mem.eql(u8, key, "stdout")) {
+                out.print(b.allocator, "{s}\n", .{val}) catch @panic("OOM");
+            } else if (std.mem.eql(u8, key, "stderr")) {
+                if (err == null) err = .empty;
+                if (val.len != 0) err.?.print(b.allocator, "{s}\n", .{val}) catch @panic("OOM");
+            } else if (std.mem.eql(u8, key, "xfail")) {
+                r.xfail = val;
+            } else if (std.mem.eql(u8, key, "refuse")) {
+                r.refuse = val;
+            }
+        }
+        if (r.design.len == 0) continue;
+        r.stdout = out.items;
+        if (err) |e| r.stderr = e.items;
+        runs.append(b.allocator, r) catch @panic("OOM");
+    }
+    return runs.items;
+}
 
-/// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
-const vpi_run_paths = blk: {
-    var paths: [vpi_runs.len][]const u8 = undefined;
-    for (vpi_runs, &paths) |r, *p| p.* = r.c;
-    break :blk paths;
-};
+/// Every file under `dir` whose name ends in `suffix`, `/`-separated and
+/// sorted. The configuration re-runs when one is added, removed or renamed.
+fn globFiles(b: *std.Build, dir: []const u8, suffix: []const u8) []const []const u8 {
+    const io = b.graph.io;
+    var d = b.root.root_dir.handle.openDir(io, dir, .{ .iterate = true }) catch |e| std.debug.panic("{s}: {t}", .{ dir, e });
+    defer d.close(io);
+    b.dependOnDirectoryContents(b.path(dir));
+    var walker = d.walk(b.allocator) catch @panic("OOM");
+    defer walker.deinit();
+    var found: std.ArrayList([]const u8) = .empty;
+    while (walker.next(io) catch |e| std.debug.panic("{s}: {t}", .{ dir, e })) |e| {
+        const rel = b.fmt("{s}/{s}", .{ dir, e.path });
+        std.mem.replaceScalar(u8, rel, '\\', '/');
+        switch (e.kind) {
+            .directory => b.dependOnDirectoryContents(b.path(rel)),
+            .file => if (std.mem.endsWith(u8, rel, suffix)) found.append(b.allocator, rel) catch @panic("OOM"),
+            else => {},
+        }
+    }
+    std.mem.sort([]const u8, found.items, {}, struct {
+        fn lt(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.order(u8, x, y) == .lt;
+        }
+    }.lt);
+    return found.items;
+}
+
+/// `path`'s bytes, read at configure time; an edit re-runs the configuration.
+fn configText(b: *std.Build, path: []const u8) []const u8 {
+    b.dependOnFileContents(b.path(path));
+    return b.root.root_dir.handle.readFileAlloc(b.graph.io, path, b.allocator, .unlimited) catch |e| std.debug.panic("{s}: {t}", .{ path, e });
+}
 
 /// Creates every module in `module_specs` with `addModule` (`exported`), so an
 /// embedder can import it, else with `createModule`, resolving imports against

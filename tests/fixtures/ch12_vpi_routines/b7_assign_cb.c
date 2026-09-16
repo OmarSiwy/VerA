@@ -24,6 +24,9 @@
  */
 
 //! lrm 12.31.1:1
+//! design ch11_vpi/p04_behaviour.v
+//! stdout p02: b7_assign_cb checks=19
+//! stdout p04_behaviour: d=12
 
 #include "../ch11_vpi/p02_check.h"
 

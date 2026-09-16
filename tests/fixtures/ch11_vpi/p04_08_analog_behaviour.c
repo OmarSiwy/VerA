@@ -57,6 +57,8 @@
 //! lrm 11.6.20:1000
 //! lrm 11.6.21:1000
 //! lrm 12.32:1
+//! design ch11_vpi/p04_analog.va
+//! stdout p02: p04_08_analog_behaviour checks=76
 
 #include "p02_check.h"
 

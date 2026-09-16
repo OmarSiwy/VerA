@@ -24,6 +24,8 @@
  */
 
 //! lrm 12.32.1:9
+//! design ch12_vpi_routines/b7_two_sites.va
+//! stdout b7-calltf-sites: sites=2 v=2
 
 #include "p03_vpi_analog.h"
 

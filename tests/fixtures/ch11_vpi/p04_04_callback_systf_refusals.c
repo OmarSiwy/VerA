@@ -60,6 +60,8 @@
 //! lrm-reject 12.31.1
 //! lrm-reject 12.31.4
 //! lrm 12.33.2
+//! design ch11_vpi/p04_objects.v
+//! stdout p02: p04_04_callback_systf_refusals checks=83
 
 #include "p02_check.h"
 
