@@ -21,8 +21,8 @@ These are implemented pieces; the remaining work below still applies.
 
 | Area | Work still needed |
 |---|---|
-| Digital execution | Implicit sensitivity (`@*`), named events, remaining control forms, intra-assignment controls, tasks/functions, continuous assignments, gates, switches, UDPs and timing checks. |
-| Digital values and hierarchy | Remaining expression forms/conversions, nets/drivers/strength resolution, memories, ports, elaboration and directive semantics. |
+| Digital execution | Implicit sensitivity (`@*`), named events, remaining control forms, intra-assignment controls, tasks/functions, net delays, gates, switches, UDPs and timing checks. |
+| Digital values and hierarchy | Remaining expression forms/conversions, drive strengths and strength resolution, bit/part selects, multidimensional arrays, ports, elaboration and directive semantics. |
 | Mixed-signal simulation | Connect processes to the scheduler and analog solver; implement synchronization, time conversion, discipline resolution and connectmodule insertion. |
 | VPI | Values (`vpi_get_value`/`vpi_put_value`, §12.10's analog family), callbacks, system task/function registration, analog derivatives and accepted-point notifications. The OBJECT MODEL and its handle/traversal/property routines now exist in `src/vpi/`: §11.6 module/port/net/reg/parameter over an elaborated design, and §12.2–§12.35's `vpi_handle`, `vpi_handle_by_name`, `vpi_handle_by_index`, `vpi_iterate`, `vpi_scan`, `vpi_get`, `vpi_get_str`, `vpi_compare_objects`, `vpi_free_object`, `vpi_release_handle`, `vpi_chk_error`, entered through §12.33.2's `vlog_startup_routines` and exercised by a compiled C application (`zig build test-vpi`). Nodes, branches, expressions and bit-level objects are not modelled, so `vpi_handle_by_index` answers nothing yet. |
 | Analog operators | Remaining table modes and runtime file loading, tabulated noise, complete delay/timer histories, and stateful-operator validation. |
