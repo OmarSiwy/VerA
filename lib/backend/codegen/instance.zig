@@ -174,6 +174,8 @@ pub fn emitInstance(self: *Gen) Error!void {
                 // The ring itself is not copied: `stateCtl` keeps the one
                 // sample the next push overwrites (`emitStateCtl`).
                 try keepHist(self, "{s}__head", .{n});
+                // `updateState` rewrites the window, so a revert restores it.
+                try keepHist(self, "{s}__w", .{n});
                 // §4.5.7 the frozen td of the two-argument form. Emitted only
                 // for a signal-valued td; a constant or parameter one is
                 // already its own first value.
