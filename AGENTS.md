@@ -1,7 +1,8 @@
 # AGENTS.md
 
-Read this before touching anything. It is short because the long documents are
-listed in §1 and you are going to read those too.
+Read this before touching anything. §0–§9 are VerA's rules; §10 and §11 are
+the design review and its rulings (`PRINCIPLES.md` holds the reasoning). The
+long documents are listed in §1 and you are going to read those too.
 
 VerA is a Verilog-AMS compiler in Zig. It compiles Verilog-A into Zig device
 code that an external simulator links and calls inside a Newton loop.
@@ -52,11 +53,67 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `specification/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |
 | `specification/CLAUSE-AUDIT.md` | the clause audit | the definition of `verified` / `partial` / `missing`, and measure B |
 | `specification/Vague_Decisions.md` | every implementation-defined choice, every resource limit and its diagnostic, and the open limit defects | what VerA picks where the LRM leaves it open; what to name when you add a buffer or a cap |
+| `PRINCIPLES.md` | the design principles (Parts I–VII, adopted 2026-10-17 from `../VerAReWrite/AGENTS.md`): lean storage, zero-overhead abstraction, easy to modify, contained failure, proven by tests | the reasoning behind §10's design review and §11's rulings; Chapter 24's checklists |
 | `git show 8b1514d4:<path>` (local tag `audit-docs-2026-09`) | removed audit notes: `docs/conformance-*.md`, `docs/CONFORMANCE.md`, `docs/PLAN.md`, `docs/rules/*.json`, `tests/fixtures/MANIFEST.md`, and each fixture directory's `COVERAGE.md` and `*_SPEC.md` | the history behind a comment that cites one (`<path> at 8b1514d4`). Their open items were carried into `specification/Vague_Decisions.md` |
 
 Measurements in older documents are superseded by the latest `CHANGELOG.md`
 entry, or by running the commands in §2. When two disagree, the newest wins and
 **you say so** rather than picking silently.
+
+### Skills to load first
+
+Load these with the Skill tool before writing or reviewing code (other agents:
+read `~/.claude/skills/<name>/SKILL.md`). Where a skill and this file
+disagree, this file wins and you say so.
+
+| Skill | Use it for here |
+|---|---|
+| `compiler-construction` | Every stage of `lib/`: SoA token and node rows with `extra_data`, interning, narrow stage outputs, coded diagnostics, refuse by clause, goldens and conformance fixtures that cite the LRM (§6). |
+| `zig` | Zig 0.17 idioms and memory discipline; `zero-cost.md` before claiming an abstraction is free. Its `simd-first.md` does not override §5: the compiler stays scalar unless §5's measurements change. |
+| `data-oriented-design` | Every new table or struct: the six questions in writing, narrowest field widths. |
+| `codebase-clean-code` | Where a new file goes (by what it must import, §4), one owner per table, closed boundary enums with no `else =>`. |
+| `assertions` | Programmer-error contracts, stated capacities and their named diagnostics (`specification/Vague_Decisions.md`). |
+| `doc-comments` | Every `pub` item and every file's `//!` header (in → out, the clauses it cites). |
+| `test-plan` | New fixture families, differential runs, release gates (§3). |
+| `ponytail`, `code-review` | Least code once the layout is fixed; review before merging. |
+
+### Which skill, when
+
+Skills marked _(explicit)_ never fire on their own: invoke them by name when
+this file sends you there.
+
+| Situation | Skill |
+|---|---|
+| Which skill to reach for; who wins on conflict | `systems` _(explicit)_ |
+| Build order before, during and after writing; rulings | `codebase-rules` |
+| Program or subsystem layout; where a feature goes; pattern vs concrete code; change drills | `codebase-clean-code` (+ `LADDER.md`, `HIERARCHY.md`, `DECISIONS.md`) |
+| Deep-module vocabulary: module, interface, depth, seam, adapter; the deletion test | `codebase-design` (+ `DEEPENING.md`, `DESIGN-IT-TWICE.md`) |
+| A boundary someone else calls: the device contract, `--emit-so`, OSDI, VPI | `api-design` (+ `zig.md`) |
+| Struct layout, SoA/AoS, field widths, hot/cold, profiling a hot path | `data-oriented-design` (+ `foundations.md`, `measurement.md`, `REFERENCE.md`, `zig.md`) |
+| Writing or reviewing `.zig`; does an abstraction cost anything | `zig` (+ `comptime.md`, `memory.md`, `zero-cost.md`, `simd-first.md`, `migration-0.17.md`) |
+| Programmer-error contracts, capacities, bounded loops | `assertions` (+ `zig.md`) |
+| A `pub` item, error set or module needs its doc comment; the doc audit | `doc-comments` (+ `zig.md`) |
+| A data-dependent branch in a hot loop (the emitted device, §5) | `branchless` |
+| A hot scalar loop to vectorize, after `branchless` (the emitted device, §5) | `simd-loops`, then `simd-first` |
+| The NVPTX/AMDGCN device backends | `gpu-kernel-optimization`, `gpu-parallel-algorithm-thinking` |
+| A lexer, parser, AST, IR, interner, diagnostics, goldens | `compiler-construction` (+ `FIXTURES.md`) |
+| `src/sim/spice/`, the testbench solver, device models | `spice-engine` (+ `LINEAR.md`, `NUMERICS.md`, `TESTING.md`) |
+| `--emit-verilog` output, `.v` fixtures | `writing-perfect-verilog` |
+| Test strategy, fuzzing, differential/golden testing, CI gates | `test-plan` (+ `DOMAINS.md`, `TECHNIQUES.md`, `SOURCES.md`) |
+| The red → green loop; where tests go | `tdd` (+ `tests.md`, `mocking.md`) |
+| Reviewing a diff: Standards axis and Spec axis | `code-review` |
+| What should not have been built | `ponytail` (writing), `ponytail-review` (a diff), `ponytail-audit` (a repo) |
+| Terminology, `GLOSSARY.md`, ADRs | `domain-modeling` (+ `ADR-FORMAT.md`, `GLOSSARY-FORMAT.md`) |
+| Bringing existing code up to §10/§11, block by block | `codebase-improvement` |
+| Finding deepening opportunities, as an HTML report | `improve-codebase-architecture` _(explicit)_ |
+| Changing code that has no tests | `legacy-code` (+ `REFERENCE.md`) |
+| Fowler's smell catalogue and refactoring moves | `refactoring-patterns` _(explicit)_ |
+| DRY, orthogonality, reversibility, contracts, tracer bullets | `pragmatic-programmer` _(explicit)_ |
+| Tests, review, dependencies, deprecation, large-scale change | `engineering-at-scale` _(explicit)_ |
+
+The `rust`, `gui-architecture` and `rewrite-clean` rows of the rewrite's map
+do not apply: VerA is Zig only, has no GUI, and is the rewrite's oracle, not
+a rewrite.
 
 ---
 
@@ -153,7 +210,30 @@ after each release. Do not edit it by hand.
 
 ## 4. Working on the code
 
-**The edit loop is `zig build --watch -fincremental`** (only what changed is re-analysed; never `-fincremental` without `--watch`, which rebuilds everything, nor with a tmpfs `.zig-cache`, which leaves `zig-out/bin/vera` stale).
+**Three loops.** Run every one inside `nix develop`: the system `zig` may be
+0.16, and VerA is 0.17.
+
+1. **Edit: `zig build check --watch -fincremental`**, left running in the
+   background of your worktree. `check` compiles every root `test` compiles
+   (each `module_specs` module, the CLI in both `-Dlanguage`s, `test_all`,
+   `osdi_dyn`, the suite runner) with no binary asked for, so it is semantic
+   analysis only (`-fno-emit-bin`, self-hosted frontend), and a compile error
+   shows in every root that sees the edited code. It catches compile errors
+   only; nothing runs. The win is the long-lived incremental process: without
+   `--watch` each run re-analyses everything. Never `-fincremental` without
+   `--watch`, nor with a tmpfs `.zig-cache`. The device hosts (`hostTests`,
+   `vdev_*`) are not in it: their roots import what `vera` emits.
+   When you add a root to `test`, add it to `check` too, and never call
+   `getEmittedBin`, `addRunArtifact` or `installArtifact` on a `check` compile,
+   or it becomes a full build.
+2. **Test: `zig build test-<module>`** (`test-ir`, `test-backend`, `test-cli`,
+   …) for the module you touched, and one fixture by hand (§6). Zig caches a
+   test run whose inputs did not change.
+3. **Gate: `zig build test`**, once per commit, gated on `$?` (§0 rule 2),
+   then the name-list diff (§0 rule 3). `failed command:` in build output is
+   not always a failure: after `run test` it can mean only that the step wrote
+   to stderr. A real failure prints `error: '<test name>' failed`; the exit
+   code decides.
 
 **Where a file goes** is decided by what it must *import*, not by what it is
 about. That rule was learned the expensive way: `ARCHITECTURE.md §8` records a
@@ -534,6 +614,29 @@ Learned expensively, and none of it is style preference:
   counts in `tests/bench.zig`, the conflict is **regenerated**, not resolved to
   one side. Both deltas are real.
 
+**The shared build.** How several agents build one repository without racing
+or starving each other, in the order it pays:
+
+1. **One worktree per agent, one build per worktree:**
+   `git worktree add -b <branch> ../VerA-<topic> <base>`. Two builds in one
+   tree race on `.zig-cache` and `zig-out`, and a shared tree lets another
+   agent's half-finished edit break your build.
+2. **Each agent's edit loop is `zig build check --watch -fincremental`** (§4)
+   in its own worktree, started once and left running. It is cheap enough to
+   run in every worktree at once; a full build is not.
+3. **Seed a new worktree.** The global cache (`~/.cache/zig`) is shared by
+   every worktree, so dependencies compile once per machine; the worktree's own
+   `.zig-cache` starts cold and can grow to gigabytes (the 12 GB budget above).
+   Delete it when the branch merges, and remove the worktree.
+4. **Cap concurrent full builds machine-wide.** A full `zig build test` or
+   `zig build benchmark` takes every core and several GB of RAM: run at most
+   two or three at once, and check `free -g` first. An agent waiting for a slot
+   stays in its `check` loop.
+5. **One integration branch.** Feature branches never merge each other. The
+   integrator rebases a finished branch onto the integration branch,
+   fast-forwards it, and runs the gate (§4 loop 3, then the name-list diff of
+   §0 rule 3) once on the result, in the integration worktree only.
+
 ---
 
 ## 9. Before you say you are done
@@ -541,6 +644,9 @@ Learned expensively, and none of it is style preference:
 - [ ] Your change has a bullet in `CHANGELOG.md` under `## Unreleased`
       (see below).
 
+- [ ] The design review §10.1 asks for this change ran, and its report is
+      committed with it (R10 alone for a small diff).
+- [ ] `zig build check` passes, and a root you added to `test` is in it (§4).
 - [ ] `zig build test` exits 0. Checked `$?`, not a log tail.
 - [ ] `zig build test` includes `zig fmt --check` (`zig build fmt-check` alone).
 - [ ] FAIL/XFAIL **name lists** diffed (captured as §0 rule 3 shows, not from
@@ -570,3 +676,307 @@ it closes, as `(#123)`; open the issue first if there isn't one. At a
 release, `tools/conformance.py --changelog vX.Y.Z` turns `## Unreleased`
 into `## vX.Y.Z — date`, puts the measured table under it above the bullets,
 and opens a new empty `## Unreleased`. Only the script writes the table.
+
+---
+
+## 10. The design review
+
+Adopted 2026-10-17 from `../VerAReWrite/AGENTS.md` §0.2 and §1. Chapter,
+Principle, Part, Technique and Appendix numbers below are `PRINCIPLES.md`'s.
+
+### 10.0 Precedence when sources disagree
+
+1. **§0–§9 of this file**: VerA's measured, project-specific rules.
+2. **§11** (VerA's rulings over the skills).
+3. **`systems` conflict rules**, in its order: data layout beats code brevity;
+   `ponytail` decides how little code to write, never what shape the data
+   takes; the zero-cost proof comes before the abstraction.
+4. **`codebase-rules` rulings**: Clean Code loses to the data in hot code
+   only; pure by default, impure when the pieces are tested; testability is a
+   seam question; measure before accepting any performance rung.
+5. **The domain skill for the block** (`compiler-construction`,
+   `spice-engine`, `gpu-kernel-optimization`, `writing-perfect-verilog`).
+6. **The general skills.**
+7. **`PRINCIPLES.md`.**
+
+If a principle and a skill disagree and §11 does not settle it: the skill wins
+on **mechanics** (how to do it in Zig 0.17), the principle wins on the
+**requirement** (zero runtime overhead, containment, tests). Record the
+conflict as a new §11 entry in the same change.
+
+**Where its artifacts live.** Design-review reports in
+`docs/dev/reviews/<yyyy-mm-dd>-<topic>.md`; seam records and drill tables in
+`docs/dev/decisions.md`; ADRs in `docs/adr/`; `GLOSSARY.md` and `TESTING.md`
+at the repo root. None exists yet: the first change that needs one creates
+it. `docs/dev/` is outside the user book (`docs/SUMMARY.md` does not list it,
+and `book.toml` sets `create-missing = false`). VerA's `ARCHITECTURE.md` is
+in history (§1); the current map of where each file sits is the archmap block
+(`zig build archmap`) and `build.zig`'s `module_specs`, so R9's "is
+`ARCHITECTURE.md` current" reads "are §4, the archmap and `module_specs`
+current".
+
+The design review is a fixed sequence of stages, each with a skill, a question and a "Done when." A design passes when every stage's verdict is **pass** or an **exception the user accepted in writing**. It fails if any stage's verdict is missing.
+
+### 10.1 When to run it
+
+| Change                                                                        | Review                                                                   |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| New program, subsystem, module or crate                                       | Full (R0–R10)                                                            |
+| New feature touching two or more tables, or adding a table                    | Full, scoped to the tables it touches                                    |
+| New or moved seam; any rung change                                            | R4, R5, R8, R9                                                           |
+| Change to a boundary: public API, FFI/C ABI, file format, wire format         | R1, R6, R7, R9                                                           |
+| Change to a hot path (profiled, benchmarked, or in a loop over many elements) | R2, R4, R7, R8                                                           |
+| Bug fix                                                                       | R6 and R7 (the missing oracle, Principle 19.4)                           |
+| Any other diff                                                                | R10 only                                                                 |
+| Existing code brought up to standard                                          | `codebase-improvement`, which runs the relevant stages per block         |
+| Code with no tests                                                            | `legacy-code` first (characterization tests), then the stages above      |
+
+### 10.2 The stages
+
+Each stage lists: **Skill**, **Principles** (sections of this file), **Ask**, **Done when**.
+
+**R0 — Scope and route.**
+
+- Skill: `systems`, `codebase-rules`.
+- Ask: Which domain skill owns this block? Is this new code, existing code, untested code or a rewrite? Is it hot or cold? ("Hot" needs evidence: a profile, a benchmark, or a call site in a loop over many elements; otherwise it is cold until proven, per `codebase-improvement`.)
+- Done when: the review report names the change, its domain skill(s), its hot/cold verdict with evidence, and which stages apply (§10.1).
+
+**R1 — Boundary.**
+
+- Skill: `api-design`.
+- Principles: Chapter 14, Chapter 18.
+- Ask: Where does the boundary go, and is the usage code written first? Does each high tier of the interface have a path down to a low one (no integration discontinuity)? Is flow control the caller's?
+- Done when: the usage code a real caller would write exists in the report, and the five characteristics (granularity, redundancy, coupling, retention, flow control) are assessed. Getting this wrong is the one mistake a later stage cannot fix (`codebase-rules`).
+
+**R2 — Data.**
+
+- Skill: `data-oriented-design` (Six Questions).
+- Principles: Part I, Part II.
+- Ask: All six, out loud: what goes in and out; how many; how wide (from the spec); access pattern; lifetime; parallelizable.
+- Done when: every table has a producer, a consumer, a layout (SoA or justified AoS), each field's width with its stated range, a capacity constant with a unit, and a lifetime (arena named for its phase), and every transform is written as `name: reads → writes`. A width that cannot be stated is a spec gap to ask about, not a reason to widen.
+
+**R3 — Owners and spines.**
+
+- Skill: `codebase-clean-code` steps 2–3, `codebase-clean-code/HIERARCHY.md`.
+- Principles: Chapter 13, Chapter 14.
+- Ask: Who is the one owner of each table? Do the modules form a DAG? Does each pipeline have one spine, one line per transform? Does any outside write bypass a request table?
+- Done when: the ownership map lists one owner per table, the module graph has no cycle and the build enforces it, every outside write goes through a named request table, and the spine runs end to end as stubs with every "which work" branch in the spine.
+
+**R4 — Seams and the ladder, under the project budget.**
+
+- Skill: `codebase-clean-code` steps 4–5, `codebase-clean-code/LADDER.md`.
+- Principles: Part III, §11.1.
+- Ask: For each place behaviour could vary: what varies (kind, backend, platform, dialect, policy, plugin), and what is the evidence (two cases today, or a drill)? Which is the cheapest rung that handles the axis? Is it allowed in this path under §11.1?
+- Done when: every seam names its axis, evidence, rung, and why the rung below fails; every place without evidence is concrete code; no seam violates the hot-path budget in §11.1.
+
+**R5 — Change drills.**
+
+- Skill: `codebase-clean-code` step 6, `codebase-clean-code/DECISIONS.md` (drill table).
+- Principles: Chapter 15.
+- Ask: What are three likely changes? Get them from the user, or from the backlog, issues or decision log with the source cited; never invent them. For each: every edit (file and function), the change radius, the interface-weight change.
+- Done when: every drill has a complete edit list and a numeric radius, and every failed drill is fixed (restructure first, climb one rung second) or recorded as an exception the user accepted.
+
+**R6 — Failure containment.**
+
+- Skill: `assertions`; `zig/memory.md`; `doc-comments` (ranks 1 and 4).
+- Principles: Part V.
+- Ask: Is every check classified as operating error or programmer error? Is outside data validated once at the boundary into refined types? Does each module return a narrow, explicit error set? Is every state change fallible-first, infallible-after (or `errdefer`-rolled-back)? Is there global mutable state? Is every loop and queue bounded? Which runtime checks ship in release, and why?
+- Done when: no assert tests a value straight from outside; every boundary function owns its error return and every function behind it owns an assert; error sets are explicit at every module boundary; no global mutable state exists; every table has a capacity and every loop a bound; the check budget (Principle 17.10) is recorded for each module.
+
+**R7 — Test plan.**
+
+- Skill: `test-plan` (steps 1–7), `tdd` (seams), the domain skill's testing file (`spice-engine/TESTING.md`, `compiler-construction/FIXTURES.md`, `gpu-parallel-algorithm-thinking/verification.md`), `test-plan/DOMAINS.md`.
+- Principles: Part VI.
+- Ask: What are the bug classes, and what oracle sees each one? Which seams are tested, agreed with the user? Which layer and tier covers each bug class? What are the exit criteria?
+- Done when: every bug class has an oracle that does not recompute the answer the way the code does; the tested seams are written down and confirmed with the user before the first test; every layer has a tier and the merge tier fits its budget; exit criteria are numbers or yes/no checks; `TESTING.md` is updated.
+
+**R8 — Proof of zero overhead and of speed.**
+
+- Skill: `zig/zero-cost.md` (probe protocol); `data-oriented-design/measurement.md`; `simd-loops`, `branchless`, `simd-first` for hot loops.
+- Principles: Chapter 1, Chapter 12, Technique 21.15.
+- Ask: For every seam at rung 5 or above and every new abstraction on a hot path, what is the probe verdict? For every speed claim, what is the number?
+- Done when: every such pair reports FOLDED, IDENTICAL, EQUIVALENT or NEGATIVE and is wired into `zig build test`; rungs 6–9 state where their residue sits and its count per run; every speed claim carries a before/after benchmark; data size, code size and compile time are reported for abstractions that move them. A vectorized loop that benchmarks slower is reported and the scalar version kept.
+
+**R9 — Record.**
+
+- Skill: `codebase-clean-code` step 7 and `DECISIONS.md`; `domain-modeling` (`GLOSSARY.md`, ADRs).
+- Principles: Principle 15.6.
+- Ask: Does every seam have a seam record? Is the drill table written? Is `ARCHITECTURE.md` current (module DAG, spines, tables, seams, invariants, adding a feature, change drill)? Did any term get sharpened or any hard-to-reverse decision get made?
+- Done when: someone who has not read the code can say from `ARCHITECTURE.md` which file a given feature goes in; every seam has a record (with its probe verdict at rung ≥5); new terms are in `GLOSSARY.md`; decisions are in `docs/adr/`.
+
+**R10 — Code review of the result.**
+
+- Skill: `code-review` (Standards and Spec axes; this file is a Standards source), then `ponytail-review`; `doc-comments` audit; for a whole repo, `ponytail-audit`.
+- Principles: Chapter 24 (red flags).
+- Ask: Does the diff follow this file and the skills (Standards)? Does it do what the spec asked, no more (Spec)? What should not have been built?
+- Done when: both axes are reported separately and not reranked; every hard Standards violation is fixed; the doc audit passes; every `ponytail-review` deletion is applied or answered.
+
+### 10.3 The review report
+
+Write it to `docs/dev/reviews/<yyyy-mm-dd>-<topic>.md`:
+
+```markdown
+# Design review: <topic>
+
+- **Change**: <one sentence>
+- **Domain skill(s)**: <…>
+- **Hot/cold**: <verdict> — evidence: <profile / benchmark / loop call site / none → cold>
+- **Stages run**: <R0…R10 per §10.1>
+
+## Data (R2)
+
+| Table | Owner | Fields: width (range) | Layout | Capacity | Lifetime/arena | Producer → consumer |
+| ----- | ----- | --------------------- | ------ | -------- | -------------- | ------------------- |
+
+Transforms: `name: reads → writes`, one per line.
+
+## Seams (R4) and drills (R5)
+
+<seam records per codebase-clean-code/DECISIONS.md; drill table>
+
+## Containment (R6)
+
+| Module | Error set | Boundary validation | Check budget (Principle 17.10) | Bounds |
+| ------ | --------- | ------------------- | ------------------------------ | ------ |
+
+## Test plan (R7)
+
+| Bug class | Oracle | Layer | Tier | Harness / file |
+| --------- | ------ | ----- | ---- | -------------- |
+
+Seams under test (confirmed with the user on <date>): <…>
+Exit criteria: <numbers or yes/no>
+
+## Proof (R8)
+
+| Abstraction / seam | Rung | Probe verdict | Probe file | Data size | Code size | Benchmark (before → after) |
+| ------------------ | ---- | ------------- | ---------- | --------- | --------- | -------------------------- |
+
+## Checklist
+
+| #   | Check | Source | Verdict | Evidence (file:line, probe, number) |
+| --- | ----- | ------ | ------- | ----------------------------------- |
+
+## Accepted exceptions
+
+<each with who accepted it and the "revisit when" event>
+```
+
+The **Checklist** table carries every item from Chapter 24's design-review list and from `codebase-clean-code`'s "Reviewing an existing codebase" list that applies. Each row needs a verdict (pass / fail / n.a. with reason) and evidence. "Looks fine" is not evidence.
+
+### 10.4 Exit criterion
+
+The design is approved when every applicable stage is done by its "Done when," every new seam names its rung, cites a change drill it passes, and has its zero-cost proof at rung 5 or above, the test plan's merge-tier layers exist and fail against stubs (red before green), and the report is committed with the change.
+
+
+---
+
+## 11. VerA's rulings over the skills
+
+Each ruling names the skill text it overrides or sharpens. §11.1–§11.6 are the
+rewrite's §2.1–§2.6 as written, plus §11.5's open conflict and §11.6's last
+bullet; §11.7–§11.10 are VerA's.
+
+### 11.1 The runtime-overhead budget
+
+The project rule is **no runtime overhead from abstraction**: an abstraction may cost compile time, build time or test time, never run-time work beyond the hand-written code (Principle 1.2). Applied to `codebase-clean-code/LADDER.md`:
+
+| Rung | Mechanism                                         | In a hot path                                                                                                                                                                                                                          | In cold code                                                                                                                                                           | Condition                                                                                         |
+| ---- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1    | Concrete code                                     | Allowed                                                                                                                                                                                                                                | Allowed                                                                                                                                                                | The default                                                                                       |
+| 2    | Free function over plain data                     | Allowed                                                                                                                                                                                                                                | Allowed                                                                                                                                                                | Extract per `HIERARCHY.md`                                                                        |
+| 3    | Table + transform (value table or table per kind) | Allowed                                                                                                                                                                                                                                | Allowed                                                                                                                                                                | Value table: compiler must refuse a missing row (`std.enums.EnumArray`) |
+| 4    | Closed enum + exhaustive switch                   | Allowed only when it is the hand-written minimum for data that genuinely varies per element (the probe compares it with the hand tag-and-switch, not with a single concrete path); a switch repeated across transforms moves to rung 3 | Allowed                                                                                                                                                                | No `else =>` / `_ =>` (Principle 10.2; `tests/exhaustive.zig` enforces it)                                                            |
+| 5    | Comptime or generic parameter                     | Allowed with a probe verdict of FOLDED, IDENTICAL, EQUIVALENT or NEGATIVE                                                                                                                                                              | Allowed                                                                                                                                                                | Code size reported per instantiation                                                              |
+| 6    | Request table or command queue                    | Never per element; per request, with capacity reserved at the phase boundary so no growth call runs in the emitter loop                                                                                                                | Allowed                                                                                                                                                                | Residue location and count in the seam record                                                     |
+| 7    | Function-pointer table indexed by kind            | Never per element; once per kind per pass, over a bucketed batch                                                                                                                                                                       | Allowed                                                                                                                                                                | Same                                                                                              |
+| 8    | `dyn` / vtable                                    | **Forbidden**                                                                                                                                                                                                                          | Only at a cold boundary (a logger sink, a backend picked at startup, a test fake) and only when rung 5 cannot do the job because the choice is not known at build time | Seam record states why rung 5 fails                                                               |
+| 9    | Process, wasm or ABI plugin boundary              | **Forbidden**                                                                                                                                                                                                                          | Only for untrusted, separately built or other-language code                                                                                                            | Snapshots in, request tables out, under capabilities                                              |
+
+"Hot path" is a measured claim (R0). Code without that evidence is cold, and the cold column applies; the probe is still required for rung 5 if the code later becomes hot.
+
+### 11.2 Clean Code and function size
+
+`codebase-rules` already rules that Clean Code loses to the data in hot code only. This project adds: function extraction follows `codebase-clean-code/HIERARCHY.md` everywhere (extract when used in three or more places, when it defines an interface worth documenting, when the test plan names it, or when it has a table of input → expected-output cases). A spine or run-once sequence stays one function with labelled blocks. Function size follows cohesion, not line count (Principle 13.3).
+
+### 11.3 The `code-review` smell baseline
+
+`code-review` says a documented repo standard overrides its Fowler baseline. This project overrides these baseline fixes:
+
+| Baseline smell      | Baseline fix                                 | This project's fix                                                                                                                                                                       |
+| ------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repeated Switches   | Replace with polymorphism, or one shared map | Bucket by kind and move to a table per kind (rung 3), or a value table (rung 3); climb to rung 7 only per §11.1. Never `dyn`                                                              |
+| Feature Envy        | Move the method onto the data it envies      | Move the transform to the **owner** of the table it writes; reads stay `const` parameters                                                                                                |
+| Data Clumps         | Bundle into one type                         | Bundle only if the fields are read together by the same transforms; otherwise keep parallel columns (SoA)                                                                                |
+| Duplicated Code     | Extract the shared shape                     | Extract only if it is the same **knowledge** (Principle 13.5) and meets §11.2; similar-looking code that changes for different reasons stays separate (`pragmatic-programmer`, false DRY) |
+| Primitive Obsession | Give the concept its own small type          | Same, as a zero-cost newtype or `enum(u32)` handle, with its width from R2                                                                                                               |
+| Refused Bequest     | Drop inheritance, use composition            | Not applicable: no implementation inheritance exists in this codebase                                                                                                                    |
+
+All other baseline smells apply as written, as judgement calls.
+
+### 11.4 Abstraction timing
+
+Two rules from the skills apply together and are not in conflict: a **seam** is introduced at the second real case today or when a drill needs it (`codebase-clean-code` step 4, Muratori's "compress at the second instance"); a **function** is extracted at the third use (`HIERARCHY.md`). "Rule of Three" in older text in this file means the second.
+
+### 11.5 Runtime checks in release builds
+
+The check budget in Principle 17.10 is the project policy. Comptime assertions are always on; boundary and control code ships with safety on (`-O ReleaseSafe`, `std.lang.Optimize.safe`); hot kernels may drop checks only with fuzz, property and differential evidence recorded in the review. `assertions` governs what each assert compiles to per build mode (`assertions/zig.md`).
+
+**Open conflict (VerA).** The released `vera` is built `-Doptimize=ReleaseFast`
+(`.github/workflows/publish.yaml`, `flake.nix`), where this ruling would make
+the compiler, a boundary tool, ReleaseSafe. The release mode does not change
+until a design review records ReleaseSafe's cost on `zig build benchmark` and
+the user decides. Emitted devices are not covered: the host builds them, in
+the mode it picks.
+
+### 11.6 Testing rules that every change obeys
+
+- No change merges without tests at agreed seams (`tdd`). Untested code is not done.
+- Every test layer names its oracle (`test-plan`); a test whose expected value is computed the way the code computes it is tautological and does not count (`tdd`).
+- Every bug fix adds the regression test **and** the oracle or generator that would have found it (Principle 19.4).
+- Refactoring is done after green, in the review stage, never inside the red → green loop (`tdd`).
+- `std.testing.checkAllAllocationFailures` can fail with
+  `error.NondeterministicMemoryUsage` when an allocator sometimes grows a
+  page-sized buffer in place: run the sweep on an allocator whose `resize`
+  and `remap` always refuse (`Allocator.noResize`, `Allocator.noRemap`), so
+  every growth is a counted allocation.
+
+### 11.7 Conformance is the oracle, and it is measured
+
+The rewrite's §2.7 holds VerA's own rules, already binding here: never type a
+conformance number (§0 rule 1); gate on `$?` (§0 rule 2); diff name lists, not
+counts (§0 rule 3, and the `VERDICTS.tsv` ratchet, §3); XFAIL markers are
+implemented, never deleted (§2); establish that a fixture is right before
+changing the compiler (§6); parse in full, then refuse by clause (§4); a
+refusal needs a legal neighbour and acceptance is not runtime evidence (§2).
+R7's oracle for a language rule is a fixture that cites its clause (§6).
+
+### 11.8 Device generation and testbench generation stay apart
+
+The rewrite's §2.8: the code that **generates devices** and the code that
+**generates testbenches** (`--emit-exe`, `--check`, `--run`) do not import
+each other, and a testbench reaches a device only through what any host gets,
+the emitted source and `tools/contract.zig`. A fact the device emitter spells
+is published in the device as a contract table, never re-derived from the IR
+by a second spelling. A device feature that exists only for testbenches is a
+contract feature every host can use, or it does not exist.
+
+VerA today: `lib/backend/codegen/` and `lib/backend/tb/` share one module,
+`backend`, so the build cannot enforce this. No file under either imports the
+other (grep, 2026-10-17); both read `lib/backend/naming.zig`. New code keeps
+it that way; making the build enforce it is a refactor phase of its own (§4).
+
+### 11.9 SIMD is for the emitted device
+
+§5 overrides R8's and `simd-loops`'/`simd-first`'s push to vectorize hot
+loops, for the compiler: its walks are chains, and the measurements in §5
+stand until new ones replace them. "Hot" in §10 R0 means, in VerA, the
+emitted device's `eval` and the simulator inner loops (`src/sim/`, the
+testbench solver); a compiler pass is cold until a profile says otherwise.
+
+### 11.10 Commit at every step
+
+Each completed step (a document, a stage, a slice, a fix, a test) is its own
+commit before the next step starts, under §8's rules (explicit paths, no AI
+attribution). A refactor phase is still one branch and one PR (§4); its
+commits are the steps inside it.

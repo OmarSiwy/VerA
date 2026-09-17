@@ -103,12 +103,13 @@ pub fn build(b: *std.Build) void {
     b.step("test-cli", "Run the CLI's tests (src/main.zig, src/cli/) only").dependOn(cli_run);
     // tools/: the OSDI host over mock devices, and the test runner itself
     // (on the stock runner, since zrunner cannot be its own runner's root).
-    const osdi_run = testRun(b, "osdi_dyn", b.createModule(.{
+    const osdi_mod = b.createModule(.{
         .root_source_file = b.path("tools/osdi_dyn.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "contract", .module = byName(mods, "contract") }},
-    }), runner);
+    });
+    const osdi_run = testRun(b, "osdi_dyn", osdi_mod, runner);
     test_step.dependOn(osdi_run);
     const zrunner_test = b.addTest(.{ .name = "zrunner", .root_module = b.createModule(.{
         .root_source_file = b.path("tools/zrunner.zig"),
@@ -254,6 +255,23 @@ pub fn build(b: *std.Build) void {
     b.step("test-suite", "Run the suite runner's own unit tests only").dependOn(suite_run);
     // Compiles the runner itself: `test` does not analyse every path of it.
     b.step("suite-exe", "Build the suite runner (tests/bench.zig)").dependOn(&suite_exe.step);
+
+    // The edit loop (AGENTS.md §4): `zig build check --watch -fincremental`.
+    // A second compile of every root, whose binary nothing asks for, so it
+    // runs as semantic analysis only (-fno-emit-bin). Test roots go through
+    // the same runner as `test`, which is where the contract's comptime
+    // checks turn on. The device hosts are left out: their roots import what
+    // `vera` emits, which would need `vera` built first.
+    const check = b.step("check", "Type-check every root without emitting a binary (`--watch -fincremental`: the edit loop)");
+    for ([_]*std.Build.Module{ exe.root_module, other_exe.root_module, suite_mod }) |m| {
+        check.dependOn(&b.addExecutable(.{ .name = "check", .root_module = m, .use_llvm = false }).step);
+    }
+    var check_roots: std.ArrayList(*std.Build.Module) = .empty;
+    for (mods) |m| check_roots.append(b.allocator, m.module) catch @panic("OOM");
+    check_roots.appendSlice(b.allocator, &.{ exe.root_module, osdi_mod, all_mod, suite_mod }) catch @panic("OOM");
+    for (check_roots.items) |m| {
+        check.dependOn(&b.addTest(.{ .name = "check", .root_module = m, .test_runner = runner, .use_llvm = false }).step);
+    }
 
     // The suite steps: the runner takes the `vera` path, a mode, then
     // whatever follows `--`. None has an `expectExitCode`: a Run step with a
