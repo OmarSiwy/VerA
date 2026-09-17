@@ -1098,6 +1098,7 @@ pass	ch04_expressions/dc_sweep_every_point_is_dc_and_static.va
 pass	ch04_expressions/ddt_abstol_dynamic_rejected.va
 pass	ch04_expressions/ddt_in_expression_is_a_charge_site.va
 pass	ch04_expressions/ddt_output_abstol.va
+pass	ch04_expressions/ddx_in_noise_power.va
 pass	ch04_expressions/ddx_runtime_indexed_array_element.va
 pass	ch04_expressions/ddx_vera_nodiff_assignment.va
 pass	ch04_expressions/dynamic_constant_argument_resampled_per_analysis.va

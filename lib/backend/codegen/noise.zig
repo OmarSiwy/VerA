@@ -79,8 +79,8 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     }
     try self.w("}};\n\n", .{});
 
-    // §4.6.4.1/.2 the PSDs, positionally, from one value-only core sweep at
-    // the caller's state vector. A generator whose statement did not execute
+    // §4.6.4.1/.2 the PSDs, positionally, from one core sweep at the
+    // caller's state vector, value-only unless a PSD argument reads `ddx`. A generator whose statement did not execute
     // at this bias reads the zero `probeBody` seeds, its physical answer.
     try self.w(
         \\/// §4.6.4.1/.2 each generator's PSD at `x`: S(f) = white + flicker/f^ef.
@@ -102,7 +102,10 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     defer self.core = full;
     if (self.noise_core.lo_vals.len != 0) {
         self.core = self.noise_core;
-        try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
+        // §4.5.14 a `ddx` in a PSD argument needs its lanes seeded, as in
+        // `eval`; a value-only family still reads it as 0 (#32).
+        const xs = if (self.noise_reads_ddx) "zProbe(S, &x)" else "zVals(S, &x)";
+        try self.w("    const m = {s}(S, {s}, model, {s}, sim{s});\n", .{ self.core.name, xs, try gen_setup.probeInstance(self), self.heldArg(true) });
     } else {
         gen_unit.patchParam(self, at_s, "S".len);
         gen_unit.patchParam(self, at_x, "x".len);
@@ -146,11 +149,17 @@ pub fn emitNoiseCore(self: *Gen) Error!void {
         any = true;
     };
     if (!any) return;
+    // `ddx` marks `jac.ddx_reads` as its text is emitted, so a mask cleared
+    // around the slice says whether the PSD arguments read a lane (#32).
+    const ddx_before = self.jac.ddx_reads;
+    self.jac.ddx_reads = 0;
     self.noise_core = try gen_unit.sliceCore(self, "noise", keep,
         \\/// §4.6.4 the PSD arguments the core computes, and only what they read:
         \\/// `noisePsd` evaluates them at the operating point `x`.
         \\
     );
+    self.noise_reads_ddx = self.jac.ddx_reads != 0;
+    self.jac.ddx_reads |= ddx_before;
 }
 
 /// Emits `noiseTablePoints`: the knots of every §4.6.4.3 table as the model

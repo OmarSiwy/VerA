@@ -154,7 +154,7 @@ pub const runner_body =
     \\    break :blk l;
     \\};
     \\/// The value family of the value-only entry points (`updateState`,
-    \\/// `noisePsd`, `limit`, `seed`, `collapse`, `derive`, the iteration hooks):
+    \\/// `limit`, `seed`, `collapse`, `derive`, the iteration hooks):
     \\/// the reference family with no lanes, so every path runs the arithmetic
     \\/// `eval` does.
     \\const Val = contract.RefFamily(f64, &@as([n_u]u8, @splat(contract.no_lane)), .{ .dense = true });

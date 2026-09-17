@@ -3529,7 +3529,10 @@ pub fn InstancePtr(comptime D: type) type {
 ///   display(S, &x, ...)          per accepted point, `--display=emit` artifacts only;
 ///                                a §9.7 `$finish`/`$stop`/`$fatal` exits the process
 ///   noisePsd / acStim            at any state vector, positional on
-///                                `noise_gens` / `ac_gens`
+///                                `noise_gens` / `ac_gens`; `noisePsd` takes
+///                                `eval`'s family, so a §4.5.14 `ddx` in a PSD
+///                                argument reads its partial (a family without
+///                                lanes reads it as 0)
 ///   acDyn(F, ..., omega, &out)   per small-signal frequency (or lane of them), positional on
 ///                                `ac_dyn_slots` (`acDynSlots`)
 ///   nextBreakpoint / pendingBreakpoint / delays

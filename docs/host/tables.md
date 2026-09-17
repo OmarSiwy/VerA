@@ -18,7 +18,9 @@ may call at any state vector, in any order.
 `noise_gens` is the list of LRM §4.6.4 generators. Position `k` is a
 generator of `kind` (`thermal`, `shot`, `flicker`, `table`) on the branch
 `(row, col)`, and position `k` of `noisePsd(S, x, &model, &inst, sim)` is its
-spectral density at the state vector `x`, as a `PsdTerm`:
+spectral density at the state vector `x`, as a `PsdTerm`. Pass `eval`'s
+family as `S`: a `ddx` in a PSD argument (a channel noise's gm) reads its
+partial there, and reads 0 in a family without lanes.
 
 ```zig
 pub const PsdTerm = struct {

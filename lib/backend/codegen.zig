@@ -379,6 +379,9 @@ pub const Gen = struct {
     /// The core as `noisePsd` reads it: its slice (`gen_noise.emitNoiseCore`),
     /// or `.{}` when `noisePsd` reads nothing off the core.
     noise_core: plan_core.Core = .{},
+    /// Whether `noise_core` reads a §4.5.14 `ddx` lane, so `noisePsd` seeds
+    /// its inputs as `eval` does (`zProbe`) instead of value-only (#32).
+    noise_reads_ddx: bool = false,
     /// The core as `advanceIteration` and `checkConvergence` read it: their
     /// slice (`gen_state.emitIterCore`), or `.{}` when they read nothing off it.
     iter_core: plan_core.Core = .{},

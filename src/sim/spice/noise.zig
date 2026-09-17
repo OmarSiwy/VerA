@@ -88,7 +88,8 @@ pub fn sweep(ckt: anytype, x_op: []const f64, out: usize, freqs: []const f64, de
     ckt.setSimState(.{ .t = op_sim.t, .kind = .noise, .analog_initial = false });
     ckt.eval(x_op, 0);
     const c_mat: [n * n]f64 = if (C.has_charge) ckt.c_vals else @splat(0);
-    const psd = D.noisePsd(C.Val, x_op[0..n].*, ckt.model, ckt.inst, ckt.sim);
+    // `eval`'s family, so a `ddx` in a PSD argument reads its partial (#32).
+    const psd = D.noisePsd(C.Dual, x_op[0..n].*, ckt.model, ckt.inst, ckt.sim);
     for (psd, 0..) |t, k| if (t.corr_with) |j| {
         if (j >= ng or lead[j] == lead[k] or !(@abs(t.corr) <= 1)) return error.BadCorrelation;
     };

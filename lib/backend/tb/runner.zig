@@ -909,7 +909,7 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"noisePsd\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try out.print(arena, "            const psd = D.noisePsd(Val, x, &{s}, &inst, sim_state);\n", .{mdl});
+    try out.print(arena, "            const psd = D.noisePsd(Dual, x, &{s}, &inst, sim_state);\n", .{mdl});
     for (d.noise, 0..) |w, k| {
         if (!w.needsPoint()) continue;
         try out.print(arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
