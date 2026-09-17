@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- `zig build test-vampyre` runs VAMPyRE, the CMC's Verilog-A rule checker, and VerA on the same compact models (self-test probes, VA-Models, cmcqa) and compares hidden state and integer division by a possibly-zero divisor, every disagreement triaged by name; a held variable's `Instance` comment now names why it is held (`event`, `retained`, ...) (#34).
 - Fix: an analog operator under a top-level `$port_connected`/`$param_given` condition compiles instead of E0514; §9.19 fixes both at elaboration, so they control analog operators like a parameter (BSIM-SOI 100.1.0's self-heating `ddt`) (#33).
 - Fix: a `ddx()` inside a noise power (a channel noise's `gm`) reads its partial in `noisePsd` instead of 0; the noise core is seeded as `eval`'s is when its PSD arguments read a `ddx`, and a host passes `eval`'s family (the testbench and `src/sim/spice` do) (#32).
 - `build.zig` builds without a `tests/` directory again (the Nix package and a fetched dependency ship none; `nix flake check` failed), and re-reads the fixture globs on every `zig build` (0.16 s) instead of registering the fixture directories, which made the build runner abort on Windows after a cached-configuration build (#29).

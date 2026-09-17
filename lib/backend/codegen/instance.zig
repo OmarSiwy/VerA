@@ -251,8 +251,12 @@ pub fn emitInstance(self: *Gen) Error!void {
         // struct field default is comptime and a model card is not. Upgrade
         // path: write it in `initState`, which already takes `*Instance`.
         try self.hist.append(self.arena, self.names.held_names[i]);
+        // Why it is held (`HeldVar.Why`), so a reader of the device can tell
+        // a latch from retention: tools/external_vampyre.py compares the
+        // `retained` ones with a linter's hidden state.
+        const note = try self.arena.print("// §5.10 held across evaluations: {t}", .{h.why});
         if (h.array != none_u32) {
-            try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
+            try emitHeldArrayField(self, h, self.names.held_names[i], note);
             if (dirtyTracked(self, h.array)) try self.w(
                 "    {s}__dirty: [2]i64 = .{{ 0, {d} }}, // §5.10 elements written since the last stateCtl\n",
                 .{ self.names.held_names[i], self.lowered.mem_arrays.items[h.array].len - 1 },
@@ -272,7 +276,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             try cg_strcap.emitHeldType(self, i);
             try self.w(" = ", .{});
             try cg_strcap.emitHeldCopy(self, i);
-            try self.w("\"{f}\"), // §5.10 held across evaluations\n", .{std.zig.fmtString(s)});
+            try self.w("\"{f}\"), {s}\n", .{ std.zig.fmtString(s), note });
             continue;
         }
         if (h.ty == .wide) {
@@ -280,20 +284,20 @@ pub fn emitInstance(self: *Gen) Error!void {
             // (`gen_wide.emitConstInit`), else zero.
             try self.w("    {s}: {s} = ", .{ self.names.held_names[i], try gen_wide.zigTy(self, h.width) });
             if (!try gen_wide.emitConstInit(self, h.init)) try self.w("zwZero({d})", .{h.width});
-            try self.w(", // §5.10 held across evaluations\n", .{});
+            try self.w(", {s}\n", .{note});
             continue;
         }
         const init = self.an.foldConst(self.an.rv(h.init), true);
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
-            try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
+            try self.w("    {s}: i64 = {d}, {s}\n", .{
                 // Saturating like every other fold-side real -> int cast: an
                 // initializer of `1e300` must not panic the compiler.
-                self.names.held_names[i], std.math.lossyCast(i64, @round(v)),
+                self.names.held_names[i], std.math.lossyCast(i64, @round(v)), note,
             });
         } else {
-            try self.w("    {s}: f64 = {s}, // §5.10 held across evaluations\n", .{
-                self.names.held_names[i], try gen_file.fmtF64(self, v),
+            try self.w("    {s}: f64 = {s}, {s}\n", .{
+                self.names.held_names[i], try gen_file.fmtF64(self, v), note,
             });
         }
     }

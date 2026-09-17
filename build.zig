@@ -610,6 +610,17 @@ pub fn build(b: *std.Build) void {
             beh_step.dependOn(&sim.step);
         }
     }
+    // VAMPyRE, the CMC's Verilog-A rule checker, and VerA on the same compact
+    // models, disagreements triaged by name (tools/external_vampyre.py,
+    // tests/fixtures/external/vampyre/). It fetches its pins over the
+    // network, so it is a step of its own, not part of `test`.
+    const vampyre = b.addSystemCommand(&.{ "python3", "tools/external_vampyre.py", "--vera" });
+    vampyre.addArtifactArg(exe);
+    vampyre.setCwd(b.path("."));
+    vampyre.has_side_effects = true;
+    vampyre.expectExitCode(0);
+    b.step("test-vampyre", "VAMPyRE and VerA on the same compact models, every disagreement triaged by name").dependOn(&vampyre.step);
+
     // --emit-so skips the preflight type check and runs it only after a failed
     // build, so a device that does not compile is still reported against its
     // .va. A contract that refuses to compile stands in for an engine bug.
