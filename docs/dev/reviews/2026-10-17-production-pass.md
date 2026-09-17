@@ -32,6 +32,21 @@ Each package is one branch, one worktree, its own commits; refactor packages kee
 
 Not planned (recorded): `Ast.ExprStore` has writers in elaboration and `src/sim` (a full R4 review, not a cleanup); the codegen `Gen` table written by every sub-file (same); the ReleaseFast vs ReleaseSafe release-mode conflict (§11.5, user decision).
 
+## Against the rewrite's target architecture
+
+`../VerAReWrite/ARCHITECTURE.md` (read 2026-10-17) is the rewrite's target, not VerA's. This pass takes the parts that are cleanups in VerA's layout and records the parts that are the rewrite itself.
+
+| Target (rewrite ARCHITECTURE.md) | VerA today | Here |
+|---|---|---|
+| Backends never import each other (§2) | `tb/exe` → `orchestrator` → `codegen` | P3 |
+| Device-spelled names published as `contract` tables (§2) | `__xz`/`__w{k}`/`__1b` spelled by lowering and `tb/runner.zig` | P4: one owner in `ir`, goldens identical. Contract tables change the ABI: recorded |
+| No string compare decides what code does (§6) | 4 codegen sites | P2 |
+| Plans are values, no god object (§3) | `codegen.Gen`, imported by 22 files | P4 `Gen.poison` only; recorded |
+| No stage mutates an earlier stage's output (§6) | codegen writes `Lowered`; elab and `src/sim` append to `Ast.ExprStore` | P4 fixes `Lowered`; `ExprStore` recorded |
+| Runtime never imports compiler (§2 fitness test) | `sim` → `frontend`; `vpi` → `ir`, `vera` | recorded (rewrite slices 3, 6) |
+| Operator semantics once, in `rt` (§6) | five copies | P5 merges the two duplicate pairs found |
+| No input-depth recursion; explicit work stacks (§6) | `deep_stack` threads sized to depth | recorded |
+
 ## Results
 
 (filled in per package as it lands)
