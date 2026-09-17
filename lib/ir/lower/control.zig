@@ -150,6 +150,11 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
         .sys_call => blk: {
             const name = self.file.str(ex.strOf(e));
             if (std.mem.eql(u8, name, "analysis")) break :blk true;
+            // §9.19 genvar_system_function: "fixed during elaboration. As such,
+            // these functions can be used in genvar expressions controlling
+            // conditional or looping behavior of the analog operators" (#33).
+            // A top-level call reads the host-written mask, so it does not fold.
+            if (std.mem.eql(u8, name, "$param_given") or std.mem.eql(u8, name, "$port_connected")) break :blk true;
             if (ex.args(e).len != 0) break :blk false;
             for ([_][]const u8{ "$mfactor", "$xposition", "$yposition", "$angle", "$hflip", "$vflip" }) |s| {
                 if (std.mem.eql(u8, name, s)) break :blk true;

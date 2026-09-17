@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: an analog operator under a top-level `$port_connected`/`$param_given` condition compiles instead of E0514; §9.19 fixes both at elaboration, so they control analog operators like a parameter (BSIM-SOI 100.1.0's self-heating `ddt`) (#33).
 - Fix: a `ddx()` inside a noise power (a channel noise's `gm`) reads its partial in `noisePsd` instead of 0; the noise core is seeded as `eval`'s is when its PSD arguments read a `ddx`, and a host passes `eval`'s family (the testbench and `src/sim/spice` do) (#32).
 - `build.zig` builds without a `tests/` directory again (the Nix package and a fetched dependency ship none; `nix flake check` failed), and re-reads the fixture globs on every `zig build` (0.16 s) instead of registering the fixture directories, which made the build runner abort on Windows after a cached-configuration build (#29).
 - External digital suites: ivtest, sv-tests and iverilog-diff each have a `TRIAGE.md` that judges every disagreement against IEEE 1364-2005, one row per root cause listing the exact names it covers (a row may now name several patterns). The `external-digital` job passes for the first time. The harness creates upstream's `work/` directory, gives vera the same `-I .` that iverilog gets, and drops iverilog's warning continuation lines from gold files (#25).
