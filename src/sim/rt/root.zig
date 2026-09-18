@@ -366,7 +366,7 @@ pub const prebuilt = @hasDecl(@import("root"), "vera_prebuilt_engine");
 pub const engine = @import("engine.zig");
 
 /// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
-pub const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
+pub const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else digital.max_events_per_tick;
 
 /// `get` of planes `v`, `x`; `k` as `poke`'s.
 inline fn peek(comptime k: bool, v: [*]const u64, x: [*]const u64, off: u32) W {

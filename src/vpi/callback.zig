@@ -15,6 +15,7 @@ const root = @import("root.zig");
 const coldOf = root.coldOf;
 const value = @import("value.zig");
 const analog = @import("analog.zig");
+const code = @import("code.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -327,7 +328,6 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         // block need not contain a system call (VerA does not check it).
         cbDisable => {
             const o = root.asObj(d.obj);
-            const code = @import("code.zig");
             if (o == null or o.?.kind != .code or (o.?.vtype != code.vpiNamedBegin and o.?.vtype != code.vpiNamedFork)) {
                 root.fail("NOTSUPPORTED", "vpi_register_cb: cbDisable is delivered for a named begin or fork in obj", .{});
                 return null;
@@ -577,7 +577,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
 fn lhsOf(from: ?*const root.Obj) ?*const root.Obj {
     const o = from orelse return null;
     if (o.stmt == .none) return o;
-    for (o.edges) |e| if (e.tag == @import("code.zig").vpiLhs and e.to != root.no_obj) return &root.design.?.objects[e.to];
+    for (o.edges) |e| if (e.tag == code.vpiLhs and e.to != root.no_obj) return &root.design.?.objects[e.to];
     return null;
 }
 
@@ -650,7 +650,7 @@ pub fn onTchk(r: *digital.Run, check: u32) void {
     const site = r.tchkSite(check);
     const d = &root.design.?;
     const tchk = for (d.objects) |*o| {
-        if (o.kind != .code or o.vtype != @import("code.zig").vpiTchk or o.src_tok != site.tok) continue;
+        if (o.kind != .code or o.vtype != code.vpiTchk or o.src_tok != site.tok) continue;
         const owner = o.owner.get() orelse continue;
         if (d.scopes[owner].engine == site.scope) break o;
     } else return;
@@ -774,7 +774,6 @@ pub fn fireOverride(reason: c_int, o: *root.Obj) void {
 /// cbDisable on each callback whose named block it disabled.
 pub fn onDone(r: *digital.Run, pc: u32) digital.Error!void {
     const site = r.done_sites.get(pc) orelse return;
-    const code = @import("code.zig");
     const reason: c_int = switch (r.code.items[pc]) {
         .override_on => |o| if (o.force) cbForce else cbAssign,
         .override_off => |o| if (o.force) cbRelease else cbDeassign,
@@ -837,7 +836,7 @@ fn stmtSites(obj: vpiHandle) ?[]const Site {
         root.fail("BADHANDLE", "vpi_register_cb: cbStmt needs a statement or module handle in obj", .{});
         return null;
     };
-    const one = o.stmt != .none and o.vtype != @import("code.zig").vpiNullStmt;
+    const one = o.stmt != .none and o.vtype != code.vpiNullStmt;
     if (!one and o.kind != .module) {
         root.fail("NOTSTMT", "vpi_register_cb: `{s}` is neither a statement Table 27-6 lists nor a module", .{o.full});
         return null;
@@ -858,7 +857,7 @@ fn stmtSites(obj: vpiHandle) ?[]const Site {
     if (one) {
         covered.put(gpa, o.stmt, @intCast(o - d.objects.ptr)) catch return oomSites();
     } else for (d.objects, 0..) |s, i| {
-        if (s.kind != .code or s.owner.get() != scope or s.stmt == .none or s.vtype == @import("code.zig").vpiNullStmt) continue;
+        if (s.kind != .code or s.owner.get() != scope or s.stmt == .none or s.vtype == code.vpiNullStmt) continue;
         covered.put(gpa, s.stmt, @intCast(i)) catch return oomSites();
     }
     var out: std.ArrayList(Site) = .empty;

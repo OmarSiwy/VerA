@@ -1361,7 +1361,7 @@ fn modelParams(
 /// header and its `endmodule`. Empty if there is no such row; a test pins that
 /// every `model_types` row exists.
 fn primitiveBody(prim: []const u8) []const u8 {
-    const prelude = @import("preprocessor.zig").spice_primitives;
+    const prelude = Preprocessor.spice_primitives;
     var buf: [64]u8 = undefined;
     const header = std.mem.print(&buf, "\nmodule {s}(", .{prim}) catch return "";
     const at = std.mem.find(u8, prelude, header) orelse return "";
@@ -1476,7 +1476,7 @@ fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
 test "model_types names a real Table E.1 module with the ports it lists" {
     // A row whose primitive or port order does not match the prelude would be
     // wrong without any other test noticing.
-    const prelude = @import("preprocessor.zig").spice_primitives;
+    const prelude = Preprocessor.spice_primitives;
     for (model_types) |r| {
         const header = try std.testing.allocator.print(
             "module {s}({s});",

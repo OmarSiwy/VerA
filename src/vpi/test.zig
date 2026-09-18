@@ -1273,7 +1273,7 @@ test "§12.22: vpi_handle_multi(vpiInterModPath) is one path per port pair, hold
     for (da[0..3], [_]f64{ 4, 2, 2 }) |t, want| try std.testing.expectEqual(want, t.real);
     // The put is not silent: the run's diagnostics say no simulation applies it.
     try std.testing.expectEqual(before + 1, h.bag.count());
-    try std.testing.expectEqual(@import("vera").diag.Code.W0251, h.bag.at(before).code);
+    try std.testing.expectEqual(vera.diag.Code.W0251, h.bag.at(before).code);
     // Read in ticks: 4 ns is 4 ticks of the 1 ns precision.
     dl.time_type = callback.vpiSimTime;
     delays.vpi_get_delays(p, &dl);

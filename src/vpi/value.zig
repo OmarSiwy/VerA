@@ -18,6 +18,7 @@ const handle = @import("handle.zig");
 const systf = @import("systf.zig");
 const callback = @import("callback.zig");
 const run = @import("run.zig");
+const analog = @import("analog.zig");
 
 const digital = sim.digital;
 const exec = digital.exec;
@@ -205,7 +206,7 @@ pub fn read(o: *const Obj, v: *Value, st: *Store) void {
     if (v.format == vpiStrengthVal) return strength(o, v);
     var scratch = std.heap.ArenaAllocator.init(gpa);
     defer scratch.deinit();
-    const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else blk: {
+    const src = source(o) orelse if (analog.argValue(o)) |r| Source{ .real = r } else blk: {
         if (!o.in_analog and !activeCall(o) and o.src_expr != .none and o.expr_scope != .none) if (run.attached()) |r| {
             const instance = root.design.?.scopes[o.expr_scope.get().?].engine;
             const result = r.vpiEval(scratch.allocator(), instance, o.src_expr) catch {
@@ -529,7 +530,7 @@ pub export fn vpi_get_value(obj: vpiHandle, value_p: ?*Value) void {
         return;
     };
     // §12.22.1 a derivative object reads back what calltf put on it.
-    if (@import("analog.zig").asDeriv(obj)) |dv| {
+    if (analog.asDeriv(obj)) |dv| {
         v.format = vpiRealVal;
         v.value.real = dv.value;
         return;
@@ -649,7 +650,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         return null;
     }
     // §12.32.2 a derivative object of the running analog call.
-    if (@import("analog.zig").asDeriv(obj)) |dv| {
+    if (analog.asDeriv(obj)) |dv| {
         const pv = value_p orelse {
             root.fail("BADVALUE", "vpi_put_value: value_p is NULL", .{});
             return null;
@@ -658,7 +659,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
             root.fail("BADFORMAT", "vpi_put_value: a derivative is a real, put with vpiRealVal", .{});
             return null;
         }
-        _ = @import("analog.zig").putDerivative(dv, pv.value.real);
+        _ = analog.putDerivative(dv, pv.value.real);
         return null;
     }
     const o = root.asObj(obj) orelse {
@@ -712,7 +713,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     // which the device was compiled to take as one).
     if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal or pv.format == vpiIntVal) {
         const r: f64 = if (pv.format == vpiRealVal) pv.value.real else @floatFromInt(pv.value.integer);
-        if (@import("analog.zig").putResult(o, r)) return null;
+        if (analog.putResult(o, r)) return null;
     };
     // IEEE 1364-2005 §27.32: "Calling vpi_put_value() on an object of type
     // vpiNamedEvent shall cause the named event to toggle", and value_p may
@@ -746,7 +747,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     // as a real or an integer.
     if (value_p) |pv| if (pv.format == vpiRealVal or pv.format == vpiIntVal) {
         const r: f64 = if (pv.format == vpiRealVal) pv.value.real else @floatFromInt(pv.value.integer);
-        if (@import("analog.zig").putArg(o, r)) return null;
+        if (analog.putArg(o, r)) return null;
     };
     if (o.kind == .code and o.vtype == root.code.vpiUdp) return putUdp(o, value_p, mode);
     const at = o.slot.get() orelse {
