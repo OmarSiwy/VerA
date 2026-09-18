@@ -127,7 +127,7 @@ pub const Harness = struct {
 
     /// `gen` with §9.4 display tasks emitted: the printing artifact.
     pub fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
-        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
+        const v = try proof.proveOpts(gpa, &self.mir, &self.lowered, .{}, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
         const a = self.arena_state.allocator();
@@ -135,7 +135,7 @@ pub const Harness = struct {
     }
 
     fn genOut(self: *Harness, gpa: std.mem.Allocator) !Output {
-        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
+        const v = try proof.proveOpts(gpa, &self.mir, &self.lowered, .{}, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
         // ponytail: the harness hands `generate` its arena as the output gpa, so
@@ -153,7 +153,7 @@ pub const Harness = struct {
     /// caller asserts on a device that was meant to compile.
     fn genWith(self: *Harness, opts: codegen.Options) !Output {
         const gpa = std.testing.allocator;
-        const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
+        const v = try proof.proveOpts(gpa, &self.mir, &self.lowered, .{}, &self.bag);
         defer v.deinit(gpa);
         var fatal = false;
         const a = self.arena_state.allocator();
@@ -187,7 +187,7 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try Harness.run(std.testing.allocator, resistor_va, &h);
     defer h.deinit();
 
-    const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
+    const v = try proof.proveOpts(std.testing.allocator, &h.mir, &h.lowered, .{}, &h.bag);
     defer v.deinit(std.testing.allocator);
     var fatal = false;
     const a = h.arena_state.allocator();
@@ -228,7 +228,7 @@ test "codegen: the family text types each merge by its unknowns" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, src, &h);
     defer h.deinit();
-    const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
+    const v = try proof.proveOpts(std.testing.allocator, &h.mir, &h.lowered, .{}, &h.bag);
     defer v.deinit(std.testing.allocator);
     var fatal = false;
     const a = h.arena_state.allocator();
@@ -2388,7 +2388,7 @@ test "codegen: metadata control failure stays fatal with and without diagnostics
             \\endmodule
         , &h);
         defer h.deinit();
-        const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
+        const v = try proof.proveOpts(std.testing.allocator, &h.mir, &h.lowered, .{}, &h.bag);
         defer v.deinit(std.testing.allocator);
         try std.testing.expect(!h.bag.failed());
         const a = h.arena_state.allocator();

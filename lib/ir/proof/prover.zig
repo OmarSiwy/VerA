@@ -51,7 +51,7 @@ const none_u32 = std.math.maxInt(u32);
 /// `buildClasses`, `markSelectArms`, `walk`, `verdict`. Each asserts that the one before it ran.
 pub const Prover = struct {
     gpa: std.mem.Allocator,
-    /// Scratch arena; dies with `prove`.
+    /// Scratch arena; dies with `proveOpts`.
     arena: std.mem.Allocator,
     mir: *const Mir,
     lowered: *const Lowered,

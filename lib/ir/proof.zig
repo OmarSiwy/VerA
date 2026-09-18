@@ -49,7 +49,7 @@ pub const Verdict = struct {
     /// (§5.6.1.3), or per statement for a §5.6.7 indirect contribution. A unit is `.optimized`
     /// only if both its `resist_val` and `react_val` slices are proven finite. §5.4.3 port probes
     /// add no unit. Any new unit kind must be appended after the contribution units.
-    /// Allocated with the `gpa` passed to `prove`; free with `deinit`.
+    /// Allocated with the `gpa` passed to `proveOpts`; free with `deinit`.
     unit_modes: []const FloatMode,
     /// §4.3.2 domain violations reported into the `diag.Bag`, at most `max_errors`. Zero means
     /// the model is accepted. On errors `unit_modes` is still filled, all `.strict`, so a lint
@@ -61,7 +61,7 @@ pub const Verdict = struct {
         return self.error_count == 0;
     }
 
-    /// Frees `unit_modes`; `gpa` must be the allocator passed to `prove`.
+    /// Frees `unit_modes`; `gpa` must be the allocator passed to `proveOpts`.
     pub fn deinit(self: Verdict, gpa: std.mem.Allocator) void {
         gpa.free(self.unit_modes);
     }
@@ -90,17 +90,6 @@ pub fn unitCount(lowered: *const Lowered) usize {
 pub const isPredicateValue = proof_lattice.isPredicateValue;
 /// Returns the LRM domain an opcode's argument must satisfy.
 pub const domainOf = proof_lattice.domainOf;
-
-/// Proves domains and rates each unit with default `Options`; see `proveOpts`.
-/// Caller owns the returned `Verdict` and must free it with `deinit(gpa)`.
-pub fn prove(
-    gpa: std.mem.Allocator,
-    mir: *const Mir,
-    lowered: *const Lowered,
-    bag: *diag.Bag,
-) !Verdict {
-    return proveOpts(gpa, mir, lowered, .{}, bag);
-}
 
 /// Proves every §4.3.2 domain, reports violations (E0601-E0607, E0609) and finiteness lints
 /// (W0650, W0651, W0653) into `bag`, and rates each unit.

@@ -12,7 +12,6 @@ const FloatMode = proof.FloatMode;
 const Verdict = proof.Verdict;
 const Options = proof.Options;
 const unitCount = proof.unitCount;
-const prove = proof.prove;
 const proveOpts = proof.proveOpts;
 
 /// The frontend preprocessor the harness runs.
