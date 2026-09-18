@@ -389,7 +389,7 @@ const Length = enum { none, hh, h, l, ll, j, z, t, L };
 /// logging routine that stores into memory is a hazard this one does not take.
 ///
 /// False when the writer failed (out of memory).
-pub fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *va.List) bool {
+fn cformat(w: *Io.Writer, format: [*:0]const u8, ap: *va.List) bool {
     expand(w, std.mem.span(format), ap) catch return false;
     return true;
 }

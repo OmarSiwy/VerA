@@ -44,7 +44,7 @@ pub const Server = struct {
 
     /// One update's outcome: the output's cache digest, or the compiler's
     /// report.
-    pub const Update = union(enum) {
+    const Update = union(enum) {
         ok: struct { digest: Cache.BinDigest, cache_hit: bool },
         failed: std.zig.ErrorBundle,
     };

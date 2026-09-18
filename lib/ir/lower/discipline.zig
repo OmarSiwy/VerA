@@ -313,7 +313,7 @@ fn fileOf(self: *const Lower, tok: u32) diag.FileId {
 }
 
 /// The attributes `natureOf` resolves for one nature; null when neither it nor a parent sets one.
-pub const NatureAttrs = struct {
+const NatureAttrs = struct {
     abstol: ?f64 = null,
     access: ?[]const u8 = null,
     /// §3.6.1.2 `units`, read for §3.11.1's Units Value Rule.

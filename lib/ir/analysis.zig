@@ -136,7 +136,7 @@ folds: [2]FoldColumn = .{ .{}, .{} },
 /// which arm a Value folded to, `bits` holds an integer's or a real's bits,
 /// or a string's index in `strs`. 9 bytes a Value instead of 24, in the
 /// table with one row per Value that codegen keeps for the whole emit.
-pub const FoldColumn = struct {
+const FoldColumn = struct {
     /// Which `Const` arm each Value folded to, `.none` for no fold.
     kind: []Kind = &.{},
     /// The arm's payload: an integer's or a real's bits, or an index into

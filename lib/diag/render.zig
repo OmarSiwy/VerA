@@ -17,7 +17,7 @@ const Severity = diag.Severity;
 
 /// SGR escapes, or all-empty when colour is off, so the renderer has one code
 /// path and coloured and plain output cannot drift apart.
-pub const Palette = struct {
+const Palette = struct {
     reset: []const u8 = "",
     bold: []const u8 = "",
     err: []const u8 = "",

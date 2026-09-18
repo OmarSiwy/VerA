@@ -365,7 +365,7 @@ pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
 /// are expressions), and whether a delay may precede the instance list.
 /// `shape` describes the A.3.4 class for the diagnostic when an instance
 /// closes its list early.
-pub const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool, shape: []const u8 };
+const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool, shape: []const u8 };
 
 const cmos_shape = "a cmos switch (A.3.4 cmos_switchtype) takes an output, an input, an ncontrol and a pcontrol terminal";
 const mos_shape = "a mos switch (A.3.4 mos_switchtype) takes an output, an input and an enable terminal";

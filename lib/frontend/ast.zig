@@ -431,7 +431,7 @@ pub const SourceFile = struct {
     }
 
     /// See `seqBlocks`. Valid until the next `addStmt`.
-    pub const SeqBlockIterator = struct {
+    const SeqBlockIterator = struct {
         blocks: []const SeqBlock,
         i: u32 = 0,
 

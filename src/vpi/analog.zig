@@ -392,7 +392,7 @@ pub const Value = struct { re: f64, im: f64 = 0 };
 /// derivative of the reactive part over the step being solved. When several
 /// instances' unnamed branches share the row, it is this instance's own share
 /// (`vpiShares`, §5.4.1), the same way.
-pub fn quantityValue(q: *const root.Obj) ValueError!Value {
+fn quantityValue(q: *const root.Obj) ValueError!Value {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
     const d = &root.design.?;
@@ -795,7 +795,7 @@ pub fn putResult(o: *const root.Obj, v: f64) bool {
 /// out; a handle is ours iff `derivs` lists it. There are at most as many as
 /// derivtf declared (call, of, wrt) triples, since a repeated request returns
 /// the first handle.
-pub const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
+const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
 var derivs: std.ArrayList(*Deriv) = .empty;
 
 /// Returns `h` as a derivative handle, or null unless it is one handed out;

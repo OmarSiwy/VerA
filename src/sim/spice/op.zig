@@ -42,7 +42,7 @@ const gmin_start: f64 = 1e-2;
 /// Zeroes `x`, then applies the device's §9.17.3 cold-start seeds (SPICE
 /// MODEINITJCT) so the first iteration linearizes there instead of at 0.
 /// Asserts that `x` holds exactly n_u values when the device has `seed`.
-pub fn coldStart(ckt: anytype, x: []f64) void {
+fn coldStart(ckt: anytype, x: []f64) void {
     @memset(x, 0);
     const D = @TypeOf(ckt.*).Device;
     if (!@hasDecl(D, "seed")) return;
@@ -54,7 +54,7 @@ pub fn coldStart(ckt: anytype, x: []f64) void {
 
 /// The `converger.newton` hook of a static solve: `assemble` is one eval,
 /// the matrix G itself.
-pub const EvalHook = struct {
+const EvalHook = struct {
     /// Stamps every plane of `ckt` at `x`.
     pub fn assemble(_: EvalHook, ckt: anytype, x: []const f64, t: f64) void {
         ckt.eval(x, t);

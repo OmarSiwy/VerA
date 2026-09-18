@@ -750,7 +750,7 @@ pub fn clog2(value: i64, width: u32) i64 {
 /// and the operators over them, and declines an identifier and `>>>`.
 pub const literal_env: LiteralEnv = .{};
 /// The type of `literal_env`: every query answers null.
-pub const LiteralEnv = struct {
+const LiteralEnv = struct {
     pub fn leaf(_: LiteralEnv, _: Ast.ExprId) ?Const {
         return null;
     }

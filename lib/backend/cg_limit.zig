@@ -97,7 +97,7 @@ pub fn liveSets(g: *const Gen) Live {
 /// shared core at clamp time, so `limit` must run its slice of the core
 /// (`emitCore`). An argument that is a literal, a parameter or a `setup` root
 /// (latched in `Model.su`) needs no core.
-pub fn usesCore(g: *const Gen) bool {
+fn usesCore(g: *const Gen) bool {
     return rejectsInCore(g) or anyArg(g, needsCore);
 }
 

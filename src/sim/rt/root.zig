@@ -309,7 +309,7 @@ const Resume = struct { pc: u32, ctx: u32, live: bool };
 /// §9.7.3: the event element selected now, or null for an invalid index.
 /// The emitted function reads the declaring scope's slots in the active
 /// logic phase. Its address is immutable across a saved tick boundary.
-pub const EventSelect = fn (*State) Error!?u32;
+const EventSelect = fn (*State) Error!?u32;
 const Term = struct { susp: u32, gen: u32, edge: Edge, select: ?*const EventSelect = null, rec: u32 = no_rec };
 /// §9.7.2 a constant select term's bits: `width` of them from bit `shift`
 /// of plane word `word` on, and their value when last tested.
@@ -530,7 +530,7 @@ pub const View = struct {
     }
 
     /// `putNode`; `k` as `poke`'s.
-    pub inline fn putNodeAs(self: View, comptime k: bool, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
+    inline fn putNodeAs(self: View, comptime k: bool, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
         if (self.s.held(slot)) return;
         const s = logic.wide(a);
         const n = s.v.len;

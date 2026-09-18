@@ -419,7 +419,7 @@ pub const Stored = struct {
 /// from `Tag` and `reserved_keywords`.
 /// This is the reference definition. `get` scans a whole length bucket linearly,
 /// so the lexer calls `lookupKeyword`, which must agree with it.
-pub const keyword_map = std.StaticStringMap(Tag).initComptime(keyword_kvs);
+const keyword_map = std.StaticStringMap(Tag).initComptime(keyword_kvs);
 
 /// Lane count for the bucket scan, from the target. `null` on a target with no
 /// useful `u8` vector, which then uses the scalar loop only.

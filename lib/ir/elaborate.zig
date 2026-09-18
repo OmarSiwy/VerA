@@ -253,7 +253,7 @@ pub const Inserted = struct {
 /// One instance the first walk elaborated (`Flatten.tree`): the instance as
 /// its parent wrote it (an array element or a generate copy as the walk
 /// named it), the module it elaborated to, and its own instance path.
-pub const TreeKid = struct {
+const TreeKid = struct {
     inst: Ast.Instance,
     module: *const Ast.ModuleDecl,
     path: []const u8,

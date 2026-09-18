@@ -64,7 +64,7 @@ pub const Levels = struct {
 
     /// `CannotAllowError`: an `E` code asked for below `deny`.
     /// `Forbidden`: the code is already `forbid`.
-    pub const SetError = error{ CannotAllowError, Forbidden } || Allocator.Error;
+    const SetError = error{ CannotAllowError, Forbidden } || Allocator.Error;
 
     /// Records the level for `c` from `--allow=`/`--warn=`/`--deny=`/`--forbid=`.
     /// A later call for the same code overrides an earlier one, except over

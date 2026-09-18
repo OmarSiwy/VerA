@@ -42,7 +42,7 @@ const Oom = Lower.Oom;
 /// digital engine: "The domain of a variable is that of the context from which
 /// its value is assigned." So the assignment targets in the discrete blocks are
 /// the digital-owned variables, with no driver state or scheduler needed.
-pub const DiscreteCtx = struct {
+const DiscreteCtx = struct {
     /// Module-level variables assigned by a statement in an `initial` or
     /// `always` block → the token of the block that assigns it. Insertion
     /// ordered: two errors in one module must be reported in source order.

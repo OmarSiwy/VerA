@@ -25,7 +25,7 @@ const filled = @import("net.zig").filled;
 /// that driver, which "will drive the receivers", from "the drivers of the
 /// connect module digital port", the ordinary drivers §9.22 ¶3's access
 /// functions see (the user's 2026-09-24 reading of §9.22.6, AGENTS.md §7). Fixture m04_12 pins it.
-pub const cm_driver_updates = false;
+const cm_driver_updates = false;
 
 /// The engine's §9.22 driver-access state (`Run.drv`), written by
 /// `segregate` during elaboration and by `arm` once the slots are final.
@@ -201,7 +201,7 @@ pub fn scheduled(r: *Run, slot: u32) Error!void {
 
 /// The driver access functions, one per VAMS §9.22.1-§9.22.4 / §9.23.1-
 /// §9.23.4 `$driver_*` name (`of` maps the `compile.SysFn` row).
-pub const Fn = enum { count, receiver_count, state, strength, delay, next_state, next_strength, type };
+const Fn = enum { count, receiver_count, state, strength, delay, next_state, next_strength, type };
 
 /// The system function a `compile.SysFn` driver row stands for.
 pub fn of(f: compile.SysFn) ?Fn {

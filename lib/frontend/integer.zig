@@ -11,7 +11,7 @@ pub const Error = error{ MissingBase, MissingDigits, DigitOutOfRange, ZeroSize, 
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 /// How `Literal.resize` fills the bits it adds: with zero, or with copies of
 /// the top bit (X and Z included), IEEE 1364-2005 §5.5.
-pub const Extension = enum(u1) { zero, sign };
+const Extension = enum(u1) { zero, sign };
 /// IEEE 1364-2005 §5.1.10's `&`, `|`, `^` and `~^`, for `Literal.bitwise`.
 pub const Bitwise = enum(u2) { and_bits, or_bits, xor_bits, xnor_bits };
 /// IEEE 1364-2005 §5.1.9's `&&` and `||`, for `Literal.logical`.

@@ -27,7 +27,7 @@ pub const Domain = enum {
 };
 
 /// `lhs REL rhs` for the twelve comparison opcodes (`Info.rel`).
-pub const Relation = enum { lt, le, gt, ge, eq, ne };
+const Relation = enum { lt, le, gt, ge, eq, ne };
 
 /// How the one constant kernel (`frontend/constfold.zig`) folds an opcode.
 /// No default: a new opcode states its fold or does not compile.

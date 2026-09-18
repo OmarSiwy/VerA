@@ -56,7 +56,7 @@ pub const Options = struct {
 
 /// What `simulate` reports: whether it reached `t_stop`, how many points it
 /// accepted after t = 0, and the time of the last.
-pub const SimResult = struct { completed: bool, steps: u32, t_final: f64 };
+const SimResult = struct { completed: bool, steps: u32, t_final: f64 };
 
 /// Newton hook: companion RHS from the q plane, matrix G + ag0*C.
 fn TranHook(comptime C: type) type {

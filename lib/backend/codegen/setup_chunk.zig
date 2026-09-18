@@ -19,7 +19,7 @@ const Error = Allocator.Error;
 pub const chunk_bytes: usize = 256 * 1024;
 
 /// `setup` rewritten as chunks: `text` replaces the doc comment and function.
-pub const Chunked = struct { text: []const u8, n: u32 };
+const Chunked = struct { text: []const u8, n: u32 };
 
 const Lines = []const []const u8;
 

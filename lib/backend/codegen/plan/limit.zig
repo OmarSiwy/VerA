@@ -174,7 +174,7 @@ const alg_names = blk: {
 
 /// A `$limit` site this device does not honour: its probe is returned
 /// unchanged, which §9.17.3 permits. `tok` is the call's token.
-pub const Decline = struct {
+const Decline = struct {
     tok: u32,
     /// The call as written and why it is declined.
     msg: []const u8,
@@ -342,7 +342,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
 /// One node of the seed tree: `s[node] = s[from] ± raw(site)`, the
 /// sign picked by which end of `site`'s branch `node` is. `from` is ground
 /// (0 V) when `none_u32`; `site == none_u32` is a component root, set to 0.
-pub const SeedStep = struct { node: u32, from: u32, site: u32 };
+const SeedStep = struct { node: u32, from: u32, site: u32 };
 
 /// `$limit`'s seed argument and SPICE `MODEINITJCT` (mos1load.c:397-408):
 /// ngspice starts a device at BRANCH values, vgs = vto, vds = 0, vbs = -1,

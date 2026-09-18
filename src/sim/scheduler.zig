@@ -17,7 +17,7 @@ pub const Region = enum(u3) { active, explicit_d2a, inactive, nba, analog, monit
 /// The region a future event lands in when its time comes: §8.5.1 lets only
 /// `#d` resumptions (inactive) and delayed nonblocking updates (nba) wait
 /// for a later time.
-pub const FutureKind = enum(u1) {
+const FutureKind = enum(u1) {
     inactive,
     nba,
 
@@ -126,7 +126,7 @@ pub const Scheduler = struct {
     /// Future work has precisely the two categories specified by §8.5.1.
     /// At the current time, inactive means #0; NBA stays in the NBA region.
     /// `TimeInPast` for a `time` before `now`; on any error nothing is queued.
-    pub fn scheduleAt(self: *Scheduler, time: Time, kind: FutureKind, payload: u32) Error!Handle {
+    fn scheduleAt(self: *Scheduler, time: Time, kind: FutureKind, payload: u32) Error!Handle {
         try self.checkMutation();
         if (time < self.now) return error.TimeInPast;
         if (time == self.now) return self.schedule(kind.region(), payload);

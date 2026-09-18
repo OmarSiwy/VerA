@@ -204,7 +204,7 @@ pub fn reduce(s: Ast.Strength, resistive: bool) Ast.Strength {
 
 /// One gate evaluation: §7.8.5's output bit, and whether it is §7.10.2's H/L
 /// (`bit` or high impedance) rather than `bit` itself.
-pub const GateOut = struct { bit: Int.Bit, or_z: bool = false };
+const GateOut = struct { bit: Int.Bit, or_z: bool = false };
 
 /// A window of a wider value: bits [lo, lo + the receiver's width) of it read
 /// `total` bits wide.
@@ -482,7 +482,7 @@ pub fn netPull(kind: Ast.NetKind) Signal {
 
 /// The two §7.9 value tables a wired-logic net folds its drivers through:
 /// wired AND (`wand`, `triand`) and wired OR (`wor`, `trior`).
-pub const Wired = enum { @"and", @"or" };
+const Wired = enum { @"and", @"or" };
 
 /// Which §7.9 table a net folds its drivers through, null for every net type
 /// that resolves through `Signal.combine` alone.

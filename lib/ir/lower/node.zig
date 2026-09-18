@@ -446,7 +446,7 @@ pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 
 /// Applies the `default_discipline in force at `main_tok` to net `name`, or to each
 /// scalarised element when it is a §3.6.3 vector (LRM §10.2).
-pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.out.vectors.get(name) orelse
         return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
     var key_buf: [lower_shape.elem_key_len]u8 = undefined;
@@ -489,7 +489,7 @@ fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
 /// its net is mixed when the net's own discipline is continuous. VerA has no
 /// vendor-specific method, so only the directive in force at the primitive can
 /// supply the connection's discipline. Must run after `applyDefaultToAll`.
-pub fn checkPrimitiveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+fn checkPrimitiveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.gates) |g| {
         try checkPrimitiveTerminal(self, g.out, g.main_tok, "gate");
         for (g.ins) |t| try checkPrimitiveTerminal(self, t, g.main_tok, "gate");
@@ -610,7 +610,7 @@ fn collectNodeAbstol(self: *Lower, name: []const u8, abstol: f64) void {
 /// ponytail: the value is frozen at the parameter's declared default, so a card
 /// override leaves a stale initial guess (never a wrong answer). Upgrade: keep the
 /// `Ast.ExprId` and export `nodeset(model)` the way `derive()` is.
-pub fn recordNodeset(self: *Lower, node: u32, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
+fn recordNodeset(self: *Lower, node: u32, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
     const c = lower_constfold.constEval(self, e) orelse {
         var b = self.errWith(tok, .E0365);
         b.msg("the initializer of `{s}` is not a constant expression", .{name});
@@ -782,7 +782,7 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u32 {
 /// name ending in `]` gets the `\` back in its key; other names keep theirs.
 ///
 /// ponytail: allocates a fresh arena copy per reference; such names are rare.
-pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
+fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
     if (name.len == 0 or name[name.len - 1] != ']') return name;
     if (tok >= self.tok_starts.len) return name;
     const at = self.tok_starts[tok];
@@ -834,7 +834,7 @@ fn refuseBound(self: *Lower, tok: u32, which: []const u8, c: Lower.Const) Oom!?V
 /// both do, "the range specification between the two declarations of a port shall
 /// be identical" (LRM §6.5.2.2), compared after folding: `input [0:3] in;
 /// electrical [0:4-1] in;` is valid, `input [3:0] in; electrical [0:3] in;` is not.
-pub fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
+fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
     const dir_r = if (p.range) |d| try foldDim(self, d, p.main_tok) else null;
     const ty_r = if (p.type_range) |d| try foldDim(self, d, p.main_tok) else null;
     if (dir_r) |a| if (ty_r) |b| {
@@ -854,7 +854,7 @@ fn partSelect(self: *const Lower, e: Ast.ExprId) bool {
 }
 
 /// A vector branch terminal: the vector `name` and the elements it covers.
-pub const VecTerm = struct { name: []const u8, range: VecRange };
+const VecTerm = struct { name: []const u8, range: VecRange };
 
 /// The vector a branch terminal names, or null when it is a scalar
 /// (`branch (a[1], b)` is two scalars) or not a net reference at all. A.2.1.3's
@@ -949,7 +949,7 @@ pub fn nodeName(self: *const Lower, idx: u32) []const u8 {
 
 /// Returns a fresh §5.4.1 branch identity, one per declared branch name (array
 /// elements included). Ids are per-module, never reused, and private to lowering.
-pub fn newBranchId(self: *Lower) u32 {
+fn newBranchId(self: *Lower) u32 {
     self.node_state.last_branch_id += 1;
     return self.node_state.last_branch_id;
 }

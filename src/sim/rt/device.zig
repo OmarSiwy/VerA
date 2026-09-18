@@ -172,7 +172,7 @@ pub fn Device(comptime spec: Spec) type {
 
         /// A step's transcript past this many bytes keeps its head and ends
         /// in `say_cut`.
-        pub const say_cap = 4096;
+        const say_cap = 4096;
         const say_cut = "...[device transcript cut at 4096 bytes]\n";
 
         /// The digital engine keeps history across accepted steps.

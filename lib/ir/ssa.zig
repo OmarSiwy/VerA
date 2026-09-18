@@ -143,7 +143,7 @@ pub const SsaBuilder = struct {
     skip: bool = true,
 
     /// Per-block SSA state, one row per `Mir.Block`.
-    pub const BlockState = struct {
+    const BlockState = struct {
         /// Braun: sealed ⇒ this block's predecessor set is final.
         sealed: bool = false,
         preds_head: u32 = list_end,

@@ -308,7 +308,7 @@ fn expandArg(pp: *Pp, arg: *[]const u8, at: usize) Error!void {
 }
 
 /// A macro use's trimmed actual arguments and the offset just past its `)`.
-pub const MacroArgs = struct { args: []const []const u8, end: usize };
+const MacroArgs = struct { args: []const []const u8, end: usize };
 
 /// Splits the top-level comma list opening at `lparen`. Nested (), [], {},
 /// string literals and escaped identifiers are opaque. A closer that does not

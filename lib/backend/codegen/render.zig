@@ -332,7 +332,7 @@ fn arrRef(self: *Gen, v0: Mir.Value) Error!bool {
 }
 
 /// Writes a load `a[i]`, with §3.2.2's zero for an index outside the array.
-pub fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
+fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
     const d = self.mir.instData(inst).load;
     if (d.op == .iload) {
         try self.b("zArrLd(i64, ", .{});
@@ -842,20 +842,20 @@ pub fn kernelOpen(self: *Gen, name: []const u8, m: u64) Error!void {
 }
 
 /// Writes one real kernel operand, widened to the kernel's mask.
-pub fn kernelArg(self: *Gen, v: Mir.Value, m: u64) Error!void {
+fn kernelArg(self: *Gen, v: Mir.Value, m: u64) Error!void {
     try self.b("zLw(S, 0x{x}, ", .{m});
     try renderVal(self, v, .real);
     try self.b(")", .{});
 }
 
 /// Writes the two parens `kernelOpen` left open.
-pub fn kernelClose(self: *Gen) Error!void {
+fn kernelClose(self: *Gen) Error!void {
     try self.b("))", .{});
 }
 
 /// Writes `(a) opx (b2)` over integers, unwrapped: only for the bitwise ops
 /// that cannot leave §3.2's range.
-pub fn intBin(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+fn intBin(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
     try self.b("((", .{});
     try renderVal(self, a, .int);
     try self.b(") {s} (", .{opx});
@@ -873,7 +873,7 @@ pub fn intBin32(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!
 }
 
 /// Writes `name(a)` over an integer operand.
-pub fn intCall1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
+fn intCall1(self: *Gen, name: []const u8, a: Mir.Value) Error!void {
     try self.b("{s}(", .{name});
     try renderVal(self, a, .int);
     try self.b(")", .{});

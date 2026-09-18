@@ -252,7 +252,7 @@ fn sext(v: u64, comptime w: u32) u64 {
 }
 
 /// §5.1.5's binary arithmetic operators but `**` (`pow`).
-pub const Arith = enum { add, sub, mul, div, mod };
+const Arith = enum { add, sub, mul, div, mod };
 
 /// `Literal.arithmetic` at one word: any unknown bit, and `/` or `%` by 0,
 /// is all x (§5.1.5).

@@ -11,7 +11,7 @@
 const std = @import("std");
 
 /// The assertion lint's finding for one source.
-pub const AssertionCheck = union(enum) {
+const AssertionCheck = union(enum) {
     /// At least one assertion, and every one of them can fail.
     ok,
     /// No `CHECK` macro anywhere in the source.

@@ -1137,7 +1137,7 @@ pub const Split = struct {
 
 /// One reactive term of a right-hand side, before `lowerContribute` knows its
 /// accumulator: the charge, its sign in the sum, and its `vera_lte` verdict.
-pub const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok: u32 };
+const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok: u32 };
 
 /// Separates the ddt terms (§4.5.3) of a right-hand side into the reactive
 /// part (LRM §5.6.1.2).
@@ -1330,7 +1330,7 @@ fn linearDdt(self: *const Lower, e: Ast.ExprId) bool {
 /// `ddt` operand, `coeff` the accumulated product of everything that rode
 /// outside the ddt (null = 1), `coeff_nonconst` whether any factor depends
 /// on an unknown (literals/params have zero gradient and need no site).
-pub const ReactiveTerm = struct { b: Mir.Value, coeff: ?Mir.Value = null, coeff_nonconst: bool = false };
+const ReactiveTerm = struct { b: Mir.Value, coeff: ?Mir.Value = null, coeff_nonconst: bool = false };
 
 /// Whether `v` has zero gradient: a literal, `undef` or a parameter.
 pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {

@@ -266,7 +266,7 @@ pub const Ty = enum(u8) {
 /// How many arguments a source call may carry, as its clause's syntax prints
 /// them. `unchecked` is every row not listed: its arity is judged elsewhere
 /// (the §9.13 distributions, §9.17, §9.21, the display family) or not at all.
-pub const Arity = struct {
+const Arity = struct {
     min: u8 = 0,
     max: u8 = std.math.maxInt(u8),
 
@@ -284,7 +284,7 @@ pub const Arity = struct {
 };
 
 /// The §9.4/§9.5/§9.7 task family a callee belongs to.
-pub const Family = enum(u3) {
+const Family = enum(u3) {
     none,
     /// §9.4.1 display and §9.7.3 severity tasks: their whole content is text on
     /// the simulator's output. Not `$monitoron`/`$monitoroff`, which toggle a

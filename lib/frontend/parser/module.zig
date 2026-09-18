@@ -73,12 +73,12 @@ pub const Body = struct {
 };
 
 /// One unnamed generate block and the number of its construct.
-pub const GenAuto = struct { stmt: Ast.StmtId, n: u32 };
+const GenAuto = struct { stmt: Ast.StmtId, n: u32 };
 
 /// One `begin : name` from the `generate_block` production, whose name
 /// declares a scope rather than a §5.3.2 statement label. Collected here
 /// because no later stage can tell the two `begin`s apart.
-pub const GenBlock = struct {
+const GenBlock = struct {
     name: Ast.StrId,
     tok: u32,
     /// `Parser.gen_construct` at the time: the outermost enclosing

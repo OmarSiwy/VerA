@@ -301,7 +301,7 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
 /// The bytes of an `include and the path they were opened by, which §10.7
 /// makes `__FILE__`: "the path by which a tool opened the file, not the short
 /// name specified in `include". A built-in annex D file keeps the name written.
-pub const Included = struct { text: []const u8, path: []const u8 };
+const Included = struct { text: []const u8, path: []const u8 };
 
 /// Returns the `include file for `path`: an absolute path as written, else
 /// the first hit in the including file's directory and then the include dirs
@@ -355,7 +355,7 @@ fn builtin(pp: *Pp, path: []const u8) Error!?Included {
 /// Parses a §10.2 Syntax 10-1 `default_discipline and records its event;
 /// §7.4 discipline resolution applies it. `rest` is everything after the word
 /// on one logical line, starting at offset `off`.
-pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
+fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     // Both operands are optional; the bare form withdraws the default. The
     // discipline_identifier is simple or escaped (A.9.3); annex D.1 declares
@@ -393,7 +393,7 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
 /// ponytail: reads one §2.6 number with scale factor (`4n`, `4e-9`), not a
 /// full constant_expression. Upgrade path: emit the directive verbatim and let
 /// the parser fold it, once a model writes `default_transition tr*2.
-pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
+fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     r.skipSpace();
     const start = r.i;
@@ -424,7 +424,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
 /// its event. Each operand is on Table 19-1's grid (1, 10 or 100 and one of
 /// six units). Every malformed form, and a precision coarser than the unit,
 /// is E0142.
-pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
+fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     // Marked null first and filled in on success; a `resetall also writes null.
     const event = pp.events.timescales.items.len;
     try pp.mark(&pp.events.timescales, null);
@@ -474,7 +474,7 @@ fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
 /// §10.2's qualifier list: that admits `integer`, `real`, `reg`, `wreal`,
 /// `supply0` and `supply1` and lacks `uwire` and `none`. Name resolution
 /// applies the region to undeclared names used as nets.
-pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
+fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     const word = r.ident() orelse "";
     const value = std.meta.stringToEnum(NetType, word) orelse {
@@ -495,7 +495,7 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
 /// Parses an IEEE 1364 §19.9 `` `unconnected_drive pull1 | pull0 `` and
 /// records its region. The operand is mandatory (E0141); the operand-less
 /// form is `` `nounconnected_drive ``.
-pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void {
+fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     const word = r.ident() orelse "";
     // Not a `stringToEnum`: `.float` is `nounconnected_drive's value, and
@@ -564,7 +564,7 @@ fn timeLiteral(r: *Rest) ?f64 {
 /// (E0128). The level is checked and dropped, since VerA keeps the real
 /// include stack. "Comments are not allowed on the same line": comments are
 /// stripped before directives are read, so a strip mark on the line is one.
-pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
+fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     if (pp.expand_site == null) {
         const bag = pp.opts.bag;
         const id = pp.cur_file_id;

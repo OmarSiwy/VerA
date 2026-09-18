@@ -774,7 +774,7 @@ pub fn isAnalogOnlySysFunc(name: []const u8) bool {
 /// `$receiver_count` is listed because its "Non-normative" §9.22.1 paragraph
 /// sits inside §9.22, takes the same `signal_name` argument, and Table 9-19
 /// carries it with the rest.
-pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
+fn isConnectModuleOnlySysFunc(name: []const u8) bool {
     const cm_only = [_][]const u8{
         // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.
         "$driver_count",         "$receiver_count", "$driver_state",

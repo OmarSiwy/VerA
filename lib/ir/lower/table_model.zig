@@ -234,7 +234,7 @@ fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
 }
 
 /// A parsed data file: row-major values and the column count every row shares.
-pub const TableFile = struct { vals: []const f64, cols: usize };
+const TableFile = struct { vals: []const f64, cols: usize };
 
 /// Reads a §4.6.4.3 `noise_table` file as `f0, p0, f1, p1, ...`, the layout the
 /// vector form produces. Returns null after reporting E0519 when the file cannot be

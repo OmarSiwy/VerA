@@ -576,7 +576,7 @@ fn timerEarlyReturn(self: *Lower, id: Ast.StmtId, last: Ast.StmtId) Oom!bool {
 /// looking like a later edit. The snapshot is narrow to this call's actuals.
 /// Null outside a capture or for a call the replay may recompute; the slice
 /// is `self.arena`'s.
-pub fn captureTimerEffects(self: *Lower, e: Ast.ExprId) Oom!?[]const TimerRead {
+fn captureTimerEffects(self: *Lower, e: Ast.ExprId) Oom!?[]const TimerRead {
     if (self.event_state.timer_capture == null) return null;
     const ex = &self.file.exprs;
     if (ex.tag(e) != .call and ex.tag(e) != .sys_call) return null;

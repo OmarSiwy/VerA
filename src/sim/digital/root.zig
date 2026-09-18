@@ -191,7 +191,7 @@ const Name = struct { scope: u32, str: Ast.StrId };
 pub const SpecExpr = struct { spec: u32, e: Ast.ExprId };
 
 /// How many distinct types the specializations that typed a row gave it.
-pub const TyState = enum(u8) { untyped, one, many };
+const TyState = enum(u8) { untyped, one, many };
 
 /// §3.9 an unpacked array is `count` consecutive element slots; the declared
 /// name maps to the first. `low`/`high` are the first dimension's address
@@ -243,10 +243,10 @@ pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update, ports,
 pub const Stop = enum { idle, analog, explicit_d2a };
 
 /// One analog event a digital event control waits on (`Run.registerMonitor`).
-pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: MonitorKind };
+const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: MonitorKind };
 
 /// A.6.5 `analog_event_functions`, the four VAMS §5.10.3 events a monitor is.
-pub const MonitorKind = enum { cross, above, timer, absdelta };
+const MonitorKind = enum { cross, above, timer, absdelta };
 
 /// One digital event term of an analog event control (`Run.watchEvent`).
 pub const D2aSite = struct { slot: u32, edge: waiters.Edge, site: u6 };
@@ -1008,7 +1008,7 @@ pub const Run = struct {
     }
 
     /// A value a VPI application reads: a real's double, else the 4-state bits.
-    pub const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
+    const VpiValue = union(enum) { bits: Int.Literal, real: f64 };
 
     /// IEEE 1364-2005 §26.6.19(e): evaluate a retained VPI expression in
     /// its original scope, when its value is requested. Arguments to user
@@ -1191,7 +1191,7 @@ pub const Run = struct {
     ///
     /// The `identifier` alternative names a parameter, so anything but a
     /// literal goes through `constant`.
-    pub fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
+    fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
         const scale = self.timeOf(self.scope).scale;
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
@@ -1333,7 +1333,7 @@ pub const Sub = struct {
 };
 
 /// A module's §19.8 time scale, and its unit as a power of ten of a second.
-pub const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
+const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
 
 /// §9.3 one slot's procedural continuous assignments: the pc range of the
 /// process maintaining each.
@@ -1347,7 +1347,7 @@ pub const Overrides = struct {
 
 /// One `force` of a constant select (§9.3.2): the bits it holds and the
 /// process maintaining them.
-pub const PartForce = struct { bits: compile.Bits, range: PcRange };
+const PartForce = struct { bits: compile.Bits, range: PcRange };
 
 /// A half-open range of `Run.code` pcs, `[start, end)`: one process body.
 /// Empty for a VPI force, which no process maintains (`waiters.forceValue`).
@@ -1362,7 +1362,7 @@ pub const Frame = struct { scope: u32, ports: []const u32, result: u32, first: u
 /// element of an unpacked net array makes nets the common slot, and a map
 /// row costs twice an entry here plus the rehash garbage, for a lookup that
 /// is a load instead of a probe.
-pub const SlotNets = struct {
+const SlotNets = struct {
     of: std.ArrayList(u32) = .empty,
 
     const none = std.math.maxInt(u32);
@@ -1412,7 +1412,7 @@ fn runDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
 }
 
 /// A `.v` design as a contract device an analog host loads (`rt.Device`).
-pub const DeviceZig = struct {
+const DeviceZig = struct {
     /// The top module's name.
     name: []const u8,
     /// The device's Zig root; it imports the modules `contract` and `sim`.

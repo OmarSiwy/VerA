@@ -560,7 +560,7 @@ pub const Parser = struct {
     /// lengths of `attrs` and `file.attributes`. Both tables only grow while
     /// it is held, so the lengths are enough to undo the read.
     /// Both lengths are bounded by the token count, which is a `u32`.
-    pub const AttrMark = struct { pos: u32, specs: u32, bindings: u32 };
+    const AttrMark = struct { pos: u32, specs: u32, bindings: u32 };
     comptime {
         std.debug.assert(@sizeOf(AttrMark) == 12);
     }

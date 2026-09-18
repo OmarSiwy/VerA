@@ -200,7 +200,7 @@ const F64Context = struct {
 // ===========================================================================
 
 /// One `systf_calls` entry: a `$name` call and the token it was lowered from.
-pub const SystfSite = struct { name: []const u8, tok: u32 };
+const SystfSite = struct { name: []const u8, tok: u32 };
 
 /// The emitter's state for one device. Built and driven by `generate`.
 ///

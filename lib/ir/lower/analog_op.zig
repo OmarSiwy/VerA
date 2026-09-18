@@ -711,7 +711,7 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 ///   nonlinear  it occurs in a shape no single factor describes (squared, in a
 ///              denominator, inside a call), so there is no coefficient;
 ///   value      the factor.
-pub const Coeff = union(enum) { absent, nonlinear, value: Mir.Value };
+const Coeff = union(enum) { absent, nonlinear, value: Mir.Value };
 
 /// Returns `-v`, folded when `v` is a literal so the coefficient renders inline in
 /// `noisePsd` instead of taking a core live-out slot.

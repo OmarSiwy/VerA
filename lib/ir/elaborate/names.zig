@@ -585,7 +585,7 @@ pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net:
 
 /// `localAccess`'s answer: the spelling, and whether only the child's
 /// declaration can judge it.
-pub const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
+const LocalAccess = struct { name: Ast.StrId, local_only: bool = false };
 
 /// Returns `value` multiplied or divided (`op`) by the unit's running
 /// `$mfactor` product when `access` is the flow access of `net`'s discipline,

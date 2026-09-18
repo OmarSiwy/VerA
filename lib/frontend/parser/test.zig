@@ -42,7 +42,7 @@ pub const TestResult = struct {
 
 /// Returns a diagnostic bag for `src` as the single file `test.va`,
 /// allocated in `arena`.
-pub fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
+fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
     const bag = try arena.create(diag.Bag);
     bag.* = diag.Bag.init(arena);
     try bag.setSingleFile("test.va", src);

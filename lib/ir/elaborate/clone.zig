@@ -175,7 +175,7 @@ pub fn cloneFunc(self: *Flatten, fd: Ast.FuncDecl) Error!Ast.FuncDecl {
 }
 
 /// A rename-map entry `hide` removed, restored by `unhide`.
-pub const HiddenName = struct { name: Ast.StrId, was: ?Ast.StrId };
+const HiddenName = struct { name: Ast.StrId, was: ?Ast.StrId };
 
 comptime {
     // One row per local of every cloned block and function; 12 B budget.

@@ -192,7 +192,7 @@ pub fn emitFile(self: *Gen) Error!void {
 
 /// Whether the device declares `batch_ok`: no lane pinned, no per-timepoint
 /// cache or status latch (each stores one point's values).
-pub fn batchOk(self: *const Gen) bool {
+fn batchOk(self: *const Gen) bool {
     return !self.float.pinned and self.lowered.timepoints.items.len == 0 and !gen_instance.hasStatus(self);
 }
 
@@ -796,7 +796,7 @@ fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
 /// `ParamInfo.folded` (`Lower.constEval` over the AST, which sees through a
 /// §4.2.12 `?:` that MIR has already turned into a CFG diamond) and
 /// `foldConst` over the MIR. Integral defaults prefer the exact AST result.
-pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
+fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
     if (want == .int) if (p.folded) |k| {
         // An explicit `integer` (§3.4.1) is 32 bits: an integral default
         // keeps its low 32 bits, a real one saturates at the 32-bit bounds

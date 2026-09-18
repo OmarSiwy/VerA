@@ -27,7 +27,7 @@ pub const Spec = struct {
 pub const Library = struct { name: []const u8, specs: []const Spec };
 
 /// Where §13.2.1.1 puts a source file.
-pub const Placement = union(enum) {
+const Placement = union(enum) {
     lib: []const u8,
     /// Two libraries whose best matching specifications tie: an error.
     ambiguous: [2][]const u8,
@@ -256,7 +256,7 @@ fn unquote(w: []const u8) []const u8 {
 /// file is located"; "Paths that end in / shall include all files in the
 /// specified directory. Identical to /*." The pattern is allocated in
 /// `arena`.
-pub fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) error{OutOfMemory}!Spec {
+fn resolveSpec(arena: std.mem.Allocator, dir: []const u8, raw: []const u8) error{OutOfMemory}!Spec {
     const base = std.fs.path.basenamePosix(raw);
     const class: Class = if (std.mem.endsWith(u8, raw, "/"))
         .directory

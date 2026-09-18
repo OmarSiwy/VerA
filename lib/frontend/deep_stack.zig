@@ -72,12 +72,12 @@ pub const bytes_per_level: usize = switch (builtin.mode) {
 /// Stack every run gets before any nesting: twice the 8 MiB main-thread
 /// stack the pipeline ran on before, for walks whose frames do not grow with
 /// nesting (codegen's buffers, the prover).
-pub const base_bytes: usize = 16 << 20;
+const base_bytes: usize = 16 << 20;
 
 /// Depth `run` leaves on the caller's stack: 512 levels of the Debug worst
 /// case is 3.7 MB, half the 1,024 levels every caller's stack held while the
 /// parser capped nesting there.
-pub const in_place_levels: usize = 512;
+const in_place_levels: usize = 512;
 
 /// The largest stack one thread can be given on this target.
 const platform_max: usize = if (builtin.os.tag == .windows) // os: a comptime constant; every target builds both arms
@@ -89,7 +89,7 @@ const granule: usize = 64 * 1024;
 
 /// The stack `run` reserves for `depth` levels, or null when that size
 /// overflows or passes what this target can give one thread.
-pub fn bytesFor(depth: usize) ?usize {
+fn bytesFor(depth: usize) ?usize {
     const levels = std.math.mul(usize, depth, bytes_per_level) catch return null;
     const raw = std.math.add(usize, levels, base_bytes + granule - 1) catch return null;
     const size = raw & ~(granule - 1);

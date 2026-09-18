@@ -223,7 +223,7 @@ pub fn timeNow(obj: vpiHandle, t: *Time) void {
 
 /// Fills both of `t`'s forms from `ticks`: high/low in ticks, and `real` in
 /// `obj`'s module time unit (in ticks when `obj` is NULL).
-pub fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
+fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
     t.high = @truncate(ticks >> 32);
     t.low = @truncate(ticks);
     const s = if (obj != null) scale(obj) else null;

@@ -148,7 +148,7 @@ pub fn value(out: *std.Io.Writer, gpa: std.mem.Allocator, v: Int.Literal, radix:
 /// negative one, because of its sign: a 32-bit `integer` is 11 columns
 /// ("-2147483648"), not 10. Exact at every width, so an x in a 128-bit `%d`
 /// is right-justified in 39 columns.
-pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
+fn autoWidth(v: Int.Literal, radix: Radix) u32 {
     if (radix != .decimal) {
         const per = radix.perDigit();
         return (v.width + per - 1) / per;
@@ -171,7 +171,7 @@ pub fn autoWidth(v: Int.Literal, radix: Radix) u32 {
 /// contribute nothing to the digit's value and nothing to its unknown-ness,
 /// which is what makes an all-x 8-bit operand print "xxx" in octal rather
 /// than "Xxx": the top group holds two x bits and no third bit at all.
-pub fn groupDigit(v: Int.Literal, radix: Radix, d: u32) u8 {
+fn groupDigit(v: Int.Literal, radix: Radix, d: u32) u8 {
     const per = radix.perDigit();
     var val: u32 = 0;
     var xs: u32 = 0;
@@ -202,7 +202,7 @@ pub fn groupDigit(v: Int.Literal, radix: Radix, d: u32) u8 {
 /// Decimal, where one unknown bit poisons the whole number (§17.1.1.4), as
 /// a slice of `buf`. Asserts `buf` holds 20 bytes, the longest i64 or u64,
 /// and that a known `v` is at most 64 bits wide (`wideDecimal` is the rest).
-pub fn decimalText(buf: []u8, v: Int.Literal) []const u8 {
+fn decimalText(buf: []u8, v: Int.Literal) []const u8 {
     if (v.hasUnknown()) {
         // An x bit is value and unknown set, a z bit unknown alone.
         var xs: u32 = 0;

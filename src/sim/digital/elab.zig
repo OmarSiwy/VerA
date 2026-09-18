@@ -1478,7 +1478,7 @@ pub fn newScope(r: *Run, tok: u32) Error!u32 {
 /// One variable's storage in the current scope (a whole value, or §3.9's
 /// array of them), bound to its name. Works in both passes: an automatic
 /// task inlined at a call site gets fresh storage while pass two compiles it.
-pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
+fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
     if (v.ty == .string) return r.fail(v.main_tok, "string variables are not implemented", .{});
     const real = v.ty == .real;

@@ -38,7 +38,7 @@ pub const testing = std.testing;
 /// Preprocess without the std-def prelude, on an arena backed by the testing
 /// allocator; the result is duped so the arena can be torn down (leak-checked).
 /// Caller owns the returned text and must free it with `testing.allocator`.
-pub fn runTest(src: []const u8) ![]u8 {
+fn runTest(src: []const u8) ![]u8 {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var bag: diag.Bag = .init(arena_state.allocator());
@@ -47,7 +47,7 @@ pub fn runTest(src: []const u8) ![]u8 {
 }
 
 /// Expects `src`, preprocessed without the prelude, to be exactly `expected`.
-pub fn expectPp(expected: []const u8, src: []const u8) !void {
+fn expectPp(expected: []const u8, src: []const u8) !void {
     const got = try runTest(src);
     defer testing.allocator.free(got);
     try testing.expectEqualStrings(expected, got);
@@ -55,7 +55,7 @@ pub fn expectPp(expected: []const u8, src: []const u8) !void {
 
 /// Expects `src` to keep its newline count through preprocessing, and the
 /// output to contain every `present` string and no `absent` one.
-pub fn expectPreserved(src: []const u8, present: []const []const u8, absent: []const []const u8) !void {
+fn expectPreserved(src: []const u8, present: []const []const u8, absent: []const []const u8) !void {
     const got = try runTest(src);
     defer testing.allocator.free(got);
     try testing.expectEqual(
@@ -68,7 +68,7 @@ pub fn expectPreserved(src: []const u8, present: []const []const u8, absent: []c
 
 /// Expects `src` to fail with exactly one `code` diagnostic whose span lies
 /// inside the file it names.
-pub fn expectFail(src: []const u8, code: diag.Code) !void {
+fn expectFail(src: []const u8, code: diag.Code) !void {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var bag: diag.Bag = .init(arena_state.allocator());
@@ -441,7 +441,7 @@ test "directives that contribute no text, and rejected ones" {
 
 /// Preprocess `src` and hand back the three region lists, which is the whole of
 /// what these directives contribute to a compilation.
-pub fn regionsOf(arena: Allocator, src: []const u8) !struct {
+fn regionsOf(arena: Allocator, src: []const u8) !struct {
     nettypes: []const NetTypeRegion,
     cells: []const CellRegion,
     drives: []const DriveRegion,
@@ -874,7 +874,7 @@ test "`--no-std-defs` gets no seed, and lexes the same either way" {
 /// Expects `a` and `b` to be structurally equal, by reflection so a new AST
 /// field is compared without a test edit. `[]u8` compares by content: the
 /// snapshot's names and a fresh parse's borrow different copies of the text.
-pub fn expectDeepEqual(comptime T: type, a: T, b: T) !void {
+fn expectDeepEqual(comptime T: type, a: T, b: T) !void {
     switch (@typeInfo(T)) {
         .pointer => |p| {
             if (p.size == .one) return expectDeepEqual(p.child, a.*, b.*);

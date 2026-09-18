@@ -8,7 +8,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 /// Both streams, whole, and the exit code; a signal or stop is 255.
-pub const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
+const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
 
 /// Runs a child and takes everything it said. Both streams are allocated in
 /// `arena`; a spawn failure is the error.

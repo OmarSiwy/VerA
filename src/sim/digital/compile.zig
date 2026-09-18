@@ -244,7 +244,7 @@ pub const SysFn = enum {
 
     /// How many real arguments a Table 17-17 function takes, or null for a
     /// function that is not one of them.
-    pub fn mathArity(self: SysFn) ?u32 {
+    fn mathArity(self: SysFn) ?u32 {
         return switch (self) {
             .pow, .atan2, .hypot => 2,
             .ln, .log10, .exp, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
@@ -1870,7 +1870,7 @@ fn eventReference(self: *Run, e: Ast.ExprId) Error!?u32 {
 
 /// An event term that is a constant select of a vector: its bits
 /// `[first, first + count)` of `slot`, at most 64 and all in range.
-pub const SelectTerm = struct { slot: u32, first: u32, count: u32 };
+const SelectTerm = struct { slot: u32, first: u32, count: u32 };
 
 /// §9.7.2 a constant bit- or part-select of a whole vector (not an array
 /// element, a real or an event) as a term watching those bits of the vector

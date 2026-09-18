@@ -90,11 +90,11 @@ pub fn matchingParamsets(self: *Flatten, inst: *const Ast.Instance, path: []cons
 }
 
 /// The three §6.4.2 tie-breaking rules, in the clause's order.
-pub const TieRule = enum { un_overridden, ranged_locals, unconnected_ports };
+const TieRule = enum { un_overridden, ranged_locals, unconnected_ports };
 
 /// Applies one tie-breaking rule: scores every surviving candidate and keeps
 /// the minimum in `live` (a "greatest" rule negates its count).
-pub fn tieBreak(
+fn tieBreak(
     self: *Flatten,
     inst: *const Ast.Instance,
     path: []const u8,
@@ -186,7 +186,7 @@ fn exposes(self: *Flatten, ps: *const Ast.ParamsetDecl, name: []const u8) bool {
 ///   4. "The underlying module shall have a port declared for each port
 ///      connected in the instance line." An undeclared target module cannot
 ///      fail it; that is E0904 at the use site.
-pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, path: []const u8, reads: ?[]bool) Error!bool {
+fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, path: []const u8, reads: ?[]bool) Error!bool {
     const named = inst.params.len != 0 and inst.params[0].name != .none;
     if (!named and inst.params.len > elab_override.overridableCount(ps.params)) return false;
     if (named) for (inst.params) |o| {

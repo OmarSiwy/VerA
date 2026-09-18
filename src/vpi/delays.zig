@@ -394,7 +394,7 @@ fn noMem() bool {
 /// `ports[0]`'s module's time unit. An interconnect nothing was put on has no
 /// delay, so they start at 0. Like a module path's, the delays are the
 /// model's: no simulation applies one (VD-114).
-pub const InterModPath = struct { ports: [2]u32, delays: [3]f64 = .{ 0, 0, 0 } };
+const InterModPath = struct { ports: [2]u32, delays: [3]f64 = .{ 0, 0, 0 } };
 
 /// Every inter-module path made since the design opened, each a handle.
 /// ponytail: scanned per lookup; an application asks for a handful. Key a

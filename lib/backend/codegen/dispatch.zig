@@ -783,7 +783,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
 /// where calling `eval` and `q` separately runs the model twice. `eval` and
 /// `q` are unchanged; DC should keep calling `eval`. Emitted only when there
 /// is a reactive half.
-pub fn emitFused(self: *Gen) Error!void {
+fn emitFused(self: *Gen) Error!void {
     try self.w(
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.

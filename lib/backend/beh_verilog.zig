@@ -63,7 +63,7 @@ pub const Error = error{ OutOfMemory, Refused };
 
 /// The largest pins-plus-nodes count the truth tables enumerate: `emit`
 /// runs the analog block 2^n times and keeps three f64 per run and node.
-pub const max_vars = 20;
+const max_vars = 20;
 
 const Pin = enum { digital, analog, power, ground };
 

@@ -66,7 +66,7 @@ pub const Invariant = enum {
 };
 
 /// The first broken invariant `verify` found, and where.
-pub const Violation = struct {
+const Violation = struct {
     invariant: Invariant,
     /// The block it was found in, or null for a table-wide rule.
     block: ?Mir.Block = null,

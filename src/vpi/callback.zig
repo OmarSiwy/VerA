@@ -54,7 +54,7 @@ pub const Value = extern struct {
 };
 
 /// An application's `cb_rtn`, called with the `CbData` of the firing.
-pub const Routine = *const fn (*CbData) callconv(.c) c_int;
+const Routine = *const fn (*CbData) callconv(.c) c_int;
 
 /// Figure 12-17 `s_cb_data`, with the `index` member Figure 12-2 omits
 /// (§12.31.1 requires it).
@@ -110,7 +110,7 @@ pub const acbConvergenceTest: c_int = 705;
 pub const acbAcceptedPoint: c_int = 706;
 
 /// Whether `r` is one of the §12.31.3 analog reasons.
-pub fn isAnalogReason(r: c_int) bool {
+fn isAnalogReason(r: c_int) bool {
     return r >= acbInitialStep and r <= acbAcceptedPoint;
 }
 
@@ -124,7 +124,7 @@ const vpiSuppressVal = value.vpiSuppressVal;
 // ---------------------------------------------------------------------------
 
 /// One registration, owned by this file; see the header for its lifetime.
-pub const Cb = struct {
+const Cb = struct {
     reason: c_int,
     rtn: Routine,
     obj: vpiHandle,

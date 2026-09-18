@@ -139,7 +139,7 @@ pub const Result = union(enum) {
 /// graph (in order), all of which change type layouts across the dyn ABI.
 /// `work_dir` and `name` do not affect it. The host compares it with the
 /// `.so`'s `arp_layout_hash` before use.
-pub fn layoutHash(o: Options) u64 {
+fn layoutHash(o: Options) u64 {
     var h: std.hash.Wyhash = .init(0xfa57_0af0_1a40_07);
     h.update(builtin.zig_version_string);
     h.update(&.{0});
@@ -287,7 +287,7 @@ pub const Part = enum { setup, state, eval };
 /// (1.4 MB) and coupled_ltra (5.8 MB) yet cost txl (590 KB) +47% eval cycles
 /// at identical instructions; the threshold sits between them. Each extra
 /// process also costs fixed std/process work, so mos1 (125 KB) gains nothing.
-pub const split_min_bytes: usize = 768 * 1024;
+const split_min_bytes: usize = 768 * 1024;
 
 /// Whether `compileRelease` builds `device` as `Part`s.
 pub fn splits(o: Options, device: codegen.Output) bool {
@@ -386,7 +386,7 @@ fn linkArgv(arena: Allocator, o: Options, objs: []const []const u8) ![]const []c
 }
 
 /// The prebuilt engine object, or the compiler's report.
-pub const EngineResult = union(enum) {
+const EngineResult = union(enum) {
     /// The object's path in `cache_dir`, owned by `gpa`.
     ok: []u8,
     failed: std.zig.ErrorBundle,

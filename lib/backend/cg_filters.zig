@@ -19,7 +19,7 @@ const gen_host = @import("codegen/host_expr.zig");
 /// One polynomial in ascending powers of `s` (§4.5.11) or `z⁻¹` (§4.5.12), as
 /// emitted expression text: a literal or `model.<p>`, so a model-card override
 /// reaches the coefficient without a rebuild.
-pub const Poly = []const []const u8;
+const Poly = []const []const u8;
 
 /// A filter realised as a cascade of sections, `H = ∏ num[i]/den[i]`.
 ///
@@ -70,7 +70,7 @@ pub const FilterPlan = struct {
 /// Decodes one `laplace_*`/`zi_*` call into its cascade, or a plan whose `err`
 /// names the violated §4.5.11/§4.5.12 rule. Lowering flattened each vector
 /// argument as `<count>, e0, e1, …`, so the argument list is self-describing.
-pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan {
+fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan {
     // `*_zp`/`*_zd` give the ZEROS as roots; `*_zp`/`*_np` give the POLES
     // as roots. The two letters after the underscore say which.
     const z: bool, const num_roots: bool, const den_roots: bool = switch (g.mir.instData(inst).call.callee) {
@@ -199,12 +199,12 @@ pub fn planOf(g: *Gen, unit: usize) FilterPlan {
 
 /// One flattened vector argument: its elements and the index of the argument
 /// after it.
-pub const Vec = struct { elems: []const Mir.Value, next: usize };
+const Vec = struct { elems: []const Mir.Value, next: usize };
 
 /// Reads the flattened vector argument at `i`: a literal count followed by that
 /// many elements. Returns null when `args[i]` is not an `int_const` count, which
 /// means the argument was never a vector.
-pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
+fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
     if (i >= args.len) return null;
     const def = g.mir.valueDef(g.an.rv(args[i]));
     if (def != .int_const or def.int_const < 0) return null;
@@ -214,7 +214,7 @@ pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
 }
 
 /// Renders filter coefficients, collecting the ones §4.5.14 samples.
-pub const Coefs = struct {
+const Coefs = struct {
     sampled: std.ArrayList(Mir.Value) = .empty,
 
     /// Returns coefficient `e` as `__sec` text: `k[<j>]` for one the solve
@@ -230,7 +230,7 @@ pub const Coefs = struct {
 /// Appends one side of a filter to `out` as sections. `roots` selects the
 /// root-vector reading (real/imaginary pairs) over the coefficient reading.
 /// Returns an LRM diagnostic, or null on success.
-pub fn filterSide(
+fn filterSide(
     g: *Gen,
     cx: *Coefs,
     out: *std.ArrayList(Poly),
@@ -384,7 +384,7 @@ fn constRoots(g: *Gen, cx: *Coefs, out: *std.ArrayList(Poly), elems: []const Mir
 /// Returns the index of the unused root conjugate to (`re`, `im`): same real
 /// part, negated imaginary part. Real parts compare as emitted text, so
 /// `model.a` pairs with `model.a` without its value.
-pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
+fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
     for (used, 0..) |u, j| {
         if (u) continue;
         const jm = g.an.foldConst(elems[2 * j + 1], true) orelse continue;

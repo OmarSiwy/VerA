@@ -141,7 +141,7 @@ pub fn emitUnits(self: *Gen) Error!void {
 /// returning them as a struct (plan/core.zig says why). The return type is an
 /// anonymous struct in the signature, because a named type would have to be
 /// public for unit files to reach it, which `contract.validate` rejects.
-pub fn emitCommon(self: *Gen) Error!void {
+fn emitCommon(self: *Gen) Error!void {
     if (self.core.lo_vals.len == 0) return;
     const n = self.jobs.list.len;
     try emitCoreDecl(self, self.core.name, try self.arena.print(core_doc, .{ n, n }));
@@ -227,7 +227,7 @@ fn remapAll(self: *Gen, fields: []const u32, remap: []const u32) Error![]u32 {
 /// Emits declaration `name` computing `self.core.lo_vals` and returning them
 /// as a struct: the shared core, or a caller's slice of it with `core.lo_vals`
 /// and `plan.lo_idx`/`lo_vals` swapped (`emitSlice`), under doc comment `doc`.
-pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
+fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     self.emitting_common = true;
     defer self.emitting_common = false;
 
@@ -473,7 +473,7 @@ pub fn slotTy(self: *Gen, i: usize) Error![]const u8 {
 }
 
 /// Returns the zero value `i`'s slot starts at (`zeroOf`).
-pub fn slotZero(self: *Gen, i: usize) Error![]const u8 {
+fn slotZero(self: *Gen, i: usize) Error![]const u8 {
     if (self.an.vty[i] == .wide) return self.arena.print("zwZero({d})", .{self.an.wide_w[i]});
     return zeroOf(self.an.vty[i]);
 }

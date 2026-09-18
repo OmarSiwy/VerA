@@ -187,7 +187,7 @@ test "line index" {
 
 /// Renders a bag to an arena-owned string. Test helper, and the shape a host
 /// that wants the text rather than a writer would use.
-pub fn renderToString(bag: *diag_bag.Bag, opts: diag_render.RenderOptions) ![]const u8 {
+fn renderToString(bag: *diag_bag.Bag, opts: diag_render.RenderOptions) ![]const u8 {
     // ponytail: the arena owns the result; transfer ownership only if it must outlive it.
     var aw: std.Io.Writer.Allocating = .init(bag.arena);
     try diag_render.render(bag, &aw.writer, opts);

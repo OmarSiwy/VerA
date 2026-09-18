@@ -672,7 +672,7 @@ fn copyWholeArray(
 /// §5.7 / A.8.5 an array reference that is not a scalar element: a whole array
 /// (`subs.len == 0`) or a slice, whose subscript list is shorter than the declared
 /// dimension list.
-pub const ArraySlice = struct { name: []const u8, info: ArrayInfo, subs: []const Ast.ExprId };
+const ArraySlice = struct { name: []const u8, info: ArrayInfo, subs: []const Ast.ExprId };
 
 /// Returns `e` as a whole-array or slice reference, or null for anything else,
 /// including a full subscript list. `subs` may point into `buf`.
@@ -993,7 +993,7 @@ fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oo
 }
 
 /// The base identifier and the subscripts of `name[i][j]...` (§3.2), outermost first.
-pub const IndexChain = struct { name: Ast.StrId, subs: []const Ast.ExprId };
+const IndexChain = struct { name: Ast.StrId, subs: []const Ast.ExprId };
 /// Returns `e`'s base name and subscripts, or null when the base is not a plain
 /// name (`f(x)[0]`). `subs` points into `buf`, or into the arena when deeper.
 pub fn indexChain(self: *Lower, e: Ast.ExprId, buf: []Ast.ExprId) Oom!?IndexChain {

@@ -32,7 +32,7 @@ const dense_lu = @import("dense_lu.zig");
 
 /// Returns the PSD of one parametric term at `f`: white plus flicker / f^ef.
 /// At f <= 0 the flicker half has no value and only the white half counts.
-pub inline fn sourcePsd(t: contract.PsdTerm, f: f64) f64 {
+inline fn sourcePsd(t: contract.PsdTerm, f: f64) f64 {
     if (t.flicker == 0 or f <= 0) return t.white;
     return t.white + t.flicker / std.math.pow(f64, f, t.ef);
 }

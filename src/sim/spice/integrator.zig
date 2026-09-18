@@ -53,7 +53,7 @@ pub fn coeffs(method: Method, dt: f64, dt_prev: f64, xmu: f64) Coeffs {
 /// indexed by order: gearCoeff = {.5, .2222222222, ...}, trapCoeff = {.5,
 /// .08333333333}. The order here is fixed by the method (BE 1, trap and
 /// gear-2 2).
-pub fn lteCoeff(method: Method) f64 {
+fn lteCoeff(method: Method) f64 {
     // ngspice's decimals, not 2/9 and 1/12: the 4e-11 relative gap moves
     // every LTE-chosen step by 2e-11, which a 256-stage inverter chain
     // amplifies past tolerance.

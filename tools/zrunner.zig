@@ -300,7 +300,7 @@ pub const TestResult = union(enum) {
     }
 
     /// Whether `std.testing.allocator` reported a leak; a skipped test never does.
-    pub fn isMemoryLeak(self: TestResult) bool {
+    fn isMemoryLeak(self: TestResult) bool {
         return switch (self) {
             .passed => |result| result.is_mem_leak,
             .failed => |result| result.is_mem_leak,
@@ -363,7 +363,7 @@ const FileReporter = struct {
     }
 
     /// Writes the banner and flushes, so it prints before any test's own output.
-    pub fn writeTitle(
+    fn writeTitle(
         self: *FileReporter,
         process_name: []const u8,
         tests_count: usize,
@@ -385,17 +385,17 @@ const FileReporter = struct {
     }
 
     /// One line naming the group the next tests belong to.
-    pub fn writeNamespace(self: *FileReporter, namespace: []const u8) anyerror!void {
+    fn writeNamespace(self: *FileReporter, namespace: []const u8) anyerror!void {
         try self.colorizeLine(colors.namespace, "{s}", .{namespace});
     }
 
     /// ` - <name> `, the line `writeTestResult` finishes.
-    pub fn writeTestName(self: *FileReporter, test_name: []const u8) anyerror!void {
+    fn writeTestName(self: *FileReporter, test_name: []const u8) anyerror!void {
         try self.colorize(colors.test_name, " - {s} ", .{test_name});
     }
 
     /// Finishes the line; a failure appends its error-return trace.
-    pub fn writeTestResult(self: *FileReporter, test_result: TestResult) anyerror!void {
+    fn writeTestResult(self: *FileReporter, test_result: TestResult) anyerror!void {
         switch (test_result) {
             .passed => |result| {
                 try self.colorize(
@@ -429,7 +429,7 @@ const FileReporter = struct {
     }
 
     /// The totals line, then a flush. Prints nothing for an artifact with no tests.
-    pub fn writeSummary(
+    fn writeSummary(
         self: *FileReporter,
         passed: u32,
         failed: u32,

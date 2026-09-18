@@ -92,7 +92,7 @@ pub const Lexer = struct {
 
     /// Returns the end offset of the token starting at `start`, by re-lexing it.
     /// Cost is one token scan per call.
-    pub fn tokenEnd(self: *const Lexer, start: u32) u32 {
+    fn tokenEnd(self: *const Lexer, start: u32) u32 {
         var relex: Lexer = .{ .src = self.src, .pos = start };
         _ = relex.next();
         return relex.pos;
@@ -419,7 +419,7 @@ pub fn tokenSpan(src: []const u8, starts: []const u32, tok: u32) diag.Span {
 
 /// Why a `.invalid` token that opened with `"` never closed, so the parser can
 /// give that common mistake its own message.
-pub const StringRunaway = enum {
+const StringRunaway = enum {
     /// Not a string literal at all; the caller's own message stands.
     none,
     /// Ran off the end of the line (or the file) with no closing quote.
@@ -573,7 +573,7 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
 
 /// An escape in a `.string_literal` that `stringContents` would decode by
 /// VerA's choice rather than by Table 2-2, as byte offsets into the text.
-pub const BadEscape = struct {
+const BadEscape = struct {
     start: u32,
     end: u32,
     /// `\ddd` above `\377` (E0148); otherwise an escape Table 2-2 does not

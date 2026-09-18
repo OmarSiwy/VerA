@@ -94,7 +94,7 @@ pub const BranchInfo = struct {
 };
 
 /// §5.4.2.1 one access function read, kept for the end-of-module probe sweep.
-pub const BranchRead = struct { access: Access, hi: u32, lo: u32, tok: u32 };
+const BranchRead = struct { access: Access, hi: u32, lo: u32, tok: u32 };
 
 /// A lowered expression: its Value plus the LRM type that governs which opcode
 /// family the *consumer* must use (§4.2.1.1–§4.2.1.3 implicit conversions).

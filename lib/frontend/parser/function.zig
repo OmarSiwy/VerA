@@ -356,7 +356,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
 
 /// One A.2.8 `block_item_declaration` of variables (`reg`, `integer`,
 /// `time`, `real`, `realtime`), cursor on the keyword, through its `;`.
-pub fn parseBlockVars(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+fn parseBlockVars(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
     const decl_tok = self.pos;
     const ty = try tfPortType(self);
     while (true) {

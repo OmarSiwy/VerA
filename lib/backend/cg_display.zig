@@ -56,7 +56,7 @@ pub const Spec = struct {
 /// conversion needs it in, and HOW it is rendered. `%h` on a real is a
 /// real→integer conversion (§4.2.1.1), not a reinterpretation, so `want` is
 /// not always the value's own type.
-pub const PrintArg = struct {
+const PrintArg = struct {
     v: Mir.Value,
     want: VTy,
     how: Mode = .plain,
@@ -834,7 +834,7 @@ pub fn emitMonitorArm(g: *Gen, args: []const Mir.Value) Error!void {
 }
 
 /// Returns the §9.7.3 severity prefix of `c`, or null for every other task.
-pub fn severityWord(c: Mir.Callee) ?[]const u8 {
+fn severityWord(c: Mir.Callee) ?[]const u8 {
     return switch (c) {
         .@"$fatal" => "FATAL",
         .@"$error" => "ERROR",
@@ -1097,7 +1097,7 @@ pub fn appendConv(
 /// Emits operand `i` of a print's argument tuple. A real crosses into the
 /// format layer through `.val()`. The `.ascii`/`.cint` arms emit labeled block
 /// expressions whose scratch is the `zb{i}` array `emitScratch` declared.
-pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
+fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
     switch (p.how) {
         .ascii => {
             // Mask the i64 carrier to the source width so sign extension adds

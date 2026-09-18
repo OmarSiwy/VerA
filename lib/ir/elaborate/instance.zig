@@ -252,7 +252,7 @@ fn loopInstances(self: *Flatten, init: Ast.StmtId, cond: Ast.ExprId, step: Ast.S
 /// `repeats` a value with the condition true and so never ends, or it is
 /// `unfolded`: the condition or step did not fold at some iteration, which
 /// the unroll then reports.
-pub fn LoopRun(comptime T: type) type {
+fn LoopRun(comptime T: type) type {
     return union(enum) { ends: u64, repeats: T, unfolded };
 }
 

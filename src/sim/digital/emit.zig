@@ -30,7 +30,7 @@ test {
 }
 
 /// What `vera --emit-exe design.v` was given: enough to run the source again.
-pub const Embed = struct {
+const Embed = struct {
     /// The design's source text, before preprocessing.
     source: []const u8,
     /// The name diagnostics and `$finish` reports give the source.
@@ -48,7 +48,7 @@ pub const Embed = struct {
 };
 
 /// What `program` made: the executable's root text, native or not.
-pub const Program = struct {
+const Program = struct {
     /// The executable's root module.
     text: []const u8,
     /// Null when the design runs natively; else why it does not.
@@ -64,7 +64,7 @@ pub const Program = struct {
 pub const Logic = enum { auto, two, four };
 
 /// Why a design keeps x or z meaning, and the token where it does.
-pub const Reason = struct { why: []const u8, tok: ?u32 };
+const Reason = struct { why: []const u8, tok: ?u32 };
 
 /// `Unsupported`: a construct is not native; `Emitter.why` names it, and
 /// `program` falls back to the interpreter (`device` refuses).
@@ -318,7 +318,7 @@ pub const Emitter = struct {
 
     /// `store` of the element `a<lb>` of the array whose first element is
     /// slot `base`.
-    pub fn storeElement(self: *Emitter, base: u32, lb: u32, how: How) Error!void {
+    fn storeElement(self: *Emitter, base: u32, lb: u32, how: How) Error!void {
         const off = .{ self.off[base], lb, base, words(self.r.values[base].width) };
         if (self.r.reals.contains(base)) {
             try realStoreCall(self, how);
@@ -400,7 +400,7 @@ fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
 /// caller's automatic frame (§10.2.2, §10.2.3).
 /// `part` is bits `lo` up of the `total`-bit local `cat<label>`, one operand's
 /// share of a concatenation lvalue's value.
-pub const Rhs = union(enum) {
+const Rhs = union(enum) {
     expr: Ast.ExprId,
     stored: struct { off: u32, ty: Type },
     captured: struct { call: u32, port: usize, ty: Type },

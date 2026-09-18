@@ -118,7 +118,7 @@ pub fn refuseRuntime(self: *Lower, tok: u32, hi: u32, lo: u32) Oom!void {
 /// §9.20 one resolved `hierarchical_reference_string`: the unknown it names,
 /// and whether the name was a node of the flat design itself (`direct`) rather
 /// than a child port flattening bound to one.
-pub const AliasHit = struct { idx: u32, direct: bool };
+const AliasHit = struct { idx: u32, direct: bool };
 
 /// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`,
 /// then the alias itself.

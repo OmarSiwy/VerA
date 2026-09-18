@@ -636,7 +636,7 @@ fn dupItem(self: *Lower, tok: u32, name: Ast.StrId) Oom!void {
 /// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a
 /// module variable and to a NAMED block's local; an unnamed `begin`'s
 /// declaration is neither, and `block_path` is "" for it.
-pub const VarScope = enum { module, local };
+const VarScope = enum { module, local };
 
 /// §3.2 declare and initialize. Verilog-AMS variables start at zero, so a read
 /// on a path that never assigned is 0 rather than the SSA builder's `.undef`
