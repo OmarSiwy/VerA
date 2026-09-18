@@ -37,8 +37,6 @@ const Elaborate = @import("elaborate.zig");
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
-/// `std.debug.assert`, re-exported for the `lower/*.zig` sub-files.
-pub const assert = std.debug.assert;
 
 /// This file's struct, so `Lower.Lower` also resolves.
 pub const Lower = @This();
@@ -55,14 +53,10 @@ pub const Error = Oom || error{ DiagnosticsReported, NoModule };
 // `Lowered`'s row types (lower/tables.zig), under the `Lower.X` names later
 // stages and the sub-files use.
 pub const ParamInfo = Lowered.ParamInfo;
-pub const Alias = Lowered.Alias;
 pub const unnamed_branch = Lowered.unnamed_branch;
 pub const ground = Lowered.ground;
 pub const none_u32 = Lowered.none_u32;
 pub const NodeKind = Lowered.NodeKind;
-pub const FlowKey = Lowered.FlowKey;
-pub const PortProbe = Lowered.PortProbe;
-pub const Nodeset = Lowered.Nodeset;
 pub const DeclMeta = Lowered.DeclMeta;
 pub const VecRange = Lowered.VecRange;
 pub const DisciplineInfo = Lowered.DisciplineInfo;
@@ -74,11 +68,8 @@ pub const NoiseSrc = Lowered.NoiseSrc;
 pub const ChargeSite = Lowered.ChargeSite;
 pub const Ty = Lowered.Ty;
 pub const HeldVar = Lowered.HeldVar;
-pub const MemArray = Lowered.MemArray;
-pub const LimitSlot = Lowered.LimitSlot;
 pub const TpBlock = Lowered.TpBlock;
 pub const TpSlot = Lowered.TpSlot;
-pub const Display = Lowered.Display;
 pub const Const = Lowered.Const;
 
 // ---------------------------------------------------------------------------
