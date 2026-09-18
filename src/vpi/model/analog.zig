@@ -21,7 +21,6 @@ const root = @import("../root.zig");
 const Building = model.Building;
 const Design = root.Design;
 const Error = root.Error;
-const Obj = root.Obj;
 const Cold = root.Cold;
 const addArray = model.addArray;
 const addModuleArrays = model.addModuleArrays;

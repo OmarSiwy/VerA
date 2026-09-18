@@ -10,7 +10,6 @@
 /// Opt into the contract's conformance checks (AGENTS.md §6).
 pub const vera_validate_contract = true;
 
-const std = @import("std");
 const contract = @import("contract");
 
 pub fn exportDevice(comptime D: type, comptime name: []const u8) void {

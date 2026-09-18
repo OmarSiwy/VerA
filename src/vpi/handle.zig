@@ -16,7 +16,6 @@ const systf = @import("systf.zig");
 
 const Obj = root.Obj;
 const asIter = root.asIter;
-const clearError = root.clearError;
 const refused = root.refused;
 const enter = root.enter;
 const fail = root.fail;
