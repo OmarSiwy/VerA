@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Fix: `zig build test -Doptimize=ReleaseSafe` passes again: `tests/status_host.zig` compared a copied `State` with the device's byte for byte, padding included, which LLVM leaves undefined; it now compares field by field. The testbench's `--certify` state check compares a held wide `reg` (`uN`, padded storage) by value for the same reason (#40).
 - `zig build check` type-checks every root `zig build test` compiles without emitting a binary; `zig build check --watch -fincremental` is the edit loop. `AGENTS.md` adopts the rewrite's design standard: the design review (§10), its rulings for VerA (§11) and `PRINCIPLES.md`.
 - `zig build test-vampyre` runs VAMPyRE, the CMC's Verilog-A rule checker, and VerA on the same compact models (self-test probes, VA-Models, cmcqa) and compares hidden state and integer division by a possibly-zero divisor, every disagreement triaged by name; a held variable's `Instance` comment now names why it is held (`event`, `retained`, ...) (#34).
 - Fix: an analog operator under a top-level `$port_connected`/`$param_given` condition compiles instead of E0514; §9.19 fixes both at elaboration, so they control analog operators like a parameter (BSIM-SOI 100.1.0's self-heating `ddt`) (#33).

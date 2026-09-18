@@ -950,13 +950,27 @@ pub const runner_body =
     \\    var bad = false;
     \\    inline for (names) |name| {
     \\        const staged = comptime std.mem.startsWith(u8, name, "wb__") or std.mem.startsWith(u8, name, "wq__");
-    \\        if (!staged and !std.mem.eql(u8, std.mem.asBytes(&@field(want.*, name)), std.mem.asBytes(&@field(got.*, name)))) {
+    \\        if (!staged and !sameBits(@field(want.*, name), @field(got.*, name))) {
     \\            std.debug.print("state_check FAIL: {s}.{s} is {any} after updateState and stateCtl(.revert), {any} before\n", .{ what, name, @field(got.*, name), @field(want.*, name) });
     \\            bad = true;
     \\        }
     \\    }
     \\    if (bad) std.process.exit(1);
     \\    return names.len;
+    \\}
+    \\/// `a` and `b` to the bit, NaN payloads included. An integer compares by
+    \\/// value: a held wide `reg` is a `uN` (`ZW`, N up to 128) whose storage
+    \\/// has padding bits LLVM leaves undefined, so the bytes of two equal
+    \\/// copies may differ outside Debug.
+    \\fn sameBits(a: anytype, b: @TypeOf(a)) bool {
+    \\    return switch (@typeInfo(@TypeOf(a))) {
+    \\        .int => a == b,
+    \\        .array => for (a, b) |x, y| {
+    \\            if (!sameBits(x, y)) break false;
+    \\        } else true,
+    \\        // else: floats, bools, pointers and the padding-free structs a device holds: bytes are bits
+    \\        else => std.mem.eql(u8, std.mem.asBytes(&a), std.mem.asBytes(&b)),
+    \\    };
     \\}
     \\
     \\fn allZero(v: [n_u]f64) bool {

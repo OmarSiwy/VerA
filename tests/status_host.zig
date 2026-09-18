@@ -90,11 +90,13 @@ test "status: an $error latches its site and arguments, and zeroes every row unt
     const both = D.evalQ(S, &xv, &m, &inst, sim(false));
     try std.testing.expect(allZero(both.res) and allZero(both.q));
 
-    // updateState leaves the device as it was.
+    // updateState leaves the device as it was. Field by field: `State` is
+    // { f64, i32 }, and its padding bytes are undefined, so a byte compare
+    // of a copy fails under LLVM (ReleaseSafe) with every field equal.
     const before = .{ inst, st };
     _ = D.updateState(S0, &m, &inst, xv, &st, sim(false));
-    try std.testing.expect(std.mem.eql(u8, std.mem.asBytes(&before[0]), std.mem.asBytes(&inst)));
-    try std.testing.expect(std.mem.eql(u8, std.mem.asBytes(&before[1]), std.mem.asBytes(&st)));
+    try std.testing.expectEqual(before[0], inst);
+    try std.testing.expectEqual(before[1], st);
 
     // initState clears it.
     st = D.initState(&m, &inst);
