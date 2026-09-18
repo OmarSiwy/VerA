@@ -726,5 +726,5 @@ test "IEEE 1364-2005 §12.8.1 an upward defparam's value is replaced down a chai
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate.elaborate(f.ctx()));
     try std.testing.expectEqual(@import("diag").Code.E0907, f.bag.at(0).code);
-    try std.testing.expect(std.mem.indexOf(u8, f.bag.at(0).message, "the cycle `w.y` → `w.x` → `w.y`") != null);
+    try std.testing.expect(std.mem.find(u8, f.bag.at(0).message, "the cycle `w.y` → `w.x` → `w.y`") != null);
 }

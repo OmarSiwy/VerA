@@ -62,7 +62,7 @@ pub fn report(
             // A sentence cite (`5.6.1.3:2`) is the requirement ledger's
             // (`conformance.py metric`), not this
             // clause inventory's: only a bare clause cite counts here.
-            if (std.mem.indexOfScalar(u8, s, ':') != null) continue;
+            if (std.mem.findScalar(u8, s, ':') != null) continue;
             cited = true;
             try cites.append(arena, .{
                 .section = s,
@@ -384,7 +384,7 @@ fn cFixtures(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]cons
     while (try walker.next(io)) |e| {
         if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".c")) continue;
         const path = try std.fs.path.join(arena, &.{ root, e.path });
-        if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
+        if (filter) |f| if (std.mem.find(u8, path, f) == null) continue;
         try list.append(arena, path);
     }
     return list.items;
@@ -438,7 +438,7 @@ fn cCites(
         const section = words.next() orelse return error.BadCTag;
         if (words.next() != null) return error.BadCTag;
         // A sentence cite is the ledger's, as in `report`.
-        if (std.mem.indexOfScalar(u8, section, ':') != null) continue;
+        if (std.mem.findScalar(u8, section, ':') != null) continue;
         try out.append(arena, .{
             .section = section,
             .path = path,
@@ -530,7 +530,7 @@ fn lrmClauses(
 /// G's change tables list ch7 subclauses).
 fn clausePrefix(basename: []const u8) ?[]const u8 {
     if (std.mem.startsWith(u8, basename, "ch")) {
-        const dash = std.mem.indexOfScalar(u8, basename, '-') orelse return null;
+        const dash = std.mem.findScalar(u8, basename, '-') orelse return null;
         const n = basename[2..dash];
         if (n.len == 0 or n.len > 2) return null;
         for (n) |c| if (!std.ascii.isDigit(c)) return null;
@@ -591,7 +591,7 @@ fn splitHeading(line: []const u8) ?struct { id: []const u8, title: []const u8 } 
             .title = rest,
         };
     }
-    const sp = std.mem.indexOfAny(u8, line, " \t") orelse return null;
+    const sp = std.mem.findAny(u8, line, " \t") orelse return null;
     const title = std.mem.trim(u8, line[sp..], " \t");
     if (title.len < 3) return null;
     if (!isClauseId(line[0..sp])) return null;
@@ -631,11 +631,11 @@ fn renderText(arena: std.mem.Allocator, html: []const u8) ![]u8 {
     while (i < html.len) {
         switch (html[i]) {
             '<' => {
-                i = (std.mem.indexOfScalarPos(u8, html, i, '>') orelse html.len - 1) + 1;
+                i = (std.mem.findScalarPos(u8, html, i, '>') orelse html.len - 1) + 1;
                 out.appendAssumeCapacity('\n');
             },
             '&' => {
-                const end = std.mem.indexOfScalarPos(u8, html, i, ';') orelse {
+                const end = std.mem.findScalarPos(u8, html, i, ';') orelse {
                     out.appendAssumeCapacity(html[i]);
                     i += 1;
                     continue;

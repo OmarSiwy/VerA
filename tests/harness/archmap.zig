@@ -53,8 +53,8 @@ pub fn run(init: std.process.Init, args: *Args) !u8 {
     const target = args.next() orelse "AGENTS.md";
     const doc = try Io.Dir.cwd().readFileAlloc(io, if (std.fs.path.isAbsolute(target)) target else try std.fs.path.join(arena, &.{ options.repo_root, target }), arena, .unlimited);
     const map = try render(&src);
-    const at = std.mem.indexOf(u8, doc, begin) orelse return noMarkers(w, target);
-    const stop = std.mem.indexOfPos(u8, doc, at + begin.len, end) orelse return noMarkers(w, target);
+    const at = std.mem.find(u8, doc, begin) orelse return noMarkers(w, target);
+    const stop = std.mem.findPos(u8, doc, at + begin.len, end) orelse return noMarkers(w, target);
     const text = try std.mem.concat(arena, u8, &.{ doc[0..at], map, doc[stop + end.len ..] });
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = if (std.fs.path.isAbsolute(target)) target else try std.fs.path.join(arena, &.{ options.repo_root, target }), .data = text });
     try w.print("{s}: architecture map written\n", .{target});
@@ -139,14 +139,14 @@ fn buildGraph(s: *Source) !Graph {
     var mods: std.ArrayList([2][]const u8) = .empty;
     var rest = try s.text("build.zig");
     const key = ".name = \"";
-    while (std.mem.indexOf(u8, rest, key)) |at| {
+    while (std.mem.find(u8, rest, key)) |at| {
         rest = rest[at + key.len ..];
-        const name_end = std.mem.indexOfScalar(u8, rest, '"') orelse break;
+        const name_end = std.mem.findScalar(u8, rest, '"') orelse break;
         const name = rest[0..name_end];
         const mid = "\", .path = \"";
         if (name.len == 0 or !allWord(name) or !std.mem.startsWith(u8, rest[name_end..], mid)) continue;
         const p = rest[name_end + mid.len ..];
-        const path_end = std.mem.indexOfScalar(u8, p, '"') orelse break;
+        const path_end = std.mem.findScalar(u8, p, '"') orelse break;
         if (path_end == 0) continue;
         for (mods.items) |*m| {
             if (std.mem.eql(u8, m[0], name)) {
@@ -166,11 +166,11 @@ fn buildGraph(s: *Source) !Graph {
         while (it.next()) |l| {
             const trimmed = std.mem.trimStart(u8, l, " \t\r\x0b\x0c");
             if (std.mem.startsWith(u8, trimmed, "\\\\")) continue;
-            var code = l[0 .. std.mem.indexOf(u8, l, "//") orelse l.len];
+            var code = l[0 .. std.mem.find(u8, l, "//") orelse l.len];
             const tag = "@import(\"";
-            while (std.mem.indexOf(u8, code, tag)) |at| {
+            while (std.mem.find(u8, code, tag)) |at| {
                 code = code[at + tag.len ..];
-                const q = std.mem.indexOfScalar(u8, code, '"') orelse break;
+                const q = std.mem.findScalar(u8, code, '"') orelse break;
                 if (q == 0 or q + 1 >= code.len or code[q + 1] != ')') continue;
                 const m = code[0..q];
                 if (std.mem.endsWith(u8, m, ".zig")) {
@@ -320,7 +320,7 @@ fn units(s: *Source) ![]const u8 {
     };
     std.mem.sort(u32, order, ByLayer{ .layer = layer, .comps = comps }, ByLayer.lt);
     const name = try a.alloc([]const u8, comps.len);
-    for (order, 0..) |i, k| name[i] = try std.fmt.allocPrint(a, "U{d:0>2}", .{k});
+    for (order, 0..) |i, k| name[i] = try a.print("U{d:0>2}", .{k});
     const users = try a.alloc(std.ArrayList(u32), comps.len);
     @memset(users, .empty);
     for (0..comps.len) |i| for (deps[i]) |d| try users[d].append(a, @intCast(i));
@@ -415,7 +415,7 @@ fn label(a: Allocator, g: *const Graph, comps: []const []u32, uid: []const u32, 
     for (u[1..]) |f| {
         if (ext[f] > ext[best] or (ext[f] == ext[best] and g.lines[f] > g.lines[best])) best = f;
     }
-    return std.fmt.allocPrint(a, "{s} (+{d})", .{ g.files[best], u.len - 1 });
+    return a.print("{s} (+{d})", .{ g.files[best], u.len - 1 });
 }
 
 /// Peel the most-imported files until the rest falls apart.
@@ -593,7 +593,7 @@ fn typeDecl(l: []const u8) ?struct { name: []const u8, kind: []const u8 } {
         while (n < rest.len and (std.ascii.isAlphanumeric(rest[n]) or rest[n] == '_')) n += 1;
         if (n >= rest.len or rest[n] != '(') return null;
         var from = n + 1;
-        while (std.mem.indexOfPos(u8, rest, from, ") type")) |at| {
+        while (std.mem.findPos(u8, rest, from, ") type")) |at| {
             const e = at + ") type".len;
             if (e == rest.len or !isWord(rest[e])) return .{ .name = rest[0..n], .kind = "type fn" };
             from = at + 1;

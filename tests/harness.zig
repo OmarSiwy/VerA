@@ -481,7 +481,7 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
         _ = scratch.reset(.retain_capacity);
         const ext = fixtureExt(scratch.allocator(), io, dir, entry.path) orelse continue;
         const path = try std.fs.path.join(arena, &.{ root, entry.path });
-        if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
+        if (filter) |f| if (std.mem.find(u8, path, f) == null) continue;
         const slug = try arena.dupe(u8, entry.path[0 .. entry.path.len - ext.len]);
         std.mem.replaceScalar(u8, slug, '/', '_');
         std.mem.replaceScalar(u8, slug, '\\', '_');
@@ -647,7 +647,7 @@ fn decide(
         // A digital transcript case is judged by its golden, not by `tb`
         // directives (`harness/digital.zig`), so only its polarity is read.
         const refusing = if (std.mem.endsWith(u8, n, ".v"))
-            digital.negative(text) or std.mem.indexOf(u8, text, "//! reject") != null
+            digital.negative(text) or std.mem.find(u8, text, "//! reject") != null
         else
             refuses(vera.tb.parse(arena, text) catch |err| {
                 try w.print("FAIL {s}: `//! neighbour {s}`: its directives do not parse: {t}\n", .{ f.path, n, err });

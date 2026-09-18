@@ -89,7 +89,7 @@ fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8) !usize {
             if (all) break r.name;
         } else continue;
         const loc = tree.tokenLocation(0, et);
-        if (std.mem.indexOf(u8, src[loc.line_start..loc.line_end], "// else:") != null) continue;
+        if (std.mem.find(u8, src[loc.line_start..loc.line_end], "// else:") != null) continue;
 
         var in_test = false;
         var best: ?Span = null;
@@ -160,8 +160,8 @@ fn scanOs(path: []const u8, src: []const u8) usize {
     while (lines.next()) |line| {
         line_no += 1;
         if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "//")) continue;
-        if (std.mem.indexOf(u8, line, "// os:") != null) continue;
-        for (os_apis) |api| if (std.mem.indexOf(u8, line, api) != null) {
+        if (std.mem.find(u8, line, "// os:") != null) continue;
+        for (os_apis) |api| if (std.mem.find(u8, line, api) != null) {
             std.debug.print(
                 "{s}:{d}: `{s}` is an OS API\n    fix: use the portable `std` API, move it to {s}, " ++
                     "or put `// os: <why every target still builds>` on the line\n",

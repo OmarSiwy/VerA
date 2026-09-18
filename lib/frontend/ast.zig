@@ -501,7 +501,7 @@ test "StringInterner: ids survive the map's rehashes, and a clone grows alone" {
     var t: StringInterner = .empty;
     defer t.deinit(gpa);
     for (&names, 0..) |*n, i| {
-        _ = std.fmt.bufPrint(n, "n{d:0>7}", .{i}) catch unreachable;
+        _ = std.mem.print(n, "n{d:0>7}", .{i}) catch unreachable;
         try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(try t.intern(gpa, n)));
     }
     for (&names, 0..) |*n, i| try testing.expectEqual(@as(u32, @intCast(i)), @backingInt(t.find(n).?));
@@ -519,7 +519,7 @@ fn internSome(gpa: std.mem.Allocator) !void {
     var t: StringInterner = .empty;
     defer t.deinit(gpa);
     for (&names, 0..) |*n, i| {
-        _ = std.fmt.bufPrint(n, "s{d:0>3}", .{i}) catch unreachable;
+        _ = std.mem.print(n, "s{d:0>3}", .{i}) catch unreachable;
         const before = t.strings.items.len;
         const id = t.intern(gpa, n) catch |err| {
             // No id without its string, and no string without its id.

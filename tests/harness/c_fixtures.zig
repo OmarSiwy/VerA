@@ -62,7 +62,7 @@ pub fn run(init: std.process.Init, args: *Args) !u8 {
         std.mem.sort([]const u8, names.items, {}, harness.strLess);
 
         for (names.items) |name| {
-            if (filter) |f| if (std.mem.indexOf(u8, name, f) == null) continue;
+            if (filter) |f| if (std.mem.find(u8, name, f) == null) continue;
             ran += 1;
             const pa = arena_state.allocator();
             const src = try std.fs.path.join(pa, &.{ dir_path, name });
@@ -98,7 +98,7 @@ pub fn run(init: std.process.Init, args: *Args) !u8 {
 /// The compiler's first `error:` line, or its first line if it never said one.
 fn firstErrorLine(stderr: []const u8) []const u8 {
     var lines = std.mem.splitScalar(u8, stderr, '\n');
-    while (lines.next()) |l| if (std.mem.indexOf(u8, l, "error:") != null) return l;
+    while (lines.next()) |l| if (std.mem.find(u8, l, "error:") != null) return l;
     var again = std.mem.splitScalar(u8, stderr, '\n');
     return again.next() orelse "";
 }

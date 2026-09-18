@@ -108,7 +108,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     var failed: usize = 0;
     var xfailed: usize = 0;
     for (cases) |case| {
-        if (filter) |f| if (std.mem.indexOf(u8, case, f) == null) continue;
+        if (filter) |f| if (std.mem.find(u8, case, f) == null) continue;
         _ = arena_state.reset(.retain_capacity);
         ran += 1;
         switch (try digitalVerdict(arena_state.allocator(), io, exe, case, w)) {

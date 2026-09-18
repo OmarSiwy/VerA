@@ -238,7 +238,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     // where the path is being used", so a bare name resolves locally, while
     // `$root.top.a` names something this module does not declare.
     const ref_name = self.file.str(ex.strOf(args[0]));
-    if (std.mem.indexOfScalar(u8, target, '.') == null and !std.mem.eql(u8, target, ref_name)) {
+    if (std.mem.findScalar(u8, target, '.') == null and !std.mem.eql(u8, target, ref_name)) {
         if (self.hier_name_state.alias_home.contains(target)) {
             try self.err(self.file.exprs.mainTok(e), .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
             return .refused;
@@ -375,7 +375,7 @@ fn callerParentPath(self: *const Lower) []const u8 {
     if (p.len == 0) return p;
     // `path` ends with the separator, so the caller's own segment is the text
     // between the previous separator and the last one.
-    const cut = std.mem.lastIndexOfScalar(u8, p[0 .. p.len - 1], Elaborate.sep) orelse return "";
+    const cut = std.mem.findScalarLast(u8, p[0 .. p.len - 1], Elaborate.sep) orelse return "";
     return p[0 .. cut + 1];
 }
 

@@ -77,8 +77,8 @@ fn isIdentChar(c: u8) bool {
 /// Whether `at` follows a `//` on its line. Enough because codegen emits no
 /// string literal containing `//`.
 fn inComment(text: []const u8, at: usize) bool {
-    const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
-    return std.mem.indexOf(u8, text[line_start..at], "//") != null;
+    const line_start = if (std.mem.findScalarLast(u8, text[0..at], '\n')) |nl| nl + 1 else 0;
+    return std.mem.find(u8, text[line_start..at], "//") != null;
 }
 
 test "every `contract.<name>` the backend emits is a decl contract.zig has" {
@@ -89,7 +89,7 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
 
     var missing: usize = 0;
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, device, i, "contract.")) |hit| {
+    while (std.mem.findPos(u8, device, i, "contract.")) |hit| {
         i = hit + "contract.".len;
         // A comment naming `contract.zig` is prose, not a decl the device
         // resolves.
@@ -111,7 +111,7 @@ test "every `contract.<name>` the backend emits is a decl contract.zig has" {
 
     // The scan is evidence only if it found something: a device that stopped
     // emitting the prefix would otherwise pass by matching nothing.
-    try std.testing.expect(std.mem.indexOf(u8, device, "contract.validate(") != null);
+    try std.testing.expect(std.mem.find(u8, device, "contract.validate(") != null);
 }
 
 // The split build writes `orchestrator.Part` tags into the shims as enum

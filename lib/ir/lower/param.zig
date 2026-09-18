@@ -591,7 +591,7 @@ fn metaRow(
     toks: []const u32,
 ) Oom!void {
     const name = self.file.str(name_id);
-    if (std.mem.indexOfScalar(u8, name, Elaborate.sep) != null) return;
+    if (std.mem.findScalar(u8, name, Elaborate.sep) != null) return;
     var specs: MetaSpecs = .{};
     for (toks) |t| if (last.get(t)) |l| {
         if (l.desc) |s| laterSpec(&specs.desc, s);

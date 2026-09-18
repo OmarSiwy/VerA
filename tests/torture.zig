@@ -374,8 +374,8 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
         for (0..f.diags.count()) |i| if (diagSays(&f.diags, i, pattern)) return true;
         return false;
     }
-    if (std.mem.indexOf(u8, f.error_name, pattern) != null) return true;
-    if (f.generated) |g| if (std.mem.indexOf(u8, g, pattern) != null) return true;
+    if (std.mem.find(u8, f.error_name, pattern) != null) return true;
+    if (f.generated) |g| if (std.mem.find(u8, g, pattern) != null) return true;
 
     if (!f.diags.isEmpty()) {
         if (std.mem.eql(u8, pattern, "DiagnosticsReported")) return true;
@@ -397,12 +397,12 @@ fn diagSays(bag: *const vera.diag.Bag, i: usize, pattern: []const u8) bool {
     const d = bag.at(i);
     if (asCode(pattern)) |want| return d.code == want;
     // The title too: much wording lives in `Info.title`, not the message.
-    if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
-    if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
-    if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
+    if (std.mem.find(u8, d.message, pattern) != null) return true;
+    if (std.mem.find(u8, d.point, pattern) != null) return true;
+    if (std.mem.find(u8, vera.diag.info(d.code).title, pattern) != null) return true;
     var nbuf: [vera.diag.max_children]vera.diag.Note = undefined;
     for (bag.notes(d, &nbuf)) |n| {
-        if (std.mem.indexOf(u8, n.text, pattern) != null) return true;
+        if (std.mem.find(u8, n.text, pattern) != null) return true;
     }
     return false;
 }
@@ -447,8 +447,8 @@ fn printDiags(f: Failure, w: *Io.Writer) !void {
     // "GeneratedCompileError" says nothing about WHICH construct codegen refused.
     if (f.generated) |g| {
         var rest = g;
-        while (std.mem.indexOf(u8, rest, "@compileError")) |at| {
-            const line_end = std.mem.indexOfScalar(u8, rest[at..], '\n') orelse rest.len - at;
+        while (std.mem.find(u8, rest, "@compileError")) |at| {
+            const line_end = std.mem.findScalar(u8, rest[at..], '\n') orelse rest.len - at;
             try w.print("  codegen: {s}\n", .{rest[at .. at + line_end]});
             rest = rest[at + line_end ..];
         }
@@ -527,7 +527,7 @@ fn runAndCheck(
         return .unmet;
     }
     // An LLVM intrinsic link-fails under `--zig-backend=native`.
-    if (std.mem.indexOf(u8, device, "extern fn @\"llvm.") != null) {
+    if (std.mem.find(u8, device, "extern fn @\"llvm.") != null) {
         try w.print("FAIL {s}: the device declares an `llvm.*` intrinsic; it cannot build under the self-hosted backend\n", .{f.path});
         return .unmet;
     }
@@ -612,7 +612,7 @@ fn runAndCheck(
         });
         var lines = std.mem.splitScalar(u8, got, '\n');
         while (lines.next()) |line| {
-            if (std.mem.indexOf(u8, line, "ok=0") != null) try w.print("    {s}\n", .{line});
+            if (std.mem.find(u8, line, "ok=0") != null) try w.print("    {s}\n", .{line});
         }
         return .unmet;
     }
@@ -633,7 +633,7 @@ fn runAndCheck(
     // may say FAIL about itself (the mixed runner's "the digital half did not
     // run"); it is judged by its status and `error[` lines above, so only
     // `capture`'s status line counts against it.
-    if (std.mem.indexOf(u8, got, if (d.reject_run.len != 0) "FAIL: <testbench" else "FAIL") != null) {
+    if (std.mem.find(u8, got, if (d.reject_run.len != 0) "FAIL: <testbench" else "FAIL") != null) {
         try w.print("FAIL {s}: the testbench itself reported a failure:\n{s}\n", .{ f.path, got });
         return .unmet;
     }
@@ -661,7 +661,7 @@ fn perturbed(f: Fixture, got: []const u8, w: *Io.Writer) !Result {
     var runner_checks: usize = 0;
     var lines = std.mem.splitScalar(u8, got, '\n');
     while (lines.next()) |line| {
-        const at = std.mem.indexOf(u8, line, "ok=") orelse continue;
+        const at = std.mem.find(u8, line, "ok=") orelse continue;
         if (directiveCheck(line)) {
             runner_checks += 1;
             continue;
@@ -676,7 +676,7 @@ fn perturbed(f: Fixture, got: []const u8, w: *Io.Writer) !Result {
     lines = std.mem.splitScalar(u8, got, '\n');
     while (lines.next()) |line| {
         if (directiveCheck(line)) continue;
-        const at = std.mem.indexOf(u8, line, "ok=1") orelse continue;
+        const at = std.mem.find(u8, line, "ok=1") orelse continue;
         if (at + 4 == line.len or std.ascii.isWhitespace(line[at + 4])) try w.print("LOOSE {s}: {s}\n", .{ f.path, line });
     }
     return .unmet;
@@ -701,7 +701,7 @@ test "a perturbed run judges the fixture's checks, not the runner's directive ta
     try std.testing.expectEqual(Result.unasserted, try perturbed(f, "nothing\n", &aw.writer));
     // An own check that survives is LOOSE, by name.
     try std.testing.expectEqual(Result.unmet, try perturbed(f, "loose got=1 want=1.001 ok=1\n", &aw.writer));
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "LOOSE x.va: loose") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "LOOSE x.va: loose") != null);
 }
 
 const Tally = struct { total: usize, failed: usize };
@@ -711,7 +711,7 @@ const Tally = struct { total: usize, failed: usize };
 fn countVerdicts(text: []const u8) Tally {
     var t: Tally = .{ .total = 0, .failed = 0 };
     var rest = text;
-    while (std.mem.indexOf(u8, rest, "ok=")) |at| {
+    while (std.mem.find(u8, rest, "ok=")) |at| {
         rest = rest[at + "ok=".len ..];
         t.total += 1;
         const is_one = rest.len != 0 and rest[0] == '1' and
@@ -869,7 +869,7 @@ test "declared check count rejects missing and duplicated observations" {
     };
     const missing = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_checks = 2 }, &report.writer, null);
     try std.testing.expect(missing == .unmet);
-    try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 1 assertion(s), expected exactly 2") != null);
+    try std.testing.expect(std.mem.find(u8, report.written(), "observed 1 assertion(s), expected exactly 2") != null);
     const complete = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_checks = 1 }, &report.writer, null);
     try std.testing.expect(complete == .met);
     const duplicated = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{
@@ -877,7 +877,7 @@ test "declared check count rejects missing and duplicated observations" {
         .times = &.{ 0.0, 1e-9 },
     }, &report.writer, null);
     try std.testing.expect(duplicated == .unmet);
-    try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 2 assertion(s), expected exactly 1") != null);
+    try std.testing.expect(std.mem.find(u8, report.written(), "observed 2 assertion(s), expected exactly 1") != null);
 }
 
 test "a fatal exit after a passing assertion must be explicitly expected" {
@@ -903,7 +903,7 @@ test "a fatal exit after a passing assertion must be explicitly expected" {
     };
     const unexpected = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{}, &report.writer, null);
     try std.testing.expect(unexpected == .unmet);
-    try std.testing.expect(std.mem.indexOf(u8, report.written(), "exit 1, expected 0") != null);
+    try std.testing.expect(std.mem.find(u8, report.written(), "exit 1, expected 0") != null);
     const expected = try runAndCheck(gpa, std.testing.io, arena, &.{ .cfg = &.{} }, fixture, source, .{ .expected_exit = 1 }, &report.writer, null);
     try std.testing.expect(expected == .met);
 }

@@ -221,7 +221,7 @@ pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !us
         try body.appendSlice(gpa, device.text[lo..fn_at]);
         if (!std.mem.startsWith(u8, device.text[fn_at..], "pub ")) try body.appendSlice(gpa, "pub ");
         try body.appendSlice(gpa, device.text[fn_at..hi]);
-        const p = try std.fmt.allocPrint(gpa, "{s}.zig", .{name});
+        const p = try gpa.print("{s}.zig", .{name});
         defer gpa.free(p);
         if (try writeIfChanged(io, gpa, udir, p, body.items)) writes += 1;
     }

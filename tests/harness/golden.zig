@@ -56,7 +56,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
 /// A tag names `.zig-cache/vera-golden/<tag>`; anything with a `/` is a path,
 /// so a snapshot from another checkout can be compared.
 fn snapDir(arena: Allocator, store: []const u8, arg: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, arg, '/') != null) return arg;
+    if (std.mem.findScalar(u8, arg, '/') != null) return arg;
     return std.fs.path.join(arena, &.{ store, arg });
 }
 
@@ -119,7 +119,7 @@ const Pool = struct {
         const out_file = try Io.Dir.cwd().openFile(io, txt, .{ .mode = .read_write });
         defer out_file.close(io);
         var line: [32]u8 = undefined;
-        try out_file.writePositionalAll(io, try std.fmt.bufPrint(&line, "exit={d}\n", .{code}), try out_file.length(io));
+        try out_file.writePositionalAll(io, try std.mem.print(&line, "exit={d}\n", .{code}), try out_file.length(io));
     }
 };
 
@@ -225,11 +225,11 @@ fn unrooted(arena: Allocator, text: []const u8) ![]const u8 {
     const key = "/tests/fixtures";
     var out: std.ArrayList(u8) = .empty;
     var rest = text;
-    while (std.mem.indexOf(u8, rest, key)) |at| {
+    while (std.mem.find(u8, rest, key)) |at| {
         const end = at + key.len;
-        const whole = end == rest.len or std.mem.indexOfScalar(u8, "/ \t\n,;:'\"`)", rest[end]) != null;
+        const whole = end == rest.len or std.mem.findScalar(u8, "/ \t\n,;:'\"`)", rest[end]) != null;
         var start = at;
-        while (start > 0 and std.mem.indexOfScalar(u8, " \t\n'\"`(", rest[start - 1]) == null) start -= 1;
+        while (start > 0 and std.mem.findScalar(u8, " \t\n'\"`(", rest[start - 1]) == null) start -= 1;
         if (whole and rest[start] == '/') {
             try out.appendSlice(arena, rest[0..start]);
             try out.appendSlice(arena, key[1..]);

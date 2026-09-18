@@ -566,7 +566,7 @@ fn runtimeSub(self: *const Lower, vars: *const std.AutoHashMapUnmanaged(Ast.StrI
     switch (ex.tag(e)) {
         .ident => {
             const n = ex.strOf(e);
-            if (std.mem.indexOfScalar(Ast.StrId, genvars, n) != null) return false;
+            if (std.mem.findScalar(Ast.StrId, genvars, n) != null) return false;
             return vars.contains(n) or self.param_index.contains(self.file.str(n));
         },
         .call, .sys_call, .hier_ident, .branch_access, .port_access, .filter_call, .noise_call => return true,

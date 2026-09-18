@@ -1201,16 +1201,16 @@ test "IEEE 1364-2005 §1.7 Annex G: a name VerA does not answer is refused by th
     // A property (vpi_get and vpi_get_str), an object or relationship
     // (vpi_handle and vpi_iterate) and a callback reason, each Annex G's.
     try std.testing.expectEqual(vpiUndefined, vpi_get(8, m));
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiCellInstance") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "vpiCellInstance") != null);
     try std.testing.expect(vpi_get_str(15, m) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiDefFile") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "vpiDefFile") != null);
     try std.testing.expect(vpi_handle(80, a) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiLowConn") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "vpiLowConn") != null);
     try std.testing.expect(vpi_iterate(127, m) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "vpiTaskFunc") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "vpiTaskFunc") != null);
     const save: callback.CbData = .{ .reason = 15, .cb_rtn = noCb, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
     try std.testing.expect(callback.vpi_register_cb(&save) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "cbStartOfSave") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "cbStartOfSave") != null);
     // The legal neighbours on the same objects answer, with no error.
     try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiTopModule, m));
     try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
@@ -1287,11 +1287,11 @@ test "§12.22: vpi_handle_multi(vpiInterModPath) is one path per port pair, hold
 
     // Not a path: an input first, one port twice, two sizes, a non-port.
     try std.testing.expect(multi(imp, a2, y1) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "not an output or inout port") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "not an output or inout port") != null);
     try std.testing.expect(multi(imp, y1, y1) == null);
     try std.testing.expectEqual(vpiError, vpi_chk_error(null));
     try std.testing.expect(multi(imp, y1, w2) == null);
-    try std.testing.expect(std.mem.indexOf(u8, lastMessage(), "same size") != null);
+    try std.testing.expect(std.mem.find(u8, lastMessage(), "same size") != null);
     try std.testing.expect(multi(imp, vpi_handle_by_name("top.n", null), a2) == null);
     try std.testing.expectEqual(vpiError, vpi_chk_error(null));
 }

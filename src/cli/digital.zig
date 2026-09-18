@@ -283,7 +283,7 @@ fn emitDevice(
         defer r.deinit(gpa);
         switch (r) {
             .ok => |a| if (f.osdi) {
-                const dest = f.out_path orelse try std.fmt.allocPrint(arena, "{s}.osdi", .{dev.name});
+                const dest = f.out_path orelse try arena.print("{s}.osdi", .{dev.name});
                 Io.Dir.cwd().copyFile(a.so_path, Io.Dir.cwd(), dest, io, .{}) catch |e| {
                     try err.print("error: cannot write `{s}`: {t}\n", .{ dest, e });
                     return 1;

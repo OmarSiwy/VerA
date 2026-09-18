@@ -102,7 +102,7 @@ const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback
 pub fn run(gpa: Allocator, io: Io, exe: []const u8, flags: []const []const u8, snapshot: bool, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
     var picked: std.ArrayList([]const u8) = .empty;
     defer picked.deinit(gpa);
-    for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
+    for (all) |c| if (filter == null or std.mem.find(u8, c, filter.?) != null) try picked.append(gpa, c);
     if (picked.items.len == 0) {
         try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});
         return 1;
@@ -172,14 +172,14 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
     try argv.appendSlice(arena, try digital.runnerArgs(arena, source, std.fs.path.dirname(src).?));
     const built = try child.capture(arena, io, argv.items);
     const two_state = std.mem.eql(u8, flags[0], "--two-state");
-    const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {
+    const fallback: ?[]const u8 = if (std.mem.find(u8, built.stderr, "not native (")) |at| blk: {
         const rest = built.stderr[at + "not native (".len ..];
-        break :blk rest[0 .. std.mem.indexOf(u8, rest, ")\n") orelse rest.len];
+        break :blk rest[0 .. std.mem.find(u8, rest, ")\n") orelse rest.len];
     } else null;
     const negative = digital.negative(source);
-    if (two_state and built.exit != 0) if (std.mem.indexOf(u8, built.stderr, "carries meaning: ")) |at| {
+    if (two_state and built.exit != 0) if (std.mem.find(u8, built.stderr, "carries meaning: ")) |at| {
         const rest = built.stderr[at + "carries meaning: ".len ..];
-        return .{ .pass = true, .fallback = rest[0 .. std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len] };
+        return .{ .pass = true, .fallback = rest[0 .. std.mem.findScalar(u8, rest, '\n') orelse rest.len] };
     };
     if (built.exit != 0) {
         if (negative and digital.rejectionMatches(source, built.exit, built.stderr)) return .{ .pass = true, .fallback = null, .refused = true };
@@ -192,15 +192,15 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
     };
     const bin = try Io.Dir.cwd().realPathFileAlloc(io, std.mem.trimEnd(u8, built.stdout, "\n"), arena);
     var ran = try child.captureIn(arena, io, if (snapshot) &.{ bin, "--vera-state", "--vera-snapshot" } else &.{ bin, "--vera-state" }, work);
-    if (std.mem.indexOf(u8, ran.stderr, "vera-snapshot: ")) |at| {
-        const end = std.mem.indexOfScalarPos(u8, ran.stderr, at, '\n') orelse ran.stderr.len;
+    if (std.mem.find(u8, ran.stderr, "vera-snapshot: ")) |at| {
+        const end = std.mem.findScalarPos(u8, ran.stderr, at, '\n') orelse ran.stderr.len;
         ran.stderr = try std.mem.concat(arena, u8, &.{ ran.stderr[0..at], ran.stderr[@min(end + 1, ran.stderr.len)..] });
     }
     var state: RunState = .four;
-    if (std.mem.indexOf(u8, ran.stderr, "vera-state: ")) |at| {
-        const end = std.mem.indexOfScalarPos(u8, ran.stderr, at, '\n') orelse ran.stderr.len;
+    if (std.mem.find(u8, ran.stderr, "vera-state: ")) |at| {
+        const end = std.mem.findScalarPos(u8, ran.stderr, at, '\n') orelse ran.stderr.len;
         const line = ran.stderr[at..end];
-        state = if (std.mem.indexOf(u8, line, "rerun") != null) .rerun else if (std.mem.indexOf(u8, line, "2-state") != null) .two else .four;
+        state = if (std.mem.find(u8, line, "rerun") != null) .rerun else if (std.mem.find(u8, line, "2-state") != null) .two else .four;
         ran.stderr = try std.mem.concat(arena, u8, &.{ ran.stderr[0..at], ran.stderr[@min(end + 1, ran.stderr.len)..] });
     }
     // `// native-state: 2|4|rerun` pins what the default `--state=auto` runs.
@@ -267,7 +267,7 @@ fn vcdDiff(arena: Allocator, io: Io, w: *Io.Writer, case: []const u8, work: []co
         const g = if (i < got.len) got[i] else "<end of file>";
         const e = if (i < want.len) want[i] else "<end of file>";
         if (std.mem.eql(u8, g, e)) continue;
-        if (two_state and std.mem.indexOfAny(u8, e, "xXzZ") != null) continue;
+        if (two_state and std.mem.findAny(u8, e, "xXzZ") != null) continue;
         try w.print("FAIL {s}: VCD token {d} is `{s}`, the golden has `{s}`\n", .{ case, i, g, e });
         return false;
     }

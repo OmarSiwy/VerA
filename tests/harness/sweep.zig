@@ -309,5 +309,5 @@ test "gen emits every axis it is asked for" {
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, "    real v"));
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, text, "  bench_leaf i"));
     // The chain terminates in the contribution, so nothing generated is dead.
-    try std.testing.expect(std.mem.indexOf(u8, text, "gain * v1 * 1.0;") != null);
+    try std.testing.expect(std.mem.find(u8, text, "gain * v1 * 1.0;") != null);
 }

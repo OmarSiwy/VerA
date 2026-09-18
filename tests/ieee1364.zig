@@ -204,7 +204,7 @@ pub fn coverage(init: std.process.Init) !u8 {
 
     try w.writeAll("\nchapter\tfixtures\tuncited-fixtures\tclauses\tboth\tpos-only\trej-only\tuncited\tclassified\n");
     for (clauses.items) |c| {
-        if (std.mem.indexOfScalar(u8, c.id, '.') != null) continue;
+        if (std.mem.findScalar(u8, c.id, '.') != null) continue;
         const t = chapters.get(c.id).?;
         try w.print("{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
             c.id, t.fixtures, t.uncited_fixtures, t.clauses, t.both, t.pos_only, t.neg_only, t.uncited, t.classified,
@@ -244,13 +244,13 @@ fn bucketOf(c: Clause) Bucket {
 
 /// `5.1.14` -> `5`, `A.6.7` -> `A`.
 fn topOf(id: []const u8) []const u8 {
-    return id[0 .. std.mem.indexOfScalar(u8, id, '.') orelse id.len];
+    return id[0 .. std.mem.findScalar(u8, id, '.') orelse id.len];
 }
 
 /// The chapter a fixture's directory files it under: `05_expressions/x.v` -> `5`.
 fn chapterOf(map: *std.StringArrayHashMapUnmanaged(Chapter), arena: Allocator, path: []const u8) !*Chapter {
-    const dir = path[0 .. std.mem.indexOfScalar(u8, path, '/') orelse 0];
-    var id = dir[0 .. std.mem.indexOfScalar(u8, dir, '_') orelse dir.len];
+    const dir = path[0 .. std.mem.findScalar(u8, path, '/') orelse 0];
+    var id = dir[0 .. std.mem.findScalar(u8, dir, '_') orelse dir.len];
     id = std.mem.trimStart(u8, id, "0");
     const g = try map.getOrPut(arena, id);
     if (!g.found_existing) g.value_ptr.* = .{};
@@ -300,7 +300,7 @@ fn inheritedCites(arena: Allocator, source: []const u8, key: []const u8, out: *s
         const rest = std.mem.trimStart(u8, line["//!".len..], " \t");
         if (!std.mem.startsWith(u8, rest, key)) continue;
         const list = rest[key.len..];
-        var words = std.mem.tokenizeAny(u8, list[0 .. std.mem.indexOfScalar(u8, list, '(') orelse list.len], " ,");
+        var words = std.mem.tokenizeAny(u8, list[0 .. std.mem.findScalar(u8, list, '(') orelse list.len], " ,");
         while (words.next()) |id| try out.append(arena, id);
     }
 }

@@ -620,7 +620,7 @@ pub fn primTerms(a: std.mem.Allocator, file: *const SourceFile, m: *const Module
             if (generated) return ty;
             const n = try seen.getOrPutValue(al, ty, 0);
             n.value_ptr.* += 1;
-            return std.fmt.allocPrint(al, "{s}${d}", .{ ty, n.value_ptr.* });
+            return al.print("{s}${d}", .{ ty, n.value_ptr.* });
         }
     };
     var inst: []const u8 = "";
@@ -631,8 +631,8 @@ pub fn primTerms(a: std.mem.Allocator, file: *const SourceFile, m: *const Module
         if (first) inst = try Name.of(a, file, &unnamed, g.name, @tagName(g.kind)[2..], g.generated);
         for (0..1 + g.ins.len) |t| {
             const port: []const u8, const dir: Direction = switch (g.kind) {
-                .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => if (t == 0) .{ "out", .output } else .{ try std.fmt.allocPrint(a, "in{d}", .{t}), .input },
-                .g_buf, .g_not => if (t == 0) .{ try std.fmt.allocPrint(a, "out{d}", .{k}), .output } else if (first) .{ "in", .input } else continue,
+                .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor => if (t == 0) .{ "out", .output } else .{ try a.print("in{d}", .{t}), .input },
+                .g_buf, .g_not => if (t == 0) .{ try a.print("out{d}", .{k}), .output } else if (first) .{ "in", .input } else continue,
                 .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => .{ ([_][]const u8{ "out", "in", "enable" })[t], if (t == 0) .output else .input },
             };
             try out.append(a, .{ .list = .gate, .row = @intCast(gi), .term = @intCast(t), .inst = inst, .range = g.range, .port = port, .dir = dir, .expr = if (t == 0) g.out else g.ins[t - 1], .generated = g.generated, .main_tok = g.main_tok });

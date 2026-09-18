@@ -2012,7 +2012,7 @@ test "an expression or statement of any depth: 256, one past the old bound, and 
         for (0..n) |_| try source.writer.writeAll("+1");
         try source.writer.writeAll("; $display(\"%0d\", a); end endmodule");
         var want: [16]u8 = undefined;
-        try @import("root.zig").expectRun(source.written(), try std.fmt.bufPrint(&want, "{d}\n", .{n}));
+        try @import("root.zig").expectRun(source.written(), try std.mem.print(&want, "{d}\n", .{n}));
         source.clearRetainingCapacity();
         try source.writer.writeAll("module m; initial ");
         for (0..n) |_| try source.writer.writeAll("if(1) ");

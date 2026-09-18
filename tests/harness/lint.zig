@@ -85,11 +85,11 @@ const MacroScan = struct {
             switch (s.src[s.i]) {
                 '/' => if (s.i + 1 < s.src.len) switch (s.src[s.i + 1]) {
                     '/' => {
-                        s.i = std.mem.indexOfScalarPos(u8, s.src, s.i, '\n') orelse s.src.len;
+                        s.i = std.mem.findScalarPos(u8, s.src, s.i, '\n') orelse s.src.len;
                         continue;
                     },
                     '*' => {
-                        const end = std.mem.indexOfPos(u8, s.src, s.i + 2, "*/");
+                        const end = std.mem.findPos(u8, s.src, s.i + 2, "*/");
                         s.i = if (end) |e| e + 2 else s.src.len;
                         continue;
                     },
@@ -284,7 +284,7 @@ fn isTimePiecewiseWant(s: []const u8) bool {
 /// The macro call as one line, for an error message. A CHECK often spans lines
 /// via `\` continuations, and a four-line quote buries the point.
 fn trimLine(s: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, s, '\n') orelse s.len;
+    const end = std.mem.findScalar(u8, s, '\n') orelse s.len;
     return std.mem.trim(u8, s[0..end], " \t\r\\");
 }
 

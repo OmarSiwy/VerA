@@ -93,7 +93,7 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
     var passed: usize = 0;
     var not_run: usize = 0;
     for (decks.items) |rel| {
-        if (filter) |f| if (std.mem.indexOf(u8, rel, f) == null) continue;
+        if (filter) |f| if (std.mem.find(u8, rel, f) == null) continue;
         ran += 1;
         const pa = arena_state.allocator();
         const path = try std.fs.path.join(pa, &.{ options.fixture_root, rel });
@@ -118,9 +118,9 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         while (lines.next()) |raw| {
             const line = std.mem.trim(u8, raw, " \t\r");
             if (!std.mem.startsWith(u8, line, ".hdl")) continue;
-            const open = std.mem.indexOfScalar(u8, line, '"') orelse continue;
+            const open = std.mem.findScalar(u8, line, '"') orelse continue;
             const rest = line[open + 1 ..];
-            const close = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+            const close = std.mem.findScalar(u8, rest, '"') orelse continue;
             const ref = rest[0..close];
 
             const model = (try resolveModel(pa, io, dir_path, ref)) orelse {
@@ -445,7 +445,7 @@ fn parseRows(arena: Allocator, out: []const u8, prefix: []const u8) !Table {
         var it = std.mem.tokenizeScalar(u8, line[prefix.len..], ' ');
         var k: usize = 0;
         while (it.next()) |kv| : (k += 1) {
-            const eq = std.mem.indexOfScalar(u8, kv, '=') orelse return error.BadRow;
+            const eq = std.mem.findScalar(u8, kv, '=') orelse return error.BadRow;
             const v = try std.fmt.parseFloat(f64, kv[eq + 1 ..]);
             if (k == 0) {
                 try axis.append(arena, v);
@@ -585,7 +585,7 @@ fn grade(arena: Allocator, deck: Deck, out: []const u8, oracle_text: []const u8)
         for (coords, want) |cv, wv| {
             // The coordinate itself must be an accepted point: interpolation
             // across it would hide a missing timepoint.
-            const i = std.mem.indexOfScalar(f64, t.axis, cv) orelse
+            const i = std.mem.findScalar(f64, t.axis, cv) orelse
                 return .{ .fail = try arena.print("MissingCoordinate: no accepted point at {e}", .{cv}) };
             if (!within(col[i], wv, fieldNum(ck, "rtol", 0), fieldNum(ck, "atol", 0)))
                 return .{ .fail = try arena.print("{s} at {e} = {e}, the oracle wants {e}", .{ cname, cv, col[i], wv }) };
@@ -652,8 +652,8 @@ test "the .noise grids: lin keeps both ends, dec and oct step by a fixed ratio t
     try std.testing.expectEqual(@as(usize, 4), oct.len);
     try std.testing.expectEqual(@as(f64, 8e3), oct[3]);
     const r = try translate(a, "R1 a 0 1k\n.noise v(a) v1 dec 2 1k 100k\n", &.{});
-    try std.testing.expect(std.mem.indexOf(u8, r.deck.va, "//! onoise V(a) = 1e3,") != null);
-    try std.testing.expect(std.mem.endsWith(u8, std.mem.sliceTo(r.deck.va[std.mem.indexOf(u8, r.deck.va, "//! onoise").?..], '\n'), ", 1e5"));
+    try std.testing.expect(std.mem.find(u8, r.deck.va, "//! onoise V(a) = 1e3,") != null);
+    try std.testing.expect(std.mem.endsWith(u8, std.mem.sliceTo(r.deck.va[std.mem.find(u8, r.deck.va, "//! onoise").?..], '\n'), ", 1e5"));
 }
 
 test "a deck with a card the runner lacks is NOT RUN, naming it" {
@@ -662,6 +662,6 @@ test "a deck with a card the runner lacks is NOT RUN, naming it" {
     const r = try translate(arena.allocator(), "Q1 c b e qmod\n.tran 1 2\n", &.{});
     try std.testing.expectEqualStrings("the Q device card (q1)", r.missing);
     const ok = try translate(arena.allocator(), "R1 a 0 1k\nV1 a 0 PWL(0 0 1m 1)\n.tran 1e-4 1e-3\n", &.{});
-    try std.testing.expect(std.mem.indexOf(u8, ok.deck.va, "resistor #(.r(1e3)) r1(a, gnd);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, ok.deck.va, "//! tran 1e-4, 1e-3") != null);
+    try std.testing.expect(std.mem.find(u8, ok.deck.va, "resistor #(.r(1e3)) r1(a, gnd);") != null);
+    try std.testing.expect(std.mem.find(u8, ok.deck.va, "//! tran 1e-4, 1e-3") != null);
 }

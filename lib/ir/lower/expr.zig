@@ -390,7 +390,7 @@ pub fn selectPos(r: Lower.RegRange, k: i64) ?u32 {
 
 /// Word `k` of a discrete `reg` input: the `Model` field the host writes it in.
 pub fn regWordValue(self: *Lower, name: []const u8, k: u32) Mir.Value {
-    const key = if (k == 0) name else std.fmt.allocPrint(self.arena, "{s}__w{d}", .{ name, k }) catch return .undef;
+    const key = if (k == 0) name else self.arena.print("{s}__w{d}", .{ name, k }) catch return .undef;
     return self.param_values.items[self.param_index.get(key).?];
 }
 
@@ -593,7 +593,7 @@ fn inScope(self: *Lower, path: []const u8) Oom!?[]const u8 {
         if (self.param_index.contains(flat) or self.vars.contains(flat) or self.consts.contains(flat) or
             self.node_voltages.contains(flat) or self.branches.contains(flat) or self.port_branches.contains(flat))
             return flat;
-        scope = scope[0 .. std.mem.lastIndexOfScalar(u8, scope, Elaborate.sep) orelse 0];
+        scope = scope[0 .. std.mem.findScalarLast(u8, scope, Elaborate.sep) orelse 0];
     }
     return null;
 }
@@ -1349,7 +1349,7 @@ fn instancePortFlow(self: *Lower, e: Ast.ExprId) Oom!?TypedValue {
     const lhs = ex.lhs(e);
     if (ex.tag(lhs) != .hier_ident) return null;
     const path = try Elaborate.flatReference(self.file, self.arena, self.out.module, lhs);
-    const cut = std.mem.lastIndexOfScalar(u8, path, Elaborate.sep) orelse return null;
+    const cut = std.mem.findScalarLast(u8, path, Elaborate.sep) orelse return null;
     const inst = path[0 .. cut + 1];
     const units = self.out.unit_paths;
     const lo: u32 = for (units, 0..) |u, i| {

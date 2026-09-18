@@ -63,7 +63,7 @@ pub fn run(init: std.process.Init) !u8 {
         const ok = if (std.mem.eql(u8, row.want, "pass"))
             v == .pass
         else
-            v == .fail and std.mem.indexOf(u8, text, row.want) != null;
+            v == .fail and std.mem.find(u8, text, row.want) != null;
         if (ok) {
             try w.print("canary {s}: {t} as expected\n", .{ name, v });
         } else {

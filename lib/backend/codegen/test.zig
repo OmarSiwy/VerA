@@ -642,7 +642,7 @@ test "codegen: the unit prologue aliases the helper API and not its internals" {
     // aliased by construction. The `z` + uppercase clause is what keeps a
     // kernel file's private names out of the prologue; pin both sides.
     const gpa = std.testing.allocator;
-    const has = std.mem.indexOf;
+    const has = std.mem.find;
     var str: std.ArrayList(u8) = .empty;
     defer str.deinit(gpa);
     try gen_kernel_text.appendAliases(&str, gpa, gen_kernel_text.str_txt);
@@ -4530,7 +4530,7 @@ test "codegen: §6.5.2.2 `U` is enum(u8) to 256 unknowns and as wide as the coun
         .{ .n = 600, .tag = "pub const U = enum(u10) {" },
         .{ .n = 70000, .tag = "pub const U = enum(u17) {" },
     }) |c| {
-        const src = try std.fmt.allocPrint(gpa,
+        const src = try gpa.print(
             \\module big(b);
             \\  inout [0:{d}] b;
             \\  electrical [0:{d}] b;

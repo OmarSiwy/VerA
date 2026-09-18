@@ -761,7 +761,7 @@ test "a later stage whose stack cannot be reserved is E0241, naming the depth" {
     defer bag.deinit(gpa);
     try std.testing.expectError(error.CompileFailed, compileSourceOpts(gpa, src, .lint, .{ .diags = &bag }));
     try std.testing.expectEqual(diag.Code.E0241, bag.at(0).code);
-    try std.testing.expect(std.mem.indexOf(u8, bag.at(0).message, "levels deep") != null);
+    try std.testing.expect(std.mem.find(u8, bag.at(0).message, "levels deep") != null);
 }
 
 test "10,000 sequential ifs compile: SSA, the prover and codegen walk them on no native stack per if" {

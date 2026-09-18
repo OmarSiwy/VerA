@@ -115,7 +115,7 @@ test "dist: §9.13 argument rules, and the integer twins match (IEEE 1364 §17.9
     var buf: [32]u8 = undefined;
     for (want) |w| {
         for ([_][]const u8{ "$rdist_", "$dist_" }, [_]@FieldType(Dist, "ty"){ .real, .integer }) |prefix, ty| {
-            const name = try std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, w[0] });
+            const name = try std.mem.print(&buf, "{s}{s}", .{ prefix, w[0] });
             const d = of(name).?;
             errdefer std.debug.print("`{s}`\n", .{name});
             try std.testing.expectEqual(w[1], d.nparam);

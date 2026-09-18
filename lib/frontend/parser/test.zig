@@ -1531,7 +1531,7 @@ test "a stack segment that cannot be reserved is E0241, naming the depth" {
     defer deep_stack.refuse_for_test = false;
     const r = try parseForTest(arena, src.items);
     try std.testing.expectEqual(@as(?diag.Code, .E0241), firstError(r));
-    try std.testing.expect(std.mem.indexOf(u8, firstErrorMsg(r), "levels deep") != null);
+    try std.testing.expect(std.mem.find(u8, firstErrorMsg(r), "levels deep") != null);
 }
 
 test "§2.9 attribute specs: the last value of a name wins, and a speculative read rewinds exactly" {

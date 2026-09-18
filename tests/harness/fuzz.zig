@@ -55,16 +55,16 @@ pub fn run(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
             try w.print("FAIL {s}: --run exited {d}, --emit-exe exited {d}\n{s}{s}\n", .{ path, want.exit, built.exit, want.stderr, built.stderr });
             return 1;
         }
-        if (std.mem.indexOf(u8, built.stderr, "not native (") != null) {
+        if (std.mem.find(u8, built.stderr, "not native (") != null) {
             try w.print("FAIL {s}: not native\n{s}\n", .{ path, built.stderr });
             return 1;
         }
-        if (late and std.mem.indexOf(u8, built.stderr, "4-state: ") != null) {
+        if (late and std.mem.find(u8, built.stderr, "4-state: ") != null) {
             try w.print("FAIL {s}: known operands, yet `--state=auto` built it 4-state\n{s}\n", .{ path, built.stderr });
             return 1;
         }
         const got = try child.capture(a, io, &.{ std.mem.trimEnd(u8, built.stdout, "\n"), "--vera-state" });
-        if (std.mem.indexOf(u8, got.stderr, "rerun") != null) reruns += 1 else if (std.mem.indexOf(u8, got.stderr, "2-state") != null) twos += 1;
+        if (std.mem.find(u8, got.stderr, "rerun") != null) reruns += 1 else if (std.mem.find(u8, got.stderr, "2-state") != null) twos += 1;
         if (!std.mem.eql(u8, want.stdout, got.stdout)) {
             failed = true;
             var wl = std.mem.splitScalar(u8, want.stdout, '\n');

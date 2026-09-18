@@ -63,7 +63,7 @@ pub fn caseSelected(has_golden: bool, source: []const u8) bool {
 /// `//! reject-only` also requires every `error[` line to match some pattern,
 /// as the analog judge does.
 pub fn rejectionMatches(source: []const u8, exit_code: u8, stderr: []const u8) bool {
-    if (exit_code != 1 or std.mem.indexOf(u8, stderr, "error[") == null) return false;
+    if (exit_code != 1 or std.mem.find(u8, stderr, "error[") == null) return false;
     var patterns: [32][]const u8 = undefined;
     var count: usize = 0;
     var only = false;
@@ -94,7 +94,7 @@ pub fn errorSays(stderr: []const u8, patterns: []const []const u8, mode: enum { 
         const diagnostic = std.mem.trim(u8, raw, " \t\r");
         if (!std.mem.startsWith(u8, diagnostic, "error[")) continue;
         const hit = for (patterns) |p| {
-            if (std.mem.indexOf(u8, diagnostic, p) != null) break true;
+            if (std.mem.find(u8, diagnostic, p) != null) break true;
         } else false;
         switch (mode) {
             .any => if (hit) return true,
@@ -143,7 +143,7 @@ pub fn warningsMatch(source: []const u8, stderr: []const u8) bool {
         while (diagnostics.next()) |diagnostic_raw| {
             const diagnostic = std.mem.trim(u8, diagnostic_raw, " \t\r");
             if (std.mem.startsWith(u8, diagnostic, "warning[") and
-                std.mem.indexOf(u8, diagnostic, pattern) != null) found = true;
+                std.mem.find(u8, diagnostic, pattern) != null) found = true;
         }
         if (!found) return false;
     }
