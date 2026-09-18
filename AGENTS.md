@@ -47,7 +47,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | Document | What it is | Use it for |
 |---|---|---|
 | `CHANGELOG.md` | every change since v0.0.1, one bullet each (fixes cite their GitHub issue); at each release, `tools/conformance.py`'s measured table under the version heading | what changed and where the project stands; where to add your own bullet (§9) |
-| `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4 and 5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
+| `ARCHITECTURE.md` | the target module DAG (the rewrite's, adapted) and its in-place migration: Phases 0–12, then behaviour changes B1–B4 | where a new file goes, and why; which phase is in flight (§6). The previous plan, all nine phases landed, is `git show 297e97d^:ARCHITECTURE.md` |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `specification/*.html`, `specification/VAMS-LRM-2023.pdf` | the LRM: 20 chapter and annex files | the normative text. Cite by clause number |
 | `specification/1364-2005.pdf` | IEEE 1364-2005, a licensed local copy. Gitignored: never commit it, a text extraction of it, or bundle it in a release | the inherited clauses; `tests/fixtures/ieee1364/CLAUSES.tsv` lists its headings |

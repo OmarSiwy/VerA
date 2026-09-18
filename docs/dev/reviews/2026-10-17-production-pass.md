@@ -47,6 +47,8 @@ Not planned (recorded): `Ast.ExprStore` has writers in elaboration and `src/sim`
 | Operator semantics once, in `rt` (§6) | five copies | P5 merges the two duplicate pairs found |
 | No input-depth recursion; explicit work stacks (§6) | `deep_stack` threads sized to depth | recorded |
 
+**Re-scoped 2026-10-17** by `ARCHITECTURE.md` §4: P3 keeps only the four cycles no phase covers; P4 keeps only `Gen.poison` (pruneHeld → Phase 6, spellings → Phase 8); P5 merges onto the `rt/` side; P9 and P10's kernel_text item land before Phase 3.
+
 ## Results
 
 (filled in per package as it lands)
