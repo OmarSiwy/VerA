@@ -85,11 +85,20 @@ pub fn simulate() digital.Error!void {
     if (@import("systf.zig").misuse != null) return error.DigitalFailed;
     callback.startOfSimulation();
     started = false;
+    var resets: u32 = 0;
     while (true) {
         try timeSteps(r);
         // §12.36 vpiReset, "upon return of user VPI function".
         const go = reset_request orelse break;
         reset_request = null;
+        // An application that asks again on every run would never let it
+        // end; neither 12.36 nor C.7 bounds the count (Vague_Decisions §7).
+        if (resets == max_resets) {
+            const e = r.fail(0, "more than {d} vpiReset requests in one run: an application that resets every run never lets it end", .{max_resets});
+            callback.runError();
+            return e;
+        }
+        resets += 1;
         callback.startOfReset();
         r.reset() catch |e| {
             callback.runError();
@@ -110,6 +119,11 @@ pub fn simulate() digital.Error!void {
     callback.endOfSimulation();
 }
 
+/// The vpiResets `simulate` performs in one run before it refuses the next
+/// request (E1100). Each reset re-elaborates the design and keeps the old
+/// run's memory (VD-106), so the cap also bounds that.
+pub const max_resets: u32 = 1000;
+
 /// A §12.36 vpiReset an application asked for: whether the run goes on
 /// after it (a nonzero stop_value). `simulate` performs it once the
 /// application's routine has returned and the engine has stopped.
@@ -118,10 +132,26 @@ var reset_request: ?bool = null;
 /// The time queues of one run, from its current time to `$finish`, an empty
 /// queue, a vpiFinish or a vpiReset.
 fn timeSteps(r: *digital.Run) digital.Error!void {
+    // Passes of the loop below at one time. A time callback that registers
+    // another at its own time (a cbReadWriteSynch from a cbReadWriteSynch)
+    // brings the loop back to `t` with no event the engine's budget counts,
+    // so the passes are counted against that budget themselves.
+    var passes: u64 = 0;
+    var pass_time: ?u64 = null;
     while (!stopped(r)) {
         const ev = r.scheduler.peekTime();
         const due = callback.nextDue(clock, true);
         const t = earliest(ev, due) orelse break;
+        if (pass_time != t) {
+            pass_time = t;
+            passes = 0;
+        }
+        passes += 1;
+        if (passes > r.budget) {
+            const e = r.fail(0, "more than {d} callback passes at time {d}: a time callback that registers another at its own time keeps simulation time from advancing", .{ r.budget, t });
+            callback.runError();
+            return e;
+        }
         if (t > clock) {
             // Every event at or before `clock` has run and the next is at `t`,
             // so moving the clock to `t` skips nothing. The engine's own clock
@@ -750,6 +780,50 @@ test "§12.36/IEEE 1364-2005 C.7: a reset with stop_value 0 ends a batch run at 
     try simulate();
     try std.testing.expectEqualStrings("start s=x\n", h.out.written());
     try std.testing.expectEqual(@as(u64, 0), now());
+}
+
+fn resetAgain(_: *callback.CbData) callconv(.c) c_int {
+    resetAt(1) catch {
+        finish_seen = 999;
+    };
+    return 0;
+}
+
+test "§12.36: an application that asks vpiReset on every run fails by name after max_resets" {
+    var h: Harness = undefined;
+    try h.init(restart_source);
+    defer h.deinit();
+    finish_seen = 0;
+    // Every reset ends by asking for the next one.
+    const again: callback.CbData = .{ .reason = callback.cbEndOfReset, .cb_rtn = resetAgain, .obj = null, .time = null, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&again) != null);
+    try resetAt(1);
+    try std.testing.expectError(error.DigitalFailed, simulate());
+    try std.testing.expectEqual(@as(u64, 0), finish_seen);
+    try std.testing.expectEqual(@as(usize, 1), h.bag.count());
+    try std.testing.expect(std.mem.indexOf(u8, h.bag.at(0).message, "more than 1000 vpiReset requests") != null);
+}
+
+fn readWriteAgain(_: *callback.CbData) callconv(.c) c_int {
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 0, .real = 0 };
+    const d: callback.CbData = .{ .reason = callback.cbReadWriteSynch, .cb_rtn = readWriteAgain, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    if (callback.vpi_register_cb(&d) == null) finish_seen = 999;
+    return 0;
+}
+
+test "§12.31.2: a read-write callback that registers itself at its own time forever fails by name" {
+    var h: Harness = undefined;
+    try h.init(timeline);
+    defer h.deinit();
+    h.run.budget = 1000;
+    finish_seen = 0;
+    var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 7, .real = 0 };
+    const d: callback.CbData = .{ .reason = callback.cbReadWriteSynch, .cb_rtn = readWriteAgain, .obj = null, .time = &t, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&d) != null);
+    try std.testing.expectError(error.DigitalFailed, simulate());
+    try std.testing.expectEqual(@as(u64, 0), finish_seen);
+    try std.testing.expectEqual(@as(u64, 7), now());
+    try std.testing.expect(std.mem.indexOf(u8, h.bag.at(0).message, "more than 1000 callback passes at time 7") != null);
 }
 
 // ---- the pieces that need no run -------------------------------------------
