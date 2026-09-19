@@ -745,6 +745,7 @@ pub const StartupFn = *const fn () callconv(.c) void;
 pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     if (design != null) close();
     design = try digital_model.buildDigital(gpa, r);
+    try callback.sizeHooks(r);
     run.attach(r);
     print.share(r);
 }

@@ -438,10 +438,7 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
         destroy(p);
         return oom();
     };
-    if (cb.reason == cbStmt) rehook() catch {
-        retire(p);
-        return oom();
-    };
+    if (cb.reason == cbStmt) rehook();
     return @ptrCast(p);
 }
 
@@ -481,8 +478,8 @@ pub export fn vpi_remove_cb(cb_obj: vpiHandle) c_int {
     };
     _ = live.remove(@intFromPtr(cb));
     cb.dead = true;
-    // Only shrinks the set, which needs no memory.
-    if (cb.reason == cbStmt) rehook() catch unreachable;
+    // Allocates nothing (`sizeHooks`), so a routine C calls cannot fail here.
+    if (cb.reason == cbStmt) rehook();
     sweep();
     return 1;
 }
@@ -881,11 +878,20 @@ fn oomSites() ?[]const Site {
     return null;
 }
 
-/// Rebuilds `hooked` from the live cbStmt callbacks, and installs the hook
-/// on the engine while any is live.
-fn rehook() !void {
-    const r = root.run.attached() orelse return;
+/// Sizes `hooked` to `r`'s program, before `r` is attached
+/// (`root.openDigital`), so `rehook` never allocates: `vpi_remove_cb` has
+/// no failure to report but a bad handle (§12.34).
+pub fn sizeHooks(r: *const digital.Run) error{OutOfMemory}!void {
     try hooked.resize(gpa, r.code.items.len, false);
+}
+
+/// Rebuilds `hooked` from the live cbStmt callbacks, and installs the hook
+/// on the engine while any is live. Asserts that `sizeHooks` sized it to the
+/// attached program, whose length a reset keeps (it elaborates the same
+/// source again).
+fn rehook() void {
+    const r = root.run.attached() orelse return;
+    std.debug.assert(hooked.bit_length == r.code.items.len);
     hooked.unsetAll();
     for (cbs.items) |cb| {
         if (cb.dead or cb.reason != cbStmt) continue;
