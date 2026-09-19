@@ -1,0 +1,1 @@
+p03-05: rejected=1 backed_up=1 ct_before_ap=1 t_final=0.005

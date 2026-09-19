@@ -1,0 +1,95 @@
+// §4.5.12 a Z-filter RUNNING — every zi_* fixture in tests/fixtures evaluates
+// at a single DC point and pins gains, so the recurrence itself, which is the
+// entire content of §4.5.12.1-.4, has never been evaluated twice in a row.
+//
+//   §4.5.12: "The Z-transform filters implement linear discrete-time filters.
+//    Each filter supports a parameter T which specifies the sampling period of
+//    the filter. A FILTER WITH UNITY TRANSFER FUNCTION ACTS LIKE A SIMPLE
+//    SAMPLE-AND-HOLD WHICH SAMPLES EVERY T SECONDS AND EXHIBITS NO DELAY."
+//   §4.5.12, on the optional τ: "If it is not specified, the transition time is
+//    taken to be one (1) unit of time (as defined by the `default_transition
+//    compiler directive) ... IF THE TRANSITION TIME IS SPECIFIED AS ZERO (0),
+//    THEN THE OUTPUT IS ABRUPTLY DISCONTINUOUS. A Z-filter with zero (0)
+//    transition time shall not be directly assigned to a branch."
+//   §4.5.12.4 zi_nd: "zi_nd(expr, n, d, T [, τ [, t0]])" and
+//    "H(z) = (Σk=0..M-1 nk z−k) / (Σk=0..N-1 dk z−k)"
+//
+// WHY τ IS PASSED EXPLICITLY AS 0. This fixture asserts a value AT the sample
+// instant t = k·T, and τ is exactly what decides whether that instant is the
+// start of the k-th transition or its end. Left unspecified, τ is one unit of
+// time, and an implementation that honours it may legitimately still be at
+// y[k−1] at t = k·T — which is what HEAD prints, so four of the five points
+// would not discriminate a defect from a legal reading. Naming τ = 0 makes the
+// output "abruptly discontinuous" at the sample instant, and the quoted
+// sample-and-hold sentence — "exhibits no delay" — fixes which side of that
+// discontinuity t = k·T is on: the k-th sample, not the (k−1)-th. The filter is
+// not assigned to a branch here (the only contribution is `I(in,n) <+ 0.0`), so
+// the τ = 0 restriction in the same paragraph is respected.
+//
+// THE HAND DERIVATION. With numerator '{1, 0} and denominator '{1, −0.5},
+//
+//     H(z) = 1 / (1 − 0.5 z⁻¹)      i.e.   y[k] = u[k] + 0.5·y[k−1]
+//
+// T = 1ns and the grid is the sample grid, so every timepoint is a sample
+// instant. The input is 0 at t = 0 and 1 from t = 1ns on. §4.5.15 fixes the
+// start: "All analog operators are considered to have no state history prior
+// to time t == 0", so y[−1] = 0.
+//
+//   k (= t/1ns)    0     1      2       3        4
+//   u[k]           0     1      1       1        1
+//   y[k]           0     1    1.5    1.75    1.875
+//
+// and in closed form y[k] = 2·(1 − 0.5^k), which is what the check below
+// writes — derived from the recurrence by hand, not read back from the filter.
+//
+// t = 0 IS DELIBERATELY UNAMBIGUOUS. ch04_expressions/24 argues at length that
+// §4.5.12 fixes no value at the operating point, so both live readings — the
+// H(z=1) steady state (2·u) and the no-history reading (u itself) — are
+// defensible there. With u(0) = 0 they are both 0, so this fixture asserts
+// nothing that the clause leaves open.
+//
+// WHY THIS FAILS TODAY. VerA samples the filter in `updateState`, which runs
+// AFTER the timepoint has been evaluated, and `emitOperator`'s `.zi` arm
+// answers the residual with `inst.<n>__out` — the value written by the
+// PREVIOUS sample. So the observed output at t = k·T is y[k−1], one whole
+// sample period late. MEASURED at HEAD it is 0, 0, 1, 1.5, 1.5 against the
+// table above — y[k−1] for k = 1..3, and a further sample missing at k = 4
+// because the last timepoint's update never runs. τ = 0 is also dropped: the
+// run is unchanged with and without it, 5 of 10 checks failing either way. The
+// operator's own comment names the same class of defect for §5.10.3 events
+// ("every cross()/timer() event was observed one timepoint late") and fixes it
+// there by deciding the event in `eval`; the sample-and-hold still has it.
+//
+// A one-sample lag is not a tolerance question: at t = 2ns the clause requires
+// 1.5 and the lagged reading gives 1, and the gap grows with the pole.
+//
+//! lrm 4.5.12
+//! lrm 4.5.15
+//! bias V(n) = 0
+//! wave V(in) = 0, 1
+//! time 0, 1n, 2n, 3n, 4n
+//! analysis tran
+//! print none
+`include "check.vh"
+module a04_zi_sample_instant(in, n);
+    inout in, n;
+    electrical in, n;
+
+    real y;
+
+    analog begin
+        // Bound once: `CHECK*` expands its GOT twice and the CHECKI puts it in
+        // the operand of a `||`, so the operator is evaluated here,
+        // unconditionally, and both checks read the variable.
+        y = zi_nd(V(in, n), '{1, 0}, '{1, -0.5}, 1n, 0);
+        `CHECKEQ("the sample taken at t = k*T is the output of that sample",
+                 y, 2.0 * (1.0 - pow(0.5, $abstime * 1e9)), 1e-12);
+        // Literal and row-invariant: the accumulator has already passed the
+        // input by the second sample. A one-sample lag is still at 1.0 there,
+        // and a pass-through never exceeds 1.0 at all.
+        `CHECKI("the recurrence has accumulated past its input by t = 2T",
+                y > 1.0 || $abstime < 2n, 1);
+
+        I(in, n) <+ 0.0;
+    end
+endmodule

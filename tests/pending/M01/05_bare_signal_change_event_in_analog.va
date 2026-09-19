@@ -1,0 +1,97 @@
+// §7.3.4 Syntax 7-2, the FIRST alternative of `analog_event_expression`:
+//
+//     analog_event_expression ::=
+//             expression
+//           | posedge expression
+//           | negedge expression
+//           | hierarchical_event_identifier
+//           | ...
+//
+// A bare `expression` is the signal-change ("any edge") event of §5.10, and
+// §7.3.4's opening sentence says what it means here: "Discrete events can be
+// detected in a Verilog-AMS HDL continuous context. The arguments to discrete
+// events in continuous contexts are in the discrete context." §5.10.5 names the
+// same set — "posedge events, negedge events, state change events, and named
+// events" — with `state change` as its own member, distinct from the two edges.
+//
+// This is the alternative fixture 04 does not reach, and the distinction is
+// worth a file because it is exactly one transition wide: `@(d)` must fire on
+// the falling edge that `@(posedge d)` ignores.
+//
+// DERIVATION, `timescale 1ns/1ns`, V(p) walked so V(p) = $abstime / 10n volts:
+//
+//   //! time  0     5n    10n   15n   20n   25n
+//   //! wave  0.0   0.5   1.0   1.5   2.0   2.5
+//
+//   t = 0     d driven to 1'b0                held = V(p)(0) = 0.0
+//   t = 10n   d 0 -> 1, a change              held = 1.0
+//   t = 20n   d 1 -> 0, ALSO a change         held = 2.0
+//
+// oracle ($abstime >= 20n) ? 2.0 : ($abstime >= 10n) ? 1.0 : 0.0.
+//
+// THE TIME-ZERO TRANSITION IS DELIBERATELY UNOBSERVABLE. Whether the discrete
+// kernel reports d's x -> 0 at time 0 as a change is a clause-8/1364 question,
+// not a clause-7 one, and this fixture must not accidentally decide it: V(p) is
+// 0.0 at t = 0, which is also §3.2's default for an unassigned real, so `held`
+// reads 0.0 either way.
+//
+// A posedge-only implementation reads 1.0 at t = 20n and 25n and fails there.
+// One that fired on every analog timestep instead of on d's changes reads 0.5
+// at t = 5n. One that never fired reads 0.0 throughout.
+//
+// WHAT FAILS TODAY, RE-CAPTURED AFTER REVIEW. This block used to record
+// `error[E0705]: not a declared named event: `d`` as the first diagnostic. It is
+// not; it is the second. What the compiler actually reports first is the `#` in
+// the stimulus:
+//
+//   $ zig-out/bin/vera --lint -I tests/fixtures \
+//       tests/pending/M01/05_bare_signal_change_event_in_analog.va
+//   error[E0209]: expected an expression: found `#`
+//     --> tests/pending/M01/05_bare_signal_change_event_in_analog.va:86:5
+//      |
+//   86 |     #10 d = 1'b1;
+//      |     ^
+//
+// `src/frontend/parser.zig:2324` gates `#` on `self.digital`, which `src/cli.zig`
+// sets only for a `.v` input, so the stimulus dies before the event does.
+//
+// Strip the delays and the SECOND failure is the one this fixture is about,
+// captured on the reduced module (`reg d; real held; initial d = 1'b0; analog
+// begin @(d) held = V(p); I(p) <+ held; end`):
+//
+//   error[E0705]: not a declared named event: `d`
+//    --> probe.va:6:7
+//     |
+//   6 |     @(d) held = V(p);
+//     |       ^
+//
+// VerA reads every bare identifier in an `@()` as a §5.10.4 named event, so
+// Syntax 7-2's first alternative has no implementation at all — not a refusal of
+// it, a misparse of it as something else.
+//
+//! lrm 7.3.4
+//! lrm 5.10.5
+//! analysis tran
+//! time 0, 5n, 10n, 15n, 20n, 25n
+//! wave V(p) = 0.0, 0.5, 1.0, 1.5, 2.0, 2.5
+`timescale 1ns/1ns
+`include "check.vh"
+module m01_signal_change_event(p);
+  inout p;
+  electrical p;
+  reg d;
+  real held;
+
+  initial begin
+    d = 1'b0;
+    #10 d = 1'b1;
+    #10 d = 1'b0;
+  end
+
+  analog begin
+    @(d)
+      held = V(p);
+    `CHECKEQ("a bare discrete expression event fires on both edges of d", held, ($abstime >= 20n) ? 2.0 : ($abstime >= 10n) ? 1.0 : 0.0, 0.0);
+    I(p) <+ held;
+  end
+endmodule

@@ -1,0 +1,80 @@
+// §3.6.3.2, the bus half of the same clause (Accellera Verilog-AMS,
+// docs/ch3-datatypes.html — NOT IEEE 1800.2, which is UVM):
+//
+//   "In the case of analog buses, a constant array expression is used as an
+//    initializer. A null value in the constant array indicates that no nodeset
+//    value is being specified for this element of the bus."
+//
+// and the clause's own example of that spelling, hole and all:
+//
+//     electrical [0:4] bus = '{2.3,4.5,,6.0};
+//
+// Two identical, independent cubic elements hang off the same bus, so the ONLY
+// difference between the two answers is which element the initializer named.
+// That makes the null element's meaning observable instead of decorative: a
+// compiler that fills the hole with 0.0, or with the previous element's value,
+// or that drops the whole table, gives a different pair of numbers.
+//
+// THE DERIVATION. Each element carries the cubic of
+// 01_nodeset_is_the_dc_initial_guess.va, whose roots are 1, 2 and 3, and whose
+// Newton basins from the two seeds here were worked out there:
+//
+//   n[0]  nodeset 2.75  -> Newton 2.75, 3.227273, 3.050713, 3.003450, ... -> 3.0
+//   n[1]  null          -> no nodeset, so the solver's own cold start, which
+//                          for this harness is 0.0
+//                       -> Newton 0, 0.545455, 0.848953, 0.974674, ...    -> 1.0
+//
+// Expected: V(n[0], g) = 3.0 and V(n[1], g) = 1.0, from one line of behaviour
+// written twice. The two differ by a whole unit, so the 1e-9 tolerance is not
+// load-bearing for either.
+//
+// WHERE THE AUTHORITY IS, because the grammar is not it. The normative claim
+// this fixture pins lives entirely in the §3.6.3.2 sentence quoted above plus
+// the clause's own printed example. Annex A does NOT back it up: the production
+// reached from `net_decl_assignment ::= ams_net_identifier = expression`
+// (A.2.4) for a `'{...}` initializer is A.8.1
+//
+//     constant_assignment_pattern ::=
+//             '{ constant_expression { , constant_expression } }
+//           | '{ constant_expression { constant_expression { , constant_expression } } }
+//
+// and neither alternative admits an empty element anywhere. A.8.3 does define
+// `constant_expression_or_null ::= [ constant_expression ]` — which is the
+// shape a corrected A.8.1 would use — but nothing in A.8.1 references it. So
+// the grammar cannot settle this question in either direction, and an earlier
+// revision of this row's SPEC.md was wrong to present "annex A.8.3" as the
+// authority for the refusal; that string is just the generic `.lrm` tag that
+// `src/diag_code.zig:1198` attaches to every E0209. The `//! lrm` directive
+// below cites 3.6.3.2 and only 3.6.3.2 for that reason. Implementing this
+// fixture means the grammar has to grow the null alternative; the fixture does
+// not claim Annex A already has it.
+//
+// WHY IT FAILS TODAY, and it fails twice over:
+//
+//   1. The hole does not parse. `'{2.75, }` is rejected with
+//      `error[E0209]: expected an expression: found `}``, so the LRM's literal
+//      example spelling is unavailable. (`src/frontend/parser.zig:4264` already
+//      carries a comment quoting the very sentence it then refuses.)
+//   2. Even written WITHOUT a hole — `'{2.75, 0.5}` — codegen emits no
+//      `u_nodeset` table at all for a vector net, where the scalar form emits
+//      one. A §3.6.3.2 initializer on a bus is currently dropped silently.
+//      Observed today with the hole removed: `x[n[0]] = 1.0`, `x[n[1]] = 1.0`.
+//
+//! lrm 3.6.3.2
+//! bias V(g) = 0.0
+//! solve
+//! print none
+`include "check.vh"
+module a08_nodeset_bus_null(g);
+    inout g;
+    electrical g;
+    // The null element is the second one: `n[1]` is being told nothing.
+    electrical [0:1] n = '{2.75, };
+
+    analog begin
+        `CHECK("the initialized bus element is seeded, so it takes the high root", V(n[0], g), 3.0, 1e-9);
+        `CHECK("the null element is told nothing and takes the cold-start root", V(n[1], g), 1.0, 1e-9);
+        I(n[0], g) <+ (V(n[0], g) - 1.0) * (V(n[0], g) - 2.0) * (V(n[0], g) - 3.0);
+        I(n[1], g) <+ (V(n[1], g) - 1.0) * (V(n[1], g) - 2.0) * (V(n[1], g) - 3.0);
+    end
+endmodule

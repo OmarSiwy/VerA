@@ -1,0 +1,27 @@
+// The device under test for tests/pending/A04/rollback/rollback_host.zig.
+//
+// Deliberately minimal: one integrator with a CONSTANT integrand and one time
+// derivative of a driven node, so every expected number in the host test is an
+// exact rational the LRM's own formulas produce, with no integration-rule
+// freedom left anywhere.
+//
+//   §4.5.4  idt(1e9, 0.0) = ∫0..t 1e9 dτ  = t·1e9, i.e. exactly 1.0 per ns
+//   §4.5.3  ddt(V(p,n))   = d/dt V(p,n)
+//
+// The contributions are scaled by 1e-3 so each operator lands in its own
+// residual row: f[p] = 1e-3 · idt, f[q] = 1e-3 · ddt.
+//
+// This file is NOT a torture fixture — it makes no `CHECK` and asserts nothing
+// on its own. The rollback behaviour it exists for is a sequence of HOST calls
+// (eval, updateState, stateCtl(.revert), eval again) that the `//!` directive
+// language cannot express, so the assertions live in the host driver beside
+// it, exactly as tests/limiter_host.zig does for §4.5.15 limiting.
+module a04_rollback_ops(p, n, q);
+    inout p, n, q;
+    electrical p, n, q;
+
+    analog begin
+        I(p, n) <+ 1e-3 * idt(1e9, 0.0);
+        I(q, n) <+ 1e-3 * ddt(V(p, n));
+    end
+endmodule

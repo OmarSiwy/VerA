@@ -1,0 +1,34 @@
+// §5.10.3.3 timer(), the tolerance's domain:
+//
+//   "The tolerance (time_tol) is an analog_expression and SHALL BE
+//    NON-NEGATIVE. If a value of zero (0.0) is specified, the simulator shall
+//    apply a suitable value."
+//
+// The same sentence appears verbatim for §5.10.3.1 cross() and §5.10.3.2
+// above(), so this is one rule with three spellings. Zero is explicitly given a
+// meaning — "pick one" — which leaves NEGATIVE with none: a negative tolerance
+// is not a wide box and not a disabled event, it is out of the domain the clause
+// defines, and there is no run whose result could be right.
+//
+// The argument is a literal here, so the violation is decidable at compile time
+// and does not depend on the solution: §9.17.2's matching rule for
+// `$bound_step` ("The expression argument shall be non-negative") is already
+// refused that way by this compiler (E0803,
+// tests/fixtures/ch09_system_tasks/136_bound_step_negative_rejected.va), which
+// is the precedent this file asks the event operators to follow.
+//
+// A reject, so there is nothing to run and no `want` to write. The substring is
+// the clause's own word, so the message names the rule and not just the
+// argument.
+//
+//! lrm 5.10.3.3
+//! reject non-negative
+module a10_timer_negative_time_tol(p);
+  inout p;
+  electrical p;
+  integer n;
+  analog begin
+    @(timer(1n, 2n, -1p)) n = n + 1;
+    I(p) <+ 0.0;
+  end
+endmodule

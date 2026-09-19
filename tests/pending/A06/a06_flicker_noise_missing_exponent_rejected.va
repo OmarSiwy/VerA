@@ -1,0 +1,52 @@
+// §4.6.4.2 / Syntax 4-4: `flicker_noise` takes TWO analog expressions. The
+// exponent is not optional.
+//
+// Syntax 4-4, verbatim, in the LRM's own bracket notation where `[ ]` marks
+// what may be omitted:
+//
+//     analog_small_signal_function_call ::=
+//         ...
+//       | white_noise ( analog_expression [ , string ] )
+//       | flicker_noise ( analog_expression , analog_expression [ , string ] )
+//
+// The name is bracketed in both; the exponent is not. §4.6.4.2 states the same
+// form in prose — "flicker_noise ( pwr , exp [ , name ] )" — and the exponent
+// is load-bearing: "generates pink noise with a power of pwr at 1Hz which
+// varies in proportion to 1/f exp". A one-argument call has no spectrum.
+//
+// WHY THIS IS A REFUSAL AND NOT A DEFAULT. There is no default in the clause,
+// and inventing one is not conservative: `flicker_noise(kf)` read as exp = 1
+// silently gives a 1/f source, while a model that meant `1/f^af` and lost the
+// argument to a typo gets no diagnostic. §4.6.4.1's `white_noise(pwr)` is the
+// one-argument member of the family and is how a flat spectrum is spelled, so
+// nothing legal is lost by refusing this.
+//
+// VerA accepts it today — `src/ir/lower.zig` seeds the exponent slot with
+// `.f_one` and notes that "`flicker_noise(pwr[, exp[, name]])` defaults `exp`
+// to 1" — and the generated device exports a `flicker` row with `.ef = 1`.
+// Grammar, not folklore: the LRM's brackets say otherwise.
+//
+// THE `//! reject` PATTERN, corrected. An earlier draft wrote
+// `//! reject flicker_noise` on the reasoning that no code is assigned yet, so
+// the construct's name was all that could be demanded. That has no teeth:
+// `failureContains` (tests/torture.zig:211-220) tests the pattern against
+// `f.generated`, the generated Zig, before it looks at any diagnostic, and the
+// generated Zig carries `flicker_noise` twice inside this module's own name.
+// Any failure at all would have matched, including one with nothing to do with
+// Syntax 4-4.
+//
+// `DiagnosticsReported` is the repo's convention for "a refusal is required and
+// the code is not assigned yet" (48 files use it): it holds only if the failure
+// carries at least one vera diagnostic. Today VerA emits none here — it accepts
+// the call and seeds `exp` with 1 — so the fixture is red for its own reason.
+// Replace this with the code once Syntax 4-4's arity rule is given one.
+//
+//! lrm 4.6.4.2
+//! lrm A.8.2
+//! reject DiagnosticsReported
+module a06_flicker_noise_missing_exponent_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog I(p, n) <+ V(p, n) / 1000.0 + flicker_noise(1e-20);
+endmodule

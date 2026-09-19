@@ -1,0 +1,68 @@
+`include "disciplines.vams"
+`include "constants.vams"
+// The small-signal circuit fixture 09 reads vpi_get_analog_freq() and the
+// IMAGINARY half of Figure 12-3's s_vpi_analog_value against.
+//
+// 1 A of AC stimulus injected into node `a`, loaded by 1 kohm in parallel with
+// C. The admittance at node a is
+//
+//     Y(w) = 1/R + jwC
+//
+// and C is chosen so that the susceptance equals the conductance at exactly
+// 1 kHz:  C = 1e-3 / (2*pi*1e3), so at f = 1 kHz, wC = 2*pi*1e3*C = 1e-3 = 1/R.
+//
+//     Y = 1e-3 * (1 + j)
+//     V(a) = 1 / Y = 1000 / (1 + j) = 1000 * (1 - j) / 2 = 500 - 500j
+//
+// So at f = 1 kHz the fixture's expected value is exactly
+//
+//     real part      = +500.0 V
+//     imaginary part = -500.0 V
+//
+// and both are exactly representable, which is the point of picking the
+// 45-degree point rather than a decade corner.
+//
+// The DC operating point of this deck is identically zero: ac_stim contributes
+// nothing to the large-signal solution (VAMS-2023 4.5.11), the source has no DC
+// term, and every element is linear. VAMS-2023 12.8 then fixes
+// vpi_get_analog_freq() == 0 at that DC solution, which is the other half of
+// fixture 09.
+//
+// Used by: 09, 10.
+
+module p03_acsrc(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real mag = 1.0;
+    // Negated so the branch current p->n is an injection INTO p when the
+    // instance is wired (a, gnd): I(p,n) is defined positive flowing out of p
+    // through the branch.
+    analog
+        I(p, n) <+ -ac_stim("ac", mag, 0.0);
+endmodule
+
+module p03_rc_ac;
+    parameter real rload = 1.0e3;
+    parameter real cload = 1.0e-3 / (2.0 * `M_PI * 1.0e3);
+    electrical a, gnd;
+    ground gnd;
+    p03_acsrc #(.mag(1.0)) i1(.p(a), .n(gnd));
+    p03_rload #(.r(rload)) r1(.p(a), .n(gnd));
+    p03_cload #(.c(cload)) c1(.p(a), .n(gnd));
+endmodule
+
+module p03_rload(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real r = 1.0e3 from (0:inf);
+    analog
+        I(p, n) <+ V(p, n) / r;
+endmodule
+
+module p03_cload(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real c = 1.0e-9 from (0:inf);
+    analog
+        I(p, n) <+ c * ddt(V(p, n));
+endmodule

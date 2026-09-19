@@ -1,0 +1,4 @@
+no_pending_value_is_minus_one state=0 delay=-1 next=0 ok=1
+delay_is_from_now state=0 delay=15 next=1 ok=1
+delay_counts_down state=0 delay=5 next=1 ok=1
+after_maturity_next_state_is_the_current_state state=1 delay=-1 next=1 ok=1

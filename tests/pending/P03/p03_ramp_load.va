@@ -1,0 +1,44 @@
+`include "disciplines.vams"
+// The stimulus every timing fixture in P03 reads back through
+// vpi_get_analog_value(). Deliberately the simplest circuit whose solution is a
+// CLOSED FORM of time, so a plugin's expected value at a forced solution point
+// is arithmetic and not a solver trace.
+//
+// VAMS-2023 9.10: "$abstime returns the absolute time, that is a real value
+// number representing time in seconds." p03_ramp is a pure voltage source of
+// slope*$abstime, so at every accepted point
+//
+//     V(out) == 1000 * t   exactly,
+//
+// and the 1 kohm load draws V(out)/1000 = t amperes without disturbing it. At
+// the points the P03 plugins force with acbAbsTime/acbElapsedTime (VAMS-2023
+// 12.31.3: "this callback shall force a solution at that time") the value is
+// therefore fixed by the clause and not by the step controller:
+//
+//     t = 1.5e-3 -> V(out) = 1.5     t = 2.5e-3 -> V(out) = 2.5
+//     t = 3.0e-3 -> V(out) = 3.0     t = 4.0e-3 -> V(out) = 4.0
+//
+// Used by: 02, 03, 04, 05.
+
+module p03_ramp(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real slope = 1000.0 from (0:inf);   // volts per second
+    analog
+        V(p, n) <+ slope * $abstime;
+endmodule
+
+module p03_res(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real r = 1000.0 from (0:inf);
+    analog
+        I(p, n) <+ V(p, n) / r;
+endmodule
+
+module p03_ramp_load;
+    electrical out, gnd;
+    ground gnd;
+    p03_ramp #(.slope(1000.0)) src (.p(out), .n(gnd));
+    p03_res  #(.r(1000.0))     load(.p(out), .n(gnd));
+endmodule

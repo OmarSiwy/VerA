@@ -1,0 +1,110 @@
+// §5.10.3.4: "The absdelta() event function enables efficient and accurate
+// sampling of analog signals for use in digital behavioral code. ... This
+// function is only allowed in an initial or always block of a Verilog-AMS
+// module." The clause's own example is `electrical_sampler`, an
+// `always @(absdelta(V(e_in), vdelta, ttol, vtol)) sampled = V(e_in);`.
+//
+// TWO CLAIMS, BOTH LATITUDE-FREE, because most of this clause is not. The
+// clause grants the simulator an explicit window — "The simulator is allowed to
+// schedule this event at any time between the time corresponding to the
+// interpolated absolute change of (delta - expr_tol) and ... (delta +
+// expr_tol)" — and also lets it choose the tolerances when they are omitted or
+// zero. Nothing about WHEN an event fires can therefore be asserted to a
+// number. What can be asserted is the pair of statements the clause makes
+// without a window:
+//
+//   1. delta = 0. "If delta is set to zero, an event is generated every
+//      timestep the expression value changes with zero tolerances. expr_tol and
+//      time_tol, if specified, will have no effect and be ignored." An event on
+//      every timestep means the sampled copy IS the signal, at every analog
+//      point the run reports.
+//
+//   2. any delta. The whole purpose of the function is that the held sample
+//      never drifts from expr by more than delta — "When the expr value changes
+//      in absolute value by more than delta, relative to the previous
+//      absdelta() event" a new event is generated. So |held - V(e_in)| <= delta
+//      is a hard bound, and the window above only moves WHEN the correction
+//      happens, never whether the bound is kept. Plus: an event is generated
+//      "During initialization or dc sweep analysis", so the bound holds from
+//      t = 0 and not only after the first change.
+//
+// DERIVATION. V(e_in) is a linear ramp, 0 V at t = 0 rising to 2 V at t = 20n,
+// i.e. V(e_in) = $abstime * 1e8 volts exactly at every listed point:
+//
+//   //! time  0     5n    10n   15n   20n
+//   //! wave  0.0   0.5   1.0   1.5   2.0
+//
+//   `tracked` (delta = 0):    an event every timestep, so the copy follows the
+//                             signal; the residual `tracked - $abstime*1e8` is
+//                             bounded by one reported step.
+//   `held`  (delta = 0.3):    the ramp moves 0.5 V between listed points, which
+//                             is MORE than 0.3, so at least one event must fall
+//                             in every interval; whatever instant the simulator
+//                             picks inside its window, the gap to V(e_in) stays
+//                             near 0.3.
+//
+// WHY delta IS 0.3 AND NOT 0.5. An earlier draft used 0.5 — exactly the step
+// the ramp takes between reported points — and §5.10.3.4 fires only when the
+// value changes "by MORE than delta". |0.5 − 0.0| is not more than 0.5, so a
+// literally conforming implementation would have generated no event after
+// initialization at all, left `held` at 0.0, and failed the second check by 2.0
+// at t = 20n. The fixture would have passed only an implementation that used
+// `>=` — it tested for a bug. 0.3 is strictly below the step, so the rule is
+// exercised on every interval under either reading.
+//
+// WHY THE BOUNDS CARRY SLACK. The clause's scheduling window means the
+// correction may land slightly after the crossing, so the reachable gap is
+// delta plus whatever that window costs, not delta exactly. 0.5 on claim 2 is
+// 0.3 + 0.2 of window. A tool that sampled `held` only once at t = 0 still
+// drifts to a gap of 2.0 by t = 20n, four times the bound, so the assertion
+// keeps its teeth.
+//
+// CLAIM 1'S BOUND IS ONE STEP, NOT ZERO, AND THAT IS AN M02 DEPENDENCY.
+// Asserting `tracked == V(e_in)` to float slack would additionally assert that a
+// value written by a digital `always` is visible to the analog block at the SAME
+// instant — the zero-delay A2D/D2A boundary question that this row's SPEC.md
+// explicitly defers to M02. Until M02 settles it, the honest bound is one
+// reported step (0.5) plus window (0.1). A tool that treated delta = 0 as "no
+// events" leaves `tracked` at the §3.2 default 0.0 and still fails from t = 10n
+// onward. When M02 lands, tighten this to equality at 1e-12 — the LRM's rule
+// here really is equality, and this fixture is currently under-claiming it.
+//
+// WHAT FAILS TODAY, in the order the compiler reaches it — re-captured after
+// review, which found the two reversed here. FIRST `error[E0205]: unsupported
+// module item: found `always``, on line 95: `src/frontend/parser.zig:1265`
+// refuses `always` outside a digital run, so the only call site §5.10.3.4
+// permits is not a legal module item at all. BEHIND it sits `error[E0513]:
+// absdelta() is not implemented`, VerA's own diagnostic title. The existing
+// fixture `tests/fixtures/ch05_analog_behavior/absdelta_digital_only.va` puts
+// the call in an `analog` block, where §5.10.3.4 forbids it, and so pins the
+// placement rule by way of a capability message; this file is the legal call
+// site.
+//
+//! lrm 5.10.3.4
+//! lrm 7.3.4
+//! analysis tran
+//! time 0, 5n, 10n, 15n, 20n
+//! wave V(e_in) = 0.0, 0.5, 1.0, 1.5, 2.0
+`timescale 1ns/100ps
+`include "check.vh"
+module m01_absdelta_sampler(e_in, p);
+  inout e_in, p;
+  electrical e_in, p;
+  real tracked, held;
+
+  always @(absdelta(V(e_in), 0.0))
+    tracked = V(e_in);
+
+  always @(absdelta(V(e_in), 0.3))
+    held = V(e_in);
+
+  analog begin
+    // One reported step (0.5) + window (0.1). Tighten to 1e-12 once M02 settles
+    // same-instant visibility; see CLAIM 1'S BOUND above.
+    `CHECK("absdelta with delta = 0 samples every timestep, so the copy follows the signal", tracked - $abstime * 1e8, 0.0, 0.6);
+    // delta (0.3) + scheduling window (0.2). delta is deliberately below the
+    // 0.5 step so the "more than delta" rule fires on every interval.
+    `CHECK("absdelta with delta = 0.3 never lets the held sample drift past 0.5 V", held - V(e_in), 0.0, 0.5);
+    I(p) <+ 1m * tracked;
+  end
+endmodule

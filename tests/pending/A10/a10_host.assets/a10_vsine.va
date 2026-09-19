@@ -1,0 +1,39 @@
+// §9.17.2 $bound_step, the LRM's own example, copied verbatim from the clause
+// except for the port spelling and the 1 kHz default:
+//
+//   module vsine(out);
+//     output out;
+//     voltage out;
+//     parameter real freq = 1.0, ampl = 1.0, offset = 0.0;
+//     analog begin
+//       V(out) <+ ampl * sin(2.0 * `M_PI * freq * $abstime) + offset;
+//       $bound_step(0.05 / freq);
+//     end
+//   endmodule
+//
+//   "The example below implements a sinusoidal voltage source and uses the
+//    $bound_step() task to assure the simulator faithfully follows the output
+//    signal (IT IS FORCING 20 POINTS PER CYCLE)."
+//
+// and the requirement itself: "For a given time step, the simulator shall ensure
+// that the next time step taken is no larger than the smallest $bound_step()
+// argument currently active."
+//
+// freq = 1 kHz, so the bound is 0.05/1000 = 5e-5 s and the period is 1e-3 s:
+// twenty points per cycle, as the clause says. The circuit this drives is purely
+// resistive, so nothing else in the deck asks for a small step — the truncation
+// error controller has no charge to look at — and the only thing standing
+// between the accepted grid and the deck's own dt_max is this task.
+`include "disciplines.vams"
+`include "constants.vams"
+
+module a10_vsine(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real freq = 1000.0 from (0:inf);
+  parameter real ampl = 1.0;
+  analog begin
+    V(p, n) <+ ampl * sin(2.0 * `M_PI * freq * $abstime);
+    $bound_step(0.05 / freq);
+  end
+endmodule

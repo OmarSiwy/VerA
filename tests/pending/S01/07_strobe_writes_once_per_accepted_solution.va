@@ -1,0 +1,93 @@
+// §9.4.6, in full:
+//
+//   "All display tasks, except $debug, shall not display output unless an
+//    iteration has been accepted."
+//
+// and §9.5.9 for the file form:
+//
+//   "If a file is being written to during an iterative solve, then the file
+//    write operations shall not be performed unless the iteration is accepted.
+//    The exception to this is the $fdebug."
+//
+// §9.4.1 gives $strobe the same reading from the other side: it "provides the
+// ability to display simulation data when the simulator has converged on a
+// solution for all nodes."
+//
+// So the number of records a $fstrobe produces is the number of ACCEPTED
+// solutions, not the number of Newton iterations the solver needed to get
+// there. This file makes the two numbers provably different and then asserts
+// the smaller one.
+//
+// WHY THE MEASUREMENT MAY BE TAKEN INLINE HERE AND MAY NOT BE IN 05/06. §9.5.9
+// suppresses the write until the iteration is accepted and then performs it;
+// nothing in §9.4.6 or §9.5.9 defers it past the statement. §9.4.1's $monitor
+// sentence is the one that says "the entire argument list is displayed AT THE
+// END OF THE TIME STEP", which is why fixtures 05 and 06 had to be reshaped to
+// measure across steps and this one did not. The difference is in the clauses,
+// not in convenience.
+//
+// WHY THE SOLVE TAKES MORE THAN ONE ITERATION. `//! solve` hands the unknowns
+// to the device's own Newton loop instead of biasing them, and the branch
+// relation is an exponential junction driven by a fixed 1 mA:
+//
+//   f(V) = Is*(exp(V/Vt) - 1) + Gmin*V - 1m,   Is = 1e-14, Vt = 0.0259,
+//                                              Gmin = 1e-12
+//
+// The iteration starts at V = 0. There
+//
+//   f(0)  = 1e-14*(1 - 1) + 0 - 1e-3           = -1e-3 A
+//   f'(0) = Is/Vt + Gmin = 3.861e-13 + 1e-12   =  1.386e-12 S
+//   first Newton step: V1 = 0 - f(0)/f'(0) = +1e-3 / 1.386e-12 = +7.22e8 V
+//
+// against a solution near 0.656 V (the value `--run` prints for x[p]). The
+// first correction therefore overshoots by nine orders of magnitude and no
+// single step can land on the root: any conforming solver performs at least two
+// iterations, and an implementation emitting one record per iteration could not
+// answer 2. (An earlier version of this header wrote that correction as −7e8 V.
+// The sign is wrong: the residual at V = 0 is negative, so −f/f' is positive
+// and the overshoot is upward, away from the root, not below it. The magnitude
+// and the conclusion are unchanged.)
+//
+// HAND DERIVATION OF THE BYTE COUNT. The record is the one-character string "s"
+// plus the newline §9.4.1 gives every member of the family except $write:
+// 2 bytes. One accepted solution, so the file holds exactly 2 bytes, measured
+// with §9.5.5's $ftell ("the offset from the beginning of the file of the
+// current byte") on the descriptor that wrote it. The "w" open truncates
+// (§9.5.1 Table 9-24), so the fixture is idempotent across runs.
+//
+// THIS FIXTURE IS GREEN AT HEAD, DELIBERATELY, AND IT IS NOT A NON-CLAIM.
+// §9.4.6 is one of the few things in this row that VerA already gets right, and
+// nothing else in the row would catch a regression in it. The discriminator is
+// exact and is not satisfied by "any compiler": an implementation that writes
+// per Newton iteration answers 2*N with N >= 2, so >= 4, and in practice far
+// more — the damped limexp walk from 0 V to 0.656 V is tens of iterations, so
+// the reading would be tens of bytes, not 2. An implementation that never
+// writes answers 0. SPEC.md lists it as a regression pin rather than as
+// coverage of a gap, which is what it is.
+//
+// This is also the positive control for the $debug row of the same clause:
+// $debug is the one task §9.4.6 exempts, and what it owes — a record per
+// iteration — is NOT asserted here. See SPEC.md for why that one needs harness
+// support rather than a fixture.
+//
+//! lrm 9.4.6
+//! lrm 9.5.9
+//! lrm 9.5.5
+//! solve
+//! print none
+`include "check.vh"
+module s01_strobe_once_per_solution(p, n);
+  inout p, n; electrical p, n;
+  integer fd, bytes;
+  analog begin
+    fd = $fopen("s01_07_strobe.dat", "w");
+    $fstrobe(fd, "s");
+    bytes = $ftell(fd);
+    $fclose(fd);
+
+    `CHECKI("§9.4.6 $fstrobe writes on the accepted solution only, not per iteration", bytes, 2);
+
+    I(p,n) <+ 1e-14 * (limexp(V(p,n) / 0.0259) - 1.0) + 1e-12 * V(p,n);
+    I(p,n) <+ -1e-3;
+  end
+endmodule

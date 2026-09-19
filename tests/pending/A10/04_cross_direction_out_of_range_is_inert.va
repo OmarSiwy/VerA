@@ -1,0 +1,60 @@
+// §5.10.3.1 cross(), the direction rule, all four cases in two sentences:
+//
+//   "If the direction indicator is set to 0 or is not specified, the event and
+//    timestep control occur on both positive and negative crossings of the
+//    signal. If dir is +1, the event and timestep control only occur on rising
+//    edge transitions of the signal. If dir is -1, the event and timestep
+//    control only occur on falling edge transitions of the signal. FOR ANY
+//    OTHER VALUES OF dir, THE cross() FUNCTION DOES NOT GENERATE AN EVENT AND
+//    DOES NOT ACT TO CONTROL THE TIMESTEP."
+//
+// The last sentence is the one with a number in it, and §5.10.3.1 says so again
+// when it lists the ways to switch the operator off: "there are two ways to
+// disable the cross function, either by specifying enable as 0, or GIVING A
+// VALUE OTHER THAN -1, 0, OR 1 TO dir".
+//
+// So `dir = +2` is a DISABLED cross, exactly as `enable = 0` is. This is not a
+// pedantic corner: a model that writes `cross(expr, dir)` with a
+// `parameter integer dir = +1 from [-1:+1]` (the LRM's own sample-and-hold
+// spells exactly that) and is then handed 2 by a model card must go quiet, not
+// start sampling on both edges.
+//
+// THE WAVEFORM. V(p) walks 0 -> 0.5 -> 1.5, so `V(p) - 1.0` goes
+// -1.0 -> -0.5 -> +0.5: one rising crossing of zero between the second and
+// third time point, and no falling crossing anywhere. A dir of +1 would fire
+// once; a dir of 0 would also fire once; a dir of -1 would fire not at all.
+//
+// EXPECTED, at every one of the three time points: n = 0. Exactly, as an
+// integer, with no relational hedge — the clause does not say "may fire", it
+// says the function does not generate an event, so there is no row of this run
+// on which any other digit is conforming. `held` is the second half of the same
+// claim: the guarded statement must never have run, so the variable it writes
+// must still hold its initializer.
+//
+// WHY IT FAILS TODAY. `Gen.crossTest` (src/backend/codegen.zig) folds the
+// direction argument and switches on it: +1 gets the rising test, -1 the
+// falling test, and EVERYTHING ELSE falls into the `else` arm, which is the
+// both-edges test. So dir = 2 is currently a synonym for dir = 0 and this
+// cross fires once, at t = 2n, reading n = 1 and held = 1.5.
+//
+//! lrm 5.10.3.1
+//! analysis tran
+//! time 0, 1n, 2n
+//! wave V(p) = 0, 0.5, 1.5
+//! print none
+`include "check.vh"
+module a10_cross_dir_out_of_range(p);
+  inout p;
+  electrical p;
+  integer n;
+  real held;
+  analog begin
+    @(cross(V(p) - 1.0, 2)) begin
+      n = n + 1;
+      held = V(p);
+    end
+    `CHECKI("a dir outside -1/0/+1 generates no event", n, 0);
+    `CHECKX("so the guarded statement never ran and its variable is untouched", held, 0.0);
+    I(p) <+ 0.0;
+  end
+endmodule
