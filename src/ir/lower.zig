@@ -797,12 +797,40 @@ pub const Const = union(enum) {
             .str => 0,
         };
     }
-    pub fn asInt(c: Const) i64 {
+    /// §4.2.1.1 real→integer rounds, ties away from zero — and says nothing
+    /// about a real that has no nearest integer, because it never contemplates
+    /// one. A NaN, an infinity, and anything past i64 are all in that hole.
+    ///
+    /// Returns null there rather than inventing a value. Any caller holding a
+    /// real the USER wrote must go through this and diagnose; `asInt` below is
+    /// only for operands already known to be in range.
+    pub fn asIntExact(c: Const) ?i64 {
         return switch (c) {
             .int => |i| i,
-            // §4.2.1.1 real→integer rounds, ties away from zero.
-            .real => |r| @intFromFloat(@round(r)),
+            .real => |r| blk: {
+                const v = @round(r);
+                if (!std.math.isFinite(v)) break :blk null;
+                // Compared against 2^63 and not maxInt(i64): 2^63 is exactly
+                // representable as an f64 and maxInt(i64) is not, so rounding
+                // the bound itself would let 2^63 through as "in range".
+                if (v >= 9223372036854775808.0 or v < -9223372036854775808.0) break :blk null;
+                break :blk @intFromFloat(v);
+            },
             .str => 0,
+        };
+    }
+    pub fn asInt(c: Const) i64 {
+        // Saturating, NaN to zero. This MUST NOT be able to panic: a bare
+        // `@intFromFloat` on an out-of-range double is illegal behavior, and it
+        // used to abort the whole compilation — no diagnostic, and every other
+        // error in the file lost with it — whenever a folded subscript or a
+        // `$discontinuity` degree reached it as an infinity. The two paths that
+        // can see such a value now call `asIntExact` and report; this fallback
+        // is what remains for operands a range check has already passed.
+        return c.asIntExact() orelse blk: {
+            const r = c.asReal();
+            if (std.math.isNan(r)) break :blk 0;
+            break :blk if (r > 0) std.math.maxInt(i64) else std.math.minInt(i64);
         };
     }
     pub fn isTrue(c: Const) bool {
@@ -6766,7 +6794,14 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
                 try self.err(self.file.exprs.mainTok(real_args[0]), .E0805, "", .{});
                 return true;
             };
-            degree = c.asInt();
+            // Same hole as the subscript path: §4.2.1.1 gives an infinity no
+            // nearest integer, so there is no degree here to compare against
+            // -1. E0820 is the clause's own verdict for a degree it cannot
+            // accept, and reporting it keeps the rest of the file compiling.
+            degree = c.asIntExact() orelse {
+                try self.err(tok, .E0820, "got {e}", .{c.asReal()});
+                return true;
+            };
         }
         if (degree == -1) {
             if (self.reject_iteration_place == null) {
@@ -7047,7 +7082,18 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // procedural `if (p > 0)`; a subscript is no different, and it fails
         // louder — `parameter integer pwl_len = 0` folded `a[pwl_len-1]` to
         // `a[-1]` and reported E0310 on legal source.
-        if (self.foldExpr(s, false)) |c| o.* = c.asInt() else all_const = false;
+        if (self.foldExpr(s, false)) |c| {
+            // §4.2.1.1 converts a real subscript by rounding to the nearest
+            // integer; an infinity, a NaN, or a magnitude past i64 has none, so
+            // the subscript names no element. That is the same verdict E0310
+            // already reaches for a constant subscript outside the declared
+            // range — which is exactly what this is, once the converter
+            // declines to invent an index for it.
+            o.* = c.asIntExact() orelse {
+                try self.err(self.file.exprs.mainTok(s), .E0310, "subscript {e} of `{s}` has no integer value, so it lies outside every dimension", .{ c.asReal(), name });
+                return poison;
+            };
+        } else all_const = false;
     }
     if (!try self.checkSubscriptCount(e, name, info, at.len)) return poison;
     if (all_const) {
