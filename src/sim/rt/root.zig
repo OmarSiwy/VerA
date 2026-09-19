@@ -844,6 +844,16 @@ pub const State = struct {
             return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
     }
 
+    /// One pass back to the top of a loop in the emitted process: counted
+    /// against the same budget as the step's events, so an untimed loop is
+    /// refused by name instead of hanging (`exec.loopIteration`'s rule and
+    /// message), in the count `next` keeps for the current time.
+    pub fn loopIteration(self: *State) Error!void {
+        self.budget_used += 1;
+        if (self.budget_used > budget)
+            return self.fail("more than {d} loop iterations and events at time {d}: a loop with no delay keeps simulation time from advancing", .{ budget, self.sched.now });
+    }
+
     /// A time step begins and every process is suspended: if no bit `live`
     /// names is x or z, the 2-state phase begins. The x left in the other
     /// words (`Design.dead`) is never read before it is overwritten. Looked

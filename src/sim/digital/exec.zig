@@ -496,6 +496,18 @@ fn doneFlush(self: *Run, start: u32) Error!void {
     if (self.done_pending.fetchRemove(start)) |kv| try h(self, kv.value);
 }
 
+/// One pass back to the top of a loop (a backward jump, a `repeat`'s next
+/// iteration): an untimed loop never returns to the scheduler, so each pass
+/// counts against the time step's event budget (`Run.budget`), and
+/// `initial forever x = 1;` is refused by name instead of hanging at one
+/// tick (specification/Vague_Decisions.md §7). `rt.State.loopIteration` is
+/// the native executable's.
+fn loopIteration(self: *Run) Error!void {
+    self.budget_used += 1;
+    if (self.budget_used > self.budget)
+        return self.fail(0, "more than {d} loop iterations and events at time {d}: a loop with no delay keeps simulation time from advancing", .{ self.budget, self.scheduler.now });
+}
+
 /// `execute`, which with `hooked` calls `Run.stmt_hook` before each
 /// instruction a statement starts at.
 fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime hooked: bool) Error!void {
@@ -622,6 +634,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
                 continue;
             },
             .jump => |target| {
+                if (target <= pc) try loopIteration(self);
                 pc = target;
                 continue;
             },
@@ -940,6 +953,7 @@ fn run(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32, comptime
             },
             .repeat_next => |s| {
                 self.repeats.items[s.counter] -= 1;
+                if (self.repeats.items[s.counter] != 0) try loopIteration(self);
                 pc = if (self.repeats.items[s.counter] != 0) s.body else pc + 1;
                 continue;
             },

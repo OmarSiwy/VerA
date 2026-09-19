@@ -1865,6 +1865,33 @@ test "a zero-delay loop fails by name instead of hanging at one tick" {
     try std.testing.expectEqual(@as(Tick, 0), r.scheduler.now);
 }
 
+test "an untimed loop inside one process fails by name instead of hanging at one tick" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\module m; reg x; initial forever x = 1; endmodule
+    , .{}, &bag, &output.writer);
+    r.budget = 1000;
+    try std.testing.expectError(error.DigitalFailed, r.runUntil(std.math.maxInt(Tick)));
+    try std.testing.expectEqual(@as(Tick, 0), r.scheduler.now);
+    try std.testing.expect(std.mem.indexOf(u8, bag.at(0).message, "more than 1000 loop iterations and events at time 0") != null);
+}
+
+test "a finite untimed loop under the budget runs to its end" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\module m; integer i, n; initial begin n = 0; for (i = 0; i < 900; i = i + 1) n = n + 1; end endmodule
+    , .{}, &bag, &output.writer);
+    r.budget = 1000;
+    _ = try r.runUntil(std.math.maxInt(Tick));
+    try std.testing.expectEqual(@as(?i64, 900), r.values[r.slotOf("n").?].asInt());
+}
+
 test "elaborate + runUntil step the engine one bounded horizon at a time" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

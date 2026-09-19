@@ -1186,7 +1186,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             }
             try self.print("            continue :sw {d};\n", .{next});
         },
-        .jump => |t| try self.print("            continue :sw {d};\n", .{t}),
+        // A backward jump is one pass of a loop: `exec.loopIteration`.
+        .jump => |t| try self.print("{s}            continue :sw {d};\n", .{ if (t <= pc) "            try s.loopIteration();\n" else "", t }),
         .branch => |b| {
             // Two constant `continue`s: each is a direct jump, where one
             // `continue` of a selected pc is a jump through the table.
@@ -1229,7 +1230,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             const ty = try expr.selfDetermined(self, x.count);
             try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
         },
-        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            if (s.repeats[{d}] != 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.counter, x.body, next }),
+        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            if (s.repeats[{d}] != 0) {{\n                try s.loopIteration();\n                continue :sw {d};\n            }}\n            continue :sw {d};\n", .{ x.counter, x.counter, x.body, next }),
         .wait_event => |e| {
             if (try waitFixed(self)) return;
             try self.print("            const id = try s.park({d});\n", .{next});
