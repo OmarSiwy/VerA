@@ -14,7 +14,6 @@ const Names = @import("names.zig").Names;
 const LimitCall = @import("limit.zig").LimitCall;
 const plan_noise = @import("noise.zig");
 const plan_topo = @import("topology.zig");
-const unitMode = @import("../float/mode.zig").unitMode;
 
 const none_u32 = std.math.maxInt(u32);
 
@@ -453,6 +452,16 @@ fn readSet(self: Input, queued: []const Job) ![]bool {
     return read;
 }
 
+/// Returns the prover's float mode for unit `i`, or `.strict` for a unit
+/// the prover did not rate.
+fn unitMode(unit_modes: []const proof.FloatMode, i: usize) proof.FloatMode {
+    // proof.zig rates the CONTRIBUTION units only (proof.unitCount ==
+    // lower.contributions.len); an analog-operator unit is not covered, so
+    // it takes the safe side.
+    if (i >= unit_modes.len) return .strict;
+    return unit_modes[i];
+}
+
 /// §4.5 Table 4-20 "Analog operator arguments": whether argument position `ai`
 /// is one `updateState` reads off the core: the clause marks it DYNAMIC, or
 /// §4.5.14 samples it (the input at position 0 is already a unit of its own,
@@ -643,4 +652,12 @@ test "a printing artifact keeps the §9.7.3 status off the core; a device that d
     try std.testing.expectEqual(@as(usize, 1), drop.list.len);
     try std.testing.expectEqual(Job.Kind.status, drop.list[0].kind);
     try std.testing.expectEqualStrings("", drop.display_name);
+}
+
+test unitMode {
+    try std.testing.expectEqual(proof.FloatMode.optimized, unitMode(&.{ .optimized, .strict }, 0));
+    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{ .optimized, .strict }, 1));
+    // An analog-operator unit the prover never rated takes the safe side.
+    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{}, 0));
+    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{.optimized}, 1));
 }

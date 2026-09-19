@@ -49,16 +49,6 @@ pub const Jac = enum {
     }
 };
 
-/// Returns the prover's float mode for unit `i`, or `.strict` for a unit
-/// the prover did not rate.
-pub fn unitMode(unit_modes: []const proof.FloatMode, i: usize) proof.FloatMode {
-    // proof.zig rates the CONTRIBUTION units only (proof.unitCount ==
-    // lower.contributions.len); an analog-operator unit is not covered, so
-    // it takes the safe side.
-    if (i >= unit_modes.len) return .strict;
-    return unit_modes[i];
-}
-
 /// Returns the mode the shared core compiles in: the strictest mode of every
 /// job it serves, excluding the §9.4 display job (LRM §4.3).
 pub fn coreMode(jobs: []const Job) proof.FloatMode {
@@ -78,7 +68,6 @@ test "the core is strict if any served job is; the f32 knob normalises host ⇒ 
     }.of;
     try std.testing.expectEqual(proof.FloatMode.optimized, coreMode(&.{ j(.resist, .optimized), j(.display, .strict) }));
     try std.testing.expectEqual(proof.FloatMode.strict, coreMode(&.{ j(.resist, .optimized), j(.held, .strict) }));
-    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{.optimized}, 1));
     try std.testing.expectEqual(Jac.host, Jac.of(false, true));
     try std.testing.expectEqual(Jac.permit, Jac.of(true, false));
     try std.testing.expectEqual(Jac.off, Jac.of(false, false));
@@ -87,11 +76,4 @@ test "the core is strict if any served job is; the f32 knob normalises host ⇒ 
 test coreMode {
     // No served job (a display-only model) forces nothing: the join's identity.
     try std.testing.expectEqual(proof.FloatMode.optimized, coreMode(&.{}));
-}
-
-test unitMode {
-    try std.testing.expectEqual(proof.FloatMode.optimized, unitMode(&.{ .optimized, .strict }, 0));
-    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{ .optimized, .strict }, 1));
-    // An analog-operator unit the prover never rated takes the safe side.
-    try std.testing.expectEqual(proof.FloatMode.strict, unitMode(&.{}, 0));
 }
