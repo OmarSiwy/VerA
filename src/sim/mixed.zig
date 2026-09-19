@@ -179,6 +179,10 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
 
 /// Secant cuts `step` tries before it halves the step instead.
 const max_secant = 64;
+/// Cuts one step can take: `max_secant`, then bisections. Each bisection
+/// halves acc - base or ends the loop, and an f64 interval shrinks to one ulp
+/// in at most 2098 + 52 halvings (the exponent range plus the mantissa).
+const max_cuts = max_secant + 2150;
 
 /// §5.10.3.1 leaves an absent `time_tol` to the tool.
 const default_time_tol = 1e-12;
@@ -535,9 +539,15 @@ fn State(comptime A: type) type {
             // secant only creeps toward is halved instead after `max_secant`,
             // which closes on any sign change, so every crossing is cut to
             // within its time_tol, and its expr_tol: "both tolerances shall be
-            // satisfied at the crossing" (§5.10.3.1).
+            // satisfied at the crossing" (§5.10.3.1). A cut must land strictly
+            // inside (base, acc): when none does, base and acc are adjacent
+            // floats and no tighter box exists, so the crossing is delivered
+            // from acc (a time_tol below one ulp of the time; Vague_Decisions
+            // §7). Each cut then moves acc down, and each bisection at least
+            // halves acc - base, so the loop ends within `max_cuts`.
             var cuts: u32 = 0;
             while (true) : (cuts += 1) {
+                std.debug.assert(cuts <= max_cuts);
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
                     const c = switch (m.kind) {
@@ -559,7 +569,10 @@ fn State(comptime A: type) type {
                     }
                 }
                 const c = cut orelse break;
-                try s.solve(if (cuts < max_secant) c else base + (s.acc.? - base) / 2);
+                const t = if (cuts < max_secant) c else base + (s.acc.? - base) / 2;
+                // Also false for a NaN `t`.
+                if (!(t > base and t < s.acc.?)) break;
+                try s.solve(t);
             }
             const tick: Tick = @intFromFloat(@round(s.acc.? / s.opts.tick));
             for (s.mons, 0..) |*m, j| switch (m.kind) {
@@ -623,6 +636,8 @@ const Fake = struct {
     snap: i64 = -1,
     slope: f64 = 0,
     power: f64 = 1,
+    /// When set, the node is a step instead: -1 V before `jump`, 3 V from it.
+    jump: ?f64 = null,
     timer_grid: ?struct { start: f64, period: f64 } = null,
     t: f64 = 0,
     solves: std.ArrayList(Point) = .empty,
@@ -648,6 +663,7 @@ const Fake = struct {
     /// The fake analog's one node follows `slope` volts per second, raised
     /// to `power`.
     pub fn probe(f: *Fake, t: ?f64, _: []const u8, _: ?[]const u8) !f64 {
+        if (f.jump) |j| return if ((t orelse f.t) >= j) 3 else -1;
         return std.math.pow(f64, f.slope * (t orelse f.t), f.power);
     }
     pub fn finish(f: *Fake) !void {
@@ -927,6 +943,30 @@ test "§5.10.3.1 a crossing the secant only creeps toward is still cut to within
         if (p.t > at and p.t <= at + 1e-15) return;
     }
     return error.TestExpectedCut;
+}
+
+test "§5.10.3.1 a step crossing with a time_tol below one ulp of time is cut to adjacent floats and delivered" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(vi);
+        \\  inout vi; electrical vi;
+        \\  integer n; initial n = 0;
+        \\  always @(cross(V(vi), +1, 1e-30)) n = n + 1;
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    // V(vi) steps from -1 V to 3 V at 1/3 s. No two times 1e-30 s apart
+    // exist near it (one ulp of 0.33 s is 5.6e-17 s), so the tightest cut
+    // is the pair of adjacent floats around the step, and the crossing is
+    // delivered once from there.
+    var f: Fake = .{ .slot = dig.slotOf("n").?, .gpa = arena, .jump = 1.0 / 3.0 };
+    dig.watchAnalog(f.slot);
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 1 }, .tick = 1e-9 });
+    try testing.expectEqual(@as(?i64, 1), dig.values[f.slot].asInt());
 }
 
 test "§5.10.3.4 absdelta interpolates digital events without forcing analog points" {
