@@ -121,9 +121,13 @@ fn plainCopy(self: *const Run, net: u32) bool {
 /// group; the group is found afresh on every resolution, which is fine for
 /// the handful of switches a digital fixture wires up.
 fn resolveJoined(self: *Run, start: u32) Error!void {
-    var scratch = std.heap.ArenaAllocator.init(self.arena);
-    defer scratch.deinit();
-    const a = scratch.allocator();
+    // `Run.resolve_scratch`, kept between calls so a resolution per event
+    // does not grow the run's arena; a nested call (a store below waking
+    // another group) shares it, and only the outermost resets it.
+    if (self.resolve_depth == 0) _ = self.resolve_scratch.reset(.retain_capacity);
+    self.resolve_depth += 1;
+    defer self.resolve_depth -= 1;
+    const a = self.resolve_scratch.allocator();
     var touched: std.ArrayList(u32) = .empty;
     try touched.append(a, start);
     for (0..self.nets[start].resolved.width) |i| {

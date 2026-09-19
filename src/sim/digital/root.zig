@@ -521,6 +521,18 @@ pub const Run = struct {
     budget_time: Tick = 0,
     budget_used: u64 = 0,
     budget: u64 = max_events_per_tick,
+    /// Per-instruction scratch of `runUntil`, reset at each call and each
+    /// event with its capacity kept, so a run of many calls (the mixed
+    /// runner's one per tick) stops growing `arena` once the largest
+    /// event has run. Backed by `arena`.
+    scratch: std.heap.ArenaAllocator,
+    /// `runUntil` is running: it is not reentrant, since a nested call would
+    /// reset `scratch` under the outer one.
+    running: bool = false,
+    /// `resolution.resolveJoined`'s scratch, likewise, and how deep its
+    /// calls are: only the outermost resets it.
+    resolve_scratch: std.heap.ArenaAllocator,
+    resolve_depth: u32 = 0,
     /// VAMS §7.3.5 the analog events digital event controls wait on
     /// (`registerMonitor`). The mixed-signal kernel evaluates each against the
     /// analog solution and delivers its A2D events (`deliverA2d`).
@@ -777,8 +789,10 @@ pub const Run = struct {
     /// again with a larger limit resumes; nothing is lost between calls
     /// because every suspended process is a waiter or a queued event.
     pub fn runUntil(r: *Run, limit: Tick) Error!Stop {
-        var scratch = std.heap.ArenaAllocator.init(r.arena);
-        defer scratch.deinit();
+        std.debug.assert(!r.running);
+        r.running = true;
+        defer r.running = false;
+        const scratch = &r.scratch;
         while (r.scheduler.nextUntil(limit)) |event| {
             _ = scratch.reset(.retain_capacity);
             // A zero-delay loop (`always a = ~a;`) never lets time advance
@@ -810,12 +824,12 @@ pub const Run = struct {
             switch (item) {
                 .run_process => |start| {
                     r.ctx = 0;
-                    try exec.execute(r, &scratch, start);
+                    try exec.execute(r, scratch, start);
                 },
                 .@"resume" => |x| {
                     r.ctx = x.ctx;
                     try exec.makeResident(r, x.ctx);
-                    try exec.execute(r, &scratch, x.pc);
+                    try exec.execute(r, scratch, x.pc);
                 },
                 .a2d => |at| try waiters.wakeA2d(r, at),
                 .write => |w| try evaluate.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
@@ -1481,7 +1495,7 @@ fn elaborateDeep(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null, .source = source, .opts = opts };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .real_card = if (opts.mixed) |mx| mx.real_params else &.{}, .budget = opts.event_budget, .systf = opts.systf, .stmt_sites = if (opts.stmt_sites) .empty else null, .source = source, .opts = opts, .scratch = .init(arena), .resolve_scratch = .init(arena) };
     try binding.libraries(&r, file, opts, pp.more_starts);
     // IEEE 1364-2005 §8.1's rules hold for every UDP declaration, whether or
     // not an instance uses it.
@@ -1890,6 +1904,32 @@ test "a finite untimed loop under the budget runs to its end" {
     r.budget = 1000;
     _ = try r.runUntil(std.math.maxInt(Tick));
     try std.testing.expectEqual(@as(?i64, 900), r.values[r.slotOf("n").?].asInt());
+}
+
+test "many runUntil calls over a switch-joined net and an extended dump stop growing the run arena" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // The mixed runner calls runUntil once per tick; every toggle of `c`
+    // resolves the `tran` group again and changes the dumped port's state.
+    const source = try arena.allocator().print(
+        \\`timescale 1ns/1ns
+        \\module top; reg c; wire a, b; assign a = c; tran t(a, b); leaf u(b);
+        \\initial c = 0; always #1 c = ~c;
+        \\initial $dumpports(u, ".zig-cache/tmp/{s}/p.evcd");
+        \\endmodule
+        \\module leaf(p); inout p; wire p; endmodule
+    , .{tmp.sub_path});
+    var r = try elaborate(arena.allocator(), source, .{ .io = std.testing.io }, &bag, &output.writer);
+    var at_warm: usize = 0;
+    for (1..2001) |k| {
+        _ = try r.runUntil(k);
+        if (k == 200) at_warm = arena.queryCapacity();
+    }
+    try std.testing.expectEqual(at_warm, arena.queryCapacity());
 }
 
 test "elaborate + runUntil step the engine one bounded horizon at a time" {

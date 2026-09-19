@@ -293,11 +293,18 @@ fn checkpoint(r: *Run, a: std.mem.Allocator, f: *File, keyword: []const u8, as_x
     try w.writer.print("{s}\n", .{keyword});
     for (f.ports, 0..) |*p, n| {
         const text = if (as_x) try unknown(a, r, p.*) else try state(r, a, p.*);
-        p.last = try r.arena.dupe(u8, text);
+        try remember(r, p, text);
         try w.writer.print("{s} <{d}\n", .{ text, n });
     }
     try w.writer.writeAll("$end\n");
     try put(r, f, w.written());
+}
+
+/// `p.last = text`, in place: a port's state text has one length (its
+/// width fixes it), so after the first write no step allocates.
+fn remember(r: *Run, p: *Port, text: []const u8) Error!void {
+    if (p.last.len == text.len) return @memcpy(p.last, text);
+    p.last = try r.arena.dupe(u8, text);
 }
 
 /// The ports whose state is not the one last written.
@@ -308,7 +315,7 @@ fn changes(r: *Run, a: std.mem.Allocator, f: *File) Error!void {
         const text = try state(r, a, p.*);
         if (std.mem.eql(u8, text, p.last)) continue;
         if (w.written().len == 0) try time(r, f, &w.writer);
-        p.last = try r.arena.dupe(u8, text);
+        try remember(r, p, text);
         try w.writer.print("{s} <{d}\n", .{ text, n });
     }
     try put(r, f, w.written());
