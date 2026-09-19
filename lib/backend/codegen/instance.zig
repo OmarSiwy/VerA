@@ -524,7 +524,7 @@ fn fsmStateCtl(self: *const Gen) bool {
 /// copying only the elements written since the last commit or revert beats
 /// copying it whole. Below `dirty_min_len` the per-store range update costs
 /// more than the copy it saves (coupled_ltra: updateState +30% with every
-/// held array tracked, docs/measurements/device-runtime-2026-10-01.md).
+/// held array tracked, `git show 6e59b3d4^:docs/measurements/device-runtime-2026-10-01.md`).
 pub fn dirtyTracked(self: *const Gen, id: u32) bool {
     return self.held_in_place.len != 0 and self.held_in_place[id] and
         self.lowered.mem_arrays.items[id].len >= dirty_min_len;

@@ -954,7 +954,7 @@ pub const gm = struct {
     // exp_data.c, pow_data.c; Copyright (c) 2018, Arm Limited, MIT) ----
     //
     // The host math without libc. Correctness contract, checked by the tests
-    // below and measured in docs/measurements/device-runtime-2026-10-01.md:
+    // below and measured in `git show 6e59b3d4^:docs/measurements/device-runtime-2026-10-01.md`:
     //   exp:  error <= 0.52 ulp of the correctly rounded result for every
     //         finite x (ARM: 0.509 with fma, 0.511 without); exp(+-0) = 1,
     //         exp(+inf) = +inf, exp(-inf) = +0, NaN in -> NaN out; +inf above
@@ -2787,7 +2787,7 @@ fn sigFold(h: u64) u16 {
 /// point's own instance, whose held values and latches the decisions may
 /// read). That cone can be most of
 /// the model: measured 0.25-0.74 of a scalar `evalQ`
-/// (docs/measurements/batched-lead-2026-10-02.md). So a host buckets on the
+/// (`git show 6e59b3d4^:docs/measurements/batched-lead-2026-10-02.md`). So a host buckets on the
 /// signatures a batched call already produced (`LeadState.regions`, equal
 /// to this value at every point) and calls `region` only for a point that
 /// has none yet. A device without `batch_lead` never diverges: its

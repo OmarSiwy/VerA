@@ -57,7 +57,7 @@ pub const Prover = struct {
     lowered: *const Lowered,
     opts: Options,
 
-    // --- SoA, indexed by @intFromEnum(Mir.Value) ---
+    // --- SoA, indexed by @backingInt(Mir.Value) ---
     /// The value's own interval: its seed (`seedValues`), met with its
     /// transfer once `walk` defines it. Guard facts live per class in `civ`;
     /// read the two together through `ivAt`.

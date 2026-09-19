@@ -120,7 +120,7 @@ pub fn emitCore(self: *Gen) Error!void {
 /// leaves the same end state as copying it into a local on the first store,
 /// returning it and storing it back, without those three whole-array copies
 /// (txl's 5 x 2048 history: updateState 19.4k -> 0.2k cycles, bit-exact,
-/// docs/measurements/device-runtime-2026-10-01.md). Loads already read through
+/// `git show 6e59b3d4^:docs/measurements/device-runtime-2026-10-01.md`). Loads already read through
 /// `p<id>`, and a load never reads a version past a later store
 /// (`plan/unit.zig`), so every load sees the same value either way. Not when
 /// the slice runs on a §9.21.1 `table_probe` copy of the instance

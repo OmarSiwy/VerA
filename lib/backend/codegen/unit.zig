@@ -534,7 +534,7 @@ fn hoistMasks(self: *Gen, n: u32) Error!void {
     for (self.hoist.mask.items) |m| try family.note(self, m);
     // One array per distinct mask: a `@Tuple` with one field per slot is
     // most of a large body's sema time (psp103 `setup`: 1,576 fields, 9
-    // masks; `docs/measurements/codegen-levers-2026-09-30.md` lever 5), and
+    // masks; `git show 6e59b3d4^:docs/measurements/codegen-levers-2026-09-30.md` lever 5), and
     // every element keeps exactly the type its tuple field had.
     // One `grp`/`pos` entry per hoist element.
     self.hoist.grp.clearRetainingCapacity();

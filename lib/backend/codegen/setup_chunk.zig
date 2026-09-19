@@ -14,7 +14,7 @@ const Error = Allocator.Error;
 
 /// Emitted `setup` (doc comment and function) from which `emitSetup` splits
 /// it, into one chunk per this many bytes. Measured 2026-10-01
-/// (docs/measurements/codegen-levers-2026-10-01.md): psp103's setup (850
+/// (`git show 6e59b3d4^:docs/measurements/codegen-levers-2026-10-01.md`): psp103's setup (850
 /// KB) was its split build's longest object; bsim4va's (457 KB) too.
 pub const chunk_bytes: usize = 256 * 1024;
 
