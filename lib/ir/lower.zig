@@ -37,6 +37,7 @@ const Elaborate = @import("elaborate.zig");
 const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
+const assert = std.debug.assert;
 
 /// This file's struct, so `Lower.Lower` also resolves.
 pub const Lower = @This();
