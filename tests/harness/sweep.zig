@@ -3,7 +3,7 @@
 //! `gen` is swept over `sweep` with the others at 1, so the slope is the
 //! point: an O(n^2) scan and a flat one can cost the same at n = 8.
 //!
-//! The half that can fail is `expected`, kept in `../bench.zig`: the device
+//! The half that can fail is `expected`, kept below: the device
 //! and MIR sizes of every generated shape, asserted under `zig build test`
 //! (AGENTS.md §8: two agents
 //! moving these sizes regenerate the table, they do not pick a side).
@@ -11,7 +11,6 @@
 const std = @import("std");
 const vera = @import("vera");
 const options = @import("suite_options");
-const bench = @import("../bench.zig");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -24,6 +23,18 @@ const Mir = @typeInfo(@FieldType(vera.CompileResult, "mir")).pointer.child;
 /// Noise on a shared machine only ever adds time, so the min is the closest
 /// sample to the code's cost, where a mean measures the machine's load.
 const reps = 25;
+
+/// The mode the engine was compiled in, printed on every row because only a
+/// ReleaseFast time is the shipping number (Debug is several times slower).
+/// `builtin.mode` is this module's `-O`, which `build.zig` keeps equal to the
+/// `vera` module's.
+pub const mode = @tagName(@import("builtin").mode);
+
+/// Nanoseconds since `t0` on the monotonic (`.awake`) clock.
+pub fn elapsed(io: Io, t0: Io.Timestamp) u64 {
+    const ns = t0.durationTo(.now(io, .awake)).nanoseconds;
+    return @intCast(@max(ns, 0));
+}
 
 /// The sweep. Powers of eight, so a doubling and a squaring are visibly
 /// different shapes across four steps rather than two.
@@ -83,10 +94,40 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
     return aw.toOwnedSlice();
 }
 
-/// The device and MIR sizes each shape must come out at: `expected` in
-/// `tests/bench.zig`. The table stays there, where a change that moves the
-/// emitted device's size updates it.
-const expected = bench.expected_sizes;
+// ---------------------------------------------------------------------------
+// The assertions — the half of this file that can fail
+// ---------------------------------------------------------------------------
+
+/// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
+/// shape, in `sweep` order, measured by this sweep. Pure functions of the
+/// source, so the same on every machine and optimize mode: a change here is a
+/// change in what VerA emits, and the commit that moves it explains it.
+const Shape = struct { device: usize, defs: usize, insts: usize };
+const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
+    .contrib = .{
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 33529, .defs = 35, .insts = 26 },
+        .{ .device = 36272, .defs = 258, .insts = 194 },
+        .{ .device = 58675, .defs = 2050, .insts = 1538 },
+        .{ .device = 241255, .defs = 16386, .insts = 12290 },
+    },
+    .vals = .{
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 33356, .defs = 24, .insts = 19 },
+        .{ .device = 34812, .defs = 136, .insts = 131 },
+        .{ .device = 46517, .defs = 1032, .insts = 1027 },
+        .{ .device = 140278, .defs = 8200, .insts = 8195 },
+    },
+    // Parallel instances share one (p, n) row; the MIR also carries each
+    // instance's share of it (`lower_contrib.unitAccum`), dead in the device.
+    .inst = .{
+        .{ .device = 33174, .defs = 8, .insts = 5 },
+        .{ .device = 34378, .defs = 57, .insts = 47 },
+        .{ .device = 44226, .defs = 449, .insts = 383 },
+        .{ .device = 124760, .defs = 3585, .insts = 3071 },
+        .{ .device = 782545, .defs = 28673, .insts = 24575 },
+    },
+});
 
 /// Compile one generated shape and hold it to `expected`. Shared by the bench
 /// run (every point of the sweep) and by the unit test below (the two cheap
@@ -234,13 +275,13 @@ fn measure(
     for (0..reps) |_| {
         const t0: Io.Timestamp = .now(io, .awake);
         bytes = try runPhase(gpa, io, phase, source, work_dir, &kept);
-        min = @min(min, bench.elapsed(io, t0));
+        min = @min(min, elapsed(io, t0));
     }
     return .{ .min_ns = min, .bytes = bytes };
 }
 
 fn emit(w: *Io.Writer, case: []const u8, n: u32, phase: Phase, s: Sample) !void {
-    try w.print("{s}\t{s}\t{d}\t{t}\t{d}\t{d}\n", .{ bench.mode, case, n, phase, s.min_ns, s.bytes });
+    try w.print("{s}\t{s}\t{d}\t{t}\t{d}\t{d}\n", .{ mode, case, n, phase, s.min_ns, s.bytes });
 }
 
 /// `--sweep`: the footprint table, then the timing table, on `w`; returns exit
@@ -258,7 +299,7 @@ pub fn report(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
     try w.writeAll("\nmode\tcase\tn\tphase\tmin_ns\tbytes\n");
     if (@import("builtin").mode != .fast) try w.print(
         "# {s}: NOT the shipping number (~8x slow). Re-run with -Doptimize=ReleaseFast.\n",
-        .{bench.mode},
+        .{mode},
     );
     for (std.enums.values(Axis)) |axis| {
         for (sweep) |n| {

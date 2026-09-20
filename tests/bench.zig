@@ -108,58 +108,10 @@ pub fn usage(io: Io, why: []const u8) !u8 {
 /// runs Debug, where four more passes over every fixture time nothing.
 const fixture_reps = if (@import("builtin").mode == .fast) 5 else 1;
 
-/// Nanoseconds since `t0` on the monotonic (`.awake`) clock.
-pub fn elapsed(io: Io, t0: Io.Timestamp) u64 {
-    const ns = t0.durationTo(.now(io, .awake)).nanoseconds;
-    return @intCast(@max(ns, 0));
-}
-
-/// The mode the engine was compiled in, printed on every row because only a
-/// ReleaseFast time is the shipping number (Debug is several times slower).
-/// `builtin.mode` is this module's `-O`, which `build.zig` keeps equal to the
-/// `vera` module's.
-pub const mode = @tagName(@import("builtin").mode);
-
-// ---------------------------------------------------------------------------
-// The assertions — the half of this file that can fail
-// ---------------------------------------------------------------------------
-
-/// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
-/// shape, in `sweep` order, measured by this bench. Pure functions of the
-/// source, so the same on every machine and optimize mode: a change here is a
-/// change in what VerA emits, and the commit that moves it explains it.
-const Shape = struct { device: usize, defs: usize, insts: usize };
-const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
-    .contrib = .{
-        .{ .device = 33174, .defs = 8, .insts = 5 },
-        .{ .device = 33529, .defs = 35, .insts = 26 },
-        .{ .device = 36272, .defs = 258, .insts = 194 },
-        .{ .device = 58675, .defs = 2050, .insts = 1538 },
-        .{ .device = 241255, .defs = 16386, .insts = 12290 },
-    },
-    .vals = .{
-        .{ .device = 33174, .defs = 8, .insts = 5 },
-        .{ .device = 33356, .defs = 24, .insts = 19 },
-        .{ .device = 34812, .defs = 136, .insts = 131 },
-        .{ .device = 46517, .defs = 1032, .insts = 1027 },
-        .{ .device = 140278, .defs = 8200, .insts = 8195 },
-    },
-    // Parallel instances share one (p, n) row; the MIR also carries each
-    // instance's share of it (`lower_contrib.unitAccum`), dead in the device.
-    .inst = .{
-        .{ .device = 33174, .defs = 8, .insts = 5 },
-        .{ .device = 34378, .defs = 57, .insts = 47 },
-        .{ .device = 44226, .defs = 449, .insts = 383 },
-        .{ .device = 124760, .defs = 3585, .insts = 3071 },
-        .{ .device = 782545, .defs = 28673, .insts = 24575 },
-    },
-});
-
-/// `expected`, for `harness/sweep.zig`, which asserts it. The table stays in
-/// this file so the change that moves a generated device's size edits it here.
-pub const expected_sizes = expected;
-const sweep = size_sweep.sweep;
-const Axis = size_sweep.Axis;
+/// `harness/sweep.zig`'s `mode` and `elapsed`: the optimize mode on every
+/// report row, and the monotonic timer both reports read.
+const mode = size_sweep.mode;
+const elapsed = size_sweep.elapsed;
 
 // ---------------------------------------------------------------------------
 // The step
