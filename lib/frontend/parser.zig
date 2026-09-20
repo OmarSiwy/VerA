@@ -1795,12 +1795,14 @@ pub const Parser = struct {
         if (self.eat(.comma)) {
             out.fall = try self.parseDelayValue();
             out.off = if (self.eat(.comma)) try self.parseDelayValue() else .none;
-            // A.2.2.3 stops at three. A fourth is `delay4`, which belongs to
-            // A.7.x path declarations and to no net or driver.
-            if (self.peek() == .comma)
-                return self.failAt(self.pos, .E0207, "a delay3 takes at most three values", .{});
         }
-        _ = try self.expect(.rparen);
+        // A.2.2.3's innermost bracket pair closes after the THIRD value, so
+        // from there the only terminal the production admits is `)`. A fourth
+        // value is a missing parenthesis, and E0210 is the diagnostic that says
+        // so — not E0207's generic "unexpected token", which would send the
+        // reader looking for the end of the previous statement.
+        if (self.peek() != .rparen) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
+        self.pos += 1;
         return out;
     }
 
