@@ -2674,6 +2674,9 @@ pub const Gen = struct {
         exp: Mir.Value,
         /// §4.6.4.3/.4 index into `noise_tabs`, null on a parametric row.
         table: ?u16 = null,
+        /// §4.6.4.1/.2/.3 the source's label, empty when unnamed. See
+        /// `Lower.NoiseSrc.name` for why it never merges rows.
+        name: []const u8 = "",
     };
 
     /// Flatten every contribution's generator set into `noise_rows`, in the
@@ -2727,6 +2730,7 @@ pub const Gen = struct {
                     .pwr = self.an.rv(s.pwr),
                     .exp = self.an.rv(s.exp),
                     .table = table,
+                    .name = s.name,
                 });
             }
         }
@@ -6878,6 +6882,7 @@ pub const Gen = struct {
                 self.u_names[nr.row], self.u_names[nr.col], contractNoiseKind(nr.kind), nr.source,
             });
             if (nr.table) |k| try self.w(", .table = {d}", .{k});
+            if (nr.name.len != 0) try self.w(", .name = \"{f}\"", .{std.zig.fmtString(nr.name)});
             try self.w(" }},\n", .{});
         }
         try self.w("}};\n\n", .{});
@@ -9298,8 +9303,12 @@ test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
     const src = try h.gen(std.testing.allocator);
     // §4.6.4.6 each CALL is one generator, so the two rows carry distinct
     // dense `source` ids — two independent sources, not one shared.
-    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal, .source = 0 }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker, .source = 1 }") != null);
+    // §4.6.4.1/.2 the trailing `name` argument is a LABEL and rides out with
+    // the row. Two calls sharing one name would still be two sources — the
+    // clause combines them in the host's summary, not in the table — which is
+    // why `source` is distinct here while `name` is free to repeat.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal, .source = 0, .name = \"thermal\" }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker, .source = 1, .name = \"flicker\" }") != null);
     // §4.6.4.1 before §4.6.4.2 — the sources append in statement order, so the
     // table is stable across builds and a host may index it positionally.
     try std.testing.expect(

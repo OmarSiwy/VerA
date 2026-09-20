@@ -684,6 +684,21 @@ pub fn NoiseGen(comptime D: type) type {
         /// §4.6.4.3/.4 index into the device's `noise_tables`. Non-null exactly
         /// when `kind == .table`; `validate` checks both halves.
         table: ?u16 = null,
+        /// §4.6.4.1/.2/.3 the optional `name` argument, empty when the model
+        /// supplied none. "The optional name argument acts as a label for the
+        /// noise source used when the simulator outputs the individual
+        /// contribution of each noise source to the total output noise. The
+        /// contributions of noise sources with the same name from the same
+        /// instance of a module are combined in the noise contribution
+        /// summary."
+        ///
+        /// Combined IN THE SUMMARY — a host groups its REPORT by this string.
+        /// It is not correlation and not identity: §4.6.4.6 makes every
+        /// separate call an uncorrelated generator, so two rows may share a
+        /// name and still carry different `source` values, and a host that
+        /// added them as one random process would be wrong. `source` is the
+        /// only field that says anything about correlation.
+        name: []const u8 = "",
     };
 }
 
