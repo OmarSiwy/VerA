@@ -313,9 +313,17 @@ pub fn emitFileCall(g: *Gen, name: []const u8, args: []const Mir.Value, site: us
     // carry (`Lower.sequenceFileCall`), and typing seven void tasks as integers to
     // avoid one cast would change what `$display`'s own chain carries too.
     const wrap = Analysis.callTy(name) == .real;
-    if (wrap) try g.b("S.con(@as(f64, @floatFromInt(", .{});
+    // `$fscanf$real` is the one real-typed §9.5 call whose KERNEL is already
+    // f64 — §9.5.4.2 names `real` among the destinations a scan may write, and
+    // `zScanR` answers one. Wrapping it in `@floatFromInt` like the integer
+    // kernels made the generated device refuse to compile ("expected integer
+    // type, found 'f64'"), which is why a real destination never worked.
+    const from_int = !std.mem.eql(u8, name, "$fscanf$real");
+    if (wrap) try g.b("S.con(", .{});
+    if (wrap and from_int) try g.b("@as(f64, @floatFromInt(", .{});
     try emitFileCallInner(g, name, args, site);
-    if (wrap) try g.b(")))", .{});
+    if (wrap and from_int) try g.b("))", .{});
+    if (wrap) try g.b(")", .{});
 }
 
 fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
@@ -360,15 +368,23 @@ fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: u
         try g.renderVal(if (args.len > 2) args[2] else Mir.Value.zero, .int);
         return g.b(")", .{});
     }
-    // §9.5.4.2 the count: read one line and hand it to §9.5.3's scanner, which
-    // `str_kernels.zScan` already is. `Lower.lowerFileRead` built the operands as
-    // (fd, format).
+    // §9.5.4.2 the count. The two kernels are composed HERE rather than in
+    // `file_kernels.zig`, which cannot call `str_kernels.zScan`: each kernel
+    // file has to compile on its own for `kernels.zig`'s test root. Scan the
+    // unread window, then consume exactly what the directives matched —
+    // `zScan.used`, which is the clause's "the offending input character is
+    // left unread" made into a number. `Lower.lowerFileRead` built the
+    // operands as (fd, format); the ITEM readers below re-scan the same
+    // window, which `zFTake` deliberately leaves latched.
     if (eq(u8, name, "$fscanf")) {
-        try g.b("zScanN(zFRead(", .{});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-        try g.b("), ", .{});
+        const fd = if (args.len > 0) args[0] else Mir.Value.zero;
+        try g.b("zk{d}: {{ const zw = zFWindow(", .{site});
+        try g.renderVal(fd, .int);
+        try g.b("); const zr = zScan(zw, ", .{});
         try g.renderVal(if (args.len > 1) args[1] else Mir.Value.f_zero, .str);
-        return g.b(")", .{});
+        try g.b(", -1); break :zk{d} zFTake(", .{site});
+        try g.renderVal(fd, .int);
+        return g.b(", zr.n, @intCast(zr.used)); }}", .{});
     }
     // The synthetic readers, all of which take the count first — see
     // `file_kernels.zFLine` for why that operand is there and why it is read.
@@ -925,6 +941,43 @@ test "§9.4.3/C11 7.21.6.1: zCReal is the conversion the device runs" {
     // C11 7.21.6.1p13 rounds the VALUE, not its shortest decimal: 0.1 is not
     // 0.1, and past 17 digits that is visible.
     try std.testing.expectEqualStrings("0.10000000000000000555", k.zCReal(&b, 0.1, 'f', 0, 0, 20));
+}
+
+test "§9.5.4.2 a scan consumes per DIRECTIVE, and says how much" {
+    // `ZScan.used` is what `$fscanf` advances the descriptor by, so these
+    // numbers are §9.5.5's `$ftell` answers — see `file_kernels.zFTake`.
+    const k = @import("kernels").str_kernels;
+    // "The offending input character is left unread": nothing moved, and the
+    // return is 0 and not EOF, because the input has not ended.
+    const fail = k.zScan("abc\n", "%d", -1);
+    try std.testing.expectEqual(@as(i64, 0), fail.n);
+    try std.testing.expectEqual(@as(usize, 0), fail.used);
+    // "Trailing white space (including newline characters) is left unread
+    // unless matched by a directive" — the field is two bytes, not the line.
+    const first = k.zScan("12 34\n56\n", "%d", 0);
+    try std.testing.expectEqual(@as(i64, 12), first.i);
+    try std.testing.expectEqual(@as(usize, 2), first.used);
+    // White space in the CONTROL string matches a newline, so one scan can
+    // take a field from each of two lines.
+    const two = k.zScan("12\n34\n", "%d %d", 1);
+    try std.testing.expectEqual(@as(i64, 2), two.n);
+    try std.testing.expectEqual(@as(i64, 34), two.i);
+    try std.testing.expectEqual(@as(usize, 5), two.used);
+    // "If the input ends before the first matching failure or conversion, EOF
+    // is returned" — and the white space looked through still counts consumed.
+    const eof = k.zScan("\n", "%d", -1);
+    try std.testing.expectEqual(@as(i64, -1), eof.n);
+    try std.testing.expectEqual(@as(usize, 1), eof.used);
+    // §9.5.4.2's `%r`, over §2.6.2 Table 2-1 — both spellings of the 1e3 row,
+    // and an optional symbol.
+    try std.testing.expectEqual(@as(f64, 2500.0), k.zScan("2.5K", "%r", 0).r);
+    try std.testing.expectEqual(@as(f64, 2500.0), k.zScan("2.5k", "%r", 0).r);
+    try std.testing.expectEqual(@as(f64, 4.0), k.zScan("4", "%r", 0).r);
+    // `%m` "does not read data from the input file or str argument", so the
+    // directive after it still sees the whole field.
+    const path = k.zScan("42", "%m%d", 1);
+    try std.testing.expectEqual(@as(i64, 2), path.n);
+    try std.testing.expectEqual(@as(i64, 42), path.i);
 }
 
 test "§9.4.3/C: integer sign flags — %05d packs zeros after the sign, %+d prints it" {
