@@ -664,26 +664,32 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 
     var need: usize = 0;
     var i: usize = 0;
-    while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
-        i = p + 1;
-        if (i >= fmt.len) break;
-        // §9.4.3 `%[flags][width][.precision]conv`; the conversion letter is
-        // what decides, so everything before it is skipped unread.
-        while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
-            (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
-        {}
-        if (i >= fmt.len) break;
-        const conv = std.ascii.toLower(fmt[i]);
-        i += 1;
-        if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
-        need += 1;
-    }
+    while (nextConsumingConv(fmt, &i)) |_| need += 1;
 
     // A null argument (`,,`) is still an argument — §9.4.1 gives it a
     // rendering — so the supply is the slot count, not the non-empty one.
     const have = args.len - (at + 1);
     if (have >= need) return;
     try self.err(tok, .E0810, "the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
+}
+
+/// §9.4.3 `%[flags][width][.precision]conv`: the next conversion at or after
+/// `i.*` that consumes an argument, lowercased, with `i.*` moved past it; null
+/// when the format ends first. The conversion letter is what decides, so the
+/// flags, width and precision are skipped unread, and `%%`, `%m` and `%l`, the
+/// three that consume nothing, are passed over.
+fn nextConsumingConv(fmt: []const u8, i: *usize) ?u8 {
+    while (std.mem.findScalarPos(u8, fmt, i.*, '%')) |p| {
+        i.* = p + 1;
+        while (i.* < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i.*]) != null or
+            std.ascii.isDigit(fmt[i.*]))) : (i.* += 1)
+        {}
+        if (i.* >= fmt.len) return null;
+        const conv = std.ascii.toLower(fmt[i.*]);
+        i.* += 1;
+        if (conv != '%' and conv != 'm' and conv != 'l') return conv;
+    }
+    return null;
 }
 
 /// Preserve the source integer width before SSA replaces variables with their
@@ -770,16 +776,7 @@ fn prepareFormatArgs(self: *Lower, tok: u32, live: []const Ast.ExprId, tys: []co
         };
         var next = at + 1;
         var i: usize = 0;
-        while (std.mem.findScalarPos(u8, fmt, i, '%')) |p| {
-            i = p + 1;
-            if (i >= fmt.len) break;
-            while (i < fmt.len and (std.mem.findScalar(u8, "-+ 0.", fmt[i]) != null or
-                (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
-            {}
-            if (i >= fmt.len) break;
-            const conv = std.ascii.toLower(fmt[i]);
-            i += 1;
-            if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
+        while (nextConsumingConv(fmt, &i)) |conv| {
             if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
             const ty = tys[next];
             const arg = live[next];
