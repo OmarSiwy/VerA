@@ -630,6 +630,20 @@ pub const AnalogBlock = struct {
     is_initial: bool = false,
     body: StmtId,
     main_tok: u32 = 0,
+    /// Which MODULE INSTANCE wrote this block, after elaboration concatenated
+    /// every instance's blocks into the top's (`elaborate.zig`). 0 is the top
+    /// itself; each inlined instance gets its own.
+    ///
+    /// §5.4.1 gives branch identity per module instance, and flattening throws
+    /// that away: two instances across the same two nets both spell the pair's
+    /// one unnamed branch. Contributions of the same kind then aggregate, which
+    /// is the right answer for devices in parallel — but §5.6.1.3's
+    /// "contributing a flow to a branch which already has a value retained for
+    /// the potential results in the potential being discarded" is stated of ONE
+    /// branch, and applying it across instances deletes a source because
+    /// something else is wired across it. This scopes that clause back to the
+    /// instance that wrote both halves; see `Lower.discardOpposite`.
+    unit: u32 = 0,
 };
 
 /// One `initial` or `always` construct (A.6.2 initial_construct /

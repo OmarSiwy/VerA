@@ -267,6 +267,10 @@ const Flatten = struct {
     ctx: Ctx,
     had_error: bool = false,
 
+    /// Last `Ast.AnalogBlock.unit` handed out. 0 is the top, so the first
+    /// inlined instance is 1. See that field for what it is for.
+    last_unit: u32 = 0,
+
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
     aliasparams: std.ArrayList(Ast.AliasParam) = .empty,
@@ -734,10 +738,15 @@ const Flatten = struct {
             .value = try self.cloneExpr(at.value),
             .main_tok = at.main_tok,
         });
+        // One id per INSTANCE, not per module: two instances of the same child
+        // are two devices, and §5.6.1.3 must not let one discard the other's.
+        self.last_unit += 1;
+        const unit_id = self.last_unit;
         for (child.analog) |blk| try self.analog.append(self.ctx.arena, .{
             .is_initial = blk.is_initial,
             .body = try self.cloneStmt(blk.body),
             .main_tok = blk.main_tok,
+            .unit = unit_id,
         });
 
         // ---- recurse, with this unit's map in force ------------------------
