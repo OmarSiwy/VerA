@@ -3013,6 +3013,33 @@ pub const Gen = struct {
                 });
             }
         }
+        // §5.10.3.3: "If the start_time or period expressions change value
+        // during the evaluation of the analog block, the next event will be
+        // scheduled based on the LATEST value of the start_time and period."
+        // The start_time is already the operator's input, so it rides the core;
+        // the period was only ever read through `f64Expr`, which is a HOST-side
+        // spelling and answered a solve-computed period with E0515 — the clause
+        // says clause-5 event arguments are `analog_expression`s, and §4.5.14's
+        // constant-or-parameter rule is about the clause-4 operators. Queued
+        // here, after the noise PSDs and before the §9.4 display job, for the
+        // same insert-tolerance reason as every neighbour: a model that gains a
+        // dynamic period appends a core field and renumbers none.
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op or opKind(u.target) != .timer) continue;
+            const args = self.opArgs(i);
+            if (args.len < 2) continue;
+            if (self.an.foldConst(args[1], 0, false) != null) continue; // renders inline
+            const v = self.an.rv(args[1]);
+            if (v == .f_zero) continue;
+            try jobs.append(self.arena, .{
+                // Never written: like `$limit`/`$retained`, this job exists
+                // only to put its target in the core.
+                .name = "$timer$period",
+                .target = v,
+                .mode = .strict,
+                .comment = "§5.10.3.3 the latest period, read by the schedule",
+            });
+        }
         if (self.lower.table_effect != .f_zero) try jobs.append(self.arena, .{
             .name = "$table_effect",
             .target = self.an.rv(self.lower.table_effect),
@@ -5333,18 +5360,52 @@ pub const Gen = struct {
     /// `updateState` binds, or the rendered operand `.val()` in `eval`. Both
     /// spellings compare against the same `__prev`, which holds the last
     /// ACCEPTED input either way.
+    /// §5.10.3.3's period, as `updateState` reads it. A folded one renders
+    /// inline; a period computed during the solve is a core live-out queued by
+    /// `buildJobs`, and reading it out of `m` is what "the next event will be
+    /// scheduled based on the LATEST value" means for a value the host cannot
+    /// spell.
+    fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
+        if (args.len < 2) return "0.0";
+        if (self.an.foldConst(args[1], 0, false) == null) {
+            const lo = self.lo_idx[@intFromEnum(self.an.rv(args[1]))];
+            if (lo != none_u32) return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{lo});
+        }
+        return self.argF64(args, 1, "0.0");
+    }
+
+    /// §5.10.3.3: "If the period expression evaluates to a value less than or
+    /// equal to 0.0, the timer shall trigger only once at the specified
+    /// start_time." An absent period is the same case — `updateState` defaults
+    /// it to 0.0 — and a period that does not fold cannot be decided here.
+    fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
+        if (args.len < 2) return true;
+        const c = self.an.foldConst(args[1], 0, false) orelse return false;
+        return c.f <= 0.0;
+    }
+
     fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const u8) Error![]const u8 {
         const arg: Mir.Value = if (args.len > 1) args[1] else .zero;
         if (self.an.foldConst(arg, 0, false)) |c| {
-            return switch (std.math.lossyCast(i64, c.f)) {
-                1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in }),
-                -1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in }),
-                else => std.fmt.allocPrint(
-                    self.arena,
-                    "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
-                    .{ n, in },
-                ),
-            };
+            // §5.10.3.1's fourth case, the one with a number in it: "For any
+            // other values of dir, the cross() function does not generate an
+            // event and does not act to control the timestep", restated in the
+            // same clause as "there are two ways to disable the cross function,
+            // either by specifying enable as 0, or giving a value other than
+            // -1, 0, or 1 to dir". The `else` arm used to be the BOTH-EDGES
+            // test, which made dir = 2 a synonym for dir = 0 and left a model
+            // handed an out-of-range direction firing on every edge instead of
+            // going quiet. §4.5.10's direction is the same closed set ("shall
+            // evaluate to an integer expression +1, -1, or 0"), so
+            // `last_crossing` reads it the same way.
+            if (c.f == 1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in });
+            if (c.f == -1.0) return std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in });
+            if (c.f != 0.0) return "false";
+            return std.fmt.allocPrint(
+                self.arena,
+                "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
+                .{ n, in },
+            );
         }
         return std.fmt.allocPrint(self.arena, "zCrossDir({s}, inst.{s}__prev, {s})", .{
             try self.f64Expr(arg), n, in,
@@ -6079,8 +6140,27 @@ pub const Gen = struct {
             // `__next` carries the schedule, but it initialises to 0.0 and is
             // only clamped up to `start_time` by `updateState`, so the clamp is
             // repeated here — without it a `timer(1n, …)` fires at t = 0.
-            .timer => try self.b("S.con(if (inst.abstime >= @max(inst.{s}__next, ({s}).val()) and ({s})) 1.0 else 0.0)", .{
-                n, in, try self.enableTest("timer", args),
+            // §5.10.3.3's parenthetical is a CONDITION on the single fire, not
+            // an aside: "the timer shall trigger only once at the specified
+            // start_time (IF THE START_TIME IS IN THE FUTURE WITH RESPECT TO
+            // THE CURRENT SIMULATION TIME)". Simulation time never runs
+            // negative, so a negative start_time is in the past at every
+            // timepoint of every analysis and the clause licenses no fire —
+            // where the bare `abstime >= @max(__next, start)` fired once at the
+            // origin, because `__next` clamps up from 0.0 and never down.
+            //
+            // ponytail: applied only when the period FOLDS non-positive. A
+            // period computed during the solve is treated as periodic here, and
+            // §5.10.5's `zNextTimer` reads a past start the same way ("a start
+            // before the origin fires at the origin") for the periodic case.
+            .timer => try self.b("S.con(if (inst.abstime >= @max(inst.{s}__next, ({s}).val()){s} and ({s})) 1.0 else 0.0)", .{
+                n,
+                in,
+                if (self.timerIsOneShot(args))
+                    try std.fmt.allocPrint(self.arena, " and ({s}).val() >= 0.0", .{in})
+                else
+                    "",
+                try self.enableTest("timer", args),
             }),
             // §5.10.3.2 "above() generates a monitored analog event to detect
             // threshold crossings in analog signals when the expression crosses
@@ -7316,7 +7396,7 @@ pub const Gen = struct {
                     \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else std.math.inf(f64);
                     \\        }}
                     \\
-                , .{ n, try self.argF64(args, 1, "0.0") }),
+                , .{ n, try self.timerPeriod(args) }),
                 // §9.17.2 "the next time step taken is no larger than the
                 // smallest $bound_step() argument currently ACTIVE". `in` is
                 // already the running minimum over every `$bound_step` that
@@ -8349,6 +8429,7 @@ const ops_txt =
     \\fn zCrossDir(dir: f64, prev: f64, in: f64) bool {
     \\    if (dir == 1.0) return prev <= 0.0 and in > 0.0;
     \\    if (dir == -1.0) return prev >= 0.0 and in < 0.0;
+    \\    if (dir != 0.0) return false; // §5.10.3.1 any other dir disables cross()
     \\    return (prev <= 0.0 and in > 0.0) or (prev >= 0.0 and in < 0.0);
     \\}
     \\/// §4.5.8 the fraction of the current excursion the ramp has traversed.
