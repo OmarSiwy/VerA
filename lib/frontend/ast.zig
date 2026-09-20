@@ -1059,6 +1059,12 @@ pub const Stmt = union(enum) {
     repeat_stmt: struct { count: ExprId, body: StmtId },
     /// §5.10 `@(event) body` (A.6.5 analog_event_control_statement). `event` is
     /// one of the `event_*` expression tags, or an `.ident` naming an event.
+    ///
+    /// `.none` is A.6.5's `@*` / `@ (*)`: the implicit event expression, whose
+    /// terms are every net and variable `body` READS. It carries no expression
+    /// because the list is derived from the body, not written by the source.
+    /// A.6.5 offers it to `event_control` only — `analog_event_control` has no
+    /// such alternative, so an analog block rejects it.
     event_control: struct { event: ExprId, body: StmtId, is_delay: bool = false },
     /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
     /// `hierarchical_event_identifier`, so only its last (and, in a flat

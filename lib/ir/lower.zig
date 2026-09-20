@@ -3846,7 +3846,14 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
         .for_stmt => |s| try self.lowerFor(s.init, s.cond, s.step, s.body), // §5.9.2
         .while_stmt => |s| try self.lowerWhile(s.cond, s.body), // §5.9.1
         .repeat_stmt => |s| try self.lowerRepeat(s.count, s.body), // §5.9
-        .event_control => |s| try self.lowerEventControl(s.event, s.body), // §5.10
+        // §5.10. A.6.5 gives `@*`/`@ (*)` (recorded as a `.none` event) to
+        // `event_control` alone; `analog_event_control` has no such
+        // alternative, and an implicit list over continuously-solved analog
+        // operands would have no defined meaning anyway.
+        .event_control => |s| if (s.event == .none)
+            try self.err(tok, .E0701, "", .{})
+        else
+            try self.lowerEventControl(s.event, s.body),
         .event_trigger => |s| try self.lowerEventTrigger(tok, self.file.str(s.name)), // §5.10.4
         .disable => try self.lowerDisable(tok),
         .sys_task => |s| try self.lowerSysTask(tok, self.file.str(s.name), s.args),

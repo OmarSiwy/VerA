@@ -2643,7 +2643,18 @@ pub const Parser = struct {
     fn parseEventControl(self: *Parser) Error!Ast.StmtId {
         const tok = self.pos;
         self.pos += 1; // '@'
+        // A.6.5 `event_control ::= … | @* | @ (*)`. Both spellings mean the same
+        // implicit list, and neither carries an expression at all, so the
+        // statement records `.none` — see `Ast.StmtKind.event_control`.
+        if (self.peek() == .star) {
+            self.pos += 1;
+            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try self.parseStmt() } }, tok);
+        }
         const event = if (self.eat(.lparen)) blk: {
+            if (self.peek() == .star and self.peekAt(1) == .rparen) {
+                self.pos += 2;
+                return self.file.addStmt(self.arena, .{ .event_control = .{ .event = .none, .body = try self.parseStmt() } }, tok);
+            }
             const e = try self.parseEventExpr();
             _ = try self.expect(.rparen);
             break :blk e;

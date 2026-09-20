@@ -99,6 +99,10 @@ const Instruction = union(enum(u4)) {
     repeat_next: struct { counter: u32, body: u32 },
     // §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
+    // A.6.5 `@*`. §9.7.5's implicit list is derived from the body and is
+    // STATIC, so it is resolved to slots once at compile time; a resumption is
+    // then the same `.any` waiter an explicit `@(a or b)` installs.
+    wait_slots: []const u32,
     // A.6.5 `-> named_event`. §5.10: events "have no time duration" and "do not
     // hold any data", so this publishes NOTHING — it only resumes whoever is
     // waiting on the slot right now. A trigger nobody is waiting for is gone.
@@ -1172,6 +1176,21 @@ const Run = struct {
                 _ = try self.append(.{ .trigger = at });
             },
             .event_control => |s| {
+                // A.6.5 `@*`. The terms come from the body, so the body has to
+                // be type-checked before they can be read off it: emit the wait
+                // with an empty list, compile the body, then patch the list in.
+                if (s.event == .none) {
+                    const at = try self.append(.{ .wait_slots = &.{} });
+                    try self.compileStmt(s.body, depth + 1);
+                    var watched: std.ArrayList(u32) = .empty;
+                    try self.readSlots(s.body, &watched, depth);
+                    // §9.7.5's list is what the statement READS. A statement
+                    // that reads nothing would suspend forever, which is never
+                    // what `@*` was written to mean.
+                    if (watched.items.len == 0) return self.fail(tok, "§9.7.5: `@*` needs the statement to read at least one net or variable", .{});
+                    self.code.items[at].wait_slots = watched.items;
+                    return;
+                }
                 if (!s.is_delay) {
                     try self.checkEvent(s.event);
                     _ = try self.append(.{ .wait_event = s.event });
@@ -1738,6 +1757,61 @@ const Run = struct {
             else => unreachable, // checkExpr admitted only the forms above
         }
     }
+    /// §9.7.5's implicit event expression: every net and variable the statement
+    /// READS. The identifier on the left of an assignment is written, not read,
+    /// so it contributes nothing — but an index into it is read, which is why
+    /// the target is walked for its subscript and not for its base.
+    ///
+    /// Runs only after `compileStmt` accepted the same statement, so every form
+    /// reachable here is one of the forms below and every expression in it is
+    /// already type-checked.
+    fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) Error!void {
+        if (id == .none) return;
+        if (depth == 256) return self.fail(self.file.stmtTok(id), "digital statements deeper than 256 AST levels are not implemented", .{});
+        const ex = &self.file.exprs;
+        switch (self.file.stmt(id)) {
+            .block => |b| for (b.body) |s| try self.readSlots(s, out, depth + 1),
+            .if_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                try self.readSlots(s.then_s, out, depth + 1);
+                try self.readSlots(s.else_s, out, depth + 1);
+            },
+            .while_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                try self.readSlots(s.body, out, depth + 1);
+            },
+            .for_stmt => |s| {
+                try self.sensitivity(s.cond, out);
+                for ([_]Ast.StmtId{ s.init, s.body, s.step }) |part| try self.readSlots(part, out, depth + 1);
+            },
+            .repeat_stmt => |s| {
+                try self.sensitivity(s.count, out);
+                try self.readSlots(s.body, out, depth + 1);
+            },
+            .case_stmt => |s| {
+                try self.sensitivity(s.scrutinee, out);
+                for (s.arms) |arm| {
+                    for (arm.labels) |label| try self.sensitivity(label, out);
+                    try self.readSlots(arm.body, out, depth + 1);
+                }
+            },
+            .assign => |s| {
+                try self.sensitivity(s.value, out);
+                // An element lvalue reads its subscript; `sensitivity` on the
+                // whole `.index` would also add the array's own elements.
+                if (ex.tag(s.target) == .index) try self.sensitivity(ex.rhs(s.target), out);
+            },
+            .sys_task => |s| for (s.args) |a| {
+                if (a != .none and ex.tag(a) != .str_literal) try self.sensitivity(a, out);
+            },
+            // A trigger reads nothing, an empty statement reads nothing, and a
+            // nested `@`/`#` inside `@*` suspends on its own terms — §9.7.5
+            // takes the implicit list from the statement's reads either way.
+            .empty, .event_trigger => {},
+            .event_control => |s| try self.readSlots(s.body, out, depth + 1),
+            else => unreachable, // compileStmt admitted only the forms above
+        }
+    }
     /// What a `Bridge` driver contributes: its window, z everywhere else.
     fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!Int.Literal {
         const out = try filled(scratch, width, false, .z);
@@ -1872,6 +1946,11 @@ const Run = struct {
                     continue;
                 },
                 .wait_event => |e| return self.suspendOn(e, pc + 1),
+                // §9.7.5 the implicit list is a plain `or` of value changes.
+                .wait_slots => |slots| {
+                    for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1 });
+                    return;
+                },
                 // §5.10 an event has "no time duration": the resumed processes
                 // are scheduled in the active region of this same timestep, and
                 // execution of the triggering process continues meanwhile.
