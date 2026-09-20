@@ -26,6 +26,9 @@ const diag = vera.diag;
 const Io = std.Io;
 const args = @import("cli/args.zig");
 const digital_cli = @import("cli/digital.zig");
+const cli_report = @import("cli/report.zig");
+const report = cli_report.report;
+const readFailed = cli_report.readFailed;
 
 /// Returns the process exit status (see the file header).
 pub fn main(init: std.process.Init) !u8 {
@@ -485,25 +488,6 @@ fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
     return std.fs.path.join(arena, &.{ root, "tools", "contract.zig" });
 }
 
-/// The compiler cache the prebuilt digital engine lives in, shared by every
-/// work directory: `vera-engine` in Zig's global cache directory
-/// (`ZIG_GLOBAL_CACHE_DIR`, else `XDG_CACHE_HOME/zig`, else
-/// `HOME/.cache/zig`, else Windows' `LOCALAPPDATA/zig`), else the work
-/// directory's own cache.
-pub fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, work_dir: ?[]const u8) ![]const u8 {
-    const global = if (env.get("ZIG_GLOBAL_CACHE_DIR")) |d|
-        d
-    else if (env.get("XDG_CACHE_HOME")) |d|
-        try std.fs.path.join(arena, &.{ d, "zig" })
-    else if (env.get("HOME")) |d|
-        try std.fs.path.join(arena, &.{ d, ".cache", "zig" })
-    else if (env.get("LOCALAPPDATA")) |d|
-        try std.fs.path.join(arena, &.{ d, "zig" })
-    else
-        return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
-    return std.fs.path.join(arena, &.{ global, "vera-engine" });
-}
-
 /// Reports a failed compilation's diagnostics and returns exit code 1. The Zig
 /// error name is printed only for an undiagnosed failure.
 fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e: anyerror) !u8 {
@@ -513,16 +497,6 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
         else => try err.print("error: {t}\n", .{e}),
     }
     return 1;
-}
-
-/// Reports that `path` could not be read: E1013 for a file past
-/// `Preprocessor.max_text_bytes` (the u32 offsets the lexer uses), else the
-/// error's name.
-pub fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
-    if (e == error.StreamTooLong)
-        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, vera.Preprocessor.max_text_bytes })
-    else
-        try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
 }
 
 /// How long one device's `zig build-obj` gets before it is killed. A check
@@ -644,18 +618,6 @@ fn typeCheck(
     return 1;
 }
 
-/// Renders `bag` on `w`, as JSON or as text coloured when `color`, and flushes
-/// `w`. An empty bag prints nothing. Shared by `cli/digital.zig`.
-pub fn report(bag: *diag.Bag, w: *Io.Writer, json: bool, color: bool) !void {
-    if (bag.isEmpty()) return;
-    if (json) {
-        try diag.renderJson(bag, w);
-    } else {
-        try diag.render(bag, w, .{ .palette = if (color) .on else .off });
-    }
-    try w.flush();
-}
-
 // ---------------------------------------------------------------------------
 // Tests. The CLI's own files are pulled in here, the module's root.
 // ---------------------------------------------------------------------------
@@ -663,38 +625,7 @@ pub fn report(bag: *diag.Bag, w: *Io.Writer, json: bool, color: bool) !void {
 test {
     _ = args;
     _ = digital_cli;
-}
-
-test engineCache {
-    const gpa = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const join = std.fs.path.join;
-    var env: std.process.Environ.Map = .init(gpa);
-    defer env.deinit();
-    // Nothing set: the work directory's own cache, `.` without one.
-    try std.testing.expectEqualStrings(try join(a, &.{ ".", ".zig-cache" }), try engineCache(a, &env, null));
-    try std.testing.expectEqualStrings(try join(a, &.{ "wd", ".zig-cache" }), try engineCache(a, &env, "wd"));
-    // Each variable outranks the ones set before it, as Zig's own lookup.
-    try env.put("LOCALAPPDATA", "/l");
-    try std.testing.expectEqualStrings(try join(a, &.{ "/l", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
-    try env.put("HOME", "/h");
-    try std.testing.expectEqualStrings(try join(a, &.{ "/h", ".cache", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
-    try env.put("XDG_CACHE_HOME", "/x");
-    try std.testing.expectEqualStrings(try join(a, &.{ "/x", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
-    try env.put("ZIG_GLOBAL_CACHE_DIR", "/g");
-    try std.testing.expectEqualStrings(try join(a, &.{ "/g", "vera-engine" }), try engineCache(a, &env, "wd"));
-}
-
-test readFailed {
-    var buf: [256]u8 = undefined;
-    var w: Io.Writer = .fixed(&buf);
-    // 2^32 - 1 is 4294967295 bytes.
-    try readFailed(&w, "big.va", error.StreamTooLong);
-    try readFailed(&w, "gone.va", error.FileNotFound);
-    try std.testing.expectEqualStrings("error[E1013]: `big.va` is larger than 4294967295 bytes; see `vera --explain E1013`\n" ++
-        "error: cannot read `gone.va`: FileNotFound\n", w.buffered());
+    _ = cli_report;
 }
 
 test compileFailed {
@@ -709,26 +640,4 @@ test compileFailed {
     try std.testing.expectEqualStrings("", w.buffered());
     try std.testing.expectEqual(@as(u8, 1), try compileFailed(&bag, &w, false, false, error.OutOfMemory));
     try std.testing.expectEqualStrings("error: OutOfMemory\n", w.buffered());
-}
-
-test report {
-    const gpa = std.testing.allocator;
-    var bag: diag.Bag = .init(gpa);
-    defer bag.deinit(gpa);
-    var none: Io.Writer.Allocating = .init(gpa);
-    defer none.deinit();
-    try report(&bag, &none.writer, false, true);
-    try std.testing.expectEqualStrings("", none.written());
-
-    try bag.add(.parse, .E1104, .none, "`x.sv` is an IEEE 1800 source", .{});
-    var json: Io.Writer.Allocating = .init(gpa);
-    defer json.deinit();
-    try report(&bag, &json.writer, true, true);
-    try std.testing.expect(std.mem.startsWith(u8, json.written(), "{\"code\":\"E1104\""));
-    var text: Io.Writer.Allocating = .init(gpa);
-    defer text.deinit();
-    try report(&bag, &text.writer, false, false);
-    try std.testing.expect(std.mem.find(u8, text.written(), "error[E1104]") != null);
-    // No colour asked for: no escape byte.
-    try std.testing.expect(std.mem.findScalar(u8, text.written(), 0x1b) == null);
 }

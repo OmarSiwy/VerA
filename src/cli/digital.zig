@@ -13,9 +13,9 @@ const digital = @import("sim").digital;
 const diag = vera.diag;
 const Io = std.Io;
 const args = @import("args.zig");
-const root = @import("../main.zig");
+const cli_report = @import("report.zig");
 
-const report = root.report;
+const report = cli_report.report;
 const missing = args.missing;
 
 /// The `.v` half of `main`. `opt` and `backend` are the derived build mode;
@@ -61,7 +61,7 @@ pub fn run(
         .optimize = opt,
         .backend = backend,
         .debug_info = cli.debug_info,
-        .engine_cache = try root.engineCache(arena.allocator(), environ_map, cli.work_dir),
+        .engine_cache = try engineCache(arena.allocator(), environ_map, cli.work_dir),
     }, out, err, json, use_color);
     const wd = cli.work_dir orelse ".zig-cache/vera-tb";
     if (!cli.run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
@@ -380,7 +380,7 @@ fn libraries(
     for (paths[1..], libs[1..], more) |p, l, *u| u.* = .{
         .name = p,
         .text = vera.Preprocessor.readText(io, .cwd(), p, arena) catch |e| {
-            try root.readFailed(err, p, e);
+            try cli_report.readFailed(err, p, e);
             return false;
         },
         .lib = l,
@@ -400,6 +400,25 @@ fn libraries(
 // Tests, over real files in a temporary directory: `libraries` resolves real
 // paths, and a device emit reads its source back through `libraries`.
 // ---------------------------------------------------------------------------
+
+/// The compiler cache the prebuilt digital engine lives in, shared by every
+/// work directory: `vera-engine` in Zig's global cache directory
+/// (`ZIG_GLOBAL_CACHE_DIR`, else `XDG_CACHE_HOME/zig`, else
+/// `HOME/.cache/zig`, else Windows' `LOCALAPPDATA/zig`), else the work
+/// directory's own cache.
+fn engineCache(arena: std.mem.Allocator, env: *const std.process.Environ.Map, work_dir: ?[]const u8) ![]const u8 {
+    const global = if (env.get("ZIG_GLOBAL_CACHE_DIR")) |d|
+        d
+    else if (env.get("XDG_CACHE_HOME")) |d|
+        try std.fs.path.join(arena, &.{ d, "zig" })
+    else if (env.get("HOME")) |d|
+        try std.fs.path.join(arena, &.{ d, ".cache", "zig" })
+    else if (env.get("LOCALAPPDATA")) |d|
+        try std.fs.path.join(arena, &.{ d, "zig" })
+    else
+        return std.fs.path.join(arena, &.{ work_dir orelse ".", ".zig-cache" });
+    return std.fs.path.join(arena, &.{ global, "vera-engine" });
+}
 
 const testing = std.testing;
 
@@ -521,4 +540,26 @@ test "run: a .v source takes exactly one of a testbench or a device" {
         try testing.expectEqual(@as(u8, 2), try run(testing.allocator, testing.io, &env, &cli, "", "x.v", .debug, .llvm, false, &out.writer, &err.writer));
         try testing.expectEqualStrings(says, err.written());
     }
+}
+
+test engineCache {
+    const gpa = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const join = std.fs.path.join;
+    var env: std.process.Environ.Map = .init(gpa);
+    defer env.deinit();
+    // Nothing set: the work directory's own cache, `.` without one.
+    try std.testing.expectEqualStrings(try join(a, &.{ ".", ".zig-cache" }), try engineCache(a, &env, null));
+    try std.testing.expectEqualStrings(try join(a, &.{ "wd", ".zig-cache" }), try engineCache(a, &env, "wd"));
+    // Each variable outranks the ones set before it, as Zig's own lookup.
+    try env.put("LOCALAPPDATA", "/l");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/l", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("HOME", "/h");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/h", ".cache", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("XDG_CACHE_HOME", "/x");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/x", "zig", "vera-engine" }), try engineCache(a, &env, "wd"));
+    try env.put("ZIG_GLOBAL_CACHE_DIR", "/g");
+    try std.testing.expectEqualStrings(try join(a, &.{ "/g", "vera-engine" }), try engineCache(a, &env, "wd"));
 }
