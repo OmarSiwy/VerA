@@ -3155,6 +3155,7 @@ pub const Parser = struct {
                 .str = name,
             });
         }
+        if (try self.parseHierBranchRef(name, tok)) |e| return e;
         const hi = try self.parseNetRef();
         var lo: Ast.ExprId = .none;
         if (self.eat(.comma)) lo = try self.parseNetRef();
@@ -3166,6 +3167,75 @@ pub const Parser = struct {
             .rhs = lo,
             .str = name,
         });
+    }
+
+    /// A.8.9 / Syntax 5-3 hierarchical_unnamed_branch_reference:
+    ///
+    ///   hierarchical_inst_identifier.branch ( branch_terminal [ , branch_terminal ] )
+    ///
+    /// §5.6.8.2's spelling for the branch a CHILD already owns —
+    /// `V(top.drv.branch(x,y)) <+ 1.2;` — as against §5.6.8.1's
+    /// `V(top.drv.x, top.drv.y)`, which creates a new branch in the module that
+    /// writes it. `branch` is a keyword, so the dotted tail `parseNetRef` walks
+    /// stops on it; this is the production that owns that token.
+    ///
+    /// The terminals are rewritten onto the instance path, so `drv.branch(x,y)`
+    /// becomes the ordinary terminal pair `drv.x`, `drv.y` and everything
+    /// downstream — elaboration's flat naming, the contribution index, codegen —
+    /// is unchanged.
+    ///
+    /// ponytail: that rewrite makes the two spellings ONE branch, which is right
+    /// for a flow contribution (§5.6.1.2 sums same-kind contributions to a pair
+    /// whichever instance wrote them) and understates §5.6.8.2 for a POTENTIAL
+    /// one, where reaching the child's branch should also discard what the child
+    /// retained on it. The upgrade is to attribute the contribution to the
+    /// child's `Ast.AnalogBlock.unit` instead of the writer's — the same field
+    /// `Lower.discardOpposite` and `potentialSourceHere` already key on.
+    ///
+    /// The `( < port_identifier > )` alternatives of the production are not
+    /// parsed: they name the child's §5.4.3 port flow, which is a different
+    /// quantity from a node pair, and nothing asks for them yet.
+    fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
+        var parts: std.ArrayList(Ast.StrId) = .empty;
+        {
+            var i = self.pos;
+            if (!self.identLike(i)) return null;
+            while (self.tags[i + 1] == .dot) : (i += 2) {
+                if (self.tags[i + 2] == .kw_branch) {
+                    if (self.tags[i + 3] != .lparen) return null;
+                    break;
+                }
+                if (!self.identLike(i + 2)) return null;
+            } else return null;
+        }
+        while (true) {
+            try parts.append(self.arena, try self.expectIdent());
+            _ = try self.expect(.dot);
+            if (self.eat(.kw_branch)) break;
+        }
+        _ = try self.expect(.lparen);
+        const hi = try self.hierTerminal(parts.items, tok);
+        var lo: Ast.ExprId = .none;
+        if (self.eat(.comma)) lo = try self.hierTerminal(parts.items, tok);
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.rparen);
+        return try self.file.exprs.add(self.arena, .{
+            .tag = .branch_access,
+            .main_tok = tok,
+            .lhs = hi,
+            .rhs = lo,
+            .str = name,
+        });
+    }
+
+    /// One `branch_terminal` of the production above, rewritten onto `prefix`.
+    fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
+        var parts: std.ArrayList(Ast.StrId) = .empty;
+        try parts.appendSlice(self.arena, prefix);
+        try parts.append(self.arena, try self.expectIdent());
+        while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
+        const off = try self.file.exprs.addStrList(self.arena, parts.items);
+        return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
     }
 
     /// A.8.9 / A.2.1.3 branch terminal: a net or branch identifier, optionally
