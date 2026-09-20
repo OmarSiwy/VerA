@@ -4,6 +4,7 @@ One short bullet per change, newest first. A fix names its GitHub issue as `(#12
 
 ## Unreleased
 
+- Internal cleanup, no change in what VerA accepts or emits: the §9.4.3 format-conversion scanner, the parser's and preprocessor's stack-segment bookkeeping (`deep_stack.Segments`) and the §2.8 identifier-character class each have one copy.
 - Fix: `zig build test -Doptimize=ReleaseSafe` passes again: `tests/status_host.zig` compared a copied `State` with the device's byte for byte, padding included, which LLVM leaves undefined; it now compares field by field. The testbench's `--certify` state check compares a held wide `reg` (`uN`, padded storage) by value for the same reason (#40).
 - Internal cleanup, no change in what VerA accepts or emits: four file-level import cycles are gone (`codegen/float/mode` and `plan/jobs`, `sim/digital/plan` and `sim/rt`, `cli/digital` and `main`, `tests/bench` and `harness/sweep`); the generated-shape size table now lives in `tests/harness/sweep.zig`.
 - Internal cleanup, no change in what VerA accepts or emits: dead aliases, unused imports and the `proof.prove` wrapper are gone, declarations no other file uses are no longer `pub`, and compiler-side code uses Zig 0.17's `std.mem.find*`/`print` names.
