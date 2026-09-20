@@ -13,7 +13,7 @@
 // asserted one would be pinning its own host's convenience.
 //
 //! lrm 9.22
-//! lrm 9.22.3
+//! lrm 9.22.4
 //! reject connect module
 module ch09_atomic_driver_strength_connectmodule_rejected(p, n);
   inout p, n; electrical p, n;

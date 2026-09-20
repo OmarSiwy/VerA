@@ -53,7 +53,6 @@
 //! analysis tran
 //! solve
 //! time 0, 1.5e-3, 2.5e-3, 3.0e-3, 4.0e-3
-//! xfail a potential contribution in one instance and a flow contribution in another, between the same two nodes, collide: VerA keeps only the last one elaborated, so the ramp's branch equation is dropped and the deck solves to zero
 `include "check.vh"
 
 module p03_ramp(p, n);

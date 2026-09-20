@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §9.22, paragraphs 2-4, verbatim:
+// §9.22, paragraphs 2-4, verbatim:
 //
 //   "Access to individual drivers and net resolution is necessary for accurate
 //    implementation of connect modules (see 7.5). A driver of a signal is a
@@ -18,7 +18,7 @@
 //
 // TWO SENTENCES THAT PULL IN OPPOSITE DIRECTIONS, AND THAT IS THE POINT. The
 // call site must be a connect module, and the connect module's OWN driver must
-// not be counted. §9.22.5 forces the collision to be real rather than
+// not be counted. §9.22.6 forces the collision to be real rather than
 // hypothetical: the connect module drives its digital port ("assign d = out;"),
 // so at the netlist level `d` genuinely has three drivers here. The clause says
 // the answer is two.
@@ -37,7 +37,6 @@
 //! lrm 9.22
 //! lrm 9.22.1
 //! lrm 7.8.4
-//! timescale 1ns/1ns
 //
 // HAND DERIVATION
 //   `net` in m04_dc_top is `electrical`, so it has an analog segment; the three
@@ -91,7 +90,7 @@ connectrules m04_dc_rules;
   connect m04_dc_c2e merged input ddiscrete, output electrical;
 endconnectrules
 
-// §9.22.6's connect module, reduced to the one query this file is about.
+// §9.22.7's connect module, reduced to the one query this file is about.
 connectmodule m04_dc_c2e(d, a);
   input d;
   output a;
@@ -99,7 +98,7 @@ connectmodule m04_dc_c2e(d, a);
   electrical a;
 
   reg out;
-  // §9.22.5: "the digital port will be used to read the driver values as well
+  // §9.22.6: "the digital port will be used to read the driver values as well
   // as to set the receiver value". This IS a driver of `d`, and it is the one
   // §9.22 paragraph 3 says $driver_count must not see.
   assign d = out;

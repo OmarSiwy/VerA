@@ -1,0 +1,116 @@
+// §7.4.4.3, verbatim: "Connect module insertion can be affected by coercion
+// i.e., declaring disciplines for the interconnect in the hierarchy. If an
+// interconnect is assigned a discipline, that discipline shall be used unless
+// the resolveto connect statement overrides the discipline."
+//
+// THE COMPILE IS THE TEST, and the numbers are almost incidental. The rule is
+// not a value, it is WHICH DISCIPLINE A NET HAS, and the one thing a source file
+// can say about a net's discipline is which access functions exist on it:
+// §3.6.1.2 binds `access` to the nature and §3.6.2.1 binds the natures to the
+// discipline. So `shared` is declared `ch7443_alt` — a user discipline whose
+// potential nature names its accessor `Va`, not `V` — and every read of it in
+// this file is `Va`. A compiler that let the child's `electrical` PORT coerce
+// the declared interconnect would make the net electrical and answer
+// `error[E0501]: unknown access function: Va` on the first assertion. A
+// compiler that resolved the net by its neighbours instead of its declaration
+// answers the same. The file either compiles or it does not; when it compiles,
+// `Va` exists and the number it returns is 0.5.
+//
+// COERCION CROSSES THE HIERARCHY PORT, which is why the child reads the net
+// too. `ch7443_child`'s port is declared `electrical`, and §7.4.4.3 says the
+// interconnect's declaration still governs — so the accessor that exists on the
+// child's `port` is the net's `Va`, not the port declaration's `V`. A compiler
+// that let the PORT's own declaration pick the accessor inside the child would
+// refuse `Va(port)`, and the child's assertion is where that is caught.
+//
+// THE CONTRAST IS IN THE SAME DESIGN, WHICH IS THE CLAUSE'S OWN CONTRAST. The
+// figure's Case 1 reads "NetB is declared as cmos3 (the others are undeclared)"
+// and its verdict, in BOTH resolution modes, is "NetB stays cmos3" while the
+// others become electrical. `plain` below is undeclared and meets the same
+// `electrical` port, so resolution runs on it and it takes the port's
+// discipline: `V(plain)` is the accessor that exists and it is the one read
+// here. Two nets, one declaration between them, and the declarations disagree —
+// asserted together so that a compiler that resolved nothing at all cannot pass
+// by refusing both.
+//
+// WHY 0.5, AND WHY `//! solve`. The two modules stamp into the SAME node: the
+// top contributes `Ia(shared) <+ 0.0` and the child `Ia(port) <+ Va(port) -
+// 0.5`, and KFL sums them, so 0.0 + (V - 0.5) = 0 and V = 0.5 at every
+// operating point. The equation is linear in the one free unknown, so one Newton
+// step from the harness's seed lands on it exactly and CHECKX is the right
+// comparison. `//! solve` is required and not decoration: the harness can only
+// tie an unknown it can SPELL, and its `//!` grammar knows the built-in
+// accessors — `V(...)`, `I(...)` — so a net of a user discipline has no line
+// that can pin it. It is untied by `//! solve` and fixed by the model instead,
+// which is also the honest order: coercion is a claim about the net the DEVICE
+// was built with, not one a bias line can assert.
+//
+// WHAT THIS FILE DOES NOT REACH. The second half of the rule — "unless the
+// resolveto connect statement overrides the discipline" — is a statement about
+// an INSERTED connect module, and VerA inserts none (the `m03_` family in this
+// directory carries that ceiling as `//! xfail`), so there is no insertion here
+// for a resolveto to steer. Citing it from this file would claim more than the
+// fixture does, so it is named and left where it belongs.
+//
+//! lrm 7.4.4.3
+//! bias V(plain) = 0.25
+//! solve
+//! print none
+`include "check.vh"
+nature ch7443_pot;
+  units = "V";
+  access = Va;
+  abstol = 1u;
+endnature
+
+nature ch7443_flo;
+  units = "A";
+  access = Ia;
+  abstol = 1p;
+endnature
+
+discipline ch7443_alt;
+  domain continuous;
+  potential ch7443_pot;
+  flow ch7443_flo;
+enddiscipline
+
+module ch7443_top;
+  ch7443_alt shared;
+
+  ch7443_alt_child c1(shared);
+  ch7443_elec_child c2(plain);
+
+  analog begin
+    `CHECKX("the declared discipline governs the declared interconnect", Va(shared), 0.5);
+    `CHECKX("an undeclared net is resolved, and reads through its port's discipline", V(plain), 0.25);
+    Ia(shared) <+ 0.0;
+    I(plain) <+ 0.0;
+  end
+endmodule
+
+// Both children declare their port `electrical`. The one on `shared` is reached
+// through the DECLARED interconnect, so the accessor that exists on its port is
+// the net's `Va`; the one on `plain` sits where resolution put the port's own
+// discipline, so its accessor is `V`. One module body cannot be written for
+// both — which is the whole content of the clause, spelled as two bodies.
+module ch7443_alt_child(port);
+  inout port;
+  electrical port;
+
+  analog begin
+    `CHECKX("a child reached through an electrical port still sees the declared discipline",
+            Va(port), 0.5);
+    Ia(port) <+ Va(port) - 0.5;
+  end
+endmodule
+
+module ch7443_elec_child(port);
+  inout port;
+  electrical port;
+
+  analog begin
+    `CHECKX("and a child on a resolved net sees the resolved one", V(port), 0.25);
+    I(port) <+ V(port) - 0.25;
+  end
+endmodule

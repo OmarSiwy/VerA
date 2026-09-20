@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §9.22.4 driver_update, verbatim and in full:
+// §9.22.5 driver_update, verbatim and in full:
 //
 //   "The status of drivers for a given signal can be monitored with the event
 //    detection keyword driver_update. It can be used in conjunction with the
@@ -33,9 +33,8 @@
 // timestep, no delta-cycle count and no simultaneity is being asserted — only
 // "one assignment to a driver produces exactly one firing".
 //
-//! lrm 9.22.4
-//! lrm 9.22.2
-//! timescale 1ns/1ns
+//! lrm 9.22.5
+//! lrm 9.22.3
 //
 // HAND DERIVATION — two ordinary drivers on the mixed net, `a` and `b`.
 //
@@ -43,7 +42,7 @@
 //   t=20  b := 1'b1   b moves x -> 1   : update #2
 //   t=30  a := 1'b1   a ALREADY HOLDS 1, and b holds 1 too, so nothing about
 //                     the signal's resolved value can differ before and after.
-//                     §9.22.4 sentence 4 makes it   : update #3
+//                     §9.22.5 sentence 4 makes it   : update #3
 //   t=50  a := 1'b0   a moves 1 -> 0                : update #4
 //
 //   Samples and their expected counts:
@@ -140,7 +139,7 @@ module m04_du_drv_a(o);
   reg o;
   initial begin
     #10 o = 1'b1;
-    #20 o = 1'b1;   // §9.22.4: an update, though the value does not change
+    #20 o = 1'b1;   // §9.22.5: an update, though the value does not change
     #20 o = 1'b0;
   end
 endmodule

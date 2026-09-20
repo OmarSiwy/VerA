@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §9.22.2, verbatim:
+// §9.22.3, verbatim:
 //
 //   "driver_state returns the current value contribution of a specific driver
 //    to the state of the signal. ... driver_index is an integer value between 0
@@ -14,7 +14,7 @@
 // LRM. What IS required is the MULTISET: every ordinary driver appears exactly
 // once somewhere in 0..N-1, with its own current value, and no driver appears
 // twice. A histogram over the whole index range is the strongest claim that is
-// order-independent, and it is the shape §9.22.6's own example uses:
+// order-independent, and it is the shape §9.22.7's own example uses:
 //
 //     for ( i = 0; i < $driver_count(d); i=i+1)
 //       if ( $driver_state(d,i) == 1 )
@@ -22,7 +22,7 @@
 //       else
 //         num_zeros = num_zeros + 1;
 //
-// This file extends that loop to four buckets instead of two, because §9.22.2
+// This file extends that loop to four buckets instead of two, because §9.22.3
 // names four possible returns and the LRM example's else-branch silently files
 // x and z under "zeros".
 //
@@ -33,8 +33,7 @@
 // the list from "drivers that affect the result" drops it and reports N = 3.
 //
 //! lrm 9.22.1
-//! lrm 9.22.2
-//! timescale 1ns/1ns
+//! lrm 9.22.3
 //
 // HAND DERIVATION
 //   Four ordinary modules drive the mixed net `net`, each holding one constant:
@@ -48,7 +47,7 @@
 //   At t=30 `unk` changes from 1'bx to 1'b1 and `hiz` from 1'bz to 1'b0. The
 //   count is unchanged (still four ordinary drivers) but the histogram moves to
 //     ones = 2, zeros = 2, xs = 0, zs = 0
-//   which is the "CURRENT value contribution" half of §9.22.2: the indexed
+//   which is the "CURRENT value contribution" half of §9.22.3: the indexed
 //   query tracks the driver, it is not a snapshot taken at elaboration.
 //
 //   Samples are at t=1 and t=40, both clear of the t=30 assignments, so no

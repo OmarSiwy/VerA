@@ -48,7 +48,6 @@
 //! lrm 3.6
 //! lrm 5.4.2.2
 //! solve
-//! xfail a potential contribution in one instance and a flow contribution in another, between the same two nodes, collide: VerA keeps only the last one elaborated, so v1's branch equation is dropped and the deck solves to zero
 `include "check.vh"
 
 module p03_vsrc(p, n);

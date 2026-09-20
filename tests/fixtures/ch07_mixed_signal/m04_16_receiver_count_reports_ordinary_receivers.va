@@ -107,21 +107,22 @@
 // which IEEE Std 1364 self-determines at ONE bit, so it prints as the single
 // digit `1` — and it, not the `got=` column, is what a wrong count fails on.
 //
-// WHY THERE IS NO `//! timescale` LINE, when 10-15 all carry one. There is no
-// `timescale` directive in `vera`'s fixture vocabulary — lib/backend/tb.zig:203
-// takes param, bias, sweep, wave, psweep, temp, time, solve, analysis, exit,
-// reject, noise, spice, lrm, xfail and print, and anything else is
-// `error.UnknownDirective`. The line is inert in two senses: it sets a timescale
-// nothing reads, and it aborts the directive parse before the compile the row is
-// actually measuring, so every fixture that carries it is reported as
+// WHY THERE IS NO `//! timescale` LINE. There is no `timescale` directive in
+// `vera`'s fixture vocabulary — lib/backend/tb.zig:274 takes param, bias,
+// sweep, wave, psweep, temp, time, solve, analysis, exit, reject, noise, spice,
+// lrm, xfail and print, and anything else is `error.UnknownDirective`. The line
+// is inert in two senses: it sets a timescale nothing reads, and it aborts the
+// directive parse before the compile the row is actually measuring, so every
+// fixture that carried it was reported as
 //
 //   FAIL ...: `//!` directive: UnknownDirective
 //
-// rather than as the module-item diagnostic its SPEC.md lists. The MANIFEST
-// records the same defect in ten `.v` files ("an invented mechanism written to
-// look like a checked one"); this file does not repeat it. `timescale` in the
-// SOURCE — a `` `timescale `` compiler directive, §10.2 — is a separate thing
-// from a `//!` tag, and no fixture in this row needs one.
+// rather than as the module-item diagnostic its SPEC.md lists. 10-15 each
+// carried one until it was deleted from all six; this file never did. The
+// MANIFEST records the same defect in ten `.v` files ("an invented mechanism
+// written to look like a checked one"). `timescale` in the SOURCE — a
+// `` `timescale `` compiler directive, §10.2 — is a separate thing from a `//!`
+// tag, and no fixture in this row needs one.
 //
 // DELIBERATELY NOT COVERED: $receiver_count's ANALOG cell. Table 9-19 is the
 // only place in the LRM where a driver access function is granted the analog

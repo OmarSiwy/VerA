@@ -1,9 +1,10 @@
 # Chapter 4 coverage
 
 Source: `docs/ch4-expressions.html`, read in full through Section 4.7.3.
-176 `.va` fixtures, of which 59 are `//! reject`, 117 run and assert, and NONE is
+219 `.va` fixtures, of which 61 are `//! reject`, 158 run and assert, and NONE is
 `//! xfail` (grep-measured over the directory; the "31 xfail, 19 of them also rejects"
-this line used to give was measured before waves 1–6).
+this line used to give was measured before waves 1–6, and the "176 / 59 / 117" that
+replaced it before the `a01_*`, `a04_*`, `a06_*` and 151–161 waves).
 
 HTML section-ID audit: `s4-1` `s4-2` `s4-2-1` `s4-2-1-1` `s4-2-1-2` `s4-2-1-3`
 `s4-2-2` `s4-2-3` `s4-2-4` `s4-2-5` `s4-2-6` `s4-2-7` `s4-2-8` `s4-2-9`
@@ -16,7 +17,10 @@ HTML section-ID audit: `s4-1` `s4-2` `s4-2-1` `s4-2-1-1` `s4-2-1-2` `s4-2-1-3`
 `s4-7` `s4-7-1` `s4-7-2` `s4-7-2-1` `s4-7-2-2` `s4-7-2-3` `s4-7-2-4` `s4-7-3`.
 Sixty-seven anchors for sixty-seven printed subsections — this chapter's
 extraction kept its anchors, so the audit is exact and needs no recovery from
-body text. **Forty-five have a fixture that cites them, twenty-two do not.**
+body text. **Sixty-six are cited by some fixture in the suite; one, 4.1, is
+not** — `zig build benchmark -- --coverage`, which counts a cite from any
+directory and not only this one. The "forty-five … twenty-two" pair this line
+used to carry was measured several waves earlier.
 
 Every row below is a `//! lrm` cite grepped out of the fixtures themselves, not
 a judgement about what a fixture is "really" testing. A file that runs a
@@ -25,7 +29,7 @@ the prose, never silently promoted.
 
 | LRM section | Fixtures / disposition |
 |---|---|
-| 4.1 Overview | — no fixture cites it; the clause defines "expression" and "constant expression" and states no testable rule of its own |
+| 4.1 Overview | — no fixture cites it, and this is the only Clause 4 anchor in that state. The clause defines "expression" and "constant expression"; its one operative sentence ("The operands of a constant expression consists of constant numbers and parameter names, but they can use any of the operators defined in Table 4-1, Table 4-14, and Table 4-15") summarises A.8.4's `constant_primary` and §3.4's constancy rule, and both halves are pinned under those clauses — `ch03_data_types/82_parameter_default_not_constant_rejected.va` for the operand restriction, `ch03_data_types/90_dependent_control_guarded.va` for operators and functions in a default. A cite here would be a summary citing itself |
 | 4.2 Operators | — no fixture cites the parent; Table 4-1 is the inventory and each entry is a child clause below |
 | 4.2.1 Operators with real operands | `63_unary_plus.va`, `64_unary_minus.va` (Table 4-2 legal); `112_real_operand_illegal_operator_rejected.va` (E0322 — the closed-list half); `29_case_equality.va` (E0323, jointly with C.5) |
 | 4.2.1.1 Real to integer conversion | `02_numeric_conversions.va` (35.5→36, −1.5→−2: rounding, away from zero at the half) |
@@ -48,9 +52,9 @@ the prose, never silently promoted.
 | 4.3.1 Standard mathematical functions | `10_standard_math_traditional.va`, `11_standard_math_system.va` (`$sqrt`/`$ln`/`$exp`/`$pow`); atomics `65_sqrt.va` `66_exp.va` `67_ln.va` `68_log10.va` `69_floor.va` `70_ceil.va` `82_min.va` `83_max.va` `84_abs.va` `85_pow.va`; `114_standard_math_domain_rejected.va` (E0602, E0604). `33_ln1p_expm1.va` — green; codegen no longer emits the cancelling forms (it used to compute `zLn1p` as `a.addC(1.0).log()` and `zExpm1` as `a.exp().addC(-1.0)`), so `ln1p(1e-12)` carries the 8.9e-5 relative error Table 4-14's C `log1p`/`expm1` exist to avoid; `ir/proof.zig` already folds the constants correctly, only the emitted device is wrong |
 | 4.3.2 Transcendental functions | `12_transcendental_math.va`; atomics `71_sin.va` `72_cos.va` `73_tan.va` `74_asin.va` `75_acos.va` `76_atan.va` `77_sinh.va` `78_cosh.va` `79_tanh.va` `80_hypot.va` `81_atan2.va`; `113_transcendental_domain_rejected.va` (E0605/E0606/E0607), `114_standard_math_domain_rejected.va` |
 | 4.4 Signal access functions | positive: `13_signal_access.va` (one- and two-net, named branch), `34_port_access.va` (`I(<p>)` as a distinct quantity from `V(p)` and `I(p)`, both forced separately), `110_custom_discipline_access.va` (`CustomV`/`CustomI` from a renamed nature access). Negative: `115_port_access_lhs_rejected.va` (E0407, port access left of `<+`, with 5.4.3), `140_access_three_nets_rejected.va` (E0207), `141_port_access_not_a_port_rejected.va` (E0508), `87_wrong_discipline_access.va` (E0501). `13b_generic_access.va` adds §4.4's generic spelling — `potential(p,n)` against a written-down 1.0, and `potential`/`flow` against `V`/`I` as identities. One negative, now green: `86_same_flow_terminals.va` (`//! reject E0315`) — `I(n,n)`/`V(n,n)` are refused rather than accepted as a self-referential branch folded away, though E0315's own explain text already claims the rule |
-| 4.5 Analog operators | — no fixture cites the parent; it is the definition of "maintains internal state" and a pointer at its children |
+| 4.5 Analog operators | `185_limexp_not_a_constant_expression_rejected.va` (`//! reject E0363`) is the parent's own sentence made observable: "One special analog operator is the limexp() function, which is a version of the exp() function" — so limexp is STATEFUL and cannot sit in a constant expression, and `parameter real bad = limexp(1.0);` is refused while §4.3's `exp(1.0)` in the same slot compiles (`ch06_hierarchy/dependent_parameter_transcendental.va` is the accept side in the tree). What the refusal is the whole of: the definition sentence ("they maintain their internal state") is what 4.5.15's restriction paragraph presupposes and cites, the family list is Syntax 4-3 whose every arm has a section above, and the file's header says both. So `--coverage` files 4.5 under REFUSED ONLY — accurate here rather than a gap: the clause's one source-level consequence is a classification error you can only catch in the negative |
 | 4.5.1 Vector or array arguments | `35_filter_parameter_arrays.va` (parameter-array coefficients into `laplace_nd`) |
-| 4.5.2 Analog operators and equations | — **no fixture.** The clause's rule is that each equation carries a tolerance and that some operators introduce new unknowns. `22_last_crossing.va` and `146_last_crossing_directions.va` lean on it in prose (the history may advance on an untested point) but neither cites it, and nothing asserts a tolerance or a new unknown |
+| 4.5.2 Analog operators and equations | `145_ddt_idt_nature_tolerance.va` carries the cite and earns it: the clause's third paragraph — "Occasionally, analog operators require new equations and new unknowns … ALTERNATIVELY, THESE OPERATORS CAN BE USED TO SPECIFY TOLERANCES" — is precisely the `ddt(expr, nature)` / `idt(expr, ic, assert, nature)` forms that file accepts, with the nature resolved in the tolerance slot. Its first paragraph ("each equation, at a minimum, shall have a tolerance defined and associated with it") constrains the solver and has no source text that can violate it; the file's header says so. This row used to read "**no fixture**" |
 | 4.5.3 Time derivative operator | `14_ddt.va` (DC returns zero), `92_operator_in_genvar_for.va` (both unrolled `ddt` instances give zero at a nonzero argument). `145_ddt_idt_nature_tolerance.va` — the `ddt(expr, nature)` form of Table 4-17, green: the nature is resolved in the tolerance slot only and its `abstol` is taken |
 | 4.5.4 Time integral operator | `15_idt.va`, `16_idt_reset_rejected.va`. `145_ddt_idt_nature_tolerance.va`, the `idt(expr, ic, assert, nature)` form of Table 4-18, green |
 | 4.5.5 Circular integrator operator | `17_idtmod.va`. `126_idtmod_modulus_rejected.va` — green (`//! reject modulus`, `positive`); Table 4-19's argument bounds are validated, so `idtmod(x, 0.0, -2.0, 0.0)` and the zero-modulus form both compile with only W0650, and no diag code covers a non-positive modulus |
@@ -176,21 +180,18 @@ example of one. The reject is correct for the Verilog-A subset and cites C.5,
 which is the clause that says so categorically. Adding a 4.2.6 cite here would
 be claiming conformance to a rule this fixture contradicts.
 
-Of the twenty-four uncovered sections, thirteen are the bookkeeping gap just
-described, one is 4.2.6's deliberate abstention, and five (**4.1**, **4.2**,
-**4.3**, **4.5**, **4.7**) are pure introductions that state no rule of their
-own.
-
-That leaves five clauses with genuinely nothing behind them: **4.2.1.2**
-(integer-to-real conversion, whose content is the x/z error case and needs a
-four-state value system VerA does not have), **4.5.2** (tolerances and
-simulator-introduced unknowns), **4.5.14** (Table 4-20's
-constant-versus-dynamic argument split — no fixture asserts that a dynamic
-expression in a constant slot is refused), **4.6.2** (`analysis("nodeset")`,
-and dc truth across a sweep rather than at a single point), and **4.6.4.5**
-(the diode noise model: `25_limexp.va` has the diode without the noise,
-`27_noise_sources.va` the noise without the diode). Only the first is blocked
-on an unimplemented feature; the other four could be written today.
+The accounting that used to close this file — twenty-four uncovered sections
+split into a thirteen-clause "bookkeeping gap", 4.2.6's deliberate abstention,
+five pure introductions and five clauses "with genuinely nothing behind them" —
+is deleted rather than renumbered, because two waves have walked through every
+entry in it. **4.1** is the only Clause 4 anchor no fixture cites at all, and
+the four clauses the last list named are cited now: **4.2.1.2** by
+`a01_10_itor_widens_an_integer.va`, **4.5.2** by `145` above, **4.5.14** by
+`159_operator_missing_mandatory_argument.va`, **4.6.2** by
+`annex_e_spice/h04_07_subckt_source_card_drives_the_node.va`. Of the introductions, **4.1**, **4.2**, **4.3** and
+**4.7** remain pure introductions that state no rule of their own; **4.5** is
+now cited on its limexp sentence. 4.2.6's abstention is explained in its own
+row, which is where it belongs.
 
 ## Fixture layout
 

@@ -125,7 +125,12 @@ nature.
 - **User-written `domain discrete`.** Both discrete fixtures bind the *prelude's*
   `\logic`/`ddiscrete`. No fixture declares a natureless discipline of its own.
 - **Copyright and distribution terms.** D.1–D.3 open with license text permitting verbatim
-  redistribution. Not a language rule; nothing to test.
+  redistribution. Not a language rule; nothing to test. The same holds for the annex's own
+  body, which is where the bare `D` clause comes from: `tests/harness.zig` reads the letter
+  out of `Annex D (normative) Standard definitions`, and the two sentences under it say only
+  that verbatim copies of the three files may be used and distributed without restrictions —
+  a permission granted to readers of the LRM, which no `.va` source can violate or satisfy.
+  No fixture cites bare `D`, and none should.
 
 ## The prepend problem
 
