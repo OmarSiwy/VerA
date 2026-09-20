@@ -1431,6 +1431,7 @@ pub const Gen = struct {
         try self.buildPrelude(stateful, hist, filt, timer, strs, tbl, rng, files);
         try self.out.appendSlice(self.gpa, header_txt);
         try self.out.appendSlice(self.gpa, math_txt);
+        try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
         try self.out.appendSlice(self.gpa, ops_txt);
         if (timer) try self.out.appendSlice(self.gpa, timer_txt);
         if (hist) try self.out.appendSlice(self.gpa, hist_txt);
@@ -1571,6 +1572,7 @@ pub const Gen = struct {
         var hz: std.ArrayList(u8) = .empty;
         try hz.appendSlice(self.arena, helpers_head_txt);
         try publish(self.arena, &hz, math_txt);
+        try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
         try publish(self.arena, &hz, ops_txt);
         if (timer) try publish(self.arena, &hz, timer_txt);
         if (hist) try publish(self.arena, &hz, hist_txt);
@@ -8165,18 +8167,26 @@ const math_txt =
     \\    return r;
     \\}
     \\fn zAsin(comptime S: type, a: S) S { // §4.3.2 asin = atan(x/sqrt(1-x^2))
+    \\    const v = a.val();
+    \\    zDomain("asin", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return a.div(a.mul(a).neg().addC(1.0).sqrt()).atan();
     \\}
     \\fn zAcos(comptime S: type, a: S) S { // §4.3.2
+    \\    const v = a.val();
+    \\    zDomain("acos", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return S.con(1.5707963267948966).sub(zAsin(S, a));
     \\}
     \\fn zAsinh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2+1))
     \\    return a.add(a.mul(a).addC(1.0).sqrt()).log();
     \\}
     \\fn zAcosh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2-1))
+    \\    const v = a.val();
+    \\    zDomain("acosh", "x >= 1", v, v >= 1.0);
     \\    return a.add(a.mul(a).addC(-1.0).sqrt()).log();
     \\}
     \\fn zAtanh(comptime S: type, a: S) S { // §4.3.2 0.5*ln((1+x)/(1-x))
+    \\    const v = a.val();
+    \\    zDomain("atanh", "-1 < x < 1", v, v > -1.0 and v < 1.0);
     \\    return a.addC(1.0).div(a.neg().addC(1.0)).log().scale(0.5);
     \\}
     \\fn zAtan2(comptime S: type, y: S, x: S) S { // §4.3.2
@@ -8298,6 +8308,42 @@ const math_txt =
     \\    const lim = 80.0;
     \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(zDevExp(lim));
     \\    return a.exp();
+    \\}
+    \\
+    \\
+;
+
+/// §4.3.2's last sentence of prose: "Input values outside of the valid range
+/// for the operator shall report an error." `proof.checkDomain` answers only
+/// the half it can PROVE from the source (E0605/E0606/E0607) and deliberately
+/// accepts an undecidable range; `math_txt`'s four restricted-domain functions
+/// call `zDomain` for the rest.
+///
+/// TWO VARIANTS, for the reason §9.4's display family has two: a DEVICE has no
+/// transcript and may not contain one — `zDev*` exists because a device also
+/// compiles for NVPTX, and a print is what a `$fatal` is already dropped for.
+/// So the report is the EXECUTABLE's, and the device keeps the empty guard: it
+/// costs nothing, and having the call site in one place means the two artifacts
+/// cannot disagree about WHICH values are out of range.
+const domain_quiet_txt =
+    \\fn zDomain(comptime _: []const u8, comptime _: []const u8, _: f64, _: bool) void {}
+    \\
+    \\
+;
+
+/// The reporting half. Fatal, on the §9.21.2 `E` precedent: the clause names no
+/// in-range value to return, and libm's quiet NaN reaches the residual as a
+/// converged-looking wrong answer. A NaN argument reports too — it is inside no
+/// range of Table 4-15. `tan` is unguarded: its poles are irrational, so no f64
+/// is ever at one, which is why E0608 was retired.
+const domain_report_txt =
+    \\fn zDomain(comptime name: []const u8, comptime rule: []const u8, x: f64, in_range: bool) void {
+    \\    if (in_range) return;
+    \\    std.debug.print(
+    \\        "error: LRM 4.3.2: " ++ name ++ "() input value is outside the valid range " ++ rule ++ ": {d}\n",
+    \\        .{x},
+    \\    );
+    \\    std.process.exit(1);
     \\}
     \\
     \\
