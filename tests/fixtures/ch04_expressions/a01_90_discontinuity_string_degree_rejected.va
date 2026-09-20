@@ -38,6 +38,7 @@
 //! lrm 3.3
 //! lrm 3.4.6
 //! reject $discontinuity
+//! xfail VerA accepts a `string` parameter as the degree of $discontinuity and lowers it to 0 (Const.asInt has a `.str => 0` arm), so §9.17.1's "i must be a non-negative integer" and §3.3's "A string cannot be assigned to an integral type" are both unchecked and the model gets the most severe announcement there is, silently
 module a01_discontinuity_string_degree_rejected(p, n);
   inout p, n;
   electrical p, n;

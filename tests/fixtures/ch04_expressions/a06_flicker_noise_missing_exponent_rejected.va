@@ -44,6 +44,7 @@
 //! lrm 4.6.4.2
 //! lrm A.8.2
 //! reject DiagnosticsReported
+//! xfail VerA accepts the one-argument call and seeds the exponent with 1, exporting a flicker row with .ef = 1; Syntax 4-4 brackets only the name — `flicker_noise ( analog_expression , analog_expression [ , string ] )` — so the exponent is mandatory and there is no default to invent
 module a06_flicker_noise_missing_exponent_rejected(p, n);
     inout p, n;
     electrical p, n;
