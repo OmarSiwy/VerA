@@ -242,7 +242,7 @@ fn isPunct(w: []const u8) bool {
 
 fn isIdentifier(w: []const u8) bool {
     if (w.len == 0 or !(std.ascii.isAlphabetic(w[0]) or w[0] == '_')) return false;
-    for (w) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '$')) return false;
+    for (w) |c| if (!Preprocessor.isIdentChar(c)) return false;
     return true;
 }
 
