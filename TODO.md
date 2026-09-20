@@ -4,8 +4,15 @@ Written 2026-09-20. This is a handoff document: everything a fresh session needs
 to continue without re-deriving it. It is deliberately blunt about what is NOT
 done.
 
-**Read [`tests/pending/MANIFEST.md`](tests/pending/MANIFEST.md) next.** It is the
+**Read [`tests/fixtures/MANIFEST.md`](tests/fixtures/MANIFEST.md) next.** It is the
 per-row defect register (950+ lines) and this file does not duplicate it.
+
+> **§1 and §3.3 below were re-measured on 2026-09-20 after the `lib/` split.**
+> `tests/pending` no longer exists as a separate tree — its fixtures were filed
+> under the chapter they pin, so the progress meter and the gate are now one
+> number and that number is NOT green. Everything in §2 (the expensive
+> knowledge) still holds; §3.1's per-diagnostic table predates the merge and its
+> counts are low.
 
 ---
 
@@ -42,10 +49,9 @@ Reproduce all of it from a clean checkout:
 
 ```sh
 cd VerA
-zig build test --summary all          # 404/404 tests, 128/128 steps
-zig build benchmark -- --strict       # 1323/1323 — HARD GATE, never break
-zig build benchmark -- --fixture-root=tests/pending --strict
-                                      # 53/193 (129 FAILED, 11 XFAIL) — expected to fail
+zig build test --summary all          # 104/104 tests, 26/26 steps — GATE
+zig build benchmark -- --strict       # 1390 pass / 133 FAIL / 34 XFAIL of 1557 .va
+zig build test-devices                # 5/66 — the `vera --run` digital transcripts
 zig build install                     # ./zig-out/bin/vera
 
 cd ../ARPice
@@ -63,16 +69,44 @@ of the 98 failures are in the load-sensitive kinds the manifest fingered, so
 either the nondeterminism is wider than those kinds or 518 was a lucky run. One
 run establishes nothing. `ARPice@4b43d53` already records this.
 
-### Commits landed this session
+### What the 133 are, by shape
+
+Roughly half are COMPILER work and roughly half are FIXTURE work, and the split
+matters because the second half is cheap:
+
+| Shape | Count | Whose bug |
+|---|---|---|
+| `did not compile` / `NoModule` | 41 | compiler |
+| `asserts nothing` | 14 | fixture — it runs green and claims nothing |
+| `want is an expression, not a literal` | 11 | fixture |
+| `expected a diagnostic, but it compiled cleanly` | 9 | compiler (a missing refusal) |
+| `//!` directive: UnknownDirective | 7 | harness — `//! timescale`, `//! acstim` |
+| codegen refused a construct (`@compileError`) | 6 | compiler |
+| `N of M assertion(s) reported ok=0` | ~40 | compiler — wrong VALUE, the real conformance work |
+| the generated testbench does not compile | 2 | compiler — an ENGINE bug, loudest of the lot |
+
+By chapter: ch07 mixed-signal 35, ch05 analog 26, ch04 expressions 26, ch09
+system tasks 13, annex E SPICE 10, ch06 hierarchy 8, ch10 directives 6, ch12 VPI
+5, the rest 4.
+
+### Commits landed
 
 | Repo | Commit | What |
 |---|---|---|
 | ARPice | `678c7ce` | Q03: tree did not compile in any mode; lazy analysis hid it |
 | VerA | `3e88218` | `asInt` aborted the compiler on a real with no nearest integer |
-| VerA | `308f978` | the `tests/pending` run + the fixture tree as a baseline |
 | VerA | `20d6961` | out-of-range array read `@panic`ed from inside generated device code |
+| VerA | `2cc1c08` | the 2023 LRM replaces 2.4; the stale prose goes with it |
+| VerA | `0984a12` | `lib/` split, one suite step, `tests/pending` merged into the tree |
+| VerA | `4f67e47` | §4.6.4's `name` argument reached the parser and stopped there |
+| VerA | `c4be543` | the per-use noise coefficient gap, marked where it cannot hide |
 
-Both repos clean. VerA on `ddt-capform`, ARPice on `spice-audit`.
+VerA on `ddt-capform`, ARPice on `spice-audit`.
+
+**A second agent was editing `tests/fixtures/` concurrently on 2026-09-20.** The
+fixture count moved 1516 → 1557 mid-session and the xfail count 11 → 34 without
+either being this session's doing. Numbers above are a snapshot; re-measure
+before trusting a delta.
 
 ---
 
@@ -252,19 +286,34 @@ Then, roughly in this order:
 6. `P02`/`P03` VPI values and callbacks — needs a *running* scheduler;
    `tests/vpi_host.zig` is lint-only today
 
-### 3.3 Unmeasured fixtures — 145 of 338
+### 3.3 Unmeasured fixtures — 33 of 1671
 
-`--fixture-root=tests/pending` walks only `.va` under `VerA/tests/pending`. Invisible today:
+Mostly closed. `zig build test-devices` now runs the `.v` fixtures through
+`vera --run` and diffs their transcripts, which was this table's first row.
 
-| Kind | Count | Rows | Needs |
+| Kind | Count | Measured by | State |
 |---|---|---|---|
-| `.v` | 77 | D03, D04, D06, D08, D09, D10, M04, P02 | a `--run`-based runner wired to a build step; `tests/harness.zig:787` reads `.va` only |
-| `.c` | 26 | P02, P03 | a `test-vpi`-style step; `grep -c p03 build.zig` = 0 |
-| `.sp` (VerA) | 7 | H04 | a `--spice` CLI flag, which does not exist |
-| ARPice `.sp`+`.va` | 35 | A09, X01, Q03 | `ARPice/tests/fixture_catalog.zig:6` opens `tests/fixtures` only |
+| `.va` | 1557 | `zig build benchmark -- --strict` | 1390 pass / 133 FAIL / 34 XFAIL |
+| `.v` | 81 | `zig build test-devices` | **5/66** — 15 fixtures the runner does not select |
+| `.c` | 26 | — | still nothing; VPI needs a running scheduler |
+| `.sp` | 7 | — | still needs a `--spice` CLI flag |
 
-**Wire these before trusting any progress number.** 53/193 looks like 27%; across
-all 338 the real figure is unknown.
+**5/66 on the digital side is the headline, and it is one refusal.** The engine
+accepts "a portless module with only variables and initial processes"
+(`src/sim/digital.zig`, E1100). Everything D03 through D09 asks for is outside
+that: drive strengths on a continuous assign (`assign (strong1, highz0) w = a`
+is E0209, "expected an expression" — the parser has no `drive_strength`), gates,
+UDPs, delays, `wreal`, and `$display` conversions other than `%b` and `%%`.
+
+The narrowest real defect in that list, and the one 10 fixtures sit behind:
+**`$display` implements `%b` and `%%` and nothing else** (`digital.zig:713`).
+§9.4.3 Table 9-22 defines `%h/%d/%o/%b` and the inherited IEEE 1364 §17.1.1.3
+sizes each field from the operand's declared width; §17.1.1.4 gives the
+`x`/`X`/`z`/`Z` rendering of a partly-unknown digit group.
+`d09_01_display_radix.expected.txt` is already written out by hand and derived
+in its own header — the want exists, only the printer does not. `$strobe`,
+`$monitor`, `$timeformat`, `$readmemh`/`$readmemb` and `$clog2` are each a
+separate "not implemented" from the same file.
 
 ### 3.4 The mixed-signal coordinator (M01–M04, ~53 fixtures)
 
@@ -310,6 +359,30 @@ need a human call, not another agent pass.
 
 ### 3.7 Other confirmed defects, not yet fixed
 
+- **§4.6.4.6's per-use noise coefficient never reaches the export, and the error
+  is silent.** `V(a,b) <+ c1*n` exports `white = pwr`, not `c1²·pwr`, so a host
+  computes the module's output noise low by `c1²` — a factor of 4 and 9 in
+  `a06_noise_correlated_scale.va`, which now carries the `//! xfail` that says
+  so. `tools/contract.zig:665` has named the fix since before this session; the
+  shape it has to take is `coeff` on **`PsdTerm`, not `NoiseGen`**, because the
+  coefficient may depend on the bias (`I(a,b) <+ V(a,b)*white_noise(p)` is a
+  legal modulated source). That gives `S_k(f) = coeff²·(white + flicker/f^ef)`,
+  the same relation for a §4.6.4.3 table row whose COMPTIME spectrum cannot
+  absorb a runtime factor, and `coeff_i·coeff_j·pwr` for the cross term — where
+  the SIGN is the whole difference between correlation and anti-correlation, so
+  `coeff` is signed and only the host squares it. Computing it is a ∂/∂n walk
+  over the already-built MIR DAG (`Mir.valueDef`/`instData`), NOT a second
+  lowering of the AST: the noise source must enter linearly, so the walk needs
+  only fadd/fsub/fneg/fmul/fdiv and refuses anything that makes `n` nonlinear.
+  Cross-repo: ARPice reads `noisePsd` and must learn the field, or it keeps the
+  old answer against a default of 1.0.
+- **§4.6.4.3's two non-vector table inputs are refused.** The clause says the
+  argument "can either be specified as an array parameter or an array assignment
+  pattern", and separately that it may be a file name. Both are E0519 today
+  (`a06_noise_table_array_parameter.va`, `a06_noise_table_file_input.va`),
+  because `noise_tables` is a comptime export and neither input is comptime
+  data. The file half may be cheap — `readTableFile` (`lower.zig`) already reads
+  a §9.21 table file and the formats are the same shape.
 - **`u_nodeset` is a dead export.** VerA emits it (`codegen.zig`, §3.6.3.2 net
   initializers); `grep -rn u_nodeset ARPice/src` = **0 hits**. Fix is
   `ARPice/src/analysis/dc/op.zig:24` plus the `seedFn` rewrite at
